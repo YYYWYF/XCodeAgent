@@ -1,0 +1,30 @@
+.@{class-prefix}-left-panel-wrapper {
+  display: flex;
+  margin-left: -1px;
+  transition: flex 0.3s ease, max-width 0.3s ease;
+  overflow: hidden;
+
+  &.@{class-prefix}-collapsed {
+    flex: 0 0 0px !important;
+    margin-left: 0;
+    max-width: 0px !important;
+    min-width: 0px;
+    border: none;
+
+    .@{class-prefix}-workbench-left {
+      opacity: 0;
+      pointer-events: none;
+    }
+  }
+
+  &.@{class-prefix}-dragging {
+    transition: none !important;
+  }
+
+  .@{class-prefix}-workbench-left {
+    flex: 1;
+    min-width: 280px;
+    border-right: 0;
+    border-radius: 0;
+  }
+}

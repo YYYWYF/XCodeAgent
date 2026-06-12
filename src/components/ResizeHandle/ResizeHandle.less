@@ -1,0 +1,82 @@
+.@{class-prefix}-resize-handle {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 1px;
+  height: 100%;
+  min-height: 0;
+  cursor: col-resize;
+  background: #d8dee8;
+
+  &::before {
+    position: absolute;
+    top: 0;
+    left: -4px;
+    width: 9px;
+    height: 100%;
+    content: "";
+    background: transparent;
+    transition: background 0.15s ease;
+  }
+
+  &:hover::before {
+    background: rgba(22, 119, 255, 0.12);
+  }
+
+  &.@{class-prefix}-collapsed {
+    flex-basis: 0;
+    cursor: default;
+    background: transparent;
+
+    &::before {
+      left: 0;
+      width: 1px;
+      transform: translateX(-50%);
+      background: #d8dee8;
+      pointer-events: none;
+    }
+
+    .@{class-prefix}-collapse-toggle.ant-btn {
+      left: 0;
+    }
+  }
+}
+
+.@{class-prefix}-collapse-toggle.ant-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  min-width: 20px;
+  height: 48px;
+  padding: 0;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+  background: #ffffff;
+  border: 1px solid #c0c6d0;
+  border-radius: 4px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition: background 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
+
+  &:hover,
+  &:focus {
+    color: #1677ff;
+    background: #f0f5ff;
+  }
+
+  > .anticon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    line-height: 1;
+
+    svg {
+      display: block;
+    }
+  }
+}

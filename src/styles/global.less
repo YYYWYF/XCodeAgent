@@ -1,0 +1,165 @@
+* {
+  box-sizing: border-box;
+}
+
+// @class-prefix 由 vite.config.ts 从 style.json 自动注入。
+// 修改 style.json 后，Less 选择器和 TSX 中 cx() 生成的类名会同步变化。
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  min-width: 960px;
+  color: #1f2933;
+  background: #eef2f6;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "Noto Sans", sans-serif;
+}
+
+.@{class-prefix}-workbench-shell {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px;
+  gap: 0;
+  background: #eef2f6;
+}
+
+.@{class-prefix}-workbench-pane {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+}
+
+/* 活动栏共享基础样式 */
+
+.@{class-prefix}-activity-bar {
+  display: flex;
+  width: 52px;
+  flex: 0 0 52px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 6px;
+  background: #f8fafc;
+  border-right: 1px solid #e5e9f0;
+}
+
+.@{class-prefix}-editor-activity-bar {
+  background: #202734;
+  border-right-color: #151a23;
+}
+
+.@{class-prefix}-left-activity-bar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  width: auto;
+  height: auto;
+  flex: none;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 2px;
+  padding: 2px;
+  background: #f3f6fa;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+}
+
+.@{class-prefix}-activity-button.ant-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  color: #667085;
+  border-radius: 6px;
+
+  &:hover,
+  &:focus {
+    color: #1677ff;
+    background: #eef5ff;
+  }
+
+  &.@{class-prefix}-active {
+    color: #1677ff;
+    background: #e8f2ff;
+
+    &::before {
+      position: absolute;
+      top: 8px;
+      left: -6px;
+      width: 3px;
+      height: 24px;
+      content: "";
+      background: #1677ff;
+      border-radius: 0 2px 2px 0;
+    }
+  }
+}
+
+.@{class-prefix}-left-activity-bar {
+  .@{class-prefix}-activity-button.ant-btn {
+    width: 28px;
+    height: 24px;
+    color: #667085;
+    border-radius: 4px;
+
+    &.@{class-prefix}-active {
+      color: #1677ff;
+      background: #ffffff;
+      box-shadow: 0 1px 2px rgba(31, 41, 51, 0.08);
+
+      &::before {
+        display: none;
+      }
+    }
+  }
+}
+
+.@{class-prefix}-editor-activity-bar {
+  .@{class-prefix}-activity-button.ant-btn {
+    color: #aab4c3;
+
+    &:hover,
+    &:focus {
+      color: #ffffff;
+      background: #313a4d;
+    }
+
+    &.@{class-prefix}-active {
+      color: #ffffff;
+      background: #3a465c;
+    }
+  }
+}
+
+/* 左右面板共享内容容器 */
+
+.@{class-prefix}-pane-content {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+@media (max-width: 960px) {
+  body {
+    min-width: 720px;
+  }
+
+  .@{class-prefix}-workbench-shell {
+    gap: 0;
+  }
+}
