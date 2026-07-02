@@ -1,0 +1,204 @@
+.task-chat {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+.task-chat__header {
+  display: flex;
+  min-height: 72px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 20px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.task-chat__meta {
+  min-width: 0;
+}
+
+.task-chat__meta h1 {
+  max-width: 220px;
+  margin: 0 0 3px;
+  overflow: hidden;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 22px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.task-chat__meta span {
+  display: inline-flex;
+  max-width: 230px;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.task-chat__copy-icon {
+  flex: 0 0 auto;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.task-chat__tags {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-chat__tags .ant-tag {
+  margin-right: 0;
+  font-size: 12px;
+}
+
+.task-chat__messages {
+  flex: 1;
+  min-height: 0;
+  padding: 18px 14px 16px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #d7dee9 transparent;
+}
+
+.task-chat__messages::-webkit-scrollbar {
+  width: 8px;
+}
+
+.task-chat__messages::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: transparent;
+}
+
+.task-chat__messages::-webkit-scrollbar-thumb {
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #d7dee9;
+}
+
+.task-chat__messages::-webkit-scrollbar-thumb:hover {
+  background: #bcc8d8;
+}
+
+.task-chat__message {
+  display: flex;
+  margin-bottom: 28px;
+  flex-direction: column;
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.task-chat__message--user {
+  align-items: flex-end;
+}
+
+.task-chat__message--assistant {
+  align-items: flex-start;
+}
+
+.task-chat__bubble {
+  max-width: min(300px, 86%);
+  padding: 12px 14px;
+  border-radius: 6px;
+  line-height: 22px;
+  word-break: break-word;
+}
+
+.task-chat__message--user .task-chat__bubble {
+  background: #e4f4ff;
+}
+
+.task-chat__message--assistant .task-chat__bubble {
+  background: #f5f6f8;
+}
+
+.task-chat__tool {
+  margin-top: 9px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.task-chat__tool::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
+  border: 1px solid #c7d0dd;
+  border-radius: 3px;
+  vertical-align: -2px;
+}
+
+.task-chat__message time {
+  margin-top: 6px;
+  color: #9aa3af;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.task-chat__composer {
+  position: relative;
+  min-height: 76px;
+  margin: 8px 12px 20px;
+  padding: 10px 52px 18px 42px;
+  border: 1px solid #e7ebf0;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(17, 24, 39, 0.06);
+}
+
+.task-chat__file-input {
+  display: none;
+}
+
+.task-chat__upload-button.ant-btn {
+  position: absolute;
+  top: 11px;
+  left: 12px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.task-chat__composer .ant-input {
+  height: 42px !important;
+  resize: none;
+  border: 0;
+  box-shadow: none;
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.task-chat__composer .ant-input:focus {
+  box-shadow: none;
+}
+
+.task-chat__send.ant-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 26px;
+  height: 26px;
+  background: #b9e1fb;
+  border-color: #b9e1fb;
+}
+
+.task-chat__counter {
+  position: absolute;
+  right: 11px;
+  bottom: 7px;
+  color: #a3adba;
+  font-size: 11px;
+}
