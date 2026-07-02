@@ -1,0 +1,41 @@
+{
+  "name": "xcode-agent-workbench",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "productName": "XCode Agent",
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": "20.19.0"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "electron:dev": "node scripts/electron-dev.cjs",
+    "electron:start": "pnpm build && electron ."
+  },
+  "dependencies": {
+    "@ag-ui/client": "^0.0.57",
+    "@ag-ui/core": "^0.0.57",
+    "@ant-design/icons": "^4.8.3",
+    "@vitejs/plugin-react": "^5.0.4",
+    "antd": "^4.24.16",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^7.1.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.24",
+    "@types/react-dom": "^18.3.7",
+    "electron": "^31.7.7",
+    "less": "^4.6.4",
+    "typescript": "^5.9.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
+  }
+}

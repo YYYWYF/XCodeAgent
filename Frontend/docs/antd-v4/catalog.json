@@ -1,0 +1,22 @@
+{
+  "$schema": "./schema/catalog.schema.json",
+  "library": "antd",
+  "libraryVersion": "4.24.16",
+  "schemaVersion": "0.1.0",
+  "status": "proposal",
+  "components": [
+    {
+      "name": "Button",
+      "category": "general",
+      "descriptionFile": "./components/button.json",
+      "status": "draft"
+    },
+    {
+      "name": "Input",
+      "category": "data-entry",
+      "descriptionFile": "./components/input.json",
+      "status": "draft"
+    }
+  ]
+}
+

@@ -1,0 +1,145 @@
+# Local LangGraph Agent
+
+一个最小可运行的 `Python + FastAPI + LangGraph` 本地后端。它会读取 `.env` 中的 Anthropic 兼容模型配置，并通过 `/chat` 暴露一个本地调用接口。
+
+当前后端还内置了：
+
+- `react-antd-v4-codegen` skill：每次调用 agent 时自动注入。
+- `REACT_BEST_PRACTICES_GUIDE.md`：作为 React + TypeScript 代码生成规范入口，随内置 skill 一起强制注入。
+- `antd_v4_docs` 工具：读取本地 `antd-components` 离线文档，并按用户问题自动检索相关 Ant Design v4.24.16 组件片段。
+- `requirement_planner` 工具：分析用户需求，生成选择题式澄清问题，并在信息足够后输出结构化开发计划。
+- `development_orchestrator` 工具：把需求澄清、统一 SDD、功能切片计划、任务 DAG、并行批次和验证计划串成一套开发编排流程。
+- 本地工作区工具：给 Electron 前端和 agent 调用的文件、搜索、命令和 Git 工具，所有路径都限制在 `workspace_root` 内。
+
+## 启动
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+服务启动后：
+
+- 健康检查：http://127.0.0.1:8000/health
+- Swagger 文档：http://127.0.0.1:8000/docs
+- AG-UI 流式接口：http://127.0.0.1:8000/ag-ui
+- Antd v4 组件列表：http://127.0.0.1:8000/tools/antd-v4/components
+- Antd v4 文档搜索：http://127.0.0.1:8000/tools/antd-v4/search?q=Form
+- Antd v4 组件详情：http://127.0.0.1:8000/tools/antd-v4/components/form
+- 需求规划工具：http://127.0.0.1:8000/tools/requirement-planner
+- 开发编排器：http://127.0.0.1:8000/tools/development-orchestrator
+- 工作区工具能力：http://127.0.0.1:8000/tools/workspace/capabilities
+
+## 调用示例
+
+```bash
+curl -X POST http://127.0.0.1:8000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"你好，介绍一下你自己"}'
+```
+
+返回里会包含 `session_id`。后续请求带上同一个 `session_id`，服务会用 LangGraph 的内存 checkpointer 保持这轮进程内的上下文：
+
+```bash
+curl -X POST http://127.0.0.1:8000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"上一次返回的 session_id","message":"刚才我问了什么？"}'
+```
+
+需求规划工具可以直连调用，也可以通过 AG-UI 的 `forwardedProps.agentMode=requirement-planner` 使用：
+
+```bash
+curl -X POST http://127.0.0.1:8000/tools/requirement-planner \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"我要做一个客户管理后台，需要客户列表和数据看板","action":"start"}'
+```
+
+返回中的 `state` 需要在下一轮作为 `planner_state` 传回；当用户完成选择后，传 `action: "finalize"` 会生成最终 `plan`。
+
+开发编排器可以通过 `action: "start" | "answer" | "finalize" | "dispatch" | "verify"` 使用。它不会把页面和 API 拆成两套流程，而是按业务功能切片生成统一计划：每个 feature 同时包含 UI、API、数据模型、验收标准和验证方式。信息不足时会复用 `requirement_planner` 输出问题；信息足够后会返回：
+
+- `plan.sdd`：Spec + Design。
+- `plan.features`：统一功能切片。
+- `taskGraph.tasks`：可执行任务 DAG。
+- `executionBatches`：按依赖和 `targetFiles` 冲突计算出的串行/并行批次。
+- `verification`：验证状态；传 `action: "verify"` 时会按 `verificationPlan.commands` 执行安全命令。
+
+直连调用示例：
+
+```bash
+curl -X POST http://127.0.0.1:8000/tools/development-orchestrator \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"我要做一个客户管理后台，需要列表、筛选、详情和客户接口","action":"finalize"}'
+```
+
+AG-UI 使用时传：
+
+```json
+{
+  "agentMode": "development-orchestrator",
+  "orchestratorAction": "finalize",
+  "workspaceRoot": "/Users/yifei/Documents/example-workspace"
+}
+```
+
+## 本地工作区工具
+
+Electron 前端选择一个目录后，把绝对路径作为 `workspace_root` 传给工具接口。若请求里不传，则使用环境变量 `XCODEAGENT_WORKSPACE_ROOT`，再退回到后端当前工作目录。
+
+当前工具：
+
+- `workspace.info`：`POST /tools/workspace/info`
+- `workspace.list_files`：`POST /tools/workspace/list-files`
+- `workspace.tree`：`POST /tools/workspace/tree`
+- `file.read`：`POST /tools/file/read`
+- `file.write`：`POST /tools/file/write`
+- `file.patch`：`POST /tools/file/patch`
+- `search.files`：`POST /tools/search/files`
+- `search.text`：`POST /tools/search/text`
+- `terminal.exec`：`POST /tools/terminal/exec`
+- `git.status`：`POST /tools/git/status`
+- `git.diff`：`POST /tools/git/diff`
+
+读文件示例：
+
+```bash
+curl -X POST http://127.0.0.1:8000/tools/file/read \
+  -H 'Content-Type: application/json' \
+  -d '{"workspace_root":"/Users/yifei/Documents/XCodeAgentBack","path":"app/main.py","max_lines":80}'
+```
+
+精确 patch 示例，建议 agent 优先用这个而不是整文件覆盖：
+
+```bash
+curl -X POST http://127.0.0.1:8000/tools/file/patch \
+  -H 'Content-Type: application/json' \
+  -d '{"workspace_root":"/Users/yifei/Documents/XCodeAgentBack","path":"README.md","dry_run":true,"edits":[{"old_text":"Local LangGraph Agent","new_text":"Local XCodeAgent Backend"}]}'
+```
+
+执行命令示例：
+
+```bash
+curl -X POST http://127.0.0.1:8000/tools/terminal/exec \
+  -H 'Content-Type: application/json' \
+  -d '{"workspace_root":"/Users/yifei/Documents/XCodeAgentBack","argv":["python3","--version"]}'
+```
+
+`terminal.exec` 不走 shell，只接收 `argv` 或用 `shlex` 拆分 `command`。`rm`、`sudo`、`git reset`、`git clean`、包管理安装等中高风险命令会先返回 `requires_approval: true` 和审批 id；前端确认后调用 `/tools/approvals/{id}/approve` 取得一次性 token，再把 token 放到 `approval` 字段重试。
+
+## 配置
+
+实际密钥放在本地 `.env`，并已被 `.gitignore` 忽略。提交或分享代码时使用 `.env.example` 作为模板。
+
+可选覆盖项：
+
+```dotenv
+AGENT_SYSTEM_PROMPT="You are a helpful local agent."
+AGENT_TEMPERATURE=0.2
+AGENT_MAX_TOKENS=2048
+ANTD_V4_DOCS_DIR=/Users/yifei/Documents/antd-components
+XCODEAGENT_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
+```
+
+`ANTD_V4_DOCS_DIR` 默认指向 `/Users/yifei/Documents/antd-components`。如果离线文档移动了，只需要改这个变量。

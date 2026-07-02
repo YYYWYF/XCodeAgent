@@ -1,0 +1,360 @@
+{
+  "$schema": "../schema/component.schema.json",
+  "schemaVersion": "0.1.0",
+  "library": "antd",
+  "libraryVersion": "4.24.16",
+  "name": "Button",
+  "displayName": "按钮",
+  "description": "用于开始一个即时操作。",
+  "category": "general",
+  "import": {
+    "package": "antd",
+    "export": "Button",
+    "style": "antd/es/button/style"
+  },
+  "source": {
+    "typeFile": "node_modules/antd/es/button/button.d.ts",
+    "documentation": "https://4x.ant.design/components/button/"
+  },
+  "extends": [
+    "html.button.attributes",
+    "html.anchor.attributes",
+    "aria.attributes",
+    "data.attributes"
+  ],
+  "props": [
+    {
+      "name": "type",
+      "description": "设置按钮类型。",
+      "valueType": "enum",
+      "typescriptType": "'default' | 'primary' | 'ghost' | 'dashed' | 'link' | 'text'",
+      "required": false,
+      "bindable": true,
+      "defaultValue": "default",
+      "editor": {
+        "type": "select",
+        "options": [
+          "default",
+          "primary",
+          "ghost",
+          "dashed",
+          "link",
+          "text"
+        ]
+      }
+    },
+    {
+      "name": "shape",
+      "description": "设置按钮形状。",
+      "valueType": "enum",
+      "typescriptType": "'default' | 'circle' | 'round'",
+      "required": false,
+      "bindable": true,
+      "defaultValue": "default",
+      "editor": {
+        "type": "select",
+        "options": [
+          "default",
+          "circle",
+          "round"
+        ]
+      }
+    },
+    {
+      "name": "size",
+      "description": "设置按钮大小。",
+      "valueType": "enum",
+      "typescriptType": "'small' | 'middle' | 'large'",
+      "required": false,
+      "bindable": true,
+      "defaultValue": "middle",
+      "editor": {
+        "type": "select",
+        "options": [
+          "small",
+          "middle",
+          "large"
+        ]
+      }
+    },
+    {
+      "name": "htmlType",
+      "description": "原生 button 元素的 type 属性。",
+      "valueType": "enum",
+      "typescriptType": "'submit' | 'button' | 'reset'",
+      "required": false,
+      "bindable": true,
+      "defaultValue": "button",
+      "editor": {
+        "type": "select",
+        "options": [
+          "button",
+          "submit",
+          "reset"
+        ]
+      }
+    },
+    {
+      "name": "disabled",
+      "description": "是否禁用按钮。",
+      "valueType": "boolean",
+      "typescriptType": "boolean",
+      "required": false,
+      "bindable": true,
+      "defaultValue": false,
+      "editor": {
+        "type": "switch"
+      }
+    },
+    {
+      "name": "loading",
+      "description": "设置按钮载入状态，也可延迟显示加载图标。",
+      "valueType": {
+        "kind": "union",
+        "types": [
+          "boolean",
+          {
+            "kind": "object",
+            "fields": {
+              "delay": "number"
+            }
+          }
+        ]
+      },
+      "typescriptType": "boolean | { delay?: number }",
+      "required": false,
+      "bindable": true,
+      "defaultValue": false,
+      "editor": {
+        "type": "json"
+      }
+    },
+    {
+      "name": "ghost",
+      "description": "使按钮背景透明。",
+      "valueType": "boolean",
+      "typescriptType": "boolean",
+      "required": false,
+      "bindable": true,
+      "defaultValue": false,
+      "editor": {
+        "type": "switch"
+      }
+    },
+    {
+      "name": "danger",
+      "description": "设置危险按钮样式。",
+      "valueType": "boolean",
+      "typescriptType": "boolean",
+      "required": false,
+      "bindable": true,
+      "defaultValue": false,
+      "editor": {
+        "type": "switch"
+      }
+    },
+    {
+      "name": "block",
+      "description": "将按钮宽度调整为父容器宽度。",
+      "valueType": "boolean",
+      "typescriptType": "boolean",
+      "required": false,
+      "bindable": true,
+      "defaultValue": false,
+      "editor": {
+        "type": "switch"
+      }
+    },
+    {
+      "name": "href",
+      "description": "存在时将按钮渲染为链接。",
+      "valueType": "string",
+      "typescriptType": "string",
+      "required": false,
+      "bindable": true,
+      "editor": {
+        "type": "text",
+        "placeholder": "https://example.com"
+      }
+    },
+    {
+      "name": "target",
+      "description": "链接打开目标，仅在设置 href 时生效。",
+      "valueType": "string",
+      "typescriptType": "string",
+      "required": false,
+      "bindable": true,
+      "editor": {
+        "type": "select",
+        "options": [
+          "_self",
+          "_blank",
+          "_parent",
+          "_top"
+        ]
+      }
+    },
+    {
+      "name": "icon",
+      "description": "按钮图标节点。",
+      "valueType": "node",
+      "typescriptType": "React.ReactNode",
+      "required": false,
+      "bindable": true,
+      "editor": {
+        "type": "icon"
+      },
+      "slot": "icon"
+    },
+    {
+      "name": "children",
+      "description": "按钮内容。",
+      "valueType": "node",
+      "typescriptType": "React.ReactNode",
+      "required": false,
+      "bindable": true,
+      "editor": {
+        "type": "node"
+      },
+      "slot": "children"
+    },
+    {
+      "name": "className",
+      "description": "附加 CSS 类名。",
+      "valueType": "string",
+      "typescriptType": "string",
+      "required": false,
+      "bindable": true,
+      "editor": {
+        "type": "text"
+      }
+    },
+    {
+      "name": "style",
+      "description": "内联样式对象。",
+      "valueType": "style",
+      "typescriptType": "React.CSSProperties",
+      "required": false,
+      "bindable": true,
+      "editor": {
+        "type": "style"
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "onClick",
+      "description": "点击按钮时触发。",
+      "parameters": [
+        {
+          "name": "event",
+          "typescriptType": "React.MouseEvent<HTMLElement>",
+          "extract": {
+            "type": "type",
+            "button": "button",
+            "clientX": "clientX",
+            "clientY": "clientY",
+            "ctrlKey": "ctrlKey",
+            "metaKey": "metaKey",
+            "shiftKey": "shiftKey"
+          }
+        }
+      ],
+      "actions": [
+        "state.set",
+        "state.toggle",
+        "navigation.open",
+        "form.submit",
+        "service.call",
+        "component.invoke"
+      ]
+    },
+    {
+      "name": "onFocus",
+      "description": "按钮获得焦点时触发，继承自原生元素。",
+      "parameters": [
+        {
+          "name": "event",
+          "typescriptType": "React.FocusEvent<HTMLElement>",
+          "extract": {
+            "type": "type"
+          }
+        }
+      ],
+      "actions": [
+        "state.set",
+        "service.call"
+      ]
+    },
+    {
+      "name": "onBlur",
+      "description": "按钮失去焦点时触发，继承自原生元素。",
+      "parameters": [
+        {
+          "name": "event",
+          "typescriptType": "React.FocusEvent<HTMLElement>",
+          "extract": {
+            "type": "type"
+          }
+        }
+      ],
+      "actions": [
+        "state.set",
+        "service.call"
+      ]
+    }
+  ],
+  "slots": [
+    {
+      "name": "children",
+      "description": "按钮主体内容。",
+      "accepts": [
+        "text",
+        "icon",
+        "component",
+        "expression"
+      ],
+      "multiple": true
+    },
+    {
+      "name": "icon",
+      "description": "按钮文字前的图标。",
+      "accepts": [
+        "icon",
+        "component",
+        "expression"
+      ],
+      "multiple": false
+    }
+  ],
+  "methods": [],
+  "examples": [
+    {
+      "id": "save-button",
+      "component": "Button",
+      "props": {
+        "type": "primary",
+        "loading": {
+          "$bind": "state.form.submitting",
+          "fallback": false
+        },
+        "icon": {
+          "$node": "icon",
+          "name": "SaveOutlined"
+        },
+        "children": "保存"
+      },
+      "events": {
+        "onClick": [
+          {
+            "action": "form.submit",
+            "args": {
+              "formId": "profile-form"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+

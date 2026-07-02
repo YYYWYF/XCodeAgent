@@ -1,0 +1,8 @@
+ag-ui-protocol>=0.1.19
+anthropic>=0.56.0
+fastapi>=0.115.0
+langchain-core>=0.3.0
+langgraph>=0.2.0
+python-dotenv>=1.0.1
+urllib3<2
+uvicorn[standard]>=0.30.0
