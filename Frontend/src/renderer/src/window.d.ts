@@ -6,6 +6,10 @@ declare global {
       isElectron: boolean;
       agentBaseUrl: string;
       platform: string;
+      auth: {
+        login: () => Promise<{ ok: boolean; token?: string }>;
+        status: () => Promise<{ authenticated: boolean }>;
+      };
       applications: {
         load: () => Promise<{ applications?: unknown }>;
         save: (applications: unknown[]) => Promise<{ ok?: boolean }>;

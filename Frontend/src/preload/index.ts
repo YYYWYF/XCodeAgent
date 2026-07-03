@@ -19,6 +19,10 @@ if (process.contextIsolated) {
       isElectron: true,
       agentBaseUrl,
       platform: process.platform,
+      auth: {
+        login: () => ipcRenderer.invoke('auth:login'),
+        status: () => ipcRenderer.invoke('auth:status'),
+      },
       applications: {
         load: () => ipcRenderer.invoke('applications:load'),
         save: (applications) => {

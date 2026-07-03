@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain,dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray } from 'electron'
 import { join } from 'path'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -8,6 +8,9 @@ import icon from '../../resources/icon.png?asset'
 import { XCODE_AGENT_ENV } from './env'
 
 let mainWindow:BrowserWindow|null = null;
+let loginWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let isQuitting = false
 const previewWindows = new Set();
 
 
@@ -23,6 +26,67 @@ async function ensureXcodeAgentDataDir(): Promise<string> {
   const dataDir = getXcodeAgentDataDir()
   await fs.mkdir(dataDir, { recursive: true })
   return dataDir
+}
+
+type AuthRecord = {
+  token: string
+  createdAt: number
+}
+
+const MOCK_LOGIN_DELAY_MS = 2000
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+function getAuthFile(): string {
+  return path.join(getXcodeAgentDataDir(), 'auth.json')
+}
+
+function isAuthRecord(value: unknown): value is AuthRecord {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<AuthRecord>
+  return typeof candidate.token === 'string' && Boolean(candidate.token.trim())
+}
+
+async function readAuthRecord(): Promise<AuthRecord | null> {
+  try {
+    const rawValue = await fs.readFile(getAuthFile(), 'utf8')
+    const parsedValue = JSON.parse(rawValue || '{}')
+    return isAuthRecord(parsedValue) ? parsedValue : null
+  } catch {
+    return null
+  }
+}
+
+async function hasValidAuthToken(): Promise<boolean> {
+  return Boolean(await readAuthRecord())
+}
+
+async function writeMockAuthRecord(): Promise<AuthRecord> {
+  const authRecord = {
+    token: `mock-token-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`,
+    createdAt: Date.now()
+  }
+  await ensureXcodeAgentDataDir()
+  await fs.writeFile(getAuthFile(), `${JSON.stringify(authRecord, null, 2)}\n`, 'utf8')
+  return authRecord
+}
+
+async function clearAuthRecord(): Promise<void> {
+  try {
+    await fs.unlink(getAuthFile())
+  } catch (error) {
+    const errorCode =
+      error && typeof error === 'object' && 'code' in error
+        ? (error as { code?: string }).code
+        : undefined
+    if (errorCode !== 'ENOENT') {
+      throw error
+    }
+  }
 }
 
 function getSeedApplicationsFile() {
@@ -367,10 +431,43 @@ function setupSessionStorageIpc() {
   });
 }
 
+function setupAuthIpc(): void {
+  ipcMain.handle('auth:status', async () => ({
+    authenticated: await hasValidAuthToken()
+  }))
 
+  ipcMain.handle('auth:login', async () => {
+    await delay(MOCK_LOGIN_DELAY_MS)
+    const authRecord = await writeMockAuthRecord()
+    if (loginWindow && !loginWindow.isDestroyed()) {
+      loginWindow.destroy()
+    }
+    loginWindow = null
+    createMainWindow()
+    return { ok: true, token: authRecord.token }
+  })
+}
 
-function createWindow(): void {
-  // Create the browser window.
+type RendererPage = 'index' | 'login'
+
+function loadRendererPage(targetWindow: BrowserWindow, pageName: RendererPage): void {
+  const rendererUrl = process.env['ELECTRON_RENDERER_URL']
+  if (is.dev && rendererUrl) {
+    const pageUrl = pageName === 'index' ? rendererUrl : `${rendererUrl.replace(/\/$/, '')}/${pageName}.html`
+    void targetWindow.loadURL(pageUrl)
+    return
+  }
+
+  void targetWindow.loadFile(join(__dirname, `../renderer/${pageName}.html`))
+}
+
+function createMainWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -391,6 +488,14 @@ function createWindow(): void {
   })
 
   mainWindow.setMenuBarVisibility(false);
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return
+    event.preventDefault()
+    mainWindow?.hide()
+  })
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
   })
@@ -400,19 +505,109 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  loadRendererPage(mainWindow, 'index')
+}
+
+function createLoginWindow(): void {
+  if (loginWindow && !loginWindow.isDestroyed()) {
+    loginWindow.show()
+    loginWindow.focus()
+    return
   }
+
+  loginWindow = new BrowserWindow({
+    width: 440,
+    height: 520,
+    minWidth: 420,
+    minHeight: 480,
+    title: 'XCode Agent 登录',
+    backgroundColor: '#eef2f6',
+    show: false,
+    autoHideMenuBar: true,
+    resizable: false,
+    ...(process.platform === 'linux' ? { icon } : {}),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      additionalArguments: [`--xcode-agent-base-url=${XCODE_AGENT_ENV.XCODE_AGENT_BASE_URL}`]
+    }
+  })
+
+  loginWindow.setMenuBarVisibility(false)
+  loginWindow.on('close', (event) => {
+    if (isQuitting) return
+    event.preventDefault()
+    loginWindow?.hide()
+  })
+  loginWindow.on('closed', () => {
+    loginWindow = null
+  })
+  loginWindow.on('ready-to-show', () => {
+    loginWindow?.show()
+  })
+
+  loadRendererPage(loginWindow, 'login')
+}
+
+async function openAuthenticatedWindow(): Promise<void> {
+  if (await hasValidAuthToken()) {
+    if (loginWindow && !loginWindow.isDestroyed()) {
+      loginWindow.hide()
+    }
+    createMainWindow()
+    return
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.hide()
+  }
+  createLoginWindow()
+}
+
+async function quitFromTray(): Promise<void> {
+  isQuitting = true
+  try {
+    await clearAuthRecord()
+  } catch (error) {
+    console.error('Failed to clear auth token', error)
+  } finally {
+    app.quit()
+  }
+}
+
+function setupTray(): void {
+  if (tray) return
+
+  tray = new Tray(icon)
+  tray.setToolTip('XCode Agent')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: '打开主窗口',
+        click: () => {
+          void openAuthenticatedWindow()
+        }
+      },
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => {
+          void quitFromTray()
+        }
+      }
+    ])
+  )
+  tray.on('click', () => {
+    void openAuthenticatedWindow()
+  })
 }
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -425,30 +620,33 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
-  void ensureXcodeAgentDataDir().catch((error) => {
-    console.error('Failed to create XCode Agent data directory', error)
-  })
+  await ensureXcodeAgentDataDir()
   setupApplicationStorageIpc();
+  setupAuthIpc()
   setupBrowserIpc();
   setupWorkspaceIpc();
   setupSessionStorageIpc();
+  setupTray()
 
-  createWindow()
+  await openAuthenticatedWindow()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    void openAuthenticatedWindow()
   })
+}).catch((error) => {
+  console.error('Failed to start XCode Agent', error)
+  app.quit()
 })
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
+app.on('before-quit', () => {
+  isQuitting = true
+})
+
+// Keep the app alive in the tray when windows are closed.
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  // The tray menu controls the explicit quit path.
 })
 
 // In this file you can include the rest of your app's specific main process
