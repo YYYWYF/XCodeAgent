@@ -16,7 +16,7 @@ function getApplicationsFile() {
 }
 
 function getXcodeAgentDataDir(): string {
-  return path.join(app.getPath('userData'), XCODE_AGENT_ENV.WORKING_DIR)
+  return path.join(app.getPath('home'), XCODE_AGENT_ENV.WORKING_DIR)
 }
 
 async function ensureXcodeAgentDataDir(): Promise<string> {
