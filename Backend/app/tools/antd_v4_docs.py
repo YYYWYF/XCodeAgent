@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 
-DEFAULT_DOCS_DIR = Path("/Users/yifei/Documents/antd-components")
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_DOCS_DIR = Path("Backend/resources/docs/antd-v4")
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*|[\u4e00-\u9fff]{2,}")
 
 
@@ -26,7 +27,10 @@ class SearchResult:
 
 
 def docs_root() -> Path:
-    return Path(os.getenv("ANTD_V4_DOCS_DIR", str(DEFAULT_DOCS_DIR))).expanduser()
+    configured_path = Path(os.getenv("ANTD_V4_DOCS_DIR", str(DEFAULT_DOCS_DIR))).expanduser()
+    if configured_path.is_absolute():
+        return configured_path
+    return (REPO_ROOT / configured_path).resolve()
 
 
 def is_available() -> bool:

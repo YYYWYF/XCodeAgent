@@ -138,8 +138,8 @@ curl -X POST http://127.0.0.1:8000/tools/terminal/exec \
 AGENT_SYSTEM_PROMPT="You are a helpful local agent."
 AGENT_TEMPERATURE=0.2
 AGENT_MAX_TOKENS=2048
-ANTD_V4_DOCS_DIR=/Users/yifei/Documents/antd-components
+ANTD_V4_DOCS_DIR=Backend/resources/docs/antd-v4
 XCODEAGENT_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
 ```
 
-`ANTD_V4_DOCS_DIR` 默认指向 `/Users/yifei/Documents/antd-components`。如果离线文档移动了，只需要改这个变量。
+`ANTD_V4_DOCS_DIR` 默认指向仓库内相对路径 `Backend/resources/docs/antd-v4`，相对路径以仓库根目录为基准。如果离线文档移动了，只需要改这个变量。
