@@ -1,6 +1,7 @@
 import { resolve } from 'path'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import styleConfig from './src/renderer/src/config/style.json';
 
 const supportedAppEnvs = ['dev', 'st', 'uat'] as const
 type AppEnv = (typeof supportedAppEnvs)[number]
@@ -43,7 +44,7 @@ export default defineConfig({
       preprocessorOptions: {
         less: {
           // 与 cx() 共用 style.json，保证 TSX 类名和 Less 选择器同步换前缀。
-          //additionalData: `@class-prefix: ${styleConfig.classPrefix};`,
+          additionalData: `@class-prefix: ${styleConfig.classPrefix};`,
           javascriptEnabled: true
         }
       }

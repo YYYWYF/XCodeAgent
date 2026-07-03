@@ -1,18 +1,14 @@
-import 'antd/dist/antd.less'
-import './assets/main.less'
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import 'antd/dist/antd.less';
+import './styles/global.less';
+import { WorkbenchProvider } from './context';
+import { AppEntryPage } from './pages';
 
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import { HashRouter } from 'react-router-dom'
-import App from './App'
-import { ApiProvider } from './context/ApiContext'
-
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ApiProvider>
-      <HashRouter>
-        <App />
-      </HashRouter>
-    </ApiProvider>
-  </StrictMode>
-)
+ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+  <React.StrictMode>
+    <WorkbenchProvider>
+      <AppEntryPage />
+    </WorkbenchProvider>
+  </React.StrictMode>,
+);

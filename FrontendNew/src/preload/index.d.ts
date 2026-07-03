@@ -1,68 +1,43 @@
-import type { ElectronAPI } from '@electron-toolkit/preload'
-import type {
-  DownloadZipAndExtractInput,
-  DownloadZipAndExtractResult,
-  LlmChatStreamRequest,
-  LlmStreamChunk,
-  LlmStreamDone,
-  LlmStreamError
-} from '../shared/api'
-import type { TaskDetail, TaskMenuItem } from '../shared/task'
-import type {
-  XcodeAgentMarkdownFileContent,
-  XcodeAgentMarkdownFileName,
-  XcodeAgentMarkdownFileSummary
-} from '../shared/xcodeagent'
-
-export type WriteTestDataResult = {
-  success: true
-  path: string
-}
-
-export type LoginResult = {
-  token: string
-}
-
-export type AppPublicConfig = {
-  env: 'dev' | 'st' | 'uat'
-  apiBaseUrl: string
-  appName: string
-}
-
-export type AppAPI = {
-  getAppConfig: () => Promise<AppPublicConfig>
-  download: {
-    zipAndExtract: (request: DownloadZipAndExtractInput) => Promise<DownloadZipAndExtractResult>
-  }
-  tasks: {
-    list: () => Promise<TaskMenuItem[]>
-    getDetail: (taskId: string) => Promise<TaskDetail>
-  }
-  llm: {
-    startChatStream: (request: LlmChatStreamRequest) => Promise<string>
-    cancelChatStream: (streamId: string) => Promise<void>
-    onStreamChunk: (listener: (payload: LlmStreamChunk) => void) => () => void
-    onStreamDone: (listener: (payload: LlmStreamDone) => void) => () => void
-    onStreamError: (listener: (payload: LlmStreamError) => void) => () => void
-  }
-  xcodeAgent: {
-    listMarkdownFiles: () => Promise<XcodeAgentMarkdownFileSummary[]>
-    getMarkdownFile: (
-      fileName: XcodeAgentMarkdownFileName
-    ) => Promise<XcodeAgentMarkdownFileContent>
-    saveMarkdownFile: (
-      fileName: XcodeAgentMarkdownFileName,
-      content: string
-    ) => Promise<XcodeAgentMarkdownFileContent>
-    revealMarkdownFile: (fileName: XcodeAgentMarkdownFileName) => Promise<void>
-  }
-  login: () => Promise<LoginResult>
-  writeTestData: () => Promise<WriteTestDataResult>
-}
+import { ElectronAPI } from '@electron-toolkit/preload'
 
 declare global {
   interface Window {
     electron: ElectronAPI
-    api: AppAPI
+    api: unknown
+    xcodeAgent?: {
+    isElectron: boolean;
+    agentBaseUrl: string;
+    platform: string;
+    applications: {
+      load: () => Promise<{ applications?: unknown }>;
+      save: (applications: unknown[]) => Promise<{ ok?: boolean }>;
+    };
+    workspace?: {
+      selectDirectory: (options?: { title?: string }) => Promise<{ canceled: boolean; path?: string }>;
+      createProjectDirectory: (payload: {
+        parentPath: string;
+        projectName: string;
+      }) => Promise<{ ok?: boolean; path: string }>;
+    };
+    sessions?: {
+      list: (payload: {
+        workspaceRoot: string;
+        editorMode: 'frontend' | 'backend';
+      }) => Promise<{ sessions?: unknown }>;
+      read: (payload: {
+        workspaceRoot: string;
+        editorMode: 'frontend' | 'backend';
+        sessionId: string;
+      }) => Promise<{ session?: unknown }>;
+      save: (payload: {
+        workspaceRoot: string;
+        session: unknown;
+      }) => Promise<{ ok?: boolean; session?: unknown }>;
+    };
+    browser?: {
+      openExternal: (url: string) => Promise<{ ok?: boolean }>;
+      openPreviewWindow?: (url: string) => Promise<{ ok?: boolean }>;
+    };
+  };
   }
 }
