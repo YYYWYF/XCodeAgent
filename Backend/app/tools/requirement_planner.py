@@ -4,9 +4,8 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from anthropic import AsyncAnthropic
-
 from app.config import Settings
+from app.llm_client import create_anthropic_client
 
 
 PLANNING_DATA_START = "<planning-data>"
@@ -20,10 +19,7 @@ class RequirementPlannerRuntime:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = AsyncAnthropic(
-            api_key=settings.anthropic_auth_token,
-            base_url=settings.anthropic_base_url,
-        )
+        self.client = create_anthropic_client(settings)
 
     async def run(
         self,

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Callable, Dict, List, Literal, Optional, Tuple, Type
 from uuid import uuid4
 
-from anthropic import AsyncAnthropic
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -18,6 +17,7 @@ from typing_extensions import NotRequired
 
 from app.builtin_skills import load_react_antd_v4_codegen_prompt
 from app.config import Settings
+from app.llm_client import create_anthropic_client
 from app.tools.antd_v4_docs import build_prompt_context
 from app.tools import workspace as workspace_tools
 from app.tools.workspace import build_prompt_context as build_workspace_tools_prompt_context
@@ -304,10 +304,7 @@ class AgentState(MessagesState):
 class AgentRuntime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = AsyncAnthropic(
-            api_key=settings.anthropic_auth_token,
-            base_url=settings.anthropic_base_url,
-        )
+        self.client = create_anthropic_client(settings)
         self.graph = self._build_graph()
 
     def _build_graph(self):
