@@ -3,7 +3,7 @@ import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import styleConfig from './src/renderer/src/config/style.json';
 
-const supportedAppEnvs = ['dev', 'st', 'uat'] as const
+const supportedAppEnvs = ['dev', 'st', 'uat', 'prd'] as const
 type AppEnv = (typeof supportedAppEnvs)[number]
 
 const isSupportedAppEnv = (value: string): value is AppEnv =>

@@ -58,7 +58,7 @@
     "@types/react-router-dom": "^5.3.3",
     "@vitejs/plugin-react": "^4.7.0",
     "cross-env": "^10.1.0",
-    "electron": "^37.2.3",
+    "electron": "^37.10.3",
     "electron-builder": "^25.1.8",
     "electron-vite": "^4.0.0",
     "eslint": "^9.31.0",

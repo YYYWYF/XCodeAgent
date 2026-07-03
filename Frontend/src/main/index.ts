@@ -5,8 +5,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-
-const AGENT_BASE_URL = process.env.XCODE_AGENT_BASE_URL || 'http://127.0.0.1:8000';
+import { XCODE_AGENT_ENV } from './env'
 
 let mainWindow:BrowserWindow|null = null;
 const previewWindows = new Set();
@@ -16,8 +15,14 @@ function getApplicationsFile() {
   return path.join(app.getPath('userData'), 'applications.json');
 }
 
-function getXcodeAgentDataDir() {
-  return path.join(app.getPath('userData'), '.xcodeagent');
+function getXcodeAgentDataDir(): string {
+  return path.join(app.getPath('userData'), XCODE_AGENT_ENV.WORKING_DIR)
+}
+
+async function ensureXcodeAgentDataDir(): Promise<string> {
+  const dataDir = getXcodeAgentDataDir()
+  await fs.mkdir(dataDir, { recursive: true })
+  return dataDir
 }
 
 function getSeedApplicationsFile() {
@@ -179,8 +184,13 @@ function getSessionFile(workspaceRoot, editorMode, sessionId) {
   return path.join(getSessionsDir(workspaceRoot, editorMode), `${assertSessionId(sessionId)}.json`);
 }
 
-function getLegacyWorkspaceSessionsDir(workspaceRoot, editorMode) {
-  return path.join(resolveWorkspaceRoot(workspaceRoot), '.xcodeagent', 'sessions', assertEditorMode(editorMode));
+function getLegacyWorkspaceSessionsDir(workspaceRoot, editorMode): string {
+  return path.join(
+    resolveWorkspaceRoot(workspaceRoot),
+    XCODE_AGENT_ENV.WORKING_DIR,
+    'sessions',
+    assertEditorMode(editorMode)
+  )
 }
 
 async function ensureSessionsDir(workspaceRoot, editorMode) {
@@ -218,7 +228,7 @@ async function migrateLegacyWorkspaceSessions(workspaceRoot, editorMode, session
         await fs.access(targetFile);
         continue;
       } catch {
-        // Missing target files are copied into the app-owned .xcodeagent store below.
+        // Missing target files are copied into the app-owned environment store below.
       }
       await fs.writeFile(targetFile, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
     } catch {
@@ -376,7 +386,7 @@ function createWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--xcode-agent-base-url=${AGENT_BASE_URL}`],
+      additionalArguments: [`--xcode-agent-base-url=${XCODE_AGENT_ENV.XCODE_AGENT_BASE_URL}`],
     }
   })
 
@@ -415,6 +425,9 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+  void ensureXcodeAgentDataDir().catch((error) => {
+    console.error('Failed to create XCode Agent data directory', error)
+  })
   setupApplicationStorageIpc();
   setupBrowserIpc();
   setupWorkspaceIpc();
