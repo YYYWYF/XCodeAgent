@@ -7,6 +7,7 @@ import type {
   ApplicationConfig,
   DevelopmentOrchestrationPayload,
   RequirementDevelopmentPlan,
+  WorkspaceCodeChangeSet,
 } from '../typings';
 
 type SendAgUiMessageOptions = {
@@ -80,6 +81,7 @@ export type AgUiChatResult = {
   answer: string;
   orchestration?: DevelopmentOrchestrationPayload;
   approval?: AgentApprovalRequest;
+  codeChanges?: WorkspaceCodeChangeSet;
   assistantMessage?: Message;
 };
 
@@ -126,15 +128,21 @@ export class AgUiChatSession {
     });
 
     let eventApproval: AgentApprovalRequest | undefined;
+    let eventCodeChanges: WorkspaceCodeChangeSet | undefined;
     const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
         if (event.name === 'tool-approval-required') {
           eventApproval = readApprovalPayload(event.value);
         }
+        if (event.name === 'workspace-code-changes') {
+          eventCodeChanges = readCodeChangesPayload(event.value);
+        }
       },
       onStateSnapshotEvent: ({ event }) => {
         const snapshotApproval = readApprovalFromState(event.snapshot);
         if (snapshotApproval) eventApproval = snapshotApproval;
+        const snapshotCodeChanges = readCodeChangesFromState(event.snapshot);
+        if (snapshotCodeChanges) eventCodeChanges = snapshotCodeChanges;
       },
     };
 
@@ -149,12 +157,14 @@ export class AgUiChatSession {
     const assistantMessage = result.newMessages.find((newMessage) => newMessage.role === 'assistant');
     const parsed = extractOrchestrationData(messageContentToText(assistantMessage?.content), result.result);
     const approval = eventApproval ?? readResultApproval(result.result);
+    const codeChanges = eventCodeChanges ?? readResultCodeChanges(result.result);
 
     return {
       threadId: this.threadId,
       answer: parsed.answer,
       orchestration: parsed.orchestration,
       approval,
+      codeChanges,
       assistantMessage,
     };
   }
@@ -316,9 +326,19 @@ function readApprovalFromState(snapshot: unknown) {
   return readApprovalPayload((snapshot as { approval?: unknown }).approval);
 }
 
+function readCodeChangesFromState(snapshot: unknown) {
+  if (!snapshot || typeof snapshot !== 'object') return undefined;
+  return readCodeChangesPayload((snapshot as { codeChanges?: unknown }).codeChanges);
+}
+
 function readResultApproval(result: unknown) {
   if (!result || typeof result !== 'object') return undefined;
   return readApprovalPayload((result as { approval?: unknown }).approval);
+}
+
+function readResultCodeChanges(result: unknown) {
+  if (!result || typeof result !== 'object') return undefined;
+  return readCodeChangesPayload((result as { codeChanges?: unknown }).codeChanges);
 }
 
 function readApprovalPayload(value: unknown): AgentApprovalRequest | undefined {
@@ -354,6 +374,70 @@ function readApprovalPayload(value: unknown): AgentApprovalRequest | undefined {
     expires_at: String(approval.expires_at || ''),
     agent_tool: typeof approval.agent_tool === 'string' ? approval.agent_tool : undefined,
   };
+}
+
+function readCodeChangesPayload(value: unknown): WorkspaceCodeChangeSet | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const payload = value as Partial<WorkspaceCodeChangeSet>;
+  if (!Array.isArray(payload.files)) return undefined;
+
+  const files = payload.files
+    .map((file): WorkspaceCodeChangeSet['files'][number] | undefined => {
+      if (!file || typeof file !== 'object') return undefined;
+      const item = file as Partial<WorkspaceCodeChangeSet['files'][number]>;
+      if (typeof item.path !== 'string' || typeof item.diff !== 'string') return undefined;
+      const tool = normalizeCodeChangeTool(item.tool);
+      const changeType = normalizeCodeChangeType(item.changeType);
+      return {
+        id: typeof item.id === 'string' ? item.id : `${tool}:${item.path}`,
+        path: item.path,
+        changeType,
+        additions: Number(item.additions || 0),
+        deletions: Number(item.deletions || 0),
+        diff: item.diff,
+        truncated: Boolean(item.truncated),
+        binary: Boolean(item.binary),
+        approvalId: typeof item.approvalId === 'string' ? item.approvalId : undefined,
+        tool,
+        executed: Boolean(item.executed),
+      };
+    })
+    .filter((file): file is WorkspaceCodeChangeSet['files'][number] => Boolean(file));
+
+  if (files.length === 0) return undefined;
+  const approvals = Array.isArray(payload.approvals)
+    ? payload.approvals
+        .map(readApprovalPayload)
+        .filter((approval): approval is AgentApprovalRequest => Boolean(approval))
+    : undefined;
+  const summary = payload.summary && typeof payload.summary === 'object'
+    ? payload.summary
+    : undefined;
+
+  return {
+    id: typeof payload.id === 'string' ? payload.id : `code-changes:${Date.now()}`,
+    status:
+      payload.status === 'pending_approval' || payload.status === 'rejected'
+        ? payload.status
+        : 'applied',
+    workspaceRoot: String(payload.workspaceRoot || ''),
+    summary: {
+      files: Number(summary?.files || new Set(files.map((file) => file.path)).size),
+      additions: Number(summary?.additions || files.reduce((total, file) => total + file.additions, 0)),
+      deletions: Number(summary?.deletions || files.reduce((total, file) => total + file.deletions, 0)),
+    },
+    files,
+    approvals,
+  };
+}
+
+function normalizeCodeChangeTool(value: unknown): WorkspaceCodeChangeSet['files'][number]['tool'] {
+  return value === 'file.patch' || value === 'file.delete' ? value : 'file.write';
+}
+
+function normalizeCodeChangeType(value: unknown): WorkspaceCodeChangeSet['files'][number]['changeType'] {
+  if (value === 'added' || value === 'deleted') return value;
+  return 'modified';
 }
 
 function readResultPlanning(result: unknown) {

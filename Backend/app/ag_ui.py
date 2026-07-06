@@ -187,11 +187,25 @@ def build_ag_ui_stream(
             )
             answer = str(result.get("answer", ""))
             approval_payload = _optional_dict(result.get("approval"))
+            approvals_payload = _optional_list(result.get("approvals"))
+            code_changes_payload = _optional_dict(result.get("codeChanges"))
             if approval_payload:
                 yield encoder.encode(
                     CustomEvent(name="tool-approval-required", value=approval_payload)
                 )
-                yield encoder.encode(StateSnapshotEvent(snapshot={"approval": approval_payload}))
+            if code_changes_payload:
+                yield encoder.encode(
+                    CustomEvent(name="workspace-code-changes", value=code_changes_payload)
+                )
+            snapshot: dict[str, Any] = {}
+            if approval_payload:
+                snapshot["approval"] = approval_payload
+            if approvals_payload:
+                snapshot["approvals"] = approvals_payload
+            if code_changes_payload:
+                snapshot["codeChanges"] = code_changes_payload
+            if snapshot:
+                yield encoder.encode(StateSnapshotEvent(snapshot=snapshot))
 
             yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
             for chunk in _chunk_text(answer):
@@ -208,6 +222,8 @@ def build_ag_ui_stream(
                         "model": result.get("model"),
                         "sessionId": result.get("session_id"),
                         "approval": approval_payload,
+                        "approvals": approvals_payload,
+                        "codeChanges": code_changes_payload,
                     },
                 )
             )
@@ -270,6 +286,10 @@ def _optional_int(value: Any) -> Optional[int]:
 
 def _optional_dict(value: Any) -> Optional[dict[str, Any]]:
     return value if isinstance(value, dict) else None
+
+
+def _optional_list(value: Any) -> Optional[list[Any]]:
+    return value if isinstance(value, list) else None
 
 
 def _chunk_text(text: str, *, size: int = 80) -> Iterable[str]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import re
 import shlex
@@ -50,6 +51,8 @@ WORKSPACE_TOOL_PROMPT = """
 When the user asks you to inspect, create, edit, search, run, or verify local workspace files, use the available workspace tools instead of only describing the action. Continue calling tools until the requested work is actually done or a tool result says explicit user approval is required.
 
 If a tool result has `requires_approval: true`, do not retry the same tool call without approval. Explain what needs approval and why.
+
+When deleting workspace files, use file_delete instead of terminal_exec so the frontend can review the exact code diff and approval request.
 """.strip()
 
 MAX_TOOL_ROUNDS = 12
@@ -121,6 +124,7 @@ WORKSPACE_TOOL_RUNNERS: Dict[str, WorkspaceToolRunner] = {
     "file_read": (workspace_tools.ReadFileRequest, workspace_tools.read_file),
     "file_write": (workspace_tools.WriteFileRequest, workspace_tools.write_file),
     "file_patch": (workspace_tools.PatchFileRequest, workspace_tools.patch_file),
+    "file_delete": (workspace_tools.DeleteFileRequest, workspace_tools.delete_file),
     "search_files": (workspace_tools.SearchFilesRequest, workspace_tools.search_files),
     "search_text": (workspace_tools.SearchTextRequest, workspace_tools.search_text),
     "terminal_exec": (workspace_tools.TerminalExecRequest, workspace_tools.terminal_exec),
@@ -229,6 +233,20 @@ WORKSPACE_TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "file_delete",
+        "description": "Delete an existing workspace file. Use this instead of terminal commands for file deletion. Corresponds to file.delete.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workspace_root": {"type": "string"},
+                "path": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": False},
+                "allow_sensitive": {"type": "boolean", "default": False},
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "search_files",
         "description": "Search workspace file names or glob-style relative paths. Corresponds to search.files.",
         "input_schema": {
@@ -310,6 +328,7 @@ class AgentState(MessagesState):
     max_tokens: NotRequired[int]
     thread_id: NotRequired[str]
     pending_approvals: NotRequired[List[Dict[str, Any]]]
+    code_changes: NotRequired[List[Dict[str, Any]]]
 
 
 class AgentRuntime:
@@ -340,6 +359,7 @@ class AgentRuntime:
         temperature = float(state.get("temperature") or self.settings.default_temperature)
         workspace_root = state.get("workspace_root")
         pending_approvals: List[Dict[str, Any]] = []
+        code_changes: List[Dict[str, Any]] = []
 
         for _ in range(MAX_TOOL_ROUNDS):
             response = await self.client.messages.create(
@@ -355,6 +375,9 @@ class AgentRuntime:
                 tool_result_payloads = []
                 for tool_use in tool_uses:
                     result = self._execute_workspace_tool(tool_use, workspace_root=workspace_root)
+                    code_change = self._code_change_from_tool_result(result)
+                    if code_change:
+                        code_changes.append(code_change)
                     approval_request = self._approval_request_from_tool_result(
                         result,
                         tool_use,
@@ -383,11 +406,15 @@ class AgentRuntime:
                 return {
                     "messages": [AIMessage(content=text)],
                     "pending_approvals": pending_approvals,
+                    "code_changes": code_changes,
                 }
 
             text_tool_results = []
             for tool_use in text_tool_uses:
                 result = self._execute_workspace_tool(tool_use, workspace_root=workspace_root)
+                code_change = self._code_change_from_tool_result(result)
+                if code_change:
+                    code_changes.append(code_change)
                 approval_request = self._approval_request_from_tool_result(
                     result,
                     tool_use,
@@ -411,6 +438,7 @@ class AgentRuntime:
                 )
             ],
             "pending_approvals": pending_approvals,
+            "code_changes": code_changes,
         }
 
     async def chat(
@@ -426,7 +454,7 @@ class AgentRuntime:
     ) -> Dict[str, object]:
         thread_id = session_id or str(uuid4())
         messages: List[BaseMessage] = [HumanMessage(content=message)]
-        approval_context = self._approval_decision_context(
+        approval_context, approval_code_changes = self._approval_decision_context(
             approval_decision,
             thread_id=thread_id,
             workspace_root=workspace_root,
@@ -448,12 +476,24 @@ class AgentRuntime:
             config={"configurable": {"thread_id": thread_id}},
         )
         answer = self._last_ai_message(result["messages"])
+        approvals = self._pending_approvals_from_value(result.get("pending_approvals"))
+        code_changes = [
+            *approval_code_changes,
+            *self._code_changes_from_value(result.get("code_changes")),
+        ]
+        code_change_set = self._code_change_set(
+            code_changes,
+            approvals=approvals,
+            workspace_root=workspace_root,
+        )
         return {
             "session_id": thread_id,
             "model": self.settings.anthropic_api_model,
             "answer": answer,
             "messages": self._serialize_messages(result["messages"]),
-            "approval": self._latest_pending_approval(result.get("pending_approvals")),
+            "approval": self._latest_pending_approval(approvals),
+            "approvals": approvals,
+            "codeChanges": code_change_set,
         }
 
     def _compose_system_prompt(
@@ -948,10 +988,54 @@ class AgentRuntime:
         *,
         thread_id: str,
         workspace_root: Optional[str],
-    ) -> Optional[str]:
+    ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
         if not isinstance(approval_decision, dict):
-            return None
+            return None, []
 
+        decision_items = self._approval_decision_items(approval_decision)
+        if not decision_items:
+            return None, []
+
+        contexts: List[str] = []
+        code_changes: List[Dict[str, Any]] = []
+        for item in decision_items:
+            context, item_code_changes = self._approval_decision_item_context(
+                item,
+                thread_id=thread_id,
+                workspace_root=workspace_root,
+            )
+            if context:
+                contexts.append(context)
+            code_changes.extend(item_code_changes)
+
+        return "\n\n".join(contexts) if contexts else None, code_changes
+
+    @staticmethod
+    def _approval_decision_items(approval_decision: Dict[str, Any]) -> List[Dict[str, Any]]:
+        raw_decisions = approval_decision.get("decisions")
+        if isinstance(raw_decisions, list):
+            parent_action = str(approval_decision.get("action") or "")
+            parent_feedback = str(approval_decision.get("feedback") or "").strip()
+            items: List[Dict[str, Any]] = []
+            for raw_item in raw_decisions:
+                if not isinstance(raw_item, dict):
+                    continue
+                item = dict(raw_item)
+                if parent_action and not item.get("action"):
+                    item["action"] = parent_action
+                if parent_feedback and not item.get("feedback"):
+                    item["feedback"] = parent_feedback
+                items.append(item)
+            return items
+        return [approval_decision]
+
+    def _approval_decision_item_context(
+        self,
+        approval_decision: Dict[str, Any],
+        *,
+        thread_id: str,
+        workspace_root: Optional[str],
+    ) -> Tuple[Optional[str], List[Dict[str, Any]]]:
         action = str(approval_decision.get("action") or "")
         feedback = str(approval_decision.get("feedback") or "").strip()
         if action == "feedback":
@@ -961,21 +1045,21 @@ class AgentRuntime:
             return (
                 "用户没有批准此前待执行的受保护工具调用。"
                 f"用户补充意见：{feedback or '未提供补充意见。'}"
-            )
+            ), []
 
         if action not in {"approve_once", "approve_always"}:
-            return None
+            return None, []
 
         approval_id = str(approval_decision.get("approvalId") or "")
         if not approval_id:
-            return "用户已批准，但审批消息缺少 approvalId，无法继续执行受保护工具。"
+            return "用户已批准，但审批消息缺少 approvalId，无法继续执行受保护工具。", []
 
         pending_request = self._pending_tool_requests.get(approval_id)
         if pending_request is None or pending_request.thread_id != thread_id:
             return (
                 "用户已批准，但后端没有找到对应的待执行工具请求。"
                 "可能是审批已过期、后端已重启，或会话线程不匹配。"
-            )
+            ), []
 
         payload = dict(pending_request.input)
         grant = approval_decision.get("grant")
@@ -995,13 +1079,97 @@ class AgentRuntime:
         if not (isinstance(tool_result, dict) and tool_result.get("requires_approval")):
             self._pending_tool_requests.pop(approval_id, None)
 
+        code_change = self._code_change_from_tool_result(result)
         scope_label = "后续相同操作也已放行" if action == "approve_always" else "仅本次放行"
         return (
             f"用户已批准此前待执行的受保护工具调用（{scope_label}）。"
             "后端已按该审批执行暂存的工具请求，结果如下。请基于这个结果继续完成用户任务，"
             "不要要求用户重复批准同一个已执行请求。\n\n"
             f"{self._json_tool_result({'approval_execution_result': result})}"
+        ), ([code_change] if code_change else [])
+
+    @staticmethod
+    def _code_change_from_tool_result(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        tool_result = result.get("result")
+        if not isinstance(tool_result, dict):
+            return None
+        code_change = tool_result.get("code_change")
+        if not isinstance(code_change, dict):
+            return None
+        path = code_change.get("path")
+        tool = code_change.get("tool")
+        if not isinstance(path, str) or not isinstance(tool, str):
+            return None
+        return dict(code_change)
+
+    @staticmethod
+    def _code_changes_from_value(value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [dict(item) for item in value if isinstance(item, dict)]
+
+    @staticmethod
+    def _pending_approvals_from_value(value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [dict(item) for item in value if isinstance(item, dict) and item.get("id")]
+
+    @staticmethod
+    def _code_change_set(
+        code_changes: List[Dict[str, Any]],
+        *,
+        approvals: List[Dict[str, Any]],
+        workspace_root: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        files = [item for item in code_changes if isinstance(item.get("path"), str)]
+        if not files:
+            return None
+
+        unique_paths = {str(item.get("path")) for item in files}
+        additions = sum(AgentRuntime._safe_int(item.get("additions")) for item in files)
+        deletions = sum(AgentRuntime._safe_int(item.get("deletions")) for item in files)
+        has_pending = any(
+            not bool(item.get("executed")) and bool(item.get("approvalId"))
+            for item in files
         )
+        status = "pending_approval" if has_pending or approvals else "applied"
+        digest_source = json.dumps(
+            {
+                "workspaceRoot": workspace_root or "",
+                "files": [
+                    {
+                        "id": item.get("id"),
+                        "path": item.get("path"),
+                        "approvalId": item.get("approvalId"),
+                        "executed": item.get("executed"),
+                    }
+                    for item in files
+                ],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        change_id = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()[:16]
+        return {
+            "id": f"code-changes:{change_id}",
+            "status": status,
+            "workspaceRoot": workspace_root or "",
+            "summary": {
+                "files": len(unique_paths),
+                "additions": additions,
+                "deletions": deletions,
+            },
+            "files": files,
+            "approvals": approvals,
+        }
+
+    @staticmethod
+    def _safe_int(value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _latest_pending_approval(value: Any) -> Optional[Dict[str, Any]]:

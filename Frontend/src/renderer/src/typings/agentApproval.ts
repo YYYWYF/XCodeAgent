@@ -6,11 +6,19 @@ export type AgentApprovalRequest = ToolApproval & {
 
 export type AgentApprovalDecisionAction = 'approve_once' | 'approve_always' | 'feedback';
 
-export type AgentApprovalDecision = {
+export type AgentApprovalDecisionItem = {
   action: AgentApprovalDecisionAction;
   approvalId: string;
   grant?: ApprovalGrant;
   feedback?: string;
 };
+
+export type AgentApprovalDecision =
+  | AgentApprovalDecisionItem
+  | {
+      action: AgentApprovalDecisionAction;
+      decisions: AgentApprovalDecisionItem[];
+      feedback?: string;
+    };
 
 export type AgentApprovalStatus = 'pending' | 'approved_once' | 'approved_always' | 'feedback';

@@ -3,6 +3,7 @@ import type {
   AgentApprovalStatus,
   DevelopmentOrchestrationPayload,
   EditorMode,
+  WorkspaceCodeChangeSet,
 } from '../typings';
 
 export type ChatSessionMessage = {
@@ -12,6 +13,7 @@ export type ChatSessionMessage = {
   orchestration?: DevelopmentOrchestrationPayload;
   approval?: AgentApprovalRequest;
   approvalStatus?: AgentApprovalStatus;
+  codeChanges?: WorkspaceCodeChangeSet;
   createdAt: number;
 };
 
@@ -55,6 +57,10 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
       approval:
         item.approval && typeof item.approval === 'object'
           ? (item.approval as AgentApprovalRequest)
+          : undefined,
+      codeChanges:
+        item.codeChanges && typeof item.codeChanges === 'object'
+          ? (item.codeChanges as WorkspaceCodeChangeSet)
           : undefined,
       approvalStatus:
         item.approvalStatus === 'approved_once' ||

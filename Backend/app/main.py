@@ -190,6 +190,11 @@ async def file_patch(request: workspace_tools.PatchFileRequest) -> dict[str, Any
     return workspace_tools.patch_file(request)
 
 
+@app.post("/tools/file/delete")
+async def file_delete(request: workspace_tools.DeleteFileRequest) -> dict[str, Any]:
+    return workspace_tools.delete_file(request)
+
+
 @app.post("/tools/search/files")
 async def search_files(request: workspace_tools.SearchFilesRequest) -> dict[str, Any]:
     return workspace_tools.search_files(request)

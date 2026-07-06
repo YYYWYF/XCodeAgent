@@ -1,0 +1,169 @@
+import {
+  CheckCircleOutlined,
+  CodeOutlined,
+  CommentOutlined,
+  FileTextOutlined,
+} from '@ant-design/icons';
+import { Button, Input, Space, Tag, Typography } from 'antd';
+import { useMemo, useState } from 'react';
+import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../typings';
+import { cx } from '../../utils';
+
+const { Text } = Typography;
+const { TextArea } = Input;
+
+type Props = {
+  codeChanges: WorkspaceCodeChangeSet;
+  loading: boolean;
+  onApproveAll: () => void;
+  onFeedback: (feedback: string) => void;
+  onOpenFile: (path: string) => void;
+};
+
+type GroupedChange = {
+  path: string;
+  additions: number;
+  deletions: number;
+  changeType: WorkspaceCodeChangeFile['changeType'];
+  changes: WorkspaceCodeChangeFile[];
+};
+
+const changeTypeCopy: Record<WorkspaceCodeChangeFile['changeType'], string> = {
+  added: '新增',
+  modified: '修改',
+  deleted: '删除',
+};
+
+export default function CodeChangeCard({
+  codeChanges,
+  loading,
+  onApproveAll,
+  onFeedback,
+  onOpenFile,
+}: Props) {
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const groupedChanges = useMemo(() => groupCodeChanges(codeChanges.files), [codeChanges.files]);
+  const pending = codeChanges.status === 'pending_approval' && Boolean(codeChanges.approvals?.length);
+  const resolved = codeChanges.status === 'applied' || codeChanges.status === 'rejected';
+
+  const handleFeedback = () => {
+    const nextFeedback = feedback.trim();
+    if (!nextFeedback || loading) return;
+    onFeedback(nextFeedback);
+  };
+
+  return (
+    <div className={cx('code-change-card', pending && 'pending', resolved && 'resolved')}>
+      <div className={cx('code-change-header')}>
+        <Space size={10}>
+          <span className={cx('code-change-icon')}>
+            <CodeOutlined />
+          </span>
+          <div className={cx('code-change-title')}>
+            <Text strong>{pending ? '待审核变更' : `已编辑 ${codeChanges.summary.files} 个文件`}</Text>
+            <span className={cx('code-change-total')}>
+              <span className={cx('addition')}>+{codeChanges.summary.additions}</span>
+              <span className={cx('deletion')}>-{codeChanges.summary.deletions}</span>
+            </span>
+          </div>
+        </Space>
+        <Tag color={pending ? 'gold' : codeChanges.status === 'rejected' ? 'red' : 'green'}>
+          {formatStatus(codeChanges.status)}
+        </Tag>
+      </div>
+
+      <div className={cx('code-change-file-list')}>
+        {groupedChanges.map((file) => (
+          <button
+            className={cx('code-change-file-row')}
+            key={file.path}
+            onClick={() => onOpenFile(file.path)}
+            type="button"
+          >
+            <span className={cx('code-change-file-name')}>
+              <FileTextOutlined />
+              <span>{file.path}</span>
+              <Tag>{changeTypeCopy[file.changeType]}</Tag>
+            </span>
+            <span className={cx('code-change-file-stats')}>
+              <span className={cx('addition')}>+{file.additions}</span>
+              <span className={cx('deletion')}>-{file.deletions}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {pending && (
+        <div className={cx('code-change-actions')}>
+          <Button disabled={loading} loading={loading} onClick={onApproveAll} type="primary">
+            审核通过
+          </Button>
+          <Button
+            disabled={loading}
+            icon={<CommentOutlined />}
+            onClick={() => setFeedbackOpen((open) => !open)}
+          >
+            输入其他意见
+          </Button>
+        </div>
+      )}
+
+      {resolved && (
+        <Text className={cx('code-change-status')}>
+          <CheckCircleOutlined /> {formatStatus(codeChanges.status)}
+        </Text>
+      )}
+
+      {feedbackOpen && pending && (
+        <div className={cx('code-change-feedback')}>
+          <TextArea
+            autoSize={{ minRows: 2, maxRows: 4 }}
+            disabled={loading}
+            placeholder="告诉 agent 你希望它怎么调整这批变更..."
+            value={feedback}
+            onChange={(event) => setFeedback(event.target.value)}
+          />
+          <Button
+            disabled={!feedback.trim() || loading}
+            loading={loading}
+            onClick={handleFeedback}
+            type="primary"
+          >
+            发送意见
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function groupCodeChanges(files: WorkspaceCodeChangeFile[]): GroupedChange[] {
+  const grouped = new Map<string, GroupedChange>();
+  files.forEach((file) => {
+    const current = grouped.get(file.path);
+    if (!current) {
+      grouped.set(file.path, {
+        path: file.path,
+        additions: file.additions,
+        deletions: file.deletions,
+        changeType: file.changeType,
+        changes: [file],
+      });
+      return;
+    }
+    current.additions += file.additions;
+    current.deletions += file.deletions;
+    current.changes.push(file);
+    if (current.changeType !== 'deleted') {
+      current.changeType = file.changeType;
+    }
+  });
+  return Array.from(grouped.values());
+}
+
+function formatStatus(status: WorkspaceCodeChangeSet['status']) {
+  if (status === 'pending_approval') return '待审核';
+  if (status === 'rejected') return '已退回';
+  return '已应用';
+}

@@ -30,15 +30,19 @@ import {
 import { approveToolRequest, rejectToolRequest } from '../../service/workspaceTools';
 import type {
   AgentApprovalDecisionAction,
+  AgentApprovalDecisionItem,
   AgentApprovalRequest,
   AgentApprovalStatus,
   ApplicationConfig,
   DevelopmentOrchestrationPayload,
   EditorMode,
+  WorkspaceCodeChangeSet,
 } from '../../typings';
 import { cx, getInitialPreviewUrl, openPreviewWindow } from '../../utils';
 import AgentApprovalCard from './AgentApprovalCard';
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel';
+import CodeChangeCard from './CodeChangeCard';
+import CodeDiffDetailPanel from './CodeDiffDetailPanel';
 import MarkdownContent from '../MarkdownContent/MarkdownContent';
 import OrchestrationPanel from '../OrchestrationPanel/OrchestrationPanel';
 import './AiChatPanel.less';
@@ -53,8 +57,13 @@ type AgentChatMessage = {
   orchestration?: DevelopmentOrchestrationPayload;
   approval?: AgentApprovalRequest;
   approvalStatus?: AgentApprovalStatus;
+  codeChanges?: WorkspaceCodeChangeSet;
   createdAt: number;
 };
+
+type RightPanelState =
+  | { type: 'preview' }
+  | { type: 'diff'; codeChanges: WorkspaceCodeChangeSet; selectedPath?: string };
 
 type Props = {
   application: ApplicationConfig;
@@ -103,7 +112,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
   const [loadingModes, setLoadingModes] = useState<Partial<Record<EditorMode, boolean>>>({});
   const [errors, setErrors] = useState<Partial<Record<EditorMode, string>>>({});
   const [previewError, setPreviewError] = useState('');
-  const [embeddedPreviewOpen, setEmbeddedPreviewOpen] = useState(false);
+  const [rightPanel, setRightPanel] = useState<RightPanelState>();
   const [confirmingOrchestrationId, setConfirmingOrchestrationId] = useState<number>();
   const [approvingApprovalId, setApprovingApprovalId] = useState<string>();
   const { publishAiMessage } = useWorkbench();
@@ -119,6 +128,8 @@ export default function AiChatPanel({ application, editorMode }: Props) {
   const sessionError = sessionErrors[editorMode];
   const showPreviewActions = editorMode === 'frontend';
   const workspaceRoot = application.workspaceRoot || '未选择工作目录';
+  const embeddedPreviewOpen = rightPanel?.type === 'preview';
+  const rightPanelOpen = Boolean(rightPanel);
 
   useEffect(() => {
     loadSessionsForMode(editorMode);
@@ -142,7 +153,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
     setPreviewError('');
 
     if (key === 'embedded') {
-      setEmbeddedPreviewOpen(true);
+      setRightPanel({ type: 'preview' });
       return;
     }
 
@@ -200,6 +211,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
     setActiveSessionIds((currentSessionIds) => ({ ...currentSessionIds, [mode]: session.id }));
     setAgentMessages((currentMessages) => ({ ...currentMessages, [mode]: session.messages }));
     setDrafts((currentDrafts) => ({ ...currentDrafts, [mode]: '' }));
+    setRightPanel(undefined);
     agUiSessionsRef.current[mode] = new AgUiChatSession(session.threadId);
   };
 
@@ -233,6 +245,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
     agUiSessionsRef.current[editorMode] = agUiSession;
     setAgentMessages((currentMessages) => ({ ...currentMessages, [editorMode]: [] }));
     setDrafts((currentDrafts) => ({ ...currentDrafts, [editorMode]: '' }));
+    setRightPanel(undefined);
 
     if (!application.workspaceRoot) {
       setActiveSessionIds((currentSessionIds) => ({ ...currentSessionIds, [editorMode]: undefined }));
@@ -367,7 +380,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
         threadId: agUiSession.threadId,
         titleFrom: message,
       });
-      const { answer: rawAnswer, orchestration, approval } = await agUiSession.sendMessage(message, {
+      const { answer: rawAnswer, orchestration, approval, codeChanges } = await agUiSession.sendMessage(message, {
         systemPrompt: buildScopedSystemPrompt(application, editorMode),
         workspaceRoot: application.workspaceRoot,
         application,
@@ -380,6 +393,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
         orchestration,
         approval,
         approvalStatus: approval ? 'pending' : undefined,
+        codeChanges,
         createdAt: Date.now(),
       };
       const completedMessages = [...nextMessages, assistantMessage];
@@ -473,7 +487,12 @@ export default function AiChatPanel({ application, editorMode }: Props) {
         titleFrom: userContent,
       });
 
-      const { answer: rawAnswer, orchestration, approval: nextApproval } = await agUiSession.sendMessage(
+      const {
+        answer: rawAnswer,
+        orchestration,
+        approval: nextApproval,
+        codeChanges,
+      } = await agUiSession.sendMessage(
         userContent,
         {
           systemPrompt: buildScopedSystemPrompt(application, editorMode),
@@ -495,6 +514,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
         orchestration,
         approval: nextApproval,
         approvalStatus: nextApproval ? 'pending' : undefined,
+        codeChanges,
         createdAt: Date.now(),
       };
       const completedMessages = [...nextMessages, assistantMessage];
@@ -513,6 +533,152 @@ export default function AiChatPanel({ application, editorMode }: Props) {
     } catch (caughtError) {
       const message =
         caughtError instanceof Error ? caughtError.message : '处理审批失败。';
+      setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: message }));
+    } finally {
+      setApprovingApprovalId(undefined);
+      setLoadingModes((currentLoadingModes) => ({
+        ...currentLoadingModes,
+        [editorMode]: false,
+      }));
+    }
+  };
+
+  const handleOpenCodeChangeFile = (
+    codeChanges: WorkspaceCodeChangeSet,
+    selectedPath: string,
+  ) => {
+    setRightPanel({ type: 'diff', codeChanges, selectedPath });
+  };
+
+  const handleCodeChangeApproval = async (
+    sourceMessageId: number,
+    codeChanges: WorkspaceCodeChangeSet,
+    action: 'approve_once' | 'feedback',
+    feedback?: string,
+  ) => {
+    if (loading || approvingApprovalId) return;
+    const approvals = (codeChanges.approvals || []).filter((approval) => approval.status === 'pending');
+    if (approvals.length === 0) return;
+    const trimmedFeedback = feedback?.trim();
+    if (action === 'feedback' && !trimmedFeedback) return;
+
+    const agUiSession =
+      agUiSessionsRef.current[editorMode] ??
+      (agUiSessionsRef.current[editorMode] = new AgUiChatSession());
+    const sessionId = activeSessionId || createChatSessionId();
+    const userContent = codeChangeApprovalMessage(codeChanges, action, trimmedFeedback);
+    const userMessage: AgentChatMessage = {
+      id: Date.now(),
+      role: 'user',
+      content: userContent,
+      createdAt: Date.now(),
+    };
+
+    setApprovingApprovalId(codeChanges.id);
+    setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }));
+    setLoadingModes((currentLoadingModes) => ({ ...currentLoadingModes, [editorMode]: true }));
+
+    try {
+      const decisions: AgentApprovalDecisionItem[] = [];
+      if (action === 'feedback') {
+        await Promise.all(
+          approvals.map((approval) => rejectToolRequest(approval.id, trimmedFeedback)),
+        );
+        approvals.forEach((approval) => {
+          decisions.push({
+            action: 'feedback',
+            approvalId: approval.id,
+            feedback: trimmedFeedback,
+          });
+        });
+      } else {
+        const grants = await Promise.all(
+          approvals.map((approval) => approveToolRequest(approval.id, 'once')),
+        );
+        approvals.forEach((approval, index) => {
+          decisions.push({
+            action,
+            approvalId: approval.id,
+            grant: grants[index],
+          });
+        });
+      }
+
+      const nextApprovalToolStatus: AgentApprovalRequest['status'] =
+        action === 'feedback' ? 'rejected' : 'approved';
+      const nextApprovalStatus: AgentApprovalStatus =
+        action === 'feedback' ? 'feedback' : 'approved_once';
+      const updatedMessages = messages.map((item) =>
+        item.id === sourceMessageId
+          ? {
+              ...item,
+              codeChanges: updateCodeChangeStatus(
+                codeChanges,
+                action === 'feedback' ? 'rejected' : 'applied',
+              ),
+              approval: item.approval
+                ? {
+                    ...item.approval,
+                    status: nextApprovalToolStatus,
+                  }
+                : item.approval,
+              approvalStatus: nextApprovalStatus,
+            }
+          : item,
+      );
+      const nextMessages = [...updatedMessages, userMessage];
+      setAgentMessages((currentMessages) => ({
+        ...currentMessages,
+        [editorMode]: nextMessages,
+      }));
+      await persistSession(editorMode, nextMessages, {
+        sessionId,
+        threadId: agUiSession.threadId,
+        titleFrom: userContent,
+      });
+
+      const {
+        answer: rawAnswer,
+        orchestration,
+        approval: nextApproval,
+        codeChanges: nextCodeChanges,
+      } = await agUiSession.sendMessage(userContent, {
+        systemPrompt: buildScopedSystemPrompt(application, editorMode),
+        workspaceRoot: application.workspaceRoot,
+        application,
+        approvalDecision: {
+          action,
+          decisions,
+          feedback: trimmedFeedback,
+        },
+      });
+      const answer = rawAnswer.trim();
+      const assistantMessage: AgentChatMessage = {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: answer || '后端已返回，但内容为空。',
+        orchestration,
+        approval: nextApproval,
+        approvalStatus: nextApproval ? 'pending' : undefined,
+        codeChanges: nextCodeChanges,
+        createdAt: Date.now(),
+      };
+      const completedMessages = [...nextMessages, assistantMessage];
+
+      setAgentMessages((currentMessages) => ({
+        ...currentMessages,
+        [editorMode]: completedMessages,
+      }));
+      await persistSession(editorMode, completedMessages, {
+        sessionId,
+        threadId: agUiSession.threadId,
+        titleFrom: userContent,
+      });
+      publishAiMessage(editorMode, answer);
+      antdMessage.success(action === 'feedback' ? '已发送意见' : '已提交审批');
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : '处理代码变更审批失败。';
       setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: message }));
     } finally {
       setApprovingApprovalId(undefined);
@@ -578,7 +744,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
   };
 
   return (
-    <section className={cx('ai-chat-panel', embeddedPreviewOpen && 'embedded-preview-open')}>
+    <section className={cx('ai-chat-panel', rightPanelOpen && 'embedded-preview-open')}>
       <div className={cx('ai-chat-assistant')}>
         <aside className={cx('session-sidebar')} aria-label="历史会话">
           <div className={cx('session-sidebar-header')}>
@@ -668,7 +834,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
                 <Button
                   aria-label="关闭内嵌预览"
                   icon={<CloseOutlined />}
-                  onClick={() => setEmbeddedPreviewOpen(false)}
+                  onClick={() => setRightPanel(undefined)}
                   type="text"
                 />
               )}
@@ -702,53 +868,69 @@ export default function AiChatPanel({ application, editorMode }: Props) {
             {messages.length === 0 ? (
               <Empty description={copy.empty} image={Empty.PRESENTED_IMAGE_SIMPLE} />
             ) : (
-              messages.map((message) => (
-                <article className={cx('ai-message', message.role)} key={message.id}>
-                  <Text className={cx('ai-message-label')}>
-                    {message.role === 'user' ? (
+              messages.map((message) => {
+                const approvalInCodeChanges = Boolean(message.codeChanges?.approvals?.length);
+                return (
+                  <article className={cx('ai-message', message.role)} key={message.id}>
+                    <Text className={cx('ai-message-label')}>
+                      {message.role === 'user' ? (
+                        <>
+                          <UserOutlined /> 用户输入
+                        </>
+                      ) : (
+                        <>
+                          <RobotOutlined /> {copy.label}
+                        </>
+                      )}
+                    </Text>
+                    {message.role === 'assistant' ? (
                       <>
-                        <UserOutlined /> 用户输入
+                        <MarkdownContent content={message.content} />
+                        {message.orchestration && (
+                          <OrchestrationPanel
+                            confirming={confirmingOrchestrationId === message.id}
+                            onConfirm={(orchestration) =>
+                              handleConfirmOrchestration(message.id, orchestration)
+                            }
+                            orchestration={message.orchestration}
+                          />
+                        )}
+                        {message.codeChanges && (
+                          <CodeChangeCard
+                            codeChanges={message.codeChanges}
+                            loading={loading || approvingApprovalId === message.codeChanges.id}
+                            onApproveAll={() =>
+                              handleCodeChangeApproval(message.id, message.codeChanges!, 'approve_once')
+                            }
+                            onFeedback={(feedback) =>
+                              handleCodeChangeApproval(message.id, message.codeChanges!, 'feedback', feedback)
+                            }
+                            onOpenFile={(path) => handleOpenCodeChangeFile(message.codeChanges!, path)}
+                          />
+                        )}
+                        {message.approval && !approvalInCodeChanges && (
+                          <AgentApprovalCard
+                            approval={message.approval}
+                            loading={loading || approvingApprovalId === message.approval.id}
+                            status={message.approvalStatus}
+                            onApproveAlways={() =>
+                              handleApprovalDecision(message.id, message.approval!, 'approve_always')
+                            }
+                            onApproveOnce={() =>
+                              handleApprovalDecision(message.id, message.approval!, 'approve_once')
+                            }
+                            onFeedback={(feedback) =>
+                              handleApprovalDecision(message.id, message.approval!, 'feedback', feedback)
+                            }
+                          />
+                        )}
                       </>
                     ) : (
-                      <>
-                        <RobotOutlined /> {copy.label}
-                      </>
+                      <Text className={cx('ai-message-text')}>{message.content}</Text>
                     )}
-                  </Text>
-                  {message.role === 'assistant' ? (
-                    <>
-                      <MarkdownContent content={message.content} />
-                      {message.orchestration && (
-                        <OrchestrationPanel
-                          confirming={confirmingOrchestrationId === message.id}
-                          onConfirm={(orchestration) =>
-                            handleConfirmOrchestration(message.id, orchestration)
-                          }
-                          orchestration={message.orchestration}
-                        />
-                      )}
-                      {message.approval && (
-                        <AgentApprovalCard
-                          approval={message.approval}
-                          loading={loading || approvingApprovalId === message.approval.id}
-                          status={message.approvalStatus}
-                          onApproveAlways={() =>
-                            handleApprovalDecision(message.id, message.approval!, 'approve_always')
-                          }
-                          onApproveOnce={() =>
-                            handleApprovalDecision(message.id, message.approval!, 'approve_once')
-                          }
-                          onFeedback={(feedback) =>
-                            handleApprovalDecision(message.id, message.approval!, 'feedback', feedback)
-                          }
-                        />
-                      )}
-                    </>
-                  ) : (
-                    <Text className={cx('ai-message-text')}>{message.content}</Text>
-                  )}
-                </article>
-              ))
+                  </article>
+                );
+              })
             )}
             {loading && (
               <div className={cx('ai-message', 'assistant', 'loading')}>
@@ -796,9 +978,25 @@ export default function AiChatPanel({ application, editorMode }: Props) {
         </div>
       </div>
 
-      {embeddedPreviewOpen && (
+      {rightPanel?.type === 'preview' && (
         <div className={cx('embedded-preview-pane')}>
           <BrowserPreviewPanel application={application} />
+        </div>
+      )}
+      {rightPanel?.type === 'diff' && (
+        <div className={cx('embedded-preview-pane')}>
+          <CodeDiffDetailPanel
+            codeChanges={rightPanel.codeChanges}
+            selectedPath={rightPanel.selectedPath}
+            onClose={() => setRightPanel(undefined)}
+            onSelectFile={(selectedPath) =>
+              setRightPanel({
+                type: 'diff',
+                codeChanges: rightPanel.codeChanges,
+                selectedPath,
+              })
+            }
+          />
         </div>
       )}
     </section>
@@ -823,6 +1021,36 @@ function approvalDecisionMessage(
     return `同意执行，后续相同命令不再询问：${approval.subject}`;
   }
   return `暂不同意执行：${approval.subject}\n其他意见：${feedback || '请调整方案后再继续。'}`;
+}
+
+function codeChangeApprovalMessage(
+  codeChanges: WorkspaceCodeChangeSet,
+  action: 'approve_once' | 'feedback',
+  feedback?: string,
+) {
+  const fileText = `${codeChanges.summary.files} 个文件（+${codeChanges.summary.additions} -${codeChanges.summary.deletions}）`;
+  if (action === 'approve_once') {
+    return `同意执行这批代码变更：${fileText}`;
+  }
+  return `暂不同意执行这批代码变更：${fileText}\n其他意见：${feedback || '请调整方案后再继续。'}`;
+}
+
+function updateCodeChangeStatus(
+  codeChanges: WorkspaceCodeChangeSet,
+  status: WorkspaceCodeChangeSet['status'],
+): WorkspaceCodeChangeSet {
+  return {
+    ...codeChanges,
+    status,
+    approvals: codeChanges.approvals?.map((approval) => ({
+      ...approval,
+      status: status === 'rejected' ? 'rejected' : 'approved',
+    })),
+    files: codeChanges.files.map((file) => ({
+      ...file,
+      executed: status === 'applied' ? true : file.executed,
+    })),
+  };
 }
 
 function formatSessionTime(value: number) {

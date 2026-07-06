@@ -78,6 +78,8 @@ MEDIUM_RISK_PACKAGE_SUBCOMMANDS = {
     "update",
 }
 
+CODE_CHANGE_DIFF_LIMIT = 50000
+
 
 class WorkspaceRequest(BaseModel):
     workspace_root: Optional[str] = Field(
@@ -128,6 +130,12 @@ class FileEdit(BaseModel):
 class PatchFileRequest(WorkspacePathRequest):
     edits: List[FileEdit] = Field(min_length=1)
     expected_sha256: Optional[str] = Field(default=None)
+    dry_run: bool = Field(default=False)
+    allow_sensitive: bool = Field(default=False)
+    approval: Optional[ApprovalGrant] = Field(default=None)
+
+
+class DeleteFileRequest(WorkspacePathRequest):
     dry_run: bool = Field(default=False)
     allow_sensitive: bool = Field(default=False)
     approval: Optional[ApprovalGrant] = Field(default=None)
@@ -184,6 +192,7 @@ def capabilities() -> Dict[str, Any]:
             "file.read",
             "file.write",
             "file.patch",
+            "file.delete",
         ],
         "search": [
             "search.files",
@@ -223,6 +232,7 @@ def build_prompt_context() -> str:
         "Use these names when describing tool work to the frontend: "
         f"{', '.join(tool_names)}.\n"
         "Important safety rules: keep all paths inside workspace_root; prefer file.patch over full rewrites; "
+        "use file.delete instead of terminal commands when deleting files; "
         "preview diffs before applying risky edits; risky commands and sensitive file changes require "
         "explicit user approval before execution."
     )
@@ -405,9 +415,20 @@ def write_file(request: WriteFileRequest) -> Dict[str, Any]:
     if path.exists() and not request.overwrite:
         _fail(409, f"File already exists: {request.path}")
 
-    before = path.read_text(encoding="utf-8") if path.exists() else ""
+    existed = path.exists()
+    before = path.read_text(encoding="utf-8") if existed else ""
+    changed = (not existed) or before != request.content
     diff = _text_diff(before, request.content, fromfile=request.path, tofile=request.path)
-    risk = _classify_file_write(path, root, before, request.content)
+    code_change = _code_change_payload(
+        tool="file.write",
+        root=root,
+        path=path,
+        before=before,
+        after=request.content,
+        change_type="modified" if existed else "added",
+        executed=False,
+    ) if changed else None
+    risk = _classify_file_write(path, root, before, request.content, existed=existed)
     if not request.dry_run:
         approval_response = _approval_required_response(
             tool="file.write",
@@ -430,8 +451,9 @@ def write_file(request: WriteFileRequest) -> Dict[str, Any]:
                 "workspace": _workspace_payload(root),
                 "path": _relative_path(path, root),
                 "dry_run": request.dry_run,
-                "changed": before != request.content,
+                "changed": changed,
                 "diff": diff,
+                "code_change": code_change,
             },
         )
         if approval_response:
@@ -456,8 +478,9 @@ def write_file(request: WriteFileRequest) -> Dict[str, Any]:
         "dry_run": request.dry_run,
         "requires_approval": False,
         "executed": not request.dry_run,
-        "changed": before != request.content,
+        "changed": changed,
         "diff": diff,
+        "code_change": _mark_code_change_executed(code_change, executed=not request.dry_run),
         "sha256": hashlib.sha256(request.content.encode("utf-8")).hexdigest(),
     }
 
@@ -497,6 +520,15 @@ def patch_file(request: PatchFileRequest) -> Dict[str, Any]:
         )
 
     diff = _text_diff(before, after, fromfile=request.path, tofile=request.path)
+    code_change = _code_change_payload(
+        tool="file.patch",
+        root=root,
+        path=path,
+        before=before,
+        after=after,
+        change_type="modified",
+        executed=False,
+    ) if before != after else None
     risk = _classify_file_patch(path, root, before != after)
     if not request.dry_run:
         approval_response = _approval_required_response(
@@ -525,6 +557,7 @@ def patch_file(request: PatchFileRequest) -> Dict[str, Any]:
                 "before_sha256": before_hash,
                 "after_sha256": hashlib.sha256(after.encode("utf-8")).hexdigest(),
                 "diff": diff,
+                "code_change": code_change,
             },
         )
         if approval_response:
@@ -545,6 +578,80 @@ def patch_file(request: PatchFileRequest) -> Dict[str, Any]:
         "before_sha256": before_hash,
         "after_sha256": hashlib.sha256(after.encode("utf-8")).hexdigest(),
         "diff": diff,
+        "code_change": _mark_code_change_executed(code_change, executed=not request.dry_run),
+    }
+
+
+def delete_file(request: DeleteFileRequest) -> Dict[str, Any]:
+    root = _workspace_root(request.workspace_root)
+    path = _safe_path(root, request.path)
+    _assert_existing_file(path, root)
+    if _is_sensitive_path(path):
+        _assert_readable_file(path, root, allow_sensitive=True)
+    else:
+        _assert_readable_file(path, root, allow_sensitive=request.allow_sensitive)
+
+    raw = path.read_bytes()
+    before_hash = hashlib.sha256(raw).hexdigest()
+    binary = _looks_binary(raw)
+    before = "" if binary else raw.decode("utf-8", errors="replace")
+    diff = "" if binary else _text_diff(before, "", fromfile=request.path, tofile=request.path)
+    code_change = _code_change_payload(
+        tool="file.delete",
+        root=root,
+        path=path,
+        before=before,
+        after="",
+        change_type="deleted",
+        executed=False,
+        binary=binary,
+    )
+    risk = _classify_file_delete(path, root)
+    if not request.dry_run:
+        approval_response = _approval_required_response(
+            tool="file.delete",
+            root=root,
+            title="删除工作区文件",
+            description=f"请求删除 {_relative_path(path, root)}。",
+            subject=_relative_path(path, root),
+            risk=risk,
+            operation_payload={
+                "workspace_root": str(root),
+                "path": _relative_path(path, root),
+                "before_sha256": before_hash,
+            },
+            grant=request.approval,
+            details=_truncate(diff, 8000) if diff else "Binary or empty file deletion.",
+            response_base={
+                "tool": "file.delete",
+                "workspace": _workspace_payload(root),
+                "path": _relative_path(path, root),
+                "dry_run": request.dry_run,
+                "changed": True,
+                "binary": binary,
+                "before_sha256": before_hash,
+                "diff": diff,
+                "code_change": code_change,
+            },
+        )
+        if approval_response:
+            return approval_response
+
+    if not request.dry_run:
+        path.unlink()
+
+    return {
+        "tool": "file.delete",
+        "workspace": _workspace_payload(root),
+        "path": _relative_path(path, root),
+        "dry_run": request.dry_run,
+        "requires_approval": False,
+        "executed": not request.dry_run,
+        "changed": True,
+        "binary": binary,
+        "before_sha256": before_hash,
+        "diff": diff,
+        "code_change": _mark_code_change_executed(code_change, executed=not request.dry_run),
     }
 
 
@@ -838,8 +945,12 @@ def _approval_required_response(
         risk=risk,
         details=details,
     )
+    response = dict(response_base)
+    code_change = response.get("code_change")
+    if isinstance(code_change, dict):
+        response["code_change"] = {**code_change, "approvalId": approval.get("id")}
     return {
-        **response_base,
+        **response,
         "risk": risk,
         "requires_approval": True,
         "executed": False,
@@ -851,10 +962,17 @@ def _risk_requires_approval(risk: Dict[str, Any]) -> bool:
     return risk.get("level") in {"medium", "high"}
 
 
-def _classify_file_write(path: Path, root: Path, before: str, after: str) -> Dict[str, Any]:
+def _classify_file_write(
+    path: Path,
+    root: Path,
+    before: str,
+    after: str,
+    *,
+    existed: bool,
+) -> Dict[str, Any]:
     reasons: List[str] = []
     level = "low"
-    if before == after:
+    if existed and before == after:
         return {"level": level, "reasons": reasons}
 
     if _is_sensitive_path(path):
@@ -863,6 +981,9 @@ def _classify_file_write(path: Path, root: Path, before: str, after: str) -> Dic
     elif path.exists():
         level = "medium"
         reasons.append(f"Writing {_relative_path(path, root)} will overwrite an existing file.")
+    else:
+        level = "medium"
+        reasons.append(f"Writing {_relative_path(path, root)} will create a new file.")
 
     return {"level": level, "reasons": reasons}
 
@@ -881,6 +1002,18 @@ def _classify_file_patch(path: Path, root: Path, changed: bool) -> Dict[str, Any
         reasons.append(f"Patching {_relative_path(path, root)} will modify an existing file.")
 
     return {"level": level, "reasons": reasons}
+
+
+def _classify_file_delete(path: Path, root: Path) -> Dict[str, Any]:
+    if _is_sensitive_path(path):
+        return {
+            "level": "high",
+            "reasons": [f"{path.name} may contain secrets or local credentials."],
+        }
+    return {
+        "level": "medium",
+        "reasons": [f"Deleting {_relative_path(path, root)} will remove an existing file."],
+    }
 
 
 def _model_payload(value: BaseModel) -> Dict[str, Any]:
@@ -991,6 +1124,58 @@ def _text_diff(before: str, after: str, *, fromfile: str, tofile: str) -> str:
             tofile=f"b/{tofile}",
         )
     )
+
+
+def _diff_stats(diff: str) -> Dict[str, int]:
+    additions = 0
+    deletions = 0
+    for line in diff.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            additions += 1
+        elif line.startswith("-"):
+            deletions += 1
+    return {"additions": additions, "deletions": deletions}
+
+
+def _code_change_payload(
+    *,
+    tool: str,
+    root: Path,
+    path: Path,
+    before: str,
+    after: str,
+    change_type: str,
+    executed: bool,
+    binary: bool = False,
+) -> Dict[str, Any]:
+    rel = _relative_path(path, root)
+    diff = "" if binary else _text_diff(before, after, fromfile=rel, tofile=rel)
+    stats = _diff_stats(diff)
+    digest = hashlib.sha256(f"{tool}:{rel}:{diff}:{change_type}".encode("utf-8")).hexdigest()[:16]
+    return {
+        "id": f"{tool}:{rel}:{digest}",
+        "tool": tool,
+        "path": rel,
+        "changeType": change_type,
+        "additions": stats["additions"],
+        "deletions": stats["deletions"],
+        "diff": _truncate(diff, CODE_CHANGE_DIFF_LIMIT),
+        "truncated": len(diff) > CODE_CHANGE_DIFF_LIMIT,
+        "binary": binary,
+        "executed": executed,
+    }
+
+
+def _mark_code_change_executed(
+    code_change: Optional[Dict[str, Any]],
+    *,
+    executed: bool,
+) -> Optional[Dict[str, Any]]:
+    if code_change is None:
+        return None
+    return {**code_change, "executed": executed}
 
 
 def _search_response(
