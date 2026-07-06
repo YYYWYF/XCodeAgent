@@ -46,7 +46,7 @@ Backend/app/
 | Path | Responsibility | Read first / common edits |
 | --- | --- | --- |
 | `Backend/app/main.py` | FastAPI app setup and route registration for `/health`, `/chat`, `/ag-ui`, `/tools/*`, approvals, and git/workspace tools. | Add or change HTTP endpoints here, then update the corresponding runtime/tool module. |
-| `Backend/app/config.py` | Environment-backed settings for Anthropic-compatible model calls. | Read when changing `.env` variables or model/client configuration. |
+| `Backend/app/config.py` | Environment-backed model Provider, endpoint, credentials, and runtime settings. | Read when changing `.env` variables or model/client configuration. |
 | `Backend/app/graph/agent.py` | Main LangGraph chat/application-development flow, workspace tool dispatch, code-change aggregation, and in-memory sessions. | Read when changing coding-agent behavior, tool use, prompts, or conversation flow. |
 | `Backend/app/graph/orchestrator.py` | Development orchestration flow for clarification, planning, task DAG batching, and verification. | Read when changing plan/dispatch/verify behavior. |
 | `Backend/app/agents/requirement_planner.py` | LLM-backed requirement questions and structured development-plan normalization. | Read when changing planner questions, schema, state, or prompts. |
@@ -54,7 +54,7 @@ Backend/app/
 | `Backend/app/domain/development_contract.py` | Framework-independent Development Contract models and normalization. | Read when changing SDD, features, API contracts, task graph, or verification plan. |
 | `Backend/app/services/requirement_intake.py` | Deterministic simple/complex requirement classification and target routing. | Read when changing intake rules or agent handoff. |
 | `Backend/app/services/task_scheduler.py` | Deterministic serial/parallel task batching and execution assignment. | Read when changing task isolation or scheduling rules. |
-| `Backend/app/services/llm_client.py` | Anthropic-compatible model client factory. | Read when changing provider/auth/base URL behavior. |
+| `Backend/app/services/llm_client.py` | Provider-neutral model response contract plus Anthropic and OpenAI-compatible adapters. | Read when changing provider selection, request/response conversion, tools, auth, or base URL behavior. |
 | `Backend/app/services/builtin_skills.py` | Loads bundled backend skill prompt content. | Read when wiring bundled skills into prompts. |
 | `Backend/app/tools/antd_v4_docs.py` | Access to bundled Ant Design v4 docs for prompt/context lookup. | Read when changing AntD docs retrieval. |
 | `Backend/app/protocols/ag_ui.py` | AG-UI stream adapter, agent-mode routing, approval events, and workspace code-change events. | Read when changing `forwardedProps`, AG-UI event shapes, or frontend/backend handoff. |

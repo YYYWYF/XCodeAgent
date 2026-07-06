@@ -11,13 +11,18 @@ from pydantic import BaseModel, Field
 from app.protocols.ag_ui import build_ag_ui_stream
 from app.graph.agent import AgentRuntime
 from app.config import Settings
-from app.graph.orchestrator import DevelopmentOrchestratorRuntime, orchestrator_capabilities
+from app.graph.orchestrator import (
+    DevelopmentOrchestratorRuntime,
+    orchestrator_capabilities,
+)
 from app.services.requirement_intake import intake_capabilities
 from app.tools import antd_v4_docs
 from app.workspace import workspace as workspace_tools
 from app.middleware.approvals import approval_store
-from app.agents.requirement_planner import RequirementPlannerRuntime, planner_capabilities
-
+from app.agents.requirement_planner import (
+    RequirementPlannerRuntime,
+    planner_capabilities,
+)
 
 settings = Settings.from_env()
 agent = AgentRuntime(settings)
@@ -39,13 +44,19 @@ app.add_middleware(
 
 
 class ChatRequest(BaseModel):
-    message: Annotated[str, Field(min_length=1, description="User input for the agent.")]
+    message: Annotated[
+        str, Field(min_length=1, description="User input for the agent.")
+    ]
     session_id: Optional[str] = Field(
         default=None,
         description="Optional conversation id. Reuse it to keep in-memory chat history.",
     )
-    system_prompt: Optional[str] = Field(default=None, description="Optional prompt override.")
-    workspace_root: Optional[str] = Field(default=None, description="Optional workspace root for local tools.")
+    system_prompt: Optional[str] = Field(
+        default=None, description="Optional prompt override."
+    )
+    workspace_root: Optional[str] = Field(
+        default=None, description="Optional workspace root for local tools."
+    )
     temperature: Optional[float] = Field(default=None, ge=0, le=1)
     max_tokens: Optional[int] = Field(default=None, ge=1, le=8192)
 
@@ -58,15 +69,25 @@ class ChatResponse(BaseModel):
 
 
 class RequirementPlannerRequest(BaseModel):
-    message: Annotated[str, Field(min_length=1, description="User requirement or answer.")]
+    message: Annotated[
+        str, Field(min_length=1, description="User requirement or answer.")
+    ]
     action: str = Field(default="answer", description="start, answer, or finalize.")
     planner_state: Optional[dict[str, Any]] = Field(default=None)
     application: Optional[dict[str, Any]] = Field(default=None)
 
 
 class DevelopmentOrchestratorRequest(BaseModel):
-    message: Annotated[str, Field(min_length=1, description="User requirement, answer, or verification request.")]
-    action: str = Field(default="answer", description="start, answer, finalize, dispatch, or verify.")
+    message: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description="User requirement, answer, or verification request.",
+        ),
+    ]
+    action: str = Field(
+        default="answer", description="start, answer, finalize, dispatch, or verify."
+    )
     orchestrator_state: Optional[dict[str, Any]] = Field(default=None)
     planner_state: Optional[dict[str, Any]] = Field(default=None)
     application: Optional[dict[str, Any]] = Field(default=None)
@@ -82,7 +103,8 @@ class ApprovalActionRequest(BaseModel):
 async def health() -> dict[str, object]:
     return {
         "status": "ok",
-        "model": settings.anthropic_api_model,
+        "provider": settings.model_provider,
+        "model": settings.model_api_name,
         "configured_model": settings.anthropic_model,
         "base_url": settings.anthropic_base_url,
         "builtin_skills": ["react-antd-v4-codegen"],
@@ -111,7 +133,9 @@ async def chat(request: ChatRequest) -> ChatResponse:
             max_tokens=request.max_tokens,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Model call failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"Model call failed: {exc}"
+        ) from exc
     return ChatResponse(**result)
 
 
@@ -137,11 +161,15 @@ async def run_requirement_planner(request: RequirementPlannerRequest) -> dict[st
             action=request.action,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Requirement planner failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"Requirement planner failed: {exc}"
+        ) from exc
 
 
 @app.post("/tools/development-orchestrator")
-async def run_development_orchestrator(request: DevelopmentOrchestratorRequest) -> dict[str, Any]:
+async def run_development_orchestrator(
+    request: DevelopmentOrchestratorRequest,
+) -> dict[str, Any]:
     try:
         return await orchestrator.run(
             request.message,
@@ -152,7 +180,9 @@ async def run_development_orchestrator(request: DevelopmentOrchestratorRequest) 
             action=request.action,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Development orchestrator failed: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"Development orchestrator failed: {exc}"
+        ) from exc
 
 
 @app.get("/tools/workspace/capabilities")
@@ -166,7 +196,9 @@ async def workspace_info(request: workspace_tools.WorkspaceRequest) -> dict[str,
 
 
 @app.post("/tools/workspace/list-files")
-async def workspace_list_files(request: workspace_tools.ListFilesRequest) -> dict[str, Any]:
+async def workspace_list_files(
+    request: workspace_tools.ListFilesRequest,
+) -> dict[str, Any]:
     return workspace_tools.list_files(request)
 
 

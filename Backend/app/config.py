@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-
 load_dotenv()
 
 _DISPLAY_MODEL_SUFFIX = re.compile(r"\s+\[[^\]]+\]\s*$")
@@ -17,8 +16,11 @@ class Settings:
     anthropic_base_url: str
     anthropic_auth_token: str
     anthropic_model: str
+    model_provider: str = "openai"
     anthropic_trust_env: bool = False
-    default_system_prompt: str = "You are a helpful local agent. Answer clearly and concisely."
+    default_system_prompt: str = (
+        "You are a helpful local agent. Answer clearly and concisely."
+    )
     default_temperature: float = 0.2
     default_max_tokens: int = 2048
 
@@ -26,12 +28,18 @@ class Settings:
     def anthropic_api_model(self) -> str:
         return _DISPLAY_MODEL_SUFFIX.sub("", self.anthropic_model).strip()
 
+    @property
+    def model_api_name(self) -> str:
+        return self.anthropic_api_model
+
     @classmethod
     def from_env(cls) -> "Settings":
+        base_url = _required_any("MODEL_BASE_URL", "ANTHROPIC_BASE_URL")
         return cls(
-            anthropic_base_url=_required("ANTHROPIC_BASE_URL"),
-            anthropic_auth_token=_required("ANTHROPIC_AUTH_TOKEN"),
-            anthropic_model=_required("ANTHROPIC_MODEL"),
+            anthropic_base_url=base_url,
+            anthropic_auth_token=_required_any("MODEL_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+            anthropic_model=_required_any("MODEL_NAME", "ANTHROPIC_MODEL"),
+            model_provider=(os.getenv("MODEL_PROVIDER", "").strip().lower()),
             anthropic_trust_env=_env_bool("ANTHROPIC_TRUST_ENV", default=False),
             default_system_prompt=os.getenv(
                 "AGENT_SYSTEM_PROMPT",
@@ -47,6 +55,14 @@ def _required(name: str) -> str:
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
+
+def _required_any(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    raise RuntimeError(f"Missing required environment variable: {' or '.join(names)}")
 
 
 def _env_bool(name: str, *, default: bool) -> bool:

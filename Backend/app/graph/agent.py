@@ -18,7 +18,7 @@ from typing_extensions import NotRequired
 
 from app.services.builtin_skills import load_react_antd_v4_codegen_prompt
 from app.config import Settings
-from app.services.llm_client import create_anthropic_client
+from app.services.llm_client import ModelResponse, create_model_provider
 from app.tools.antd_v4_docs import build_prompt_context
 from app.workspace import workspace as workspace_tools
 from app.workspace.workspace import build_prompt_context as build_workspace_tools_prompt_context
@@ -334,7 +334,7 @@ class AgentState(MessagesState):
 class AgentRuntime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = create_anthropic_client(settings)
+        self.provider = create_model_provider(settings)
         self._pending_tool_requests: Dict[str, PendingAgentToolRequest] = {}
         self.graph = self._build_graph()
 
@@ -346,7 +346,7 @@ class AgentRuntime:
         return graph.compile(checkpointer=MemorySaver())
 
     async def _call_model(self, state: AgentState) -> dict[str, list[AIMessage]]:
-        anthropic_messages, inline_system = self._to_anthropic_messages(state["messages"])
+        model_messages, inline_system = self._to_model_messages(state["messages"])
         latest_user_message = self._latest_user_message(state["messages"])
         system_prompt = self._compose_system_prompt(
             state.get("system_prompt"),
@@ -362,17 +362,16 @@ class AgentRuntime:
         code_changes: List[Dict[str, Any]] = []
 
         for _ in range(MAX_TOOL_ROUNDS):
-            response = await self.client.messages.create(
-                model=self.settings.anthropic_api_model,
+            response = await self.provider.complete(
+                model=self.settings.model_api_name,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 system=system_prompt,
-                messages=anthropic_messages,
+                messages=model_messages,
                 tools=WORKSPACE_TOOLS,
             )
             tool_uses = self._tool_uses(response)
             if tool_uses:
-                tool_result_payloads = []
                 for tool_use in tool_uses:
                     result = self._execute_workspace_tool(tool_use, workspace_root=workspace_root)
                     code_change = self._code_change_from_tool_result(result)
@@ -386,17 +385,28 @@ class AgentRuntime:
                     )
                     if approval_request:
                         pending_approvals.append(approval_request)
-                    tool_result_payloads.append(
-                        self._tool_result_payload_from_result(tool_use, result)
+                    model_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_use.id,
+                            "content": self._json_tool_result(result),
+                            "is_error": not bool(result.get("ok")),
+                        }
                     )
-                anthropic_messages.append(
-                    {"role": "assistant", "content": self._response_content_payload(response)}
-                )
-                anthropic_messages.append(
+                model_messages.insert(
+                    len(model_messages) - len(tool_uses),
                     {
-                        "role": "user",
-                        "content": tool_result_payloads,
-                    }
+                        "role": "assistant",
+                        "content": response.text,
+                        "tool_calls": [
+                            {
+                                "id": tool_use.id,
+                                "name": tool_use.name,
+                                "input": tool_use.input,
+                            }
+                            for tool_use in tool_uses
+                        ],
+                    },
                 )
                 continue
 
@@ -424,8 +434,8 @@ class AgentRuntime:
                 if approval_request:
                     pending_approvals.append(approval_request)
                 text_tool_results.append(result)
-            anthropic_messages.append({"role": "assistant", "content": text})
-            anthropic_messages.append(
+            model_messages.append({"role": "assistant", "content": text})
+            model_messages.append(
                 {"role": "user", "content": self._text_tool_results_message(text_tool_results)}
             )
 
@@ -488,7 +498,7 @@ class AgentRuntime:
         )
         return {
             "session_id": thread_id,
-            "model": self.settings.anthropic_api_model,
+            "model": self.settings.model_api_name,
             "answer": answer,
             "messages": self._serialize_messages(result["messages"]),
             "approval": self._latest_pending_approval(approvals),
@@ -521,7 +531,7 @@ class AgentRuntime:
         return ""
 
     @staticmethod
-    def _to_anthropic_messages(messages: List[BaseMessage]) -> Tuple[List[Dict[str, str]], str]:
+    def _to_model_messages(messages: List[BaseMessage]) -> Tuple[List[Dict[str, Any]], str]:
         output: List[Dict[str, str]] = []
         system_parts: List[str] = []
 
@@ -539,16 +549,12 @@ class AgentRuntime:
         return output, "\n\n".join(system_parts)
 
     @staticmethod
-    def _extract_text(response) -> str:
-        chunks: List[str] = []
-        for block in response.content:
-            if getattr(block, "type", None) == "text":
-                chunks.append(block.text)
-        return "\n".join(chunks).strip()
+    def _extract_text(response: ModelResponse) -> str:
+        return response.text.strip()
 
     @staticmethod
-    def _tool_uses(response) -> List[Any]:
-        return [block for block in response.content if getattr(block, "type", None) == "tool_use"]
+    def _tool_uses(response: ModelResponse) -> List[Any]:
+        return response.tool_calls
 
     @staticmethod
     def _text_tool_uses(text: str) -> List[TextToolUse]:

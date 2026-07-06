@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import Settings
 from app.domain.development_contract import normalize_contract
-from app.services.llm_client import create_anthropic_client
+from app.services.llm_client import create_model_provider
 
 
 PLANNING_DATA_START = "<planning-data>"
@@ -21,7 +21,7 @@ class RequirementPlannerRuntime:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.client = create_anthropic_client(settings)
+        self.provider = create_model_provider(settings)
 
     async def run(
         self,
@@ -94,8 +94,8 @@ class RequirementPlannerRuntime:
         }
 
     async def _call_json(self, prompt: str, *, max_tokens: int) -> Dict[str, Any]:
-        response = await self.client.messages.create(
-            model=self.settings.anthropic_api_model,
+        response = await self.provider.complete(
+            model=self.settings.model_api_name,
             max_tokens=max_tokens,
             temperature=0.2,
             system=(
@@ -672,11 +672,7 @@ def _fallback_sdd(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extract_text(response: Any) -> str:
-    chunks: List[str] = []
-    for block in response.content:
-        if getattr(block, "type", None) == "text":
-            chunks.append(block.text)
-    return "\n".join(chunks).strip()
+    return str(response.text).strip()
 
 
 def _loads_json_object(value: str) -> Dict[str, Any]:
