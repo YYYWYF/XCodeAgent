@@ -1,5 +1,6 @@
 import {
   CloseOutlined,
+  DeleteOutlined,
   DesktopOutlined,
   DownOutlined,
   ExportOutlined,
@@ -9,15 +10,16 @@ import {
   SendOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Dropdown, Empty, Input, Spin, Typography } from 'antd';
+import { Alert, Button, Dropdown, Empty, Input, Popconfirm, Spin, Typography, message as antdMessage } from 'antd';
 import type { MenuProps } from 'antd';
 import type { KeyboardEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useWorkbench } from '../../context';
-import { AgUiChatSession } from '../../service/agUiAgent';
+import { AgUiChatSession, DevelopmentOrchestratorSession } from '../../service/agUiAgent';
 import {
   createChatSessionId,
   createChatSessionTitle,
+  deleteChatSession,
   listChatSessions,
   readChatSession,
   saveChatSession,
@@ -25,10 +27,20 @@ import {
   type ChatSessionRecord,
   type ChatSessionSummary,
 } from '../../service/chatSessions';
-import type { ApplicationConfig, EditorMode } from '../../typings';
+import { approveToolRequest, rejectToolRequest } from '../../service/workspaceTools';
+import type {
+  AgentApprovalDecisionAction,
+  AgentApprovalRequest,
+  AgentApprovalStatus,
+  ApplicationConfig,
+  DevelopmentOrchestrationPayload,
+  EditorMode,
+} from '../../typings';
 import { cx, getInitialPreviewUrl, openPreviewWindow } from '../../utils';
+import AgentApprovalCard from './AgentApprovalCard';
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel';
 import MarkdownContent from '../MarkdownContent/MarkdownContent';
+import OrchestrationPanel from '../OrchestrationPanel/OrchestrationPanel';
 import './AiChatPanel.less';
 
 const { Text, Title } = Typography;
@@ -38,6 +50,9 @@ type AgentChatMessage = {
   id: number;
   role: 'user' | 'assistant';
   content: string;
+  orchestration?: DevelopmentOrchestrationPayload;
+  approval?: AgentApprovalRequest;
+  approvalStatus?: AgentApprovalStatus;
   createdAt: number;
 };
 
@@ -83,11 +98,14 @@ export default function AiChatPanel({ application, editorMode }: Props) {
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<EditorMode, string>>>({});
   const [sessionLoadingModes, setSessionLoadingModes] = useState<Partial<Record<EditorMode, boolean>>>({});
   const [sessionErrors, setSessionErrors] = useState<Partial<Record<EditorMode, string>>>({});
+  const [deletingSessionIds, setDeletingSessionIds] = useState<Partial<Record<EditorMode, string>>>({});
   const agUiSessionsRef = useRef<Partial<Record<EditorMode, AgUiChatSession>>>({});
   const [loadingModes, setLoadingModes] = useState<Partial<Record<EditorMode, boolean>>>({});
   const [errors, setErrors] = useState<Partial<Record<EditorMode, string>>>({});
   const [previewError, setPreviewError] = useState('');
   const [embeddedPreviewOpen, setEmbeddedPreviewOpen] = useState(false);
+  const [confirmingOrchestrationId, setConfirmingOrchestrationId] = useState<number>();
+  const [approvingApprovalId, setApprovingApprovalId] = useState<string>();
   const { publishAiMessage } = useWorkbench();
   const messages = agentMessages[editorMode];
   const sessions = sessionSummaries[editorMode];
@@ -96,6 +114,7 @@ export default function AiChatPanel({ application, editorMode }: Props) {
   const draft = drafts[editorMode];
   const loading = Boolean(loadingModes[editorMode]);
   const loadingSessions = Boolean(sessionLoadingModes[editorMode]);
+  const deletingSessionId = deletingSessionIds[editorMode];
   const error = errors[editorMode];
   const sessionError = sessionErrors[editorMode];
   const showPreviewActions = editorMode === 'frontend';
@@ -254,6 +273,42 @@ export default function AiChatPanel({ application, editorMode }: Props) {
     createNewSession();
   };
 
+  const handleDeleteSession = async (sessionId: string) => {
+    if (!application.workspaceRoot || deletingSessionId || (loading && activeSessionId === sessionId)) return;
+
+    const nextSession = sessions.find((session) => session.id !== sessionId);
+    setDeletingSessionIds((currentDeletingIds) => ({ ...currentDeletingIds, [editorMode]: sessionId }));
+    setSessionErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }));
+
+    try {
+      await deleteChatSession(application.workspaceRoot, editorMode, sessionId);
+      setSessionSummaries((currentSummaries) => ({
+        ...currentSummaries,
+        [editorMode]: currentSummaries[editorMode].filter((session) => session.id !== sessionId),
+      }));
+
+      if (activeSessionId === sessionId) {
+        if (nextSession) {
+          await openChatSession(editorMode, nextSession.id);
+        } else {
+          setAgentMessages((currentMessages) => ({ ...currentMessages, [editorMode]: [] }));
+          setActiveSessionIds((currentSessionIds) => ({ ...currentSessionIds, [editorMode]: undefined }));
+          setDrafts((currentDrafts) => ({ ...currentDrafts, [editorMode]: '' }));
+          agUiSessionsRef.current[editorMode] = undefined;
+        }
+      }
+
+      antdMessage.success('已删除会话');
+    } catch (caughtError) {
+      setSessionErrors((currentErrors) => ({
+        ...currentErrors,
+        [editorMode]: caughtError instanceof Error ? caughtError.message : '删除本地会话失败。',
+      }));
+    } finally {
+      setDeletingSessionIds((currentDeletingIds) => ({ ...currentDeletingIds, [editorMode]: undefined }));
+    }
+  };
+
   const persistSession = async (
     mode: EditorMode,
     nextMessages: ChatSessionMessage[],
@@ -312,15 +367,19 @@ export default function AiChatPanel({ application, editorMode }: Props) {
         threadId: agUiSession.threadId,
         titleFrom: message,
       });
-      const { answer: rawAnswer } = await agUiSession.sendMessage(message, {
+      const { answer: rawAnswer, orchestration, approval } = await agUiSession.sendMessage(message, {
         systemPrompt: buildScopedSystemPrompt(application, editorMode),
         workspaceRoot: application.workspaceRoot,
+        application,
       });
       const answer = rawAnswer.trim();
       const assistantMessage: AgentChatMessage = {
         id: Date.now() + 1,
         role: 'assistant',
         content: answer || '后端已返回，但内容为空。',
+        orchestration,
+        approval,
+        approvalStatus: approval ? 'pending' : undefined,
         createdAt: Date.now(),
       };
       const completedMessages = [...nextMessages, assistantMessage];
@@ -345,6 +404,176 @@ export default function AiChatPanel({ application, editorMode }: Props) {
         ...currentLoadingModes,
         [editorMode]: false,
       }));
+    }
+  };
+
+  const handleApprovalDecision = async (
+    sourceMessageId: number,
+    approval: AgentApprovalRequest,
+    action: AgentApprovalDecisionAction,
+    feedback?: string,
+  ) => {
+    if (loading || approvingApprovalId) return;
+    const trimmedFeedback = feedback?.trim();
+    if (action === 'feedback' && !trimmedFeedback) return;
+
+    const agUiSession =
+      agUiSessionsRef.current[editorMode] ??
+      (agUiSessionsRef.current[editorMode] = new AgUiChatSession());
+    const sessionId = activeSessionId || createChatSessionId();
+    const approvalStatus = approvalStatusFromAction(action);
+    const userContent = approvalDecisionMessage(approval, action, trimmedFeedback);
+    const userMessage: AgentChatMessage = {
+      id: Date.now(),
+      role: 'user',
+      content: userContent,
+      createdAt: Date.now(),
+    };
+
+    setApprovingApprovalId(approval.id);
+    setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }));
+    setLoadingModes((currentLoadingModes) => ({ ...currentLoadingModes, [editorMode]: true }));
+
+    try {
+      const grant =
+        action === 'feedback'
+          ? undefined
+          : await approveToolRequest(
+              approval.id,
+              action === 'approve_always' ? 'operation' : 'once',
+            );
+      if (action === 'feedback') {
+        await rejectToolRequest(approval.id, trimmedFeedback);
+      }
+
+      const nextToolApprovalStatus: AgentApprovalRequest['status'] =
+        action === 'feedback' ? 'rejected' : 'approved';
+      const approvedMessages = messages.map((item) =>
+        item.id === sourceMessageId
+          ? {
+              ...item,
+              approvalStatus,
+              approval: item.approval
+                ? {
+                    ...item.approval,
+                    status: nextToolApprovalStatus,
+                  }
+                : item.approval,
+            }
+          : item,
+      );
+      const nextMessages = [...approvedMessages, userMessage];
+      setAgentMessages((currentMessages) => ({
+        ...currentMessages,
+        [editorMode]: nextMessages,
+      }));
+      await persistSession(editorMode, nextMessages, {
+        sessionId,
+        threadId: agUiSession.threadId,
+        titleFrom: userContent,
+      });
+
+      const { answer: rawAnswer, orchestration, approval: nextApproval } = await agUiSession.sendMessage(
+        userContent,
+        {
+          systemPrompt: buildScopedSystemPrompt(application, editorMode),
+          workspaceRoot: application.workspaceRoot,
+          application,
+          approvalDecision: {
+            action,
+            approvalId: approval.id,
+            grant,
+            feedback: trimmedFeedback,
+          },
+        },
+      );
+      const answer = rawAnswer.trim();
+      const assistantMessage: AgentChatMessage = {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: answer || '后端已返回，但内容为空。',
+        orchestration,
+        approval: nextApproval,
+        approvalStatus: nextApproval ? 'pending' : undefined,
+        createdAt: Date.now(),
+      };
+      const completedMessages = [...nextMessages, assistantMessage];
+
+      setAgentMessages((currentMessages) => ({
+        ...currentMessages,
+        [editorMode]: completedMessages,
+      }));
+      await persistSession(editorMode, completedMessages, {
+        sessionId,
+        threadId: agUiSession.threadId,
+        titleFrom: userContent,
+      });
+      publishAiMessage(editorMode, answer);
+      antdMessage.success(action === 'feedback' ? '已发送意见' : '已提交审批');
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : '处理审批失败。';
+      setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: message }));
+    } finally {
+      setApprovingApprovalId(undefined);
+      setLoadingModes((currentLoadingModes) => ({
+        ...currentLoadingModes,
+        [editorMode]: false,
+      }));
+    }
+  };
+
+  const handleConfirmOrchestration = async (
+    messageId: number,
+    orchestration: DevelopmentOrchestrationPayload,
+  ) => {
+    if (confirmingOrchestrationId) return;
+    if (!application.workspaceRoot) {
+      setErrors((currentErrors) => ({
+        ...currentErrors,
+        [editorMode]: '确认执行计划前需要先绑定工作目录。',
+      }));
+      return;
+    }
+    const agUiSession =
+      agUiSessionsRef.current[editorMode] ??
+      (agUiSessionsRef.current[editorMode] = new AgUiChatSession());
+    const orchestratorSession = new DevelopmentOrchestratorSession(agUiSession.threadId);
+
+    setConfirmingOrchestrationId(messageId);
+    setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }));
+    try {
+      const result = await orchestratorSession.sendMessage('用户确认执行当前开发计划。', {
+        action: 'dispatch',
+        orchestratorState: orchestration.state,
+        application,
+        workspaceRoot: application.workspaceRoot,
+      });
+      const nextOrchestration = result.orchestration || orchestration;
+      const nextAnswer = result.answer || '开发计划已确认。';
+      const nextMessages = messages.map((item) =>
+        item.id === messageId
+          ? {
+              ...item,
+              content: `${item.content}\n\n${nextAnswer}`,
+              orchestration: nextOrchestration,
+            }
+          : item,
+      );
+      setAgentMessages((currentMessages) => ({
+        ...currentMessages,
+        [editorMode]: nextMessages,
+      }));
+      await persistSession(editorMode, nextMessages, {
+        sessionId: activeSessionId,
+        threadId: agUiSession.threadId,
+      });
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : '确认执行计划失败。';
+      setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: message }));
+    } finally {
+      setConfirmingOrchestrationId(undefined);
     }
   };
 
@@ -386,16 +615,45 @@ export default function AiChatPanel({ application, editorMode }: Props) {
                 <div
                   className={cx('session-item', activeSessionId === session.id && 'active')}
                   key={session.id}
-                  onClick={() => handleOpenSession(session.id)}
-                  onKeyDown={(event) => handleOpenSessionKeyDown(event, session.id)}
-                  tabIndex={0}
                 >
-                  <span className={cx('session-item-title')}>
-                    <MessageOutlined /> {session.title}
-                  </span>
-                  <span className={cx('session-item-meta')}>
-                    {formatSessionTime(session.updatedAt)} · {session.messageCount} 条
-                  </span>
+                  <div
+                    className={cx('session-item-content')}
+                    onClick={() => handleOpenSession(session.id)}
+                    onKeyDown={(event) => handleOpenSessionKeyDown(event, session.id)}
+                    tabIndex={0}
+                  >
+                    <span className={cx('session-item-title')}>
+                      <MessageOutlined /> {session.title}
+                    </span>
+                    <span className={cx('session-item-meta')}>
+                      {formatSessionTime(session.updatedAt)} · {session.messageCount} 条
+                    </span>
+                  </div>
+                  <Popconfirm
+                    cancelText="取消"
+                    disabled={loading && activeSessionId === session.id}
+                    okText="删除"
+                    okButtonProps={{ danger: true }}
+                    onCancel={(event) => event?.stopPropagation()}
+                    onConfirm={(event) => {
+                      event?.stopPropagation();
+                      return handleDeleteSession(session.id);
+                    }}
+                    title="删除这个历史会话？"
+                  >
+                    <Button
+                      aria-label={`删除会话 ${session.title}`}
+                      className={cx('session-delete-button')}
+                      danger
+                      disabled={loadingSessions || (loading && activeSessionId === session.id)}
+                      icon={<DeleteOutlined />}
+                      loading={deletingSessionId === session.id}
+                      onClick={(event) => event.stopPropagation()}
+                      size="small"
+                      title="删除会话"
+                      type="text"
+                    />
+                  </Popconfirm>
                 </div>
               ))
             )}
@@ -458,7 +716,34 @@ export default function AiChatPanel({ application, editorMode }: Props) {
                     )}
                   </Text>
                   {message.role === 'assistant' ? (
-                    <MarkdownContent content={message.content} />
+                    <>
+                      <MarkdownContent content={message.content} />
+                      {message.orchestration && (
+                        <OrchestrationPanel
+                          confirming={confirmingOrchestrationId === message.id}
+                          onConfirm={(orchestration) =>
+                            handleConfirmOrchestration(message.id, orchestration)
+                          }
+                          orchestration={message.orchestration}
+                        />
+                      )}
+                      {message.approval && (
+                        <AgentApprovalCard
+                          approval={message.approval}
+                          loading={loading || approvingApprovalId === message.approval.id}
+                          status={message.approvalStatus}
+                          onApproveAlways={() =>
+                            handleApprovalDecision(message.id, message.approval!, 'approve_always')
+                          }
+                          onApproveOnce={() =>
+                            handleApprovalDecision(message.id, message.approval!, 'approve_once')
+                          }
+                          onFeedback={(feedback) =>
+                            handleApprovalDecision(message.id, message.approval!, 'feedback', feedback)
+                          }
+                        />
+                      )}
+                    </>
                   ) : (
                     <Text className={cx('ai-message-text')}>{message.content}</Text>
                   )}
@@ -518,6 +803,26 @@ export default function AiChatPanel({ application, editorMode }: Props) {
       )}
     </section>
   );
+}
+
+function approvalStatusFromAction(action: AgentApprovalDecisionAction): AgentApprovalStatus {
+  if (action === 'approve_always') return 'approved_always';
+  if (action === 'approve_once') return 'approved_once';
+  return 'feedback';
+}
+
+function approvalDecisionMessage(
+  approval: AgentApprovalRequest,
+  action: AgentApprovalDecisionAction,
+  feedback?: string,
+) {
+  if (action === 'approve_once') {
+    return `同意执行（仅本次）：${approval.subject}`;
+  }
+  if (action === 'approve_always') {
+    return `同意执行，后续相同命令不再询问：${approval.subject}`;
+  }
+  return `暂不同意执行：${approval.subject}\n其他意见：${feedback || '请调整方案后再继续。'}`;
 }
 
 function formatSessionTime(value: number) {

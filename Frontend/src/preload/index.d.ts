@@ -33,6 +33,11 @@ declare global {
         workspaceRoot: string;
         session: unknown;
       }) => Promise<{ ok?: boolean; session?: unknown }>;
+      delete: (payload: {
+        workspaceRoot: string;
+        editorMode: 'frontend' | 'backend';
+        sessionId: string;
+      }) => Promise<{ ok?: boolean }>;
     };
     browser?: {
       openExternal: (url: string) => Promise<{ ok?: boolean }>;

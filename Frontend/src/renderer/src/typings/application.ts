@@ -1,3 +1,5 @@
+import type { DevelopmentContract } from './developmentContract';
+
 export type ApplicationAudience =
   | 'operator'
   | 'admin'
@@ -54,41 +56,4 @@ export interface ApplicationDraft {
   dynamicRouteDescription?: string;
 }
 
-export interface RequirementDevelopmentPlan {
-  title: string;
-  summary: string;
-  assumptions: string[];
-  scope: {
-    in: string[];
-    out: string[];
-  };
-  modules?: Array<{
-    name: string;
-    enabled: boolean;
-    reason: string;
-  }>;
-  pages: Array<{
-    name: string;
-    goal: string;
-    keyInteractions?: string[];
-  }>;
-  frontendTasks: string[];
-  backendTasks: string[];
-  apis: Array<{
-    name: string;
-    method: string;
-    path: string;
-    purpose: string;
-  }>;
-  dataModels: Array<{
-    name: string;
-    description: string;
-  }>;
-  milestones: Array<{
-    name: string;
-    deliverables: string[];
-  }>;
-  risks: string[];
-  openQuestions: string[];
-  nextActions: string[];
-}
+export type RequirementDevelopmentPlan = DevelopmentContract;

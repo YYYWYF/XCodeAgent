@@ -5,6 +5,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from app.config import Settings
+from app.development_contract import normalize_contract
 from app.llm_client import create_anthropic_client
 
 
@@ -12,6 +13,7 @@ PLANNING_DATA_START = "<planning-data>"
 PLANNING_DATA_END = "</planning-data>"
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_TARGET_TYPES = {"frontend", "backend", "fullstack"}
 
 
 class RequirementPlannerRuntime:
@@ -119,9 +121,10 @@ def summarize_planning_payload(payload: Dict[str, Any]) -> str:
     if status == "plan" and isinstance(payload.get("plan"), dict):
         plan = payload["plan"]
         title = str(plan.get("title") or "开发计划")
+        target_label = _target_type_label(plan.get("targetType"))
         summary = str(plan.get("summary") or payload.get("message") or "")
         next_actions = _as_list(plan.get("nextActions"))[:3]
-        lines = [f"已生成《{title}》。", summary]
+        lines = [f"已生成《{title}》{target_label}。", summary]
         if next_actions:
             lines.append("下一步建议：")
             lines.extend(f"{index + 1}. {item}" for index, item in enumerate(next_actions))
@@ -229,10 +232,11 @@ def _normalize_options(value: Any) -> List[Dict[str, str]]:
 
 
 def _normalize_plan(value: Any, state: Dict[str, Any]) -> Dict[str, Any]:
-    if not isinstance(value, dict):
-        return _fallback_plan(state)
-
-    plan = dict(value)
+    plan = dict(value) if isinstance(value, dict) else _fallback_plan(state)
+    plan["targetType"] = _normalize_target_type(
+        plan.get("targetType") or plan.get("target_type"),
+        state,
+    )
     plan.setdefault("title", "应用开发计划")
     plan.setdefault("summary", "基于当前需求和选择结果生成的开发计划。")
     plan.setdefault("sdd", _fallback_sdd(state))
@@ -243,7 +247,7 @@ def _normalize_plan(value: Any, state: Dict[str, Any]) -> Dict[str, Any]:
     plan.setdefault("risks", [])
     plan.setdefault("openQuestions", [])
     plan.setdefault("nextActions", [])
-    return plan
+    return normalize_contract(plan, requirement=str(state.get("requirement") or ""))
 
 
 def _next_state(state: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -262,6 +266,55 @@ def _should_generate_plan(state: Dict[str, Any]) -> bool:
     return isinstance(answers, list) and len(answers) >= 6 or iteration >= 3
 
 
+def _normalize_target_type(value: Any, state: Dict[str, Any]) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in _TARGET_TYPES:
+        return raw
+    if any(token in raw for token in ("fullstack", "full-stack", "全栈", "前后端", "端到端")):
+        return "fullstack"
+    if any(token in raw for token in ("backend", "back-end", "后端", "接口", "服务", "数据库")):
+        return "backend"
+    if any(token in raw for token in ("frontend", "front-end", "前端", "页面", "界面", "组件")):
+        return "frontend"
+    return _infer_target_type(state)
+
+
+def _infer_target_type(state: Dict[str, Any]) -> str:
+    parts = [str(state.get("requirement") or "")]
+    for answer in _normalize_answers(state.get("answers")):
+        parts.append(str(answer.get("question") or ""))
+        value = answer.get("value")
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        else:
+            parts.append(str(value or ""))
+        parts.append(str(answer.get("label") or ""))
+
+    text = " ".join(parts).lower()
+    if any(token in text for token in ("fullstack", "full-stack", "全栈", "前后端", "端到端", "闭环")):
+        return "fullstack"
+    frontend = any(
+        token in text
+        for token in ("frontend", "front-end", "前端", "页面", "界面", "组件", "样式", "布局", "react", "antd")
+    )
+    backend = any(
+        token in text
+        for token in ("backend", "back-end", "后端", "接口", "api", "服务", "数据库", "权限", "认证", "存储")
+    )
+    if frontend and backend:
+        return "fullstack"
+    if backend:
+        return "backend"
+    if frontend:
+        return "frontend"
+    return "fullstack"
+
+
+def _target_type_label(value: Any) -> str:
+    labels = {"frontend": "（前端需求）", "backend": "（后端需求）", "fullstack": "（全栈需求）"}
+    return labels.get(str(value or ""), "")
+
+
 def _question_prompt(
     message: str,
     state: Dict[str, Any],
@@ -276,6 +329,7 @@ def _question_prompt(
 - 面向完整应用开发，而不是单纯前端页面开发。
 - 已有固定模块可以让用户选择是否集成，例如登录认证、权限、埋点、主题、布局、数据源、API 集成、部署/验证。
 - 不要询问页面和接口的详细字段配置，这部分后续会由更可视化的界面完成。
+- 如果无法确定需求主要落在前端、后端还是全栈，第一优先询问落地范围。
 - 优先确认：业务目标、用户角色、核心流程、固定模块选择、数据来源、权限边界、API/服务边界、交付优先级、验证方式。
 - 只询问会阻塞开发设计或验证方式的问题，不要为了完整性而追问。
 - 问题必须可直接渲染成 UI。
@@ -325,6 +379,7 @@ def _plan_prompt(
 - 如果计划包含 React + TypeScript + Ant Design 前端代码，前端实现必须遵循 React 最佳实践、Ant Design v4.24.16、内置 `REACT_BEST_PRACTICES_GUIDE.md`、`AGENTS.md` 和 `react-antd-v4-codegen` 引用规则。
 - 不要把页面和 API 分成两套计划。请按业务功能切片输出，每个 feature 同时包含 UI、API、数据模型、验收标准和验证方式。
 - 页面和接口字段详设可以标记为后续可视化配置，不要展开到字段级穷举。
+- 必须识别需求类型，并输出 `targetType`，只能是 `frontend`、`backend` 或 `fullstack`。
 - 计划要具体到可分发任务，但不要写代码。
 - 任务图要考虑效率：能并行的独立功能切片应标记 canRunInParallel=true；共享能力、同文件修改和最终验证必须串行。
 - 最终必须包含 verificationPlan，用于验证生成代码是否准确。
@@ -335,6 +390,7 @@ JSON 结构：
   "message": "一句话说明计划已生成",
   "plan": {{
     "title": "计划标题",
+    "targetType": "frontend | backend | fullstack",
     "summary": "一段摘要",
     "sdd": {{
       "spec": {{
@@ -418,6 +474,18 @@ def _fallback_questions(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     iteration = int(state.get("iteration", 0) or 0)
     if iteration <= 0:
         return [
+            {
+                "id": "target-surface",
+                "type": "single",
+                "title": "这次需求主要落在哪一层？",
+                "description": "我会用它判断后续是前端需求、后端需求还是全栈需求。",
+                "required": True,
+                "options": [
+                    {"id": "frontend", "label": "前端", "description": "主要改页面、组件、样式、路由或交互。"},
+                    {"id": "backend", "label": "后端", "description": "主要改接口、服务、数据模型、权限或存储。"},
+                    {"id": "fullstack", "label": "全栈", "description": "需要前端、后端或数据/API 一起闭环。"},
+                ],
+            },
             {
                 "id": "business-goal",
                 "type": "single",
@@ -512,6 +580,7 @@ def _fallback_plan(state: Dict[str, Any]) -> Dict[str, Any]:
     sdd = _fallback_sdd(state)
     return {
         "title": "应用开发计划",
+        "targetType": _infer_target_type(state),
         "summary": "基于当前需求和已选择信息，先交付一版按功能切片组织的统一开发计划。",
         "sdd": sdd,
         "features": [

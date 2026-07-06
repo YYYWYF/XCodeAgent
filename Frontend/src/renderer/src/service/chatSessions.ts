@@ -1,9 +1,17 @@
-import type { EditorMode } from '../typings';
+import type {
+  AgentApprovalRequest,
+  AgentApprovalStatus,
+  DevelopmentOrchestrationPayload,
+  EditorMode,
+} from '../typings';
 
 export type ChatSessionMessage = {
   id: number;
   role: 'user' | 'assistant';
   content: string;
+  orchestration?: DevelopmentOrchestrationPayload;
+  approval?: AgentApprovalRequest;
+  approvalStatus?: AgentApprovalStatus;
   createdAt: number;
 };
 
@@ -40,6 +48,22 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
       id: Number(item.id || Date.now()),
       role: item.role === 'assistant' ? 'assistant' : 'user',
       content: String(item.content || ''),
+      orchestration:
+        item.orchestration && typeof item.orchestration === 'object'
+          ? (item.orchestration as DevelopmentOrchestrationPayload)
+          : undefined,
+      approval:
+        item.approval && typeof item.approval === 'object'
+          ? (item.approval as AgentApprovalRequest)
+          : undefined,
+      approvalStatus:
+        item.approvalStatus === 'approved_once' ||
+        item.approvalStatus === 'approved_always' ||
+        item.approvalStatus === 'feedback'
+          ? item.approvalStatus
+          : item.approval
+            ? 'pending'
+            : undefined,
       createdAt: Number(item.createdAt || Date.now()),
     }));
 }
@@ -183,4 +207,23 @@ export async function saveChatSession(session: ChatSessionRecord) {
   ].sort((a, b) => b.updatedAt - a.updatedAt);
   writeFallbackSessions(session.workspaceRoot, session.editorMode, nextSessions);
   return toSummary(session);
+}
+
+export async function deleteChatSession(
+  workspaceRoot: string,
+  editorMode: EditorMode,
+  sessionId: string,
+) {
+  const sessionApi = window.xcodeAgent?.sessions;
+  if (sessionApi) {
+    await sessionApi.delete({ workspaceRoot, editorMode, sessionId });
+    return;
+  }
+
+  const sessions = readFallbackSessions(workspaceRoot, editorMode);
+  writeFallbackSessions(
+    workspaceRoot,
+    editorMode,
+    sessions.filter((item) => item.id !== sessionId),
+  );
 }

@@ -36,6 +36,7 @@ if (process.contextIsolated) {
         list: (payload) => ipcRenderer.invoke('sessions:list', payload),
         read: (payload) => ipcRenderer.invoke('sessions:read', payload),
         save: (payload) => ipcRenderer.invoke('sessions:save', payload),
+        delete: (payload) => ipcRenderer.invoke('sessions:delete', payload),
       },
       browser: {
         openExternal: (url) => {

@@ -55,6 +55,7 @@ export type TerminalExecResult = {
 export type ApprovalDecision = ApprovalGrant & {
   tool: string;
   status: 'approved';
+  scope: 'once' | 'operation';
   expires_at: string;
 };
 
@@ -90,17 +91,25 @@ export function runTerminalExec(request: TerminalExecRequest) {
   });
 }
 
-export function approveToolRequest(approvalId: string) {
+export function approveToolRequest(approvalId: string, scope: 'once' | 'operation' = 'once') {
   return requestJson<ApprovalDecision>(`/tools/approvals/${approvalId}/approve`, {
     method: 'POST',
+    body: JSON.stringify({ scope }),
   });
 }
 
-export function rejectToolRequest(approvalId: string) {
-  return requestJson<{ id: string; tool: string; status: 'rejected'; expires_at: string }>(
+export function rejectToolRequest(approvalId: string, reason?: string) {
+  return requestJson<{
+    id: string;
+    tool: string;
+    status: 'rejected';
+    reason?: string;
+    expires_at: string;
+  }>(
     `/tools/approvals/${approvalId}/reject`,
     {
       method: 'POST',
+      body: JSON.stringify({ reason }),
     },
   );
 }

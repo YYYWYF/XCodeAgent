@@ -105,6 +105,15 @@ class TextToolUse:
     name: str
     input: Dict[str, Any]
 
+
+@dataclass(frozen=True)
+class PendingAgentToolRequest:
+    thread_id: str
+    tool_name: str
+    input: Dict[str, Any]
+    workspace_root: Optional[str]
+
+
 WORKSPACE_TOOL_RUNNERS: Dict[str, WorkspaceToolRunner] = {
     "workspace_info": (workspace_tools.WorkspaceRequest, workspace_tools.workspace_info),
     "workspace_list_files": (workspace_tools.ListFilesRequest, workspace_tools.list_files),
@@ -299,12 +308,15 @@ class AgentState(MessagesState):
     workspace_root: NotRequired[str]
     temperature: NotRequired[float]
     max_tokens: NotRequired[int]
+    thread_id: NotRequired[str]
+    pending_approvals: NotRequired[List[Dict[str, Any]]]
 
 
 class AgentRuntime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.client = create_anthropic_client(settings)
+        self._pending_tool_requests: Dict[str, PendingAgentToolRequest] = {}
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -327,6 +339,7 @@ class AgentRuntime:
         max_tokens = int(state.get("max_tokens") or self.settings.default_max_tokens)
         temperature = float(state.get("temperature") or self.settings.default_temperature)
         workspace_root = state.get("workspace_root")
+        pending_approvals: List[Dict[str, Any]] = []
 
         for _ in range(MAX_TOOL_ROUNDS):
             response = await self.client.messages.create(
@@ -339,16 +352,27 @@ class AgentRuntime:
             )
             tool_uses = self._tool_uses(response)
             if tool_uses:
+                tool_result_payloads = []
+                for tool_use in tool_uses:
+                    result = self._execute_workspace_tool(tool_use, workspace_root=workspace_root)
+                    approval_request = self._approval_request_from_tool_result(
+                        result,
+                        tool_use,
+                        thread_id=str(state.get("thread_id") or ""),
+                        workspace_root=workspace_root,
+                    )
+                    if approval_request:
+                        pending_approvals.append(approval_request)
+                    tool_result_payloads.append(
+                        self._tool_result_payload_from_result(tool_use, result)
+                    )
                 anthropic_messages.append(
                     {"role": "assistant", "content": self._response_content_payload(response)}
                 )
                 anthropic_messages.append(
                     {
                         "role": "user",
-                        "content": [
-                            self._tool_result_payload(tool_use, workspace_root=workspace_root)
-                            for tool_use in tool_uses
-                        ],
+                        "content": tool_result_payloads,
                     }
                 )
                 continue
@@ -356,12 +380,23 @@ class AgentRuntime:
             text = self._extract_text(response)
             text_tool_uses = self._text_tool_uses(text)
             if not text_tool_uses:
-                return {"messages": [AIMessage(content=text)]}
+                return {
+                    "messages": [AIMessage(content=text)],
+                    "pending_approvals": pending_approvals,
+                }
 
-            text_tool_results = [
-                self._execute_workspace_tool(tool_use, workspace_root=workspace_root)
-                for tool_use in text_tool_uses
-            ]
+            text_tool_results = []
+            for tool_use in text_tool_uses:
+                result = self._execute_workspace_tool(tool_use, workspace_root=workspace_root)
+                approval_request = self._approval_request_from_tool_result(
+                    result,
+                    tool_use,
+                    thread_id=str(state.get("thread_id") or ""),
+                    workspace_root=workspace_root,
+                )
+                if approval_request:
+                    pending_approvals.append(approval_request)
+                text_tool_results.append(result)
             anthropic_messages.append({"role": "assistant", "content": text})
             anthropic_messages.append(
                 {"role": "user", "content": self._text_tool_results_message(text_tool_results)}
@@ -374,7 +409,8 @@ class AgentRuntime:
                         "工具调用次数过多，已停止继续执行。请缩小任务范围或明确下一步。"
                     )
                 )
-            ]
+            ],
+            "pending_approvals": pending_approvals,
         }
 
     async def chat(
@@ -386,9 +422,18 @@ class AgentRuntime:
         workspace_root: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        approval_decision: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, object]:
         thread_id = session_id or str(uuid4())
-        state: AgentState = {"messages": [HumanMessage(content=message)]}
+        messages: List[BaseMessage] = [HumanMessage(content=message)]
+        approval_context = self._approval_decision_context(
+            approval_decision,
+            thread_id=thread_id,
+            workspace_root=workspace_root,
+        )
+        if approval_context:
+            messages.append(HumanMessage(content=approval_context))
+        state: AgentState = {"messages": messages, "thread_id": thread_id}
         if system_prompt:
             state["system_prompt"] = system_prompt
         if workspace_root:
@@ -408,6 +453,7 @@ class AgentRuntime:
             "model": self.settings.anthropic_api_model,
             "answer": answer,
             "messages": self._serialize_messages(result["messages"]),
+            "approval": self._latest_pending_approval(result.get("pending_approvals")),
         }
 
     def _compose_system_prompt(
@@ -851,14 +897,120 @@ class AgentRuntime:
 
     @staticmethod
     def _tool_result_payload(tool_use: Any, *, workspace_root: Optional[str]) -> Dict[str, Any]:
-        tool_use_id = getattr(tool_use, "id", "")
         result = AgentRuntime._execute_workspace_tool(tool_use, workspace_root=workspace_root)
+        return AgentRuntime._tool_result_payload_from_result(tool_use, result)
+
+    @staticmethod
+    def _tool_result_payload_from_result(tool_use: Any, result: Dict[str, Any]) -> Dict[str, Any]:
+        tool_use_id = getattr(tool_use, "id", "")
         return {
             "type": "tool_result",
             "tool_use_id": tool_use_id,
             "content": AgentRuntime._json_tool_result(result),
             "is_error": not bool(result.get("ok")),
         }
+
+    def _approval_request_from_tool_result(
+        self,
+        result: Dict[str, Any],
+        tool_use: Any,
+        *,
+        thread_id: str,
+        workspace_root: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        tool_result = result.get("result")
+        if not isinstance(tool_result, dict) or not tool_result.get("requires_approval"):
+            return None
+
+        approval = tool_result.get("approval")
+        if not isinstance(approval, dict) or not approval.get("id"):
+            return None
+
+        approval_id = str(approval["id"])
+        raw_input = getattr(tool_use, "input", {}) or {}
+        tool_name = AgentRuntime._canonical_tool_name(getattr(tool_use, "name", ""))
+        if isinstance(raw_input, dict):
+            self._pending_tool_requests[approval_id] = PendingAgentToolRequest(
+                thread_id=thread_id,
+                tool_name=tool_name,
+                input=AgentRuntime._normalize_tool_payload(dict(raw_input)),
+                workspace_root=workspace_root,
+            )
+
+        return {
+            **approval,
+            "agent_tool": tool_name,
+        }
+
+    def _approval_decision_context(
+        self,
+        approval_decision: Optional[Dict[str, Any]],
+        *,
+        thread_id: str,
+        workspace_root: Optional[str],
+    ) -> Optional[str]:
+        if not isinstance(approval_decision, dict):
+            return None
+
+        action = str(approval_decision.get("action") or "")
+        feedback = str(approval_decision.get("feedback") or "").strip()
+        if action == "feedback":
+            approval_id = str(approval_decision.get("approvalId") or "")
+            if approval_id:
+                self._pending_tool_requests.pop(approval_id, None)
+            return (
+                "用户没有批准此前待执行的受保护工具调用。"
+                f"用户补充意见：{feedback or '未提供补充意见。'}"
+            )
+
+        if action not in {"approve_once", "approve_always"}:
+            return None
+
+        approval_id = str(approval_decision.get("approvalId") or "")
+        if not approval_id:
+            return "用户已批准，但审批消息缺少 approvalId，无法继续执行受保护工具。"
+
+        pending_request = self._pending_tool_requests.get(approval_id)
+        if pending_request is None or pending_request.thread_id != thread_id:
+            return (
+                "用户已批准，但后端没有找到对应的待执行工具请求。"
+                "可能是审批已过期、后端已重启，或会话线程不匹配。"
+            )
+
+        payload = dict(pending_request.input)
+        grant = approval_decision.get("grant")
+        if isinstance(grant, dict) and grant.get("id") and grant.get("token"):
+            payload["approval"] = {"id": str(grant["id"]), "token": str(grant["token"])}
+
+        tool_use = TextToolUse(
+            id=f"approval-{approval_id}",
+            name=pending_request.tool_name,
+            input=payload,
+        )
+        result = self._execute_workspace_tool(
+            tool_use,
+            workspace_root=workspace_root or pending_request.workspace_root,
+        )
+        tool_result = result.get("result")
+        if not (isinstance(tool_result, dict) and tool_result.get("requires_approval")):
+            self._pending_tool_requests.pop(approval_id, None)
+
+        scope_label = "后续相同操作也已放行" if action == "approve_always" else "仅本次放行"
+        return (
+            f"用户已批准此前待执行的受保护工具调用（{scope_label}）。"
+            "后端已按该审批执行暂存的工具请求，结果如下。请基于这个结果继续完成用户任务，"
+            "不要要求用户重复批准同一个已执行请求。\n\n"
+            f"{self._json_tool_result({'approval_execution_result': result})}"
+        )
+
+    @staticmethod
+    def _latest_pending_approval(value: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return None
+        for item in reversed(value):
+            if isinstance(item, dict) and item.get("id"):
+                return item
+        return None
 
     @staticmethod
     def _execute_workspace_tool(tool_use: Any, *, workspace_root: Optional[str]) -> Dict[str, Any]:

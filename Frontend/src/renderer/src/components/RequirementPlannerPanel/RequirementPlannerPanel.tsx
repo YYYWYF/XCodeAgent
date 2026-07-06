@@ -333,30 +333,34 @@ function formatAnswerLabel(question: RequirementQuestion, value: DraftAnswerValu
 }
 
 function PlanPreview({ plan }: { plan: RequirementDevelopmentPlan }) {
+  const scopeIn = plan.sdd?.spec?.scopeIn ?? [];
+  const scopeOut = plan.sdd?.spec?.scopeOut ?? [];
+  const features = plan.features ?? [];
+  const tasks = plan.taskGraph?.tasks ?? [];
+  const commands = plan.verificationPlan?.commands ?? [];
+
   return (
     <section className={cx('planner-plan-preview')}>
       <Title level={5}>{plan.title}</Title>
       <Paragraph>{plan.summary}</Paragraph>
+      <Space wrap>
+        <Tag color="blue">{targetTypeLabel(plan.targetType)}</Tag>
+        <Tag>{plan.status}</Tag>
+        <Tag>{tasks.length} 个任务</Tag>
+      </Space>
 
-      {Boolean(plan.modules?.length) && (
-        <Space wrap>
-          {plan.modules?.map((module) => (
-            <Tag color={module.enabled ? 'blue' : 'default'} key={module.name}>
-              {module.name}
-            </Tag>
-          ))}
-        </Space>
-      )}
-
-      <PlanList title="前端任务" values={plan.frontendTasks} />
-      <PlanList title="后端任务" values={plan.backendTasks} />
+      <PlanList title="本期范围" values={scopeIn} />
+      <PlanList title="暂不包含" values={scopeOut} />
+      <PlanList title="功能切片" values={features.map((feature) => feature.name)} />
+      <PlanList title="任务图" values={tasks.map((task) => `${task.title} · ${task.executionMode}`)} />
+      <PlanList title="验证命令" values={commands} />
       <PlanList title="下一步" values={plan.nextActions} />
     </section>
   );
 }
 
-function PlanList({ title, values }: { title: string; values: string[] }) {
-  if (!values.length) return null;
+function PlanList({ title, values }: { title: string; values?: string[] }) {
+  if (!values?.length) return null;
 
   return (
     <div className={cx('planner-plan-list')}>
@@ -368,4 +372,10 @@ function PlanList({ title, values }: { title: string; values: string[] }) {
       </ul>
     </div>
   );
+}
+
+function targetTypeLabel(value: RequirementDevelopmentPlan['targetType']) {
+  if (value === 'frontend') return '前端';
+  if (value === 'backend') return '后端';
+  return '全栈';
 }

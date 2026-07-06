@@ -202,8 +202,8 @@ def capabilities() -> Dict[str, Any]:
             "ignoredDirs": sorted(DEFAULT_IGNORED_DIRS),
             "approvals": (
                 "Medium/high-risk terminal commands and sensitive or risky file changes return "
-                "requires_approval with a one-time approval id. Approve it, then retry with the "
-                "returned token in approval."
+                "requires_approval with an approval id. Approvals can be granted once with the "
+                "returned token or remembered for the same operation."
             ),
         },
     }
@@ -821,8 +821,12 @@ def _approval_required_response(
         return None
 
     operation_key = operation_fingerprint(tool, operation_payload)
+    if approval_store.is_operation_approved(tool=tool, operation_key=operation_key):
+        return None
     if grant is not None:
         approval_store.consume(tool=tool, operation_key=operation_key, grant=grant)
+        return None
+    if approval_store.consume_approved_once(tool=tool, operation_key=operation_key):
         return None
 
     approval = approval_store.request(

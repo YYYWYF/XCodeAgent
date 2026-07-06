@@ -37,9 +37,17 @@ class PendingApproval:
     consumed: bool = False
 
 
+@dataclass(frozen=True)
+class ApprovedOperation:
+    tool: str
+    operation_key: str
+    approved_at: datetime
+
+
 class ApprovalStore:
     def __init__(self) -> None:
         self._approvals: Dict[str, PendingApproval] = {}
+        self._approved_operations: Dict[str, ApprovedOperation] = {}
         self._lock = Lock()
 
     def request(
@@ -72,20 +80,31 @@ class ApprovalStore:
             self._approvals[approval.id] = approval
         return self._public_payload(approval)
 
-    def approve(self, approval_id: str) -> Dict[str, Any]:
+    def approve(self, approval_id: str, *, scope: str = "once") -> Dict[str, Any]:
         approval = self._get(approval_id)
         if approval.status != "pending":
             self._fail(409, f"Approval is already {approval.status}.")
         approval.status = "approved"
+        normalized_scope = "operation" if scope == "operation" else "once"
+        if normalized_scope == "operation":
+            with self._lock:
+                self._approved_operations[self._operation_rule_key(approval.tool, approval.operation_key)] = (
+                    ApprovedOperation(
+                        tool=approval.tool,
+                        operation_key=approval.operation_key,
+                        approved_at=datetime.now(timezone.utc),
+                    )
+                )
         return {
             "id": approval.id,
             "tool": approval.tool,
             "status": approval.status,
+            "scope": normalized_scope,
             "token": approval.token,
             "expires_at": approval.expires_at.isoformat(),
         }
 
-    def reject(self, approval_id: str) -> Dict[str, Any]:
+    def reject(self, approval_id: str, *, reason: Optional[str] = None) -> Dict[str, Any]:
         approval = self._get(approval_id)
         if approval.status != "pending":
             self._fail(409, f"Approval is already {approval.status}.")
@@ -94,6 +113,7 @@ class ApprovalStore:
             "id": approval.id,
             "tool": approval.tool,
             "status": approval.status,
+            "reason": reason,
             "expires_at": approval.expires_at.isoformat(),
         }
 
@@ -108,6 +128,31 @@ class ApprovalStore:
         if approval.token != grant.token:
             self._fail(403, "Approval token is invalid.")
         approval.consumed = True
+
+    def consume_approved_once(self, *, tool: str, operation_key: str) -> bool:
+        now = datetime.now(timezone.utc)
+        self._prune(now)
+        with self._lock:
+            approvals = [
+                approval
+                for approval in self._approvals.values()
+                if (
+                    approval.tool == tool
+                    and approval.operation_key == operation_key
+                    and approval.status == "approved"
+                    and not approval.consumed
+                    and approval.expires_at > now
+                )
+            ]
+            if not approvals:
+                return False
+            approvals.sort(key=lambda approval: approval.created_at)
+            approvals[0].consumed = True
+            return True
+
+    def is_operation_approved(self, *, tool: str, operation_key: str) -> bool:
+        with self._lock:
+            return self._operation_rule_key(tool, operation_key) in self._approved_operations
 
     def _get(self, approval_id: str) -> PendingApproval:
         now = datetime.now(timezone.utc)
@@ -129,6 +174,10 @@ class ApprovalStore:
             ]
             for approval_id in expired_ids:
                 self._approvals.pop(approval_id, None)
+
+    @staticmethod
+    def _operation_rule_key(tool: str, operation_key: str) -> str:
+        return f"{tool}:{operation_key}"
 
     @staticmethod
     def _public_payload(approval: PendingApproval) -> Dict[str, Any]:

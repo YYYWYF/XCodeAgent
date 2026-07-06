@@ -22,6 +22,7 @@ from app.orchestrator import (
     attach_orchestration_data,
     summarize_orchestration_payload,
 )
+from app.requirement_intake import analyze_requirement_intake, summarize_intake
 from app.tools.requirement_planner import (
     RequirementPlannerRuntime,
     attach_planning_data,
@@ -129,6 +130,52 @@ def build_ag_ui_stream(
                 )
                 return
 
+            intake_decision = analyze_requirement_intake(user_message)
+            yield encoder.encode(CustomEvent(name="requirement-intake", value=intake_decision))
+
+            if intake_decision["route"] == "development-orchestrator" and orchestrator is not None:
+                orchestration_payload = await orchestrator.run(
+                    user_message,
+                    orchestrator_state={"requirement": user_message, "intake": intake_decision},
+                    planner_state=_optional_dict(forwarded_props.get("plannerState")),
+                    application=_optional_dict(forwarded_props.get("application")),
+                    workspace_root=_optional_str(forwarded_props.get("workspaceRoot")),
+                    action="start",
+                )
+                orchestration_payload["intake"] = intake_decision
+                answer = "\n\n".join(
+                    [
+                        summarize_intake(intake_decision),
+                        summarize_orchestration_payload(orchestration_payload),
+                    ]
+                )
+
+                yield encoder.encode(
+                    CustomEvent(name="development-orchestrator", value=orchestration_payload)
+                )
+                yield encoder.encode(
+                    StateSnapshotEvent(
+                        snapshot={"intake": intake_decision, "orchestration": orchestration_payload}
+                    )
+                )
+                yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
+                for chunk in _chunk_text(answer):
+                    yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=chunk))
+                yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+                yield encoder.encode(
+                    RunFinishedEvent(
+                        threadId=run_input.thread_id,
+                        runId=run_input.run_id,
+                        result={
+                            "messageId": message_id,
+                            "agentMode": "development-orchestrator",
+                            "intake": intake_decision,
+                            "orchestration": orchestration_payload,
+                        },
+                    )
+                )
+                return
+
             result = await agent.chat(
                 user_message,
                 session_id=run_input.thread_id,
@@ -136,8 +183,15 @@ def build_ag_ui_stream(
                 workspace_root=_optional_str(forwarded_props.get("workspaceRoot")),
                 temperature=_optional_float(forwarded_props.get("temperature")),
                 max_tokens=_optional_int(forwarded_props.get("maxTokens")),
+                approval_decision=_optional_dict(forwarded_props.get("approvalDecision")),
             )
             answer = str(result.get("answer", ""))
+            approval_payload = _optional_dict(result.get("approval"))
+            if approval_payload:
+                yield encoder.encode(
+                    CustomEvent(name="tool-approval-required", value=approval_payload)
+                )
+                yield encoder.encode(StateSnapshotEvent(snapshot={"approval": approval_payload}))
 
             yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
             for chunk in _chunk_text(answer):
@@ -149,8 +203,11 @@ def build_ag_ui_stream(
                     runId=run_input.run_id,
                     result={
                         "messageId": message_id,
+                        "agentMode": "main-agent",
+                        "intake": intake_decision,
                         "model": result.get("model"),
                         "sessionId": result.get("session_id"),
+                        "approval": approval_payload,
                     },
                 )
             )

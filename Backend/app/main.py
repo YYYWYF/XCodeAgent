@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from ag_ui.core import RunAgentInput
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -12,6 +12,7 @@ from app.ag_ui import build_ag_ui_stream
 from app.agent import AgentRuntime
 from app.config import Settings
 from app.orchestrator import DevelopmentOrchestratorRuntime, orchestrator_capabilities
+from app.requirement_intake import intake_capabilities
 from app.tools import antd_v4_docs
 from app.tools import workspace as workspace_tools
 from app.tools.approvals import approval_store
@@ -72,6 +73,11 @@ class DevelopmentOrchestratorRequest(BaseModel):
     workspace_root: Optional[str] = Field(default=None)
 
 
+class ApprovalActionRequest(BaseModel):
+    scope: Literal["once", "operation"] = Field(default="once")
+    reason: Optional[str] = Field(default=None)
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
     return {
@@ -85,6 +91,7 @@ async def health() -> dict[str, object]:
                 "available": antd_v4_docs.is_available(),
                 "docs_dir": str(antd_v4_docs.docs_root()),
             },
+            "requirement_intake": intake_capabilities(),
             "requirement_planner": planner_capabilities(),
             "development_orchestrator": orchestrator_capabilities(),
             "workspace": workspace_tools.capabilities(),
@@ -199,13 +206,19 @@ async def terminal_exec(request: workspace_tools.TerminalExecRequest) -> dict[st
 
 
 @app.post("/tools/approvals/{approval_id}/approve")
-async def approve_tool_request(approval_id: str) -> dict[str, Any]:
-    return approval_store.approve(approval_id)
+async def approve_tool_request(
+    approval_id: str,
+    request: ApprovalActionRequest = Body(default_factory=ApprovalActionRequest),
+) -> dict[str, Any]:
+    return approval_store.approve(approval_id, scope=request.scope)
 
 
 @app.post("/tools/approvals/{approval_id}/reject")
-async def reject_tool_request(approval_id: str) -> dict[str, Any]:
-    return approval_store.reject(approval_id)
+async def reject_tool_request(
+    approval_id: str,
+    request: ApprovalActionRequest = Body(default_factory=ApprovalActionRequest),
+) -> dict[str, Any]:
+    return approval_store.reject(approval_id, reason=request.reason)
 
 
 @app.post("/tools/git/status")

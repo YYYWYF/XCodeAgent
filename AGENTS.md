@@ -5,6 +5,8 @@ These instructions apply to the whole XCodeAgent repository. Every Codex agent s
 ## Working Loop
 
 - Start by checking the current workspace state with `git status --short` and by reading the relevant files before editing.
+- Before broad exploration, read `docs/CODEBASE_INDEX.md` and use it to choose the smallest relevant file set. Do not scan the whole repository for simple tasks when the index can route you directly.
+- When a substantial code change changes directory ownership, public APIs, Electron IPC, storage formats, AG-UI payloads, workspace tool contracts, or feature boundaries, update `docs/CODEBASE_INDEX.md` in the same patch.
 - Prefer small, focused patches that match the existing project structure. Do not rewrite unrelated code, rename files, or introduce new architecture unless the task clearly requires it.
 - Use `rg` or `rg --files` for search whenever possible.
 - Use precise patches for edits. Avoid whole-file replacement when a targeted change is enough.

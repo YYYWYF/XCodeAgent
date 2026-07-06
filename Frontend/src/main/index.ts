@@ -349,6 +349,12 @@ function setupSessionStorageIpc() {
     );
     return { ok: true, session: sessionSummary(session) };
   });
+
+  ipcMain.handle('sessions:delete', async (_event, payload = {}) => {
+    const sessionFile = getSessionFile(payload.workspaceRoot, payload.editorMode, payload.sessionId);
+    await fs.rm(sessionFile, { force: true });
+    return { ok: true };
+  });
 }
 
 

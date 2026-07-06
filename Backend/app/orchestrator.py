@@ -5,6 +5,10 @@ import shlex
 from typing import Any, Dict, List, Optional, Set
 
 from app.config import Settings
+from app.development_contract import normalize_contract
+from app.run_store import create_run_artifacts, run_store_capabilities
+from app import task_scheduler
+from app.subagents import build_subagent_input, subagent_capabilities
 from app.tools import workspace as workspace_tools
 from app.tools.requirement_planner import RequirementPlannerRuntime
 
@@ -12,7 +16,7 @@ from app.tools.requirement_planner import RequirementPlannerRuntime
 ORCHESTRATION_DATA_START = "<orchestration-data>"
 ORCHESTRATION_DATA_END = "</orchestration-data>"
 
-_TASK_TYPES = {"inspect", "shared", "feature", "test", "verify"}
+_TASK_TYPES = {"inspect", "shared", "feature", "frontend", "backend", "fullstack", "test", "verify"}
 _SHELL_META = {"&&", "||", ";", "|", ">", ">>", "<", "$(", "`"}
 
 
@@ -44,6 +48,14 @@ class DevelopmentOrchestratorRuntime:
                 state=state,
                 workspace_root=workspace_root,
             )
+        if normalized_action == "dispatch" and (
+            _optional_dict(state.get("contract")) or _optional_dict(state.get("plan"))
+        ):
+            return self._dispatch_existing_contract(
+                message,
+                state=state,
+                workspace_root=workspace_root,
+            )
 
         planner_payload = await self.planner.run(
             message,
@@ -69,38 +81,147 @@ class DevelopmentOrchestratorRuntime:
 
         plan = _optional_dict(planner_payload.get("plan")) or {}
         workspace = _inspect_workspace(workspace_root)
-        plan["verificationPlan"] = _normalize_verification_plan(
+        verification_plan = _normalize_verification_plan(
             plan.get("verificationPlan"),
             workspace=workspace,
         )
+        plan["verificationPlan"] = verification_plan
         task_graph = _normalize_task_graph(plan.get("taskGraph"), plan=plan)
+        task_graph["tasks"] = task_scheduler.annotate_task_execution(task_graph["tasks"])
         plan["taskGraph"] = task_graph
-        execution_batches = _build_execution_batches(task_graph["tasks"])
+        execution_batches = task_scheduler.build_execution_batches(task_graph["tasks"])
+        contract = normalize_contract(
+            plan,
+            requirement=str(state.get("requirement") or message),
+            task_graph=task_graph,
+            verification_plan=verification_plan,
+        )
+        if normalized_action == "dispatch":
+            contract["status"] = "executing"
+        run = (
+            create_run_artifacts(
+                workspace_root=workspace_root,
+                contract=contract,
+                task_graph=task_graph,
+                verification={"status": "not_run", "commands": verification_plan.get("commands") or [], "checks": verification_plan.get("checks") or []},
+            )
+            if normalized_action == "dispatch" and workspace_root
+            else {
+                "runId": None,
+                "runPath": "",
+                "artifacts": {},
+                "retention": run_store_capabilities()["retention"],
+                "message": (
+                    "当前应用没有绑定 workspaceRoot，未写入 .xcodeagent 运行产物。"
+                    if normalized_action == "dispatch"
+                    else "计划尚未确认执行，暂未写入 .xcodeagent 运行产物。"
+                ),
+            }
+        )
+        status = "executing" if normalized_action == "dispatch" else "ready"
+        phase = "executing" if normalized_action == "dispatch" else "dispatch"
 
         state.update(
             {
-                "phase": "dispatch",
-                "status": "ready",
-                "plan": plan,
+                "phase": phase,
+                "status": status,
+                "plan": contract,
+                "contract": contract,
                 "workspace": workspace,
                 "taskGraph": task_graph,
                 "executionBatches": execution_batches,
+                "run": run,
                 "verification": {"status": "not_run", "commands": [], "message": "尚未执行验证。"},
             }
         )
 
         return {
             "tool": "development_orchestrator",
-            "status": "ready",
-            "phase": "dispatch",
-            "message": "统一开发计划和任务分发已经生成，可以按批次开始执行。",
+            "status": status,
+            "phase": phase,
+            "message": (
+                "开发计划已确认，运行产物已经创建，可以开始按调度结果执行任务。"
+                if normalized_action == "dispatch"
+                else "统一开发计划和任务分发已经生成，等待用户确认后再执行。"
+            ),
             "questions": [],
-            "plan": plan,
+            "plan": contract,
+            "contract": contract,
+            "runId": run.get("runId"),
+            "run": run,
             "workspace": workspace,
             "taskGraph": task_graph,
             "executionBatches": execution_batches,
             "verification": state["verification"],
+            "subagentInputs": _subagent_inputs(run.get("runId"), task_graph, contract, workspace),
             "planner": planner_payload,
+            "state": state,
+        }
+
+    def _dispatch_existing_contract(
+        self,
+        message: str,
+        *,
+        state: Dict[str, Any],
+        workspace_root: Optional[str],
+    ) -> Dict[str, Any]:
+        plan = _optional_dict(state.get("contract")) or _optional_dict(state.get("plan")) or {}
+        workspace = _inspect_workspace(workspace_root)
+        verification_plan = _normalize_verification_plan(plan.get("verificationPlan"), workspace=workspace)
+        task_graph = _normalize_task_graph(plan.get("taskGraph"), plan=plan)
+        task_graph["tasks"] = task_scheduler.annotate_task_execution(task_graph["tasks"])
+        execution_batches = task_scheduler.build_execution_batches(task_graph["tasks"])
+        contract = normalize_contract(
+            plan,
+            requirement=str(state.get("requirement") or message),
+            task_graph=task_graph,
+            verification_plan=verification_plan,
+        )
+        contract["status"] = "executing"
+        run = (
+            create_run_artifacts(
+                workspace_root=workspace_root,
+                contract=contract,
+                task_graph=task_graph,
+                verification={"status": "not_run", "commands": verification_plan.get("commands") or [], "checks": verification_plan.get("checks") or []},
+            )
+            if workspace_root
+            else {
+                "runId": None,
+                "runPath": "",
+                "artifacts": {},
+                "retention": run_store_capabilities()["retention"],
+                "message": "当前应用没有绑定 workspaceRoot，未写入 .xcodeagent 运行产物。",
+            }
+        )
+        state.update(
+            {
+                "phase": "executing",
+                "status": "executing",
+                "plan": contract,
+                "contract": contract,
+                "workspace": workspace,
+                "taskGraph": task_graph,
+                "executionBatches": execution_batches,
+                "run": run,
+                "verification": {"status": "not_run", "commands": [], "message": "尚未执行验证。"},
+            }
+        )
+        return {
+            "tool": "development_orchestrator",
+            "status": "executing",
+            "phase": "executing",
+            "message": "开发计划已确认，运行产物已经创建，可以开始按调度结果执行任务。",
+            "questions": [],
+            "plan": contract,
+            "contract": contract,
+            "runId": run.get("runId"),
+            "run": run,
+            "workspace": workspace,
+            "taskGraph": task_graph,
+            "executionBatches": execution_batches,
+            "verification": state["verification"],
+            "subagentInputs": _subagent_inputs(run.get("runId"), task_graph, contract, workspace),
             "state": state,
         }
 
@@ -200,11 +321,14 @@ def orchestrator_capabilities() -> Dict[str, Any]:
             "workspaceRoot": "Optional absolute workspace root selected by the desktop app.",
         },
         "output": {
-            "status": ["questions", "ready", "passed", "failed", "partial", "not_run"],
+            "status": ["questions", "ready", "executing", "passed", "failed", "partial", "not_run"],
             "plan": "Unified SDD plan grouped by feature slices.",
             "taskGraph": "Normalized task DAG with target files and dependencies.",
             "executionBatches": "Serial/parallel batches computed from dependencies and target-file conflicts.",
             "verification": "Command results and diff summary when action=verify.",
+            "run": run_store_capabilities(),
+            "scheduler": task_scheduler.scheduler_capabilities(),
+            "subagents": subagent_capabilities(),
         },
     }
 
@@ -239,10 +363,11 @@ def summarize_orchestration_payload(payload: Dict[str, Any]) -> str:
     task_graph = _optional_dict(payload.get("taskGraph")) or {"tasks": []}
     batches = payload.get("executionBatches") if isinstance(payload.get("executionBatches"), list) else []
     title = str(plan.get("title") or "统一开发计划")
+    target_label = _target_type_label(plan.get("targetType"))
     task_count = len(task_graph.get("tasks") or [])
     parallel_count = sum(1 for batch in batches if isinstance(batch, dict) and batch.get("mode") == "parallel")
     return (
-        f"已生成《{title}》。\n"
+        f"已生成《{title}》{target_label}。\n"
         f"任务图包含 {task_count} 个任务，调度为 {len(batches)} 个执行批次，其中 {parallel_count} 个可并行批次。\n"
         "下一步可以按批次执行，最后运行 verificationPlan 做验收。"
     )
@@ -703,3 +828,29 @@ def _string_list(value: Any) -> List[str]:
 
 def _optional_dict(value: Any) -> Optional[Dict[str, Any]]:
     return value if isinstance(value, dict) else None
+
+
+def _target_type_label(value: Any) -> str:
+    labels = {"frontend": "（前端需求）", "backend": "（后端需求）", "fullstack": "（全栈需求）"}
+    return labels.get(str(value or ""), "")
+
+
+def _subagent_inputs(
+    run_id: Any,
+    task_graph: Dict[str, Any],
+    contract: Dict[str, Any],
+    workspace: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    if not run_id:
+        return []
+    tasks = task_graph.get("tasks") if isinstance(task_graph.get("tasks"), list) else []
+    return [
+        build_subagent_input(
+            run_id=str(run_id),
+            task=task,
+            contract=contract,
+            workspace=workspace,
+        )
+        for task in tasks
+        if isinstance(task, dict) and str(task.get("assignedAgent") or "") not in {"main-agent", ""}
+    ]
