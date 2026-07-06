@@ -11,7 +11,7 @@ SHARED_FILE_MARKERS = (
     "requirements.txt",
     "pyproject.toml",
     "Backend/app/main.py",
-    "Backend/app/ag_ui.py",
+    "Backend/app/protocols/ag_ui.py",
     "Frontend/src/main/index.ts",
     "Frontend/src/preload/",
     "Frontend/src/renderer/src/typings/",

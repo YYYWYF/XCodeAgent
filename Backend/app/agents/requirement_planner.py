@@ -5,8 +5,8 @@ import re
 from typing import Any, Dict, List, Optional
 
 from app.config import Settings
-from app.development_contract import normalize_contract
-from app.llm_client import create_anthropic_client
+from app.domain.development_contract import normalize_contract
+from app.services.llm_client import create_anthropic_client
 
 
 PLANNING_DATA_START = "<planning-data>"

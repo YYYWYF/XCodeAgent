@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.agent import AgentRuntime
-from app.tools import workspace
-from app.tools.approvals import ApprovalGrant, approval_store
+from app.graph.agent import AgentRuntime
+from app.workspace import workspace
+from app.middleware.approvals import ApprovalGrant, approval_store
 
 
 class CodeChangeTests(unittest.TestCase):

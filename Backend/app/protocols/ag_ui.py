@@ -16,14 +16,14 @@ from ag_ui.core import (
 )
 from ag_ui.encoder import EventEncoder
 
-from app.agent import AgentRuntime
-from app.orchestrator import (
+from app.graph.agent import AgentRuntime
+from app.graph.orchestrator import (
     DevelopmentOrchestratorRuntime,
     attach_orchestration_data,
     summarize_orchestration_payload,
 )
-from app.requirement_intake import analyze_requirement_intake, summarize_intake
-from app.tools.requirement_planner import (
+from app.services.requirement_intake import analyze_requirement_intake, summarize_intake
+from app.agents.requirement_planner import (
     RequirementPlannerRuntime,
     attach_planning_data,
     summarize_planning_payload,

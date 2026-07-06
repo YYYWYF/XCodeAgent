@@ -8,15 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.ag_ui import build_ag_ui_stream
-from app.agent import AgentRuntime
+from app.protocols.ag_ui import build_ag_ui_stream
+from app.graph.agent import AgentRuntime
 from app.config import Settings
-from app.orchestrator import DevelopmentOrchestratorRuntime, orchestrator_capabilities
-from app.requirement_intake import intake_capabilities
+from app.graph.orchestrator import DevelopmentOrchestratorRuntime, orchestrator_capabilities
+from app.services.requirement_intake import intake_capabilities
 from app.tools import antd_v4_docs
-from app.tools import workspace as workspace_tools
-from app.tools.approvals import approval_store
-from app.tools.requirement_planner import RequirementPlannerRuntime, planner_capabilities
+from app.workspace import workspace as workspace_tools
+from app.middleware.approvals import approval_store
+from app.agents.requirement_planner import RequirementPlannerRuntime, planner_capabilities
 
 
 settings = Settings.from_env()

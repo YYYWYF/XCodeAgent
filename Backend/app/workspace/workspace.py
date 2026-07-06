@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from app.tools.approvals import ApprovalGrant, approval_store, operation_fingerprint
+from app.middleware.approvals import ApprovalGrant, approval_store, operation_fingerprint
 
 
 DEFAULT_IGNORED_DIRS = {

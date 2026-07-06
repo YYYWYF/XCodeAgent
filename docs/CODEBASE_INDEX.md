@@ -27,25 +27,41 @@ For small local edits that do not change structure or ownership, leave the index
 
 ## Backend
 
+```text
+Backend/app/
+├── main.py
+├── config.py
+├── graph/          # LangGraph main business flows
+├── agents/         # First-class Deep Agent runtimes and contracts
+├── domain/         # Framework-independent core data models
+├── services/       # Deterministic business rules and shared services
+├── tools/          # Controlled tools exposed to Deep Agents
+├── protocols/      # Protocol integration
+├── workspace/      # User-local workspace management
+├── middleware/     # Cross-cutting Deep Agent controls
+├── persistence/    # Business and runtime persistence
+└── observability/  # Runtime events and observability
+```
+
 | Path | Responsibility | Read first / common edits |
 | --- | --- | --- |
 | `Backend/app/main.py` | FastAPI app setup and route registration for `/health`, `/chat`, `/ag-ui`, `/tools/*`, approvals, and git/workspace tools. | Add or change HTTP endpoints here, then update the corresponding runtime/tool module. |
 | `Backend/app/config.py` | Environment-backed settings for Anthropic-compatible model calls. | Read when changing `.env` variables or model/client configuration. |
-| `Backend/app/llm_client.py` | Anthropic-compatible client factory. | Read when changing provider/auth/base URL behavior. |
-| `Backend/app/ag_ui.py` | AG-UI stream adapter, default requirement intake routing, main-agent approval events, workspace code-change events, and explicit mode routing between chat, planner, and orchestrator behavior. | Read when changing `forwardedProps`, AG-UI event shape, approval/code-change payloads, intake-to-agent routing, or frontend/backend agent mode handoff. |
-| `Backend/app/agent.py` | Main LangGraph chat/application-development agent, workspace tool prompt, text tool parsing, local tool dispatch, code-change aggregation, and in-memory sessions. | Read when changing coding-agent behavior, workspace tool use, built-in prompts, code-change summaries, or conversation loop behavior. |
-| `Backend/app/requirement_intake.py` | Deterministic intake classifier that decides whether a new requirement is simple or complex and identifies the initial frontend/backend/fullstack target. | Read when changing simple-vs-complex routing rules or default main-agent/orchestrator handoff. |
-| `Backend/app/development_contract.py` | Shared Development Contract normalization models for SDD, features, API contracts, task graph, and verification plan. | Read when changing planner/orchestrator payload shape or frontend contract typings. |
-| `Backend/app/orchestrator.py` | Development orchestrator for clarification, unified planning, task DAG batching, and verification summaries. | Read when changing plan/dispatch/verify behavior. |
-| `Backend/app/task_scheduler.py` | Computes task execution modes and serial/parallel batches from target-file isolation and shared-contract rules. | Read when changing subagent direct-write policy or task batching. |
-| `Backend/app/run_store.py` | Writes `.xcodeagent/runs/<runId>` artifacts and JSONL run events after a plan is confirmed for dispatch. | Read when changing run artifact lifecycle, retention, or saved contract behavior. |
-| `Backend/app/agent_events.py` | Small helpers for append-oriented run event payloads. | Read when changing run event names or JSONL fields. |
-| `Backend/app/subagents.py` | Subagent input/result protocol and direct-write guard helpers for scout/build/verifier roles. | Read when wiring real subagent execution or changing subagent payloads. |
-| `Backend/app/builtin_skills.py` | Loads bundled backend skill prompt content. | Read when wiring new bundled skills into backend prompts. |
-| `Backend/app/tools/requirement_planner.py` | LLM-backed requirement question generation and structured development plan normalization. | Read when changing planner questions, plan schema, or planning prompts. |
-| `Backend/app/tools/workspace.py` | Sandboxed workspace/file/search/terminal/git tools, sensitive-file checks, approval gates, file code-change payloads, and tool capability summaries. | Read when changing local file access, file write/patch/delete contracts, terminal policy, git tools, or workspace tool API contracts. |
-| `Backend/app/tools/approvals.py` | In-memory approval grants, one-time approval consumption, reusable same-operation approval rules, and operation fingerprints for protected tool actions. | Read when changing approval lifecycle, approval scopes, or risk gating. |
+| `Backend/app/graph/agent.py` | Main LangGraph chat/application-development flow, workspace tool dispatch, code-change aggregation, and in-memory sessions. | Read when changing coding-agent behavior, tool use, prompts, or conversation flow. |
+| `Backend/app/graph/orchestrator.py` | Development orchestration flow for clarification, planning, task DAG batching, and verification. | Read when changing plan/dispatch/verify behavior. |
+| `Backend/app/agents/requirement_planner.py` | LLM-backed requirement questions and structured development-plan normalization. | Read when changing planner questions, schema, state, or prompts. |
+| `Backend/app/agents/subagents.py` | Subagent input/result contracts and direct-write guards. | Read when wiring scout/build/verifier agents or changing subagent payloads. |
+| `Backend/app/domain/development_contract.py` | Framework-independent Development Contract models and normalization. | Read when changing SDD, features, API contracts, task graph, or verification plan. |
+| `Backend/app/services/requirement_intake.py` | Deterministic simple/complex requirement classification and target routing. | Read when changing intake rules or agent handoff. |
+| `Backend/app/services/task_scheduler.py` | Deterministic serial/parallel task batching and execution assignment. | Read when changing task isolation or scheduling rules. |
+| `Backend/app/services/llm_client.py` | Anthropic-compatible model client factory. | Read when changing provider/auth/base URL behavior. |
+| `Backend/app/services/builtin_skills.py` | Loads bundled backend skill prompt content. | Read when wiring bundled skills into prompts. |
 | `Backend/app/tools/antd_v4_docs.py` | Access to bundled Ant Design v4 docs for prompt/context lookup. | Read when changing AntD docs retrieval. |
+| `Backend/app/protocols/ag_ui.py` | AG-UI stream adapter, agent-mode routing, approval events, and workspace code-change events. | Read when changing `forwardedProps`, AG-UI event shapes, or frontend/backend handoff. |
+| `Backend/app/workspace/workspace.py` | Sandboxed workspace/file/search/terminal/Git operations, sensitive-file checks, approval gates, and code-change payloads. | Read when changing workspace management or agent-facing workspace tool contracts. |
+| `Backend/app/middleware/approvals.py` | Approval grants, reusable operation rules, and protected-operation fingerprints. | Read when changing approval lifecycle, scopes, or risk gating. |
+| `Backend/app/persistence/run_store.py` | Writes `.xcodeagent/runs/<runId>` artifacts and JSONL run events. | Read when changing run artifact lifecycle, formats, or retention. |
+| `Backend/app/observability/agent_events.py` | Helpers for append-oriented agent run event payloads. | Read when changing event names or JSONL fields. |
 | `Backend/app/builtin_skills/react-antd-v4-codegen/` | Bundled React + Ant Design codegen skill and references. | Read `SKILL.md` first; references are task-specific. |
 | `Backend/resources/docs/` | Large generated Ant Design docs and JSON catalog. | Avoid broad reads; use `antd_v4_docs.py` or targeted files only. |
 
@@ -94,12 +110,12 @@ For small local edits that do not change structure or ownership, leave the index
 | Task | Start here | Usually also touch |
 | --- | --- | --- |
 | Add or change backend API route | `Backend/app/main.py` | Runtime/tool module, frontend service caller, validation docs if behavior changes. |
-| Add or change workspace/file/git/terminal tool | `Backend/app/tools/workspace.py` | `Backend/app/main.py`, `Backend/app/agent.py`, frontend tool UI/service if exposed. |
-| Change AG-UI chat behavior | `Frontend/src/renderer/src/service/agUiAgent.ts` | `Backend/app/ag_ui.py`, `Backend/app/agent.py`, `AiChatPanel`. |
-| Change default requirement intake/routing | `Backend/app/requirement_intake.py` | `Backend/app/ag_ui.py`, `Backend/app/tools/requirement_planner.py`, shared typings if payload shape changes. |
-| Change requirement planning | `Backend/app/tools/requirement_planner.py` | `RequirementPlannerPanel`, `agUiAgent.ts`, shared typings. |
-| Change orchestration/verification | `Backend/app/orchestrator.py` | `development_contract.py`, `task_scheduler.py`, `run_store.py`, `Backend/app/main.py`, planner types/UI if payload changes. |
-| Change Development Contract payload | `Backend/app/development_contract.py` | `Frontend/src/renderer/src/typings/developmentContract.ts`, `requirement_planner.py`, `orchestrator.py`, `OrchestrationPanel`. |
+| Add or change workspace/file/git/terminal tool | `Backend/app/workspace/workspace.py` | `Backend/app/main.py`, `Backend/app/graph/agent.py`, frontend tool UI/service if exposed. |
+| Change AG-UI chat behavior | `Frontend/src/renderer/src/service/agUiAgent.ts` | `Backend/app/protocols/ag_ui.py`, `Backend/app/graph/agent.py`, `AiChatPanel`. |
+| Change default requirement intake/routing | `Backend/app/services/requirement_intake.py` | `Backend/app/protocols/ag_ui.py`, `Backend/app/agents/requirement_planner.py`, shared typings if payload shape changes. |
+| Change requirement planning | `Backend/app/agents/requirement_planner.py` | `RequirementPlannerPanel`, `agUiAgent.ts`, shared typings. |
+| Change orchestration/verification | `Backend/app/graph/orchestrator.py` | `domain/development_contract.py`, `services/task_scheduler.py`, `persistence/run_store.py`, `Backend/app/main.py`, planner types/UI if payload changes. |
+| Change Development Contract payload | `Backend/app/domain/development_contract.py` | `Frontend/src/renderer/src/typings/developmentContract.ts`, `agents/requirement_planner.py`, `graph/orchestrator.py`, `OrchestrationPanel`. |
 | Change local chat history | `Frontend/src/main/index.ts` | `preload` typings, `chatSessions.ts`, `AiChatPanel`. |
 | Change saved applications/workspace open flow | `WelcomePage.tsx` | `applicationStorage.ts`, Electron workspace/app storage IPC, application typings. |
 | Change frontend preview | `AiChatPanel` preview actions | `BrowserPreviewPanel`, `utils/previewUrl.ts`, Electron browser IPC. |

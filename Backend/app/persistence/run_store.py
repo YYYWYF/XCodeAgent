@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
-from app.agent_events import make_event
+from app.observability.agent_events import make_event
 
 
 RUNS_DIR = ".xcodeagent/runs"

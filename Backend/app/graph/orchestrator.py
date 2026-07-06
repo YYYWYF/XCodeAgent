@@ -5,12 +5,12 @@ import shlex
 from typing import Any, Dict, List, Optional, Set
 
 from app.config import Settings
-from app.development_contract import normalize_contract
-from app.run_store import create_run_artifacts, run_store_capabilities
-from app import task_scheduler
-from app.subagents import build_subagent_input, subagent_capabilities
-from app.tools import workspace as workspace_tools
-from app.tools.requirement_planner import RequirementPlannerRuntime
+from app.domain.development_contract import normalize_contract
+from app.persistence.run_store import create_run_artifacts, run_store_capabilities
+from app.services import task_scheduler
+from app.agents.subagents import build_subagent_input, subagent_capabilities
+from app.workspace import workspace as workspace_tools
+from app.agents.requirement_planner import RequirementPlannerRuntime
 
 
 ORCHESTRATION_DATA_START = "<orchestration-data>"

@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 
 
-_SKILL_ROOT = Path(__file__).resolve().parent / "builtin_skills" / "react-antd-v4-codegen"
+_SKILL_ROOT = Path(__file__).resolve().parent.parent / "builtin_skills" / "react-antd-v4-codegen"
 _ENTRY_FILES = [
     "REACT_BEST_PRACTICES_GUIDE.md",
     "AGENTS.md",

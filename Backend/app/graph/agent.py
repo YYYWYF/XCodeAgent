@@ -16,12 +16,12 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired
 
-from app.builtin_skills import load_react_antd_v4_codegen_prompt
+from app.services.builtin_skills import load_react_antd_v4_codegen_prompt
 from app.config import Settings
-from app.llm_client import create_anthropic_client
+from app.services.llm_client import create_anthropic_client
 from app.tools.antd_v4_docs import build_prompt_context
-from app.tools import workspace as workspace_tools
-from app.tools.workspace import build_prompt_context as build_workspace_tools_prompt_context
+from app.workspace import workspace as workspace_tools
+from app.workspace.workspace import build_prompt_context as build_workspace_tools_prompt_context
 
 try:
     from langgraph.checkpoint.memory import MemorySaver
