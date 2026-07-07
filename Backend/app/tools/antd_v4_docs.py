@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -27,10 +28,34 @@ class SearchResult:
 
 
 def docs_root() -> Path:
-    configured_path = Path(os.getenv("ANTD_V4_DOCS_DIR", str(DEFAULT_DOCS_DIR))).expanduser()
-    if configured_path.is_absolute():
-        return configured_path
-    return (REPO_ROOT / configured_path).resolve()
+    configured_value = os.getenv("ANTD_V4_DOCS_DIR")
+    if configured_value:
+        configured_path = Path(configured_value).expanduser()
+        if configured_path.is_absolute():
+            return configured_path
+        return (REPO_ROOT / configured_path).resolve()
+
+    for candidate in _default_docs_candidates():
+        if candidate.is_dir():
+            return candidate
+
+    return (REPO_ROOT / DEFAULT_DOCS_DIR).resolve()
+
+
+def _default_docs_candidates() -> List[Path]:
+    candidates = [
+        REPO_ROOT / DEFAULT_DOCS_DIR,
+    ]
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        resource_root = Path(frozen_root).resolve()
+        candidates.extend(
+            [
+                resource_root / "resources" / "docs" / "antd-v4",
+                resource_root / "Backend" / "resources" / "docs" / "antd-v4",
+            ]
+        )
+    return candidates
 
 
 def is_available() -> bool:

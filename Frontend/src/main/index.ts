@@ -6,6 +6,7 @@ import path from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { XCODE_AGENT_ENV } from './env'
+import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 
 let mainWindow:BrowserWindow|null = null;
 let loginWindow: BrowserWindow | null = null
@@ -483,7 +484,7 @@ function createMainWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--xcode-agent-base-url=${XCODE_AGENT_ENV.XCODE_AGENT_BASE_URL}`],
+      additionalArguments: [`--xcode-agent-base-url=${getBackendBaseUrl()}`],
     }
   })
 
@@ -531,7 +532,7 @@ function createLoginWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--xcode-agent-base-url=${XCODE_AGENT_ENV.XCODE_AGENT_BASE_URL}`]
+      additionalArguments: [`--xcode-agent-base-url=${getBackendBaseUrl()}`]
     }
   })
 
@@ -621,6 +622,8 @@ app.whenReady().then(async () => {
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
   await ensureXcodeAgentDataDir()
+  const backendBaseUrl = await startBackendService()
+  console.log(`XCode Agent backend URL: ${backendBaseUrl}`)
   setupApplicationStorageIpc();
   setupAuthIpc()
   setupBrowserIpc();
@@ -640,8 +643,27 @@ app.whenReady().then(async () => {
   app.quit()
 })
 
-app.on('before-quit', () => {
+let backendStoppedBeforeQuit = false
+let backendStopBeforeQuitStarted = false
+
+app.on('before-quit', (event) => {
   isQuitting = true
+  if (backendStoppedBeforeQuit) return
+
+  event.preventDefault()
+  if (backendStopBeforeQuitStarted) return
+  backendStopBeforeQuitStarted = true
+
+  void (async () => {
+    try {
+      await stopBackendService()
+    } catch (error) {
+      console.error('Failed to stop backend service', error)
+    } finally {
+      backendStoppedBeforeQuit = true
+      app.quit()
+    }
+  })()
 })
 
 // Keep the app alive in the tray when windows are closed.

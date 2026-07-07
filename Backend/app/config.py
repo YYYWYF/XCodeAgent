@@ -3,10 +3,20 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+
+def _load_environment() -> None:
+    env_file = os.getenv("XCODEAGENT_BACKEND_ENV_FILE")
+    if env_file:
+        load_dotenv(Path(env_file).expanduser(), override=False)
+        return
+    load_dotenv()
+
+
+_load_environment()
 
 _DISPLAY_MODEL_SUFFIX = re.compile(r"\s+\[[^\]]+\]\s*$")
 

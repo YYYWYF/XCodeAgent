@@ -22,6 +22,8 @@ For small local edits that do not change structure or ownership, leave the index
 | `AGENTS.md` | Repository-wide agent instructions, validation rules, and architecture constraints. | Always read before edits. |
 | `docs/CODEBASE_INDEX.md` | Directory/function routing map for future agents. | Read before broad search or planning. |
 | `scripts/start-backend.sh` | Standard backend dev-server command for agents and humans. | Run this when asked to start the backend service. |
+| `scripts/build-backend-mac.sh` | macOS PyInstaller build and staging script for the packaged backend executable plus `.env`. | Run on macOS before `Frontend` mac packaging. |
+| `scripts/build-backend-win.ps1` | Windows-only PyInstaller build and staging script for the packaged backend exe plus `.env`. | Run on a Windows CI/VM before `Frontend` Windows packaging. |
 | `Backend/` | FastAPI backend, agent runtime, planning/orchestration, local workspace tools, bundled docs. | `Backend/app/main.py`, then the relevant module below. |
 | `Frontend/` | Electron + React desktop client with Vite, Ant Design, local session/app storage, AG-UI frontend clients. | `Frontend/src/main/index.ts`, `Frontend/src/renderer/src/pages/AppEntryPage.tsx`. |
 
@@ -70,6 +72,7 @@ Backend/app/
 | Path | Responsibility | Read first / common edits |
 | --- | --- | --- |
 | `Frontend/src/main/index.ts` | Electron main process: windows, external/preview browser IPC, app storage, workspace selection/project creation, local session file storage. | Read when changing desktop IPC, persisted app/session storage, preview windows, or filesystem-backed desktop behavior. |
+| `Frontend/src/main/backendService.ts` | Packaged Windows/macOS backend service lifecycle: locating the PyInstaller executable, selecting a local port, health polling, renderer base URL, and process shutdown. | Read when changing bundled backend startup, ports, health checks, or quit cleanup. |
 | `Frontend/src/preload/index.ts` and `Frontend/src/preload/index.d.ts` | Context-bridge API exposed as `window.xcodeAgent` plus preload typings. | Update with every new/changed Electron IPC channel. |
 | `Frontend/src/renderer/src/window.d.ts` | Renderer-side `window.xcodeAgent` type declarations. | Update with preload API changes. |
 | `Frontend/src/renderer/src/main.tsx` | React renderer entry. | Read for app bootstrapping issues. |
@@ -95,12 +98,15 @@ Backend/app/
 | `Frontend/src/renderer/src/constants/` | Static workbench constants. | Read when changing mode/navigation constants. |
 | `Frontend/src/renderer/src/utils/` | Class name helper, layout helpers, preview URL/open helpers. | Read for shared renderer utilities. |
 | `Frontend/src/renderer/src/styles/global.less` and component `.less` files | Global and component-scoped styling. | Keep style changes near the component unless truly global. |
+| `Frontend/scripts/verify-backend-resource.mjs` | Preflight check used by Windows/macOS Electron package scripts to ensure platform-specific `resources/backend/<platform>` contains the staged PyInstaller backend and `.env`. | Read when changing frontend desktop packaging requirements. |
 
 ## Generated Or External-Like Areas
 
 | Path | Notes |
 | --- | --- |
 | `Frontend/node_modules/`, `Frontend/out/`, `Frontend/dist/` | Generated/dependency output; do not inspect for normal feature work. |
+| `Frontend/resources/backend/` | Generated platform backend staging output from `scripts/build-backend-win.ps1` and `scripts/build-backend-mac.sh`; contains PyInstaller support files and copied `.env`. Do not commit or inspect secrets. |
+| `Backend/build/`, `Backend/dist/` | Generated PyInstaller build output. |
 | `Backend/.venv/`, `Backend/.pycache/` | Environment/cache output; do not inspect for normal feature work. |
 | `.pnpm-store/` | Package store; do not inspect. |
 | `Backend/resources/docs/antd-v4*` | Large bundled docs; prefer targeted lookup through backend docs tooling. |
@@ -127,5 +133,7 @@ Backend/app/
 | --- | --- |
 | Documentation/instruction/index only | No backend health, Vite check, build, or compile required unless explicitly requested. |
 | Frontend TypeScript/UI/Electron behavior | `pnpm build` from `Frontend`; if a dev server is running, check the active Vite URL. |
+| Windows Electron package with bundled backend | Run `scripts/build-backend-win.ps1` on Windows first, then `pnpm build:win:dev` from `Frontend`. |
+| macOS Electron package with bundled backend | Run `scripts/build-backend-mac.sh` on macOS first, then `pnpm build:mac:dev` from `Frontend`. |
 | Backend Python behavior | Focused `python3 -m py_compile` or narrower test for changed Python files, plus `/health`. |
 | Backend API/agent behavior | `/health`; add focused endpoint/manual checks when behavior changes. |

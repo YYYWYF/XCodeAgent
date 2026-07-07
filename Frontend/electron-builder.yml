@@ -13,12 +13,24 @@ asarUnpack:
   - resources/**
 win:
   executableName: my-app
+  extraResources:
+    - from: resources/backend/win32
+      to: backend
+      filter:
+        - .env
+        - '**/*'
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  extraResources:
+    - from: resources/backend/darwin
+      to: backend
+      filter:
+        - .env
+        - '**/*'
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
