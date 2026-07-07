@@ -1,10 +1,12 @@
 import {
+  ArrowLeftOutlined,
   CloseOutlined,
   DeleteOutlined,
   DesktopOutlined,
   DownOutlined,
   ExportOutlined,
   FolderOpenOutlined,
+  HolderOutlined,
   MessageOutlined,
   RobotOutlined,
   SendOutlined,
@@ -12,7 +14,7 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Dropdown, Empty, Input, Popconfirm, Spin, Typography, message as antdMessage } from 'antd';
 import type { MenuProps } from 'antd';
-import type { KeyboardEvent } from 'react';
+import type { CSSProperties, KeyboardEvent, MouseEvent as ReactMouseEvent, ReactElement } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useWorkbench } from '../../context';
 import { AgUiChatSession, DevelopmentOrchestratorSession } from '../../service/agUiAgent';
@@ -50,6 +52,11 @@ import './AiChatPanel.less';
 const { Text, Title } = Typography;
 const { TextArea } = Input;
 
+const DEFAULT_ASSISTANT_PANEL_WIDTH = 660;
+const MIN_ASSISTANT_PANEL_WIDTH = 520;
+const MIN_RIGHT_PANEL_WIDTH = 380;
+const SPLIT_HANDLE_WIDTH = 10;
+
 type AgentChatMessage = {
   id: number;
   role: 'user' | 'assistant';
@@ -68,6 +75,7 @@ type RightPanelState =
 type Props = {
   application: ApplicationConfig;
   editorMode: EditorMode;
+  onReturnWelcome: () => void;
 };
 
 const chatCopy: Record<
@@ -90,7 +98,8 @@ const chatCopy: Record<
   },
 };
 
-export default function AiChatPanel({ application, editorMode }: Props) {
+export default function AiChatPanel({ application, editorMode, onReturnWelcome }: Props): ReactElement {
+  const panelRef = useRef<HTMLElement | null>(null);
   // 草稿按前后端分别保存，来回切换不会串内容或丢失未发送文本。
   const [drafts, setDrafts] = useState<Record<EditorMode, string>>({
     frontend: '',
@@ -113,6 +122,8 @@ export default function AiChatPanel({ application, editorMode }: Props) {
   const [errors, setErrors] = useState<Partial<Record<EditorMode, string>>>({});
   const [previewError, setPreviewError] = useState('');
   const [rightPanel, setRightPanel] = useState<RightPanelState>();
+  const [assistantPanelWidth, setAssistantPanelWidth] = useState(DEFAULT_ASSISTANT_PANEL_WIDTH);
+  const [splitDragging, setSplitDragging] = useState(false);
   const [confirmingOrchestrationId, setConfirmingOrchestrationId] = useState<number>();
   const [approvingApprovalId, setApprovingApprovalId] = useState<string>();
   const { publishAiMessage } = useWorkbench();
@@ -130,11 +141,57 @@ export default function AiChatPanel({ application, editorMode }: Props) {
   const workspaceRoot = application.workspaceRoot || '未选择工作目录';
   const embeddedPreviewOpen = rightPanel?.type === 'preview';
   const rightPanelOpen = Boolean(rightPanel);
+  const panelStyle = rightPanelOpen
+    ? ({
+        '--assistant-panel-width': `${assistantPanelWidth}px`,
+      } as CSSProperties)
+    : undefined;
 
   useEffect(() => {
     loadSessionsForMode(editorMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [application.workspaceRoot, editorMode]);
+
+  useEffect(() => {
+    if (!rightPanelOpen) {
+      setSplitDragging(false);
+      return;
+    }
+
+    const nextWidth = clampAssistantPanelWidth(assistantPanelWidth, panelRef.current);
+    if (nextWidth !== assistantPanelWidth) {
+      setAssistantPanelWidth(nextWidth);
+    }
+  }, [assistantPanelWidth, rightPanelOpen]);
+
+  useEffect(() => {
+    if (!splitDragging) return undefined;
+
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handleMouseMove = (event: MouseEvent): void => {
+      const panelRect = panelRef.current?.getBoundingClientRect();
+      if (!panelRect) return;
+
+      setAssistantPanelWidth(
+        clampAssistantPanelWidth(event.clientX - panelRect.left, panelRef.current),
+      );
+    };
+    const handleMouseUp = (): void => setSplitDragging(false);
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [splitDragging]);
 
   const previewMenuItems: MenuProps['items'] = [
     {
@@ -162,6 +219,11 @@ export default function AiChatPanel({ application, editorMode }: Props) {
     } catch (caughtError) {
       setPreviewError(caughtError instanceof Error ? caughtError.message : '无法打开网页预览');
     }
+  };
+
+  const handlePanelSplitDragStart = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    setSplitDragging(true);
   };
 
   const replaceSessionSummary = (mode: EditorMode, summary: ChatSessionSummary) => {
@@ -744,11 +806,30 @@ export default function AiChatPanel({ application, editorMode }: Props) {
   };
 
   return (
-    <section className={cx('ai-chat-panel', rightPanelOpen && 'embedded-preview-open')}>
+    <section
+      className={cx(
+        'ai-chat-panel',
+        rightPanelOpen && 'embedded-preview-open',
+        splitDragging && 'split-dragging',
+      )}
+      ref={panelRef}
+      style={panelStyle}
+    >
       <div className={cx('ai-chat-assistant')}>
         <aside className={cx('session-sidebar')} aria-label="历史会话">
           <div className={cx('session-sidebar-header')}>
             <Text strong>历史会话</Text>
+            <Button
+              aria-label="返回欢迎页"
+              className={cx('session-return-button')}
+              icon={<ArrowLeftOutlined />}
+              onClick={onReturnWelcome}
+              size="small"
+              title="返回欢迎页"
+              type="text"
+            >
+              返回
+            </Button>
           </div>
           <Text className={cx('session-workspace-name')} title={workspaceRoot}>
             <FolderOpenOutlined /> {application.workspaceRoot ? application.name : '未选择工作目录'}
@@ -978,6 +1059,19 @@ export default function AiChatPanel({ application, editorMode }: Props) {
         </div>
       </div>
 
+      {rightPanelOpen && (
+        <div
+          aria-label="拖动调整右侧面板宽度"
+          aria-orientation="vertical"
+          className={cx('panel-split-handle', splitDragging && 'dragging')}
+          onMouseDown={handlePanelSplitDragStart}
+          role="separator"
+          title="拖动调整左右面板宽度"
+        >
+          <HolderOutlined className={cx('panel-split-handle-icon')} />
+        </div>
+      )}
+
       {rightPanel?.type === 'preview' && (
         <div className={cx('embedded-preview-pane')}>
           <BrowserPreviewPanel application={application} />
@@ -989,13 +1083,6 @@ export default function AiChatPanel({ application, editorMode }: Props) {
             codeChanges={rightPanel.codeChanges}
             selectedPath={rightPanel.selectedPath}
             onClose={() => setRightPanel(undefined)}
-            onSelectFile={(selectedPath) =>
-              setRightPanel({
-                type: 'diff',
-                codeChanges: rightPanel.codeChanges,
-                selectedPath,
-              })
-            }
           />
         </div>
       )}
@@ -1074,4 +1161,14 @@ function buildScopedSystemPrompt(application: ApplicationConfig, editorMode: Edi
     : '当前应用没有绑定工作目录，涉及本地工具或命令时先说明需要选择工作目录。';
 
   return `${scopePrompt}\n应用名称：${application.name}。\n${workspacePrompt}`;
+}
+
+function clampAssistantPanelWidth(nextWidth: number, panel: HTMLElement | null): number {
+  const panelWidth = panel?.getBoundingClientRect().width ?? 0;
+  const maxWidth = Math.max(
+    MIN_ASSISTANT_PANEL_WIDTH,
+    panelWidth - MIN_RIGHT_PANEL_WIDTH - SPLIT_HANDLE_WIDTH,
+  );
+
+  return Math.min(Math.max(nextWidth, MIN_ASSISTANT_PANEL_WIDTH), maxWidth);
 }

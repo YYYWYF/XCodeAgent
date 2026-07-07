@@ -5,9 +5,10 @@ import { cx } from '../utils';
 
 type Props = {
   application: ApplicationConfig;
+  onReturnWelcome: () => void;
 };
 
-function WorkbenchPage({ application }: Props) {
+function WorkbenchPage({ application, onReturnWelcome }: Props) {
   const editorMode: EditorMode = 'frontend';
 
   return (
@@ -15,6 +16,7 @@ function WorkbenchPage({ application }: Props) {
       <LeftPanel
         application={application}
         editorMode={editorMode}
+        onReturnWelcome={onReturnWelcome}
       />
     </Layout>
   );

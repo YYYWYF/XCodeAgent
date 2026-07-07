@@ -6,9 +6,18 @@ import WorkbenchPage from './WorkbenchPage';
 export default function AppEntryPage() {
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null);
 
+  const handleReturnWelcome = () => {
+    setActiveApplication(null);
+  };
+
   if (!activeApplication) {
     return <WelcomePage onOpenApplication={setActiveApplication} />;
   }
 
-  return <WorkbenchPage application={activeApplication} />;
+  return (
+    <WorkbenchPage
+      application={activeApplication}
+      onReturnWelcome={handleReturnWelcome}
+    />
+  );
 }

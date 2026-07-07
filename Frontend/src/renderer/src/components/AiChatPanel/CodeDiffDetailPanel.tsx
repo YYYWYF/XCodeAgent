@@ -1,6 +1,6 @@
 import { CloseOutlined, CodeOutlined, FileTextOutlined } from '@ant-design/icons';
 import { Button, Empty, Tag, Typography } from 'antd';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, type ReactElement } from 'react';
 import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../typings';
 import { cx } from '../../utils';
 
@@ -10,7 +10,6 @@ type Props = {
   codeChanges: WorkspaceCodeChangeSet;
   selectedPath?: string;
   onClose: () => void;
-  onSelectFile: (path: string) => void;
 };
 
 const changeTypeCopy: Record<WorkspaceCodeChangeFile['changeType'], string> = {
@@ -23,11 +22,23 @@ export default function CodeDiffDetailPanel({
   codeChanges,
   selectedPath,
   onClose,
-  onSelectFile,
-}: Props) {
+}: Props): ReactElement {
   const groupedFiles = useMemo(() => groupCodeChanges(codeChanges.files), [codeChanges.files]);
-  const activePath = selectedPath || groupedFiles[0]?.path;
-  const activeFile = groupedFiles.find((file) => file.path === activePath);
+  const fileSectionRefs = useRef(new Map<string, HTMLElement>());
+
+  useEffect(() => {
+    if (!selectedPath) return;
+
+    fileSectionRefs.current.get(selectedPath)?.scrollIntoView({ block: 'start' });
+  }, [groupedFiles, selectedPath]);
+
+  const bindFileSectionRef = (path: string): ((node: HTMLElement | null) => void) => (node) => {
+    if (node) {
+      fileSectionRefs.current.set(path, node);
+      return;
+    }
+    fileSectionRefs.current.delete(path);
+  };
 
   return (
     <section className={cx('code-diff-detail-panel')}>
@@ -45,73 +56,62 @@ export default function CodeDiffDetailPanel({
         <Button aria-label="关闭代码变更详情" icon={<CloseOutlined />} onClick={onClose} type="text" />
       </header>
 
-      <div className={cx('code-diff-file-tabs')}>
-        {groupedFiles.map((file) => (
-          <button
-            className={cx('code-diff-file-tab', file.path === activePath && 'active')}
-            key={file.path}
-            onClick={() => onSelectFile(file.path)}
-            type="button"
-          >
-            <FileTextOutlined />
-            <span>{file.path}</span>
-            <span className={cx('code-diff-file-tab-stats')}>
-              <span className={cx('addition')}>+{file.additions}</span>
-              <span className={cx('deletion')}>-{file.deletions}</span>
-            </span>
-          </button>
-        ))}
-      </div>
-
       <div className={cx('code-diff-body')}>
-        {!activeFile ? (
+        {groupedFiles.length === 0 ? (
           <Empty description="暂无可展示的代码变更" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
-          <>
-            <div className={cx('code-diff-active-file')}>
-              <div>
-                <Text strong>{activeFile.path}</Text>
-                <Tag>{changeTypeCopy[activeFile.changeType]}</Tag>
+          groupedFiles.map((file) => (
+            <section
+              className={cx('code-diff-file-section', file.path === selectedPath && 'selected')}
+              key={file.path}
+              ref={bindFileSectionRef(file.path)}
+            >
+              <div className={cx('code-diff-active-file')}>
+                <div>
+                  <FileTextOutlined />
+                  <Text strong>{file.path}</Text>
+                  <Tag>{changeTypeCopy[file.changeType]}</Tag>
+                </div>
+                <Text className={cx('code-diff-file-stats')} type="secondary">
+                  <span className={cx('addition')}>+{file.additions}</span>
+                  <span className={cx('deletion')}>-{file.deletions}</span>
+                </Text>
               </div>
-              <Text type="secondary">
-                <span className={cx('addition')}>+{activeFile.additions}</span>
-                <span className={cx('deletion')}>-{activeFile.deletions}</span>
-              </Text>
-            </div>
-            {activeFile.changes.map((change, index) => (
-              <div className={cx('code-diff-block')} key={`${change.id}-${index}`}>
-                {activeFile.changes.length > 1 && (
-                  <div className={cx('code-diff-block-title')}>
-                    <CodeOutlined />
-                    <Text type="secondary">变更 {index + 1}</Text>
-                  </div>
-                )}
-                {change.binary ? (
-                  <div className={cx('code-diff-empty')}>
-                    <Text type="secondary">Binary file change has no textual diff.</Text>
-                  </div>
-                ) : change.diff ? (
-                  <pre className={cx('code-diff-lines')}>
-                    {parseDiffLines(change.diff).map((line, lineIndex) => (
-                      <div className={cx('code-diff-line', line.kind)} key={`${lineIndex}-${line.text}`}>
-                        <span className={cx('code-diff-line-marker')}>{line.marker}</span>
-                        <code>{line.text}</code>
-                      </div>
-                    ))}
-                  </pre>
-                ) : (
-                  <div className={cx('code-diff-empty')}>
-                    <Text type="secondary">此文件没有文本行级变更。</Text>
-                  </div>
-                )}
-                {change.truncated && (
-                  <Text className={cx('code-diff-truncated')} type="secondary">
-                    Diff 内容过长，已截断。
-                  </Text>
-                )}
-              </div>
-            ))}
-          </>
+              {file.changes.map((change, index) => (
+                <div className={cx('code-diff-block')} key={`${change.id}-${index}`}>
+                  {file.changes.length > 1 && (
+                    <div className={cx('code-diff-block-title')}>
+                      <CodeOutlined />
+                      <Text type="secondary">变更 {index + 1}</Text>
+                    </div>
+                  )}
+                  {change.binary ? (
+                    <div className={cx('code-diff-empty')}>
+                      <Text type="secondary">Binary file change has no textual diff.</Text>
+                    </div>
+                  ) : change.diff ? (
+                    <pre className={cx('code-diff-lines')}>
+                      {parseDiffLines(change.diff).map((line, lineIndex) => (
+                        <div className={cx('code-diff-line', line.kind)} key={`${lineIndex}-${line.text}`}>
+                          <span className={cx('code-diff-line-marker')}>{line.marker}</span>
+                          <code>{line.text}</code>
+                        </div>
+                      ))}
+                    </pre>
+                  ) : (
+                    <div className={cx('code-diff-empty')}>
+                      <Text type="secondary">此文件没有文本行级变更。</Text>
+                    </div>
+                  )}
+                  {change.truncated && (
+                    <Text className={cx('code-diff-truncated')} type="secondary">
+                      Diff 内容过长，已截断。
+                    </Text>
+                  )}
+                </div>
+              ))}
+            </section>
+          ))
         )}
       </div>
     </section>
