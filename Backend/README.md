@@ -20,6 +20,18 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+如果只想在 VSCode terminal 里验证 graph workflow，可以从仓库根目录运行：
+
+```bash
+scripts/workflow "一句话需求"
+```
+
+也可以复用后端启动脚本的子命令：
+
+```bash
+scripts/start-backend.sh workflow "一句话需求"
+```
+
 服务启动后：
 
 - 健康检查：http://127.0.0.1:8000/health

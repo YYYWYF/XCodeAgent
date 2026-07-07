@@ -98,7 +98,10 @@ class OpenAICompatibleProvider:
         temperature: float,
         tools: List[Dict[str, Any]] | None = None,
     ) -> ModelResponse:
-        openai_messages = [{"role": "system", "content": system}, *_openai_messages(messages)]
+        openai_messages = [
+            {"role": "system", "content": system},
+            *_openai_messages(messages),
+        ]
         request: Dict[str, Any] = {
             "model": model,
             "messages": openai_messages,
@@ -134,7 +137,8 @@ def _openai_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
         "function": {
             "name": tool.get("name"),
             "description": tool.get("description"),
-            "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
+            "parameters": tool.get("input_schema")
+            or {"type": "object", "properties": {}},
         },
     }
 
@@ -210,7 +214,9 @@ def _anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             )
             output.append({"role": "assistant", "content": content})
         else:
-            output.append({"role": message.get("role"), "content": message.get("content") or ""})
+            output.append(
+                {"role": message.get("role"), "content": message.get("content") or ""}
+            )
     if pending_tool_results:
         output.append({"role": "user", "content": pending_tool_results})
     return output

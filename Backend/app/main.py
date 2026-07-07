@@ -8,7 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.graph import graph
 from app.protocols.ag_ui import build_ag_ui_stream
+from app.protocols.workflow_visualization import (
+    build_workflow_ag_ui_stream,
+    workflow_capabilities,
+)
 from app.graph.agent import AgentRuntime
 from app.config import Settings
 from app.graph.orchestrator import (
@@ -116,6 +121,7 @@ async def health() -> dict[str, object]:
             "requirement_intake": intake_capabilities(),
             "requirement_planner": planner_capabilities(),
             "development_orchestrator": orchestrator_capabilities(),
+            "workflow_run": workflow_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -299,3 +305,15 @@ async def search_antd_v4_docs(
             for result in results
         ],
     }
+
+
+@app.post("/workflow/run")
+async def run_workflow(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    return StreamingResponse(
+        build_workflow_ag_ui_stream(graph=graph, payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

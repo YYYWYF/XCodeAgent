@@ -5,11 +5,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-
 TargetType = Literal["frontend", "backend", "fullstack"]
 ContractStatus = Literal["draft", "ready", "executing", "verifying", "done", "blocked"]
-TaskType = Literal["inspect", "shared", "frontend", "backend", "fullstack", "feature", "test", "verify"]
-TaskExecutionMode = Literal["main-integrated", "subagent-plan-only", "subagent-direct-write"]
+TaskType = Literal[
+    "inspect", "shared", "frontend", "backend", "fullstack", "feature", "test", "verify"
+]
+TaskExecutionMode = Literal[
+    "main-integrated", "subagent-plan-only", "subagent-direct-write"
+]
 TaskStatus = Literal["pending", "running", "done", "failed", "blocked"]
 
 
@@ -31,14 +34,20 @@ class ContractSpec(BaseModel):
     users: List[str] = Field(default_factory=list)
     scope_in: List[str] = Field(default_factory=list, alias="scopeIn")
     scope_out: List[str] = Field(default_factory=list, alias="scopeOut")
-    acceptance_criteria: List[str] = Field(default_factory=list, alias="acceptanceCriteria")
+    acceptance_criteria: List[str] = Field(
+        default_factory=list, alias="acceptanceCriteria"
+    )
 
 
 class ContractDesign(BaseModel):
     features: List[str] = Field(default_factory=list)
-    shared_capabilities: List[str] = Field(default_factory=list, alias="sharedCapabilities")
+    shared_capabilities: List[str] = Field(
+        default_factory=list, alias="sharedCapabilities"
+    )
     api_conventions: List[str] = Field(default_factory=list, alias="apiConventions")
-    data_models: List[DataModelContract] = Field(default_factory=list, alias="dataModels")
+    data_models: List[DataModelContract] = Field(
+        default_factory=list, alias="dataModels"
+    )
     permissions: List[str] = Field(default_factory=list)
     error_handling: List[str] = Field(default_factory=list, alias="errorHandling")
 
@@ -62,7 +71,9 @@ class FeatureContract(BaseModel):
     apis: List[ApiContract] = Field(default_factory=list)
     data_models: List[str] = Field(default_factory=list, alias="dataModels")
     dependencies: List[str] = Field(default_factory=list)
-    acceptance_criteria: List[str] = Field(default_factory=list, alias="acceptanceCriteria")
+    acceptance_criteria: List[str] = Field(
+        default_factory=list, alias="acceptanceCriteria"
+    )
     verification: List[str] = Field(default_factory=list)
 
 
@@ -75,10 +86,16 @@ class AgentTask(BaseModel):
     depends_on: List[str] = Field(default_factory=list, alias="dependsOn")
     target_files: List[str] = Field(default_factory=list, alias="targetFiles")
     can_run_in_parallel: bool = Field(default=False, alias="canRunInParallel")
-    execution_mode: TaskExecutionMode = Field(default="subagent-plan-only", alias="executionMode")
+    execution_mode: TaskExecutionMode = Field(
+        default="subagent-plan-only", alias="executionMode"
+    )
     status: TaskStatus = "pending"
-    acceptance_criteria: List[str] = Field(default_factory=list, alias="acceptanceCriteria")
-    verification_commands: List[str] = Field(default_factory=list, alias="verificationCommands")
+    acceptance_criteria: List[str] = Field(
+        default_factory=list, alias="acceptanceCriteria"
+    )
+    verification_commands: List[str] = Field(
+        default_factory=list, alias="verificationCommands"
+    )
     direct_write_reason: str = Field(default="", alias="directWriteReason")
 
 
@@ -102,9 +119,13 @@ class DevelopmentContract(BaseModel):
     sdd: ContractSdd = Field(default_factory=ContractSdd)
     features: List[FeatureContract] = Field(default_factory=list)
     api_contracts: List[ApiContract] = Field(default_factory=list, alias="apiContracts")
-    data_models: List[DataModelContract] = Field(default_factory=list, alias="dataModels")
+    data_models: List[DataModelContract] = Field(
+        default_factory=list, alias="dataModels"
+    )
     task_graph: TaskGraph = Field(default_factory=TaskGraph, alias="taskGraph")
-    verification_plan: VerificationPlan = Field(default_factory=VerificationPlan, alias="verificationPlan")
+    verification_plan: VerificationPlan = Field(
+        default_factory=VerificationPlan, alias="verificationPlan"
+    )
     risks: List[str] = Field(default_factory=list)
     open_questions: List[str] = Field(default_factory=list, alias="openQuestions")
     next_actions: List[str] = Field(default_factory=list, alias="nextActions")
@@ -119,7 +140,10 @@ def normalize_contract(
 ) -> Dict[str, Any]:
     plan = value if isinstance(value, dict) else {}
     sdd = _dict(plan.get("sdd"))
-    features = [_normalize_feature(item, index) for index, item in enumerate(_list(plan.get("features")))]
+    features = [
+        _normalize_feature(item, index)
+        for index, item in enumerate(_list(plan.get("features")))
+    ]
     task_graph_value = task_graph or _dict(plan.get("taskGraph"))
     verification_value = verification_plan or _dict(plan.get("verificationPlan"))
     data_models = _data_models_from_design(sdd)
@@ -161,7 +185,10 @@ def _normalize_feature(value: Any, index: int) -> Dict[str, Any]:
             name=str(item.get("name") or feature_id),
             userGoal=str(item.get("userGoal") or item.get("user_goal") or ""),
             ui=_dict(item.get("ui")),
-            apis=[_normalize_api(api, feature_id=feature_id, index=api_index) for api_index, api in enumerate(_list(item.get("apis")))],
+            apis=[
+                _normalize_api(api, feature_id=feature_id, index=api_index)
+                for api_index, api in enumerate(_list(item.get("apis")))
+            ],
             dataModels=_string_list(item.get("dataModels")),
             dependencies=_string_list(item.get("dependencies")),
             acceptanceCriteria=_string_list(item.get("acceptanceCriteria")),
@@ -176,7 +203,9 @@ def _normalize_api(value: Any, *, feature_id: str, index: int) -> Dict[str, Any]
     method = str(item.get("method") or "GET").upper()
     return _dump(
         ApiContract(
-            name=str(item.get("name") or f"{method} {path}".strip() or f"api-{index + 1}"),
+            name=str(
+                item.get("name") or f"{method} {path}".strip() or f"api-{index + 1}"
+            ),
             method=method,
             path=path,
             purpose=str(item.get("purpose") or ""),
@@ -201,7 +230,10 @@ def _normalize_sdd(value: Dict[str, Any], *, requirement: str) -> Dict[str, Any]
                 "features": _string_list(design.get("features")),
                 "sharedCapabilities": _string_list(design.get("sharedCapabilities")),
                 "apiConventions": _string_list(design.get("apiConventions")),
-                "dataModels": [_normalize_data_model(item, index) for index, item in enumerate(_list(design.get("dataModels")))],
+                "dataModels": [
+                    _normalize_data_model(item, index)
+                    for index, item in enumerate(_list(design.get("dataModels")))
+                ],
                 "permissions": _string_list(design.get("permissions")),
                 "errorHandling": _string_list(design.get("errorHandling")),
             },
@@ -211,16 +243,24 @@ def _normalize_sdd(value: Dict[str, Any], *, requirement: str) -> Dict[str, Any]
 
 def _normalize_data_model(value: Any, index: int) -> Dict[str, str]:
     if isinstance(value, dict):
-        return {"name": str(value.get("name") or f"Model{index + 1}"), "description": str(value.get("description") or "")}
+        return {
+            "name": str(value.get("name") or f"Model{index + 1}"),
+            "description": str(value.get("description") or ""),
+        }
     return {"name": str(value or f"Model{index + 1}"), "description": ""}
 
 
 def _data_models_from_design(sdd: Dict[str, Any]) -> List[Dict[str, str]]:
     design = _dict(sdd.get("design"))
-    return [_normalize_data_model(item, index) for index, item in enumerate(_list(design.get("dataModels")))]
+    return [
+        _normalize_data_model(item, index)
+        for index, item in enumerate(_list(design.get("dataModels")))
+    ]
 
 
-def _api_contracts_from_features(features: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _api_contracts_from_features(
+    features: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     contracts: List[Dict[str, Any]] = []
     for feature in features:
         for api in _list(feature.get("apis")):
@@ -252,7 +292,9 @@ def _list(value: Any) -> List[Any]:
 
 
 def _string_list(value: Any) -> List[str]:
-    return [str(item) for item in _list(value) if item is not None and str(item).strip()]
+    return [
+        str(item) for item in _list(value) if item is not None and str(item).strip()
+    ]
 
 
 def _dump(value: BaseModel) -> Dict[str, Any]:
