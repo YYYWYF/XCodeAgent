@@ -1,7 +1,10 @@
 export {};
 
+import type { ElectronAPI } from '@electron-toolkit/preload';
+
 declare global {
   interface Window {
+    electron: ElectronAPI;
     xcodeAgent?: {
       isElectron: boolean;
       agentBaseUrl: string;
@@ -22,6 +25,7 @@ declare global {
         }) => Promise<{ ok?: boolean; path: string }>;
       };
       sessions?: {
+        listWorkspaces: () => Promise<{ workspaces?: unknown }>;
         list: (payload: {
           workspaceRoot: string;
           editorMode: 'frontend' | 'backend';

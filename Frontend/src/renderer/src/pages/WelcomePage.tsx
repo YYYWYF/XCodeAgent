@@ -8,8 +8,10 @@ import {
 } from '@ant-design/icons';
 import {
   Button,
+  Empty,
   Form,
   Input,
+  List,
   message,
   Modal,
   Radio,
@@ -32,6 +34,11 @@ import {
   loadStoredApplications,
   saveStoredApplications,
 } from '../service/applicationStorage';
+import {
+  canListSessionWorkspaces,
+  listSessionWorkspaces,
+  type SessionWorkspaceSummary,
+} from '../service/chatSessions';
 import { cx } from '../utils';
 import './WelcomePage.less';
 
@@ -135,6 +142,16 @@ function formatError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function formatHistoryTime(value: number): string {
+  if (!value) return '未知时间';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(value);
+}
+
 function validateProjectDirectoryName(_: unknown, value?: string) {
   if (!value?.trim()) return Promise.reject(new Error('请输入项目文件夹名'));
   if (/[<>:"/\\|?*\x00-\x1F]/.test(value.trim())) {
@@ -149,6 +166,9 @@ export default function WelcomePage({ onOpenApplication }: Props) {
   const [pagesText, setPagesText] = useState(initialDraft.pagesText);
   const [creating, setCreating] = useState(false);
   const [openingWorkspace, setOpeningWorkspace] = useState(false);
+  const [workspaceHistoryOpen, setWorkspaceHistoryOpen] = useState(false);
+  const [workspaceHistory, setWorkspaceHistory] = useState<SessionWorkspaceSummary[]>([]);
+  const [openingWorkspaceRoot, setOpeningWorkspaceRoot] = useState<string>();
   const [selectingParent, setSelectingParent] = useState(false);
   const pageOptions = useMemo(
     () => parsePages(pagesText).map((page) => ({ label: page, value: page })),
@@ -206,18 +226,36 @@ export default function WelcomePage({ onOpenApplication }: Props) {
     }
   };
 
-  const handleOpenExistingWorkspace = async () => {
+  const handleOpenExistingWorkspace = async (): Promise<void> => {
     setOpeningWorkspace(true);
     try {
-      const selectedPath = await selectDirectory('选择已有工作目录');
-      if (!selectedPath) return;
+      if (!canListSessionWorkspaces()) {
+        message.warning('当前环境不能读取本地历史工作目录，请在桌面客户端中使用。');
+        return;
+      }
 
-      const workspaceName = pathBasename(selectedPath);
+      setWorkspaceHistory(await listSessionWorkspaces());
+      setWorkspaceHistoryOpen(true);
+    } catch (error) {
+      message.error(formatError(error, '读取历史工作目录失败'));
+    } finally {
+      setOpeningWorkspace(false);
+    }
+  };
+
+  const closeWorkspaceHistory = (): void => {
+    setWorkspaceHistoryOpen(false);
+  };
+
+  const openHistoryWorkspace = async (workspace: SessionWorkspaceSummary): Promise<void> => {
+    setOpeningWorkspaceRoot(workspace.workspaceRoot);
+    try {
+      const workspaceName = workspace.name || pathBasename(workspace.workspaceRoot);
       const application: ApplicationConfig = {
         id: createApplicationId(),
         name: workspaceName,
-        workspaceRoot: selectedPath,
-        projectParentPath: pathDirname(selectedPath),
+        workspaceRoot: workspace.workspaceRoot,
+        projectParentPath: pathDirname(workspace.workspaceRoot),
         projectDirectoryName: workspaceName,
         source: 'existing-workspace',
         audience: 'developer',
@@ -233,10 +271,11 @@ export default function WelcomePage({ onOpenApplication }: Props) {
         createdAt: Date.now(),
       };
       await saveAndOpenApplication(application);
+      setWorkspaceHistoryOpen(false);
     } catch (error) {
-      message.error(formatError(error, '打开工作目录失败'));
+      message.error(formatError(error, '打开历史工作目录失败'));
     } finally {
-      setOpeningWorkspace(false);
+      setOpeningWorkspaceRoot(undefined);
     }
   };
 
@@ -326,7 +365,7 @@ export default function WelcomePage({ onOpenApplication }: Props) {
             <div className={cx('welcome-action-copy')}>
               <Title level={3}>打开工作目录</Title>
               <Paragraph type="secondary">
-                选择已有项目文件夹，直接进入对话和受保护工具工作台。
+                从历史会话中选择工作目录，直接进入对话和受保护工具工作台。
               </Paragraph>
             </div>
             <Button
@@ -340,6 +379,60 @@ export default function WelcomePage({ onOpenApplication }: Props) {
           </article>
         </section>
       </section>
+
+      <Modal
+        destroyOnClose
+        footer={null}
+        onCancel={closeWorkspaceHistory}
+        open={workspaceHistoryOpen}
+        title="选择历史工作目录"
+        width={820}
+      >
+        {workspaceHistory.length === 0 ? (
+          <Empty description="暂无历史工作目录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <List
+            className={cx('workspace-history-list')}
+            dataSource={workspaceHistory}
+            renderItem={(workspace) => (
+              <List.Item
+                actions={[
+                  <Button
+                    key="open"
+                    loading={openingWorkspaceRoot === workspace.workspaceRoot}
+                    onClick={() => openHistoryWorkspace(workspace)}
+                    type="primary"
+                  >
+                    进入
+                  </Button>,
+                ]}
+                className={cx('workspace-history-item')}
+              >
+                <List.Item.Meta
+                  avatar={<FolderOpenOutlined className={cx('workspace-history-icon')} />}
+                  description={
+                    <div className={cx('workspace-history-description')}>
+                      <Text className={cx('workspace-history-path')} title={workspace.workspaceRoot}>
+                        {workspace.workspaceRoot}
+                      </Text>
+                      <Space className={cx('workspace-history-meta')} size={[8, 6]} wrap>
+                        <Tag>共 {workspace.sessionCount} 条</Tag>
+                        <Tag>前端 {workspace.frontendCount}</Tag>
+                        {workspace.backendCount > 0 && <Tag>后端 {workspace.backendCount}</Tag>}
+                        <Text type="secondary">最近 {formatHistoryTime(workspace.latestUpdatedAt)}</Text>
+                      </Space>
+                      <Text className={cx('workspace-history-latest')} type="secondary">
+                        最近会话：{workspace.latestTitle}
+                      </Text>
+                    </div>
+                  }
+                  title={<Text strong>{workspace.name}</Text>}
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Modal>
 
       <Modal
         bodyStyle={{ maxHeight: 'calc(100vh - 260px)', overflow: 'auto' }}

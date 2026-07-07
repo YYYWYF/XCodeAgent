@@ -24,6 +24,7 @@ declare global {
       }) => Promise<{ ok?: boolean; path: string }>;
     };
     sessions?: {
+      listWorkspaces: () => Promise<{ workspaces?: unknown }>;
       list: (payload: {
         workspaceRoot: string;
         editorMode: 'frontend' | 'backend';

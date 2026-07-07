@@ -36,6 +36,28 @@ type AuthRecord = {
 
 const MOCK_LOGIN_DELAY_MS = 2000
 
+type EditorMode = 'frontend' | 'backend'
+
+type SessionWorkspaceSummary = {
+  workspaceRoot: string
+  name: string
+  sessionCount: number
+  frontendCount: number
+  backendCount: number
+  latestUpdatedAt: number
+  latestTitle: string
+}
+
+type ChatSessionSummary = {
+  id: string
+  title: string
+  editorMode: EditorMode
+  threadId: string
+  createdAt: number
+  updatedAt: number
+  messageCount: number
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
@@ -241,6 +263,10 @@ function getWorkspaceSessionRoot(workspaceRoot) {
   return path.join(getXcodeAgentDataDir(), 'sessions', getWorkspaceSessionKey(workspaceRoot));
 }
 
+function getSessionStorageRoot(): string {
+  return path.join(getXcodeAgentDataDir(), 'sessions');
+}
+
 function getSessionsDir(workspaceRoot, editorMode) {
   return path.join(getWorkspaceSessionRoot(workspaceRoot), assertEditorMode(editorMode));
 }
@@ -345,6 +371,83 @@ function normalizeSession(session) {
   };
 }
 
+async function readSessionSummariesFromDir(
+  sessionsDir: string,
+  editorMode: EditorMode
+): Promise<ChatSessionSummary[]> {
+  let entries;
+  try {
+    entries = await fs.readdir(sessionsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const sessions: ChatSessionSummary[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    try {
+      const rawValue = await fs.readFile(path.join(sessionsDir, entry.name), 'utf8');
+      const session = normalizeSession(JSON.parse(rawValue || '{}'));
+      if (session.editorMode !== editorMode) continue;
+      sessions.push(sessionSummary(session));
+    } catch {
+      // Ignore malformed session files so one bad record does not hide the workspace.
+    }
+  }
+  return sessions;
+}
+
+async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
+  const sessionsRoot = getSessionStorageRoot();
+  let entries;
+  try {
+    entries = await fs.readdir(sessionsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const workspaces: SessionWorkspaceSummary[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+
+    const workspaceSessionRoot = path.join(sessionsRoot, entry.name);
+    let workspaceRoot: string;
+    try {
+      const rawWorkspace = await fs.readFile(path.join(workspaceSessionRoot, 'workspace.json'), 'utf8');
+      const workspaceRecord = JSON.parse(rawWorkspace || '{}');
+      workspaceRoot = resolveWorkspaceRoot(workspaceRecord.workspaceRoot);
+    } catch {
+      continue;
+    }
+
+    const frontendSessions = await readSessionSummariesFromDir(
+      path.join(workspaceSessionRoot, 'frontend'),
+      'frontend',
+    );
+    const backendSessions = await readSessionSummariesFromDir(
+      path.join(workspaceSessionRoot, 'backend'),
+      'backend',
+    );
+    const allSessions = [...frontendSessions, ...backendSessions].sort(
+      (a, b) => b.updatedAt - a.updatedAt,
+    );
+    if (allSessions.length === 0) continue;
+
+    const latestSession = allSessions[0];
+    workspaces.push({
+      workspaceRoot,
+      name: path.basename(workspaceRoot) || workspaceRoot,
+      sessionCount: allSessions.length,
+      frontendCount: frontendSessions.length,
+      backendCount: backendSessions.length,
+      latestUpdatedAt: latestSession.updatedAt,
+      latestTitle: latestSession.title,
+    });
+  }
+
+  return workspaces.sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt);
+}
+
 function setupWorkspaceIpc() {
   ipcMain.handle('workspace:select-directory', async (_event, options = {}) => {
     const result = await dialog.showOpenDialog(mainWindow!, {
@@ -380,7 +483,11 @@ function setupWorkspaceIpc() {
   });
 }
 
-function setupSessionStorageIpc() {
+function setupSessionStorageIpc(): void {
+  ipcMain.handle('sessions:list-workspaces', async () => ({
+    workspaces: await listSessionWorkspaces(),
+  }));
+
   ipcMain.handle('sessions:list', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
     const editorMode = assertEditorMode(payload.editorMode);
@@ -388,7 +495,7 @@ function setupSessionStorageIpc() {
     await migrateLegacyWorkspaceSessions(workspaceRoot, editorMode, sessionsDir);
 
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
-    const sessions:any = [];
+    const sessions: ChatSessionSummary[] = [];
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
       try {

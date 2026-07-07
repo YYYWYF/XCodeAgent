@@ -38,8 +38,27 @@ export type ChatSessionSummary = {
   messageCount: number;
 };
 
+export type SessionWorkspaceSummary = {
+  workspaceRoot: string;
+  name: string;
+  sessionCount: number;
+  frontendCount: number;
+  backendCount: number;
+  latestUpdatedAt: number;
+  latestTitle: string;
+};
+
+type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>;
+
 function storageKey(workspaceRoot: string, editorMode: EditorMode) {
   return `xcode-agent-sessions:${workspaceRoot}:${editorMode}`;
+}
+
+function getElectronInvoke(): ElectronInvoke | undefined {
+  const electronApi = window.electron as
+    | { ipcRenderer?: { invoke?: ElectronInvoke } }
+    | undefined;
+  return electronApi?.ipcRenderer?.invoke;
 }
 
 function normalizeMessages(value: unknown): ChatSessionMessage[] {
@@ -118,6 +137,23 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
     .filter((item) => item.id);
 }
 
+function normalizeSessionWorkspaces(value: unknown): SessionWorkspaceSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Partial<SessionWorkspaceSummary> => Boolean(item && typeof item === 'object'))
+    .map((item) => ({
+      workspaceRoot: String(item.workspaceRoot || ''),
+      name: String(item.name || item.workspaceRoot || '未命名工作目录'),
+      sessionCount: Number(item.sessionCount || 0),
+      frontendCount: Number(item.frontendCount || 0),
+      backendCount: Number(item.backendCount || 0),
+      latestUpdatedAt: Number(item.latestUpdatedAt || 0),
+      latestTitle: String(item.latestTitle || '新对话'),
+    }))
+    .filter((item) => item.workspaceRoot && item.sessionCount > 0)
+    .sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt);
+}
+
 function readFallbackSessions(workspaceRoot: string, editorMode: EditorMode) {
   try {
     const rawValue = window.localStorage.getItem(storageKey(workspaceRoot, editorMode));
@@ -152,6 +188,30 @@ export function createChatSessionTitle(content: string) {
 
 export function chatSessionToSummary(session: ChatSessionRecord) {
   return toSummary(session);
+}
+
+export function canListSessionWorkspaces(): boolean {
+  return Boolean(window.xcodeAgent?.sessions?.listWorkspaces || getElectronInvoke());
+}
+
+export async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
+  const sessionApi = window.xcodeAgent?.sessions;
+  const legacyInvoke = getElectronInvoke();
+  if (!sessionApi?.listWorkspaces && !legacyInvoke) return [];
+
+  try {
+    const result = sessionApi?.listWorkspaces
+      ? await sessionApi.listWorkspaces()
+      : await legacyInvoke?.('sessions:list-workspaces');
+    const workspaces =
+      result && typeof result === 'object' && 'workspaces' in result
+        ? (result as { workspaces?: unknown }).workspaces
+        : [];
+    return normalizeSessionWorkspaces(workspaces);
+  } catch (error) {
+    console.warn(error);
+    throw error;
+  }
 }
 
 export async function listChatSessions(workspaceRoot: string, editorMode: EditorMode) {

@@ -8,6 +8,50 @@ const agentBaseUrl =
 // Custom APIs for renderer
 const api = {}
 
+const xcodeAgentApi = {
+  isElectron: true,
+  agentBaseUrl,
+  platform: process.platform,
+  auth: {
+    login: () => ipcRenderer.invoke('auth:login'),
+    status: () => ipcRenderer.invoke('auth:status'),
+  },
+  applications: {
+    load: () => ipcRenderer.invoke('applications:load'),
+    save: (applications) => {
+      if (!Array.isArray(applications)) {
+        return Promise.reject(new Error('applications must be an array'));
+      }
+      return ipcRenderer.invoke('applications:save', applications);
+    },
+  },
+  workspace: {
+    selectDirectory: (options = {}) => ipcRenderer.invoke('workspace:select-directory', options),
+    createProjectDirectory: (payload) => ipcRenderer.invoke('workspace:create-project-directory', payload),
+  },
+  sessions: {
+    listWorkspaces: () => ipcRenderer.invoke('sessions:list-workspaces'),
+    list: (payload) => ipcRenderer.invoke('sessions:list', payload),
+    read: (payload) => ipcRenderer.invoke('sessions:read', payload),
+    save: (payload) => ipcRenderer.invoke('sessions:save', payload),
+    delete: (payload) => ipcRenderer.invoke('sessions:delete', payload),
+  },
+  browser: {
+    openExternal: (url) => {
+      if (typeof url !== 'string') {
+        return Promise.reject(new Error('url must be a string'));
+      }
+      return ipcRenderer.invoke('browser:open-external', url);
+    },
+    openPreviewWindow: (url) => {
+      if (typeof url !== 'string') {
+        return Promise.reject(new Error('url must be a string'));
+      }
+      return ipcRenderer.invoke('browser:open-preview-window', url);
+    },
+  },
+}
+
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
 // just add to the DOM global.
@@ -15,48 +59,7 @@ if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
-    contextBridge.exposeInMainWorld('xcodeAgent', {
-      isElectron: true,
-      agentBaseUrl,
-      platform: process.platform,
-      auth: {
-        login: () => ipcRenderer.invoke('auth:login'),
-        status: () => ipcRenderer.invoke('auth:status'),
-      },
-      applications: {
-        load: () => ipcRenderer.invoke('applications:load'),
-        save: (applications) => {
-          if (!Array.isArray(applications)) {
-            return Promise.reject(new Error('applications must be an array'));
-          }
-          return ipcRenderer.invoke('applications:save', applications);
-        },
-      },
-      workspace: {
-        selectDirectory: (options = {}) => ipcRenderer.invoke('workspace:select-directory', options),
-        createProjectDirectory: (payload) => ipcRenderer.invoke('workspace:create-project-directory', payload),
-      },
-      sessions: {
-        list: (payload) => ipcRenderer.invoke('sessions:list', payload),
-        read: (payload) => ipcRenderer.invoke('sessions:read', payload),
-        save: (payload) => ipcRenderer.invoke('sessions:save', payload),
-        delete: (payload) => ipcRenderer.invoke('sessions:delete', payload),
-      },
-      browser: {
-        openExternal: (url) => {
-          if (typeof url !== 'string') {
-            return Promise.reject(new Error('url must be a string'));
-          }
-          return ipcRenderer.invoke('browser:open-external', url);
-        },
-        openPreviewWindow: (url) => {
-          if (typeof url !== 'string') {
-            return Promise.reject(new Error('url must be a string'));
-          }
-          return ipcRenderer.invoke('browser:open-preview-window', url);
-        },
-      },
-    });
+    contextBridge.exposeInMainWorld('xcodeAgent', xcodeAgentApi);
     
   } catch (error) {
     console.error(error)
@@ -66,4 +69,6 @@ if (process.contextIsolated) {
   window.electron = electronAPI
   // @ts-ignore (define in dts)
   window.api = api
+  // @ts-ignore (define in dts)
+  window.xcodeAgent = xcodeAgentApi
 }

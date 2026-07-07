@@ -1,6 +1,6 @@
 # XCodeAgent Codebase Index
 
-Last updated: 2026-07-06
+Last updated: 2026-07-07
 
 Use this file before broad code exploration. It is a routing map, not full documentation: read the matching row, then inspect only the listed entry files and nearby code.
 
@@ -71,13 +71,13 @@ Backend/app/
 
 | Path | Responsibility | Read first / common edits |
 | --- | --- | --- |
-| `Frontend/src/main/index.ts` | Electron main process: windows, external/preview browser IPC, app storage, workspace selection/project creation, local session file storage. | Read when changing desktop IPC, persisted app/session storage, preview windows, or filesystem-backed desktop behavior. |
+| `Frontend/src/main/index.ts` | Electron main process: windows, external/preview browser IPC, app storage, workspace selection/project creation, local session file storage, and historical session workspace listing. | Read when changing desktop IPC, persisted app/session storage, preview windows, or filesystem-backed desktop behavior. |
 | `Frontend/src/main/backendService.ts` | Packaged Windows/macOS backend service lifecycle: locating the PyInstaller executable, selecting a local port, health polling, renderer base URL, and process shutdown. | Read when changing bundled backend startup, ports, health checks, or quit cleanup. |
-| `Frontend/src/preload/index.ts` and `Frontend/src/preload/index.d.ts` | Context-bridge API exposed as `window.xcodeAgent` plus preload typings. | Update with every new/changed Electron IPC channel. |
+| `Frontend/src/preload/index.ts` and `Frontend/src/preload/index.d.ts` | Context-bridge API exposed as `window.xcodeAgent` plus preload typings, including session workspace history calls. | Update with every new/changed Electron IPC channel. |
 | `Frontend/src/renderer/src/window.d.ts` | Renderer-side `window.xcodeAgent` type declarations. | Update with preload API changes. |
 | `Frontend/src/renderer/src/main.tsx` | React renderer entry. | Read for app bootstrapping issues. |
 | `Frontend/src/renderer/src/pages/AppEntryPage.tsx` | Top-level renderer routing between welcome flow and workbench. | Read when changing app open/create lifecycle. |
-| `Frontend/src/renderer/src/pages/WelcomePage.tsx` | Create/open application UI and application metadata collection. | Read when changing app setup, workspace selection, or saved application metadata. |
+| `Frontend/src/renderer/src/pages/WelcomePage.tsx` | Create/open application UI, historical workspace selection, and application metadata collection. | Read when changing app setup, workspace selection, or saved application metadata. |
 | `Frontend/src/renderer/src/pages/WorkbenchPage.tsx` | Workbench shell; currently routes the selected app into `LeftPanel`. | Read when changing workbench layout entry. |
 | `Frontend/src/renderer/src/components/AiChatPanel/` | Main chat UI, history sidebar, local chat sessions, AG-UI sends, protected-tool approval cards/actions, code-change diff review cards/panels, assistant output publishing, and frontend preview actions. | Read when changing chat, history, AG-UI message sending, approval interactions, diff review UI, or preview controls. |
 | `Frontend/src/renderer/src/components/RequirementPlannerPanel/` | Planner UI for collecting answers and rendering structured development plans. | Read when changing requirement planning interactions. |
@@ -90,7 +90,7 @@ Backend/app/
 | `Frontend/src/renderer/src/components/ActivityBar/`, `ResizeHandle/`, `PlaceholderPanel/`, `MarkdownContent/` | Shared UI pieces for navigation, resizing, empty states, and markdown rendering. | Read only for UI work touching those widgets. |
 | `Frontend/src/renderer/src/service/agUiAgent.ts` | Frontend AG-UI client wrappers for chat and requirement planner sessions, including custom approval and workspace code-change event parsing. | Read when changing AG-UI request props, approval decisions, parsing structured payloads, code-change payloads, or thread/session handling. |
 | `Frontend/src/renderer/src/service/orchestratorAgent.ts` | Thin re-export service for development orchestrator AG-UI sessions. | Read when changing frontend orchestrator call sites. |
-| `Frontend/src/renderer/src/service/chatSessions.ts` | Renderer chat session model, summary normalization, code-change message persistence, Electron/localStorage persistence fallback. | Read when changing chat history/session behavior or persisted message shape. |
+| `Frontend/src/renderer/src/service/chatSessions.ts` | Renderer chat session model, summary/workspace normalization, code-change message persistence, Electron/localStorage persistence fallback. | Read when changing chat history/session behavior or persisted message shape. |
 | `Frontend/src/renderer/src/service/applicationStorage.ts` | Stored application list load/save fallback and Electron storage calls. | Read when changing saved applications. |
 | `Frontend/src/renderer/src/service/workspaceTools.ts` | Frontend client helpers for backend workspace tools and approval approve/reject calls. | Read when changing workspace tool invocation or approval API usage from the UI. |
 | `Frontend/src/renderer/src/context/WorkbenchContext.tsx` | Shared workbench state for assistant messages published to editor panels. | Read when changing cross-panel message flow. |

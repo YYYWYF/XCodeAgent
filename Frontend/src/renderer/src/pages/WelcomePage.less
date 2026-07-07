@@ -157,6 +157,60 @@
   word-break: break-all;
 }
 
+.@{class-prefix}-workspace-history-list {
+  max-height: min(560px, calc(100vh - 260px));
+  overflow: auto;
+}
+
+.@{class-prefix}-workspace-history-item.ant-list-item {
+  align-items: flex-start;
+  padding: 16px 4px;
+
+  .ant-list-item-meta {
+    min-width: 0;
+  }
+
+  .ant-list-item-meta-content {
+    min-width: 0;
+  }
+}
+
+.@{class-prefix}-workspace-history-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #fff5df;
+  color: #a45d00;
+  font-size: 18px;
+}
+
+.@{class-prefix}-workspace-history-description {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.@{class-prefix}-workspace-history-path,
+.@{class-prefix}-workspace-history-latest {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-workspace-history-meta {
+  min-width: 0;
+
+  .ant-tag {
+    margin-right: 0;
+    border-radius: 6px;
+  }
+}
+
 @media (max-width: 860px) {
   .@{class-prefix}-welcome-page {
     padding: 22px;
