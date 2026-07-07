@@ -58,6 +58,13 @@ type ChatSessionSummary = {
   messageCount: number
 }
 
+const MESSAGE_APPROVAL_STATUSES = new Set([
+  'pending',
+  'approved_once',
+  'approved_always',
+  'feedback',
+])
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
@@ -341,6 +348,38 @@ function sessionSummary(session) {
   };
 }
 
+function cloneJsonRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+
+  try {
+    return JSON.parse(JSON.stringify(value)) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeSessionMessage(message): Record<string, unknown> {
+  const normalizedMessage = {
+    id: Number(message.id || Date.now()),
+    role: message.role === 'assistant' ? 'assistant' : 'user',
+    content: String(message.content || ''),
+    createdAt: Number(message.createdAt || Date.now()),
+  }
+  const orchestration = cloneJsonRecord(message.orchestration)
+  const approval = cloneJsonRecord(message.approval)
+  const codeChanges = cloneJsonRecord(message.codeChanges)
+
+  return {
+    ...normalizedMessage,
+    ...(orchestration ? { orchestration } : {}),
+    ...(approval ? { approval } : {}),
+    ...(MESSAGE_APPROVAL_STATUSES.has(message.approvalStatus)
+      ? { approvalStatus: message.approvalStatus }
+      : {}),
+    ...(codeChanges ? { codeChanges } : {}),
+  }
+}
+
 function normalizeSession(session) {
   if (!session || typeof session !== 'object') {
     throw new Error('session must be an object');
@@ -351,12 +390,7 @@ function normalizeSession(session) {
   const messages = Array.isArray(session.messages)
     ? session.messages
         .filter((message) => message && typeof message === 'object')
-        .map((message) => ({
-          id: Number(message.id || Date.now()),
-          role: message.role === 'assistant' ? 'assistant' : 'user',
-          content: String(message.content || ''),
-          createdAt: Number(message.createdAt || Date.now()),
-        }))
+        .map(normalizeSessionMessage)
     : [];
 
   return {

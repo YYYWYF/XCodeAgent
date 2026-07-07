@@ -115,6 +115,7 @@ class PendingAgentToolRequest:
     tool_name: str
     input: Dict[str, Any]
     workspace_root: Optional[str]
+    code_change: Optional[Dict[str, Any]] = None
 
 
 WORKSPACE_TOOL_RUNNERS: Dict[str, WorkspaceToolRunner] = {
@@ -487,10 +488,13 @@ class AgentRuntime:
         )
         answer = self._last_ai_message(result["messages"])
         approvals = self._pending_approvals_from_value(result.get("pending_approvals"))
-        code_changes = [
-            *approval_code_changes,
-            *self._code_changes_from_value(result.get("code_changes")),
-        ]
+        code_changes = self._dedupe_code_changes(
+            [
+                *approval_code_changes,
+                *self._code_changes_from_value(result.get("code_changes")),
+                *self._pending_code_changes_for_approvals(approvals),
+            ]
+        )
         code_change_set = self._code_change_set(
             code_changes,
             approvals=approvals,
@@ -975,12 +979,14 @@ class AgentRuntime:
         approval_id = str(approval["id"])
         raw_input = getattr(tool_use, "input", {}) or {}
         tool_name = AgentRuntime._canonical_tool_name(getattr(tool_use, "name", ""))
+        code_change = self._code_change_from_tool_result(result)
         if isinstance(raw_input, dict):
             self._pending_tool_requests[approval_id] = PendingAgentToolRequest(
                 thread_id=thread_id,
                 tool_name=tool_name,
                 input=AgentRuntime._normalize_tool_payload(dict(raw_input)),
                 workspace_root=workspace_root,
+                code_change=code_change,
             )
 
         return {
@@ -1113,6 +1119,39 @@ class AgentRuntime:
         if not isinstance(value, list):
             return []
         return [dict(item) for item in value if isinstance(item, dict)]
+
+    def _pending_code_changes_for_approvals(
+        self,
+        approvals: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        code_changes: List[Dict[str, Any]] = []
+        for approval in approvals:
+            approval_id = str(approval.get("id") or "")
+            pending_request = self._pending_tool_requests.get(approval_id)
+            if pending_request is None or pending_request.code_change is None:
+                continue
+            code_changes.append({**pending_request.code_change, "approvalId": approval_id})
+        return code_changes
+
+    @staticmethod
+    def _dedupe_code_changes(code_changes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        deduped: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in code_changes:
+            key = str(
+                item.get("id")
+                or (
+                    item.get("tool"),
+                    item.get("path"),
+                    item.get("approvalId"),
+                    item.get("diff"),
+                )
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
 
     @staticmethod
     def _pending_approvals_from_value(value: Any) -> List[Dict[str, Any]]:

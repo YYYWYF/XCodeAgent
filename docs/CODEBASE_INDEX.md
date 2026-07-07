@@ -71,7 +71,7 @@ Backend/app/
 
 | Path | Responsibility | Read first / common edits |
 | --- | --- | --- |
-| `Frontend/src/main/index.ts` | Electron main process: windows, external/preview browser IPC, app storage, workspace selection/project creation, local session file storage, and historical session workspace listing. | Read when changing desktop IPC, persisted app/session storage, preview windows, or filesystem-backed desktop behavior. |
+| `Frontend/src/main/index.ts` | Electron main process: windows, external/preview browser IPC, app storage, workspace selection/project creation, local session file storage with structured message payload retention, and historical session workspace listing. | Read when changing desktop IPC, persisted app/session storage, preview windows, or filesystem-backed desktop behavior. |
 | `Frontend/src/main/backendService.ts` | Packaged Windows/macOS backend service lifecycle: locating the PyInstaller executable, selecting a local port, health polling, renderer base URL, and process shutdown. | Read when changing bundled backend startup, ports, health checks, or quit cleanup. |
 | `Frontend/src/preload/index.ts` and `Frontend/src/preload/index.d.ts` | Context-bridge API exposed as `window.xcodeAgent` plus preload typings, including session workspace history calls. | Update with every new/changed Electron IPC channel. |
 | `Frontend/src/renderer/src/window.d.ts` | Renderer-side `window.xcodeAgent` type declarations. | Update with preload API changes. |
