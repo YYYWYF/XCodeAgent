@@ -6,6 +6,8 @@ import type { ApplicationConfig, WorkflowRunPayload } from '../typings'
 type SendWorkflowMessageOptions = {
   workspaceRoot?: string
   application?: ApplicationConfig
+  onContent?: (content: string) => void
+  onWorkflow?: (workflow: WorkflowRunPayload) => void
 }
 
 export type AgUiChatResult = {
@@ -35,6 +37,10 @@ export class AgUiChatSession {
     })
   }
 
+  stop(): void {
+    this.agent.abortRun()
+  }
+
   async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
     this.agent.addMessage({
       id: randomUUID(),
@@ -47,10 +53,18 @@ export class AgUiChatSession {
       onCustomEvent: ({ event }) => {
         if (event.name === 'workflow-run') {
           workflow = readWorkflowPayload(event.value) ?? workflow
+          if (workflow) options.onWorkflow?.(workflow)
         }
       },
       onStateSnapshotEvent: ({ event }) => {
         workflow = readWorkflowFromState(event.snapshot) ?? workflow
+        if (workflow) options.onWorkflow?.(workflow)
+      },
+      onTextMessageContentEvent: ({ event, textMessageBuffer }) => {
+        options.onContent?.(`${textMessageBuffer}${event.delta}`)
+      },
+      onTextMessageEndEvent: ({ textMessageBuffer }) => {
+        options.onContent?.(textMessageBuffer)
       }
     }
 

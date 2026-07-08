@@ -10,6 +10,7 @@ import {
   MessageOutlined,
   RobotOutlined,
   SendOutlined,
+  StopOutlined,
   UserOutlined
 } from '@ant-design/icons'
 import {
@@ -124,7 +125,9 @@ export default function AiChatPanel({
     {}
   )
   const agUiSessionsRef = useRef<Partial<Record<EditorMode, AgUiChatSession>>>({})
+  const stopRequestedModesRef = useRef<Partial<Record<EditorMode, boolean>>>({})
   const [loadingModes, setLoadingModes] = useState<Partial<Record<EditorMode, boolean>>>({})
+  const [stoppingModes, setStoppingModes] = useState<Partial<Record<EditorMode, boolean>>>({})
   const [errors, setErrors] = useState<Partial<Record<EditorMode, string>>>({})
   const [previewError, setPreviewError] = useState('')
   const [rightPanel, setRightPanel] = useState<RightPanelState>()
@@ -137,6 +140,7 @@ export default function AiChatPanel({
   const copy = chatCopy[editorMode]
   const draft = drafts[editorMode]
   const loading = Boolean(loadingModes[editorMode])
+  const stopping = Boolean(stoppingModes[editorMode])
   const loadingSessions = Boolean(sessionLoadingModes[editorMode])
   const deletingSessionId = deletingSessionIds[editorMode]
   const error = errors[editorMode]
@@ -456,7 +460,14 @@ export default function AiChatPanel({
       agUiSessionsRef.current[editorMode] ??
       (agUiSessionsRef.current[editorMode] = new AgUiChatSession())
     const sessionId = activeSessionId || createChatSessionId()
-    const nextMessages = [...messages, userMessage]
+    const assistantMessageId = Date.now() + 1
+    const assistantMessage: AgentChatMessage = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      createdAt: Date.now()
+    }
+    const nextMessages = [...messages, userMessage, assistantMessage]
 
     setAgentMessages((currentMessages) => ({
       ...currentMessages,
@@ -465,6 +476,46 @@ export default function AiChatPanel({
     setDrafts((currentDrafts) => ({ ...currentDrafts, [editorMode]: '' }))
     setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }))
     setLoadingModes((currentLoadingModes) => ({ ...currentLoadingModes, [editorMode]: true }))
+    setStoppingModes((currentStoppingModes) => ({ ...currentStoppingModes, [editorMode]: false }))
+    stopRequestedModesRef.current[editorMode] = false
+
+    let streamedContent = ''
+    let streamedWorkflow: WorkflowRunPayload | undefined
+    let latestMessages = nextMessages
+    const updateAssistantMessage = (
+      content: string,
+      workflow?: WorkflowRunPayload
+    ): AgentChatMessage[] => {
+      latestMessages = latestMessages.map((currentMessage) =>
+        currentMessage.id === assistantMessageId
+          ? {
+              ...currentMessage,
+              content,
+              workflow: workflow ?? currentMessage.workflow
+            }
+          : currentMessage
+      )
+      setAgentMessages((currentMessages) => {
+        const updatedMessages = currentMessages[editorMode].map((currentMessage) =>
+          currentMessage.id === assistantMessageId
+            ? {
+                ...currentMessage,
+                content,
+                workflow: workflow ?? currentMessage.workflow
+              }
+            : currentMessage
+        )
+        return {
+          ...currentMessages,
+          [editorMode]: updatedMessages
+        }
+      })
+      return latestMessages
+    }
+    const stoppedAnswer = (content: string): string => {
+      const trimmedContent = content.trim()
+      return trimmedContent ? `${trimmedContent}\n\n_已停止生成。_` : '_已停止生成。_'
+    }
 
     try {
       await persistSession(editorMode, nextMessages, {
@@ -474,22 +525,25 @@ export default function AiChatPanel({
       })
       const { answer: rawAnswer, workflow } = await agUiSession.sendMessage(message, {
         workspaceRoot: application.workspaceRoot,
-        application
+        application,
+        onContent: (content) => {
+          streamedContent = content
+          updateAssistantMessage(content, streamedWorkflow)
+        },
+        onWorkflow: (nextWorkflow) => {
+          streamedWorkflow = nextWorkflow
+          updateAssistantMessage(streamedContent, nextWorkflow)
+        }
       })
-      const answer = rawAnswer.trim()
-      const assistantMessage: AgentChatMessage = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: answer || 'Workflow 已返回，但内容为空。',
-        workflow,
-        createdAt: Date.now()
-      }
-      const completedMessages = [...nextMessages, assistantMessage]
+      const stopped = Boolean(stopRequestedModesRef.current[editorMode])
+      const answer = stopped
+        ? stoppedAnswer(streamedContent || rawAnswer)
+        : rawAnswer.trim()
+      const completedMessages = updateAssistantMessage(
+        answer || 'Workflow 已返回，但内容为空。',
+        workflow ?? streamedWorkflow
+      )
 
-      setAgentMessages((currentMessages) => ({
-        ...currentMessages,
-        [editorMode]: completedMessages
-      }))
       await persistSession(editorMode, completedMessages, {
         sessionId,
         threadId: agUiSession.threadId,
@@ -497,14 +551,39 @@ export default function AiChatPanel({
       })
       publishAiMessage(editorMode, answer)
     } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : '调用 Workflow 失败。'
-      setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: message }))
+      if (stopRequestedModesRef.current[editorMode]) {
+        const answer = stoppedAnswer(streamedContent)
+        const completedMessages = updateAssistantMessage(answer, streamedWorkflow)
+        await persistSession(editorMode, completedMessages, {
+          sessionId,
+          threadId: agUiSession.threadId,
+          titleFrom: message
+        })
+        publishAiMessage(editorMode, answer)
+        return
+      }
+      const errorMessage = caughtError instanceof Error ? caughtError.message : '调用 Workflow 失败。'
+      setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: errorMessage }))
     } finally {
       setLoadingModes((currentLoadingModes) => ({
         ...currentLoadingModes,
         [editorMode]: false
       }))
+      setStoppingModes((currentStoppingModes) => ({
+        ...currentStoppingModes,
+        [editorMode]: false
+      }))
+      stopRequestedModesRef.current[editorMode] = false
     }
+  }
+
+  const handleStopGenerating = (): void => {
+    const agUiSession = agUiSessionsRef.current[editorMode]
+    if (!loading || !agUiSession || stopping) return
+
+    stopRequestedModesRef.current[editorMode] = true
+    setStoppingModes((currentStoppingModes) => ({ ...currentStoppingModes, [editorMode]: true }))
+    agUiSession.stop()
   }
 
   return (
@@ -708,15 +787,25 @@ export default function AiChatPanel({
               <Text className={cx('workspace-root-label')} title={workspaceRoot}>
                 <FolderOpenOutlined /> 工作目录：{workspaceRoot}
               </Text>
-              <Button
-                disabled={!draft.trim() || loading}
-                icon={<SendOutlined />}
-                loading={loading}
-                onClick={handleSend}
-                type="primary"
-              >
-                发送给 Workflow
-              </Button>
+              {loading ? (
+                <Button
+                  danger
+                  disabled={stopping}
+                  icon={<StopOutlined />}
+                  onClick={handleStopGenerating}
+                >
+                  {stopping ? '正在停止...' : '停止生成'}
+                </Button>
+              ) : (
+                <Button
+                  disabled={!draft.trim()}
+                  icon={<SendOutlined />}
+                  onClick={handleSend}
+                  type="primary"
+                >
+                  发送给 Workflow
+                </Button>
+              )}
             </div>
           </div>
         </div>
