@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Protocol
 from openai import AsyncOpenAI
 
 from app.config import Settings
+from app.services.model_output_logger import log_model_output
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class ModelProvider(Protocol):
 
 class OpenAIProvider:
     def __init__(self, settings: Settings) -> None:
+        self.output_log_enabled = settings.model_output_log_enabled
         self.client = AsyncOpenAI(
             api_key=settings.model_api_key,
             base_url=settings.model_base_url,
@@ -76,6 +78,14 @@ class OpenAIProvider:
             )
             for tool_call in (message.tool_calls or [])
         ]
+        if self.output_log_enabled:
+            log_model_output(
+                content=message.content or "",
+                tool_calls=[
+                    {"id": tool_call.id, "name": tool_call.function.name}
+                    for tool_call in (message.tool_calls or [])
+                ],
+            )
         return ModelResponse(text=message.content or "", tool_calls=tool_calls)
 
 

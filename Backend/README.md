@@ -162,8 +162,11 @@ AGENT_SYSTEM_PROMPT="You are a helpful local agent."
 AGENT_TEMPERATURE=0.2
 AGENT_MAX_TOKENS=2048
 MODEL_TRUST_ENV=false
+MODEL_OUTPUT_LOG_ENABLED=false
 ANTD_V4_DOCS_DIR=Backend/resources/docs/antd-v4
 XCODEAGENT_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
 ```
+
+`MODEL_OUTPUT_LOG_ENABLED=true` 会在模型生成时把文本输出流式打印到后端控制台，并在调用结束后打印工具调用概要，便于调试。
 
 `ANTD_V4_DOCS_DIR` 默认指向仓库内相对路径 `Backend/resources/docs/antd-v4`，相对路径以仓库根目录为基准。如果离线文档移动了，只需要改这个变量。

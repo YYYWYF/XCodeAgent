@@ -2,6 +2,7 @@ import httpx
 from langchain_openai import ChatOpenAI
 
 from app.config import Settings
+from app.services.model_output_logger import ModelOutputLogHandler
 
 
 def create_chat_model(settings: Settings) -> ChatOpenAI:
@@ -19,4 +20,8 @@ def create_chat_model(settings: Settings) -> ChatOpenAI:
         temperature=settings.default_temperature,
         http_client=httpx.Client(trust_env=settings.model_trust_env),
         http_async_client=httpx.AsyncClient(trust_env=settings.model_trust_env),
+        streaming=settings.model_output_log_enabled,
+        callbacks=(
+            [ModelOutputLogHandler()] if settings.model_output_log_enabled else None
+        ),
     )

@@ -28,6 +28,7 @@ class Settings:
     model_name: str
     model_provider: str = "openai"
     model_trust_env: bool = False
+    model_output_log_enabled: bool = False
     default_system_prompt: str = (
         "You are a helpful local agent. Answer clearly and concisely."
     )
@@ -56,6 +57,9 @@ class Settings:
             model_name=_required_any("MODEL_NAME", "OPENAI_MODEL"),
             model_provider=model_provider,
             model_trust_env=_env_bool("MODEL_TRUST_ENV", default=False),
+            model_output_log_enabled=_env_bool(
+                "MODEL_OUTPUT_LOG_ENABLED", default=False
+            ),
             default_system_prompt=os.getenv(
                 "AGENT_SYSTEM_PROMPT",
                 "You are a helpful local agent. Answer clearly and concisely.",
