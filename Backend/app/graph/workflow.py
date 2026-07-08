@@ -5,6 +5,10 @@ from app.graph import nodes
 from app.graph.state import ProjectState
 
 
+def route_workflow_start(state: ProjectState) -> str:
+    return "requirements" if state.get("resume_from") == "requirements" else "classify_request_complexity"
+
+
 def route_request_complexity(state: ProjectState) -> str:
     return (
         "direct_modification"
@@ -15,6 +19,16 @@ def route_request_complexity(state: ProjectState) -> str:
 
 def route_test_validation(state: ProjectState) -> str:
     return "launch_project" if state["quality_gate_passed"] else "handle_failure"
+
+
+def route_requirements(state: ProjectState) -> str:
+    clarification = state.get("clarification", {})
+    if (
+        isinstance(clarification, dict)
+        and clarification.get("status") == "requires_user_input"
+    ):
+        return "await_user_input"
+    return "project_planning"
 
 
 def build_graph():
@@ -33,7 +47,14 @@ def build_graph():
     builder.add_node("finalize_project", nodes.finalize_project)
     builder.add_node("handle_failure", nodes.handle_failure)
 
-    builder.add_edge(START, "classify_request_complexity")
+    builder.add_conditional_edges(
+        START,
+        route_workflow_start,
+        {
+            "classify_request_complexity": "classify_request_complexity",
+            "requirements": "requirements",
+        },
+    )
     builder.add_conditional_edges(
         "classify_request_complexity",
         route_request_complexity,
@@ -42,7 +63,14 @@ def build_graph():
             "direct_modification": "direct_modification",
         },
     )
-    builder.add_edge("requirements", "project_planning")
+    builder.add_conditional_edges(
+        "requirements",
+        route_requirements,
+        {
+            "project_planning": "project_planning",
+            "await_user_input": END,
+        },
+    )
     builder.add_edge("project_planning", "detail_confirmation")
     builder.add_edge("detail_confirmation", "prepare_build_tasks")
     builder.add_edge("prepare_build_tasks", "build")

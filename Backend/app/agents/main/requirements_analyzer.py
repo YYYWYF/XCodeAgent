@@ -5,42 +5,53 @@ from typing import Any
 
 from app.config import Settings
 from app.services.requirement_spec import create_requirement_spec
-from app.tools.clarification import ask_user_about_unclear_requirements
+from app.tools.ask_user import extract_ask_user_clarification
 
 
 def _requirements_prompt(request: str) -> str:
     return (
         "You are the Main Agent for an app-generation workflow.\n"
-        "Analyze the user's application request, identify unclear requirements, "
-        "ask clarification questions when needed, and produce a structured RequirementSpec.\n"
-        "The RequirementSpec must include app info, user roles, feature modules, pages, "
-        "data sources, business flows, acceptance criteria, assumptions, and clarification questions.\n\n"
+        "Analyze the user's application request and decide whether the requirement is clear enough "
+        "to produce a RequirementSpec.\n"
+        "A clear RequirementSpec must cover all of these aspects: 应用信息, 用户角色, 功能模块, "
+        "页面清单, 数据源清单, 业务流程, 验收标准.\n"
+        "If any aspect is missing, ambiguous, or risky to assume, call the ask_user tool with one to "
+        "four focused questions. The questions can be choice, text, or yesno, and you should decide "
+        "which questions are necessary from the user's request. After calling ask_user, do not invent "
+        "answers and do not continue planning until the user answers.\n"
+        "If the requirement is clear, do not call ask_user. Return a concise analysis note that "
+        "summarizes the seven aspects and any safe assumptions.\n\n"
         f"User request:\n{request}"
     )
 
 
-def _invoke_live_main_agent(request: str) -> str:
+def _invoke_live_main_agent(request: str) -> dict[str, Any]:
     # Lazy imports avoid constructing Deep Agents before this live boundary is used.
     from app.agents import create_agent_bundle
-    from app.graph.nodes.common import last_agent_text
 
-    result = create_agent_bundle().main.invoke(
+    return create_agent_bundle().main.invoke(
         {"messages": [{"role": "user", "content": _requirements_prompt(request)}]}
     )
-    return last_agent_text(result)
 
 
 def analyze_requirements_with_main_agent(request: str) -> dict[str, Any]:
     """Use the live Main Agent boundary to create RequirementSpec and clarifications."""
 
     settings = Settings.from_env()
-    agent_note = _invoke_live_main_agent(request)
+    agent_result = _invoke_live_main_agent(request)
+    from app.graph.nodes.common import last_agent_text
+
+    agent_note = last_agent_text(agent_result)
     analysis_source = "main_agent_live"
 
     spec = create_requirement_spec(request, agent_note=agent_note)
-    clarification = ask_user_about_unclear_requirements(request, spec)
+    clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
     spec["assumptions"] = clarification["assumptions"]
+    spec["clarification_status"] = clarification["status"]
+    spec["unresolved_requirement_dimensions"] = clarification.get(
+        "all_unresolved_dimensions", []
+    )
     spec["analyzed_by"] = {
         "agent": "main-agent",
         "mode": "live",

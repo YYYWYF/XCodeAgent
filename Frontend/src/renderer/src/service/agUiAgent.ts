@@ -6,6 +6,7 @@ import type { ApplicationConfig, WorkflowRunPayload } from '../typings'
 type SendWorkflowMessageOptions = {
   workspaceRoot?: string
   application?: ApplicationConfig
+  resumeState?: WorkflowRunPayload
   onContent?: (content: string) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
 }
@@ -72,7 +73,8 @@ export class AgUiChatSession {
       {
         forwardedProps: {
           workspaceRoot: options.workspaceRoot,
-          application: options.application
+          application: options.application,
+          resumeState: options.resumeState
         }
       },
       subscriber
@@ -135,6 +137,10 @@ function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
         ? payload.summary
         : { status: 'unknown' },
     events: Array.isArray(payload.events) ? payload.events : [],
+    state:
+      payload.state && typeof payload.state === 'object'
+        ? (payload.state as Record<string, unknown>)
+        : undefined,
     result:
       payload.result && typeof payload.result === 'object'
         ? (payload.result as Record<string, unknown>)

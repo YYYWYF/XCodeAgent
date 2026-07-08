@@ -40,7 +40,9 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
         for flow in spec["business_flows"]
     )
     questions = "\n".join(
-        f"- [{question['id']}] {question['question']} 默认：{question['default_assumption']}"
+        f"- [{question.get('id') or question.get('header') or 'ask_user'}] "
+        f"{question.get('question', '请补充需求细节。')}"
+        f"{' 默认：' + question['default_assumption'] if question.get('default_assumption') else ''}"
         for question in spec.get("clarification_questions", [])
     )
     assumptions = _bullet_items(spec.get("assumptions", [])) or "- 暂无"

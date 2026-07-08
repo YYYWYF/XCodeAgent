@@ -14,6 +14,33 @@ export type WorkflowSummary = {
   message?: string
   phase?: string
   artifacts?: Record<string, string>
+  clarification?: WorkflowClarification
+  [key: string]: unknown
+}
+
+export type WorkflowClarificationQuestion = {
+  id?: string
+  header?: string
+  question?: string
+  type?: 'choice' | 'text' | 'yesno'
+  dimension?: string
+  default_assumption?: string
+  placeholder?: string
+  multiSelect?: boolean
+  options?: Array<{
+    label?: string
+    description?: string
+  }>
+}
+
+export type WorkflowClarification = {
+  mode?: string
+  status?: string
+  question_schema?: string
+  message?: string
+  questions?: WorkflowClarificationQuestion[]
+  assumptions?: string[]
+  all_unresolved_dimensions?: string[]
   [key: string]: unknown
 }
 
@@ -22,5 +49,6 @@ export type WorkflowRunPayload = {
   threadId: string
   summary: WorkflowSummary
   events: WorkflowEvent[]
+  state?: Record<string, unknown>
   result?: Record<string, unknown>
 }

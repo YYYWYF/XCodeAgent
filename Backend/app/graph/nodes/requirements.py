@@ -14,6 +14,7 @@ def requirements(state: ProjectState) -> dict:
 
     return {
         "phase": "requirements",
+        "status": clarification["status"],
         "requirement_spec": spec,
         "requirement_spec_path": spec_path,
         "requirement_spec_json_path": str(requirement_spec_json_path(state)),

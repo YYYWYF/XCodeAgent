@@ -21,7 +21,6 @@ import {
   Input,
   Popconfirm,
   Spin,
-  Tag,
   Typography,
   message as antdMessage
 } from 'antd'
@@ -46,10 +45,19 @@ import {
   type ChatSessionRecord,
   type ChatSessionSummary
 } from '../../service/chatSessions'
-import type { ApplicationConfig, EditorMode, WorkflowRunPayload } from '../../typings'
+import type {
+  ApplicationConfig,
+  EditorMode,
+  WorkflowRunPayload
+} from '../../typings'
 import { cx, getInitialPreviewUrl, openPreviewWindow } from '../../utils'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import MarkdownContent from '../MarkdownContent/MarkdownContent'
+import WorkflowRunCard, {
+  buildClarificationContinuationMessage,
+  workflowOriginalRequest,
+  type ClarificationAnswers
+} from './WorkflowRunCard'
 import './AiChatPanel.less'
 
 const { Text, Title } = Typography
@@ -449,11 +457,20 @@ export default function AiChatPanel({
   const handleSend = async (): Promise<void> => {
     const message = draft.trim()
     if (!message || loading) return
+    await sendWorkflowMessage(message, { clearDraft: true, titleFrom: message })
+  }
+
+  const sendWorkflowMessage = async (
+    message: string,
+    options?: { clearDraft?: boolean; resumeState?: WorkflowRunPayload; titleFrom?: string }
+  ): Promise<void> => {
+    const trimmedMessage = message.trim()
+    if (!trimmedMessage || loading) return
 
     const userMessage: AgentChatMessage = {
       id: Date.now(),
       role: 'user',
-      content: message,
+      content: trimmedMessage,
       createdAt: Date.now()
     }
     const agUiSession =
@@ -473,7 +490,9 @@ export default function AiChatPanel({
       ...currentMessages,
       [editorMode]: nextMessages
     }))
-    setDrafts((currentDrafts) => ({ ...currentDrafts, [editorMode]: '' }))
+    if (options?.clearDraft) {
+      setDrafts((currentDrafts) => ({ ...currentDrafts, [editorMode]: '' }))
+    }
     setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }))
     setLoadingModes((currentLoadingModes) => ({ ...currentLoadingModes, [editorMode]: true }))
     setStoppingModes((currentStoppingModes) => ({ ...currentStoppingModes, [editorMode]: false }))
@@ -521,11 +540,12 @@ export default function AiChatPanel({
       await persistSession(editorMode, nextMessages, {
         sessionId,
         threadId: agUiSession.threadId,
-        titleFrom: message
+        titleFrom: options?.titleFrom || trimmedMessage
       })
-      const { answer: rawAnswer, workflow } = await agUiSession.sendMessage(message, {
+      const { answer: rawAnswer, workflow } = await agUiSession.sendMessage(trimmedMessage, {
         workspaceRoot: application.workspaceRoot,
         application,
+        resumeState: options?.resumeState,
         onContent: (content) => {
           streamedContent = content
           updateAssistantMessage(content, streamedWorkflow)
@@ -547,7 +567,7 @@ export default function AiChatPanel({
       await persistSession(editorMode, completedMessages, {
         sessionId,
         threadId: agUiSession.threadId,
-        titleFrom: message
+        titleFrom: options?.titleFrom || trimmedMessage
       })
       publishAiMessage(editorMode, answer)
     } catch (caughtError) {
@@ -575,6 +595,18 @@ export default function AiChatPanel({
       }))
       stopRequestedModesRef.current[editorMode] = false
     }
+  }
+
+  const handleSubmitClarification = async (
+    workflow: WorkflowRunPayload,
+    answers: ClarificationAnswers
+  ): Promise<void> => {
+    const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
+    if (!continuationMessage) return
+    await sendWorkflowMessage(continuationMessage, {
+      resumeState: workflow,
+      titleFrom: workflowOriginalRequest(workflow) || '补充需求确认'
+    })
   }
 
   const handleStopGenerating = (): void => {
@@ -747,7 +779,13 @@ export default function AiChatPanel({
                   {message.role === 'assistant' ? (
                     <>
                       <MarkdownContent content={message.content} />
-                      {message.workflow && <WorkflowRunCard workflow={message.workflow} />}
+                      {message.workflow && (
+                        <WorkflowRunCard
+                          disabled={loading}
+                          onSubmitClarification={handleSubmitClarification}
+                          workflow={message.workflow}
+                        />
+                      )}
                     </>
                   ) : (
                     <Text className={cx('ai-message-text')}>{message.content}</Text>
@@ -831,50 +869,6 @@ export default function AiChatPanel({
       )}
     </section>
   )
-}
-
-function WorkflowRunCard({ workflow }: { workflow: WorkflowRunPayload }): ReactElement {
-  const status = String(workflow.summary.status || 'unknown')
-  const artifacts = workflow.summary.artifacts || {}
-  const recentEvents = workflow.events.slice(-8)
-
-  return (
-    <div className={cx('workflow-run-card')}>
-      <div className={cx('workflow-run-header')}>
-        <Text strong>Workflow Run</Text>
-        <Tag color={workflowStatusColor(status)}>{status}</Tag>
-      </div>
-      {workflow.summary.message && <Text>{String(workflow.summary.message)}</Text>}
-      {Object.keys(artifacts).length > 0 && (
-        <div className={cx('workflow-artifacts')}>
-          <Text type="secondary">产物</Text>
-          {Object.entries(artifacts).map(([name, path]) => (
-            <Text code key={name}>
-              {name}: {path}
-            </Text>
-          ))}
-        </div>
-      )}
-      {recentEvents.length > 0 && (
-        <div className={cx('workflow-events')}>
-          <Text type="secondary">最近事件</Text>
-          {recentEvents.map((event, index) => (
-            <div className={cx('workflow-event')} key={`${event.type}-${event.timestamp}-${index}`}>
-              <Tag>{event.nodeName || event.type}</Tag>
-              <Text>{event.message || event.status || event.type}</Text>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function workflowStatusColor(status: string): string {
-  if (status === 'completed' || status === 'passed') return 'green'
-  if (status === 'failed' || status === 'error') return 'red'
-  if (status === 'running') return 'blue'
-  return 'default'
 }
 
 function formatSessionTime(value: number): string {

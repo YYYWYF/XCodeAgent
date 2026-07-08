@@ -20,9 +20,27 @@ class FakeWorkflowGraph:
             "classify_request_complexity": {
                 "phase": "classify_request_complexity",
                 "status": "completed",
-                "complexity": "simple",
+                "request_complexity": "complex",
                 "message": "classified",
                 "timeline": ["classified"],
+            }
+        }
+        yield {
+            "requirements": {
+                "phase": "requirements",
+                "requirement_spec_path": "var/specs/requirement-spec.md",
+                "clarification": {
+                    "status": "requires_user_input",
+                    "questions": [
+                        {
+                            "id": "user_roles",
+                            "header": "用户角色",
+                            "question": "需要哪些角色？",
+                            "type": "choice",
+                        }
+                    ],
+                },
+                "timeline": ["requirements"],
             }
         }
 
@@ -30,10 +48,14 @@ class FakeWorkflowGraph:
         return SimpleNamespace(
             values={
                 "phase": "finalize_project",
-                "status": "completed",
+                "status": "requires_user_input",
                 "summary": "done",
                 "timeline": ["classified", "done"],
-                "quality_gate_passed": True,
+                "quality_gate_passed": None,
+                "clarification": {
+                    "status": "requires_user_input",
+                    "questions": [{"id": "user_roles", "question": "需要哪些角色？"}],
+                },
             }
         )
 
@@ -66,6 +88,9 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("workflow-run", payload)
         self.assertIn("workflow.run.finished", payload)
         self.assertIn("qualityGatePassed", payload)
+        self.assertIn("requiresUserInput", payload)
+        self.assertIn("requires_user_input", payload)
+        self.assertIn("需要哪些角色", payload)
 
     def test_stream_passes_forwarded_workspace_to_graph_state(self) -> None:
         graph = FakeWorkflowGraph()

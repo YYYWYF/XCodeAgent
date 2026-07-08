@@ -39,22 +39,24 @@ START
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
+当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。当前已支持从 `requirements` 续跑；后续页面设计、计划确认等节点接入用户确认时，应扩展后端推断逻辑，而不是让前端传固定阶段名。
+
 ### `classify_request_complexity`
 
-确定性路由节点，负责判断用户请求进入哪条流程：
+模型辅助路由节点，负责判断用户请求进入哪条流程：
 
 - 复杂需求：生成新应用、创建工程、涉及多页面、API、数据源、权限、登录、全栈协作等，进入完整开发流程；
 - 简单需求：局部修改、文案调整、样式调整、按钮/标题改动、小范围 Bug 修复等，进入直接修改流程；
 - 模糊需求：默认按复杂需求处理，因为完整流程包含需求确认，更安全。
 
-该节点使用 `services/request_complexity.py` 中的确定性决策器实现，输出：
+该节点使用 `services/request_complexity.py` 中的模型语义分类器实现，并在模型不可用或返回无效结果时保守进入复杂需求流程，输出：
 
 - `request_complexity`：`simple` 或 `complex`；
 - `complexity_reason`：用于前端展示和日志排查的简短原因；
 - `complexity_decision.confidence`：当前判断置信度；
-- `complexity_decision.signals`：命中的规则信号，例如 `complex_scope:权限` 或 `simple_scope:标题`。
+- `complexity_decision.signals`：模型给出的语义判断信号或兜底信号。
 
-后续如果需要模型辅助判断，也应由 Main Agent 给出结构化建议，再由 Graph 的确定性路由规则决定最终分支。
+该节点只决定进入完整开发流程还是直接修改流程，不负责需求分析、澄清或计划生成。
 
 ### `requirements`
 
@@ -78,7 +80,13 @@ START
 - 待确认问题；
 - 默认假设。
 
-当前最简版通过 `agents/main/requirements_analyzer.py` 作为 Main Agent 需求分析边界，并通过 `tools/clarification.py` 生成待确认问题和默认假设，不阻塞等待用户输入；正式实现时，Main Agent 应调用澄清工具，经 LangGraph `interrupt`、checkpointer 和 AG-UI 事件等待用户确认。
+当前实现通过 `agents/main/requirements_analyzer.py` 作为 Main Agent 需求分析边界，并将通用 `tools/ask_user.py` 注册给 Main Agent。需求分析提示词明确要求覆盖应用信息、用户角色、功能模块、页面清单、数据源清单、业务流程和验收标准；若 Main Agent 判断信息缺失、模糊或不适合假设，应由 Main Agent 自行调用 `ask_user` 生成 1-4 个待确认问题。
+
+`ask_user` 是通用的人机确认工具，不包含 requirements 专用问题规则。后续项目计划、单页面设计、数据源确认等阶段需要用户输入时，也应复用该工具，由对应 Agent 根据上下文决定问题内容。
+
+当 `requirements` 输出 `clarification.status = requires_user_input` 时，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时应带上上一轮 workflow payload 作为 `resumeState`，后端据此推断从 `requirements` 续跑；用户回答会与原始需求合并后重新进入 requirements 节点，生成包含补充信息的需求文档，再继续后续 `project_planning` 等节点。
+
+当前等待/续跑机制是显式的后端推断续跑点，还不是 LangGraph 原生 `interrupt` resume。后续如果切换到 LangGraph `interrupt`、checkpointer 和 command resume，应保持同样的原则：前端提交用户回答和 workflow 状态，不硬编码后端阶段名。
 
 Graph 节点只接收 Main Agent 产出的结构化 `RequirementSpec` 和澄清结果，负责写入需求文档并更新状态，不应自行进行需求分析。
 

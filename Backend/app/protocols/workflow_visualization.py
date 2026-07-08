@@ -75,6 +75,10 @@ def workflow_capabilities() -> dict[str, Any]:
             "workspace": "Optional project workspace path/context reference.",
             "forwardedProps.workspaceRoot": "Preferred workspace path for AG-UI callers.",
             "forwardedProps.application": "Optional application metadata; application.id and workspaceRoot are used as fallbacks.",
+            "originalRequest": "Optional original request used when submitting clarification answers.",
+            "clarificationAnswers": "Optional structured user answers that are merged with originalRequest before rerunning workflow.",
+            "resumeState": "Optional previous workflow payload/state used by the backend to infer which waiting phase to resume.",
+            "resumeFrom": "Optional backend/debug override for the workflow phase to resume from. Currently supports requirements.",
         },
         "output": {
             "summary": "Human-readable and machine-readable workflow result summary.",
@@ -134,10 +138,15 @@ def build_workflow_ag_ui_stream(
 
             project_id = workflow_inputs["project_id"] or None
             workspace = workflow_inputs["workspace"] or None
+            resume_from = workflow_inputs.get("resume_from") or None
             initial_state: dict[str, Any] = {
                 "request": request,
                 "timeline": [],
             }
+            first_node_name = _workflow_start_node(resume_from)
+
+            if resume_from:
+                initial_state["resume_from"] = resume_from
 
             if project_id:
                 initial_state["project_id"] = project_id
@@ -154,7 +163,7 @@ def build_workflow_ag_ui_stream(
                 thread_id=thread_id,
                 status="running",
                 message="Workflow run started.",
-                data={"request": request, "projectId": project_id},
+                data={"request": request, "projectId": project_id, "resumeFrom": resume_from},
             )
             for frame in _workflow_ag_ui_frames(
                 encoder,
@@ -177,9 +186,9 @@ def build_workflow_ag_ui_stream(
                 "workflow.node.started",
                 run_id=run_id,
                 thread_id=thread_id,
-                node_name="classify_request_complexity",
+                node_name=first_node_name,
                 status="running",
-                message=f"正在执行：{_workflow_node_label('classify_request_complexity')}",
+                message=f"正在执行：{_workflow_node_label(first_node_name)}",
             )
             for frame in _workflow_ag_ui_frames(
                 encoder,
@@ -219,7 +228,7 @@ def build_workflow_ag_ui_stream(
                         run_id=run_id,
                         thread_id=thread_id,
                         node_name=node_name,
-                        status="completed",
+                        status=str(update.get("status") or "completed"),
                         message=detail.get("message")
                         or f"完成：{_workflow_node_label(node_name)}",
                         data=node_payload,
@@ -382,6 +391,7 @@ async def build_workflow_response(
     workspace: str | None = None,
     thread_id: str | None = None,
     run_id: str | None = None,
+    resume_from: str | None = None,
 ) -> dict[str, Any]:
     thread_id = thread_id or str(uuid4())
     run_id = run_id or f"workflow-{uuid4().hex[:12]}"
@@ -389,6 +399,10 @@ async def build_workflow_response(
         "request": request,
         "timeline": [],
     }
+    first_node_name = _workflow_start_node(resume_from)
+
+    if resume_from:
+        initial_state["resume_from"] = resume_from
 
     if project_id:
         initial_state["project_id"] = project_id
@@ -407,16 +421,16 @@ async def build_workflow_response(
         thread_id=thread_id,
         status="running",
         message="Workflow run started.",
-        data={"request": request, "projectId": project_id},
+        data={"request": request, "projectId": project_id, "resumeFrom": resume_from},
     )
     _workflow_event(
         events,
         "workflow.node.started",
         run_id=run_id,
         thread_id=thread_id,
-        node_name="classify_request_complexity",
+        node_name=first_node_name,
         status="running",
-        message=f"正在执行：{_workflow_node_label('classify_request_complexity')}",
+        message=f"正在执行：{_workflow_node_label(first_node_name)}",
     )
 
     try:
@@ -442,7 +456,7 @@ async def build_workflow_response(
                     run_id=run_id,
                     thread_id=thread_id,
                     node_name=node_name,
-                    status="completed",
+                    status=str(update.get("status") or "completed"),
                     message=detail.get("message")
                     or f"完成：{_workflow_node_label(node_name)}",
                     data=node_payload,
@@ -593,11 +607,16 @@ def _workflow_progress_summary(
         "buildSummary": result.get("build_summary", {}),
         "testSummary": {},
         "artifacts": _workflow_artifacts(result),
+        "clarification": result.get("clarification", {}),
     }
 
 
 def _workflow_node_label(node_name: str) -> str:
     return WORKFLOW_NODE_LABELS.get(node_name, node_name)
+
+
+def _workflow_start_node(resume_from: str | None) -> str:
+    return "requirements" if resume_from == "requirements" else "classify_request_complexity"
 
 
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
@@ -613,6 +632,14 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             if update.get("quality_gate_passed")
             else ["handle_failure"]
         )
+    if node_name == "requirements":
+        clarification = update.get("clarification")
+        if (
+            isinstance(clarification, dict)
+            and clarification.get("status") == "requires_user_input"
+        ):
+            return []
+        return ["project_planning"]
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
 
 
@@ -634,9 +661,27 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             },
         }
     if node_name == "requirements":
+        clarification = update.get("clarification")
+        questions = (
+            clarification.get("questions", [])
+            if isinstance(clarification, dict)
+            and isinstance(clarification.get("questions"), list)
+            else []
+        )
+        status = (
+            clarification.get("status")
+            if isinstance(clarification, dict)
+            else None
+        )
+        message = f"需求文档={update.get('requirement_spec_path')}"
+        if questions:
+            message += f"，待确认问题={len(questions)}"
         return {
-            "message": f"需求文档={update.get('requirement_spec_path')}",
-            "data": {"clarification": update.get("clarification")},
+            "message": message,
+            "data": {
+                "clarification": clarification,
+                "requiresUserInput": status == "requires_user_input",
+            },
         }
     if node_name == "project_planning":
         return {
@@ -766,11 +811,20 @@ def _workflow_summary(
         if isinstance(result.get("build_summary"), dict)
         else {}
     )
-    artifacts = _workflow_artifacts(result)
-    message = (
-        f"Workflow {status}：完成 {len(completed_nodes)} 个节点，"
-        f"质量门禁={'通过' if result.get('quality_gate_passed') else '未通过'}。"
+    clarification = (
+        result.get("clarification")
+        if isinstance(result.get("clarification"), dict)
+        else {}
     )
+    artifacts = _workflow_artifacts(result)
+    if status == "requires_user_input":
+        question_count = len(clarification.get("questions", []))
+        message = f"Workflow 等待用户补充需求：完成 {len(completed_nodes)} 个节点，待确认问题 {question_count} 个。"
+    else:
+        message = (
+            f"Workflow {status}：完成 {len(completed_nodes)} 个节点，"
+            f"质量门禁={'通过' if result.get('quality_gate_passed') else '未通过'}。"
+        )
     if result.get("preview_url"):
         message += f" 预览地址：{result.get('preview_url')}。"
 
@@ -787,6 +841,7 @@ def _workflow_summary(
         "buildSummary": build_summary,
         "testSummary": test_summary,
         "artifacts": artifacts,
+        "clarification": clarification,
     }
 
 
@@ -805,6 +860,7 @@ def _workflow_visual_payload(
         "events": events,
         "state": {
             "status": summary.get("status"),
+            "request": result.get("request"),
             "phase": summary.get("phase"),
             "timeline": summary.get("timeline", []),
             "artifacts": summary.get("artifacts", {}),
@@ -815,5 +871,6 @@ def _workflow_visual_payload(
             "buildSummary": result.get("build_summary", {}),
             "testReport": result.get("test_report", {}),
             "repairTaskPlan": result.get("repair_task_plan"),
+            "clarification": result.get("clarification", {}),
         },
     }

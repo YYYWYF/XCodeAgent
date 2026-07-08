@@ -8,6 +8,7 @@ class ProjectState(TypedDict, total=False):
     workspace: str
     workspace_path: str
     phase: str
+    resume_from: str
     request_complexity: str
     complexity_reason: str
     complexity_decision: dict[str, Any]

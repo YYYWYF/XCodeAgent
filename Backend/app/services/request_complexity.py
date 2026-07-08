@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from app.agents.model_factory import create_chat_model
+from app.config import Settings
 
 RequestComplexity = Literal["simple", "complex"]
 
@@ -15,169 +21,145 @@ class ComplexityDecision:
     signals: list[str]
 
 
-COMPLEX_INTENT_KEYWORDS = (
-    "生成",
-    "创建",
-    "新建",
-    "从零",
-    "完整",
-    "搭建",
-    "实现一个",
-    "做一个",
+CLASSIFIER_SYSTEM_PROMPT = (
+    "Classify the user's request by semantic complexity, not by keyword matching. "
+    "Return only a JSON object."
 )
 
-COMPLEX_SCOPE_KEYWORDS = (
-    "应用",
-    "工程",
-    "项目",
-    "系统",
-    "后台",
-    "管理端",
-    "全栈",
-    "前后端",
-    "多页面",
-    "多个页面",
-    "数据库",
-    "数据源",
-    "数据模型",
-    "接口",
-    "api",
-    "权限",
-    "鉴权",
-    "登录",
-    "注册",
-    "工作流",
-    "支付",
-    "审批",
-    "部署",
-)
+CLASSIFIER_USER_PROMPT_TEMPLATE = """Decide whether this user request should use the direct modification flow or the full planning workflow.
 
-SIMPLE_ACTION_KEYWORDS = (
-    "修改",
-    "调整",
-    "修复",
-    "优化",
-    "改一下",
-    "改成",
-    "替换",
-    "删除",
-    "加一个",
-    "加个",
-    "增加",
-    "隐藏",
-    "显示",
-)
+Definitions:
+- simple: a localized edit, small fix, copy/style tweak, or narrow modification that can usually be handled directly.
+- complex: a new app/project/system, multi-page or cross-layer feature, data/API/auth/workflow change, broad redesign, ambiguous product requirement, or anything that needs requirements confirmation and planning.
 
-SIMPLE_SCOPE_KEYWORDS = (
-    "文案",
-    "颜色",
-    "样式",
-    "按钮",
-    "标题",
-    "占位文案",
-    "提示语",
-    "间距",
-    "字号",
-    "图标",
-    "图片",
-    "链接",
-    "路由文案",
-    "loading",
-    "empty",
-    "error",
-    "bug",
-)
+Favor "complex" when the request is unclear or could affect architecture, storage, APIs, permissions, multiple screens, build tasks, or acceptance criteria.
 
-AMBIGUOUS_SEPARATORS = ("，", ",", "；", ";", "、", "\n")
+Return this JSON shape:
+{{
+  "complexity": "simple" | "complex",
+  "confidence": number between 0 and 1,
+  "reason": "short human-readable reason",
+  "signals": ["brief semantic signals"]
+}}
+
+User request:
+{request}
+"""
+
+_JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def _matched_keywords(text: str, keywords: tuple[str, ...]) -> list[str]:
-    return [keyword for keyword in keywords if keyword in text]
+def _classifier_fallback(reason: str, signal: str) -> ComplexityDecision:
+    return ComplexityDecision(
+        complexity="complex",
+        confidence=0.5,
+        reason=reason,
+        signals=[signal],
+    )
 
 
-def _has_multiple_requirements(text: str) -> bool:
-    return sum(text.count(separator) for separator in AMBIGUOUS_SEPARATORS) >= 2
+def _message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _json_from_text(text: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        match = _JSON_OBJECT_PATTERN.search(text)
+        if not match:
+            return {}
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _coerce_decision(payload: dict[str, Any]) -> ComplexityDecision | None:
+    complexity = payload.get("complexity")
+    if complexity not in {"simple", "complex"}:
+        return None
+
+    try:
+        confidence = float(payload.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    confidence = max(0.0, min(1.0, confidence))
+
+    reason = payload.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        reason = "Model classified the request complexity."
+
+    raw_signals = payload.get("signals")
+    signals = (
+        [
+            str(signal)
+            for signal in raw_signals
+            if isinstance(signal, (str, int, float)) and str(signal).strip()
+        ]
+        if isinstance(raw_signals, list)
+        else []
+    )
+    if not signals:
+        signals = ["model_semantic_classification"]
+
+    return ComplexityDecision(
+        complexity=complexity,
+        confidence=confidence,
+        reason=reason.strip(),
+        signals=signals,
+    )
+
+
+def _invoke_model_classifier(request: str) -> ComplexityDecision:
+    settings = Settings.from_env()
+    model = create_chat_model(settings)
+    result = model.invoke(
+        [
+            SystemMessage(content=CLASSIFIER_SYSTEM_PROMPT),
+            HumanMessage(
+                content=CLASSIFIER_USER_PROMPT_TEMPLATE.format(request=request.strip())
+            ),
+        ]
+    )
+    payload = _json_from_text(_message_text(getattr(result, "content", "")))
+    decision = _coerce_decision(payload)
+    if decision is None:
+        return _classifier_fallback(
+            "Model classifier returned an invalid response; defaulting to the full planning workflow.",
+            "invalid_model_classifier_response",
+        )
+    return decision
 
 
 def decide_request_complexity(request: str) -> ComplexityDecision:
-    """Decide whether a request should use the simple or complex workflow.
+    """Ask the configured chat model to route a request by semantic complexity."""
 
-    Classification rules:
-    - New app/project/system generation is complex.
-    - Requests touching API, data model, auth, permissions, workflow, payment,
-      deployment, or multiple pages are complex.
-    - Small local edits with an explicit local target are simple.
-    - Ambiguous requests default to complex so the full requirement-confirmation
-      workflow can protect the project.
-    """
-
-    normalized = request.strip().lower()
-    if not normalized:
-        return ComplexityDecision(
-            complexity="complex",
-            confidence=0.6,
-            reason="Empty request; default to the full requirement-confirmation workflow.",
-            signals=["empty_request"],
+    if not request.strip():
+        return _classifier_fallback(
+            "Empty request; defaulting to the full planning workflow.",
+            "empty_request",
         )
-
-    complex_intents = _matched_keywords(normalized, COMPLEX_INTENT_KEYWORDS)
-    complex_scopes = _matched_keywords(normalized, COMPLEX_SCOPE_KEYWORDS)
-    simple_actions = _matched_keywords(normalized, SIMPLE_ACTION_KEYWORDS)
-    simple_scopes = _matched_keywords(normalized, SIMPLE_SCOPE_KEYWORDS)
-    has_multiple_requirements = _has_multiple_requirements(normalized)
-
-    if complex_intents and complex_scopes:
-        return ComplexityDecision(
-            complexity="complex",
-            confidence=0.95,
-            reason="Request looks like app/project-level generation.",
-            signals=[
-                *[f"complex_intent:{keyword}" for keyword in complex_intents],
-                *[f"complex_scope:{keyword}" for keyword in complex_scopes],
-            ],
+    try:
+        return _invoke_model_classifier(request)
+    except Exception as exc:
+        return _classifier_fallback(
+            f"Model classifier failed ({exc.__class__.__name__}); defaulting to the full planning workflow.",
+            "model_classifier_error",
         )
-
-    if complex_scopes:
-        return ComplexityDecision(
-            complexity="complex",
-            confidence=0.85,
-            reason="Request touches architecture, data, API, auth, permissions, workflow, or deployment.",
-            signals=[f"complex_scope:{keyword}" for keyword in complex_scopes],
-        )
-
-    if has_multiple_requirements:
-        return ComplexityDecision(
-            complexity="complex",
-            confidence=0.75,
-            reason="Request contains multiple requirement fragments; use full planning flow.",
-            signals=["multiple_requirement_fragments"],
-        )
-
-    if simple_actions and simple_scopes:
-        return ComplexityDecision(
-            complexity="simple",
-            confidence=0.9,
-            reason="Request is a small local change with an explicit UI/content target.",
-            signals=[
-                *[f"simple_action:{keyword}" for keyword in simple_actions],
-                *[f"simple_scope:{keyword}" for keyword in simple_scopes],
-            ],
-        )
-
-    if simple_actions and len(normalized) <= 40:
-        return ComplexityDecision(
-            complexity="simple",
-            confidence=0.7,
-            reason="Request looks like a short local modification.",
-            signals=[f"simple_action:{keyword}" for keyword in simple_actions],
-        )
-
-    return ComplexityDecision(
-        complexity="complex",
-        confidence=0.65,
-        reason="Request is ambiguous; default to the full requirement-confirmation workflow.",
-        signals=["ambiguous_default_complex"],
-    )
 
 
 def classify_request_complexity(request: str) -> RequestComplexity:
