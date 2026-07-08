@@ -45,11 +45,12 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         base_url = _required_any("MODEL_BASE_URL", "ANTHROPIC_BASE_URL")
+        model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
         return cls(
             anthropic_base_url=base_url,
             anthropic_auth_token=_required_any("MODEL_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
             anthropic_model=_required_any("MODEL_NAME", "ANTHROPIC_MODEL"),
-            model_provider=(os.getenv("MODEL_PROVIDER", "").strip().lower()),
+            model_provider=model_provider,
             anthropic_trust_env=_env_bool("ANTHROPIC_TRUST_ENV", default=False),
             default_system_prompt=os.getenv(
                 "AGENT_SYSTEM_PROMPT",

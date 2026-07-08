@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
+from unittest.mock import patch
 
+from app.config import Settings
 from app.services.llm_client import _anthropic_messages, _openai_messages, _openai_tool
 
 
@@ -74,6 +77,20 @@ class ModelProviderConversionTests(unittest.TestCase):
         self.assertEqual(messages[1]["role"], "user")
         self.assertEqual(messages[1]["content"][0]["type"], "tool_result")
         self.assertEqual(messages[1]["content"][0]["tool_use_id"], "call-1")
+
+    def test_settings_default_to_openai_provider_when_not_configured(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_BASE_URL": "https://example.com/v1",
+                "MODEL_API_KEY": "test-key",
+                "MODEL_NAME": "test-model",
+            },
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        self.assertEqual(settings.model_provider, "openai")
 
 
 if __name__ == "__main__":

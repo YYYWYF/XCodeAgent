@@ -20,6 +20,7 @@ import {
   Input,
   Popconfirm,
   Spin,
+  Tag,
   Typography,
   message as antdMessage
 } from 'antd'
@@ -32,7 +33,7 @@ import type {
 } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
-import { AgUiChatSession, DevelopmentOrchestratorSession } from '../../service/agUiAgent'
+import { AgUiChatSession } from '../../service/agUiAgent'
 import {
   createChatSessionId,
   createChatSessionTitle,
@@ -44,28 +45,10 @@ import {
   type ChatSessionRecord,
   type ChatSessionSummary
 } from '../../service/chatSessions'
-import {
-  approveToolRequest,
-  readWorkspaceFile,
-  rejectToolRequest
-} from '../../service/workspaceTools'
-import type {
-  AgentApprovalDecisionAction,
-  AgentApprovalDecisionItem,
-  AgentApprovalRequest,
-  AgentApprovalStatus,
-  ApplicationConfig,
-  DevelopmentOrchestrationPayload,
-  EditorMode,
-  WorkspaceCodeChangeSet
-} from '../../typings'
+import type { ApplicationConfig, EditorMode, WorkflowRunPayload } from '../../typings'
 import { cx, getInitialPreviewUrl, openPreviewWindow } from '../../utils'
-import AgentApprovalCard from './AgentApprovalCard'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
-import CodeChangeCard from './CodeChangeCard'
-import CodeDiffDetailPanel from './CodeDiffDetailPanel'
 import MarkdownContent from '../MarkdownContent/MarkdownContent'
-import OrchestrationPanel from '../OrchestrationPanel/OrchestrationPanel'
 import './AiChatPanel.less'
 
 const { Text, Title } = Typography
@@ -75,21 +58,16 @@ const DEFAULT_ASSISTANT_PANEL_WIDTH = 660
 const MIN_ASSISTANT_PANEL_WIDTH = 520
 const MIN_RIGHT_PANEL_WIDTH = 380
 const SPLIT_HANDLE_WIDTH = 10
-const CODE_FENCE_RE = /```([A-Za-z0-9_-]+)?\s*\n([\s\S]*?)```/g
 
 type AgentChatMessage = {
   id: number
   role: 'user' | 'assistant'
   content: string
-  orchestration?: DevelopmentOrchestrationPayload
-  approval?: AgentApprovalRequest
-  approvalStatus?: AgentApprovalStatus
-  codeChanges?: WorkspaceCodeChangeSet
+  workflow?: WorkflowRunPayload
   createdAt: number
 }
 
-type RightPanelState =
-  { type: 'preview' } | { type: 'diff'; codeChanges: WorkspaceCodeChangeSet; selectedPath?: string }
+type RightPanelState = { type: 'preview' }
 
 type Props = {
   application: ApplicationConfig
@@ -103,17 +81,17 @@ const chatCopy: Record<
 > = {
   frontend: {
     title: '应用开发助手',
-    description: '围绕当前应用的代码实现、页面体验、接口协作和验证步骤推进开发。',
-    empty: '暂无应用开发助手输出',
+    description: '通过 Workflow 统一推进需求判断、计划、构建、验证和交付。',
+    empty: '暂无 Workflow 输出',
     placeholder: '输入你想开发或修改的应用需求...',
-    label: '应用开发助手输出'
+    label: 'Workflow 输出'
   },
   backend: {
     title: '应用开发助手',
-    description: '围绕当前应用的接口、数据模型、服务逻辑和验证步骤推进开发。',
-    empty: '暂无应用开发助手输出',
+    description: '通过 Workflow 统一推进接口、数据模型、服务逻辑和验证。',
+    empty: '暂无 Workflow 输出',
     placeholder: '输入接口、服务或应用开发需求...',
-    label: '应用开发助手输出'
+    label: 'Workflow 输出'
   }
 }
 
@@ -123,7 +101,6 @@ export default function AiChatPanel({
   onReturnWelcome
 }: Props): ReactElement {
   const panelRef = useRef<HTMLElement | null>(null)
-  // 草稿按前后端分别保存，来回切换不会串内容或丢失未发送文本。
   const [drafts, setDrafts] = useState<Record<EditorMode, string>>({
     frontend: '',
     backend: ''
@@ -153,8 +130,6 @@ export default function AiChatPanel({
   const [rightPanel, setRightPanel] = useState<RightPanelState>()
   const [assistantPanelWidth, setAssistantPanelWidth] = useState(DEFAULT_ASSISTANT_PANEL_WIDTH)
   const [splitDragging, setSplitDragging] = useState(false)
-  const [confirmingOrchestrationId, setConfirmingOrchestrationId] = useState<number>()
-  const [approvingApprovalId, setApprovingApprovalId] = useState<string>()
   const { publishAiMessage } = useWorkbench()
   const messages = agentMessages[editorMode]
   const sessions = sessionSummaries[editorMode]
@@ -298,19 +273,11 @@ export default function AiChatPanel({
     if (!application.workspaceRoot) return
 
     const session = await readChatSession(application.workspaceRoot, mode, sessionId)
-    const sessionMessages = await ensurePersistedCodeChanges(
-      session.messages,
-      application.workspaceRoot
-    )
     setActiveSessionIds((currentSessionIds) => ({ ...currentSessionIds, [mode]: session.id }))
-    setAgentMessages((currentMessages) => ({ ...currentMessages, [mode]: sessionMessages }))
+    setAgentMessages((currentMessages) => ({ ...currentMessages, [mode]: session.messages }))
     setDrafts((currentDrafts) => ({ ...currentDrafts, [mode]: '' }))
     setRightPanel(undefined)
     agUiSessionsRef.current[mode] = new AgUiChatSession(session.threadId)
-    if (sessionMessages !== session.messages) {
-      const summary = await saveChatSession({ ...session, messages: sessionMessages })
-      replaceSessionSummary(mode, summary)
-    }
   }
 
   const handleOpenSession = async (sessionId: string): Promise<void> => {
@@ -453,10 +420,6 @@ export default function AiChatPanel({
       (summary) => summary.id === (options?.sessionId || activeSessionIds[mode])
     )
     const now = Date.now()
-    const sessionMessages = await ensurePersistedCodeChanges(
-      nextMessages,
-      application.workspaceRoot
-    )
     const session: ChatSessionRecord = {
       id: options?.sessionId || existingSummary?.id || createChatSessionId(),
       title:
@@ -470,7 +433,7 @@ export default function AiChatPanel({
         agUiSessionsRef.current[mode]?.threadId ||
         createChatSessionId(),
       workspaceRoot: application.workspaceRoot,
-      messages: sessionMessages,
+      messages: nextMessages,
       createdAt: existingSummary?.createdAt || now,
       updatedAt: now
     }
@@ -509,13 +472,7 @@ export default function AiChatPanel({
         threadId: agUiSession.threadId,
         titleFrom: message
       })
-      const {
-        answer: rawAnswer,
-        orchestration,
-        approval,
-        codeChanges
-      } = await agUiSession.sendMessage(message, {
-        systemPrompt: buildScopedSystemPrompt(application, editorMode),
+      const { answer: rawAnswer, workflow } = await agUiSession.sendMessage(message, {
         workspaceRoot: application.workspaceRoot,
         application
       })
@@ -523,11 +480,8 @@ export default function AiChatPanel({
       const assistantMessage: AgentChatMessage = {
         id: Date.now() + 1,
         role: 'assistant',
-        content: answer || '后端已返回，但内容为空。',
-        orchestration,
-        approval,
-        approvalStatus: approval ? 'pending' : undefined,
-        codeChanges,
+        content: answer || 'Workflow 已返回，但内容为空。',
+        workflow,
         createdAt: Date.now()
       }
       const completedMessages = [...nextMessages, assistantMessage]
@@ -541,339 +495,15 @@ export default function AiChatPanel({
         threadId: agUiSession.threadId,
         titleFrom: message
       })
-      // AG-UI run 完成后，将模型返回投递给对应编辑器。
       publishAiMessage(editorMode, answer)
     } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : '调用应用开发助手失败。'
+      const message = caughtError instanceof Error ? caughtError.message : '调用 Workflow 失败。'
       setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: message }))
     } finally {
       setLoadingModes((currentLoadingModes) => ({
         ...currentLoadingModes,
         [editorMode]: false
       }))
-    }
-  }
-
-  const handleApprovalDecision = async (
-    sourceMessageId: number,
-    approval: AgentApprovalRequest,
-    action: AgentApprovalDecisionAction,
-    feedback?: string
-  ): Promise<void> => {
-    if (loading || approvingApprovalId) return
-    const trimmedFeedback = feedback?.trim()
-    if (action === 'feedback' && !trimmedFeedback) return
-
-    const agUiSession =
-      agUiSessionsRef.current[editorMode] ??
-      (agUiSessionsRef.current[editorMode] = new AgUiChatSession())
-    const sessionId = activeSessionId || createChatSessionId()
-    const approvalStatus = approvalStatusFromAction(action)
-    const userContent = approvalDecisionMessage(approval, action, trimmedFeedback)
-    const userMessage: AgentChatMessage = {
-      id: Date.now(),
-      role: 'user',
-      content: userContent,
-      createdAt: Date.now()
-    }
-
-    setApprovingApprovalId(approval.id)
-    setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }))
-    setLoadingModes((currentLoadingModes) => ({ ...currentLoadingModes, [editorMode]: true }))
-
-    try {
-      const grant =
-        action === 'feedback'
-          ? undefined
-          : await approveToolRequest(
-              approval.id,
-              action === 'approve_always' ? 'operation' : 'once'
-            )
-      if (action === 'feedback') {
-        await rejectToolRequest(approval.id, trimmedFeedback)
-      }
-
-      const nextToolApprovalStatus: AgentApprovalRequest['status'] =
-        action === 'feedback' ? 'rejected' : 'approved'
-      const approvedMessages = messages.map((item) =>
-        item.id === sourceMessageId
-          ? {
-              ...item,
-              approvalStatus,
-              approval: item.approval
-                ? {
-                    ...item.approval,
-                    status: nextToolApprovalStatus
-                  }
-                : item.approval
-            }
-          : item
-      )
-      const nextMessages = [...approvedMessages, userMessage]
-      setAgentMessages((currentMessages) => ({
-        ...currentMessages,
-        [editorMode]: nextMessages
-      }))
-      await persistSession(editorMode, nextMessages, {
-        sessionId,
-        threadId: agUiSession.threadId,
-        titleFrom: userContent
-      })
-
-      const {
-        answer: rawAnswer,
-        orchestration,
-        approval: nextApproval,
-        codeChanges
-      } = await agUiSession.sendMessage(userContent, {
-        systemPrompt: buildScopedSystemPrompt(application, editorMode),
-        workspaceRoot: application.workspaceRoot,
-        application,
-        approvalDecision: {
-          action,
-          approvalId: approval.id,
-          grant,
-          feedback: trimmedFeedback
-        }
-      })
-      const answer = rawAnswer.trim()
-      const assistantMessage: AgentChatMessage = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: answer || '后端已返回，但内容为空。',
-        orchestration,
-        approval: nextApproval,
-        approvalStatus: nextApproval ? 'pending' : undefined,
-        codeChanges,
-        createdAt: Date.now()
-      }
-      const completedMessages = [...nextMessages, assistantMessage]
-
-      setAgentMessages((currentMessages) => ({
-        ...currentMessages,
-        [editorMode]: completedMessages
-      }))
-      await persistSession(editorMode, completedMessages, {
-        sessionId,
-        threadId: agUiSession.threadId,
-        titleFrom: userContent
-      })
-      publishAiMessage(editorMode, answer)
-      antdMessage.success(action === 'feedback' ? '已发送意见' : '已提交审批')
-    } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : '处理审批失败。'
-      setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: message }))
-    } finally {
-      setApprovingApprovalId(undefined)
-      setLoadingModes((currentLoadingModes) => ({
-        ...currentLoadingModes,
-        [editorMode]: false
-      }))
-    }
-  }
-
-  const handleOpenCodeChangeFile = (
-    codeChanges: WorkspaceCodeChangeSet,
-    selectedPath: string
-  ): Promise<void> => {
-    return hydrateRecoveredCodeChanges(codeChanges, application.workspaceRoot || '').then(
-      (hydratedCodeChanges) => {
-        setRightPanel({ type: 'diff', codeChanges: hydratedCodeChanges, selectedPath })
-      }
-    )
-  }
-
-  const handleCodeChangeApproval = async (
-    sourceMessageId: number,
-    codeChanges: WorkspaceCodeChangeSet,
-    action: 'approve_once' | 'feedback',
-    feedback?: string
-  ): Promise<void> => {
-    if (loading || approvingApprovalId) return
-    const approvals = (codeChanges.approvals || []).filter(
-      (approval) => approval.status === 'pending'
-    )
-    if (approvals.length === 0) return
-    const trimmedFeedback = feedback?.trim()
-    if (action === 'feedback' && !trimmedFeedback) return
-
-    const agUiSession =
-      agUiSessionsRef.current[editorMode] ??
-      (agUiSessionsRef.current[editorMode] = new AgUiChatSession())
-    const sessionId = activeSessionId || createChatSessionId()
-    const userContent = codeChangeApprovalMessage(codeChanges, action, trimmedFeedback)
-    const nextCodeChangeStatus: WorkspaceCodeChangeSet['status'] =
-      action === 'feedback' ? 'rejected' : 'applied'
-    const resolvedCodeChanges = updateCodeChangeStatus(codeChanges, nextCodeChangeStatus)
-    const userMessage: AgentChatMessage = {
-      id: Date.now(),
-      role: 'user',
-      content: userContent,
-      codeChanges: resolvedCodeChanges,
-      createdAt: Date.now()
-    }
-
-    setApprovingApprovalId(codeChanges.id)
-    setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }))
-    setLoadingModes((currentLoadingModes) => ({ ...currentLoadingModes, [editorMode]: true }))
-
-    try {
-      const decisions: AgentApprovalDecisionItem[] = []
-      if (action === 'feedback') {
-        await Promise.all(
-          approvals.map((approval) => rejectToolRequest(approval.id, trimmedFeedback))
-        )
-        approvals.forEach((approval) => {
-          decisions.push({
-            action: 'feedback',
-            approvalId: approval.id,
-            feedback: trimmedFeedback
-          })
-        })
-      } else {
-        const grants = await Promise.all(
-          approvals.map((approval) => approveToolRequest(approval.id, 'once'))
-        )
-        approvals.forEach((approval, index) => {
-          decisions.push({
-            action,
-            approvalId: approval.id,
-            grant: grants[index]
-          })
-        })
-      }
-
-      const nextApprovalToolStatus: AgentApprovalRequest['status'] =
-        action === 'feedback' ? 'rejected' : 'approved'
-      const nextApprovalStatus: AgentApprovalStatus =
-        action === 'feedback' ? 'feedback' : 'approved_once'
-      const updatedMessages = messages.map((item) =>
-        item.id === sourceMessageId
-          ? {
-              ...item,
-              codeChanges: resolvedCodeChanges,
-              approval: item.approval
-                ? {
-                    ...item.approval,
-                    status: nextApprovalToolStatus
-                  }
-                : item.approval,
-              approvalStatus: nextApprovalStatus
-            }
-          : item
-      )
-      const nextMessages = [...updatedMessages, userMessage]
-      setAgentMessages((currentMessages) => ({
-        ...currentMessages,
-        [editorMode]: nextMessages
-      }))
-      await persistSession(editorMode, nextMessages, {
-        sessionId,
-        threadId: agUiSession.threadId,
-        titleFrom: userContent
-      })
-
-      const {
-        answer: rawAnswer,
-        orchestration,
-        approval: nextApproval,
-        codeChanges: nextCodeChanges
-      } = await agUiSession.sendMessage(userContent, {
-        systemPrompt: buildScopedSystemPrompt(application, editorMode),
-        workspaceRoot: application.workspaceRoot,
-        application,
-        approvalDecision: {
-          action,
-          decisions,
-          feedback: trimmedFeedback
-        }
-      })
-      const answer = rawAnswer.trim()
-      const assistantMessage: AgentChatMessage = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: answer || '后端已返回，但内容为空。',
-        orchestration,
-        approval: nextApproval,
-        approvalStatus: nextApproval ? 'pending' : undefined,
-        codeChanges: nextCodeChanges,
-        createdAt: Date.now()
-      }
-      const completedMessages = [...nextMessages, assistantMessage]
-
-      setAgentMessages((currentMessages) => ({
-        ...currentMessages,
-        [editorMode]: completedMessages
-      }))
-      await persistSession(editorMode, completedMessages, {
-        sessionId,
-        threadId: agUiSession.threadId,
-        titleFrom: userContent
-      })
-      publishAiMessage(editorMode, answer)
-      antdMessage.success(action === 'feedback' ? '已发送意见' : '已提交审批')
-    } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : '处理代码变更审批失败。'
-      setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: message }))
-    } finally {
-      setApprovingApprovalId(undefined)
-      setLoadingModes((currentLoadingModes) => ({
-        ...currentLoadingModes,
-        [editorMode]: false
-      }))
-    }
-  }
-
-  const handleConfirmOrchestration = async (
-    messageId: number,
-    orchestration: DevelopmentOrchestrationPayload
-  ): Promise<void> => {
-    if (confirmingOrchestrationId) return
-    if (!application.workspaceRoot) {
-      setErrors((currentErrors) => ({
-        ...currentErrors,
-        [editorMode]: '确认执行计划前需要先绑定工作目录。'
-      }))
-      return
-    }
-    const agUiSession =
-      agUiSessionsRef.current[editorMode] ??
-      (agUiSessionsRef.current[editorMode] = new AgUiChatSession())
-    const orchestratorSession = new DevelopmentOrchestratorSession(agUiSession.threadId)
-
-    setConfirmingOrchestrationId(messageId)
-    setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }))
-    try {
-      const result = await orchestratorSession.sendMessage('用户确认执行当前开发计划。', {
-        action: 'dispatch',
-        orchestratorState: orchestration.state,
-        application,
-        workspaceRoot: application.workspaceRoot
-      })
-      const nextOrchestration = result.orchestration || orchestration
-      const nextAnswer = result.answer || '开发计划已确认。'
-      const nextMessages = messages.map((item) =>
-        item.id === messageId
-          ? {
-              ...item,
-              content: `${item.content}\n\n${nextAnswer}`,
-              orchestration: nextOrchestration
-            }
-          : item
-      )
-      setAgentMessages((currentMessages) => ({
-        ...currentMessages,
-        [editorMode]: nextMessages
-      }))
-      await persistSession(editorMode, nextMessages, {
-        sessionId: activeSessionId,
-        threadId: agUiSession.threadId
-      })
-    } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : '确认执行计划失败。'
-      setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: message }))
-    } finally {
-      setConfirmingOrchestrationId(undefined)
     }
   }
 
@@ -1003,7 +633,7 @@ export default function AiChatPanel({
           )}
           <header className={cx('ai-chat-header')}>
             <div className={cx('ai-chat-title')}>
-              <Text className={cx('editor-scope-tag', editorMode)}>APP DEV</Text>
+              <Text className={cx('editor-scope-tag', editorMode)}>WORKFLOW</Text>
               <Title level={4}>{copy.title}</Title>
               <Text type="secondary">{copy.description}</Text>
             </div>
@@ -1022,110 +652,34 @@ export default function AiChatPanel({
             {messages.length === 0 ? (
               <Empty description={copy.empty} image={Empty.PRESENTED_IMAGE_SIMPLE} />
             ) : (
-              messages.map((message, index) => {
-                const previousMessage = messages[index - 1]
-                const nextMessage = messages[index + 1]
-                const visibleCodeChanges = getVisibleCodeChangesForMessage(
-                  message,
-                  application.workspaceRoot || '',
-                  previousMessage,
-                  nextMessage
-                )
-                const codeChangeSourceMessageId = message.codeChanges
-                  ? message.id
-                  : (previousMessage?.id ?? message.id)
-                const approvalInCodeChanges =
-                  message.role === 'assistant' && Boolean(visibleCodeChanges?.approvals?.length)
-                const assistantDisplayContent =
-                  message.role === 'assistant'
-                    ? getAssistantDisplayContent(message.content, visibleCodeChanges)
-                    : ''
-                return (
-                  <article className={cx('ai-message', message.role)} key={message.id}>
-                    <Text className={cx('ai-message-label')}>
-                      {message.role === 'user' ? (
-                        <>
-                          <UserOutlined /> 用户输入
-                        </>
-                      ) : (
-                        <>
-                          <RobotOutlined /> {copy.label}
-                        </>
-                      )}
-                    </Text>
-                    {message.role === 'assistant' ? (
+              messages.map((message) => (
+                <article className={cx('ai-message', message.role)} key={message.id}>
+                  <Text className={cx('ai-message-label')}>
+                    {message.role === 'user' ? (
                       <>
-                        {assistantDisplayContent && (
-                          <MarkdownContent content={assistantDisplayContent} />
-                        )}
-                        {message.orchestration && (
-                          <OrchestrationPanel
-                            confirming={confirmingOrchestrationId === message.id}
-                            onConfirm={(orchestration) =>
-                              handleConfirmOrchestration(message.id, orchestration)
-                            }
-                            orchestration={message.orchestration}
-                          />
-                        )}
-                        {message.approval && !approvalInCodeChanges && (
-                          <AgentApprovalCard
-                            approval={message.approval}
-                            loading={loading || approvingApprovalId === message.approval.id}
-                            status={message.approvalStatus}
-                            onApproveAlways={() =>
-                              handleApprovalDecision(
-                                message.id,
-                                message.approval!,
-                                'approve_always'
-                              )
-                            }
-                            onApproveOnce={() =>
-                              handleApprovalDecision(message.id, message.approval!, 'approve_once')
-                            }
-                            onFeedback={(feedback) =>
-                              handleApprovalDecision(
-                                message.id,
-                                message.approval!,
-                                'feedback',
-                                feedback
-                              )
-                            }
-                          />
-                        )}
+                        <UserOutlined /> 用户输入
                       </>
                     ) : (
-                      <Text className={cx('ai-message-text')}>{message.content}</Text>
+                      <>
+                        <RobotOutlined /> {copy.label}
+                      </>
                     )}
-                    {visibleCodeChanges && (
-                      <CodeChangeCard
-                        codeChanges={visibleCodeChanges}
-                        loading={loading || approvingApprovalId === visibleCodeChanges.id}
-                        onApproveAll={() =>
-                          handleCodeChangeApproval(
-                            codeChangeSourceMessageId,
-                            visibleCodeChanges,
-                            'approve_once'
-                          )
-                        }
-                        onFeedback={(feedback) =>
-                          handleCodeChangeApproval(
-                            codeChangeSourceMessageId,
-                            visibleCodeChanges,
-                            'feedback',
-                            feedback
-                          )
-                        }
-                        onOpenFile={(path) => handleOpenCodeChangeFile(visibleCodeChanges, path)}
-                      />
-                    )}
-                  </article>
-                )
-              })
+                  </Text>
+                  {message.role === 'assistant' ? (
+                    <>
+                      <MarkdownContent content={message.content} />
+                      {message.workflow && <WorkflowRunCard workflow={message.workflow} />}
+                    </>
+                  ) : (
+                    <Text className={cx('ai-message-text')}>{message.content}</Text>
+                  )}
+                </article>
+              ))
             )}
             {loading && (
               <div className={cx('ai-message', 'assistant', 'loading')}>
                 <Spin size="small" />
-                <Text type="secondary">正在调用应用开发助手...</Text>
+                <Text type="secondary">正在运行 Workflow...</Text>
               </div>
             )}
           </div>
@@ -1161,7 +715,7 @@ export default function AiChatPanel({
                 onClick={handleSend}
                 type="primary"
               >
-                发送给应用开发助手
+                发送给 Workflow
               </Button>
             </div>
           </div>
@@ -1186,456 +740,52 @@ export default function AiChatPanel({
           <BrowserPreviewPanel application={application} />
         </div>
       )}
-      {rightPanel?.type === 'diff' && (
-        <div className={cx('embedded-preview-pane')}>
-          <CodeDiffDetailPanel
-            codeChanges={rightPanel.codeChanges}
-            selectedPath={rightPanel.selectedPath}
-            onClose={() => setRightPanel(undefined)}
-          />
-        </div>
-      )}
     </section>
   )
 }
 
-function approvalStatusFromAction(action: AgentApprovalDecisionAction): AgentApprovalStatus {
-  if (action === 'approve_always') return 'approved_always'
-  if (action === 'approve_once') return 'approved_once'
-  return 'feedback'
-}
+function WorkflowRunCard({ workflow }: { workflow: WorkflowRunPayload }): ReactElement {
+  const status = String(workflow.summary.status || 'unknown')
+  const artifacts = workflow.summary.artifacts || {}
+  const recentEvents = workflow.events.slice(-8)
 
-function approvalDecisionMessage(
-  approval: AgentApprovalRequest,
-  action: AgentApprovalDecisionAction,
-  feedback?: string
-): string {
-  if (action === 'approve_once') {
-    return `同意执行（仅本次）：${approval.subject}`
-  }
-  if (action === 'approve_always') {
-    return `同意执行，后续相同命令不再询问：${approval.subject}`
-  }
-  return `暂不同意执行：${approval.subject}\n其他意见：${feedback || '请调整方案后再继续。'}`
-}
-
-function codeChangeApprovalMessage(
-  codeChanges: WorkspaceCodeChangeSet,
-  action: 'approve_once' | 'feedback',
-  feedback?: string
-): string {
-  const fileText = `${codeChanges.summary.files} 个文件（+${codeChanges.summary.additions} -${codeChanges.summary.deletions}）`
-  if (action === 'approve_once') {
-    return `同意执行这批代码变更：${fileText}`
-  }
-  return `暂不同意执行这批代码变更：${fileText}\n其他意见：${feedback || '请调整方案后再继续。'}`
-}
-
-function getVisibleCodeChangesForMessage(
-  message: AgentChatMessage,
-  workspaceRoot: string,
-  previousMessage?: AgentChatMessage,
-  nextMessage?: AgentChatMessage
-): WorkspaceCodeChangeSet | undefined {
-  const messageCodeChanges =
-    message.codeChanges ??
-    (message.role === 'assistant'
-      ? buildCodeChangesFromAssistantContent(message.content, workspaceRoot, message.approval)
-      : undefined)
-  if (messageCodeChanges) return messageCodeChanges
-
-  if (message.role !== 'user' || !previousMessage) return undefined
-  const nextStatus = approvalMessageCodeChangeStatus(message.content)
-  if (!nextStatus) return undefined
-
-  const previousCodeChanges =
-    previousMessage.codeChanges ??
-    buildCodeChangesFromAssistantContent(
-      previousMessage.content,
-      workspaceRoot,
-      previousMessage.approval
-    )
-  if (previousCodeChanges) return updateCodeChangeStatus(previousCodeChanges, nextStatus)
-
-  return buildCodeChangesFromApprovalContext({
-    approvalContent: message.content,
-    contextContent: `${previousMessage.content}\n\n${nextMessage?.content || ''}`,
-    workspaceRoot,
-    status: nextStatus
-  })
-}
-
-async function ensurePersistedCodeChanges(
-  messages: ChatSessionMessage[],
-  workspaceRoot: string
-): Promise<ChatSessionMessage[]> {
-  let changed = false
-  const enrichedMessages: ChatSessionMessage[] = []
-
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index]
-    let codeChanges = message.codeChanges
-    if (codeChanges) {
-      const hydratedCodeChanges = await hydrateRecoveredCodeChanges(codeChanges, workspaceRoot)
-      if (hydratedCodeChanges !== codeChanges) {
-        codeChanges = hydratedCodeChanges
-      }
-    }
-
-    if (!codeChanges && message.role === 'assistant') {
-      codeChanges = buildCodeChangesFromAssistantContent(
-        message.content,
-        workspaceRoot,
-        message.approval
-      )
-    }
-
-    if (!codeChanges && message.role === 'user') {
-      const previousMessage = enrichedMessages[enrichedMessages.length - 1]
-      const nextStatus = approvalMessageCodeChangeStatus(message.content)
-      if (nextStatus) {
-        if (previousMessage?.codeChanges) {
-          codeChanges = updateCodeChangeStatus(previousMessage.codeChanges, nextStatus)
-          enrichedMessages[enrichedMessages.length - 1] = {
-            ...previousMessage,
-            codeChanges
-          }
-        } else if (previousMessage) {
-          codeChanges = buildCodeChangesFromApprovalContext({
-            approvalContent: message.content,
-            contextContent: `${previousMessage.content}\n\n${messages[index + 1]?.content || ''}`,
-            workspaceRoot,
-            status: nextStatus
-          })
-          if (codeChanges) {
-            codeChanges = await hydrateRecoveredCodeChanges(codeChanges, workspaceRoot)
-          }
-        }
-      }
-    }
-
-    if (codeChanges && codeChanges !== message.codeChanges) {
-      changed = true
-      enrichedMessages.push({ ...message, codeChanges })
-      continue
-    }
-
-    enrichedMessages.push(message)
-  }
-
-  return changed ? enrichedMessages : messages
-}
-
-function approvalMessageCodeChangeStatus(
-  content: string
-): WorkspaceCodeChangeSet['status'] | undefined {
-  const normalizedContent = content.trim()
-  if (normalizedContent.startsWith('同意执行这批代码变更')) return 'applied'
-  if (normalizedContent.startsWith('暂不同意执行这批代码变更')) return 'rejected'
-  return undefined
-}
-
-type ApprovalCodeChangeSummary = {
-  files: number
-  additions: number
-  deletions: number
-}
-
-type ApprovalContextBuildOptions = {
-  approvalContent: string
-  contextContent: string
-  workspaceRoot: string
-  status: WorkspaceCodeChangeSet['status']
-}
-
-function approvalMessageCodeChangeSummary(content: string): ApprovalCodeChangeSummary | undefined {
-  const match = content.match(/(\d+)\s*个文件[（(]\s*\+(\d+)\s*-(\d+)\s*[）)]/)
-  if (!match) return undefined
-
-  return {
-    files: Number(match[1]),
-    additions: Number(match[2]),
-    deletions: Number(match[3])
-  }
-}
-
-function buildCodeChangesFromApprovalContext({
-  approvalContent,
-  contextContent,
-  workspaceRoot,
-  status
-}: ApprovalContextBuildOptions): WorkspaceCodeChangeSet | undefined {
-  const summary = approvalMessageCodeChangeSummary(approvalContent)
-  if (!summary) return undefined
-
-  const inferredPaths = inferCodeChangePathsFromContext(contextContent, workspaceRoot)
-  const totalFiles = Math.max(summary.files, inferredPaths.length || 1)
-  const files: WorkspaceCodeChangeSet['files'] = Array.from({ length: totalFiles }).map(
-    (_, index) => {
-      const path = inferredPaths[index] || `未识别文件-${index + 1}.diff`
-      const additions = index === 0 ? summary.additions : 0
-      const deletions = index === 0 ? summary.deletions : 0
-      return {
-        id: `approval-context:${path}:${stableId(`${approvalContent}:${contextContent}:${index}`)}`,
-        path,
-        changeType: inferFallbackChangeType(contextContent, '', { additions, deletions }),
-        additions,
-        deletions,
-        diff: buildRecoveredPlaceholderDiff(path),
-        truncated: false,
-        binary: false,
-        tool: 'file.patch',
-        executed: status === 'applied'
-      }
-    }
-  )
-
-  return {
-    id: `code-changes:approval-context:${stableId(
-      `${workspaceRoot}:${approvalContent}:${files.map((file) => file.path).join('|')}`
-    )}`,
-    status,
-    workspaceRoot,
-    summary,
-    files
-  }
-}
-
-function inferCodeChangePathsFromContext(content: string, workspaceRoot: string): string[] {
-  const paths: string[] = []
-  const addCandidate = (candidate: string): void => {
-    const normalizedPath = normalizeContextFilePath(candidate, workspaceRoot)
-    if (!normalizedPath || paths.includes(normalizedPath)) return
-    paths.push(normalizedPath)
-  }
-
-  Array.from(content.matchAll(/`([^`\n]+)`/g)).forEach((match) => {
-    addCandidate(match[1])
-  })
-  Array.from(
-    content.matchAll(
-      /(?:^|[\s:："'（(])([A-Za-z0-9._~/-]+\.(?:tsx?|jsx?|css|less|scss|sass|html?|md|json|ya?ml|py|vue|svelte|java|go|rs|swift|kt|php))/gi
-    )
-  ).forEach((match) => {
-    addCandidate(match[1])
-  })
-
-  return paths
-}
-
-function normalizeContextFilePath(rawPath: string, workspaceRoot: string): string | undefined {
-  const trimmedPath = rawPath
-    .trim()
-    .replace(/^["'`]|["'`]$/g, '')
-    .replace(/[),，。；;：:]+$/g, '')
-  if (
-    !/\.(tsx?|jsx?|css|less|scss|sass|html?|md|json|ya?ml|py|vue|svelte|java|go|rs|swift|kt|php)$/i.test(
-      trimmedPath
-    )
-  ) {
-    return undefined
-  }
-  return normalizeDiffPath(trimmedPath, workspaceRoot)
-}
-
-async function hydrateRecoveredCodeChanges(
-  codeChanges: WorkspaceCodeChangeSet,
-  workspaceRoot: string
-): Promise<WorkspaceCodeChangeSet> {
-  if (!workspaceRoot || !codeChanges.files.some(shouldHydrateRecoveredFile)) return codeChanges
-
-  let changed = false
-  const files = await Promise.all(
-    codeChanges.files.map(async (file) => {
-      if (!shouldHydrateRecoveredFile(file)) return file
-      try {
-        const result = await readWorkspaceFile({
-          workspace_root: workspaceRoot,
-          path: file.path,
-          start_line: 1,
-          max_lines: 5000,
-          max_chars: 200000
-        })
-        changed = true
-        return {
-          ...file,
-          path: result.path || file.path,
-          diff: buildSnapshotDiff(result.path || file.path, result.content),
-          truncated: result.truncated
-        }
-      } catch {
-        return file
-      }
-    })
-  )
-
-  return changed ? { ...codeChanges, files } : codeChanges
-}
-
-function shouldHydrateRecoveredFile(file: WorkspaceCodeChangeSet['files'][number]): boolean {
-  return !file.diff || isRecoveredPlaceholderDiff(file.diff)
-}
-
-function isRecoveredPlaceholderDiff(diff: string): boolean {
-  return diff.includes('Diff 未随审批事件保存')
-}
-
-function buildRecoveredPlaceholderDiff(path: string): string {
-  return [
-    '--- /dev/null',
-    `+++ ${path}`,
-    '@@ -0,0 +1,1 @@',
-    '+Diff 未随审批事件保存；重新打开会话时会尝试读取当前文件生成快照。'
-  ].join('\n')
-}
-
-function buildSnapshotDiff(path: string, content: string): string {
-  const normalizedContent = content.replace(/\r\n/g, '\n')
-  const lines = normalizedContent ? normalizedContent.replace(/\n$/, '').split('\n') : []
-  return [
-    '--- /dev/null',
-    `+++ ${path}`,
-    `@@ -0,0 +1,${lines.length} @@`,
-    ...lines.map((line) => `+${line}`)
-  ].join('\n')
-}
-
-function buildCodeChangesFromAssistantContent(
-  content: string,
-  workspaceRoot: string,
-  approval?: AgentApprovalRequest
-): WorkspaceCodeChangeSet | undefined {
-  if (!content) return undefined
-
-  const files: WorkspaceCodeChangeSet['files'] = []
-  Array.from(content.matchAll(CODE_FENCE_RE)).forEach((match, index) => {
-    const language = match[1] || ''
-    const diff = (match[2] || '').trim()
-    if (!isDiffLikeBlock(language, diff)) return
-
-    const path = inferDiffPath(content, match.index || 0, diff, workspaceRoot, index)
-    const stats = countDiffStats(diff)
-    files.push({
-      id: `fallback:${path}:${stableId(diff)}`,
-      path,
-      changeType: inferFallbackChangeType(content, diff, stats),
-      additions: stats.additions,
-      deletions: stats.deletions,
-      diff,
-      truncated: false,
-      binary: false,
-      approvalId: approval?.id,
-      tool: 'file.patch',
-      executed: false
-    })
-  })
-
-  if (files.length === 0) return undefined
-
-  const approvals = approval ? [approval] : undefined
-  const status: WorkspaceCodeChangeSet['status'] =
-    approvals || /批准|审批|确认|待执行|等待/.test(content) ? 'pending_approval' : 'applied'
-
-  return {
-    id: `code-changes:fallback:${stableId(
-      `${workspaceRoot}:${files.map((file) => `${file.path}:${file.diff}`).join('|')}`
-    )}`,
-    status,
-    workspaceRoot,
-    summary: {
-      files: new Set(files.map((file) => file.path)).size,
-      additions: files.reduce((total, file) => total + file.additions, 0),
-      deletions: files.reduce((total, file) => total + file.deletions, 0)
-    },
-    files,
-    approvals
-  }
-}
-
-function inferDiffPath(
-  content: string,
-  matchIndex: number,
-  diff: string,
-  workspaceRoot: string,
-  fallbackIndex: number
-): string {
-  const headerPath = pathFromUnifiedDiffHeader(diff)
-  if (headerPath) return normalizeDiffPath(headerPath, workspaceRoot)
-
-  const prefix = content.slice(Math.max(0, matchIndex - 700), matchIndex)
-  const backtickMatches = Array.from(prefix.matchAll(/`([^`\n]+\.[A-Za-z0-9][^`\n]*)`/g))
-  const lastBacktickPath = backtickMatches.at(-1)?.[1]
-  if (lastBacktickPath) return normalizeDiffPath(lastBacktickPath, workspaceRoot)
-
-  return `未命名变更-${fallbackIndex + 1}.diff`
-}
-
-function pathFromUnifiedDiffHeader(diff: string): string | undefined {
-  const lines = diff.split('\n')
-  const targetLine = lines.find((line) => line.startsWith('+++ '))
-  const sourceLine = lines.find((line) => line.startsWith('--- '))
-  const path = (targetLine || sourceLine)?.replace(/^(---|\+\+\+)\s+/, '').trim()
-  if (!path || path === '/dev/null') return undefined
-  return path
-}
-
-function normalizeDiffPath(path: string, workspaceRoot: string): string {
-  const normalizedPath = path
-    .trim()
-    .replace(/^["']|["']$/g, '')
-    .replace(/^[ab]\//, '')
-  if (workspaceRoot && normalizedPath.startsWith(`${workspaceRoot}/`)) {
-    return normalizedPath.slice(workspaceRoot.length + 1)
-  }
-  return normalizedPath
-}
-
-function countDiffStats(diff: string): { additions: number; deletions: number } {
-  return diff.split('\n').reduce(
-    (stats, line) => {
-      if (line.startsWith('+++') || line.startsWith('---')) return stats
-      if (line.startsWith('+')) stats.additions += 1
-      if (line.startsWith('-')) stats.deletions += 1
-      return stats
-    },
-    { additions: 0, deletions: 0 }
+  return (
+    <div className={cx('workflow-run-card')}>
+      <div className={cx('workflow-run-header')}>
+        <Text strong>Workflow Run</Text>
+        <Tag color={workflowStatusColor(status)}>{status}</Tag>
+      </div>
+      {workflow.summary.message && <Text>{String(workflow.summary.message)}</Text>}
+      {Object.keys(artifacts).length > 0 && (
+        <div className={cx('workflow-artifacts')}>
+          <Text type="secondary">产物</Text>
+          {Object.entries(artifacts).map(([name, path]) => (
+            <Text code key={name}>
+              {name}: {path}
+            </Text>
+          ))}
+        </div>
+      )}
+      {recentEvents.length > 0 && (
+        <div className={cx('workflow-events')}>
+          <Text type="secondary">最近事件</Text>
+          {recentEvents.map((event, index) => (
+            <div className={cx('workflow-event')} key={`${event.type}-${event.timestamp}-${index}`}>
+              <Tag>{event.nodeName || event.type}</Tag>
+              <Text>{event.message || event.status || event.type}</Text>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
-function inferFallbackChangeType(
-  content: string,
-  diff: string,
-  stats: { additions: number; deletions: number }
-): WorkspaceCodeChangeSet['files'][number]['changeType'] {
-  if (stats.deletions > 0 && stats.additions === 0) return 'deleted'
-  if (/新建|新增|创建/.test(content) || /---\s+\/dev\/null/.test(diff)) return 'added'
-  return 'modified'
-}
-
-function stableId(value: string): string {
-  let hash = 0
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0
-  }
-  return hash.toString(36)
-}
-
-function updateCodeChangeStatus(
-  codeChanges: WorkspaceCodeChangeSet,
-  status: WorkspaceCodeChangeSet['status']
-): WorkspaceCodeChangeSet {
-  return {
-    ...codeChanges,
-    status,
-    approvals: codeChanges.approvals?.map((approval) => ({
-      ...approval,
-      status: status === 'rejected' ? 'rejected' : 'approved'
-    })),
-    files: codeChanges.files.map((file) => ({
-      ...file,
-      executed: status === 'applied' ? true : file.executed
-    }))
-  }
+function workflowStatusColor(status: string): string {
+  if (status === 'completed' || status === 'passed') return 'green'
+  if (status === 'failed' || status === 'error') return 'red'
+  if (status === 'running') return 'blue'
+  return 'default'
 }
 
 function formatSessionTime(value: number): string {
@@ -1649,18 +799,6 @@ function formatSessionTime(value: number): string {
   })
 }
 
-function buildScopedSystemPrompt(application: ApplicationConfig, editorMode: EditorMode): string {
-  const scopePrompt =
-    editorMode === 'frontend'
-      ? '你是 XCodeAgent，一个应用开发助手。回答要围绕当前应用的代码实现、页面体验、接口协作和验证步骤。'
-      : '你是 XCodeAgent，一个应用开发助手。回答要围绕当前应用的接口、数据模型、服务逻辑和验证步骤。'
-  const workspacePrompt = application.workspaceRoot
-    ? `当前应用工作目录：${application.workspaceRoot}。涉及本地工具或命令时优先使用这个 workspace_root。`
-    : '当前应用没有绑定工作目录，涉及本地工具或命令时先说明需要选择工作目录。'
-
-  return `${scopePrompt}\n应用名称：${application.name}。\n${workspacePrompt}`
-}
-
 function clampAssistantPanelWidth(nextWidth: number, panel: HTMLElement | null): number {
   const panelWidth = panel?.getBoundingClientRect().width ?? 0
   const maxWidth = Math.max(
@@ -1669,74 +807,4 @@ function clampAssistantPanelWidth(nextWidth: number, panel: HTMLElement | null):
   )
 
   return Math.min(Math.max(nextWidth, MIN_ASSISTANT_PANEL_WIDTH), maxWidth)
-}
-
-function getAssistantDisplayContent(content: string, codeChanges?: WorkspaceCodeChangeSet): string {
-  if (!codeChanges) return content
-  return stripCodeDiffContent(content)
-}
-
-function stripCodeDiffContent(content: string): string {
-  const withoutDiffFences = content.replace(
-    CODE_FENCE_RE,
-    (block: string, language = '', code = '') => (isDiffLikeBlock(language, code) ? '' : block)
-  )
-
-  return stripRawUnifiedDiffBlocks(withoutDiffFences)
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-function isDiffLikeBlock(language: string, code: string): boolean {
-  const normalizedLanguage = language.toLowerCase()
-  return (
-    normalizedLanguage === 'diff' ||
-    normalizedLanguage === 'patch' ||
-    normalizedLanguage === 'udiff' ||
-    /^(diff --git|@@\s|---\s|\+\+\+\s)/m.test(code)
-  )
-}
-
-function stripRawUnifiedDiffBlocks(content: string): string {
-  const lines = content.split('\n')
-  const keptLines: string[] = []
-  let skippingDiff = false
-
-  lines.forEach((line) => {
-    if (!skippingDiff && isRawDiffStart(line)) {
-      skippingDiff = true
-      return
-    }
-
-    if (skippingDiff) {
-      if (!line.trim()) {
-        skippingDiff = false
-      }
-      if (isRawDiffContinuation(line)) return
-      skippingDiff = false
-    }
-
-    keptLines.push(line)
-  })
-
-  return keptLines.join('\n')
-}
-
-function isRawDiffStart(line: string): boolean {
-  return /^(diff --git\s|Index:\s|@@\s)/.test(line.trim())
-}
-
-function isRawDiffContinuation(line: string): boolean {
-  const trimmedLine = line.trimStart()
-  return (
-    !trimmedLine ||
-    trimmedLine.startsWith('index ') ||
-    trimmedLine.startsWith('--- ') ||
-    trimmedLine.startsWith('+++ ') ||
-    trimmedLine.startsWith('@@ ') ||
-    line.startsWith(' ') ||
-    trimmedLine.startsWith('+') ||
-    trimmedLine.startsWith('-') ||
-    trimmedLine.startsWith('\\ No newline')
-  )
 }

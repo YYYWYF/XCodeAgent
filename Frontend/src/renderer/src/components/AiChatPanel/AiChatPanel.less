@@ -851,6 +851,44 @@
   background: #fffaf0;
 }
 
+.@{class-prefix}-workflow-run-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid #edf0f5;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.@{class-prefix}-workflow-run-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.@{class-prefix}-workflow-artifacts,
+.@{class-prefix}-workflow-events {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.@{class-prefix}-workflow-event {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+
+  .ant-tag {
+    flex: 0 0 auto;
+    margin-right: 0;
+  }
+}
+
 .@{class-prefix}-ai-chat-composer {
   display: flex;
   flex-direction: column;

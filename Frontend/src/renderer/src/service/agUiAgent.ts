@@ -1,110 +1,25 @@
 import { HttpAgent, randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
-import type {
-  AgentApprovalDecision,
-  AgentApprovalRequest,
-  ApplicationConfig,
-  DevelopmentOrchestrationPayload,
-  RequirementDevelopmentPlan,
-  WorkspaceCodeChangeSet
-} from '../typings'
+import type { ApplicationConfig, WorkflowRunPayload } from '../typings'
 
-type SendAgUiMessageOptions = {
-  systemPrompt: string
+type SendWorkflowMessageOptions = {
   workspaceRoot?: string
   application?: ApplicationConfig
-  approvalDecision?: AgentApprovalDecision
-}
-
-export type RequirementQuestionType = 'single' | 'multiple' | 'text' | 'confirm'
-
-export type RequirementQuestionOption = {
-  id: string
-  label: string
-  description?: string
-}
-
-export type RequirementQuestion = {
-  id: string
-  type: RequirementQuestionType
-  title: string
-  description?: string
-  required: boolean
-  options: RequirementQuestionOption[]
-}
-
-export type RequirementAnswer = {
-  questionId: string
-  question: string
-  value: string | string[]
-  label?: string
-}
-
-export type RequirementPlannerState = {
-  requirement: string
-  answers: RequirementAnswer[]
-  iteration: number
-  lastQuestions?: RequirementQuestion[]
-  status?: 'questions' | 'plan'
-  plan?: RequirementDevelopmentPlan
-}
-
-export type RequirementPlannerPayload = {
-  tool: 'requirement_planner'
-  status: 'questions' | 'plan'
-  phase: 'discovery' | 'planning'
-  iteration: number
-  message: string
-  questions: RequirementQuestion[]
-  answers: RequirementAnswer[]
-  plan?: RequirementDevelopmentPlan | null
-  state: RequirementPlannerState
-}
-
-type SendPlannerMessageOptions = {
-  action: 'start' | 'answer' | 'finalize'
-  plannerState?: RequirementPlannerState
-  application: ApplicationConfig
-}
-
-type SendOrchestratorMessageOptions = {
-  action: 'start' | 'answer' | 'finalize' | 'dispatch' | 'verify'
-  orchestratorState?: Record<string, unknown>
-  plannerState?: RequirementPlannerState
-  application: ApplicationConfig
-  workspaceRoot?: string
 }
 
 export type AgUiChatResult = {
   threadId: string
   answer: string
-  orchestration?: DevelopmentOrchestrationPayload
-  approval?: AgentApprovalRequest
-  codeChanges?: WorkspaceCodeChangeSet
+  workflow?: WorkflowRunPayload
   assistantMessage?: Message
 }
 
-export type RequirementPlannerResult = {
-  threadId: string
-  answer: string
-  planning?: RequirementPlannerPayload
-  assistantMessage?: Message
-}
-
-export type DevelopmentOrchestratorResult = {
-  threadId: string
-  answer: string
-  orchestration?: DevelopmentOrchestrationPayload
-  assistantMessage?: Message
-}
-
-const PLANNING_DATA_RE = /<planning-data>([\s\S]*?)<\/planning-data>/
-const ORCHESTRATION_DATA_RE = /<orchestration-data>([\s\S]*?)<\/orchestration-data>/
-
-function getAgUiUrl(): string {
+function getWorkflowUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
-  return agentBaseUrl ? `${agentBaseUrl.replace(/\/$/, '')}/ag-ui` : '/api/agent/ag-ui'
+  return agentBaseUrl
+    ? `${agentBaseUrl.replace(/\/$/, '')}/workflow/run`
+    : '/api/agent/workflow/run'
 }
 
 export class AgUiChatSession {
@@ -115,44 +30,35 @@ export class AgUiChatSession {
   constructor(threadId = randomUUID()) {
     this.threadId = threadId
     this.agent = new HttpAgent({
-      url: getAgUiUrl(),
+      url: getWorkflowUrl(),
       threadId
     })
   }
 
-  async sendMessage(message: string, options: SendAgUiMessageOptions): Promise<AgUiChatResult> {
+  async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
     this.agent.addMessage({
       id: randomUUID(),
       role: 'user',
       content: message
     })
 
-    let eventApproval: AgentApprovalRequest | undefined
-    let eventCodeChanges: WorkspaceCodeChangeSet | undefined
+    let workflow: WorkflowRunPayload | undefined
     const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
-        if (event.name === 'tool-approval-required') {
-          eventApproval = readApprovalPayload(event.value)
-        }
-        if (event.name === 'workspace-code-changes') {
-          eventCodeChanges = readCodeChangesPayload(event.value)
+        if (event.name === 'workflow-run') {
+          workflow = readWorkflowPayload(event.value) ?? workflow
         }
       },
       onStateSnapshotEvent: ({ event }) => {
-        const snapshotApproval = readApprovalFromState(event.snapshot)
-        if (snapshotApproval) eventApproval = snapshotApproval
-        const snapshotCodeChanges = readCodeChangesFromState(event.snapshot)
-        if (snapshotCodeChanges) eventCodeChanges = snapshotCodeChanges
+        workflow = readWorkflowFromState(event.snapshot) ?? workflow
       }
     }
 
     const result = await this.agent.runAgent(
       {
         forwardedProps: {
-          systemPrompt: options.systemPrompt,
           workspaceRoot: options.workspaceRoot,
-          application: options.application,
-          approvalDecision: options.approvalDecision
+          application: options.application
         }
       },
       subscriber
@@ -160,117 +66,16 @@ export class AgUiChatSession {
     const assistantMessage = result.newMessages.find(
       (newMessage) => newMessage.role === 'assistant'
     )
-    const parsed = extractOrchestrationData(
-      messageContentToText(assistantMessage?.content),
-      result.result
-    )
-    const approval = eventApproval ?? readResultApproval(result.result)
-    const codeChanges = eventCodeChanges ?? readResultCodeChanges(result.result)
+    workflow = readResultWorkflow(result.result) ?? workflow
+    const answer =
+      messageContentToText(assistantMessage?.content).trim() ||
+      workflow?.summary?.message ||
+      'Workflow run finished.'
 
     return {
       threadId: this.threadId,
-      answer: parsed.answer,
-      orchestration: parsed.orchestration,
-      approval,
-      codeChanges,
-      assistantMessage
-    }
-  }
-}
-
-export class RequirementPlannerSession {
-  readonly threadId: string
-
-  private readonly agent: HttpAgent
-
-  constructor(threadId = randomUUID()) {
-    this.threadId = threadId
-    this.agent = new HttpAgent({
-      url: getAgUiUrl(),
-      threadId
-    })
-  }
-
-  async sendMessage(
-    message: string,
-    options: SendPlannerMessageOptions
-  ): Promise<RequirementPlannerResult> {
-    this.agent.addMessage({
-      id: randomUUID(),
-      role: 'user',
-      content: message
-    })
-
-    const result = await this.agent.runAgent({
-      forwardedProps: {
-        agentMode: 'requirement-planner',
-        plannerAction: options.action,
-        plannerState: options.plannerState,
-        application: options.application
-      }
-    })
-    const assistantMessage = result.newMessages.find(
-      (newMessage) => newMessage.role === 'assistant'
-    )
-    const parsed = extractPlanningData(
-      messageContentToText(assistantMessage?.content),
-      result.result
-    )
-
-    return {
-      threadId: this.threadId,
-      answer: parsed.answer,
-      planning: parsed.planning,
-      assistantMessage
-    }
-  }
-}
-
-export class DevelopmentOrchestratorSession {
-  readonly threadId: string
-
-  private readonly agent: HttpAgent
-
-  constructor(threadId = randomUUID()) {
-    this.threadId = threadId
-    this.agent = new HttpAgent({
-      url: getAgUiUrl(),
-      threadId
-    })
-  }
-
-  async sendMessage(
-    message: string,
-    options: SendOrchestratorMessageOptions
-  ): Promise<DevelopmentOrchestratorResult> {
-    this.agent.addMessage({
-      id: randomUUID(),
-      role: 'user',
-      content: message
-    })
-
-    const result = await this.agent.runAgent({
-      forwardedProps: {
-        agentMode: 'development-orchestrator',
-        orchestratorAction: options.action,
-        orchestratorState: options.orchestratorState,
-        plannerState: options.plannerState,
-        application: options.application,
-        workspaceRoot: options.workspaceRoot
-      }
-    })
-    const assistantMessage = result.newMessages.find(
-      (newMessage) => newMessage.role === 'assistant'
-    )
-    const parsed = extractOrchestrationData(
-      messageContentToText(assistantMessage?.content),
-      result.result
-    )
-
-    return {
-      threadId: this.threadId,
-      answer: parsed.answer,
-      orchestration: parsed.orchestration,
+      answer,
+      workflow,
       assistantMessage
     }
   }
@@ -291,242 +96,34 @@ function messageContentToText(content: Message['content'] | undefined): string {
   return ''
 }
 
-function extractPlanningData(
-  answer: string,
-  result: unknown
-): { answer: string; planning?: RequirementPlannerPayload } {
-  const resultPlanning = readResultPlanning(result)
-  if (resultPlanning) {
-    return {
-      answer: answer.replace(PLANNING_DATA_RE, '').trim(),
-      planning: resultPlanning
-    }
-  }
-
-  const match = PLANNING_DATA_RE.exec(answer)
-  if (!match) {
-    return { answer: answer.trim(), planning: undefined }
-  }
-
-  try {
-    return {
-      answer: answer.replace(PLANNING_DATA_RE, '').trim(),
-      planning: JSON.parse(match[1]) as RequirementPlannerPayload
-    }
-  } catch {
-    return { answer: answer.replace(PLANNING_DATA_RE, '').trim(), planning: undefined }
-  }
-}
-
-function extractOrchestrationData(
-  answer: string,
-  result: unknown
-): { answer: string; orchestration?: DevelopmentOrchestrationPayload } {
-  const resultOrchestration = readResultOrchestration(result)
-  if (resultOrchestration) {
-    return {
-      answer: answer.replace(ORCHESTRATION_DATA_RE, '').trim(),
-      orchestration: resultOrchestration
-    }
-  }
-
-  const match = ORCHESTRATION_DATA_RE.exec(answer)
-  if (!match) {
-    return { answer: answer.trim(), orchestration: undefined }
-  }
-
-  try {
-    return {
-      answer: answer.replace(ORCHESTRATION_DATA_RE, '').trim(),
-      orchestration: JSON.parse(match[1]) as DevelopmentOrchestrationPayload
-    }
-  } catch {
-    return { answer: answer.replace(ORCHESTRATION_DATA_RE, '').trim(), orchestration: undefined }
-  }
-}
-
-function readApprovalFromState(snapshot: unknown): AgentApprovalRequest | undefined {
+function readWorkflowFromState(snapshot: unknown): WorkflowRunPayload | undefined {
   if (!snapshot || typeof snapshot !== 'object') return undefined
-  return readApprovalPayload((snapshot as { approval?: unknown }).approval)
+  return readWorkflowPayload((snapshot as { workflow?: unknown }).workflow)
 }
 
-function readCodeChangesFromState(snapshot: unknown): WorkspaceCodeChangeSet | undefined {
-  return readCodeChangesPayload(snapshot)
-}
-
-function readResultApproval(result: unknown): AgentApprovalRequest | undefined {
+function readResultWorkflow(result: unknown): WorkflowRunPayload | undefined {
   if (!result || typeof result !== 'object') return undefined
-  return readApprovalPayload((result as { approval?: unknown }).approval)
+  return readWorkflowPayload((result as { workflow?: unknown }).workflow)
 }
 
-function readResultCodeChanges(result: unknown): WorkspaceCodeChangeSet | undefined {
-  return readCodeChangesPayload(result)
-}
-
-function readApprovalPayload(value: unknown): AgentApprovalRequest | undefined {
+function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const approval = value as Partial<AgentApprovalRequest>
-  if (
-    typeof approval.id !== 'string' ||
-    typeof approval.tool !== 'string' ||
-    typeof approval.title !== 'string' ||
-    typeof approval.subject !== 'string'
-  ) {
+  const payload = value as Partial<WorkflowRunPayload>
+  if (typeof payload.runId !== 'string' || typeof payload.threadId !== 'string') {
     return undefined
   }
 
   return {
-    id: approval.id,
-    tool: approval.tool,
-    title: approval.title,
-    description: String(approval.description || ''),
-    subject: approval.subject,
-    risk: {
-      level:
-        approval.risk?.level === 'high' || approval.risk?.level === 'medium'
-          ? approval.risk.level
-          : 'low',
-      reasons: Array.isArray(approval.risk?.reasons) ? approval.risk.reasons.map(String) : []
-    },
-    details: typeof approval.details === 'string' ? approval.details : null,
-    status:
-      approval.status === 'approved' || approval.status === 'rejected'
-        ? approval.status
-        : 'pending',
-    created_at: String(approval.created_at || ''),
-    expires_at: String(approval.expires_at || ''),
-    agent_tool: typeof approval.agent_tool === 'string' ? approval.agent_tool : undefined
+    runId: payload.runId,
+    threadId: payload.threadId,
+    summary:
+      payload.summary && typeof payload.summary === 'object'
+        ? payload.summary
+        : { status: 'unknown' },
+    events: Array.isArray(payload.events) ? payload.events : [],
+    result:
+      payload.result && typeof payload.result === 'object'
+        ? (payload.result as Record<string, unknown>)
+        : undefined
   }
-}
-
-function readCodeChangesPayload(value: unknown): WorkspaceCodeChangeSet | undefined {
-  const unwrappedValue = unwrapCodeChangesPayload(value)
-  if (!unwrappedValue || typeof unwrappedValue !== 'object') return undefined
-
-  const payload = unwrappedValue as Partial<WorkspaceCodeChangeSet>
-  const payloadRecord = unwrappedValue as Record<string, unknown>
-  if (!Array.isArray(payload.files)) return undefined
-
-  const files = payload.files
-    .map((file): WorkspaceCodeChangeSet['files'][number] | undefined => {
-      if (!file || typeof file !== 'object') return undefined
-      const item = file as Partial<WorkspaceCodeChangeSet['files'][number]>
-      const itemRecord = file as Record<string, unknown>
-      const path = readString(item.path ?? itemRecord.filePath ?? itemRecord.file_path)
-      const diff = readString(
-        item.diff ?? itemRecord.patch ?? itemRecord.unifiedDiff ?? itemRecord.unified_diff
-      )
-      if (!path || typeof diff !== 'string') return undefined
-      const tool = normalizeCodeChangeTool(
-        item.tool ?? itemRecord.agentTool ?? itemRecord.agent_tool
-      )
-      const changeType = normalizeCodeChangeType(item.changeType ?? itemRecord.change_type)
-      return {
-        id: readString(item.id) ?? `${tool}:${path}`,
-        path,
-        changeType,
-        additions: readNumber(item.additions) ?? 0,
-        deletions: readNumber(item.deletions) ?? 0,
-        diff,
-        truncated: Boolean(item.truncated),
-        binary: Boolean(item.binary),
-        approvalId: readString(item.approvalId ?? itemRecord.approval_id),
-        tool,
-        executed: Boolean(item.executed)
-      }
-    })
-    .filter((file): file is WorkspaceCodeChangeSet['files'][number] => Boolean(file))
-
-  if (files.length === 0) return undefined
-  const approvalSource = Array.isArray(payload.approvals)
-    ? payload.approvals
-    : payloadRecord.approval
-      ? [payloadRecord.approval]
-      : undefined
-  const approvals = approvalSource
-    ? approvalSource
-        .map(readApprovalPayload)
-        .filter((approval): approval is AgentApprovalRequest => Boolean(approval))
-    : undefined
-  const summary =
-    payload.summary && typeof payload.summary === 'object'
-      ? (payload.summary as Record<string, unknown>)
-      : undefined
-
-  return {
-    id: readString(payload.id) ?? `code-changes:${Date.now()}`,
-    status: normalizeCodeChangeStatus(payload.status),
-    workspaceRoot: String(payload.workspaceRoot || payloadRecord.workspace_root || ''),
-    summary: {
-      files: readNumber(summary?.files) ?? new Set(files.map((file) => file.path)).size,
-      additions:
-        readNumber(summary?.additions) ?? files.reduce((total, file) => total + file.additions, 0),
-      deletions:
-        readNumber(summary?.deletions) ?? files.reduce((total, file) => total + file.deletions, 0)
-    },
-    files,
-    approvals
-  }
-}
-
-function unwrapCodeChangesPayload(value: unknown): unknown {
-  const parsedValue = parseJsonValue(value)
-  if (!parsedValue || typeof parsedValue !== 'object') return parsedValue
-
-  const record = parsedValue as Record<string, unknown>
-  const nestedValue =
-    record.codeChanges ??
-    record.code_changes ??
-    record.workspaceCodeChanges ??
-    record.workspace_code_changes
-  return nestedValue === undefined ? parsedValue : unwrapCodeChangesPayload(nestedValue)
-}
-
-function parseJsonValue(value: unknown): unknown {
-  if (typeof value !== 'string') return value
-  try {
-    return JSON.parse(value)
-  } catch {
-    return value
-  }
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined
-}
-
-function readNumber(value: unknown): number | undefined {
-  const nextValue = Number(value)
-  return Number.isFinite(nextValue) ? nextValue : undefined
-}
-
-function normalizeCodeChangeStatus(value: unknown): WorkspaceCodeChangeSet['status'] {
-  if (value === 'pending_approval') return 'pending_approval'
-  if (value === 'rejected') return 'rejected'
-  return 'applied'
-}
-
-function normalizeCodeChangeTool(value: unknown): WorkspaceCodeChangeSet['files'][number]['tool'] {
-  return value === 'file.patch' || value === 'file.delete' ? value : 'file.write'
-}
-
-function normalizeCodeChangeType(
-  value: unknown
-): WorkspaceCodeChangeSet['files'][number]['changeType'] {
-  if (value === 'added' || value === 'deleted') return value
-  return 'modified'
-}
-
-function readResultPlanning(result: unknown): RequirementPlannerPayload | undefined {
-  if (!result || typeof result !== 'object') return undefined
-  const planning = (result as { planning?: unknown }).planning
-  if (!planning || typeof planning !== 'object') return undefined
-  return planning as RequirementPlannerPayload
-}
-
-function readResultOrchestration(result: unknown): DevelopmentOrchestrationPayload | undefined {
-  if (!result || typeof result !== 'object') return undefined
-  const orchestration = (result as { orchestration?: unknown }).orchestration
-  if (!orchestration || typeof orchestration !== 'object') return undefined
-  return orchestration as DevelopmentOrchestrationPayload
 }

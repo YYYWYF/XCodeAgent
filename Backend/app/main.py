@@ -2,37 +2,23 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Optional
 
-from ag_ui.core import RunAgentInput
 from fastapi import Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.graph import graph
-from app.protocols.ag_ui import build_ag_ui_stream
 from app.protocols.workflow_visualization import (
+    build_workflow_response,
     build_workflow_ag_ui_stream,
     workflow_capabilities,
 )
-from app.graph.agent import AgentRuntime
 from app.config import Settings
-from app.graph.orchestrator import (
-    DevelopmentOrchestratorRuntime,
-    orchestrator_capabilities,
-)
-from app.services.requirement_intake import intake_capabilities
 from app.tools import antd_v4_docs
 from app.workspace import workspace as workspace_tools
 from app.middleware.approvals import approval_store
-from app.agents.requirement_planner import (
-    RequirementPlannerRuntime,
-    planner_capabilities,
-)
 
 settings = Settings.from_env()
-agent = AgentRuntime(settings)
-planner = RequirementPlannerRuntime(settings)
-orchestrator = DevelopmentOrchestratorRuntime(settings, planner)
 
 app = FastAPI(
     title="Local LangGraph Agent",
@@ -73,32 +59,6 @@ class ChatResponse(BaseModel):
     messages: list[dict[str, str]]
 
 
-class RequirementPlannerRequest(BaseModel):
-    message: Annotated[
-        str, Field(min_length=1, description="User requirement or answer.")
-    ]
-    action: str = Field(default="answer", description="start, answer, or finalize.")
-    planner_state: Optional[dict[str, Any]] = Field(default=None)
-    application: Optional[dict[str, Any]] = Field(default=None)
-
-
-class DevelopmentOrchestratorRequest(BaseModel):
-    message: Annotated[
-        str,
-        Field(
-            min_length=1,
-            description="User requirement, answer, or verification request.",
-        ),
-    ]
-    action: str = Field(
-        default="answer", description="start, answer, finalize, dispatch, or verify."
-    )
-    orchestrator_state: Optional[dict[str, Any]] = Field(default=None)
-    planner_state: Optional[dict[str, Any]] = Field(default=None)
-    application: Optional[dict[str, Any]] = Field(default=None)
-    workspace_root: Optional[str] = Field(default=None)
-
-
 class ApprovalActionRequest(BaseModel):
     scope: Literal["once", "operation"] = Field(default="once")
     reason: Optional[str] = Field(default=None)
@@ -118,9 +78,6 @@ async def health() -> dict[str, object]:
                 "available": antd_v4_docs.is_available(),
                 "docs_dir": str(antd_v4_docs.docs_root()),
             },
-            "requirement_intake": intake_capabilities(),
-            "requirement_planner": planner_capabilities(),
-            "development_orchestrator": orchestrator_capabilities(),
             "workflow_run": workflow_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
@@ -130,65 +87,40 @@ async def health() -> dict[str, object]:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
     try:
-        result = await agent.chat(
-            request.message,
-            session_id=request.session_id,
-            system_prompt=request.system_prompt,
-            workspace_root=request.workspace_root,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
+        result = await build_workflow_response(
+            graph=graph,
+            request=request.message,
+            workspace=request.workspace_root,
+            thread_id=request.session_id,
         )
     except Exception as exc:
         raise HTTPException(
-            status_code=502, detail=f"Model call failed: {exc}"
+            status_code=502, detail=f"Workflow run failed: {exc}"
         ) from exc
-    return ChatResponse(**result)
+    answer = str(result.get("summary", {}).get("message") or "")
+    session_id = str(result.get("threadId") or request.session_id or "")
+    return ChatResponse(
+        session_id=session_id,
+        model=settings.model_api_name,
+        answer=answer,
+        messages=[
+            {"role": "user", "content": request.message},
+            {"role": "assistant", "content": answer},
+        ],
+    )
 
 
 @app.post("/ag-ui")
 async def ag_ui(
-    run_input: RunAgentInput,
+    input_data: dict[str, Any] = Body(...),
     accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
+    """Compatibility alias while the frontend migrates to /workflow/run."""
     return StreamingResponse(
-        build_ag_ui_stream(run_input, agent, planner, orchestrator, accept=accept),
+        build_workflow_ag_ui_stream(graph=graph, payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-@app.post("/tools/requirement-planner")
-async def run_requirement_planner(request: RequirementPlannerRequest) -> dict[str, Any]:
-    try:
-        return await planner.run(
-            request.message,
-            planner_state=request.planner_state,
-            application=request.application,
-            action=request.action,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Requirement planner failed: {exc}"
-        ) from exc
-
-
-@app.post("/tools/development-orchestrator")
-async def run_development_orchestrator(
-    request: DevelopmentOrchestratorRequest,
-) -> dict[str, Any]:
-    try:
-        return await orchestrator.run(
-            request.message,
-            orchestrator_state=request.orchestrator_state,
-            planner_state=request.planner_state,
-            application=request.application,
-            workspace_root=request.workspace_root,
-            action=request.action,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Development orchestrator failed: {exc}"
-        ) from exc
 
 
 @app.get("/tools/workspace/capabilities")
