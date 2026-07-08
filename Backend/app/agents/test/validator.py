@@ -28,7 +28,7 @@ def _invoke_live_test_agent(
     build_results: list[dict[str, Any]],
 ) -> str:
     # Lazy import keeps Deep Agent construction at this live execution boundary.
-    from app_demo.agents import create_agent_bundle
+    from app.agents import create_agent_bundle
 
     result = create_agent_bundle().test.invoke(
         {
