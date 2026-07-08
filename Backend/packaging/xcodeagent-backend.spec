@@ -20,10 +20,11 @@ for package_name in ("ag_ui", "langchain_core", "langgraph"):
 
 for distribution_name in (
     "ag-ui-protocol",
-    "anthropic",
     "fastapi",
     "langchain-core",
     "langgraph",
+    "langchain-openai",
+    "openai",
     "pydantic",
     "uvicorn",
 ):
@@ -33,10 +34,11 @@ hiddenimports = []
 for package_name in (
     "app",
     "ag_ui",
-    "anthropic",
     "fastapi",
     "langchain_core",
+    "langchain_openai",
     "langgraph",
+    "openai",
     "pydantic",
     "starlette",
     "uvicorn",

@@ -43,7 +43,7 @@ def prepare_build_tasks_with_main_agent(project_plan: dict[str, Any]) -> dict[st
     build_task_plan["prepared_by"] = {
         "agent": "main-agent",
         "mode": "live",
-        "model": settings.anthropic_model,
+        "model": settings.model_name,
         "source": preparation_source,
     }
     build_task_plan["preparation_source"] = preparation_source

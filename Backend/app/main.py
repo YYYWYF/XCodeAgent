@@ -22,7 +22,7 @@ settings = Settings.from_env()
 
 app = FastAPI(
     title="Local LangGraph Agent",
-    description="A minimal local FastAPI backend powered by LangGraph and an Anthropic-compatible model.",
+    description="A minimal local FastAPI backend powered by LangGraph and an OpenAI-compatible model.",
     version="0.1.0",
 )
 
@@ -70,8 +70,8 @@ async def health() -> dict[str, object]:
         "status": "ok",
         "provider": settings.model_provider,
         "model": settings.model_api_name,
-        "configured_model": settings.anthropic_model,
-        "base_url": settings.anthropic_base_url,
+        "configured_model": settings.model_name,
+        "base_url": settings.model_base_url,
         "builtin_skills": ["react-antd-v4-codegen"],
         "tools": {
             "antd_v4_docs": {

@@ -44,7 +44,7 @@ def analyze_requirements_with_main_agent(request: str) -> dict[str, Any]:
     spec["analyzed_by"] = {
         "agent": "main-agent",
         "mode": "live",
-        "model": settings.anthropic_model,
+        "model": settings.model_name,
         "source": analysis_source,
     }
     spec["analysis_source"] = analysis_source

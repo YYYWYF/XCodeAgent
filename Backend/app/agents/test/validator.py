@@ -61,7 +61,7 @@ def summarize_tests_with_deep_agent(
         "reviewed_by": {
             "agent": "test-agent",
             "mode": "live",
-            "model": settings.anthropic_model,
+            "model": settings.model_name,
             "source": "test_deep_agent",
         },
     }

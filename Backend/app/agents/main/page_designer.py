@@ -60,7 +60,7 @@ def design_page_with_main_agent(
     detail_plan["designed_by"] = {
         "agent": "main-agent",
         "mode": "live",
-        "model": settings.anthropic_model,
+        "model": settings.model_name,
         "source": design_source,
     }
     detail_plan["design_source"] = design_source

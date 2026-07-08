@@ -23,11 +23,11 @@ _DISPLAY_MODEL_SUFFIX = re.compile(r"\s+\[[^\]]+\]\s*$")
 
 @dataclass(frozen=True)
 class Settings:
-    anthropic_base_url: str
-    anthropic_auth_token: str
-    anthropic_model: str
+    model_base_url: str
+    model_api_key: str
+    model_name: str
     model_provider: str = "openai"
-    anthropic_trust_env: bool = False
+    model_trust_env: bool = False
     default_system_prompt: str = (
         "You are a helpful local agent. Answer clearly and concisely."
     )
@@ -35,23 +35,27 @@ class Settings:
     default_max_tokens: int = 2048
 
     @property
-    def anthropic_api_model(self) -> str:
-        return _DISPLAY_MODEL_SUFFIX.sub("", self.anthropic_model).strip()
+    def model_api_name(self) -> str:
+        return _DISPLAY_MODEL_SUFFIX.sub("", self.model_name).strip()
 
     @property
-    def model_api_name(self) -> str:
-        return self.anthropic_api_model
+    def provider_api_name(self) -> str:
+        return "openai"
 
     @classmethod
     def from_env(cls) -> "Settings":
-        base_url = _required_any("MODEL_BASE_URL", "ANTHROPIC_BASE_URL")
+        base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL")
         model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
+        if model_provider == "openai-compatible":
+            model_provider = "openai"
+        if model_provider != "openai":
+            raise RuntimeError("Only OpenAI-compatible MODEL_PROVIDER=openai is supported.")
         return cls(
-            anthropic_base_url=base_url,
-            anthropic_auth_token=_required_any("MODEL_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
-            anthropic_model=_required_any("MODEL_NAME", "ANTHROPIC_MODEL"),
+            model_base_url=base_url,
+            model_api_key=_required_any("MODEL_API_KEY", "OPENAI_API_KEY"),
+            model_name=_required_any("MODEL_NAME", "OPENAI_MODEL"),
             model_provider=model_provider,
-            anthropic_trust_env=_env_bool("ANTHROPIC_TRUST_ENV", default=False),
+            model_trust_env=_env_bool("MODEL_TRUST_ENV", default=False),
             default_system_prompt=os.getenv(
                 "AGENT_SYSTEM_PROMPT",
                 "You are a helpful local agent. Answer clearly and concisely.",

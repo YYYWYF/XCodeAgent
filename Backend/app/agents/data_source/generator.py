@@ -85,7 +85,7 @@ def generate_data_sources_with_deep_agent(
             executed_by={
                 "agent": "data-source-generation-agent",
                 "mode": "live",
-                "model": settings.anthropic_model,
+                "model": settings.model_name,
                 "source": "data_source_deep_agent",
             },
         )

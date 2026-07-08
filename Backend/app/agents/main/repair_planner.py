@@ -71,5 +71,5 @@ def plan_repairs_with_main_agent(
         revision_requests=revision_requests,
         agent_note=agent_note,
     )
-    repair_task_plan["prepared_by"]["model"] = settings.anthropic_model
+    repair_task_plan["prepared_by"]["model"] = settings.model_name
     return repair_task_plan

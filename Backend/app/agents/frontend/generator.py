@@ -84,7 +84,7 @@ def generate_frontend_with_deep_agent(
             executed_by={
                 "agent": "frontend-generation-agent",
                 "mode": "live",
-                "model": settings.anthropic_model,
+                "model": settings.model_name,
                 "source": "frontend_deep_agent",
             },
         )

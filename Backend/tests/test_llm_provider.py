@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from app.config import Settings
-from app.services.llm_client import _anthropic_messages, _openai_messages, _openai_tool
+from app.services.llm_client import _openai_messages, _openai_tool
 
 
 class ModelProviderConversionTests(unittest.TestCase):
@@ -54,30 +54,6 @@ class ModelProviderConversionTests(unittest.TestCase):
             {"role": "tool", "tool_call_id": "call-1", "content": '{"ok":true}'},
         )
 
-    def test_anthropic_messages_convert_tool_calls_and_results(self) -> None:
-        messages = _anthropic_messages(
-            [
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {"id": "call-1", "name": "file_read", "input": {"path": "README.md"}}
-                    ],
-                },
-                {
-                    "role": "tool",
-                    "tool_call_id": "call-1",
-                    "content": '{"ok":true}',
-                    "is_error": False,
-                },
-            ]
-        )
-
-        self.assertEqual(messages[0]["content"][0]["type"], "tool_use")
-        self.assertEqual(messages[1]["role"], "user")
-        self.assertEqual(messages[1]["content"][0]["type"], "tool_result")
-        self.assertEqual(messages[1]["content"][0]["tool_use_id"], "call-1")
-
     def test_settings_default_to_openai_provider_when_not_configured(self) -> None:
         with patch.dict(
             os.environ,
@@ -91,6 +67,35 @@ class ModelProviderConversionTests(unittest.TestCase):
             settings = Settings.from_env()
 
         self.assertEqual(settings.model_provider, "openai")
+
+    def test_settings_normalize_openai_compatible_provider(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_PROVIDER": "openai-compatible",
+                "MODEL_BASE_URL": "https://example.com/v1",
+                "MODEL_API_KEY": "test-key",
+                "MODEL_NAME": "test-model",
+            },
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        self.assertEqual(settings.model_provider, "openai")
+
+    def test_settings_reject_non_openai_provider(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_PROVIDER": "other",
+                "MODEL_BASE_URL": "https://example.com/v1",
+                "MODEL_API_KEY": "test-key",
+                "MODEL_NAME": "test-model",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Only OpenAI-compatible"):
+                Settings.from_env()
 
 
 if __name__ == "__main__":

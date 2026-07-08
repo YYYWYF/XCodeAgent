@@ -1,6 +1,6 @@
 # Local LangGraph Agent
 
-一个最小可运行的 `Python + FastAPI + LangGraph` 本地后端。它会读取 `.env` 中的模型 Provider 配置，支持 Anthropic Messages API 和 OpenAI-compatible Chat Completions API，并通过 `/chat` 暴露一个本地调用接口。
+一个最小可运行的 `Python + FastAPI + LangGraph` 本地后端。它会读取 `.env` 中的模型 Provider 配置，使用 OpenAI-compatible Chat Completions API，并通过 `/chat` 暴露一个本地调用接口。
 
 当前后端还内置了：
 
@@ -144,16 +144,7 @@ curl -X POST http://127.0.0.1:8000/tools/terminal/exec \
 
 实际密钥放在本地 `.env`，并已被 `.gitignore` 忽略。提交或分享代码时使用 `.env.example` 作为模板。
 
-Anthropic-compatible 示例：
-
-```dotenv
-MODEL_PROVIDER=anthropic
-MODEL_BASE_URL=https://api.anthropic.com
-MODEL_API_KEY=replace-with-your-token
-MODEL_NAME=claude-sonnet-5
-```
-
-Moonshot/Kimi 等 OpenAI-compatible 服务示例：
+OpenAI-compatible 服务示例：
 
 ```dotenv
 MODEL_PROVIDER=openai
@@ -162,7 +153,7 @@ MODEL_API_KEY=replace-with-your-token
 MODEL_NAME=moonshot-v1-8k
 ```
 
-为兼容已有本地配置，未设置 `MODEL_*` 时仍会读取 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_MODEL`。当旧配置地址包含 `moonshot` 时，会自动选择 OpenAI-compatible Provider。
+也可以使用 `OPENAI_BASE_URL`、`OPENAI_API_KEY` 和 `OPENAI_MODEL` 作为 `MODEL_*` 的兼容别名。`MODEL_PROVIDER` 只支持 `openai` 或 `openai-compatible`，后者会被归一化为 `openai`。
 
 可选覆盖项：
 
@@ -170,6 +161,7 @@ MODEL_NAME=moonshot-v1-8k
 AGENT_SYSTEM_PROMPT="You are a helpful local agent."
 AGENT_TEMPERATURE=0.2
 AGENT_MAX_TOKENS=2048
+MODEL_TRUST_ENV=false
 ANTD_V4_DOCS_DIR=Backend/resources/docs/antd-v4
 XCODEAGENT_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
 ```

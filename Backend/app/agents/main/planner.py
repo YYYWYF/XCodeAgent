@@ -48,7 +48,7 @@ def plan_project_with_main_agent(requirement_spec: dict[str, Any]) -> dict[str, 
     plan["planned_by"] = {
         "agent": "main-agent",
         "mode": "live",
-        "model": settings.anthropic_model,
+        "model": settings.model_name,
         "source": planning_source,
     }
     return plan

@@ -5,7 +5,6 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Protocol
 
-from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from app.config import Settings
@@ -37,55 +36,12 @@ class ModelProvider(Protocol):
     ) -> ModelResponse: ...
 
 
-class AnthropicProvider:
-    def __init__(self, settings: Settings) -> None:
-        self.client = AsyncAnthropic(
-            api_key=settings.anthropic_auth_token,
-            base_url=settings.anthropic_base_url,
-            http_client=httpx.AsyncClient(trust_env=settings.anthropic_trust_env),
-        )
-
-    async def complete(
-        self,
-        *,
-        model: str,
-        messages: List[Dict[str, Any]],
-        system: str,
-        max_tokens: int,
-        temperature: float,
-        tools: List[Dict[str, Any]] | None = None,
-    ) -> ModelResponse:
-        response = await self.client.messages.create(
-            model=model,
-            messages=_anthropic_messages(messages),
-            system=system,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools or [],
-        )
-        text_parts: List[str] = []
-        tool_calls: List[ModelToolCall] = []
-        for block in response.content:
-            block_type = getattr(block, "type", None)
-            if block_type == "text":
-                text_parts.append(str(getattr(block, "text", "")))
-            elif block_type == "tool_use":
-                tool_calls.append(
-                    ModelToolCall(
-                        id=str(getattr(block, "id", "")),
-                        name=str(getattr(block, "name", "")),
-                        input=getattr(block, "input", {}) or {},
-                    )
-                )
-        return ModelResponse(text="\n".join(text_parts).strip(), tool_calls=tool_calls)
-
-
-class OpenAICompatibleProvider:
+class OpenAIProvider:
     def __init__(self, settings: Settings) -> None:
         self.client = AsyncOpenAI(
-            api_key=settings.anthropic_auth_token,
-            base_url=settings.anthropic_base_url,
-            http_client=httpx.AsyncClient(trust_env=settings.anthropic_trust_env),
+            api_key=settings.model_api_key,
+            base_url=settings.model_base_url,
+            http_client=httpx.AsyncClient(trust_env=settings.model_trust_env),
         )
 
     async def complete(
@@ -124,10 +80,8 @@ class OpenAICompatibleProvider:
 
 
 def create_model_provider(settings: Settings) -> ModelProvider:
-    if settings.model_provider in {"openai", "openai-compatible"}:
-        return OpenAICompatibleProvider(settings)
-    if settings.model_provider == "anthropic":
-        return AnthropicProvider(settings)
+    if settings.model_provider == "openai":
+        return OpenAIProvider(settings)
     raise ValueError(f"Unsupported MODEL_PROVIDER: {settings.model_provider}")
 
 
@@ -179,46 +133,6 @@ def _openai_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             )
         else:
             output.append({"role": role, "content": message.get("content") or ""})
-    return output
-
-
-def _anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    output: List[Dict[str, Any]] = []
-    pending_tool_results: List[Dict[str, Any]] = []
-    for message in messages:
-        if message.get("role") == "tool":
-            pending_tool_results.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": message.get("tool_call_id"),
-                    "content": message.get("content") or "",
-                    "is_error": bool(message.get("is_error")),
-                }
-            )
-            continue
-        if pending_tool_results:
-            output.append({"role": "user", "content": pending_tool_results})
-            pending_tool_results = []
-        if message.get("role") == "assistant" and message.get("tool_calls"):
-            content: List[Dict[str, Any]] = []
-            if message.get("content"):
-                content.append({"type": "text", "text": message["content"]})
-            content.extend(
-                {
-                    "type": "tool_use",
-                    "id": tool_call["id"],
-                    "name": tool_call["name"],
-                    "input": tool_call.get("input") or {},
-                }
-                for tool_call in message["tool_calls"]
-            )
-            output.append({"role": "assistant", "content": content})
-        else:
-            output.append(
-                {"role": message.get("role"), "content": message.get("content") or ""}
-            )
-    if pending_tool_results:
-        output.append({"role": "user", "content": pending_tool_results})
     return output
 
 
