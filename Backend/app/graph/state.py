@@ -5,6 +5,8 @@ from typing import Annotated, Any, TypedDict
 class ProjectState(TypedDict, total=False):
     request: str
     project_id: str
+    workspace: str
+    workspace_path: str
     phase: str
     request_complexity: str
     complexity_reason: str
