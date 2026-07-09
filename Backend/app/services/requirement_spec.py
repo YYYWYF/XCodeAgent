@@ -8,6 +8,64 @@ def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
+def consolidated_requirement_text(request: str) -> str:
+    """Collapse original request plus confirmation answers into one readable summary."""
+
+    text = request.strip()
+    if not text:
+        return ""
+
+    original = _section_after(text, "原始需求：", ("用户补充确认：",))
+    answers = _section_after(text, "用户补充确认：", ())
+    if not original and not answers:
+        return _compact_lines(text)
+
+    parts = [_compact_lines(original)]
+    answer_facts = _answer_facts(answers)
+    if answer_facts:
+        parts.append("补充确认：" + "；".join(answer_facts))
+    return "；".join(part for part in parts if part).strip("；")
+
+
+def _section_after(text: str, marker: str, stop_markers: tuple[str, ...]) -> str:
+    if marker not in text:
+        return ""
+    section = text.split(marker, 1)[1]
+    for stop_marker in stop_markers:
+        if stop_marker in section:
+            section = section.split(stop_marker, 1)[0]
+    return section.strip()
+
+
+def _compact_lines(value: str) -> str:
+    return "；".join(
+        line.strip().strip("-").strip()
+        for line in value.splitlines()
+        if line.strip()
+        and not line.strip().startswith("请基于")
+        and line.strip() not in {"原始需求：", "用户补充确认："}
+    )
+
+
+def _answer_facts(value: str) -> list[str]:
+    facts = []
+    current_question = ""
+    for raw_line in value.splitlines():
+        line = raw_line.strip().strip("-").strip()
+        if not line:
+            continue
+        if "回答：" in line:
+            answer = line.split("回答：", 1)[1].strip()
+            if answer:
+                facts.append(
+                    f"{current_question}为{answer}" if current_question else answer
+                )
+            current_question = ""
+            continue
+        current_question = line.split("：", 1)[0].strip() if "：" in line else line
+    return facts
+
+
 def _app_name(request: str) -> str:
     if "订单" in request:
         return "订单管理应用"
@@ -211,8 +269,10 @@ def create_requirement_spec(
     request: str,
     agent_note: str = "live main-agent requirements analysis",
 ) -> dict[str, Any]:
-    modules = _feature_modules(request)
-    app_name = _app_name(request)
+    requirement_summary = consolidated_requirement_text(request)
+    source_text = requirement_summary or request
+    modules = _feature_modules(source_text)
+    app_name = _app_name(source_text)
     roles = [
         {
             "id": "admin",
@@ -230,11 +290,11 @@ def create_requirement_spec(
         "version": "0.1.0",
         "status": "draft",
         "generated_at": datetime.now(UTC).isoformat(),
-        "summary": request,
-        "source_request": request,
+        "summary": source_text,
+        "source_request": source_text,
         "app_info": {
             "name": app_name,
-            "summary": request,
+            "summary": source_text,
             "target": "生成一个可在本地运行的前后端应用工程。",
         },
         "user_roles": roles,

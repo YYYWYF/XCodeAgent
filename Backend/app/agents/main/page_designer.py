@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from app.config import Settings
+from app.agents.model_factory import create_chat_model
 from app.services.page_detail_plan import create_page_detail_plan
 
 
@@ -31,21 +33,24 @@ def _invoke_live_main_agent(
     *,
     workspace: str | None = None,
 ) -> str:
-    # Lazy imports keep Deep Agent construction at this live execution boundary.
-    from app.agents import create_agent_bundle
-    from app.graph.nodes.common import last_agent_text
-
-    result = create_agent_bundle(workspace).main.invoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": _page_design_prompt(project_plan, confirmed_page_spec),
-                }
-            ]
-        }
+    settings = Settings.from_env()
+    result = create_chat_model(settings).invoke(
+        _page_design_prompt(project_plan, confirmed_page_spec)
     )
-    return last_agent_text(result)
+    content = getattr(result, "content", result)
+    if isinstance(content, list):
+        return "\n".join(
+            str(item.get("text", item)) if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    return str(content)
+
+
+def _fallback_agent_note(error: Exception) -> str:
+    return (
+        "Main Agent 页面详细设计调用失败，已降级使用 ProjectPlan 与用户确认的 "
+        f"PageSpec 生成确定性页面详细计划。错误：{type(error).__name__}: {error}"
+    )
 
 
 def design_page_with_main_agent(
@@ -57,12 +62,22 @@ def design_page_with_main_agent(
     """Use the live Main Agent boundary to create a page detail plan."""
 
     settings = Settings.from_env()
-    agent_note = _invoke_live_main_agent(
-        project_plan,
-        confirmed_page_spec,
-        workspace=workspace,
-    )
     design_source = "main_agent_live"
+    fallback_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            agent_note = _invoke_live_main_agent(
+                project_plan,
+                confirmed_page_spec,
+            )
+            break
+        except Exception as exc:
+            fallback_error = exc
+            if attempt == 0:
+                time.sleep(0.8)
+                continue
+            agent_note = _fallback_agent_note(exc)
+            design_source = "deterministic_fallback_after_main_agent_error"
 
     detail_plan = create_page_detail_plan(
         project_plan,
@@ -76,4 +91,9 @@ def design_page_with_main_agent(
         "source": design_source,
     }
     detail_plan["design_source"] = design_source
+    if fallback_error is not None and design_source != "main_agent_live":
+        detail_plan["design_error"] = {
+            "type": type(fallback_error).__name__,
+            "message": str(fallback_error),
+        }
     return detail_plan

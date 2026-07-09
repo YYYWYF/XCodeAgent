@@ -3,7 +3,12 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import type { ToolCallRecord } from '../../../service/agUiAgent'
 import { createChatSessionId, type ChatSessionMessage } from '../../../service/chatSessions'
-import type { ApplicationConfig, EditorMode, WorkflowRunPayload } from '../../../typings'
+import type {
+  ApplicationConfig,
+  EditorMode,
+  WorkflowDebugOptions,
+  WorkflowRunPayload
+} from '../../../typings'
 import {
   buildClarificationContinuationMessage,
   workflowOriginalRequest,
@@ -31,7 +36,7 @@ type UseWorkflowConversationParams = {
 
 type UseWorkflowConversationResult = {
   error?: string
-  handleSend: () => Promise<void>
+  handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleStopGenerating: () => void
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -61,15 +66,20 @@ export function useWorkflowConversation({
   const stopping = Boolean(stoppingModes[editorMode])
   const error = errors[editorMode]
 
-  const handleSend = async (): Promise<void> => {
-    const message = draft.trim()
+  const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
+    const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading) return
-    await sendWorkflowMessage(message, { clearDraft: true, titleFrom: message })
+    await sendWorkflowMessage(message, { clearDraft: true, titleFrom: message, workflowDebug })
   }
 
   const sendWorkflowMessage = async (
     message: string,
-    options?: { clearDraft?: boolean; resumeState?: WorkflowRunPayload; titleFrom?: string }
+    options?: {
+      clearDraft?: boolean
+      resumeState?: WorkflowRunPayload
+      titleFrom?: string
+      workflowDebug?: WorkflowDebugOptions
+    }
   ): Promise<void> => {
     const trimmedMessage = message.trim()
     if (!trimmedMessage || loading) return
@@ -159,6 +169,7 @@ export function useWorkflowConversation({
       } = await agUiSession.sendMessage(trimmedMessage, {
         workspaceRoot: application.workspaceRoot,
         application,
+        workflowDebug: options?.workflowDebug,
         resumeState: options?.resumeState,
         onContent: (content) => {
           streamedContent = content
@@ -248,4 +259,9 @@ export function useWorkflowConversation({
     loading,
     stopping
   }
+}
+
+function workflowDebugMessage(workflowDebug?: WorkflowDebugOptions): string {
+  if (!workflowDebug?.enabled || !workflowDebug.resumeFrom) return ''
+  return `从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`
 }

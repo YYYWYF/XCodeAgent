@@ -53,7 +53,7 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 
 - 名称：{spec['app_info']['name']}
 - 目标：{spec['app_info']['target']}
-- 原始需求：{spec['source_request']}
+- 确认需求摘要：{spec['source_request']}
 - 状态：{spec['status']}
 - 版本：{spec['version']}
 

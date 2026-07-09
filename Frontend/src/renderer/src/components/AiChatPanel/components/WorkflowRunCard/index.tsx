@@ -4,6 +4,7 @@ import { useState } from "react";
 import type {
   WorkflowClarification,
   WorkflowClarificationQuestion,
+  WorkflowClarificationSelectionGroup,
   WorkflowRunPayload,
 } from "../../../../typings";
 import { cx } from "../../../../utils";
@@ -82,6 +83,7 @@ export default function WorkflowRunCard({
               {clarificationQuestions.length}
             </Tag>
           </div>
+          <ClarificationContext clarification={clarification} />
           {clarificationQuestions.map((question, index) => (
             <div
               className={cx("workflow-clarification-question")}
@@ -127,6 +129,114 @@ export default function WorkflowRunCard({
               <Text>{event.message || event.status || event.type}</Text>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClarificationContext({
+  clarification,
+}: {
+  clarification?: WorkflowClarification;
+}): ReactElement | null {
+  const groups = (clarification?.selection_groups || []).filter(
+    (group) => Array.isArray(group.items) && group.items.length > 0,
+  );
+  const context = clarification?.context;
+  if (groups.length === 0 && !context) return null;
+
+  return (
+    <div className={cx("workflow-clarification-context")}>
+      {groups.map((group, index) => (
+        <SelectionGroup group={group} key={`${group.type || group.title}-${index}`} />
+      ))}
+      {context && <PageSpecContext context={context} />}
+    </div>
+  );
+}
+
+function SelectionGroup({
+  group,
+}: {
+  group: WorkflowClarificationSelectionGroup;
+}): ReactElement {
+  return (
+    <div className={cx("workflow-selection-group")}>
+      <Text strong>{group.title || group.type || "候选项"}</Text>
+      <ul className={cx("workflow-selection-list")}>
+        {(group.items || []).map((item) => (
+          <li className={cx("workflow-selection-item")} key={item.id || item.label}>
+            <Text>{item.label || item.name || item.id}</Text>
+            <ul className={cx("workflow-selection-item-meta")}>
+              {item.id && (
+                <li>
+                  <Text type="secondary">id: </Text>
+                  <Text code>{item.id}</Text>
+                </li>
+              )}
+              {item.description && (
+                <li>
+                  <Text type="secondary">{item.description}</Text>
+                </li>
+              )}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function PageSpecContext({
+  context,
+}: {
+  context: Record<string, unknown>;
+}): ReactElement {
+  const page = objectValue(context.page);
+  const layout = objectValue(context.layout);
+  const interactions = stringList(context.interactions);
+  const dataSources = objectList(context.data_sources);
+  const permissions = stringList(context.permissions);
+
+  return (
+    <div className={cx("workflow-page-context")}>
+      {Object.keys(page).length > 0 && (
+        <div className={cx("workflow-page-context-row")}>
+          <Text strong>{stringValue(page.name) || "页面"}</Text>
+          <Text type="secondary">
+            {stringValue(page.path)}
+            {stringValue(page.goal) ? `：${stringValue(page.goal)}` : ""}
+          </Text>
+        </div>
+      )}
+      {stringList(layout.structure).length > 0 && (
+        <div className={cx("workflow-page-context-row")}>
+          <Text type="secondary">布局</Text>
+          <Text>{stringList(layout.structure).join("、")}</Text>
+        </div>
+      )}
+      {interactions.length > 0 && (
+        <div className={cx("workflow-page-context-row")}>
+          <Text type="secondary">交互</Text>
+          <Text>{interactions.join("、")}</Text>
+        </div>
+      )}
+      {dataSources.length > 0 && (
+        <div className={cx("workflow-page-context-row")}>
+          <Text type="secondary">数据源</Text>
+          <Text>
+            {dataSources
+              .map((source) => stringValue(source.name) || stringValue(source.id))
+              .filter(Boolean)
+              .join("、")}
+          </Text>
+        </div>
+      )}
+      {permissions.length > 0 && (
+        <div className={cx("workflow-page-context-row")}>
+          <Text type="secondary">权限</Text>
+          <Text>{permissions.join("、")}</Text>
         </div>
       )}
     </div>
@@ -214,6 +324,26 @@ function clarificationAnswerComplete(
 ): boolean {
   if (Array.isArray(value)) return value.length > 0;
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function objectList(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    : [];
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map(String).filter((item) => item.trim())
+    : [];
 }
 
 export function workflowOriginalRequest(workflow: WorkflowRunPayload): string {

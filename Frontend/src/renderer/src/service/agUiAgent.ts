@@ -3,6 +3,7 @@ import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import type {
   ApplicationConfig,
+  WorkflowDebugOptions,
   WorkflowEvent,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
@@ -11,6 +12,7 @@ import type {
 type SendWorkflowMessageOptions = {
   workspaceRoot?: string
   application?: ApplicationConfig
+  workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   onContent?: (content: string) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
@@ -117,6 +119,8 @@ export class AgUiChatSession {
         forwardedProps: {
           workspaceRoot: options.workspaceRoot,
           application: options.application,
+          workflowDebug: options.workflowDebug,
+          resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
           resumeState: options.resumeState
         }
       },

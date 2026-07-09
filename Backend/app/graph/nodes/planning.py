@@ -22,7 +22,9 @@ from app.workspace.plan_documents import (
 
 
 def project_planning(state: ProjectState) -> dict:
-    if state.get("project_plan") and _user_confirmed_project_plan(state.get("request", "")):
+    if state.get("project_plan") and _user_confirmed_project_plan(
+        state.get("request", "")
+    ):
         project_plan = {
             **state["project_plan"],
             "confirmation_status": "confirmed",
@@ -33,7 +35,7 @@ def project_planning(state: ProjectState) -> dict:
             "status": "completed",
             "project_plan": project_plan,
             "project_plan_path": project_plan_path,
-            "project_plan_json_path": str(project_plan_json_path(state)),
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
             "clarification": _project_plan_confirmed_payload(project_plan),
             "timeline": ["project_planning"],
         }
@@ -53,7 +55,7 @@ def project_planning(state: ProjectState) -> dict:
             workspace=workspace,
         ),
     )
-    project_plan = captured.value
+    project_plan = plan_project_with_main_agent(requirement_spec)
     project_plan["confirmation_status"] = "pending_user_confirmation"
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = _project_plan_confirmation_payload(project_plan)
@@ -64,7 +66,7 @@ def project_planning(state: ProjectState) -> dict:
         "status": "requires_user_input",
         "project_plan": project_plan,
         "project_plan_path": project_plan_path,
-        "project_plan_json_path": str(project_plan_json_path(state)),
+        "project_plan_json_path": _project_plan_json_path_for_state(state),
         "clarification": clarification,
         "timeline": ["project_planning"],
     }
@@ -84,7 +86,7 @@ def detail_confirmation(state: ProjectState) -> dict:
             "status": "completed",
             "project_plan": project_plan,
             "project_plan_path": project_plan_path,
-            "project_plan_json_path": str(project_plan_json_path(state)),
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
             "clarification": _project_plan_confirmed_payload(project_plan),
             "detail_selection": state.get("detail_selection"),
             "selected_page_id": state.get("selected_page_id"),
@@ -123,14 +125,29 @@ def detail_confirmation(state: ProjectState) -> dict:
     )
 
     if target is None:
-        clarification = _detail_target_selection(project_plan)
+        targets = _remaining_detail_targets(project_plan)
+        if not targets:
+            return {
+                "phase": "detail_confirmation",
+                "status": "completed",
+                "project_plan": project_plan,
+                "project_plan_path": state.get("project_plan_path"),
+                "project_plan_json_path": state.get("project_plan_json_path"),
+                "clarification": _project_plan_confirmed_payload(project_plan),
+                "detail_selection": {
+                    "status": "completed",
+                    "targets": [],
+                },
+                "timeline": ["detail_confirmation"],
+            }
+        clarification = _detail_target_selection(project_plan, targets)
         return {
             "phase": "detail_confirmation",
             "status": "requires_user_input",
             "clarification": clarification,
             "detail_selection": {
                 "status": "requires_user_input",
-                "targets": detail_design_targets(project_plan),
+                "targets": targets,
             },
             "project_plan": project_plan,
             "project_plan_path": state.get("project_plan_path"),
@@ -144,34 +161,56 @@ def detail_confirmation(state: ProjectState) -> dict:
             target["id"],
             user_request=state.get("request", ""),
         )
-        pending_project_plan = attach_data_source_detail_plan(
+        updated_project_plan = attach_data_source_detail_plan(
             project_plan,
             data_source_detail_plan,
         )
-        pending_project_plan["confirmation_status"] = "pending_user_confirmation"
-        project_plan_path = write_project_plan_document(state, pending_project_plan)
-        clarification = _project_plan_adjustment_confirmation_payload(
-            pending_project_plan
-        )
+        updated_project_plan["confirmation_status"] = "confirmed"
+        project_plan_path = write_project_plan_document(state, updated_project_plan)
+        next_targets = _remaining_detail_targets(updated_project_plan)
+        if not next_targets:
+            return {
+                "phase": "detail_confirmation",
+                "status": "completed",
+                "clarification": _project_plan_confirmed_payload(updated_project_plan),
+                "detail_selection": {
+                    "status": "completed",
+                    "targets": [],
+                },
+                "selected_page_id": "",
+                "selected_data_source_id": "",
+                "page_spec_draft": {},
+                "confirmed_page_spec": {},
+                "project_plan": updated_project_plan,
+                "project_plan_path": project_plan_path,
+                "project_plan_json_path": _project_plan_json_path_for_state(state),
+                "detail_plans": [data_source_detail_plan],
+                "timeline": ["detail_confirmation"],
+            }
+        clarification = _detail_target_selection(updated_project_plan, next_targets)
         return {
             "phase": "detail_confirmation",
             "status": "requires_user_input",
             "clarification": clarification,
             "detail_selection": {
-                "status": "selected",
-                "selected_target": target,
+                "status": "requires_user_input",
+                "targets": next_targets,
+                "previous_target": target,
             },
-            "selected_data_source_id": target["id"],
+            "selected_page_id": "",
+            "selected_data_source_id": "",
+            "page_spec_draft": {},
+            "confirmed_page_spec": {},
             "data_source_spec_confirmation": {
                 "status": "confirmed",
                 "confirmed_data_source_spec": data_source_detail_plan,
                 "source": "project_plan_with_user_confirmation",
             },
             "detail_plans": [data_source_detail_plan],
-            "project_plan": project_plan,
-            "pending_project_plan": pending_project_plan,
+            "project_plan": updated_project_plan,
+            "pending_project_plan": {},
             "project_plan_path": project_plan_path,
-            "project_plan_json_path": str(project_plan_json_path(state)),
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
             "timeline": ["detail_confirmation"],
         }
 
@@ -182,8 +221,28 @@ def detail_confirmation(state: ProjectState) -> dict:
         user_request=state.get("request", ""),
         existing_spec=state.get("page_spec_draft"),
     )
+    if not state.get("page_spec_draft") and not state.get("confirmed_page_spec"):
+        clarification = _page_spec_initial_clarification(page_spec, project_plan)
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "clarification": clarification,
+            "detail_selection": {
+                "status": "selected",
+                "selected_target": target,
+            },
+            "selected_page_id": selected_page_id,
+            "page_spec_draft": page_spec,
+            "project_plan": project_plan,
+            "project_plan_path": state.get("project_plan_path"),
+            "project_plan_json_path": state.get("project_plan_json_path"),
+            "timeline": ["detail_confirmation"],
+        }
     page_spec = apply_page_spec_answers(page_spec, state.get("request", ""))
-    missing_aspects = missing_page_spec_aspects(page_spec)
+    page_spec = _complete_page_spec_defaults(page_spec, project_plan, selected_page_id)
+    missing_aspects = (
+        [] if state.get("page_spec_draft") else missing_page_spec_aspects(page_spec)
+    )
     if missing_aspects:
         clarification = _page_spec_clarification(page_spec, missing_aspects)
         return {
@@ -203,6 +262,10 @@ def detail_confirmation(state: ProjectState) -> dict:
         }
 
     confirmed_page_spec = page_spec
+    page_detail_plan = design_page_with_main_agent(
+        project_plan,
+        confirmed_page_spec,
+    )
     workspace = workspace_from_state(state)
     captured = capture_agent_file_changes(
         workspace=workspace,
@@ -213,11 +276,37 @@ def detail_confirmation(state: ProjectState) -> dict:
             workspace=workspace,
         ),
     )
-    page_detail_plan = captured.value
-    pending_project_plan = attach_page_detail_plan(project_plan, page_detail_plan)
-    pending_project_plan["confirmation_status"] = "pending_user_confirmation"
-    project_plan_path = write_project_plan_document(state, pending_project_plan)
-    clarification = _project_plan_adjustment_confirmation_payload(pending_project_plan)
+    updated_project_plan = attach_page_detail_plan(project_plan, page_detail_plan)
+    updated_project_plan["confirmation_status"] = "confirmed"
+    project_plan_path = write_project_plan_document(state, updated_project_plan)
+    next_targets = _remaining_detail_targets(updated_project_plan)
+    if not next_targets:
+        return {
+            **code_change_state_update(captured.code_change_set),
+            "phase": "detail_confirmation",
+            "status": "completed",
+            "clarification": _project_plan_confirmed_payload(updated_project_plan),
+            "detail_selection": {
+                "status": "completed",
+                "targets": [],
+            },
+            "page_spec_confirmation": {
+                "status": "confirmed",
+                "confirmed_page_spec": confirmed_page_spec,
+                "source": "project_plan_with_user_confirmation",
+            },
+            "selected_page_id": "",
+            "selected_data_source_id": "",
+            "page_spec_draft": {},
+            "confirmed_page_spec": {},
+            "detail_plans": [page_detail_plan],
+            "project_plan": updated_project_plan,
+            "pending_project_plan": {},
+            "project_plan_path": project_plan_path,
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
+            "timeline": ["detail_confirmation"],
+        }
+    clarification = _detail_target_selection(updated_project_plan, next_targets)
 
     return {
         **code_change_state_update(captured.code_change_set),
@@ -225,27 +314,35 @@ def detail_confirmation(state: ProjectState) -> dict:
         "status": "requires_user_input",
         "clarification": clarification,
         "detail_selection": {
-            "status": "selected",
-            "selected_target": target,
+            "status": "requires_user_input",
+            "targets": next_targets,
+            "previous_target": target,
         },
         "page_spec_confirmation": {
             "status": "confirmed",
             "confirmed_page_spec": confirmed_page_spec,
             "source": "project_plan_with_user_confirmation",
         },
-        "selected_page_id": selected_page_id,
-        "confirmed_page_spec": confirmed_page_spec,
+        "selected_page_id": "",
+        "selected_data_source_id": "",
+        "page_spec_draft": {},
+        "confirmed_page_spec": {},
         "detail_plans": [page_detail_plan],
-        "project_plan": project_plan,
-        "pending_project_plan": pending_project_plan,
+        "project_plan": updated_project_plan,
+        "pending_project_plan": {},
         "project_plan_path": project_plan_path,
-        "project_plan_json_path": str(project_plan_json_path(state)),
+        "project_plan_json_path": _project_plan_json_path_for_state(state),
         "timeline": ["detail_confirmation"],
     }
 
 
-def _detail_target_selection(project_plan: dict) -> dict:
-    targets = detail_design_targets(project_plan)
+def _detail_target_selection(
+    project_plan: dict, targets: list[dict] | None = None
+) -> dict:
+    targets = (
+        targets if targets is not None else _remaining_detail_targets(project_plan)
+    )
+    target_groups = _detail_target_groups(targets)
     if 2 <= len(targets) <= 4:
         question = AskUserQuestion(
             header="设计对象",
@@ -260,20 +357,172 @@ def _detail_target_selection(project_plan: dict) -> dict:
             ],
         )
     else:
-        target_lines = "\n".join(
-            f"- {target['label']}（id: {target['id']}）：{target['description']}"
-            for target in targets
-        )
         question = AskUserQuestion(
             header="设计对象",
             question=(
-                "请输入要进行详细设计的页面或数据源名称/id。\n"
-                f"{target_lines}"
+                "请输入要进行详细设计的页面或数据源名称/id。"
+                "候选项已按页面和数据源分组展示。"
             ),
             type="text",
             placeholder="例如：页面：库存管理列表页 或 inventory_management_list_page",
         )
-    return build_ask_user_payload([question])
+    payload = build_ask_user_payload([question])
+    payload["mode"] = "detail_target_selection"
+    payload["message"] = "请选择接下来要进行详细设计的页面或数据源。"
+    payload["selection_groups"] = target_groups
+    return payload
+
+
+def _remaining_detail_targets(project_plan: dict) -> list[dict]:
+    confirmed_pages = {
+        item.get("page_id")
+        for item in project_plan.get("page_detail_plans", [])
+        if isinstance(item, dict) and item.get("page_id")
+    }
+    confirmed_data_sources = {
+        item.get("data_source_id")
+        for item in project_plan.get("data_source_detail_plans", [])
+        if isinstance(item, dict) and item.get("data_source_id")
+    }
+    remaining = []
+    for target in detail_design_targets(project_plan):
+        if target.get("type") == "page" and target.get("id") in confirmed_pages:
+            continue
+        if (
+            target.get("type") == "data_source"
+            and target.get("id") in confirmed_data_sources
+        ):
+            continue
+        remaining.append(target)
+    return remaining
+
+
+def _project_plan_json_path_for_state(state: ProjectState) -> str:
+    return str(state.get("project_plan_json_path") or project_plan_json_path(state))
+
+
+def _detail_target_groups(targets: list[dict]) -> list[dict]:
+    groups = [
+        {
+            "type": "page",
+            "title": "页面",
+            "items": [],
+        },
+        {
+            "type": "data_source",
+            "title": "数据源",
+            "items": [],
+        },
+    ]
+    by_type = {group["type"]: group for group in groups}
+    for target in targets:
+        group = by_type.get(target.get("type"))
+        if not group:
+            continue
+        group["items"].append(
+            {
+                "id": target.get("id"),
+                "label": target.get("label"),
+                "name": target.get("name"),
+                "description": target.get("description"),
+            }
+        )
+    return [group for group in groups if group["items"]]
+
+
+def _complete_page_spec_defaults(
+    page_spec: dict,
+    project_plan: dict,
+    selected_page_id: str,
+) -> dict:
+    page = next(
+        (
+            item
+            for item in project_plan.get("frontend_pages", [])
+            if item.get("id") == selected_page_id
+        ),
+        {},
+    )
+    completed = {
+        **page_spec,
+        "page_goal": page_spec.get("page_goal")
+        or page.get("description")
+        or f"完成 {page_spec.get('page_name', selected_page_id)} 的核心业务展示与操作。",
+        "interactions": page_spec.get("interactions")
+        or page.get("interactions")
+        or [
+            "进入页面后加载数据",
+            "支持查看主要业务内容",
+            "展示 loading、empty、error、ready 状态",
+        ],
+        "data_source_ids": page_spec.get("data_source_ids")
+        or page.get("data_dependencies")
+        or [],
+        "permissions": page_spec.get("permissions")
+        or page.get("permissions")
+        or ["admin", "user"],
+    }
+    completed["layout"] = {
+        "structure": ["页面标题区", "筛选/操作区", "主要内容区", "状态反馈区"],
+        "responsive": "优先桌面端工作台布局，保持内容可扫描、操作可达。",
+        **completed.get("layout", {}),
+    }
+    if not completed["layout"].get("structure"):
+        completed["layout"]["structure"] = ["页面标题区", "主要内容区", "状态反馈区"]
+    return completed
+
+
+def _page_spec_initial_clarification(page_spec: dict, project_plan: dict) -> dict:
+    data_sources = [
+        source
+        for source in project_plan.get("data_sources", [])
+        if source.get("id") in page_spec.get("data_source_ids", [])
+    ]
+    payload = build_ask_user_payload(
+        [
+            AskUserQuestion(
+                header="页面目标",
+                question=f"请确认或补充 {page_spec.get('page_name')} 的页面目标。",
+                type="text",
+                placeholder=page_spec.get("page_goal")
+                or "例如：帮助用户快速查看状态并处理核心操作。",
+            ),
+            AskUserQuestion(
+                header="页面布局",
+                question="请确认页面布局应包含哪些区域。",
+                type="text",
+                placeholder="例如：顶部筛选区、表格列表、详情抽屉、批量操作栏。",
+            ),
+            AskUserQuestion(
+                header="页面交互",
+                question="请确认这个页面需要支持哪些关键交互。",
+                type="text",
+                placeholder="例如：搜索、筛选、查看详情、新增、编辑、导出。",
+            ),
+            AskUserQuestion(
+                header="数据来源与权限",
+                question="请确认页面依赖的数据源和访问角色是否正确，或直接写出调整。",
+                type="text",
+                placeholder="例如：数据源保持不变；仅 admin 和 warehouse_manager 可操作。",
+            ),
+        ]
+    )
+    payload["mode"] = "page_spec_confirmation"
+    payload["message"] = f"请先确认 {page_spec.get('page_name')} 的页面设计细节。"
+    payload["page_spec_draft"] = page_spec
+    payload["context"] = {
+        "page": {
+            "id": page_spec.get("page_id"),
+            "name": page_spec.get("page_name"),
+            "path": page_spec.get("path"),
+            "goal": page_spec.get("page_goal"),
+        },
+        "layout": page_spec.get("layout", {}),
+        "interactions": page_spec.get("interactions", []),
+        "data_sources": data_sources,
+        "permissions": page_spec.get("permissions", []),
+    }
+    return payload
 
 
 def _page_spec_clarification(

@@ -79,7 +79,8 @@ def workflow_capabilities() -> dict[str, Any]:
             "originalRequest": "Optional original request used when submitting clarification answers.",
             "clarificationAnswers": "Optional structured user answers that are merged with originalRequest before rerunning workflow.",
             "resumeState": "Optional previous workflow payload/state used by the backend to infer which waiting phase to resume.",
-            "resumeFrom": "Optional backend/debug override for the workflow phase to resume from. Currently supports requirements, project_planning, detail_confirmation, and prepare_build_tasks.",
+            "resumeFrom": "Optional backend/debug override for the workflow phase to resume from.",
+            "forwardedProps.workflowDebug": "Optional debug resume settings with resumeFrom, requirementSpecPath, projectPlanPath, and buildTaskPlanPath.",
         },
         "output": {
             "summary": "Human-readable and machine-readable workflow result summary.",
@@ -641,6 +642,16 @@ def _workflow_start_node(resume_from: str | None) -> str:
         return "detail_confirmation"
     if resume_from == "prepare_build_tasks":
         return "prepare_build_tasks"
+    if resume_from == "build":
+        return "build"
+    if resume_from == "integration_test":
+        return "integration_test"
+    if resume_from == "launch_project":
+        return "launch_project"
+    if resume_from == "acceptance":
+        return "acceptance"
+    if resume_from == "finalize_project":
+        return "finalize_project"
     return "classify_request_complexity"
 
 

@@ -193,10 +193,13 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 
 def write_project_plan_document(state: dict[str, Any], plan: dict[str, Any]) -> str:
-    plans_dir = workspace_root(state) / "plans"
-    plans_dir.mkdir(parents=True, exist_ok=True)
-
-    path = plans_dir / "project-plan.md"
+    existing_path = state.get("project_plan_path")
+    path = (
+        Path(existing_path)
+        if existing_path and str(existing_path).endswith(".md")
+        else workspace_root(state) / "plans" / "project-plan.md"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_project_plan_markdown(plan), encoding="utf-8")
     write_project_plan_json(state, plan)
     return str(path)
@@ -207,7 +210,8 @@ def project_plan_json_path(state: dict[str, Any]) -> Path:
 
 
 def write_project_plan_json(state: dict[str, Any], plan: dict[str, Any]) -> str:
-    path = project_plan_json_path(state)
+    existing_path = state.get("project_plan_json_path")
+    path = Path(existing_path) if existing_path else project_plan_json_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(plan, ensure_ascii=False, indent=2),

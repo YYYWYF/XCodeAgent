@@ -39,6 +39,17 @@ export type WorkflowClarificationQuestion = {
   }>
 }
 
+export type WorkflowClarificationSelectionGroup = {
+  type?: string
+  title?: string
+  items?: Array<{
+    id?: string
+    label?: string
+    name?: string
+    description?: string
+  }>
+}
+
 export type WorkflowClarification = {
   mode?: string
   status?: string
@@ -47,6 +58,8 @@ export type WorkflowClarification = {
   questions?: WorkflowClarificationQuestion[]
   assumptions?: string[]
   all_unresolved_dimensions?: string[]
+  selection_groups?: WorkflowClarificationSelectionGroup[]
+  context?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -58,4 +71,12 @@ export type WorkflowRunPayload = {
   codeChanges?: WorkspaceCodeChangeSet
   state?: Record<string, unknown>
   result?: Record<string, unknown>
+}
+
+export type WorkflowDebugOptions = {
+  enabled: boolean
+  resumeFrom?: string
+  requirementSpecPath?: string
+  projectPlanPath?: string
+  buildTaskPlanPath?: string
 }

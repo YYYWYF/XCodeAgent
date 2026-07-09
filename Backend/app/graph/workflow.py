@@ -14,6 +14,16 @@ def route_workflow_start(state: ProjectState) -> str:
         return "detail_confirmation"
     if state.get("resume_from") == "prepare_build_tasks":
         return "prepare_build_tasks"
+    if state.get("resume_from") == "build":
+        return "build"
+    if state.get("resume_from") == "integration_test":
+        return "integration_test"
+    if state.get("resume_from") == "launch_project":
+        return "launch_project"
+    if state.get("resume_from") == "acceptance":
+        return "acceptance"
+    if state.get("resume_from") == "finalize_project":
+        return "finalize_project"
     return "classify_request_complexity"
 
 
@@ -86,6 +96,11 @@ def build_graph():
             "project_planning": "project_planning",
             "detail_confirmation": "detail_confirmation",
             "prepare_build_tasks": "prepare_build_tasks",
+            "build": "build",
+            "integration_test": "integration_test",
+            "launch_project": "launch_project",
+            "acceptance": "acceptance",
+            "finalize_project": "finalize_project",
         },
     )
     builder.add_conditional_edges(

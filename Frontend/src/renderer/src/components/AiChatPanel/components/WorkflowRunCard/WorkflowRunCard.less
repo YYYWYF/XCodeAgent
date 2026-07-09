@@ -59,6 +59,70 @@
   border-top: 1px solid #ffe7ba;
 }
 
+.@{class-prefix}-workflow-clarification-context {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid #f4d8a8;
+  border-radius: 7px;
+}
+
+.@{class-prefix}-workflow-selection-group,
+.@{class-prefix}-workflow-page-context {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.@{class-prefix}-workflow-selection-list,
+.@{class-prefix}-workflow-selection-item-meta {
+  min-width: 0;
+  padding-left: 20px;
+  margin: 0;
+}
+
+.@{class-prefix}-workflow-selection-item {
+  min-width: 0;
+  padding: 4px 0;
+
+  &::marker {
+    color: #667085;
+  }
+}
+
+.@{class-prefix}-workflow-selection-item-meta {
+  padding-top: 3px;
+  color: #667085;
+}
+
+.@{class-prefix}-workflow-page-context-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+
+  .ant-tag {
+    flex: 0 0 auto;
+    margin-right: 0;
+  }
+}
+
+.@{class-prefix}-workflow-page-context-row {
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #edf0f5;
+
+  &:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+}
+
 .@{class-prefix}-workflow-clarification-options {
   display: flex;
   flex-wrap: wrap;
