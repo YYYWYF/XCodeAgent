@@ -60,6 +60,51 @@ class FakeWorkflowGraph:
         )
 
 
+class FakeCodeChangesWorkflowGraph:
+    async def astream(self, initial_state, *, config, stream_mode):
+        code_change_set = {
+            "id": "set-1",
+            "status": "applied",
+            "workspaceRoot": "/tmp/workspace",
+            "summary": {"files": 1, "additions": 1, "deletions": 0},
+            "files": [
+                {
+                    "id": "file.write:src/app.py:abc",
+                    "path": "src/app.py",
+                    "changeType": "added",
+                    "additions": 1,
+                    "deletions": 0,
+                    "diff": "--- a/src/app.py\n+++ b/src/app.py\n@@ -0,0 +1 @@\n+print('hi')\n",
+                    "truncated": False,
+                    "binary": False,
+                    "tool": "file.write",
+                    "sourceTool": "main.direct_modification",
+                    "executed": True,
+                }
+            ],
+        }
+        self.values = {
+            "phase": "finalize_project",
+            "status": "completed",
+            "timeline": ["direct_modification"],
+            "quality_gate_passed": True,
+            "code_changes": code_change_set,
+            "code_change_sets": [code_change_set],
+        }
+        yield {
+            "direct_modification": {
+                "phase": "direct_modification",
+                "status": "completed",
+                "code_changes": code_change_set,
+                "code_change_sets": [code_change_set],
+                "timeline": ["direct_modification"],
+            }
+        }
+
+    def get_state(self, config):
+        return SimpleNamespace(values=self.values)
+
+
 class WorkflowAgUiStreamTests(unittest.TestCase):
     def test_stream_emits_ag_ui_frames_for_openai_backed_workflow(self) -> None:
         graph = FakeWorkflowGraph()
@@ -151,6 +196,29 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             result["workspace"],
             "/Users/sbw/Documents/example-workspace",
         )
+
+    def test_stream_includes_code_changes_payload(self) -> None:
+        graph = FakeCodeChangesWorkflowGraph()
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-1",
+                    "runId": "run-1",
+                    "messages": [{"role": "user", "content": "write a file"}],
+                },
+                accept="text/event-stream",
+            )
+            return [frame async for frame in stream]
+
+        payload = "\n".join(asyncio.run(collect()))
+
+        self.assertIn("workflow-run", payload)
+        self.assertIn("codeChanges", payload)
+        self.assertIn("codeChangesSummary", payload)
+        self.assertIn("src/app.py", payload)
+        self.assertIn("main.direct_modification", payload)
 
 
 if __name__ == "__main__":

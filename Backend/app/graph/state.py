@@ -43,6 +43,8 @@ class ProjectState(TypedDict, total=False):
     repair_task_plan: dict[str, Any]
     repair_task_plan_path: str
     repair_tasks: list[dict[str, Any]]
+    code_changes: dict[str, Any]
+    code_change_sets: Annotated[list[dict[str, Any]], add]
     preview_url: str
     accepted: bool
     status: str

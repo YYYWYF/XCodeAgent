@@ -17,6 +17,7 @@ export type WorkspaceCodeChangeFile = {
   binary?: boolean;
   approvalId?: string;
   tool: WorkspaceCodeChangeTool;
+  sourceTool?: string;
   executed?: boolean;
 };
 

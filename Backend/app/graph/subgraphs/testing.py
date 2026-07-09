@@ -4,9 +4,10 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents.main.repair_planner import plan_repairs_with_main_agent
 from app.agents.test.validator import summarize_tests_with_deep_agent
-from app.graph.nodes.common import workspace_from_state
+from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.services.test_validation import evaluate_quality_gate
+from app.workspace.code_changes import code_change_state_update
 from app.workspace.test_documents import write_test_report_json
 from app.workspace.task_documents import write_repair_task_plan_json
 
@@ -173,13 +174,19 @@ def e2e_check(state: ProjectState) -> dict:
 
 
 def test_agent_review(state: ProjectState) -> dict:
-    review = summarize_tests_with_deep_agent(
-        test_results=state.get("test_results", []),
-        build_results=state.get("build_results", []),
-        workspace=workspace_from_state(state),
+    workspace = workspace_from_state(state)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="test.deep_agent",
+        action=lambda: summarize_tests_with_deep_agent(
+            test_results=state.get("test_results", []),
+            build_results=state.get("build_results", []),
+            workspace=workspace,
+        ),
     )
     return {
-        "test_agent_review": review,
+        **code_change_state_update(captured.code_change_set),
+        "test_agent_review": captured.value,
         "test_events": ["test_agent_review"],
     }
 
@@ -204,14 +211,21 @@ def main_quality_gate(state: ProjectState) -> dict:
 
 
 def main_repair_planning(state: ProjectState) -> dict:
-    repair_task_plan = plan_repairs_with_main_agent(
-        test_report=state.get("test_report", {}),
-        revision_requests=state.get("revision_requests", []),
-        build_task_plan=state.get("build_task_plan"),
-        workspace=workspace_from_state(state),
+    workspace = workspace_from_state(state)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="main.repair_planning",
+        action=lambda: plan_repairs_with_main_agent(
+            test_report=state.get("test_report", {}),
+            revision_requests=state.get("revision_requests", []),
+            build_task_plan=state.get("build_task_plan"),
+            workspace=workspace,
+        ),
     )
+    repair_task_plan = captured.value
     repair_task_plan_path = write_repair_task_plan_json(state, repair_task_plan)
     return {
+        **code_change_state_update(captured.code_change_set),
         "repair_task_plan": repair_task_plan,
         "repair_task_plan_path": repair_task_plan_path,
         "repair_tasks": repair_task_plan["tasks"],
@@ -253,6 +267,8 @@ def integration_test(state: ProjectState) -> dict:
             **state,
             "test_results": [],
             "test_events": [],
+            "code_changes": {},
+            "code_change_sets": [],
             "timeline": [],
         }
     )
@@ -269,5 +285,7 @@ def integration_test(state: ProjectState) -> dict:
         "repair_task_plan": result.get("repair_task_plan", {}),
         "repair_task_plan_path": result.get("repair_task_plan_path"),
         "repair_tasks": result.get("repair_tasks", []),
+        "code_changes": result.get("code_changes", {}),
+        "code_change_sets": result.get("code_change_sets", []),
         "timeline": ["integration_test"],
     }

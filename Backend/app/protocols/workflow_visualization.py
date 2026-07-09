@@ -21,6 +21,7 @@ from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
 from app.protocols.workflow_request import workflow_run_inputs
+from app.workspace.code_changes import merge_code_change_sets
 
 WORKFLOW_EVENT_PROTOCOL = "xcodeagent.workflow.event.v1"
 
@@ -90,6 +91,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "events": f"Ordered event list using {WORKFLOW_EVENT_PROTOCOL}.",
             "agUi": "AG-UI-compatible custom-event/state-snapshot payload for frontend visualization.",
             "toolCalls": "AG-UI TOOL_CALL_* events are emitted when workflow agents request user input through ask_user.",
+            "codeChanges": "Workspace file diff payload for files changed by DeepAgents during the workflow run.",
             "result": "Final LangGraph ProjectState.",
         },
         "eventProtocol": {
@@ -657,6 +659,7 @@ def _workflow_progress_summary(
     ]
     failed_events = [event for event in events if str(event.get("status")) == "failed"]
     node = last_event.get("node") if isinstance(last_event.get("node"), dict) else {}
+    code_changes = _workflow_code_changes(result)
 
     return {
         "status": last_event.get("status") or result.get("status") or "running",
@@ -670,6 +673,7 @@ def _workflow_progress_summary(
         "previewUrl": result.get("preview_url"),
         "buildSummary": result.get("build_summary", {}),
         "testSummary": {},
+        "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
     }
@@ -875,6 +879,7 @@ def _workflow_summary(
         if isinstance(result.get("build_summary"), dict)
         else {}
     )
+    code_changes = _workflow_code_changes(result)
     clarification = (
         result.get("clarification")
         if isinstance(result.get("clarification"), dict)
@@ -904,6 +909,7 @@ def _workflow_summary(
         "previewUrl": result.get("preview_url"),
         "buildSummary": build_summary,
         "testSummary": test_summary,
+        "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
         "clarification": clarification,
     }
@@ -917,24 +923,50 @@ def _workflow_visual_payload(
     events: list[dict[str, Any]],
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    return {
+    code_changes = _workflow_code_changes(result)
+    state_payload = {
+        "status": summary.get("status"),
+        "request": result.get("request"),
+        "phase": summary.get("phase"),
+        "timeline": summary.get("timeline", []),
+        "artifacts": summary.get("artifacts", {}),
+        "qualityGatePassed": summary.get("qualityGatePassed"),
+        "needsRevision": summary.get("needsRevision"),
+        "previewUrl": summary.get("previewUrl"),
+        "tasks": result.get("tasks", []),
+        "buildSummary": result.get("build_summary", {}),
+        "testReport": result.get("test_report", {}),
+        "repairTaskPlan": result.get("repair_task_plan"),
+        "clarification": result.get("clarification", {}),
+    }
+    payload = {
         "runId": run_id,
         "threadId": thread_id,
         "summary": summary,
         "events": events,
-        "state": {
-            "status": summary.get("status"),
-            "request": result.get("request"),
-            "phase": summary.get("phase"),
-            "timeline": summary.get("timeline", []),
-            "artifacts": summary.get("artifacts", {}),
-            "qualityGatePassed": summary.get("qualityGatePassed"),
-            "needsRevision": summary.get("needsRevision"),
-            "previewUrl": summary.get("previewUrl"),
-            "tasks": result.get("tasks", []),
-            "buildSummary": result.get("build_summary", {}),
-            "testReport": result.get("test_report", {}),
-            "repairTaskPlan": result.get("repair_task_plan"),
-            "clarification": result.get("clarification", {}),
-        },
+        "state": state_payload,
     }
+    if code_changes:
+        payload["codeChanges"] = code_changes
+        state_payload["codeChanges"] = code_changes
+    return payload
+
+
+def _workflow_code_changes(value: dict[str, Any]) -> dict[str, Any] | None:
+    code_change_sets = value.get("code_change_sets")
+    if isinstance(code_change_sets, list):
+        merged = merge_code_change_sets(
+            [item for item in code_change_sets if isinstance(item, dict)]
+        )
+        if merged:
+            return merged
+
+    code_changes = value.get("code_changes")
+    if (
+        isinstance(code_changes, dict)
+        and isinstance(code_changes.get("files"), list)
+        and code_changes.get("files")
+    ):
+        return code_changes
+
+    return None

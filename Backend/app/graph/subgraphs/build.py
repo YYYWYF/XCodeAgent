@@ -2,10 +2,12 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
 from app.agents.frontend.generator import generate_frontend_with_deep_agent
+from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.services.build_result_coordinator import (
     apply_agent_results_with_main_agent,
 )
+from app.workspace.code_changes import code_change_state_update
 from app.workspace.plan_documents import (
     project_plan_json_path,
     write_project_plan_document,
@@ -70,14 +72,20 @@ def select_ready_build_tasks(state: ProjectState) -> dict:
 
 def generate_data_sources(state: ProjectState) -> dict:
     ready_tasks = _ready_tasks_for_owner(state, "data_source")
-    pending_results = generate_data_sources_with_deep_agent(
-        project_plan=state["project_plan"],
-        build_task_plan=state["build_task_plan"],
-        tasks=ready_tasks,
-        workspace=state.get("workspace") or state.get("workspace_path"),
+    workspace = workspace_from_state(state)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="data_source.deep_agent",
+        action=lambda: generate_data_sources_with_deep_agent(
+            project_plan=state["project_plan"],
+            build_task_plan=state["build_task_plan"],
+            tasks=ready_tasks,
+            workspace=workspace,
+        ),
     )
     return {
-        "pending_build_results": pending_results,
+        **code_change_state_update(captured.code_change_set),
+        "pending_build_results": captured.value,
         "phase": "build_generate_data_sources",
         "build_events": ["generate_data_sources"],
     }
@@ -94,14 +102,20 @@ def main_update_after_data_sources(state: ProjectState) -> dict:
 
 def generate_frontend(state: ProjectState) -> dict:
     ready_tasks = _ready_tasks_for_owner(state, "frontend")
-    pending_results = generate_frontend_with_deep_agent(
-        project_plan=state["project_plan"],
-        build_task_plan=state["build_task_plan"],
-        tasks=ready_tasks,
-        workspace=state.get("workspace") or state.get("workspace_path"),
+    workspace = workspace_from_state(state)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="frontend.deep_agent",
+        action=lambda: generate_frontend_with_deep_agent(
+            project_plan=state["project_plan"],
+            build_task_plan=state["build_task_plan"],
+            tasks=ready_tasks,
+            workspace=workspace,
+        ),
     )
     return {
-        "pending_build_results": pending_results,
+        **code_change_state_update(captured.code_change_set),
+        "pending_build_results": captured.value,
         "phase": "build_generate_frontend",
         "build_events": ["generate_frontend"],
     }
@@ -171,6 +185,8 @@ def build(state: ProjectState) -> dict:
             **state,
             "build_events": [],
             "pending_build_results": [],
+            "code_changes": {},
+            "code_change_sets": [],
             "timeline": [],
         }
     )
@@ -194,5 +210,7 @@ def build(state: ProjectState) -> dict:
         "build_results": result.get("build_results", []),
         "build_summary": result.get("build_summary", {}),
         "build_events": result.get("build_events", []),
+        "code_changes": result.get("code_changes", {}),
+        "code_change_sets": result.get("code_change_sets", []),
         "timeline": ["build"],
     }

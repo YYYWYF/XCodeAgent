@@ -49,11 +49,14 @@ import {
 import type {
   ApplicationConfig,
   EditorMode,
-  WorkflowRunPayload
+  WorkflowRunPayload,
+  WorkspaceCodeChangeSet
 } from '../../typings'
 import { cx, getInitialPreviewUrl, openPreviewWindow } from '../../utils'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import MarkdownContent from '../MarkdownContent/MarkdownContent'
+import CodeChangeCard from './CodeChangeCard'
+import CodeDiffDetailPanel from './CodeDiffDetailPanel'
 import WorkflowRunCard, {
   buildClarificationContinuationMessage,
   workflowOriginalRequest,
@@ -75,11 +78,18 @@ type AgentChatMessage = {
   role: 'user' | 'assistant'
   content: string
   workflow?: WorkflowRunPayload
+  codeChanges?: WorkspaceCodeChangeSet
   toolCalls?: ToolCallRecord[]
   createdAt: number
 }
 
-type RightPanelState = { type: 'preview' }
+type RightPanelState =
+  | { type: 'preview' }
+  | {
+      type: 'diff'
+      codeChanges: WorkspaceCodeChangeSet
+      selectedPath?: string
+    }
 
 type Props = {
   application: ApplicationConfig
@@ -243,6 +253,13 @@ export default function AiChatPanel({
   const handlePanelSplitDragStart = (event: ReactMouseEvent<HTMLDivElement>): void => {
     event.preventDefault()
     setSplitDragging(true)
+  }
+
+  const handleOpenCodeChangeFile = (
+    codeChanges: WorkspaceCodeChangeSet,
+    selectedPath: string
+  ): void => {
+    setRightPanel({ type: 'diff', codeChanges, selectedPath })
   }
 
   const replaceSessionSummary = (mode: EditorMode, summary: ChatSessionSummary): void => {
@@ -510,12 +527,14 @@ export default function AiChatPanel({
       workflow?: WorkflowRunPayload,
       toolCalls?: ToolCallRecord[]
     ): AgentChatMessage[] => {
+      const nextCodeChanges = workflowCodeChanges(workflow)
       latestMessages = latestMessages.map((currentMessage) =>
         currentMessage.id === assistantMessageId
           ? {
               ...currentMessage,
               content,
               workflow: workflow ?? currentMessage.workflow,
+              codeChanges: nextCodeChanges ?? currentMessage.codeChanges,
               toolCalls: toolCalls ?? currentMessage.toolCalls
             }
           : currentMessage
@@ -527,6 +546,7 @@ export default function AiChatPanel({
                 ...currentMessage,
                 content,
                 workflow: workflow ?? currentMessage.workflow,
+                codeChanges: nextCodeChanges ?? currentMessage.codeChanges,
                 toolCalls: toolCalls ?? currentMessage.toolCalls
               }
             : currentMessage
@@ -783,38 +803,50 @@ export default function AiChatPanel({
             {messages.length === 0 ? (
               <Empty description={copy.empty} image={Empty.PRESENTED_IMAGE_SIMPLE} />
             ) : (
-              messages.map((message) => (
-                <article className={cx('ai-message', message.role)} key={message.id}>
-                  <Text className={cx('ai-message-label')}>
-                    {message.role === 'user' ? (
+              messages.map((message) => {
+                const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
+                return (
+                  <article className={cx('ai-message', message.role)} key={message.id}>
+                    <Text className={cx('ai-message-label')}>
+                      {message.role === 'user' ? (
+                        <>
+                          <UserOutlined /> 用户输入
+                        </>
+                      ) : (
+                        <>
+                          <RobotOutlined /> {copy.label}
+                        </>
+                      )}
+                    </Text>
+                    {message.role === 'assistant' ? (
                       <>
-                        <UserOutlined /> 用户输入
+                        <MarkdownContent content={message.content} />
+                        {message.toolCalls?.map((toolCall) => (
+                          <ToolCallCard key={toolCall.id} toolCall={toolCall} />
+                        ))}
+                        {message.workflow && (
+                          <WorkflowRunCard
+                            disabled={loading}
+                            onSubmitClarification={handleSubmitClarification}
+                            workflow={message.workflow}
+                          />
+                        )}
+                        {codeChanges && (
+                          <CodeChangeCard
+                            codeChanges={codeChanges}
+                            loading={loading}
+                            onApproveAll={() => undefined}
+                            onFeedback={() => undefined}
+                            onOpenFile={(path) => handleOpenCodeChangeFile(codeChanges, path)}
+                          />
+                        )}
                       </>
                     ) : (
-                      <>
-                        <RobotOutlined /> {copy.label}
-                      </>
+                      <Text className={cx('ai-message-text')}>{message.content}</Text>
                     )}
-                  </Text>
-                  {message.role === 'assistant' ? (
-                    <>
-                      <MarkdownContent content={message.content} />
-                      {message.toolCalls?.map((toolCall) => (
-                        <ToolCallCard key={toolCall.id} toolCall={toolCall} />
-                      ))}
-                      {message.workflow && (
-                        <WorkflowRunCard
-                          disabled={loading}
-                          onSubmitClarification={handleSubmitClarification}
-                          workflow={message.workflow}
-                        />
-                      )}
-                    </>
-                  ) : (
-                    <Text className={cx('ai-message-text')}>{message.content}</Text>
-                  )}
-                </article>
-              ))
+                  </article>
+                )
+              })
             )}
             {loading && (
               <div className={cx('ai-message', 'assistant', 'loading')}>
@@ -890,8 +922,35 @@ export default function AiChatPanel({
           <BrowserPreviewPanel application={application} />
         </div>
       )}
+
+      {rightPanel?.type === 'diff' && (
+        <div className={cx('embedded-preview-pane')}>
+          <CodeDiffDetailPanel
+            codeChanges={rightPanel.codeChanges}
+            selectedPath={rightPanel.selectedPath}
+            onClose={() => setRightPanel(undefined)}
+          />
+        </div>
+      )}
     </section>
   )
+}
+
+function workflowCodeChanges(
+  workflow: WorkflowRunPayload | undefined
+): WorkspaceCodeChangeSet | undefined {
+  if (!workflow) return undefined
+  if (workflow.codeChanges?.files?.length) return workflow.codeChanges
+  const stateCodeChanges = workflow.state?.codeChanges
+  if (
+    stateCodeChanges &&
+    typeof stateCodeChanges === 'object' &&
+    Array.isArray((stateCodeChanges as Partial<WorkspaceCodeChangeSet>).files) &&
+    (stateCodeChanges as Partial<WorkspaceCodeChangeSet>).files?.length
+  ) {
+    return stateCodeChanges as WorkspaceCodeChangeSet
+  }
+  return undefined
 }
 
 function formatSessionTime(value: number): string {

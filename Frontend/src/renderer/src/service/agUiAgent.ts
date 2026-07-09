@@ -1,7 +1,7 @@
 import { HttpAgent, randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
-import type { ApplicationConfig, WorkflowRunPayload } from '../typings'
+import type { ApplicationConfig, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../typings'
 
 type SendWorkflowMessageOptions = {
   workspaceRoot?: string
@@ -211,6 +211,12 @@ function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
   if (typeof payload.runId !== 'string' || typeof payload.threadId !== 'string') {
     return undefined
   }
+  const state =
+    payload.state && typeof payload.state === 'object'
+      ? (payload.state as Record<string, unknown>)
+      : undefined
+  const codeChanges =
+    readCodeChangesPayload(payload.codeChanges) ?? readCodeChangesPayload(state?.codeChanges)
 
   return {
     runId: payload.runId,
@@ -220,13 +226,19 @@ function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
         ? payload.summary
         : { status: 'unknown' },
     events: Array.isArray(payload.events) ? payload.events : [],
-    state:
-      payload.state && typeof payload.state === 'object'
-        ? (payload.state as Record<string, unknown>)
-        : undefined,
+    codeChanges,
+    state,
     result:
       payload.result && typeof payload.result === 'object'
         ? (payload.result as Record<string, unknown>)
         : undefined
   }
+}
+
+function readCodeChangesPayload(value: unknown): WorkspaceCodeChangeSet | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const codeChanges = value as Partial<WorkspaceCodeChangeSet>
+  if (!Array.isArray(codeChanges.files) || codeChanges.files.length === 0) return undefined
+  if (!codeChanges.summary || typeof codeChanges.summary !== 'object') return undefined
+  return codeChanges as WorkspaceCodeChangeSet
 }

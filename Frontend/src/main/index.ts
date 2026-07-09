@@ -368,6 +368,7 @@ function normalizeSessionMessage(message): Record<string, unknown> {
   const orchestration = cloneJsonRecord(message.orchestration)
   const approval = cloneJsonRecord(message.approval)
   const codeChanges = cloneJsonRecord(message.codeChanges)
+  const workflow = cloneJsonRecord(message.workflow)
 
   return {
     ...normalizedMessage,
@@ -377,6 +378,7 @@ function normalizeSessionMessage(message): Record<string, unknown> {
       ? { approvalStatus: message.approvalStatus }
       : {}),
     ...(codeChanges ? { codeChanges } : {}),
+    ...(workflow ? { workflow } : {}),
   }
 }
 

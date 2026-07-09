@@ -1,12 +1,13 @@
 from app.agents.main.planner import plan_project_with_main_agent
 from app.agents.main.page_designer import design_page_with_main_agent
-from app.graph.nodes.common import workspace_from_state
+from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.services.page_detail_plan import (
     attach_page_detail_plan,
 )
 from app.tools.page_selection import present_page_selection
 from app.tools.page_spec_confirmation import confirm_page_spec
+from app.workspace.code_changes import code_change_state_update
 from app.workspace.plan_documents import (
     project_plan_json_path,
     write_project_plan_document,
@@ -15,13 +16,20 @@ from app.workspace.plan_documents import (
 
 def project_planning(state: ProjectState) -> dict:
     requirement_spec = state["requirement_spec"]
-    project_plan = plan_project_with_main_agent(
-        requirement_spec,
-        workspace=workspace_from_state(state),
+    workspace = workspace_from_state(state)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="main.project_planning",
+        action=lambda: plan_project_with_main_agent(
+            requirement_spec,
+            workspace=workspace,
+        ),
     )
+    project_plan = captured.value
     project_plan_path = write_project_plan_document(state, project_plan)
 
     return {
+        **code_change_state_update(captured.code_change_set),
         "phase": "project_planning",
         "project_plan": project_plan,
         "project_plan_path": project_plan_path,
@@ -47,15 +55,22 @@ def detail_confirmation(state: ProjectState) -> dict:
         confirmed_page_spec=state.get("confirmed_page_spec"),
     )
     confirmed_page_spec = page_spec_confirmation["confirmed_page_spec"]
-    page_detail_plan = design_page_with_main_agent(
-        project_plan,
-        confirmed_page_spec,
-        workspace=workspace_from_state(state),
+    workspace = workspace_from_state(state)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="main.detail_confirmation",
+        action=lambda: design_page_with_main_agent(
+            project_plan,
+            confirmed_page_spec,
+            workspace=workspace,
+        ),
     )
+    page_detail_plan = captured.value
     updated_project_plan = attach_page_detail_plan(project_plan, page_detail_plan)
     project_plan_path = write_project_plan_document(state, updated_project_plan)
 
     return {
+        **code_change_state_update(captured.code_change_set),
         "phase": "detail_confirmation",
         "page_selection": page_selection,
         "page_spec_confirmation": page_spec_confirmation,

@@ -1,6 +1,7 @@
 from app.agents.main.requirements_analyzer import analyze_requirements_with_main_agent
-from app.graph.nodes.common import workspace_from_state
+from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
+from app.workspace.code_changes import code_change_state_update
 from app.workspace.spec_documents import (
     requirement_spec_json_path,
     write_requirement_spec_document,
@@ -8,15 +9,22 @@ from app.workspace.spec_documents import (
 
 
 def requirements(state: ProjectState) -> dict:
-    analysis = analyze_requirements_with_main_agent(
-        state["request"],
-        workspace=workspace_from_state(state),
+    workspace = workspace_from_state(state)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="main.requirements",
+        action=lambda: analyze_requirements_with_main_agent(
+            state["request"],
+            workspace=workspace,
+        ),
     )
+    analysis = captured.value
     spec = analysis["requirement_spec"]
     clarification = analysis["clarification"]
     spec_path = write_requirement_spec_document(state, spec)
 
     return {
+        **code_change_state_update(captured.code_change_set),
         "phase": "requirements",
         "status": clarification["status"],
         "requirement_spec": spec,

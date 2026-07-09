@@ -1,3 +1,5 @@
+import type { WorkspaceCodeChangeSet } from './codeChanges'
+
 export type WorkflowEvent = {
   type: string
   runId?: string
@@ -49,6 +51,7 @@ export type WorkflowRunPayload = {
   threadId: string
   summary: WorkflowSummary
   events: WorkflowEvent[]
+  codeChanges?: WorkspaceCodeChangeSet
   state?: Record<string, unknown>
   result?: Record<string, unknown>
 }
