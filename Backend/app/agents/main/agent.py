@@ -5,13 +5,14 @@ from app.agents.workspace_scope import (
     create_workspace_permissions,
 )
 from app.tools.ask_user import ask_user
+from app.tools.delete_file import create_delete_file_tool
 
 
 def create_main_agent(model, frontend, data_source, test, workspace_root: str | None = None):
     return create_deep_agent(
         name="main-agent",
         model=model,
-        tools=[ask_user],
+        tools=[ask_user, create_delete_file_tool(workspace_root)],
         system_prompt=(
             "You are the application-generation coordinator. Analyze requirements, "
             "create and update RequirementSpec documents, clarify uncertain requirements, "
@@ -20,6 +21,7 @@ def create_main_agent(model, frontend, data_source, test, workspace_root: str | 
             "Use ask_user when user input is required before safe planning can continue. "
             "When workspace filesystem tools are available, use virtual absolute paths "
             "such as /data.json; they are rooted at the selected workspaceRoot. "
+            "When deleting a file, use delete_file(file_path=\"/path\") with a virtual absolute path. "
             "Do not read or write sensitive files such as .env, .npmrc, or private keys. "
             "Keep responses concise in this minimal demo."
         ),
