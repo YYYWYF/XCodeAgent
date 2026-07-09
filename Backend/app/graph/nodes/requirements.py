@@ -1,5 +1,6 @@
 from app.agents.main.requirements_analyzer import analyze_requirements_with_main_agent
 from app.graph.nodes.confirmation import user_confirmed_text
+from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.spec_documents import (
@@ -26,7 +27,8 @@ def requirements(state: ProjectState) -> dict:
             "timeline": ["requirements"],
         }
 
-    analysis = analyze_requirements_with_main_agent(state["request"])
+    workspace = workspace_from_state(state)
+    analysis = analyze_requirements_with_main_agent(state["request"], workspace=workspace)
     spec = analysis["requirement_spec"]
     clarification = analysis["clarification"]
     if clarification["status"] == "clear":

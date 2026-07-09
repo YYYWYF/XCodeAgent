@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from unittest.mock import patch
 
 from app.graph.nodes.planning import detail_confirmation
@@ -28,26 +29,30 @@ class DetailConfirmationTests(unittest.TestCase):
     def test_detail_confirmation_builds_page_spec_from_project_plan_context(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
 
-        with patch(
-            "app.graph.nodes.planning.design_page_with_main_agent",
-            side_effect=lambda _plan, spec: {
-                "id": f"page_detail:{spec['page_id']}",
-                "page_id": spec["page_id"],
-                "page_name": spec["page_name"],
-                "path": spec["path"],
-                "status": "confirmed",
-                "source_page_spec": spec,
-            },
-        ):
-            result = detail_confirmation(
-                {
-                    "request": "我选择 页面：库存管理列表页 做详细设计",
-                    "project_plan": project_plan,
-                    "timeline": [],
-                }
-            )
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.planning.design_page_with_main_agent",
+                side_effect=lambda _plan, spec, *, workspace=None: {
+                    "id": f"page_detail:{spec['page_id']}",
+                    "page_id": spec["page_id"],
+                    "page_name": spec["page_name"],
+                    "path": spec["path"],
+                    "status": "confirmed",
+                    "source_page_spec": spec,
+                    "workspace": workspace,
+                },
+            ) as designer:
+                result = detail_confirmation(
+                    {
+                        "request": "我选择 页面：库存管理列表页 做详细设计",
+                        "workspace": workspace,
+                        "project_plan": project_plan,
+                        "timeline": [],
+                    }
+                )
 
         spec = result["confirmed_page_spec"]
+        self.assertEqual(designer.call_args.kwargs["workspace"], workspace)
         self.assertEqual(result["selected_page_id"], "inventory_management_list_page")
         self.assertEqual(spec["page_id"], "inventory_management_list_page")
         self.assertTrue(spec["data_source_ids"])

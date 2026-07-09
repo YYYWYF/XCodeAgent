@@ -19,7 +19,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     "requirement_spec": spec,
                     "clarification": clear_clarification(spec),
                 },
-            ):
+            ) as analyzer:
                 result = requirements(
                     {
                         "request": "创建一个库存管理系统",
@@ -28,6 +28,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     }
                 )
 
+        analyzer.assert_called_once_with("创建一个库存管理系统", workspace=workspace)
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
             result["clarification"]["mode"],

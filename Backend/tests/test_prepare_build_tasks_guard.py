@@ -41,7 +41,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "tasks": [],
                     "summary": {"total": 0},
                 },
-            ):
+            ) as preparer:
                 result = prepare_build_tasks(
                     {
                         "request": "正确，继续",
@@ -51,6 +51,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     }
                 )
 
+        self.assertEqual(preparer.call_args.args[0]["confirmation_status"], "confirmed")
+        self.assertEqual(preparer.call_args.kwargs["workspace"], workspace)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
         self.assertEqual(result["tasks"], [])
@@ -78,7 +80,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "tasks": [],
                     "summary": {"total": 0},
                 },
-            ):
+            ) as preparer:
                 result = prepare_build_tasks(
                     {
                         "request": continuation_message,
@@ -88,6 +90,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     }
                 )
 
+        self.assertEqual(preparer.call_args.args[0]["confirmation_status"], "confirmed")
+        self.assertEqual(preparer.call_args.kwargs["workspace"], workspace)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
 

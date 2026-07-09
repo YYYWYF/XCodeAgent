@@ -1,5 +1,6 @@
 from app.agents.main.task_preparer import prepare_build_tasks_with_main_agent
 from app.graph.nodes.confirmation import user_confirmed_text
+from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.task_documents import write_build_task_plan_json
@@ -23,7 +24,10 @@ def prepare_build_tasks(state: ProjectState) -> dict:
                 "timeline": ["prepare_build_tasks"],
             }
 
-    build_task_plan = prepare_build_tasks_with_main_agent(project_plan)
+    build_task_plan = prepare_build_tasks_with_main_agent(
+        project_plan,
+        workspace=workspace_from_state(state),
+    )
     build_task_plan_path = write_build_task_plan_json(state, build_task_plan)
     return {
         "phase": "prepare_build_tasks",

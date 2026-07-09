@@ -1,6 +1,7 @@
 from app.agents.main.planner import plan_project_with_main_agent
 from app.agents.main.page_designer import design_page_with_main_agent
 from app.graph.nodes.confirmation import user_confirmed_text
+from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.page_detail_plan import (
     apply_page_spec_answers,
@@ -36,13 +37,14 @@ def project_planning(state: ProjectState) -> dict:
             "timeline": ["project_planning"],
         }
 
+    workspace = workspace_from_state(state)
     requirement_spec = state["requirement_spec"]
     if state.get("project_plan") and state.get("request"):
         requirement_spec = {
             **requirement_spec,
             "planning_adjustment_request": state["request"],
         }
-    project_plan = plan_project_with_main_agent(requirement_spec)
+    project_plan = plan_project_with_main_agent(requirement_spec, workspace=workspace)
     project_plan["confirmation_status"] = "pending_user_confirmation"
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = _project_plan_confirmation_payload(project_plan)
@@ -194,6 +196,7 @@ def detail_confirmation(state: ProjectState) -> dict:
     page_detail_plan = design_page_with_main_agent(
         project_plan,
         confirmed_page_spec,
+        workspace=workspace_from_state(state),
     )
     pending_project_plan = attach_page_detail_plan(project_plan, page_detail_plan)
     pending_project_plan["confirmation_status"] = "pending_user_confirmation"

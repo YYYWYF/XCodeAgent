@@ -18,7 +18,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
             with patch(
                 "app.graph.nodes.planning.plan_project_with_main_agent",
                 return_value=plan,
-            ):
+            ) as planner:
                 result = project_planning(
                     {
                         "request": "创建一个库存管理系统",
@@ -28,6 +28,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                     }
                 )
 
+        planner.assert_called_once_with(spec, workspace=workspace)
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["mode"], "project_plan_confirmation")
         self.assertEqual(

@@ -4,7 +4,6 @@ import json
 from typing import Any
 
 from app.config import Settings
-from app.agents.model_factory import create_chat_model
 from app.services.page_detail_plan import create_page_detail_plan
 
 
@@ -32,24 +31,30 @@ def _invoke_live_main_agent(
     *,
     workspace: str | None = None,
 ) -> str:
-    settings = Settings.from_env()
-    result = create_chat_model(settings).invoke(
-        _page_design_prompt(project_plan, confirmed_page_spec)
+    # Lazy imports keep Deep Agent construction at this live execution boundary.
+    from app.agents import create_agent_bundle
+    from app.graph.nodes.common import last_agent_text
+
+    result = create_agent_bundle(workspace).main.invoke(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": _page_design_prompt(project_plan, confirmed_page_spec),
+                }
+            ]
+        }
     )
-    content = getattr(result, "content", result)
-    if isinstance(content, list):
-        return "\n".join(
-            str(item.get("text", item)) if isinstance(item, dict) else str(item)
-            for item in content
-        )
-    return str(content)
+    return last_agent_text(result)
 
 
 def design_page_with_main_agent(
     project_plan: dict[str, Any],
     confirmed_page_spec: dict[str, Any],
-) -> dict[str, Any
-跟i    """Use the live Main Agent boundary to create a page detail plan."""
+    *,
+    workspace: str | None = None,
+) -> dict[str, Any]:
+    """Use the live Main Agent boundary to create a page detail plan."""
 
     settings = Settings.from_env()
     agent_note = _invoke_live_main_agent(

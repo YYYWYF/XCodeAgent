@@ -7,75 +7,70 @@ from unittest.mock import patch
 from app.agents.main import page_designer, planner, requirements_analyzer
 
 
-class FakeModel:
+class FakeMainAgent:
     def __init__(self) -> None:
-        self.prompts: list[str] = []
+        self.payloads: list[dict] = []
 
-    def invoke(self, prompt: str):
-        self.prompts.append(prompt)
-        return SimpleNamespace(content='{"requirements_overview": {"summary": "ok"}}')
-
-    def bind_tools(self, tools):
-        self.bound_tools = tools
-        return self
+    def invoke(self, payload: dict):
+        self.payloads.append(payload)
+        return {"messages": [SimpleNamespace(content='{"requirements_overview": {"summary": "ok"}}')]}
 
 
 class MainAgentBoundaryTests(unittest.TestCase):
-    def test_requirements_analysis_uses_ask_user_only_model_boundary(self) -> None:
-        fake_model = FakeModel()
+    def test_requirements_analysis_uses_workspace_scoped_main_agent(self) -> None:
+        fake_agent = FakeMainAgent()
 
-        with patch("app.agents.main.requirements_analyzer.Settings.from_env", return_value=object()):
-            with patch(
-                "app.agents.main.requirements_analyzer.create_chat_model",
-                return_value=fake_model,
-            ):
-                with patch(
-                    "app.agents.create_agent_bundle",
-                    side_effect=AssertionError("requirements must not construct subagent bundle"),
-                ):
-                    result = requirements_analyzer._invoke_live_main_agent(
-                        "创建一个库存管理系统"
-                    )
+        with patch(
+            "app.agents.create_agent_bundle",
+            return_value=SimpleNamespace(main=fake_agent),
+        ) as bundle_factory:
+            result = requirements_analyzer._invoke_live_main_agent(
+                "创建一个库存管理系统",
+                workspace="/tmp/workspace-a",
+            )
 
         self.assertEqual(len(result["messages"]), 1)
-        self.assertIn("ask_user", getattr(fake_model, "bound_tools")[0].name)
-        self.assertIn("call subagents", fake_model.prompts[0])
-        self.assertIn("create project plans", fake_model.prompts[0])
+        bundle_factory.assert_called_once_with("/tmp/workspace-a")
+        prompt = fake_agent.payloads[0]["messages"][0]["content"]
+        self.assertIn("call subagents", prompt)
+        self.assertIn("create project plans", prompt)
 
-    def test_project_planning_uses_tool_free_model_boundary(self) -> None:
-        fake_model = FakeModel()
+    def test_project_planning_uses_workspace_scoped_main_agent(self) -> None:
+        fake_agent = FakeMainAgent()
 
-        with patch("app.agents.main.planner.Settings.from_env", return_value=object()):
-            with patch("app.agents.main.planner.create_chat_model", return_value=fake_model):
-                with patch(
-                    "app.agents.create_agent_bundle",
-                    side_effect=AssertionError("planning must not construct subagent bundle"),
-                ):
-                    output = planner._invoke_live_main_agent(
-                        {"version": "0.1.0", "app_info": {"name": "Demo"}}
-                    )
-
-        self.assertIn("requirements_overview", output)
-        self.assertIn("do not call subagents", fake_model.prompts[0])
-        self.assertIn("do not generate or modify code", fake_model.prompts[0])
-
-    def test_page_design_uses_tool_free_model_boundary(self) -> None:
-        fake_model = FakeModel()
-
-        with patch("app.agents.main.page_designer.Settings.from_env", return_value=object()):
-            with patch("app.agents.main.page_designer.create_chat_model", return_value=fake_model):
-                with patch(
-                    "app.agents.create_agent_bundle",
-                    side_effect=AssertionError("page design must not construct subagent bundle"),
-                ):
-                    output = page_designer._invoke_live_main_agent(
-                        {"api_contracts": [], "page_data_dependencies": []},
-                        {"page_id": "dashboard", "page_goal": "Show overview"},
-                    )
+        with patch(
+            "app.agents.create_agent_bundle",
+            return_value=SimpleNamespace(main=fake_agent),
+        ) as bundle_factory:
+            output = planner._invoke_live_main_agent(
+                {"version": "0.1.0", "app_info": {"name": "Demo"}},
+                workspace="/tmp/workspace-b",
+            )
 
         self.assertIn("requirements_overview", output)
-        self.assertIn("do not call subagents", fake_model.prompts[0])
-        self.assertIn("do not generate or modify code", fake_model.prompts[0])
+        bundle_factory.assert_called_once_with("/tmp/workspace-b")
+        prompt = fake_agent.payloads[0]["messages"][0]["content"]
+        self.assertIn("do not call subagents", prompt)
+        self.assertIn("do not generate or modify code", prompt)
+
+    def test_page_design_uses_workspace_scoped_main_agent(self) -> None:
+        fake_agent = FakeMainAgent()
+
+        with patch(
+            "app.agents.create_agent_bundle",
+            return_value=SimpleNamespace(main=fake_agent),
+        ) as bundle_factory:
+            output = page_designer._invoke_live_main_agent(
+                {"api_contracts": [], "page_data_dependencies": []},
+                {"page_id": "dashboard", "page_goal": "Show overview"},
+                workspace="/tmp/workspace-c",
+            )
+
+        self.assertIn("requirements_overview", output)
+        bundle_factory.assert_called_once_with("/tmp/workspace-c")
+        prompt = fake_agent.payloads[0]["messages"][0]["content"]
+        self.assertIn("do not call subagents", prompt)
+        self.assertIn("do not generate or modify code", prompt)
 
 
 if __name__ == "__main__":
