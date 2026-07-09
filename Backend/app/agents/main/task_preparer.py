@@ -17,12 +17,16 @@ def _task_preparation_prompt(project_plan: dict[str, Any]) -> str:
     )
 
 
-def _invoke_live_main_agent(project_plan: dict[str, Any]) -> str:
+def _invoke_live_main_agent(
+    project_plan: dict[str, Any],
+    *,
+    workspace: str | None = None,
+) -> str:
     # Lazy imports avoid constructing Deep Agents before this live boundary is used.
     from app.agents import create_agent_bundle
     from app.graph.nodes.common import last_agent_text
 
-    result = create_agent_bundle().main.invoke(
+    result = create_agent_bundle(workspace).main.invoke(
         {
             "messages": [
                 {"role": "user", "content": _task_preparation_prompt(project_plan)}
@@ -32,11 +36,15 @@ def _invoke_live_main_agent(project_plan: dict[str, Any]) -> str:
     return last_agent_text(result)
 
 
-def prepare_build_tasks_with_main_agent(project_plan: dict[str, Any]) -> dict[str, Any]:
+def prepare_build_tasks_with_main_agent(
+    project_plan: dict[str, Any],
+    *,
+    workspace: str | None = None,
+) -> dict[str, Any]:
     """Use the live Main Agent boundary to prepare executable build tasks."""
 
     settings = Settings.from_env()
-    agent_note = _invoke_live_main_agent(project_plan)
+    agent_note = _invoke_live_main_agent(project_plan, workspace=workspace)
     preparation_source = "main_agent_live"
 
     build_task_plan = create_build_task_plan(project_plan, agent_note=agent_note)

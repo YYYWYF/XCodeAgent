@@ -4,6 +4,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents.main.repair_planner import plan_repairs_with_main_agent
 from app.agents.test.validator import summarize_tests_with_deep_agent
+from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.test_validation import evaluate_quality_gate
 from app.workspace.test_documents import write_test_report_json
@@ -175,6 +176,7 @@ def test_agent_review(state: ProjectState) -> dict:
     review = summarize_tests_with_deep_agent(
         test_results=state.get("test_results", []),
         build_results=state.get("build_results", []),
+        workspace=workspace_from_state(state),
     )
     return {
         "test_agent_review": review,
@@ -206,6 +208,7 @@ def main_repair_planning(state: ProjectState) -> dict:
         test_report=state.get("test_report", {}),
         revision_requests=state.get("revision_requests", []),
         build_task_plan=state.get("build_task_plan"),
+        workspace=workspace_from_state(state),
     )
     repair_task_plan_path = write_repair_task_plan_json(state, repair_task_plan)
     return {

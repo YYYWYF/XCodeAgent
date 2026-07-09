@@ -40,7 +40,7 @@ def _invoke_live_frontend_agent(
     # Lazy import keeps Deep Agent construction at this live execution boundary.
     from app.agents import create_agent_bundle
 
-    result = create_agent_bundle().frontend.invoke(
+    result = create_agent_bundle(workspace).frontend.invoke(
         {
             "messages": [
                 {

@@ -24,12 +24,14 @@ def _page_design_prompt(
 def _invoke_live_main_agent(
     project_plan: dict[str, Any],
     confirmed_page_spec: dict[str, Any],
+    *,
+    workspace: str | None = None,
 ) -> str:
     # Lazy imports avoid constructing Deep Agents before this live boundary is used.
     from app.agents import create_agent_bundle
     from app.graph.nodes.common import last_agent_text
 
-    result = create_agent_bundle().main.invoke(
+    result = create_agent_bundle(workspace).main.invoke(
         {
             "messages": [
                 {
@@ -45,11 +47,17 @@ def _invoke_live_main_agent(
 def design_page_with_main_agent(
     project_plan: dict[str, Any],
     confirmed_page_spec: dict[str, Any],
+    *,
+    workspace: str | None = None,
 ) -> dict[str, Any]:
     """Use the live Main Agent boundary to create a page detail plan."""
 
     settings = Settings.from_env()
-    agent_note = _invoke_live_main_agent(project_plan, confirmed_page_spec)
+    agent_note = _invoke_live_main_agent(
+        project_plan,
+        confirmed_page_spec,
+        workspace=workspace,
+    )
     design_source = "main_agent_live"
 
     detail_plan = create_page_detail_plan(

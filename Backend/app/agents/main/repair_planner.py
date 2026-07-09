@@ -31,10 +31,11 @@ def _invoke_live_main_agent(
     test_report: dict[str, Any],
     revision_requests: list[dict[str, Any]],
     build_task_plan: dict[str, Any] | None,
+    workspace: str | None = None,
 ) -> str:
     from app.agents import create_agent_bundle
 
-    result = create_agent_bundle().main.invoke(
+    result = create_agent_bundle(workspace).main.invoke(
         {
             "messages": [
                 {
@@ -56,6 +57,7 @@ def plan_repairs_with_main_agent(
     test_report: dict[str, Any],
     revision_requests: list[dict[str, Any]],
     build_task_plan: dict[str, Any] | None = None,
+    workspace: str | None = None,
 ) -> dict[str, Any]:
     settings = Settings.from_env()
     if not revision_requests:
@@ -65,6 +67,7 @@ def plan_repairs_with_main_agent(
             test_report=test_report,
             revision_requests=revision_requests,
             build_task_plan=build_task_plan,
+            workspace=workspace,
         )
 
     repair_task_plan = create_repair_task_plan(

@@ -25,20 +25,28 @@ def _requirements_prompt(request: str) -> str:
     )
 
 
-def _invoke_live_main_agent(request: str) -> dict[str, Any]:
+def _invoke_live_main_agent(
+    request: str,
+    *,
+    workspace: str | None = None,
+) -> dict[str, Any]:
     # Lazy imports avoid constructing Deep Agents before this live boundary is used.
     from app.agents import create_agent_bundle
 
-    return create_agent_bundle().main.invoke(
+    return create_agent_bundle(workspace).main.invoke(
         {"messages": [{"role": "user", "content": _requirements_prompt(request)}]}
     )
 
 
-def analyze_requirements_with_main_agent(request: str) -> dict[str, Any]:
+def analyze_requirements_with_main_agent(
+    request: str,
+    *,
+    workspace: str | None = None,
+) -> dict[str, Any]:
     """Use the live Main Agent boundary to create RequirementSpec and clarifications."""
 
     settings = Settings.from_env()
-    agent_result = _invoke_live_main_agent(request)
+    agent_result = _invoke_live_main_agent(request, workspace=workspace)
     from app.graph.nodes.common import last_agent_text
 
     agent_note = last_agent_text(agent_result)

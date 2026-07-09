@@ -26,11 +26,12 @@ def _invoke_live_test_agent(
     *,
     test_results: list[dict[str, Any]],
     build_results: list[dict[str, Any]],
+    workspace: str | None = None,
 ) -> str:
     # Lazy import keeps Deep Agent construction at this live execution boundary.
     from app.agents import create_agent_bundle
 
-    result = create_agent_bundle().test.invoke(
+    result = create_agent_bundle(workspace).test.invoke(
         {
             "messages": [
                 {
@@ -50,11 +51,13 @@ def summarize_tests_with_deep_agent(
     *,
     test_results: list[dict[str, Any]],
     build_results: list[dict[str, Any]],
+    workspace: str | None = None,
 ) -> dict[str, Any]:
     settings = Settings.from_env()
     agent_note = _invoke_live_test_agent(
         test_results=test_results,
         build_results=build_results,
+        workspace=workspace,
     )
     return {
         "agent_note": agent_note,

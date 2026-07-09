@@ -22,22 +22,30 @@ def _planning_prompt(requirement_spec: dict[str, Any]) -> str:
     )
 
 
-def _invoke_live_main_agent(requirement_spec: dict[str, Any]) -> str:
+def _invoke_live_main_agent(
+    requirement_spec: dict[str, Any],
+    *,
+    workspace: str | None = None,
+) -> str:
     # Import lazily to avoid constructing Deep Agents before this live boundary is used.
     from app.agents import create_agent_bundle
     from app.graph.nodes.common import last_agent_text
 
-    result = create_agent_bundle().main.invoke(
+    result = create_agent_bundle(workspace).main.invoke(
         {"messages": [{"role": "user", "content": _planning_prompt(requirement_spec)}]}
     )
     return last_agent_text(result)
 
 
-def plan_project_with_main_agent(requirement_spec: dict[str, Any]) -> dict[str, Any]:
+def plan_project_with_main_agent(
+    requirement_spec: dict[str, Any],
+    *,
+    workspace: str | None = None,
+) -> dict[str, Any]:
     """Use the live Main Agent planning boundary to produce a ProjectPlan."""
 
     settings = Settings.from_env()
-    agent_note = _invoke_live_main_agent(requirement_spec)
+    agent_note = _invoke_live_main_agent(requirement_spec, workspace=workspace)
     planning_source = "main_agent_live"
 
     plan = create_project_plan(

@@ -1,5 +1,6 @@
 from app.agents.main.planner import plan_project_with_main_agent
 from app.agents.main.page_designer import design_page_with_main_agent
+from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.page_detail_plan import (
     attach_page_detail_plan,
@@ -14,7 +15,10 @@ from app.workspace.plan_documents import (
 
 def project_planning(state: ProjectState) -> dict:
     requirement_spec = state["requirement_spec"]
-    project_plan = plan_project_with_main_agent(requirement_spec)
+    project_plan = plan_project_with_main_agent(
+        requirement_spec,
+        workspace=workspace_from_state(state),
+    )
     project_plan_path = write_project_plan_document(state, project_plan)
 
     return {
@@ -46,6 +50,7 @@ def detail_confirmation(state: ProjectState) -> dict:
     page_detail_plan = design_page_with_main_agent(
         project_plan,
         confirmed_page_spec,
+        workspace=workspace_from_state(state),
     )
     updated_project_plan = attach_page_detail_plan(project_plan, page_detail_plan)
     project_plan_path = write_project_plan_document(state, updated_project_plan)

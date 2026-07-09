@@ -41,7 +41,7 @@ def _invoke_live_data_source_agent(
     # Lazy import keeps Deep Agent construction at this live execution boundary.
     from app.agents import create_agent_bundle
 
-    result = create_agent_bundle().data_source.invoke(
+    result = create_agent_bundle(workspace).data_source.invoke(
         {
             "messages": [
                 {

@@ -1,4 +1,5 @@
 from app.agents.main.requirements_analyzer import analyze_requirements_with_main_agent
+from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.workspace.spec_documents import (
     requirement_spec_json_path,
@@ -7,7 +8,10 @@ from app.workspace.spec_documents import (
 
 
 def requirements(state: ProjectState) -> dict:
-    analysis = analyze_requirements_with_main_agent(state["request"])
+    analysis = analyze_requirements_with_main_agent(
+        state["request"],
+        workspace=workspace_from_state(state),
+    )
     spec = analysis["requirement_spec"]
     clarification = analysis["clarification"]
     spec_path = write_requirement_spec_document(state, spec)

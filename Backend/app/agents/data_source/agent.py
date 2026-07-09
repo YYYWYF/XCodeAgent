@@ -1,8 +1,12 @@
 from deepagents import create_deep_agent
-from deepagents.middleware.permissions import FilesystemPermission
+
+from app.agents.workspace_scope import (
+    create_workspace_backend,
+    create_workspace_permissions,
+)
 
 
-def create_data_source_agent(model):
+def create_data_source_agent(model, workspace_root: str | None = None):
     return create_deep_agent(
         name="data-source-generation-agent",
         model=model,
@@ -15,16 +19,9 @@ def create_data_source_agent(model):
             "change the contract. Do not confirm requirements and do not modify "
             "RequirementSpec, PageSpec, ProjectPlan, or the task DAG directly. Return "
             "a concise structured implementation report with changed files, commands, "
-            "status, and any change request."
+            "status, and any change request. When workspace filesystem tools are "
+            "available, use virtual absolute paths rooted at workspaceRoot."
         ),
-        permissions=[
-            FilesystemPermission(
-                operations=["read", "write"],
-                paths=[
-                    "/app/backend/**",
-                    "/app/shared/api/**",
-                    "/tests/backend/**",
-                ],
-            )
-        ],
+        backend=create_workspace_backend(workspace_root),
+        permissions=create_workspace_permissions(workspace_root, mode="data_source"),
     )
