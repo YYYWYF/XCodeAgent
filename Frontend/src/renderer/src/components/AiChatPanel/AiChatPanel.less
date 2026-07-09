@@ -38,6 +38,14 @@
   }
 }
 
+.@{class-prefix}-diff-panel-open {
+  .@{class-prefix}-ai-chat-assistant {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 620px;
+  }
+}
+
 .@{class-prefix}-split-dragging {
   cursor: col-resize;
 
@@ -132,6 +140,12 @@
   min-height: 0;
   overflow: hidden;
   background: #ffffff;
+}
+
+.@{class-prefix}-diff-detail-pane {
+  flex: 0 0 clamp(420px, 34vw, 620px);
+  width: clamp(420px, 34vw, 620px);
+  border-left: 1px solid #e2e8f0;
 }
 
 .@{class-prefix}-ai-chat-main {

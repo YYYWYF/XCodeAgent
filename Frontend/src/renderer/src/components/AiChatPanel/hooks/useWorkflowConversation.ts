@@ -10,7 +10,7 @@ import {
   type ClarificationAnswers
 } from '../components/WorkflowRunCard'
 import type { AgentChatMessage } from '../types'
-import { stoppedAnswer } from '../utils'
+import { stoppedAnswer, workflowCodeChanges } from '../utils'
 
 type UseWorkflowConversationParams = {
   activeSessionId?: string
@@ -114,12 +114,14 @@ export function useWorkflowConversation({
       workflow?: WorkflowRunPayload,
       toolCalls?: ToolCallRecord[]
     ): AgentChatMessage[] => {
+      const nextCodeChanges = workflowCodeChanges(workflow)
       latestMessages = latestMessages.map((currentMessage) =>
         currentMessage.id === assistantMessageId
           ? {
               ...currentMessage,
               content,
               workflow: workflow ?? currentMessage.workflow,
+              codeChanges: nextCodeChanges ?? currentMessage.codeChanges,
               toolCalls: toolCalls ?? currentMessage.toolCalls
             }
           : currentMessage
@@ -131,6 +133,7 @@ export function useWorkflowConversation({
                 ...currentMessage,
                 content,
                 workflow: workflow ?? currentMessage.workflow,
+                codeChanges: nextCodeChanges ?? currentMessage.codeChanges,
                 toolCalls: toolCalls ?? currentMessage.toolCalls
               }
             : currentMessage

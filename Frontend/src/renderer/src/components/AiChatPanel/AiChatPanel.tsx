@@ -4,11 +4,12 @@ import type { MenuProps } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
-import type { ApplicationConfig, EditorMode } from '../../typings'
+import type { ApplicationConfig, EditorMode, WorkspaceCodeChangeSet } from '../../typings'
 import { cx, getInitialPreviewUrl, openPreviewWindow } from '../../utils'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
 import ChatHeader from './components/ChatHeader'
+import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import MessageList from './components/MessageList'
 import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
@@ -104,11 +105,19 @@ export default function AiChatPanel({
     }
   }
 
+  const handleOpenCodeChangeFile = (
+    codeChanges: WorkspaceCodeChangeSet,
+    selectedPath: string
+  ): void => {
+    setRightPanel({ type: 'diff', codeChanges, selectedPath })
+  }
+
   return (
     <section
       className={cx(
         'ai-chat-panel',
         rightPanelOpen && 'embedded-preview-open',
+        rightPanel?.type === 'diff' && 'diff-panel-open',
         splitDragging && 'split-dragging'
       )}
       ref={panelRef}
@@ -155,6 +164,7 @@ export default function AiChatPanel({
             copy={copy}
             loading={loading}
             messages={messages}
+            onOpenCodeChangeFile={handleOpenCodeChangeFile}
             onSubmitClarification={handleSubmitClarification}
           />
 
@@ -172,7 +182,7 @@ export default function AiChatPanel({
         </div>
       </div>
 
-      {rightPanelOpen && (
+      {rightPanel?.type === 'preview' && (
         <div
           aria-label="拖动调整右侧面板宽度"
           aria-orientation="vertical"
@@ -188,6 +198,16 @@ export default function AiChatPanel({
       {rightPanel?.type === 'preview' && (
         <div className={cx('embedded-preview-pane')}>
           <BrowserPreviewPanel application={application} />
+        </div>
+      )}
+
+      {rightPanel?.type === 'diff' && (
+        <div className={cx('embedded-preview-pane', 'diff-detail-pane')}>
+          <CodeDiffDetailPanel
+            codeChanges={rightPanel.codeChanges}
+            selectedPath={rightPanel.selectedPath}
+            onClose={() => setRightPanel(undefined)}
+          />
         </div>
       )}
     </section>
