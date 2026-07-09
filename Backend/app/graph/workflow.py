@@ -6,7 +6,15 @@ from app.graph.state import ProjectState
 
 
 def route_workflow_start(state: ProjectState) -> str:
-    return "requirements" if state.get("resume_from") == "requirements" else "classify_request_complexity"
+    if state.get("resume_from") == "requirements":
+        return "requirements"
+    if state.get("resume_from") == "project_planning":
+        return "project_planning"
+    if state.get("resume_from") == "detail_confirmation":
+        return "detail_confirmation"
+    if state.get("resume_from") == "prepare_build_tasks":
+        return "prepare_build_tasks"
+    return "classify_request_complexity"
 
 
 def route_request_complexity(state: ProjectState) -> str:
@@ -31,6 +39,28 @@ def route_requirements(state: ProjectState) -> str:
     return "project_planning"
 
 
+def route_project_planning(state: ProjectState) -> str:
+    return (
+        "await_user_input"
+        if state.get("status") == "requires_user_input"
+        else "detail_confirmation"
+    )
+
+
+def route_detail_confirmation(state: ProjectState) -> str:
+    return (
+        "await_user_input"
+        if state.get("status") == "requires_user_input"
+        else "prepare_build_tasks"
+    )
+
+
+def route_prepare_build_tasks(state: ProjectState) -> str:
+    return (
+        "await_user_input" if state.get("status") == "requires_user_input" else "build"
+    )
+
+
 def build_graph():
     builder = StateGraph(ProjectState)
 
@@ -53,6 +83,9 @@ def build_graph():
         {
             "classify_request_complexity": "classify_request_complexity",
             "requirements": "requirements",
+            "project_planning": "project_planning",
+            "detail_confirmation": "detail_confirmation",
+            "prepare_build_tasks": "prepare_build_tasks",
         },
     )
     builder.add_conditional_edges(
@@ -71,9 +104,30 @@ def build_graph():
             "await_user_input": END,
         },
     )
-    builder.add_edge("project_planning", "detail_confirmation")
-    builder.add_edge("detail_confirmation", "prepare_build_tasks")
-    builder.add_edge("prepare_build_tasks", "build")
+    builder.add_conditional_edges(
+        "project_planning",
+        route_project_planning,
+        {
+            "detail_confirmation": "detail_confirmation",
+            "await_user_input": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "detail_confirmation",
+        route_detail_confirmation,
+        {
+            "prepare_build_tasks": "prepare_build_tasks",
+            "await_user_input": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "prepare_build_tasks",
+        route_prepare_build_tasks,
+        {
+            "build": "build",
+            "await_user_input": END,
+        },
+    )
     builder.add_edge("build", "integration_test")
     builder.add_edge("direct_modification", "integration_test")
     builder.add_conditional_edges(

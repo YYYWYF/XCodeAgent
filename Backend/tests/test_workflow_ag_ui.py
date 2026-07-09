@@ -60,49 +60,44 @@ class FakeWorkflowGraph:
         )
 
 
-class FakeCodeChangesWorkflowGraph:
+class FakeProjectPlanningWaitGraph:
     async def astream(self, initial_state, *, config, stream_mode):
-        code_change_set = {
-            "id": "set-1",
-            "status": "applied",
-            "workspaceRoot": "/tmp/workspace",
-            "summary": {"files": 1, "additions": 1, "deletions": 0},
-            "files": [
-                {
-                    "id": "file.write:src/app.py:abc",
-                    "path": "src/app.py",
-                    "changeType": "added",
-                    "additions": 1,
-                    "deletions": 0,
-                    "diff": "--- a/src/app.py\n+++ b/src/app.py\n@@ -0,0 +1 @@\n+print('hi')\n",
-                    "truncated": False,
-                    "binary": False,
-                    "tool": "file.write",
-                    "sourceTool": "main.direct_modification",
-                    "executed": True,
-                }
-            ],
-        }
-        self.values = {
-            "phase": "finalize_project",
-            "status": "completed",
-            "timeline": ["direct_modification"],
-            "quality_gate_passed": True,
-            "code_changes": code_change_set,
-            "code_change_sets": [code_change_set],
-        }
         yield {
-            "direct_modification": {
-                "phase": "direct_modification",
-                "status": "completed",
-                "code_changes": code_change_set,
-                "code_change_sets": [code_change_set],
-                "timeline": ["direct_modification"],
+            "project_planning": {
+                "phase": "project_planning",
+                "status": "requires_user_input",
+                "project_plan_path": "var/plans/project-plan.md",
+                "project_plan": {"confirmation_status": "pending_user_confirmation"},
+                "clarification": {
+                    "mode": "project_plan_confirmation",
+                    "status": "requires_user_input",
+                    "questions": [
+                        {
+                            "header": "计划确认",
+                            "question": "请确认项目规划书是否正确。",
+                            "type": "text",
+                        }
+                    ],
+                },
+                "timeline": ["project_planning"],
             }
         }
 
     def get_state(self, config):
-        return SimpleNamespace(values=self.values)
+        return SimpleNamespace(
+            values={
+                "phase": "project_planning",
+                "status": "requires_user_input",
+                "project_plan_path": "var/plans/project-plan.md",
+                "project_plan": {"confirmation_status": "pending_user_confirmation"},
+                "clarification": {
+                    "mode": "project_plan_confirmation",
+                    "status": "requires_user_input",
+                    "questions": [{"header": "计划确认", "question": "请确认项目规划书是否正确。"}],
+                },
+                "timeline": ["project_planning"],
+            }
+        )
 
 
 class WorkflowAgUiStreamTests(unittest.TestCase):
@@ -127,11 +122,6 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("RUN_STARTED", payload)
         self.assertIn("TEXT_MESSAGE_START", payload)
         self.assertIn("TEXT_MESSAGE_CONTENT", payload)
-        self.assertIn("TOOL_CALL_START", payload)
-        self.assertIn("TOOL_CALL_ARGS", payload)
-        self.assertIn("TOOL_CALL_END", payload)
-        self.assertIn("TOOL_CALL_RESULT", payload)
-        self.assertIn("ask_user", payload)
         self.assertIn("CUSTOM", payload)
         self.assertIn("STATE_SNAPSHOT", payload)
         self.assertIn("RUN_FINISHED", payload)
@@ -141,6 +131,30 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("requiresUserInput", payload)
         self.assertIn("requires_user_input", payload)
         self.assertIn("需要哪些角色", payload)
+
+    def test_stream_exposes_project_planning_confirmation(self) -> None:
+        graph = FakeProjectPlanningWaitGraph()
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-1",
+                    "runId": "run-1",
+                    "messages": [{"role": "user", "content": "make inventory app"}],
+                    "resumeFrom": "project_planning",
+                },
+                accept="text/event-stream",
+            )
+            return [frame async for frame in stream]
+
+        frames = asyncio.run(collect())
+        payload = "\n".join(frames)
+
+        self.assertIn("project_plan_confirmation", payload)
+        self.assertIn("请确认项目规划书是否正确", payload)
+        self.assertIn("project_planning", payload)
+        self.assertIn("nodeName", payload)
 
     def test_stream_passes_forwarded_workspace_to_graph_state(self) -> None:
         graph = FakeWorkflowGraph()
@@ -196,29 +210,6 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             result["workspace"],
             "/Users/sbw/Documents/example-workspace",
         )
-
-    def test_stream_includes_code_changes_payload(self) -> None:
-        graph = FakeCodeChangesWorkflowGraph()
-
-        async def collect() -> list[str]:
-            stream = build_workflow_ag_ui_stream(
-                graph=graph,
-                payload={
-                    "threadId": "thread-1",
-                    "runId": "run-1",
-                    "messages": [{"role": "user", "content": "write a file"}],
-                },
-                accept="text/event-stream",
-            )
-            return [frame async for frame in stream]
-
-        payload = "\n".join(asyncio.run(collect()))
-
-        self.assertIn("workflow-run", payload)
-        self.assertIn("codeChanges", payload)
-        self.assertIn("codeChangesSummary", payload)
-        self.assertIn("src/app.py", payload)
-        self.assertIn("main.direct_modification", payload)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from app.config import Settings
+from app.agents.model_factory import create_chat_model
 from app.services.page_detail_plan import create_page_detail_plan
 
 
@@ -13,9 +14,13 @@ def _page_design_prompt(
 ) -> str:
     return (
         "You are the Main Agent for an app-generation workflow.\n"
+        "This is a design-only boundary. Do not call tools, do not call subagents, "
+        "do not delegate tasks, and do not generate or modify code.\n"
         "Create a detailed page design from the user-confirmed PageSpec.\n"
         "The ProjectPlan is only context for API contracts, data sources, and dependencies.\n"
         "The PageSpec is the source of truth for page goal, layout, interactions, data sources, and permissions.\n\n"
+        "Pay special attention to ProjectPlan.api_contracts and ProjectPlan.page_data_dependencies; "
+        "the page design must not invent incompatible APIs or undeclared page/data dependencies.\n\n"
         f"Confirmed PageSpec:\n{json.dumps(confirmed_page_spec, ensure_ascii=False)}\n\n"
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False)}"
     )
@@ -27,30 +32,24 @@ def _invoke_live_main_agent(
     *,
     workspace: str | None = None,
 ) -> str:
-    # Lazy imports avoid constructing Deep Agents before this live boundary is used.
-    from app.agents import create_agent_bundle
-    from app.graph.nodes.common import last_agent_text
-
-    result = create_agent_bundle(workspace).main.invoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": _page_design_prompt(project_plan, confirmed_page_spec),
-                }
-            ]
-        }
+    settings = Settings.from_env()
+    result = create_chat_model(settings).invoke(
+        _page_design_prompt(project_plan, confirmed_page_spec)
     )
-    return last_agent_text(result)
+    content = getattr(result, "content", result)
+    if isinstance(content, list):
+        return "\n".join(
+            str(item.get("text", item)) if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    return str(content)
 
 
 def design_page_with_main_agent(
     project_plan: dict[str, Any],
     confirmed_page_spec: dict[str, Any],
-    *,
-    workspace: str | None = None,
-) -> dict[str, Any]:
-    """Use the live Main Agent boundary to create a page detail plan."""
+) -> dict[str, Any
+跟i    """Use the live Main Agent boundary to create a page detail plan."""
 
     settings = Settings.from_env()
     agent_note = _invoke_live_main_agent(

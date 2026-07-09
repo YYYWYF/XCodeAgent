@@ -60,6 +60,95 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["resume_from"], "requirements")
 
+    def test_infers_detail_confirmation_resume_and_preserves_plan_state(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "我选择 页面：库存管理列表页",
+                "forwardedProps": {
+                    "resumeState": {
+                        "events": [
+                            {
+                                "type": "workflow.node.completed",
+                                "node": {"id": "detail_confirmation"},
+                                "status": "requires_user_input",
+                            }
+                        ],
+                        "result": {
+                            "project_plan": {"frontend_pages": []},
+                            "project_plan_path": "var/plans/project-plan.md",
+                            "page_spec_draft": {"page_id": "inventory_page"},
+                        },
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "detail_confirmation")
+        self.assertEqual(inputs["resume_values"]["project_plan"], {"frontend_pages": []})
+        self.assertEqual(
+            inputs["resume_values"]["page_spec_draft"],
+            {"page_id": "inventory_page"},
+        )
+
+    def test_infers_project_planning_resume_and_preserves_plan_state(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "正确，继续",
+                "forwardedProps": {
+                    "resumeState": {
+                        "events": [
+                            {
+                                "type": "workflow.node.completed",
+                                "node": {"id": "project_planning"},
+                                "status": "requires_user_input",
+                            }
+                        ],
+                        "result": {
+                            "requirement_spec": {"version": "0.1.0"},
+                            "project_plan": {"version": "0.1.0"},
+                        },
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "project_planning")
+        self.assertEqual(inputs["resume_values"]["project_plan"], {"version": "0.1.0"})
+        self.assertEqual(
+            inputs["resume_values"]["requirement_spec"],
+            {"version": "0.1.0"},
+        )
+
+    def test_infers_prepare_build_tasks_resume_for_plan_confirmation_guard(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "正确，继续",
+                "forwardedProps": {
+                    "resumeState": {
+                        "events": [
+                            {
+                                "type": "workflow.node.completed",
+                                "node": {"id": "prepare_build_tasks"},
+                                "status": "requires_user_input",
+                            }
+                        ],
+                        "result": {
+                            "project_plan": {
+                                "version": "0.1.0",
+                                "confirmation_status": "pending_user_confirmation",
+                            },
+                        },
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+        self.assertEqual(
+            inputs["resume_values"]["project_plan"]["confirmation_status"],
+            "pending_user_confirmation",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,10 @@ export type WorkflowEvent = {
   runId?: string
   threadId?: string
   nodeName?: string
+  node?: {
+    id?: string
+    label?: string
+  }
   status?: string
   message?: string
   data?: Record<string, unknown>

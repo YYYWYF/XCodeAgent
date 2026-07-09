@@ -4,6 +4,97 @@ from datetime import UTC, datetime
 from typing import Any
 
 
+def _agent_section(agent_plan: dict[str, Any] | None, key: str) -> Any:
+    if not isinstance(agent_plan, dict):
+        return None
+    return agent_plan.get(key)
+
+
+def _merge_agent_items(
+    default_items: list[dict[str, Any]],
+    agent_plan: dict[str, Any] | None,
+    key: str,
+) -> list[dict[str, Any]]:
+    agent_items = _agent_section(agent_plan, key)
+    if not isinstance(agent_items, list):
+        return default_items
+
+    by_id = {
+        str(item["id"]): item
+        for item in agent_items
+        if isinstance(item, dict) and item.get("id")
+    }
+    return [
+        _merge_agent_item(item, by_id.get(str(item["id"]), {}))
+        for item in default_items
+    ]
+
+
+def _merge_agent_item(
+    default_item: dict[str, Any],
+    agent_item: dict[str, Any],
+) -> dict[str, Any]:
+    merged = {**default_item, **agent_item}
+    for key, default_value in default_item.items():
+        agent_value = agent_item.get(key)
+        if isinstance(default_value, list) and not isinstance(agent_value, list):
+            merged[key] = default_value
+        elif isinstance(default_value, dict) and not isinstance(agent_value, dict):
+            merged[key] = default_value
+    return merged
+
+
+def _dict_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _string_items(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _normalize_data_sources(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = []
+    for item in items:
+        normalized.append(
+            {
+                **item,
+                "entities": _string_items(item.get("entities")),
+                "schema": item.get("schema") if isinstance(item.get("schema"), dict) else {},
+            }
+        )
+    return normalized
+
+
+def _normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = []
+    for item in items:
+        normalized.append(
+            {
+                **item,
+                "endpoints": _dict_items(item.get("endpoints")),
+            }
+        )
+    return normalized
+
+
+def _normalize_frontend_pages(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = []
+    for item in items:
+        normalized.append(
+            {
+                **item,
+                "data_dependencies": _string_items(item.get("data_dependencies")),
+                "states": _string_items(item.get("states")),
+                "permissions": _string_items(item.get("permissions")),
+            }
+        )
+    return normalized
+
+
 def _entity_name_from_source(data_source: dict[str, Any]) -> str:
     entities = data_source.get("entities") or []
     if entities:
@@ -122,6 +213,135 @@ def _task_inputs(plan_pages: list[dict[str, Any]], plan_sources: list[dict[str, 
     }
 
 
+def _requirements_overview(
+    spec: dict[str, Any],
+    agent_plan: dict[str, Any] | None,
+) -> dict[str, Any]:
+    overview = {
+        "summary": spec["app_info"]["summary"],
+        "target": spec["app_info"].get("target", "生成一个可在本地运行的前后端应用工程。"),
+        "roles": spec["user_roles"],
+        "modules": spec["feature_modules"],
+        "business_flows": spec["business_flows"],
+        "acceptance_focus": spec["acceptance_criteria"],
+    }
+    agent_overview = _agent_section(agent_plan, "requirements_overview")
+    if isinstance(agent_overview, dict):
+        overview.update(agent_overview)
+    for key, fallback in {
+        "roles": spec["user_roles"],
+        "modules": spec["feature_modules"],
+        "business_flows": spec["business_flows"],
+        "acceptance_focus": spec["acceptance_criteria"],
+    }.items():
+        if key == "acceptance_focus":
+            if not _string_items(overview.get(key)):
+                overview[key] = fallback
+        elif not _dict_items(overview.get(key)):
+            overview[key] = fallback
+    return overview
+
+
+def _project_acceptance_criteria(
+    spec: dict[str, Any],
+    agent_plan: dict[str, Any] | None,
+) -> list[str]:
+    agent_criteria = _agent_section(agent_plan, "project_acceptance_criteria")
+    if isinstance(agent_criteria, list) and agent_criteria:
+        criteria = [str(item) for item in agent_criteria if str(item).strip()]
+        if criteria:
+            return criteria
+    return list(spec["acceptance_criteria"])
+
+
+def _page_data_dependencies(
+    plan_pages: list[dict[str, Any]],
+    api_contracts: list[dict[str, Any]],
+    agent_plan: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    contract_by_source = {
+        contract["data_source_id"]: contract["id"]
+        for contract in api_contracts
+        if contract.get("data_source_id")
+    }
+    dependencies = [
+        {
+            "page_id": page["id"],
+            "page_name": page["name"],
+            "path": page["path"],
+            "data_source_ids": page["data_dependencies"],
+            "api_contract_ids": [
+                contract_by_source[source_id]
+                for source_id in page["data_dependencies"]
+                if source_id in contract_by_source
+            ],
+            "usage": "read",
+        }
+        for page in plan_pages
+    ]
+    agent_dependencies = _dict_items(_agent_section(agent_plan, "page_data_dependencies"))
+    if not agent_dependencies:
+        return dependencies
+
+    by_page_id = {
+        str(item["page_id"]): item
+        for item in agent_dependencies
+        if item.get("page_id")
+    }
+    return [
+        {
+            **item,
+            **by_page_id.get(str(item["page_id"]), {}),
+            "data_source_ids": _string_items(
+                by_page_id.get(str(item["page_id"]), {}).get(
+                    "data_source_ids",
+                    item["data_source_ids"],
+                )
+            ),
+            "api_contract_ids": _string_items(
+                by_page_id.get(str(item["page_id"]), {}).get(
+                    "api_contract_ids",
+                    item["api_contract_ids"],
+                )
+            ),
+        }
+        for item in dependencies
+    ]
+
+
+def _permission_model(
+    spec: dict[str, Any],
+    plan_pages: list[dict[str, Any]],
+    agent_plan: dict[str, Any] | None,
+) -> dict[str, Any]:
+    role_ids = [role["id"] for role in spec["user_roles"]]
+    model = {
+        "roles": spec["user_roles"],
+        "page_access": [
+            {
+                "page_id": page["id"],
+                "path": page["path"],
+                "allowed_roles": page["permissions"],
+            }
+            for page in plan_pages
+        ],
+        "operation_permissions": [
+            {
+                "role_id": role_id,
+                "operations": ["read", "create", "update", "delete"]
+                if role_id == "admin"
+                else ["read"],
+            }
+            for role_id in role_ids
+        ],
+        "default_policy": "deny_unlisted",
+    }
+    agent_model = _agent_section(agent_plan, "permission_model")
+    if isinstance(agent_model, dict):
+        model.update(agent_model)
+    return model
+
+
 def _coordination_plan() -> dict[str, Any]:
     return {
         "detail_confirmation": {
@@ -146,9 +366,40 @@ def create_project_plan(
     spec: dict[str, Any],
     agent_note: str = "live main-agent project planning",
     planning_source: str = "main_agent_live",
+    agent_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    frontend_pages = _frontend_pages(spec)
-    data_sources = _planned_data_sources(spec)
+    data_sources = _normalize_data_sources(
+        _merge_agent_items(
+            _planned_data_sources(spec),
+            agent_plan,
+            "data_sources",
+        )
+    )
+    api_contracts = _normalize_api_contracts(
+        _merge_agent_items(
+            _api_contracts(spec),
+            agent_plan,
+            "api_contracts",
+        )
+    )
+    frontend_pages = _normalize_frontend_pages(
+        _merge_agent_items(
+            _frontend_pages(spec),
+            agent_plan,
+            "frontend_pages",
+        )
+    )
+    task_inputs = _task_inputs(frontend_pages, data_sources)
+
+    agent_architecture = _agent_section(agent_plan, "architecture")
+    architecture = {
+        "frontend": "Single Page Application with generated pages and API client.",
+        "backend": "Local API service exposing generated resource endpoints.",
+        "data": "Mock or database-backed data sources based on RequirementSpec.",
+        "testing": "Unit, contract, integration, and smoke checks before acceptance.",
+    }
+    if isinstance(agent_architecture, dict):
+        architecture.update(agent_architecture)
 
     return {
         "version": "0.1.0",
@@ -159,18 +410,24 @@ def create_project_plan(
             "name": spec["app_info"]["name"],
             "summary": spec["app_info"]["summary"],
         },
-        "architecture": {
-            "frontend": "Single Page Application with generated pages and API client.",
-            "backend": "Local API service exposing generated resource endpoints.",
-            "data": "Mock or database-backed data sources based on RequirementSpec.",
-            "testing": "Unit, contract, integration, and smoke checks before acceptance.",
-        },
-        "api_contracts": _api_contracts(spec),
+        "requirements_overview": _requirements_overview(spec, agent_plan),
+        "project_acceptance_criteria": _project_acceptance_criteria(
+            spec,
+            agent_plan,
+        ),
+        "architecture": architecture,
+        "api_contracts": api_contracts,
         "frontend_pages": frontend_pages,
         "data_sources": data_sources,
+        "page_data_dependencies": _page_data_dependencies(
+            frontend_pages,
+            api_contracts,
+            agent_plan,
+        ),
+        "permission_model": _permission_model(spec, frontend_pages, agent_plan),
         "business_flows": spec["business_flows"],
         "acceptance_criteria": spec["acceptance_criteria"],
-        "task_inputs": _task_inputs(frontend_pages, data_sources),
+        "task_inputs": task_inputs,
         "coordination_plan": _coordination_plan(),
         "risks": [
             "字段模型仍是初版，需要在单页面/单数据源细节确认阶段细化。",
@@ -178,5 +435,6 @@ def create_project_plan(
         ],
         "agent_note": agent_note,
         "planning_source": planning_source,
+        "agent_plan_used": isinstance(agent_plan, dict),
         "approved": True,
     }

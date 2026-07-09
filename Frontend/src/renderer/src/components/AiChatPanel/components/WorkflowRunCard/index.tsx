@@ -71,7 +71,7 @@ export default function WorkflowRunCard({
       {clarificationQuestions.length > 0 && (
         <div className={cx("workflow-clarification")}>
           <div className={cx("workflow-clarification-header")}>
-            <Text type="secondary">待确认需求</Text>
+            <Text type="secondary">待确认事项</Text>
             <Tag
               color={
                 clarification?.status === "requires_user_input"
@@ -123,7 +123,7 @@ export default function WorkflowRunCard({
               className={cx("workflow-event")}
               key={`${event.type}-${event.timestamp}-${index}`}
             >
-              <Tag>{event.nodeName || event.type}</Tag>
+              <Tag>{event.nodeName || event.node?.id || event.type}</Tag>
               <Text>{event.message || event.status || event.type}</Text>
             </div>
           ))}
@@ -282,11 +282,16 @@ function workflowClarification(
     return resultClarification as WorkflowClarification;
   }
 
-  const requirementsEvent = workflow.events
+  const clarificationEvent = workflow.events
     .slice()
     .reverse()
-    .find((event) => event.nodeName === "requirements");
-  const eventClarification = requirementsEvent?.data?.detail;
+    .find((event) => {
+      const detail = event.data?.detail;
+      return Boolean(
+        detail && typeof detail === "object" && "clarification" in detail,
+      );
+    });
+  const eventClarification = clarificationEvent?.data?.detail;
   if (
     eventClarification &&
     typeof eventClarification === "object" &&

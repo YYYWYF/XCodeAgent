@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any, AsyncIterator, Iterable
 from uuid import uuid4
 
@@ -12,16 +11,11 @@ from ag_ui.core import (
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
-    ToolCallArgsEvent,
-    ToolCallEndEvent,
-    ToolCallResultEvent,
-    ToolCallStartEvent,
 )
 from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
 from app.protocols.workflow_request import workflow_run_inputs
-from app.workspace.code_changes import merge_code_change_sets
 
 WORKFLOW_EVENT_PROTOCOL = "xcodeagent.workflow.event.v1"
 
@@ -84,14 +78,12 @@ def workflow_capabilities() -> dict[str, Any]:
             "originalRequest": "Optional original request used when submitting clarification answers.",
             "clarificationAnswers": "Optional structured user answers that are merged with originalRequest before rerunning workflow.",
             "resumeState": "Optional previous workflow payload/state used by the backend to infer which waiting phase to resume.",
-            "resumeFrom": "Optional backend/debug override for the workflow phase to resume from. Currently supports requirements.",
+            "resumeFrom": "Optional backend/debug override for the workflow phase to resume from. Currently supports requirements, project_planning, detail_confirmation, and prepare_build_tasks.",
         },
         "output": {
             "summary": "Human-readable and machine-readable workflow result summary.",
             "events": f"Ordered event list using {WORKFLOW_EVENT_PROTOCOL}.",
             "agUi": "AG-UI-compatible custom-event/state-snapshot payload for frontend visualization.",
-            "toolCalls": "AG-UI TOOL_CALL_* events are emitted when workflow agents request user input through ask_user.",
-            "codeChanges": "Workspace file diff payload for files changed by DeepAgents during the workflow run.",
             "result": "Final LangGraph ProjectState.",
         },
         "eventProtocol": {
@@ -151,6 +143,7 @@ def build_workflow_ag_ui_stream(
                 "request": request,
                 "timeline": [],
             }
+            initial_state.update(workflow_inputs.get("resume_values") or {})
             first_node_name = _workflow_start_node(resume_from)
 
             if resume_from:
@@ -241,14 +234,6 @@ def build_workflow_ag_ui_stream(
                         or f"完成：{_workflow_node_label(node_name)}",
                         data=node_payload,
                     )
-                    for frame in _workflow_tool_call_frames(
-                        encoder,
-                        parent_message_id=message_id,
-                        node_name=node_name,
-                        update=update,
-                        sequence=len(events),
-                    ):
-                        yield frame
                     for frame in _workflow_ag_ui_frames(
                         encoder,
                         run_id=run_id,
@@ -415,6 +400,17 @@ async def build_workflow_response(
         "request": request,
         "timeline": [],
     }
+    request_inputs = workflow_run_inputs(
+        {
+            "request": request,
+            "project_id": project_id,
+            "workspace": workspace,
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "resume_from": resume_from,
+        }
+    )
+    initial_state.update(request_inputs.get("resume_values") or {})
     first_node_name = _workflow_start_node(resume_from)
 
     if resume_from:
@@ -590,56 +586,6 @@ def _text_delta_frames(
         yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=chunk))
 
 
-def _workflow_tool_call_frames(
-    encoder: EventEncoder,
-    *,
-    parent_message_id: str,
-    node_name: str,
-    update: dict[str, Any],
-    sequence: int,
-) -> Iterable[str]:
-    if node_name != "requirements":
-        return
-
-    clarification = update.get("clarification")
-    if not isinstance(clarification, dict):
-        return
-    questions = clarification.get("questions")
-    if clarification.get("status") != "requires_user_input" or not isinstance(
-        questions, list
-    ):
-        return
-    if not questions:
-        return
-
-    tool_call_id = f"workflow-{node_name}-ask-user-{sequence:04d}"
-    args = _json_text({"questions": questions})
-    result = _json_text(clarification)
-
-    yield encoder.encode(
-        ToolCallStartEvent(
-            toolCallId=tool_call_id,
-            toolCallName="ask_user",
-            parentMessageId=parent_message_id,
-        )
-    )
-    for chunk in _chunk_text(args, size=240):
-        yield encoder.encode(ToolCallArgsEvent(toolCallId=tool_call_id, delta=chunk))
-    yield encoder.encode(ToolCallEndEvent(toolCallId=tool_call_id))
-    yield encoder.encode(
-        ToolCallResultEvent(
-            messageId=f"{tool_call_id}-result",
-            toolCallId=tool_call_id,
-            content=result,
-            role="tool",
-        )
-    )
-
-
-def _json_text(value: Any) -> str:
-    return json.dumps(jsonable_encoder(value), ensure_ascii=False, separators=(",", ":"))
-
-
 def _chunk_text(text: str, *, size: int = 80) -> Iterable[str]:
     if not text:
         yield ""
@@ -659,7 +605,6 @@ def _workflow_progress_summary(
     ]
     failed_events = [event for event in events if str(event.get("status")) == "failed"]
     node = last_event.get("node") if isinstance(last_event.get("node"), dict) else {}
-    code_changes = _workflow_code_changes(result)
 
     return {
         "status": last_event.get("status") or result.get("status") or "running",
@@ -673,7 +618,6 @@ def _workflow_progress_summary(
         "previewUrl": result.get("preview_url"),
         "buildSummary": result.get("build_summary", {}),
         "testSummary": {},
-        "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
     }
@@ -684,7 +628,15 @@ def _workflow_node_label(node_name: str) -> str:
 
 
 def _workflow_start_node(resume_from: str | None) -> str:
-    return "requirements" if resume_from == "requirements" else "classify_request_complexity"
+    if resume_from == "requirements":
+        return "requirements"
+    if resume_from == "project_planning":
+        return "project_planning"
+    if resume_from == "detail_confirmation":
+        return "detail_confirmation"
+    if resume_from == "prepare_build_tasks":
+        return "prepare_build_tasks"
+    return "classify_request_complexity"
 
 
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
@@ -708,6 +660,18 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         ):
             return []
         return ["project_planning"]
+    if node_name == "project_planning":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["detail_confirmation"]
+    if node_name == "detail_confirmation":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["prepare_build_tasks"]
+    if node_name == "prepare_build_tasks":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["build"]
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
 
 
@@ -752,6 +716,26 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             },
         }
     if node_name == "project_planning":
+        clarification = update.get("clarification")
+        status = update.get("status")
+        if status == "requires_user_input":
+            questions = (
+                clarification.get("questions", [])
+                if isinstance(clarification, dict)
+                and isinstance(clarification.get("questions"), list)
+                else []
+            )
+            return {
+                "message": (
+                    f"计划文档={update.get('project_plan_path')}，"
+                    f"待确认问题={len(questions)}"
+                ),
+                "data": {
+                    "projectPlan": update.get("project_plan"),
+                    "clarification": clarification,
+                    "requiresUserInput": True,
+                },
+            }
         return {
             "message": (
                 f"计划文档={update.get('project_plan_path')}，"
@@ -760,15 +744,49 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {"projectPlan": update.get("project_plan")},
         }
     if node_name == "detail_confirmation":
+        clarification = update.get("clarification")
+        status = update.get("status")
+        if status == "requires_user_input":
+            questions = (
+                clarification.get("questions", [])
+                if isinstance(clarification, dict)
+                and isinstance(clarification.get("questions"), list)
+                else []
+            )
+            return {
+                "message": f"页面/数据源详细设计待确认，问题={len(questions)}",
+                "data": {
+                    "clarification": clarification,
+                    "requiresUserInput": True,
+                    "detailSelection": update.get("detail_selection"),
+                    "pageSpecDraft": update.get("page_spec_draft"),
+                },
+            }
         return {
             "message": f"页面={update.get('selected_page_id')}，计划文档已更新",
             "data": {
-                "pageSelection": update.get("page_selection"),
+                "detailSelection": update.get("detail_selection"),
                 "pageSpecConfirmation": update.get("page_spec_confirmation"),
                 "detailPlans": update.get("detail_plans", []),
             },
         }
     if node_name == "prepare_build_tasks":
+        clarification = update.get("clarification")
+        if update.get("status") == "requires_user_input":
+            questions = (
+                clarification.get("questions", [])
+                if isinstance(clarification, dict)
+                and isinstance(clarification.get("questions"), list)
+                else []
+            )
+            return {
+                "message": f"ProjectPlan 未确认，已阻止代码生成，待确认问题={len(questions)}",
+                "data": {
+                    "projectPlan": update.get("project_plan"),
+                    "clarification": clarification,
+                    "requiresUserInput": True,
+                },
+            }
         tasks = update.get("tasks") if isinstance(update.get("tasks"), list) else []
         return {
             "message": f"任务数={len(tasks)}，任务DAG={update.get('build_task_plan_path')}",
@@ -843,6 +861,7 @@ def _workflow_event(
         "threadId": thread_id,
         "status": status,
         "message": message,
+        "nodeName": node_name,
         "node": (
             {"id": node_name, "label": _workflow_node_label(node_name)}
             if node_name
@@ -879,7 +898,6 @@ def _workflow_summary(
         if isinstance(result.get("build_summary"), dict)
         else {}
     )
-    code_changes = _workflow_code_changes(result)
     clarification = (
         result.get("clarification")
         if isinstance(result.get("clarification"), dict)
@@ -888,7 +906,7 @@ def _workflow_summary(
     artifacts = _workflow_artifacts(result)
     if status == "requires_user_input":
         question_count = len(clarification.get("questions", []))
-        message = f"Workflow 等待用户补充需求：完成 {len(completed_nodes)} 个节点，待确认问题 {question_count} 个。"
+        message = f"Workflow 等待用户确认/补充：完成 {len(completed_nodes)} 个节点，待确认问题 {question_count} 个。"
     else:
         message = (
             f"Workflow {status}：完成 {len(completed_nodes)} 个节点，"
@@ -909,7 +927,6 @@ def _workflow_summary(
         "previewUrl": result.get("preview_url"),
         "buildSummary": build_summary,
         "testSummary": test_summary,
-        "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
         "clarification": clarification,
     }
@@ -923,50 +940,33 @@ def _workflow_visual_payload(
     events: list[dict[str, Any]],
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    code_changes = _workflow_code_changes(result)
-    state_payload = {
-        "status": summary.get("status"),
-        "request": result.get("request"),
-        "phase": summary.get("phase"),
-        "timeline": summary.get("timeline", []),
-        "artifacts": summary.get("artifacts", {}),
-        "qualityGatePassed": summary.get("qualityGatePassed"),
-        "needsRevision": summary.get("needsRevision"),
-        "previewUrl": summary.get("previewUrl"),
-        "tasks": result.get("tasks", []),
-        "buildSummary": result.get("build_summary", {}),
-        "testReport": result.get("test_report", {}),
-        "repairTaskPlan": result.get("repair_task_plan"),
-        "clarification": result.get("clarification", {}),
-    }
-    payload = {
+    return {
         "runId": run_id,
         "threadId": thread_id,
         "summary": summary,
         "events": events,
-        "state": state_payload,
+        "state": {
+            "status": summary.get("status"),
+            "request": result.get("request"),
+            "phase": summary.get("phase"),
+            "timeline": summary.get("timeline", []),
+            "artifacts": summary.get("artifacts", {}),
+            "qualityGatePassed": summary.get("qualityGatePassed"),
+            "needsRevision": summary.get("needsRevision"),
+            "previewUrl": summary.get("previewUrl"),
+            "tasks": result.get("tasks", []),
+            "buildSummary": result.get("build_summary", {}),
+            "testReport": result.get("test_report", {}),
+            "repairTaskPlan": result.get("repair_task_plan"),
+            "clarification": result.get("clarification", {}),
+            "project_plan": result.get("project_plan"),
+            "pending_project_plan": result.get("pending_project_plan"),
+            "project_plan_path": result.get("project_plan_path"),
+            "project_plan_json_path": result.get("project_plan_json_path"),
+            "detail_selection": result.get("detail_selection"),
+            "selected_page_id": result.get("selected_page_id"),
+            "selected_data_source_id": result.get("selected_data_source_id"),
+            "page_spec_draft": result.get("page_spec_draft"),
+        },
+        "result": result,
     }
-    if code_changes:
-        payload["codeChanges"] = code_changes
-        state_payload["codeChanges"] = code_changes
-    return payload
-
-
-def _workflow_code_changes(value: dict[str, Any]) -> dict[str, Any] | None:
-    code_change_sets = value.get("code_change_sets")
-    if isinstance(code_change_sets, list):
-        merged = merge_code_change_sets(
-            [item for item in code_change_sets if isinstance(item, dict)]
-        )
-        if merged:
-            return merged
-
-    code_changes = value.get("code_changes")
-    if (
-        isinstance(code_changes, dict)
-        and isinstance(code_changes.get("files"), list)
-        and code_changes.get("files")
-    ):
-        return code_changes
-
-    return None

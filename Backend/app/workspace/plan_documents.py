@@ -11,7 +11,28 @@ def _bullet_items(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
+def _dict_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _label_items(value: Any) -> list[str]:
+    return [
+        str(item.get("name") or item.get("id") or item)
+        if isinstance(item, dict)
+        else str(item)
+        for item in value
+        if str(item).strip()
+    ] if isinstance(value, list) else []
+
+
 def render_project_plan_markdown(plan: dict[str, Any]) -> str:
+    overview = plan.get("requirements_overview", {})
+    acceptance_criteria = plan.get(
+        "project_acceptance_criteria",
+        plan["acceptance_criteria"],
+    )
     api_contracts = "\n".join(
         "\n".join(
             [
@@ -32,6 +53,19 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         f"- `{source['id']}` {source['name']}：实体 {source['entities']}，类型 {source['type']}"
         for source in plan["data_sources"]
     )
+    page_data_dependencies = "\n".join(
+        f"- `{item.get('page_id', 'unknown')}`：数据源 {item.get('data_source_ids', []) or ['无']}，API {item.get('api_contract_ids', []) or ['无']}"
+        for item in _dict_items(plan.get("page_data_dependencies", []))
+    )
+    permissions = plan.get("permission_model", {})
+    page_access = "\n".join(
+        f"- `{item.get('path', item.get('page_id', 'unknown'))}`：{item.get('allowed_roles', [])}"
+        for item in _dict_items(permissions.get("page_access", []))
+    )
+    operation_permissions = "\n".join(
+        f"- `{item.get('role_id', 'unknown')}`：{item.get('operations', [])}"
+        for item in _dict_items(permissions.get("operation_permissions", []))
+    )
     frontend_tasks = "\n".join(
         f"- `{task['task_id']}`：{task['description']} 依赖 {task['depends_on'] or ['无']}"
         for task in plan["task_inputs"]["frontend"]
@@ -47,16 +81,28 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     page_details = "\n\n".join(
         "\n".join(
             [
-                f"### {detail['page_name']} `{detail['path']}`",
-                f"- 页面目标：{detail['page_goal']}",
-                f"- 基本布局：{'、'.join(detail['basic_layout']['structure'])}",
-                f"- 页面交互：{'；'.join(detail['interactions'])}",
-                f"- 数据来源：{[source['id'] for source in detail['data_sources']] or ['无']}",
-                f"- 页面权限：{detail['permissions']}",
-                f"- 状态：{detail['status']}",
+                f"### {detail.get('page_name', detail.get('page_id', '未命名页面'))} `{detail.get('path', '')}`",
+                f"- 页面目标：{detail.get('page_goal', '待补充')}",
+                f"- 基本布局：{'、'.join(detail.get('basic_layout', {}).get('structure', [])) or '待补充'}",
+                f"- 页面交互：{'；'.join(detail.get('interactions', [])) or '待补充'}",
+                f"- 数据来源：{[source.get('id') for source in _dict_items(detail.get('data_sources', []))] or ['无']}",
+                f"- 页面权限：{detail.get('permissions', [])}",
+                f"- 状态：{detail.get('status', 'draft')}",
             ]
         )
-        for detail in plan.get("page_detail_plans", [])
+        for detail in _dict_items(plan.get("page_detail_plans", []))
+    )
+    data_source_details = "\n\n".join(
+        "\n".join(
+            [
+                f"### {detail.get('data_source_name', detail.get('data_source_id', '未命名数据源'))}",
+                f"- 实体：{detail.get('entities', [])}",
+                f"- API 契约：{[contract.get('id') for contract in _dict_items(detail.get('api_contracts', []))] or ['无']}",
+                f"- 依赖页面：{[page.get('page_id') for page in _dict_items(detail.get('dependent_pages', []))] or ['无']}",
+                f"- 状态：{detail.get('status', 'draft')}",
+            ]
+        )
+        for detail in _dict_items(plan.get("data_source_detail_plans", []))
     )
 
     return f"""# {plan['app']['name']}总体计划书
@@ -65,8 +111,20 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 - 应用：{plan['app']['name']}
 - 摘要：{plan['app']['summary']}
+- 目标：{overview.get('target', '生成一个可在本地运行的前后端应用工程。')}
 - 状态：{plan['status']}
 - 版本：{plan['version']}
+
+## 需求概述
+
+- 需求摘要：{overview.get('summary', plan['app']['summary'])}
+- 用户角色：{_label_items(overview.get('roles', []))}
+- 功能模块：{_label_items(overview.get('modules', []))}
+- 业务流程：{_label_items(overview.get('business_flows', []))}
+
+## 整体需求验收标准
+
+{_bullet_items(acceptance_criteria)}
 
 ## 技术架构
 
@@ -86,6 +144,22 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 ## 数据源清单
 
 {data_sources}
+
+## 页面与数据源依赖
+
+{page_data_dependencies or "- 暂无页面数据源依赖"}
+
+## 权限体系
+
+- 默认策略：{permissions.get('default_policy', 'deny_unlisted')}
+
+### 页面访问
+
+{page_access or "- 暂无页面权限规则"}
+
+### 操作权限
+
+{operation_permissions or "- 暂无操作权限规则"}
 
 ## 后续任务拆分输入
 
@@ -108,9 +182,9 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 {page_details or "- 尚未确认页面详细设计"}
 
-## 验收标准
+## 数据源详细设计
 
-{_bullet_items(plan['acceptance_criteria'])}
+{data_source_details or "- 尚未确认数据源详细设计"}
 
 ## 风险与待细化点
 

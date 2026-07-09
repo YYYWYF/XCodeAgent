@@ -225,20 +225,34 @@ function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
       payload.summary && typeof payload.summary === 'object'
         ? payload.summary
         : { status: 'unknown' },
-    events: Array.isArray(payload.events) ? payload.events : [],
+    events: Array.isArray(payload.events) ? payload.events.map(readWorkflowEvent) : [],
     codeChanges,
-    state,
+    state:
+      payload.state && typeof payload.state === 'object'
+        ? (payload.state as Record<string, unknown>)
+        : undefined,
     result:
       payload.result && typeof payload.result === 'object'
         ? (payload.result as Record<string, unknown>)
         : undefined
   }
 }
-
 function readCodeChangesPayload(value: unknown): WorkspaceCodeChangeSet | undefined {
   if (!value || typeof value !== 'object') return undefined
   const codeChanges = value as Partial<WorkspaceCodeChangeSet>
   if (!Array.isArray(codeChanges.files) || codeChanges.files.length === 0) return undefined
   if (!codeChanges.summary || typeof codeChanges.summary !== 'object') return undefined
   return codeChanges as WorkspaceCodeChangeSet
+}
+
+
+function readWorkflowEvent(value: unknown): WorkflowEvent {
+  if (!value || typeof value !== 'object') return { type: 'workflow.event' }
+  const event = value as WorkflowEvent
+  const node = event.node && typeof event.node === 'object' ? event.node : undefined
+  return {
+    ...event,
+    node,
+    nodeName: event.nodeName || node?.id
+  }
 }

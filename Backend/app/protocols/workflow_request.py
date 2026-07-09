@@ -45,6 +45,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "request": request,
         "resume_from": resume_from,
+        "resume_values": _resume_values(resume_state),
         "project_id": (
             _optional_text(payload.get("project_id"))
             or _optional_text(payload.get("projectId"))
@@ -140,7 +141,46 @@ def _resume_from_state(value: dict[str, Any] | None) -> str:
 
 
 def _supported_resume_node(node_name: str) -> str:
-    return node_name if node_name in {"requirements"} else ""
+    return (
+        node_name
+        if node_name
+        in {
+            "requirements",
+            "project_planning",
+            "detail_confirmation",
+            "prepare_build_tasks",
+        }
+        else ""
+    )
+
+
+def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
+    if not value:
+        return {}
+
+    state = _optional_dict(value.get("state")) or {}
+    result = _optional_dict(value.get("result")) or {}
+    merged = {**state, **result}
+    allowed_keys = {
+        "project_plan",
+        "pending_project_plan",
+        "project_plan_path",
+        "project_plan_json_path",
+        "detail_selection",
+        "selected_page_id",
+        "selected_data_source_id",
+        "page_spec_draft",
+        "confirmed_page_spec",
+        "detail_plans",
+        "requirement_spec",
+        "requirement_spec_path",
+        "requirement_spec_json_path",
+    }
+    return {
+        key: merged[key]
+        for key in allowed_keys
+        if key in merged and merged[key] is not None
+    }
 
 
 def _merge_clarification_answers(
