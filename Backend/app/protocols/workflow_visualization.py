@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, AsyncIterator, Iterable
 from uuid import uuid4
 
@@ -11,6 +12,10 @@ from ag_ui.core import (
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
+    ToolCallResultEvent,
+    ToolCallStartEvent,
 )
 from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
@@ -84,6 +89,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "summary": "Human-readable and machine-readable workflow result summary.",
             "events": f"Ordered event list using {WORKFLOW_EVENT_PROTOCOL}.",
             "agUi": "AG-UI-compatible custom-event/state-snapshot payload for frontend visualization.",
+            "toolCalls": "AG-UI TOOL_CALL_* events are emitted when workflow agents request user input through ask_user.",
             "result": "Final LangGraph ProjectState.",
         },
         "eventProtocol": {
@@ -233,6 +239,14 @@ def build_workflow_ag_ui_stream(
                         or f"完成：{_workflow_node_label(node_name)}",
                         data=node_payload,
                     )
+                    for frame in _workflow_tool_call_frames(
+                        encoder,
+                        parent_message_id=message_id,
+                        node_name=node_name,
+                        update=update,
+                        sequence=len(events),
+                    ):
+                        yield frame
                     for frame in _workflow_ag_ui_frames(
                         encoder,
                         run_id=run_id,
@@ -572,6 +586,56 @@ def _text_delta_frames(
 ) -> Iterable[str]:
     for chunk in _chunk_text(text, size=size):
         yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=chunk))
+
+
+def _workflow_tool_call_frames(
+    encoder: EventEncoder,
+    *,
+    parent_message_id: str,
+    node_name: str,
+    update: dict[str, Any],
+    sequence: int,
+) -> Iterable[str]:
+    if node_name != "requirements":
+        return
+
+    clarification = update.get("clarification")
+    if not isinstance(clarification, dict):
+        return
+    questions = clarification.get("questions")
+    if clarification.get("status") != "requires_user_input" or not isinstance(
+        questions, list
+    ):
+        return
+    if not questions:
+        return
+
+    tool_call_id = f"workflow-{node_name}-ask-user-{sequence:04d}"
+    args = _json_text({"questions": questions})
+    result = _json_text(clarification)
+
+    yield encoder.encode(
+        ToolCallStartEvent(
+            toolCallId=tool_call_id,
+            toolCallName="ask_user",
+            parentMessageId=parent_message_id,
+        )
+    )
+    for chunk in _chunk_text(args, size=240):
+        yield encoder.encode(ToolCallArgsEvent(toolCallId=tool_call_id, delta=chunk))
+    yield encoder.encode(ToolCallEndEvent(toolCallId=tool_call_id))
+    yield encoder.encode(
+        ToolCallResultEvent(
+            messageId=f"{tool_call_id}-result",
+            toolCallId=tool_call_id,
+            content=result,
+            role="tool",
+        )
+    )
+
+
+def _json_text(value: Any) -> str:
+    return json.dumps(jsonable_encoder(value), ensure_ascii=False, separators=(",", ":"))
 
 
 def _chunk_text(text: str, *, size: int = 80) -> Iterable[str]:

@@ -6,6 +6,7 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet,
 } from '../typings';
+import type { ToolCallRecord } from './agUiAgent';
 
 export type ChatSessionMessage = {
   id: number;
@@ -16,6 +17,7 @@ export type ChatSessionMessage = {
   approvalStatus?: AgentApprovalStatus;
   codeChanges?: WorkspaceCodeChangeSet;
   workflow?: WorkflowRunPayload;
+  toolCalls?: ToolCallRecord[];
   createdAt: number;
 };
 
@@ -87,6 +89,7 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
         item.workflow && typeof item.workflow === 'object'
           ? (item.workflow as WorkflowRunPayload)
           : undefined,
+      toolCalls: normalizeToolCalls(item.toolCalls),
       approvalStatus:
         item.approvalStatus === 'approved_once' ||
         item.approvalStatus === 'approved_always' ||
@@ -97,6 +100,21 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
             : undefined,
       createdAt: Number(item.createdAt || Date.now()),
     }));
+}
+
+function normalizeToolCalls(value: unknown): ToolCallRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const toolCalls = value
+    .filter((item): item is Partial<ToolCallRecord> => Boolean(item && typeof item === 'object'))
+    .map((item) => ({
+      id: String(item.id || ''),
+      name: String(item.name || 'unknown'),
+      args: typeof item.args === 'string' ? item.args : '',
+      result: typeof item.result === 'string' ? item.result : undefined,
+      status: item.status === 'completed' ? ('completed' as const) : ('running' as const),
+    }))
+    .filter((item) => item.id);
+  return toolCalls.length > 0 ? toolCalls : undefined;
 }
 
 function normalizeSession(value: unknown): ChatSessionRecord | null {

@@ -9,13 +9,31 @@ type SendWorkflowMessageOptions = {
   resumeState?: WorkflowRunPayload
   onContent?: (content: string) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
+  onToolCalls?: (toolCalls: ToolCallRecord[]) => void
 }
 
 export type AgUiChatResult = {
   threadId: string
   answer: string
   workflow?: WorkflowRunPayload
+  toolCalls: ToolCallRecord[]
   assistantMessage?: Message
+}
+
+export type ToolCallRecord = {
+  id: string
+  name: string
+  args: string
+  result?: string
+  status: 'running' | 'completed'
+}
+
+type ToolCallSubscriber = {
+  onToolCallStartEvent?: (input: { event: unknown }) => void
+  onToolCallArgsEvent?: (input: { event: unknown }) => void
+  onToolCallEndEvent?: (input: { event: unknown }) => void
+  onToolCallResultEvent?: (input: { event: unknown }) => void
+  onToolCallChunkEvent?: (input: { event: unknown }) => void
 }
 
 function getWorkflowUrl(): string {
@@ -50,7 +68,12 @@ export class AgUiChatSession {
     })
 
     let workflow: WorkflowRunPayload | undefined
-    const subscriber: AgentSubscriber = {
+    let toolCalls: ToolCallRecord[] = []
+    const emitToolCalls = (nextToolCalls: ToolCallRecord[]): void => {
+      toolCalls = nextToolCalls
+      options.onToolCalls?.(toolCalls)
+    }
+    const subscriber: AgentSubscriber & ToolCallSubscriber = {
       onCustomEvent: ({ event }) => {
         if (event.name === 'workflow-run') {
           workflow = readWorkflowPayload(event.value) ?? workflow
@@ -66,6 +89,21 @@ export class AgUiChatSession {
       },
       onTextMessageEndEvent: ({ textMessageBuffer }) => {
         options.onContent?.(textMessageBuffer)
+      },
+      onToolCallStartEvent: ({ event }) => {
+        emitToolCalls(applyToolCallEvent(toolCalls, 'start', event))
+      },
+      onToolCallArgsEvent: ({ event }) => {
+        emitToolCalls(applyToolCallEvent(toolCalls, 'args', event))
+      },
+      onToolCallChunkEvent: ({ event }) => {
+        emitToolCalls(applyToolCallEvent(toolCalls, 'chunk', event))
+      },
+      onToolCallEndEvent: ({ event }) => {
+        emitToolCalls(applyToolCallEvent(toolCalls, 'end', event))
+      },
+      onToolCallResultEvent: ({ event }) => {
+        emitToolCalls(applyToolCallEvent(toolCalls, 'result', event))
       }
     }
 
@@ -92,9 +130,54 @@ export class AgUiChatSession {
       threadId: this.threadId,
       answer,
       workflow,
+      toolCalls,
       assistantMessage
     }
   }
+}
+
+function applyToolCallEvent(
+  toolCalls: ToolCallRecord[],
+  eventType: 'start' | 'args' | 'chunk' | 'end' | 'result',
+  event: unknown
+): ToolCallRecord[] {
+  const eventObject = objectValue(event)
+  const id = stringValue(eventObject.toolCallId ?? eventObject.tool_call_id)
+  if (!id) return toolCalls
+
+  const existing = toolCalls.find((toolCall) => toolCall.id === id)
+  const name = stringValue(eventObject.toolCallName ?? eventObject.tool_call_name)
+  const delta = stringValue(eventObject.delta)
+  const content = stringValue(eventObject.content)
+  const nextToolCall: ToolCallRecord = {
+    id,
+    name: name || existing?.name || 'unknown',
+    args: existing?.args || '',
+    result: existing?.result,
+    status: existing?.status || 'running'
+  }
+
+  if (eventType === 'args' || eventType === 'chunk') {
+    nextToolCall.args += delta
+  }
+
+  if (eventType === 'result') {
+    nextToolCall.result = content
+    nextToolCall.status = 'completed'
+  }
+
+  const updatedToolCalls = existing
+    ? toolCalls.map((toolCall) => (toolCall.id === id ? nextToolCall : toolCall))
+    : [...toolCalls, nextToolCall]
+  return updatedToolCalls
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : ''
 }
 
 function messageContentToText(content: Message['content'] | undefined): string {

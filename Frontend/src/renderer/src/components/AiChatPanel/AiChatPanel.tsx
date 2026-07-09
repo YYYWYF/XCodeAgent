@@ -34,6 +34,7 @@ import type {
 import { useEffect, useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
 import { AgUiChatSession } from '../../service/agUiAgent'
+import type { ToolCallRecord } from '../../service/agUiAgent'
 import {
   createChatSessionId,
   createChatSessionTitle,
@@ -58,6 +59,7 @@ import WorkflowRunCard, {
   workflowOriginalRequest,
   type ClarificationAnswers
 } from './WorkflowRunCard'
+import ToolCallCard from './ToolCallCard'
 import './AiChatPanel.less'
 
 const { Text, Title } = Typography
@@ -73,6 +75,7 @@ type AgentChatMessage = {
   role: 'user' | 'assistant'
   content: string
   workflow?: WorkflowRunPayload
+  toolCalls?: ToolCallRecord[]
   createdAt: number
 }
 
@@ -500,17 +503,20 @@ export default function AiChatPanel({
 
     let streamedContent = ''
     let streamedWorkflow: WorkflowRunPayload | undefined
+    let streamedToolCalls: ToolCallRecord[] = []
     let latestMessages = nextMessages
     const updateAssistantMessage = (
       content: string,
-      workflow?: WorkflowRunPayload
+      workflow?: WorkflowRunPayload,
+      toolCalls?: ToolCallRecord[]
     ): AgentChatMessage[] => {
       latestMessages = latestMessages.map((currentMessage) =>
         currentMessage.id === assistantMessageId
           ? {
               ...currentMessage,
               content,
-              workflow: workflow ?? currentMessage.workflow
+              workflow: workflow ?? currentMessage.workflow,
+              toolCalls: toolCalls ?? currentMessage.toolCalls
             }
           : currentMessage
       )
@@ -520,7 +526,8 @@ export default function AiChatPanel({
             ? {
                 ...currentMessage,
                 content,
-                workflow: workflow ?? currentMessage.workflow
+                workflow: workflow ?? currentMessage.workflow,
+                toolCalls: toolCalls ?? currentMessage.toolCalls
               }
             : currentMessage
         )
@@ -542,17 +549,25 @@ export default function AiChatPanel({
         threadId: agUiSession.threadId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
-      const { answer: rawAnswer, workflow } = await agUiSession.sendMessage(trimmedMessage, {
+      const {
+        answer: rawAnswer,
+        workflow,
+        toolCalls: rawToolCalls
+      } = await agUiSession.sendMessage(trimmedMessage, {
         workspaceRoot: application.workspaceRoot,
         application,
         resumeState: options?.resumeState,
         onContent: (content) => {
           streamedContent = content
-          updateAssistantMessage(content, streamedWorkflow)
+          updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
         },
         onWorkflow: (nextWorkflow) => {
           streamedWorkflow = nextWorkflow
-          updateAssistantMessage(streamedContent, nextWorkflow)
+          updateAssistantMessage(streamedContent, nextWorkflow, streamedToolCalls)
+        },
+        onToolCalls: (nextToolCalls) => {
+          streamedToolCalls = nextToolCalls
+          updateAssistantMessage(streamedContent, streamedWorkflow, nextToolCalls)
         }
       })
       const stopped = Boolean(stopRequestedModesRef.current[editorMode])
@@ -561,7 +576,8 @@ export default function AiChatPanel({
         : rawAnswer.trim()
       const completedMessages = updateAssistantMessage(
         answer || 'Workflow 已返回，但内容为空。',
-        workflow ?? streamedWorkflow
+        workflow ?? streamedWorkflow,
+        rawToolCalls.length > 0 ? rawToolCalls : streamedToolCalls
       )
 
       await persistSession(editorMode, completedMessages, {
@@ -573,7 +589,11 @@ export default function AiChatPanel({
     } catch (caughtError) {
       if (stopRequestedModesRef.current[editorMode]) {
         const answer = stoppedAnswer(streamedContent)
-        const completedMessages = updateAssistantMessage(answer, streamedWorkflow)
+        const completedMessages = updateAssistantMessage(
+          answer,
+          streamedWorkflow,
+          streamedToolCalls
+        )
         await persistSession(editorMode, completedMessages, {
           sessionId,
           threadId: agUiSession.threadId,
@@ -779,6 +799,9 @@ export default function AiChatPanel({
                   {message.role === 'assistant' ? (
                     <>
                       <MarkdownContent content={message.content} />
+                      {message.toolCalls?.map((toolCall) => (
+                        <ToolCallCard key={toolCall.id} toolCall={toolCall} />
+                      ))}
                       {message.workflow && (
                         <WorkflowRunCard
                           disabled={loading}
