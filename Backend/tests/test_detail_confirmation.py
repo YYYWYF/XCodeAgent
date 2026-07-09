@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.planning import detail_confirmation
@@ -67,6 +68,48 @@ class DetailConfirmationTests(unittest.TestCase):
             result["clarification"]["mode"],
             "project_plan_adjustment_confirmation",
         )
+
+    def test_agent_file_changes_are_returned_in_node_update(self) -> None:
+        project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
+
+        def design_with_file_change(
+            _plan: dict,
+            spec: dict,
+            *,
+            workspace: str | None = None,
+        ) -> dict:
+            assert workspace is not None
+            Path(workspace, "detail-agent.txt").write_text(
+                "changed by detail agent\n",
+                encoding="utf-8",
+            )
+            return {
+                "id": f"page_detail:{spec['page_id']}",
+                "page_id": spec["page_id"],
+                "page_name": spec["page_name"],
+                "path": spec["path"],
+                "status": "confirmed",
+            }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.planning.design_page_with_main_agent",
+                side_effect=design_with_file_change,
+            ):
+                result = detail_confirmation(
+                    {
+                        "request": "我选择 页面：库存管理列表页 做详细设计",
+                        "workspace": workspace,
+                        "project_plan": project_plan,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(
+            result["code_changes"]["files"][0]["path"],
+            "detail-agent.txt",
+        )
+        self.assertEqual(result["code_change_sets"], [result["code_changes"]])
 
     def test_detail_confirmation_asks_for_missing_page_spec_aspects(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))

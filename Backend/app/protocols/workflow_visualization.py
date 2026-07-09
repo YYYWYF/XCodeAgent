@@ -16,6 +16,7 @@ from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
 from app.protocols.workflow_request import workflow_run_inputs
+from app.workspace.code_changes import merge_code_change_sets
 
 WORKFLOW_EVENT_PROTOCOL = "xcodeagent.workflow.event.v1"
 
@@ -84,6 +85,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "summary": "Human-readable and machine-readable workflow result summary.",
             "events": f"Ordered event list using {WORKFLOW_EVENT_PROTOCOL}.",
             "agUi": "AG-UI-compatible custom-event/state-snapshot payload for frontend visualization.",
+            "codeChanges": "Merged workspace diff payload for files changed by DeepAgent tools.",
             "result": "Final LangGraph ProjectState.",
         },
         "eventProtocol": {
@@ -540,6 +542,7 @@ async def build_workflow_response(
         "quality_gate_passed": result.get("quality_gate_passed"),
         "needs_revision": result.get("needs_revision"),
         "preview_url": result.get("preview_url"),
+        "codeChanges": visual_payload.get("codeChanges"),
         "artifacts": summary.get("artifacts", {}),
         "result": result,
     }
@@ -605,6 +608,7 @@ def _workflow_progress_summary(
     ]
     failed_events = [event for event in events if str(event.get("status")) == "failed"]
     node = last_event.get("node") if isinstance(last_event.get("node"), dict) else {}
+    code_changes = _workflow_code_changes(result)
 
     return {
         "status": last_event.get("status") or result.get("status") or "running",
@@ -618,6 +622,7 @@ def _workflow_progress_summary(
         "previewUrl": result.get("preview_url"),
         "buildSummary": result.get("build_summary", {}),
         "testSummary": {},
+        "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
     }
@@ -904,6 +909,7 @@ def _workflow_summary(
         else {}
     )
     artifacts = _workflow_artifacts(result)
+    code_changes = _workflow_code_changes(result)
     if status == "requires_user_input":
         question_count = len(clarification.get("questions", []))
         message = f"Workflow 等待用户确认/补充：完成 {len(completed_nodes)} 个节点，待确认问题 {question_count} 个。"
@@ -927,6 +933,7 @@ def _workflow_summary(
         "previewUrl": result.get("preview_url"),
         "buildSummary": build_summary,
         "testSummary": test_summary,
+        "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
         "clarification": clarification,
     }
@@ -940,33 +947,59 @@ def _workflow_visual_payload(
     events: list[dict[str, Any]],
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    return {
+    code_changes = _workflow_code_changes(result)
+    state_payload = {
+        "status": summary.get("status"),
+        "request": result.get("request"),
+        "phase": summary.get("phase"),
+        "timeline": summary.get("timeline", []),
+        "artifacts": summary.get("artifacts", {}),
+        "qualityGatePassed": summary.get("qualityGatePassed"),
+        "needsRevision": summary.get("needsRevision"),
+        "previewUrl": summary.get("previewUrl"),
+        "tasks": result.get("tasks", []),
+        "buildSummary": result.get("build_summary", {}),
+        "testReport": result.get("test_report", {}),
+        "repairTaskPlan": result.get("repair_task_plan"),
+        "clarification": result.get("clarification", {}),
+        "project_plan": result.get("project_plan"),
+        "pending_project_plan": result.get("pending_project_plan"),
+        "project_plan_path": result.get("project_plan_path"),
+        "project_plan_json_path": result.get("project_plan_json_path"),
+        "detail_selection": result.get("detail_selection"),
+        "selected_page_id": result.get("selected_page_id"),
+        "selected_data_source_id": result.get("selected_data_source_id"),
+        "page_spec_draft": result.get("page_spec_draft"),
+    }
+    payload = {
         "runId": run_id,
         "threadId": thread_id,
         "summary": summary,
         "events": events,
-        "state": {
-            "status": summary.get("status"),
-            "request": result.get("request"),
-            "phase": summary.get("phase"),
-            "timeline": summary.get("timeline", []),
-            "artifacts": summary.get("artifacts", {}),
-            "qualityGatePassed": summary.get("qualityGatePassed"),
-            "needsRevision": summary.get("needsRevision"),
-            "previewUrl": summary.get("previewUrl"),
-            "tasks": result.get("tasks", []),
-            "buildSummary": result.get("build_summary", {}),
-            "testReport": result.get("test_report", {}),
-            "repairTaskPlan": result.get("repair_task_plan"),
-            "clarification": result.get("clarification", {}),
-            "project_plan": result.get("project_plan"),
-            "pending_project_plan": result.get("pending_project_plan"),
-            "project_plan_path": result.get("project_plan_path"),
-            "project_plan_json_path": result.get("project_plan_json_path"),
-            "detail_selection": result.get("detail_selection"),
-            "selected_page_id": result.get("selected_page_id"),
-            "selected_data_source_id": result.get("selected_data_source_id"),
-            "page_spec_draft": result.get("page_spec_draft"),
-        },
+        "state": state_payload,
         "result": result,
     }
+    if code_changes:
+        payload["codeChanges"] = code_changes
+        state_payload["codeChanges"] = code_changes
+    return payload
+
+
+def _workflow_code_changes(value: dict[str, Any]) -> dict[str, Any] | None:
+    code_change_sets = value.get("code_change_sets")
+    if isinstance(code_change_sets, list):
+        merged = merge_code_change_sets(
+            item for item in code_change_sets if isinstance(item, dict)
+        )
+        if merged:
+            return merged
+
+    code_changes = value.get("code_changes")
+    if (
+        isinstance(code_changes, dict)
+        and isinstance(code_changes.get("files"), list)
+        and code_changes.get("files")
+    ):
+        return code_changes
+
+    return None

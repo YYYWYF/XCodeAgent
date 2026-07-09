@@ -1,7 +1,7 @@
 from app.agents.main.planner import plan_project_with_main_agent
 from app.agents.main.page_designer import design_page_with_main_agent
 from app.graph.nodes.confirmation import user_confirmed_text
-from app.graph.nodes.common import workspace_from_state
+from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.services.page_detail_plan import (
     apply_page_spec_answers,
@@ -14,6 +14,7 @@ from app.services.page_detail_plan import (
     resolve_detail_design_target,
 )
 from app.tools.ask_user import AskUserOption, AskUserQuestion, build_ask_user_payload
+from app.workspace.code_changes import code_change_state_update
 from app.workspace.plan_documents import (
     project_plan_json_path,
     write_project_plan_document,
@@ -44,12 +45,21 @@ def project_planning(state: ProjectState) -> dict:
             **requirement_spec,
             "planning_adjustment_request": state["request"],
         }
-    project_plan = plan_project_with_main_agent(requirement_spec, workspace=workspace)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="main.project_planning",
+        action=lambda: plan_project_with_main_agent(
+            requirement_spec,
+            workspace=workspace,
+        ),
+    )
+    project_plan = captured.value
     project_plan["confirmation_status"] = "pending_user_confirmation"
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = _project_plan_confirmation_payload(project_plan)
 
     return {
+        **code_change_state_update(captured.code_change_set),
         "phase": "project_planning",
         "status": "requires_user_input",
         "project_plan": project_plan,
@@ -193,17 +203,24 @@ def detail_confirmation(state: ProjectState) -> dict:
         }
 
     confirmed_page_spec = page_spec
-    page_detail_plan = design_page_with_main_agent(
-        project_plan,
-        confirmed_page_spec,
-        workspace=workspace_from_state(state),
+    workspace = workspace_from_state(state)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="main.detail_confirmation",
+        action=lambda: design_page_with_main_agent(
+            project_plan,
+            confirmed_page_spec,
+            workspace=workspace,
+        ),
     )
+    page_detail_plan = captured.value
     pending_project_plan = attach_page_detail_plan(project_plan, page_detail_plan)
     pending_project_plan["confirmation_status"] = "pending_user_confirmation"
     project_plan_path = write_project_plan_document(state, pending_project_plan)
     clarification = _project_plan_adjustment_confirmation_payload(pending_project_plan)
 
     return {
+        **code_change_state_update(captured.code_change_set),
         "phase": "detail_confirmation",
         "status": "requires_user_input",
         "clarification": clarification,

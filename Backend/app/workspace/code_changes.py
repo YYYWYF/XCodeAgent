@@ -265,7 +265,7 @@ def _code_change_payload_from_snapshots(
         or before_content is None
         or after_content is None
     )
-    diff = (
+    raw_diff = (
         ""
         if binary
         else _text_diff(
@@ -275,9 +275,10 @@ def _code_change_payload_from_snapshots(
             tofile=path,
         )
     )
-    stats = _diff_stats(diff)
+    display_diff = _changed_lines_only_diff(raw_diff)
+    stats = _diff_stats(raw_diff)
     digest = hashlib.sha256(
-        f"{source_tool}:{tool}:{path}:{change_type}:{diff}".encode("utf-8")
+        f"{source_tool}:{tool}:{path}:{change_type}:{raw_diff}".encode("utf-8")
     ).hexdigest()[:16]
     return {
         "id": f"{tool}:{path}:{digest}",
@@ -285,8 +286,8 @@ def _code_change_payload_from_snapshots(
         "changeType": change_type,
         "additions": stats["additions"],
         "deletions": stats["deletions"],
-        "diff": _truncate(diff, CODE_CHANGE_DIFF_LIMIT),
-        "truncated": len(diff) > CODE_CHANGE_DIFF_LIMIT,
+        "diff": _truncate(display_diff, CODE_CHANGE_DIFF_LIMIT),
+        "truncated": len(display_diff) > CODE_CHANGE_DIFF_LIMIT,
         "binary": binary,
         "tool": tool,
         "sourceTool": source_tool,
@@ -301,6 +302,20 @@ def _valid_change_set(value: dict[str, Any]) -> bool:
         and isinstance(value.get("files"), list)
         and isinstance(value.get("summary"), dict)
     )
+
+
+def _changed_lines_only_diff(diff: str) -> str:
+    """Remove unified diff metadata and unchanged context from frontend diffs."""
+
+    lines: list[str] = []
+    for index, line in enumerate(diff.splitlines(keepends=True)):
+        if index < 2 and (line.startswith("--- ") or line.startswith("+++ ")):
+            continue
+        if line.startswith("@@"):
+            continue
+        if line.startswith("+") or line.startswith("-"):
+            lines.append(line)
+    return "".join(lines)
 
 
 def _safe_int(value: Any) -> int:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.requirements import requirements
@@ -57,6 +58,39 @@ class RequirementsConfirmationTests(unittest.TestCase):
             result["requirement_spec"]["confirmation_status"],
             "confirmed",
         )
+
+    def test_agent_file_changes_are_returned_in_node_update(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+
+        def analyze_with_file_change(_request: str, *, workspace: str | None = None) -> dict:
+            assert workspace is not None
+            Path(workspace, "requirements-agent.txt").write_text(
+                "changed by requirements agent\n",
+                encoding="utf-8",
+            )
+            return {
+                "requirement_spec": spec,
+                "clarification": clear_clarification(spec),
+            }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_main_agent",
+                side_effect=analyze_with_file_change,
+            ):
+                result = requirements(
+                    {
+                        "request": "创建一个库存管理系统",
+                        "workspace": workspace,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(
+            result["code_changes"]["files"][0]["path"],
+            "requirements-agent.txt",
+        )
+        self.assertEqual(result["code_change_sets"], [result["code_changes"]])
 
     def test_confirmation_ignores_question_text_negative_words(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")

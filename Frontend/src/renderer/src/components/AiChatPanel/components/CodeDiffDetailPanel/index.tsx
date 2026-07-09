@@ -114,7 +114,7 @@ type GroupedChange = {
 };
 
 type DiffLine = {
-  kind: 'meta' | 'hunk' | 'addition' | 'deletion' | 'context';
+  kind: 'addition' | 'deletion' | 'context';
   marker: string;
   text: string;
 };
@@ -144,19 +144,55 @@ function groupCodeChanges(files: WorkspaceCodeChangeFile[]): GroupedChange[] {
 }
 
 function parseDiffLines(diff: string): DiffLine[] {
-  return diff.split('\n').map((line) => {
-    if (line.startsWith('@@')) {
-      return { kind: 'hunk', marker: '', text: line };
+  const lines = diff.split('\n');
+  const parsed: DiffLine[] = [];
+  const hasUnifiedHeader =
+    lines.length >= 2 &&
+    isUnifiedFileHeader(lines[0], '---') &&
+    isUnifiedFileHeader(lines[1], '+++');
+
+  lines.forEach((line, index) => {
+    if (index === lines.length - 1 && line === '') {
+      return;
     }
-    if (line.startsWith('+++') || line.startsWith('---')) {
-      return { kind: 'meta', marker: line.slice(0, 3), text: line.slice(3).trim() };
+    if (isUnifiedDiffMetadata(line, index, hasUnifiedHeader)) {
+      return;
     }
     if (line.startsWith('+')) {
-      return { kind: 'addition', marker: '+', text: line.slice(1) };
+      parsed.push({ kind: 'addition', marker: '+', text: line.slice(1) });
+      return;
     }
     if (line.startsWith('-')) {
-      return { kind: 'deletion', marker: '-', text: line.slice(1) };
+      parsed.push({ kind: 'deletion', marker: '-', text: line.slice(1) });
+      return;
     }
-    return { kind: 'context', marker: line ? ' ' : '', text: line.startsWith(' ') ? line.slice(1) : line };
+    parsed.push({
+      kind: 'context',
+      marker: line ? ' ' : '',
+      text: line.startsWith(' ') ? line.slice(1) : line,
+    });
   });
+
+  return parsed;
+}
+
+function isUnifiedDiffMetadata(
+  line: string,
+  index: number,
+  hasUnifiedHeader: boolean,
+): boolean {
+  if (line.startsWith('@@')) return true;
+  if (hasUnifiedHeader && index < 2) return true;
+  return line.startsWith('--- a/') || line.startsWith('+++ b/');
+}
+
+function isUnifiedFileHeader(line: string | undefined, prefix: '---' | '+++'): boolean {
+  if (!line?.startsWith(prefix)) return false;
+  const filePart = line.slice(prefix.length);
+  return (
+    filePart.startsWith(' ') ||
+    filePart.startsWith('a/') ||
+    filePart.startsWith('b/') ||
+    /^\S+\.\w+/.test(filePart)
+  );
 }

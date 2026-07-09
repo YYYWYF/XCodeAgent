@@ -35,8 +35,12 @@ class WorkspaceCodeChangeTests(unittest.TestCase):
             self.assertEqual(by_path["added.txt"]["changeType"], "added")
             self.assertEqual(by_path["modified.txt"]["changeType"], "modified")
             self.assertEqual(by_path["deleted.txt"]["changeType"], "deleted")
+            for item in by_path.values():
+                self.assertNotIn("@@", item["diff"])
+                self.assertNotIn("---", item["diff"])
+                self.assertNotIn("+++", item["diff"])
             self.assertIn("+new", by_path["added.txt"]["diff"])
-            self.assertIn("+next", by_path["modified.txt"]["diff"])
+            self.assertEqual(by_path["modified.txt"]["diff"], "+next\n")
             self.assertIn("-gone", by_path["deleted.txt"]["diff"])
             self.assertEqual(by_path["added.txt"]["additions"], 1)
             self.assertEqual(by_path["deleted.txt"]["deletions"], 1)

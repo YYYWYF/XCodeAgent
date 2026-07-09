@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.planning import project_planning
@@ -54,6 +55,38 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["clarification"]["status"], "clear")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
+
+    def test_agent_file_changes_are_returned_in_node_update(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+        plan = create_project_plan(spec)
+
+        def plan_with_file_change(_spec: dict, *, workspace: str | None = None) -> dict:
+            assert workspace is not None
+            Path(workspace, "planning-agent.txt").write_text(
+                "changed by planning agent\n",
+                encoding="utf-8",
+            )
+            return plan
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.planning.plan_project_with_main_agent",
+                side_effect=plan_with_file_change,
+            ):
+                result = project_planning(
+                    {
+                        "request": "创建一个库存管理系统",
+                        "workspace": workspace,
+                        "requirement_spec": spec,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(
+            result["code_changes"]["files"][0]["path"],
+            "planning-agent.txt",
+        )
+        self.assertEqual(result["code_change_sets"], [result["code_changes"]])
 
     def test_project_plan_confirmation_ignores_question_text_negative_words(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")

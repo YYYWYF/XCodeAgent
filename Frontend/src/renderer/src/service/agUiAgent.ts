@@ -1,7 +1,12 @@
 import { HttpAgent, randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
-import type { ApplicationConfig, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../typings'
+import type {
+  ApplicationConfig,
+  WorkflowEvent,
+  WorkflowRunPayload,
+  WorkspaceCodeChangeSet
+} from '../typings'
 
 type SendWorkflowMessageOptions = {
   workspaceRoot?: string

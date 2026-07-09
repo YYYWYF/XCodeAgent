@@ -100,6 +100,53 @@ class FakeProjectPlanningWaitGraph:
         )
 
 
+class FakeCodeChangesGraph:
+    async def astream(self, initial_state, *, config, stream_mode):
+        yield {
+            "direct_modification": {
+                "phase": "direct_modification",
+                "status": "completed",
+                "code_changes": _fake_code_change_set(),
+                "code_change_sets": [_fake_code_change_set()],
+                "timeline": ["direct_modification"],
+            }
+        }
+
+    def get_state(self, config):
+        return SimpleNamespace(
+            values={
+                "phase": "finalize_project",
+                "status": "completed",
+                "quality_gate_passed": True,
+                "code_change_sets": [_fake_code_change_set()],
+                "timeline": ["direct_modification", "finalize_project"],
+            }
+        )
+
+
+def _fake_code_change_set() -> dict:
+    return {
+        "id": "code-change-set:test",
+        "status": "applied",
+        "workspaceRoot": "/tmp/workspace",
+        "summary": {"files": 1, "additions": 1, "deletions": 0},
+        "files": [
+            {
+                "id": "file.write:data.json:test",
+                "path": "data.json",
+                "changeType": "added",
+                "additions": 1,
+                "deletions": 0,
+                "diff": "--- data.json\n+++ data.json\n@@ -0,0 +1 @@\n+{\"sbw\":123}",
+                "truncated": False,
+                "binary": False,
+                "tool": "file.write",
+                "executed": True,
+            }
+        ],
+    }
+
+
 class WorkflowAgUiStreamTests(unittest.TestCase):
     def test_stream_emits_ag_ui_frames_for_openai_backed_workflow(self) -> None:
         graph = FakeWorkflowGraph()
@@ -210,6 +257,28 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             result["workspace"],
             "/Users/sbw/Documents/example-workspace",
         )
+
+    def test_stream_exposes_code_changes_payload(self) -> None:
+        graph = FakeCodeChangesGraph()
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-1",
+                    "runId": "run-1",
+                    "messages": [{"role": "user", "content": "add data.json"}],
+                },
+                accept="text/event-stream",
+            )
+            return [frame async for frame in stream]
+
+        payload = "\n".join(asyncio.run(collect()))
+
+        self.assertIn("codeChanges", payload)
+        self.assertIn("codeChangesSummary", payload)
+        self.assertIn("data.json", payload)
+        self.assertIn("file.write", payload)
 
 
 if __name__ == "__main__":
