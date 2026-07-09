@@ -1,8 +1,9 @@
 import { CloseOutlined, CodeOutlined, FileTextOutlined } from '@ant-design/icons';
 import { Button, Empty, Tag, Typography } from 'antd';
 import { useMemo, type ReactElement } from 'react';
-import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../typings';
-import { cx } from '../../utils';
+import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../../../typings';
+import { cx } from '../../../../utils';
+import './CodeDiffDetailPanel.less';
 
 const { Text, Title } = Typography;
 

@@ -1,8 +1,9 @@
 import { CheckCircleOutlined, LoadingOutlined, ToolOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
 import type { ReactElement } from 'react'
-import type { ToolCallRecord } from '../../service/agUiAgent'
-import { cx } from '../../utils'
+import type { ToolCallRecord } from '../../../../service/agUiAgent'
+import { cx } from '../../../../utils'
+import './ToolCallCard.less'
 
 const { Text } = Typography
 

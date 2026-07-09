@@ -10,6 +10,7 @@ These instructions apply to the whole XCodeAgent repository. Every Codex agent s
 - Prefer small, focused patches that match the existing project structure. Do not rewrite unrelated code, rename files, or introduce new architecture unless the task clearly requires it.
 - Use `rg` or `rg --files` for search whenever possible.
 - Use precise patches for edits. Avoid whole-file replacement when a targeted change is enough.
+- Keep source files focused. When an active source or style file grows beyond roughly 350 lines, or starts mixing unrelated responsibilities, first consider splitting it by feature, hook/service, UI section, or style partial before adding more code. Do not churn deprecated/generated files just to satisfy a line count.
 - Treat user changes as intentional. Never revert or overwrite work you did not make unless the user explicitly asks for it.
 - Do not run destructive commands such as `rm`, `git reset`, `git clean`, or `git checkout --` without explicit user approval.
 

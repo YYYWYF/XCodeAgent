@@ -1,7 +1,7 @@
 import { Layout } from 'antd';
 import type { ApplicationConfig, EditorMode } from '../../typings';
 import { cx } from '../../utils';
-import AiChatPanel from '../AiChatPanel/AiChatPanel';
+import AiChatPanel from '../AiChatPanel';
 import './LeftPanel.less';
 
 const { Sider } = Layout;

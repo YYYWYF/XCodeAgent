@@ -5,8 +5,9 @@ import type {
   WorkflowClarification,
   WorkflowClarificationQuestion,
   WorkflowRunPayload,
-} from "../../typings";
-import { cx } from "../../utils";
+} from "../../../../typings";
+import { cx } from "../../../../utils";
+import './WorkflowRunCard.less';
 
 const { Text } = Typography;
 const { TextArea } = Input;

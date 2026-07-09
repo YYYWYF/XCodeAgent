@@ -1,5 +1,5 @@
 export { default as ActivityBar } from './ActivityBar/ActivityBar';
-export { default as AiChatPanel } from './AiChatPanel/AiChatPanel';
+export { default as AiChatPanel } from './AiChatPanel';
 export { default as BrowserPreviewPanel } from './BrowserPreviewPanel/BrowserPreviewPanel';
 export { default as EditorPanel } from './EditorPanel/EditorPanel';
 export { default as GlobalConfigPanel } from './GlobalConfigPanel/GlobalConfigPanel';

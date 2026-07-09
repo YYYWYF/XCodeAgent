@@ -6,8 +6,9 @@ import {
 } from '@ant-design/icons';
 import { Button, Input, Space, Tag, Typography } from 'antd';
 import { useMemo, useState } from 'react';
-import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../typings';
-import { cx } from '../../utils';
+import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../../../typings';
+import { cx } from '../../../../utils';
+import './CodeChangeCard.less';
 
 const { Text } = Typography;
 const { TextArea } = Input;

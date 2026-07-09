@@ -1,0 +1,76 @@
+.@{class-prefix}-tool-call-card {
+  overflow: hidden;
+  border: 1px solid #dfe7f1;
+  border-radius: 8px;
+  background: #fbfdff;
+
+  &.@{class-prefix}-completed {
+    border-color: #c9ddd7;
+    background: #fbfffd;
+  }
+}
+
+.@{class-prefix}-tool-call-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  color: #334155;
+  cursor: pointer;
+  user-select: none;
+
+  &::marker {
+    color: #7b8794;
+  }
+}
+
+.@{class-prefix}-tool-call-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: #1677ff;
+}
+
+.@{class-prefix}-tool-call-card.@{class-prefix}-completed {
+  .@{class-prefix}-tool-call-icon {
+    color: #0f8a73;
+  }
+}
+
+.@{class-prefix}-tool-call-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 10px 10px 26px;
+}
+
+.@{class-prefix}-tool-call-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.@{class-prefix}-tool-call-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #5c6675;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-tool-call-content {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  color: #202939;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #ffffff;
+  border: 1px solid #e5eaf1;
+  border-radius: 7px;
+}

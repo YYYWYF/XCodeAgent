@@ -5,8 +5,9 @@ import {
 } from '@ant-design/icons';
 import { Button, Input, Space, Tag, Typography } from 'antd';
 import { useState } from 'react';
-import type { AgentApprovalRequest, AgentApprovalStatus } from '../../typings';
-import { cx } from '../../utils';
+import type { AgentApprovalRequest, AgentApprovalStatus } from '../../../../typings';
+import { cx } from '../../../../utils';
+import './AgentApprovalCard.less';
 
 const { Text } = Typography;
 const { TextArea } = Input;
