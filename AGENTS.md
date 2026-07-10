@@ -22,6 +22,7 @@ These instructions apply to the whole XCodeAgent repository. Every Codex agent s
 - Backend feature endpoints must emit AG-UI-compatible event streams with explicit run lifecycle, messages, state snapshots or deltas, and structured results/errors. Frontend callers must use `@ag-ui/client` and `@ag-ui/core` rather than hand-rolled request, SSE, or event parsing logic. Keep independent product flows on separate AG-UI endpoints/thread IDs when they must not enter the existing `/workflow/run` LangGraph workflow.
 - Existing infrastructure endpoints such as `/health`, documentation lookup, and low-level workspace/tool routes may remain on their established contracts, but they must not be copied as the transport pattern for new product features. If an external standard makes AG-UI technically impossible for a new product API, stop before implementation, document the conflict, and obtain explicit user approval for the exception.
 - For frontend UI work, follow the existing Ant Design v4 patterns and local styles. Do not add another UI framework or a large dependency unless there is a clear need.
+- Every new or materially changed UI feature must support both light and dark themes. Define and verify readable colors, borders, backgrounds, hover/focus states, overlays, and empty/loading/error states in both themes.
 - Use `pnpm` for frontend package scripts. The expected Node version is `20.19.0`.
 - Keep secrets out of the repository. Do not print, copy, or commit values from `.env`; update `.env.example` when documenting configuration.
 

@@ -1,8 +1,6 @@
 import type { ReactNode } from 'react'
-import { Button, Typography } from 'antd'
+import { Button } from 'antd'
 import { cx } from '../../utils'
-
-const { Paragraph, Title } = Typography
 
 type Props = {
   buttonIcon: ReactNode
@@ -20,29 +18,21 @@ export default function WelcomeActionCard({
   buttonIcon,
   buttonLabel,
   description,
-  icon,
-  iconVariant,
   loading,
   onClick,
-  primary,
-  title
-}: Props) {
+  primary
+}: Props): JSX.Element {
   return (
-    <article className={cx('welcome-action-card', primary && 'primary')}>
-      <div className={cx('welcome-action-icon', iconVariant)}>{icon}</div>
-      <div className={cx('welcome-action-copy')}>
-        <Title level={3}>{title}</Title>
-        <Paragraph type="secondary">{description}</Paragraph>
-      </div>
-      <Button
-        icon={buttonIcon}
-        loading={loading}
-        onClick={onClick}
-        size="large"
-        type={primary ? 'primary' : 'default'}
-      >
-        {buttonLabel}
-      </Button>
-    </article>
+    <Button
+      className={cx('welcome-action-button', primary && 'primary')}
+      icon={buttonIcon}
+      loading={loading}
+      onClick={onClick}
+      size="large"
+      title={description}
+      type={primary ? 'primary' : 'default'}
+    >
+      {buttonLabel}
+    </Button>
   )
 }

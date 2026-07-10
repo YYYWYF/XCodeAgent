@@ -26,7 +26,7 @@ type Props = {
   onOpenApplication: (application: ApplicationConfig) => void
 }
 
-export default function OpenWorkspaceAction({ onOpenApplication }: Props) {
+export default function OpenWorkspaceAction({ onOpenApplication }: Props): JSX.Element {
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [workspaceHistory, setWorkspaceHistory] = useState<SessionWorkspaceSummary[]>([])
@@ -93,7 +93,7 @@ export default function OpenWorkspaceAction({ onOpenApplication }: Props) {
     <>
       <WelcomeActionCard
         buttonIcon={<FolderOpenOutlined />}
-        buttonLabel="选择工作目录"
+        buttonLabel="打开工作目录"
         description="从历史会话中选择工作目录，直接进入对话和受保护工具工作台。"
         icon={<FolderOpenOutlined />}
         iconVariant="folder"

@@ -1,3 +1,5 @@
 export { default as CreateApplicationAction } from './CreateApplicationAction'
 export { default as OpenWorkspaceAction } from './OpenWorkspaceAction'
+export { default as WelcomeAgentTrack } from './WelcomeAgentTrack'
 export { default as WelcomeHero } from './WelcomeHero'
+export { default as WelcomeRecentProjects } from './WelcomeRecentProjects'
