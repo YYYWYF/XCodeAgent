@@ -13,6 +13,10 @@ from app.protocols.workflow_visualization import (
     build_workflow_ag_ui_stream,
     workflow_capabilities,
 )
+from app.protocols.application_page_planning import (
+    application_page_planning_capabilities,
+    build_application_page_planning_ag_ui_stream,
+)
 from app.config import Settings
 from app.tools import antd_v4_docs
 from app.workspace import workspace as workspace_tools
@@ -79,6 +83,7 @@ async def health() -> dict[str, object]:
                 "docs_dir": str(antd_v4_docs.docs_root()),
             },
             "workflow_run": workflow_capabilities(),
+            "application_page_planning": application_page_planning_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -107,6 +112,21 @@ async def chat(request: ChatRequest) -> ChatResponse:
             {"role": "user", "content": request.message},
             {"role": "assistant", "content": answer},
         ],
+    )
+
+
+@app.post("/application-page-planning/run")
+async def run_application_page_planning(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    return StreamingResponse(
+        build_application_page_planning_ag_ui_stream(
+            payload=input_data,
+            accept=accept,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

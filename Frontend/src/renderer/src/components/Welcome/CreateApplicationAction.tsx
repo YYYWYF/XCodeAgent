@@ -1,10 +1,21 @@
 import { PlusOutlined } from '@ant-design/icons'
 import { Form, message, Modal } from 'antd'
 import { useState } from 'react'
-import type { ApplicationConfig, ApplicationDraft } from '../../typings'
+import {
+  createPagePlanningThreadId,
+  requestPagePlanningQuestions
+} from '../../service/applicationPagePlanning'
+import type {
+  ApplicationConfig,
+  ApplicationDraft,
+  ApplicationPagePlan,
+  ConfirmedPagePlan,
+  PagePlanningQuestion
+} from '../../typings'
 import ApplicationForm from './ApplicationForm'
+import ApplicationPagePlanningModal from './ApplicationPagePlanningModal'
 import WelcomeActionCard from './WelcomeActionCard'
-import { saveAndOpenApplication } from './applicationService'
+import { saveAndOpenApplication, saveApplication } from './applicationService'
 import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError } from './utils'
 
@@ -17,6 +28,11 @@ export default function CreateApplicationAction({ onOpenApplication }: Props) {
   const [modalOpen, setModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [selectingParent, setSelectingParent] = useState(false)
+  const [planningApplication, setPlanningApplication] = useState<ApplicationConfig>()
+  const [planningQuestions, setPlanningQuestions] = useState<PagePlanningQuestion[]>([])
+  const [planningQuestionsError, setPlanningQuestionsError] = useState('')
+  const [planningQuestionsLoading, setPlanningQuestionsLoading] = useState(false)
+  const [planningThreadId, setPlanningThreadId] = useState('')
 
   const openModal = () => {
     form.setFieldsValue(initialApplicationDraft)
@@ -79,13 +95,58 @@ export default function CreateApplicationAction({ onOpenApplication }: Props) {
         schema,
         createdAt: Date.now()
       }
-      await saveAndOpenApplication(application, onOpenApplication)
+      await saveApplication(application)
       setModalOpen(false)
+      await loadPagePlanningQuestions(application, createPagePlanningThreadId())
     } catch (error) {
       message.error(formatError(error, '创建应用失败'))
     } finally {
       setCreating(false)
     }
+  }
+
+  const loadPagePlanningQuestions = async (
+    application: ApplicationConfig,
+    threadId: string
+  ) => {
+    setPlanningApplication(application)
+    setPlanningThreadId(threadId)
+    setPlanningQuestions([])
+    setPlanningQuestionsError('')
+    setPlanningQuestionsLoading(true)
+    try {
+      const questions = await requestPagePlanningQuestions(
+        {
+          name: application.appName,
+          scenario: application.senario,
+          terminal: application.terminal
+        },
+        threadId
+      )
+      setPlanningQuestions(questions)
+    } catch (error) {
+      setPlanningQuestionsError(formatError(error, '生成细节问题失败'))
+    } finally {
+      setPlanningQuestionsLoading(false)
+    }
+  }
+
+  const handlePagePlanConfirmed = async (
+    plan: ApplicationPagePlan,
+    confirmation: ConfirmedPagePlan
+  ) => {
+    if (!planningApplication) return
+    const pageNames = plan.pages.map((page) => page.name)
+    const schema = { ...planningApplication.schema, menus: confirmation.menus }
+    const application = {
+      ...planningApplication,
+      menus: confirmation.menus,
+      schema,
+      pages: pageNames,
+      defaultPage: pageNames[0] || planningApplication.defaultPage
+    }
+    await saveAndOpenApplication(application, onOpenApplication)
+    setPlanningApplication(undefined)
   }
 
   return (
@@ -104,8 +165,9 @@ export default function CreateApplicationAction({ onOpenApplication }: Props) {
         bodyStyle={{ maxHeight: 'calc(100vh - 260px)', overflow: 'auto' }}
         confirmLoading={creating}
         destroyOnClose
+        forceRender
         maskClosable={false}
-        okText="创建并进入工作台"
+        okText="创建并规划页面"
         onCancel={() => setModalOpen(false)}
         onOk={handleCreateApplication}
         open={modalOpen}
@@ -119,6 +181,21 @@ export default function CreateApplicationAction({ onOpenApplication }: Props) {
           selectingParent={selectingParent}
         />
       </Modal>
+
+      {planningApplication ? (
+        <ApplicationPagePlanningModal
+          application={planningApplication}
+          key={planningApplication.id}
+          onConfirmed={handlePagePlanConfirmed}
+          onRetryQuestions={() =>
+            loadPagePlanningQuestions(planningApplication, planningThreadId)
+          }
+          questions={planningQuestions}
+          questionsError={planningQuestionsError}
+          questionsLoading={planningQuestionsLoading}
+          threadId={planningThreadId}
+        />
+      ) : null}
     </>
   )
 }
