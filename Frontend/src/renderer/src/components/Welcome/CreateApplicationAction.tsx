@@ -12,18 +12,23 @@ import type {
   ConfirmedPagePlan,
   PagePlanningQuestion
 } from '../../typings'
+import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'
 import ApplicationPagePlanningModal from './ApplicationPagePlanningModal'
 import WelcomeActionCard from './WelcomeActionCard'
+import WelcomeModalTitle from './WelcomeModalTitle'
+import './ApplicationFormModal.less'
+import './WelcomeModal.less'
 import { saveAndOpenApplication, saveApplication } from './applicationService'
 import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError } from './utils'
 
 type Props = {
   onOpenApplication: (application: ApplicationConfig) => void
+  theme: 'dark' | 'light'
 }
 
-export default function CreateApplicationAction({ onOpenApplication }: Props) {
+export default function CreateApplicationAction({ onOpenApplication, theme }: Props) {
   const [form] = Form.useForm<ApplicationDraft>()
   const [modalOpen, setModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -35,7 +40,6 @@ export default function CreateApplicationAction({ onOpenApplication }: Props) {
   const [planningThreadId, setPlanningThreadId] = useState('')
 
   const openModal = () => {
-    form.setFieldsValue(initialApplicationDraft)
     setModalOpen(true)
   }
 
@@ -105,10 +109,7 @@ export default function CreateApplicationAction({ onOpenApplication }: Props) {
     }
   }
 
-  const loadPagePlanningQuestions = async (
-    application: ApplicationConfig,
-    threadId: string
-  ) => {
+  const loadPagePlanningQuestions = async (application: ApplicationConfig, threadId: string) => {
     setPlanningApplication(application)
     setPlanningThreadId(threadId)
     setPlanningQuestions([])
@@ -162,18 +163,28 @@ export default function CreateApplicationAction({ onOpenApplication }: Props) {
       />
 
       <Modal
-        bodyStyle={{ maxHeight: 'calc(100vh - 260px)', overflow: 'auto' }}
+        afterClose={() => form.setFieldsValue(initialApplicationDraft)}
+        cancelText="取消"
         confirmLoading={creating}
         destroyOnClose
         forceRender
         maskClosable={false}
+        maskTransitionName=""
         okText="创建并规划页面"
         onCancel={() => setModalOpen(false)}
         onOk={handleCreateApplication}
         open={modalOpen}
         style={{ top: 24 }}
-        title="新建应用"
-        width={780}
+        title={
+          <WelcomeModalTitle
+            description="定义应用骨架、创建位置和基础能力"
+            icon={<PlusOutlined />}
+            title="新建应用"
+          />
+        }
+        transitionName=""
+        width={860}
+        wrapClassName={cx('welcome-modal', 'create-application-modal', `theme-${theme}`)}
       >
         <ApplicationForm
           form={form}
@@ -187,9 +198,7 @@ export default function CreateApplicationAction({ onOpenApplication }: Props) {
           application={planningApplication}
           key={planningApplication.id}
           onConfirmed={handlePagePlanConfirmed}
-          onRetryQuestions={() =>
-            loadPagePlanningQuestions(planningApplication, planningThreadId)
-          }
+          onRetryQuestions={() => loadPagePlanningQuestions(planningApplication, planningThreadId)}
           questions={planningQuestions}
           questionsError={planningQuestionsError}
           questionsLoading={planningQuestionsLoading}

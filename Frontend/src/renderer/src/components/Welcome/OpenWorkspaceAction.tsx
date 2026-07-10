@@ -9,8 +9,11 @@ import {
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
 import WelcomeActionCard from './WelcomeActionCard'
+import WelcomeModalTitle from './WelcomeModalTitle'
 import { saveAndOpenApplication } from './applicationService'
 import { initialApplicationDraft } from './constants'
+import './WelcomeModal.less'
+import './WorkspaceHistoryModal.less'
 import {
   buildApplicationSchema,
   createApplicationId,
@@ -24,9 +27,10 @@ const { Text } = Typography
 
 type Props = {
   onOpenApplication: (application: ApplicationConfig) => void
+  theme: 'dark' | 'light'
 }
 
-export default function OpenWorkspaceAction({ onOpenApplication }: Props): JSX.Element {
+export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props): JSX.Element {
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [workspaceHistory, setWorkspaceHistory] = useState<SessionWorkspaceSummary[]>([])
@@ -107,59 +111,76 @@ export default function OpenWorkspaceAction({ onOpenApplication }: Props): JSX.E
         footer={null}
         onCancel={() => setHistoryOpen(false)}
         open={historyOpen}
-        title="选择历史工作目录"
+        title={
+          <WelcomeModalTitle
+            description="从最近会话中选择一个目录，继续之前的工作"
+            icon={<FolderOpenOutlined />}
+            title="打开工作目录"
+          />
+        }
         width={820}
+        wrapClassName={cx('welcome-modal', 'open-workspace-modal', `theme-${theme}`)}
       >
         {workspaceHistory.length === 0 ? (
-          <Empty description="暂无历史工作目录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : (
-          <List
-            className={cx('workspace-history-list')}
-            dataSource={workspaceHistory}
-            renderItem={(workspace) => (
-              <List.Item
-                actions={[
-                  <Button
-                    key="open"
-                    loading={openingWorkspaceRoot === workspace.workspaceRoot}
-                    onClick={() => openWorkspace(workspace)}
-                    type="primary"
-                  >
-                    进入
-                  </Button>
-                ]}
-                className={cx('workspace-history-item')}
-              >
-                <List.Item.Meta
-                  avatar={<FolderOpenOutlined className={cx('workspace-history-icon')} />}
-                  description={
-                    <div className={cx('workspace-history-description')}>
-                      <Text
-                        className={cx('workspace-history-path')}
-                        title={workspace.workspaceRoot}
-                      >
-                        {workspace.workspaceRoot}
-                      </Text>
-                      <Space className={cx('workspace-history-meta')} size={[8, 6]} wrap>
-                        <Tag>共 {workspace.sessionCount} 条</Tag>
-                        <Tag>前端 {workspace.frontendCount}</Tag>
-                        {workspace.backendCount > 0 ? (
-                          <Tag>后端 {workspace.backendCount}</Tag>
-                        ) : null}
-                        <Text type="secondary">
-                          最近 {formatHistoryTime(workspace.latestUpdatedAt)}
-                        </Text>
-                      </Space>
-                      <Text className={cx('workspace-history-latest')} type="secondary">
-                        最近会话：{workspace.latestTitle}
-                      </Text>
-                    </div>
-                  }
-                  title={<Text strong>{workspace.name}</Text>}
-                />
-              </List.Item>
-            )}
+          <Empty
+            className={cx('workspace-history-empty')}
+            description="暂无历史工作目录"
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
+        ) : (
+          <>
+            <div className={cx('workspace-history-summary')}>
+              <strong>最近使用</strong>
+              <span>{workspaceHistory.length} 个工作目录</span>
+            </div>
+            <List
+              className={cx('workspace-history-list')}
+              dataSource={workspaceHistory}
+              renderItem={(workspace) => (
+                <List.Item
+                  actions={[
+                    <Button
+                      key="open"
+                      loading={openingWorkspaceRoot === workspace.workspaceRoot}
+                      onClick={() => openWorkspace(workspace)}
+                      type="primary"
+                    >
+                      进入
+                    </Button>
+                  ]}
+                  className={cx('workspace-history-item')}
+                >
+                  <List.Item.Meta
+                    avatar={<FolderOpenOutlined className={cx('workspace-history-icon')} />}
+                    description={
+                      <div className={cx('workspace-history-description')}>
+                        <Text
+                          className={cx('workspace-history-path')}
+                          title={workspace.workspaceRoot}
+                        >
+                          {workspace.workspaceRoot}
+                        </Text>
+                        <Space className={cx('workspace-history-meta')} size={[8, 6]} wrap>
+                          <Tag>共 {workspace.sessionCount} 条</Tag>
+                          <Tag>前端 {workspace.frontendCount}</Tag>
+                          {workspace.backendCount > 0 ? (
+                            <Tag>后端 {workspace.backendCount}</Tag>
+                          ) : null}
+                          <Text type="secondary">
+                            最近 {formatHistoryTime(workspace.latestUpdatedAt)}
+                          </Text>
+                        </Space>
+                        <Text className={cx('workspace-history-latest')} type="secondary">
+                          最近会话：{workspace.latestTitle}
+                        </Text>
+                      </div>
+                    }
+                    title={<Text strong>{workspace.name}</Text>}
+                  />
+                </List.Item>
+              )}
+            />
+          </>
         )}
       </Modal>
     </>

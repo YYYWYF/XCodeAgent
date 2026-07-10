@@ -20,18 +20,134 @@ body {
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
     "Noto Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 .@{class-prefix}-workbench-shell {
+  --wb-bg: #f3f3f1;
+  --wb-canvas: #f7f7f5;
+  --wb-sidebar: #ececea;
+  --wb-editor: #efefed;
+  --wb-surface: rgba(255, 255, 255, 0.58);
+  --wb-surface-subtle: rgba(0, 0, 0, 0.025);
+  --wb-surface-hover: rgba(0, 0, 0, 0.045);
+  --wb-surface-selected: rgba(0, 0, 0, 0.07);
+  --wb-control: rgba(0, 0, 0, 0.06);
+  --wb-control-hover: rgba(0, 0, 0, 0.095);
+  --wb-text: #202124;
+  --wb-text-secondary: #65666a;
+  --wb-text-tertiary: #909196;
+  --wb-border: rgba(0, 0, 0, 0.075);
+  --wb-border-strong: rgba(0, 0, 0, 0.115);
+  --wb-focus: rgba(0, 0, 0, 0.24);
+  --wb-shadow: 0 10px 32px rgba(0, 0, 0, 0.055);
+  --wb-code-add: rgba(0, 0, 0, 0.025);
+  --wb-code-delete: rgba(0, 0, 0, 0.055);
+  --wb-inverse: var(--wb-control);
+  --wb-inverse-text: var(--wb-text);
+  --wb-danger: #b42318;
+  --wb-warning: #8a5a00;
   display: flex;
   flex-direction: row;
   align-items: stretch;
   height: 100vh;
   min-height: 0;
   overflow: hidden;
-  padding: 16px;
+  padding: 0;
   gap: 0;
-  background: #eef2f6;
+  color: var(--wb-text);
+  background: var(--wb-bg);
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] {
+  --wb-bg: #1b1b1d;
+  --wb-canvas: #1e1e20;
+  --wb-sidebar: #202023;
+  --wb-editor: #19191b;
+  --wb-surface: rgba(255, 255, 255, 0.055);
+  --wb-surface-subtle: rgba(255, 255, 255, 0.035);
+  --wb-surface-hover: rgba(255, 255, 255, 0.075);
+  --wb-surface-selected: rgba(255, 255, 255, 0.095);
+  --wb-control: rgba(255, 255, 255, 0.1);
+  --wb-control-hover: rgba(255, 255, 255, 0.145);
+  --wb-text: #f2f2f2;
+  --wb-text-secondary: #a6a6aa;
+  --wb-text-tertiary: #737378;
+  --wb-border: rgba(255, 255, 255, 0.075);
+  --wb-border-strong: rgba(255, 255, 255, 0.13);
+  --wb-focus: rgba(255, 255, 255, 0.28);
+  --wb-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
+  --wb-code-add: rgba(255, 255, 255, 0.035);
+  --wb-code-delete: rgba(255, 255, 255, 0.065);
+  --wb-inverse: var(--wb-control);
+  --wb-inverse-text: var(--wb-text);
+  --wb-danger: #ff8a80;
+  --wb-warning: #e8c06a;
+
+  .ant-typography,
+  .ant-empty-description,
+  .ant-checkbox-wrapper,
+  .ant-radio-wrapper {
+    color: var(--wb-text);
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+  }
+
+  .ant-checkbox-inner,
+  .ant-radio-inner {
+    background: var(--wb-surface);
+    border-color: var(--wb-border-strong);
+  }
+
+  .ant-checkbox-checked .ant-checkbox-inner,
+  .ant-radio-checked .ant-radio-inner {
+    background: var(--wb-control-hover);
+    border-color: var(--wb-focus);
+  }
+}
+
+.@{class-prefix}-workbench-shell {
+  .ant-btn {
+    box-shadow: none;
+  }
+
+  .ant-btn-default,
+  .ant-btn-primary {
+    color: var(--wb-text);
+    background: var(--wb-control);
+    border-color: var(--wb-border);
+
+    &:hover,
+    &:focus {
+      color: var(--wb-text);
+      background: var(--wb-control-hover);
+      border-color: var(--wb-border-strong);
+    }
+  }
+
+  .ant-input,
+  .ant-input-affix-wrapper,
+  .ant-select-selector {
+    color: var(--wb-text);
+    background: var(--wb-surface);
+    border-color: var(--wb-border);
+    box-shadow: none;
+  }
+
+  .ant-tag {
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+  }
+
+  .ant-alert {
+    color: var(--wb-text);
+    background: var(--wb-surface);
+    border-color: var(--wb-border);
+  }
 }
 
 .@{class-prefix}-workbench-pane {
@@ -39,9 +155,9 @@ body {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: #ffffff;
-  border: 1px solid #d8dee8;
-  border-radius: 8px;
+  background: var(--wb-canvas);
+  border: 0;
+  border-radius: 0;
 }
 
 /* 活动栏共享基础样式 */

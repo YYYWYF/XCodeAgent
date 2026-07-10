@@ -111,8 +111,8 @@ export default function WelcomePage({ onOpenApplication }: Props): JSX.Element {
             <WelcomeHero />
 
             <section className={cx('welcome-actions')} aria-label="开始使用 XCodeAgent">
-              <CreateApplicationAction onOpenApplication={onOpenApplication} />
-              <OpenWorkspaceAction onOpenApplication={onOpenApplication} />
+              <CreateApplicationAction onOpenApplication={onOpenApplication} theme={theme} />
+              <OpenWorkspaceAction onOpenApplication={onOpenApplication} theme={theme} />
             </section>
 
             <WelcomeRecentProjects onOpenApplication={onOpenApplication} />

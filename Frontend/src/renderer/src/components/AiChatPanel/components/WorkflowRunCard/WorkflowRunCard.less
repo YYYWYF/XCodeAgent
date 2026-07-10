@@ -4,9 +4,15 @@
   gap: 10px;
   margin-top: 10px;
   padding: 12px;
-  border: 1px solid #edf0f5;
+  border: 1px solid var(--wb-border);
   border-radius: 8px;
-  background: #fbfcfe;
+  background: var(--wb-surface-subtle);
+
+  .ant-tag {
+    color: var(--wb-text-secondary) !important;
+    background: var(--wb-surface) !important;
+    border-color: var(--wb-border) !important;
+  }
 }
 
 .@{class-prefix}-workflow-run-header {
@@ -27,9 +33,9 @@
 
 .@{class-prefix}-workflow-clarification {
   padding: 10px;
-  border: 1px solid #ffe7ba;
+  border: 1px solid var(--wb-border-strong);
   border-radius: 8px;
-  background: #fffaf0;
+  background: var(--wb-surface);
 }
 
 .@{class-prefix}-workflow-clarification-header,
@@ -56,7 +62,7 @@
   flex-direction: column;
   gap: 5px;
   padding-top: 8px;
-  border-top: 1px solid #ffe7ba;
+  border-top: 1px solid var(--wb-border);
 }
 
 .@{class-prefix}-workflow-clarification-context {
@@ -65,8 +71,8 @@
   flex-direction: column;
   gap: 10px;
   padding: 10px;
-  background: #ffffff;
-  border: 1px solid #f4d8a8;
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
   border-radius: 7px;
 }
 
@@ -90,13 +96,13 @@
   padding: 4px 0;
 
   &::marker {
-    color: #667085;
+      color: var(--wb-text-secondary);
   }
 }
 
 .@{class-prefix}-workflow-selection-item-meta {
   padding-top: 3px;
-  color: #667085;
+  color: var(--wb-text-secondary);
 }
 
 .@{class-prefix}-workflow-page-context-row {
@@ -115,7 +121,7 @@
   flex-direction: column;
   gap: 2px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #edf0f5;
+  border-bottom: 1px solid var(--wb-border);
 
   &:last-child {
     padding-bottom: 0;

@@ -1,5 +1,5 @@
 import { RobotOutlined, UserOutlined } from '@ant-design/icons'
-import { Empty, Spin, Typography } from 'antd'
+import { Spin, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { EditorMode, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -35,60 +35,66 @@ export default function MessageList({
 
   return (
     <div className={cx('ai-message-list')} aria-live="polite">
-      {visibleMessages.length === 0 ? (
-        <Empty description={copy.empty} image={Empty.PRESENTED_IMAGE_SIMPLE} />
-      ) : (
-        visibleMessages.map((message) => {
-          const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
-          return (
-            <article className={cx('ai-message', message.role)} key={message.id}>
-              <Text className={cx('ai-message-label')}>
-                {message.role === 'user' ? (
-                  <>
-                    <UserOutlined /> 用户输入
-                  </>
-                ) : (
-                  <>
-                    <RobotOutlined /> {copy.label}
-                  </>
-                )}
-              </Text>
-              {message.role === 'assistant' ? (
-                <>
-                  <MarkdownContent content={message.content} />
-                  {message.toolCalls?.map((toolCall) => (
-                    <ToolCallCard key={toolCall.id} toolCall={toolCall} />
-                  ))}
-                  {message.workflow && (
-                    <WorkflowRunCard
-                      disabled={loading}
-                      onSubmitClarification={onSubmitClarification}
-                      workflow={message.workflow}
-                    />
+      <div className={cx('ai-message-column')}>
+        {visibleMessages.length === 0 ? (
+          <div className={cx('ai-message-empty')}>
+            <span className={cx('ai-message-empty-mark')}><RobotOutlined /></span>
+            <Text strong>从一个想法开始</Text>
+            <Text type="secondary">{copy.empty}</Text>
+          </div>
+        ) : (
+          visibleMessages.map((message) => {
+            const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
+            return (
+              <article className={cx('ai-message', message.role)} key={message.id}>
+                <div className={cx('ai-message-author')}>
+                  <span className={cx('ai-message-avatar')}>
+                    {message.role === 'user' ? <UserOutlined /> : <RobotOutlined />}
+                  </span>
+                  <Text className={cx('ai-message-label')}>
+                    {message.role === 'user' ? '你' : copy.label}
+                  </Text>
+                </div>
+                <div className={cx('ai-message-content')}>
+                  {message.role === 'assistant' ? (
+                    <>
+                      <MarkdownContent content={message.content} />
+                      {message.toolCalls?.map((toolCall) => (
+                        <ToolCallCard key={toolCall.id} toolCall={toolCall} />
+                      ))}
+                      {message.workflow && (
+                        <WorkflowRunCard
+                          disabled={loading}
+                          onSubmitClarification={onSubmitClarification}
+                          workflow={message.workflow}
+                        />
+                      )}
+                      {codeChanges && (
+                        <CodeChangeCard
+                          codeChanges={codeChanges}
+                          loading={loading}
+                          onApproveAll={() => undefined}
+                          onFeedback={() => undefined}
+                          onOpenFile={(path) => onOpenCodeChangeFile(codeChanges, path)}
+                        />
+                      )}
+                    </>
+                  ) : (
+                    <Text className={cx('ai-message-text')}>{message.content}</Text>
                   )}
-                  {codeChanges && (
-                    <CodeChangeCard
-                      codeChanges={codeChanges}
-                      loading={loading}
-                      onApproveAll={() => undefined}
-                      onFeedback={() => undefined}
-                      onOpenFile={(path) => onOpenCodeChangeFile(codeChanges, path)}
-                    />
-                  )}
-                </>
-              ) : (
-                <Text className={cx('ai-message-text')}>{message.content}</Text>
-              )}
-            </article>
-          )
-        })
-      )}
-      {loading && (
-        <div className={cx('ai-message', 'assistant', 'loading')}>
-          <Spin size="small" />
-          <Text type="secondary">正在运行 Workflow...</Text>
-        </div>
-      )}
+                </div>
+              </article>
+            )
+          })
+        )}
+        {loading && (
+          <div className={cx('ai-message', 'assistant', 'loading')}>
+            <span className={cx('ai-message-avatar')}><RobotOutlined /></span>
+            <Spin size="small" />
+            <Text type="secondary">正在运行 Workflow...</Text>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

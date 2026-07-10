@@ -1,0 +1,68 @@
+.@{class-prefix}-application-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.@{class-prefix}-application-form-section {
+  min-width: 0;
+  padding: 18px 18px 6px;
+  border: 1px solid var(--modal-border);
+  border-radius: 10px;
+  background: var(--modal-surface);
+
+  &:first-child,
+  &:nth-child(2) {
+    grid-column: 1 / -1;
+  }
+
+  h5.ant-typography {
+    margin: 0 0 16px;
+    color: var(--modal-text);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .ant-form-item {
+    margin-bottom: 16px;
+  }
+
+  .ant-radio-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .ant-radio-button-wrapper {
+    border-left-width: 1px;
+    border-radius: 6px;
+
+    &:not(:first-child)::before {
+      display: none;
+    }
+  }
+}
+
+.@{class-prefix}-project-path-preview {
+  display: block;
+  margin: -4px 0 12px;
+  padding: 9px 11px;
+  color: var(--modal-text-secondary);
+  border: 1px dashed var(--modal-border-strong);
+  border-radius: 7px;
+  background: var(--modal-field);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-application-form {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-application-form-section:first-child,
+  .@{class-prefix}-application-form-section:nth-child(2) {
+    grid-column: auto;
+  }
+}

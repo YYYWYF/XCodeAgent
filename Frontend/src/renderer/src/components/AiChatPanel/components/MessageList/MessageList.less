@@ -2,51 +2,118 @@
   display: flex;
   flex: 1;
   min-height: 0;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
   overflow: auto;
-  background: #f8fafc;
+  background: var(--wb-canvas);
+  scrollbar-width: thin;
+}
 
-  .ant-empty {
-    margin: auto;
+.@{class-prefix}-ai-message-column {
+  display: flex;
+  width: min(100%, 860px);
+  min-height: 100%;
+  flex-direction: column;
+  gap: 30px;
+  padding: 34px 34px 28px;
+  margin: 0 auto;
+}
+
+.@{class-prefix}-ai-message-empty {
+  display: flex;
+  min-height: 100%;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+
+  .ant-typography {
+    color: var(--wb-text);
   }
+
+  .ant-typography-secondary {
+    max-width: 420px;
+    color: var(--wb-text-secondary);
+  }
+}
+
+.@{class-prefix}-ai-message-empty-mark {
+  display: inline-flex;
+  width: 46px;
+  height: 46px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+  color: var(--wb-text);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 50%;
+  font-size: 18px;
 }
 
 .@{class-prefix}-ai-message {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 14px;
-  background: #ffffff;
-  border: 1px solid #e5eaf1;
-  border-radius: 10px;
-  box-shadow: 0 2px 6px rgba(31, 41, 51, 0.04);
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
 
   &.@{class-prefix}-user {
-    border-color: #cfe0ff;
-    background: #f5f9ff;
-  }
-
-  &.@{class-prefix}-assistant {
-    border-color: #e5eaf1;
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--wb-border);
   }
 
   &.@{class-prefix}-loading {
-    flex-direction: row;
+    grid-template-columns: 34px auto minmax(0, 1fr);
     align-items: center;
+    padding: 6px 0;
   }
 }
 
-.@{class-prefix}-ai-message-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: #1677ff;
-  font-size: 11px;
-  font-weight: 600;
+.@{class-prefix}-ai-message-author {
+  display: contents;
 }
 
-.@{class-prefix}-ai-message-text {
+.@{class-prefix}-ai-message-avatar {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-text);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 50%;
+}
+
+.@{class-prefix}-ai-message-label.ant-typography {
+  align-self: center;
+  color: var(--wb-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.@{class-prefix}-ai-message-content {
+  grid-column: 2;
+  min-width: 0;
+  margin-top: -5px;
+  color: var(--wb-text);
+  font-size: 14px;
+  line-height: 1.75;
+
+  .ant-typography,
+  .markdown-body {
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-ai-message-text.ant-typography {
+  color: var(--wb-text);
+  font-size: 14px;
+  line-height: 1.75;
   white-space: pre-wrap;
+}
+
+@media (max-width: 1000px) {
+  .@{class-prefix}-ai-message-column {
+    padding: 32px 24px 24px;
+  }
 }

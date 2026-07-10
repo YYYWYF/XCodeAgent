@@ -4,17 +4,23 @@
   gap: 10px;
   margin-top: 4px;
   overflow: hidden;
-  border: 1px solid #e0e7ef;
+  border: 1px solid var(--wb-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--wb-surface);
+
+  .ant-tag {
+    color: var(--wb-text-secondary) !important;
+    background: var(--wb-surface-subtle) !important;
+    border-color: var(--wb-border) !important;
+  }
 
   &.@{class-prefix}-pending {
-    border-color: #f0d58a;
-    background: #fffdf5;
+    border-color: var(--wb-border-strong);
+    background: var(--wb-surface-subtle);
   }
 
   &.@{class-prefix}-resolved {
-    border-color: #c9ddd7;
+    border-color: var(--wb-border-strong);
   }
 }
 
@@ -25,7 +31,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: 12px 14px 10px;
-  border-bottom: 1px solid #edf1f5;
+  border-bottom: 1px solid var(--wb-border);
 }
 
 .@{class-prefix}-code-change-icon {
@@ -35,8 +41,8 @@
   flex: 0 0 32px;
   align-items: center;
   justify-content: center;
-  color: #34556b;
-  background: #eef3f7;
+  color: var(--wb-text);
+  background: var(--wb-surface-hover);
   border-radius: 8px;
 }
 
@@ -58,17 +64,17 @@
 }
 
 .@{class-prefix}-addition {
-  color: #079455;
+  color: var(--wb-text);
 }
 
 .@{class-prefix}-deletion {
-  color: #d92d20;
+  color: var(--wb-text-secondary);
 }
 
 .@{class-prefix}-code-change-file-list {
   display: flex;
   flex-direction: column;
-  padding: 2px 0 8px;
+  padding: 0 0 8px;
 }
 
 .@{class-prefix}-code-change-file-row {
@@ -79,17 +85,17 @@
   align-items: center;
   gap: 12px;
   padding: 8px 14px;
-  color: #334155;
+  color: var(--wb-text);
   font: inherit;
   text-align: left;
   background: transparent;
   border: 0;
-  border-top: 1px solid #f1f4f8;
+  border-top: 1px solid var(--wb-border);
   cursor: pointer;
 
   &:hover,
   &:focus-visible {
-    background: #f6f8fb;
+    background: var(--wb-surface-hover);
     outline: none;
   }
 }
@@ -109,7 +115,7 @@
 
   .anticon {
     flex: 0 0 auto;
-    color: #6b7788;
+    color: var(--wb-text-secondary);
   }
 
   .ant-tag {
@@ -133,7 +139,7 @@
   align-items: center;
   gap: 5px;
   padding: 0 14px 12px;
-  color: #0f8a73;
+  color: var(--wb-text-secondary);
   font-size: 12px;
 }
 

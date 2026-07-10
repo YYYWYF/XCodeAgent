@@ -18,6 +18,7 @@ type Props = {
 export default function ApplicationForm({ form, onSelectProjectParent, selectingParent }: Props) {
   return (
     <Form
+      className={cx('application-form')}
       form={form}
       initialValues={initialApplicationDraft}
       layout="vertical"

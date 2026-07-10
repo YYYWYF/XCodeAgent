@@ -1,6 +1,6 @@
 .@{class-prefix}-markdown-content {
   min-width: 0;
-  color: #1f2937;
+  color: var(--wb-text, #1f2937);
   font-size: 13px;
   line-height: 1.65;
   overflow-wrap: anywhere;
@@ -24,7 +24,7 @@
   h5,
   h6 {
     margin: 12px 0 6px;
-    color: #111827;
+    color: var(--wb-text, #111827);
     font-weight: 600;
     line-height: 1.35;
     letter-spacing: 0;
@@ -61,19 +61,19 @@
   blockquote {
     margin: 0 0 8px;
     padding: 6px 10px;
-    color: #4b5563;
-    background: #f4f7fb;
-    border-left: 3px solid #9fb2c8;
+    color: var(--wb-text-secondary, #4b5563);
+    background: var(--wb-surface-subtle, #f4f7fb);
+    border-left: 3px solid var(--wb-border-strong, #9fb2c8);
     border-radius: 0 6px 6px 0;
   }
 
   code {
     padding: 1px 5px;
-    color: #a43f13;
+    color: var(--wb-text, #202124);
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     font-size: 12px;
-    background: #eef2f7;
-    border: 1px solid #dbe3ee;
+    background: var(--wb-surface-subtle, #eef2f7);
+    border: 1px solid var(--wb-border, #dbe3ee);
     border-radius: 4px;
   }
 
@@ -81,9 +81,9 @@
     margin: 0 0 8px;
     padding: 10px 12px;
     overflow: auto;
-    color: #e6edf3;
-    background: #101820;
-    border: 1px solid #243244;
+    color: var(--wb-text, #e6edf3);
+    background: var(--wb-editor, #101820);
+    border: 1px solid var(--wb-border, #243244);
     border-radius: 8px;
 
     code {
@@ -98,7 +98,10 @@
   }
 
   a {
-    color: #1677ff;
+    color: var(--wb-text, #1677ff);
+    text-decoration: underline;
+    text-decoration-color: var(--wb-border-strong, currentColor);
+    text-underline-offset: 2px;
   }
 
   table {
@@ -114,17 +117,17 @@
     padding: 6px 8px;
     text-align: left;
     vertical-align: top;
-    border: 1px solid #d8e0ea;
+    border: 1px solid var(--wb-border, #d8e0ea);
   }
 
   th {
     font-weight: 600;
-    background: #f1f5f9;
+    background: var(--wb-surface-subtle, #f1f5f9);
   }
 
   hr {
     margin: 10px 0;
     border: 0;
-    border-top: 1px solid #d8e0ea;
+    border-top: 1px solid var(--wb-border, #d8e0ea);
   }
 }

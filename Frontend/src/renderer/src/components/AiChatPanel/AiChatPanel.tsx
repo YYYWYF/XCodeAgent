@@ -24,12 +24,18 @@ type Props = {
   application: ApplicationConfig
   editorMode: EditorMode
   onReturnWelcome: () => void
+  onThemeChange: (theme: 'light' | 'dark' | 'system') => void
+  theme: 'light' | 'dark'
+  themePreference: 'light' | 'dark' | 'system'
 }
 
 export default function AiChatPanel({
   application,
   editorMode,
-  onReturnWelcome
+  onReturnWelcome,
+  onThemeChange,
+  theme,
+  themePreference
 }: Props): ReactElement {
   const [previewError, setPreviewError] = useState('')
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
@@ -55,7 +61,6 @@ export default function AiChatPanel({
     ensureActiveSession,
     getSessionMessages,
     handleCreateSessionFromList,
-    handleCreateSessionKeyDown,
     handleDeleteSession,
     handleOpenSession,
     handleOpenSessionKeyDown,
@@ -101,6 +106,7 @@ export default function AiChatPanel({
   const copy = chatCopy[editorMode]
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
+  const activeSessionTitle = sessions.find((session) => session.id === activeSessionId)?.title
 
   const handlePreviewAction: MenuProps['onClick'] = async ({ key }) => {
     setPreviewError('')
@@ -142,7 +148,6 @@ export default function AiChatPanel({
           deletingSessionId={deletingSessionId}
           loadingSessions={loadingSessions}
           onCreateSession={handleCreateSessionFromList}
-          onCreateSessionKeyDown={handleCreateSessionKeyDown}
           onDeleteSession={handleDeleteSession}
           onOpenSession={handleOpenSession}
           onOpenSessionKeyDown={handleOpenSessionKeyDown}
@@ -154,14 +159,24 @@ export default function AiChatPanel({
         />
 
         <div className={cx('ai-chat-main')}>
-          {showPreviewActions && (
-            <PreviewActions
-              embeddedPreviewOpen={embeddedPreviewOpen}
-              onCloseEmbeddedPreview={() => setRightPanel(undefined)}
-              onPreviewAction={handlePreviewAction}
-            />
-          )}
-          <ChatHeader copy={copy} editorMode={editorMode} />
+          <ChatHeader
+            actions={
+              showPreviewActions ? (
+                <PreviewActions
+                  embeddedPreviewOpen={embeddedPreviewOpen}
+                  onCloseEmbeddedPreview={() => setRightPanel(undefined)}
+                  onPreviewAction={handlePreviewAction}
+                />
+              ) : undefined
+            }
+            copy={copy}
+            editorMode={editorMode}
+            onThemeChange={onThemeChange}
+            theme={theme}
+            themePreference={themePreference}
+            title={activeSessionTitle || '新对话'}
+            workspaceName={application.name}
+          />
 
           {previewError && (
             <Alert

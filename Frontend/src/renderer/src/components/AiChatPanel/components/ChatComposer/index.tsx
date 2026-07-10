@@ -74,87 +74,100 @@ export default function ChatComposer({
 
   return (
     <div className={cx('ai-chat-composer')}>
-      {error && <Alert message={error} showIcon type="error" />}
-      <TextArea
-        aria-label={`${copy.title}输出内容`}
-        autoSize={{ minRows: 3, maxRows: 6 }}
-        placeholder={copy.placeholder}
-        value={draft}
-        onChange={(event) => onDraftChange(event.target.value)}
-        onPressEnter={(event) => {
-          if (!event.shiftKey) {
-            event.preventDefault()
-            handleSend()
-          }
-        }}
-      />
-      <div className={cx('workflow-debug-box', debugEnabled && 'enabled')}>
-        <Checkbox
-          checked={debugEnabled}
-          disabled={loading}
-          onChange={(event) => setDebugEnabled(event.target.checked)}
-        >
-          <BugOutlined /> Workflow 调试续跑
-        </Checkbox>
-        {debugEnabled && (
-          <div className={cx('workflow-debug-fields')}>
-            <Select
-              className={cx('workflow-debug-node-select')}
+      <div className={cx('ai-chat-composer-column')}>
+        {error && <Alert message={error} showIcon type="error" />}
+        <div className={cx('ai-chat-composer-frame')}>
+          <TextArea
+            aria-label={`${copy.title}输出内容`}
+            autoSize={{ minRows: 2, maxRows: 6 }}
+            placeholder={copy.placeholder}
+            value={draft}
+            onChange={(event) => onDraftChange(event.target.value)}
+            onPressEnter={(event) => {
+              if (!event.shiftKey) {
+                event.preventDefault()
+                handleSend()
+              }
+            }}
+          />
+          <div className={cx('workflow-debug-box', debugEnabled && 'enabled')}>
+            <Checkbox
+              checked={debugEnabled}
               disabled={loading}
-              placeholder="选择开始节点"
-              value={resumeFrom}
-              onChange={setResumeFrom}
+              onChange={(event) => setDebugEnabled(event.target.checked)}
             >
-              {resumeNodeOptions.map((option) => (
-                <Option key={option.value} value={option.value}>
-                  {option.label}
-                </Option>
-              ))}
-            </Select>
-            <Input
-              disabled={loading}
-              placeholder="需求文档目录或 requirement-spec.json"
-              value={requirementSpecPath}
-              onChange={(event) => setRequirementSpecPath(event.target.value)}
-            />
-            <Input
-              disabled={loading}
-              placeholder="项目文档目录或 project-plan.json"
-              value={projectPlanPath}
-              onChange={(event) => setProjectPlanPath(event.target.value)}
-            />
-            <Input
-              disabled={loading}
-              placeholder="任务文档目录或 build-task-plan.json（从 build 开始时使用）"
-              value={buildTaskPlanPath}
-              onChange={(event) => setBuildTaskPlanPath(event.target.value)}
-            />
+              <BugOutlined /> Workflow 调试
+            </Checkbox>
+            {debugEnabled && (
+              <div className={cx('workflow-debug-fields')}>
+                <Select
+                  className={cx('workflow-debug-node-select')}
+                  disabled={loading}
+                  placeholder="选择开始节点"
+                  value={resumeFrom}
+                  onChange={setResumeFrom}
+                >
+                  {resumeNodeOptions.map((option) => (
+                    <Option key={option.value} value={option.value}>
+                      {option.label}
+                    </Option>
+                  ))}
+                </Select>
+                <Input
+                  disabled={loading}
+                  placeholder="需求文档目录或 requirement-spec.json"
+                  value={requirementSpecPath}
+                  onChange={(event) => setRequirementSpecPath(event.target.value)}
+                />
+                <Input
+                  disabled={loading}
+                  placeholder="项目文档目录或 project-plan.json"
+                  value={projectPlanPath}
+                  onChange={(event) => setProjectPlanPath(event.target.value)}
+                />
+                <Input
+                  disabled={loading}
+                  placeholder="任务文档目录或 build-task-plan.json（从 build 开始时使用）"
+                  value={buildTaskPlanPath}
+                  onChange={(event) => setBuildTaskPlanPath(event.target.value)}
+                />
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      <div className={cx('ai-chat-composer-footer')}>
-        <Text className={cx('workspace-root-label')} title={workspaceRoot}>
-          <FolderOpenOutlined /> 工作目录：{workspaceRoot}
-        </Text>
-        {workspaceBusy && (
-          <Text className={cx('workspace-busy-label')} type="warning">
-            工作区中另一个会话正在执行
-          </Text>
-        )}
-        {loading ? (
-          <Button danger disabled={stopping} icon={<StopOutlined />} onClick={onStopGenerating}>
-            {stopping ? '正在停止...' : '停止生成'}
-          </Button>
-        ) : (
-          <Button
-            disabled={!canSend || workspaceBusy}
-            icon={<SendOutlined />}
-            onClick={handleSend}
-            type="primary"
-          >
-            {debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
-          </Button>
-        )}
+          <div className={cx('ai-chat-composer-footer')}>
+            <Text className={cx('workspace-root-label')} title={workspaceRoot}>
+              <FolderOpenOutlined /> {workspaceRoot}
+            </Text>
+            {workspaceBusy && (
+              <Text className={cx('workspace-busy-label')} type="warning">
+                其他会话正在执行
+              </Text>
+            )}
+            {loading ? (
+              <Button
+                aria-label={stopping ? '正在停止' : '停止生成'}
+                className={cx('composer-send-button')}
+                danger
+                disabled={stopping}
+                icon={<StopOutlined />}
+                onClick={onStopGenerating}
+                shape="circle"
+                title={stopping ? '正在停止...' : '停止生成'}
+              />
+            ) : (
+              <Button
+                aria-label={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
+                className={cx('composer-send-button')}
+                disabled={!canSend || workspaceBusy}
+                icon={<SendOutlined />}
+                onClick={handleSend}
+                shape="circle"
+                title={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
+                type="primary"
+              />
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )

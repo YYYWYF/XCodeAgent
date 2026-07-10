@@ -6,7 +6,8 @@
   min-width: 0;
   min-height: 0;
   flex-direction: row;
-  background: #ffffff;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
 }
 
 .@{class-prefix}-ai-chat-assistant {
@@ -18,7 +19,7 @@
   height: 100%;
   min-height: 0;
   flex-direction: row;
-  background: #ffffff;
+  background: var(--wb-canvas);
 }
 
 .@{class-prefix}-ai-chat-panel:not(.@{class-prefix}-embedded-preview-open) {
@@ -66,7 +67,7 @@
   align-items: center;
   justify-content: center;
   cursor: col-resize;
-  background: #ffffff;
+  background: var(--wb-canvas);
 
   &::before {
     position: absolute;
@@ -75,7 +76,7 @@
     width: 1px;
     height: 100%;
     content: "";
-    background: #d8dee8;
+    background: var(--wb-border);
     transition:
       background 0.16s ease,
       box-shadow 0.16s ease;
@@ -95,12 +96,12 @@
   &:hover,
   &.@{class-prefix}-dragging {
     &::before {
-      background: #1677ff;
-      box-shadow: 0 0 0 1px rgba(22, 119, 255, 0.18);
+      background: var(--wb-text);
+      box-shadow: none;
     }
 
     &::after {
-      background: rgba(22, 119, 255, 0.08);
+      background: var(--wb-surface-hover);
     }
 
     .@{class-prefix}-panel-split-handle-icon {
@@ -120,11 +121,11 @@
   height: 32px;
   align-items: center;
   justify-content: center;
-  color: #1677ff;
-  background: #ffffff;
-  border: 1px solid #bfd8ff;
+  color: var(--wb-text);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border-strong);
   border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(31, 41, 51, 0.14);
+  box-shadow: none;
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, -50%) scale(0.92);
@@ -139,13 +140,13 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--wb-canvas);
 }
 
 .@{class-prefix}-diff-detail-pane {
   flex: 0 0 clamp(420px, 34vw, 620px);
   width: clamp(420px, 34vw, 620px);
-  border-left: 1px solid #e2e8f0;
+  border-left: 1px solid var(--wb-border);
 }
 
 .@{class-prefix}-ai-chat-main {
@@ -156,11 +157,18 @@
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  padding-top: 56px;
-  background: #ffffff;
+  background: var(--wb-canvas);
 }
 
 .@{class-prefix}-preview-action-error.ant-alert {
   margin: 10px 16px 0;
   border-radius: 8px;
+}
+
+@media (max-width: 1100px) {
+  .@{class-prefix}-embedded-preview-open {
+    .@{class-prefix}-session-sidebar {
+      display: none;
+    }
+  }
 }

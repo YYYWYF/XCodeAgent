@@ -1,30 +1,35 @@
 .@{class-prefix}-preview-actions {
-  position: absolute;
-  top: 12px;
-  right: 14px;
-  z-index: 3;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px;
-  background: #f3f6fa;
-  border: 1px solid #d8dee8;
-  border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(31, 41, 51, 0.08);
+  gap: 4px;
 
   .ant-btn {
-    height: 30px;
-    border-radius: 6px;
+    height: 34px;
+    border-radius: 8px;
   }
 
   .ant-btn-text {
-    width: 30px;
-    color: #667085;
+    width: 34px;
+    color: var(--wb-text-secondary);
 
     &:hover,
     &:focus {
-      color: #1677ff;
-      background: #ffffff;
+      color: var(--wb-text);
+      background: var(--wb-surface-hover);
+    }
+  }
+
+  .ant-btn-primary {
+    color: var(--wb-inverse-text);
+    background: var(--wb-inverse);
+    border-color: var(--wb-inverse);
+    box-shadow: none;
+
+    &:hover,
+    &:focus {
+      color: var(--wb-inverse-text);
+      background: var(--wb-text-secondary);
+      border-color: var(--wb-text-secondary);
     }
   }
 }
