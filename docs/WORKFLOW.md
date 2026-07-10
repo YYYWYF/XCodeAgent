@@ -180,12 +180,15 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 由 Main Agent 根据已经确认并写回的 `ProjectPlan` 生成可执行任务 DAG：
 
+- 先以只读方式检查当前工作目录，识别技术栈、源码目录、路由/API 入口、共享模块、测试位置和现有文件约定；
 - 生成稳定的 `task_id`；
 - 指定任务执行 Agent；
 - 计算任务依赖；
 - 标记可并行任务；
-- 设置允许修改的文件范围；
+- 以 `change_scope` 记录新增、修改、删除文件及每项改动目的，并据此设置允许修改的文件范围；
+- 以 `impact_scope` 记录受影响模块、公共契约、风险和影响摘要；
 - 绑定验收标准；
+- 初始化任务状态为 `pending`，后续只在 `pending/running/completed/failed` 中流转；
 - 校验循环依赖和缺失依赖。
 
 该节点不生成新需求，也不编写业务代码。`ProjectPlan` 是输入上下文，Main Agent 负责将已确认的页面详细设计和相关数据源转换成可执行任务；Graph 节点只接收结构化 `build_task_plan`、更新 `tasks`，并交给后续 Build Subgraph 执行。
@@ -198,8 +201,11 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 - `tasks`：可执行任务 DAG；
 - `summary`：任务数量统计；
+- `workspace_analysis`：任务拆分前实际检查到的代码结构和工程约定；
 - `prepared_by`：执行任务编排的 Agent、运行方式和模型信息；
-- `coordination`：任务分发顺序和依赖策略。
+- `coordination`：任务分发顺序、依赖策略和串并行执行批次。
+
+该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。为控制 128k 上下文预算，Main Agent 只把代码结构摘要和精确文件清单写入任务计划，不把完整目录树或文件内容复制进 Graph State。
 
 该节点的结构化产物必须落盘，供后续恢复执行和单节点验证使用：
 
