@@ -510,10 +510,14 @@ Graph State 只保存这些文件的路径和版本。
 
 - 每个项目必须有独立工作目录。
 - 所有文件操作必须限制在项目工作目录中。
+- 前端历史会话的消息、草稿、运行状态、停止控制和 AG-UI client 必须按 `workspaceRoot + editorMode + sessionId` 隔离；`threadId` 只属于对应会话，每次执行使用独立 `runId`。
+- 同一个 `workspaceRoot` 同时只允许一个 `/workflow/run` 进入 Graph。Backend 使用进程内非阻塞 workspace lease 保护共享代码、固定计划文档和全目录 diff 快照，冲突请求通过现有 AG-UI 失败事件返回 `workspace_busy`。
 - 修改相同文件的任务不得并发执行。
 - 共享入口文件、依赖清单、API 契约和路由配置应使用文件锁。
 - 任务锁和文件锁由 `workspace/` 提供，不由 Agent 自行约定。
 - 生成代码和执行命令最终应运行在隔离 Sandbox 中。
+
+会话隔离不等于项目文件隔离：同一 workspace 内不同会话仍然顺序共享代码、Spec、Plan 和 Report。当前桌面端只启动一个 Uvicorn 进程，因此进程内 lease 覆盖所有 Renderer 请求；未来引入多进程 Backend 时必须将 lease 升级为跨进程锁或独立 worktree。
 
 ## 当前不实现的内容
 

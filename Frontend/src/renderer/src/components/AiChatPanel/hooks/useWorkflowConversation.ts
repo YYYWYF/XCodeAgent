@@ -1,8 +1,7 @@
 import { useRef, useState } from 'react'
-import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
+import type { MutableRefObject, SetStateAction } from 'react'
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import type { ToolCallRecord } from '../../../service/agUiAgent'
-import { createChatSessionId, type ChatSessionMessage } from '../../../service/chatSessions'
 import type {
   ApplicationConfig,
   EditorMode,
@@ -16,22 +15,28 @@ import {
 } from '../components/WorkflowRunCard'
 import type { AgentChatMessage } from '../types'
 import { stoppedAnswer, workflowCodeChanges } from '../utils'
+import type { PersistSessionInput } from './useChatSessions'
+import type { SessionIdentity, SessionRunStatus } from './sessionRuntime'
+
+type SessionRunEntry = {
+  identity: SessionIdentity
+  status: SessionRunStatus
+}
 
 type UseWorkflowConversationParams = {
-  activeSessionId?: string
-  agUiSessionsRef: MutableRefObject<Partial<Record<EditorMode, AgUiChatSession>>>
+  activeSession?: SessionIdentity
+  agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   application: ApplicationConfig
   draft: string
+  draftKey: string
   editorMode: EditorMode
-  messages: AgentChatMessage[]
-  persistSession: (
-    mode: EditorMode,
-    nextMessages: ChatSessionMessage[],
-    options?: { titleFrom?: string; sessionId?: string; threadId?: string }
-  ) => Promise<void>
+  ensureActiveSession: () => Promise<SessionIdentity>
+  getSessionMessages: (sessionKey: string) => AgentChatMessage[]
+  persistSession: (input: PersistSessionInput) => Promise<void>
   publishAiMessage: (mode: EditorMode, content: string) => void
-  setAgentMessages: Dispatch<SetStateAction<Record<EditorMode, AgentChatMessage[]>>>
-  setDraftForMode: (mode: EditorMode, value: string) => void
+  runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
+  setDraftByKey: (sessionKey: string, value: string) => void
+  setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
 }
 
 type UseWorkflowConversationResult = {
@@ -43,32 +48,55 @@ type UseWorkflowConversationResult = {
     answers: ClarificationAnswers
   ) => Promise<void>
   loading: boolean
+  sessionRunStates: Record<string, SessionRunStatus>
   stopping: boolean
+  workspaceBusy: boolean
 }
 
 export function useWorkflowConversation({
-  activeSessionId,
+  activeSession,
   agUiSessionsRef,
   application,
   draft,
+  draftKey,
   editorMode,
-  messages,
+  ensureActiveSession,
+  getSessionMessages,
   persistSession,
   publishAiMessage,
-  setAgentMessages,
-  setDraftForMode
+  runningSessionsRef,
+  setDraftByKey,
+  setSessionMessages
 }: UseWorkflowConversationParams): UseWorkflowConversationResult {
-  const stopRequestedModesRef = useRef<Partial<Record<EditorMode, boolean>>>({})
-  const [loadingModes, setLoadingModes] = useState<Partial<Record<EditorMode, boolean>>>({})
-  const [stoppingModes, setStoppingModes] = useState<Partial<Record<EditorMode, boolean>>>({})
-  const [errors, setErrors] = useState<Partial<Record<EditorMode, string>>>({})
-  const loading = Boolean(loadingModes[editorMode])
-  const stopping = Boolean(stoppingModes[editorMode])
-  const error = errors[editorMode]
+  const stopRequestedRef = useRef<Record<string, boolean>>({})
+  const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
+  const [errors, setErrors] = useState<Record<string, string | undefined>>({})
+
+  const activeRun = activeSession ? runStates[activeSession.key] : undefined
+  const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
+  const stopping = activeRun?.status === 'stopping'
+  const error = activeSession ? errors[activeSession.key] : undefined
+  const workspaceBusy = Object.values(runStates).some(
+    (entry) =>
+      entry.identity.workspaceRoot === application.workspaceRoot &&
+      entry.identity.key !== activeSession?.key
+  )
+  const sessionRunStates = Object.values(runStates).reduce<Record<string, SessionRunStatus>>(
+    (states, entry) => {
+      if (
+        entry.identity.workspaceRoot === application.workspaceRoot &&
+        entry.identity.editorMode === editorMode
+      ) {
+        states[entry.identity.sessionId] = entry.status
+      }
+      return states
+    },
+    {}
+  )
 
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
-    if (!message || loading) return
+    if (!message || loading || workspaceBusy) return
     await sendWorkflowMessage(message, { clearDraft: true, titleFrom: message, workflowDebug })
   }
 
@@ -84,18 +112,31 @@ export function useWorkflowConversation({
     }
   ): Promise<void> => {
     const trimmedMessage = message.trim()
-    if (!trimmedMessage || loading) return
+    if (!trimmedMessage) return
 
+    const identity = await ensureActiveSession()
+    const competingSession = findRunningSession(
+      runningSessionsRef.current,
+      identity.workspaceRoot,
+      identity.key
+    )
+    if (competingSession || runningSessionsRef.current.has(identity.key)) {
+      setErrors((current) => ({
+        ...current,
+        [identity.key]: competingSession ? '工作区中另一个会话正在执行。' : '当前会话正在执行。'
+      }))
+      return
+    }
+
+    const agUiSession =
+      agUiSessionsRef.current[identity.key] ||
+      (agUiSessionsRef.current[identity.key] = new AgUiChatSession(identity.threadId))
     const userMessage: AgentChatMessage = {
       id: Date.now(),
       role: 'user',
       content: trimmedMessage,
       createdAt: Date.now()
     }
-    const agUiSession =
-      agUiSessionsRef.current[editorMode] ??
-      (agUiSessionsRef.current[editorMode] = new AgUiChatSession())
-    const sessionId = activeSessionId || createChatSessionId()
     const assistantMessageId = Date.now() + 1
     const assistantMessage: AgentChatMessage = {
       id: assistantMessageId,
@@ -103,19 +144,17 @@ export function useWorkflowConversation({
       content: '',
       createdAt: Date.now()
     }
-    const nextMessages = [...messages, userMessage, assistantMessage]
+    const nextMessages = [...getSessionMessages(identity.key), userMessage, assistantMessage]
 
-    setAgentMessages((currentMessages) => ({
-      ...currentMessages,
-      [editorMode]: nextMessages
+    runningSessionsRef.current.set(identity.key, identity)
+    setRunStates((current) => ({
+      ...current,
+      [identity.key]: { identity, status: 'running' }
     }))
-    if (options?.clearDraft) {
-      setDraftForMode(editorMode, '')
-    }
-    setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }))
-    setLoadingModes((currentLoadingModes) => ({ ...currentLoadingModes, [editorMode]: true }))
-    setStoppingModes((currentStoppingModes) => ({ ...currentStoppingModes, [editorMode]: false }))
-    stopRequestedModesRef.current[editorMode] = false
+    setErrors((current) => ({ ...current, [identity.key]: undefined }))
+    stopRequestedRef.current[identity.key] = false
+    setSessionMessages(identity.key, nextMessages)
+    if (options?.clearDraft) setDraftByKey(draftKey, '')
 
     let streamedContent = ''
     let streamedWorkflow: WorkflowRunPayload | undefined
@@ -127,19 +166,8 @@ export function useWorkflowConversation({
       toolCalls?: ToolCallRecord[]
     ): AgentChatMessage[] => {
       const nextCodeChanges = workflowCodeChanges(workflow)
-      latestMessages = latestMessages.map((currentMessage) =>
-        currentMessage.id === assistantMessageId
-          ? {
-              ...currentMessage,
-              content,
-              workflow: workflow ?? currentMessage.workflow,
-              codeChanges: nextCodeChanges ?? currentMessage.codeChanges,
-              toolCalls: toolCalls ?? currentMessage.toolCalls
-            }
-          : currentMessage
-      )
-      setAgentMessages((currentMessages) => {
-        const updatedMessages = currentMessages[editorMode].map((currentMessage) =>
+      const updateMessages = (currentMessages: AgentChatMessage[]): AgentChatMessage[] =>
+        currentMessages.map((currentMessage) =>
           currentMessage.id === assistantMessageId
             ? {
                 ...currentMessage,
@@ -150,18 +178,17 @@ export function useWorkflowConversation({
               }
             : currentMessage
         )
-        return {
-          ...currentMessages,
-          [editorMode]: updatedMessages
-        }
-      })
+      latestMessages = updateMessages(latestMessages)
+      setSessionMessages(identity.key, updateMessages)
       return latestMessages
     }
 
     try {
-      await persistSession(editorMode, nextMessages, {
-        sessionId,
-        threadId: agUiSession.threadId,
+      await persistSession({
+        editorMode: identity.editorMode,
+        messages: nextMessages,
+        sessionId: identity.sessionId,
+        threadId: identity.threadId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
       const {
@@ -169,7 +196,7 @@ export function useWorkflowConversation({
         workflow,
         toolCalls: rawToolCalls
       } = await agUiSession.sendMessage(trimmedMessage, {
-        workspaceRoot: application.workspaceRoot,
+        workspaceRoot: identity.workspaceRoot,
         application,
         clarificationAnswers: options?.clarificationAnswers,
         originalRequest: options?.originalRequest,
@@ -188,7 +215,7 @@ export function useWorkflowConversation({
           updateAssistantMessage(streamedContent, streamedWorkflow, nextToolCalls)
         }
       })
-      const stopped = Boolean(stopRequestedModesRef.current[editorMode])
+      const stopped = Boolean(stopRequestedRef.current[identity.key])
       const answer = stopped ? stoppedAnswer(streamedContent || rawAnswer) : rawAnswer.trim()
       const completedMessages = updateAssistantMessage(
         answer || 'Workflow 已返回，但内容为空。',
@@ -196,41 +223,40 @@ export function useWorkflowConversation({
         rawToolCalls.length > 0 ? rawToolCalls : streamedToolCalls
       )
 
-      await persistSession(editorMode, completedMessages, {
-        sessionId,
-        threadId: agUiSession.threadId,
+      await persistSession({
+        editorMode: identity.editorMode,
+        messages: completedMessages,
+        sessionId: identity.sessionId,
+        threadId: identity.threadId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
-      publishAiMessage(editorMode, answer)
+      publishAiMessage(identity.editorMode, answer)
     } catch (caughtError) {
-      if (stopRequestedModesRef.current[editorMode]) {
+      if (stopRequestedRef.current[identity.key]) {
         const answer = stoppedAnswer(streamedContent)
         const completedMessages = updateAssistantMessage(
           answer,
           streamedWorkflow,
           streamedToolCalls
         )
-        await persistSession(editorMode, completedMessages, {
-          sessionId,
-          threadId: agUiSession.threadId,
+        await persistSession({
+          editorMode: identity.editorMode,
+          messages: completedMessages,
+          sessionId: identity.sessionId,
+          threadId: identity.threadId,
           titleFrom: message
         })
-        publishAiMessage(editorMode, answer)
+        publishAiMessage(identity.editorMode, answer)
         return
       }
-      const errorMessage =
-        caughtError instanceof Error ? caughtError.message : '调用 Workflow 失败。'
-      setErrors((currentErrors) => ({ ...currentErrors, [editorMode]: errorMessage }))
+      setErrors((current) => ({
+        ...current,
+        [identity.key]: caughtError instanceof Error ? caughtError.message : '调用 Workflow 失败。'
+      }))
     } finally {
-      setLoadingModes((currentLoadingModes) => ({
-        ...currentLoadingModes,
-        [editorMode]: false
-      }))
-      setStoppingModes((currentStoppingModes) => ({
-        ...currentStoppingModes,
-        [editorMode]: false
-      }))
-      stopRequestedModesRef.current[editorMode] = false
+      runningSessionsRef.current.delete(identity.key)
+      setRunStates((current) => omitKey(current, identity.key))
+      stopRequestedRef.current[identity.key] = false
     }
   }
 
@@ -239,7 +265,7 @@ export function useWorkflowConversation({
     answers: ClarificationAnswers
   ): Promise<void> => {
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
-    if (!continuationMessage) return
+    if (!continuationMessage || loading || workspaceBusy) return
     const originalRequest = workflowOriginalRequest(workflow)
     await sendWorkflowMessage(continuationMessage, {
       clarificationAnswers: answers,
@@ -250,11 +276,15 @@ export function useWorkflowConversation({
   }
 
   const handleStopGenerating = (): void => {
-    const agUiSession = agUiSessionsRef.current[editorMode]
-    if (!loading || !agUiSession || stopping) return
+    if (!activeSession || !loading || stopping) return
+    const agUiSession = agUiSessionsRef.current[activeSession.key]
+    if (!agUiSession) return
 
-    stopRequestedModesRef.current[editorMode] = true
-    setStoppingModes((currentStoppingModes) => ({ ...currentStoppingModes, [editorMode]: true }))
+    stopRequestedRef.current[activeSession.key] = true
+    setRunStates((current) => ({
+      ...current,
+      [activeSession.key]: { identity: activeSession, status: 'stopping' }
+    }))
     agUiSession.stop()
   }
 
@@ -264,8 +294,26 @@ export function useWorkflowConversation({
     handleStopGenerating,
     handleSubmitClarification,
     loading,
-    stopping
+    sessionRunStates,
+    stopping,
+    workspaceBusy
   }
+}
+
+function findRunningSession(
+  sessions: Map<string, SessionIdentity>,
+  workspaceRoot: string,
+  excludedKey: string
+): SessionIdentity | undefined {
+  return Array.from(sessions.values()).find(
+    (identity) => identity.workspaceRoot === workspaceRoot && identity.key !== excludedKey
+  )
+}
+
+function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record }
+  delete next[key]
+  return next
 }
 
 function workflowDebugMessage(workflowDebug?: WorkflowDebugOptions): string {

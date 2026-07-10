@@ -166,8 +166,20 @@
 }
 
 .@{class-prefix}-session-item-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: #7b8794;
   font-size: 11px;
+
+  .ant-spin {
+    line-height: 1;
+  }
+}
+
+.@{class-prefix}-session-item.@{class-prefix}-running {
+  border-color: #d8dee8;
+  background: #ffffff;
 }
 
 .@{class-prefix}-session-delete-button.ant-btn {

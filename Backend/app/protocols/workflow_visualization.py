@@ -17,6 +17,10 @@ from fastapi.encoders import jsonable_encoder
 
 from app.protocols.workflow_request import workflow_run_inputs
 from app.workspace.code_changes import merge_code_change_sets
+from app.workspace.run_lease import (
+    WorkspaceRunLease,
+    workspace_run_leases,
+)
 
 WORKFLOW_EVENT_PROTOCOL = "xcodeagent.workflow.event.v1"
 
@@ -128,6 +132,7 @@ def build_workflow_ag_ui_stream(
     async def stream() -> AsyncIterator[str]:
         events: list[dict[str, Any]] = []
         result: dict[str, Any] = {}
+        workspace_lease: WorkspaceRunLease | None = None
 
         yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
         yield encoder.encode(
@@ -143,6 +148,12 @@ def build_workflow_ag_ui_stream(
 
             project_id = workflow_inputs["project_id"] or None
             workspace = workflow_inputs["workspace"] or None
+            workspace_lease = workspace_run_leases.acquire(
+                workspace_root=workspace,
+                project_id=project_id,
+                thread_id=thread_id,
+                run_id=run_id,
+            )
             resume_from = workflow_inputs.get("resume_from") or None
             initial_state: dict[str, Any] = {
                 "request": request,
@@ -333,9 +344,17 @@ def build_workflow_ag_ui_stream(
                 )
             )
         except Exception as exc:
-            result = {"status": "failed", "phase": "failed", "error": str(exc)}
+            error_code = getattr(exc, "code", None)
+            result = {
+                "status": "failed",
+                "phase": "failed",
+                "error": str(exc),
+                **({"error_code": error_code} if error_code else {}),
+            }
             summary = _workflow_summary(result, events)
             summary["message"] = f"Workflow failed：{type(exc).__name__}: {exc}"
+            if error_code:
+                summary["errorCode"] = error_code
             failed_event = _workflow_event(
                 events,
                 "workflow.run.failed",
@@ -343,7 +362,13 @@ def build_workflow_ag_ui_stream(
                 thread_id=thread_id,
                 status="failed",
                 message=summary["message"],
-                data={"error": {"type": type(exc).__name__, "message": str(exc)}},
+                data={
+                    "error": {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        **({"code": error_code} if error_code else {}),
+                    }
+                },
             )
             failed_payload = _workflow_visual_payload(
                 run_id=run_id,
@@ -385,6 +410,9 @@ def build_workflow_ag_ui_stream(
                     ),
                 )
             )
+        finally:
+            if workspace_lease is not None:
+                workspace_lease.release()
 
     return stream()
 

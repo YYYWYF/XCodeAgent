@@ -2,7 +2,7 @@ import { HolderOutlined } from '@ant-design/icons'
 import { Alert } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ReactElement } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
 import type { ApplicationConfig, EditorMode, WorkspaceCodeChangeSet } from '../../typings'
 import { cx, getInitialPreviewUrl, openPreviewWindow } from '../../utils'
@@ -16,6 +16,7 @@ import SessionSidebar from './components/SessionSidebar'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
+import type { SessionIdentity } from './hooks/sessionRuntime'
 import { chatCopy } from './constants'
 import './AiChatPanel.less'
 
@@ -31,7 +32,7 @@ export default function AiChatPanel({
   onReturnWelcome
 }: Props): ReactElement {
   const [previewError, setPreviewError] = useState('')
-  const workflowLoadingRef = useRef(false)
+  const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const { publishAiMessage } = useWorkbench()
   const {
     embeddedPreviewOpen,
@@ -45,10 +46,14 @@ export default function AiChatPanel({
   } = useAssistantPreviewLayout()
 
   const {
+    activeSession,
     activeSessionId,
     agUiSessionsRef,
     deletingSessionId,
     draft,
+    draftKey,
+    ensureActiveSession,
+    getSessionMessages,
     handleCreateSessionFromList,
     handleCreateSessionKeyDown,
     handleDeleteSession,
@@ -59,32 +64,39 @@ export default function AiChatPanel({
     persistSession,
     sessionError,
     sessions,
-    setAgentMessages,
-    setDraftForMode
+    setDraftByKey,
+    setSessionMessages
   } = useChatSessions({
     application,
     editorMode,
-    loadingRef: workflowLoadingRef,
-    onCloseRightPanel: () => setRightPanel(undefined)
+    onCloseRightPanel: () => setRightPanel(undefined),
+    runningSessionsRef
   })
 
-  const { error, handleSend, handleStopGenerating, handleSubmitClarification, loading, stopping } =
-    useWorkflowConversation({
-      activeSessionId,
-      agUiSessionsRef,
-      application,
-      draft,
-      editorMode,
-      messages,
-      persistSession,
-      publishAiMessage,
-      setAgentMessages,
-      setDraftForMode
-    })
-
-  useEffect(() => {
-    workflowLoadingRef.current = loading
-  }, [loading, workflowLoadingRef])
+  const {
+    error,
+    handleSend,
+    handleStopGenerating,
+    handleSubmitClarification,
+    loading,
+    sessionRunStates,
+    stopping,
+    workspaceBusy
+  } = useWorkflowConversation({
+    activeSession,
+    agUiSessionsRef,
+    application,
+    draft,
+    draftKey,
+    editorMode,
+    ensureActiveSession,
+    getSessionMessages,
+    persistSession,
+    publishAiMessage,
+    runningSessionsRef,
+    setDraftByKey,
+    setSessionMessages
+  })
 
   const copy = chatCopy[editorMode]
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
@@ -128,7 +140,6 @@ export default function AiChatPanel({
           activeSessionId={activeSessionId}
           application={application}
           deletingSessionId={deletingSessionId}
-          loading={loading}
           loadingSessions={loadingSessions}
           onCreateSession={handleCreateSessionFromList}
           onCreateSessionKeyDown={handleCreateSessionKeyDown}
@@ -137,6 +148,7 @@ export default function AiChatPanel({
           onOpenSessionKeyDown={handleOpenSessionKeyDown}
           onReturnWelcome={onReturnWelcome}
           sessionError={sessionError}
+          sessionRunStates={sessionRunStates}
           sessions={sessions}
           workspaceRoot={workspaceRoot}
         />
@@ -173,10 +185,11 @@ export default function AiChatPanel({
             draft={draft}
             error={error}
             loading={loading}
-            onDraftChange={(value) => setDraftForMode(editorMode, value)}
+            onDraftChange={(value) => setDraftByKey(draftKey, value)}
             onSend={handleSend}
             onStopGenerating={handleStopGenerating}
             stopping={stopping}
+            workspaceBusy={workspaceBusy}
             workspaceRoot={workspaceRoot}
           />
         </div>

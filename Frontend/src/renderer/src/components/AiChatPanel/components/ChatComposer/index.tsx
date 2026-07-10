@@ -32,6 +32,7 @@ type ChatComposerProps = {
   onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   onStopGenerating: () => void
   stopping: boolean
+  workspaceBusy: boolean
   workspaceRoot: string
 }
 
@@ -44,6 +45,7 @@ export default function ChatComposer({
   onSend,
   onStopGenerating,
   stopping,
+  workspaceBusy,
   workspaceRoot
 }: ChatComposerProps): ReactElement {
   const [debugEnabled, setDebugEnabled] = useState(false)
@@ -134,13 +136,18 @@ export default function ChatComposer({
         <Text className={cx('workspace-root-label')} title={workspaceRoot}>
           <FolderOpenOutlined /> 工作目录：{workspaceRoot}
         </Text>
+        {workspaceBusy && (
+          <Text className={cx('workspace-busy-label')} type="warning">
+            工作区中另一个会话正在执行
+          </Text>
+        )}
         {loading ? (
           <Button danger disabled={stopping} icon={<StopOutlined />} onClick={onStopGenerating}>
             {stopping ? '正在停止...' : '停止生成'}
           </Button>
         ) : (
           <Button
-            disabled={!canSend}
+            disabled={!canSend || workspaceBusy}
             icon={<SendOutlined />}
             onClick={handleSend}
             type="primary"

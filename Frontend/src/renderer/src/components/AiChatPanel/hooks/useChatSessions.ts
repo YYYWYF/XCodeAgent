@@ -1,6 +1,6 @@
-import type { Dispatch, KeyboardEvent, MutableRefObject, SetStateAction } from 'react'
-import { useEffect, useRef, useState } from 'react'
 import { message as antdMessage } from 'antd'
+import type { KeyboardEvent, MutableRefObject, SetStateAction } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import {
   createChatSessionId,
@@ -15,19 +15,39 @@ import {
 } from '../../../service/chatSessions'
 import type { ApplicationConfig, EditorMode } from '../../../typings'
 import type { AgentChatMessage } from '../types'
+import {
+  createSessionIdentity,
+  pendingDraftKey,
+  sessionIdentityFromSummary,
+  sessionRuntimeKey,
+  type SessionIdentity
+} from './sessionRuntime'
+import { useSessionRuntimeStore } from './useSessionRuntimeStore'
+
+export type PersistSessionInput = {
+  editorMode: EditorMode
+  messages: ChatSessionMessage[]
+  sessionId: string
+  threadId: string
+  titleFrom?: string
+}
 
 type UseChatSessionsParams = {
   application: ApplicationConfig
   editorMode: EditorMode
-  loadingRef: MutableRefObject<boolean>
   onCloseRightPanel: () => void
+  runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
 }
 
 type UseChatSessionsResult = {
+  activeSession?: SessionIdentity
   activeSessionId?: string
-  agUiSessionsRef: MutableRefObject<Partial<Record<EditorMode, AgUiChatSession>>>
+  agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   deletingSessionId?: string
   draft: string
+  draftKey: string
+  ensureActiveSession: () => Promise<SessionIdentity>
+  getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   handleCreateSessionFromList: () => void
   handleCreateSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
   handleDeleteSession: (sessionId: string) => Promise<void>
@@ -35,37 +55,22 @@ type UseChatSessionsResult = {
   handleOpenSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>, sessionId: string) => void
   loadingSessions: boolean
   messages: AgentChatMessage[]
-  persistSession: (
-    mode: EditorMode,
-    nextMessages: ChatSessionMessage[],
-    options?: { titleFrom?: string; sessionId?: string; threadId?: string }
-  ) => Promise<void>
+  persistSession: (input: PersistSessionInput) => Promise<void>
   sessionError?: string
   sessions: ChatSessionSummary[]
-  setAgentMessages: Dispatch<SetStateAction<Record<EditorMode, AgentChatMessage[]>>>
-  setDraftForMode: (mode: EditorMode, value: string) => void
+  setDraftByKey: (sessionKey: string, value: string) => void
+  setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
 }
 
 export function useChatSessions({
   application,
   editorMode,
-  loadingRef,
-  onCloseRightPanel
+  onCloseRightPanel,
+  runningSessionsRef
 }: UseChatSessionsParams): UseChatSessionsResult {
-  const [drafts, setDrafts] = useState<Record<EditorMode, string>>({
-    frontend: '',
-    backend: ''
-  })
-  const [agentMessages, setAgentMessages] = useState<Record<EditorMode, AgentChatMessage[]>>({
-    frontend: [],
-    backend: []
-  })
   const [sessionSummaries, setSessionSummaries] = useState<
     Record<EditorMode, ChatSessionSummary[]>
-  >({
-    frontend: [],
-    backend: []
-  })
+  >({ frontend: [], backend: [] })
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<EditorMode, string>>>({})
   const [sessionLoadingModes, setSessionLoadingModes] = useState<
     Partial<Record<EditorMode, boolean>>
@@ -74,24 +79,49 @@ export function useChatSessions({
   const [deletingSessionIds, setDeletingSessionIds] = useState<Partial<Record<EditorMode, string>>>(
     {}
   )
-  const agUiSessionsRef = useRef<Partial<Record<EditorMode, AgUiChatSession>>>({})
+  const sessionSummariesRef = useRef(sessionSummaries)
+  const {
+    agUiSessionsRef,
+    draftForKey,
+    ensureAgent,
+    getIdentity,
+    getSessionMessages,
+    messagesForKey,
+    registerSession,
+    removeSession,
+    setDraftByKey,
+    setSessionMessages
+  } = useSessionRuntimeStore()
 
-  const messages = agentMessages[editorMode]
-  const sessions = sessionSummaries[editorMode]
-  const activeSessionId = activeSessionIds[editorMode]
-  const draft = drafts[editorMode]
-  const loadingSessions = Boolean(sessionLoadingModes[editorMode])
-  const deletingSessionId = deletingSessionIds[editorMode]
-  const sessionError = sessionErrors[editorMode]
+  useEffect(() => {
+    sessionSummariesRef.current = sessionSummaries
+  }, [sessionSummaries])
 
   useEffect(() => {
     loadSessionsForMode(editorMode)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [application.workspaceRoot, editorMode])
 
-  const setDraftForMode = (mode: EditorMode, value: string): void => {
-    setDrafts((currentDrafts) => ({ ...currentDrafts, [mode]: value }))
-  }
+  const workspaceRoot = application.workspaceRoot || ''
+  const sessions = sessionSummaries[editorMode]
+  const activeSessionId = activeSessionIds[editorMode]
+  const activeKey = activeSessionId
+    ? sessionRuntimeKey(workspaceRoot, editorMode, activeSessionId)
+    : undefined
+  const activeSession = activeKey
+    ? getIdentity(activeKey) ||
+      sessionIdentityFromSummary(
+        sessions.find((session) => session.id === activeSessionId),
+        editorMode,
+        workspaceRoot
+      )
+    : undefined
+  const draftKey = activeSession?.key || pendingDraftKey(workspaceRoot, editorMode)
+  const draft = draftForKey(draftKey)
+  const messages = activeSession ? messagesForKey(activeSession.key) : []
+  const loadingSessions = Boolean(sessionLoadingModes[editorMode])
+  const deletingSessionId = deletingSessionIds[editorMode]
+  const sessionError = sessionErrors[editorMode]
 
   const replaceSessionSummary = (mode: EditorMode, summary: ChatSessionSummary): void => {
     setSessionSummaries((currentSummaries) => ({
@@ -104,64 +134,63 @@ export function useChatSessions({
 
   const loadSessionsForMode = async (mode: EditorMode): Promise<void> => {
     if (!application.workspaceRoot) {
-      setSessionSummaries((currentSummaries) => ({ ...currentSummaries, [mode]: [] }))
-      setAgentMessages((currentMessages) => ({ ...currentMessages, [mode]: [] }))
-      setActiveSessionIds((currentSessionIds) => ({ ...currentSessionIds, [mode]: undefined }))
+      setSessionSummaries((current) => ({ ...current, [mode]: [] }))
+      setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
       return
     }
 
-    setSessionLoadingModes((currentLoadingModes) => ({ ...currentLoadingModes, [mode]: true }))
-    setSessionErrors((currentErrors) => ({ ...currentErrors, [mode]: undefined }))
+    setSessionLoadingModes((current) => ({ ...current, [mode]: true }))
+    setSessionErrors((current) => ({ ...current, [mode]: undefined }))
     try {
       const nextSessions = await listChatSessions(application.workspaceRoot, mode)
-      setSessionSummaries((currentSummaries) => ({ ...currentSummaries, [mode]: nextSessions }))
+      setSessionSummaries((current) => ({ ...current, [mode]: nextSessions }))
       if (nextSessions.length === 0) {
-        setAgentMessages((currentMessages) => ({ ...currentMessages, [mode]: [] }))
-        setActiveSessionIds((currentSessionIds) => ({ ...currentSessionIds, [mode]: undefined }))
-        agUiSessionsRef.current[mode] = undefined
+        setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
         return
       }
       await openChatSession(mode, nextSessions[0].id)
     } catch (caughtError) {
-      setSessionErrors((currentErrors) => ({
-        ...currentErrors,
+      setSessionErrors((current) => ({
+        ...current,
         [mode]: caughtError instanceof Error ? caughtError.message : '读取本地会话失败。'
       }))
     } finally {
-      setSessionLoadingModes((currentLoadingModes) => ({ ...currentLoadingModes, [mode]: false }))
+      setSessionLoadingModes((current) => ({ ...current, [mode]: false }))
     }
   }
 
   const openChatSession = async (mode: EditorMode, sessionId: string): Promise<void> => {
     if (!application.workspaceRoot) return
 
-    const session = await readChatSession(application.workspaceRoot, mode, sessionId)
-    setActiveSessionIds((currentSessionIds) => ({ ...currentSessionIds, [mode]: session.id }))
-    setAgentMessages((currentMessages) => ({ ...currentMessages, [mode]: session.messages }))
-    setDraftForMode(mode, '')
+    const key = sessionRuntimeKey(application.workspaceRoot, mode, sessionId)
+    if (!agUiSessionsRef.current[key]) {
+      const session = await readChatSession(application.workspaceRoot, mode, sessionId)
+      const identity = createSessionIdentity({
+        workspaceRoot: application.workspaceRoot,
+        editorMode: mode,
+        sessionId: session.id,
+        threadId: session.threadId
+      })
+      registerSession(identity, session.messages)
+    }
+
+    setActiveSessionIds((current) => ({ ...current, [mode]: sessionId }))
     onCloseRightPanel()
-    agUiSessionsRef.current[mode] = new AgUiChatSession(session.threadId)
   }
 
   const handleOpenSession = async (sessionId: string): Promise<void> => {
     if (sessionId === activeSessionId || loadingSessions) return
-    setSessionLoadingModes((currentLoadingModes) => ({
-      ...currentLoadingModes,
-      [editorMode]: true
-    }))
-    setSessionErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }))
+    setSessionLoadingModes((current) => ({ ...current, [editorMode]: true }))
+    setSessionErrors((current) => ({ ...current, [editorMode]: undefined }))
     try {
       await openChatSession(editorMode, sessionId)
     } catch (caughtError) {
-      setSessionErrors((currentErrors) => ({
-        ...currentErrors,
+      setSessionErrors((current) => ({
+        ...current,
         [editorMode]: caughtError instanceof Error ? caughtError.message : '打开本地会话失败。'
       }))
     } finally {
-      setSessionLoadingModes((currentLoadingModes) => ({
-        ...currentLoadingModes,
-        [editorMode]: false
-      }))
+      setSessionLoadingModes((current) => ({ ...current, [editorMode]: false }))
     }
   }
 
@@ -174,142 +203,135 @@ export function useChatSessions({
     handleOpenSession(sessionId)
   }
 
-  const createNewSession = async (): Promise<void> => {
-    const agUiSession = new AgUiChatSession()
-    agUiSessionsRef.current[editorMode] = agUiSession
-    setAgentMessages((currentMessages) => ({ ...currentMessages, [editorMode]: [] }))
-    setDraftForMode(editorMode, '')
-    onCloseRightPanel()
-
+  const createNewSession = async (): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
-      setActiveSessionIds((currentSessionIds) => ({
-        ...currentSessionIds,
-        [editorMode]: undefined
-      }))
-      return
+      throw new Error('创建会话前需要选择工作目录。')
     }
 
     const now = Date.now()
+    const sessionId = createChatSessionId()
+    const agUiSession = new AgUiChatSession()
+    const identity = createSessionIdentity({
+      workspaceRoot: application.workspaceRoot,
+      editorMode,
+      sessionId,
+      threadId: agUiSession.threadId
+    })
     const session: ChatSessionRecord = {
-      id: createChatSessionId(),
+      id: sessionId,
       title: '新对话',
       editorMode,
-      threadId: agUiSession.threadId,
+      threadId: identity.threadId,
       workspaceRoot: application.workspaceRoot,
       messages: [],
       createdAt: now,
       updatedAt: now
     }
-    setActiveSessionIds((currentSessionIds) => ({ ...currentSessionIds, [editorMode]: session.id }))
-    try {
-      const summary = await saveChatSession(session)
-      replaceSessionSummary(editorMode, summary)
-    } catch (caughtError) {
-      setSessionErrors((currentErrors) => ({
-        ...currentErrors,
-        [editorMode]: caughtError instanceof Error ? caughtError.message : '创建本地会话失败。'
-      }))
+
+    registerSession(identity, [], agUiSession)
+    setDraftByKey(identity.key, '')
+    setActiveSessionIds((current) => ({ ...current, [editorMode]: session.id }))
+    onCloseRightPanel()
+
+    const summary = await saveChatSession(session)
+    replaceSessionSummary(editorMode, summary)
+    return identity
+  }
+
+  const ensureActiveSession = async (): Promise<SessionIdentity> => {
+    if (activeSession) {
+      ensureAgent(activeSession)
+      return activeSession
     }
+    return createNewSession()
   }
 
   const handleCreateSessionFromList = (): void => {
     if (!application.workspaceRoot) return
-    createNewSession()
+    createNewSession().catch(reportSessionError)
   }
 
   const handleCreateSessionKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (!application.workspaceRoot || (event.key !== 'Enter' && event.key !== ' ')) return
     event.preventDefault()
-    createNewSession()
+    createNewSession().catch(reportSessionError)
+  }
+
+  const reportSessionError = (caughtError: unknown): void => {
+    setSessionErrors((current) => ({
+      ...current,
+      [editorMode]: caughtError instanceof Error ? caughtError.message : '创建本地会话失败。'
+    }))
   }
 
   const handleDeleteSession = async (sessionId: string): Promise<void> => {
-    if (
-      !application.workspaceRoot ||
-      deletingSessionId ||
-      (loadingRef.current && activeSessionId === sessionId)
-    )
-      return
+    if (!application.workspaceRoot || deletingSessionId) return
+    const key = sessionRuntimeKey(application.workspaceRoot, editorMode, sessionId)
+    if (runningSessionsRef.current.has(key)) return
 
     const nextSession = sessions.find((session) => session.id !== sessionId)
-    setDeletingSessionIds((currentDeletingIds) => ({
-      ...currentDeletingIds,
-      [editorMode]: sessionId
-    }))
-    setSessionErrors((currentErrors) => ({ ...currentErrors, [editorMode]: undefined }))
+    setDeletingSessionIds((current) => ({ ...current, [editorMode]: sessionId }))
+    setSessionErrors((current) => ({ ...current, [editorMode]: undefined }))
 
     try {
       await deleteChatSession(application.workspaceRoot, editorMode, sessionId)
-      setSessionSummaries((currentSummaries) => ({
-        ...currentSummaries,
-        [editorMode]: currentSummaries[editorMode].filter((session) => session.id !== sessionId)
+      setSessionSummaries((current) => ({
+        ...current,
+        [editorMode]: current[editorMode].filter((session) => session.id !== sessionId)
       }))
+      removeSession(key)
 
       if (activeSessionId === sessionId) {
         if (nextSession) {
           await openChatSession(editorMode, nextSession.id)
         } else {
-          setAgentMessages((currentMessages) => ({ ...currentMessages, [editorMode]: [] }))
-          setActiveSessionIds((currentSessionIds) => ({
-            ...currentSessionIds,
-            [editorMode]: undefined
-          }))
-          setDraftForMode(editorMode, '')
-          agUiSessionsRef.current[editorMode] = undefined
+          setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
         }
       }
 
       antdMessage.success('已删除会话')
     } catch (caughtError) {
-      setSessionErrors((currentErrors) => ({
-        ...currentErrors,
+      setSessionErrors((current) => ({
+        ...current,
         [editorMode]: caughtError instanceof Error ? caughtError.message : '删除本地会话失败。'
       }))
     } finally {
-      setDeletingSessionIds((currentDeletingIds) => ({
-        ...currentDeletingIds,
-        [editorMode]: undefined
-      }))
+      setDeletingSessionIds((current) => ({ ...current, [editorMode]: undefined }))
     }
   }
 
-  const persistSession = async (
-    mode: EditorMode,
-    nextMessages: ChatSessionMessage[],
-    options?: { titleFrom?: string; sessionId?: string; threadId?: string }
-  ): Promise<void> => {
+  const persistSession = async (input: PersistSessionInput): Promise<void> => {
     if (!application.workspaceRoot) return
-    const existingSummary = sessionSummaries[mode].find(
-      (summary) => summary.id === (options?.sessionId || activeSessionIds[mode])
+    const existingSummary = sessionSummariesRef.current[input.editorMode].find(
+      (summary) => summary.id === input.sessionId
     )
     const now = Date.now()
     const session: ChatSessionRecord = {
-      id: options?.sessionId || existingSummary?.id || createChatSessionId(),
+      id: input.sessionId,
       title:
-        options?.titleFrom && (!existingSummary || existingSummary.title === '新对话')
-          ? createChatSessionTitle(options.titleFrom)
+        input.titleFrom && (!existingSummary || existingSummary.title === '新对话')
+          ? createChatSessionTitle(input.titleFrom)
           : existingSummary?.title || '新对话',
-      editorMode: mode,
-      threadId:
-        options?.threadId ||
-        existingSummary?.threadId ||
-        agUiSessionsRef.current[mode]?.threadId ||
-        createChatSessionId(),
+      editorMode: input.editorMode,
+      threadId: input.threadId,
       workspaceRoot: application.workspaceRoot,
-      messages: nextMessages,
+      messages: input.messages,
       createdAt: existingSummary?.createdAt || now,
       updatedAt: now
     }
-    setActiveSessionIds((currentSessionIds) => ({ ...currentSessionIds, [mode]: session.id }))
     const summary = await saveChatSession(session)
-    replaceSessionSummary(mode, summary)
+    replaceSessionSummary(input.editorMode, summary)
   }
 
   return {
+    activeSession,
     activeSessionId,
     agUiSessionsRef,
     deletingSessionId,
     draft,
+    draftKey,
+    ensureActiveSession,
+    getSessionMessages,
     handleCreateSessionFromList,
     handleCreateSessionKeyDown,
     handleDeleteSession,
@@ -320,7 +342,7 @@ export function useChatSessions({
     persistSession,
     sessionError,
     sessions,
-    setAgentMessages,
-    setDraftForMode
+    setDraftByKey,
+    setSessionMessages
   }
 }
