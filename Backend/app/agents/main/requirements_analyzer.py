@@ -3,14 +3,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.requirement_spec import create_requirement_spec
-from app.tools.ask_user import extract_ask_user_clarification
+from app.tools.ask_user import ask_user, extract_ask_user_clarification
 
 
 def _requirements_prompt(request: str) -> str:
     return (
-        "You are the Main Agent for an app-generation workflow.\n"
+        "You are the requirements model for an app-generation workflow.\n"
         "This is a requirements-only boundary. Do not call subagents, do not delegate tasks, "
         "do not create project plans, and do not generate or modify code.\n"
         "The only tool you may call is ask_user, and only when user input is required.\n"
@@ -28,32 +29,29 @@ def _requirements_prompt(request: str) -> str:
     )
 
 
-def _invoke_live_main_agent(
+def _invoke_live_chat_model(
     request: str,
     *,
-    workspace: str | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
-    # Lazy imports keep Deep Agent construction at this live execution boundary.
-    from app.agents import create_agent_bundle
-
-    return create_agent_bundle(workspace).main.invoke(
-        {"messages": [{"role": "user", "content": _requirements_prompt(request)}]}
+    active_settings = settings or Settings.from_env()
+    result = (
+        create_chat_model(active_settings)
+        .bind_tools([ask_user])
+        .invoke(_requirements_prompt(request))
     )
+    return {"messages": [result]}
 
 
-def analyze_requirements_with_main_agent(
-    request: str,
-    *,
-    workspace: str | None = None,
-) -> dict[str, Any]:
-    """Use the live Main Agent boundary to create RequirementSpec and clarifications."""
+def analyze_requirements_with_chat_model(request: str) -> dict[str, Any]:
+    """Use a direct chat-model call to create RequirementSpec and clarifications."""
 
     settings = Settings.from_env()
-    agent_result = _invoke_live_main_agent(request, workspace=workspace)
-    from app.graph.nodes.common import last_agent_text
-
-    agent_note = last_agent_text(agent_result)
-    analysis_source = "main_agent_live"
+    agent_result = _invoke_live_chat_model(request, settings=settings)
+    messages = agent_result.get("messages", [])
+    content = getattr(messages[-1], "content", "") if messages else ""
+    agent_note = content if isinstance(content, str) else str(content)
+    analysis_source = "direct_chat_model"
 
     spec = create_requirement_spec(request, agent_note=agent_note)
     clarification = extract_ask_user_clarification(agent_result, spec)
@@ -64,17 +62,17 @@ def analyze_requirements_with_main_agent(
         "all_unresolved_dimensions", []
     )
     spec["analyzed_by"] = {
-        "agent": "main-agent",
-        "mode": "live",
+        "agent": "chat-model",
+        "mode": "direct",
         "model": settings.model_name,
         "source": analysis_source,
     }
     spec["analysis_source"] = analysis_source
-    clarification["requested_by"] = "main-agent"
+    clarification["requested_by"] = "chat-model"
     clarification["analysis_source"] = analysis_source
     clarification["analysis_note"] = json.dumps(
         {
-            "mode": "live",
+            "mode": "direct",
             "source": analysis_source,
             "agent_note": agent_note,
         },

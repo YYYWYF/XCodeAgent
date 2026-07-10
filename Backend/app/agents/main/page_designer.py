@@ -4,8 +4,8 @@ import json
 import time
 from typing import Any
 
-from app.config import Settings
 from app.agents.model_factory import create_chat_model
+from app.config import Settings
 from app.services.page_detail_plan import create_page_detail_plan
 
 
@@ -14,7 +14,7 @@ def _page_design_prompt(
     confirmed_page_spec: dict[str, Any],
 ) -> str:
     return (
-        "You are the Main Agent for an app-generation workflow.\n"
+        "You are the page-design model for an app-generation workflow.\n"
         "This is a design-only boundary. Do not call tools, do not call subagents, "
         "do not delegate tasks, and do not generate or modify code.\n"
         "Create a detailed page design from the user-confirmed PageSpec.\n"
@@ -27,14 +27,14 @@ def _page_design_prompt(
     )
 
 
-def _invoke_live_main_agent(
+def _invoke_live_chat_model(
     project_plan: dict[str, Any],
     confirmed_page_spec: dict[str, Any],
     *,
-    workspace: str | None = None,
+    settings: Settings | None = None,
 ) -> str:
-    settings = Settings.from_env()
-    result = create_chat_model(settings).invoke(
+    active_settings = settings or Settings.from_env()
+    result = create_chat_model(active_settings).invoke(
         _page_design_prompt(project_plan, confirmed_page_spec)
     )
     content = getattr(result, "content", result)
@@ -43,32 +43,31 @@ def _invoke_live_main_agent(
             str(item.get("text", item)) if isinstance(item, dict) else str(item)
             for item in content
         )
-    return str(content)
+    return content if isinstance(content, str) else str(content)
 
 
-def _fallback_agent_note(error: Exception) -> str:
+def _fallback_model_note(error: Exception) -> str:
     return (
-        "Main Agent 页面详细设计调用失败，已降级使用 ProjectPlan 与用户确认的 "
+        "页面设计模型调用失败，已降级使用 ProjectPlan 与用户确认的 "
         f"PageSpec 生成确定性页面详细计划。错误：{type(error).__name__}: {error}"
     )
 
 
-def design_page_with_main_agent(
+def design_page_with_chat_model(
     project_plan: dict[str, Any],
     confirmed_page_spec: dict[str, Any],
-    *,
-    workspace: str | None = None,
 ) -> dict[str, Any]:
-    """Use the live Main Agent boundary to create a page detail plan."""
+    """Use a direct chat-model call to create a page detail plan."""
 
     settings = Settings.from_env()
-    design_source = "main_agent_live"
+    design_source = "direct_chat_model"
     fallback_error: Exception | None = None
     for attempt in range(2):
         try:
-            agent_note = _invoke_live_main_agent(
+            agent_note = _invoke_live_chat_model(
                 project_plan,
                 confirmed_page_spec,
+                settings=settings,
             )
             break
         except Exception as exc:
@@ -76,8 +75,8 @@ def design_page_with_main_agent(
             if attempt == 0:
                 time.sleep(0.8)
                 continue
-            agent_note = _fallback_agent_note(exc)
-            design_source = "deterministic_fallback_after_main_agent_error"
+            agent_note = _fallback_model_note(exc)
+            design_source = "deterministic_fallback_after_chat_model_error"
 
     detail_plan = create_page_detail_plan(
         project_plan,
@@ -85,13 +84,13 @@ def design_page_with_main_agent(
         agent_note=agent_note,
     )
     detail_plan["designed_by"] = {
-        "agent": "main-agent",
-        "mode": "live",
+        "agent": "chat-model",
+        "mode": "direct",
         "model": settings.model_name,
         "source": design_source,
     }
     detail_plan["design_source"] = design_source
-    if fallback_error is not None and design_source != "main_agent_live":
+    if fallback_error is not None and design_source != "direct_chat_model":
         detail_plan["design_error"] = {
             "type": type(fallback_error).__name__,
             "message": str(fallback_error),

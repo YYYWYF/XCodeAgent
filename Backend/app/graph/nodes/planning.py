@@ -1,7 +1,6 @@
-from app.agents.main.planner import plan_project_with_main_agent
-from app.agents.main.page_designer import design_page_with_main_agent
+from app.agents.main.planner import plan_project_with_chat_model
+from app.agents.main.page_designer import design_page_with_chat_model
 from app.graph.nodes.confirmation import user_confirmed_text
-from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.services.page_detail_plan import (
     apply_page_spec_answers,
@@ -14,7 +13,6 @@ from app.services.page_detail_plan import (
     resolve_detail_design_target,
 )
 from app.tools.ask_user import AskUserOption, AskUserQuestion, build_ask_user_payload
-from app.workspace.code_changes import code_change_state_update
 from app.workspace.plan_documents import (
     project_plan_json_path,
     write_project_plan_document,
@@ -40,28 +38,18 @@ def project_planning(state: ProjectState) -> dict:
             "timeline": ["project_planning"],
         }
 
-    workspace = workspace_from_state(state)
     requirement_spec = state["requirement_spec"]
     if state.get("project_plan") and state.get("request"):
         requirement_spec = {
             **requirement_spec,
             "planning_adjustment_request": state["request"],
         }
-    captured = capture_agent_file_changes(
-        workspace=workspace,
-        source_tool="main.project_planning",
-        action=lambda: plan_project_with_main_agent(
-            requirement_spec,
-            workspace=workspace,
-        ),
-    )
-    project_plan = plan_project_with_main_agent(requirement_spec)
+    project_plan = plan_project_with_chat_model(requirement_spec)
     project_plan["confirmation_status"] = "pending_user_confirmation"
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = _project_plan_confirmation_payload(project_plan)
 
     return {
-        **code_change_state_update(captured.code_change_set),
         "phase": "project_planning",
         "status": "requires_user_input",
         "project_plan": project_plan,
@@ -262,19 +250,9 @@ def detail_confirmation(state: ProjectState) -> dict:
         }
 
     confirmed_page_spec = page_spec
-    page_detail_plan = design_page_with_main_agent(
+    page_detail_plan = design_page_with_chat_model(
         project_plan,
         confirmed_page_spec,
-    )
-    workspace = workspace_from_state(state)
-    captured = capture_agent_file_changes(
-        workspace=workspace,
-        source_tool="main.detail_confirmation",
-        action=lambda: design_page_with_main_agent(
-            project_plan,
-            confirmed_page_spec,
-            workspace=workspace,
-        ),
     )
     updated_project_plan = attach_page_detail_plan(project_plan, page_detail_plan)
     updated_project_plan["confirmation_status"] = "confirmed"
@@ -282,7 +260,6 @@ def detail_confirmation(state: ProjectState) -> dict:
     next_targets = _remaining_detail_targets(updated_project_plan)
     if not next_targets:
         return {
-            **code_change_state_update(captured.code_change_set),
             "phase": "detail_confirmation",
             "status": "completed",
             "clarification": _project_plan_confirmed_payload(updated_project_plan),
@@ -309,7 +286,6 @@ def detail_confirmation(state: ProjectState) -> dict:
     clarification = _detail_target_selection(updated_project_plan, next_targets)
 
     return {
-        **code_change_state_update(captured.code_change_set),
         "phase": "detail_confirmation",
         "status": "requires_user_input",
         "clarification": clarification,

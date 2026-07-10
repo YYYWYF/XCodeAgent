@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.project_plan import create_project_plan
 
 
 def _planning_prompt(requirement_spec: dict[str, Any]) -> str:
     return (
-        "You are the Main Agent for an app-generation workflow.\n"
+        "You are the project-planning model for an app-generation workflow.\n"
         "This is a planning-only boundary. Do not call tools, do not call subagents, "
         "do not delegate tasks, and do not generate or modify code.\n"
         "Create a project-level planning document from the RequirementSpec.\n"
@@ -31,23 +32,19 @@ def _planning_prompt(requirement_spec: dict[str, Any]) -> str:
     )
 
 
-def _invoke_live_main_agent(
+def _invoke_live_chat_model(
     requirement_spec: dict[str, Any],
     *,
-    workspace: str | None = None,
+    settings: Settings | None = None,
 ) -> str:
-    # Lazy imports keep Deep Agent construction at this live execution boundary.
-    from app.agents import create_agent_bundle
-    from app.graph.nodes.common import last_agent_text
-
-    result = create_agent_bundle(workspace).main.invoke(
-        {"messages": [{"role": "user", "content": _planning_prompt(requirement_spec)}]}
-    )
-    return last_agent_text(result)
+    active_settings = settings or Settings.from_env()
+    result = create_chat_model(active_settings).invoke(_planning_prompt(requirement_spec))
+    content = getattr(result, "content", "")
+    return content if isinstance(content, str) else str(content)
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
-    """Best-effort parser for Main Agent JSON without trusting formatting."""
+    """Best-effort parser for model JSON without trusting formatting."""
 
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -71,16 +68,14 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def plan_project_with_main_agent(
+def plan_project_with_chat_model(
     requirement_spec: dict[str, Any],
-    *,
-    workspace: str | None = None,
 ) -> dict[str, Any]:
-    """Use the live Main Agent planning boundary to produce a ProjectPlan."""
+    """Use a direct chat-model call to produce a ProjectPlan."""
 
     settings = Settings.from_env()
-    agent_note = _invoke_live_main_agent(requirement_spec, workspace=workspace)
-    planning_source = "main_agent_live"
+    agent_note = _invoke_live_chat_model(requirement_spec, settings=settings)
+    planning_source = "direct_chat_model"
 
     plan = create_project_plan(
         requirement_spec,
@@ -89,8 +84,8 @@ def plan_project_with_main_agent(
         agent_plan=_extract_json_object(agent_note),
     )
     plan["planned_by"] = {
-        "agent": "main-agent",
-        "mode": "live",
+        "agent": "chat-model",
+        "mode": "direct",
         "model": settings.model_name,
         "source": planning_source,
     }

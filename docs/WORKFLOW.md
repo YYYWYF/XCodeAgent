@@ -20,9 +20,9 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 ```text
 START
   → classify_request_complexity
-      ├─ 复杂需求 → requirements //main agent负责
-      │            → project_planning //main agent负责
-      │            → detail_confirmation //main agent负责
+      ├─ 复杂需求 → requirements //direct ChatModel负责
+      │            → project_planning //direct ChatModel负责
+      │            → detail_confirmation //direct ChatModel负责页面设计
       │            → prepare_build_tasks //main agent负责
       │            → build //由mainagent分发给
       └─ 简单需求 → direct_modification
@@ -64,7 +64,7 @@ START
 
 ### `requirements`
 
-由 Main Agent 负责：
+由 requirements 专用 ChatModel 负责：
 
 - 理解用户的原始需求；
 - 发现缺失信息并提出澄清问题；
@@ -84,17 +84,17 @@ START
 - 待确认问题；
 - 默认假设。
 
-当前实现通过 `agents/main/requirements_analyzer.py` 作为 Main Agent 需求分析边界，并将通用 `tools/ask_user.py` 注册给该边界。这个边界只允许调用 `ask_user`，不得暴露 `task` 工具、Frontend/Data Source/Test subagent、项目规划能力或文件写入能力。需求分析提示词明确要求覆盖应用信息、用户角色、功能模块、页面清单、数据源清单、业务流程和验收标准；若 Main Agent 判断信息缺失、模糊或不适合假设，应由 Main Agent 自行调用 `ask_user` 生成 1-4 个待确认问题。
+当前实现通过 `agents/main/requirements_analyzer.py` 直接调用 `create_chat_model()`，并只绑定通用 `tools/ask_user.py`。该边界不创建 Main DeepAgent，不加载 workspace backend，也不暴露 `task`、Frontend/Data Source/Test subagent 或文件读写工具。需求分析提示词明确要求覆盖应用信息、用户角色、功能模块、页面清单、数据源清单、业务流程和验收标准；若模型判断信息缺失、模糊或不适合假设，应生成 `ask_user` tool call，由后端解析为 1-4 个待确认问题。
 
 `ask_user` 是通用的人机确认工具，不包含 requirements 专用问题规则。后续项目计划、单页面设计、数据源确认等阶段需要用户输入时，也应复用该工具，由对应 Agent 根据上下文决定问题内容。
 
-当 Main Agent 判断需求不清晰时，`requirements` 输出 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时应带上上一轮 workflow payload 作为 `resumeState`，后端据此推断从 `requirements` 续跑；用户回答会与原始需求合并后重新进入 requirements 节点，生成包含补充信息的需求文档。
+当模型判断需求不清晰时，`requirements` 输出 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时应带上上一轮 workflow payload 作为 `resumeState`，后端据此推断从 `requirements` 续跑；用户回答会与原始需求合并后重新进入 requirements 节点，生成包含补充信息的需求文档。
 
 当需求已经清晰并生成 `RequirementSpec` 后，`requirements` 仍必须进入一次 `requirement_spec_confirmation` 确认状态，要求用户确认需求文档是否正确。用户回复“正确，继续规划”等确认语义后，该节点才输出 `status = completed` 并继续进入 `project_planning`；如果用户提供修改意见，则重新分析并生成更新后的 `RequirementSpec`，再进入确认。
 
 当前等待/续跑机制是显式的后端推断续跑点，还不是 LangGraph 原生 `interrupt` resume。后续如果切换到 LangGraph `interrupt`、checkpointer 和 command resume，应保持同样的原则：前端提交用户回答和 workflow 状态，不硬编码后端阶段名。
 
-Graph 节点只接收 Main Agent 产出的结构化 `RequirementSpec` 和澄清结果，负责写入需求文档并更新状态，不应自行进行需求分析。
+Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec` 和澄清结果，负责写入需求文档并更新状态，不应自行进行需求分析。
 
 ### `direct_modification`
 
@@ -121,9 +121,9 @@ Graph 节点只接收 Main Agent 产出的结构化 `RequirementSpec` 和澄清�
 - 页面和数据源之间的依赖；
 - 面向后续任务拆分的 `task_inputs`。
 
-该节点由 Main Agent 执行项目级规划：读取 `RequirementSpec`，产出结构化 `ProjectPlan` 和总体计划书 Markdown 文档。这个阶段不生成业务代码。
+该节点由 project-planning 专用 ChatModel 执行项目级规划：读取 `RequirementSpec`，产出结构化 `ProjectPlan` 和总体计划书 Markdown 文档。这个阶段不生成业务代码。
 
-该节点调用 Main Agent 的规划专用模型边界生成结构化 JSON 规划建议，再由确定性 schema 合并和归一化后写入 Graph State。这个边界不得暴露 `task` 工具、Frontend/Data Source/Test subagent 或任何文件写入能力；模型输出只用于细化项目级判断，确定性归一化负责保证稳定 id、必需字段和后续任务拆分可读取的结构。
+该节点通过 `agents/main/planner.py` 直接调用 `create_chat_model()` 生成结构化 JSON 规划建议，再由确定性 schema 合并和归一化后写入 Graph State。该调用不绑定任何工具，不创建 DeepAgent，也不扫描 workspace；模型输出只用于细化项目级判断，确定性归一化负责保证稳定 id、必需字段和后续任务拆分可读取的结构。
 
 `project_planning` 生成计划书后必须进入 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点才输出 `status = completed` 并进入 `detail_confirmation`；如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
 
@@ -140,7 +140,7 @@ Graph 节点只接收 Main Agent 产出的结构化 `RequirementSpec` 和澄清�
 - `task_inputs.frontend`：后续前端任务拆分输入；
 - `task_inputs.data_source`：后续数据源任务拆分输入；
 - `coordination_plan`：Main Agent 对细节确认、构建分发、测试反馈的协调策略；
-- `planned_by`：执行规划的 Agent、运行方式和模型信息；
+- `planned_by`：执行规划的直接模型、运行方式和模型信息；
 - `risks`：后续细节确认阶段需要消化的风险和待细化点。
 
 ### `detail_confirmation`
@@ -156,11 +156,11 @@ Graph 节点只接收 Main Agent 产出的结构化 `RequirementSpec` 和澄清�
 - 等待用户逐项确认；
 - 将确认后的页面详细设计写回 `ProjectPlan` 和总体计划书 Markdown，保证 Graph State 与规划文档一致。
 
-该阶段由主 Agent 的需求/规划能力负责，不由代码生成 Agent 负责。
+该阶段由只读规划逻辑和 page-design 专用 ChatModel 负责，不由代码生成 Agent 负责。
 
 当前实现通过 `tools/ask_user.py` 生成通用用户确认 payload。首次进入该节点时，节点从 `ProjectPlan` 读取页面清单和数据源清单，要求用户选择具体设计对象；前端提交回答时只传 `resumeState`，后端根据阻断事件推断从 `detail_confirmation` 续跑，并从 `resumeState.result/state` 恢复 `project_plan`、`detail_selection` 和 `page_spec_draft`。
 
-以选择页面为例，节点会读取 `ProjectPlan.frontend_pages` 中该页面的描述，并结合 `api_contracts`、`page_data_dependencies` 和相关 `data_sources` 形成单页面 `PageSpec` 草稿。`PageSpec` 覆盖页面目标、基本布局、页面交互、数据来源、页面权限和页面依赖。若这些方面仍缺失或不清晰，节点继续通过 `ask_user` 询问用户；信息足够后，再由 Main Agent 的页面设计专用模型边界基于用户确认后的 `PageSpec` 生成页面详细设计，并写入待确认的 `pending_project_plan`。该设计边界同样不得暴露 `task` 工具、代码生成 subagent 或文件写入能力。若用户选择数据源，当前节点会基于 `ProjectPlan.data_sources`、相关 API 契约和依赖页面生成基础 `data_source_detail_plans`，同样先写入 `pending_project_plan`。
+以选择页面为例，节点会读取 `ProjectPlan.frontend_pages` 中该页面的描述，并结合 `api_contracts`、`page_data_dependencies` 和相关 `data_sources` 形成单页面 `PageSpec` 草稿。`PageSpec` 覆盖页面目标、基本布局、页面交互、数据来源、页面权限和页面依赖。若这些方面仍缺失或不清晰，节点继续通过 `ask_user` 询问用户；信息足够后，`agents/main/page_designer.py` 直接调用 `create_chat_model()`，基于用户确认后的 `PageSpec` 生成页面详细设计，并写入待确认的 `pending_project_plan`。该调用不绑定工具、不创建 DeepAgent，也不读取或修改 workspace。若用户选择数据源，当前节点会基于 `ProjectPlan.data_sources`、相关 API 契约和依赖页面生成基础 `data_source_detail_plans`，同样先写入 `pending_project_plan`。
 
 凡是 `detail_confirmation` 对 `ProjectPlan` 产生页面详细设计、数据源详细设计或其他计划调整，都必须进入 `project_plan_adjustment_confirmation` 等待状态。只有用户确认后，`pending_project_plan` 才会提升为正式 `project_plan`，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
