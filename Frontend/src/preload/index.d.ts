@@ -21,6 +21,7 @@ declare global {
       createProjectDirectory: (payload: {
         parentPath: string;
         projectName: string;
+        applicationConfig: unknown;
       }) => Promise<{ ok?: boolean; path: string }>;
     };
     sessions?: {

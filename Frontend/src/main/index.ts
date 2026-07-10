@@ -501,6 +501,13 @@ function setupWorkspaceIpc() {
     if (typeof payload.parentPath !== 'string' || !payload.parentPath.trim()) {
       throw new Error('parentPath must be a non-empty string');
     }
+    if (
+      !payload.applicationConfig ||
+      typeof payload.applicationConfig !== 'object' ||
+      Array.isArray(payload.applicationConfig)
+    ) {
+      throw new Error('applicationConfig must be an object');
+    }
 
     const parentPath = path.resolve(payload.parentPath);
     const projectName = assertDirectoryName(payload.projectName);
@@ -511,6 +518,11 @@ function setupWorkspaceIpc() {
     }
 
     await fs.mkdir(projectPath, { recursive: false });
+    await fs.writeFile(
+      path.join(projectPath, 'application.json'),
+      `${JSON.stringify(payload.applicationConfig, null, 2)}\n`,
+      'utf8',
+    );
 
     return {
       ok: true,

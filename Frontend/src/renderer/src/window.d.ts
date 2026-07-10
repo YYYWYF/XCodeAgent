@@ -1,6 +1,7 @@
 export {};
 
 import type { ElectronAPI } from '@electron-toolkit/preload';
+import type { ApplicationSchemaConfig } from './typings';
 
 declare global {
   interface Window {
@@ -22,6 +23,7 @@ declare global {
         createProjectDirectory: (payload: {
           parentPath: string;
           projectName: string;
+          applicationConfig: ApplicationSchemaConfig;
         }) => Promise<{ ok?: boolean; path: string }>;
       };
       sessions?: {
