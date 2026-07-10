@@ -16,11 +16,15 @@ def present_page_selection(
 
     options = [
         {
-            "id": page["id"],
-            "label": page["name"],
-            "description": f"{page['path']} · {page['description']}",
+            "id": page.get("id"),
+            "label": page.get("name") or page.get("id") or "未命名页面",
+            "description": (
+                f"{page.get('path') or '/'} · "
+                f"{page.get('description') or page.get('name') or '待补充页面目标'}"
+            ),
         }
         for page in pages
+        if isinstance(page, dict) and page.get("id")
     ]
     valid_ids = {option["id"] for option in options}
     resolved_page_id = selected_page_id if selected_page_id in valid_ids else None

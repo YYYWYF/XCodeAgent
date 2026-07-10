@@ -4,15 +4,25 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.workspace.spec_documents import workspace_root
+from app.workspace.spec_documents import workflow_artifact_root
 
 
 def build_task_plan_json_path(state: dict[str, Any]) -> Path:
-    return workspace_root(state) / "plans" / "build-task-plan.json"
+    existing_path = state.get("build_task_plan_path")
+    return (
+        Path(existing_path)
+        if existing_path
+        else workflow_artifact_root(state) / "plans" / "build-task-plan.json"
+    )
 
 
 def repair_task_plan_json_path(state: dict[str, Any]) -> Path:
-    return workspace_root(state) / "plans" / "repair-task-plan.json"
+    existing_path = state.get("repair_task_plan_path")
+    return (
+        Path(existing_path)
+        if existing_path
+        else workflow_artifact_root(state) / "plans" / "repair-task-plan.json"
+    )
 
 
 def write_build_task_plan_json(

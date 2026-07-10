@@ -78,6 +78,8 @@ def workflow_capabilities() -> dict[str, Any]:
             "forwardedProps.application": "Optional application metadata; application.id and workspaceRoot are used as fallbacks.",
             "originalRequest": "Optional original request used when submitting clarification answers.",
             "clarificationAnswers": "Optional structured user answers that are merged with originalRequest before rerunning workflow.",
+            "forwardedProps.originalRequest": "Preferred AG-UI requirement context for clarification continuation.",
+            "forwardedProps.clarificationAnswers": "Preferred AG-UI structured answers for the latest clarification round.",
             "resumeState": "Optional previous workflow payload/state used by the backend to infer which waiting phase to resume.",
             "resumeFrom": "Optional backend/debug override for the workflow phase to resume from.",
             "forwardedProps.workflowDebug": "Optional debug resume settings with resumeFrom, requirementSpecPath, projectPlanPath, and buildTaskPlanPath.",
@@ -779,7 +781,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 },
             }
         return {
-            "message": f"页面={update.get('selected_page_id')}，计划文档已更新",
+            "message": _detail_confirmation_completed_message(update),
             "data": {
                 "detailSelection": update.get("detail_selection"),
                 "pageSpecConfirmation": update.get("page_spec_confirmation"),
@@ -855,6 +857,31 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {"status": update.get("status"), "phase": update.get("phase")},
         }
     return {"message": "", "data": {}}
+
+
+def _detail_confirmation_completed_message(update: dict[str, Any]) -> str:
+    detail_selection = update.get("detail_selection")
+    summary = {}
+    if isinstance(detail_selection, dict) and isinstance(
+        detail_selection.get("summary"),
+        dict,
+    ):
+        summary = detail_selection["summary"]
+    project_plan = update.get("project_plan")
+    if not summary and isinstance(project_plan, dict):
+        candidate = project_plan.get("detail_confirmation_summary")
+        if isinstance(candidate, dict):
+            summary = candidate
+
+    if summary.get("all_detail_targets_completed"):
+        return (
+            "页面/数据源详细设计已全部完成，最终项目计划书已更新，"
+            "准备进入任务拆分。"
+        )
+    remaining = summary.get("remaining_total")
+    if isinstance(remaining, int):
+        return f"项目计划书已更新，剩余待设计对象={remaining}"
+    return "项目计划书已更新"
 
 
 def _workflow_event(

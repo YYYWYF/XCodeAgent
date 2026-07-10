@@ -25,8 +25,10 @@ def requirements(state: ProjectState) -> dict:
             "clarification": _requirement_spec_confirmed_payload(spec),
             "timeline": ["requirements"],
         }
-
-    analysis = analyze_requirements_with_chat_model(state["request"])
+    analysis = analyze_requirements_with_chat_model(
+        state["request"],
+        existing_spec=existing_spec,
+    )
     spec = analysis["requirement_spec"]
     clarification = analysis["clarification"]
     if clarification["status"] == "clear":

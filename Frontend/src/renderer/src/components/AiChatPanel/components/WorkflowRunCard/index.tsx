@@ -347,6 +347,13 @@ function stringList(value: unknown): string[] {
 }
 
 export function workflowOriginalRequest(workflow: WorkflowRunPayload): string {
+  for (const source of [workflow.result, workflow.state]) {
+    const requirementSpec = objectValue(source?.requirement_spec);
+    const sourceRequest = requirementSpec.source_request;
+    if (typeof sourceRequest === "string" && sourceRequest.trim())
+      return sourceRequest.trim();
+  }
+
   const resultRequest = workflow.result?.request;
   if (typeof resultRequest === "string" && resultRequest.trim())
     return resultRequest.trim();
@@ -385,15 +392,7 @@ export function buildClarificationContinuationMessage(
 
   if (answerLines.length === 0) return "";
 
-  return [
-    "请基于原始需求和以下用户补充确认，继续生成需求文档并推进后续 workflow。",
-    "",
-    "原始需求：",
-    originalRequest,
-    "",
-    "用户补充确认：",
-    ...answerLines,
-  ].join("\n");
+  return answerLines.join("\n");
 }
 
 function workflowClarification(

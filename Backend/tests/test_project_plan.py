@@ -68,6 +68,61 @@ class ProjectPlanTests(unittest.TestCase):
             ["库存管理系统核心流程通过端到端验收。"],
         )
 
+    def test_authoritative_agent_plan_can_replace_page_and_role_scoped_content(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+        only_page = {
+            "id": "inventory_only",
+            "name": "库存列表",
+            "path": "/inventory",
+            "module_id": "inventory_management",
+            "description": "唯一业务页面",
+            "data_dependencies": [],
+            "states": ["ready"],
+            "permissions": ["user"],
+        }
+
+        plan = create_project_plan(
+            spec,
+            agent_plan={"frontend_pages": [only_page]},
+            authoritative_agent_plan=True,
+        )
+
+        self.assertEqual([page["id"] for page in plan["frontend_pages"]], ["inventory_only"])
+
+    def test_coordination_plan_missing_outputs_is_normalized_and_renderable(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+        plan = create_project_plan(
+            spec,
+            agent_plan={
+                "coordination_plan": {
+                    "detail_confirmation": {
+                        "strategy": "逐项确认页面和数据源。",
+                    }
+                }
+            },
+            authoritative_agent_plan=True,
+        )
+
+        self.assertTrue(plan["coordination_plan"]["detail_confirmation"]["outputs"])
+        self.assertIn("逐项确认页面和数据源", render_project_plan_markdown(plan))
+
+    def test_project_plan_tolerates_requirement_page_without_description(self) -> None:
+        spec = create_requirement_spec("创建一个人员管理系统")
+        spec["pages"] = [
+            {
+                "id": "people_list",
+                "name": "人员列表",
+                "path": "/people",
+                "module_id": "people",
+            }
+        ]
+
+        plan = create_project_plan(spec)
+        markdown = render_project_plan_markdown(plan)
+
+        self.assertEqual(plan["frontend_pages"][0]["description"], "人员列表")
+        self.assertIn("人员列表", markdown)
+
     def test_rendered_project_plan_includes_dependency_and_permission_sections(self) -> None:
         spec = create_requirement_spec("创建一个带登录权限的库存管理系统")
         plan = create_project_plan(spec)

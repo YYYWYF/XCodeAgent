@@ -1,9 +1,14 @@
 from app.agents.main.task_preparer import prepare_build_tasks_with_main_agent
-from app.graph.nodes.confirmation import user_confirmed_text
+from app.agents.main.planner import revise_project_plan_with_chat_model
+from app.graph.nodes.confirmation import (
+    user_confirmed_text,
+    user_requested_changes_text,
+)
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.code_changes import code_change_state_update
+from app.workspace.plan_documents import write_project_plan_document
 from app.workspace.task_documents import write_build_task_plan_json
 
 
@@ -14,6 +19,21 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             project_plan = {
                 **project_plan,
                 "confirmation_status": "confirmed",
+            }
+        elif user_requested_changes_text(state.get("request", "")):
+            project_plan = revise_project_plan_with_chat_model(
+                project_plan,
+                state.get("request", ""),
+            )
+            project_plan_path = write_project_plan_document(state, project_plan)
+            clarification = _project_plan_confirmation_payload(project_plan)
+            return {
+                "phase": "prepare_build_tasks",
+                "status": "requires_user_input",
+                "project_plan": project_plan,
+                "project_plan_path": project_plan_path,
+                "clarification": clarification,
+                "timeline": ["prepare_build_tasks"],
             }
         else:
             clarification = _project_plan_confirmation_payload(project_plan)

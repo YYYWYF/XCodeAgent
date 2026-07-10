@@ -8,7 +8,7 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 2. Deep Agents 负责需要自主推理、工具调用、文件操作和多步执行的任务。
 3. Agent 不得自行决定或绕过项目阶段、用户确认、任务依赖和质量门禁。
 4. Graph State 保存小型结构化状态和文件引用，不保存完整代码、大型日志或全部 Agent 消息。
-5. 项目文件、Spec、计划和测试报告是跨节点共享的事实来源。
+5. 项目文件、Spec、计划和测试报告是跨节点共享的事实来源；工作流元数据统一写入项目工作区的 `.xcodeagent/`，业务代码仍写入正常工程目录。
 6. Deep Agent 的消息和工具结果属于任务级临时上下文，不直接合并进整体 Graph State。
 7. 所有 Agent 结果必须结构化，并经过确定性校验后才能更新业务状态。
 8. 测试是否通过由确定性的质量门禁判断，不能只相信 Agent 的自然语言结论。
@@ -88,7 +88,7 @@ START
 
 `ask_user` 是通用的人机确认工具，不包含 requirements 专用问题规则。后续项目计划、单页面设计、数据源确认等阶段需要用户输入时，也应复用该工具，由对应 Agent 根据上下文决定问题内容。
 
-当模型判断需求不清晰时，`requirements` 输出 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时应带上上一轮 workflow payload 作为 `resumeState`，后端据此推断从 `requirements` 续跑；用户回答会与原始需求合并后重新进入 requirements 节点，生成包含补充信息的需求文档。
+当 Main Agent 判断需求不清晰时，`requirements` 输出 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和本轮结构化答案；后端据此推断续跑节点并生成扁平的当前请求，不重复嵌套完整会话。Main Agent 基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
 
 当需求已经清晰并生成 `RequirementSpec` 后，`requirements` 仍必须进入一次 `requirement_spec_confirmation` 确认状态，要求用户确认需求文档是否正确。用户回复“正确，继续规划”等确认语义后，该节点才输出 `status = completed` 并继续进入 `project_planning`；如果用户提供修改意见，则重新分析并生成更新后的 `RequirementSpec`，再进入确认。
 
@@ -158,7 +158,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 该阶段由只读规划逻辑和 page-design 专用 ChatModel 负责，不由代码生成 Agent 负责。
 
-当前实现通过 `tools/ask_user.py` 生成通用用户确认 payload。首次进入该节点时，节点从 `ProjectPlan` 读取页面清单和数据源清单，要求用户选择具体设计对象；前端提交回答时只传 `resumeState`，后端根据阻断事件推断从 `detail_confirmation` 续跑，并从 `resumeState.result/state` 恢复 `project_plan`、`detail_selection` 和 `page_spec_draft`。
+当前实现通过 `tools/ask_user.py` 生成通用用户确认 payload。首次进入该节点时，节点从 `ProjectPlan` 读取页面清单和数据源清单，要求用户选择具体设计对象；前端提交回答时携带 `resumeState` 和本轮结构化答案，后端恢复 `project_plan`、选择对象以及页面或数据源设计草稿。
 
 以选择页面为例，节点会读取 `ProjectPlan.frontend_pages` 中该页面的描述，并结合 `api_contracts`、`page_data_dependencies` 和相关 `data_sources` 形成单页面 `PageSpec` 草稿。`PageSpec` 覆盖页面目标、基本布局、页面交互、数据来源、页面权限和页面依赖。若这些方面仍缺失或不清晰，节点继续通过 `ask_user` 询问用户；信息足够后，`agents/main/page_designer.py` 直接调用 `create_chat_model()`，基于用户确认后的 `PageSpec` 生成页面详细设计，并写入待确认的 `pending_project_plan`。该调用不绑定工具、不创建 DeepAgent，也不读取或修改 workspace。若用户选择数据源，当前节点会基于 `ProjectPlan.data_sources`、相关 API 契约和依赖页面生成基础 `data_source_detail_plans`，同样先写入 `pending_project_plan`。
 
@@ -204,14 +204,17 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 该节点的结构化产物必须落盘，供后续恢复执行和单节点验证使用：
 
 ```text
-var/workspaces/{project_id}/plans/project-plan.json
-var/workspaces/{project_id}/plans/build-task-plan.json
+{workspace}/.xcodeagent/specs/requirement-spec.{md,json}
+{workspace}/.xcodeagent/plans/project-plan.{md,json}
+{workspace}/.xcodeagent/plans/build-task-plan.json
+{workspace}/.xcodeagent/plans/repair-task-plan.json
+{workspace}/.xcodeagent/reports/test-report.json
 ```
 
 `project-plan.md` 和 `requirement-spec.md` 面向人类阅读；节点恢复执行必须优先使用同目录下的 JSON 文件。若要跳过前序节点单独验证任务 DAG 生成，可执行：
 
 ```bash
-app-demo-prepare-build-tasks var/workspaces/demo-project/plans/project-plan.json
+app-demo-prepare-build-tasks var/workspaces/demo-project/.xcodeagent/plans/project-plan.json
 ```
 
 本地调试某个节点时，可以使用 `Backend/app/cli.py` 的 `--from-node` 和已落盘 JSON 产物直接续跑，避免每次从头生成需求文档。例如，从已确认的 requirements 结果直接调试 `project_planning`：
@@ -220,12 +223,12 @@ app-demo-prepare-build-tasks var/workspaces/demo-project/plans/project-plan.json
 cd Backend
 python3 -m app.cli \
   --from-node project_planning \
-  --requirement-spec-json var/workspaces/demo-project/specs/requirement-spec.json \
+  --requirement-spec-json var/workspaces/demo-project/.xcodeagent/specs/requirement-spec.json \
   --project-id demo-project \
   "正确，继续"
 ```
 
-如果要从已经生成的项目计划调试后续节点，可追加 `--project-plan-json var/workspaces/demo-project/plans/project-plan.json`，并把 `--from-node` 设置为 `detail_confirmation` 或 `prepare_build_tasks`。调试续跑仍会遵守确认闸口；未确认的 `ProjectPlan` 不会进入代码生成。
+如果要从已经生成的项目计划调试后续节点，可追加 `--project-plan-json var/workspaces/demo-project/.xcodeagent/plans/project-plan.json`，并把 `--from-node` 设置为 `detail_confirmation` 或 `prepare_build_tasks`。调试续跑仍会遵守确认闸口；未确认的 `ProjectPlan` 不会进入代码生成。为兼容已有项目，调试目录解析仍能读取旧的 `specs/` 和 `plans/` 路径；新写入统一使用 `.xcodeagent/`。
 
 ### `build`
 

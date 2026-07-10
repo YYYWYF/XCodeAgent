@@ -195,6 +195,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "selected_data_source_id",
         "page_spec_draft",
         "confirmed_page_spec",
+        "data_source_spec_draft",
         "detail_plans",
         "requirement_spec",
         "requirement_spec_path",
@@ -215,7 +216,11 @@ def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
     requirement_path = _resolve_debug_json_path(
         debug_state,
         ("requirement_spec_path", "requirementSpecPath", "requirementSpecDirectory"),
-        ("requirement-spec.json", "specs/requirement-spec.json"),
+        (
+            "requirement-spec.json",
+            ".xcodeagent/specs/requirement-spec.json",
+            "specs/requirement-spec.json",
+        ),
     )
     if requirement_path:
         values["requirement_spec_path"] = _markdown_sibling_path(requirement_path)
@@ -225,7 +230,11 @@ def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
     project_plan_path = _resolve_debug_json_path(
         debug_state,
         ("project_plan_path", "projectPlanPath", "projectPlanDirectory"),
-        ("project-plan.json", "plans/project-plan.json"),
+        (
+            "project-plan.json",
+            ".xcodeagent/plans/project-plan.json",
+            "plans/project-plan.json",
+        ),
     )
     if project_plan_path:
         values["project_plan_path"] = _markdown_sibling_path(project_plan_path)
@@ -235,7 +244,11 @@ def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
     build_task_plan_path = _resolve_debug_json_path(
         debug_state,
         ("build_task_plan_path", "buildTaskPlanPath", "buildTaskPlanDirectory"),
-        ("build-task-plan.json", "plans/build-task-plan.json"),
+        (
+            "build-task-plan.json",
+            ".xcodeagent/plans/build-task-plan.json",
+            "plans/build-task-plan.json",
+        ),
     )
     if build_task_plan_path:
         build_task_plan = load_build_task_plan_json(build_task_plan_path)
@@ -306,7 +319,7 @@ def _clarification_answers_to_text(value: Any) -> str:
         for key, answer in value.items():
             answer_text = _answer_to_text(answer)
             if answer_text:
-                lines.append(f"- {key}: {answer_text}")
+                lines.extend([f"- {key}", f"  回答：{answer_text}"])
         return "\n".join(lines)
 
     if isinstance(value, list):

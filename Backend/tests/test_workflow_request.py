@@ -71,6 +71,8 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(inputs["resume_from"], "requirements")
+        self.assertNotIn("原始需求：\n请基于原始需求", inputs["request"])
+        self.assertIn("回答：库管员", inputs["request"])
 
     def test_infers_detail_confirmation_resume_and_preserves_plan_state(self) -> None:
         inputs = workflow_run_inputs(

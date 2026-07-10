@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
@@ -265,9 +266,36 @@ def _acceptance_criteria(spec_name: str) -> list[str]:
     ]
 
 
+def _normalize_requirement_items(
+    value: Any,
+    *,
+    prefix: str,
+    defaults: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or f"{prefix}_{index + 1}")
+        normalized_item = {**defaults, **item, "id": item_id}
+        normalized_item["name"] = str(
+            normalized_item.get("name") or item_id
+        )
+        if "description" in defaults:
+            normalized_item["description"] = str(
+                normalized_item.get("description") or normalized_item["name"]
+            )
+        normalized.append(normalized_item)
+    return normalized
+
+
 def create_requirement_spec(
     request: str,
     agent_note: str = "live main-agent requirements analysis",
+    agent_spec: dict[str, Any] | None = None,
+    existing_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     requirement_summary = consolidated_requirement_text(request)
     source_text = requirement_summary or request
@@ -286,7 +314,7 @@ def create_requirement_spec(
         },
     ]
 
-    spec = {
+    default_spec = {
         "version": "0.1.0",
         "status": "draft",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -307,5 +335,88 @@ def create_requirement_spec(
         "clarification_questions": [],
         "agent_note": agent_note,
         "approved": True,
+    }
+    spec = {
+        **default_spec,
+        **(deepcopy(existing_spec) if isinstance(existing_spec, dict) else {}),
+    }
+    if isinstance(agent_spec, dict):
+        spec.update(agent_spec)
+        spec["app_info"] = {
+            **default_spec["app_info"],
+            **(
+                agent_spec.get("app_info", {})
+                if isinstance(agent_spec.get("app_info"), dict)
+                else {}
+            ),
+        }
+
+    item_defaults = {
+        "user_roles": ("role", {"name": "用户", "description": "使用应用。"}),
+        "feature_modules": (
+            "module",
+            {"name": "业务模块", "description": "完成核心业务。", "priority": "must"},
+        ),
+        "pages": (
+            "page",
+            {"name": "业务页面", "path": "/", "module_id": "core", "description": "业务页面。"},
+        ),
+        "data_sources": (
+            "source",
+            {"name": "业务数据源", "type": "mock", "entities": [], "description": "业务数据。"},
+        ),
+        "business_flows": ("flow", {"name": "业务流程", "steps": []}),
+    }
+    for key, (prefix, defaults) in item_defaults.items():
+        normalized = _normalize_requirement_items(
+            spec.get(key),
+            prefix=prefix,
+            defaults=defaults,
+        )
+        spec[key] = normalized if normalized else default_spec[key]
+    for source in spec["data_sources"]:
+        entities = source.get("entities")
+        source["entities"] = (
+            [str(item) for item in entities if str(item).strip()]
+            if isinstance(entities, list)
+            else []
+        )
+    for flow in spec["business_flows"]:
+        steps = flow.get("steps")
+        flow["steps"] = (
+            [str(item) for item in steps if str(item).strip()]
+            if isinstance(steps, list)
+            else []
+        )
+
+    criteria = spec.get("acceptance_criteria")
+    normalized_criteria = (
+        [str(item) for item in criteria if str(item).strip()]
+        if isinstance(criteria, list)
+        else []
+    )
+    spec["acceptance_criteria"] = normalized_criteria or default_spec["acceptance_criteria"]
+    assumptions = spec.get("assumptions")
+    spec["assumptions"] = (
+        [str(item) for item in assumptions if str(item).strip()]
+        if isinstance(assumptions, list)
+        else []
+    )
+    spec.update(
+        {
+            "version": str(spec.get("version") or "0.1.0"),
+            "status": "draft",
+            "generated_at": datetime.now(UTC).isoformat(),
+            "summary": source_text,
+            "source_request": source_text,
+            "agent_note": agent_note,
+            "agent_spec_used": isinstance(agent_spec, dict),
+            "approved": True,
+        }
+    )
+    spec["app_info"] = {
+        **default_spec["app_info"],
+        **(spec.get("app_info") if isinstance(spec.get("app_info"), dict) else {}),
+        "summary": source_text,
     }
     return spec

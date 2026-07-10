@@ -7,9 +7,21 @@ from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.requirement_spec import create_requirement_spec
 from app.tools.ask_user import ask_user, extract_ask_user_clarification
+from app.utils.model_output import extract_json_object
 
 
-def _requirements_prompt(request: str) -> str:
+def _requirements_prompt(
+    request: str,
+    existing_spec: dict[str, Any] | None = None,
+) -> str:
+    revision_context = (
+        "Revise the existing RequirementSpec using the latest user feedback. "
+        "The latest feedback overrides conflicting older requirements. Preserve stable ids for "
+        "unchanged items, remove items the user no longer wants, and add newly requested items.\n"
+        f"Existing RequirementSpec:\n{json.dumps(existing_spec, ensure_ascii=False)}\n\n"
+        if existing_spec
+        else "Create a new RequirementSpec from the user request.\n"
+    )
     return (
         "You are the requirements model for an app-generation workflow.\n"
         "This is a requirements-only boundary. Do not call subagents, do not delegate tasks, "
@@ -23,37 +35,54 @@ def _requirements_prompt(request: str) -> str:
         "four focused questions. The questions can be choice, text, or yesno, and you should decide "
         "which questions are necessary from the user's request. After calling ask_user, do not invent "
         "answers and do not continue planning until the user answers.\n"
-        "If the requirement is clear, do not call ask_user. Return a concise analysis note that "
-        "summarizes the seven aspects and any safe assumptions.\n\n"
-        f"User request:\n{request}"
+        "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
+        "without markdown fences or commentary. It must include app_info, user_roles, "
+        "feature_modules, pages, data_sources, business_flows, acceptance_criteria, and assumptions. "
+        "Every role, module, page, data source, and flow must have a stable id and the fields needed "
+        "to describe it. The JSON must represent the complete current requirement, not a patch.\n\n"
+        f"{revision_context}Latest user request or feedback:\n{request}"
     )
 
 
 def _invoke_live_chat_model(
     request: str,
     *,
+    existing_spec: dict[str, Any] | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     active_settings = settings or Settings.from_env()
     result = (
         create_chat_model(active_settings)
         .bind_tools([ask_user])
-        .invoke(_requirements_prompt(request))
+        .invoke(_requirements_prompt(request, existing_spec))
     )
     return {"messages": [result]}
 
 
-def analyze_requirements_with_chat_model(request: str) -> dict[str, Any]:
+def analyze_requirements_with_chat_model(
+    request: str,
+    existing_spec: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Use a direct chat-model call to create RequirementSpec and clarifications."""
 
     settings = Settings.from_env()
-    agent_result = _invoke_live_chat_model(request, settings=settings)
+    agent_result = _invoke_live_chat_model(
+        request,
+        existing_spec=existing_spec,
+        settings=settings,
+    )
     messages = agent_result.get("messages", [])
     content = getattr(messages[-1], "content", "") if messages else ""
     agent_note = content if isinstance(content, str) else str(content)
     analysis_source = "direct_chat_model"
 
-    spec = create_requirement_spec(request, agent_note=agent_note)
+    agent_spec = extract_json_object(agent_note)
+    spec = create_requirement_spec(
+        request,
+        agent_note=agent_note,
+        agent_spec=agent_spec,
+        existing_spec=existing_spec,
+    )
     clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
     spec["assumptions"] = clarification["assumptions"]
@@ -68,6 +97,7 @@ def analyze_requirements_with_chat_model(request: str) -> dict[str, Any]:
         "source": analysis_source,
     }
     spec["analysis_source"] = analysis_source
+    spec["agent_spec_used"] = isinstance(agent_spec, dict)
     clarification["requested_by"] = "chat-model"
     clarification["analysis_source"] = analysis_source
     clarification["analysis_note"] = json.dumps(

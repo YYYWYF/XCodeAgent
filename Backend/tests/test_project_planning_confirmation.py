@@ -55,6 +55,37 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         self.assertEqual(result["clarification"]["status"], "clear")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
 
+    def test_project_planning_revision_uses_existing_plan_once(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+        existing_plan = create_project_plan(spec)
+        revised_plan = {
+            **existing_plan,
+            "frontend_pages": [existing_plan["frontend_pages"][1]],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=revised_plan,
+            ) as planner:
+                result = project_planning(
+                    {
+                        "request": "只保留库存列表页，删除其他页面",
+                        "workspace": workspace,
+                        "requirement_spec": spec,
+                        "project_plan": existing_plan,
+                        "timeline": [],
+                    }
+                )
+
+        planner.assert_called_once()
+        self.assertEqual(planner.call_args.kwargs["existing_plan"], existing_plan)
+        self.assertIn(
+            "只保留库存列表页",
+            planner.call_args.args[0]["planning_adjustment_request"],
+        )
+        self.assertEqual(len(result["project_plan"]["frontend_pages"]), 1)
+
     def test_project_plan_confirmation_ignores_question_text_negative_words(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         plan = create_project_plan(spec)

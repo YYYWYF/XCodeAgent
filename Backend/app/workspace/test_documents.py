@@ -4,11 +4,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.workspace.spec_documents import workspace_root
+from app.workspace.spec_documents import workflow_artifact_root
 
 
 def test_report_json_path(state: dict[str, Any]) -> Path:
-    return workspace_root(state) / "reports" / "test-report.json"
+    existing_path = state.get("test_report_path")
+    return (
+        Path(existing_path)
+        if existing_path
+        else workflow_artifact_root(state) / "reports" / "test-report.json"
+    )
 
 
 def write_test_report_json(state: dict[str, Any], test_report: dict[str, Any]) -> str:

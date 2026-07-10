@@ -31,12 +31,14 @@ export default function MessageList({
   onOpenCodeChangeFile,
   onSubmitClarification
 }: MessageListProps): ReactElement {
+  const visibleMessages = latestConversationMessages(messages)
+
   return (
     <div className={cx('ai-message-list')} aria-live="polite">
-      {messages.length === 0 ? (
+      {visibleMessages.length === 0 ? (
         <Empty description={copy.empty} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       ) : (
-        messages.map((message) => {
+        visibleMessages.map((message) => {
           const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
           return (
             <article className={cx('ai-message', message.role)} key={message.id}>
@@ -89,4 +91,9 @@ export default function MessageList({
       )}
     </div>
   )
+}
+
+function latestConversationMessages(messages: AgentChatMessage[]): AgentChatMessage[] {
+  const latestUserMessageIndex = messages.findLastIndex((message) => message.role === 'user')
+  return latestUserMessageIndex >= 0 ? messages.slice(latestUserMessageIndex) : messages.slice(-1)
 }

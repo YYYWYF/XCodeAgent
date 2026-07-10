@@ -5,11 +5,13 @@ from typing import Any
 
 
 def _default_page_spec(page: dict[str, Any]) -> dict[str, Any]:
+    page_id = str(page.get("id") or "page")
+    page_name = str(page.get("name") or page_id)
     return {
-        "page_id": page["id"],
-        "page_name": page["name"],
-        "path": page["path"],
-        "page_goal": page["description"],
+        "page_id": page_id,
+        "page_name": page_name,
+        "path": str(page.get("path") or "/"),
+        "page_goal": page.get("description") or f"完成 {page_name} 的核心业务展示与操作。",
         "layout": {
             "structure": [
                 "页面标题区",
@@ -26,9 +28,9 @@ def _default_page_spec(page: dict[str, Any]) -> dict[str, Any]:
             "接口失败时展示 error 状态和重试入口。",
             "用户执行主要操作后刷新页面数据。",
         ],
-        "data_source_ids": page["data_dependencies"],
-        "permissions": page["permissions"],
-        "states": page["states"],
+        "data_source_ids": page.get("data_dependencies", []),
+        "permissions": page.get("permissions", []),
+        "states": page.get("states", []),
     }
 
 
@@ -47,9 +49,9 @@ def confirm_page_spec(
     default_spec = _default_page_spec(page)
     if confirmed_page_spec:
         spec = {**default_spec, **deepcopy(confirmed_page_spec)}
-        spec["page_id"] = page["id"]
-        spec["page_name"] = page["name"]
-        spec["path"] = page["path"]
+        spec["page_id"] = default_spec["page_id"]
+        spec["page_name"] = default_spec["page_name"]
+        spec["path"] = default_spec["path"]
         status = "confirmed"
     else:
         spec = default_spec

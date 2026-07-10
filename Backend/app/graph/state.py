@@ -27,6 +27,7 @@ class ProjectState(TypedDict, total=False):
     selected_data_source_id: str
     page_spec_draft: dict[str, Any]
     confirmed_page_spec: dict[str, Any]
+    data_source_spec_draft: dict[str, Any]
     detail_plans: list[dict[str, Any]]
     build_task_plan: dict[str, Any]
     build_task_plan_path: str

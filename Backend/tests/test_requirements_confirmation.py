@@ -10,6 +10,25 @@ from app.tools.ask_user import clear_clarification
 
 
 class RequirementsConfirmationTests(unittest.TestCase):
+    def test_model_requirement_spec_replaces_default_roles_and_pages(self) -> None:
+        spec = create_requirement_spec(
+            "只需要一个人员列表页、一个普通用户角色，不需要登录",
+            agent_spec={
+                "app_info": {"name": "人员管理应用", "target": "管理人员信息"},
+                "user_roles": [{"id": "user", "name": "普通用户", "description": "使用系统"}],
+                "feature_modules": [{"id": "people", "name": "人员管理", "description": "人员列表", "priority": "must"}],
+                "pages": [{"id": "people_list", "name": "人员列表", "path": "/", "module_id": "people", "description": "唯一页面"}],
+                "data_sources": [{"id": "people_source", "name": "人员数据", "type": "database", "entities": ["Person"], "description": "人员信息"}],
+                "business_flows": [{"id": "browse_people", "name": "浏览人员", "steps": ["打开列表"]}],
+                "acceptance_criteria": ["列表可以展示人员信息"],
+                "assumptions": [],
+            },
+        )
+
+        self.assertEqual([role["id"] for role in spec["user_roles"]], ["user"])
+        self.assertEqual([page["id"] for page in spec["pages"]], ["people_list"])
+        self.assertNotIn("login_page", [page["id"] for page in spec["pages"]])
+
     def test_clear_requirement_waits_for_spec_confirmation(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         with tempfile.TemporaryDirectory() as workspace:
@@ -28,7 +47,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     }
                 )
 
-        analyzer.assert_called_once_with("创建一个库存管理系统")
+        analyzer.assert_called_once_with("创建一个库存管理系统", existing_spec=None)
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
             result["clarification"]["mode"],

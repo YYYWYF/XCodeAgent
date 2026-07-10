@@ -12,6 +12,8 @@ import type {
 type SendWorkflowMessageOptions = {
   workspaceRoot?: string
   application?: ApplicationConfig
+  clarificationAnswers?: Record<string, string | string[]>
+  originalRequest?: string
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   onContent?: (content: string) => void
@@ -119,6 +121,8 @@ export class AgUiChatSession {
         forwardedProps: {
           workspaceRoot: options.workspaceRoot,
           application: options.application,
+          clarificationAnswers: options.clarificationAnswers,
+          originalRequest: options.originalRequest,
           workflowDebug: options.workflowDebug,
           resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
           resumeState: options.resumeState

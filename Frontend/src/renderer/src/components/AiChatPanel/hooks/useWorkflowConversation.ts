@@ -76,6 +76,8 @@ export function useWorkflowConversation({
     message: string,
     options?: {
       clearDraft?: boolean
+      clarificationAnswers?: ClarificationAnswers
+      originalRequest?: string
       resumeState?: WorkflowRunPayload
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
@@ -169,6 +171,8 @@ export function useWorkflowConversation({
       } = await agUiSession.sendMessage(trimmedMessage, {
         workspaceRoot: application.workspaceRoot,
         application,
+        clarificationAnswers: options?.clarificationAnswers,
+        originalRequest: options?.originalRequest,
         workflowDebug: options?.workflowDebug,
         resumeState: options?.resumeState,
         onContent: (content) => {
@@ -236,9 +240,12 @@ export function useWorkflowConversation({
   ): Promise<void> => {
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
     if (!continuationMessage) return
+    const originalRequest = workflowOriginalRequest(workflow)
     await sendWorkflowMessage(continuationMessage, {
+      clarificationAnswers: answers,
+      originalRequest,
       resumeState: workflow,
-      titleFrom: workflowOriginalRequest(workflow) || '补充需求确认'
+      titleFrom: originalRequest || '补充需求确认'
     })
   }
 
