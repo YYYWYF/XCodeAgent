@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.messages import last_agent_text
 from app.config import Settings
 from app.services.build_task_planner import create_build_task_plan
 
@@ -24,8 +25,6 @@ def _invoke_live_main_agent(
 ) -> str:
     # Lazy imports avoid constructing Deep Agents before this live boundary is used.
     from app.agents import create_agent_bundle
-    from app.graph.nodes.common import last_agent_text
-
     result = create_agent_bundle(workspace).main.invoke(
         {
             "messages": [

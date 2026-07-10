@@ -6,6 +6,18 @@ from app.protocols.workflow_request import workflow_run_inputs
 
 
 class WorkflowRequestTests(unittest.TestCase):
+    def test_reads_workspace_root_from_forwarded_props(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "创建一个库存管理系统",
+                "forwardedProps": {
+                    "workspaceRoot": "/Users/sbw/Downloads/test/manage",
+                },
+            }
+        )
+
+        self.assertEqual(inputs["workspace"], "/Users/sbw/Downloads/test/manage")
+
     def test_merges_clarification_answers_with_original_request(self) -> None:
         inputs = workflow_run_inputs(
             {

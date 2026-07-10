@@ -12,6 +12,7 @@ from app.agents.workspace_scope import (
     create_workspace_permissions,
     resolve_workspace_root,
 )
+from app.workspace.virtual_paths import host_workspace_virtual_alias
 
 
 class WorkspaceScopeTests(unittest.TestCase):
@@ -38,6 +39,19 @@ class WorkspaceScopeTests(unittest.TestCase):
                 '{"sbw":123}',
             )
 
+    def test_workspace_backend_writes_virtual_app_path_to_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            backend = create_workspace_backend(workspace)
+
+            backend.write("/app/frontend/index.tsx", "export default null\n")
+
+            self.assertEqual(
+                (Path(workspace) / "app" / "frontend" / "index.tsx").read_text(
+                    encoding="utf-8"
+                ),
+                "export default null\n",
+            )
+
     def test_missing_workspace_uses_state_backend_and_denies_filesystem(self) -> None:
         backend = create_workspace_backend(None)
         permissions = create_workspace_permissions(None, mode="main")
@@ -57,6 +71,37 @@ class WorkspaceScopeTests(unittest.TestCase):
             )
             self.assertEqual(
                 _check_fs_permission(permissions, "write", "/data.json"),
+                "allow",
+            )
+
+    def test_host_workspace_path_cannot_be_repeated_as_virtual_path(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            permissions = create_workspace_permissions(workspace, mode="frontend")
+            host_alias = host_workspace_virtual_alias(Path(workspace))
+
+            self.assertIsNotNone(host_alias)
+            self.assertEqual(
+                _check_fs_permission(
+                    permissions,
+                    "write",
+                    f"{host_alias}/app/frontend/index.tsx",
+                ),
+                "deny",
+            )
+            self.assertEqual(
+                _check_fs_permission(
+                    permissions,
+                    "read",
+                    f"{host_alias}/app/frontend/index.tsx",
+                ),
+                "deny",
+            )
+            self.assertEqual(
+                _check_fs_permission(
+                    permissions,
+                    "write",
+                    "/app/frontend/index.tsx",
+                ),
                 "allow",
             )
 

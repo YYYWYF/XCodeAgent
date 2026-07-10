@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.messages import last_agent_text
 from app.config import Settings
-from app.graph.nodes.common import last_agent_text
 from app.services.build_result_coordinator import create_agent_task_result
+from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
 def _data_source_generation_prompt(
@@ -13,7 +14,6 @@ def _data_source_generation_prompt(
     project_plan: dict[str, Any],
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
-    workspace: str | None,
 ) -> str:
     return (
         "You are the Data Source Generation Agent in an app-generation workflow.\n"
@@ -23,8 +23,10 @@ def _data_source_generation_prompt(
         "API contract exactly. If the contract cannot be implemented, return a "
         "change_request instead of silently changing it.\n"
         "Do not modify RequirementSpec, PageSpec, ProjectPlan, API contracts, or "
-        "the task DAG directly.\n\n"
-        f"Workspace:\n{workspace or 'default workspace'}\n\n"
+        "the task DAG directly.\n"
+        f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n"
+        "Treat every allowed_paths entry as relative to virtual root '/'. For example, "
+        "app/backend/** means /app/backend/** in filesystem tool calls.\n\n"
         f"Approved data-source tasks:\n{json.dumps(tasks, ensure_ascii=False, indent=2)}\n\n"
         f"BuildTaskPlan summary:\n{json.dumps(build_task_plan.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
@@ -50,7 +52,6 @@ def _invoke_live_data_source_agent(
                         project_plan=project_plan,
                         build_task_plan=build_task_plan,
                         tasks=tasks,
-                        workspace=workspace,
                     ),
                 }
             ]

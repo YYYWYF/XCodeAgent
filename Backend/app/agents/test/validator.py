@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.messages import last_agent_text
 from app.config import Settings
-from app.graph.nodes.common import last_agent_text
 
 
 def _test_validation_prompt(

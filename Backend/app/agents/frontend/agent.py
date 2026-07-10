@@ -5,6 +5,7 @@ from app.agents.workspace_scope import (
     create_workspace_permissions,
 )
 from app.tools.delete_file import create_delete_file_tool
+from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
 def create_frontend_agent(model, workspace_root: str | None = None):
@@ -19,8 +20,8 @@ def create_frontend_agent(model, workspace_root: str | None = None):
             "and unit tests when available. Do not confirm requirements, do not modify "
             "PageSpec, and do not silently change API contracts. Return a concise "
             "structured implementation report with changed files, commands, status, "
-            "and any change request. When workspace filesystem tools are available, "
-            "use virtual absolute paths rooted at workspaceRoot. When deleting a file, "
+            "and any change request. "
+            f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting a file, "
             "use delete_file(file_path=\"/path\") with a virtual absolute path."
         ),
         tools=[create_delete_file_tool(workspace_root)],

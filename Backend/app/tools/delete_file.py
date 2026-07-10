@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from app.workspace.virtual_paths import is_host_workspace_virtual_path
 from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
 
@@ -37,6 +38,11 @@ def _delete_workspace_file(
     try:
         root = _resolve_workspace_root(workspace_root)
         virtual_path = _normalize_virtual_path(file_path)
+        if is_host_workspace_virtual_path(root, virtual_path):
+            raise ValueError(
+                "file_path must be relative to the virtual workspace root '/'; "
+                "do not include workspaceRoot."
+            )
         target = _resolve_virtual_path(root, virtual_path)
         _validate_delete_target(root, target)
         target.unlink()

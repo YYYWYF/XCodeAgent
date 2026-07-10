@@ -46,6 +46,16 @@ class DeleteFileToolTests(unittest.TestCase):
 
             self.assertTrue(outside.exists())
 
+    def test_host_workspace_path_alias_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace).resolve()
+            repeated_path = f"/{root.as_posix().lstrip('/')}/data.json"
+
+            payload = self._invoke_delete(workspace, repeated_path)
+
+            self.assertEqual(payload["status"], "error")
+            self.assertIn("do not include workspaceRoot", payload["error"])
+
     def test_sensitive_files_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
             for filename in (".env", ".npmrc", "id_rsa"):

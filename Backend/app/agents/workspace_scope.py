@@ -6,6 +6,7 @@ from typing import Literal
 from deepagents.backends import FilesystemBackend, StateBackend
 from deepagents.middleware.permissions import FilesystemPermission
 
+from app.workspace.virtual_paths import host_workspace_virtual_deny_patterns
 from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
 
@@ -36,7 +37,8 @@ def create_workspace_permissions(
     *,
     mode: AgentWorkspaceMode,
 ) -> list[FilesystemPermission]:
-    if resolve_workspace_root(workspace_root) is None:
+    root = resolve_workspace_root(workspace_root)
+    if root is None:
         return [
             FilesystemPermission(
                 operations=["read", "write"],
@@ -52,6 +54,15 @@ def create_workspace_permissions(
             mode="deny",
         )
     ]
+    host_path_patterns = host_workspace_virtual_deny_patterns(root)
+    if host_path_patterns:
+        permissions.append(
+            FilesystemPermission(
+                operations=["read", "write"],
+                paths=host_path_patterns,
+                mode="deny",
+            )
+        )
     if mode == "test":
         permissions.extend(
             [

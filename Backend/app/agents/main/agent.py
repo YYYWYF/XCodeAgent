@@ -6,6 +6,7 @@ from app.agents.workspace_scope import (
 )
 from app.tools.ask_user import ask_user
 from app.tools.delete_file import create_delete_file_tool
+from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
 def create_main_agent(model, frontend, data_source, test, workspace_root: str | None = None):
@@ -19,8 +20,7 @@ def create_main_agent(model, frontend, data_source, test, workspace_root: str | 
             "create project-level plans, define API/page/data-source contracts, "
             "coordinate detail confirmation, and delegate implementation and testing when appropriate. "
             "Use ask_user when user input is required before safe planning can continue. "
-            "When workspace filesystem tools are available, use virtual absolute paths "
-            "such as /data.json; they are rooted at the selected workspaceRoot. "
+            f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} "
             "When deleting a file, use delete_file(file_path=\"/path\") with a virtual absolute path. "
             "Do not read or write sensitive files such as .env, .npmrc, or private keys. "
             "Keep responses concise in this minimal demo."
