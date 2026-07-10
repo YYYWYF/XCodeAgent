@@ -8,7 +8,7 @@ After a new application directory is created, XCodeAgent runs a standalone page-
 2. Ask the model for a compact page structure after the user answers those questions.
 3. Show the proposed pages and their purposes to the user for review.
 4. Let the user submit free-form revision feedback and repeatedly update the current proposal.
-5. Update the application workspace's `application.json` with the confirmed menu structure and complete page plan.
+5. Update the application workspace's `application.json` with the confirmed menu structure.
 
 This flow does not call, resume, or modify the existing LangGraph workflow. Questions, page proposals, and confirmed persistence all use the dedicated `/application-page-planning/run` AG-UI SSE endpoint and one page-planning thread id; transient review state stays in the creation UI.
 
@@ -26,7 +26,8 @@ The model receives only application metadata, at most five short question/answer
 
 ## Persistence and Safety
 
-- `application.json` is updated only by the explicit AG-UI `confirm` action. Existing application configuration is preserved; `menus.homeMenuKey` is `default`, same-level page routes become `items`, shared first-level route paths become a `menu` whose `children` are page entries, and `pagePlan` stores the validated full plan plus its confirmation time.
+- `application.json` is updated only by the explicit AG-UI `confirm` action. Existing application configuration is preserved; `menus.homeMenuKey` is `default`, same-level page routes become `items`, and shared first-level route paths become a `menu` whose `children` are page entries. Every menu/page object stores its own `purpose` and `keyFeatures`.
+- Clarification answers and the intermediate `pagePlan` are never persisted. Confirmation also removes stale `pagePlan`, `clarification`, or `clarifications` fields left by an earlier version.
 - Model runs are transported with `@ag-ui/client`, `@ag-ui/core`, AG-UI events, and state snapshots; no handwritten SSE parsing is used.
 - The target is always the fixed filename `application.json` directly under a validated workspace directory; callers cannot provide an arbitrary relative file path.
 - The backend serializes the validated page-plan model instead of persisting raw model text.

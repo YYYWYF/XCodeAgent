@@ -77,6 +77,8 @@ export interface ApplicationMenuItem {
   path: string;
   label: string;
   type: 'menu' | 'page';
+  purpose: string;
+  keyFeatures: string[];
   pageKey?: string;
   children?: ApplicationMenuItem[];
 }

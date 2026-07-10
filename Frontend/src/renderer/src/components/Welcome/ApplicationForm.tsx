@@ -4,7 +4,7 @@ import type { FormInstance } from 'antd'
 import type { ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
 import { initialApplicationDraft, terminalLabels, trackMethodLabels } from './constants'
-import { joinLocalPath, toProjectDirectoryName, validateProjectDirectoryName } from './utils'
+import { joinLocalPath, validateProjectDirectoryName } from './utils'
 
 const { Text, Title } = Typography
 const { TextArea } = Input
@@ -21,13 +21,6 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       form={form}
       initialValues={initialApplicationDraft}
       layout="vertical"
-      onValuesChange={(changedValues: Partial<ApplicationDraft>, allValues) => {
-        if ('appName' in changedValues && !allValues.projectDirectoryName) {
-          form.setFieldsValue({
-            projectDirectoryName: toProjectDirectoryName(changedValues.appName ?? '')
-          })
-        }
-      }}
     >
       <section className={cx('application-form-section')}>
         <Title level={5}>基础信息</Title>

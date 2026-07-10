@@ -15,16 +15,6 @@ export function pathDirname(value: string) {
   return index > 0 ? normalizedValue.slice(0, index) : ''
 }
 
-export function toProjectDirectoryName(value: string) {
-  return (
-    value
-      .trim()
-      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
-      .replace(/\s+/g, '-')
-      .slice(0, 80) || ''
-  )
-}
-
 export function joinLocalPath(parentPath: string, directoryName: string) {
   const parent = parentPath.trim().replace(/[\\/]+$/, '')
   const directory = directoryName.trim()

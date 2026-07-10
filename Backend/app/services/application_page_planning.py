@@ -70,6 +70,8 @@ class ApplicationMenuItem(ApiModel):
     path: str = Field(min_length=1, max_length=160)
     label: str = Field(min_length=1, max_length=100)
     type: Literal["menu", "page"]
+    purpose: str = Field(min_length=1, max_length=500)
+    key_features: list[str] = Field(default_factory=list, max_length=8)
     page_key: str | None = None
     children: list["ApplicationMenuItem"] | None = None
 
@@ -262,8 +264,21 @@ def _menu_item_for_page(
         path=_menu_path(page),
         label=page.name,
         type="page",
+        purpose=page.purpose,
+        key_features=page.key_features,
         page_key=_page_key(page),
     )
+
+
+def _group_key_features(pages: list[ApplicationPageDefinition]) -> list[str]:
+    features: list[str] = []
+    for page in pages:
+        for feature in page.key_features:
+            if feature not in features:
+                features.append(feature)
+            if len(features) == 8:
+                return features
+    return features
 
 
 def _page_plan_menus(plan: ApplicationPagePlan) -> ApplicationMenus:
@@ -298,6 +313,8 @@ def _page_plan_menus(plan: ApplicationPagePlan) -> ApplicationMenus:
                     path=page_path,
                     label=page.name,
                     type="menu",
+                    purpose=page.purpose,
+                    key_features=page.key_features,
                     children=children,
                 )
             )
@@ -315,6 +332,8 @@ def _page_plan_menus(plan: ApplicationPagePlan) -> ApplicationMenus:
                 path=group_key,
                 label=pages[0].name,
                 type="menu",
+                purpose=f"组织{pages[0].name}及相关页面",
+                key_features=_group_key_features(pages),
                 children=[_menu_item_for_page(page) for page in pages],
             )
         )
@@ -437,13 +456,11 @@ def confirm_application_page_plan(
 
     confirmed_at = datetime.now(timezone.utc).isoformat()
     menus = _page_plan_menus(request.plan)
+    for transient_key in ("pagePlan", "clarification", "clarifications"):
+        existing.pop(transient_key, None)
     payload = {
         **existing,
         "menus": menus.model_dump(by_alias=True, exclude_none=True),
-        "pagePlan": {
-            **request.plan.model_dump(by_alias=True),
-            "confirmedAt": confirmed_at,
-        },
     }
     content = f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
     temporary = workspace_root / ".application.json.tmp"
