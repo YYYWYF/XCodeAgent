@@ -22,6 +22,24 @@
   }
 }
 
+.@{class-prefix}-code-diff-close-button.ant-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  color: var(--wb-text);
+  font-size: 16px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+  }
+}
+
 .@{class-prefix}-code-diff-detail-title {
   min-width: 0;
 }
@@ -87,53 +105,95 @@
   background: var(--wb-surface-subtle);
 }
 
-.@{class-prefix}-code-diff-lines {
-  margin: 0;
+.@{class-prefix}-code-diff-view {
   overflow: auto;
-  color: var(--wb-text);
+  --diff-background-color: var(--wb-editor);
+  --diff-text-color: var(--wb-text);
+  --diff-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  --diff-gutter-insert-background-color: color-mix(in srgb, var(--wb-editor) 94%, var(--wb-code-add-text));
+  --diff-gutter-insert-text-color: var(--wb-code-add-text);
+  --diff-gutter-delete-background-color: color-mix(in srgb, var(--wb-editor) 94%, var(--wb-code-delete-text));
+  --diff-gutter-delete-text-color: var(--wb-code-delete-text);
+  --diff-code-insert-background-color: var(--wb-code-add);
+  --diff-code-insert-text-color: var(--wb-code-add-text);
+  --diff-code-delete-background-color: var(--wb-code-delete);
+  --diff-code-delete-text-color: var(--wb-code-delete-text);
+  --diff-code-insert-edit-background-color: color-mix(in srgb, var(--wb-code-add-text) 18%, transparent);
+  --diff-code-delete-edit-background-color: color-mix(in srgb, var(--wb-code-delete-text) 18%, transparent);
+
+  .diff {
+    min-width: 100%;
+    width: max-content;
+    font-size: 12px;
+  }
+
+  .diff-line {
+    line-height: 1.55;
+  }
+
+  .diff-gutter {
+    min-width: 24px;
+    padding: 0 4px;
+    color: var(--wb-text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .diff-unified {
+    col.diff-gutter-col {
+      width: 24px;
+    }
+
+    col.diff-gutter-col:first-child {
+      width: 0;
+    }
+
+    .diff-line > .diff-gutter:first-child {
+      display: none;
+    }
+  }
+
+  .diff-gutter-insert {
+    box-shadow: inset 4px 0 0 var(--wb-code-add-text);
+  }
+
+  .diff-gutter-delete {
+    box-shadow: inset 4px 0 0 var(--wb-code-delete-text);
+  }
+
+  .diff-code {
+    padding: 1px 16px 1px 8px;
+    white-space: pre;
+    word-break: normal;
+  }
+
+}
+
+.@{class-prefix}-workbench-shell[data-theme='light'] .@{class-prefix}-code-diff-view {
+  @import (less) 'highlight.js/styles/github.css';
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] .@{class-prefix}-code-diff-view {
+  @import (less) 'highlight.js/styles/github-dark.css';
+}
+
+.@{class-prefix}-workbench-shell .@{class-prefix}-code-diff-view .diff-code.hljs {
+  display: table-cell;
+  padding: 1px 16px 1px 8px;
+  overflow: visible;
+  color: inherit;
+  background: inherit;
+}
+
+.@{class-prefix}-code-diff-raw {
+  margin: 0;
+  padding: 12px 16px;
+  overflow: auto;
+  color: var(--wb-text-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
   line-height: 1.55;
+  white-space: pre;
   background: var(--wb-editor);
-}
-
-.@{class-prefix}-code-diff-line {
-  display: grid;
-  min-width: max-content;
-  grid-template-columns: 34px minmax(0, 1fr);
-  border-left: 4px solid transparent;
-
-  code {
-    padding: 2px 14px 2px 0;
-    white-space: pre;
-  }
-
-  &.@{class-prefix}-addition {
-    background: var(--wb-code-add);
-    border-left-color: var(--wb-text-secondary);
-  }
-
-  &.@{class-prefix}-deletion {
-    background: var(--wb-code-delete);
-    border-left-color: var(--wb-text);
-  }
-
-  &.@{class-prefix}-hunk {
-    color: var(--wb-text-secondary);
-    background: var(--wb-surface-subtle);
-  }
-
-  &.@{class-prefix}-meta {
-    color: var(--wb-text-secondary);
-    background: var(--wb-surface-subtle);
-  }
-}
-
-.@{class-prefix}-code-diff-line-marker {
-  padding: 2px 8px;
-  color: var(--wb-text-secondary);
-  text-align: center;
-  user-select: none;
 }
 
 .@{class-prefix}-code-diff-empty {

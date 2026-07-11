@@ -1,4 +1,4 @@
-import { CheckCircleOutlined, DesktopOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
 import { Button, Dropdown, Typography } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
@@ -13,15 +13,13 @@ type ChatHeaderProps = {
   actions?: ReactNode
   copy: ChatCopy[EditorMode]
   editorMode: EditorMode
-  onThemeChange: (theme: 'light' | 'dark' | 'system') => void
+  onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
-  themePreference: 'light' | 'dark' | 'system'
   title: string
   workspaceName: string
 }
 
 const themeItems: MenuProps['items'] = [
-  { key: 'system', icon: <DesktopOutlined />, label: '跟随系统' },
   { key: 'light', icon: <SunOutlined />, label: '浅色主题' },
   { key: 'dark', icon: <MoonOutlined />, label: '深色主题' }
 ]
@@ -32,12 +30,11 @@ export default function ChatHeader({
   editorMode,
   onThemeChange,
   theme,
-  themePreference,
   title,
   workspaceName
 }: ChatHeaderProps): ReactElement {
   const handleThemeChange: MenuProps['onClick'] = ({ key }) => {
-    onThemeChange(key as 'light' | 'dark' | 'system')
+    onThemeChange(key as 'light' | 'dark')
   }
 
   return (
@@ -60,7 +57,7 @@ export default function ChatHeader({
             items: themeItems,
             onClick: handleThemeChange,
             selectable: true,
-            selectedKeys: [themePreference]
+            selectedKeys: [theme]
           }}
           overlayClassName={cx('workbench-theme-dropdown', theme)}
           placement="bottomRight"

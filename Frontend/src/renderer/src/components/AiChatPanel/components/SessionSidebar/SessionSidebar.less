@@ -131,6 +131,16 @@
   border-radius: 8px;
   box-shadow: none;
 
+  &:hover {
+    border-color: var(--wb-border-strong);
+  }
+
+  &:focus-within,
+  &.ant-input-affix-wrapper-focused {
+    border-color: var(--wb-focus);
+    box-shadow: 0 0 0 2px var(--wb-surface-hover);
+  }
+
   .ant-input {
     color: var(--wb-text);
     background: transparent;
@@ -185,7 +195,7 @@
   justify-content: space-between;
   gap: 2px;
   color: var(--wb-text);
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 8px;
   transition: background 0.16s ease, color 0.16s ease;
 
@@ -197,7 +207,6 @@
   &.@{class-prefix}-active {
     color: var(--wb-text);
     background: var(--wb-surface-selected);
-    border-color: var(--wb-border);
 
     .@{class-prefix}-session-item-meta {
       color: var(--wb-text-secondary);

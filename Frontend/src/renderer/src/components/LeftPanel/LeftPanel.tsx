@@ -10,9 +10,8 @@ type Props = {
   application: ApplicationConfig;
   editorMode: EditorMode;
   onReturnWelcome: () => void;
-  onThemeChange: (theme: 'light' | 'dark' | 'system') => void;
+  onThemeChange: (theme: 'light' | 'dark') => void;
   theme: 'light' | 'dark';
-  themePreference: 'light' | 'dark' | 'system';
 };
 
 export default function LeftPanel({
@@ -21,7 +20,6 @@ export default function LeftPanel({
   onReturnWelcome,
   onThemeChange,
   theme,
-  themePreference,
 }: Props) {
   return (
     <div className={cx('left-panel-wrapper')}>
@@ -33,7 +31,6 @@ export default function LeftPanel({
             onReturnWelcome={onReturnWelcome}
             onThemeChange={onThemeChange}
             theme={theme}
-            themePreference={themePreference}
           />
         </div>
       </Sider>

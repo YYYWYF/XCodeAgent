@@ -48,8 +48,10 @@
     "compressing": "^1.10.3",
     "electron-updater": "^6.3.9",
     "fs-extra": "^11.3.5",
+    "highlight.js": "^11.11.1",
     "lodash": "^4.17.21",
     "react": "18.2.0",
+    "react-diff-view": "^3.3.3",
     "react-dom": "18.2.0",
     "react-router": "^6.8.2",
     "react-router-dom": "^6.8.2"

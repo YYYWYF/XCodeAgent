@@ -1,5 +1,4 @@
 import {
-  DesktopOutlined,
   MoonOutlined,
   QuestionCircleOutlined,
   SettingOutlined,
@@ -7,7 +6,7 @@ import {
 } from '@ant-design/icons'
 import { Button, Dropdown, message, Tooltip } from 'antd'
 import type { MenuProps } from 'antd'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   CreateApplicationAction,
   OpenWorkspaceAction,
@@ -25,43 +24,26 @@ type Props = {
 }
 
 type WelcomeTheme = 'dark' | 'light'
-type ThemePreference = WelcomeTheme | 'system'
 
 const THEME_PREFERENCE_KEY = 'xcode-agent-theme-preference'
 
 const themeItems: MenuProps['items'] = [
-  { key: 'system', icon: <DesktopOutlined />, label: '跟随系统' },
   { key: 'light', icon: <SunOutlined />, label: '浅色主题' },
   { key: 'dark', icon: <MoonOutlined />, label: '深色主题' }
 ]
 
-function getSystemTheme(): WelcomeTheme {
-  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
-}
-
-function getThemePreference(): ThemePreference {
+function getTheme(): WelcomeTheme {
   const storedPreference = window.localStorage.getItem(THEME_PREFERENCE_KEY)
-  return storedPreference === 'light' || storedPreference === 'dark' ? storedPreference : 'system'
+  return storedPreference === 'light' || storedPreference === 'dark' ? storedPreference : 'light'
 }
 
 export default function WelcomePage({ onOpenApplication }: Props): JSX.Element {
-  const [themePreference, setThemePreference] = useState<ThemePreference>(getThemePreference)
-  const [systemTheme, setSystemTheme] = useState<WelcomeTheme>(getSystemTheme)
-  const theme = themePreference === 'system' ? systemTheme : themePreference
-
-  useEffect(() => {
-    const colorScheme = window.matchMedia('(prefers-color-scheme: light)')
-    const syncTheme = (event: MediaQueryListEvent): void => {
-      setSystemTheme(event.matches ? 'light' : 'dark')
-    }
-    colorScheme.addEventListener('change', syncTheme)
-    return () => colorScheme.removeEventListener('change', syncTheme)
-  }, [])
+  const [theme, setTheme] = useState<WelcomeTheme>(getTheme)
 
   const handleThemeChange: MenuProps['onClick'] = ({ key }) => {
-    const nextPreference = key as ThemePreference
-    setThemePreference(nextPreference)
-    window.localStorage.setItem(THEME_PREFERENCE_KEY, nextPreference)
+    const nextTheme = key as WelcomeTheme
+    setTheme(nextTheme)
+    window.localStorage.setItem(THEME_PREFERENCE_KEY, nextTheme)
   }
 
   return (
@@ -82,7 +64,7 @@ export default function WelcomePage({ onOpenApplication }: Props): JSX.Element {
                 items: themeItems,
                 onClick: handleThemeChange,
                 selectable: true,
-                selectedKeys: [themePreference]
+                selectedKeys: [theme]
               }}
               overlayClassName={cx('welcome-theme-dropdown', theme)}
               placement="bottomRight"

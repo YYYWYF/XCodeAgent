@@ -1,11 +1,33 @@
 import { CloseOutlined, CodeOutlined, FileTextOutlined } from '@ant-design/icons';
 import { Button, Empty, Tag, Typography } from 'antd';
-import { useMemo, type ReactElement } from 'react';
+import hljs from 'highlight.js/lib/core';
+import bash from 'highlight.js/lib/languages/bash';
+import css from 'highlight.js/lib/languages/css';
+import java from 'highlight.js/lib/languages/java';
+import javascript from 'highlight.js/lib/languages/javascript';
+import json from 'highlight.js/lib/languages/json';
+import python from 'highlight.js/lib/languages/python';
+import sql from 'highlight.js/lib/languages/sql';
+import typescript from 'highlight.js/lib/languages/typescript';
+import xml from 'highlight.js/lib/languages/xml';
+import { useEffect, useMemo, useRef, type ReactElement, type ReactNode } from 'react';
+import { Diff, parseDiff, type FileData, type GutterOptions } from 'react-diff-view';
+import 'react-diff-view/style/index.css';
 import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../../../typings';
 import { cx } from '../../../../utils';
 import './CodeDiffDetailPanel.less';
 
 const { Text, Title } = Typography;
+
+hljs.registerLanguage('bash', bash);
+hljs.registerLanguage('css', css);
+hljs.registerLanguage('java', java);
+hljs.registerLanguage('javascript', javascript);
+hljs.registerLanguage('json', json);
+hljs.registerLanguage('python', python);
+hljs.registerLanguage('sql', sql);
+hljs.registerLanguage('typescript', typescript);
+hljs.registerLanguage('xml', xml);
 
 type Props = {
   codeChanges: WorkspaceCodeChangeSet;
@@ -26,6 +48,10 @@ export default function CodeDiffDetailPanel({
 }: Props): ReactElement {
   const groupedFiles = useMemo(() => groupCodeChanges(codeChanges.files), [codeChanges.files]);
   const selectedFile = groupedFiles.find((file) => file.path === selectedPath) ?? groupedFiles[0];
+  const parsedChanges = useMemo(
+    () => selectedFile?.changes.map((change) => parseChangeDiff(change)) ?? [],
+    [selectedFile],
+  );
 
   return (
     <section className={cx('code-diff-detail-panel')}>
@@ -46,7 +72,13 @@ export default function CodeDiffDetailPanel({
             )}
           </Text>
         </div>
-        <Button aria-label="关闭代码变更详情" icon={<CloseOutlined />} onClick={onClose} type="text" />
+        <Button
+          aria-label="关闭代码变更详情"
+          className={cx('code-diff-close-button')}
+          icon={<CloseOutlined />}
+          onClick={onClose}
+          type="text"
+        />
       </header>
 
       <div className={cx('code-diff-body')}>
@@ -77,15 +109,10 @@ export default function CodeDiffDetailPanel({
                   <div className={cx('code-diff-empty')}>
                     <Text type="secondary">Binary file change has no textual diff.</Text>
                   </div>
+                ) : parsedChanges[index].length > 0 ? (
+                  <HighlightedDiff files={parsedChanges[index]} path={selectedFile.path} />
                 ) : change.diff ? (
-                  <pre className={cx('code-diff-lines')}>
-                    {parseDiffLines(change.diff).map((line, lineIndex) => (
-                      <div className={cx('code-diff-line', line.kind)} key={`${lineIndex}-${line.text}`}>
-                        <span className={cx('code-diff-line-marker')}>{line.marker}</span>
-                        <code>{line.text}</code>
-                      </div>
-                    ))}
-                  </pre>
+                  <pre className={cx('code-diff-raw')}>{change.diff}</pre>
                 ) : (
                   <div className={cx('code-diff-empty')}>
                     <Text type="secondary">此文件没有文本行级变更。</Text>
@@ -113,12 +140,6 @@ type GroupedChange = {
   changes: WorkspaceCodeChangeFile[];
 };
 
-type DiffLine = {
-  kind: 'addition' | 'deletion' | 'context';
-  marker: string;
-  text: string;
-};
-
 function groupCodeChanges(files: WorkspaceCodeChangeFile[]): GroupedChange[] {
   const grouped = new Map<string, GroupedChange>();
   files.forEach((file) => {
@@ -143,56 +164,94 @@ function groupCodeChanges(files: WorkspaceCodeChangeFile[]): GroupedChange[] {
   return Array.from(grouped.values());
 }
 
-function parseDiffLines(diff: string): DiffLine[] {
-  const lines = diff.split('\n');
-  const parsed: DiffLine[] = [];
-  const hasUnifiedHeader =
-    lines.length >= 2 &&
-    isUnifiedFileHeader(lines[0], '---') &&
-    isUnifiedFileHeader(lines[1], '+++');
+type HighlightedDiffProps = {
+  files: FileData[];
+  path: string;
+};
 
-  lines.forEach((line, index) => {
-    if (index === lines.length - 1 && line === '') {
-      return;
-    }
-    if (isUnifiedDiffMetadata(line, index, hasUnifiedHeader)) {
-      return;
-    }
-    if (line.startsWith('+')) {
-      parsed.push({ kind: 'addition', marker: '+', text: line.slice(1) });
-      return;
-    }
-    if (line.startsWith('-')) {
-      parsed.push({ kind: 'deletion', marker: '-', text: line.slice(1) });
-      return;
-    }
-    parsed.push({
-      kind: 'context',
-      marker: line ? ' ' : '',
-      text: line.startsWith(' ') ? line.slice(1) : line,
+function HighlightedDiff({ files, path }: HighlightedDiffProps): ReactElement {
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const language = languageFromPath(path);
+    rootRef.current?.querySelectorAll<HTMLElement>('.diff-code').forEach((element) => {
+      const code = element.textContent ?? '';
+      element.innerHTML = language
+        ? hljs.highlight(code, { language, ignoreIllegals: true }).value
+        : hljs.highlightAuto(code).value;
+      element.classList.add('hljs');
     });
-  });
+  }, [files, path]);
 
-  return parsed;
-}
-
-function isUnifiedDiffMetadata(
-  line: string,
-  index: number,
-  hasUnifiedHeader: boolean,
-): boolean {
-  if (line.startsWith('@@')) return true;
-  if (hasUnifiedHeader && index < 2) return true;
-  return line.startsWith('--- a/') || line.startsWith('+++ b/');
-}
-
-function isUnifiedFileHeader(line: string | undefined, prefix: '---' | '+++'): boolean {
-  if (!line?.startsWith(prefix)) return false;
-  const filePart = line.slice(prefix.length);
   return (
-    filePart.startsWith(' ') ||
-    filePart.startsWith('a/') ||
-    filePart.startsWith('b/') ||
-    /^\S+\.\w+/.test(filePart)
+    <div className={cx('code-diff-view')} ref={rootRef}>
+      {files.map((file, fileIndex) => (
+        <Diff
+          diffType={file.type}
+          hunks={file.hunks}
+          key={`${file.oldPath}-${file.newPath}-${fileIndex}`}
+          renderGutter={renderSingleGutter}
+          viewType="unified"
+        />
+      ))}
+    </div>
   );
+}
+
+function renderSingleGutter({ change, side }: GutterOptions): ReactNode {
+  if (side === 'old') return null;
+  if (change.type === 'normal') return change.newLineNumber;
+  return change.lineNumber;
+}
+
+function parseChangeDiff(change: WorkspaceCodeChangeFile): FileData[] {
+  if (!change.diff) return [];
+  try {
+    return parseDiff(normalizeUnifiedDiff(change));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeUnifiedDiff(change: WorkspaceCodeChangeFile): string {
+  if (/^(?:diff --git|--- |@@ )/m.test(change.diff)) return change.diff;
+
+  const lines = change.diff.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  const oldLines = lines.filter((line) => !line.startsWith('+')).length;
+  const newLines = lines.filter((line) => !line.startsWith('-')).length;
+  const oldPath = change.changeType === 'added' ? '/dev/null' : `a/${change.path}`;
+  const newPath = change.changeType === 'deleted' ? '/dev/null' : `b/${change.path}`;
+  const oldStart = oldLines === 0 ? 0 : 1;
+  const newStart = newLines === 0 ? 0 : 1;
+
+  return [
+    `--- ${oldPath}`,
+    `+++ ${newPath}`,
+    `@@ -${oldStart},${oldLines} +${newStart},${newLines} @@`,
+    ...lines,
+    '',
+  ].join('\n');
+}
+
+function languageFromPath(path: string): string | undefined {
+  const extension = path.split('.').pop()?.toLowerCase();
+  const languages: Record<string, string> = {
+    bash: 'bash',
+    css: 'css',
+    htm: 'xml',
+    html: 'xml',
+    java: 'java',
+    js: 'javascript',
+    json: 'json',
+    jsx: 'javascript',
+    less: 'css',
+    py: 'python',
+    sh: 'bash',
+    sql: 'sql',
+    ts: 'typescript',
+    tsx: 'typescript',
+    xml: 'xml',
+  };
+  return extension ? languages[extension] : undefined;
 }

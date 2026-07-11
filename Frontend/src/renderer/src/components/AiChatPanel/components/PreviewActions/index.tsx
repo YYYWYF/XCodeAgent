@@ -22,12 +22,14 @@ type PreviewActionsProps = {
   embeddedPreviewOpen: boolean
   onCloseEmbeddedPreview: () => void
   onPreviewAction: MenuProps['onClick']
+  theme: 'light' | 'dark'
 }
 
 export default function PreviewActions({
   embeddedPreviewOpen,
   onCloseEmbeddedPreview,
-  onPreviewAction
+  onPreviewAction,
+  theme
 }: PreviewActionsProps): ReactElement {
   return (
     <div className={cx('preview-actions')}>
@@ -39,7 +41,11 @@ export default function PreviewActions({
           type="text"
         />
       )}
-      <Dropdown menu={{ items: previewMenuItems, onClick: onPreviewAction }} trigger={['click']}>
+      <Dropdown
+        menu={{ items: previewMenuItems, onClick: onPreviewAction }}
+        overlayClassName={cx('preview-actions-dropdown', theme)}
+        trigger={['click']}
+      >
         <Button icon={<DesktopOutlined />} type="primary">
           预览应用 <DownOutlined />
         </Button>

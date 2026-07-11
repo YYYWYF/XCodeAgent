@@ -275,7 +275,6 @@ def _code_change_payload_from_snapshots(
             tofile=path,
         )
     )
-    display_diff = _changed_lines_only_diff(raw_diff)
     stats = _diff_stats(raw_diff)
     digest = hashlib.sha256(
         f"{source_tool}:{tool}:{path}:{change_type}:{raw_diff}".encode("utf-8")
@@ -286,8 +285,8 @@ def _code_change_payload_from_snapshots(
         "changeType": change_type,
         "additions": stats["additions"],
         "deletions": stats["deletions"],
-        "diff": _truncate(display_diff, CODE_CHANGE_DIFF_LIMIT),
-        "truncated": len(display_diff) > CODE_CHANGE_DIFF_LIMIT,
+        "diff": _truncate(raw_diff, CODE_CHANGE_DIFF_LIMIT),
+        "truncated": len(raw_diff) > CODE_CHANGE_DIFF_LIMIT,
         "binary": binary,
         "tool": tool,
         "sourceTool": source_tool,
@@ -302,20 +301,6 @@ def _valid_change_set(value: dict[str, Any]) -> bool:
         and isinstance(value.get("files"), list)
         and isinstance(value.get("summary"), dict)
     )
-
-
-def _changed_lines_only_diff(diff: str) -> str:
-    """Remove unified diff metadata and unchanged context from frontend diffs."""
-
-    lines: list[str] = []
-    for index, line in enumerate(diff.splitlines(keepends=True)):
-        if index < 2 and (line.startswith("--- ") or line.startswith("+++ ")):
-            continue
-        if line.startswith("@@"):
-            continue
-        if line.startswith("+") or line.startswith("-"):
-            lines.append(line)
-    return "".join(lines)
 
 
 def _safe_int(value: Any) -> int:

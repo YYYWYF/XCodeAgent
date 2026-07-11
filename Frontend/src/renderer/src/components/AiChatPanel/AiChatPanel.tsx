@@ -24,9 +24,8 @@ type Props = {
   application: ApplicationConfig
   editorMode: EditorMode
   onReturnWelcome: () => void
-  onThemeChange: (theme: 'light' | 'dark' | 'system') => void
+  onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
-  themePreference: 'light' | 'dark' | 'system'
 }
 
 export default function AiChatPanel({
@@ -34,8 +33,7 @@ export default function AiChatPanel({
   editorMode,
   onReturnWelcome,
   onThemeChange,
-  theme,
-  themePreference
+  theme
 }: Props): ReactElement {
   const [previewError, setPreviewError] = useState('')
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
@@ -166,6 +164,7 @@ export default function AiChatPanel({
                   embeddedPreviewOpen={embeddedPreviewOpen}
                   onCloseEmbeddedPreview={() => setRightPanel(undefined)}
                   onPreviewAction={handlePreviewAction}
+                  theme={theme}
                 />
               ) : undefined
             }
@@ -173,7 +172,6 @@ export default function AiChatPanel({
             editorMode={editorMode}
             onThemeChange={onThemeChange}
             theme={theme}
-            themePreference={themePreference}
             title={activeSessionTitle || '新对话'}
             workspaceName={application.name}
           />
