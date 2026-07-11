@@ -117,6 +117,7 @@ def _data_source_task(data_source: dict[str, Any]) -> dict[str, Any]:
         "source_ref": {
             "type": "data_source",
             "id": data_source["id"],
+            "schema_refs": data_source.get("schema_refs", []),
         },
         "allowed_paths": [
             "app/backend/**",
@@ -156,6 +157,14 @@ def _frontend_task(page_detail_plan: dict[str, Any]) -> dict[str, Any]:
             "type": "page_detail_plan",
             "id": page_detail_plan["id"],
             "page_id": page_detail_plan["page_id"],
+            "endpoint_ids": [
+                dependency.get("endpoint_id")
+                for dependency in page_detail_plan.get("page_dependencies", {}).get(
+                    "endpoint_dependencies", []
+                )
+                if isinstance(dependency, dict) and dependency.get("endpoint_id")
+            ],
+            "response_bindings": page_detail_plan.get("response_bindings", []),
         },
         "allowed_paths": [
             "app/frontend/**",

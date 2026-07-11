@@ -416,7 +416,7 @@ def _data_source_spec_draft(project_plan: dict, data_source_id: str) -> dict:
         "name": source.get("name", data_source_id),
         "type": source.get("type"),
         "entities": source.get("entities", []),
-        "schema": source.get("schema", {}),
+        "schema_refs": source.get("schema_refs", []),
         "seed_strategy": source.get("seed_strategy"),
         "api_contracts": [
             contract

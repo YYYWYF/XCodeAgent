@@ -3,6 +3,11 @@ from __future__ import annotations
 import unittest
 
 from app.services.project_plan import create_project_plan
+from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.page_detail_plan import (
+    create_page_detail_plan,
+    create_page_spec_from_project_plan,
+)
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import render_project_plan_markdown
 
@@ -133,6 +138,111 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertIn("## 整体需求验收标准", markdown)
         self.assertIn("## 页面与数据源依赖", markdown)
         self.assertIn("## 权限体系", markdown)
+
+    def test_project_plan_generates_complete_api_endpoint_contracts(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+
+        plan = create_project_plan(spec)
+        dependency = next(
+            item
+            for item in plan["page_data_dependencies"]
+            if item["endpoint_dependencies"]
+        )
+        contract = next(
+            item
+            for item in plan["api_contracts"]
+            if item["id"] == dependency["api_contract_ids"][0]
+        )
+        endpoint = contract["endpoints"][0]
+
+        self.assertTrue(endpoint["id"])
+        self.assertTrue(endpoint["path"].startswith("/api/"))
+        self.assertIsInstance(endpoint["parameters"], list)
+        self.assertIn(endpoint["response_schema_ref"], contract["schemas"])
+        create_endpoint = next(
+            candidate
+            for candidate in contract["endpoints"]
+            if candidate["id"].endswith(".create")
+        )
+        self.assertIn(create_endpoint["request_schema_ref"], contract["schemas"])
+        self.assertNotIn("schema", plan["data_sources"][0])
+        self.assertTrue(plan["data_sources"][0]["schema_refs"])
+        self.assertTrue(dependency["endpoint_dependencies"])
+        self.assertEqual(
+            dependency["endpoint_dependencies"][0]["api_contract_id"],
+            contract["id"],
+        )
+
+    def test_project_plan_normalizes_agent_endpoint_contract_shapes(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+        plan = create_project_plan(
+            spec,
+            agent_plan={
+                "api_contracts": [
+                    {
+                        "id": "inventory_api",
+                        "data_source_id": "inventory_management_source",
+                        "resource": "Inventory",
+                        "base_path": "/api/inventory",
+                        "schemas": {
+                            "Inventory": {
+                                "type": "object",
+                                "properties": {"id": {"type": "string"}},
+                                "required": ["id"],
+                            }
+                        },
+                        "endpoints": [
+                            {
+                                "id": "inventory.search",
+                                "method": "get",
+                                "path": "/api/inventory",
+                                "response_schema_ref": "Inventory",
+                            }
+                        ],
+                    }
+                ]
+            },
+            authoritative_agent_plan=True,
+        )
+
+        endpoint = plan["api_contracts"][0]["endpoints"][0]
+        self.assertEqual(endpoint["method"], "GET")
+        self.assertEqual(endpoint["path"], "/api/inventory")
+        self.assertEqual(endpoint["response_schema_ref"], "Inventory")
+        self.assertEqual(validate_api_contract_consistency(plan), [])
+
+    def test_contract_consistency_rejects_fields_defined_by_data_source(self) -> None:
+        plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
+        plan["data_sources"][0]["schema"] = {"unexpected": "field"}
+
+        errors = validate_api_contract_consistency(plan)
+
+        self.assertTrue(any("duplicates contract fields" in error for error in errors))
+
+    def test_contract_consistency_rejects_unknown_page_response_field(self) -> None:
+        plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
+        page_spec = create_page_spec_from_project_plan(
+            plan,
+            "inventory_management_list_page",
+        )
+        page_detail = create_page_detail_plan(
+            plan,
+            page_spec,
+            agent_detail_plan={
+                "response_bindings": [
+                    {
+                        "endpoint_id": "inventory_management_source_api.list",
+                        "source_path": "items[].field_not_in_contract",
+                        "page_field": "invalid",
+                    }
+                ]
+            },
+        )
+        plan["page_detail_plans"] = [page_detail]
+
+        errors = validate_api_contract_consistency(plan)
+
+        self.assertTrue(any("unknown response field" in error for error in errors))
 
     def test_project_plan_tolerates_agent_string_items(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")

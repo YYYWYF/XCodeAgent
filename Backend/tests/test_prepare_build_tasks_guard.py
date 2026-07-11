@@ -135,6 +135,30 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
 
+    def test_prepare_build_tasks_blocks_inconsistent_api_contract(self) -> None:
+        project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
+        project_plan["confirmation_status"] = "confirmed"
+        project_plan["data_sources"][0]["schema"] = {"field": "not allowed"}
+
+        with patch(
+            "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
+            side_effect=AssertionError("must not generate tasks with contract drift"),
+        ):
+            result = prepare_build_tasks(
+                {
+                    "request": "开始任务拆分",
+                    "project_plan": project_plan,
+                    "timeline": [],
+                }
+            )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["clarification"]["mode"],
+            "api_contract_consistency_error",
+        )
+        self.assertTrue(result["clarification"]["errors"])
+
 
 if __name__ == "__main__":
     unittest.main()

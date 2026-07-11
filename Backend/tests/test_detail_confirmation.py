@@ -35,7 +35,8 @@ class DetailConfirmationTests(unittest.TestCase):
         )
 
         self.assertEqual(page_detail["interactions"], ["仅查看，不允许删除"])
-        self.assertTrue(data_detail["schema"]["fields"][0]["unique"])
+        self.assertNotIn("schema", data_detail)
+        self.assertTrue(data_detail["schema_refs"])
 
     def test_page_spec_defaults_when_page_description_is_missing(self) -> None:
         project_plan = create_project_plan(
@@ -104,6 +105,32 @@ class DetailConfirmationTests(unittest.TestCase):
 
         self.assertIn("筛选区", markdown)
         self.assertIn("搜索", markdown)
+
+    def test_page_detail_only_carries_the_page_endpoint_dependencies(self) -> None:
+        project_plan = create_project_plan(
+            create_requirement_spec("创建一个库存管理系统")
+        )
+        page_spec = create_page_spec_from_project_plan(
+            project_plan,
+            "inventory_management_list_page",
+        )
+        page_spec["page_dependencies"]["endpoint_dependencies"] = [
+            {
+                "api_contract_id": "inventory_management_source_api",
+                "endpoint_id": "inventory_management_source_api.list",
+                "method": "GET",
+                "url": "/api/inventory-management",
+                "usage": "page_load",
+                "required": True,
+            }
+        ]
+
+        page_detail = create_page_detail_plan(project_plan, page_spec)
+
+        endpoints = page_detail["data_sources"][0]["endpoints"]
+        self.assertEqual([endpoint["id"] for endpoint in endpoints], [
+            "inventory_management_source_api.list"
+        ])
 
     def test_detail_confirmation_asks_user_to_select_target_first(self) -> None:
         project_plan = create_project_plan(

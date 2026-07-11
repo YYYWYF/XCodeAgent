@@ -127,15 +127,17 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 `project_planning` 生成计划书后必须进入 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点才输出 `status = completed` 并进入 `detail_confirmation`；如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
 
+API 契约在此阶段作为前后端共享的唯一字段事实来源生成。为保持简约和可扩展，每个 contract 只包含资源级 `schemas`、稳定 endpoint id、HTTP method、path、参数、请求/响应 schema 引用、错误码和权限要求。`data_sources` 只能保存 `schema_refs`，不得复制字段；`page_data_dependencies` 只能保存 endpoint 引用；页面详细设计只能通过 `response_bindings` 绑定已声明响应字段。`detail_confirmation` 若发现字段或接口缺口，应提出 ProjectPlan 调整并经过确认，不能自行补字段或发明独立接口。
+
 `ProjectPlan` 至少包含：
 
 - `requirements_overview`：需求概述、应用目标、用户角色、功能模块、业务流程和验收重点；
 - `project_acceptance_criteria`：整个需求在项目完成时必须满足的验收标准；
 - `architecture`：前端、后端、数据和测试策略；
-- `api_contracts`：资源、路径、方法、响应结构；
+- `api_contracts`：唯一的业务字段 Schema、资源 endpoint 和输入输出 Schema 引用；
 - `frontend_pages`：页面路径、模块归属、数据依赖、状态和权限；
-- `data_sources`：数据源类型、实体、初版字段模型和 Seed 策略；
-- `page_data_dependencies`：页面、数据源和 API 契约之间的显式依赖关系；
+- `data_sources`：数据源类型、实体、`schema_refs` 和 Seed 策略，不重复保存字段；
+- `page_data_dependencies`：页面、数据源、API 契约和具体 endpoint 之间的显式引用关系；
 - `permission_model`：角色、页面访问规则、操作权限和默认权限策略；
 - `task_inputs.frontend`：后续前端任务拆分输入；
 - `task_inputs.data_source`：后续数据源任务拆分输入；
@@ -151,7 +153,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 - 通过通用 `ask_user` 让用户选择一个页面或数据源进入详细设计；
 - 引导用户确认该页面的 `PageSpec`；
 - 确认页面布局、组件、交互、权限和异常状态；
-- 确认数据模型、关系、校验规则和 API 映射；
+- 核对数据模型、关系、校验规则和 API 映射；如需字段变更则返回 ProjectPlan 契约调整；
 - 生成单页面或单数据源的执行计划；
 - 等待用户逐项确认；
 - 将确认后的页面详细设计写回 `ProjectPlan` 和总体计划书 Markdown，保证 Graph State 与规划文档一致。
@@ -160,7 +162,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 当前实现通过 `tools/ask_user.py` 生成通用用户确认 payload。首次进入该节点时，节点从 `ProjectPlan` 读取页面清单和数据源清单，要求用户选择具体设计对象；前端提交回答时携带 `resumeState` 和本轮结构化答案，后端恢复 `project_plan`、选择对象以及页面或数据源设计草稿。
 
-以选择页面为例，节点会读取 `ProjectPlan.frontend_pages` 中该页面的描述，并结合 `api_contracts`、`page_data_dependencies` 和相关 `data_sources` 形成单页面 `PageSpec` 草稿。`PageSpec` 覆盖页面目标、基本布局、页面交互、数据来源、页面权限和页面依赖。若这些方面仍缺失或不清晰，节点继续通过 `ask_user` 询问用户；信息足够后，`agents/main/page_designer.py` 直接调用 `create_chat_model()`，基于用户确认后的 `PageSpec` 生成页面详细设计，并写入待确认的 `pending_project_plan`。该调用不绑定工具、不创建 DeepAgent，也不读取或修改 workspace。若用户选择数据源，当前节点会基于 `ProjectPlan.data_sources`、相关 API 契约和依赖页面生成基础 `data_source_detail_plans`，同样先写入 `pending_project_plan`。
+以选择页面为例，节点会读取 `ProjectPlan.frontend_pages` 中该页面的描述，并结合 `api_contracts`、`page_data_dependencies` 和相关 `data_sources` 形成单页面 `PageSpec` 草稿。`PageSpec` 覆盖页面目标、基本布局、页面交互、数据来源、页面权限和页面依赖。若这些方面仍缺失或不清晰，节点继续通过 `ask_user` 询问用户；信息足够后，`agents/main/page_designer.py` 直接调用 `create_chat_model()`，基于用户确认后的 `PageSpec` 生成页面详细设计，并写入待确认的 `pending_project_plan`。页面展示字段通过 `response_bindings` 引用 endpoint 响应字段，不能在页面计划中新增字段。该调用不绑定工具、不创建 DeepAgent，也不读取或修改 workspace。若用户选择数据源，当前节点会基于 `ProjectPlan.data_sources.schema_refs`、相关 API 契约和依赖页面生成基础 `data_source_detail_plans`；数据源详细计划不得复制或覆盖字段 Schema。
 
 凡是 `detail_confirmation` 对 `ProjectPlan` 产生页面详细设计、数据源详细设计或其他计划调整，都必须进入 `project_plan_adjustment_confirmation` 等待状态。只有用户确认后，`pending_project_plan` 才会提升为正式 `project_plan`，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
@@ -175,6 +177,8 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 - 页面权限；
 - 页面依赖；
 - 页面级验收标准。
+
+进入 `prepare_build_tasks` 前必须执行确定性的 API 契约一致性检查，并在 `integration_test.api_contract_check` 再次执行：数据源不得包含独立 `schema`；所有 schema/endpoint 引用必须存在；页面 `response_bindings.source_path` 必须来自所依赖 endpoint 的响应 Schema；写接口必须声明请求 Schema，非删除接口必须声明响应 Schema。任何错误都会阻止任务拆分或令质量门禁失败。
 
 ### `prepare_build_tasks`
 

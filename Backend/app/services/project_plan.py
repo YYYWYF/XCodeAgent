@@ -3,6 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from app.services.api_contracts import (
+    endpoint_dependencies_for_contracts,
+    normalize_api_contracts,
+    schema_refs_for_data_source,
+)
+
 
 def _agent_section(agent_plan: dict[str, Any] | None, key: str) -> Any:
     if not isinstance(agent_plan, dict):
@@ -73,32 +79,21 @@ def _string_items(value: Any) -> list[str]:
 def _normalize_data_sources(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for item in items:
+        source = {key: value for key, value in item.items() if key != "schema"}
         normalized.append(
             {
-                **item,
+                **source,
                 "name": str(item.get("name") or item.get("id") or "数据源"),
                 "type": str(item.get("type") or "mock"),
                 "entities": _string_items(item.get("entities")),
-                "schema": (
-                    item.get("schema") if isinstance(item.get("schema"), dict) else {}
-                ),
+                "schema_refs": _string_items(item.get("schema_refs")),
             }
         )
     return normalized
 
 
 def _normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized = []
-    for item in items:
-        normalized.append(
-            {
-                **item,
-                "resource": str(item.get("resource") or item.get("id") or "Resource"),
-                "base_path": str(item.get("base_path") or "/api/resource"),
-                "endpoints": _dict_items(item.get("endpoints")),
-            }
-        )
-    return normalized
+    return normalize_api_contracts(items)
 
 
 def _normalize_frontend_pages(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -135,34 +130,120 @@ def _route_base(data_source: dict[str, Any]) -> str:
     return source_id.replace("_", "-")
 
 
-def _api_contracts(spec: dict[str, Any]) -> list[dict[str, Any]]:
+def _api_contracts(data_sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     contracts: list[dict[str, Any]] = []
-    for data_source in spec["data_sources"]:
+    for data_source in data_sources:
         entity = _entity_name_from_source(data_source)
         route_base = _route_base(data_source)
+        entity_schema = _entity_schema()
+        create_schema = _write_schema(entity_schema, partial=False)
+        update_schema = _write_schema(entity_schema, partial=True)
         contracts.append(
             {
                 "id": f"{data_source['id']}_api",
                 "data_source_id": data_source["id"],
                 "resource": entity,
                 "base_path": f"/api/{route_base}",
+                "authentication": {"required": True, "roles": ["admin", "user"]},
+                "schemas": {
+                    entity: entity_schema,
+                    f"{entity}CreateInput": create_schema,
+                    f"{entity}UpdateInput": update_schema,
+                    f"{entity}ListOutput": {
+                        "type": "object",
+                        "properties": {
+                            "items": {"type": "array", "items": {"$ref": entity}},
+                            "total": {"type": "integer"},
+                            "page": {"type": "integer"},
+                            "page_size": {"type": "integer"},
+                        },
+                        "required": ["items", "total", "page", "page_size"],
+                    },
+                },
                 "endpoints": [
                     {
+                        "id": f"{data_source['id']}_api.list",
                         "method": "GET",
                         "path": f"/api/{route_base}",
-                        "description": f"查询{data_source['name']}列表。",
-                        "response": {"items": [entity], "total": "number"},
+                        "summary": f"查询{data_source['name']}列表。",
+                        "parameters": [
+                            {"name": "page", "in": "query", "required": False, "schema": {"type": "integer", "default": 1}},
+                            {"name": "page_size", "in": "query", "required": False, "schema": {"type": "integer", "default": 20}},
+                        ],
+                        "response_schema_ref": f"{entity}ListOutput",
+                        "error_codes": ["UNAUTHORIZED"],
                     },
                     {
+                        "id": f"{data_source['id']}_api.detail",
                         "method": "GET",
                         "path": f"/api/{route_base}/{{id}}",
-                        "description": f"查询单条{data_source['name']}详情。",
-                        "response": entity,
+                        "summary": f"查询单条{data_source['name']}详情。",
+                        "parameters": [
+                            {"name": "id", "in": "path", "required": True, "schema": {"type": "string"}},
+                        ],
+                        "response_schema_ref": entity,
+                        "error_codes": ["NOT_FOUND"],
+                    },
+                    {
+                        "id": f"{data_source['id']}_api.create",
+                        "method": "POST",
+                        "path": f"/api/{route_base}",
+                        "summary": f"创建{data_source['name']}。",
+                        "request_schema_ref": f"{entity}CreateInput",
+                        "response_schema_ref": entity,
+                        "error_codes": ["VALIDATION_ERROR"],
+                    },
+                    {
+                        "id": f"{data_source['id']}_api.update",
+                        "method": "PATCH",
+                        "path": f"/api/{route_base}/{{id}}",
+                        "summary": f"更新{data_source['name']}。",
+                        "parameters": [
+                            {"name": "id", "in": "path", "required": True, "schema": {"type": "string"}},
+                        ],
+                        "request_schema_ref": f"{entity}UpdateInput",
+                        "response_schema_ref": entity,
+                        "error_codes": ["VALIDATION_ERROR", "NOT_FOUND"],
+                    },
+                    {
+                        "id": f"{data_source['id']}_api.delete",
+                        "method": "DELETE",
+                        "path": f"/api/{route_base}/{{id}}",
+                        "summary": f"删除{data_source['name']}。",
+                        "parameters": [
+                            {"name": "id", "in": "path", "required": True, "schema": {"type": "string"}},
+                        ],
+                        "error_codes": ["NOT_FOUND"],
                     },
                 ],
             }
         )
     return contracts
+
+
+def _entity_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "name": {"type": "string"},
+            "status": {"type": "string"},
+            "created_at": {"type": "string", "format": "date-time"},
+        },
+        "required": ["id", "name"],
+    }
+
+
+def _write_schema(entity_schema: dict[str, Any], *, partial: bool) -> dict[str, Any]:
+    properties = {
+        key: value
+        for key, value in entity_schema["properties"].items()
+        if key not in {"id", "created_at"}
+    }
+    required = [] if partial else [
+        key for key in entity_schema["required"] if key in properties
+    ]
+    return {"type": "object", "properties": properties, "required": required}
 
 
 def _frontend_pages(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -197,22 +278,13 @@ def _frontend_pages(spec: dict[str, Any]) -> list[dict[str, Any]]:
 def _planned_data_sources(spec: dict[str, Any]) -> list[dict[str, Any]]:
     planned_sources = []
     for source in spec["data_sources"]:
-        entity = _entity_name_from_source(source)
         planned_sources.append(
             {
                 "id": source["id"],
                 "name": source["name"],
                 "type": source["type"],
                 "entities": source["entities"],
-                "schema": {
-                    "entity": entity,
-                    "fields": [
-                        {"name": "id", "type": "string", "required": True},
-                        {"name": "name", "type": "string", "required": True},
-                        {"name": "status", "type": "string", "required": False},
-                        {"name": "createdAt", "type": "datetime", "required": False},
-                    ],
-                },
+                "schema_refs": [],
                 "seed_strategy": "demo_records",
             }
         )
@@ -313,6 +385,12 @@ def _page_data_dependencies(
                 for source_id in page["data_dependencies"]
                 if source_id in contract_by_source
             ],
+            "endpoint_dependencies": endpoint_dependencies_for_contracts(
+                api_contracts,
+                page["data_dependencies"],
+                page_path=page["path"],
+                page_name=page["name"],
+            ),
             "usage": "read",
         }
         for page in plan_pages
@@ -329,6 +407,7 @@ def _page_data_dependencies(
                 **item,
                 "data_source_ids": _string_items(item.get("data_source_ids")),
                 "api_contract_ids": _string_items(item.get("api_contract_ids")),
+                "endpoint_dependencies": _dict_items(item.get("endpoint_dependencies")),
             }
             for item in agent_dependencies
             if item.get("page_id")
@@ -351,6 +430,12 @@ def _page_data_dependencies(
                 by_page_id.get(str(item["page_id"]), {}).get(
                     "api_contract_ids",
                     item["api_contract_ids"],
+                )
+            ),
+            "endpoint_dependencies": _dict_items(
+                by_page_id.get(str(item["page_id"]), {}).get(
+                    "endpoint_dependencies",
+                    item["endpoint_dependencies"],
                 )
             ),
         }
@@ -459,12 +544,22 @@ def create_project_plan(
     )
     api_contracts = _normalize_api_contracts(
         _merge_agent_items(
-            _api_contracts(spec),
+            _api_contracts(data_sources),
             agent_plan,
             "api_contracts",
             authoritative=authoritative_agent_plan,
         )
     )
+    data_sources = [
+        {
+            **source,
+            "schema_refs": schema_refs_for_data_source(
+                api_contracts,
+                str(source.get("id") or ""),
+            ),
+        }
+        for source in data_sources
+    ]
     frontend_pages = _normalize_frontend_pages(
         _merge_agent_items(
             _frontend_pages(spec),
@@ -529,7 +624,7 @@ def create_project_plan(
             if authoritative_agent_plan
             and isinstance(_agent_section(agent_plan, "risks"), list)
             else [
-                "字段模型仍是初版，需要在单页面/单数据源细节确认阶段细化。",
+                "API 契约字段模型仍是初版；细节确认若发现缺口，必须回到 ProjectPlan 调整并重新确认。",
                 "权限规则当前按角色粗粒度规划，后续需要确认到页面和操作级别。",
             ]
         ),

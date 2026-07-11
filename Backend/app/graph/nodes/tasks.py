@@ -6,6 +6,7 @@ from app.graph.nodes.confirmation import (
 )
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
+from app.services.api_contract_validation import validate_api_contract_consistency
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.plan_documents import write_project_plan_document
@@ -44,6 +45,16 @@ def prepare_build_tasks(state: ProjectState) -> dict:
                 "clarification": clarification,
                 "timeline": ["prepare_build_tasks"],
             }
+
+    contract_errors = validate_api_contract_consistency(project_plan)
+    if contract_errors:
+        return {
+            "phase": "prepare_build_tasks",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "clarification": _api_contract_inconsistency_payload(contract_errors),
+            "timeline": ["prepare_build_tasks"],
+        }
 
     workspace = workspace_from_state(state)
     captured = capture_agent_file_changes(
@@ -86,6 +97,26 @@ def _project_plan_confirmation_payload(project_plan: dict) -> dict:
     payload["mode"] = "project_plan_confirmation"
     payload["message"] = "ProjectPlan 未确认，已阻止任务拆分和代码生成。"
     payload["plan_summary"] = project_plan.get("app", {}).get("name", "未命名应用")
+    return payload
+
+
+def _api_contract_inconsistency_payload(errors: list[str]) -> dict:
+    payload = build_ask_user_payload(
+        [
+            AskUserQuestion(
+                header="契约校验",
+                question=(
+                    "API 契约与数据源或页面字段引用不一致，已阻止代码生成。"
+                    "请返回项目规划阶段修订契约后再继续。"
+                ),
+                type="text",
+                placeholder="例如：请按校验错误修订 API 契约和页面字段引用。",
+            )
+        ]
+    )
+    payload["mode"] = "api_contract_consistency_error"
+    payload["message"] = "API 契约一致性校验失败，已阻止任务拆分和代码生成。"
+    payload["errors"] = errors
     return payload
 
 

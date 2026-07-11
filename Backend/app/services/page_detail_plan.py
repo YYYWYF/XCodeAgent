@@ -5,6 +5,11 @@ from datetime import UTC, datetime
 import json
 from typing import Any
 
+from app.services.api_contracts import (
+    contract_endpoints_for_dependencies,
+    normalize_response_bindings,
+)
+
 
 def detail_design_targets(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
     page_targets = [
@@ -202,6 +207,7 @@ def create_page_spec_from_project_plan(
         "page_dependencies": {
             "data_sources": data_source_ids,
             "api_contracts": api_contract_ids,
+            "endpoint_dependencies": dependency.get("endpoint_dependencies", []),
             "dependency_detail": dependency,
         },
         "source_project_plan_context": {
@@ -308,7 +314,7 @@ def create_data_source_detail_plan(
         "status": "confirmed",
         "confirmed_at": datetime.now(UTC).isoformat(),
         "source_data_source": source,
-        "schema": source.get("schema", {}),
+        "schema_refs": source.get("schema_refs", []),
         "entities": source.get("entities", []),
         "api_contracts": api_contracts,
         "dependent_pages": dependent_pages,
@@ -326,8 +332,7 @@ def create_data_source_detail_plan(
     for key in ("entities", "api_contracts", "dependent_pages", "acceptance_criteria"):
         if not isinstance(detail_plan.get(key), list):
             detail_plan[key] = []
-    if not isinstance(detail_plan.get("schema"), dict):
-        detail_plan["schema"] = {}
+    detail_plan.pop("schema", None)
     detail_plan.update(
         {
             "id": f"data_source_detail:{source['id']}",
@@ -337,6 +342,8 @@ def create_data_source_detail_plan(
             "status": "confirmed",
             "confirmed_at": datetime.now(UTC).isoformat(),
             "source_data_source": source,
+            "schema_refs": source.get("schema_refs", []),
+            "api_contracts": api_contracts,
             "user_confirmation_note": user_request.strip(),
             "approved": True,
         }
@@ -408,7 +415,39 @@ def create_page_detail_plan(
         page.get("data_dependencies", []),
     )
     api_contracts = _related_api_contracts(project_plan, data_source_ids)
+    endpoint_dependencies = confirmed_page_spec.get("page_dependencies", {}).get(
+        "endpoint_dependencies", []
+    )
+    endpoint_ids_by_contract: dict[str, set[str]] = {}
+    for dependency in confirmed_page_spec.get("page_dependencies", {}).get(
+        "endpoint_dependencies", []
+    ):
+        if not isinstance(dependency, dict):
+            continue
+        contract_id = dependency.get("api_contract_id")
+        endpoint_id = dependency.get("endpoint_id")
+        if contract_id and endpoint_id:
+            endpoint_ids_by_contract.setdefault(str(contract_id), set()).add(
+                str(endpoint_id)
+            )
     layout = confirmed_page_spec.get("layout", {})
+    contract_data_sources = [
+        {
+            "id": contract.get("data_source_id", ""),
+            "api_contract_id": contract.get("id", ""),
+            "endpoints": contract_endpoints_for_dependencies(
+                contract,
+                endpoint_ids_by_contract.get(str(contract.get("id")), set()),
+            ),
+        }
+        for contract in api_contracts
+        if contract.get("data_source_id")
+    ]
+    response_bindings = normalize_response_bindings(
+        project_plan.get("api_contracts", []),
+        endpoint_dependencies if isinstance(endpoint_dependencies, list) else [],
+        (agent_detail_plan or {}).get("response_bindings"),
+    )
 
     detail_plan = {
         "id": f"page_detail:{page_id}",
@@ -432,18 +471,10 @@ def create_page_detail_plan(
             ),
         },
         "interactions": confirmed_page_spec["interactions"],
-        "data_sources": [
-            {
-                "id": contract.get("data_source_id", ""),
-                "api_contract_id": contract.get("id", ""),
-                "base_path": contract.get("base_path", "/api/resource"),
-                "endpoints": contract.get("endpoints", []),
-            }
-            for contract in api_contracts
-            if contract.get("data_source_id")
-        ],
+        "data_sources": contract_data_sources,
         "permissions": confirmed_page_spec["permissions"],
         "page_dependencies": confirmed_page_spec.get("page_dependencies", {}),
+        "response_bindings": response_bindings,
         "acceptance_criteria": [
             f"用户可以访问 {page_path} 并看到 {page_name} 的主要内容。",
             "页面具备 loading、empty、error、ready 四类基础状态。",
@@ -475,6 +506,9 @@ def create_page_detail_plan(
             "status": "confirmed",
             "confirmed_at": datetime.now(UTC).isoformat(),
             "source_page_spec": confirmed_page_spec,
+            "data_sources": contract_data_sources,
+            "page_dependencies": confirmed_page_spec.get("page_dependencies", {}),
+            "response_bindings": response_bindings,
             "agent_note": agent_note,
             "approved": True,
         }

@@ -54,8 +54,17 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         "\n".join(
             [
                 f"### `{contract.get('base_path', '/api/resource')}` {contract.get('resource', contract.get('id', 'Resource'))}",
+                f"- Schema：{list(contract.get('schemas', {}))}",
                 *[
-                    f"- `{endpoint.get('method', 'GET')} {endpoint.get('path', '')}`：{endpoint.get('description', '待补充接口说明')}"
+                    "\n".join(
+                        [
+                            f"- `{endpoint.get('id', 'endpoint')}` · `{endpoint.get('method', 'GET')} {endpoint.get('path', '')}`：{endpoint.get('summary', '待补充接口说明')}",
+                            f"  - 参数：{endpoint.get('parameters', []) or '无'}",
+                            f"  - 请求 Schema：{endpoint.get('request_schema_ref') or '无'}",
+                            f"  - 响应 Schema：{endpoint.get('response_schema_ref') or '无'}",
+                            f"  - 错误码：{endpoint.get('error_codes', []) or '无'}",
+                        ]
+                    )
                     for endpoint in _dict_items(contract.get("endpoints", []))
                 ],
             ]
@@ -69,11 +78,11 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     )
     data_sources = "\n".join(
         f"- `{source.get('id', 'unknown')}` {source.get('name', '未命名数据源')}："
-        f"实体 {source.get('entities', [])}，类型 {source.get('type', 'mock')}"
+        f"实体 {source.get('entities', [])}，Schema 引用 {source.get('schema_refs', []) or ['无']}，类型 {source.get('type', 'mock')}"
         for source in _dict_items(plan.get("data_sources", []))
     )
     page_data_dependencies = "\n".join(
-        f"- `{item.get('page_id', 'unknown')}`：数据源 {item.get('data_source_ids', []) or ['无']}，API {item.get('api_contract_ids', []) or ['无']}"
+        f"- `{item.get('page_id', 'unknown')}`：数据源 {item.get('data_source_ids', []) or ['无']}，API {item.get('api_contract_ids', []) or ['无']}，Endpoint {[(dependency.get('endpoint_id'), dependency.get('usage')) for dependency in _dict_items(item.get('endpoint_dependencies', []))] or ['无']}"
         for item in _dict_items(plan.get("page_data_dependencies", []))
     )
     permissions = plan.get("permission_model", {})

@@ -6,6 +6,7 @@ from app.agents.main.repair_planner import plan_repairs_with_main_agent
 from app.agents.test.validator import summarize_tests_with_deep_agent
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
+from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.test_validation import evaluate_quality_gate
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.test_documents import write_test_report_json
@@ -141,14 +142,28 @@ def backend_checks(state: ProjectState) -> dict:
 
 
 def api_contract_check(state: ProjectState) -> dict:
-    return _check(
-        state,
-        check_id="api_contract",
-        name="API 契约有效",
-        layer="contract",
-        language=None,
-        command="contract-test",
-    )
+    errors = validate_api_contract_consistency(state.get("project_plan", {}))
+    passed = _build_is_clean(state) and not errors
+    return {
+        "test_results": _append_check(
+            state,
+            {
+                "id": "api_contract",
+                "name": "API 契约有效",
+                "layer": "contract",
+                "language": None,
+                "passed": passed,
+                "command": "project-plan-contract-validation",
+                "evidence": (
+                    "API contract schemas, data-source refs, endpoint dependencies, and page field bindings are consistent."
+                    if passed
+                    else "; ".join(errors)
+                    or f"Build summary is not clean: {state.get('build_summary', {})}"
+                ),
+            },
+        ),
+        "test_events": ["api_contract"],
+    }
 
 
 def joint_integration_check(state: ProjectState) -> dict:
