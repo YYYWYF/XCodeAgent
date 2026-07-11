@@ -1,0 +1,97 @@
+.@{class-prefix}-process-steps {
+  margin-bottom: 14px;
+  overflow: hidden;
+  color: var(--wb-text);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 9px;
+}
+
+.@{class-prefix}-process-steps-summary,
+.@{class-prefix}-process-step-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+
+  &::marker {
+    color: var(--wb-text-tertiary);
+  }
+}
+
+.@{class-prefix}-process-steps-summary {
+  padding: 10px 12px;
+
+  .ant-typography {
+    margin: 0;
+  }
+}
+
+.@{class-prefix}-process-steps-status {
+  display: inline-flex;
+  color: var(--wb-text-secondary);
+}
+
+.@{class-prefix}-process-steps-list {
+  padding: 0 10px 10px;
+}
+
+.@{class-prefix}-process-step {
+  border-top: 1px solid var(--wb-border);
+
+  &:first-child {
+    border-top: 0;
+  }
+}
+
+.@{class-prefix}-process-step-summary {
+  padding: 9px 4px;
+
+  .ant-typography {
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-process-step-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--wb-text-tertiary);
+}
+
+.@{class-prefix}-process-step-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 4px 10px 24px;
+
+  section {
+    min-width: 0;
+  }
+
+  pre {
+    max-height: 260px;
+    margin: 5px 0 0;
+    padding: 10px;
+    overflow: auto;
+    color: var(--wb-text);
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: var(--wb-canvas);
+    border: 1px solid var(--wb-border);
+    border-radius: 7px;
+  }
+}
+
+.@{class-prefix}-process-step-detail-label.ant-typography {
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}

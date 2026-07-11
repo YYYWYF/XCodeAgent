@@ -1,6 +1,5 @@
 import { CheckCircleOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
-import { Button, Dropdown, Typography } from 'antd'
-import type { MenuProps } from 'antd'
+import { Button, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import type { EditorMode } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -19,11 +18,6 @@ type ChatHeaderProps = {
   workspaceName: string
 }
 
-const themeItems: MenuProps['items'] = [
-  { key: 'light', icon: <SunOutlined />, label: '浅色主题' },
-  { key: 'dark', icon: <MoonOutlined />, label: '深色主题' }
-]
-
 export default function ChatHeader({
   actions,
   copy,
@@ -33,10 +27,6 @@ export default function ChatHeader({
   title,
   workspaceName
 }: ChatHeaderProps): ReactElement {
-  const handleThemeChange: MenuProps['onClick'] = ({ key }) => {
-    onThemeChange(key as 'light' | 'dark')
-  }
-
   return (
     <header className={cx('ai-chat-header')}>
       <div className={cx('ai-chat-title')}>
@@ -52,24 +42,13 @@ export default function ChatHeader({
       </div>
       <div className={cx('ai-chat-header-actions')}>
         {actions}
-        <Dropdown
-          menu={{
-            items: themeItems,
-            onClick: handleThemeChange,
-            selectable: true,
-            selectedKeys: [theme]
-          }}
-          overlayClassName={cx('workbench-theme-dropdown', theme)}
-          placement="bottomRight"
-          trigger={['click']}
-        >
-          <Button
-            aria-label="切换工作台主题"
-            icon={theme === 'dark' ? <MoonOutlined /> : <SunOutlined />}
-            title="切换主题"
-            type="text"
-          />
-        </Dropdown>
+        <Button
+          aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
+          icon={theme === 'dark' ? <MoonOutlined /> : <SunOutlined />}
+          onClick={() => onThemeChange(theme === 'dark' ? 'light' : 'dark')}
+          title={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
+          type="text"
+        />
       </div>
     </header>
   )

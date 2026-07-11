@@ -1,4 +1,4 @@
-import type { ToolCallRecord } from '../../service/agUiAgent'
+import type { ProcessStepRecord, ToolCallRecord } from '../../service/agUiAgent'
 import type { EditorMode, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../../typings'
 
 export type AgentChatMessage = {
@@ -8,6 +8,7 @@ export type AgentChatMessage = {
   workflow?: WorkflowRunPayload
   codeChanges?: WorkspaceCodeChangeSet
   toolCalls?: ToolCallRecord[]
+  processSteps?: ProcessStepRecord[]
   createdAt: number
 }
 

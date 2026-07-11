@@ -19,6 +19,7 @@ type SendWorkflowMessageOptions = {
   onContent?: (content: string) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onToolCalls?: (toolCalls: ToolCallRecord[]) => void
+  onProcessSteps?: (steps: ProcessStepRecord[]) => void
 }
 
 export type AgUiChatResult = {
@@ -26,6 +27,7 @@ export type AgUiChatResult = {
   answer: string
   workflow?: WorkflowRunPayload
   toolCalls: ToolCallRecord[]
+  processSteps: ProcessStepRecord[]
   assistantMessage?: Message
 }
 
@@ -35,6 +37,17 @@ export type ToolCallRecord = {
   args: string
   result?: string
   status: 'running' | 'completed'
+}
+
+export type ProcessStepRecord = {
+  id: string
+  kind: 'reasoning' | 'tool' | 'command' | 'workflow'
+  status: 'running' | 'completed' | 'failed'
+  title: string
+  detail: string
+  result?: string
+  sequence: number
+  appendDetail?: boolean
 }
 
 type ToolCallSubscriber = {
@@ -78,12 +91,20 @@ export class AgUiChatSession {
 
     let workflow: WorkflowRunPayload | undefined
     let toolCalls: ToolCallRecord[] = []
+    let processSteps: ProcessStepRecord[] = []
     const emitToolCalls = (nextToolCalls: ToolCallRecord[]): void => {
       toolCalls = nextToolCalls
       options.onToolCalls?.(toolCalls)
     }
     const subscriber: AgentSubscriber & ToolCallSubscriber = {
       onCustomEvent: ({ event }) => {
+        if (event.name === 'agent-process') {
+          const step = readProcessStep(event.value)
+          if (step) {
+            processSteps = mergeProcessStep(processSteps, step)
+            options.onProcessSteps?.(processSteps)
+          }
+        }
         if (event.name === 'workflow-run') {
           workflow = readWorkflowPayload(event.value) ?? workflow
           if (workflow) options.onWorkflow?.(workflow)
@@ -144,8 +165,46 @@ export class AgUiChatSession {
       answer,
       workflow,
       toolCalls,
+      processSteps,
       assistantMessage
     }
+  }
+}
+
+function mergeProcessStep(steps: ProcessStepRecord[], step: ProcessStepRecord): ProcessStepRecord[] {
+  const existingIndex = steps.findIndex((item) => item.id === step.id)
+  const existing = existingIndex >= 0 ? steps[existingIndex] : undefined
+  const mergedStep = {
+    ...existing,
+    ...step,
+    detail: step.appendDetail ? `${existing?.detail || ''}${step.detail}`.slice(-24_000) : step.detail,
+    appendDetail: false,
+    sequence: existing?.sequence ?? step.sequence
+  }
+  const next = existingIndex < 0
+    ? [...steps, mergedStep]
+    : steps.map((item, index) => (
+        index === existingIndex ? mergedStep : item
+      ))
+  return next.sort((left, right) => left.sequence - right.sequence)
+}
+
+function readProcessStep(value: unknown): ProcessStepRecord | undefined {
+  const step = objectValue(value)
+  const id = stringValue(step.id)
+  const kind = stringValue(step.kind)
+  const status = stringValue(step.status)
+  if (!id || !['reasoning', 'tool', 'command', 'workflow'].includes(kind)) return undefined
+  if (!['running', 'completed', 'failed'].includes(status)) return undefined
+  return {
+    id,
+    kind: kind as ProcessStepRecord['kind'],
+    status: status as ProcessStepRecord['status'],
+    title: stringValue(step.title),
+    detail: stringValue(step.detail),
+    result: stringValue(step.result) || undefined,
+    sequence: typeof step.sequence === 'number' ? step.sequence : 0,
+    appendDetail: step.appendDetail === true
   }
 }
 

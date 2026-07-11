@@ -6,7 +6,7 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet,
 } from '../typings';
-import type { ToolCallRecord } from './agUiAgent';
+import type { ProcessStepRecord, ToolCallRecord } from './agUiAgent';
 
 export type ChatSessionMessage = {
   id: number;
@@ -18,6 +18,7 @@ export type ChatSessionMessage = {
   codeChanges?: WorkspaceCodeChangeSet;
   workflow?: WorkflowRunPayload;
   toolCalls?: ToolCallRecord[];
+  processSteps?: ProcessStepRecord[];
   createdAt: number;
 };
 
@@ -90,6 +91,7 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
           ? (item.workflow as WorkflowRunPayload)
           : undefined,
       toolCalls: normalizeToolCalls(item.toolCalls),
+      processSteps: normalizeProcessSteps(item.processSteps),
       approvalStatus:
         item.approvalStatus === 'approved_once' ||
         item.approvalStatus === 'approved_always' ||
@@ -100,6 +102,16 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
             : undefined,
       createdAt: Number(item.createdAt || Date.now()),
     }));
+}
+
+function normalizeProcessSteps(value: unknown): ProcessStepRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const steps = value.filter((item): item is ProcessStepRecord => {
+    if (!item || typeof item !== 'object') return false;
+    const step = item as Partial<ProcessStepRecord>;
+    return Boolean(step.id && step.title && step.kind && step.status);
+  });
+  return steps.length > 0 ? steps : undefined;
 }
 
 function normalizeToolCalls(value: unknown): ToolCallRecord[] | undefined {

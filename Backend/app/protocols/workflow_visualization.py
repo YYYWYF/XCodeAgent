@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, AsyncIterator, Iterable
 from uuid import uuid4
 
@@ -23,6 +24,8 @@ from app.workspace.run_lease import (
 )
 
 WORKFLOW_EVENT_PROTOCOL = "xcodeagent.workflow.event.v1"
+PROCESS_EVENT_NAME = "agent-process"
+PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
     "classify_request_complexity": "判断需求复杂度",
@@ -101,6 +104,7 @@ def workflow_capabilities() -> dict[str, Any]:
                 "workflow.run.started",
                 "workflow.node.started",
                 "workflow.node.completed",
+                "agent-process",
                 "workflow.run.finished",
                 "workflow.run.failed",
             ],
@@ -191,13 +195,6 @@ def build_workflow_ag_ui_stream(
                 event=started_event,
             ):
                 yield frame
-            for frame in _text_delta_frames(
-                encoder,
-                message_id,
-                f"{started_event['message']}\n",
-            ):
-                yield frame
-
             first_node_event = _workflow_event(
                 events,
                 "workflow.node.started",
@@ -216,18 +213,38 @@ def build_workflow_ag_ui_stream(
                 event=first_node_event,
             ):
                 yield frame
-            for frame in _text_delta_frames(
+            process_sequence = 1
+            yield _process_frame(
                 encoder,
-                message_id,
-                f"{first_node_event['message']}\n",
-            ):
-                yield frame
+                id=f"workflow:{first_node_name}",
+                kind="workflow",
+                status="running",
+                title=f"正在执行 {_workflow_node_label(first_node_name)}",
+                detail=str(first_node_event["message"]),
+                sequence=process_sequence,
+            )
+            reasoning_steps: dict[str, str] = {}
+            tool_steps: dict[str, dict[str, str]] = {}
 
-            async for chunk in graph.astream(
+            async for stream_mode, chunk in graph.astream(
                 initial_state,
                 config=config,
-                stream_mode="updates",
+                stream_mode=["updates", "messages"],
             ):
+                if stream_mode == "messages":
+                    message_chunk, metadata = chunk
+                    process_frames, process_sequence = _message_process_frames(
+                        encoder,
+                        message_chunk=message_chunk,
+                        metadata=metadata,
+                        reasoning_steps=reasoning_steps,
+                        tool_steps=tool_steps,
+                        sequence=process_sequence,
+                    )
+                    for frame in process_frames:
+                        yield frame
+                    continue
+
                 for node_name, update in chunk.items():
                     if not isinstance(update, dict):
                         continue
@@ -259,10 +276,21 @@ def build_workflow_ag_ui_stream(
                         event=completed_event,
                     ):
                         yield frame
-                    for frame in _text_delta_frames(
+                    process_sequence += 1
+                    yield _process_frame(
                         encoder,
-                        message_id,
-                        f"{completed_event['message']}\n",
+                        id=f"workflow:{node_name}",
+                        kind="workflow",
+                        status="completed",
+                        title=f"已完成 {_workflow_node_label(node_name)}",
+                        detail=str(completed_event["message"]),
+                        sequence=process_sequence,
+                    )
+                    for frame in _tool_result_frames(
+                        encoder,
+                        update=update,
+                        tool_steps=tool_steps,
+                        sequence=process_sequence,
                     ):
                         yield frame
 
@@ -285,12 +313,16 @@ def build_workflow_ag_ui_stream(
                             event=next_event,
                         ):
                             yield frame
-                        for frame in _text_delta_frames(
+                        process_sequence += 1
+                        yield _process_frame(
                             encoder,
-                            message_id,
-                            f"{next_event['message']}\n",
-                        ):
-                            yield frame
+                            id=f"workflow:{next_node}",
+                            kind="workflow",
+                            status="running",
+                            title=f"正在执行 {_workflow_node_label(next_node)}",
+                            detail=str(next_event["message"]),
+                            sequence=process_sequence,
+                        )
 
             result = dict(graph.get_state(config).values)
             summary = _workflow_summary(result, events)
@@ -607,6 +639,164 @@ def _workflow_ag_ui_frames(
     )
     yield encoder.encode(CustomEvent(name="workflow-run", value=safe_payload))
     yield encoder.encode(StateSnapshotEvent(snapshot={"workflow": safe_payload}))
+
+
+def _process_frame(
+    encoder: EventEncoder,
+    *,
+    id: str,
+    kind: str,
+    status: str,
+    title: str,
+    sequence: int,
+    detail: str = "",
+    result: str = "",
+    append_detail: bool = False,
+) -> str:
+    return encoder.encode(
+        CustomEvent(
+            name=PROCESS_EVENT_NAME,
+            value={
+                "id": id,
+                "kind": kind,
+                "status": status,
+                "title": title,
+                "detail": detail[-PROCESS_DETAIL_LIMIT:],
+                "result": result[-PROCESS_DETAIL_LIMIT:],
+                "appendDetail": append_detail,
+                "sequence": sequence,
+            },
+        )
+    )
+
+
+def _message_process_frames(
+    encoder: EventEncoder,
+    *,
+    message_chunk: Any,
+    metadata: Any,
+    reasoning_steps: dict[str, str],
+    tool_steps: dict[str, dict[str, str]],
+    sequence: int,
+) -> tuple[list[str], int]:
+    frames: list[str] = []
+    metadata = metadata if isinstance(metadata, dict) else {}
+    node_name = str(metadata.get("langgraph_node") or "model")
+    message_id = str(getattr(message_chunk, "id", "") or node_name)
+    reasoning = _reasoning_text(message_chunk)
+    if reasoning:
+        step_id = f"reasoning:{message_id}"
+        reasoning_steps[step_id] = "streaming"
+        sequence += 1
+        frames.append(
+            _process_frame(
+                encoder,
+                id=step_id,
+                kind="reasoning",
+                status="running",
+                title=f"正在思考 · {_workflow_node_label(node_name)}",
+                detail=reasoning,
+                append_detail=True,
+                sequence=sequence,
+            )
+        )
+
+    for tool_chunk in getattr(message_chunk, "tool_call_chunks", None) or []:
+        if not isinstance(tool_chunk, dict):
+            continue
+        tool_id = str(tool_chunk.get("id") or "")
+        if not tool_id:
+            continue
+        current = tool_steps.setdefault(tool_id, {"name": "unknown", "args": ""})
+        if tool_chunk.get("name"):
+            current["name"] = str(tool_chunk["name"])
+        current["args"] = (current["args"] + str(tool_chunk.get("args") or ""))[-PROCESS_DETAIL_LIMIT:]
+        sequence += 1
+        kind = "command" if _is_command_tool(current["name"]) else "tool"
+        frames.append(
+            _process_frame(
+                encoder,
+                id=f"tool:{tool_id}",
+                kind=kind,
+                status="running",
+                title=_tool_title(current["name"], current["args"], running=True),
+                detail=current["args"],
+                sequence=sequence,
+            )
+        )
+    return frames, sequence
+
+
+def _reasoning_text(message_chunk: Any) -> str:
+    additional = getattr(message_chunk, "additional_kwargs", None) or {}
+    if isinstance(additional, dict):
+        for key in ("reasoning_content", "reasoning", "thinking"):
+            value = additional.get(key)
+            if isinstance(value, str) and value:
+                return value
+    content = getattr(message_chunk, "content", None)
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        str(block.get("text") or block.get("content") or "")
+        for block in content
+        if isinstance(block, dict)
+        and str(block.get("type") or "").lower() in {"reasoning", "thinking"}
+    )
+
+
+def _tool_result_frames(
+    encoder: EventEncoder,
+    *,
+    update: dict[str, Any],
+    tool_steps: dict[str, dict[str, str]],
+    sequence: int,
+) -> Iterable[str]:
+    messages = update.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+        if not tool_call_id or tool_call_id not in tool_steps:
+            continue
+        current = tool_steps[tool_call_id]
+        content = getattr(message, "content", "")
+        result = content if isinstance(content, str) else str(content)
+        yield _process_frame(
+            encoder,
+            id=f"tool:{tool_call_id}",
+            kind="command" if _is_command_tool(current["name"]) else "tool",
+            status="completed",
+            title=_tool_title(current["name"], current["args"], running=False),
+            detail=current["args"],
+            result=result,
+            sequence=sequence + 1,
+        )
+
+
+def _is_command_tool(name: str) -> bool:
+    lowered = name.lower()
+    return any(token in lowered for token in ("execute", "exec", "shell", "terminal", "command"))
+
+
+def _tool_title(name: str, args: str, *, running: bool) -> str:
+    if _is_command_tool(name):
+        command = _command_summary(args) or name
+        return f"{'正在执行' if running else '已执行'} {command} 命令"
+    return f"{'正在调用' if running else '已调用'} {name} 工具"
+
+
+def _command_summary(args: str) -> str:
+    try:
+        payload = json.loads(args)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        for key in ("command", "cmd", "input"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().splitlines()[0][:80]
+    return args.strip().splitlines()[0][:80] if args.strip() else ""
 
 
 def _text_delta_frames(

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { AgUiChatSession } from '../../../service/agUiAgent'
-import type { ToolCallRecord } from '../../../service/agUiAgent'
+import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import type {
   ApplicationConfig,
   EditorMode,
@@ -159,11 +159,13 @@ export function useWorkflowConversation({
     let streamedContent = ''
     let streamedWorkflow: WorkflowRunPayload | undefined
     let streamedToolCalls: ToolCallRecord[] = []
+    let streamedProcessSteps: ProcessStepRecord[] = []
     let latestMessages = nextMessages
     const updateAssistantMessage = (
       content: string,
       workflow?: WorkflowRunPayload,
-      toolCalls?: ToolCallRecord[]
+      toolCalls?: ToolCallRecord[],
+      processSteps?: ProcessStepRecord[]
     ): AgentChatMessage[] => {
       const nextCodeChanges = workflowCodeChanges(workflow)
       const updateMessages = (currentMessages: AgentChatMessage[]): AgentChatMessage[] =>
@@ -174,7 +176,8 @@ export function useWorkflowConversation({
                 content,
                 workflow: workflow ?? currentMessage.workflow,
                 codeChanges: nextCodeChanges ?? currentMessage.codeChanges,
-                toolCalls: toolCalls ?? currentMessage.toolCalls
+                toolCalls: toolCalls ?? currentMessage.toolCalls,
+                processSteps: processSteps ?? currentMessage.processSteps
               }
             : currentMessage
         )
@@ -213,6 +216,15 @@ export function useWorkflowConversation({
         onToolCalls: (nextToolCalls) => {
           streamedToolCalls = nextToolCalls
           updateAssistantMessage(streamedContent, streamedWorkflow, nextToolCalls)
+        },
+        onProcessSteps: (nextProcessSteps) => {
+          streamedProcessSteps = nextProcessSteps
+          updateAssistantMessage(
+            streamedContent,
+            streamedWorkflow,
+            streamedToolCalls,
+            nextProcessSteps
+          )
         }
       })
       const stopped = Boolean(stopRequestedRef.current[identity.key])
@@ -220,7 +232,8 @@ export function useWorkflowConversation({
       const completedMessages = updateAssistantMessage(
         answer || 'Workflow 已返回，但内容为空。',
         workflow ?? streamedWorkflow,
-        rawToolCalls.length > 0 ? rawToolCalls : streamedToolCalls
+        rawToolCalls.length > 0 ? rawToolCalls : streamedToolCalls,
+        streamedProcessSteps
       )
 
       await persistSession({
@@ -237,7 +250,8 @@ export function useWorkflowConversation({
         const completedMessages = updateAssistantMessage(
           answer,
           streamedWorkflow,
-          streamedToolCalls
+          streamedToolCalls,
+          streamedProcessSteps
         )
         await persistSession({
           editorMode: identity.editorMode,

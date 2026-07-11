@@ -1,12 +1,5 @@
-import {
-  MoonOutlined,
-  QuestionCircleOutlined,
-  SettingOutlined,
-  SunOutlined
-} from '@ant-design/icons'
-import { Button, Dropdown, message, Tooltip } from 'antd'
-import type { MenuProps } from 'antd'
-import { useState } from 'react'
+import { QuestionCircleOutlined, SettingOutlined } from '@ant-design/icons'
+import { Button, message, Tooltip } from 'antd'
 import {
   CreateApplicationAction,
   OpenWorkspaceAction,
@@ -27,24 +20,13 @@ type WelcomeTheme = 'dark' | 'light'
 
 const THEME_PREFERENCE_KEY = 'xcode-agent-theme-preference'
 
-const themeItems: MenuProps['items'] = [
-  { key: 'light', icon: <SunOutlined />, label: '浅色主题' },
-  { key: 'dark', icon: <MoonOutlined />, label: '深色主题' }
-]
-
 function getTheme(): WelcomeTheme {
   const storedPreference = window.localStorage.getItem(THEME_PREFERENCE_KEY)
   return storedPreference === 'light' || storedPreference === 'dark' ? storedPreference : 'light'
 }
 
 export default function WelcomePage({ onOpenApplication }: Props): JSX.Element {
-  const [theme, setTheme] = useState<WelcomeTheme>(getTheme)
-
-  const handleThemeChange: MenuProps['onClick'] = ({ key }) => {
-    const nextTheme = key as WelcomeTheme
-    setTheme(nextTheme)
-    window.localStorage.setItem(THEME_PREFERENCE_KEY, nextTheme)
-  }
+  const theme = getTheme()
 
   return (
     <main className={cx('welcome-page')} data-theme={theme}>
@@ -59,24 +41,7 @@ export default function WelcomePage({ onOpenApplication }: Props): JSX.Element {
           </div>
 
           <nav className={cx('welcome-utilities')} aria-label="欢迎页工具">
-            <Dropdown
-              menu={{
-                items: themeItems,
-                onClick: handleThemeChange,
-                selectable: true,
-                selectedKeys: [theme]
-              }}
-              overlayClassName={cx('welcome-theme-dropdown', theme)}
-              placement="bottomRight"
-              trigger={['click']}
-            >
-              <Button
-                aria-label="设置与主题"
-                icon={<SettingOutlined />}
-                title="切换主题"
-                type="text"
-              />
-            </Dropdown>
+            <Button aria-label="设置" disabled icon={<SettingOutlined />} title="设置" type="text" />
             <Tooltip title="帮助功能即将推出">
               <Button
                 aria-label="帮助"

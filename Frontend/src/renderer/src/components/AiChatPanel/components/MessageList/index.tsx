@@ -6,6 +6,7 @@ import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import CodeChangeCard from '../CodeChangeCard'
 import ToolCallCard from '../ToolCallCard'
+import ProcessSteps from '../ProcessSteps'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
 import type { AgentChatMessage, ChatCopy } from '../../types'
 import { workflowCodeChanges } from '../../utils'
@@ -32,6 +33,9 @@ export default function MessageList({
   onSubmitClarification
 }: MessageListProps): ReactElement {
   const visibleMessages = latestConversationMessages(messages)
+  const hasStreamingProcess = visibleMessages.some(
+    (message) => message.role === 'assistant' && Boolean(message.processSteps?.length)
+  )
 
   return (
     <div className={cx('ai-message-list')} aria-live="polite">
@@ -58,10 +62,13 @@ export default function MessageList({
                 <div className={cx('ai-message-content')}>
                   {message.role === 'assistant' ? (
                     <>
-                      <MarkdownContent content={message.content} />
-                      {message.toolCalls?.map((toolCall) => (
+                      {message.processSteps && message.processSteps.length > 0 && (
+                        <ProcessSteps loading={loading} steps={message.processSteps} />
+                      )}
+                      {!message.processSteps && message.toolCalls?.map((toolCall) => (
                         <ToolCallCard key={toolCall.id} toolCall={toolCall} />
                       ))}
+                      <MarkdownContent content={message.content} />
                       {message.workflow && (
                         <WorkflowRunCard
                           disabled={loading}
@@ -87,7 +94,7 @@ export default function MessageList({
             )
           })
         )}
-        {loading && (
+        {loading && !hasStreamingProcess && (
           <div className={cx('ai-message', 'assistant', 'loading')}>
             <span className={cx('ai-message-avatar')}><RobotOutlined /></span>
             <Spin size="small" />
