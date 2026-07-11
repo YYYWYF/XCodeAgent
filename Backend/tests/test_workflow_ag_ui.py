@@ -67,6 +67,7 @@ class FakeProjectPlanningWaitGraph:
                 "phase": "project_planning",
                 "status": "requires_user_input",
                 "project_plan_path": "var/plans/project-plan.md",
+                "project_plan_json_path": "var/plans/project-plan.json",
                 "project_plan": {"confirmation_status": "pending_user_confirmation"},
                 "clarification": {
                     "mode": "project_plan_confirmation",
@@ -89,6 +90,7 @@ class FakeProjectPlanningWaitGraph:
                 "phase": "project_planning",
                 "status": "requires_user_input",
                 "project_plan_path": "var/plans/project-plan.md",
+                "project_plan_json_path": "var/plans/project-plan.json",
                 "project_plan": {"confirmation_status": "pending_user_confirmation"},
                 "clarification": {
                     "mode": "project_plan_confirmation",
@@ -358,6 +360,8 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("请确认项目规划书是否正确", payload)
         self.assertIn("project_planning", payload)
         self.assertIn("nodeName", payload)
+        self.assertIn("project-plan.md", payload)
+        self.assertNotIn("project-plan.json", payload)
 
     def test_stream_passes_forwarded_workspace_to_graph_state(self) -> None:
         graph = FakeWorkflowGraph()

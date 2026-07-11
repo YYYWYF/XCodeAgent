@@ -42,6 +42,8 @@ class AskUserToolTests(unittest.TestCase):
         self.assertEqual(payload["status"], "requires_user_input")
         self.assertEqual(payload["question_schema"], "gemini_cli.ask_user.v1")
         self.assertEqual(payload["questions"][0]["header"], "Database")
+        self.assertEqual(payload["questions"][0]["options"][-1]["label"], "其他")
+        self.assertEqual(payload["questions"][0]["options"][-1]["value"], "__other__")
 
     def test_extracts_clarification_from_tool_message(self) -> None:
         payload = build_ask_user_payload(
@@ -75,6 +77,33 @@ class AskUserToolTests(unittest.TestCase):
         self.assertEqual(clarification["questions"][0]["header"], "Pages")
         self.assertEqual(clarification["spec_summary"], "Demo App")
 
+    def test_preserves_multi_select_for_combinable_choice_options(self) -> None:
+        payload = build_ask_user_payload(
+            [
+                AskUserQuestion.model_validate(
+                    {
+                        "header": "列表能力",
+                        "question": "人员列表需要哪些附加能力？",
+                        "type": "choice",
+                        "multiSelect": True,
+                        "options": [
+                            {"label": "搜索", "description": "按关键词检索人员"},
+                            {"label": "筛选", "description": "按条件筛选人员"},
+                            {"label": "导入导出", "description": "批量导入或导出数据"},
+                            {"label": "分页", "description": "按页浏览人员"},
+                        ],
+                    }
+                )
+            ]
+        )
+
+        question = payload["questions"][0]
+        self.assertTrue(question["multiSelect"])
+        self.assertEqual(
+            [option["label"] for option in question["options"]],
+            ["搜索", "筛选", "导入导出", "分页", "其他"],
+        )
+
     def test_extracts_clarification_from_ai_tool_call(self) -> None:
         result = {
             "messages": [
@@ -106,6 +135,7 @@ class AskUserToolTests(unittest.TestCase):
 
         self.assertEqual(clarification["status"], "requires_user_input")
         self.assertEqual(clarification["questions"][0]["type"], "yesno")
+        self.assertTrue(clarification["questions"][0]["allowOther"])
 
     def test_returns_clear_when_agent_did_not_call_ask_user(self) -> None:
         clarification = extract_ask_user_clarification(

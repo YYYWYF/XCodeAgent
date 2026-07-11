@@ -266,7 +266,7 @@ def build_workflow_ag_ui_stream(
                     detail = _workflow_node_detail(node_name, update)
                     node_payload = {
                         "phase": update.get("phase", node_name),
-                        "stateDelta": update,
+                        "stateDelta": _public_workflow_state(update),
                         "detail": detail.get("data", {}),
                         "artifacts": _workflow_artifacts(update),
                     }
@@ -537,7 +537,7 @@ async def build_workflow_response(
                 detail = _workflow_node_detail(node_name, update)
                 node_payload = {
                     "phase": update.get("phase", node_name),
-                    "stateDelta": update,
+                    "stateDelta": _public_workflow_state(update),
                     "detail": detail.get("data", {}),
                     "artifacts": _workflow_artifacts(update),
                 }
@@ -1037,7 +1037,16 @@ def _workflow_artifacts(value: dict[str, Any]) -> dict[str, Any]:
     return {
         field: value.get(field)
         for field in WORKFLOW_ARTIFACT_FIELDS
-        if value.get(field)
+        if value.get(field) and not str(value.get(field)).lower().endswith(".json")
+    }
+
+
+def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: item
+        for key, item in value.items()
+        if key not in {"requirement_spec_json_path", "project_plan_json_path"}
+        and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
 
 
@@ -1096,8 +1105,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             }
         return {
             "message": (
-                f"计划文档={update.get('project_plan_path')}，"
-                f"结构化状态={update.get('project_plan_json_path')}"
+                f"计划文档={update.get('project_plan_path')}"
             ),
             "data": {"projectPlan": update.get("project_plan")},
         }
@@ -1105,14 +1113,18 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
         clarification = update.get("clarification")
         status = update.get("status")
         if status == "requires_user_input":
-            questions = (
-                clarification.get("questions", [])
+            review = (
+                clarification.get("review", {})
                 if isinstance(clarification, dict)
-                and isinstance(clarification.get("questions"), list)
-                else []
+                else {}
             )
+            summary = review.get("summary", {}) if isinstance(review, dict) else {}
             return {
-                "message": f"页面/数据源详细设计待确认，问题={len(questions)}",
+                "message": (
+                    "页面/数据源初版设计待整体确认，"
+                    f"页面={summary.get('page_count', 0)}，"
+                    f"数据源={summary.get('data_source_count', 0)}"
+                ),
                 "data": {
                     "clarification": clarification,
                     "requiresUserInput": True,
@@ -1147,7 +1159,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             }
         tasks = update.get("tasks") if isinstance(update.get("tasks"), list) else []
         return {
-            "message": f"任务数={len(tasks)}，任务DAG={update.get('build_task_plan_path')}",
+            "message": f"任务数={len(tasks)}，任务 DAG 已生成",
             "data": {
                 "buildTaskPlan": update.get("build_task_plan"),
                 "taskCount": len(tasks),
@@ -1166,11 +1178,17 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
     if node_name == "integration_test":
         report = update.get("test_report", {})
         summary = report.get("summary", {}) if isinstance(report, dict) else {}
+        report_path = update.get("test_report_path")
+        report_suffix = (
+            f"，报告={report_path}"
+            if report_path and not str(report_path).lower().endswith(".json")
+            else ""
+        )
         return {
             "message": (
                 f"通过={report.get('passed') if isinstance(report, dict) else None}，"
-                f"检查={summary.get('passed', 0)}/{summary.get('total', 0)}，"
-                f"报告={update.get('test_report_path')}"
+                f"检查={summary.get('passed', 0)}/{summary.get('total', 0)}"
+                f"{report_suffix}"
             ),
             "data": {
                 "testReport": report,
@@ -1343,7 +1361,6 @@ def _workflow_visual_payload(
         "project_plan": result.get("project_plan"),
         "pending_project_plan": result.get("pending_project_plan"),
         "project_plan_path": result.get("project_plan_path"),
-        "project_plan_json_path": result.get("project_plan_json_path"),
         "detail_selection": result.get("detail_selection"),
         "selected_page_id": result.get("selected_page_id"),
         "selected_data_source_id": result.get("selected_data_source_id"),
@@ -1355,7 +1372,7 @@ def _workflow_visual_payload(
         "summary": summary,
         "events": events,
         "state": state_payload,
-        "result": result,
+        "result": _public_workflow_state(result),
     }
     if code_changes:
         payload["codeChanges"] = code_changes

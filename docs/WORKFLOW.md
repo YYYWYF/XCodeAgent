@@ -96,11 +96,17 @@ START
 
 `ask_user` 是通用的人机确认工具，不包含 requirements 专用问题规则。后续项目计划、单页面设计、数据源确认等阶段需要用户输入时，也应复用该工具，由对应 Agent 根据上下文决定问题内容。
 
-当 Main Agent 判断需求不清晰时，`requirements` 输出 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和本轮结构化答案；后端据此推断续跑节点并生成扁平的当前请求，不重复嵌套完整会话。Main Agent 基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
+当 Main Agent 判断需求不清晰时，必须先一次性审视所有关键产物所需信息：应用信息、角色、模块、页面清单、数据源清单、支撑 API 契约的业务信息、业务流程和验收标准。它将所有无法安全推断的缺口合并为一次 1-4 题的 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和本轮结构化答案；后端据此推断续跑节点并生成扁平的当前请求，不重复嵌套完整会话。Main Agent 基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
 
-当需求已经清晰并生成 `RequirementSpec` 后，`requirements` 仍必须进入一次 `requirement_spec_confirmation` 确认状态，要求用户确认需求文档是否正确。用户回复“正确，继续规划”等确认语义后，该节点才输出 `status = completed` 并继续进入 `project_planning`；如果用户提供修改意见，则重新分析并生成更新后的 `RequirementSpec`，再进入确认。
+无论初始需求是否需要澄清，只要 `requirements` 生成或更新了需求文档，就必须进入 `requirement_spec_confirmation`，要求用户明确确认文档是否正确。澄清问题的回答只用于补充需求，不能等同于对生成后文档的确认；只有用户确认当前版本后，节点才输出 `status = completed` 并继续进入 `project_planning`。若用户补充后仍存在重要缺口，模型可以再次发起一次集中澄清。用户提出修改意见时，需要重新生成文档，并再次经过确认。
+
+确认时以 Markdown 作为用户可读、可编辑的文档。如果用户在确认前直接修改了 RequirementSpec Markdown，节点必须先与当前结构化状态对比，以原 JSON 为基线同步 Markdown 中的业务变更并保留 Markdown 未表达的内部字段，然后更新内部 JSON；不得先重写 Markdown 或直接使用旧 JSON 继续。JSON 文件只供工作流节点读取，不作为前端可编辑产物展示。
 
 当前等待/续跑机制是显式的后端推断续跑点，还不是 LangGraph 原生 `interrupt` resume。后续如果切换到 LangGraph `interrupt`、checkpointer 和 command resume，应保持同样的原则：前端提交用户回答和 workflow 状态，不硬编码后端阶段名。
+
+所有选项型 `ask_user` 问题（单选、多选、是/否）都自动包含“其他”选项。用户选中“其他”后必须填写补充内容；前端提交结构化答案 `{ selected, other }`，后端将其归并为“已选：…；其他补充：…”，与原始需求和既有选项一起输入给后续模型。文本题本身就是自由输入，不额外显示“其他”。
+
+生成选项题前，模型必须先判断选项是否互斥。搜索、筛选、导入导出、分页等可叠加能力必须使用 `multiSelect = true`，并将每项能力作为独立选项；不得通过“搜索 + 导入导出”这类组合选项伪造单选。只有数据源类型、认证策略等真正的二选一或多选一决策使用单选。
 
 Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec` 和澄清结果，负责写入需求文档并更新状态，不应自行进行需求分析。
 
@@ -133,7 +139,9 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 该节点通过 `agents/main/planner.py` 直接调用 `create_chat_model()` 生成结构化 JSON 规划建议，再由确定性 schema 合并和归一化后写入 Graph State。该调用不绑定任何工具，不创建 DeepAgent，也不扫描 workspace；模型输出只用于细化项目级判断，确定性归一化负责保证稳定 id、必需字段和后续任务拆分可读取的结构。
 
-`project_planning` 生成计划书后必须进入 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点才输出 `status = completed` 并进入 `detail_confirmation`；如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
+`project_planning` 在输出计划前会内部核对 API 契约、页面清单、数据源清单、依赖、角色、流程和验收标准；普通缺口以明确假设和风险写入同一份计划，而不是拆成后续多轮追问。生成计划书后进入一次 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点才输出 `status = completed` 并进入 `detail_confirmation`；如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
+
+ProjectPlan 同样以 Markdown 作为用户确认入口。确认前若 Markdown 被直接编辑，节点先将改动同步到内部 ProjectPlan JSON，并执行 API 契约、页面依赖和数据源一致性校验；同步成功后才允许确认并进入后续节点。AG-UI 产物列表只展示 Markdown 等用户可读文件，所有 JSON 路径和 JSON 任务文件都属于内部工作流状态，不向用户呈现为可编辑产物。
 
 API 契约在此阶段作为前后端共享的唯一字段事实来源生成。为保持简约和可扩展，每个 contract 只包含资源级 `schemas`、稳定 endpoint id、HTTP method、path、参数、请求/响应 schema 引用、错误码和权限要求。`data_sources` 只能保存 `schema_refs`，不得复制字段；`page_data_dependencies` 只能保存 endpoint 引用；页面详细设计只能通过 `response_bindings` 绑定已声明响应字段。`detail_confirmation` 若发现字段或接口缺口，应提出 ProjectPlan 调整并经过确认，不能自行补字段或发明独立接口。
 
@@ -155,24 +163,23 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 ### `detail_confirmation`
 
-逐个处理页面和数据源，负责：
+批量生成并整体审阅全部页面和数据源详细设计，负责：
 
 - 读取 `ProjectPlan.frontend_pages` 和 `ProjectPlan.data_sources`；
-- 通过通用 `ask_user` 让用户选择一个页面或数据源进入详细设计；
-- 引导用户确认该页面的 `PageSpec`；
-- 确认页面布局、组件、交互、权限和异常状态；
+- 一次性为所有页面和数据源生成初版详细设计；
+- 在同一审阅界面按页面和数据源分组展示，默认折叠；
+- 用户只展开需要调整的对象，按页面目标、布局、交互、权限、关系、校验和 Seed 等模板字段修改；
 - 核对数据模型、关系、校验规则和 API 映射；如需字段变更则返回 ProjectPlan 契约调整；
-- 生成单页面或单数据源的执行计划；
-- 等待用户逐项确认；
+- 未修改时允许一键确认全部设计；
 - 将确认后的页面详细设计写回 `ProjectPlan` 和总体计划书 Markdown，保证 Graph State 与规划文档一致。
 
 该阶段由只读规划逻辑和 page-design 专用 ChatModel 负责，不由代码生成 Agent 负责。
 
-当前实现通过 `tools/ask_user.py` 生成通用用户确认 payload。首次进入该节点时，节点从 `ProjectPlan` 读取页面清单和数据源清单，要求用户选择具体设计对象；前端提交回答时携带 `resumeState` 和本轮结构化答案，后端恢复 `project_plan`、选择对象以及页面或数据源设计草稿。
+当前实现使用 `xcodeagent.detail_review.v1` 批量审阅 payload。首次进入该节点时，节点从 `ProjectPlan` 读取全部页面和数据源，生成完整 `page_detail_plans` 和 `data_source_detail_plans`，写入 `pending_project_plan`，然后一次性暂停。前端提交 `detail_review` 结构化结果并携带 `resumeState`，后端只合并白名单模板字段、执行契约一致性校验并确认当前计划，不再逐个选择对象或产生多轮中断。
 
-以选择页面为例，节点会读取 `ProjectPlan.frontend_pages` 中该页面的描述，并结合 `api_contracts`、`page_data_dependencies` 和相关 `data_sources` 形成单页面 `PageSpec` 草稿。`PageSpec` 覆盖页面目标、基本布局、页面交互、数据来源、页面权限和页面依赖。若这些方面仍缺失或不清晰，节点继续通过 `ask_user` 询问用户；信息足够后，`agents/main/page_designer.py` 直接调用 `create_chat_model()`，基于用户确认后的 `PageSpec` 生成页面详细设计，并写入待确认的 `pending_project_plan`。页面展示字段通过 `response_bindings` 引用 endpoint 响应字段，不能在页面计划中新增字段。该调用不绑定工具、不创建 DeepAgent，也不读取或修改 workspace。若用户选择数据源，当前节点会基于 `ProjectPlan.data_sources.schema_refs`、相关 API 契约和依赖页面生成基础 `data_source_detail_plans`；数据源详细计划不得复制或覆盖字段 Schema。
+页面初版设计结合 `frontend_pages`、`api_contracts`、`page_data_dependencies` 和相关 `data_sources`，覆盖页面目标、基本布局、交互、状态、权限、依赖、响应字段绑定和验收标准。数据源初版设计覆盖实体引用、关系、校验、API 契约、依赖页面、Seed/Mock 策略和验收标准。页面的数据源、endpoint、Schema 和 `response_bindings`，以及数据源的实体、Schema 和 API 契约在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
 
-凡是 `detail_confirmation` 对 `ProjectPlan` 产生页面详细设计、数据源详细设计或其他计划调整，都必须进入 `project_plan_adjustment_confirmation` 等待状态。只有用户确认后，`pending_project_plan` 才会提升为正式 `project_plan`，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
+批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
 当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan/PageSpec 小型结构化状态，不把完整会话历史重新塞回上下文。
 

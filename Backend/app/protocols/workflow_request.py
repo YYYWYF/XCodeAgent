@@ -12,6 +12,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     forwarded_props = _optional_dict(payload.get("forwardedProps")) or {}
     application = _optional_dict(forwarded_props.get("application")) or {}
     state = _optional_dict(payload.get("state")) or {}
+    clarification_answers = (
+        payload.get("clarificationAnswers")
+        or forwarded_props.get("clarificationAnswers")
+    )
     request = (
         _optional_text(payload.get("request"))
         or _optional_text(payload.get("message"))
@@ -23,10 +27,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             _optional_text(payload.get("originalRequest"))
             or _optional_text(forwarded_props.get("originalRequest"))
         ),
-        clarification_answers=(
-            payload.get("clarificationAnswers")
-            or forwarded_props.get("clarificationAnswers")
-        ),
+        clarification_answers=clarification_answers,
     )
     resume_state = (
         _optional_dict(payload.get("resumeState"))
@@ -50,10 +51,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("resume_from"))
         or _optional_text(forwarded_props.get("resumeFrom"))
     )
-    if not resume_from and _clarification_answers_to_text(
-        payload.get("clarificationAnswers")
-        or forwarded_props.get("clarificationAnswers")
-    ):
+    if not resume_from and _clarification_answers_to_text(clarification_answers):
         resume_from = "requirements"
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
@@ -64,6 +62,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "resume_values": {
             **_resume_values(resume_state),
             **_debug_resume_values(debug_state),
+            **(
+                {"detail_review_submission": _detail_review_submission(clarification_answers)}
+                if _detail_review_submission(clarification_answers)
+                else {}
+            ),
         },
         "project_id": (
             _optional_text(payload.get("project_id"))
@@ -197,6 +200,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "confirmed_page_spec",
         "data_source_spec_draft",
         "detail_plans",
+        "detail_review_submission",
         "requirement_spec",
         "requirement_spec_path",
         "requirement_spec_json_path",
@@ -345,7 +349,38 @@ def _answer_to_text(value: Any) -> str:
     if isinstance(value, list):
         return "、".join(str(item).strip() for item in value if str(item).strip())
     if isinstance(value, dict):
+        selected = _selected_answer_text(value.get("selected"))
+        other = _optional_text(value.get("other"))
+        if selected or other:
+            parts = []
+            if selected:
+                parts.append(f"已选：{selected}")
+            if other:
+                parts.append(f"其他补充：{other}")
+            return "；".join(parts)
         return ", ".join(
             f"{key}={answer}" for key, answer in value.items() if str(answer).strip()
         )
     return str(value).strip() if value is not None else ""
+
+
+def _detail_review_submission(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    submission = value.get("detail_review")
+    if not isinstance(submission, dict):
+        return None
+    if submission.get("review_status") != "confirmed":
+        return None
+    return submission
+
+
+def _selected_answer_text(value: Any) -> str:
+    if isinstance(value, list):
+        return "、".join(
+            str(item).strip()
+            for item in value
+            if str(item).strip() and str(item).strip() != "__other__"
+        )
+    text = str(value).strip() if value is not None else ""
+    return "" if text == "__other__" else text

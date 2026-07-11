@@ -1,5 +1,6 @@
-from app.agents.main.task_preparer import prepare_build_tasks_with_main_agent
+from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.planner import revise_project_plan_with_chat_model
+from app.agents.main.task_preparer import prepare_build_tasks_with_main_agent
 from app.graph.nodes.confirmation import (
     user_confirmed_text,
     user_requested_changes_text,
@@ -9,7 +10,12 @@ from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.code_changes import code_change_state_update
-from app.workspace.plan_documents import write_project_plan_document
+from app.workspace.plan_documents import (
+    edited_project_plan_markdown,
+    project_plan_markdown_path,
+    write_project_plan_document,
+    write_project_plan_json,
+)
 from app.workspace.task_documents import write_build_task_plan_json
 
 
@@ -17,10 +23,24 @@ def prepare_build_tasks(state: ProjectState) -> dict:
     project_plan = state["project_plan"]
     if project_plan.get("confirmation_status") != "confirmed":
         if _user_confirmed_project_plan(state.get("request", "")):
+            edited_markdown = edited_project_plan_markdown(state, project_plan)
+            synchronized_plan = (
+                sync_project_plan_from_markdown(
+                    project_plan,
+                    state["requirement_spec"],
+                    edited_markdown,
+                )
+                if edited_markdown is not None
+                else project_plan
+            )
             project_plan = {
-                **project_plan,
+                **synchronized_plan,
                 "confirmation_status": "confirmed",
             }
+            if project_plan_markdown_path(state).is_file():
+                write_project_plan_json(state, project_plan)
+            else:
+                write_project_plan_document(state, project_plan)
         elif user_requested_changes_text(state.get("request", "")):
             project_plan = revise_project_plan_with_chat_model(
                 project_plan,

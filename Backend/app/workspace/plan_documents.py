@@ -227,16 +227,31 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 
 def write_project_plan_document(state: dict[str, Any], plan: dict[str, Any]) -> str:
-    existing_path = state.get("project_plan_path")
-    path = (
-        Path(existing_path)
-        if existing_path and str(existing_path).endswith(".md")
-        else workflow_artifact_root(state) / "plans" / "project-plan.md"
-    )
+    path = project_plan_markdown_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_project_plan_markdown(plan), encoding="utf-8")
     write_project_plan_json(state, plan)
     return str(path)
+
+
+def project_plan_markdown_path(state: dict[str, Any]) -> Path:
+    existing_path = state.get("project_plan_path")
+    return (
+        Path(existing_path)
+        if existing_path and str(existing_path).endswith(".md")
+        else workflow_artifact_root(state) / "plans" / "project-plan.md"
+    )
+
+
+def edited_project_plan_markdown(
+    state: dict[str, Any],
+    plan: dict[str, Any],
+) -> str | None:
+    path = project_plan_markdown_path(state)
+    if not path.is_file():
+        return None
+    content = path.read_text(encoding="utf-8")
+    return content if content != render_project_plan_markdown(plan) else None
 
 
 def project_plan_json_path(state: dict[str, Any]) -> Path:

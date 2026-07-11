@@ -296,6 +296,7 @@ def create_requirement_spec(
     agent_note: str = "live main-agent requirements analysis",
     agent_spec: dict[str, Any] | None = None,
     existing_spec: dict[str, Any] | None = None,
+    authoritative_agent_spec: bool = False,
 ) -> dict[str, Any]:
     requirement_summary = consolidated_requirement_text(request)
     source_text = requirement_summary or request
@@ -373,7 +374,12 @@ def create_requirement_spec(
             prefix=prefix,
             defaults=defaults,
         )
-        spec[key] = normalized if normalized else default_spec[key]
+        has_authoritative_list = (
+            authoritative_agent_spec
+            and isinstance(agent_spec, dict)
+            and isinstance(agent_spec.get(key), list)
+        )
+        spec[key] = normalized if normalized or has_authoritative_list else default_spec[key]
     for source in spec["data_sources"]:
         entities = source.get("entities")
         source["entities"] = (
@@ -395,7 +401,16 @@ def create_requirement_spec(
         if isinstance(criteria, list)
         else []
     )
-    spec["acceptance_criteria"] = normalized_criteria or default_spec["acceptance_criteria"]
+    has_authoritative_criteria = (
+        authoritative_agent_spec
+        and isinstance(agent_spec, dict)
+        and isinstance(agent_spec.get("acceptance_criteria"), list)
+    )
+    spec["acceptance_criteria"] = (
+        normalized_criteria
+        if normalized_criteria or has_authoritative_criteria
+        else default_spec["acceptance_criteria"]
+    )
     assumptions = spec.get("assumptions")
     spec["assumptions"] = (
         [str(item) for item in assumptions if str(item).strip()]

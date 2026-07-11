@@ -1,21 +1,37 @@
+from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import analyze_requirements_with_chat_model
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.state import ProjectState
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.spec_documents import (
+    edited_requirement_spec_markdown,
     requirement_spec_json_path,
+    requirement_spec_markdown_path,
     write_requirement_spec_document,
+    write_requirement_spec_json,
 )
 
 
 def requirements(state: ProjectState) -> dict:
     existing_spec = state.get("requirement_spec")
-    if existing_spec and _user_confirmed_requirement_spec(state.get("request", "")):
-        spec = {
-            **existing_spec,
-            "confirmation_status": "confirmed",
-        }
-        spec_path = write_requirement_spec_document(state, spec)
+    if (
+        existing_spec
+        and existing_spec.get("confirmation_status") == "pending_user_confirmation"
+        and _user_confirmed_requirement_spec(state.get("request", ""))
+    ):
+        edited_markdown = edited_requirement_spec_markdown(state, existing_spec)
+        synchronized_spec = (
+            sync_requirement_spec_from_markdown(existing_spec, edited_markdown)
+            if edited_markdown is not None
+            else existing_spec
+        )
+        spec = {**synchronized_spec, "confirmation_status": "confirmed"}
+        markdown_path = requirement_spec_markdown_path(state)
+        if markdown_path.is_file():
+            spec_path = str(markdown_path)
+            write_requirement_spec_json(state, spec)
+        else:
+            spec_path = write_requirement_spec_document(state, spec)
         return {
             "phase": "requirements",
             "status": "completed",
@@ -36,11 +52,15 @@ def requirements(state: ProjectState) -> dict:
         spec["clarification_questions"] = clarification["questions"]
         spec["clarification_status"] = clarification["status"]
         spec["confirmation_status"] = "pending_user_confirmation"
+        status = clarification["status"]
+    else:
+        spec["confirmation_status"] = "pending_user_input"
+        status = clarification["status"]
     spec_path = write_requirement_spec_document(state, spec)
 
     return {
         "phase": "requirements",
-        "status": clarification["status"],
+        "status": status,
         "requirement_spec": spec,
         "requirement_spec_path": spec_path,
         "requirement_spec_json_path": str(requirement_spec_json_path(state)),

@@ -33,11 +33,73 @@ export type WorkflowClarificationQuestion = {
   default_assumption?: string
   placeholder?: string
   multiSelect?: boolean
+  allowOther?: boolean
   options?: Array<{
     label?: string
     description?: string
+    value?: string
   }>
 }
+
+export type WorkflowClarificationChoiceAnswer = {
+  selected: string | string[]
+  other?: string
+}
+
+export type WorkflowDetailReviewTarget = {
+  target_type: 'page' | 'data_source'
+  target_id: string
+  name?: string
+  path?: string
+  page_goal?: string
+  basic_layout?: Record<string, unknown>
+  interactions?: string[]
+  permissions?: string[]
+  states?: string[]
+  data_sources?: Array<Record<string, unknown>>
+  page_dependencies?: Record<string, unknown>
+  response_bindings?: Array<Record<string, unknown>>
+  acceptance_criteria?: string[]
+  source_type?: string
+  entities?: string[]
+  schema_refs?: string[]
+  relationships?: string[]
+  validation_rules?: string[]
+  seed_strategy?: string
+  api_contracts?: Array<Record<string, unknown>>
+  dependent_pages?: Array<Record<string, unknown>>
+}
+
+export type WorkflowDetailReview = {
+  pages?: WorkflowDetailReviewTarget[]
+  data_sources?: WorkflowDetailReviewTarget[]
+  summary?: {
+    page_count?: number
+    data_source_count?: number
+    api_contract_count?: number
+  }
+}
+
+export type WorkflowDetailReviewSubmission = {
+  review_status: 'confirmed'
+  target_changes: Array<{
+    target_type: 'page' | 'data_source'
+    target_id: string
+    changes: Record<string, unknown>
+  }>
+  overall_note?: string
+}
+
+export type WorkflowClarificationAnswer =
+  | string
+  | string[]
+  | WorkflowClarificationChoiceAnswer
+  | WorkflowDetailReviewSubmission
+
+export type WorkflowClarificationAnswers = Record<
+  string,
+  WorkflowClarificationAnswer
+>
 
 export type WorkflowClarificationSelectionGroup = {
   type?: string
@@ -60,6 +122,7 @@ export type WorkflowClarification = {
   all_unresolved_dimensions?: string[]
   selection_groups?: WorkflowClarificationSelectionGroup[]
   context?: Record<string, unknown>
+  review?: WorkflowDetailReview
   [key: string]: unknown
 }
 

@@ -169,3 +169,58 @@
     margin-right: 0;
   }
 }
+
+.@{class-prefix}-workflow-detail-review,
+.@{class-prefix}-workflow-detail-review-fields {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.@{class-prefix}-workflow-detail-review-summary,
+.@{class-prefix}-workflow-detail-review-title {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+
+  .ant-tag {
+    margin-right: 0;
+  }
+}
+
+.@{class-prefix}-workflow-detail-review {
+  .ant-collapse {
+    border: 1px solid var(--wb-border);
+    border-radius: 8px;
+    background: var(--wb-canvas);
+  }
+
+  .ant-collapse-item {
+    border-color: var(--wb-border);
+  }
+
+  .ant-collapse-header,
+  .ant-collapse-content,
+  .ant-collapse-content-box {
+    color: var(--wb-text-primary);
+    background: var(--wb-canvas);
+  }
+}
+
+.@{class-prefix}-workflow-detail-review-field,
+.@{class-prefix}-workflow-detail-review-readonly {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.@{class-prefix}-workflow-detail-review-readonly {
+  padding: 8px;
+  border: 1px dashed var(--wb-border-strong);
+  border-radius: 6px;
+  background: var(--wb-surface-subtle);
+}

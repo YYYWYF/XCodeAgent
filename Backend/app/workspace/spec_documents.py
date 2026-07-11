@@ -114,16 +114,31 @@ def write_requirement_spec_document(
     state: dict[str, Any],
     spec: dict[str, Any],
 ) -> str:
-    existing_path = state.get("requirement_spec_path")
-    path = (
-        Path(existing_path)
-        if existing_path and str(existing_path).endswith(".md")
-        else workflow_artifact_root(state) / "specs" / "requirement-spec.md"
-    )
+    path = requirement_spec_markdown_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_requirement_spec_markdown(spec), encoding="utf-8")
     write_requirement_spec_json(state, spec)
     return str(path)
+
+
+def requirement_spec_markdown_path(state: dict[str, Any]) -> Path:
+    existing_path = state.get("requirement_spec_path")
+    return (
+        Path(existing_path)
+        if existing_path and str(existing_path).endswith(".md")
+        else workflow_artifact_root(state) / "specs" / "requirement-spec.md"
+    )
+
+
+def edited_requirement_spec_markdown(
+    state: dict[str, Any],
+    spec: dict[str, Any],
+) -> str | None:
+    path = requirement_spec_markdown_path(state)
+    if not path.is_file():
+        return None
+    content = path.read_text(encoding="utf-8")
+    return content if content != render_requirement_spec_markdown(spec) else None
 
 
 def requirement_spec_json_path(state: dict[str, Any]) -> Path:

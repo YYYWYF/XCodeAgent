@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.planning import project_planning
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
+from app.workspace.plan_documents import write_project_plan_document
 
 
 class ProjectPlanningConfirmationTests(unittest.TestCase):
@@ -115,6 +118,48 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
+
+    def test_confirmation_synchronizes_user_edited_plan_markdown(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+        plan = create_project_plan(spec)
+        plan["confirmation_status"] = "pending_user_confirmation"
+        with tempfile.TemporaryDirectory() as workspace:
+            state = {"workspace": workspace}
+            markdown_path = Path(write_project_plan_document(state, plan))
+            edited_markdown = markdown_path.read_text(encoding="utf-8").replace(
+                plan["app"]["name"],
+                "仓储计划应用",
+            )
+            markdown_path.write_text(edited_markdown, encoding="utf-8")
+            synchronized = {
+                **plan,
+                "app": {**plan["app"], "name": "仓储计划应用"},
+            }
+
+            with patch(
+                "app.graph.nodes.planning.sync_project_plan_from_markdown",
+                return_value=synchronized,
+            ) as synchronizer:
+                result = project_planning(
+                    {
+                        "request": "正确，继续",
+                        "workspace": workspace,
+                        "requirement_spec": spec,
+                        "project_plan": plan,
+                        "project_plan_path": str(markdown_path),
+                        "timeline": [],
+                    }
+                )
+
+            internal_json = json.loads(
+                Path(result["project_plan_json_path"]).read_text(encoding="utf-8")
+            )
+            preserved_markdown = markdown_path.read_text(encoding="utf-8")
+
+        synchronizer.assert_called_once_with(plan, spec, edited_markdown)
+        self.assertEqual(result["project_plan"]["app"]["name"], "仓储计划应用")
+        self.assertEqual(internal_json["app"]["name"], "仓储计划应用")
+        self.assertEqual(preserved_markdown, edited_markdown)
 
 
 if __name__ == "__main__":

@@ -5,15 +5,20 @@ import type {
   WorkflowClarification,
   WorkflowClarificationQuestion,
   WorkflowClarificationSelectionGroup,
+  WorkflowClarificationAnswer,
+  WorkflowClarificationAnswers,
   WorkflowRunPayload,
 } from "../../../../typings";
 import { cx } from "../../../../utils";
+import DetailReview from './DetailReview';
 import './WorkflowRunCard.less';
 
 const { Text } = Typography;
 const { TextArea } = Input;
 
-export type ClarificationAnswers = Record<string, string | string[]>;
+const OTHER_OPTION_VALUE = '__other__';
+
+export type ClarificationAnswers = WorkflowClarificationAnswers;
 
 type WorkflowRunCardProps = {
   disabled?: boolean;
@@ -34,16 +39,23 @@ export default function WorkflowRunCard({
   const recentEvents = workflow.events.slice(-8);
   const clarification = workflowClarification(workflow);
   const clarificationQuestions = clarification?.questions || [];
+  const detailReview = clarification?.mode === 'detail_review'
+    ? clarification.review
+    : undefined;
+  const confirmationItemCount = detailReview
+    ? (detailReview.pages?.length || 0) + (detailReview.data_sources?.length || 0)
+    : clarificationQuestions.length;
   const [answers, setAnswers] = useState<ClarificationAnswers>({});
   const canSubmitClarification =
     clarification?.status === "requires_user_input" &&
     clarificationQuestions.length > 0 &&
     clarificationQuestions.every((question, index) =>
       clarificationAnswerComplete(
+        question,
         answers[clarificationQuestionKey(question, index)],
       ),
     );
-  const updateAnswer = (key: string, value: string | string[]): void => {
+  const updateAnswer = (key: string, value: WorkflowClarificationAnswer): void => {
     setAnswers((currentAnswers) => ({
       ...currentAnswers,
       [key]: value,
@@ -69,7 +81,7 @@ export default function WorkflowRunCard({
           ))}
         </div>
       )}
-      {clarificationQuestions.length > 0 && (
+      {(clarificationQuestions.length > 0 || detailReview) && (
         <div className={cx("workflow-clarification")}>
           <div className={cx("workflow-clarification-header")}>
             <Text type="secondary">待确认事项</Text>
@@ -80,9 +92,20 @@ export default function WorkflowRunCard({
                   : "default"
               }
             >
-              {clarificationQuestions.length}
+              {confirmationItemCount}
             </Tag>
           </div>
+          {detailReview ? (
+            <DetailReview
+              disabled={disabled}
+              onConfirm={(submission) => onSubmitClarification?.(
+                workflow,
+                { detail_review: submission },
+              )}
+              review={detailReview}
+            />
+          ) : (
+            <>
           <ClarificationContext clarification={clarification} />
           {clarificationQuestions.map((question, index) => (
             <div
@@ -114,6 +137,8 @@ export default function WorkflowRunCard({
             >
               确认并继续
             </Button>
+          )}
+            </>
           )}
         </div>
       )}
@@ -250,54 +275,77 @@ function ClarificationQuestionControl({
   value,
 }: {
   disabled?: boolean;
-  onChange: (value: string | string[]) => void;
+  onChange: (value: WorkflowClarificationAnswer) => void;
   question: WorkflowClarificationQuestion;
-  value?: string | string[];
+  value?: WorkflowClarificationAnswer;
 }): ReactElement {
   const options = (question.options || [])
     .filter((option) => option.label)
     .map((option) => ({
       label: option.label || "",
-      value: option.label || "",
+      value: option.value || option.label || "",
     }));
+  const optionsWithOther =
+    question.allowOther !== false && !options.some((option) => option.value === OTHER_OPTION_VALUE)
+      ? [...options, { label: "其他", value: OTHER_OPTION_VALUE }]
+      : options;
+  const selectedValues = selectedAnswerValues(value);
+  const otherSelected = selectedValues.includes(OTHER_OPTION_VALUE);
+  const otherValue = answerOtherText(value);
+  const setSelectedValues = (selected: string[]): void => {
+    onChange({ selected, other: otherValue || undefined });
+  };
+  const setOtherValue = (other: string): void => {
+    onChange({ selected: selectedValues, other });
+  };
 
   if (question.type === "yesno") {
     return (
-      <Radio.Group
-        disabled={disabled}
-        onChange={(event) => onChange(String(event.target.value))}
-        value={typeof value === "string" ? value : undefined}
-      >
-        <Radio value="是">是</Radio>
-        <Radio value="否">否</Radio>
-      </Radio.Group>
+      <>
+        <Radio.Group
+          disabled={disabled}
+          onChange={(event) => setSelectedValues([String(event.target.value)])}
+          value={selectedValues[0]}
+        >
+          <Radio value="是">是</Radio>
+          <Radio value="否">否</Radio>
+          {question.allowOther !== false && <Radio value={OTHER_OPTION_VALUE}>其他</Radio>}
+        </Radio.Group>
+        {otherSelected && <OtherInput disabled={disabled} onChange={setOtherValue} value={otherValue} />}
+      </>
     );
   }
 
-  if (question.type === "choice" && options.length > 0) {
+  if (question.type === "choice" && optionsWithOther.length > 0) {
     if (question.multiSelect) {
       return (
-        <Checkbox.Group
-          disabled={disabled}
-          onChange={(checkedValues) => onChange(checkedValues.map(String))}
-          options={options}
-          value={Array.isArray(value) ? value : []}
-        />
+        <>
+          <Checkbox.Group
+            disabled={disabled}
+            onChange={(checkedValues) => setSelectedValues(checkedValues.map(String))}
+            options={optionsWithOther}
+            value={selectedValues}
+          />
+          {otherSelected && <OtherInput disabled={disabled} onChange={setOtherValue} value={otherValue} />}
+        </>
       );
     }
 
     return (
-      <Radio.Group
-        disabled={disabled}
-        onChange={(event) => onChange(String(event.target.value))}
-        value={typeof value === "string" ? value : undefined}
-      >
-        {options.map((option) => (
-          <Radio key={option.value} value={option.value}>
-            {option.label}
-          </Radio>
-        ))}
-      </Radio.Group>
+      <>
+        <Radio.Group
+          disabled={disabled}
+          onChange={(event) => setSelectedValues([String(event.target.value)])}
+          value={selectedValues[0]}
+        >
+          {optionsWithOther.map((option) => (
+            <Radio key={option.value} value={option.value}>
+              {option.label}
+            </Radio>
+          ))}
+        </Radio.Group>
+        {otherSelected && <OtherInput disabled={disabled} onChange={setOtherValue} value={otherValue} />}
+      </>
     );
   }
 
@@ -312,6 +360,26 @@ function ClarificationQuestionControl({
   );
 }
 
+function OtherInput({
+  disabled,
+  onChange,
+  value,
+}: {
+  disabled?: boolean;
+  onChange: (value: string) => void;
+  value: string;
+}): ReactElement {
+  return (
+    <TextArea
+      autoSize={{ minRows: 2, maxRows: 4 }}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder="请补充其他选择或说明"
+      value={value}
+    />
+  );
+}
+
 function clarificationQuestionKey(
   question: WorkflowClarificationQuestion,
   index: number,
@@ -320,10 +388,31 @@ function clarificationQuestionKey(
 }
 
 function clarificationAnswerComplete(
-  value: string | string[] | undefined,
+  question: WorkflowClarificationQuestion,
+  value: WorkflowClarificationAnswer | undefined,
 ): boolean {
+  if (question.type === "choice" || question.type === "yesno") {
+    const selected = selectedAnswerValues(value);
+    if (selected.length === 0) return false;
+    return !selected.includes(OTHER_OPTION_VALUE) || Boolean(answerOtherText(value).trim());
+  }
   if (Array.isArray(value)) return value.length > 0;
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function selectedAnswerValues(value: WorkflowClarificationAnswer | undefined): string[] {
+  if (typeof value === "object" && value && !Array.isArray(value) && "selected" in value) {
+    const selected = value.selected;
+    return Array.isArray(selected) ? selected.map(String) : [String(selected)];
+  }
+  if (Array.isArray(value)) return value.map(String);
+  return typeof value === "string" && value ? [value] : [];
+}
+
+function answerOtherText(value: WorkflowClarificationAnswer | undefined): string {
+  return typeof value === "object" && value && !Array.isArray(value) && "other" in value
+    ? String(value.other || "")
+    : "";
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -374,6 +463,16 @@ export function buildClarificationContinuationMessage(
   answers: ClarificationAnswers,
 ): string {
   const clarification = workflowClarification(workflow);
+  if (clarification?.mode === 'detail_review' && answers.detail_review) {
+    const submission = answers.detail_review;
+    if (
+      typeof submission === 'object' &&
+      !Array.isArray(submission) &&
+      'review_status' in submission
+    ) {
+      return '已整体审阅并确认全部页面和数据源设计，请合并本次结构化修改后继续。';
+    }
+  }
   const questions = clarification?.questions || [];
   const originalRequest = workflowOriginalRequest(workflow);
   if (!originalRequest || questions.length === 0) return "";
@@ -382,7 +481,7 @@ export function buildClarificationContinuationMessage(
     .map((question, index) => {
       const key = clarificationQuestionKey(question, index);
       const value = answers[key];
-      const answer = Array.isArray(value) ? value.join("、") : value;
+      const answer = clarificationAnswerText(value);
       if (!answer || !String(answer).trim()) return "";
       return `- ${
         question.header || question.dimension || `问题${index + 1}`
@@ -393,6 +492,18 @@ export function buildClarificationContinuationMessage(
   if (answerLines.length === 0) return "";
 
   return answerLines.join("\n");
+}
+
+function clarificationAnswerText(value: WorkflowClarificationAnswer | undefined): string {
+  if (typeof value === "object" && value && !Array.isArray(value) && "selected" in value) {
+    const selected = selectedAnswerValues(value).filter((item) => item !== OTHER_OPTION_VALUE);
+    const parts = selected.length > 0 ? [`已选：${selected.join("、")}`] : [];
+    const other = answerOtherText(value).trim();
+    if (other) parts.push(`其他补充：${other}`);
+    return parts.join("；");
+  }
+  if (Array.isArray(value)) return value.join("、");
+  return typeof value === "string" ? value : "";
 }
 
 function workflowClarification(

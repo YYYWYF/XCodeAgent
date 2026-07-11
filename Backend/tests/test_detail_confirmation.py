@@ -132,138 +132,86 @@ class DetailConfirmationTests(unittest.TestCase):
             "inventory_management_source_api.list"
         ])
 
-    def test_detail_confirmation_asks_user_to_select_target_first(self) -> None:
+    def test_detail_confirmation_generates_all_targets_for_one_batch_review(self) -> None:
         project_plan = create_project_plan(
             create_requirement_spec("创建一个库存管理系统")
         )
-
-        result = detail_confirmation(
-            {
-                "request": "创建一个库存管理系统",
-                "project_plan": project_plan,
-                "timeline": [],
-            }
-        )
-
-        self.assertEqual(result["status"], "requires_user_input")
-        self.assertEqual(result["phase"], "detail_confirmation")
-        self.assertEqual(result["clarification"]["status"], "requires_user_input")
-        self.assertTrue(result["detail_selection"]["targets"])
-
-    def test_detail_confirmation_builds_page_spec_from_project_plan_context(
-        self,
-    ) -> None:
-        project_plan = create_project_plan(
-            create_requirement_spec("创建一个库存管理系统")
-        )
-        selection = detail_confirmation(
-            {
-                "request": "我选择 页面：库存管理列表页 做详细设计",
-                "project_plan": project_plan,
-                "timeline": [],
-            }
-        )
-
         with patch(
             "app.graph.nodes.planning.design_page_with_chat_model",
-            side_effect=lambda _plan, spec: {
-                "id": f"page_detail:{spec['page_id']}",
-                "page_id": spec["page_id"],
-                "page_name": spec["page_name"],
-                "path": spec["path"],
-                "status": "confirmed",
-                "source_page_spec": spec,
-            },
-        ) as designer:
+            side_effect=create_page_detail_plan,
+        ) as page_designer, patch(
+            "app.graph.nodes.planning.design_data_source_with_chat_model",
+            side_effect=lambda plan, source_id, _request: create_data_source_detail_plan(
+                plan,
+                source_id,
+            ),
+        ) as source_designer:
             result = detail_confirmation(
                 {
-                    "request": "- 页面目标\n  回答：展示库存并支持筛选",
+                    "request": "开始整体详细设计",
                     "project_plan": project_plan,
-                    "selected_page_id": selection["selected_page_id"],
-                    "page_spec_draft": selection["page_spec_draft"],
                     "timeline": [],
                 }
             )
 
-        spec = result["page_spec_confirmation"]["confirmed_page_spec"]
-        designer.assert_called_once()
-        self.assertEqual(spec["page_id"], "inventory_management_list_page")
-        self.assertTrue(spec["data_source_ids"])
-        self.assertTrue(spec["api_contract_ids"])
-        self.assertIn("page_dependencies", spec)
         self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["clarification"]["mode"], "detail_review")
         self.assertEqual(
-            result["project_plan"]["page_detail_plans"][0]["page_id"],
-            spec["page_id"],
+            len(result["clarification"]["review"]["pages"]),
+            len(project_plan["frontend_pages"]),
+        )
+        self.assertEqual(
+            len(result["clarification"]["review"]["data_sources"]),
+            len(project_plan["data_sources"]),
+        )
+        self.assertEqual(page_designer.call_count, len(project_plan["frontend_pages"]))
+        self.assertEqual(source_designer.call_count, len(project_plan["data_sources"]))
+        self.assertEqual(
+            result["pending_project_plan"]["confirmation_status"],
+            "pending_user_confirmation",
         )
 
-    def test_detail_confirmation_asks_for_missing_page_spec_aspects(self) -> None:
-        project_plan = create_project_plan(
-            create_requirement_spec("创建一个库存管理系统")
+    def test_detail_review_applies_page_patch_and_confirms_once(self) -> None:
+        project_plan = create_project_plan(create_requirement_spec("创建库存系统"))
+        page_spec = create_page_spec_from_project_plan(
+            project_plan,
+            project_plan["frontend_pages"][0]["id"],
         )
-        for page in project_plan["frontend_pages"]:
-            if page["id"] == "inventory_management_list_page":
-                page["permissions"] = []
+        pending_plan = {
+            **project_plan,
+            "page_detail_plans": [create_page_detail_plan(project_plan, page_spec)],
+            "data_source_detail_plans": [],
+            "confirmation_status": "pending_user_confirmation",
+        }
+        page_id = page_spec["page_id"]
 
         result = detail_confirmation(
             {
-                "request": "我选择 页面：库存管理列表页 做详细设计",
+                "request": "已整体确认设计",
                 "project_plan": project_plan,
+                "pending_project_plan": pending_plan,
+                "detail_review_submission": {
+                    "review_status": "confirmed",
+                    "target_changes": [
+                        {
+                            "target_type": "page",
+                            "target_id": page_id,
+                            "changes": {
+                                "page_goal": "快速查看库存并支持批量导出",
+                                "interactions": ["搜索", "筛选", "批量导出"],
+                            },
+                        }
+                    ],
+                },
                 "timeline": [],
             }
         )
 
-        self.assertEqual(result["status"], "requires_user_input")
-        self.assertEqual(result["clarification"]["mode"], "page_spec_confirmation")
-        self.assertEqual(
-            result["page_spec_draft"]["page_id"], "inventory_management_list_page"
-        )
-
-    def test_detail_confirmation_can_confirm_data_source_target(self) -> None:
-        project_plan = create_project_plan(
-            create_requirement_spec("创建一个库存管理系统")
-        )
-
-        selection = detail_confirmation(
-            {
-                "request": "我选择 数据源：库存管理数据源 做详细设计",
-                "project_plan": project_plan,
-                "timeline": [],
-            }
-        )
-
-        self.assertEqual(
-            selection["selected_data_source_id"], "inventory_management_source"
-        )
-        self.assertEqual(selection["clarification"]["mode"], "data_source_spec_confirmation")
-
-        with patch(
-            "app.graph.nodes.planning.design_data_source_with_chat_model",
-            return_value={
-                "id": "data_source_detail:inventory_management_source",
-                "type": "data_source",
-                "data_source_id": "inventory_management_source",
-                "data_source_name": "库存管理数据源",
-                "status": "confirmed",
-                "schema": {"fields": [{"name": "sku", "unique": True}]},
-            },
-        ):
-            result = detail_confirmation(
-                {
-                    "request": "- 数据源设计\n  回答：sku 字段必须唯一",
-                    "project_plan": project_plan,
-                    "selected_data_source_id": selection["selected_data_source_id"],
-                    "data_source_spec_draft": selection["data_source_spec_draft"],
-                    "timeline": [],
-                }
-            )
-
-        self.assertEqual(
-            result["project_plan"]["data_source_detail_plans"][0][
-                "data_source_id"
-            ],
-            "inventory_management_source",
-        )
+        detail = result["project_plan"]["page_detail_plans"][0]
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
+        self.assertEqual(detail["page_goal"], "快速查看库存并支持批量导出")
+        self.assertEqual(detail["interactions"], ["搜索", "筛选", "批量导出"])
 
     def test_detail_confirmation_promotes_pending_plan_after_user_confirmation(
         self,

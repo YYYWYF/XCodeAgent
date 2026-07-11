@@ -3,6 +3,7 @@ import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import type {
   ApplicationConfig,
+  WorkflowClarificationAnswers,
   WorkflowDebugOptions,
   WorkflowEvent,
   WorkflowRunPayload,
@@ -12,7 +13,7 @@ import type {
 type SendWorkflowMessageOptions = {
   workspaceRoot?: string
   application?: ApplicationConfig
-  clarificationAnswers?: Record<string, string | string[]>
+  clarificationAnswers?: WorkflowClarificationAnswers
   originalRequest?: string
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload

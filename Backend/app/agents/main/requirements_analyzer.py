@@ -22,6 +22,14 @@ def _requirements_prompt(
         if existing_spec
         else "Create a new RequirementSpec from the user request.\n"
     )
+    clarification_policy = (
+        "Before asking the user, silently audit every required aspect together, including the "
+        "information needed to derive API contracts, page inventory, data-source inventory, business "
+        "flows, roles, and acceptance criteria. In each clarification turn, batch every material missing "
+        "or ambiguous item into one to four focused questions. Prefer explicit assumptions when safe, "
+        "but ask another consolidated clarification when the latest answer still leaves material "
+        "information unresolved.\n"
+    )
     return (
         "You are the requirements model for an app-generation workflow.\n"
         "This is a requirements-only boundary. Do not call subagents, do not delegate tasks, "
@@ -31,10 +39,13 @@ def _requirements_prompt(
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 用户角色, 功能模块, "
         "页面清单, 数据源清单, 业务流程, 验收标准.\n"
-        "If any aspect is missing, ambiguous, or risky to assume, call the ask_user tool with one to "
-        "four focused questions. The questions can be choice, text, or yesno, and you should decide "
-        "which questions are necessary from the user's request. After calling ask_user, do not invent "
-        "answers and do not continue planning until the user answers.\n"
+        f"{clarification_policy}"
+        "When asking, questions can be choice, text, or yesno. For every choice question, first decide "
+        "whether the options are mutually exclusive. Set multiSelect=true for independently combinable "
+        "capabilities or requirements (for example search, filtering, import/export, and pagination); "
+        "do not turn their combinations into several single-choice options. Set multiSelect=false only "
+        "for genuine either-or decisions. After calling ask_user, do not invent answers and do not "
+        "continue planning until the user answers.\n"
         "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
         "without markdown fences or commentary. It must include app_info, user_roles, "
         "feature_modules, pages, data_sources, business_flows, acceptance_criteria, and assumptions. "

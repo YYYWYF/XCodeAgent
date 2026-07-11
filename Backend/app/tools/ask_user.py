@@ -9,11 +9,16 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 QuestionType = Literal["choice", "text", "yesno"]
+OTHER_OPTION_VALUE = "__other__"
 
 
 class AskUserOption(BaseModel):
     label: str = Field(description="Display text, ideally 1-5 words.")
     description: str = Field(description="Brief explanation of this option.")
+    value: str | None = Field(
+        default=None,
+        description="Stable submitted value. Omit for ordinary options.",
+    )
 
 
 class AskUserQuestion(BaseModel):
@@ -24,16 +29,25 @@ class AskUserQuestion(BaseModel):
     type: QuestionType = Field(default="choice", description="Question input type.")
     options: list[AskUserOption] | None = Field(
         default=None,
-        description="Required for choice questions. Provide 2-4 options.",
+        description="Required for choice questions. Provide 2-4 business options.",
     )
     multi_select: bool = Field(
         default=False,
         alias="multiSelect",
-        description="Whether a choice question allows multiple options.",
+        description=(
+            "Set true when options are independently combinable capabilities or requirements, "
+            "such as search, filter, import/export, and pagination. Keep false only when the "
+            "options are mutually exclusive alternatives."
+        ),
     )
     placeholder: str | None = Field(
         default=None,
         description="Hint text for free-form text input.",
+    )
+    allow_other: bool = Field(
+        default=True,
+        alias="allowOther",
+        description="Whether a selectable question includes an Other option with free-form input.",
     )
 
 
@@ -52,11 +66,32 @@ def _normalize_question(question: AskUserQuestion) -> dict[str, Any]:
         options = payload.get("options")
         if not isinstance(options, list) or len(options) < 2:
             raise ValueError("choice questions require 2-4 options")
-        payload["options"] = options[:4]
+        payload["options"] = _with_other_option(options)
+    elif payload.get("type") == "yesno":
+        payload.pop("options", None)
+        payload["allowOther"] = True
     else:
         payload.pop("options", None)
         payload.pop("multiSelect", None)
+        payload.pop("allowOther", None)
     return payload
+
+
+def _with_other_option(options: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    business_options = [
+        option
+        for option in options
+        if option.get("value") != OTHER_OPTION_VALUE
+        and option.get("label") != "其他"
+    ][:4]
+    return [
+        *business_options,
+        {
+            "label": "其他",
+            "description": "补充未覆盖的需求或偏好。",
+            "value": OTHER_OPTION_VALUE,
+        },
+    ]
 
 
 def build_ask_user_payload(questions: list[AskUserQuestion]) -> dict[str, Any]:
@@ -159,11 +194,18 @@ def _valid_ask_user_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
     questions = payload.get("questions")
     if not isinstance(questions, list):
         return None
+    try:
+        normalized = build_ask_user_payload(
+            [AskUserQuestion.model_validate(question) for question in questions[:4]]
+        )
+    except (TypeError, ValueError):
+        return None
     return {
-        "mode": payload.get("mode") or "ask_user_question",
-        "status": payload.get("status") or "requires_user_input",
-        "question_schema": "gemini_cli.ask_user.v1",
-        "questions": questions[:4],
-        "assumptions": payload.get("assumptions") if isinstance(payload.get("assumptions"), list) else [],
-        "message": payload.get("message") or "Agent requested user input before continuing.",
+        **normalized,
+        "mode": payload.get("mode") or normalized["mode"],
+        "status": payload.get("status") or normalized["status"],
+        "assumptions": payload.get("assumptions")
+        if isinstance(payload.get("assumptions"), list)
+        else [],
+        "message": payload.get("message") or normalized["message"],
     }

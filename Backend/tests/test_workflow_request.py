@@ -74,6 +74,23 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertNotIn("原始需求：\n请基于原始需求", inputs["request"])
         self.assertIn("回答：库管员", inputs["request"])
 
+    def test_merges_other_choice_input_as_a_requirement_supplement(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "originalRequest": "创建库存管理系统",
+                "clarificationAnswers": {
+                    "库存页面": {
+                        "selected": ["库存列表"],
+                        "other": "列表必须支持按仓库分组并导出 Excel",
+                    }
+                },
+            }
+        )
+
+        self.assertIn("已选：库存列表", inputs["request"])
+        self.assertIn("其他补充：列表必须支持按仓库分组并导出 Excel", inputs["request"])
+        self.assertNotIn("__other__", inputs["request"])
+
     def test_infers_detail_confirmation_resume_and_preserves_plan_state(self) -> None:
         inputs = workflow_run_inputs(
             {
@@ -102,6 +119,43 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(
             inputs["resume_values"]["page_spec_draft"],
             {"page_id": "inventory_page"},
+        )
+
+    def test_extracts_structured_batch_detail_review_submission(self) -> None:
+        submission = {
+            "review_status": "confirmed",
+            "target_changes": [
+                {
+                    "target_type": "page",
+                    "target_id": "inventory_page",
+                    "changes": {"interactions": ["搜索", "导出"]},
+                }
+            ],
+        }
+        inputs = workflow_run_inputs(
+            {
+                "clarificationAnswers": {"detail_review": submission},
+                "forwardedProps": {
+                    "resumeState": {
+                        "events": [
+                            {
+                                "type": "workflow.node.completed",
+                                "node": {"id": "detail_confirmation"},
+                                "status": "requires_user_input",
+                            }
+                        ],
+                        "result": {
+                            "pending_project_plan": {"confirmation_status": "pending_user_confirmation"}
+                        },
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "detail_confirmation")
+        self.assertEqual(
+            inputs["resume_values"]["detail_review_submission"],
+            submission,
         )
 
     def test_infers_project_planning_resume_and_preserves_plan_state(self) -> None:

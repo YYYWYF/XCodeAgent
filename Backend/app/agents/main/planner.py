@@ -47,7 +47,11 @@ def _planning_prompt(
         "API contracts are the canonical backend/frontend boundary. Data sources and pages may only "
         "reference contract schemas/endpoints and must not define additional fields. Define reusable "
         "project-level endpoints here rather than inventing them per page. Keep ids stable and reuse "
-        "ids from RequirementSpec whenever possible.\n"
+        "ids from RequirementSpec whenever possible. Before returning, internally audit whether the "
+        "plan contains the information needed to derive API contracts, page inventory, data-source "
+        "inventory, dependencies, roles, flows, and acceptance criteria. Resolve ordinary omissions "
+        "with explicit assumptions and risks in this one plan; do not return questions or defer them "
+        "to later confirmation rounds.\n"
         f"{revision_context}RequirementSpec:\n"
         f"{json.dumps(requirement_spec, ensure_ascii=False)}"
     )
