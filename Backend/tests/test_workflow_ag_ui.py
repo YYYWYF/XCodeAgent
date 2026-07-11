@@ -16,7 +16,7 @@ class FakeWorkflowGraph:
 
     async def astream(self, initial_state, *, config, stream_mode):
         self.initial_states.append(initial_state)
-        yield {
+        yield "updates", {
             "classify_request_complexity": {
                 "phase": "classify_request_complexity",
                 "status": "completed",
@@ -25,7 +25,7 @@ class FakeWorkflowGraph:
                 "timeline": ["classified"],
             }
         }
-        yield {
+        yield "updates", {
             "requirements": {
                 "phase": "requirements",
                 "requirement_spec_path": "var/specs/requirement-spec.md",
@@ -62,7 +62,7 @@ class FakeWorkflowGraph:
 
 class FakeProjectPlanningWaitGraph:
     async def astream(self, initial_state, *, config, stream_mode):
-        yield {
+        yield "updates", {
             "project_planning": {
                 "phase": "project_planning",
                 "status": "requires_user_input",
@@ -102,7 +102,7 @@ class FakeProjectPlanningWaitGraph:
 
 class FakeCodeChangesGraph:
     async def astream(self, initial_state, *, config, stream_mode):
-        yield {
+        yield "updates", {
             "direct_modification": {
                 "phase": "direct_modification",
                 "status": "completed",
@@ -120,6 +120,121 @@ class FakeCodeChangesGraph:
                 "quality_gate_passed": True,
                 "code_change_sets": [_fake_code_change_set()],
                 "timeline": ["direct_modification", "finalize_project"],
+            }
+        )
+
+
+class FakeStreamingToolGraph:
+    async def astream(self, initial_state, *, config, stream_mode):
+        yield (
+            "messages",
+            (
+                SimpleNamespace(
+                    id="assistant-tool-message",
+                    content="",
+                    additional_kwargs={},
+                    tool_call_chunks=[
+                        {"id": "call-1", "name": "read_file", "args": '{"path":', "index": 0}
+                    ],
+                ),
+                {"langgraph_node": "direct_modification"},
+            ),
+        )
+        yield (
+            "messages",
+            (
+                SimpleNamespace(
+                    id="assistant-tool-message",
+                    content="",
+                    additional_kwargs={},
+                    tool_call_chunks=[
+                        {"id": None, "name": None, "args": '"README.md"}', "index": 0}
+                    ],
+                ),
+                {"langgraph_node": "direct_modification"},
+            ),
+        )
+        yield (
+            "messages",
+            (
+                SimpleNamespace(
+                    id="tool-result-message",
+                    content="read result",
+                    additional_kwargs={},
+                    tool_call_id="call-1",
+                    tool_call_chunks=[],
+                ),
+                {"langgraph_node": "direct_modification"},
+            ),
+        )
+        yield (
+            "updates",
+            {
+                "direct_modification": {
+                    "phase": "direct_modification",
+                    "status": "completed",
+                    "timeline": ["direct_modification"],
+                }
+            },
+        )
+
+    def get_state(self, config):
+        return SimpleNamespace(
+            values={
+                "phase": "finalize_project",
+                "status": "completed",
+                "summary": "done",
+                "timeline": ["direct_modification", "finalize_project"],
+            }
+        )
+
+
+class FakeAskUserToolGraph:
+    async def astream(self, initial_state, *, config, stream_mode):
+        yield (
+            "messages",
+            (
+                SimpleNamespace(
+                    id="assistant-ask-user",
+                    content="",
+                    additional_kwargs={},
+                    tool_call_chunks=[
+                        {
+                            "id": "ask-1",
+                            "name": "ask_user",
+                            "args": '{"questions":[{"question":"Which role?"}]}',
+                            "index": 0,
+                        }
+                    ],
+                ),
+                {"langgraph_node": "requirements"},
+            ),
+        )
+        yield (
+            "updates",
+            {
+                "requirements": {
+                    "phase": "requirements",
+                    "status": "requires_user_input",
+                    "clarification": {
+                        "status": "requires_user_input",
+                        "questions": [{"id": "role", "question": "Which role?"}],
+                    },
+                    "timeline": ["requirements"],
+                }
+            },
+        )
+
+    def get_state(self, config):
+        return SimpleNamespace(
+            values={
+                "phase": "requirements",
+                "status": "requires_user_input",
+                "clarification": {
+                    "status": "requires_user_input",
+                    "questions": [{"id": "role", "question": "Which role?"}],
+                },
+                "timeline": ["requirements"],
             }
         )
 
@@ -148,6 +263,47 @@ def _fake_code_change_set() -> dict:
 
 
 class WorkflowAgUiStreamTests(unittest.TestCase):
+    def test_ask_user_tool_ends_before_run_finishes_without_tool_message(self) -> None:
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeAskUserToolGraph(),
+                payload={
+                    "threadId": "thread-ask",
+                    "runId": "run-ask",
+                    "messages": [{"role": "user", "content": "make an app"}],
+                },
+                accept="text/event-stream",
+            )
+            return [frame async for frame in stream]
+
+        payload = "\n".join(asyncio.run(collect()))
+
+        self.assertIn("TOOL_CALL_RESULT", payload)
+        self.assertLess(payload.index("TOOL_CALL_END"), payload.index("RUN_FINISHED"))
+        self.assertLess(payload.index("TOOL_CALL_RESULT"), payload.index("RUN_FINISHED"))
+
+    def test_stream_emits_incremental_standard_tool_call_events(self) -> None:
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeStreamingToolGraph(),
+                payload={
+                    "threadId": "thread-tools",
+                    "runId": "run-tools",
+                    "messages": [{"role": "user", "content": "read the readme"}],
+                },
+                accept="text/event-stream",
+            )
+            return [frame async for frame in stream]
+
+        payload = "\n".join(asyncio.run(collect()))
+
+        self.assertIn("TOOL_CALL_START", payload)
+        self.assertEqual(payload.count("TOOL_CALL_ARGS"), 2)
+        self.assertIn("TOOL_CALL_END", payload)
+        self.assertIn("TOOL_CALL_RESULT", payload)
+        self.assertIn('\\"README.md\\"', payload)
+        self.assertIn("read result", payload)
+
     def test_stream_emits_ag_ui_frames_for_openai_backed_workflow(self) -> None:
         graph = FakeWorkflowGraph()
 

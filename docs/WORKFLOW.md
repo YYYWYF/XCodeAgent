@@ -13,6 +13,14 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 7. 所有 Agent 结果必须结构化，并经过确定性校验后才能更新业务状态。
 8. 测试是否通过由确定性的质量门禁判断，不能只相信 Agent 的自然语言结论。
 
+### 工具调用流式可视化映射
+
+- learn-coding-agent：保持“生成工具输入、执行、立即回传结果并继续验证”的紧凑循环，工具事件不改变工作流阶段边界。
+- OpenCode：使用稳定的 tool call id 更新同一条前端记录，参数按 delta 追加，执行结果到达后将该记录收敛为完成状态。
+- Deep Agents 与 128k 上下文：LangGraph 的 `messages` 流只转发当前工具片段；大型参数和结果仅在展示层限长保留，不写入整体 Graph State。
+
+后端通过 AG-UI 标准 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`、`TOOL_CALL_RESULT` 事件实时传输工具调用。`agent-process` 自定义事件仅补充思考和工作流阶段展示，不作为工具卡片的数据协议。
+
 ## 已确认的主 Graph
 
 主流程顺序如下：

@@ -12,6 +12,10 @@ from ag_ui.core import (
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
+    ToolCallResultEvent,
+    ToolCallStartEvent,
 )
 from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
@@ -225,6 +229,7 @@ def build_workflow_ag_ui_stream(
             )
             reasoning_steps: dict[str, str] = {}
             tool_steps: dict[str, dict[str, str]] = {}
+            tool_indexes: dict[int, str] = {}
 
             async for stream_mode, chunk in graph.astream(
                 initial_state,
@@ -239,6 +244,7 @@ def build_workflow_ag_ui_stream(
                         metadata=metadata,
                         reasoning_steps=reasoning_steps,
                         tool_steps=tool_steps,
+                        tool_indexes=tool_indexes,
                         sequence=process_sequence,
                     )
                     for frame in process_frames:
@@ -248,6 +254,14 @@ def build_workflow_ag_ui_stream(
                 for node_name, update in chunk.items():
                     if not isinstance(update, dict):
                         continue
+
+                    for frame in _pending_tool_frames(
+                        encoder,
+                        update=update,
+                        tool_steps=tool_steps,
+                        sequence=process_sequence,
+                    ):
+                        yield frame
 
                     detail = _workflow_node_detail(node_name, update)
                     node_payload = {
@@ -677,6 +691,7 @@ def _message_process_frames(
     metadata: Any,
     reasoning_steps: dict[str, str],
     tool_steps: dict[str, dict[str, str]],
+    tool_indexes: dict[int, str],
     sequence: int,
 ) -> tuple[list[str], int]:
     frames: list[str] = []
@@ -701,16 +716,71 @@ def _message_process_frames(
             )
         )
 
+    tool_call_id = str(getattr(message_chunk, "tool_call_id", "") or "")
+    if tool_call_id and tool_call_id in tool_steps:
+        current = tool_steps[tool_call_id]
+        if current.get("result_emitted") != "true":
+            content = getattr(message_chunk, "content", "")
+            result = content if isinstance(content, str) else str(content)
+            current["result_emitted"] = "true"
+            if current.get("ended") != "true":
+                current["ended"] = "true"
+                frames.append(encoder.encode(ToolCallEndEvent(toolCallId=tool_call_id)))
+            frames.append(
+                encoder.encode(
+                    ToolCallResultEvent(
+                        messageId=message_id,
+                        toolCallId=tool_call_id,
+                        content=result,
+                        role="tool",
+                    )
+                )
+            )
+            sequence += 1
+            frames.append(
+                _process_frame(
+                    encoder,
+                    id=f"tool:{tool_call_id}",
+                    kind="command" if _is_command_tool(current["name"]) else "tool",
+                    status="completed",
+                    title=_tool_title(current["name"], current["args"], running=False),
+                    detail=current["args"],
+                    result=result,
+                    sequence=sequence,
+                )
+            )
+
     for tool_chunk in getattr(message_chunk, "tool_call_chunks", None) or []:
         if not isinstance(tool_chunk, dict):
             continue
+        tool_index = tool_chunk.get("index")
         tool_id = str(tool_chunk.get("id") or "")
+        if tool_id and isinstance(tool_index, int):
+            tool_indexes[tool_index] = tool_id
+        if not tool_id and isinstance(tool_index, int):
+            tool_id = tool_indexes.get(tool_index, "")
         if not tool_id:
             continue
         current = tool_steps.setdefault(tool_id, {"name": "unknown", "args": ""})
+        if current.get("started") != "true":
+            current["started"] = "true"
+            frames.append(
+                encoder.encode(
+                    ToolCallStartEvent(
+                        toolCallId=tool_id,
+                        toolCallName=str(tool_chunk.get("name") or current["name"]),
+                        parentMessageId=message_id,
+                    )
+                )
+            )
         if tool_chunk.get("name"):
             current["name"] = str(tool_chunk["name"])
-        current["args"] = (current["args"] + str(tool_chunk.get("args") or ""))[-PROCESS_DETAIL_LIMIT:]
+        args_delta = str(tool_chunk.get("args") or "")
+        current["args"] = (current["args"] + args_delta)[-PROCESS_DETAIL_LIMIT:]
+        if args_delta:
+            frames.append(
+                encoder.encode(ToolCallArgsEvent(toolCallId=tool_id, delta=args_delta))
+            )
         sequence += 1
         kind = "command" if _is_command_tool(current["name"]) else "tool"
         frames.append(
@@ -760,12 +830,64 @@ def _tool_result_frames(
         if not tool_call_id or tool_call_id not in tool_steps:
             continue
         current = tool_steps[tool_call_id]
+        if current.get("result_emitted") == "true":
+            continue
         content = getattr(message, "content", "")
         result = content if isinstance(content, str) else str(content)
+        current["result_emitted"] = "true"
+        if current.get("ended") != "true":
+            current["ended"] = "true"
+            yield encoder.encode(ToolCallEndEvent(toolCallId=tool_call_id))
+        yield encoder.encode(
+            ToolCallResultEvent(
+                messageId=str(getattr(message, "id", "") or f"tool-result:{tool_call_id}"),
+                toolCallId=tool_call_id,
+                content=result,
+                role="tool",
+            )
+        )
         yield _process_frame(
             encoder,
             id=f"tool:{tool_call_id}",
             kind="command" if _is_command_tool(current["name"]) else "tool",
+            status="completed",
+            title=_tool_title(current["name"], current["args"], running=False),
+            detail=current["args"],
+            result=result,
+            sequence=sequence + 1,
+        )
+
+
+def _pending_tool_frames(
+    encoder: EventEncoder,
+    *,
+    update: dict[str, Any],
+    tool_steps: dict[str, dict[str, str]],
+    sequence: int,
+) -> Iterable[str]:
+    clarification = update.get("clarification")
+    for tool_call_id, current in tool_steps.items():
+        if current.get("started") != "true" or current.get("ended") == "true":
+            continue
+        current["ended"] = "true"
+        yield encoder.encode(ToolCallEndEvent(toolCallId=tool_call_id))
+
+        if current.get("name") != "ask_user" or not isinstance(clarification, dict):
+            continue
+        result = json.dumps(clarification, ensure_ascii=False)
+        current["result_emitted"] = "true"
+        yield encoder.encode(
+            ToolCallResultEvent(
+                messageId=f"tool-result:{tool_call_id}",
+                toolCallId=tool_call_id,
+                content=result,
+                role="tool",
+            )
+        )
+        yield _process_frame(
+            encoder,
+            id=f"tool:{tool_call_id}",
+            kind="tool",
             status="completed",
             title=_tool_title(current["name"], current["args"], running=False),
             detail=current["args"],

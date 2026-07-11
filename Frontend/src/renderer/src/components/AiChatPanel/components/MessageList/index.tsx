@@ -49,6 +49,9 @@ export default function MessageList({
         ) : (
           visibleMessages.map((message) => {
             const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
+            const nonToolSteps = message.processSteps?.filter(
+              (step) => step.kind !== 'tool' && step.kind !== 'command'
+            )
             return (
               <article className={cx('ai-message', message.role)} key={message.id}>
                 <div className={cx('ai-message-author')}>
@@ -62,10 +65,10 @@ export default function MessageList({
                 <div className={cx('ai-message-content')}>
                   {message.role === 'assistant' ? (
                     <>
-                      {message.processSteps && message.processSteps.length > 0 && (
-                        <ProcessSteps loading={loading} steps={message.processSteps} />
+                      {nonToolSteps && nonToolSteps.length > 0 && (
+                        <ProcessSteps loading={loading} steps={nonToolSteps} />
                       )}
-                      {!message.processSteps && message.toolCalls?.map((toolCall) => (
+                      {message.toolCalls?.map((toolCall) => (
                         <ToolCallCard key={toolCall.id} toolCall={toolCall} />
                       ))}
                       <MarkdownContent content={message.content} />

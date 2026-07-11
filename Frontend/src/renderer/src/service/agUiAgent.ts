@@ -50,14 +50,6 @@ export type ProcessStepRecord = {
   appendDetail?: boolean
 }
 
-type ToolCallSubscriber = {
-  onToolCallStartEvent?: (input: { event: unknown }) => void
-  onToolCallArgsEvent?: (input: { event: unknown }) => void
-  onToolCallEndEvent?: (input: { event: unknown }) => void
-  onToolCallResultEvent?: (input: { event: unknown }) => void
-  onToolCallChunkEvent?: (input: { event: unknown }) => void
-}
-
 function getWorkflowUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
   return agentBaseUrl
@@ -96,7 +88,7 @@ export class AgUiChatSession {
       toolCalls = nextToolCalls
       options.onToolCalls?.(toolCalls)
     }
-    const subscriber: AgentSubscriber & ToolCallSubscriber = {
+    const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
         if (event.name === 'agent-process') {
           const step = readProcessStep(event.value)
@@ -125,9 +117,6 @@ export class AgUiChatSession {
       },
       onToolCallArgsEvent: ({ event }) => {
         emitToolCalls(applyToolCallEvent(toolCalls, 'args', event))
-      },
-      onToolCallChunkEvent: ({ event }) => {
-        emitToolCalls(applyToolCallEvent(toolCalls, 'chunk', event))
       },
       onToolCallEndEvent: ({ event }) => {
         emitToolCalls(applyToolCallEvent(toolCalls, 'end', event))
@@ -210,7 +199,7 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
 
 function applyToolCallEvent(
   toolCalls: ToolCallRecord[],
-  eventType: 'start' | 'args' | 'chunk' | 'end' | 'result',
+  eventType: 'start' | 'args' | 'end' | 'result',
   event: unknown
 ): ToolCallRecord[] {
   const eventObject = objectValue(event)
@@ -229,7 +218,7 @@ function applyToolCallEvent(
     status: existing?.status || 'running'
   }
 
-  if (eventType === 'args' || eventType === 'chunk') {
+  if (eventType === 'args') {
     nextToolCall.args += delta
   }
 
