@@ -36,19 +36,38 @@ export default function ProcessSteps({ loading, steps }: Props): ReactElement {
         <span className={cx('process-steps-status')}>
           {loading ? <LoadingOutlined spin /> : <CheckCircleOutlined />}
         </span>
-        <Text strong>{loading ? '正在处理' : '已处理'}</Text>
-        <Text type="secondary">· {steps.length} 个步骤</Text>
+        <span className={cx('process-steps-heading')}>
+          <Text strong>{loading ? 'Agent 正在执行' : '任务已完成'}</Text>
+          <Text type="secondary">
+            {loading ? currentStepLabel(steps) : `${steps.length} 个步骤`}
+          </Text>
+        </span>
       </summary>
       <div className={cx('process-steps-list')}>
-        {steps.map((step) => <ProcessStep key={step.id} settled={!loading} step={step} />)}
+        {steps.map((step, index) => (
+          <ProcessStep
+            isLast={index === steps.length - 1}
+            key={step.id}
+            settled={!loading}
+            step={step}
+          />
+        ))}
       </div>
     </details>
   )
 }
 
-function ProcessStep({ settled, step }: { settled: boolean; step: ProcessStepRecord }): ReactElement {
+function ProcessStep({
+  isLast,
+  settled,
+  step
+}: {
+  isLast: boolean
+  settled: boolean
+  step: ProcessStepRecord
+}): ReactElement {
   return (
-    <details className={cx('process-step', step.kind, step.status)}>
+    <details className={cx('process-step', step.kind, step.status, isLast && 'last')} open={step.status === 'running'}>
       <summary className={cx('process-step-summary')}>
         <span className={cx('process-step-icon')}>{stepIcon(step, settled)}</span>
         <Text>{settled ? settledTitle(step.title) : step.title}</Text>
@@ -59,6 +78,12 @@ function ProcessStep({ settled, step }: { settled: boolean; step: ProcessStepRec
       </div>
     </details>
   )
+}
+
+function currentStepLabel(steps: ProcessStepRecord[]): string {
+  const activeIndex = steps.findIndex((step) => step.status === 'running')
+  if (activeIndex < 0) return `正在准备 · ${steps.length} 个步骤`
+  return `第 ${activeIndex + 1} / ${steps.length} 步 · ${steps[activeIndex].title}`
 }
 
 function DetailBlock({ label, value }: { label: string; value: string }): ReactElement {

@@ -1,23 +1,21 @@
 import {
   CheckCircleOutlined,
   CodeOutlined,
-  CommentOutlined,
+  ExportOutlined,
   FileTextOutlined,
 } from '@ant-design/icons';
-import { Button, Input, Space, Tag, Typography } from 'antd';
-import { useMemo, useState } from 'react';
+import { Button, Space, Tag, Typography } from 'antd';
+import { useMemo } from 'react';
 import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../../../typings';
 import { cx } from '../../../../utils';
 import './CodeChangeCard.less';
 
 const { Text } = Typography;
-const { TextArea } = Input;
 
 type Props = {
   codeChanges: WorkspaceCodeChangeSet;
   loading: boolean;
   onApproveAll: () => void;
-  onFeedback: (feedback: string) => void;
   onOpenFile: (path: string) => void;
 };
 
@@ -39,20 +37,11 @@ export default function CodeChangeCard({
   codeChanges,
   loading,
   onApproveAll,
-  onFeedback,
   onOpenFile,
 }: Props) {
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [feedback, setFeedback] = useState('');
   const groupedChanges = useMemo(() => groupCodeChanges(codeChanges.files), [codeChanges.files]);
   const pending = codeChanges.status === 'pending_approval' && Boolean(codeChanges.approvals?.length);
   const resolved = codeChanges.status === 'applied' || codeChanges.status === 'rejected';
-
-  const handleFeedback = () => {
-    const nextFeedback = feedback.trim();
-    if (!nextFeedback || loading) return;
-    onFeedback(nextFeedback);
-  };
 
   return (
     <div className={cx('code-change-card', pending && 'pending', resolved && 'resolved')}>
@@ -62,16 +51,24 @@ export default function CodeChangeCard({
             <CodeOutlined />
           </span>
           <div className={cx('code-change-title')}>
-            <Text strong>{pending ? '待审核变更' : `已编辑 ${codeChanges.summary.files} 个文件`}</Text>
+            <Text strong>{pending ? '待审核变更' : '文件改动'}</Text>
+            <Text className={cx('code-change-count')}>{codeChanges.summary.files} 个文件已变更</Text>
             <span className={cx('code-change-total')}>
               <span className={cx('addition')}>+{codeChanges.summary.additions}</span>
               <span className={cx('deletion')}>-{codeChanges.summary.deletions}</span>
             </span>
           </div>
         </Space>
-        <Tag color={pending ? 'gold' : codeChanges.status === 'rejected' ? 'red' : 'green'}>
-          {formatStatus(codeChanges.status)}
-        </Tag>
+        {!pending && groupedChanges.length > 0 && (
+          <Button
+            icon={<ExportOutlined />}
+            onClick={() => onOpenFile(groupedChanges[0].path)}
+            size="small"
+          >
+            查看全部变更
+          </Button>
+        )}
+        {pending && <Tag color="gold">{formatStatus(codeChanges.status)}</Tag>}
       </div>
 
       <div className={cx('code-change-file-list')}>
@@ -100,41 +97,10 @@ export default function CodeChangeCard({
           <Button disabled={loading} loading={loading} onClick={onApproveAll} type="primary">
             审核通过
           </Button>
-          <Button
-            disabled={loading}
-            icon={<CommentOutlined />}
-            onClick={() => setFeedbackOpen((open) => !open)}
-          >
-            输入其他意见
-          </Button>
         </div>
       )}
 
-      {resolved && (
-        <Text className={cx('code-change-status')}>
-          <CheckCircleOutlined /> {formatStatus(codeChanges.status)}
-        </Text>
-      )}
-
-      {feedbackOpen && pending && (
-        <div className={cx('code-change-feedback')}>
-          <TextArea
-            autoSize={{ minRows: 2, maxRows: 4 }}
-            disabled={loading}
-            placeholder="告诉 agent 你希望它怎么调整这批变更..."
-            value={feedback}
-            onChange={(event) => setFeedback(event.target.value)}
-          />
-          <Button
-            disabled={!feedback.trim() || loading}
-            loading={loading}
-            onClick={handleFeedback}
-            type="primary"
-          >
-            发送意见
-          </Button>
-        </div>
-      )}
+      {resolved && <span className={cx('code-change-resolved-mark')}><CheckCircleOutlined /></span>}
     </div>
   );
 }

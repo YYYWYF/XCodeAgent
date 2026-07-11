@@ -1,10 +1,23 @@
 .@{class-prefix}-code-diff-detail-panel {
+  --code-panel-bg: #ffffff;
+  --code-panel-header: #ffffff;
+  --code-panel-active: #eef5ff;
+  --code-panel-border: #d8e5f7;
   display: flex;
   height: 100%;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  background: var(--wb-editor);
+  color: var(--wb-text);
+  background: var(--code-panel-bg);
+  border-left: 1px solid var(--code-panel-border);
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] .@{class-prefix}-code-diff-detail-panel {
+  --code-panel-bg: var(--wb-canvas);
+  --code-panel-header: var(--wb-canvas);
+  --code-panel-active: var(--wb-surface-subtle);
+  --code-panel-border: var(--wb-border);
 }
 
 .@{class-prefix}-code-diff-detail-header {
@@ -14,8 +27,8 @@
   justify-content: space-between;
   gap: 12px;
   padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--wb-border);
-  background: var(--wb-surface-subtle);
+  border-bottom: 1px solid var(--code-panel-border);
+  background: var(--code-panel-header);
 
   h4.ant-typography {
     margin: 5px 0 4px;
@@ -48,7 +61,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  background: var(--wb-editor);
+  background: var(--code-panel-bg);
 }
 
 .@{class-prefix}-code-diff-active-file {
@@ -61,9 +74,9 @@
   justify-content: space-between;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--wb-border);
-  background: color-mix(in srgb, var(--wb-editor) 92%, transparent);
-  box-shadow: none;
+  border-bottom: 1px solid var(--code-panel-border);
+  background: color-mix(in srgb, var(--code-panel-active) 94%, transparent);
+  box-shadow: 0 1px 0 rgba(47, 114, 232, 0.05);
 
   > div {
     display: inline-flex;
@@ -74,7 +87,7 @@
 
     .anticon {
       flex: 0 0 auto;
-      color: var(--wb-text-secondary);
+      color: var(--wb-accent);
     }
   }
 
@@ -94,7 +107,7 @@
 }
 
 .@{class-prefix}-code-diff-block {
-  border-bottom: 1px solid var(--wb-border);
+  border-bottom: 1px solid var(--code-panel-border);
 }
 
 .@{class-prefix}-code-diff-block-title {
@@ -102,17 +115,17 @@
   align-items: center;
   gap: 6px;
   padding: 10px 16px;
-  background: var(--wb-surface-subtle);
+  background: var(--code-panel-header);
 }
 
 .@{class-prefix}-code-diff-view {
   overflow: auto;
-  --diff-background-color: var(--wb-editor);
+  --diff-background-color: var(--code-panel-bg);
   --diff-text-color: var(--wb-text);
   --diff-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  --diff-gutter-insert-background-color: color-mix(in srgb, var(--wb-editor) 94%, var(--wb-code-add-text));
+  --diff-gutter-insert-background-color: color-mix(in srgb, var(--code-panel-bg) 92%, var(--wb-code-add-text));
   --diff-gutter-insert-text-color: var(--wb-code-add-text);
-  --diff-gutter-delete-background-color: color-mix(in srgb, var(--wb-editor) 94%, var(--wb-code-delete-text));
+  --diff-gutter-delete-background-color: color-mix(in srgb, var(--code-panel-bg) 92%, var(--wb-code-delete-text));
   --diff-gutter-delete-text-color: var(--wb-code-delete-text);
   --diff-code-insert-background-color: var(--wb-code-add);
   --diff-code-insert-text-color: var(--wb-code-add-text);
@@ -193,7 +206,7 @@
   font-size: 12px;
   line-height: 1.55;
   white-space: pre;
-  background: var(--wb-editor);
+  background: var(--code-panel-bg);
 }
 
 .@{class-prefix}-code-diff-empty {
@@ -204,5 +217,31 @@
 .@{class-prefix}-code-diff-truncated {
   display: block;
   padding: 8px 16px 12px;
-  background: var(--wb-surface-subtle);
+  background: var(--code-panel-header);
+}
+
+.@{class-prefix}-workbench-shell[data-theme='light'] {
+  .@{class-prefix}-code-diff-detail-header h4.ant-typography,
+  .@{class-prefix}-code-diff-active-file .ant-typography {
+    color: #15243b;
+  }
+
+  .@{class-prefix}-code-diff-close-button.ant-btn:hover,
+  .@{class-prefix}-code-diff-close-button.ant-btn:focus-visible {
+    color: #1e63c5;
+    background: #e8f1ff;
+  }
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] {
+  .@{class-prefix}-code-diff-close-button.ant-btn:hover,
+  .@{class-prefix}-code-diff-close-button.ant-btn:focus-visible {
+    color: #ffffff;
+    background: #354052;
+  }
+
+  .@{class-prefix}-code-diff-view {
+    --diff-code-insert-background-color: rgba(63, 185, 103, 0.16);
+    --diff-code-delete-background-color: rgba(255, 123, 114, 0.15);
+  }
 }

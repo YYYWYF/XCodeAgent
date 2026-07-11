@@ -1,12 +1,12 @@
 .@{class-prefix}-ai-chat-composer {
   flex: 0 0 auto;
-  padding: 16px 24px 22px;
+  padding: 14px 30px 24px;
   background: var(--wb-canvas);
 }
 
 .@{class-prefix}-ai-chat-composer-column {
   display: flex;
-  width: min(100%, 860px);
+  width: min(100%, 1080px);
   flex-direction: column;
   gap: 8px;
   margin: 0 auto;
@@ -16,15 +16,21 @@
   }
 }
 
+.@{class-prefix}-composer-context-label.ant-typography {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .@{class-prefix}-ai-chat-composer-frame {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px 9px;
-  background: var(--wb-surface);
-  border: 1px solid var(--wb-border);
-  border-radius: 12px;
-  box-shadow: var(--wb-shadow);
+  padding: 12px 14px 11px;
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 26px rgba(33, 84, 160, 0.07);
 
   &:focus-within {
     border-color: var(--wb-focus);
@@ -61,7 +67,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 6px 5px 7px;
+  padding: 4px 5px 6px;
   border-bottom: 1px solid var(--wb-border);
 
   .ant-checkbox-wrapper {
@@ -69,7 +75,7 @@
     width: fit-content;
     align-items: center;
     color: var(--wb-text-secondary);
-    font-size: 12px;
+    font-size: 11px;
     line-height: 20px;
   }
 
@@ -135,16 +141,17 @@
   width: 40px;
   height: 40px;
   flex: 0 0 40px;
-  color: var(--wb-text);
-  background: var(--wb-control);
-  border-color: var(--wb-border);
+  color: #fff;
+  background: var(--wb-accent);
+  border-color: var(--wb-accent);
   box-shadow: none;
 
   &:hover,
   &:focus {
-    color: var(--wb-text);
-    background: var(--wb-control-hover);
-    border-color: var(--wb-border-strong);
+    color: #fff;
+    background: var(--wb-accent);
+    border-color: var(--wb-accent);
+    filter: brightness(1.06);
   }
 
   &[disabled] {

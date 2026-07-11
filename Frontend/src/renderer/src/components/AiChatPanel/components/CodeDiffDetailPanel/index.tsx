@@ -1,5 +1,5 @@
 import { CloseOutlined, CodeOutlined, FileTextOutlined } from '@ant-design/icons';
-import { Button, Empty, Tag, Typography } from 'antd';
+import { Button, Empty, Typography } from 'antd';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import css from 'highlight.js/lib/languages/css';
@@ -33,12 +33,6 @@ type Props = {
   codeChanges: WorkspaceCodeChangeSet;
   selectedPath?: string;
   onClose: () => void;
-};
-
-const changeTypeCopy: Record<WorkspaceCodeChangeFile['changeType'], string> = {
-  added: '新增',
-  modified: '修改',
-  deleted: '删除',
 };
 
 export default function CodeDiffDetailPanel({
@@ -90,7 +84,6 @@ export default function CodeDiffDetailPanel({
               <div>
                 <FileTextOutlined />
                 <Text strong>{selectedFile.path}</Text>
-                <Tag>{changeTypeCopy[selectedFile.changeType]}</Tag>
               </div>
               <Text className={cx('code-diff-file-stats')} type="secondary">
                 <span className={cx('addition')}>+{selectedFile.additions}</span>

@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  CloseOutlined,
   DeleteOutlined,
   FolderOpenOutlined,
   PlusOutlined,
@@ -64,7 +65,10 @@ export default function SessionSidebar({
   return (
     <aside className={cx('session-sidebar')} aria-label="历史会话">
       <div className={cx('session-sidebar-header')}>
-        <Text className={cx('session-brand')} strong>XCodeAgent</Text>
+        <div className={cx('session-brand-lockup')}>
+          <span className={cx('session-brand-mark')} aria-hidden="true"><CloseOutlined /></span>
+          <Text className={cx('session-brand')} strong>XCodeAgent</Text>
+        </div>
         <Button
           aria-label="返回欢迎页"
           className={cx('session-return-button')}

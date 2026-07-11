@@ -76,6 +76,7 @@ export default function ChatComposer({
     <div className={cx('ai-chat-composer')}>
       <div className={cx('ai-chat-composer-column')}>
         {error && <Alert message={error} showIcon type="error" />}
+        <Text className={cx('composer-context-label')}>继续完善当前任务</Text>
         <div className={cx('ai-chat-composer-frame')}>
           <TextArea
             aria-label={`${copy.title}输出内容`}

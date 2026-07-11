@@ -9,11 +9,11 @@
 
 .@{class-prefix}-ai-message-column {
   display: flex;
-  width: min(100%, 860px);
+  width: min(100%, 1080px);
   min-height: 100%;
   flex-direction: column;
-  gap: 30px;
-  padding: 34px 34px 28px;
+  gap: 38px;
+  padding: 42px 38px 32px;
   margin: 0 auto;
 }
 
@@ -51,50 +51,36 @@
 }
 
 .@{class-prefix}-ai-message {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  align-items: start;
-  gap: 14px;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
 
   &.@{class-prefix}-user {
-    padding-bottom: 28px;
-    border-bottom: 1px solid var(--wb-border);
+    align-items: flex-end;
+    padding-bottom: 0;
+    border-bottom: 0;
+
+    .@{class-prefix}-ai-message-content {
+      width: fit-content;
+      max-width: 78%;
+      margin-top: 0;
+      padding: 13px 16px;
+      background: var(--wb-accent-soft);
+      border: 1px solid var(--wb-accent-border);
+      border-radius: 8px;
+    }
   }
 
   &.@{class-prefix}-loading {
-    grid-template-columns: 34px auto minmax(0, 1fr);
+    flex-direction: row;
     align-items: center;
+    gap: 10px;
     padding: 6px 0;
   }
 }
 
-.@{class-prefix}-ai-message-author {
-  display: contents;
-}
-
-.@{class-prefix}-ai-message-avatar {
-  display: inline-flex;
-  width: 34px;
-  height: 34px;
-  align-items: center;
-  justify-content: center;
-  color: var(--wb-text);
-  background: var(--wb-surface-subtle);
-  border: 1px solid var(--wb-border);
-  border-radius: 50%;
-}
-
-.@{class-prefix}-ai-message-label.ant-typography {
-  align-self: center;
-  color: var(--wb-text);
-  font-size: 12px;
-  font-weight: 650;
-}
-
 .@{class-prefix}-ai-message-content {
-  grid-column: 2;
   min-width: 0;
-  margin-top: -5px;
   color: var(--wb-text);
   font-size: 14px;
   line-height: 1.75;
@@ -103,6 +89,48 @@
   .markdown-body {
     color: var(--wb-text);
   }
+}
+
+.@{class-prefix}-final-result-heading {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 18px;
+
+  > span {
+    display: inline-flex;
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    align-items: center;
+    justify-content: center;
+    color: var(--wb-code-add-text);
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    font-size: 18px;
+  }
+
+  > div {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .ant-typography-strong {
+    color: var(--wb-text);
+    font-size: 20px;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-tertiary);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-final-result-content {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--wb-border);
 }
 
 .@{class-prefix}-ai-message-text.ant-typography {

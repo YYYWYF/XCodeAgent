@@ -1,4 +1,4 @@
-import { RobotOutlined, UserOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, RobotOutlined } from '@ant-design/icons'
 import { Spin, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { EditorMode, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../../../../typings'
@@ -32,66 +32,74 @@ export default function MessageList({
   onOpenCodeChangeFile,
   onSubmitClarification
 }: MessageListProps): ReactElement {
-  const visibleMessages = latestConversationMessages(messages)
-  const hasStreamingProcess = visibleMessages.some(
+  const hasStreamingProcess = messages.some(
     (message) => message.role === 'assistant' && Boolean(message.processSteps?.length)
   )
 
   return (
     <div className={cx('ai-message-list')} aria-live="polite">
       <div className={cx('ai-message-column')}>
-        {visibleMessages.length === 0 ? (
+        {messages.length === 0 ? (
           <div className={cx('ai-message-empty')}>
             <span className={cx('ai-message-empty-mark')}><RobotOutlined /></span>
             <Text strong>从一个想法开始</Text>
             <Text type="secondary">{copy.empty}</Text>
           </div>
         ) : (
-          visibleMessages.map((message) => {
+          messages.map((message) => {
             const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
             const nonToolSteps = message.processSteps?.filter(
               (step) => step.kind !== 'tool' && step.kind !== 'command'
             )
+            const requiresClarification =
+              message.workflow?.summary.clarification?.status === 'requires_user_input'
             return (
-              <article className={cx('ai-message', message.role)} key={message.id}>
-                <div className={cx('ai-message-author')}>
-                  <span className={cx('ai-message-avatar')}>
-                    {message.role === 'user' ? <UserOutlined /> : <RobotOutlined />}
-                  </span>
-                  <Text className={cx('ai-message-label')}>
-                    {message.role === 'user' ? '你' : copy.label}
-                  </Text>
-                </div>
+              <article
+                className={cx(
+                  'ai-message',
+                  message.role,
+                  message.role === 'assistant' && !loading && 'completed'
+                )}
+                key={message.id}
+              >
                 <div className={cx('ai-message-content')}>
                   {message.role === 'assistant' ? (
                     <>
-                      {nonToolSteps && nonToolSteps.length > 0 && (
+                      {loading && nonToolSteps && nonToolSteps.length > 0 && (
                         <ProcessSteps loading={loading} steps={nonToolSteps} />
                       )}
-                      {message.toolCalls?.map((toolCall) => (
+                      {loading && message.toolCalls?.map((toolCall) => (
                         <ToolCallCard key={toolCall.id} toolCall={toolCall} />
                       ))}
-                      <MarkdownContent content={message.content} />
-                      {message.workflow && (
+                      {!loading && codeChanges && (
+                        <div className={cx('final-result-heading')}>
+                          <span><CheckCircleOutlined /></span>
+                          <div>
+                            <Text strong>任务已完成</Text>
+                            <Text type="secondary">最终结果</Text>
+                          </div>
+                        </div>
+                      )}
+                      <div className={cx(!loading && codeChanges && 'final-result-content')}>
+                        <MarkdownContent content={message.content} />
+                      </div>
+                      {message.workflow && (loading || requiresClarification) && (
                         <WorkflowRunCard
                           disabled={loading}
                           onSubmitClarification={onSubmitClarification}
                           workflow={message.workflow}
                         />
                       )}
-                      {codeChanges && (
+                      {!loading && codeChanges && (
                         <CodeChangeCard
                           codeChanges={codeChanges}
                           loading={loading}
                           onApproveAll={() => undefined}
-                          onFeedback={() => undefined}
                           onOpenFile={(path) => onOpenCodeChangeFile(codeChanges, path)}
                         />
                       )}
                     </>
-                  ) : (
-                    <Text className={cx('ai-message-text')}>{message.content}</Text>
-                  )}
+                  ) : <Text className={cx('ai-message-text')}>{message.content}</Text>}
                 </div>
               </article>
             )
@@ -99,7 +107,6 @@ export default function MessageList({
         )}
         {loading && !hasStreamingProcess && (
           <div className={cx('ai-message', 'assistant', 'loading')}>
-            <span className={cx('ai-message-avatar')}><RobotOutlined /></span>
             <Spin size="small" />
             <Text type="secondary">正在运行 Workflow...</Text>
           </div>
@@ -107,9 +114,4 @@ export default function MessageList({
       </div>
     </div>
   )
-}
-
-function latestConversationMessages(messages: AgentChatMessage[]): AgentChatMessage[] {
-  const latestUserMessageIndex = messages.findLastIndex((message) => message.role === 'user')
-  return latestUserMessageIndex >= 0 ? messages.slice(latestUserMessageIndex) : messages.slice(-1)
 }
