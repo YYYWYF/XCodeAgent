@@ -6,6 +6,7 @@ import {
   listSessionWorkspaces,
   type SessionWorkspaceSummary
 } from '../../service/chatSessions'
+import { loadStoredApplications } from '../../service/applicationStorage'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
 import WelcomeActionCard from './WelcomeActionCard'
@@ -30,21 +31,47 @@ type Props = {
   theme: 'dark' | 'light'
 }
 
+type WorkspaceHistoryEntry = SessionWorkspaceSummary & {
+  application?: ApplicationConfig
+}
+
 export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props): JSX.Element {
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [workspaceHistory, setWorkspaceHistory] = useState<SessionWorkspaceSummary[]>([])
+  const [workspaceHistory, setWorkspaceHistory] = useState<WorkspaceHistoryEntry[]>([])
   const [openingWorkspaceRoot, setOpeningWorkspaceRoot] = useState<string>()
 
   const handleOpenHistory = async (): Promise<void> => {
     setLoadingHistory(true)
     try {
-      if (!canListSessionWorkspaces()) {
-        message.warning('当前环境不能读取本地历史工作目录，请在桌面客户端中使用。')
-        return
-      }
+      const [applications, sessionWorkspaces] = await Promise.all([
+        loadStoredApplications(),
+        canListSessionWorkspaces() ? listSessionWorkspaces() : Promise.resolve([])
+      ])
+      const entries = new Map<string, WorkspaceHistoryEntry>()
 
-      setWorkspaceHistory(await listSessionWorkspaces())
+      applications.forEach((application) => {
+        if (!application.workspaceRoot || entries.has(application.workspaceRoot)) return
+        entries.set(application.workspaceRoot, {
+          application,
+          workspaceRoot: application.workspaceRoot,
+          name: application.name || pathBasename(application.workspaceRoot),
+          sessionCount: 0,
+          frontendCount: 0,
+          backendCount: 0,
+          latestUpdatedAt: application.createdAt,
+          latestTitle: '已保存项目'
+        })
+      })
+
+      sessionWorkspaces.forEach((workspace) => {
+        const existing = entries.get(workspace.workspaceRoot)
+        entries.set(workspace.workspaceRoot, { ...existing, ...workspace })
+      })
+
+      setWorkspaceHistory(
+        Array.from(entries.values()).sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt)
+      )
       setHistoryOpen(true)
     } catch (error) {
       message.error(formatError(error, '读取历史工作目录失败'))
@@ -53,9 +80,15 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
     }
   }
 
-  const openWorkspace = async (workspace: SessionWorkspaceSummary): Promise<void> => {
+  const openWorkspace = async (workspace: WorkspaceHistoryEntry): Promise<void> => {
     setOpeningWorkspaceRoot(workspace.workspaceRoot)
     try {
+      if (workspace.application) {
+        onOpenApplication(workspace.application)
+        setHistoryOpen(false)
+        return
+      }
+
       const workspaceName = workspace.name || pathBasename(workspace.workspaceRoot)
       const projectParentPath = pathDirname(workspace.workspaceRoot)
       const schema = buildApplicationSchema({
@@ -98,7 +131,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
       <WelcomeActionCard
         buttonIcon={<FolderOpenOutlined />}
         buttonLabel="打开工作目录"
-        description="从历史会话中选择工作目录，直接进入对话和受保护工具工作台。"
+        description="从已保存项目或历史会话中选择工作目录，继续之前的工作。"
         icon={<FolderOpenOutlined />}
         iconVariant="folder"
         loading={loadingHistory}
@@ -113,7 +146,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
         open={historyOpen}
         title={
           <WelcomeModalTitle
-            description="从最近会话中选择一个目录，继续之前的工作"
+            description="从已保存项目和最近会话中选择一个工作目录"
             icon={<FolderOpenOutlined />}
             title="打开工作目录"
           />
@@ -161,8 +194,8 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
                           {workspace.workspaceRoot}
                         </Text>
                         <Space className={cx('workspace-history-meta')} size={[8, 6]} wrap>
-                          <Tag>共 {workspace.sessionCount} 条</Tag>
-                          <Tag>前端 {workspace.frontendCount}</Tag>
+                          {workspace.sessionCount > 0 ? <Tag>共 {workspace.sessionCount} 条</Tag> : null}
+                          {workspace.frontendCount > 0 ? <Tag>前端 {workspace.frontendCount}</Tag> : null}
                           {workspace.backendCount > 0 ? (
                             <Tag>后端 {workspace.backendCount}</Tag>
                           ) : null}
@@ -171,7 +204,9 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
                           </Text>
                         </Space>
                         <Text className={cx('workspace-history-latest')} type="secondary">
-                          最近会话：{workspace.latestTitle}
+                          {workspace.sessionCount > 0
+                            ? `最近会话：${workspace.latestTitle}`
+                            : '已保存项目 · 暂无历史会话'}
                         </Text>
                       </div>
                     }

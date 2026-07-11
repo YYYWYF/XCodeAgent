@@ -16,7 +16,7 @@ body,
 body {
   min-width: 960px;
   color: #1f2933;
-  background: #eef2f6;
+  background: #f5f5f5;
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
     "Noto Sans", sans-serif;
@@ -25,11 +25,11 @@ body {
 }
 
 .@{class-prefix}-workbench-shell {
-  --wb-bg: #f3f3f1;
-  --wb-canvas: #f7f7f5;
-  --wb-sidebar: #ececea;
-  --wb-editor: #efefed;
-  --wb-surface: rgba(255, 255, 255, 0.58);
+  --wb-bg: #f5f5f5;
+  --wb-canvas: #ffffff;
+  --wb-sidebar: #f2f2f2;
+  --wb-editor: #f7f7f7;
+  --wb-surface: rgba(255, 255, 255, 0.78);
   --wb-surface-subtle: rgba(0, 0, 0, 0.025);
   --wb-surface-hover: rgba(0, 0, 0, 0.045);
   --wb-surface-selected: rgba(0, 0, 0, 0.055);
@@ -60,6 +60,64 @@ body {
   gap: 0;
   color: var(--wb-text);
   background: var(--wb-bg);
+}
+
+/* Ant Design 浮层通过 Portal 挂载到 body，需要从当前页面同步主题。 */
+body:has(.@{class-prefix}-workbench-shell[data-theme='light']),
+body:has(.@{class-prefix}-welcome-page[data-theme='light']) {
+  .ant-tooltip-inner,
+  .ant-popover-inner {
+    color: #202124;
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  }
+
+  .ant-tooltip-arrow-content,
+  .ant-popover-arrow-content {
+    background: #ffffff;
+  }
+
+  .ant-popover-message,
+  .ant-popover-message-title,
+  .ant-popover-inner-content {
+    color: #202124;
+  }
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']),
+body:has(.@{class-prefix}-welcome-page[data-theme='dark']) {
+  .ant-tooltip-inner,
+  .ant-popover-inner {
+    color: #f2f2f2;
+    background: #28282b;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+  }
+
+  .ant-tooltip-arrow-content,
+  .ant-popover-arrow-content {
+    background: #28282b;
+  }
+
+  .ant-popover-message,
+  .ant-popover-message-title,
+  .ant-popover-inner-content {
+    color: #f2f2f2;
+  }
+
+  .ant-popover-buttons .ant-btn-default {
+    color: #f2f2f2;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+
+    &:hover,
+    &:focus {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.13);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+  }
 }
 
 .@{class-prefix}-workbench-shell[data-theme='dark'] {
