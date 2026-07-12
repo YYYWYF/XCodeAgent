@@ -71,6 +71,11 @@ if (-not (Test-Path $DistDir -PathType Container)) {
   throw "PyInstaller output not found: $DistDir"
 }
 
+& $Python (Join-Path $BackendRoot "packaging\verify_bundled_skills.py") $DistDir
+if ($LASTEXITCODE -ne 0) {
+  throw "Bundled built-in skill verification failed."
+}
+
 if (Test-Path $TargetDir) {
   Remove-Item $TargetDir -Recurse -Force
 }

@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from app.services.builtin_skills import is_builtin_skill_virtual_path
 from app.workspace.virtual_paths import is_host_workspace_virtual_path
 from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
@@ -38,6 +39,8 @@ def _delete_workspace_file(
     try:
         root = _resolve_workspace_root(workspace_root)
         virtual_path = _normalize_virtual_path(file_path)
+        if is_builtin_skill_virtual_path(virtual_path):
+            raise ValueError("Refusing to delete files from the built-in skill namespace.")
         if is_host_workspace_virtual_path(root, virtual_path):
             raise ValueError(
                 "file_path must be relative to the virtual workspace root '/'; "

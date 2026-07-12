@@ -119,6 +119,14 @@ async function resolveBundledBackendPaths(): Promise<BundledBackendPaths> {
   await assertFileExists(executablePath, 'Packaged backend executable')
   await assertFileExists(envFilePath, 'Packaged backend .env')
 
+  const bundledSkillsDir = path.join(
+    backendDir,
+    '_internal',
+    'app',
+    'builtin_skills'
+  )
+  await assertDirectoryExists(bundledSkillsDir, 'Packaged backend built-in skills directory')
+
   const docsDir = await firstExistingDirectory([
     path.join(backendDir, '_internal', 'resources', 'docs', 'antd-v4'),
     path.join(backendDir, 'resources', 'docs', 'antd-v4')
@@ -140,6 +148,16 @@ async function assertFileExists(filePath: string, label: string): Promise<void> 
     // The clearer error below includes the packaged path Electron tried to use.
   }
   throw new Error(`${label} not found: ${filePath}`)
+}
+
+async function assertDirectoryExists(directoryPath: string, label: string): Promise<void> {
+  try {
+    const stat = await fs.stat(directoryPath)
+    if (stat.isDirectory()) return
+  } catch {
+    // The clearer error below includes the packaged path Electron tried to use.
+  }
+  throw new Error(`${label} not found: ${directoryPath}`)
 }
 
 async function firstExistingDirectory(candidates: string[]): Promise<string | undefined> {

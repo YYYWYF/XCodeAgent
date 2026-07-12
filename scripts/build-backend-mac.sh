@@ -32,6 +32,8 @@ if [ ! -d "$DIST_DIR" ]; then
   exit 1
 fi
 
+"$PYTHON_BIN" "$BACKEND_ROOT/packaging/verify_bundled_skills.py" "$DIST_DIR"
+
 rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 cp -R "$DIST_DIR"/. "$TARGET_DIR"/

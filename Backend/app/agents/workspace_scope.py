@@ -3,9 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from deepagents.backends import FilesystemBackend, StateBackend
+from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 from deepagents.middleware.permissions import FilesystemPermission
 
+from app.services.builtin_skills import (
+    BUILTIN_SKILLS_VIRTUAL_ROOT,
+    validate_required_builtin_skills,
+)
 from app.workspace.virtual_paths import host_workspace_virtual_deny_patterns
 from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
@@ -25,21 +29,45 @@ def resolve_workspace_root(workspace_root: str | None) -> Path | None:
     return root
 
 
-def create_workspace_backend(workspace_root: str | None):
+def create_workspace_backend(
+    workspace_root: str | None,
+    *,
+    include_builtin_skills: bool = False,
+):
     root = resolve_workspace_root(workspace_root)
-    if root is None:
-        return StateBackend()
-    return FilesystemBackend(root_dir=root, virtual_mode=True)
+    default_backend = (
+        StateBackend()
+        if root is None
+        else FilesystemBackend(root_dir=root, virtual_mode=True)
+    )
+    if not include_builtin_skills:
+        return default_backend
+
+    skills_root = validate_required_builtin_skills()
+    return CompositeBackend(
+        default=default_backend,
+        routes={
+            BUILTIN_SKILLS_VIRTUAL_ROOT: FilesystemBackend(
+                root_dir=skills_root,
+                virtual_mode=True,
+            )
+        },
+    )
 
 
 def create_workspace_permissions(
     workspace_root: str | None,
     *,
     mode: AgentWorkspaceMode,
+    include_builtin_skills: bool = False,
 ) -> list[FilesystemPermission]:
     root = resolve_workspace_root(workspace_root)
+    skill_permissions = (
+        _builtin_skill_permissions() if include_builtin_skills else []
+    )
     if root is None:
         return [
+            *skill_permissions,
             FilesystemPermission(
                 operations=["read", "write"],
                 paths=["/**"],
@@ -63,6 +91,7 @@ def create_workspace_permissions(
                 mode="deny",
             )
         )
+    permissions.extend(skill_permissions)
     if mode == "test":
         permissions.extend(
             [
@@ -76,6 +105,23 @@ def create_workspace_permissions(
         FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="allow")
     )
     return permissions
+
+
+def _builtin_skill_permissions() -> list[FilesystemPermission]:
+    skill_root = BUILTIN_SKILLS_VIRTUAL_ROOT.rstrip("/")
+    skill_paths = [skill_root, f"{skill_root}/**"]
+    return [
+        FilesystemPermission(
+            operations=["write"],
+            paths=skill_paths,
+            mode="deny",
+        ),
+        FilesystemPermission(
+            operations=["read"],
+            paths=skill_paths,
+            mode="allow",
+        ),
+    ]
 
 
 def _sensitive_virtual_paths() -> list[str]:

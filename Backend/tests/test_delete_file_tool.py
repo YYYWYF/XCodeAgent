@@ -10,6 +10,7 @@ from app.agents.data_source.agent import create_data_source_agent
 from app.agents.frontend.agent import create_frontend_agent
 from app.agents.main.agent import create_main_agent
 from app.agents.test.agent import create_test_agent
+from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.tools.delete_file import create_delete_file_tool
 
 
@@ -68,6 +69,27 @@ class DeleteFileToolTests(unittest.TestCase):
                     self.assertEqual(payload["status"], "error")
                     self.assertIn("sensitive file", payload["error"])
                     self.assertTrue(target.exists())
+
+    def test_builtin_skill_namespace_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            target = (
+                Path(workspace)
+                / ".xcodeagent"
+                / "builtin-skills"
+                / "react-antd-v4-codegen"
+                / "SKILL.md"
+            )
+            target.parent.mkdir(parents=True)
+            target.write_text("keep", encoding="utf-8")
+
+            payload = self._invoke_delete(
+                workspace,
+                f"{BUILTIN_SKILLS_VIRTUAL_ROOT}react-antd-v4-codegen/SKILL.md",
+            )
+
+            self.assertEqual(payload["status"], "error")
+            self.assertIn("built-in skill namespace", payload["error"])
+            self.assertTrue(target.exists())
 
     def test_directories_and_symlinks_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
@@ -134,6 +156,10 @@ class DeleteFileToolTests(unittest.TestCase):
         self.assertIn("delete_file", _tool_names(frontend.get("tools", [])))
         self.assertIn("delete_file", _tool_names(data_source.get("tools", [])))
         self.assertNotIn("delete_file", _tool_names(test.get("tools", [])))
+        self.assertEqual(main.get("skills"), [BUILTIN_SKILLS_VIRTUAL_ROOT])
+        self.assertEqual(frontend.get("skills"), [BUILTIN_SKILLS_VIRTUAL_ROOT])
+        self.assertNotIn("skills", data_source)
+        self.assertNotIn("skills", test)
 
     def _invoke_delete(self, workspace: str | None, file_path: str) -> dict:
         delete_file = create_delete_file_tool(workspace)

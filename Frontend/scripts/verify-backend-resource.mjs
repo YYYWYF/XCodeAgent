@@ -9,10 +9,17 @@ const supportedPlatforms = new Set(['win32', 'darwin'])
 const platform = resolvePlatform()
 const backendResourceDir = path.join(frontendRoot, 'resources', 'backend', platform)
 const executableName = platform === 'win32' ? 'xcodeagent-backend.exe' : 'xcodeagent-backend'
+const bundledSkillsDir = path.join(
+  backendResourceDir,
+  '_internal',
+  'app',
+  'builtin_skills'
+)
 const requiredPaths = [
   path.join(backendResourceDir, executableName),
   path.join(backendResourceDir, '.env'),
-  path.join(backendResourceDir, '_internal')
+  path.join(backendResourceDir, '_internal'),
+  bundledSkillsDir
 ]
 
 const missingPaths = requiredPaths.filter((filePath) => !fs.existsSync(filePath))

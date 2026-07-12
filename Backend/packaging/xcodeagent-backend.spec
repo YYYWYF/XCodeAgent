@@ -9,8 +9,8 @@ backend_root = Path(SPECPATH).parent.resolve()
 
 datas = [
     (
-        str(backend_root / "app" / "builtin_skills" / "react-antd-v4-codegen"),
-        "app/builtin_skills/react-antd-v4-codegen",
+        str(backend_root / "app" / "builtin_skills"),
+        "app/builtin_skills",
     ),
     (str(backend_root / "resources" / "docs" / "antd-v4"), "resources/docs/antd-v4"),
 ]

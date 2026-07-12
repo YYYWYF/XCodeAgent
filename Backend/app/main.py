@@ -18,6 +18,7 @@ from app.protocols.application_page_planning import (
     build_application_page_planning_ag_ui_stream,
 )
 from app.config import Settings
+from app.services.builtin_skills import available_builtin_skills
 from app.tools import antd_v4_docs
 from app.workspace import workspace as workspace_tools
 from app.middleware.approvals import approval_store
@@ -76,7 +77,7 @@ async def health() -> dict[str, object]:
         "model": settings.model_api_name,
         "configured_model": settings.model_name,
         "base_url": settings.model_base_url,
-        "builtin_skills": ["react-antd-v4-codegen"],
+        "builtin_skills": available_builtin_skills(),
         "tools": {
             "antd_v4_docs": {
                 "available": antd_v4_docs.is_available(),

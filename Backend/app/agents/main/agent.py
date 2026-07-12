@@ -4,16 +4,22 @@ from app.agents.workspace_scope import (
     create_workspace_backend,
     create_workspace_permissions,
 )
+from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.tools.ask_user import ask_user
 from app.tools.delete_file import create_delete_file_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
 def create_main_agent(model, frontend, data_source, test, workspace_root: str | None = None):
+    backend = create_workspace_backend(
+        workspace_root,
+        include_builtin_skills=True,
+    )
     return create_deep_agent(
         name="main-agent",
         model=model,
         tools=[ask_user, create_delete_file_tool(workspace_root)],
+        skills=[BUILTIN_SKILLS_VIRTUAL_ROOT],
         system_prompt=(
             "You are the application-generation coordinator. Analyze requirements, "
             "create and update RequirementSpec documents, clarify uncertain requirements, "
@@ -25,8 +31,12 @@ def create_main_agent(model, frontend, data_source, test, workspace_root: str | 
             "Do not read or write sensitive files such as .env, .npmrc, or private keys. "
             "Keep responses concise in this minimal demo."
         ),
-        backend=create_workspace_backend(workspace_root),
-        permissions=create_workspace_permissions(workspace_root, mode="main"),
+        backend=backend,
+        permissions=create_workspace_permissions(
+            workspace_root,
+            mode="main",
+            include_builtin_skills=True,
+        ),
         subagents=[
             CompiledSubAgent(
                 name="frontend-generation-agent",

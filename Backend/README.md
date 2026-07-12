@@ -4,8 +4,8 @@
 
 当前后端还内置了：
 
-- `react-antd-v4-codegen` skill：每次调用 agent 时自动注入。
-- `REACT_BEST_PRACTICES_GUIDE.md`：作为 React + TypeScript 代码生成规范入口，随内置 skill 一起强制注入。
+- `react-antd-v4-codegen` skill：通过 Deep Agents 原生 skill middleware 暴露给 Main 和 Frontend Agent；prompt 常驻元数据，完整规则和 references 按需读取。
+- `REACT_BEST_PRACTICES_GUIDE.md`：作为 React + TypeScript 代码生成规范入口，随 PyInstaller 后端一起打包并以只读虚拟路径 `/.xcodeagent/builtin-skills/` 访问。
 - `antd_v4_docs` 工具：读取本地 `antd-components` 离线文档，并按用户问题自动检索相关 Ant Design v4.24.16 组件片段。
 - `requirement_planner` 工具：分析用户需求，生成选择题式澄清问题，并在信息足够后输出结构化开发计划。
 - `development_orchestrator` 工具：把需求澄清、统一 SDD、功能切片计划、任务 DAG、并行批次和验证计划串成一套开发编排流程。

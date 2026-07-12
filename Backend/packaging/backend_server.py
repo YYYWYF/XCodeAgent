@@ -32,6 +32,10 @@ def load_backend_env() -> None:
     if bundled_docs_dir:
         os.environ.setdefault("ANTD_V4_DOCS_DIR", str(bundled_docs_dir))
 
+    from app.services.builtin_skills import validate_required_builtin_skills
+
+    validate_required_builtin_skills()
+
 
 def resolve_env_file() -> Path | None:
     configured_path = os.getenv("XCODEAGENT_BACKEND_ENV_FILE")
