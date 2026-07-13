@@ -55,16 +55,13 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "app.agents.registry.create_main_agent",
-                side_effect=lambda model, frontend, data_source, test, *, workspace_root=None, user_skills_backend: (
-                    "main",
+                "app.agents.registry.create_repair_planner_agent",
+                side_effect=lambda model, *, workspace_root=None, user_skills_backend: (
+                    "repair_planner",
                     workspace_root,
                     user_skills_backend,
-                    frontend,
-                    data_source,
-                    test,
                 ),
-            ) as main_factory,
+            ) as repair_planner_factory,
         ):
             first_bundle = registry.create_agent_bundle(first_workspace)
             first_bundle_again = registry.create_agent_bundle(first_workspace)
@@ -73,11 +70,11 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
         self.assertIs(first_bundle, first_bundle_again)
         self.assertIsNot(first_bundle, second_bundle)
         self.assertEqual(frontend_factory.call_count, 2)
-        self.assertEqual(main_factory.call_count, 2)
+        self.assertEqual(repair_planner_factory.call_count, 2)
         self.assertEqual(first_bundle.frontend[1], str(Path(first_workspace).resolve()))
         self.assertEqual(second_bundle.frontend[1], str(Path(second_workspace).resolve()))
-        self.assertEqual(first_bundle.main[1], str(Path(first_workspace).resolve()))
-        self.assertEqual(second_bundle.main[1], str(Path(second_workspace).resolve()))
+        self.assertEqual(first_bundle.repair_planner[1], str(Path(first_workspace).resolve()))
+        self.assertEqual(second_bundle.repair_planner[1], str(Path(second_workspace).resolve()))
 
     def test_agent_bundle_cache_changes_with_user_skill_revision(self) -> None:
         with (
@@ -108,9 +105,9 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 side_effect=lambda model, **kwargs: ("test", kwargs),
             ),
             patch(
-                "app.agents.registry.create_main_agent",
-                side_effect=lambda model, frontend, data_source, test, **kwargs: (
-                    "main",
+                "app.agents.registry.create_repair_planner_agent",
+                side_effect=lambda model, **kwargs: (
+                    "repair_planner",
                     kwargs,
                 ),
             ),

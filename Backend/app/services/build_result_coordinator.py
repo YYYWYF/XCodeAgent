@@ -13,8 +13,8 @@ def create_agent_task_result(
     """Normalize a specialist agent response into a build result record.
 
     Specialist agents execute only the approved task. They do not mutate the
-    project plan or task DAG directly; the Main Agent boundary consumes this
-    structure and performs state updates.
+    project plan or task DAG directly; the scheduler coordination boundary
+    consumes this structure and performs state updates.
     """
 
     return {
@@ -46,7 +46,7 @@ def _task_status_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def apply_agent_results_with_main_agent(
+def apply_agent_results_with_scheduler(
     *,
     project_plan: dict[str, Any],
     build_task_plan: dict[str, Any],
@@ -55,7 +55,7 @@ def apply_agent_results_with_main_agent(
     new_results: list[dict[str, Any]],
     stage: str,
 ) -> dict[str, Any]:
-    """Apply specialist-agent results as the Main Agent coordination boundary."""
+    """Apply specialist-agent results as the scheduler coordination boundary."""
 
     now = datetime.now(UTC).isoformat()
     result_by_task_id = {result["task_id"]: result for result in new_results}
@@ -73,7 +73,7 @@ def apply_agent_results_with_main_agent(
                 **task,
                 "status": status,
                 "last_result_status": result.get("status"),
-                "updated_by": "main-agent",
+                "updated_by": "build-scheduler",
                 "updated_at": now,
             }
         )
@@ -90,7 +90,7 @@ def apply_agent_results_with_main_agent(
     }
     updated_build_task_plan["last_update"] = {
         "stage": stage,
-        "updated_by": "main-agent",
+        "updated_by": "build-scheduler",
         "updated_at": now,
         "applied_result_count": len(new_results),
     }
@@ -100,7 +100,7 @@ def apply_agent_results_with_main_agent(
         "status": "completed"
         if summary["completed"] == summary["total"] and summary["failed"] == 0
         else "in_progress",
-        "updated_by": "main-agent",
+        "updated_by": "build-scheduler",
         "updated_at": now,
         "stage": stage,
         "summary": summary,
@@ -126,3 +126,6 @@ def apply_agent_results_with_main_agent(
             "results": len(all_results),
         },
     }
+
+
+apply_agent_results_with_main_agent = apply_agent_results_with_scheduler

@@ -1,0 +1,519 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
+
+
+MAX_REPAIR_DEPTH = 1
+RepairPlanner = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def create_build_failure_repair_plan(
+    *,
+    failed_results: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    existing_repair_tasks: list[dict[str, Any]] | None = None,
+    workspace_snapshot: dict[str, Any] | None = None,
+    targeted_snapshot: dict[str, Any] | None = None,
+    repair_planner: RepairPlanner | None = None,
+) -> dict[str, Any]:
+    """Create scheduler-bounded RepairPlan entries for repairable build task failures."""
+
+    tasks_by_id = {str(task.get("id")): task for task in tasks if task.get("id")}
+    existing_keys = {
+        _repair_key(task.get("source_ref", {}))
+        for task in existing_repair_tasks or []
+        if isinstance(task, dict)
+    }
+    repair_tasks: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    planner_inputs: list[dict[str, Any]] = []
+    planner_outputs: list[dict[str, Any]] = []
+    confirmations: list[dict[str, Any]] = []
+    terminal_failures: list[dict[str, Any]] = []
+
+    for result in failed_results:
+        decision = result.get("scheduler_decision") or {}
+        if decision.get("action") != "repair":
+            continue
+
+        parent_id = str(result.get("task_id") or "")
+        parent_task = tasks_by_id.get(parent_id)
+        if not parent_task:
+            skipped.append({"task_id": parent_id, "reason": "missing_parent_task"})
+            continue
+
+        depth = _repair_depth(parent_task)
+        if depth >= MAX_REPAIR_DEPTH:
+            skipped.append({"task_id": parent_id, "reason": "repair_depth_exhausted"})
+            continue
+
+        source_ref = _source_ref(parent_task, result, depth=depth + 1)
+        key = _repair_key(source_ref)
+        if key in existing_keys:
+            skipped.append({"task_id": parent_id, "reason": "repair_already_exists"})
+            continue
+
+        repair_input = create_repair_planner_input(
+            original_task=parent_task,
+            failed_attempt=result,
+            workspace_snapshot=workspace_snapshot,
+            targeted_snapshot=targeted_snapshot,
+            source_ref=source_ref,
+        )
+        planner_inputs.append(repair_input)
+        try:
+            raw_plan = (
+                repair_planner(repair_input)
+                if repair_planner
+                else _deterministic_repair_plan(repair_input)
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime boundary
+            raw_plan = {
+                "decision": "terminal_failure",
+                "reason": f"RepairPlanner invocation failed: {exc}",
+                "strategy": "",
+                "boundaries": {},
+                "repair_tasks": [],
+                "failure_handling": "stop_build",
+            }
+        normalized = normalize_repair_plan(
+            repair_input=repair_input,
+            raw_plan=raw_plan,
+            parent_task=parent_task,
+            result=result,
+            source_ref=source_ref,
+        )
+        planner_outputs.append(normalized)
+
+        if normalized["decision"] == "requires_user_confirmation":
+            confirmations.append(normalized)
+            continue
+        if normalized["decision"] == "terminal_failure":
+            terminal_failures.append(normalized)
+            continue
+
+        for task in normalized.get("tasks", []):
+            repair_tasks.append(task)
+            existing_keys.add(key)
+
+    decision_text = _overall_repair_decision(
+        repair_tasks=repair_tasks,
+        confirmations=confirmations,
+        terminal_failures=terminal_failures,
+    )
+    status = {
+        "repair": "ready",
+        "requires_user_confirmation": "requires_user_confirmation",
+        "terminal_failure": "terminal_failure",
+    }.get(decision_text, "not_required")
+    return {
+        "version": "0.1.0",
+        "status": status,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "source": "build_scheduler",
+        "decision": decision_text,
+        "tasks": repair_tasks if decision_text == "repair" else [],
+        "repair_tasks": repair_tasks if decision_text == "repair" else [],
+        "requires_user_confirmation": confirmations,
+        "terminal_failures": terminal_failures,
+        "skipped": skipped,
+        "planner_inputs": planner_inputs,
+        "planner_outputs": planner_outputs,
+        "summary": {
+            "total": len(repair_tasks) if decision_text == "repair" else 0,
+            "frontend": len([task for task in repair_tasks if task["owner"] == "frontend"]),
+            "data_source": len(
+                [task for task in repair_tasks if task["owner"] == "data_source"]
+            ),
+            "requires_user_confirmation": len(confirmations),
+            "terminal_failure": len(terminal_failures),
+        },
+        "prepared_by": {
+            "agent": "build-repair-planner",
+            "mode": "deep_agent_constrained" if repair_planner else "deterministic",
+            "source": "build_scheduler_failure_classification",
+        },
+    }
+
+
+def create_repair_planner_input(
+    *,
+    original_task: dict[str, Any],
+    failed_attempt: dict[str, Any],
+    workspace_snapshot: dict[str, Any] | None = None,
+    targeted_snapshot: dict[str, Any] | None = None,
+    source_ref: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    acceptance = _string_list(
+        original_task.get("acceptance_criteria")
+        or original_task.get("acceptanceCriteria")
+    )
+    change_scope = original_task.get("change_scope", [])
+    return {
+        "version": "0.1.0",
+        "original_task": original_task,
+        "failed_attempt": failed_attempt,
+        "change_scope": {
+            "items": change_scope if isinstance(change_scope, list) else [],
+            "allowed_paths": _string_list(
+                original_task.get("allowed_paths") or original_task.get("allowedPaths")
+            ),
+            "target_files": _string_list(
+                original_task.get("targetFiles") or original_task.get("target_files")
+            ),
+            "policy": "Repair tasks must not expand the original task change_scope or allowed_paths.",
+        },
+        "workspace_snapshot": targeted_snapshot or workspace_snapshot or {},
+        "failure_logs_refs": _failure_log_refs(failed_attempt),
+        "acceptance_criteria": acceptance,
+        "constraints": {
+            "max_repair_depth": MAX_REPAIR_DEPTH,
+            "current_repair_depth": _repair_depth(original_task),
+            "must_not_modify_scheduler_state": True,
+            "must_not_change_confirmed_project_plan": True,
+            "must_not_expand_contracts_without_confirmation": True,
+        },
+        "source_ref": source_ref or {},
+        "scheduler_decision": failed_attempt.get("scheduler_decision", {}),
+    }
+
+
+def normalize_repair_plan(
+    *,
+    repair_input: dict[str, Any],
+    raw_plan: dict[str, Any] | None,
+    parent_task: dict[str, Any],
+    result: dict[str, Any],
+    source_ref: dict[str, Any],
+) -> dict[str, Any]:
+    plan = raw_plan if isinstance(raw_plan, dict) else {}
+    decision = str(plan.get("decision") or "").strip()
+    if decision not in {"repair", "requires_user_confirmation", "terminal_failure"}:
+        decision = "terminal_failure"
+
+    normalized = {
+        "decision": decision,
+        "strategy": str(plan.get("strategy") or ""),
+        "boundaries": _repair_boundaries(parent_task, plan.get("boundaries")),
+        "failure_handling": str(plan.get("failure_handling") or ""),
+        "reason": str(plan.get("reason") or ""),
+        "raw_plan": plan,
+        "repair_input_ref": {
+            "task_id": repair_input.get("source_ref", {}).get("parent_task_id"),
+            "failure_signature": repair_input.get("source_ref", {}).get(
+                "failure_signature"
+            ),
+        },
+        "tasks": [],
+    }
+    if decision != "repair":
+        return normalized
+
+    raw_tasks = plan.get("repair_tasks") or plan.get("tasks") or [{}]
+    if not isinstance(raw_tasks, list):
+        raw_tasks = [{}]
+    tasks: list[dict[str, Any]] = []
+    for index, raw_task in enumerate(raw_tasks):
+        task = _repair_task(
+            parent_task,
+            result,
+            source_ref,
+            raw_task=raw_task if isinstance(raw_task, dict) else {},
+            strategy=normalized["strategy"],
+            boundaries=normalized["boundaries"],
+        )
+        if len(raw_tasks) > 1:
+            task = {
+                **task,
+                "id": f"{task['id']}:{index + 1}",
+                "task_id": f"{task['task_id']}:{index + 1}",
+            }
+        tasks.append(task)
+    return {**normalized, "tasks": tasks}
+
+
+def append_repair_tasks_to_build_plan(
+    *,
+    build_task_plan: dict[str, Any],
+    repair_task_plan: dict[str, Any],
+) -> dict[str, Any]:
+    repair_tasks = [
+        task
+        for task in repair_task_plan.get("tasks", [])
+        if isinstance(task, dict) and task.get("id")
+    ]
+    if not repair_tasks:
+        return build_task_plan
+
+    existing_tasks = [
+        task
+        for task in build_task_plan.get("tasks", [])
+        if isinstance(task, dict) and task.get("id")
+    ]
+    existing_ids = {str(task["id"]) for task in existing_tasks}
+    next_tasks = [
+        *existing_tasks,
+        *[task for task in repair_tasks if str(task["id"]) not in existing_ids],
+    ]
+    summary = {
+        **(build_task_plan.get("summary") if isinstance(build_task_plan.get("summary"), dict) else {}),
+        "total": len(next_tasks),
+        "pending": len([task for task in next_tasks if task.get("status", "pending") == "pending"]),
+        "running": len([task for task in next_tasks if task.get("status") == "running"]),
+        "completed": len([task for task in next_tasks if task.get("status") == "completed"]),
+        "failed": len([task for task in next_tasks if task.get("status") == "failed"]),
+        "repair": len([task for task in next_tasks if _is_repair_task(task)]),
+    }
+    return {
+        **build_task_plan,
+        "tasks": next_tasks,
+        "summary": summary,
+        "repair_task_plan": repair_task_plan,
+    }
+
+
+def close_repaired_parent_tasks(
+    *,
+    tasks: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    completed_repair_by_parent = {
+        _parent_task_id(task)
+        for task in tasks
+        if _is_repair_task(task)
+        and task.get("status") == "completed"
+        and _has_completed_result(task, results)
+        and _parent_task_id(task)
+    }
+    if not completed_repair_by_parent:
+        return tasks
+
+    now = datetime.now(UTC).isoformat()
+    return [
+        {
+            **task,
+            "status": "completed",
+            "completed_by_repair": True,
+            "repair_closed_at": now,
+        }
+        if task.get("id") in completed_repair_by_parent and task.get("status") == "failed"
+        else task
+        for task in tasks
+    ]
+
+
+def _repair_task(
+    parent_task: dict[str, Any],
+    result: dict[str, Any],
+    source_ref: dict[str, Any],
+    *,
+    raw_task: dict[str, Any] | None = None,
+    strategy: str = "",
+    boundaries: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    raw_task = raw_task or {}
+    parent_id = str(parent_task["id"])
+    repair_id = f"repair:{parent_id}:{source_ref['failure_signature'][:12]}"
+    description = (
+        str(raw_task.get("description") or "").strip()
+        or f"修复任务 {parent_id} 的执行失败："
+        f"{result.get('agent_note') or result.get('failure_category') or '实现未通过验证'}"
+    )
+    acceptance = _string_list(parent_task.get("acceptance_criteria"))
+    if not acceptance:
+        acceptance = [f"原任务 {parent_id} 的验收条件重新满足。"]
+    raw_acceptance = _string_list(
+        raw_task.get("acceptance_criteria") or raw_task.get("acceptanceCriteria")
+    )
+    if raw_acceptance:
+        acceptance = raw_acceptance
+    return {
+        "id": repair_id,
+        "task_id": repair_id,
+        "kind": "repair",
+        "owner": parent_task.get("owner"),
+        "type": parent_task.get("type"),
+        "title": str(raw_task.get("title") or "").strip()
+        or f"修复 {parent_task.get('title') or parent_id}",
+        "description": description,
+        "dependencies": [],
+        "dependsOn": [],
+        "status": "pending",
+        "source_ref": source_ref,
+        "repairs": {
+            "task_id": parent_id,
+            "result_task_id": result.get("task_id"),
+        },
+        "allowed_paths": _string_list(parent_task.get("allowed_paths") or parent_task.get("allowedPaths")),
+        "targetFiles": _string_list(parent_task.get("targetFiles") or parent_task.get("target_files")),
+        "change_scope": parent_task.get("change_scope", []),
+        "impact_scope": parent_task.get("impact_scope", {}),
+        "canRunInParallel": False,
+        "can_run_in_parallel": False,
+        "parallel_reason": "repair task must serialize with the failed parent scope.",
+        "repair_strategy": strategy,
+        "repair_boundaries": boundaries or _repair_boundaries(parent_task, {}),
+        "acceptance_criteria": [
+            *acceptance,
+            "不得扩大原任务 change_scope、allowed_paths、API 契约或 ProjectPlan 边界。",
+        ],
+        "acceptanceCriteria": [
+            *acceptance,
+            "不得扩大原任务 change_scope、allowed_paths、API 契约或 ProjectPlan 边界。",
+        ],
+        "failure_evidence": {
+            "failure_category": result.get("failure_category"),
+            "failure_signature": source_ref["failure_signature"],
+            "agent_note": result.get("agent_note"),
+            "changed_files": result.get("changed_files", []),
+            "commands": result.get("commands", []),
+        },
+    }
+
+
+def _source_ref(
+    parent_task: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    depth: int,
+) -> dict[str, Any]:
+    signature = str(
+        result.get("failure_signature")
+        or result.get("failure_category")
+        or result.get("agent_note")
+        or result.get("task_id")
+        or "unknown_failure"
+    )
+    return {
+        "type": "build_task_failure",
+        "parent_task_id": parent_task["id"],
+        "failed_task_id": result.get("task_id"),
+        "failure_category": result.get("failure_category"),
+        "failure_signature": signature,
+        "repair_depth": depth,
+    }
+
+
+def _repair_key(source_ref: Any) -> tuple[str, str]:
+    source = source_ref if isinstance(source_ref, dict) else {}
+    return (
+        str(source.get("parent_task_id") or source.get("failed_task_id") or ""),
+        str(source.get("failure_signature") or ""),
+    )
+
+
+def _repair_depth(task: dict[str, Any]) -> int:
+    source_ref = task.get("source_ref") if isinstance(task.get("source_ref"), dict) else {}
+    try:
+        return int(source_ref.get("repair_depth") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_repair_task(task: dict[str, Any]) -> bool:
+    return task.get("kind") == "repair" or (
+        isinstance(task.get("source_ref"), dict)
+        and task["source_ref"].get("type") == "build_task_failure"
+    )
+
+
+def _parent_task_id(task: dict[str, Any]) -> str:
+    repairs = task.get("repairs") if isinstance(task.get("repairs"), dict) else {}
+    source_ref = task.get("source_ref") if isinstance(task.get("source_ref"), dict) else {}
+    return str(repairs.get("task_id") or source_ref.get("parent_task_id") or "")
+
+
+def _has_completed_result(task: dict[str, Any], results: list[dict[str, Any]]) -> bool:
+    task_id = str(task.get("id") or "")
+    return any(
+        result.get("task_id") == task_id and result.get("status") == "completed"
+        for result in results
+    )
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _deterministic_repair_plan(repair_input: dict[str, Any]) -> dict[str, Any]:
+    result = repair_input.get("failed_attempt") if isinstance(repair_input, dict) else {}
+    original_task = repair_input.get("original_task") if isinstance(repair_input, dict) else {}
+    task_id = original_task.get("id") if isinstance(original_task, dict) else ""
+    return {
+        "decision": "repair",
+        "strategy": (
+            "Create a bounded repair task that fixes the failed implementation "
+            "inside the original task scope, then rerun the original acceptance criteria."
+        ),
+        "boundaries": {
+            "change_scope_policy": "stay_within_original_task_change_scope",
+            "allowed_paths_policy": "stay_within_original_task_allowed_paths",
+            "contract_policy": "do_not_change_confirmed_contracts_without_user_confirmation",
+        },
+        "repair_tasks": [
+            {
+                "title": f"修复 {task_id}",
+                "description": (
+                    "根据失败结果修复实现："
+                    f"{result.get('agent_note') or result.get('failure_category') or '实现未通过验证'}"
+                )
+                if isinstance(result, dict)
+                else "根据失败结果修复实现。",
+            }
+        ],
+        "failure_handling": "append_repair_task_and_resume_scheduler",
+    }
+
+
+def _repair_boundaries(
+    parent_task: dict[str, Any],
+    raw_boundaries: Any,
+) -> dict[str, Any]:
+    raw = raw_boundaries if isinstance(raw_boundaries, dict) else {}
+    return {
+        **raw,
+        "allowed_paths": _string_list(
+            parent_task.get("allowed_paths") or parent_task.get("allowedPaths")
+        ),
+        "change_scope": parent_task.get("change_scope", []),
+        "targetFiles": _string_list(
+            parent_task.get("targetFiles") or parent_task.get("target_files")
+        ),
+        "scope_policy": "must_not_expand_original_task_scope",
+        "scheduler_policy": "planner_may_only_return_plan_not_mutate_state",
+    }
+
+
+def _failure_log_refs(result: dict[str, Any]) -> list[str]:
+    refs: list[str] = []
+    for key in ("failure_logs_refs", "failure_log_refs", "logs_ref", "log_ref"):
+        value = result.get(key)
+        if isinstance(value, list):
+            refs.extend(str(item) for item in value if str(item).strip())
+        elif value:
+            refs.append(str(value))
+    commands = result.get("commands")
+    if isinstance(commands, list):
+        for command in commands:
+            if isinstance(command, dict) and command.get("log_ref"):
+                refs.append(str(command["log_ref"]))
+    return refs
+
+
+def _overall_repair_decision(
+    *,
+    repair_tasks: list[dict[str, Any]],
+    confirmations: list[dict[str, Any]],
+    terminal_failures: list[dict[str, Any]],
+) -> str:
+    if confirmations:
+        return "requires_user_confirmation"
+    if terminal_failures:
+        return "terminal_failure"
+    if repair_tasks:
+        return "repair"
+    return "terminal_failure"

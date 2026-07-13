@@ -1,3 +1,3 @@
-from app.agents.main.agent import create_main_agent
+"""Direct ChatModel workflow boundaries formerly grouped under the main role."""
 
-__all__ = ["create_main_agent"]
+__all__: list[str] = []

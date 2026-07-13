@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agents.main.repair_planner import plan_repairs_with_main_agent
+from app.agents.repair_planner import plan_repairs_with_repair_planner_agent
 from app.agents.test.validator import summarize_tests_with_deep_agent
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
@@ -225,12 +225,12 @@ def main_quality_gate(state: ProjectState) -> dict:
     }
 
 
-def main_repair_planning(state: ProjectState) -> dict:
+def repair_planning(state: ProjectState) -> dict:
     workspace = workspace_from_state(state)
     captured = capture_agent_file_changes(
         workspace=workspace,
-        source_tool="main.repair_planning",
-        action=lambda: plan_repairs_with_main_agent(
+        source_tool="repair_planner.deep_agent",
+        action=lambda: plan_repairs_with_repair_planner_agent(
             test_report=state.get("test_report", {}),
             revision_requests=state.get("revision_requests", []),
             build_task_plan=state.get("build_task_plan"),
@@ -244,7 +244,7 @@ def main_repair_planning(state: ProjectState) -> dict:
         "repair_task_plan": repair_task_plan,
         "repair_task_plan_path": repair_task_plan_path,
         "repair_tasks": repair_task_plan["tasks"],
-        "test_events": ["main_repair_planning"],
+        "test_events": ["repair_planning"],
     }
 
 
@@ -258,7 +258,7 @@ def build_testing_subgraph():
     builder.add_node("e2e_check", e2e_check)
     builder.add_node("test_agent_review", test_agent_review)
     builder.add_node("main_quality_gate", main_quality_gate)
-    builder.add_node("main_repair_planning", main_repair_planning)
+    builder.add_node("repair_planning", repair_planning)
 
     builder.add_edge(START, "frontend_checks")
     builder.add_edge("frontend_checks", "backend_checks")
@@ -267,8 +267,8 @@ def build_testing_subgraph():
     builder.add_edge("joint_integration_check", "e2e_check")
     builder.add_edge("e2e_check", "test_agent_review")
     builder.add_edge("test_agent_review", "main_quality_gate")
-    builder.add_edge("main_quality_gate", "main_repair_planning")
-    builder.add_edge("main_repair_planning", END)
+    builder.add_edge("main_quality_gate", "repair_planning")
+    builder.add_edge("repair_planning", END)
 
     return builder.compile()
 

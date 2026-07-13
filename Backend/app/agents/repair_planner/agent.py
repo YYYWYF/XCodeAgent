@@ -1,0 +1,45 @@
+from deepagents import create_deep_agent
+from deepagents.backends.protocol import BackendProtocol
+
+from app.agents.workspace_scope import (
+    create_workspace_backend,
+    create_workspace_permissions,
+)
+from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
+from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
+
+
+def create_repair_planner_agent(
+    model,
+    workspace_root: str | None = None,
+    *,
+    user_skills_backend: BackendProtocol,
+):
+    return create_deep_agent(
+        name="repair-planner-agent",
+        model=model,
+        system_prompt=(
+            "You are the RepairPlanner Agent for the app-generation workflow. "
+            "You are a planning-only DeepAgent node. Analyze failed task attempts, "
+            "test reports, failure logs, workspace snapshots, allowed change scope, "
+            "and acceptance criteria. Return structured repair plans for scheduler "
+            "consumption. Do not edit files, do not run commands, do not mutate "
+            "ProjectPlan, RequirementSpec, BuildTaskPlan, test reports, DAG state, "
+            "or scheduler state. If a repair requires expanding change scope, "
+            "changing confirmed requirements, changing API contracts, or making a "
+            "user-visible product decision, return requires_user_confirmation. "
+            "If the failure is not actionable with the provided evidence, return "
+            "terminal_failure. "
+            f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}"
+        ),
+        skills=[USER_SKILLS_VIRTUAL_ROOT],
+        backend=create_workspace_backend(
+            workspace_root,
+            user_skills_backend=user_skills_backend,
+        ),
+        permissions=create_workspace_permissions(
+            workspace_root,
+            mode="repair_planner",
+            include_user_skills=True,
+        ),
+    )

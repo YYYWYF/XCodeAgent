@@ -5,8 +5,8 @@ from typing import Any
 
 from app.agents.data_source import create_data_source_agent
 from app.agents.frontend import create_frontend_agent
-from app.agents.main import create_main_agent
 from app.agents.model_factory import create_chat_model
+from app.agents.repair_planner import create_repair_planner_agent
 from app.agents.test import create_test_agent
 from app.agents.workspace_scope import resolve_workspace_root
 from app.config import Settings
@@ -23,10 +23,10 @@ _MAX_SNAPSHOT_ATTEMPTS = 3
 
 @dataclass(frozen=True)
 class AgentBundle:
-    main: Any
     frontend: Any
     data_source: Any
     test: Any
+    repair_planner: Any
 
 
 def create_agent_bundle(workspace_root: str | None = None) -> AgentBundle:
@@ -78,19 +78,16 @@ def _create_agent_bundle_for_workspace(
         workspace_root=workspace_root,
         user_skills_backend=user_skills.backend,
     )
-    main = create_main_agent(
+    repair_planner = create_repair_planner_agent(
         chat_model,
-        frontend,
-        data_source,
-        test,
         workspace_root=workspace_root,
         user_skills_backend=user_skills.backend,
     )
     return AgentBundle(
-        main=main,
         frontend=frontend,
         data_source=data_source,
         test=test,
+        repair_planner=repair_planner,
     )
 
 

@@ -10,7 +10,7 @@ from deepagents.backends import FilesystemBackend
 
 from app.agents.data_source.agent import create_data_source_agent
 from app.agents.frontend.agent import create_frontend_agent
-from app.agents.main.agent import create_main_agent
+from app.agents.repair_planner.agent import create_repair_planner_agent
 from app.agents.test.agent import create_test_agent
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
@@ -141,21 +141,13 @@ class DeleteFileToolTests(unittest.TestCase):
             self.assertTrue(link.exists())
             self.assertTrue(target.exists())
 
-    def test_writable_agents_register_delete_file_tool(self) -> None:
+    def test_only_writable_agents_register_delete_file_tool(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
             user_skills_backend = FilesystemBackend(
                 root_dir=workspace,
                 virtual_mode=True,
             )
             with (
-                patch(
-                    "app.agents.main.agent.CompiledSubAgent",
-                    side_effect=lambda **kwargs: kwargs,
-                ),
-                patch(
-                    "app.agents.main.agent.create_deep_agent",
-                    side_effect=lambda **kwargs: kwargs,
-                ),
                 patch(
                     "app.agents.frontend.agent.create_deep_agent",
                     side_effect=lambda **kwargs: kwargs,
@@ -168,15 +160,11 @@ class DeleteFileToolTests(unittest.TestCase):
                     "app.agents.test.agent.create_deep_agent",
                     side_effect=lambda **kwargs: kwargs,
                 ),
+                patch(
+                    "app.agents.repair_planner.agent.create_deep_agent",
+                    side_effect=lambda **kwargs: kwargs,
+                ),
             ):
-                main = create_main_agent(
-                    "model",
-                    frontend="frontend",
-                    data_source="data_source",
-                    test="test",
-                    workspace_root=workspace,
-                    user_skills_backend=user_skills_backend,
-                )
                 frontend = create_frontend_agent(
                     "model",
                     workspace_root=workspace,
@@ -192,21 +180,23 @@ class DeleteFileToolTests(unittest.TestCase):
                     workspace_root=workspace,
                     user_skills_backend=user_skills_backend,
                 )
+                repair_planner = create_repair_planner_agent(
+                    "model",
+                    workspace_root=workspace,
+                    user_skills_backend=user_skills_backend,
+                )
 
-        self.assertIn("delete_file", _tool_names(main.get("tools", [])))
         self.assertIn("delete_file", _tool_names(frontend.get("tools", [])))
         self.assertIn("delete_file", _tool_names(data_source.get("tools", [])))
         self.assertNotIn("delete_file", _tool_names(test.get("tools", [])))
-        self.assertEqual(
-            main.get("skills"),
-            [BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
-        )
+        self.assertNotIn("delete_file", _tool_names(repair_planner.get("tools", [])))
         self.assertEqual(
             frontend.get("skills"),
             [BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         )
         self.assertEqual(data_source.get("skills"), [USER_SKILLS_VIRTUAL_ROOT])
         self.assertEqual(test.get("skills"), [USER_SKILLS_VIRTUAL_ROOT])
+        self.assertEqual(repair_planner.get("skills"), [USER_SKILLS_VIRTUAL_ROOT])
 
     def _invoke_delete(self, workspace: str | None, file_path: str) -> dict:
         delete_file = create_delete_file_tool(workspace)

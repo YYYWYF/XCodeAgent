@@ -276,30 +276,35 @@ app-demo-prepare-build-tasks var/workspaces/demo-project/.xcodeagent/plans/proje
 - 更新任务状态；
 - 在没有文件冲突时并行执行任务。
 
-Build Subgraph 的最小内部结构：
+Build Subgraph 当前由确定性 `BuildScheduler` 驱动：
 
 ```text
-build.START
-  → select_ready_build_tasks
-  → generate_data_sources
-  → main_update_after_data_sources
-  → generate_frontend
-  → main_update_after_frontend
-  → collect_build_results
-  → build.END
+scheduler loop:
+  → select dependency-ready and lock-compatible task batch
+  → dispatch each task batch to owner CodeRunner
+  → validate structured TaskResult
+  → apply results and update ProjectPlan/build_task_plan/tasks
+  → continue until completed, blocked, failed, needs_repair, or requires_confirmation
 ```
 
-后续正式实现时，这个子图可以扩展为按任务 DAG 循环调度：
+`BuildScheduler` 只做确定性调度，不作为 DeepAgent：
 
-- `select_ready_build_tasks`：选择依赖满足、文件锁可获得、尚未完成的任务；
-- `generate_data_sources`：调用 Data Source Generation Deep Agent 生成模型、迁移、API、校验和后端测试，只返回结构化执行结果；
-- `main_update_after_data_sources`：由 Main Agent 边界汇总 Data Source Agent 结果，更新 `ProjectPlan`、`build_task_plan` 和任务状态；
-- `generate_frontend`：调用 Frontend Generation Deep Agent 生成页面、组件、交互、API 接入和前端测试，只返回结构化执行结果；
-- `main_update_after_frontend`：由 Main Agent 边界汇总 Frontend Agent 结果，更新 `ProjectPlan`、`build_task_plan` 和任务状态；
-- `collect_build_results`：收集最终构建摘要，记录生成文件和命令证据；
-- 如果任务失败，应生成修复任务或缺陷记录，而不是直接进入通过状态。
+- `select_ready_build_batch`：只选择 `pending` 且依赖全部 `completed` 的任务；依赖 `failed` 的下游任务保持阻塞；
+- 文件锁来自 `lock_scope`、`change_scope.path`、`targetFiles` 和 `allowed_paths`，同一批 ready task 之间不能冲突；
+- 任务按 `owner` 派发给对应 CodeRunner：`data_source` 使用 Data Source Generation Agent，`frontend` 使用 Frontend Generation Agent；
+- CodeRunner 只返回结构化 `TaskResult`，不更新 DAG；
+- 调度器校验缺失或非法结果，并将其转为 `runner_protocol_error`；
+- 失败结果先分类为 `retry`、`repair`、`requires_confirmation` 或 `terminal_failure`。`repair` 会触发 Build Repair Planner 生成受约束 repair task，并 append 到运行时 Build DAG；repair task 成功后调度器关闭原 failed task 并继续释放下游依赖。`requires_confirmation` 和 `terminal_failure` 仍会阻断构建并写入摘要。
 
-专业代码生成 Agent 必须以 Deep Agent 形式存在，具备受控文件读写能力，并从已批准任务中读取 `allowed_paths`、依赖、验收标准和上下文。它们只执行任务，不负责更新计划文档、修改需求或重写任务 DAG。任务完成、失败、变更申请和计划一致性由 Main Agent 统一协调。
+Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 Main Agent。它由 `BuildScheduler` 严格约束输入和输出，只在调度器已将失败分类为 `repair` 后被调用，不直接操作 DAG、任务状态或调度循环。调度器传入的 `RepairPlannerInput` 包含原 task、失败 attempt result、允许修改范围 `change_scope/allowed_paths`、当前 `WorkspaceSnapshot` 或 targeted snapshot、失败日志引用和原验收标准。Planner 返回 `RepairPlan`，只能是三种决策之一：
+
+- `repair`：包含修复策略、边界说明和一个或多个 repair task；服务层会强制 repair task 继承原任务的 owner、change_scope、allowed_paths、依赖隔离和验收边界；
+- `requires_user_confirmation`：表示需要扩大修改范围、变更已确认需求/API 契约或做用户可见产品决策，调度器停止继续释放后续任务；
+- `terminal_failure`：表示证据不足、修复预算耗尽或失败不可自动处理，调度器停止构建并保留失败证据。
+
+因此失败处理不是统一“重跑”：可重试的 runner/tool/网络类失败可以由调度策略处理；实现、编译、测试、验收类失败进入 RepairPlanner；契约或计划边界类失败进入用户确认；不可恢复失败终止当前 build。
+
+专业代码生成 Agent 必须以 Deep Agent 形式存在，具备受控文件读写能力，并从已批准任务中读取 `allowed_paths`、依赖、验收标准和上下文。它们只执行任务，不负责更新计划文档、修改需求或重写任务 DAG。任务完成、失败、变更申请和计划一致性由 `BuildScheduler` 与确定性协调服务统一更新；需要修复规划时再调用独立 RepairPlanner Agent。
 
 `workspaceRoot` 是 Backend 的宿主机目录，只能用于 Graph State、Agent filesystem backend、确定性文档写入和 workspace diff 捕获。Deep Agent 的文件工具始终以 `/` 作为虚拟工作区根；例如任务中的 `app/frontend/**` 必须解释为 `/app/frontend/**`，不得把 `/Users/...`、Windows 盘符或其它真实 `workspaceRoot` 拼入工具路径。Frontend/Data Source generation prompt 不暴露真实根目录，filesystem permission 和 `delete_file` 还会拒绝把真实根目录重复成虚拟子目录的路径。已经存在的错误嵌套目录不会被工作流自动迁移或删除。
 
@@ -319,7 +324,7 @@ Main Deep Agent 会直接执行简单分支的局部修改，并负责复杂分�
 
 `integration_test` 在外层主 Graph 中表现为一个节点，但内部应实现为 Testing Subgraph，并合并原 `quality_gate` 的职责。
 
-测试命令和质量判定应以确定性结果为准，不应让大模型凭空判断是否通过。Test Deep Agent 的职责是审阅确定性证据、生成测试摘要和返修建议；Main Agent/确定性规则负责更新 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`。
+测试命令和质量判定应以确定性结果为准，不应让大模型凭空判断是否通过。Test Deep Agent 的职责是审阅确定性证据、生成测试摘要和返修建议；确定性规则负责更新 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，需要生成修复计划时调用独立 RepairPlanner Agent。
 
 Testing Subgraph 的最小内部结构：
 
@@ -356,20 +361,20 @@ testing.START
 - `test_report_path`：结构化测试报告 JSON 路径；
 - `quality_gate_passed`：是否允许进入启动和验收；
 - `needs_revision`：是否需要返回修改；
-- `revision_requests`：返回给 Main Agent 的结构化返修请求。
-- `repair_task_plan`：Main Agent 基于失败证据生成的修复任务计划；
+- `revision_requests`：返回给 RepairPlanner Agent 的结构化返修请求。
+- `repair_task_plan`：RepairPlanner Agent 基于失败证据生成的修复任务计划；
 - `repair_task_plan_path`：结构化修复任务计划 JSON 路径；
-- `repair_tasks`：可被重新分发给 Frontend/Data Source/Main Agent 的修复任务。
+- `repair_tasks`：可被重新分发给 Frontend/Data Source 等代码执行 Agent 的修复任务。
 
 当前最简版不执行真实 npm/pytest/playwright 命令，而是通过确定性 demo 检查根据 `build_summary` 生成结果。后续正式实现时，每个 check 节点替换为真实命令执行和证据采集即可。
 
 其中 `frontend_checks` 和 `backend_checks` 是按技术栈聚合的业务级节点，内部可以继续执行多个具体命令。Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点，避免主流程过碎；但 `test_results` 里仍需保留每个具体检查项的结构化证据。
 
-测试不通过时，Testing Subgraph 必须把失败项转成足够详细的 `revision_requests`，包括失败检查、命令、证据、建议 owner。随后由 Main Agent 汇总生成 `repair_task_plan`，再由后续修复循环分发给对应代码修改 Agent：
+测试不通过时，Testing Subgraph 必须把失败项转成足够详细的 `revision_requests`，包括失败检查、命令、证据、建议 owner。随后由 RepairPlanner Agent 汇总生成 `repair_task_plan`，再由后续修复循环分发给对应代码修改 Agent：
 
 - 前端检查失败 → Frontend Generation Agent；
 - 后端或 API 契约检查失败 → Data Source Generation Agent；
-- 前后端集成或 E2E 失败 → Main Agent 先判断归因，再拆分给专业 Agent。
+- 前后端集成或 E2E 失败 → RepairPlanner Agent 先判断归因，再拆分给专业 Agent。
 
 ### `launch_project`
 
@@ -405,23 +410,9 @@ testing.START
 - 输出工程目录或压缩包；
 - 将项目状态标记为完成。
 
-## 四个一等 Deep Agent
+## 一等 Deep Agent
 
-本项目只保留四个一等 Deep Agent。
-
-目录：`agents/main/`
-
-职责：
-
-- 需求分析；
-- RequirementSpec 生成和更新；
-- 项目级规划；
-- 页面和数据源细节规划；
-- 构建任务协调；
-- 根据任务类型委派给专业 Agent；
-- 汇总专业 Agent 的结构化结果。
-
-Main Agent 不直接替代外层 Graph，不得控制项目阶段转换。
+本项目只保留四个一等 Deep Agent：Frontend Generation、Data Source Generation、Test、RepairPlanner。`agents/main/` 只作为历史命名下的 direct ChatModel 边界目录，用于需求、规划、页面设计、任务准备和 Markdown 同步；它不再声明或创建 Main DeepAgent。
 
 ### Frontend Generation Agent
 
@@ -462,13 +453,25 @@ Main Agent 不直接替代外层 Graph，不得控制项目阶段转换。
 - 输出结构化测试报告和缺陷；
 - 只负责发现问题，不直接修改业务代码。
 
-修复任务由 Main Agent 重新派发给 Frontend 或 Data Source Agent。
+### RepairPlanner Agent
+
+目录：`agents/repair_planner/`
+
+职责：
+
+- 在 build task 或 integration test 失败后分析失败证据；
+- 接收调度器约束的 `RepairPlannerInput` 或测试返修请求；
+- 输出 `RepairPlan` / `repair_task_plan`；
+- 对需要扩大范围或改变契约的情况返回用户确认需求；
+- 只读工作区，不直接修改代码、计划、DAG 或调度状态。
+
+修复任务由 BuildScheduler 或后续修复循环重新派发给 Frontend/Data Source 等代码执行 Agent。
 
 ## 目录职责
 
 ```text
 graph/          LangGraph 主业务流程、节点、路由和 Graph State
-agents/         四个一等 Deep Agent 的声明与配置
+agents/         一等 Deep Agent 与 direct ChatModel 边界的声明与配置
 domain/         不依赖 LangGraph、Deep Agents、FastAPI 的核心数据模型
 services/       任务编译、调度、质量门禁等确定性业务规则
 tools/          暴露给 Deep Agents 的受控工具

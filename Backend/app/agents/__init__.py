@@ -1,4 +1,4 @@
-"""Four first-class Deep Agent declarations."""
+"""First-class workflow Deep Agent declarations."""
 
 from app.agents.registry import AgentBundle, clear_agent_bundle_cache, create_agent_bundle
 
