@@ -23,7 +23,7 @@
     "verify:backend-resource": "node scripts/verify-backend-resource.mjs",
     "verify:backend-resource:win": "node scripts/verify-backend-resource.mjs --platform=win32",
     "verify:backend-resource:mac": "node scripts/verify-backend-resource.mjs --platform=darwin",
-    "rebuild-deps": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm build && electron-builder --dir",
     "build:win:dev": "pnpm verify:backend-resource:win && pnpm build:dev && electron-builder --win --x64",
     "build:win:st": "pnpm verify:backend-resource:win && pnpm build:st && electron-builder --win --x64",
