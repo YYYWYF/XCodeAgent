@@ -45,68 +45,27 @@ def build_user_skills_ag_ui_stream(
     skill_input = _skill_catalog_input(payload)
     action = skill_input.get("action")
 
-    async def stream() -> AsyncIterator[str]:
-        yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
-        yield encoder.encode(
-            TextMessageStartEvent(messageId=message_id, role="assistant")
-        )
-        try:
-            skill_input = _skill_catalog_input(payload)
-            action = skill_input.get("action")
-            if action == "list":
-                catalog = list_user_skills()
-                result_payload = catalog.model_dump(by_alias=True, exclude_none=True)
-                message = f"已读取 {len(catalog.skills)} 个用户技能。"
-            elif action == "get":
-                request = GetUserSkillRequest.model_validate(skill_input)
-                document = read_user_skill_document(request.relative_path)
-                result_payload = {
-                    "root": user_skills_root_label(),
-                    "document": document.model_dump(by_alias=True),
-                }
-                message = f"已读取技能 {document.name}。"
-            elif action == "create":
-                request = CreateUserSkillRequest.model_validate(skill_input)
-                document = create_user_skill_document(request.content)
-                result_payload = {
-                    "root": user_skills_root_label(),
-                    "document": document.model_dump(by_alias=True),
-                }
-                message = f"已创建技能 {document.name}。"
-            elif action == "save":
-                request = SaveUserSkillRequest.model_validate(skill_input)
-                document = save_user_skill_document(
-                    request.relative_path,
-                    request.content,
-                    request.expected_revision,
-                )
-                result_payload = {
-                    "root": user_skills_root_label(),
-                    "document": document.model_dump(by_alias=True),
-                }
-                message = f"已保存技能 {document.name}。"
-            elif action == "delete":
-                request = DeleteUserSkillRequest.model_validate(skill_input)
-                deleted = delete_user_skill(request.relative_path)
-                result_payload = {
-                    "root": user_skills_root_label(),
-                    "deleted": deleted.model_dump(by_alias=True),
-                }
-                message = f"已删除技能 {deleted.name}。"
-            else:
-                raise ValueError(
-                    "skillCatalog.action 必须是 list、get、save、create 或 delete。"
-                )
-
-            response_payload: dict[str, Any] = {
-                "schemaVersion": 1,
-                "runId": run_id,
-                "threadId": thread_id,
-                "status": "completed",
-                "action": action,
-                **result_payload,
+    async def operation() -> AgUiActionResult:
+        if action == "list":
+            catalog = list_user_skills()
+            result_payload = catalog.model_dump(by_alias=True, exclude_none=True)
+            message = f"已读取 {len(catalog.skills)} 个用户技能。"
+        elif action == "get":
+            request = GetUserSkillRequest.model_validate(skill_input)
+            document = read_user_skill_document(request.relative_path)
+            result_payload = {
+                "root": user_skills_root_label(),
+                "document": document.model_dump(by_alias=True),
             }
             message = f"已读取技能 {document.name}。"
+        elif action == "create":
+            request = CreateUserSkillRequest.model_validate(skill_input)
+            document = create_user_skill_document(request.content)
+            result_payload = {
+                "root": user_skills_root_label(),
+                "document": document.model_dump(by_alias=True),
+            }
+            message = f"已创建技能 {document.name}。"
         elif action == "save":
             request = SaveUserSkillRequest.model_validate(skill_input)
             document = save_user_skill_document(
@@ -119,8 +78,18 @@ def build_user_skills_ag_ui_stream(
                 "document": document.model_dump(by_alias=True),
             }
             message = f"已保存技能 {document.name}。"
+        elif action == "delete":
+            request = DeleteUserSkillRequest.model_validate(skill_input)
+            deleted = delete_user_skill(request.relative_path)
+            result_payload = {
+                "root": user_skills_root_label(),
+                "deleted": deleted.model_dump(by_alias=True),
+            }
+            message = f"已删除技能 {deleted.name}。"
         else:
-            raise ValueError("skillCatalog.action 必须是 list、get 或 save。")
+            raise ValueError(
+                "skillCatalog.action 必须是 list、get、save、create 或 delete。"
+            )
         return AgUiActionResult(
             data={"action": action, **result_payload},
             message=message,
