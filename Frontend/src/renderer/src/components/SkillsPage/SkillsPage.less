@@ -101,6 +101,43 @@
   }
 }
 
+.@{class-prefix}-skills-create-button.ant-btn-primary:not([disabled]) {
+  color: #ffffff;
+  background: #2f72e8;
+  border-color: #2f72e8;
+
+  &:hover,
+  &:focus {
+    color: #ffffff;
+    background: #3e81f0;
+    border-color: #3e81f0;
+  }
+
+  &:active {
+    color: #ffffff;
+    background: #255fc4;
+    border-color: #255fc4;
+  }
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] {
+  .@{class-prefix}-skills-create-button.ant-btn-primary:not([disabled]) {
+    background: #3779eb;
+    border-color: #3779eb;
+
+    &:hover,
+    &:focus {
+      background: #4b8cf4;
+      border-color: #4b8cf4;
+    }
+
+    &:active {
+      background: #2f68ce;
+      border-color: #2f68ce;
+    }
+  }
+}
+
 .@{class-prefix}-skills-toolbar {
   display: flex;
   align-items: center;
@@ -173,6 +210,7 @@
   display: flex;
   min-width: 0;
   min-height: 238px;
+  height: 100%;
   flex-direction: column;
   padding: 20px;
   overflow: hidden;
@@ -226,6 +264,7 @@
   position: relative;
   z-index: 1;
   gap: 12px;
+  padding-right: 34px;
 }
 
 .@{class-prefix}-skill-card-icon {

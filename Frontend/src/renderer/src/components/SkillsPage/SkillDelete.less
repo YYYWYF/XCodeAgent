@@ -1,0 +1,65 @@
+.@{class-prefix}-skill-card-shell {
+  position: relative;
+  min-width: 0;
+}
+
+.@{class-prefix}-skill-card-delete-button.ant-btn {
+  position: absolute;
+  z-index: 3;
+  top: 14px;
+  right: 14px;
+  display: inline-flex;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--wb-text-tertiary);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+
+  &:hover,
+  &:focus {
+    color: var(--wb-danger);
+    background: rgba(255, 77, 79, 0.1);
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--wb-accent-soft);
+  }
+}
+
+.@{class-prefix}-skill-delete-confirm {
+  .ant-modal-content,
+  .ant-modal-confirm-body-wrapper {
+    border-radius: 12px;
+  }
+
+  &.@{class-prefix}-theme-dark {
+    .ant-modal-content {
+      color: #f2f2f2;
+      background: #28282b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 18px 54px rgba(0, 0, 0, 0.38);
+    }
+
+    .ant-modal-confirm-title,
+    .ant-modal-confirm-content {
+      color: #f2f2f2;
+    }
+
+    .ant-btn-default {
+      color: #f2f2f2;
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.12);
+
+      &:hover,
+      &:focus {
+        background: rgba(255, 255, 255, 0.13);
+        border-color: rgba(255, 255, 255, 0.2);
+      }
+    }
+  }
+}

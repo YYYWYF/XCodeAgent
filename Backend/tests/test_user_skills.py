@@ -127,6 +127,12 @@ class UserSkillsServiceTests(unittest.TestCase):
 
 
 class UserSkillsAgUiTests(unittest.TestCase):
+    def test_capabilities_include_create_and_delete_actions(self) -> None:
+        self.assertEqual(
+            user_skills_protocol.user_skills_capabilities()["actions"],
+            ["list", "get", "save", "create", "delete"],
+        )
+
     def test_stream_emits_catalog_lifecycle_and_result(self) -> None:
         catalog = user_skills.UserSkillCatalog(
             root="~/.xcodeagent_dev/skills",
@@ -185,7 +191,42 @@ class UserSkillsAgUiTests(unittest.TestCase):
         self.assertIn("ValueError", payload)
         self.assertIn("RUN_FINISHED", payload)
 
-    def test_stream_supports_get_and_save_actions(self) -> None:
+    def test_create_failure_is_returned_as_structured_failure(self) -> None:
+        async def collect() -> list[str]:
+            with patch.object(
+                user_skills_protocol,
+                "create_user_skill_document",
+                side_effect=user_skill_documents.SkillAlreadyExistsError(
+                    "技能 duplicate_skill 已存在。"
+                ),
+            ):
+                stream = user_skills_protocol.build_user_skills_ag_ui_stream(
+                    payload={
+                        "threadId": "skills-create-thread",
+                        "runId": "skills-create-run",
+                        "forwardedProps": {
+                            "skillCatalog": {
+                                "action": "create",
+                                "content": (
+                                    "---\nname: duplicate_skill\n"
+                                    "description: Duplicate\n---\n"
+                                ),
+                            }
+                        },
+                    },
+                    accept="text/event-stream",
+                )
+                return [frame async for frame in stream]
+
+        payload = "\n".join(asyncio.run(collect()))
+
+        self.assertIn('"action":"create"', payload)
+        self.assertIn('"status":"failed"', payload)
+        self.assertIn("SkillAlreadyExistsError", payload)
+        self.assertIn("duplicate_skill", payload)
+        self.assertIn("RUN_FINISHED", payload)
+
+    def test_stream_supports_get_save_and_create_actions(self) -> None:
         document = user_skill_documents.UserSkillDocument(
             name="sample",
             relative_path="sample/SKILL.md",
@@ -200,11 +241,11 @@ class UserSkillsAgUiTests(unittest.TestCase):
                 "content": document.content,
                 "expectedRevision": "b" * 64,
             }
-            target = (
-                "read_user_skill_document"
-                if action == "get"
-                else "save_user_skill_document"
-            )
+            target = {
+                "get": "read_user_skill_document",
+                "save": "save_user_skill_document",
+                "create": "create_user_skill_document",
+            }[action]
             with patch.object(user_skills_protocol, target, return_value=document):
                 stream = user_skills_protocol.build_user_skills_ag_ui_stream(
                     payload={
@@ -216,13 +257,49 @@ class UserSkillsAgUiTests(unittest.TestCase):
                 )
                 return "\n".join([frame async for frame in stream])
 
-        for action in ("get", "save"):
+        for action in ("get", "save", "create"):
             with self.subTest(action=action):
                 payload = asyncio.run(collect(action))
                 self.assertIn(f'"action":"{action}"', payload)
                 self.assertIn('"document"', payload)
                 self.assertIn('"content":"---\\nname: sample', payload)
                 self.assertIn("RUN_FINISHED", payload)
+
+    def test_stream_supports_delete_action(self) -> None:
+        deleted = user_skill_documents.DeletedUserSkill(
+            name="sample",
+            relative_path="sample/SKILL.md",
+        )
+
+        async def collect() -> str:
+            with patch.object(
+                user_skills_protocol,
+                "delete_user_skill",
+                return_value=deleted,
+            ):
+                stream = user_skills_protocol.build_user_skills_ag_ui_stream(
+                    payload={
+                        "threadId": "skills-delete-thread",
+                        "runId": "skills-delete-run",
+                        "forwardedProps": {
+                            "skillCatalog": {
+                                "action": "delete",
+                                "relativePath": "sample/SKILL.md",
+                            }
+                        },
+                    },
+                    accept="text/event-stream",
+                )
+                return "\n".join([frame async for frame in stream])
+
+        payload = asyncio.run(collect())
+
+        self.assertIn('"action":"delete"', payload)
+        self.assertIn('"deleted"', payload)
+        self.assertIn('"relativePath":"sample/SKILL.md"', payload)
+        self.assertIn("skill-catalog", payload)
+        self.assertIn("STATE_SNAPSHOT", payload)
+        self.assertIn("RUN_FINISHED", payload)
 
 
 

@@ -16,8 +16,12 @@ from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
 from app.services.user_skill_documents import (
+    CreateUserSkillRequest,
+    DeleteUserSkillRequest,
     GetUserSkillRequest,
     SaveUserSkillRequest,
+    create_user_skill_document,
+    delete_user_skill,
     read_user_skill_document,
     save_user_skill_document,
 )
@@ -35,7 +39,7 @@ def user_skills_capabilities() -> dict[str, Any]:
         "name": "user-skills",
         "endpoint": "/skills/run",
         "transport": "ag-ui-sse",
-        "actions": ["list", "get", "save"],
+        "actions": ["list", "get", "save", "create", "delete"],
         "customEventName": SKILL_CATALOG_EVENT_NAME,
         "stateSnapshotKey": "skillCatalog",
         "root": user_skills_root_label(),
@@ -71,6 +75,14 @@ def build_user_skills_ag_ui_stream(
                     "document": document.model_dump(by_alias=True),
                 }
                 message = f"已读取技能 {document.name}。"
+            elif action == "create":
+                request = CreateUserSkillRequest.model_validate(skill_input)
+                document = create_user_skill_document(request.content)
+                result_payload = {
+                    "root": user_skills_root_label(),
+                    "document": document.model_dump(by_alias=True),
+                }
+                message = f"已创建技能 {document.name}。"
             elif action == "save":
                 request = SaveUserSkillRequest.model_validate(skill_input)
                 document = save_user_skill_document(
@@ -83,8 +95,18 @@ def build_user_skills_ag_ui_stream(
                     "document": document.model_dump(by_alias=True),
                 }
                 message = f"已保存技能 {document.name}。"
+            elif action == "delete":
+                request = DeleteUserSkillRequest.model_validate(skill_input)
+                deleted = delete_user_skill(request.relative_path)
+                result_payload = {
+                    "root": user_skills_root_label(),
+                    "deleted": deleted.model_dump(by_alias=True),
+                }
+                message = f"已删除技能 {deleted.name}。"
             else:
-                raise ValueError("skillCatalog.action 必须是 list、get 或 save。")
+                raise ValueError(
+                    "skillCatalog.action 必须是 list、get、save、create 或 delete。"
+                )
 
             response_payload: dict[str, Any] = {
                 "schemaVersion": 1,

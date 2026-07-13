@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
+import shutil
 import stat
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -13,6 +15,7 @@ from pydantic import Field
 from app.services.user_skills import (
     ApiModel,
     SkillFrontmatterError,
+    list_user_skills,
     parse_skill_frontmatter,
     resolve_user_skills_root,
     user_skills_root_label,
@@ -20,6 +23,7 @@ from app.services.user_skills import (
 
 
 MAX_SKILL_CONTENT_BYTES = 512 * 1024
+CREATE_SKILL_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 class UserSkillDocument(ApiModel):
@@ -29,8 +33,23 @@ class UserSkillDocument(ApiModel):
     revision: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
+class DeletedUserSkill(ApiModel):
+    name: str = Field(min_length=1)
+    relative_path: str = Field(min_length=1)
+
+
 class GetUserSkillRequest(ApiModel):
     action: Literal["get"]
+    relative_path: str = Field(min_length=1)
+
+
+class CreateUserSkillRequest(ApiModel):
+    action: Literal["create"]
+    content: str
+
+
+class DeleteUserSkillRequest(ApiModel):
+    action: Literal["delete"]
     relative_path: str = Field(min_length=1)
 
 
@@ -46,6 +65,14 @@ class SkillPathError(ValueError):
 
 
 class SkillContentTooLargeError(ValueError):
+    pass
+
+
+class SkillAlreadyExistsError(RuntimeError):
+    pass
+
+
+class SkillNameError(ValueError):
     pass
 
 
@@ -73,6 +100,51 @@ def read_user_skill_document(
     )
 
 
+def create_user_skill_document(
+    content: str,
+    *,
+    root: Path | None = None,
+) -> UserSkillDocument:
+    """Create a direct-child user Skill without overwriting existing data."""
+
+    encoded_content = _encode_skill_content(content)
+    metadata = _parse_create_skill_frontmatter(content)
+    name = metadata["name"]
+    skills_root = _ensure_user_skills_root(root)
+
+    try:
+        existing_skills = list_user_skills(skills_root).skills
+    except (OSError, RuntimeError) as exc:
+        raise SkillPathError("无法检查已有用户技能。") from exc
+    if any(skill.name == name for skill in existing_skills):
+        raise SkillAlreadyExistsError(f"技能 {name} 已存在。")
+
+    skill_directory = skills_root / name
+    try:
+        skill_directory.mkdir(mode=0o755)
+    except FileExistsError as exc:
+        raise SkillAlreadyExistsError(f"技能目录 {name} 已存在。") from exc
+    except OSError as exc:
+        raise SkillPathError("无法创建技能目录。") from exc
+
+    try:
+        _create_skill_file(skill_directory / "SKILL.md", encoded_content)
+    except Exception:
+        try:
+            skill_directory.rmdir()
+        except OSError:
+            pass
+        raise
+
+    relative_path = f"{name}/SKILL.md"
+    return UserSkillDocument(
+        name=name,
+        relative_path=relative_path,
+        content=content,
+        revision=_content_revision(encoded_content),
+    )
+
+
 def save_user_skill_document(
     relative_path: str,
     content: str,
@@ -81,12 +153,7 @@ def save_user_skill_document(
     root: Path | None = None,
 ) -> UserSkillDocument:
     skill_file = _resolve_user_skill_file(relative_path, root=root)
-    try:
-        encoded_content = content.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise SkillFrontmatterError("SKILL.md 必须是有效的 UTF-8 文本。") from exc
-    if len(encoded_content) > MAX_SKILL_CONTENT_BYTES:
-        raise SkillContentTooLargeError("SKILL.md 不能超过 512 KiB。")
+    encoded_content = _encode_skill_content(content)
 
     metadata = parse_skill_frontmatter(content)
     current_content = _read_skill_content_bytes(skill_file)
@@ -106,6 +173,102 @@ def save_user_skill_document(
     )
 
 
+def delete_user_skill(
+    relative_path: str,
+    *,
+    root: Path | None = None,
+) -> DeletedUserSkill:
+    """Delete one direct-child user Skill directory without following symlinks."""
+
+    skill_file = _resolve_user_skill_file(relative_path, root=root)
+    raw_content = _read_skill_content_bytes(skill_file)
+    try:
+        content = raw_content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SkillFrontmatterError("SKILL.md 必须使用 UTF-8 编码。") from exc
+    metadata = parse_skill_frontmatter(content)
+    skill_directory = skill_file.parent
+    try:
+        shutil.rmtree(skill_directory)
+    except OSError as exc:
+        raise SkillPathError("无法删除技能目录。") from exc
+    return DeletedUserSkill(name=metadata["name"], relative_path=relative_path)
+
+
+def _encode_skill_content(content: str) -> bytes:
+    try:
+        encoded_content = content.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise SkillFrontmatterError("SKILL.md 必须是有效的 UTF-8 文本。") from exc
+    if len(encoded_content) > MAX_SKILL_CONTENT_BYTES:
+        raise SkillContentTooLargeError("SKILL.md 不能超过 512 KiB。")
+    return encoded_content
+
+
+def _parse_create_skill_frontmatter(content: str) -> dict[str, str]:
+    metadata = parse_skill_frontmatter(content)
+    lines = content.removeprefix("\ufeff").splitlines()
+    closing_index = next(
+        (
+            index
+            for index, line in enumerate(lines[1:], start=1)
+            if line.strip() in {"---", "..."}
+        ),
+        None,
+    )
+    if closing_index is None or lines[closing_index].strip() != "---":
+        raise SkillFrontmatterError("新技能 YAML frontmatter 必须使用 --- 结束。")
+    if not CREATE_SKILL_NAME_PATTERN.fullmatch(metadata["name"]):
+        raise SkillNameError(
+            "技能 name 必须以英文小写字母开头，且仅包含英文小写字母、数字和下划线。"
+        )
+    return metadata
+
+
+def _ensure_user_skills_root(root: Path | None) -> Path:
+    skills_root = root or resolve_user_skills_root()
+    environment_root = skills_root.parent
+    if environment_root.is_symlink():
+        raise SkillPathError("用户技能环境目录不允许使用符号链接。")
+    try:
+        skills_root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise SkillPathError("无法创建用户技能目录。") from exc
+    if skills_root.is_symlink() or not skills_root.is_dir():
+        raise SkillPathError(f"{user_skills_root_label()} 不可用。")
+    return skills_root
+
+
+def _create_skill_file(skill_file: Path, content: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor: int | None = None
+    created = False
+    try:
+        descriptor = os.open(skill_file, flags, 0o644)
+        created = True
+        file = os.fdopen(descriptor, "wb")
+        descriptor = None
+        with file:
+            file.write(content)
+            file.flush()
+            os.fsync(file.fileno())
+    except (OSError, ValueError) as exc:
+        if created:
+            try:
+                skill_file.unlink()
+            except OSError:
+                pass
+        raise SkillPathError("无法创建 SKILL.md。") from exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
 def _resolve_user_skill_file(
     relative_path: str,
     *,
@@ -119,7 +282,7 @@ def _resolve_user_skill_file(
         or path_parts[0] in {"", ".", ".."}
         or path_parts[1] != "SKILL.md"
     ):
-        raise SkillPathError("只允许读取直属 skill 目录中的 SKILL.md。")
+        raise SkillPathError("只允许访问直属 skill 目录中的 SKILL.md。")
 
     skills_root = root or resolve_user_skills_root()
     if skills_root.is_symlink() or not skills_root.is_dir():

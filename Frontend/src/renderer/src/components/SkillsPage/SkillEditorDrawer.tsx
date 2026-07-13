@@ -2,38 +2,76 @@ import { CodeOutlined, ExclamationCircleOutlined, FileTextOutlined } from '@ant-
 import { Alert, Button, Drawer, Form, Input, Modal, Spin, Typography, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useMemo, useState } from 'react'
-import { requestUserSkillDocument, saveUserSkillDocument } from '../../service/userSkills'
+import {
+  createUserSkillDocument,
+  requestUserSkillDocument,
+  saveUserSkillDocument
+} from '../../service/userSkills'
 import type { UserSkill, UserSkillDocument } from '../../typings'
 import { cx } from '../../utils'
-import { validateSkillContent } from './skillContent'
+import {
+  CREATE_SKILL_CONTENT_PLACEHOLDER,
+  readSkillNameFromContent,
+  syncSkillNameToContent,
+  validateSkillContent
+} from './skillContent'
 import './SkillEditorDrawer.less'
 
 const { Text } = Typography
 const { TextArea } = Input
 
-type Props = {
+function getWorkbenchDrawerContainer(): HTMLElement {
+  return document.querySelector<HTMLElement>(`.${cx('workbench-shell')}`) ?? document.body
+}
+
+type SharedProps = {
   onClose: () => void
   onSaved: () => Promise<void> | void
-  skill?: UserSkill
   theme: 'light' | 'dark'
 }
 
-export default function SkillEditorDrawer({ onClose, onSaved, skill, theme }: Props): ReactElement {
+type Props = SharedProps &
+  (
+    | { mode: 'create'; open: boolean; skill?: never }
+    | { mode?: 'edit'; open?: never; skill?: UserSkill }
+  )
+
+export default function SkillEditorDrawer(props: Props): ReactElement {
+  const { onClose, onSaved, theme } = props
+  const isCreate = props.mode === 'create'
+  const skill = isCreate ? undefined : props.skill
+  const open = isCreate ? props.open : Boolean(skill)
   const [content, setContent] = useState('')
   const [document, setDocument] = useState<UserSkillDocument>()
   const [loadError, setLoadError] = useState('')
   const [loading, setLoading] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [skillName, setSkillName] = useState('')
+  const [createTouched, setCreateTouched] = useState(false)
 
   useEffect(() => {
-    if (!skill) {
+    if (!open) {
       setContent('')
       setDocument(undefined)
       setLoadError('')
       setSaveError('')
+      setLoading(false)
+      setSkillName('')
+      setCreateTouched(false)
       return
     }
+    if (isCreate) {
+      setContent('')
+      setDocument(undefined)
+      setLoadError('')
+      setSaveError('')
+      setLoading(false)
+      setSkillName('')
+      setCreateTouched(false)
+      return
+    }
+    if (!skill) return
 
     let active = true
     setLoading(true)
@@ -41,11 +79,13 @@ export default function SkillEditorDrawer({ onClose, onSaved, skill, theme }: Pr
     setSaveError('')
     setDocument(undefined)
     setContent('')
+    setSkillName('')
     void requestUserSkillDocument(skill.relativePath)
       .then((result) => {
         if (!active) return
         setDocument(result)
         setContent(result.content)
+        setSkillName(readSkillNameFromContent(result.content) || result.name)
       })
       .catch((caughtError) => {
         if (!active) return
@@ -57,10 +97,31 @@ export default function SkillEditorDrawer({ onClose, onSaved, skill, theme }: Pr
     return () => {
       active = false
     }
-  }, [skill])
+  }, [isCreate, open, skill])
 
-  const validation = useMemo(() => validateSkillContent(content), [content])
-  const dirty = Boolean(document && content !== document.content)
+  const validation = useMemo(
+    () => validateSkillContent(content, isCreate ? 'create' : 'edit'),
+    [content, isCreate]
+  )
+  const dirty = isCreate
+    ? content.length > 0 || skillName.length > 0
+    : Boolean(document && content !== document.content)
+  const ready = isCreate || Boolean(document)
+  const showContentError = !validation.valid && (!isCreate || createTouched)
+
+  const handleSkillNameChange = (name: string): void => {
+    setSkillName(name)
+    setContent((currentContent) => syncSkillNameToContent(currentContent, name))
+    if (isCreate) setCreateTouched(true)
+    setSaveError('')
+  }
+
+  const handleContentChange = (nextContent: string): void => {
+    setContent(nextContent)
+    setSkillName(readSkillNameFromContent(nextContent))
+    if (isCreate) setCreateTouched(true)
+    setSaveError('')
+  }
 
   const handleClose = (): void => {
     if (!dirty) {
@@ -81,19 +142,30 @@ export default function SkillEditorDrawer({ onClose, onSaved, skill, theme }: Pr
   }
 
   const handleSave = async (): Promise<void> => {
-    if (!document || !dirty || !validation.valid || saving) return
+    if (!ready || !dirty || !validation.valid || saving) return
     setSaving(true)
     setSaveError('')
     try {
-      await saveUserSkillDocument({
-        relativePath: document.relativePath,
-        content,
-        expectedRevision: document.revision
-      })
-      message.success('技能已保存')
+      if (isCreate) {
+        await createUserSkillDocument({ content })
+      } else {
+        if (!document) return
+        await saveUserSkillDocument({
+          relativePath: document.relativePath,
+          content,
+          expectedRevision: document.revision
+        })
+      }
+      message.success(isCreate ? '技能已创建' : '技能已保存')
       await onSaved()
     } catch (caughtError) {
-      setSaveError(caughtError instanceof Error ? caughtError.message : '技能保存失败。')
+      setSaveError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : isCreate
+            ? '技能创建失败。'
+            : '技能保存失败。'
+      )
     } finally {
       setSaving(false)
     }
@@ -110,28 +182,29 @@ export default function SkillEditorDrawer({ onClose, onSaved, skill, theme }: Pr
             取消
           </Button>
           <Button
-            disabled={!document || !dirty || !validation.valid || loading}
+            disabled={!ready || !dirty || !validation.valid || loading}
             loading={saving}
             onClick={() => void handleSave()}
             type="primary"
           >
-            保存
+            {isCreate ? '创建' : '保存'}
           </Button>
         </div>
       }
-      getContainer={false}
+      getContainer={getWorkbenchDrawerContainer}
       keyboard={false}
       maskClosable={false}
       onClose={handleClose}
-      open={Boolean(skill)}
-      style={{ position: 'absolute' }}
+      open={open}
       title={
         <div className={cx('skill-editor-title')}>
           <span className={cx('skill-editor-title-icon')} aria-hidden="true">
             <CodeOutlined />
           </span>
           <span>
-            <span className={cx('skill-editor-title-text')}>编辑技能</span>
+            <span className={cx('skill-editor-title-text')}>
+              {isCreate ? '创建技能' : '编辑技能'}
+            </span>
             <span className={cx('skill-editor-title-caption')}>SKILL.md</span>
           </span>
         </div>
@@ -146,13 +219,13 @@ export default function SkillEditorDrawer({ onClose, onSaved, skill, theme }: Pr
           </div>
         ) : loadError ? (
           <Alert description={loadError} message="无法读取技能内容" showIcon type="error" />
-        ) : document ? (
+        ) : ready ? (
           <>
             {saveError && (
               <Alert
                 className={cx('skill-editor-save-error')}
                 description={saveError}
-                message="保存失败"
+                message={isCreate ? '创建失败' : '保存失败'}
                 showIcon
                 type="error"
               />
@@ -161,18 +234,19 @@ export default function SkillEditorDrawer({ onClose, onSaved, skill, theme }: Pr
               <Form.Item className={cx('skill-name-item')} label="技能名称" required>
                 <Input
                   aria-label="技能名称"
-                  placeholder="技能内容中缺少有效的 name"
+                  autoComplete="off"
+                  onChange={(event) => handleSkillNameChange(event.target.value)}
+                  placeholder="请输入技能名称"
                   prefix={<CodeOutlined aria-hidden="true" />}
-                  readOnly
-                  value={validation.name}
+                  value={skillName}
                 />
               </Form.Item>
               <Form.Item
                 className={cx('skill-content-item')}
-                help={validation.valid ? undefined : validation.error}
+                help={showContentError ? validation.error : undefined}
                 label="技能内容"
                 required
-                validateStatus={validation.valid ? undefined : 'error'}
+                validateStatus={showContentError ? 'error' : undefined}
               >
                 <div className={cx('skill-content-editor')}>
                   <div className={cx('skill-content-editor-bar')}>
@@ -183,13 +257,11 @@ export default function SkillEditorDrawer({ onClose, onSaved, skill, theme }: Pr
                     <span>YAML + Markdown</span>
                   </div>
                   <TextArea
-                    aria-invalid={!validation.valid}
+                    aria-invalid={showContentError}
                     aria-label="技能内容"
                     className={cx('skill-content-textarea')}
-                    onChange={(event) => {
-                      setContent(event.target.value)
-                      setSaveError('')
-                    }}
+                    onChange={(event) => handleContentChange(event.target.value)}
+                    placeholder={isCreate ? CREATE_SKILL_CONTENT_PLACEHOLDER : undefined}
                     spellCheck={false}
                     value={content}
                   />

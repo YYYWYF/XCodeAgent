@@ -1,24 +1,20 @@
 import { HttpAgent, randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
-import type {
-  UserSkill,
-  UserSkillCatalog,
-  UserSkillDocument,
-  UserSkillIssue
-} from '../typings'
+import type { UserSkill, UserSkillCatalog, UserSkillDocument, UserSkillIssue } from '../typings'
 
 type SkillCatalogAgUiPayload = {
   schemaVersion: 1
   runId: string
   threadId: string
   status: 'completed' | 'failed'
-  action?: 'list' | 'get' | 'save'
+  action?: 'list' | 'get' | 'save' | 'create' | 'delete'
   root?: string
   skills?: UserSkill[]
   skippedCount?: number
   issues?: UserSkillIssue[]
   document?: UserSkillDocument
+  deleted?: { name: string; relativePath: string }
   error?: { type?: string; message?: string }
 }
 
@@ -75,10 +71,7 @@ async function runSkillCatalogAgent(
       catalog = readSkillCatalogFromState(event.snapshot) ?? catalog
     }
   }
-  const result = await agent.runAgent(
-    { forwardedProps: { skillCatalog: input } },
-    subscriber
-  )
+  const result = await agent.runAgent({ forwardedProps: { skillCatalog: input } }, subscriber)
   catalog = readSkillCatalogFromResult(result.result) ?? catalog
   if (!catalog) throw new Error('技能接口没有返回有效的 AG-UI 状态。')
   if (catalog.status === 'failed') {
@@ -104,14 +97,20 @@ export async function requestUserSkills(): Promise<UserSkillCatalog> {
   }
 }
 
-export async function requestUserSkillDocument(
-  relativePath: string
-): Promise<UserSkillDocument> {
+export async function requestUserSkillDocument(relativePath: string): Promise<UserSkillDocument> {
   const response = await runSkillCatalogAgent(
     { action: 'get', relativePath },
     `读取用户技能 ${relativePath}。`
   )
   if (!response.document) throw new Error('技能接口没有返回完整内容。')
+  return response.document
+}
+
+export async function createUserSkillDocument(input: {
+  content: string
+}): Promise<UserSkillDocument> {
+  const response = await runSkillCatalogAgent({ action: 'create', ...input }, '创建用户技能。')
+  if (!response.document) throw new Error('技能接口没有返回创建结果。')
   return response.document
 }
 
@@ -126,4 +125,14 @@ export async function saveUserSkillDocument(input: {
   )
   if (!response.document) throw new Error('技能接口没有返回保存结果。')
   return response.document
+}
+
+export async function deleteUserSkill(relativePath: string): Promise<void> {
+  const response = await runSkillCatalogAgent(
+    { action: 'delete', relativePath },
+    `删除用户技能 ${relativePath}。`
+  )
+  if (response.deleted?.relativePath !== relativePath) {
+    throw new Error('技能接口没有返回有效的删除结果。')
+  }
 }

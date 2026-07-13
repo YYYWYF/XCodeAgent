@@ -1,6 +1,7 @@
 import {
   AppstoreOutlined,
   CloudUploadOutlined,
+  DeleteOutlined,
   ImportOutlined,
   MoonOutlined,
   PlusOutlined,
@@ -10,13 +11,14 @@ import {
   ThunderboltOutlined,
   ToolOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Empty, Input, Spin, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Empty, Input, Modal, Spin, Tag, Tooltip, Typography, message } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { requestUserSkills } from '../../service/userSkills'
+import { deleteUserSkill, requestUserSkills } from '../../service/userSkills'
 import type { UserSkill, UserSkillCatalog } from '../../typings'
 import { cx } from '../../utils'
 import SkillEditorDrawer from './SkillEditorDrawer'
+import './SkillDelete.less'
 import './SkillsPage.less'
 
 const { Paragraph, Text, Title } = Typography
@@ -29,15 +31,13 @@ type Props = {
 type PendingAction = {
   label: string
   icon: ReactNode
-  primary?: boolean
 }
 
 const pendingActions: PendingAction[] = [
   { label: '刷新', icon: <ReloadOutlined /> },
   { label: 'ZIP 上传', icon: <CloudUploadOutlined /> },
   { label: '导入 Hub', icon: <ImportOutlined /> },
-  { label: '批量操作', icon: <ToolOutlined /> },
-  { label: '创建技能', icon: <PlusOutlined />, primary: true }
+  { label: '批量操作', icon: <ToolOutlined /> }
 ]
 
 function formatUpdatedAt(value: string): string {
@@ -57,6 +57,8 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [deletingSkillPath, setDeletingSkillPath] = useState('')
   const [selectedSkill, setSelectedSkill] = useState<UserSkill>()
   const mountedRef = useRef(true)
 
@@ -93,6 +95,33 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
     )
   }, [catalog, query])
 
+  const confirmDeleteSkill = (skill: UserSkill): void => {
+    Modal.confirm({
+      cancelText: '取消',
+      centered: true,
+      className: cx('skill-delete-confirm', `theme-${theme}`),
+      content: `删除后将同时移除目录 ${skill.directoryName} 及其中的所有辅助资源，且无法恢复。`,
+      okButtonProps: { danger: true },
+      okText: '删除',
+      onOk: async () => {
+        setDeletingSkillPath(skill.relativePath)
+        try {
+          await deleteUserSkill(skill.relativePath)
+          if (selectedSkill?.relativePath === skill.relativePath) {
+            setSelectedSkill(undefined)
+          }
+          message.success(`技能 ${skill.name} 已删除`)
+          await loadSkills()
+        } catch (caughtError) {
+          message.error(caughtError instanceof Error ? caughtError.message : '技能删除失败。')
+        } finally {
+          if (mountedRef.current) setDeletingSkillPath('')
+        }
+      },
+      title: `确认删除技能 ${skill.name}？`
+    })
+  }
+
   return (
     <section className={cx('skills-page')} aria-label="用户技能">
       <header className={cx('skills-header')}>
@@ -112,12 +141,23 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
           {pendingActions.map((action) => (
             <Tooltip key={action.label} title="即将开放">
               <span>
-                <Button disabled icon={action.icon} type={action.primary ? 'primary' : 'default'}>
+                <Button disabled icon={action.icon}>
                   {action.label}
                 </Button>
               </span>
             </Tooltip>
           ))}
+          <Button
+            className={cx('skills-create-button')}
+            icon={<PlusOutlined />}
+            onClick={() => {
+              setSelectedSkill(undefined)
+              setCreating(true)
+            }}
+            type="primary"
+          >
+            创建技能
+          </Button>
           <Button
             aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
             icon={theme === 'dark' ? <MoonOutlined /> : <SunOutlined />}
@@ -170,53 +210,78 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
         ) : (
           <div className={cx('skills-grid')}>
             {filteredSkills.map((skill) => (
-              <article
-                aria-expanded={selectedSkill?.relativePath === skill.relativePath}
-                className={cx(
-                  'skill-card',
-                  selectedSkill?.relativePath === skill.relativePath && 'active'
-                )}
-                key={skill.relativePath}
-                onClick={() => setSelectedSkill(skill)}
-                onKeyDown={(event) => {
-                  if (event.key !== 'Enter' && event.key !== ' ') return
-                  event.preventDefault()
-                  setSelectedSkill(skill)
-                }}
-                role="button"
-                tabIndex={0}
-                title={`编辑技能 ${skill.name}`}
-              >
-                <div className={cx('skill-card-heading')}>
-                  <span className={cx('skill-card-icon')} aria-hidden="true">
-                    <AppstoreOutlined />
-                  </span>
-                  <div className={cx('skill-card-name')}>
-                    <Title level={5}>{skill.name}</Title>
-                    <Tag>用户技能</Tag>
+              <div className={cx('skill-card-shell')} key={skill.relativePath}>
+                <article
+                  aria-expanded={selectedSkill?.relativePath === skill.relativePath}
+                  className={cx(
+                    'skill-card',
+                    selectedSkill?.relativePath === skill.relativePath && 'active'
+                  )}
+                  onClick={() => setSelectedSkill(skill)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    setSelectedSkill(skill)
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  title={`编辑技能 ${skill.name}`}
+                >
+                  <div className={cx('skill-card-heading')}>
+                    <span className={cx('skill-card-icon')} aria-hidden="true">
+                      <AppstoreOutlined />
+                    </span>
+                    <div className={cx('skill-card-name')}>
+                      <Title level={5}>{skill.name}</Title>
+                      <Tag>用户技能</Tag>
+                    </div>
                   </div>
-                </div>
-                <Paragraph className={cx('skill-card-description')}>{skill.description}</Paragraph>
-                <dl className={cx('skill-card-meta')}>
-                  <div>
-                    <dt>目录</dt>
-                    <dd title={skill.relativePath}>{skill.directoryName}</dd>
-                  </div>
-                  <div>
-                    <dt>更新时间</dt>
-                    <dd>{formatUpdatedAt(skill.updatedAt)}</dd>
-                  </div>
-                  <div>
-                    <dt>版本</dt>
-                    <dd>{skill.version || '未标注'}</dd>
-                  </div>
-                </dl>
-              </article>
+                  <Paragraph className={cx('skill-card-description')}>
+                    {skill.description}
+                  </Paragraph>
+                  <dl className={cx('skill-card-meta')}>
+                    <div>
+                      <dt>目录</dt>
+                      <dd title={skill.relativePath}>{skill.directoryName}</dd>
+                    </div>
+                    <div>
+                      <dt>更新时间</dt>
+                      <dd>{formatUpdatedAt(skill.updatedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>版本</dt>
+                      <dd>{skill.version || '未标注'}</dd>
+                    </div>
+                  </dl>
+                </article>
+                <Button
+                  aria-label={`删除技能 ${skill.name}`}
+                  className={cx('skill-card-delete-button')}
+                  danger
+                  icon={<DeleteOutlined />}
+                  loading={deletingSkillPath === skill.relativePath}
+                  onClick={() => confirmDeleteSkill(skill)}
+                  shape="circle"
+                  title={`删除技能 ${skill.name}`}
+                  type="text"
+                />
+              </div>
             ))}
           </div>
         )}
       </div>
       <SkillEditorDrawer
+        mode="create"
+        onClose={() => setCreating(false)}
+        onSaved={async () => {
+          setCreating(false)
+          await loadSkills()
+        }}
+        open={creating}
+        theme={theme}
+      />
+      <SkillEditorDrawer
+        mode="edit"
         onClose={() => setSelectedSkill(undefined)}
         onSaved={async () => {
           setSelectedSkill(undefined)
