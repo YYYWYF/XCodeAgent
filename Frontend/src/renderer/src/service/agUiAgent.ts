@@ -26,6 +26,7 @@ type SendWorkflowMessageOptions = {
 
 export type AgUiChatResult = {
   threadId: string
+  runId: string
   answer: string
   workflow?: WorkflowRunPayload
   toolCalls: ToolCallRecord[]
@@ -63,6 +64,7 @@ export class AgUiChatSession {
   readonly threadId: string
 
   private readonly agent: HttpAgent
+  private activeRunId?: string
 
   constructor(threadId = randomUUID()) {
     this.threadId = threadId
@@ -73,7 +75,9 @@ export class AgUiChatSession {
   }
 
   stop(): void {
+    const runId = this.activeRunId
     this.agent.abortRun()
+    if (runId) void this.cancelRun(runId)
   }
 
   async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
@@ -128,20 +132,28 @@ export class AgUiChatSession {
       }
     }
 
-    const result = await this.agent.runAgent(
-      {
-        forwardedProps: {
-          workspaceRoot: options.workspaceRoot,
-          application: options.application,
-          clarificationAnswers: options.clarificationAnswers,
-          originalRequest: options.originalRequest,
-          workflowDebug: options.workflowDebug,
-          resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
-          resumeState: options.resumeState
-        }
-      },
-      subscriber
-    )
+    const runId = randomUUID()
+    this.activeRunId = runId
+    let result: Awaited<ReturnType<HttpAgent['runAgent']>>
+    try {
+      result = await this.agent.runAgent(
+        {
+          runId,
+          forwardedProps: {
+            workspaceRoot: options.workspaceRoot,
+            application: options.application,
+            clarificationAnswers: options.clarificationAnswers,
+            originalRequest: options.originalRequest,
+            workflowDebug: options.workflowDebug,
+            resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
+            resumeState: options.resumeState
+          }
+        },
+        subscriber
+      )
+    } finally {
+      if (this.activeRunId === runId) this.activeRunId = undefined
+    }
     const assistantMessage = result.newMessages.find(
       (newMessage) => newMessage.role === 'assistant'
     )
@@ -153,11 +165,26 @@ export class AgUiChatSession {
 
     return {
       threadId: this.threadId,
+      runId,
       answer,
       workflow,
       toolCalls,
       processSteps,
       assistantMessage
+    }
+  }
+
+  private async cancelRun(targetRunId: string): Promise<void> {
+    const cancellationAgent = new HttpAgent({
+      url: getWorkflowUrl(),
+      threadId: this.threadId
+    })
+    try {
+      await cancellationAgent.runAgent({
+        forwardedProps: { cancelRunId: targetRunId }
+      })
+    } catch {
+      // The aborted client stream remains a fallback if the cancellation acknowledgement is lost.
     }
   }
 }

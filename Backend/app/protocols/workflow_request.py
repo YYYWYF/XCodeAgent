@@ -57,6 +57,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
 
     return {
+        "cancel_run_id": (
+            _optional_text(payload.get("cancelRunId"))
+            or _optional_text(payload.get("cancel_run_id"))
+            or _optional_text(forwarded_props.get("cancelRunId"))
+            or _optional_text(forwarded_props.get("cancel_run_id"))
+        ),
         "request": request,
         "resume_from": resume_from,
         "resume_values": {

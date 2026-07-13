@@ -18,6 +18,13 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["workspace"], "/Users/sbw/Downloads/test/manage")
 
+    def test_reads_cancel_run_id_from_forwarded_props(self) -> None:
+        inputs = workflow_run_inputs(
+            {"forwardedProps": {"cancelRunId": "workflow-active-run"}}
+        )
+
+        self.assertEqual(inputs["cancel_run_id"], "workflow-active-run")
+
     def test_merges_clarification_answers_with_original_request(self) -> None:
         inputs = workflow_run_inputs(
             {

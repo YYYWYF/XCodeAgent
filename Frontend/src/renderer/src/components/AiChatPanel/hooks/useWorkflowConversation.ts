@@ -245,7 +245,7 @@ export function useWorkflowConversation({
       })
       publishAiMessage(identity.editorMode, answer)
     } catch (caughtError) {
-      if (stopRequestedRef.current[identity.key]) {
+      if (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError)) {
         const answer = stoppedAnswer(streamedContent)
         const completedMessages = updateAssistantMessage(
           answer,
@@ -333,4 +333,22 @@ function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
 function workflowDebugMessage(workflowDebug?: WorkflowDebugOptions): string {
   if (!workflowDebug?.enabled || !workflowDebug.resumeFrom) return ''
   return `从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`
+}
+
+function isAbortedStreamError(error: unknown): boolean {
+  const inspected = new Set<unknown>()
+  let current = error
+
+  while (current && typeof current === 'object' && !inspected.has(current)) {
+    inspected.add(current)
+    const candidate = current as { name?: unknown; message?: unknown; cause?: unknown }
+    const name = typeof candidate.name === 'string' ? candidate.name.toLowerCase() : ''
+    const message = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : ''
+    if (name === 'aborterror' || message.includes('aborted') || message.includes('aborterror')) {
+      return true
+    }
+    current = candidate.cause
+  }
+
+  return false
 }
