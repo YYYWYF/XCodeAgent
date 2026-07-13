@@ -32,7 +32,7 @@ START
       │            → project_planning //direct ChatModel负责
       │            → detail_confirmation //direct ChatModel负责页面设计
       │            → inspect_workspace //确定性工作区快照
-      │            → prepare_build_tasks //main agent负责基于快照生成任务DAG
+      │            → prepare_build_tasks //direct ChatModel 基于快照生成静态 Build DAG
       │            → build //由mainagent分发给
       └─ 简单需求 → direct_modification
   → integration_test
@@ -214,9 +214,9 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 ### `prepare_build_tasks`
 
-由 Main Agent 根据已经确认并写回的 `ProjectPlan` 生成可执行任务 DAG：
+由 planning-only ChatModel 根据已经确认并写回的 `ProjectPlan` 和 `WorkspaceSnapshot` 生成可执行静态 Build DAG：
 
-- 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为工作区事实来源，只在快照缺少关键上下文时做定向只读文件检查；
+- 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为唯一工作区事实来源，不读取、创建、修改或删除代码文件；
 - 生成稳定的 `task_id`；
 - 指定任务执行 Agent；
 - 计算任务依赖；
@@ -227,11 +227,11 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 初始化任务状态为 `pending`，后续只在 `pending/running/completed/failed` 中流转；
 - 校验循环依赖和缺失依赖。
 
-该节点不生成新需求，也不编写业务代码。`ProjectPlan` 是输入上下文，Main Agent 负责将已确认的页面详细设计和相关数据源转换成可执行任务；Graph 节点只接收结构化 `build_task_plan`、更新 `tasks`，并交给后续 Build Subgraph 执行。
+该节点不生成新需求，也不编写业务代码。`ProjectPlan` 和 `WorkspaceSnapshot` 是唯一输入上下文；模型负责将已确认的页面详细设计、相关数据源和当前工程结构转换成可执行任务 DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
 
-该节点通过 `agents/main/task_preparer.py` 调用真实 Main Deep Agent 生成任务编排建议，再由确定性 schema 归一化。`build_task_plan.workspace_analysis` 优先使用 Agent 返回的结构化摘要；缺省时由 `WorkspaceSnapshot` 兜底，并记录 `workspace_snapshot_ref` 以便恢复和审计。
+该节点通过 `agents/main/task_preparer.py` 调用 direct ChatModel 生成任务编排建议，再由确定性 schema 归一化为静态 Build DAG。`build_task_plan.workspace_analysis` 优先使用模型返回的结构化摘要；缺省时由 `WorkspaceSnapshot` 兜底，并记录 `workspace_snapshot_ref` 以便恢复和审计。模型未返回可解析任务时，节点必须阻止进入 `build`，不能用硬编码任务清单代替模型规划结果。
 
-调用 Main Agent 生成任务 DAG 前，节点必须检查 `ProjectPlan.confirmation_status == confirmed`。若计划未确认，节点返回 `requires_user_input` 并停止在当前阶段；用户确认后可从 `prepare_build_tasks` 续跑，再生成任务 DAG。
+调用模型生成任务 DAG 前，节点必须检查 `ProjectPlan.confirmation_status == confirmed`。若计划未确认，节点返回 `requires_user_input` 并停止在当前阶段；用户确认后可从 `prepare_build_tasks` 续跑，再生成任务 DAG。
 
 `build_task_plan` 至少包含：
 
@@ -241,7 +241,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - `prepared_by`：执行任务编排的 Agent、运行方式和模型信息；
 - `coordination`：任务分发顺序、依赖策略和串并行执行批次。
 
-该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。为控制 128k 上下文预算，Main Agent 只把代码结构摘要和精确文件清单写入任务计划，不把完整目录树或文件内容复制进 Graph State。
+该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。与 Deep Agents 的默认 harness 映射是：`prepare_build_tasks` 只负责 planning，不挂载文件工具；后续 BuildScheduler 与代码执行 runner 负责 action/verification。为控制 128k 上下文预算，模型只接收已确认计划、快照摘要和精确文件清单，不把完整目录树或文件内容复制进 Graph State。
 
 该节点的结构化产物必须落盘，供后续恢复执行和单节点验证使用：
 

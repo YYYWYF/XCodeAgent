@@ -320,6 +320,57 @@ class WorkflowRequestTests(unittest.TestCase):
             ["FastAPI", "React"],
         )
 
+    def test_workflow_debug_auto_loads_fixed_workspace_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            specs_dir = workspace / ".xcodeagent" / "specs"
+            plans_dir = workspace / ".xcodeagent" / "plans"
+            snapshots_dir = workspace / ".xcodeagent" / "cache" / "workspace-snapshots"
+            specs_dir.mkdir(parents=True)
+            plans_dir.mkdir(parents=True)
+            snapshots_dir.mkdir(parents=True)
+            (specs_dir / "requirement-spec.json").write_text(
+                json.dumps({"version": "spec-v1"}),
+                encoding="utf-8",
+            )
+            (plans_dir / "project-plan.json").write_text(
+                json.dumps({"version": "plan-v1"}),
+                encoding="utf-8",
+            )
+            (plans_dir / "build-task-plan.json").write_text(
+                json.dumps({"tasks": [{"id": "task-1"}]}),
+                encoding="utf-8",
+            )
+            (snapshots_dir / "rev.1.0.0.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "workspace_revision": "rev-auto",
+                        "tech_stack": ["React"],
+                        "entrypoints": [],
+                        "project_roots": [],
+                        "file_manifest": {},
+                        "code_graph": {"provider": "none", "available": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            inputs = workflow_run_inputs(
+                {
+                    "forwardedProps": {
+                        "workspaceRoot": str(workspace),
+                        "workflowDebug": {"enabled": True, "resumeFrom": "build"},
+                    }
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "build")
+        self.assertEqual(inputs["resume_values"]["requirement_spec"]["version"], "spec-v1")
+        self.assertEqual(inputs["resume_values"]["project_plan"]["version"], "plan-v1")
+        self.assertEqual(inputs["resume_values"]["tasks"], [{"id": "task-1"}])
+        self.assertEqual(inputs["resume_values"]["workspace_revision"], "rev-auto")
+
 
 if __name__ == "__main__":
     unittest.main()

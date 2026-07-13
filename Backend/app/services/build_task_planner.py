@@ -9,14 +9,21 @@ from app.services.task_scheduler import annotate_task_execution, build_execution
 TASK_STATUSES = ("pending", "running", "completed", "failed")
 
 
-def _task_status(task: dict[str, Any]) -> str:
-    return task.get("status", "pending")
-
-
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _text(value: Any, default: str = "") -> str:
@@ -127,93 +134,6 @@ def _workspace_analysis_from_snapshot(snapshot: dict[str, Any] | None) -> dict[s
     }
 
 
-def _data_source_task(data_source: dict[str, Any]) -> dict[str, Any]:
-    task_id = f"data_source:{data_source['id']}"
-    description = f"生成数据源 {data_source['name']}、API 契约和示例数据。"
-    target_files = ["app/backend/**", "app/shared/api/**", "tests/backend/**"]
-    acceptance_criteria = [
-        f"数据源 {data_source['id']} 的实体模型被创建。",
-        "相关 API 路径与 ProjectPlan 中的 API 契约一致。",
-        "提供可用于页面联调的示例数据。",
-    ]
-    return {
-        "id": task_id,
-        "task_id": task_id,
-        "owner": "data_source",
-        "title": f"实现数据源 {data_source['name']}",
-        "description": description,
-        "dependencies": [],
-        "dependsOn": [],
-        "status": "pending",
-        "source_ref": {
-            "type": "data_source",
-            "id": data_source["id"],
-            "schema_refs": data_source.get("schema_refs", []),
-        },
-        "allowed_paths": [
-            "app/backend/**",
-            "app/shared/api/**",
-            "tests/backend/**",
-        ],
-        "targetFiles": target_files,
-        "change_scope": _change_scope([], target_files),
-        "impact_scope": _impact_scope({}, description),
-        "canRunInParallel": True,
-        "can_run_in_parallel": True,
-        "parallel_reason": "不与其他任务修改相同文件且依赖满足时可并行。",
-        "verification_commands": [],
-        "acceptance_criteria": acceptance_criteria,
-        "acceptanceCriteria": acceptance_criteria,
-    }
-
-
-def _frontend_task(page_detail_plan: dict[str, Any]) -> dict[str, Any]:
-    data_source_dependencies = [
-        f"data_source:{source['id']}" for source in page_detail_plan.get("data_sources", [])
-    ]
-    task_id = f"page:{page_detail_plan['page_id']}"
-    description = f"生成页面 {page_detail_plan['page_name']}（{page_detail_plan['path']}）。"
-    target_files = ["app/frontend/**", "app/shared/api/**", "tests/frontend/**"]
-    acceptance_criteria = page_detail_plan["acceptance_criteria"]
-    return {
-        "id": task_id,
-        "task_id": task_id,
-        "owner": "frontend",
-        "title": f"实现页面 {page_detail_plan['page_name']}",
-        "description": description,
-        "dependencies": data_source_dependencies,
-        "dependsOn": data_source_dependencies,
-        "status": "pending",
-        "source_ref": {
-            "type": "page_detail_plan",
-            "id": page_detail_plan["id"],
-            "page_id": page_detail_plan["page_id"],
-            "endpoint_ids": [
-                dependency.get("endpoint_id")
-                for dependency in page_detail_plan.get("page_dependencies", {}).get(
-                    "endpoint_dependencies", []
-                )
-                if isinstance(dependency, dict) and dependency.get("endpoint_id")
-            ],
-            "response_bindings": page_detail_plan.get("response_bindings", []),
-        },
-        "allowed_paths": [
-            "app/frontend/**",
-            "app/shared/api/**",
-            "tests/frontend/**",
-        ],
-        "targetFiles": target_files,
-        "change_scope": _change_scope([], target_files),
-        "impact_scope": _impact_scope({}, description),
-        "canRunInParallel": True,
-        "can_run_in_parallel": True,
-        "parallel_reason": "不与其他任务修改相同文件且依赖满足时可并行。",
-        "verification_commands": [],
-        "acceptance_criteria": acceptance_criteria,
-        "acceptanceCriteria": acceptance_criteria,
-    }
-
-
 def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_tasks, list):
         return []
@@ -292,6 +212,19 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
     return tasks
 
 
+def _raw_agent_tasks(agent_plan: dict[str, Any] | None) -> Any:
+    if not isinstance(agent_plan, dict):
+        return None
+    if isinstance(agent_plan.get("tasks"), list):
+        return agent_plan["tasks"]
+    dag = agent_plan.get("dag")
+    if isinstance(dag, dict):
+        for key in ("tasks", "nodes"):
+            if isinstance(dag.get(key), list):
+                return dag[key]
+    return None
+
+
 def _annotate_parallelism(
     tasks: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -317,14 +250,78 @@ def _annotate_parallelism(
     return annotated, batches
 
 
-def _deduplicate_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    deduplicated: dict[str, dict[str, Any]] = {}
-    for task in tasks:
-        existing = deduplicated.get(task["id"])
-        if existing and _task_status(existing) == "completed":
-            continue
-        deduplicated[task["id"]] = task
-    return list(deduplicated.values())
+def _topological_order(tasks: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    by_id = {task["id"]: task for task in tasks}
+    incoming = {
+        task_id: set(_string_list(task.get("dependencies") or task.get("dependsOn")))
+        for task_id, task in by_id.items()
+    }
+    errors = [
+        f"Task {task_id} depends on missing task {dependency}."
+        for task_id, dependencies in incoming.items()
+        for dependency in sorted(dependencies)
+        if dependency not in by_id
+    ]
+    for dependencies in incoming.values():
+        dependencies.intersection_update(by_id)
+
+    ready = sorted(task_id for task_id, dependencies in incoming.items() if not dependencies)
+    order: list[str] = []
+    while ready:
+        task_id = ready.pop(0)
+        order.append(task_id)
+        for candidate_id, dependencies in incoming.items():
+            if task_id not in dependencies:
+                continue
+            dependencies.remove(task_id)
+            if not dependencies and candidate_id not in order and candidate_id not in ready:
+                ready.append(candidate_id)
+        ready.sort()
+
+    if len(order) != len(tasks):
+        blocked = sorted(set(by_id) - set(order))
+        errors.append(f"Task dependency graph contains a cycle involving: {', '.join(blocked)}.")
+    return order, errors
+
+
+def _build_static_dag(
+    tasks: list[dict[str, Any]],
+    execution_batches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    task_ids = [task["id"] for task in tasks]
+    edges = [
+        {"from": dependency, "to": task["id"], "type": "depends_on"}
+        for task in tasks
+        for dependency in _string_list(task.get("dependencies") or task.get("dependsOn"))
+    ]
+    incoming = {task_id: 0 for task_id in task_ids}
+    outgoing = {task_id: 0 for task_id in task_ids}
+    for edge in edges:
+        if edge["to"] in incoming:
+            incoming[edge["to"]] += 1
+        if edge["from"] in outgoing:
+            outgoing[edge["from"]] += 1
+
+    topological_order, validation_errors = _topological_order(tasks)
+    missing_dependency_errors = [
+        f"Task {edge['to']} depends on missing task {edge['from']}."
+        for edge in edges
+        if edge["from"] not in incoming
+    ]
+    all_errors = _dedupe_strings([*missing_dependency_errors, *validation_errors])
+    return {
+        "schema_version": "build-dag.v1",
+        "nodes": task_ids,
+        "edges": edges,
+        "roots": [task_id for task_id in task_ids if incoming[task_id] == 0],
+        "leaves": [task_id for task_id in task_ids if outgoing[task_id] == 0],
+        "topological_order": topological_order,
+        "execution_layers": execution_batches,
+        "validation": {
+            "is_valid": not all_errors,
+            "errors": all_errors,
+        },
+    }
 
 
 def create_build_task_plan(
@@ -333,42 +330,29 @@ def create_build_task_plan(
     agent_plan: dict[str, Any] | None = None,
     workspace_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create executable build tasks from the Main Agent's ProjectPlan.
+    """Normalize model-produced executable build tasks into a static Build DAG."""
 
-    Only confirmed page detail plans are converted into frontend generation
-    tasks. Their data-source dependencies are converted into data-source tasks.
-    """
-
-    page_detail_plans = project_plan.get("page_detail_plans", [])
-    required_data_source_ids = {
-        source["id"]
-        for detail_plan in page_detail_plans
-        for source in detail_plan.get("data_sources", [])
-    }
-    data_sources = [
-        source
-        for source in project_plan.get("data_sources", [])
-        if source["id"] in required_data_source_ids
-    ]
-
-    proposed_tasks = _normalize_agent_tasks((agent_plan or {}).get("tasks"))
-    tasks = proposed_tasks or _deduplicate_tasks(
-        [
-            *[_data_source_task(source) for source in data_sources],
-            *[_frontend_task(detail_plan) for detail_plan in page_detail_plans],
-        ]
-    )
+    proposed_tasks = _normalize_agent_tasks(_raw_agent_tasks(agent_plan))
+    if not proposed_tasks:
+        raise ValueError("Build task model output did not include any valid tasks.")
+    tasks = proposed_tasks
     tasks, execution_batches = _annotate_parallelism(tasks)
+    dag = _build_static_dag(tasks, execution_batches)
     blocked_batches = [
         batch for batch in execution_batches if batch.get("mode") == "blocked"
     ]
 
     return {
-        "version": "0.2.0",
-        "status": "blocked" if blocked_batches else "ready",
+        "version": "0.3.0",
+        "status": (
+            "ready"
+            if dag["validation"]["is_valid"] and not blocked_batches
+            else "blocked"
+        ),
         "generated_at": datetime.now(UTC).isoformat(),
         "source_project_plan_version": project_plan["version"],
         "task_statuses": list(TASK_STATUSES),
+        "dag": dag,
         "workspace_analysis": (
             _workspace_analysis((agent_plan or {}).get("workspace_analysis"))
             if (agent_plan or {}).get("workspace_analysis")
@@ -394,5 +378,12 @@ def create_build_task_plan(
             "execution_batches": execution_batches,
             "blocked_batches": blocked_batches,
         },
+        "prepared_by": {
+            "agent": "prepare-build-tasks",
+            "mode": "model-normalized",
+            "model": None,
+            "source": "confirmed_project_plan_and_workspace_snapshot",
+        },
+        "preparation_source": "confirmed_project_plan_and_workspace_snapshot",
         "agent_note": agent_note,
     }

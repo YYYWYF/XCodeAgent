@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.tasks import prepare_build_tasks
@@ -58,30 +57,18 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
         self.assertEqual(result["tasks"], [])
 
-    def test_agent_file_changes_are_returned_in_node_update(self) -> None:
+    def test_prepare_build_tasks_uses_model_output_and_does_not_report_code_changes(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
         project_plan["confirmation_status"] = "confirmed"
-
-        def prepare_with_file_change(
-            _project_plan: dict,
-            *,
-            workspace: str | None = None,
-            workspace_snapshot: dict | None = None,
-        ) -> dict:
-            assert workspace is not None
-            Path(workspace, "tasks-agent.txt").write_text(
-                "changed by task agent\n",
-                encoding="utf-8",
-            )
-            return {
-                "tasks": [],
-                "summary": {"total": 0},
-            }
 
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
                 "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
-                side_effect=prepare_with_file_change,
+                return_value={
+                    "tasks": [],
+                    "summary": {"total": 0},
+                    "prepared_by": {"mode": "direct"},
+                },
             ):
                 result = prepare_build_tasks(
                     {
@@ -92,11 +79,9 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     }
                 )
 
-        self.assertEqual(
-            result["code_changes"]["files"][0]["path"],
-            "tasks-agent.txt",
-        )
-        self.assertEqual(result["code_change_sets"], [result["code_changes"]])
+        self.assertNotIn("code_changes", result)
+        self.assertNotIn("code_change_sets", result)
+        self.assertEqual(result["build_task_plan"]["prepared_by"]["mode"], "direct")
 
     def test_prepare_build_tasks_confirmation_ignores_question_text_negative_words(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))

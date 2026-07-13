@@ -88,20 +88,26 @@
 .@{class-prefix}-workflow-debug-fields {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(160px, 210px) minmax(160px, 1fr) minmax(160px, 1fr);
+  align-items: center;
+  grid-template-columns: minmax(160px, 240px) minmax(220px, 1fr);
   gap: 7px;
 
-  .ant-input,
   .ant-select-selector {
     color: var(--wb-text);
     font-size: 11px;
     background: var(--wb-surface-subtle) !important;
     border-color: var(--wb-border) !important;
   }
+}
 
-  .ant-input:last-child {
-    grid-column: 1 / -1;
-  }
+.@{class-prefix}-workflow-debug-auto-paths.ant-typography {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  line-height: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .@{class-prefix}-workflow-debug-node-select {
@@ -164,10 +170,6 @@
 @media (max-width: 1050px) {
   .@{class-prefix}-workflow-debug-fields {
     grid-template-columns: 1fr;
-
-    .ant-input:last-child {
-      grid-column: auto;
-    }
   }
 }
 

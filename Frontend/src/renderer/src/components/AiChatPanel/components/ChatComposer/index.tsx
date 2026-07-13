@@ -51,10 +51,6 @@ export default function ChatComposer({
 }: ChatComposerProps): ReactElement {
   const [debugEnabled, setDebugEnabled] = useState(false)
   const [resumeFrom, setResumeFrom] = useState('requirements')
-  const [requirementSpecPath, setRequirementSpecPath] = useState('')
-  const [projectPlanPath, setProjectPlanPath] = useState('')
-  const [workspaceSnapshotPath, setWorkspaceSnapshotPath] = useState('')
-  const [buildTaskPlanPath, setBuildTaskPlanPath] = useState('')
   const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
   const canSend = debugEnabled ? hasDebugNode : Boolean(draft.trim())
 
@@ -62,11 +58,7 @@ export default function ChatComposer({
     debugEnabled
       ? {
           enabled: true,
-          resumeFrom,
-          requirementSpecPath: requirementSpecPath.trim() || undefined,
-          projectPlanPath: projectPlanPath.trim() || undefined,
-          workspaceSnapshotPath: workspaceSnapshotPath.trim() || undefined,
-          buildTaskPlanPath: buildTaskPlanPath.trim() || undefined
+          resumeFrom
         }
       : undefined
 
@@ -117,30 +109,9 @@ export default function ChatComposer({
                     </Option>
                   ))}
                 </Select>
-                <Input
-                  disabled={loading}
-                  placeholder="需求文档目录或 requirement-spec.json"
-                  value={requirementSpecPath}
-                  onChange={(event) => setRequirementSpecPath(event.target.value)}
-                />
-                <Input
-                  disabled={loading}
-                  placeholder="项目文档目录或 project-plan.json"
-                  value={projectPlanPath}
-                  onChange={(event) => setProjectPlanPath(event.target.value)}
-                />
-                <Input
-                  disabled={loading}
-                  placeholder="workspace snapshot json（从 prepare_build_tasks 或后续节点开始时使用）"
-                  value={workspaceSnapshotPath}
-                  onChange={(event) => setWorkspaceSnapshotPath(event.target.value)}
-                />
-                <Input
-                  disabled={loading}
-                  placeholder="任务文档目录或 build-task-plan.json（从 build 开始时使用）"
-                  value={buildTaskPlanPath}
-                  onChange={(event) => setBuildTaskPlanPath(event.target.value)}
-                />
+                <Text className={cx('workflow-debug-auto-paths')} title={workspaceRoot}>
+                  自动读取当前工作目录下的 .xcodeagent 产物
+                </Text>
               </div>
             )}
           </div>

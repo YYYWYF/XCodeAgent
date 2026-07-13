@@ -66,6 +66,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     detail_review_submission = _detail_review_submission(clarification_answers)
+    workspace = (
+        _optional_text(payload.get("workspace"))
+        or _optional_text(payload.get("workspaceRoot"))
+        or _optional_text(forwarded_props.get("workspaceRoot"))
+        or _optional_text(application.get("workspaceRoot"))
+    )
 
     return {
         "cancel_run_id": (
@@ -78,7 +84,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "resume_from": resume_from,
         "resume_values": {
             **_resume_values(resume_state),
-            **_debug_resume_values(debug_state),
+            **_debug_resume_values(debug_state, workspace=workspace),
             **(
                 {"detail_review_submission": detail_review_submission}
                 if detail_review_submission
@@ -92,12 +98,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(state.get("projectId"))
             or _optional_text(application.get("id"))
         ),
-        "workspace": (
-            _optional_text(payload.get("workspace"))
-            or _optional_text(payload.get("workspaceRoot"))
-            or _optional_text(forwarded_props.get("workspaceRoot"))
-            or _optional_text(application.get("workspaceRoot"))
-        ),
+        "workspace": workspace,
         "thread_id": (
             _optional_text(payload.get("thread_id"))
             or _optional_text(payload.get("threadId"))
@@ -237,7 +238,14 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
+def _debug_resume_values(
+    debug_state: dict[str, Any],
+    *,
+    workspace: str = "",
+) -> dict[str, Any]:
+    if not debug_state or debug_state.get("enabled") is False:
+        return {}
+
     values: dict[str, Any] = {}
     requirement_path = _resolve_debug_json_path(
         debug_state,
@@ -247,6 +255,7 @@ def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
             ".xcodeagent/specs/requirement-spec.json",
             "specs/requirement-spec.json",
         ),
+        workspace=workspace,
     )
     if requirement_path:
         values["requirement_spec_path"] = _markdown_sibling_path(requirement_path)
@@ -261,6 +270,7 @@ def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
             ".xcodeagent/plans/project-plan.json",
             "plans/project-plan.json",
         ),
+        workspace=workspace,
     )
     if project_plan_path:
         values["project_plan_path"] = _markdown_sibling_path(project_plan_path)
@@ -275,6 +285,7 @@ def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
             ".xcodeagent/plans/build-task-plan.json",
             "plans/build-task-plan.json",
         ),
+        workspace=workspace,
     )
     if build_task_plan_path:
         build_task_plan = load_build_task_plan_json(build_task_plan_path)
@@ -283,7 +294,10 @@ def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
         if isinstance(build_task_plan.get("tasks"), list):
             values["tasks"] = build_task_plan["tasks"]
 
-    workspace_snapshot_path = _resolve_debug_workspace_snapshot_path(debug_state)
+    workspace_snapshot_path = _resolve_debug_workspace_snapshot_path(
+        debug_state,
+        workspace=workspace,
+    )
     if workspace_snapshot_path:
         workspace_snapshot = load_workspace_snapshot_json(workspace_snapshot_path)
         values["workspace_snapshot_path"] = str(workspace_snapshot_path)
@@ -300,6 +314,8 @@ def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
 
 def _resolve_debug_workspace_snapshot_path(
     debug_state: dict[str, Any],
+    *,
+    workspace: str = "",
 ) -> Path | None:
     raw_path = ""
     for field_name in (
@@ -311,9 +327,17 @@ def _resolve_debug_workspace_snapshot_path(
         if raw_path:
             break
     if not raw_path:
-        return None
+        workspace_root = _workspace_root_path(workspace)
+        if not workspace_root:
+            return None
+        path = workspace_root / ".xcodeagent" / "cache" / "workspace-snapshots"
+        if not path.is_dir():
+            path = workspace_root / "cache" / "workspace-snapshots"
+            if not path.is_dir():
+                return None
+    else:
+        path = Path(raw_path).expanduser()
 
-    path = Path(raw_path).expanduser()
     if path.is_file() and path.suffix == ".json":
         return path
     if path.is_dir():
@@ -346,6 +370,8 @@ def _resolve_debug_json_path(
     debug_state: dict[str, Any],
     field_names: tuple[str, ...],
     default_files: tuple[str, ...],
+    *,
+    workspace: str = "",
 ) -> Path | None:
     raw_path = ""
     for field_name in field_names:
@@ -353,7 +379,11 @@ def _resolve_debug_json_path(
         if raw_path:
             break
     if not raw_path:
-        return None
+        workspace_root = _workspace_root_path(workspace)
+        if not workspace_root:
+            return None
+        candidates = [workspace_root / default_file for default_file in default_files]
+        return next((candidate for candidate in candidates if candidate.exists()), None)
 
     path = Path(raw_path).expanduser()
     if path.is_file():
@@ -364,6 +394,14 @@ def _resolve_debug_json_path(
 
     candidates = [path / default_file for default_file in default_files]
     return next((candidate for candidate in candidates if candidate.exists()), None)
+
+
+def _workspace_root_path(workspace: str) -> Path | None:
+    workspace_text = _optional_text(workspace)
+    if not workspace_text:
+        return None
+    path = Path(workspace_text).expanduser()
+    return path if path.is_dir() else None
 
 
 def _markdown_sibling_path(json_path: Path) -> str:

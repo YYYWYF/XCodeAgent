@@ -83,7 +83,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
         plan = create_build_task_plan(project_plan, agent_plan=agent_plan)
         task = plan["tasks"][0]
 
-        self.assertEqual(plan["version"], "0.2.0")
+        self.assertEqual(plan["version"], "0.3.0")
+        self.assertEqual(plan["dag"]["nodes"], ["page-login"])
+        self.assertTrue(plan["dag"]["validation"]["is_valid"])
         self.assertEqual(plan["workspace_analysis"]["entry_files"], ["src/router/index.ts"])
         self.assertEqual(task["id"], "page-login")
         self.assertEqual(task["task_id"], "page-login")

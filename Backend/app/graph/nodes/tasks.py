@@ -5,11 +5,10 @@ from app.graph.nodes.confirmation import (
     user_confirmed_text,
     user_requested_changes_text,
 )
-from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
+from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
-from app.workspace.code_changes import code_change_state_update
 from app.workspace.plan_documents import (
     edited_project_plan_markdown,
     project_plan_markdown_path,
@@ -79,19 +78,36 @@ def prepare_build_tasks(state: ProjectState) -> dict:
 
     workspace = workspace_from_state(state)
     workspace_snapshot = _workspace_snapshot_from_state(state)
-    captured = capture_agent_file_changes(
-        workspace=workspace,
-        source_tool="main.prepare_build_tasks",
-        action=lambda: prepare_build_tasks_with_main_agent(
+    try:
+        build_task_plan = prepare_build_tasks_with_main_agent(
             project_plan,
             workspace=workspace,
             workspace_snapshot=workspace_snapshot,
-        ),
+        )
+    except ValueError as exc:
+        return {
+            "phase": "prepare_build_tasks",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "clarification": _build_task_plan_generation_error_payload(str(exc)),
+            "timeline": ["prepare_build_tasks"],
+        }
+    dag_errors = (
+        build_task_plan.get("dag", {})
+        .get("validation", {})
+        .get("errors", [])
     )
-    build_task_plan = captured.value
+    if dag_errors:
+        return {
+            "phase": "prepare_build_tasks",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "build_task_plan": build_task_plan,
+            "clarification": _build_task_plan_validation_error_payload(dag_errors),
+            "timeline": ["prepare_build_tasks"],
+        }
     build_task_plan_path = write_build_task_plan_json(state, build_task_plan)
     return {
-        **code_change_state_update(captured.code_change_set),
         "phase": "prepare_build_tasks",
         "status": "completed",
         "project_plan": project_plan,
@@ -149,6 +165,46 @@ def _api_contract_inconsistency_payload(errors: list[str]) -> dict:
     )
     payload["mode"] = "api_contract_consistency_error"
     payload["message"] = "API 契约一致性校验失败，已阻止任务拆分和代码生成。"
+    payload["errors"] = errors
+    return payload
+
+
+def _build_task_plan_generation_error_payload(error: str) -> dict:
+    payload = build_ask_user_payload(
+        [
+            AskUserQuestion(
+                header="任务拆分",
+                question=(
+                    "Build DAG 生成失败，模型没有返回可执行的任务列表。"
+                    "请确认是否重试任务拆分，或返回项目规划阶段调整计划。"
+                ),
+                type="text",
+                placeholder="例如：请重试任务拆分 / 返回项目规划阶段补充任务边界。",
+            )
+        ]
+    )
+    payload["mode"] = "build_task_plan_generation_error"
+    payload["message"] = "Build DAG 生成失败，已阻止代码生成。"
+    payload["error"] = error
+    return payload
+
+
+def _build_task_plan_validation_error_payload(errors: list[str]) -> dict:
+    payload = build_ask_user_payload(
+        [
+            AskUserQuestion(
+                header="DAG 校验",
+                question=(
+                    "Build DAG 校验失败，存在缺失依赖或循环依赖。"
+                    "请确认是否重试任务拆分，或返回项目规划阶段调整任务边界。"
+                ),
+                type="text",
+                placeholder="例如：请重试任务拆分 / 返回项目规划阶段补充依赖关系。",
+            )
+        ]
+    )
+    payload["mode"] = "build_task_plan_validation_error"
+    payload["message"] = "Build DAG 校验失败，已阻止代码生成。"
     payload["errors"] = errors
     return payload
 
