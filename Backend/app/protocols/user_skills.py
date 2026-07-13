@@ -1,19 +1,11 @@
 from __future__ import annotations
 
 from typing import Any, AsyncIterator
-from uuid import uuid4
 
-from ag_ui.core import (
-    CustomEvent,
-    RunFinishedEvent,
-    RunStartedEvent,
-    StateSnapshotEvent,
-    TextMessageContentEvent,
-    TextMessageEndEvent,
-    TextMessageStartEvent,
+from app.protocols.ag_ui_action_stream import (
+    AgUiActionResult,
+    build_ag_ui_action_stream,
 )
-from ag_ui.encoder import EventEncoder
-from fastapi.encoders import jsonable_encoder
 
 from app.services.user_skill_documents import (
     CreateUserSkillRequest,
@@ -50,10 +42,8 @@ def user_skills_capabilities() -> dict[str, Any]:
 def build_user_skills_ag_ui_stream(
     *, payload: dict[str, Any], accept: str | None = None
 ) -> AsyncIterator[str]:
-    encoder = EventEncoder(accept or "text/event-stream")
-    thread_id = str(payload.get("threadId") or uuid4())
-    run_id = str(payload.get("runId") or f"skills-{uuid4().hex[:12]}")
-    message_id = str(uuid4())
+    skill_input = _skill_catalog_input(payload)
+    action = skill_input.get("action")
 
     async def stream() -> AsyncIterator[str]:
         yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
@@ -116,37 +106,36 @@ def build_user_skills_ag_ui_stream(
                 "action": action,
                 **result_payload,
             }
-        except Exception as exc:
-            message = f"技能操作失败：{type(exc).__name__}: {exc}"
-            response_payload = {
-                "schemaVersion": 1,
-                "runId": run_id,
-                "threadId": thread_id,
-                "status": "failed",
-                "action": skill_input.get("action") if "skill_input" in locals() else None,
-                "error": {"type": type(exc).__name__, "message": str(exc)},
-            }
-
-        safe_payload = jsonable_encoder(response_payload)
-        yield encoder.encode(
-            CustomEvent(name=SKILL_CATALOG_EVENT_NAME, value=safe_payload)
-        )
-        yield encoder.encode(
-            StateSnapshotEvent(snapshot={"skillCatalog": safe_payload})
-        )
-        yield encoder.encode(
-            TextMessageContentEvent(messageId=message_id, delta=message)
-        )
-        yield encoder.encode(TextMessageEndEvent(messageId=message_id))
-        yield encoder.encode(
-            RunFinishedEvent(
-                threadId=thread_id,
-                runId=run_id,
-                result={"skillCatalog": safe_payload},
+            message = f"已读取技能 {document.name}。"
+        elif action == "save":
+            request = SaveUserSkillRequest.model_validate(skill_input)
+            document = save_user_skill_document(
+                request.relative_path,
+                request.content,
+                request.expected_revision,
             )
+            result_payload = {
+                "root": user_skills_root_label(),
+                "document": document.model_dump(by_alias=True),
+            }
+            message = f"已保存技能 {document.name}。"
+        else:
+            raise ValueError("skillCatalog.action 必须是 list、get 或 save。")
+        return AgUiActionResult(
+            data={"action": action, **result_payload},
+            message=message,
         )
 
-    return stream()
+    return build_ag_ui_action_stream(
+        payload=payload,
+        event_name=SKILL_CATALOG_EVENT_NAME,
+        state_key="skillCatalog",
+        run_id_prefix="skills",
+        operation=operation,
+        error_message_prefix="技能操作失败",
+        error_data=lambda _exc: {"action": action},
+        accept=accept,
+    )
 
 
 def _skill_catalog_input(payload: dict[str, Any]) -> dict[str, Any]:

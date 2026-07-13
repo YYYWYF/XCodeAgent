@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.protocols.workflow_request import workflow_run_inputs
+from app.protocols.workflow.request import workflow_run_inputs
 
 
 class WorkflowRequestTests(unittest.TestCase):

@@ -9,10 +9,8 @@ from types import SimpleNamespace
 from langgraph.graph import END, START, StateGraph
 
 from app.graph.state import ProjectState
-from app.protocols.workflow_visualization import (
-    _workflow_confirmation_artifact,
-    build_workflow_ag_ui_stream,
-)
+from app.protocols.workflow import build_workflow_ag_ui_stream
+from app.protocols.workflow.projection import _workflow_confirmation_artifact
 
 
 class FakeWorkflowGraph:

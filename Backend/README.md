@@ -1,6 +1,6 @@
 # Local LangGraph Agent
 
-一个最小可运行的 `Python + FastAPI + LangGraph` 本地后端。它会读取 `.env` 中的模型 Provider 配置，使用 OpenAI-compatible Chat Completions API，并通过 `/chat` 暴露一个本地调用接口。
+一个最小可运行的 `Python + FastAPI + LangGraph` 本地后端。它会读取 `.env` 中的模型 Provider 配置，使用 OpenAI-compatible Chat Completions API，并通过 `/workflow/run` 暴露 AG-UI 流式接口。
 
 当前后端还内置了：
 
@@ -36,7 +36,7 @@ scripts/start-backend.sh workflow "一句话需求"
 
 - 健康检查：http://127.0.0.1:8000/health
 - Swagger 文档：http://127.0.0.1:8000/docs
-- AG-UI 流式接口：http://127.0.0.1:8000/ag-ui
+- AG-UI 流式接口：http://127.0.0.1:8000/workflow/run
 - Antd v4 组件列表：http://127.0.0.1:8000/tools/antd-v4/components
 - Antd v4 文档搜索：http://127.0.0.1:8000/tools/antd-v4/search?q=Form
 - Antd v4 组件详情：http://127.0.0.1:8000/tools/antd-v4/components/form
@@ -47,18 +47,13 @@ scripts/start-backend.sh workflow "一句话需求"
 ## 调用示例
 
 ```bash
-curl -X POST http://127.0.0.1:8000/chat \
+curl -N -X POST http://127.0.0.1:8000/workflow/run \
   -H 'Content-Type: application/json' \
-  -d '{"message":"你好，介绍一下你自己"}'
+  -H 'Accept: text/event-stream' \
+  -d '{"threadId":"demo-thread","messages":[{"role":"user","content":"创建一个库存管理应用"}]}'
 ```
 
-返回里会包含 `session_id`。后续请求带上同一个 `session_id`，服务会用 LangGraph 的内存 checkpointer 保持这轮进程内的上下文：
-
-```bash
-curl -X POST http://127.0.0.1:8000/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"session_id":"上一次返回的 session_id","message":"刚才我问了什么？"}'
-```
+后续请求复用同一个 `threadId`，服务会用 LangGraph checkpointer 延续该主工作流。
 
 需求规划工具可以直连调用，也可以通过 AG-UI 的 `forwardedProps.agentMode=requirement-planner` 使用：
 

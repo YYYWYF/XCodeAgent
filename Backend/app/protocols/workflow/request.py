@@ -1,3 +1,5 @@
+"""将受支持的 HTTP 和 AG-UI 请求结构归一化为主工作流输入。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,6 +11,12 @@ from app.workspace.task_documents import load_build_task_plan_json
 
 
 def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
+    """应用兼容性回退规则并返回统一的运行时输入。
+
+    显式顶层字段优先于 forwardedProps；只有 `request` 和 `message` 都不存在时，
+    才会使用 AG-UI 消息列表中的最后一条用户消息。
+    """
+
     forwarded_props = _optional_dict(payload.get("forwardedProps")) or {}
     application = _optional_dict(forwarded_props.get("application")) or {}
     state = _optional_dict(payload.get("state")) or {}
@@ -55,6 +63,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         resume_from = "requirements"
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
+    detail_review_submission = _detail_review_submission(clarification_answers)
 
     return {
         "cancel_run_id": (
@@ -69,8 +78,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             **_resume_values(resume_state),
             **_debug_resume_values(debug_state),
             **(
-                {"detail_review_submission": _detail_review_submission(clarification_answers)}
-                if _detail_review_submission(clarification_answers)
+                {"detail_review_submission": detail_review_submission}
+                if detail_review_submission
                 else {}
             ),
         },

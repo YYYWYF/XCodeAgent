@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,8 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.graph import graph
-from app.protocols.workflow_visualization import (
-    build_workflow_response,
+from app.protocols.workflow import (
     build_workflow_ag_ui_stream,
     workflow_capabilities,
 )
@@ -43,31 +42,6 @@ app.add_middleware(
 )
 
 
-class ChatRequest(BaseModel):
-    message: Annotated[
-        str, Field(min_length=1, description="User input for the agent.")
-    ]
-    session_id: Optional[str] = Field(
-        default=None,
-        description="Optional conversation id. Reuse it to keep in-memory chat history.",
-    )
-    system_prompt: Optional[str] = Field(
-        default=None, description="Optional prompt override."
-    )
-    workspace_root: Optional[str] = Field(
-        default=None, description="Optional workspace root for local tools."
-    )
-    temperature: Optional[float] = Field(default=None, ge=0, le=1)
-    max_tokens: Optional[int] = Field(default=None, ge=1, le=8192)
-
-
-class ChatResponse(BaseModel):
-    session_id: str
-    model: str
-    answer: str
-    messages: list[dict[str, str]]
-
-
 class ApprovalActionRequest(BaseModel):
     scope: Literal["once", "operation"] = Field(default="once")
     reason: Optional[str] = Field(default=None)
@@ -93,32 +67,6 @@ async def health() -> dict[str, object]:
             "workspace": workspace_tools.capabilities(),
         },
     }
-
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
-    try:
-        result = await build_workflow_response(
-            graph=graph,
-            request=request.message,
-            workspace=request.workspace_root,
-            thread_id=request.session_id,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Workflow run failed: {exc}"
-        ) from exc
-    answer = str(result.get("summary", {}).get("message") or "")
-    session_id = str(result.get("threadId") or request.session_id or "")
-    return ChatResponse(
-        session_id=session_id,
-        model=settings.model_api_name,
-        answer=answer,
-        messages=[
-            {"role": "user", "content": request.message},
-            {"role": "assistant", "content": answer},
-        ],
-    )
 
 
 @app.post("/application-page-planning/run")

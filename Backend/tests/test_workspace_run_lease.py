@@ -6,7 +6,7 @@ import unittest
 from contextlib import suppress
 from pathlib import Path
 
-from app.protocols.workflow_visualization import build_workflow_ag_ui_stream
+from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.workspace.run_lease import (
     WORKSPACE_BUSY_ERROR_CODE,
     WorkspaceBusyError,
