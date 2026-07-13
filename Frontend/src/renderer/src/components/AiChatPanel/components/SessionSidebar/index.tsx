@@ -4,7 +4,8 @@ import {
   DeleteOutlined,
   FolderOpenOutlined,
   PlusOutlined,
-  SearchOutlined
+  SearchOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons'
 import { Alert, Button, Empty, Input, Popconfirm, Spin, Typography } from 'antd'
 import type { KeyboardEvent, ReactElement } from 'react'
@@ -28,9 +29,11 @@ type SessionSidebarProps = {
   onOpenSession: (sessionId: string) => Promise<void>
   onOpenSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>, sessionId: string) => void
   onReturnWelcome: () => void
+  onShowSkills: () => void
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
+  skillsActive: boolean
   workspaceRoot: string
 }
 
@@ -44,9 +47,11 @@ export default function SessionSidebar({
   onOpenSession,
   onOpenSessionKeyDown,
   onReturnWelcome,
+  onShowSkills,
   sessionError,
   sessionRunStates,
   sessions,
+  skillsActive,
   workspaceRoot
 }: SessionSidebarProps): ReactElement {
   const [query, setQuery] = useState('')
@@ -89,6 +94,15 @@ export default function SessionSidebar({
         </span>
       </button>
       <Button
+        aria-current={skillsActive ? 'page' : undefined}
+        block
+        className={cx('session-skills-button', skillsActive && 'active')}
+        icon={<ThunderboltOutlined />}
+        onClick={onShowSkills}
+      >
+        技能
+      </Button>
+      <Button
         block
         className={cx('session-new-button')}
         disabled={!application.workspaceRoot}
@@ -126,8 +140,14 @@ export default function SessionSidebar({
                 const running = Boolean(runStatus)
                 return (
                   <div
-                    aria-current={activeSessionId === session.id ? 'page' : undefined}
-                    className={cx('session-item', activeSessionId === session.id && 'active', running && 'running')}
+                    aria-current={
+                      !skillsActive && activeSessionId === session.id ? 'page' : undefined
+                    }
+                    className={cx(
+                      'session-item',
+                      !skillsActive && activeSessionId === session.id && 'active',
+                      running && 'running'
+                    )}
                     key={session.id}
                   >
                     <div

@@ -49,6 +49,7 @@ export async function startBackendService(): Promise<string> {
     XCODEAGENT_BACKEND_HOST: BACKEND_HOST,
     XCODEAGENT_BACKEND_PORT: String(port),
     XCODEAGENT_BACKEND_ENV_FILE: bundledBackend.envFilePath,
+    XCODEAGENT_WORKING_DIR: XCODE_AGENT_ENV.WORKING_DIR,
     PYTHONUTF8: '1'
   }
 

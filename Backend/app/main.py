@@ -17,6 +17,10 @@ from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
 )
+from app.protocols.user_skills import (
+    build_user_skills_ag_ui_stream,
+    user_skills_capabilities,
+)
 from app.config import Settings
 from app.services.builtin_skills import available_builtin_skills
 from app.tools import antd_v4_docs
@@ -85,6 +89,7 @@ async def health() -> dict[str, object]:
             },
             "workflow_run": workflow_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
+            "user_skills": user_skills_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -126,6 +131,18 @@ async def run_application_page_planning(
             payload=input_data,
             accept=accept,
         ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/skills/run")
+async def run_user_skills(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    return StreamingResponse(
+        build_user_skills_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -143,6 +143,39 @@
   }
 }
 
+.@{class-prefix}-session-skills-button.ant-btn {
+  display: flex;
+  height: 40px;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 13px;
+  color: var(--wb-text-secondary);
+  font-weight: 600;
+  background: transparent;
+  border-color: transparent;
+  border-radius: 8px;
+
+  .anticon {
+    color: var(--wb-accent);
+  }
+
+  &:hover,
+  &:focus {
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+    border-color: var(--wb-border);
+  }
+
+  &.@{class-prefix}-active,
+  &.@{class-prefix}-active:hover,
+  &.@{class-prefix}-active:focus {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent-border);
+    box-shadow: inset 3px 0 0 var(--wb-accent);
+  }
+}
+
 .@{class-prefix}-workbench-shell[data-theme='dark'] {
   .@{class-prefix}-session-new-button.ant-btn {
     color: #f7fbff;

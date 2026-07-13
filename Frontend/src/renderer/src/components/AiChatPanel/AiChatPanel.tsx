@@ -13,6 +13,7 @@ import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import MessageList from './components/MessageList'
 import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
+import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
@@ -35,6 +36,7 @@ export default function AiChatPanel({
   onThemeChange,
   theme
 }: Props): ReactElement {
+  const [activeView, setActiveView] = useState<'chat' | 'skills'>('chat')
   const [previewError, setPreviewError] = useState('')
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const { publishAiMessage } = useWorkbench()
@@ -128,6 +130,22 @@ export default function AiChatPanel({
     setRightPanel({ type: 'diff', codeChanges, selectedPath })
   }
 
+  const handleShowSkills = (): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('skills')
+  }
+
+  const handleCreateChatSession = (): void => {
+    setActiveView('chat')
+    handleCreateSessionFromList()
+  }
+
+  const handleOpenChatSession = async (sessionId: string): Promise<void> => {
+    setActiveView('chat')
+    await handleOpenSession(sessionId)
+  }
+
   return (
     <section
       className={cx(
@@ -145,67 +163,76 @@ export default function AiChatPanel({
           application={application}
           deletingSessionId={deletingSessionId}
           loadingSessions={loadingSessions}
-          onCreateSession={handleCreateSessionFromList}
+          onCreateSession={handleCreateChatSession}
           onDeleteSession={handleDeleteSession}
-          onOpenSession={handleOpenSession}
-          onOpenSessionKeyDown={handleOpenSessionKeyDown}
+          onOpenSession={handleOpenChatSession}
+          onOpenSessionKeyDown={(event, sessionId) => {
+            if (event.key === 'Enter' || event.key === ' ') setActiveView('chat')
+            handleOpenSessionKeyDown(event, sessionId)
+          }}
           onReturnWelcome={onReturnWelcome}
+          onShowSkills={handleShowSkills}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
           sessions={sessions}
+          skillsActive={activeView === 'skills'}
           workspaceRoot={workspaceRoot}
         />
 
-        <div className={cx('ai-chat-main')}>
-          <ChatHeader
-            actions={
-              showPreviewActions ? (
-                <PreviewActions
-                  embeddedPreviewOpen={embeddedPreviewOpen}
-                  onCloseEmbeddedPreview={() => setRightPanel(undefined)}
-                  onPreviewAction={handlePreviewAction}
-                  theme={theme}
-                />
-              ) : undefined
-            }
-            copy={copy}
-            editorMode={editorMode}
-            onThemeChange={onThemeChange}
-            theme={theme}
-            title={activeSessionTitle || '新对话'}
-            workspaceName={application.name}
-          />
-
-          {previewError && (
-            <Alert
-              className={cx('preview-action-error')}
-              message={previewError}
-              showIcon
-              type="error"
+        {activeView === 'skills' ? (
+          <SkillsPage onThemeChange={onThemeChange} theme={theme} />
+        ) : (
+          <div className={cx('ai-chat-main')}>
+            <ChatHeader
+              actions={
+                showPreviewActions ? (
+                  <PreviewActions
+                    embeddedPreviewOpen={embeddedPreviewOpen}
+                    onCloseEmbeddedPreview={() => setRightPanel(undefined)}
+                    onPreviewAction={handlePreviewAction}
+                    theme={theme}
+                  />
+                ) : undefined
+              }
+              copy={copy}
+              editorMode={editorMode}
+              onThemeChange={onThemeChange}
+              theme={theme}
+              title={activeSessionTitle || '新对话'}
+              workspaceName={application.name}
             />
-          )}
 
-          <MessageList
-            copy={copy}
-            loading={loading}
-            messages={messages}
-            onOpenCodeChangeFile={handleOpenCodeChangeFile}
-            onSubmitClarification={handleSubmitClarification}
-          />
+            {previewError && (
+              <Alert
+                className={cx('preview-action-error')}
+                message={previewError}
+                showIcon
+                type="error"
+              />
+            )}
 
-          <ChatComposer
-            copy={copy}
-            draft={draft}
-            error={error}
-            loading={loading}
-            onDraftChange={(value) => setDraftByKey(draftKey, value)}
-            onSend={handleSend}
-            onStopGenerating={handleStopGenerating}
-            stopping={stopping}
-            workspaceBusy={workspaceBusy}
-            workspaceRoot={workspaceRoot}
-          />
-        </div>
+            <MessageList
+              copy={copy}
+              loading={loading}
+              messages={messages}
+              onOpenCodeChangeFile={handleOpenCodeChangeFile}
+              onSubmitClarification={handleSubmitClarification}
+            />
+
+            <ChatComposer
+              copy={copy}
+              draft={draft}
+              error={error}
+              loading={loading}
+              onDraftChange={(value) => setDraftByKey(draftKey, value)}
+              onSend={handleSend}
+              onStopGenerating={handleStopGenerating}
+              stopping={stopping}
+              workspaceBusy={workspaceBusy}
+              workspaceRoot={workspaceRoot}
+            />
+          </div>
+        )}
       </div>
 
       {rightPanel?.type === 'preview' && (
