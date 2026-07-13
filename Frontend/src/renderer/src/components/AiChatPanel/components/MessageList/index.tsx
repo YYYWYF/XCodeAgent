@@ -32,8 +32,9 @@ export default function MessageList({
   onOpenCodeChangeFile,
   onSubmitClarification
 }: MessageListProps): ReactElement {
+  const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const hasStreamingProcess = messages.some(
-    (message) => message.role === 'assistant' && Boolean(message.processSteps?.length)
+    (message) => message.id === activeAssistantMessageId && Boolean(message.processSteps?.length)
   )
 
   return (
@@ -41,12 +42,15 @@ export default function MessageList({
       <div className={cx('ai-message-column')}>
         {messages.length === 0 ? (
           <div className={cx('ai-message-empty')}>
-            <span className={cx('ai-message-empty-mark')}><RobotOutlined /></span>
+            <span className={cx('ai-message-empty-mark')}>
+              <RobotOutlined />
+            </span>
             <Text strong>从一个想法开始</Text>
             <Text type="secondary">{copy.empty}</Text>
           </div>
         ) : (
           messages.map((message) => {
+            const messageLoading = message.id === activeAssistantMessageId
             const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
             const nonToolSteps = message.processSteps?.filter(
               (step) => step.kind !== 'tool' && step.kind !== 'command'
@@ -58,48 +62,53 @@ export default function MessageList({
                 className={cx(
                   'ai-message',
                   message.role,
-                  message.role === 'assistant' && !loading && 'completed'
+                  message.role === 'assistant' && !messageLoading && 'completed'
                 )}
                 key={message.id}
               >
                 <div className={cx('ai-message-content')}>
                   {message.role === 'assistant' ? (
                     <>
-                      {loading && nonToolSteps && nonToolSteps.length > 0 && (
-                        <ProcessSteps loading={loading} steps={nonToolSteps} />
+                      {messageLoading && nonToolSteps && nonToolSteps.length > 0 && (
+                        <ProcessSteps loading={messageLoading} steps={nonToolSteps} />
                       )}
-                      {loading && message.toolCalls?.map((toolCall) => (
-                        <ToolCallCard key={toolCall.id} toolCall={toolCall} />
-                      ))}
-                      {!loading && codeChanges && (
+                      {messageLoading &&
+                        message.toolCalls?.map((toolCall) => (
+                          <ToolCallCard key={toolCall.id} toolCall={toolCall} />
+                        ))}
+                      {!messageLoading && codeChanges && (
                         <div className={cx('final-result-heading')}>
-                          <span><CheckCircleOutlined /></span>
+                          <span>
+                            <CheckCircleOutlined />
+                          </span>
                           <div>
                             <Text strong>任务已完成</Text>
                             <Text type="secondary">最终结果</Text>
                           </div>
                         </div>
                       )}
-                      <div className={cx(!loading && codeChanges && 'final-result-content')}>
+                      <div className={cx(!messageLoading && codeChanges && 'final-result-content')}>
                         <MarkdownContent content={message.content} />
                       </div>
-                      {message.workflow && (loading || requiresClarification) && (
+                      {message.workflow && (messageLoading || requiresClarification) && (
                         <WorkflowRunCard
-                          disabled={loading}
+                          disabled={messageLoading}
                           onSubmitClarification={onSubmitClarification}
                           workflow={message.workflow}
                         />
                       )}
-                      {!loading && codeChanges && (
+                      {!messageLoading && codeChanges && (
                         <CodeChangeCard
                           codeChanges={codeChanges}
-                          loading={loading}
+                          loading={messageLoading}
                           onApproveAll={() => undefined}
                           onOpenFile={(path) => onOpenCodeChangeFile(codeChanges, path)}
                         />
                       )}
                     </>
-                  ) : <Text className={cx('ai-message-text')}>{message.content}</Text>}
+                  ) : (
+                    <Text className={cx('ai-message-text')}>{message.content}</Text>
+                  )}
                 </div>
               </article>
             )
@@ -114,4 +123,11 @@ export default function MessageList({
       </div>
     </div>
   )
+}
+
+function findLastAssistantMessageId(messages: AgentChatMessage[]): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'assistant') return messages[index].id
+  }
+  return undefined
 }
