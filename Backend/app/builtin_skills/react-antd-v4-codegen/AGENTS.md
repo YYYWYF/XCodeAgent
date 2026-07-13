@@ -1,22 +1,22 @@
-# Coding Agent Instructions
+# 编码代理指令
 
-Use these rules whenever generating or modifying React + TypeScript code in this workspace.
+在本工作区生成或修改 React + TypeScript 代码时使用这些规则。
 
-Primary rule source:
+主要规则来源：
 
 - `react-antd-v4-codegen/SKILL.md`
 
-Hard requirements:
+硬性要求：
 
-1. Only write Ant Design `4.24.16` code. Do not generate antd v5/v6 APIs.
-2. Every third-party import must be declared in the current package or workspace `package.json`.
-3. Use feature-based file splitting. Avoid large files and keep code easy to review by feature.
-4. Use nearby ownership: private code stays inside the component or feature module; only cross-module reusable code moves to global directories.
-5. Follow React Hook rules. Never call Hooks conditionally or after an early return.
-6. Avoid unnecessary `useEffect`; do not store derived state.
-7. Handle loading, empty, error, forbidden, and notFound states explicitly.
-8. Write necessary comments for complex business rules, compatibility logic, race handling, and side-effect boundaries.
-9. Prefer existing project patterns, wrappers, request hooks, components, styles, and naming.
-10. Do not introduce unrelated refactors.
+1. 只编写 Ant Design `4.24.16` 代码。不得生成 antd v5/v6 API。
+2. 每个第三方引入必须已在当前包或工作区的 `package.json` 中声明。
+3. 按功能拆分文件。避免大文件，保持按功能易于审查。
+4. 使用就近归属：私有代码保留在组件或功能模块内部；只有跨模块可复用的代码才移到全局目录。
+5. 遵循 React Hook 规则。切勿在条件语句中或提前 return 之后调用 Hook。
+6. 避免不必要的 `useEffect`；不要存储派生状态。
+7. 显式处理加载中、空数据、错误、无权限和未找到状态。
+8. 为复杂业务规则、兼容逻辑、竞态处理和副作用边界编写必要注释。
+9. 优先使用已有的项目模式、包装器、请求 Hook、组件、样式和命名。
+10. 不要引入无关的重构。
 
-Before finishing React work, run through `react-antd-v4-codegen/references/review-checklist.md`.
+完成 React 工作前，过一遍 `react-antd-v4-codegen/references/review-checklist.md`。

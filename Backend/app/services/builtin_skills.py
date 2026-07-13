@@ -9,6 +9,7 @@ BUILTIN_SKILLS_DIR_ENV = "XCODEAGENT_BUILTIN_SKILLS_DIR"
 BUILTIN_SKILLS_VIRTUAL_ROOT = "/.xcodeagent/builtin-skills/"
 REACT_ANTD_V4_SKILL_NAME = "react-antd-v4-codegen"
 REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
+CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
 
 _ANTD_V4_ENTRY_FILES = [
     "REACT_BEST_PRACTICES_GUIDE.md",
@@ -31,9 +32,17 @@ _REACT_DEV_SPEC_REFERENCE_FILES = [
     "references/06-appendix.md",
 ]
 
+_CODE_BLOCK_TEMPLATE_REFERENCE_FILES = [
+    "references/blocks.md",
+    "references/codegen-strategy.md",
+    "references/mock-data.md",
+    "references/page-templates.md",
+]
+
 REQUIRED_BUILTIN_SKILL_FILES = {
     REACT_ANTD_V4_SKILL_NAME: ["SKILL.md", *_ANTD_V4_ENTRY_FILES, *_ANTD_V4_REFERENCE_FILES],
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
+    CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
 }
 
 

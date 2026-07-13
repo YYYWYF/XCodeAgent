@@ -1,50 +1,50 @@
-# Review Checklist
+# 审查检查清单
 
-Run this checklist before finishing React code generation or review.
+完成 React 代码生成或审查前，逐项过一遍此清单。
 
-## Hard Gates
+## 硬门槛
 
-1. Is antd usage compatible with `antd@4.24.16`?
-2. Are all third-party imports declared in `package.json`?
-3. Did the implementation avoid antd v5/v6 APIs?
-4. Are Hooks called only at top level and before any conditional return?
-5. Are loading, empty, error, forbidden, and notFound states handled where applicable?
+1. antd 用法是否兼容 `antd@4.24.16`？
+2. 所有第三方引入是否已在 `package.json` 中声明？
+3. 实现是否避免了 antd v5/v6 API？
+4. Hook 是否仅在顶层调用，且在条件 return 之前？
+5. 加载中、空数据、错误、无权限和未找到状态是否在适用场景下处理了？
 
-## Structure
+## 结构
 
-1. Is code split by feature module?
-2. Can the user review the change by feature from the directory and file names?
-3. Are private components, Hooks, types, constants, styles, providers, APIs, and utils kept near their owner?
-4. Has any module-private code been promoted too early to global directories?
-5. Are ordinary source files under the target size?
-6. Are files over 400 lines split, unless they are allowed exceptions?
+1. 代码是否按功能模块拆分？
+2. 用户能否从目录和文件名按功能审查变更？
+3. 私有组件、Hook、类型、常量、样式、Provider、API 和工具函数是否保持在其拥有者附近？
+4. 是否有模块私有代码被过早提升到全局目录？
+5. 普通源文件是否在目标大小以内？
+6. 超过 400 行的文件是否已拆分，除非属于允许的例外？
 
-## React Quality
+## React 质量
 
-1. Is render pure?
-2. Is there unnecessary derived state?
-3. Is there unnecessary `useEffect`?
-4. Do Effects cleanup subscriptions, timers, async races, and external resources?
-5. Are Context values memoized and not too broad?
-6. Are request dependencies and race conditions handled?
-7. Are list keys stable and unique?
+1. 渲染是否纯净？
+2. 是否存在不必要的派生状态？
+3. 是否存在不必要的 `useEffect`？
+4. Effect 是否清理了订阅、定时器、异步竞态和外部资源？
+5. Context 值是否做了记忆化且范围不过大？
+6. 请求依赖和竞态条件是否处理了？
+7. 列表 key 是否稳定且唯一？
 
-## Types And Comments
+## 类型与注释
 
-1. Are API params, responses, props, and UI state typed separately?
-2. Is `any` avoided or locally isolated with a reason?
-3. Do complex business rules, compatibility logic, race handling, and side-effect boundaries have necessary comments?
-4. Are comments explaining why, not repeating what?
+1. API 参数、响应、props 和 UI 状态是否分别设置了类型？
+2. 是否避免了 `any`，或对不可避免的 `any` 做了局部隔离并说明原因？
+3. 复杂业务规则、兼容逻辑、竞态处理和副作用边界是否有必要注释？
+4. 注释是否说明了为什么而不是重复做了什么？
 
-## Priority Order
+## 优先级顺序
 
-When rules conflict, choose in this order:
+规则冲突时，按以下顺序选择：
 
-1. Correctness: Hooks, types, request states, error fallback.
-2. Dependency legality: declared packages only; antd `4.24.16` only.
-3. Feature reviewability: split by feature and avoid large files.
-4. Project consistency: existing directories, names, wrappers, request APIs, styles.
-5. Maintainability: clear state ownership and minimal side effects.
-6. Understandability: necessary comments for complex logic.
-7. Performance: optimize only where useful.
-8. Simplicity: avoid unnecessary abstraction and unrelated refactors.
+1. 正确性：Hook、类型、请求状态、错误兜底。
+2. 依赖合法性：仅使用已声明的包；仅 antd `4.24.16`。
+3. 功能可审查性：按功能拆分，避免大文件。
+4. 项目一致性：已有目录、命名、包装器、请求 API、样式。
+5. 可维护性：清晰的状态归属和最小副作用。
+6. 可理解性：复杂逻辑的必要注释。
+7. 性能：仅在有效益时优化。
+8. 简洁性：避免不必要的抽象和无关重构。

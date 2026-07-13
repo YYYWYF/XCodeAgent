@@ -1,29 +1,29 @@
-# Structure And Ownership
+# 结构与归属
 
-## Nearby Ownership
+## 就近归属
 
-Private code stays near the component or feature that owns it. Only move code upward when it has real reuse.
+私有代码保留在拥有它的组件或功能附近。只有在真正复用时才向上移动。
 
-| Code Type | Single Component | Same Feature Module | Multiple Feature Modules |
+| 代码类型 | 单个组件 | 同功能模块 | 多个功能模块 |
 | --- | --- | --- | --- |
-| Component | component directory or current file | `routes/Feature/components/` | `src/components/` |
-| Hook | component `hooks/` or current file | `routes/Feature/hooks/` | `src/hooks/` |
-| API adapter | component nearby or module `apis.ts` | `routes/Feature/apis.ts` | `src/apis/` |
-| Type | component file or `types.ts` | `routes/Feature/types.ts` | `src/typings/` |
-| Constant | component file or `constants.ts` | `routes/Feature/constants.ts` | `src/constants/` |
-| Style | component directory | feature style directory | `src/styles/` |
-| Utility | component nearby if pure | `routes/Feature/utils.ts` | `src/utils/` |
-| Provider | component or feature internal | `routes/Feature/providers/` | `src/providers/` |
+| 组件 | 组件目录或当前文件 | `routes/Feature/components/` | `src/components/` |
+| Hook | 组件 `hooks/` 或当前文件 | `routes/Feature/hooks/` | `src/hooks/` |
+| API 适配器 | 组件附近或模块 `apis.ts` | `routes/Feature/apis.ts` | `src/apis/` |
+| 类型 | 组件文件或 `types.ts` | `routes/Feature/types.ts` | `src/typings/` |
+| 常量 | 组件文件或 `constants.ts` | `routes/Feature/constants.ts` | `src/constants/` |
+| 样式 | 组件目录 | 功能样式目录 | `src/styles/` |
+| 工具函数 | 纯函数放组件附近 | `routes/Feature/utils.ts` | `src/utils/` |
+| Provider | 组件或功能内部 | `routes/Feature/providers/` | `src/providers/` |
 
-## Promotion Rules
+## 提升规则
 
-1. Do not promote code globally because it might be reused.
-2. Promote only after at least a second real usage appears.
-3. Before promoting globally, remove page-specific API, permission, copywriting, and workflow coupling.
-4. Global directories contain only stable, generic, cross-feature code.
-5. Private feature code should stay inside the feature even if there are several files.
+1. 不要因为代码"可能被复用"就将其提升到全局。
+2. 只有在至少出现第二个真实使用场景后才提升。
+3. 提升到全局前，移除页面专属的 API、权限、文案和工作流耦合。
+4. 全局目录只包含稳定、通用、跨功能的代码。
+5. 功能私有代码即使文件较多，也应保留在功能模块内部。
 
-## Feature Module Structure
+## 功能模块结构
 
 ```text
 routes/Editor/
@@ -40,38 +40,38 @@ routes/Editor/
 └── constants.ts
 ```
 
-## File Splitting
+## 文件拆分
 
-1. Split large files by feature responsibility, not by arbitrary line count alone.
-2. A page entry should orchestrate data and layout, not contain all form, table, modal, and request logic.
-3. A single file should have one main responsibility.
-4. Do not combine page orchestration, complex form logic, table column definitions, request logic, and modal internals in one file.
-5. Ordinary source files should target fewer than 300 lines.
-6. Files above 400 lines must be split.
-7. React component files should target fewer than 250 lines.
-8. Hooks and utils should target fewer than 200 lines.
-9. Type declarations, route tables, static config, and generated files may exceed limits, but must not contain business process logic.
+1. 按功能职责拆分大文件，而非仅按任意行数拆分。
+2. 页面入口应编排数据与布局，不应包含全部表单、表格、弹窗和请求逻辑。
+3. 单个文件应只有一项主要职责。
+4. 不要将页面编排、复杂表单逻辑、表格列定义、请求逻辑和弹窗内部细节混在一个文件里。
+5. 普通源文件应控制在 300 行以内。
+6. 超过 400 行的文件必须拆分。
+7. React 组件文件应控制在 250 行以内。
+8. Hook 和工具文件应控制在 200 行以内。
+9. 类型声明、路由表、静态配置和生成文件可以超出限制，但不得包含业务流程逻辑。
 
-## Comments
+## 注释
 
-Write necessary comments, not noise.
+编写必要注释，而非噪音。
 
-Required comments:
+必须注释的情况：
 
-1. Complex business rules, permission logic, state machines, data transformations, compatibility logic, race handling, and error fallback.
-2. Temporary workarounds, legacy API compatibility, downgrade paths, and third-party component limitations.
-3. Complex Hooks, table column configuration, form dependencies, important side effects, and cleanup boundaries.
-4. Public functions, components, or Hooks whose parameter semantics are not obvious.
+1. 复杂业务规则、权限逻辑、状态机、数据转换、兼容逻辑、竞态处理和错误兜底。
+2. 临时变通方案、旧版 API 兼容、降级路径和第三方组件限制。
+3. 复杂 Hook、表格列配置、表单依赖、重要副作用和清理边界。
+4. 参数语义不明显公开函数、组件或 Hook。
 
-Comment style:
+注释风格：
 
-- Explain why the code exists and what business constraint it preserves.
-- Do not repeat obvious code behavior.
-- Avoid comments like `// set variable`, `// click handler`, or `// return result`.
+- 说明代码为什么存在、保护了什么业务约束。
+- 不要重复显而易见的代码行为。
+- 避免写 `// 设置变量`、`// 点击处理` 或 `// 返回结果` 这类注释。
 
-Example:
+示例：
 
 ```ts
-// Legacy apps may not have terminal; default to PC assets to avoid blank previews.
+// 旧版应用可能没有终端信息；默认使用 PC 资源以避免预览白屏。
 const terminal = pageInfo?.terminal ?? 'pc';
 ```
