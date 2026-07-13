@@ -1,6 +1,10 @@
-from langgraph.checkpoint.memory import MemorySaver
+import sqlite3
+from pathlib import Path
+
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
+from app.config import Settings
 from app.graph import nodes
 from app.graph.state import ProjectState
 
@@ -76,6 +80,7 @@ def route_prepare_build_tasks(state: ProjectState) -> str:
 def build_graph():
     builder = StateGraph(ProjectState)
 
+    # ... (node and edge definitions unchanged)
     builder.add_node("classify_request_complexity", nodes.classify_request_complexity)
     builder.add_node("requirements", nodes.requirements)
     builder.add_node("direct_modification", nodes.direct_modification)
@@ -163,7 +168,13 @@ def build_graph():
     builder.add_edge("finalize_project", END)
     builder.add_edge("handle_failure", END)
 
-    return builder.compile(checkpointer=MemorySaver())
+    settings = Settings.from_env()
+    db_path = settings.checkpoint_db_path
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+    checkpointer.setup()
+    return builder.compile(checkpointer=checkpointer)
 
 
 graph = build_graph()

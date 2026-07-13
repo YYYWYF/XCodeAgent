@@ -34,6 +34,7 @@ class Settings:
     )
     default_temperature: float = 0.2
     default_max_tokens: int = 2048
+    checkpoint_db_path: str = ""  # populated in from_env
 
     @property
     def model_api_name(self) -> str:
@@ -66,6 +67,10 @@ class Settings:
             ),
             default_temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
             default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "2048")),
+            checkpoint_db_path=os.getenv(
+                "XCODEAGENT_CHECKPOINT_DB",
+                str(Path(__file__).resolve().parent.parent / "data" / "checkpoints.db"),
+            ),
         )
 
 
