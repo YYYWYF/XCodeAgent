@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CodeOutlined, GlobalOutlined, RightOutlined } from '@ant-design/icons'
+import { AppstoreOutlined, CodeOutlined, GlobalOutlined } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import { loadStoredApplications } from '../../service/applicationStorage'
 import type { ApplicationConfig } from '../../typings'
@@ -24,7 +24,6 @@ function formatRecentTime(value: number): string {
 
 export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX.Element {
   const [applications, setApplications] = useState<ApplicationConfig[]>([])
-  const [expanded, setExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -41,17 +40,10 @@ export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX
     }
   }, [])
 
-  const visibleApplications = expanded ? applications : applications.slice(0, 3)
-
   return (
     <section className={cx('welcome-recents')} aria-labelledby="welcome-recents-title">
       <div className={cx('welcome-section-heading')}>
         <h2 id="welcome-recents-title">最近项目</h2>
-        {applications.length > 3 ? (
-          <button onClick={() => setExpanded((value) => !value)} type="button">
-            {expanded ? '收起' : '查看全部'} <RightOutlined />
-          </button>
-        ) : null}
       </div>
 
       <div className={cx('welcome-project-list')}>
@@ -59,8 +51,8 @@ export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX
           Array.from({ length: 3 }, (_, index) => (
             <div className={cx('welcome-project-row', 'loading')} key={index} />
           ))
-        ) : visibleApplications.length > 0 ? (
-          visibleApplications.map((application, index) => {
+        ) : applications.length > 0 ? (
+          applications.map((application, index) => {
             const ProjectIcon = projectIcons[index % projectIcons.length]
             return (
               <button

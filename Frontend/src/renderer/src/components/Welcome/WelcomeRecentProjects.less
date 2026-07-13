@@ -14,24 +14,33 @@
     font-size: 17px;
     font-weight: 500;
   }
-
-  button {
-    padding: 4px 0;
-    color: #168dff;
-    font: inherit;
-    border: 0;
-    background: transparent;
-    cursor: pointer;
-
-    &:hover {
-      color: #55b1ff;
-    }
-  }
 }
 
 .@{class-prefix}-welcome-project-list {
   display: grid;
+  max-height: 258px;
+  align-content: start;
   gap: 12px;
+  padding-right: 3px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-color: rgba(112, 140, 169, 0.42) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(112, 140, 169, 0.32);
+    border-radius: 999px;
+  }
 }
 
 .@{class-prefix}-welcome-project-row {
