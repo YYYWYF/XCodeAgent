@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, AsyncIterator, Iterable
 from uuid import uuid4
 
@@ -100,6 +101,10 @@ def workflow_capabilities() -> dict[str, Any]:
             "events": f"Ordered event list using {WORKFLOW_EVENT_PROTOCOL}.",
             "agUi": "AG-UI-compatible custom-event/state-snapshot payload for frontend visualization.",
             "codeChanges": "Merged workspace diff payload for files changed by DeepAgent tools.",
+            "confirmationArtifact": (
+                "The current read-only Markdown document shown while RequirementSpec "
+                "or ProjectPlan confirmation is waiting for user input."
+            ),
             "result": "Final LangGraph ProjectState.",
         },
         "eventProtocol": {
@@ -384,7 +389,7 @@ def build_workflow_ag_ui_stream(
                             "workflow": final_payload,
                             "summary": summary,
                             "events": events,
-                            "result": result,
+                            "result": _public_workflow_state(result),
                         }
                     ),
                 )
@@ -1344,6 +1349,7 @@ def _workflow_visual_payload(
     result: dict[str, Any],
 ) -> dict[str, Any]:
     code_changes = _workflow_code_changes(result)
+    confirmation_artifact = _workflow_confirmation_artifact(result)
     state_payload = {
         "status": summary.get("status"),
         "request": result.get("request"),
@@ -1377,7 +1383,62 @@ def _workflow_visual_payload(
     if code_changes:
         payload["codeChanges"] = code_changes
         state_payload["codeChanges"] = code_changes
+    if confirmation_artifact:
+        payload["confirmationArtifact"] = confirmation_artifact
     return payload
+
+
+def _workflow_confirmation_artifact(
+    result: dict[str, Any],
+) -> dict[str, str] | None:
+    """Return the single Markdown document for the active confirmation gate."""
+
+    if result.get("status") != "requires_user_input":
+        return None
+
+    clarification = result.get("clarification")
+    if not isinstance(clarification, dict):
+        return None
+    if clarification.get("status") != "requires_user_input":
+        return None
+
+    artifact_contracts = {
+        "requirement_spec_confirmation": {
+            "phase": "requirements",
+            "id": "requirement_spec",
+            "name": "requirement-spec.md",
+            "path_field": "requirement_spec_path",
+        },
+        "project_plan_confirmation": {
+            "phase": "project_planning",
+            "id": "project_plan",
+            "name": "project-plan.md",
+            "path_field": "project_plan_path",
+        },
+    }
+    contract = artifact_contracts.get(str(clarification.get("mode") or ""))
+    if not contract or result.get("phase") != contract["phase"]:
+        return None
+
+    raw_path = result.get(contract["path_field"])
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    path = Path(raw_path)
+    if path.name != contract["name"] or not path.is_file():
+        return None
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+    return {
+        "id": contract["id"],
+        "name": contract["name"],
+        "path": str(path),
+        "format": "markdown",
+        "content": content,
+    }
 
 
 def _workflow_code_changes(value: dict[str, Any]) -> dict[str, Any] | None:

@@ -4,6 +4,7 @@ import type { Message } from '@ag-ui/core'
 import type {
   ApplicationConfig,
   WorkflowClarificationAnswers,
+  WorkflowConfirmationArtifact,
   WorkflowDebugOptions,
   WorkflowEvent,
   WorkflowRunPayload,
@@ -288,6 +289,7 @@ function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
         ? payload.summary
         : { status: 'unknown' },
     events: Array.isArray(payload.events) ? payload.events.map(readWorkflowEvent) : [],
+    confirmationArtifact: readConfirmationArtifact(payload.confirmationArtifact),
     codeChanges,
     state:
       payload.state && typeof payload.state === 'object'
@@ -299,6 +301,22 @@ function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
         : undefined
   }
 }
+
+function readConfirmationArtifact(value: unknown): WorkflowConfirmationArtifact | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const artifact = value as Partial<WorkflowConfirmationArtifact>
+  if (!['requirement_spec', 'project_plan'].includes(String(artifact.id))) return undefined
+  if (artifact.format !== 'markdown') return undefined
+  if (
+    typeof artifact.name !== 'string' ||
+    typeof artifact.path !== 'string' ||
+    typeof artifact.content !== 'string'
+  ) {
+    return undefined
+  }
+  return artifact as WorkflowConfirmationArtifact
+}
+
 function readCodeChangesPayload(value: unknown): WorkspaceCodeChangeSet | undefined {
   if (!value || typeof value !== 'object') return undefined
   const codeChanges = value as Partial<WorkspaceCodeChangeSet>

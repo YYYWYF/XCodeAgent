@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from langgraph.graph import END, START, StateGraph
 
 from app.graph.state import ProjectState
-from app.protocols.workflow_visualization import build_workflow_ag_ui_stream
+from app.protocols.workflow_visualization import (
+    _workflow_confirmation_artifact,
+    build_workflow_ag_ui_stream,
+)
 
 
 class FakeWorkflowGraph:
@@ -61,12 +66,15 @@ class FakeWorkflowGraph:
 
 
 class FakeProjectPlanningWaitGraph:
+    def __init__(self, project_plan_path: str = "var/plans/project-plan.md") -> None:
+        self.project_plan_path = project_plan_path
+
     async def astream(self, initial_state, *, config, stream_mode):
         yield "updates", {
             "project_planning": {
                 "phase": "project_planning",
                 "status": "requires_user_input",
-                "project_plan_path": "var/plans/project-plan.md",
+                "project_plan_path": self.project_plan_path,
                 "project_plan_json_path": "var/plans/project-plan.json",
                 "project_plan": {"confirmation_status": "pending_user_confirmation"},
                 "clarification": {
@@ -89,7 +97,7 @@ class FakeProjectPlanningWaitGraph:
             values={
                 "phase": "project_planning",
                 "status": "requires_user_input",
-                "project_plan_path": "var/plans/project-plan.md",
+                "project_plan_path": self.project_plan_path,
                 "project_plan_json_path": "var/plans/project-plan.json",
                 "project_plan": {"confirmation_status": "pending_user_confirmation"},
                 "clarification": {
@@ -338,30 +346,109 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("需要哪些角色", payload)
 
     def test_stream_exposes_project_planning_confirmation(self) -> None:
-        graph = FakeProjectPlanningWaitGraph()
-
-        async def collect() -> list[str]:
-            stream = build_workflow_ag_ui_stream(
-                graph=graph,
-                payload={
-                    "threadId": "thread-1",
-                    "runId": "run-1",
-                    "messages": [{"role": "user", "content": "make inventory app"}],
-                    "resumeFrom": "project_planning",
-                },
-                accept="text/event-stream",
+        with tempfile.TemporaryDirectory() as workspace:
+            project_plan_path = Path(workspace) / "project-plan.md"
+            project_plan_path.write_text(
+                "# 库存系统项目计划\n\n仅用于项目规划确认。",
+                encoding="utf-8",
             )
-            return [frame async for frame in stream]
+            graph = FakeProjectPlanningWaitGraph(str(project_plan_path))
 
-        frames = asyncio.run(collect())
-        payload = "\n".join(frames)
+            async def collect() -> list[str]:
+                stream = build_workflow_ag_ui_stream(
+                    graph=graph,
+                    payload={
+                        "threadId": "thread-1",
+                        "runId": "run-1",
+                        "messages": [{"role": "user", "content": "make inventory app"}],
+                        "resumeFrom": "project_planning",
+                    },
+                    accept="text/event-stream",
+                )
+                return [frame async for frame in stream]
+
+            frames = asyncio.run(collect())
+            payload = "\n".join(frames)
 
         self.assertIn("project_plan_confirmation", payload)
+        self.assertIn("confirmationArtifact", payload)
+        self.assertIn("库存系统项目计划", payload)
+        self.assertIn("project_plan", payload)
         self.assertIn("请确认项目规划书是否正确", payload)
         self.assertIn("project_planning", payload)
         self.assertIn("nodeName", payload)
         self.assertIn("project-plan.md", payload)
         self.assertNotIn("project-plan.json", payload)
+
+    def test_confirmation_artifact_is_limited_to_the_active_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            requirement_path = Path(workspace) / "requirement-spec.md"
+            project_plan_path = Path(workspace) / "project-plan.md"
+            requirement_path.write_text("# 需求文档\n\n需求确认正文。", encoding="utf-8")
+            project_plan_path.write_text("# 项目计划\n\n计划确认正文。", encoding="utf-8")
+
+            requirement_artifact = _workflow_confirmation_artifact(
+                {
+                    "phase": "requirements",
+                    "status": "requires_user_input",
+                    "requirement_spec_path": str(requirement_path),
+                    "project_plan_path": str(project_plan_path),
+                    "clarification": {
+                        "mode": "requirement_spec_confirmation",
+                        "status": "requires_user_input",
+                    },
+                }
+            )
+            project_plan_artifact = _workflow_confirmation_artifact(
+                {
+                    "phase": "project_planning",
+                    "status": "requires_user_input",
+                    "requirement_spec_path": str(requirement_path),
+                    "project_plan_path": str(project_plan_path),
+                    "clarification": {
+                        "mode": "project_plan_confirmation",
+                        "status": "requires_user_input",
+                    },
+                }
+            )
+
+        self.assertIsNotNone(requirement_artifact)
+        self.assertIsNotNone(project_plan_artifact)
+        assert requirement_artifact is not None
+        assert project_plan_artifact is not None
+        self.assertEqual(requirement_artifact["id"], "requirement_spec")
+        self.assertIn("需求确认正文", requirement_artifact["content"])
+        self.assertNotIn("计划确认正文", requirement_artifact["content"])
+        self.assertEqual(project_plan_artifact["id"], "project_plan")
+        self.assertIn("计划确认正文", project_plan_artifact["content"])
+        self.assertNotIn("需求确认正文", project_plan_artifact["content"])
+
+        self.assertIsNone(
+            _workflow_confirmation_artifact(
+                {
+                    "phase": "detail_confirmation",
+                    "status": "requires_user_input",
+                    "project_plan_path": "project-plan.md",
+                    "clarification": {
+                        "mode": "detail_review",
+                        "status": "requires_user_input",
+                    },
+                }
+            )
+        )
+        self.assertIsNone(
+            _workflow_confirmation_artifact(
+                {
+                    "phase": "requirements",
+                    "status": "completed",
+                    "requirement_spec_path": "requirement-spec.md",
+                    "clarification": {
+                        "mode": "requirement_spec_confirmation",
+                        "status": "clear",
+                    },
+                }
+            )
+        )
 
     def test_stream_passes_forwarded_workspace_to_graph_state(self) -> None:
         graph = FakeWorkflowGraph()

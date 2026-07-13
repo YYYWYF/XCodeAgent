@@ -38,6 +38,45 @@
   background: var(--wb-surface);
 }
 
+.@{class-prefix}-workflow-confirmation-artifact {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-workflow-confirmation-artifact-header {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+
+  .ant-typography code {
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+  }
+}
+
+.@{class-prefix}-workflow-confirmation-artifact-path {
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-workflow-confirmation-artifact-content {
+  max-height: 420px;
+  padding: 12px;
+  overflow: auto;
+  color: var(--wb-text-primary);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+}
+
 .@{class-prefix}-workflow-clarification-header,
 .@{class-prefix}-workflow-clarification-title {
   display: flex;

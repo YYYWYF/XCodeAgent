@@ -126,11 +126,20 @@ export type WorkflowClarification = {
   [key: string]: unknown
 }
 
+export type WorkflowConfirmationArtifact = {
+  id: 'requirement_spec' | 'project_plan'
+  name: string
+  path: string
+  format: 'markdown'
+  content: string
+}
+
 export type WorkflowRunPayload = {
   runId: string
   threadId: string
   summary: WorkflowSummary
   events: WorkflowEvent[]
+  confirmationArtifact?: WorkflowConfirmationArtifact
   codeChanges?: WorkspaceCodeChangeSet
   state?: Record<string, unknown>
   result?: Record<string, unknown>

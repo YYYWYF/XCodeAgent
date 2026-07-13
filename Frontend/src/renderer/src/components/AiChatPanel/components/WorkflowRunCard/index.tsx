@@ -7,9 +7,11 @@ import type {
   WorkflowClarificationSelectionGroup,
   WorkflowClarificationAnswer,
   WorkflowClarificationAnswers,
+  WorkflowConfirmationArtifact,
   WorkflowRunPayload,
 } from "../../../../typings";
 import { cx } from "../../../../utils";
+import ConfirmationArtifact from './ConfirmationArtifact';
 import DetailReview from './DetailReview';
 import './WorkflowRunCard.less';
 
@@ -38,6 +40,7 @@ export default function WorkflowRunCard({
   const artifacts = workflow.summary.artifacts || {};
   const recentEvents = workflow.events.slice(-8);
   const clarification = workflowClarification(workflow);
+  const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification);
   const clarificationQuestions = clarification?.questions || [];
   const detailReview = clarification?.mode === 'detail_review'
     ? clarification.review
@@ -106,6 +109,9 @@ export default function WorkflowRunCard({
             />
           ) : (
             <>
+          {confirmationArtifact && (
+            <ConfirmationArtifact artifact={confirmationArtifact} />
+          )}
           <ClarificationContext clarification={clarification} />
           {clarificationQuestions.map((question, index) => (
             <div
@@ -545,6 +551,31 @@ function workflowClarification(
   }
 
   return undefined;
+}
+
+function workflowConfirmationArtifact(
+  workflow: WorkflowRunPayload,
+  clarification?: WorkflowClarification,
+): WorkflowConfirmationArtifact | undefined {
+  const expectedArtifactId = clarification?.mode === 'requirement_spec_confirmation'
+    ? 'requirement_spec'
+    : clarification?.mode === 'project_plan_confirmation'
+      ? 'project_plan'
+      : undefined;
+  const artifact = workflow.confirmationArtifact;
+
+  if (
+    !expectedArtifactId ||
+    clarification?.status !== 'requires_user_input' ||
+    !artifact ||
+    artifact.id !== expectedArtifactId ||
+    artifact.format !== 'markdown' ||
+    !artifact.content.trim()
+  ) {
+    return undefined;
+  }
+
+  return artifact;
 }
 
 function workflowStatusColor(status: string): string {
