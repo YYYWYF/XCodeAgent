@@ -2,7 +2,7 @@ from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import analyze_requirements_with_chat_model
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.state import ProjectState
-from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
+from app.tools.ask_user import AskUserQuestion, build_ask_user_payload, clear_clarification
 from app.workspace.spec_documents import (
     edited_requirement_spec_markdown,
     requirement_spec_json_path,
@@ -25,7 +25,12 @@ def requirements(state: ProjectState) -> dict:
             if edited_markdown is not None
             else existing_spec
         )
-        spec = {**synchronized_spec, "confirmation_status": "confirmed"}
+        spec = {
+            **synchronized_spec,
+            "clarification_questions": [],
+            "clarification_status": "clear",
+            "confirmation_status": "confirmed",
+        }
         markdown_path = requirement_spec_markdown_path(state)
         if markdown_path.is_file():
             spec_path = str(markdown_path)
@@ -47,10 +52,14 @@ def requirements(state: ProjectState) -> dict:
     )
     spec = analysis["requirement_spec"]
     clarification = analysis["clarification"]
+    if _should_suppress_repeat_clarification(existing_spec, clarification):
+        clarification = clear_clarification(spec)
+        spec["clarification_questions"] = []
+        spec["clarification_status"] = "clear"
     if clarification["status"] == "clear":
         clarification = _requirement_spec_confirmation_payload(spec)
-        spec["clarification_questions"] = clarification["questions"]
-        spec["clarification_status"] = clarification["status"]
+        spec["clarification_questions"] = []
+        spec["clarification_status"] = "clear"
         spec["confirmation_status"] = "pending_user_confirmation"
         status = clarification["status"]
     else:
@@ -107,4 +116,37 @@ def _user_confirmed_requirement_spec(request: str) -> bool:
         request,
         positive_signals=("正确", "没问题", "继续规划", "可以继续", "无误"),
         negative_signals=("不正确", "需要修改", "修改", "调整", "补充", "不对"),
+    )
+
+
+def _should_suppress_repeat_clarification(
+    existing_spec: dict | None,
+    clarification: dict,
+) -> bool:
+    if not isinstance(existing_spec, dict):
+        return False
+    if existing_spec.get("confirmation_status") != "pending_user_input":
+        return False
+    if clarification.get("status") != "requires_user_input":
+        return False
+
+    questions = clarification.get("questions")
+    if not isinstance(questions, list) or not questions:
+        return False
+
+    return all(_is_optional_additive_question(question) for question in questions)
+
+
+def _is_optional_additive_question(question: object) -> bool:
+    if not isinstance(question, dict):
+        return False
+    text = "".join(
+        str(question.get(key) or "")
+        for key in ("id", "header", "dimension", "question")
+    )
+    normalized = text.replace(" ", "")
+    additive_markers = ("其他", "更多", "还有", "补充", "是否还", "是否有")
+    requirement_dimensions = ("角色", "页面", "菜单", "功能", "模块", "数据源", "验收")
+    return any(marker in normalized for marker in additive_markers) and any(
+        dimension in normalized for dimension in requirement_dimensions
     )

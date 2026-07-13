@@ -15,9 +15,4 @@ if [ ! -x "$PYTHON_BIN" ]; then
   PYTHON_BIN="python3"
 fi
 
-if [ "${1:-}" = "workflow" ]; then
-  shift
-  exec "$PYTHON_BIN" -m app.cli "$@"
-fi
-
 exec "$PYTHON_BIN" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000

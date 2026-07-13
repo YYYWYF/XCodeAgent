@@ -116,6 +116,32 @@ def response_field_paths(
     return _schema_paths(schema, contract.get("schemas", {}))
 
 
+def normalize_response_path(value: Any) -> str:
+    """Normalize model/user supplied response paths to contract field paths.
+
+    API contracts store field paths in a compact dotted form such as
+    ``items`` or ``items[].name``. Detail design agents may emit JSONPath-like
+    variants such as ``$.items`` or a malformed trailing dot ``$.items.``.
+    Keep the contract format deterministic while tolerating those harmless
+    surface differences at integration boundaries.
+    """
+
+    path = str(value or "").strip()
+    while path.endswith("."):
+        path = path[:-1].strip()
+    if path == "$":
+        return ""
+    if path.startswith("$."):
+        path = path[2:]
+    elif path.startswith("$"):
+        path = path[1:]
+        if path.startswith("."):
+            path = path[1:]
+    while path.endswith("."):
+        path = path[:-1].strip()
+    return path
+
+
 def normalize_response_bindings(
     contracts: list[dict[str, Any]],
     endpoint_dependencies: list[dict[str, Any]],
@@ -133,10 +159,13 @@ def normalize_response_bindings(
         return [
             {
                 "endpoint_id": str(binding.get("endpoint_id") or ""),
-                "source_path": str(binding.get("source_path") or ""),
+                "source_path": normalize_response_path(binding.get("source_path")),
                 "page_field": str(
                     binding.get("page_field")
-                    or str(binding.get("source_path") or "").rsplit(".", 1)[-1]
+                    or normalize_response_path(binding.get("source_path")).rsplit(
+                        ".",
+                        1,
+                    )[-1]
                 ),
             }
             for binding in provided_bindings
@@ -262,7 +291,7 @@ def _schema_paths(
     paths: list[str] = []
     for name, child in schema.get("properties", {}).items():
         child_prefix = f"{prefix}.{name}" if prefix else str(name)
+        paths.append(child_prefix)
         child_paths = _schema_paths(child, schemas, prefix=child_prefix)
-        paths.extend(child_paths or [child_prefix])
+        paths.extend(path for path in child_paths if path != child_prefix)
     return paths
-

@@ -244,6 +244,45 @@ class ProjectPlanTests(unittest.TestCase):
 
         self.assertTrue(any("unknown response field" in error for error in errors))
 
+    def test_contract_consistency_accepts_jsonpath_list_response_bindings(self) -> None:
+        plan = create_project_plan(create_requirement_spec("创建一个人员管理系统"))
+        page_dependency = next(
+            dependency
+            for dependency in plan["page_data_dependencies"]
+            if dependency.get("endpoint_dependencies")
+            and str(
+                dependency["endpoint_dependencies"][0].get("endpoint_id", "")
+            ).endswith(".list")
+        )
+        page_id = page_dependency["page_id"]
+        endpoint_id = page_dependency["endpoint_dependencies"][0]["endpoint_id"]
+        page_spec = create_page_spec_from_project_plan(
+            plan,
+            page_id,
+        )
+        page_detail = create_page_detail_plan(
+            plan,
+            page_spec,
+            agent_detail_plan={
+                "response_bindings": [
+                    {
+                        "endpoint_id": endpoint_id,
+                        "source_path": "$.items.",
+                        "page_field": "items",
+                    },
+                    {
+                        "endpoint_id": endpoint_id,
+                        "source_path": "$.total",
+                        "page_field": "total",
+                    },
+                ]
+            },
+        )
+        plan["page_detail_plans"] = [page_detail]
+
+        self.assertEqual(validate_api_contract_consistency(plan), [])
+        self.assertEqual(page_detail["response_bindings"][0]["source_path"], "items")
+
     def test_project_plan_tolerates_agent_string_items(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         agent_plan = {

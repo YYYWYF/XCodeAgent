@@ -150,5 +150,6 @@ export type WorkflowDebugOptions = {
   resumeFrom?: string
   requirementSpecPath?: string
   projectPlanPath?: string
+  workspaceSnapshotPath?: string
   buildTaskPlanPath?: string
 }

@@ -7,7 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.requirements import requirements
-from app.services.requirement_spec import create_requirement_spec
+from app.services.requirement_spec import (
+    create_requirement_spec,
+    merge_clarification_answers_into_spec,
+)
 from app.tools.ask_user import clear_clarification
 from app.workspace.spec_documents import write_requirement_spec_document
 
@@ -42,6 +45,28 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual([page["id"] for page in spec["pages"]], ["people_list"])
         self.assertNotIn("login_page", [page["id"] for page in spec["pages"]])
 
+    def test_clarification_answers_merge_into_requirement_spec_fields(self) -> None:
+        spec = create_requirement_spec("创建一个业务管理系统")
+        request = "\n".join(
+            [
+                "- 用户角色：系统需要哪些用户角色？",
+                "  回答：已选：仓库管理员、采购员",
+                "- 页面清单：需要哪些页面？",
+                "  回答：已选：库存列表、入库登记",
+            ]
+        )
+
+        merged = merge_clarification_answers_into_spec(spec, request)
+
+        self.assertEqual(
+            [role["name"] for role in merged["user_roles"]],
+            ["仓库管理员", "采购员"],
+        )
+        self.assertEqual(
+            [page["name"] for page in merged["pages"]],
+            ["库存列表", "入库登记"],
+        )
+
     def test_clear_requirement_waits_for_spec_confirmation(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         with tempfile.TemporaryDirectory() as workspace:
@@ -59,6 +84,9 @@ class RequirementsConfirmationTests(unittest.TestCase):
                         "timeline": [],
                     }
                 )
+                markdown = Path(result["requirement_spec_path"]).read_text(
+                    encoding="utf-8"
+                )
 
         analyzer.assert_called_once_with("创建一个库存管理系统", existing_spec=None)
         self.assertEqual(result["status"], "requires_user_input")
@@ -70,9 +98,16 @@ class RequirementsConfirmationTests(unittest.TestCase):
             result["requirement_spec"]["confirmation_status"],
             "pending_user_confirmation",
         )
+        self.assertEqual(result["requirement_spec"]["clarification_questions"], [])
+        self.assertEqual(result["requirement_spec"]["clarification_status"], "clear")
+        self.assertEqual(result["clarification"]["status"], "requires_user_input")
+        self.assertEqual(len(result["clarification"]["questions"]), 1)
+        self.assertIn("## 待确认问题\n\n- 暂无", markdown)
+        self.assertNotIn("请确认已生成的需求文档是否正确", markdown)
 
     def test_confirmed_requirement_spec_continues_to_planning(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
+        spec["confirmation_status"] = "pending_user_confirmation"
         with tempfile.TemporaryDirectory() as workspace:
             result = requirements(
                 {
@@ -89,6 +124,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
             result["requirement_spec"]["confirmation_status"],
             "confirmed",
         )
+        self.assertEqual(result["requirement_spec"]["clarification_questions"], [])
+        self.assertEqual(result["requirement_spec"]["clarification_status"], "clear")
 
     def test_generated_spec_requires_confirmation_after_clarification(self) -> None:
         existing_spec = create_requirement_spec("创建一个库存管理系统")
@@ -125,6 +162,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
             result["requirement_spec"]["confirmation_status"],
             "pending_user_confirmation",
         )
+        self.assertEqual(result["requirement_spec"]["clarification_questions"], [])
+        self.assertEqual(result["requirement_spec"]["clarification_status"], "clear")
 
     def test_clarification_answer_with_confirmation_words_is_not_short_circuited(self) -> None:
         existing_spec = create_requirement_spec("创建一个库存管理系统")
@@ -160,8 +199,81 @@ class RequirementsConfirmationTests(unittest.TestCase):
             "pending_user_confirmation",
         )
 
+    def test_repeated_optional_role_and_page_questions_are_not_asked_again(self) -> None:
+        existing_spec = create_requirement_spec("创建一个库存管理系统")
+        existing_spec.update(
+            {
+                "clarification_status": "requires_user_input",
+                "confirmation_status": "pending_user_input",
+            }
+        )
+        completed_spec = {
+            **existing_spec,
+            "user_roles": [
+                {"id": "role_1", "name": "仓库管理员", "description": "管理库存。"}
+            ],
+            "pages": [
+                {
+                    "id": "page_1",
+                    "name": "库存列表",
+                    "path": "/inventory",
+                    "module_id": "inventory",
+                    "description": "查看库存。",
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": completed_spec,
+                    "clarification": {
+                        "mode": "ask_user_question",
+                        "status": "requires_user_input",
+                        "question_schema": "gemini_cli.ask_user.v1",
+                        "questions": [
+                            {
+                                "id": "other_roles",
+                                "header": "用户角色",
+                                "question": "是否还有其他用户角色？",
+                                "type": "yesno",
+                            },
+                            {
+                                "id": "other_pages",
+                                "header": "页面清单",
+                                "question": "是否还有其他页面？",
+                                "type": "yesno",
+                            },
+                        ],
+                        "assumptions": [],
+                    },
+                },
+            ):
+                result = requirements(
+                    {
+                        "request": "已选：仓库管理员；页面：库存列表",
+                        "workspace": workspace,
+                        "requirement_spec": existing_spec,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["clarification"]["mode"],
+            "requirement_spec_confirmation",
+        )
+        self.assertEqual(len(result["clarification"]["questions"]), 1)
+        self.assertEqual(result["requirement_spec"]["clarification_questions"], [])
+        self.assertEqual(
+            result["requirement_spec"]["confirmation_status"],
+            "pending_user_confirmation",
+        )
+
     def test_confirmation_ignores_question_text_negative_words(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
+        spec["confirmation_status"] = "pending_user_confirmation"
         continuation_message = "\n".join(
             [
                 "请基于原始需求和以下用户补充确认，继续生成需求文档并推进后续 workflow。",

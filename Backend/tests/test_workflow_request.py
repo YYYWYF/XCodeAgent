@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from app.protocols.workflow.request import workflow_run_inputs
 
@@ -128,6 +131,37 @@ class WorkflowRequestTests(unittest.TestCase):
             {"page_id": "inventory_page"},
         )
 
+    def test_preserves_requirement_spec_from_state_snapshot_resume(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "补充角色和页面信息",
+                "forwardedProps": {
+                    "resumeState": {
+                        "state": {
+                            "status": "requires_user_input",
+                            "phase": "requirements",
+                            "requirement_spec": {
+                                "confirmation_status": "pending_user_input",
+                                "clarification_status": "requires_user_input",
+                            },
+                            "requirement_spec_path": "var/specs/requirement-spec.md",
+                            "requirement_spec_json_path": "var/specs/requirement-spec.json",
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "requirements")
+        self.assertEqual(
+            inputs["resume_values"]["requirement_spec"]["confirmation_status"],
+            "pending_user_input",
+        )
+        self.assertEqual(
+            inputs["resume_values"]["requirement_spec_path"],
+            "var/specs/requirement-spec.md",
+        )
+
     def test_extracts_structured_batch_detail_review_submission(self) -> None:
         submission = {
             "review_status": "confirmed",
@@ -222,6 +256,68 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(
             inputs["resume_values"]["project_plan"]["confirmation_status"],
             "pending_user_confirmation",
+        )
+
+    def test_preserves_workspace_snapshot_refs_from_resume_state(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "从任务拆分继续",
+                "forwardedProps": {
+                    "resumeState": {
+                        "state": {
+                            "workspace_snapshot_summary": {
+                                "workspace_revision": "rev-123"
+                            },
+                            "workspace_snapshot_path": "/tmp/snapshot.json",
+                            "workspace_snapshot_hash": "hash-123",
+                            "workspace_revision": "rev-123",
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["workspace_snapshot_path"],
+            "/tmp/snapshot.json",
+        )
+        self.assertEqual(
+            inputs["resume_values"]["workspace_snapshot_summary"]["workspace_revision"],
+            "rev-123",
+        )
+
+    def test_loads_workspace_snapshot_from_debug_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            snapshot_path = Path(tmpdir) / "snapshot.json"
+            snapshot_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "workspace_revision": "rev-debug",
+                        "tech_stack": ["FastAPI", "React"],
+                        "entrypoints": [{"path": "Backend/app/main.py"}],
+                        "project_roots": [{"path": "Backend/app"}],
+                        "file_manifest": {"total_files_indexed": 12},
+                        "code_graph": {"provider": "none", "available": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            inputs = workflow_run_inputs(
+                {
+                    "workflowDebug": {
+                        "resume_from": "inspect_workspace",
+                        "workspace_snapshot_path": str(snapshot_path),
+                    }
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "inspect_workspace")
+        self.assertEqual(inputs["resume_values"]["workspace_revision"], "rev-debug")
+        self.assertEqual(
+            inputs["resume_values"]["workspace_snapshot_summary"]["tech_stack"],
+            ["FastAPI", "React"],
         )
 
 

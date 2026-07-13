@@ -30,6 +30,10 @@ class ProjectState(TypedDict, total=False):
     data_source_spec_draft: dict[str, Any]
     detail_plans: list[dict[str, Any]]
     detail_review_submission: dict[str, Any]
+    workspace_snapshot_summary: dict[str, Any]
+    workspace_snapshot_path: str
+    workspace_snapshot_hash: str
+    workspace_revision: str
     build_task_plan: dict[str, Any]
     build_task_plan_path: str
     tasks: list[dict[str, Any]]

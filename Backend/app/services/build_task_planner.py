@@ -96,6 +96,37 @@ def _workspace_analysis(value: Any) -> dict[str, Any]:
     }
 
 
+def _workspace_analysis_from_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(snapshot, dict) or not snapshot:
+        return _workspace_analysis({})
+
+    entry_files = [
+        str(entry.get("path"))
+        for entry in snapshot.get("entrypoints", [])
+        if isinstance(entry, dict) and entry.get("path")
+    ]
+    inspected_directories = [
+        str(root.get("path"))
+        for root in snapshot.get("project_roots", [])
+        if isinstance(root, dict) and root.get("path")
+    ]
+    conventions = [
+        f"{command.get('kind')}: {command.get('command')}"
+        for command in snapshot.get("build_commands", [])
+        if isinstance(command, dict) and command.get("command")
+    ]
+    return {
+        "inspection_status": "completed",
+        "workspace_revision": snapshot.get("workspace_revision"),
+        "snapshot_schema_version": snapshot.get("schema_version"),
+        "stack": _string_list(snapshot.get("tech_stack")),
+        "inspected_directories": inspected_directories,
+        "entry_files": entry_files,
+        "conventions": conventions,
+        "summary": "WorkspaceSnapshot provided deterministic project roots, stack, entrypoints, commands, and contract hints before task planning.",
+    }
+
+
 def _data_source_task(data_source: dict[str, Any]) -> dict[str, Any]:
     task_id = f"data_source:{data_source['id']}"
     description = f"生成数据源 {data_source['name']}、API 契约和示例数据。"
@@ -300,6 +331,7 @@ def create_build_task_plan(
     project_plan: dict[str, Any],
     agent_note: str = "live main-agent build task preparation",
     agent_plan: dict[str, Any] | None = None,
+    workspace_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create executable build tasks from the Main Agent's ProjectPlan.
 
@@ -337,7 +369,15 @@ def create_build_task_plan(
         "generated_at": datetime.now(UTC).isoformat(),
         "source_project_plan_version": project_plan["version"],
         "task_statuses": list(TASK_STATUSES),
-        "workspace_analysis": _workspace_analysis((agent_plan or {}).get("workspace_analysis")),
+        "workspace_analysis": (
+            _workspace_analysis((agent_plan or {}).get("workspace_analysis"))
+            if (agent_plan or {}).get("workspace_analysis")
+            else _workspace_analysis_from_snapshot(workspace_snapshot)
+        ),
+        "workspace_snapshot_ref": {
+            "workspace_revision": (workspace_snapshot or {}).get("workspace_revision"),
+            "schema_version": (workspace_snapshot or {}).get("schema_version"),
+        },
         "tasks": tasks,
         "summary": {
             "total": len(tasks),

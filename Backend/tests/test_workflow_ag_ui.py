@@ -11,7 +11,12 @@ from langgraph.graph import END, START, StateGraph
 from app.graph.state import ProjectState
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_confirmation_artifact
-
+from app.protocols.workflow_visualization import (
+    _workflow_confirmation_artifact,
+    _workflow_summary,
+    _workflow_visual_payload,
+    build_workflow_ag_ui_stream,
+)
 
 class FakeWorkflowGraph:
     def __init__(self) -> None:
@@ -325,6 +330,40 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("RUN_STARTED", payload)
         self.assertIn("RUN_FINISHED", payload)
         self.assertIn("cancel_requested", payload)
+
+    def test_visual_payload_state_preserves_requirement_spec_for_resume(self) -> None:
+        result = {
+            "phase": "requirements",
+            "status": "requires_user_input",
+            "requirement_spec": {
+                "confirmation_status": "pending_user_input",
+                "clarification_status": "requires_user_input",
+            },
+            "requirement_spec_path": "var/specs/requirement-spec.md",
+            "requirement_spec_json_path": "var/specs/requirement-spec.json",
+            "clarification": {
+                "status": "requires_user_input",
+                "questions": [{"id": "role", "question": "需要哪些角色？"}],
+            },
+            "timeline": ["requirements"],
+        }
+        summary = _workflow_summary(result, [])
+        payload = _workflow_visual_payload(
+            run_id="run-resume",
+            thread_id="thread-resume",
+            summary=summary,
+            events=[],
+            result=result,
+        )
+
+        self.assertEqual(
+            payload["state"]["requirement_spec"]["confirmation_status"],
+            "pending_user_input",
+        )
+        self.assertEqual(
+            payload["state"]["requirement_spec_path"],
+            "var/specs/requirement-spec.md",
+        )
 
     def test_ask_user_tool_ends_before_run_finishes_without_tool_message(self) -> None:
         async def collect() -> list[str]:

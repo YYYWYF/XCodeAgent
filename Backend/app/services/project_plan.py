@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 from typing import Any
 
 from app.services.api_contracts import (
@@ -73,7 +74,30 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
 def _string_items(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-    return [str(item) for item in value if str(item).strip()]
+    return [
+        str(item)
+        for item in value
+        if str(item).strip() and str(item).strip() not in {"无", "none", "None"}
+    ]
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _norm(value: Any) -> str:
+    return re.sub(r"[\s_\-:/\\，,。；;（）()\[\]【】'\"`]+", "", _text(value).lower())
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _normalize_data_sources(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -441,6 +465,243 @@ def _page_data_dependencies(
         }
         for item in dependencies
     ]
+
+
+def apply_project_plan_feedback(
+    plan: dict[str, Any],
+    user_feedback: str,
+) -> dict[str, Any]:
+    """Deterministically merge common ProjectPlan confirmation feedback.
+
+    The planning model still handles broad revisions, but direct confirmation
+    text such as "人员列表页依赖数据源/api/database" must update the structured
+    dependency fields before downstream detail design and task planning.
+    """
+
+    if not _text(user_feedback):
+        return plan
+
+    updated = {
+        **plan,
+        "frontend_pages": [dict(page) for page in _dict_items(plan.get("frontend_pages"))],
+        "data_sources": [dict(source) for source in _dict_items(plan.get("data_sources"))],
+        "api_contracts": [dict(contract) for contract in _dict_items(plan.get("api_contracts"))],
+        "page_data_dependencies": [
+            dict(item) for item in _dict_items(plan.get("page_data_dependencies"))
+        ],
+        "task_inputs": {
+            **(plan.get("task_inputs") if isinstance(plan.get("task_inputs"), dict) else {}),
+        },
+    }
+
+    applied = False
+    if _mentions_database(user_feedback):
+        for source in updated["data_sources"]:
+            source["type"] = "database"
+        architecture = updated.get("architecture") if isinstance(updated.get("architecture"), dict) else {}
+        updated["architecture"] = {
+            **architecture,
+            "data": "Database-backed data sources based on ProjectPlan confirmation feedback.",
+        }
+        applied = True
+
+    for page, source_ids in _dependency_updates_from_feedback(updated, user_feedback):
+        _apply_page_dependency(updated, page, source_ids)
+        applied = True
+
+    if applied:
+        updated["task_inputs"] = _task_inputs(
+            updated.get("frontend_pages", []),
+            updated.get("data_sources", []),
+        )
+        updated.setdefault("plan_feedback_updates", []).append(
+            {
+                "source": "project_plan_confirmation_feedback",
+                "feedback": user_feedback,
+            }
+        )
+    return updated
+
+
+def _mentions_database(feedback: str) -> bool:
+    normalized = _norm(feedback)
+    return "database" in normalized or "数据库" in normalized
+
+
+def _dependency_updates_from_feedback(
+    plan: dict[str, Any],
+    feedback: str,
+) -> list[tuple[dict[str, Any], list[str]]]:
+    if "依赖" not in feedback:
+        return []
+    if not any(marker in feedback.lower() for marker in ("数据源", "api", "endpoint", "database", "数据库")):
+        return []
+
+    lines = [
+        line.strip().strip("-").strip()
+        for line in feedback.splitlines()
+        if line.strip()
+    ] or [feedback]
+    updates: list[tuple[dict[str, Any], list[str]]] = []
+    for line in lines:
+        if "依赖" not in line:
+            continue
+        if "回答：" in line:
+            line = line.split("回答：", 1)[1].strip()
+        elif "回答:" in line:
+            line = line.split("回答:", 1)[1].strip()
+        page_hint = line.split("依赖", 1)[0].strip(" ：:")
+        page = _match_page(plan.get("frontend_pages", []), page_hint)
+        if not page:
+            continue
+        source_ids = _source_ids_from_feedback(plan, line, page)
+        if source_ids:
+            updates.append((page, source_ids))
+    return updates
+
+
+def _match_page(
+    pages: list[dict[str, Any]],
+    page_hint: str,
+) -> dict[str, Any] | None:
+    hint = _norm(page_hint)
+    if not hint:
+        return None
+    for page in pages:
+        candidates = [
+            page.get("id"),
+            page.get("name"),
+            page.get("path"),
+        ]
+        if any(_norm(candidate) == hint for candidate in candidates):
+            return page
+    for page in pages:
+        candidates = [
+            page.get("id"),
+            page.get("name"),
+            page.get("path"),
+        ]
+        if any(hint in _norm(candidate) or _norm(candidate) in hint for candidate in candidates):
+            return page
+    return None
+
+
+def _source_ids_from_feedback(
+    plan: dict[str, Any],
+    feedback: str,
+    page: dict[str, Any],
+) -> list[str]:
+    sources = _dict_items(plan.get("data_sources"))
+    normalized_feedback = _norm(feedback)
+    explicit = [
+        str(source["id"])
+        for source in sources
+        if source.get("id")
+        and (
+            _norm(source.get("id")) in normalized_feedback
+            or _norm(source.get("name")) in normalized_feedback
+            or any(_norm(entity) in normalized_feedback for entity in source.get("entities", []))
+        )
+    ]
+    if explicit:
+        return _dedupe_strings(explicit)
+
+    page_text = _norm(f"{page.get('id', '')}{page.get('name', '')}{page.get('module_id', '')}")
+    related = [
+        str(source["id"])
+        for source in sources
+        if source.get("id")
+        and source.get("id") != "user_source"
+        and (
+            _norm(source.get("id")) in page_text
+            or page_text in _norm(source.get("id"))
+            or _norm(source.get("name")) in page_text
+        )
+    ]
+    if related:
+        return _dedupe_strings(related)
+
+    business_sources = [
+        str(source["id"])
+        for source in sources
+        if source.get("id") and source.get("id") != "user_source"
+    ]
+    return _dedupe_strings(business_sources or [str(source["id"]) for source in sources if source.get("id")])
+
+
+def _apply_page_dependency(
+    plan: dict[str, Any],
+    page: dict[str, Any],
+    source_ids: list[str],
+) -> None:
+    page_id = str(page.get("id") or "")
+    if not page_id:
+        return
+
+    page["data_dependencies"] = _dedupe_strings(
+        [*_string_items(page.get("data_dependencies")), *source_ids]
+    )
+
+    contracts = _dict_items(plan.get("api_contracts"))
+    contract_by_source = {
+        str(contract.get("data_source_id")): str(contract.get("id"))
+        for contract in contracts
+        if contract.get("data_source_id") and contract.get("id")
+    }
+    api_contract_ids = [
+        contract_by_source[source_id]
+        for source_id in source_ids
+        if source_id in contract_by_source
+    ]
+    endpoint_dependencies = endpoint_dependencies_for_contracts(
+        contracts,
+        source_ids,
+        page_path=str(page.get("path") or ""),
+        page_name=str(page.get("name") or page_id),
+    )
+
+    dependencies = _dict_items(plan.get("page_data_dependencies"))
+    existing = next(
+        (item for item in dependencies if str(item.get("page_id")) == page_id),
+        None,
+    )
+    dependency_item = {
+        "page_id": page_id,
+        "page_name": page.get("name", page_id),
+        "path": page.get("path", "/"),
+        "data_source_ids": _dedupe_strings(
+            [
+                *(
+                    _string_items(existing.get("data_source_ids"))
+                    if isinstance(existing, dict)
+                    else []
+                ),
+                *source_ids,
+            ]
+        ),
+        "api_contract_ids": _dedupe_strings(
+            [
+                *(
+                    _string_items(existing.get("api_contract_ids"))
+                    if isinstance(existing, dict)
+                    else []
+                ),
+                *api_contract_ids,
+            ]
+        ),
+        "endpoint_dependencies": endpoint_dependencies
+        or (
+            _dict_items(existing.get("endpoint_dependencies"))
+            if isinstance(existing, dict)
+            else []
+        ),
+        "usage": "read",
+    }
+    if existing is not None:
+        existing.update(dependency_item)
+    else:
+        dependencies.append(dependency_item)
+        plan["page_data_dependencies"] = dependencies
 
 
 def _permission_model(

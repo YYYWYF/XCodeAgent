@@ -20,17 +20,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-如果只想在 VSCode terminal 里验证 graph workflow，可以从仓库根目录运行：
-
-```bash
-scripts/workflow "一句话需求"
-```
-
-也可以复用后端启动脚本的子命令：
-
-```bash
-scripts/start-backend.sh workflow "一句话需求"
-```
+Workflow 调试入口在前端 Chat Composer 的“Workflow 调试”面板中，可以选择开始节点并传入已落盘的 RequirementSpec、ProjectPlan、WorkspaceSnapshot 或 BuildTaskPlan 路径。
 
 服务启动后：
 

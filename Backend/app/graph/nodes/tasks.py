@@ -17,6 +17,7 @@ from app.workspace.plan_documents import (
     write_project_plan_json,
 )
 from app.workspace.task_documents import write_build_task_plan_json
+from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
 def prepare_build_tasks(state: ProjectState) -> dict:
@@ -77,12 +78,14 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         }
 
     workspace = workspace_from_state(state)
+    workspace_snapshot = _workspace_snapshot_from_state(state)
     captured = capture_agent_file_changes(
         workspace=workspace,
         source_tool="main.prepare_build_tasks",
         action=lambda: prepare_build_tasks_with_main_agent(
             project_plan,
             workspace=workspace,
+            workspace_snapshot=workspace_snapshot,
         ),
     )
     build_task_plan = captured.value
@@ -118,6 +121,16 @@ def _project_plan_confirmation_payload(project_plan: dict) -> dict:
     payload["message"] = "ProjectPlan 未确认，已阻止任务拆分和代码生成。"
     payload["plan_summary"] = project_plan.get("app", {}).get("name", "未命名应用")
     return payload
+
+
+def _workspace_snapshot_from_state(state: ProjectState) -> dict:
+    snapshot = state.get("workspace_snapshot")
+    if isinstance(snapshot, dict) and snapshot:
+        return snapshot
+    snapshot_path = state.get("workspace_snapshot_path")
+    if snapshot_path:
+        return load_workspace_snapshot_json(snapshot_path)
+    return {}
 
 
 def _api_contract_inconsistency_payload(errors: list[str]) -> dict:

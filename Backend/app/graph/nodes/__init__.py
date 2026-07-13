@@ -10,6 +10,7 @@ from app.graph.nodes.modification import direct_modification
 from app.graph.nodes.planning import detail_confirmation, project_planning
 from app.graph.nodes.requirements import requirements
 from app.graph.nodes.testing import integration_test, quality_gate
+from app.graph.nodes.workspace_inspection import inspect_workspace
 from app.graph.subgraphs import build
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "direct_modification",
     "finalize_project",
     "handle_failure",
+    "inspect_workspace",
     "integration_test",
     "launch_project",
     "prepare_build_tasks",

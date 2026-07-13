@@ -9,16 +9,25 @@ from app.services.build_task_planner import create_build_task_plan
 from app.utils.model_output import extract_json_object
 
 
-def _task_preparation_prompt(project_plan: dict[str, Any]) -> str:
+def _task_preparation_prompt(
+    project_plan: dict[str, Any],
+    workspace_snapshot: dict[str, Any] | None,
+) -> str:
+    snapshot_text = (
+        json.dumps(workspace_snapshot, ensure_ascii=False, indent=2)
+        if workspace_snapshot
+        else "{}"
+    )
     return (
         "You are the Main Agent for an app-generation workflow.\n"
-        "Before planning tasks, inspect the current workspace with filesystem tools. "
-        "Identify the actual source tree, package/framework conventions, route entry, "
-        "API/data layer, shared modules, tests, and existing files related to the plan. "
+        "Use the deterministic WorkspaceSnapshot as the primary source for the current "
+        "source tree, package/framework conventions, route entry, API/data layer, shared "
+        "modules, tests, and relevant existing files. If critical context is missing, "
+        "you may do targeted read-only file inspection, but do not perform broad scans. "
         "This step is read-only: do not create, edit, move, or delete files.\n"
-        "Then prepare an executable build task DAG from the confirmed ProjectPlan and "
-        "the code structure you actually observed. Do not invent generic paths when an "
-        "existing project convention can be discovered.\n"
+        "Prepare an executable build task DAG from the confirmed ProjectPlan and "
+        "WorkspaceSnapshot. Do not invent generic paths when an existing project "
+        "convention is present in the snapshot.\n"
         "Use confirmed page_detail_plans for frontend tasks and related data_sources for backend/data tasks. "
         "ProjectPlan.api_contracts is the only source of fields. Preserve schema_refs, endpoint ids, "
         "request/response schema refs, and page response_bindings in task source references.\n"
@@ -35,6 +44,7 @@ def _task_preparation_prompt(project_plan: dict[str, Any]) -> str:
         "- status: pending for every newly planned task\n"
         "Return one JSON object only, with workspace_analysis and tasks. "
         "workspace_analysis must summarize inspected directories, entry files, stack, and conventions.\n\n"
+        f"WorkspaceSnapshot:\n{snapshot_text}\n\n"
         f"ProjectPlan:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
     )
 
@@ -43,13 +53,20 @@ def _invoke_live_main_agent(
     project_plan: dict[str, Any],
     *,
     workspace: str | None = None,
+    workspace_snapshot: dict[str, Any] | None = None,
 ) -> str:
     # Lazy imports avoid constructing Deep Agents before this live boundary is used.
     from app.agents import create_agent_bundle
     result = create_agent_bundle(workspace).main.invoke(
         {
             "messages": [
-                {"role": "user", "content": _task_preparation_prompt(project_plan)}
+                {
+                    "role": "user",
+                    "content": _task_preparation_prompt(
+                        project_plan,
+                        workspace_snapshot,
+                    ),
+                }
             ]
         }
     )
@@ -60,17 +77,23 @@ def prepare_build_tasks_with_main_agent(
     project_plan: dict[str, Any],
     *,
     workspace: str | None = None,
+    workspace_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Use the live Main Agent boundary to prepare executable build tasks."""
 
     settings = Settings.from_env()
-    agent_note = _invoke_live_main_agent(project_plan, workspace=workspace)
+    agent_note = _invoke_live_main_agent(
+        project_plan,
+        workspace=workspace,
+        workspace_snapshot=workspace_snapshot,
+    )
     preparation_source = "main_agent_live"
 
     build_task_plan = create_build_task_plan(
         project_plan,
         agent_note=agent_note,
         agent_plan=extract_json_object(agent_note),
+        workspace_snapshot=workspace_snapshot,
     )
     build_task_plan["prepared_by"] = {
         "agent": "main-agent",

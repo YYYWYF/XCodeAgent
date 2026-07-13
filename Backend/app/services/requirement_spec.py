@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime
+import re
 from typing import Any
 
 
@@ -65,6 +66,167 @@ def _answer_facts(value: str) -> list[str]:
             continue
         current_question = line.split("：", 1)[0].strip() if "：" in line else line
     return facts
+
+
+def _answer_blocks(request: str) -> list[dict[str, str]]:
+    blocks: list[dict[str, str]] = []
+    current_question = ""
+    for raw_line in request.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        stripped = line.strip("-").strip()
+        if stripped.startswith("回答：") or stripped.startswith("回答:"):
+            answer = re.split(r"回答[:：]", stripped, maxsplit=1)[1].strip()
+            if current_question and answer:
+                blocks.append({"question": current_question, "answer": answer})
+            current_question = ""
+            continue
+        if "：" in stripped:
+            current_question = stripped
+    return blocks
+
+
+def _answer_values(answer: str) -> list[str]:
+    cleaned_parts: list[str] = []
+    for part in re.split(r"[；;]", answer):
+        part = part.strip()
+        if not part:
+            continue
+        if part.startswith("已选："):
+            part = part.split("已选：", 1)[1].strip()
+        elif part.startswith("其他补充："):
+            part = part.split("其他补充：", 1)[1].strip()
+        cleaned_parts.append(part)
+
+    values: list[str] = []
+    for part in cleaned_parts:
+        if _negative_optional_answer(part):
+            continue
+        values.extend(
+            item.strip()
+            for item in re.split(r"[、，,/\n]", part)
+            if item.strip() and not _negative_optional_answer(item.strip())
+        )
+    return _dedupe(values)
+
+
+def _negative_optional_answer(value: str) -> bool:
+    normalized = value.replace(" ", "")
+    return normalized in {
+        "无",
+        "暂无",
+        "没有",
+        "不需要",
+        "无需",
+        "否",
+        "不用",
+        "没有其他",
+        "不需要其他",
+        "无需其他",
+    }
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _stable_id(prefix: str, name: str, index: int) -> str:
+    ascii_slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    return f"{prefix}_{ascii_slug or index + 1}"
+
+
+def merge_clarification_answers_into_spec(
+    spec: dict[str, Any],
+    request: str,
+) -> dict[str, Any]:
+    """Merge structured clarification answers into RequirementSpec fields.
+
+    This is a deterministic safety net for clarification resumes. The model is
+    still expected to return a complete spec, but answers for common dimensions
+    should never be lost or trigger the same follow-up questions again.
+    """
+
+    blocks = _answer_blocks(request)
+    if not blocks:
+        return spec
+
+    merged = deepcopy(spec)
+    for block in blocks:
+        question = block["question"]
+        values = _answer_values(block["answer"])
+        if not values:
+            continue
+        if "角色" in question:
+            merged["user_roles"] = [
+                {
+                    "id": _stable_id("role", value, index),
+                    "name": value,
+                    "description": f"以{value}身份使用系统。",
+                }
+                for index, value in enumerate(values)
+            ]
+        elif "页面" in question or "菜单" in question:
+            merged["pages"] = [
+                {
+                    "id": _stable_id("page", value, index),
+                    "name": value,
+                    "path": f"/{_stable_id('page', value, index).removeprefix('page_').replace('_', '-')}",
+                    "module_id": "core_management",
+                    "description": f"{value}页面。",
+                }
+                for index, value in enumerate(values)
+            ]
+        elif "功能" in question or "模块" in question:
+            merged["feature_modules"] = [
+                {
+                    "id": _stable_id("module", value, index),
+                    "name": value,
+                    "description": f"支持{value}相关业务能力。",
+                    "priority": "must",
+                }
+                for index, value in enumerate(values)
+            ]
+        elif "数据源" in question or "数据" in question or "存储" in question:
+            storage_type = (
+                "database"
+                if any("数据库" in value or "database" in value.lower() for value in values)
+                else "mock"
+            )
+            existing_sources = (
+                merged.get("data_sources")
+                if isinstance(merged.get("data_sources"), list)
+                else []
+            )
+            merged["data_sources"] = [
+                {
+                    **source,
+                    "type": storage_type,
+                }
+                for source in existing_sources
+                if isinstance(source, dict)
+            ] or [
+                {
+                    "id": "core_source",
+                    "name": "核心业务数据源",
+                    "type": storage_type,
+                    "entities": ["CoreEntity"],
+                    "description": "提供核心业务页面所需数据。",
+                }
+            ]
+        elif "验收" in question:
+            merged["acceptance_criteria"] = values
+
+    merged["source_request"] = consolidated_requirement_text(request) or request
+    merged["summary"] = merged["source_request"]
+    return merged
 
 
 def _app_name(request: str) -> str:

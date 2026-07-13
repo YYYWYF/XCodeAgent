@@ -31,7 +31,8 @@ START
       ├─ 复杂需求 → requirements //direct ChatModel负责
       │            → project_planning //direct ChatModel负责
       │            → detail_confirmation //direct ChatModel负责页面设计
-      │            → prepare_build_tasks //main agent负责
+      │            → inspect_workspace //确定性工作区快照
+      │            → prepare_build_tasks //main agent负责基于快照生成任务DAG
       │            → build //由mainagent分发给
       └─ 简单需求 → direct_modification
   → integration_test
@@ -47,9 +48,9 @@ START
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
-当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。当前已支持从 `requirements`、`project_planning` 和 `detail_confirmation` 续跑；后续计划确认等节点接入用户确认时，应扩展后端推断逻辑，而不是让前端传固定阶段名。
+当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。当前已支持从 `requirements`、`project_planning`、`detail_confirmation`、`inspect_workspace`、`prepare_build_tasks` 和后续执行节点续跑；后续计划确认等节点接入用户确认时，应扩展后端推断逻辑，而不是让前端传固定阶段名。
 
-所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。
+所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
 `prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。
 
@@ -197,13 +198,25 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 页面依赖；
 - 页面级验收标准。
 
-进入 `prepare_build_tasks` 前必须执行确定性的 API 契约一致性检查，并在 `integration_test.api_contract_check` 再次执行：数据源不得包含独立 `schema`；所有 schema/endpoint 引用必须存在；页面 `response_bindings.source_path` 必须来自所依赖 endpoint 的响应 Schema；写接口必须声明请求 Schema，非删除接口必须声明响应 Schema。任何错误都会阻止任务拆分或令质量门禁失败。
+`prepare_build_tasks` 生成任务 DAG 前必须执行确定性的 API 契约一致性检查，并在 `integration_test.api_contract_check` 再次执行：数据源不得包含独立 `schema`；所有 schema/endpoint 引用必须存在；页面 `response_bindings.source_path` 必须来自所依赖 endpoint 的响应 Schema；写接口必须声明请求 Schema，非删除接口必须声明响应 Schema。任何错误都会阻止任务拆分或令质量门禁失败。
+
+### `inspect_workspace`
+
+确定性、可缓存的工作区检查节点，负责在任务拆分前生成 `WorkspaceSnapshot`：
+
+- 解析当前 workspace revision，包含 Git HEAD、暂存区 diff、未暂存 diff、未跟踪文件清单、关键 lock/config 文件和 inspector schema 版本；
+- 命中 `.xcodeagent/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json` 时直接复用；
+- 未命中时用轻量扫描识别项目根、技术栈、入口文件、构建/测试命令、FastAPI 路由、Pydantic 模型、Workflow 节点、React 组件、API client、Electron IPC、AG-UI 使用点和共享契约候选；
+- 将完整 snapshot 写入 `.xcodeagent/cache/workspace-snapshots/`，Graph State 只保存 `workspace_snapshot_summary`、`workspace_snapshot_path`、`workspace_snapshot_hash` 和 `workspace_revision`；
+- 预留 `CodeGraphProvider` 扩展点。第一期默认使用空 provider，后续可接 Codebase Memory MCP、SCIP、Serena 或 tree-sitter 图索引，把图查询结果并入 `snapshot.code_graph`。
+
+该节点不生成任务、不修改代码、不调用写工具，也不把快照写入 `ProjectPlan`。它只回答“当前工作区事实是什么”，供后续模型规划和确定性调度引用。
 
 ### `prepare_build_tasks`
 
 由 Main Agent 根据已经确认并写回的 `ProjectPlan` 生成可执行任务 DAG：
 
-- 先以只读方式检查当前工作目录，识别技术栈、源码目录、路由/API 入口、共享模块、测试位置和现有文件约定；
+- 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为工作区事实来源，只在快照缺少关键上下文时做定向只读文件检查；
 - 生成稳定的 `task_id`；
 - 指定任务执行 Agent；
 - 计算任务依赖；
@@ -216,7 +229,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 该节点不生成新需求，也不编写业务代码。`ProjectPlan` 是输入上下文，Main Agent 负责将已确认的页面详细设计和相关数据源转换成可执行任务；Graph 节点只接收结构化 `build_task_plan`、更新 `tasks`，并交给后续 Build Subgraph 执行。
 
-该节点通过 `agents/main/task_preparer.py` 调用真实 Main Deep Agent 生成任务编排建议，再由确定性 schema 归一化。
+该节点通过 `agents/main/task_preparer.py` 调用真实 Main Deep Agent 生成任务编排建议，再由确定性 schema 归一化。`build_task_plan.workspace_analysis` 优先使用 Agent 返回的结构化摘要；缺省时由 `WorkspaceSnapshot` 兜底，并记录 `workspace_snapshot_ref` 以便恢复和审计。
 
 调用 Main Agent 生成任务 DAG 前，节点必须检查 `ProjectPlan.confirmation_status == confirmed`。若计划未确认，节点返回 `requires_user_input` 并停止在当前阶段；用户确认后可从 `prepare_build_tasks` 续跑，再生成任务 DAG。
 
@@ -235,6 +248,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 ```text
 {workspace}/.xcodeagent/specs/requirement-spec.{md,json}
 {workspace}/.xcodeagent/plans/project-plan.{md,json}
+{workspace}/.xcodeagent/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json
 {workspace}/.xcodeagent/plans/build-task-plan.json
 {workspace}/.xcodeagent/plans/repair-task-plan.json
 {workspace}/.xcodeagent/reports/test-report.json
@@ -246,18 +260,9 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 app-demo-prepare-build-tasks var/workspaces/demo-project/.xcodeagent/plans/project-plan.json
 ```
 
-本地调试某个节点时，可以使用 `Backend/app/cli.py` 的 `--from-node` 和已落盘 JSON 产物直接续跑，避免每次从头生成需求文档。例如，从已确认的 requirements 结果直接调试 `project_planning`：
+本地调试某个节点时，使用前端 Chat Composer 的“Workflow 调试”面板选择开始节点，并填写已落盘 JSON 产物路径，避免每次从头生成需求文档。调试面板通过 AG-UI `forwardedProps.workflowDebug` 传入 `resumeFrom`、`requirementSpecPath`、`projectPlanPath`、`workspaceSnapshotPath` 和 `buildTaskPlanPath`。
 
-```bash
-cd Backend
-python3 -m app.cli \
-  --from-node project_planning \
-  --requirement-spec-json var/workspaces/demo-project/.xcodeagent/specs/requirement-spec.json \
-  --project-id demo-project \
-  "正确，继续"
-```
-
-如果要从已经生成的项目计划调试后续节点，可追加 `--project-plan-json var/workspaces/demo-project/.xcodeagent/plans/project-plan.json`，并把 `--from-node` 设置为 `detail_confirmation` 或 `prepare_build_tasks`。调试续跑仍会遵守确认闸口；未确认的 `ProjectPlan` 不会进入代码生成。为兼容已有项目，调试目录解析仍能读取旧的 `specs/` 和 `plans/` 路径；新写入统一使用 `.xcodeagent/`。
+如果要从已经生成的项目计划调试后续节点，可填写 `project-plan.json` 并把开始节点设置为 `detail_confirmation`、`inspect_workspace` 或 `prepare_build_tasks`。从 `prepare_build_tasks` 或后续节点续跑时，也可以填写 `.xcodeagent/cache/workspace-snapshots/<revision>.1.0.0.json` 复用已生成的工作区快照。调试续跑仍会遵守确认闸口；未确认的 `ProjectPlan` 不会进入代码生成。为兼容已有项目，调试目录解析仍能读取旧的 `specs/` 和 `plans/` 路径；新写入统一使用 `.xcodeagent/`。
 
 ### `build`
 

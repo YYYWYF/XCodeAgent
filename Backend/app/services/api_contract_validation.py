@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.api_contracts import dict_items, response_field_paths
+from app.services.api_contracts import (
+    dict_items,
+    normalize_response_path,
+    response_field_paths,
+)
 
 
 def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]:
@@ -138,12 +142,15 @@ def _validate_page_bindings(
         }
         for binding in dict_items(page_detail.get("response_bindings")):
             endpoint_id = str(binding.get("endpoint_id") or "")
-            source_path = str(binding.get("source_path") or "")
+            source_path = normalize_response_path(binding.get("source_path"))
             if endpoint_id not in endpoint_ids:
                 errors.append(
                     f"Page {page_detail.get('page_id')} binds undeclared endpoint {endpoint_id}."
                 )
-            elif source_path not in response_field_paths(contracts, endpoint_id):
+            elif source_path not in {
+                normalize_response_path(path)
+                for path in response_field_paths(contracts, endpoint_id)
+            }:
                 errors.append(
                     f"Page {page_detail.get('page_id')} binds unknown response field {source_path}."
                 )

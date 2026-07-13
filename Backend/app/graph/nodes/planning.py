@@ -13,6 +13,7 @@ from app.services.detail_review import (
     apply_detail_review_submission,
     detail_review_payload,
 )
+from app.services.project_plan import apply_project_plan_feedback
 from app.services.page_detail_plan import (
     attach_data_source_detail_plan,
     attach_page_detail_plan,
@@ -40,14 +41,17 @@ def project_planning(state: ProjectState) -> dict:
         synchronized_plan = (
             sync_project_plan_from_markdown(
                 state["project_plan"],
-                state["requirement_spec"],
+                state.get("requirement_spec", {}),
                 edited_markdown,
             )
             if edited_markdown is not None
             else state["project_plan"]
         )
         project_plan = {
-            **synchronized_plan,
+            **apply_project_plan_feedback(
+                synchronized_plan,
+                state.get("request", ""),
+            ),
             "confirmation_status": "confirmed",
         }
         markdown_path = project_plan_markdown_path(state)
@@ -80,6 +84,10 @@ def project_planning(state: ProjectState) -> dict:
             else {}
         ),
     )
+    project_plan = apply_project_plan_feedback(
+        project_plan,
+        state.get("request", ""),
+    )
     project_plan["confirmation_status"] = "pending_user_confirmation"
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = _project_plan_confirmation_payload(project_plan)
@@ -103,10 +111,10 @@ def detail_confirmation(state: ProjectState) -> dict:
         synchronized_plan = (
             sync_project_plan_from_markdown(
                 pending_plan,
-                state["requirement_spec"],
+                state.get("requirement_spec", {}),
                 edited_markdown,
             )
-            if edited_markdown is not None
+            if edited_markdown is not None and state.get("requirement_spec")
             else pending_plan
         )
         confirmed_plan = apply_detail_review_submission(

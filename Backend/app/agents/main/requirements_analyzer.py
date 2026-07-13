@@ -5,7 +5,10 @@ from typing import Any
 
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
-from app.services.requirement_spec import create_requirement_spec
+from app.services.requirement_spec import (
+    create_requirement_spec,
+    merge_clarification_answers_into_spec,
+)
 from app.tools.ask_user import ask_user, extract_ask_user_clarification
 from app.utils.model_output import extract_json_object
 
@@ -27,8 +30,18 @@ def _requirements_prompt(
         "information needed to derive API contracts, page inventory, data-source inventory, business "
         "flows, roles, and acceptance criteria. In each clarification turn, batch every material missing "
         "or ambiguous item into one to four focused questions. Prefer explicit assumptions when safe, "
-        "but ask another consolidated clarification when the latest answer still leaves material "
-        "information unresolved.\n"
+        "and do not ask open-ended follow-up questions such as whether there are more roles, pages, "
+        "or optional features after the user has answered a prior clarification turn.\n"
+    )
+    followup_policy = (
+        "The latest request contains answers to a previous clarification turn. Treat these answers as "
+        "the user's confirmation for the asked dimensions. Merge them into a complete RequirementSpec "
+        "now. Do not call ask_user again for the same dimensions, and do not ask optional 'any other "
+        "roles/pages/features' questions. Use explicit assumptions for optional details that remain "
+        "unspecified.\n"
+        if existing_spec
+        and existing_spec.get("confirmation_status") == "pending_user_input"
+        else ""
     )
     return (
         "You are the requirements model for an app-generation workflow.\n"
@@ -40,6 +53,7 @@ def _requirements_prompt(
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 用户角色, 功能模块, "
         "页面清单, 数据源清单, 业务流程, 验收标准.\n"
         f"{clarification_policy}"
+        f"{followup_policy}"
         "When asking, questions can be choice, text, or yesno. For every choice question, first decide "
         "whether the options are mutually exclusive. Set multiSelect=true for independently combinable "
         "capabilities or requirements (for example search, filtering, import/export, and pagination); "
@@ -94,6 +108,8 @@ def analyze_requirements_with_chat_model(
         agent_spec=agent_spec,
         existing_spec=existing_spec,
     )
+    if _is_clarification_followup(existing_spec):
+        spec = merge_clarification_answers_into_spec(spec, request)
     clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
     spec["assumptions"] = clarification["assumptions"]
@@ -123,3 +139,10 @@ def analyze_requirements_with_chat_model(
         "requirement_spec": spec,
         "clarification": clarification,
     }
+
+
+def _is_clarification_followup(existing_spec: dict[str, Any] | None) -> bool:
+    return bool(
+        isinstance(existing_spec, dict)
+        and existing_spec.get("confirmation_status") == "pending_user_input"
+    )

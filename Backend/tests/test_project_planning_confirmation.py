@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.planning import project_planning
-from app.services.project_plan import create_project_plan
+from app.services.project_plan import apply_project_plan_feedback, create_project_plan
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import write_project_plan_document
 
@@ -88,6 +88,149 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
             planner.call_args.args[0]["planning_adjustment_request"],
         )
         self.assertEqual(len(result["project_plan"]["frontend_pages"]), 1)
+
+    def test_project_plan_feedback_updates_page_data_api_dependencies(self) -> None:
+        plan = {
+            "frontend_pages": [
+                {
+                    "id": "personnel_list_page",
+                    "name": "人员列表页",
+                    "path": "/personnel",
+                    "module_id": "personnel",
+                    "data_dependencies": [],
+                    "permissions": ["admin"],
+                }
+            ],
+            "data_sources": [
+                {
+                    "id": "personnel_source",
+                    "name": "人员数据源",
+                    "type": "mock",
+                    "entities": ["Personnel"],
+                    "schema_refs": ["Personnel"],
+                }
+            ],
+            "api_contracts": [
+                {
+                    "id": "personnel_source_api",
+                    "data_source_id": "personnel_source",
+                    "resource": "Personnel",
+                    "base_path": "/api/personnel",
+                    "schemas": {"Personnel": {"type": "object"}},
+                    "endpoints": [
+                        {
+                            "id": "personnel_source_api.list",
+                            "method": "GET",
+                            "path": "/api/personnel",
+                            "summary": "查询人员列表",
+                            "response_schema_ref": "PersonnelListOutput",
+                        }
+                    ],
+                }
+            ],
+            "page_data_dependencies": [
+                {
+                    "page_id": "personnel_list_page",
+                    "data_source_ids": ["无"],
+                    "api_contract_ids": ["无"],
+                    "endpoint_dependencies": [],
+                }
+            ],
+            "task_inputs": {"frontend": [], "data_source": []},
+            "architecture": {},
+        }
+
+        updated = apply_project_plan_feedback(
+            plan,
+            "回答：人员列表页依赖数据源/api/database",
+        )
+
+        page = updated["frontend_pages"][0]
+        dependency = updated["page_data_dependencies"][0]
+        self.assertEqual(page["data_dependencies"], ["personnel_source"])
+        self.assertEqual(dependency["data_source_ids"], ["personnel_source"])
+        self.assertEqual(dependency["api_contract_ids"], ["personnel_source_api"])
+        self.assertEqual(
+            dependency["endpoint_dependencies"][0]["endpoint_id"],
+            "personnel_source_api.list",
+        )
+        self.assertEqual(updated["data_sources"][0]["type"], "database")
+        self.assertEqual(
+            updated["task_inputs"]["frontend"][0]["depends_on"],
+            ["data_source:personnel_source"],
+        )
+
+    def test_project_plan_revision_applies_dependency_feedback_after_model(self) -> None:
+        spec = create_requirement_spec("创建一个人员管理系统")
+        existing_plan = create_project_plan(spec)
+        existing_plan["frontend_pages"] = [
+            {
+                "id": "personnel_list_page",
+                "name": "人员列表页",
+                "path": "/personnel",
+                "module_id": "personnel",
+                "data_dependencies": [],
+                "permissions": ["admin"],
+            }
+        ]
+        existing_plan["data_sources"] = [
+            {
+                "id": "personnel_source",
+                "name": "人员数据源",
+                "type": "mock",
+                "entities": ["Personnel"],
+                "schema_refs": ["Personnel"],
+            }
+        ]
+        existing_plan["api_contracts"] = [
+            {
+                "id": "personnel_source_api",
+                "data_source_id": "personnel_source",
+                "resource": "Personnel",
+                "base_path": "/api/personnel",
+                "schemas": {"Personnel": {"type": "object"}},
+                "endpoints": [
+                    {
+                        "id": "personnel_source_api.list",
+                        "method": "GET",
+                        "path": "/api/personnel",
+                        "summary": "查询人员列表",
+                        "response_schema_ref": "PersonnelListOutput",
+                    }
+                ],
+            }
+        ]
+        existing_plan["page_data_dependencies"] = [
+            {
+                "page_id": "personnel_list_page",
+                "data_source_ids": [],
+                "api_contract_ids": [],
+                "endpoint_dependencies": [],
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                return_value=existing_plan,
+            ):
+                result = project_planning(
+                    {
+                        "request": "回答：人员列表页依赖数据源/api/database",
+                        "workspace": workspace,
+                        "requirement_spec": spec,
+                        "project_plan": existing_plan,
+                        "timeline": [],
+                    }
+                )
+
+        dependency = result["project_plan"]["page_data_dependencies"][0]
+        self.assertEqual(dependency["data_source_ids"], ["personnel_source"])
+        self.assertEqual(dependency["api_contract_ids"], ["personnel_source_api"])
+        self.assertEqual(
+            dependency["endpoint_dependencies"][0]["endpoint_id"],
+            "personnel_source_api.list",
+        )
 
     def test_project_plan_confirmation_ignores_question_text_negative_words(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")

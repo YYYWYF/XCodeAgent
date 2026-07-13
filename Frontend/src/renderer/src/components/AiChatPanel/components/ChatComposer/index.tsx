@@ -15,6 +15,7 @@ const resumeNodeOptions = [
   { value: 'requirements', label: 'requirements' },
   { value: 'project_planning', label: 'project_planning' },
   { value: 'detail_confirmation', label: 'detail_confirmation' },
+  { value: 'inspect_workspace', label: 'inspect_workspace' },
   { value: 'prepare_build_tasks', label: 'prepare_build_tasks' },
   { value: 'build', label: 'build' },
   { value: 'integration_test', label: 'integration_test' },
@@ -52,6 +53,7 @@ export default function ChatComposer({
   const [resumeFrom, setResumeFrom] = useState('requirements')
   const [requirementSpecPath, setRequirementSpecPath] = useState('')
   const [projectPlanPath, setProjectPlanPath] = useState('')
+  const [workspaceSnapshotPath, setWorkspaceSnapshotPath] = useState('')
   const [buildTaskPlanPath, setBuildTaskPlanPath] = useState('')
   const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
   const canSend = debugEnabled ? hasDebugNode : Boolean(draft.trim())
@@ -63,6 +65,7 @@ export default function ChatComposer({
           resumeFrom,
           requirementSpecPath: requirementSpecPath.trim() || undefined,
           projectPlanPath: projectPlanPath.trim() || undefined,
+          workspaceSnapshotPath: workspaceSnapshotPath.trim() || undefined,
           buildTaskPlanPath: buildTaskPlanPath.trim() || undefined
         }
       : undefined
@@ -125,6 +128,12 @@ export default function ChatComposer({
                   placeholder="项目文档目录或 project-plan.json"
                   value={projectPlanPath}
                   onChange={(event) => setProjectPlanPath(event.target.value)}
+                />
+                <Input
+                  disabled={loading}
+                  placeholder="workspace snapshot json（从 prepare_build_tasks 或后续节点开始时使用）"
+                  value={workspaceSnapshotPath}
+                  onChange={(event) => setWorkspaceSnapshotPath(event.target.value)}
                 />
                 <Input
                   disabled={loading}

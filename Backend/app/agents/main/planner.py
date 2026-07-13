@@ -5,7 +5,10 @@ from typing import Any
 
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
-from app.services.project_plan import create_project_plan
+from app.services.project_plan import (
+    apply_project_plan_feedback,
+    create_project_plan,
+)
 from app.utils.model_output import extract_json_object
 
 
@@ -133,6 +136,7 @@ def revise_project_plan_with_chat_model(
         requirement_spec,
         existing_plan=existing_plan,
     )
+    revised = apply_project_plan_feedback(revised, user_feedback)
     revised["planning_source"] = "direct_chat_model_revision"
     revised["confirmation_status"] = "pending_user_confirmation"
     return revised

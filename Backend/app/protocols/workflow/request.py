@@ -8,6 +8,8 @@ from typing import Any
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json
 from app.workspace.task_documents import load_build_task_plan_json
+from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
+from app.services.workspace_inspector import snapshot_hash
 
 
 def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
@@ -185,6 +187,7 @@ def _supported_resume_node(node_name: str) -> str:
             "requirements",
             "project_planning",
             "detail_confirmation",
+            "inspect_workspace",
             "prepare_build_tasks",
             "build",
             "integration_test",
@@ -216,6 +219,10 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "data_source_spec_draft",
         "detail_plans",
         "detail_review_submission",
+        "workspace_snapshot_summary",
+        "workspace_snapshot_path",
+        "workspace_snapshot_hash",
+        "workspace_revision",
         "requirement_spec",
         "requirement_spec_path",
         "requirement_spec_json_path",
@@ -276,7 +283,63 @@ def _debug_resume_values(debug_state: dict[str, Any]) -> dict[str, Any]:
         if isinstance(build_task_plan.get("tasks"), list):
             values["tasks"] = build_task_plan["tasks"]
 
+    workspace_snapshot_path = _resolve_debug_workspace_snapshot_path(debug_state)
+    if workspace_snapshot_path:
+        workspace_snapshot = load_workspace_snapshot_json(workspace_snapshot_path)
+        values["workspace_snapshot_path"] = str(workspace_snapshot_path)
+        values["workspace_snapshot_hash"] = snapshot_hash(workspace_snapshot)
+        values["workspace_revision"] = str(
+            workspace_snapshot.get("workspace_revision") or ""
+        )
+        values["workspace_snapshot_summary"] = _workspace_snapshot_summary(
+            workspace_snapshot
+        )
+
     return values
+
+
+def _resolve_debug_workspace_snapshot_path(
+    debug_state: dict[str, Any],
+) -> Path | None:
+    raw_path = ""
+    for field_name in (
+        "workspace_snapshot_path",
+        "workspaceSnapshotPath",
+        "workspaceSnapshotDirectory",
+    ):
+        raw_path = _optional_text(debug_state.get(field_name))
+        if raw_path:
+            break
+    if not raw_path:
+        return None
+
+    path = Path(raw_path).expanduser()
+    if path.is_file() and path.suffix == ".json":
+        return path
+    if path.is_dir():
+        candidates = sorted(
+            path.glob("*.json"),
+            key=lambda candidate: candidate.stat().st_mtime,
+            reverse=True,
+        )
+        return candidates[0] if candidates else None
+    return None
+
+
+def _workspace_snapshot_summary(snapshot: dict[str, Any]) -> dict[str, Any]:
+    code_graph = snapshot.get("code_graph") if isinstance(snapshot, dict) else {}
+    return {
+        "schema_version": snapshot.get("schema_version"),
+        "workspace_revision": snapshot.get("workspace_revision"),
+        "tech_stack": snapshot.get("tech_stack", []),
+        "entrypoints": snapshot.get("entrypoints", []),
+        "project_roots": snapshot.get("project_roots", []),
+        "file_manifest": snapshot.get("file_manifest", {}),
+        "code_graph": {
+            "provider": (code_graph or {}).get("provider"),
+            "available": bool((code_graph or {}).get("available")),
+        },
+    }
 
 
 def _resolve_debug_json_path(

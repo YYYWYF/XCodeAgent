@@ -12,6 +12,8 @@ def route_workflow_start(state: ProjectState) -> str:
         return "project_planning"
     if state.get("resume_from") == "detail_confirmation":
         return "detail_confirmation"
+    if state.get("resume_from") == "inspect_workspace":
+        return "inspect_workspace"
     if state.get("resume_from") == "prepare_build_tasks":
         return "prepare_build_tasks"
     if state.get("resume_from") == "build":
@@ -61,7 +63,7 @@ def route_detail_confirmation(state: ProjectState) -> str:
     return (
         "await_user_input"
         if state.get("status") == "requires_user_input"
-        else "prepare_build_tasks"
+        else "inspect_workspace"
     )
 
 
@@ -79,6 +81,7 @@ def build_graph():
     builder.add_node("direct_modification", nodes.direct_modification)
     builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("detail_confirmation", nodes.detail_confirmation)
+    builder.add_node("inspect_workspace", nodes.inspect_workspace)
     builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
     builder.add_node("build", nodes.build)
     builder.add_node("integration_test", nodes.integration_test)
@@ -95,6 +98,7 @@ def build_graph():
             "requirements": "requirements",
             "project_planning": "project_planning",
             "detail_confirmation": "detail_confirmation",
+            "inspect_workspace": "inspect_workspace",
             "prepare_build_tasks": "prepare_build_tasks",
             "build": "build",
             "integration_test": "integration_test",
@@ -131,10 +135,11 @@ def build_graph():
         "detail_confirmation",
         route_detail_confirmation,
         {
-            "prepare_build_tasks": "prepare_build_tasks",
+            "inspect_workspace": "inspect_workspace",
             "await_user_input": END,
         },
     )
+    builder.add_edge("inspect_workspace", "prepare_build_tasks")
     builder.add_conditional_edges(
         "prepare_build_tasks",
         route_prepare_build_tasks,

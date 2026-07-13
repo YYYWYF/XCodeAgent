@@ -66,6 +66,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             _project_plan: dict,
             *,
             workspace: str | None = None,
+            workspace_snapshot: dict | None = None,
         ) -> dict:
             assert workspace is not None
             Path(workspace, "tasks-agent.txt").write_text(
