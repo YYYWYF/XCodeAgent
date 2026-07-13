@@ -17,6 +17,10 @@ class BuiltinSkillsTests(unittest.TestCase):
             builtin_skills.REACT_ANTD_V4_SKILL_NAME,
             builtin_skills.available_builtin_skills(root),
         )
+        self.assertIn(
+            builtin_skills.REACT_DEV_SPEC_SKILL_NAME,
+            builtin_skills.available_builtin_skills(root),
+        )
 
     def test_environment_override_controls_skill_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:

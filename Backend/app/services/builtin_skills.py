@@ -8,18 +8,32 @@ from pathlib import Path
 BUILTIN_SKILLS_DIR_ENV = "XCODEAGENT_BUILTIN_SKILLS_DIR"
 BUILTIN_SKILLS_VIRTUAL_ROOT = "/.xcodeagent/builtin-skills/"
 REACT_ANTD_V4_SKILL_NAME = "react-antd-v4-codegen"
-_ENTRY_FILES = [
+REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
+
+_ANTD_V4_ENTRY_FILES = [
     "REACT_BEST_PRACTICES_GUIDE.md",
     "AGENTS.md",
 ]
-_REFERENCE_FILES = [
+_ANTD_V4_REFERENCE_FILES = [
     "references/dependencies-and-antd.md",
     "references/structure-and-ownership.md",
     "references/react-rules.md",
     "references/review-checklist.md",
 ]
+
+_REACT_DEV_SPEC_REFERENCE_FILES = [
+    "references/00-framework-intro.md",
+    "references/01-naming-standards.md",
+    "references/02-coding-standards.md",
+    "references/03-security-standards.md",
+    "references/04-engineering-standards.md",
+    "references/05-project-example.md",
+    "references/06-appendix.md",
+]
+
 REQUIRED_BUILTIN_SKILL_FILES = {
-    REACT_ANTD_V4_SKILL_NAME: ["SKILL.md", *_ENTRY_FILES, *_REFERENCE_FILES],
+    REACT_ANTD_V4_SKILL_NAME: ["SKILL.md", *_ANTD_V4_ENTRY_FILES, *_ANTD_V4_REFERENCE_FILES],
+    REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
 }
 
 
