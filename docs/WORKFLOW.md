@@ -551,6 +551,8 @@ Graph State 只保存这些文件的路径和版本。
 - 所有文件操作必须限制在项目工作目录中。
 - 前端历史会话的消息、草稿、运行状态、停止控制和 AG-UI client 必须按 `workspaceRoot + editorMode + sessionId` 隔离；`threadId` 只属于对应会话，每次执行使用独立 `runId`。
 - 同一个 `workspaceRoot` 同时只允许一个 `/workflow/run` 进入 Graph。Backend 使用进程内非阻塞 workspace lease 保护共享代码、固定计划文档和全目录 diff 快照，冲突请求通过现有 AG-UI 失败事件返回 `workspace_busy`。
+- 停止生成必须是端到端取消：前端先中止当前 SSE 消费以停止渲染，再通过同一 `/workflow/run` 发送带 `forwardedProps.cancelRunId` 的独立 AG-UI 控制运行。后端的进程内运行表按 `runId` 调用对应 `asyncio.Task.cancel()`，使 `graph.astream()` 和其正在等待的异步模型 HTTP 流收到取消；控制运行也返回完整 AG-UI 开始、消息、状态快照和结束事件。模型供应商对已在其服务端排队的 token 的最终停止时点仍是 best-effort，不把取消响应误报为模型已计费归零。
+- 该设计对应 learn-coding-agent 的“执行后立刻反馈/停止”紧凑循环，采用 OpenCode 风格的稳定运行标识和显式任务生命周期，并保持 Deep Agents 的人类可控边界。运行表只保存 `runId -> asyncio.Task`，不复制对话或仓库内容，因此不会扩大 128k 上下文预算；当前单 Uvicorn 进程是该进程内表的适用边界，未来多进程部署需要共享取消协调器。
 - 修改相同文件的任务不得并发执行。
 - 共享入口文件、依赖清单、API 契约和路由配置应使用文件锁。
 - 任务锁和文件锁由 `workspace/` 提供，不由 Agent 自行约定。

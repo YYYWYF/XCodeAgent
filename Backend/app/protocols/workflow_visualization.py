@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterable
@@ -22,6 +23,10 @@ from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
 from app.protocols.workflow_request import workflow_run_inputs
+from app.protocols.workflow_run_control import (
+    build_workflow_cancellation_ag_ui_stream,
+    workflow_run_registry,
+)
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.run_lease import (
     WorkspaceRunLease,
@@ -95,6 +100,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "resumeState": "Optional previous workflow payload/state used by the backend to infer which waiting phase to resume.",
             "resumeFrom": "Optional backend/debug override for the workflow phase to resume from.",
             "forwardedProps.workflowDebug": "Optional debug resume settings with resumeFrom, requirementSpecPath, projectPlanPath, and buildTaskPlanPath.",
+            "forwardedProps.cancelRunId": "AG-UI cancellation request for an active workflow run id.",
         },
         "output": {
             "summary": "Human-readable and machine-readable workflow result summary.",
@@ -140,12 +146,24 @@ def build_workflow_ag_ui_stream(
     workflow_inputs = workflow_run_inputs(payload)
     thread_id = workflow_inputs["thread_id"] or str(uuid4())
     run_id = workflow_inputs["run_id"] or f"workflow-{uuid4().hex[:12]}"
+    cancel_run_id = workflow_inputs["cancel_run_id"]
+    if cancel_run_id:
+        return build_workflow_cancellation_ag_ui_stream(
+            thread_id=thread_id,
+            run_id=run_id,
+            target_run_id=cancel_run_id,
+            accept=accept,
+        )
     message_id = str(uuid4())
 
     async def stream() -> AsyncIterator[str]:
         events: list[dict[str, Any]] = []
         result: dict[str, Any] = {}
         workspace_lease: WorkspaceRunLease | None = None
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("Workflow stream must run inside an asyncio task.")
+        workflow_run_registry.register(run_id, task)
 
         yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
         yield encoder.encode(
@@ -462,6 +480,7 @@ def build_workflow_ag_ui_stream(
                 )
             )
         finally:
+            workflow_run_registry.unregister(run_id, task)
             if workspace_lease is not None:
                 workspace_lease.release()
 

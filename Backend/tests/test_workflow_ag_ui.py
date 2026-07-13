@@ -249,6 +249,19 @@ class FakeAskUserToolGraph:
         )
 
 
+class FakeBlockingGraph:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        self.started.set()
+        await asyncio.Event().wait()
+        yield "updates", {}
+
+    def get_state(self, config):
+        return SimpleNamespace(values={})
+
+
 def _fake_code_change_set() -> dict:
     return {
         "id": "code-change-set:test",
@@ -273,6 +286,48 @@ def _fake_code_change_set() -> dict:
 
 
 class WorkflowAgUiStreamTests(unittest.TestCase):
+    def test_cancel_run_request_cancels_the_active_workflow_task(self) -> None:
+        graph = FakeBlockingGraph()
+
+        async def collect(stream) -> list[str]:
+            return [frame async for frame in stream]
+
+        async def run() -> tuple[list[str], bool]:
+            workflow_task = asyncio.create_task(
+                collect(
+                    build_workflow_ag_ui_stream(
+                        graph=graph,
+                        payload={
+                            "threadId": "thread-cancel",
+                            "runId": "run-active",
+                            "messages": [{"role": "user", "content": "keep working"}],
+                        },
+                    )
+                )
+            )
+            await graph.started.wait()
+            cancellation_frames = await collect(
+                build_workflow_ag_ui_stream(
+                    graph=graph,
+                    payload={
+                        "threadId": "thread-cancel",
+                        "runId": "run-cancel-request",
+                        "forwardedProps": {"cancelRunId": "run-active"},
+                    },
+                )
+            )
+            with self.assertRaises(asyncio.CancelledError):
+                await workflow_task
+            return cancellation_frames, workflow_task.cancelled()
+
+        frames, cancelled = asyncio.run(run())
+        payload = "\n".join(frames)
+
+        self.assertTrue(cancelled)
+        self.assertIn("RUN_STARTED", payload)
+        self.assertIn("RUN_FINISHED", payload)
+        self.assertIn("cancel_requested", payload)
+
     def test_ask_user_tool_ends_before_run_finishes_without_tool_message(self) -> None:
         async def collect() -> list[str]:
             stream = build_workflow_ag_ui_stream(
