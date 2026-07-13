@@ -12,10 +12,11 @@ import {
 } from '@ant-design/icons'
 import { Alert, Button, Empty, Input, Spin, Tag, Tooltip, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { requestUserSkills } from '../../service/userSkills'
-import type { UserSkillCatalog } from '../../typings'
+import type { UserSkill, UserSkillCatalog } from '../../typings'
 import { cx } from '../../utils'
+import SkillEditorDrawer from './SkillEditorDrawer'
 import './SkillsPage.less'
 
 const { Paragraph, Text, Title } = Typography
@@ -56,26 +57,31 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
+  const [selectedSkill, setSelectedSkill] = useState<UserSkill>()
+  const mountedRef = useRef(true)
 
-  useEffect(() => {
-    let active = true
+  const loadSkills = useCallback(async (): Promise<void> => {
     setLoading(true)
     setError('')
-    void requestUserSkills()
-      .then((result) => {
-        if (active) setCatalog(result)
-      })
-      .catch((caughtError) => {
-        if (!active) return
+    try {
+      const result = await requestUserSkills()
+      if (mountedRef.current) setCatalog(result)
+    } catch (caughtError) {
+      if (mountedRef.current) {
         setError(caughtError instanceof Error ? caughtError.message : '技能列表读取失败。')
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
-    return () => {
-      active = false
+      }
+    } finally {
+      if (mountedRef.current) setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    mountedRef.current = true
+    void loadSkills()
+    return () => {
+      mountedRef.current = false
+    }
+  }, [loadSkills])
 
   const filteredSkills = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -164,7 +170,23 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
         ) : (
           <div className={cx('skills-grid')}>
             {filteredSkills.map((skill) => (
-              <article className={cx('skill-card')} key={skill.relativePath}>
+              <article
+                aria-expanded={selectedSkill?.relativePath === skill.relativePath}
+                className={cx(
+                  'skill-card',
+                  selectedSkill?.relativePath === skill.relativePath && 'active'
+                )}
+                key={skill.relativePath}
+                onClick={() => setSelectedSkill(skill)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  event.preventDefault()
+                  setSelectedSkill(skill)
+                }}
+                role="button"
+                tabIndex={0}
+                title={`编辑技能 ${skill.name}`}
+              >
                 <div className={cx('skill-card-heading')}>
                   <span className={cx('skill-card-icon')} aria-hidden="true">
                     <AppstoreOutlined />
@@ -194,6 +216,15 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
           </div>
         )}
       </div>
+      <SkillEditorDrawer
+        onClose={() => setSelectedSkill(undefined)}
+        onSaved={async () => {
+          setSelectedSkill(undefined)
+          await loadSkills()
+        }}
+        skill={selectedSkill}
+        theme={theme}
+      />
     </section>
   )
 }

@@ -15,7 +15,16 @@ from ag_ui.core import (
 from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
-from app.services.user_skills import list_user_skills, user_skills_root_label
+from app.services.user_skill_documents import (
+    GetUserSkillRequest,
+    SaveUserSkillRequest,
+    read_user_skill_document,
+    save_user_skill_document,
+)
+from app.services.user_skills import (
+    list_user_skills,
+    user_skills_root_label,
+)
 
 
 SKILL_CATALOG_EVENT_NAME = "skill-catalog"
@@ -26,7 +35,7 @@ def user_skills_capabilities() -> dict[str, Any]:
         "name": "user-skills",
         "endpoint": "/skills/run",
         "transport": "ag-ui-sse",
-        "actions": ["list"],
+        "actions": ["list", "get", "save"],
         "customEventName": SKILL_CATALOG_EVENT_NAME,
         "stateSnapshotKey": "skillCatalog",
         "root": user_skills_root_label(),
@@ -49,26 +58,50 @@ def build_user_skills_ag_ui_stream(
         )
         try:
             skill_input = _skill_catalog_input(payload)
-            if skill_input.get("action") != "list":
-                raise ValueError("skillCatalog.action 必须是 list。")
+            action = skill_input.get("action")
+            if action == "list":
+                catalog = list_user_skills()
+                result_payload = catalog.model_dump(by_alias=True, exclude_none=True)
+                message = f"已读取 {len(catalog.skills)} 个用户技能。"
+            elif action == "get":
+                request = GetUserSkillRequest.model_validate(skill_input)
+                document = read_user_skill_document(request.relative_path)
+                result_payload = {
+                    "root": user_skills_root_label(),
+                    "document": document.model_dump(by_alias=True),
+                }
+                message = f"已读取技能 {document.name}。"
+            elif action == "save":
+                request = SaveUserSkillRequest.model_validate(skill_input)
+                document = save_user_skill_document(
+                    request.relative_path,
+                    request.content,
+                    request.expected_revision,
+                )
+                result_payload = {
+                    "root": user_skills_root_label(),
+                    "document": document.model_dump(by_alias=True),
+                }
+                message = f"已保存技能 {document.name}。"
+            else:
+                raise ValueError("skillCatalog.action 必须是 list、get 或 save。")
 
-            catalog = list_user_skills()
-            catalog_payload = catalog.model_dump(by_alias=True, exclude_none=True)
             response_payload: dict[str, Any] = {
                 "schemaVersion": 1,
                 "runId": run_id,
                 "threadId": thread_id,
                 "status": "completed",
-                **catalog_payload,
+                "action": action,
+                **result_payload,
             }
-            message = f"已读取 {len(catalog.skills)} 个用户技能。"
         except Exception as exc:
-            message = f"技能列表读取失败：{type(exc).__name__}: {exc}"
+            message = f"技能操作失败：{type(exc).__name__}: {exc}"
             response_payload = {
                 "schemaVersion": 1,
                 "runId": run_id,
                 "threadId": thread_id,
                 "status": "failed",
+                "action": skill_input.get("action") if "skill_input" in locals() else None,
                 "error": {"type": type(exc).__name__, "message": str(exc)},
             }
 

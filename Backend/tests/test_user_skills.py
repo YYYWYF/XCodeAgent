@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.protocols import user_skills as user_skills_protocol
+from app.services import user_skill_documents
 from app.services import user_skills
 
 
@@ -183,6 +184,47 @@ class UserSkillsAgUiTests(unittest.TestCase):
         self.assertIn('"status":"failed"', payload)
         self.assertIn("ValueError", payload)
         self.assertIn("RUN_FINISHED", payload)
+
+    def test_stream_supports_get_and_save_actions(self) -> None:
+        document = user_skill_documents.UserSkillDocument(
+            name="sample",
+            relative_path="sample/SKILL.md",
+            content="---\nname: sample\ndescription: Sample\n---\n",
+            revision="a" * 64,
+        )
+
+        async def collect(action: str) -> str:
+            input_payload = {
+                "action": action,
+                "relativePath": "sample/SKILL.md",
+                "content": document.content,
+                "expectedRevision": "b" * 64,
+            }
+            target = (
+                "read_user_skill_document"
+                if action == "get"
+                else "save_user_skill_document"
+            )
+            with patch.object(user_skills_protocol, target, return_value=document):
+                stream = user_skills_protocol.build_user_skills_ag_ui_stream(
+                    payload={
+                        "threadId": f"skills-{action}-thread",
+                        "runId": f"skills-{action}-run",
+                        "forwardedProps": {"skillCatalog": input_payload},
+                    },
+                    accept="text/event-stream",
+                )
+                return "\n".join([frame async for frame in stream])
+
+        for action in ("get", "save"):
+            with self.subTest(action=action):
+                payload = asyncio.run(collect(action))
+                self.assertIn(f'"action":"{action}"', payload)
+                self.assertIn('"document"', payload)
+                self.assertIn('"content":"---\\nname: sample', payload)
+                self.assertIn("RUN_FINISHED", payload)
+
+
 
 
 if __name__ == "__main__":

@@ -19,3 +19,10 @@ export type UserSkillCatalog = {
   skippedCount: number
   issues: UserSkillIssue[]
 }
+
+export type UserSkillDocument = {
+  name: string
+  relativePath: string
+  content: string
+  revision: string
+}

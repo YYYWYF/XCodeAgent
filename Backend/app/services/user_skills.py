@@ -170,12 +170,13 @@ def list_user_skills(root: Path | None = None) -> UserSkillCatalog:
 
 
 def _read_skill_frontmatter(skill_file: Path) -> dict[str, str]:
-    with skill_file.open("rb") as file:
-        raw_prefix = file.read(MAX_SKILL_FRONTMATTER_BYTES + 1)
+    with skill_file.open("r", encoding="utf-8") as file:
+        text = file.read(MAX_SKILL_FRONTMATTER_BYTES)
+    return parse_skill_frontmatter(text)
 
-    if raw_prefix.startswith(b"\xef\xbb\xbf"):
-        raw_prefix = raw_prefix[3:]
-    text = raw_prefix.decode("utf-8")
+
+def parse_skill_frontmatter(content: str) -> dict[str, str]:
+    text = content.removeprefix("\ufeff")
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         raise SkillFrontmatterError("SKILL.md 缺少 YAML frontmatter。")
