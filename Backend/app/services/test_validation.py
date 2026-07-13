@@ -74,11 +74,13 @@ def create_revision_requests(
         {
             "id": f"revision:{result['id']}",
             "source": "integration_test",
-            "target": "main-agent",
+            "target": "repair-planner-agent",
             "owner": _revision_owner(result["id"]),
+            "owners": _revision_owners(result["id"]),
             "reason": result["name"],
             "evidence": result["evidence"],
             "failed_check": result,
+            "failed_attempt": _failed_attempt(result),
             "status": "pending",
         }
         for result in failed_results
@@ -86,11 +88,15 @@ def create_revision_requests(
 
 
 def _revision_owner(check_id: str) -> str:
+    return _revision_owners(check_id)[0]
+
+
+def _revision_owners(check_id: str) -> list[str]:
     if check_id.startswith("frontend_"):
-        return "frontend"
+        return ["frontend"]
     if check_id.startswith("backend_") or check_id == "api_contract":
-        return "data_source"
-    return "main"
+        return ["data_source"]
+    return ["frontend", "data_source"]
 
 
 def evaluate_quality_gate(
@@ -116,7 +122,7 @@ def evaluate_quality_gate(
         "quality_gate": {
             "passed": passed,
             "required_checks": [check_id for check_id, _ in REQUIRED_TEST_CHECKS],
-            "evaluated_by": "main-agent",
+            "evaluated_by": "deterministic-quality-gate",
         },
     }
 
@@ -126,30 +132,45 @@ def create_repair_task_plan(
     revision_requests: list[dict[str, Any]],
     agent_note: str,
 ) -> dict[str, Any]:
-    tasks = [
-        {
-            "id": f"repair:{request['failed_check']['id']}",
-            "owner": request["owner"],
-            "description": f"修复测试失败：{request['reason']}",
-            "dependencies": [],
-            "status": "pending",
-            "source_ref": {
-                "type": "revision_request",
-                "id": request["id"],
-                "failed_check_id": request["failed_check"]["id"],
-            },
-            "allowed_paths": _repair_allowed_paths(request["owner"]),
-            "acceptance_criteria": [
-                f"{request['reason']} 重新执行后必须通过。",
-                "不得修改已确认需求、页面规格或 API 契约；如必须修改契约，需返回变更申请。",
-            ],
-            "failure_evidence": request["evidence"],
-        }
-        for request in revision_requests
-    ]
+    tasks = []
+    for request in revision_requests:
+        owners = request.get("owners") if isinstance(request.get("owners"), list) else []
+        owners = owners or [request["owner"]]
+        for owner in owners:
+            tasks.append(
+                {
+                    "id": f"repair:{request['failed_check']['id']}:{owner}",
+                    "task_id": f"repair:{request['failed_check']['id']}:{owner}",
+                    "kind": "repair",
+                    "owner": owner,
+                    "description": f"修复测试失败：{request['reason']}",
+                    "dependencies": [],
+                    "dependsOn": [],
+                    "status": "pending",
+                    "source_ref": {
+                        "type": "revision_request",
+                        "id": request["id"],
+                        "failed_check_id": request["failed_check"]["id"],
+                    },
+                    "allowed_paths": _repair_allowed_paths(owner),
+                    "change_scope": [{"path": path} for path in _repair_allowed_paths(owner)],
+                    "canRunInParallel": False,
+                    "can_run_in_parallel": False,
+                    "parallel_reason": "integration-test repair must run in a bounded follow-up cycle.",
+                    "acceptance_criteria": [
+                        f"{request['reason']} 重新执行后必须通过。",
+                        "不得修改已确认需求、页面规格或 API 契约；如必须修改契约，需返回变更申请。",
+                    ],
+                    "failure_evidence": {
+                        "evidence": request["evidence"],
+                        "failed_attempt": request.get("failed_attempt", {}),
+                    },
+                }
+            )
     return {
         "version": "0.1.0",
         "status": "ready" if tasks else "not_required",
+        "decision": "repair" if tasks else "terminal_failure",
         "generated_at": datetime.now(UTC).isoformat(),
         "source": "integration_test",
         "tasks": tasks,
@@ -157,13 +178,12 @@ def create_repair_task_plan(
             "total": len(tasks),
             "frontend": len([task for task in tasks if task["owner"] == "frontend"]),
             "data_source": len([task for task in tasks if task["owner"] == "data_source"]),
-            "main": len([task for task in tasks if task["owner"] == "main"]),
         },
         "agent_note": agent_note,
         "prepared_by": {
-            "agent": "main-agent",
+            "agent": "repair-planner-agent",
             "mode": "live",
-            "source": "main_agent_test_repair_planning",
+            "source": "repair_planner_test_repair_planning",
         },
     }
 
@@ -174,3 +194,21 @@ def _repair_allowed_paths(owner: str) -> list[str]:
     if owner == "data_source":
         return ["app/backend/**", "app/shared/api/**", "tests/backend/**"]
     return ["app/**", "tests/**"]
+
+
+def _failed_attempt(result: dict[str, Any]) -> dict[str, Any]:
+    execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
+    return {
+        "source": "integration_test",
+        "check_id": result.get("id"),
+        "check_name": result.get("name"),
+        "status": "completed" if result.get("passed") else "failed",
+        "failure_category": result.get("failure_category") or "test_failure",
+        "command": result.get("command"),
+        "execution": execution,
+        "logs": {
+            "stdout": execution.get("stdout_log"),
+            "stderr": execution.get("stderr_log"),
+        },
+        "agent_note": result.get("evidence"),
+    }

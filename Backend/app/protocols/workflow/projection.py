@@ -261,12 +261,19 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "needsRevision": update.get("needs_revision"),
                 "revisionRequests": update.get("revision_requests", []),
                 "repairTaskPlan": update.get("repair_task_plan"),
+                "integrationNextAction": update.get("integration_next_action"),
+                "repairIteration": update.get("repair_iteration"),
+                "maxRepairIterations": update.get("max_repair_iterations"),
             },
         }
     if node_name == "launch_project":
         return {
             "message": f"预览地址={update.get('preview_url')}",
-            "data": {"previewUrl": update.get("preview_url")},
+            "data": {
+                "previewUrl": update.get("preview_url"),
+                "acceptanceRequest": update.get("acceptance_request"),
+                "launchResult": update.get("launch_result"),
+            },
         }
     if node_name == "acceptance":
         return {
@@ -387,6 +394,11 @@ def _workflow_summary(
         "qualityGatePassed": result.get("quality_gate_passed"),
         "needsRevision": result.get("needs_revision"),
         "previewUrl": result.get("preview_url"),
+        "launchResult": result.get("launch_result"),
+        "acceptanceRequest": result.get("acceptance_request"),
+        "integrationNextAction": result.get("integration_next_action"),
+        "repairIteration": result.get("repair_iteration"),
+        "maxRepairIterations": result.get("max_repair_iterations"),
         "buildSummary": build_summary,
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,

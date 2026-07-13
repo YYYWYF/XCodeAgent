@@ -41,6 +41,7 @@ WORKFLOW_ARTIFACT_FIELDS = (
     "project_plan_path",
     "project_plan_json_path",
     "build_task_plan_path",
+    "build_task_dag_path",
     "test_report_path",
     "repair_task_plan_path",
 )

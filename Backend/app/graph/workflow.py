@@ -38,7 +38,14 @@ def route_request_complexity(state: ProjectState) -> str:
 
 
 def route_test_validation(state: ProjectState) -> str:
-    return "launch_project" if state["quality_gate_passed"] else "handle_failure"
+    if state.get("quality_gate_passed"):
+        return "launch_project"
+    next_action = state.get("integration_next_action")
+    if next_action == "repair_build":
+        return "build"
+    if next_action == "await_user_input":
+        return "await_user_input"
+    return "handle_failure"
 
 
 def route_requirements(state: ProjectState) -> str:
@@ -155,10 +162,12 @@ def build_graph():
         route_test_validation,
         {
             "launch_project": "launch_project",
+            "build": "build",
+            "await_user_input": END,
             "handle_failure": "handle_failure",
         },
     )
-    builder.add_edge("launch_project", "acceptance")
+    builder.add_edge("launch_project", END)
     builder.add_edge("acceptance", "finalize_project")
     builder.add_edge("finalize_project", END)
     builder.add_edge("handle_failure", END)

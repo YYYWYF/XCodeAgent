@@ -33,15 +33,20 @@ START
       │            → detail_confirmation //direct ChatModel负责页面设计
       │            → inspect_workspace //确定性工作区快照
       │            → prepare_build_tasks //direct ChatModel 基于快照生成静态 Build DAG
-      │            → build //由mainagent分发给
+      │            → build //BuildScheduler 派发给 CodeRunner
       └─ 简单需求 → direct_modification
   → integration_test
       ├─ 测试与质量门禁通过 → launch_project
-      │                         → acceptance
+      │                         → 提示用户验收并结束本轮
+      │                         → 用户确认后从 acceptance 续跑
       │                         → finalize_project
       │                         → END
-      └─ 需要返修或失败 → handle_failure
-                            → END
+      ├─ 可自动修复 → RepairPlanner 生成 repair_task_plan
+      │              → build 执行 repair tasks
+      │              → integration_test 复测
+      ├─ 需要用户确认 → END
+      └─ 不可恢复失败 → handle_failure
+                         → END
 ```
 
 项目初始化不属于本 Graph 的职责。进入 Graph 前，外部系统应已经完成项目创建、工作目录准备、持久化上下文初始化和运行资源准备，并将必要的 `project_id`、`workspace` 或上下文引用作为 Graph 输入传入。
@@ -52,7 +57,7 @@ START
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
-`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。
+`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。集成测试失败后的修复不回到 `prepare_build_tasks`；RepairPlanner 只追加受限 repair tasks，然后回到 `build` 由 BuildScheduler 调度执行。
 
 ### `classify_request_complexity`
 
@@ -97,7 +102,7 @@ START
 
 `ask_user` 是通用的人机确认工具，不包含 requirements 专用问题规则。后续项目计划、单页面设计、数据源确认等阶段需要用户输入时，也应复用该工具，由对应 Agent 根据上下文决定问题内容。
 
-当 Main Agent 判断需求不清晰时，必须先一次性审视所有关键产物所需信息：应用信息、角色、模块、页面清单、数据源清单、支撑 API 契约的业务信息、业务流程和验收标准。它将所有无法安全推断的缺口合并为一次 1-4 题的 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和本轮结构化答案；后端据此推断续跑节点并生成扁平的当前请求，不重复嵌套完整会话。Main Agent 基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
+当 requirements direct ChatModel 边界判断需求不清晰时，必须先一次性审视所有关键产物所需信息：应用信息、角色、模块、页面清单、数据源清单、支撑 API 契约的业务信息、业务流程和验收标准。它将所有无法安全推断的缺口合并为一次 1-4 题的 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和本轮结构化答案；后端据此推断续跑节点并生成扁平的当前请求，不重复嵌套完整会话。模型基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
 
 无论初始需求是否需要澄清，只要 `requirements` 生成或更新了需求文档，就必须进入 `requirement_spec_confirmation`，要求用户明确确认文档是否正确。澄清问题的回答只用于补充需求，不能等同于对生成后文档的确认；只有用户确认当前版本后，节点才输出 `status = completed` 并继续进入 `project_planning`。若用户补充后仍存在重要缺口，模型可以再次发起一次集中澄清。用户提出修改意见时，需要重新生成文档，并再次经过确认。
 
@@ -118,7 +123,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 简单需求专用节点，负责在已有工程上下文中直接完成小范围修改：
 
 - 识别修改目标和允许修改的文件范围；
-- 必要时由 Main Agent 将任务委派给 Frontend 或 Data Source Agent；
+- 必要时按修改范围委派给 Frontend 或 Data Source CodeRunner；
 - 执行局部文件修改；
 - 输出结构化修改结果、变更文件、执行命令和风险提示；
 - 进入 `integration_test`，复用后续测试、质量门禁、启动和验收流程。
@@ -162,7 +167,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - `permission_model`：角色、页面访问规则、操作权限和默认权限策略；
 - `task_inputs.frontend`：后续前端任务拆分输入；
 - `task_inputs.data_source`：后续数据源任务拆分输入；
-- `coordination_plan`：Main Agent 对细节确认、构建分发、测试反馈的协调策略；
+- `coordination_plan`：工作流对细节确认、构建分发、测试反馈和修复闭环的协调策略；
 - `planned_by`：执行规划的直接模型、运行方式和模型信息；
 - `risks`：后续细节确认阶段需要消化的风险和待细化点。
 
@@ -241,6 +246,11 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - `prepared_by`：执行任务编排的 Agent、运行方式和模型信息；
 - `coordination`：任务分发顺序、依赖策略和串并行执行批次。
 
+节点成功后必须写入两个任务 DAG 产物：
+
+- `.xcodeagent/plans/build-task-plan.json`：内部结构化状态，供 BuildScheduler、调试续跑和后续节点读取；
+- `.xcodeagent/plans/BUILD_TASK_DAG.md`：人类可读的任务 DAG 摘要，展示任务、owner、依赖、change scope 和验收标准。该 Markdown 不作为用户编辑入口，修改任务 DAG 仍应通过确认后的 ProjectPlan 或重新执行 `prepare_build_tasks` 完成。
+
 该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。与 Deep Agents 的默认 harness 映射是：`prepare_build_tasks` 只负责 planning，不挂载文件工具；后续 BuildScheduler 与代码执行 runner 负责 action/verification。为控制 128k 上下文预算，模型只接收已确认计划、快照摘要和精确文件清单，不把完整目录树或文件内容复制进 Graph State。
 
 该节点的结构化产物必须落盘，供后续恢复执行和单节点验证使用：
@@ -310,7 +320,7 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 ### Skill 与上下文预算
 
-Main Deep Agent 会直接执行简单分支的局部修改，并负责复杂分支的任务拆分和返修规划；Frontend Deep Agent 负责复杂分支的前端实现。因此这两个 Agent 通过 Deep Agents 原生 `skills` 参数按“内置、用户”顺序加载 Skill，用户同名 Skill 后加载并覆盖内置 Skill。Data Source/Test Agent 只加载用户 Skill；直接 ChatModel 节点不加载 Skill。Main 注册的三个 `CompiledSubAgent` 各自保留独立的 SkillsMiddleware，不依赖 Main 隐式继承。
+当前一等 Deep Agent 是 Frontend Generation、Data Source Generation、Test、RepairPlanner，不再声明或创建 Main DeepAgent。Frontend Generation Agent 通过 Deep Agents 原生 `skills` 参数按“内置、用户”顺序加载 Skill，用户同名 Skill 后加载并覆盖内置 Skill；Data Source、Test、RepairPlanner Agent 只加载用户 Skill。requirements、project_planning、detail_confirmation、prepare_build_tasks 等 direct ChatModel 节点不加载 Skill，也不绑定 workspace backend 或文件工具。
 
 内置 skill 的宿主目录在源码模式为 `Backend/app/builtin_skills/`，在 PyInstaller onedir 模式为后端资源目录 `_internal/app/builtin_skills/`。Agent 不接触宿主绝对路径，而是通过只读 CompositeBackend 路由 `/.xcodeagent/builtin-skills/` 发现和读取 skill；文件权限与 `delete_file` 都拒绝写入或删除该命名空间。Backend Python 是必需 skill 名称和文件的唯一事实来源：PyInstaller staging 和 Backend 启动执行完整性校验并在缺失时 fail fast；Electron 打包前和启动前只检查通用 `builtin_skills` 资源目录，不复制具体 skill 清单。
 
@@ -330,15 +340,15 @@ Testing Subgraph 的最小内部结构：
 
 ```text
 testing.START
-  → frontend_checks
-  → backend_checks
+  → actual_project_checks
   → api_contract_check
-  → joint_integration_check
-  → e2e_check
   → test_agent_review
   → main_quality_gate
+  → repair_planning
   → testing.END
 ```
+
+`main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；质量门禁通过时跳过修复计划并输出 `integration_next_action = launch_project`。
 
 质量门禁至少应覆盖：
 
@@ -361,20 +371,46 @@ testing.START
 - `test_report_path`：结构化测试报告 JSON 路径；
 - `quality_gate_passed`：是否允许进入启动和验收；
 - `needs_revision`：是否需要返回修改；
-- `revision_requests`：返回给 RepairPlanner Agent 的结构化返修请求。
+- `revision_requests`：返回给 RepairPlanner Agent 的结构化返修请求；
 - `repair_task_plan`：RepairPlanner Agent 基于失败证据生成的修复任务计划；
 - `repair_task_plan_path`：结构化修复任务计划 JSON 路径；
-- `repair_tasks`：可被重新分发给 Frontend/Data Source 等代码执行 Agent 的修复任务。
+- `repair_tasks`：可被重新分发给 Frontend/Data Source 等代码执行 Agent 的修复任务；
+- `integration_next_action`：外层 Graph 的下一步路由，取值为 `launch_project`、`repair_build`、`await_user_input` 或 `handle_failure`；
+- `repair_iteration` / `max_repair_iterations`：集成测试修复闭环预算。
 
-当前最简版不执行真实 npm/pytest/playwright 命令，而是通过确定性 demo 检查根据 `build_summary` 生成结果。后续正式实现时，每个 check 节点替换为真实命令执行和证据采集即可。
+`actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：
 
-其中 `frontend_checks` 和 `backend_checks` 是按技术栈聚合的业务级节点，内部可以继续执行多个具体命令。Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点，避免主流程过碎；但 `test_results` 里仍需保留每个具体检查项的结构化证据。
+- 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm`、`yarn` 或 `npm`，执行 install、build、lint、typecheck、unit test 和 e2e/integration scripts；
+- 后端：优先复用 Maven Wrapper / Maven（`mvnw`、`pom.xml`），也支持 Python 项目的 `python3 -m pytest`；
+- E2E：优先复用 `test:e2e` / `e2e` script；若存在 Playwright 配置，则使用 `npx playwright test`；
+- 未声明的可选检查（lint、typecheck、unit/e2e/integration 等）会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。
+
+每个真实命令都会写入 `.xcodeagent/runtime/tests/<check_id>/stdout.log` 和 `stderr.log`，`test_results` 只保存日志引用、命令、cwd、returncode、timeout 和失败分类，避免把大日志塞入 Graph State。
+
+Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点，避免主流程过碎；但 `test_results` 里必须保留每个具体检查项的结构化证据。
 
 测试不通过时，Testing Subgraph 必须把失败项转成足够详细的 `revision_requests`，包括失败检查、命令、证据、建议 owner。随后由 RepairPlanner Agent 汇总生成 `repair_task_plan`，再由后续修复循环分发给对应代码修改 Agent：
 
 - 前端检查失败 → Frontend Generation Agent；
 - 后端或 API 契约检查失败 → Data Source Generation Agent；
 - 前后端集成或 E2E 失败 → RepairPlanner Agent 先判断归因，再拆分给专业 Agent。
+
+`revision_requests[*].failed_attempt` 使用统一格式返回给 RepairPlanner / 后续调度器，至少包含：
+
+- `check_id`、`check_name`、`status`；
+- `failure_category`（如 `dependency_install_failed`、`compile_error`、`lint_failure`、`type_error`、`test_failure`、`integration_test_failure`）；
+- `command` 和 `execution.argv/cwd/returncode/timed_out`；
+- `logs.stdout`、`logs.stderr`；
+- `agent_note` / evidence 摘要。
+
+外层 Graph 根据 `integration_next_action` 路由：
+
+- `launch_project`：质量门禁通过，进入 `launch_project`，写入 `preview_url` 和 `acceptance_request`，本轮结束等待用户验收；
+- `repair_build`：RepairPlanner 返回可执行 repair tasks，回到 `build`，BuildScheduler 将 repair tasks append 到运行时 Build DAG 并只调度 pending 修复任务，完成后再次进入 `integration_test`；
+- `await_user_input`：修复需要扩大范围、改变契约或做产品决策，本轮结束等待用户确认；
+- `handle_failure`：证据不足、修复预算耗尽或不可恢复失败，进入失败处理。
+
+为避免卡死，Graph State 记录 `repair_iteration` 和 `max_repair_iterations`。超过预算后，Testing Subgraph 返回 `terminal_failure` 并路由到 `handle_failure`。
 
 ### `launch_project`
 
@@ -385,7 +421,20 @@ testing.START
 - 启动前后端服务；
 - 执行健康检查；
 - 返回本地预览地址；
+- 写入 `acceptance_request` 并提示用户验收；
 - 保存和清理进程信息。
+
+`launch_project` 是质量门禁通过后的本轮终点。它返回 `preview_url` 和 `acceptance_request`，并将状态设为 `requires_user_input`，前端应展示预览地址和验收提示。工作流不会自动进入 `acceptance`；用户确认验收后，下一轮从 `acceptance` 续跑。
+
+当前启动策略：
+
+- 在工作区内优先读取 `Frontend/package.json`，其次尝试 `frontend/package.json`、`app/frontend/package.json` 和根 `package.json`；
+- 根据 lockfile 选择包管理器：`pnpm-lock.yaml → pnpm`，`yarn.lock → yarn`，否则使用 `npm`；
+- 执行 `<package-manager> install` 安装依赖；
+- 优先执行 `dev` script，其次执行 `start` script；
+- 将前端 dev server 作为后台进程启动，pid、stdout/stderr 日志和安装日志写入 `.xcodeagent/runtime/launch/`；
+- 根据 script 推断预览地址：Vite 默认 `http://127.0.0.1:5173`，其它 dev server 默认 `http://127.0.0.1:3000`，若脚本声明 `--port` 或 `PORT=` 则使用声明端口；
+- 将启动结果写入 `launch_result`，将可展示给用户的验收信息写入 `acceptance_request`。
 
 ### `acceptance`
 
@@ -398,7 +447,7 @@ testing.START
 - 架构级调整：返回项目规划阶段；
 - 取消：停止任务和运行进程。
 
-当前最简版自动通过。
+当前实现应等待用户验收；只有用户明确接受后，`acceptance` 才设置 `accepted = true` 并进入 `finalize_project`。如果用户提出页面或数据源调整，后续应按调整类型回到 `detail_confirmation` 或生成受控修复任务；如果是架构级调整，则回到 `project_planning` 并重新经过确认闸口。
 
 ### `finalize_project`
 

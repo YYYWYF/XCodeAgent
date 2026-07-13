@@ -15,7 +15,10 @@ from app.workspace.plan_documents import (
     write_project_plan_document,
     write_project_plan_json,
 )
-from app.workspace.task_documents import write_build_task_plan_json
+from app.workspace.task_documents import (
+    write_build_task_dag_markdown,
+    write_build_task_plan_json,
+)
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
@@ -107,12 +110,14 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "timeline": ["prepare_build_tasks"],
         }
     build_task_plan_path = write_build_task_plan_json(state, build_task_plan)
+    build_task_dag_path = write_build_task_dag_markdown(state, build_task_plan)
     return {
         "phase": "prepare_build_tasks",
         "status": "completed",
         "project_plan": project_plan,
         "build_task_plan": build_task_plan,
         "build_task_plan_path": build_task_plan_path,
+        "build_task_dag_path": build_task_dag_path,
         "tasks": build_task_plan["tasks"],
         "timeline": ["prepare_build_tasks"],
     }

@@ -26,7 +26,10 @@ from app.workspace.plan_documents import (
     project_plan_json_path,
     write_project_plan_document,
 )
-from app.workspace.task_documents import write_build_task_plan_json
+from app.workspace.task_documents import (
+    write_build_task_dag_markdown,
+    write_build_task_plan_json,
+)
 from app.workspace.task_documents import write_repair_task_plan_json
 
 
@@ -138,16 +141,35 @@ def _apply_scheduler_results(
         )
     project_plan_path = write_project_plan_document(state, updated["project_plan"])
     build_task_plan_path = write_build_task_plan_json(state, updated["build_task_plan"])
+    build_task_dag_path = write_build_task_dag_markdown(state, updated["build_task_plan"])
     return {
         **updated,
         "project_plan_path": project_plan_path,
         "project_plan_json_path": str(project_plan_json_path(state)),
         "build_task_plan_path": build_task_plan_path,
+        "build_task_dag_path": build_task_dag_path,
     }
 
 
 def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
-    tasks = list(state.get("tasks") or state.get("build_task_plan", {}).get("tasks") or [])
+    build_task_plan = dict(state.get("build_task_plan") or {})
+    incoming_repair_task_plan = state.get("repair_task_plan")
+    if (
+        isinstance(incoming_repair_task_plan, dict)
+        and incoming_repair_task_plan.get("tasks")
+        and incoming_repair_task_plan.get("decision", "repair") == "repair"
+    ):
+        build_task_plan = append_repair_tasks_to_build_plan(
+            build_task_plan={
+                **build_task_plan,
+                "tasks": list(state.get("tasks") or build_task_plan.get("tasks") or []),
+            },
+            repair_task_plan=incoming_repair_task_plan,
+        )
+
+    tasks = list(state.get("tasks") or build_task_plan.get("tasks") or [])
+    if build_task_plan.get("tasks"):
+        tasks = list(build_task_plan["tasks"])
     if not tasks:
         return {
             "phase": "build",
@@ -166,6 +188,10 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
     current_state: ProjectState = {
         **state,
         "tasks": tasks,
+        "build_task_plan": {
+            **build_task_plan,
+            "tasks": tasks,
+        },
         "build_results": list(state.get("build_results", [])),
     }
     build_events: list[str] = []
@@ -264,7 +290,12 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
                 current_state,
                 next_build_task_plan,
             )
+            build_task_dag_path = write_build_task_dag_markdown(
+                current_state,
+                next_build_task_plan,
+            )
             current_state["build_task_plan_path"] = build_task_plan_path
+            current_state["build_task_dag_path"] = build_task_dag_path
             build_events.append(f"scheduler:repair_planned:{len(repair_task_plan['tasks'])}")
             continue
 
@@ -292,6 +323,9 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
         ),
         "build_task_plan_path": current_state.get(
             "build_task_plan_path", state.get("build_task_plan_path")
+        ),
+        "build_task_dag_path": current_state.get(
+            "build_task_dag_path", state.get("build_task_dag_path")
         ),
         "tasks": current_state["tasks"],
         "ready_tasks": [],

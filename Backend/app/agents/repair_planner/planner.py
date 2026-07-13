@@ -17,11 +17,23 @@ def _test_repair_planning_prompt(
 ) -> str:
     return (
         "You are the RepairPlanner Agent for an app-generation workflow.\n"
-        "Review the test report and revision requests. Decide whether repair is "
-        "needed and summarize a repair task plan for specialist code agents. "
+        "Review the test report and revision requests. Decide whether bounded "
+        "repair is possible for specialist code agents. "
         "Do not mark failed tests as passed. Do not silently change confirmed "
         "requirements, PageSpec, or API contracts. Do not edit files or mutate "
         "workflow state.\n\n"
+        "Return only one JSON object using this contract:\n"
+        "{\n"
+        '  "decision": "repair" | "requires_user_confirmation" | "terminal_failure",\n'
+        '  "strategy": "short repair strategy",\n'
+        '  "reason": "required for confirmation or terminal failure",\n'
+        '  "failure_handling": "how the workflow should handle this failure"\n'
+        "}\n\n"
+        "Choose requires_user_confirmation when repair requires expanding scope, "
+        "changing confirmed requirements/API contracts, or making a product "
+        "decision. Choose terminal_failure when evidence is insufficient or the "
+        "failure is not automatically actionable. Choose repair only when the "
+        "failure can be converted into bounded frontend/data-source repair tasks.\n\n"
         f"TestReport:\n{json.dumps(test_report, ensure_ascii=False, indent=2)}\n\n"
         f"RevisionRequests:\n{json.dumps(revision_requests, ensure_ascii=False, indent=2)}\n\n"
         f"CurrentBuildTaskPlan:\n{json.dumps(build_task_plan or {}, ensure_ascii=False, indent=2)}"
@@ -117,6 +129,7 @@ def plan_repairs_with_repair_planner_agent(
     settings = Settings.from_env()
     if not revision_requests:
         agent_note = "No repair required because all quality gate checks passed."
+        planner_decision: dict[str, Any] = {"decision": "terminal_failure"}
     else:
         agent_note = _invoke_repair_planner_agent(
             prompt=_test_repair_planning_prompt(
@@ -126,6 +139,30 @@ def plan_repairs_with_repair_planner_agent(
             ),
             workspace=workspace,
         )
+        planner_decision = extract_json_object(agent_note) or {
+            "decision": "repair",
+            "strategy": agent_note,
+        }
+
+    decision = planner_decision.get("decision")
+    if decision in {"requires_user_confirmation", "terminal_failure"}:
+        return {
+            "version": "0.1.0",
+            "status": decision,
+            "decision": decision,
+            "generated_at": test_report.get("generated_at"),
+            "source": "integration_test",
+            "tasks": [],
+            "summary": {"total": 0, "frontend": 0, "data_source": 0},
+            "agent_note": agent_note,
+            "reason": planner_decision.get("reason", ""),
+            "failure_handling": planner_decision.get("failure_handling", ""),
+            "prepared_by": {
+                "agent": "repair-planner-agent",
+                "mode": "deep_agent",
+                "model": settings.model_name,
+            },
+        }
 
     repair_task_plan = create_repair_task_plan(
         revision_requests=revision_requests,
@@ -133,4 +170,7 @@ def plan_repairs_with_repair_planner_agent(
     )
     repair_task_plan["prepared_by"]["agent"] = "repair-planner-agent"
     repair_task_plan["prepared_by"]["model"] = settings.model_name
+    repair_task_plan["planner_decision"] = planner_decision
+    if planner_decision.get("strategy"):
+        repair_task_plan["strategy"] = planner_decision["strategy"]
     return repair_task_plan

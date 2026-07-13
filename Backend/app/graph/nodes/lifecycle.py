@@ -1,10 +1,34 @@
 from app.graph.state import ProjectState
+from app.services.project_launcher import launch_frontend_project
 
 
 def launch_project(state: ProjectState) -> dict:
+    launch = launch_frontend_project(state)
+    preview_url = launch.get("preview_url")
+    if launch.get("status") == "failed":
+        return {
+            "phase": "launch_project",
+            "status": "failed",
+            "launch_result": launch,
+            "acceptance_request": {
+                "status": "failed",
+                "message": f"项目启动失败：{launch.get('message')}",
+            },
+            "timeline": ["launch_project"],
+        }
+
     return {
         "phase": "launch_project",
-        "preview_url": "http://127.0.0.1:3000",
+        "status": "requires_user_input",
+        "preview_url": preview_url,
+        "launch_result": launch,
+        "acceptance_request": {
+            "status": "requires_user_input",
+            "message": "项目已通过集成测试并启动预览，请用户验收。",
+            "preview_url": preview_url,
+            "package_json_path": launch.get("package_json_path"),
+            "server": launch.get("server"),
+        },
         "timeline": ["launch_project"],
     }
 

@@ -7,6 +7,7 @@ from app.graph.workflow import (
     route_prepare_build_tasks,
     route_project_planning,
     route_requirements,
+    route_test_validation,
     route_workflow_start,
 )
 
@@ -77,7 +78,7 @@ class WorkflowRoutingTests(unittest.TestCase):
     def test_detail_confirmation_continues_when_page_spec_is_confirmed(self) -> None:
         self.assertEqual(
             route_detail_confirmation({"status": "completed"}),
-            "prepare_build_tasks",
+            "inspect_workspace",
         )
 
     def test_prepare_build_tasks_waits_for_project_plan_confirmation(self) -> None:
@@ -90,6 +91,45 @@ class WorkflowRoutingTests(unittest.TestCase):
         self.assertEqual(
             route_prepare_build_tasks({"status": "completed"}),
             "build",
+        )
+
+    def test_integration_test_passes_to_launch_project(self) -> None:
+        self.assertEqual(
+            route_test_validation({"quality_gate_passed": True}),
+            "launch_project",
+        )
+
+    def test_integration_test_repair_plan_returns_to_build(self) -> None:
+        self.assertEqual(
+            route_test_validation(
+                {
+                    "quality_gate_passed": False,
+                    "integration_next_action": "repair_build",
+                }
+            ),
+            "build",
+        )
+
+    def test_integration_test_confirmation_waits_for_user(self) -> None:
+        self.assertEqual(
+            route_test_validation(
+                {
+                    "quality_gate_passed": False,
+                    "integration_next_action": "await_user_input",
+                }
+            ),
+            "await_user_input",
+        )
+
+    def test_integration_test_terminal_failure_routes_to_failure(self) -> None:
+        self.assertEqual(
+            route_test_validation(
+                {
+                    "quality_gate_passed": False,
+                    "integration_next_action": "handle_failure",
+                }
+            ),
+            "handle_failure",
         )
 
 

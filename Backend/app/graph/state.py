@@ -36,6 +36,7 @@ class ProjectState(TypedDict, total=False):
     workspace_revision: str
     build_task_plan: dict[str, Any]
     build_task_plan_path: str
+    build_task_dag_path: str
     tasks: list[dict[str, Any]]
     ready_tasks: list[dict[str, Any]]
     pending_build_results: list[dict[str, Any]]
@@ -53,9 +54,14 @@ class ProjectState(TypedDict, total=False):
     repair_task_plan: dict[str, Any]
     repair_task_plan_path: str
     repair_tasks: list[dict[str, Any]]
+    repair_iteration: int
+    max_repair_iterations: int
+    integration_next_action: str
     code_changes: dict[str, Any]
     code_change_sets: Annotated[list[dict[str, Any]], add]
     preview_url: str
+    launch_result: dict[str, Any]
+    acceptance_request: dict[str, Any]
     accepted: bool
     status: str
     timeline: Annotated[list[str], add]

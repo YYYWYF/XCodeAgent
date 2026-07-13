@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from app.services.integration_test_runner import run_integration_checks
+from app.services.test_validation import create_revision_requests
+
+
+class IntegrationTestRunnerTests(unittest.TestCase):
+    def test_runs_real_project_scripts_and_returns_structured_results(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "Frontend"
+            frontend.mkdir()
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"vite build","lint":"eslint .","typecheck":"tsc --noEmit","test":"vitest run","test:e2e":"playwright test"}}',
+                encoding="utf-8",
+            )
+            (frontend / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'", encoding="utf-8")
+
+            calls: list[list[str]] = []
+
+            def fake_run(argv, **kwargs):
+                calls.append(argv)
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with patch("app.services.integration_test_runner.subprocess.run", side_effect=fake_run):
+                result = run_integration_checks({"workspace": workspace})
+
+        ids = [item["id"] for item in result["test_results"]]
+        self.assertIn("frontend_install", ids)
+        self.assertIn("frontend_build", ids)
+        self.assertIn("frontend_lint", ids)
+        self.assertIn("frontend_typecheck", ids)
+        self.assertIn("frontend_unit_tests", ids)
+        self.assertIn("e2e_tests", ids)
+        self.assertIn(["pnpm", "install"], calls)
+        self.assertIn(["pnpm", "run", "build"], calls)
+        self.assertTrue(all(item["passed"] for item in result["test_results"]))
+        self.assertTrue(all("execution" in item for item in result["test_results"]))
+
+    def test_failed_result_becomes_scheduler_friendly_revision_request(self) -> None:
+        failed_result = {
+            "id": "frontend_build",
+            "name": "前端构建检查",
+            "passed": False,
+            "failure_category": "compile_error",
+            "command": "pnpm run build",
+            "evidence": "命令执行失败：pnpm run build；退出码：1。",
+            "execution": {
+                "argv": ["pnpm", "run", "build"],
+                "cwd": "Frontend",
+                "returncode": 1,
+                "stdout_log": "/tmp/stdout.log",
+                "stderr_log": "/tmp/stderr.log",
+            },
+        }
+
+        requests = create_revision_requests([failed_result])
+
+        self.assertEqual(requests[0]["failed_attempt"]["failure_category"], "compile_error")
+        self.assertEqual(requests[0]["failed_attempt"]["logs"]["stderr"], "/tmp/stderr.log")
+        self.assertEqual(requests[0]["failed_attempt"]["execution"]["returncode"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

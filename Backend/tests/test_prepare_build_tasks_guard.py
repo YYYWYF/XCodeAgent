@@ -78,10 +78,15 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "timeline": [],
                     }
                 )
+                dag_path = result["build_task_dag_path"]
+                with open(dag_path, encoding="utf-8") as dag_file:
+                    dag_content = dag_file.read()
 
         self.assertNotIn("code_changes", result)
         self.assertNotIn("code_change_sets", result)
         self.assertEqual(result["build_task_plan"]["prepared_by"]["mode"], "direct")
+        self.assertTrue(dag_path.endswith(".xcodeagent/plans/BUILD_TASK_DAG.md"))
+        self.assertIn("# Build Task DAG", dag_content)
 
     def test_prepare_build_tasks_confirmation_ignores_question_text_negative_words(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))

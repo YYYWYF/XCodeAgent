@@ -21,7 +21,7 @@ from ag_ui.core import (
 from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
-from app.protocols.workflow_request import workflow_run_inputs
+from app.protocols.workflow.request import workflow_run_inputs
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.run_lease import (
     WorkspaceRunLease,
@@ -67,6 +67,7 @@ WORKFLOW_ARTIFACT_FIELDS = (
     "project_plan_json_path",
     "workspace_snapshot_path",
     "build_task_plan_path",
+    "build_task_dag_path",
     "test_report_path",
     "repair_task_plan_path",
 )
@@ -1239,12 +1240,19 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "needsRevision": update.get("needs_revision"),
                 "revisionRequests": update.get("revision_requests", []),
                 "repairTaskPlan": update.get("repair_task_plan"),
+                "integrationNextAction": update.get("integration_next_action"),
+                "repairIteration": update.get("repair_iteration"),
+                "maxRepairIterations": update.get("max_repair_iterations"),
             },
         }
     if node_name == "launch_project":
         return {
             "message": f"预览地址={update.get('preview_url')}",
-            "data": {"previewUrl": update.get("preview_url")},
+            "data": {
+                "previewUrl": update.get("preview_url"),
+                "acceptanceRequest": update.get("acceptance_request"),
+                "launchResult": update.get("launch_result"),
+            },
         }
     if node_name == "acceptance":
         return {
@@ -1368,6 +1376,11 @@ def _workflow_summary(
         "qualityGatePassed": result.get("quality_gate_passed"),
         "needsRevision": result.get("needs_revision"),
         "previewUrl": result.get("preview_url"),
+        "launchResult": result.get("launch_result"),
+        "acceptanceRequest": result.get("acceptance_request"),
+        "integrationNextAction": result.get("integration_next_action"),
+        "repairIteration": result.get("repair_iteration"),
+        "maxRepairIterations": result.get("max_repair_iterations"),
         "buildSummary": build_summary,
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
