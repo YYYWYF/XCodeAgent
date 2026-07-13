@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.agents import registry
@@ -19,31 +20,46 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as first_workspace,
             tempfile.TemporaryDirectory() as second_workspace,
+            patch(
+                "app.agents.registry.get_user_skill_runtime_revision",
+                return_value="skills-v1",
+            ),
+            patch(
+                "app.agents.registry.create_user_skill_runtime_snapshot",
+                return_value=SimpleNamespace(backend="user-skills", issues=()),
+            ),
             patch("app.agents.registry.Settings.from_env", return_value=object()),
             patch("app.agents.registry.create_chat_model", return_value="model"),
             patch(
                 "app.agents.registry.create_frontend_agent",
-                side_effect=lambda model, *, workspace_root=None: (
+                side_effect=lambda model, *, workspace_root=None, user_skills_backend: (
                     "frontend",
                     workspace_root,
+                    user_skills_backend,
                 ),
             ) as frontend_factory,
             patch(
                 "app.agents.registry.create_data_source_agent",
-                side_effect=lambda model, *, workspace_root=None: (
+                side_effect=lambda model, *, workspace_root=None, user_skills_backend: (
                     "data_source",
                     workspace_root,
+                    user_skills_backend,
                 ),
             ),
             patch(
                 "app.agents.registry.create_test_agent",
-                side_effect=lambda model, *, workspace_root=None: ("test", workspace_root),
+                side_effect=lambda model, *, workspace_root=None, user_skills_backend: (
+                    "test",
+                    workspace_root,
+                    user_skills_backend,
+                ),
             ),
             patch(
                 "app.agents.registry.create_main_agent",
-                side_effect=lambda model, frontend, data_source, test, *, workspace_root=None: (
+                side_effect=lambda model, frontend, data_source, test, *, workspace_root=None, user_skills_backend: (
                     "main",
                     workspace_root,
+                    user_skills_backend,
                     frontend,
                     data_source,
                     test,
@@ -62,6 +78,54 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
         self.assertEqual(second_bundle.frontend[1], str(Path(second_workspace).resolve()))
         self.assertEqual(first_bundle.main[1], str(Path(first_workspace).resolve()))
         self.assertEqual(second_bundle.main[1], str(Path(second_workspace).resolve()))
+
+    def test_agent_bundle_cache_changes_with_user_skill_revision(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as workspace,
+            patch(
+                "app.agents.registry.get_user_skill_runtime_revision",
+                side_effect=["skills-v1", "skills-v1", "skills-v2"],
+            ),
+            patch(
+                "app.agents.registry.create_user_skill_runtime_snapshot",
+                side_effect=lambda revision: SimpleNamespace(
+                    backend=f"backend-{revision}",
+                    issues=(),
+                ),
+            ) as snapshot_factory,
+            patch("app.agents.registry.Settings.from_env", return_value=object()),
+            patch("app.agents.registry.create_chat_model", return_value="model"),
+            patch(
+                "app.agents.registry.create_frontend_agent",
+                side_effect=lambda model, **kwargs: ("frontend", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_data_source_agent",
+                side_effect=lambda model, **kwargs: ("data_source", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_test_agent",
+                side_effect=lambda model, **kwargs: ("test", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_main_agent",
+                side_effect=lambda model, frontend, data_source, test, **kwargs: (
+                    "main",
+                    kwargs,
+                ),
+            ),
+        ):
+            first = registry.create_agent_bundle(workspace)
+            unchanged = registry.create_agent_bundle(workspace)
+            updated = registry.create_agent_bundle(workspace)
+
+        self.assertIs(first, unchanged)
+        self.assertIsNot(first, updated)
+        self.assertEqual(snapshot_factory.call_count, 2)
+        self.assertEqual(
+            updated.frontend[1]["user_skills_backend"],
+            "backend-skills-v2",
+        )
 
 
 if __name__ == "__main__":

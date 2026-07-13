@@ -298,13 +298,15 @@ build.START
 
 `workspaceRoot` 是 Backend 的宿主机目录，只能用于 Graph State、Agent filesystem backend、确定性文档写入和 workspace diff 捕获。Deep Agent 的文件工具始终以 `/` 作为虚拟工作区根；例如任务中的 `app/frontend/**` 必须解释为 `/app/frontend/**`，不得把 `/Users/...`、Windows 盘符或其它真实 `workspaceRoot` 拼入工具路径。Frontend/Data Source generation prompt 不暴露真实根目录，filesystem permission 和 `delete_file` 还会拒绝把真实根目录重复成虚拟子目录的路径。已经存在的错误嵌套目录不会被工作流自动迁移或删除。
 
-### 内置 Skill 与上下文预算
+### Skill 与上下文预算
 
-Main Deep Agent 会直接执行简单分支的局部修改，并负责复杂分支的任务拆分和返修规划；Frontend Deep Agent 负责复杂分支的前端实现。因此这两个 Agent 都通过 Deep Agents 原生 `skills` 参数加载 `react-antd-v4-codegen`，Data Source/Test Agent 和直接 ChatModel 节点不加载该 React skill。
+Main Deep Agent 会直接执行简单分支的局部修改，并负责复杂分支的任务拆分和返修规划；Frontend Deep Agent 负责复杂分支的前端实现。因此这两个 Agent 通过 Deep Agents 原生 `skills` 参数按“内置、用户”顺序加载 Skill，用户同名 Skill 后加载并覆盖内置 Skill。Data Source/Test Agent 只加载用户 Skill；直接 ChatModel 节点不加载 Skill。Main 注册的三个 `CompiledSubAgent` 各自保留独立的 SkillsMiddleware，不依赖 Main 隐式继承。
 
 内置 skill 的宿主目录在源码模式为 `Backend/app/builtin_skills/`，在 PyInstaller onedir 模式为后端资源目录 `_internal/app/builtin_skills/`。Agent 不接触宿主绝对路径，而是通过只读 CompositeBackend 路由 `/.xcodeagent/builtin-skills/` 发现和读取 skill；文件权限与 `delete_file` 都拒绝写入或删除该命名空间。Backend Python 是必需 skill 名称和文件的唯一事实来源：PyInstaller staging 和 Backend 启动执行完整性校验并在缺失时 fail fast；Electron 打包前和启动前只检查通用 `builtin_skills` 资源目录，不复制具体 skill 清单。
 
-该设计映射到参考架构：learn-coding-agent 的紧凑“收集上下文—行动—验证”循环只读取当前任务需要的规范；OpenCode 风格把 skill 作为可发现、按需加载的 Agent 能力；Deep Agents 使用原生 SkillsMiddleware 和 filesystem backend。为遵守 128k 上下文预算，system prompt 只常驻 skill 名称、描述和路径，模型命中 React 任务后再读取 `SKILL.md` 与需要的 references，不再把全部规则固定拼进每次请求。
+用户 Skill 来自当前环境的 `~/.xcodeagent[_dev|_st|_uat]/skills`。每次创建 Agent bundle 前，Backend 会把有效直属 Skill 的完整目录复制为不可变只读快照，并通过 `/.xcodeagent/user-skills/` 挂载；符号链接、非常规文件和超限 Skill 会被隔离跳过。bundle 缓存键包含工作区和快照 revision，因此保存或外部修改会在下一次调用生效，已经运行中的 Agent 继续读取原快照。
+
+该设计映射到参考架构：learn-coding-agent 的紧凑“收集上下文—行动—验证”循环只读取当前任务需要的规范；OpenCode 风格把用户 Skill 作为可发现、可覆盖且错误隔离的 Agent 能力；Deep Agents 使用原生 SkillsMiddleware、FilesystemBackend 和 CompositeBackend。为遵守 128k 上下文预算，system prompt 只常驻 Skill 名称、描述和虚拟路径，模型命中任务后再读取完整 `SKILL.md` 与所需辅助资源，不把全部正文固定拼进每次请求。
 
 外层主 Graph 不关心单个生成任务的执行细节，只根据 Build Subgraph 输出的任务状态和结果继续进入 `integration_test`。
 
