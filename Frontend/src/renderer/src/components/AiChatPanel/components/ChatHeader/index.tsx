@@ -1,44 +1,31 @@
-import { CheckCircleOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
+import { FileTextOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import type { EditorMode } from '../../../../typings'
 import { cx } from '../../../../utils'
-import type { ChatCopy } from '../../types'
 import './ChatHeader.less'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 
 type ChatHeaderProps = {
   actions?: ReactNode
-  copy: ChatCopy[EditorMode]
-  editorMode: EditorMode
   onThemeChange: (theme: 'light' | 'dark') => void
+  pageTitle: string
   theme: 'light' | 'dark'
-  title: string
-  workspaceName: string
 }
 
 export default function ChatHeader({
   actions,
-  copy,
-  editorMode,
   onThemeChange,
-  theme,
-  title,
-  workspaceName
+  pageTitle,
+  theme
 }: ChatHeaderProps): ReactElement {
   return (
     <header className={cx('ai-chat-header')}>
-      <div className={cx('ai-chat-title')}>
-        <div className={cx('ai-chat-title-line')}>
-          <Title level={4}>{title}</Title>
-          <Text className={cx('ai-chat-saved')}>
-            <CheckCircleOutlined /> 已保存
-          </Text>
-        </div>
-        <Text className={cx('ai-chat-workspace-path')} title={copy.description}>
-          {workspaceName} <span>/</span> {editorMode === 'frontend' ? '前端工作流' : '后端工作流'}
-        </Text>
+      <div className={cx('ai-chat-breadcrumb')}>
+        <FileTextOutlined className={cx('ai-chat-page-icon')} />
+        <Text strong>Pages</Text>
+        <Text className={cx('ai-chat-breadcrumb-separator')}>/</Text>
+        <Text className={cx('ai-chat-page-title')} strong title={pageTitle}>{pageTitle}</Text>
       </div>
       <div className={cx('ai-chat-header-actions')}>
         {actions}

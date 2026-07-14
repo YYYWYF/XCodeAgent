@@ -1,73 +1,63 @@
 .@{class-prefix}-ai-chat-header {
   display: flex;
-  min-height: 80px;
+  min-height: 60px;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding: 14px 30px 13px;
+  gap: 20px;
+  padding: 10px 24px;
   border-bottom: 1px solid var(--wb-border);
   background: var(--wb-canvas);
-
-  h4.ant-typography {
-    max-width: min(52vw, 680px);
-    margin: 0;
-    overflow: hidden;
-    color: var(--wb-text);
-    font-size: 18px;
-    font-weight: 700;
-    line-height: 24px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
 }
 
-.@{class-prefix}-ai-chat-title {
-  min-width: 0;
-}
-
-.@{class-prefix}-ai-chat-title-line,
-.@{class-prefix}-ai-chat-header-actions {
+.@{class-prefix}-ai-chat-breadcrumb {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 12px;
-}
+  color: var(--wb-text);
+  font-size: 15px;
 
-.@{class-prefix}-ai-chat-saved.ant-typography,
-.@{class-prefix}-ai-chat-workspace-path.ant-typography {
-  color: var(--wb-text-secondary);
-  font-size: 12px;
-}
-
-.@{class-prefix}-ai-chat-saved {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-}
-
-.@{class-prefix}-ai-chat-workspace-path {
-  display: block;
-  margin-top: 4px;
-  font-family: inherit;
-
-  span {
-    padding: 0 5px;
-    color: var(--wb-text-tertiary);
+  .ant-typography {
+    margin: 0;
+    color: inherit;
   }
 }
 
+.@{class-prefix}-ai-chat-page-icon {
+  color: var(--wb-accent, #6d3df5);
+  font-size: 21px;
+}
+
+.@{class-prefix}-ai-chat-breadcrumb-separator.ant-typography {
+  color: var(--wb-text-tertiary);
+}
+
+.@{class-prefix}-ai-chat-page-title.ant-typography {
+  max-width: min(36vw, 520px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .@{class-prefix}-ai-chat-header-actions {
+  display: flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
 
   > .ant-btn {
+    height: 34px;
     color: var(--wb-text-secondary);
-    border-radius: 8px;
+    background: var(--wb-surface);
+    border-color: var(--wb-border);
+    border-radius: 7px;
+    box-shadow: none;
 
     &:hover,
     &:focus {
       color: var(--wb-text);
       background: var(--wb-surface-hover);
+      border-color: var(--wb-border-strong);
     }
   }
 }
@@ -109,8 +99,11 @@
 }
 
 @media (max-width: 900px) {
-  .@{class-prefix}-ai-chat-saved,
-  .@{class-prefix}-ai-chat-workspace-path {
-    display: none;
+  .@{class-prefix}-ai-chat-header {
+    padding-inline: 16px;
+  }
+
+  .@{class-prefix}-ai-chat-page-title.ant-typography {
+    max-width: 24vw;
   }
 }

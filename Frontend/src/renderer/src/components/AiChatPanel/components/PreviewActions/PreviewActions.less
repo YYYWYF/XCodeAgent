@@ -1,75 +1,43 @@
 .@{class-prefix}-preview-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 10px;
 
   .ant-btn {
     height: 34px;
-    border-radius: 8px;
-  }
-
-  .ant-btn-text {
-    width: 34px;
     color: var(--wb-text-secondary);
-
-    &:hover,
-    &:focus {
-      color: var(--wb-text);
-      background: var(--wb-surface-hover);
-    }
-  }
-
-  .ant-btn-primary {
-    color: var(--wb-text);
     background: var(--wb-surface);
     border-color: var(--wb-border);
+    border-radius: 7px;
     box-shadow: none;
 
     &:hover,
-    &:focus {
+    &:focus,
+    &.@{class-prefix}-active {
       color: var(--wb-text);
-      background: var(--wb-control-hover);
+      background: var(--wb-surface-hover);
       border-color: var(--wb-border-strong);
     }
   }
 }
 
-.@{class-prefix}-preview-actions-dropdown {
-  .ant-dropdown-menu {
-    min-width: 184px;
-    padding: 5px;
-    border: 1px solid rgba(0, 0, 0, 0.075);
-    border-radius: 9px;
-    background: #ffffff;
-    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.1);
+.@{class-prefix}-workbench-shell[data-theme='dark'] {
+  .@{class-prefix}-preview-actions .ant-btn:not(.@{class-prefix}-active) {
+    background: transparent;
+    border-color: transparent;
+    color: var(--wb-text-tertiary);
   }
 
-  .ant-dropdown-menu-item {
-    color: #202124;
-    border-radius: 6px;
-
-    &:hover,
-    &.ant-dropdown-menu-item-selected {
-      color: #202124;
-      background: rgba(0, 0, 0, 0.045);
-    }
+  .@{class-prefix}-preview-actions .ant-btn:hover,
+  .@{class-prefix}-preview-actions .ant-btn:focus {
+    color: #dacdff;
+    background: rgba(126, 91, 183, 0.18);
+    border-color: rgba(157, 126, 216, 0.3);
   }
 
-  &.@{class-prefix}-dark {
-    .ant-dropdown-menu {
-      border-color: rgba(255, 255, 255, 0.1);
-      background: #28282b;
-      box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
-    }
-
-    .ant-dropdown-menu-item {
-      color: #f2f2f2;
-
-      &:hover,
-      &.ant-dropdown-menu-item-selected {
-        color: #f2f2f2;
-        background: rgba(255, 255, 255, 0.09);
-      }
-    }
+  .@{class-prefix}-preview-actions .ant-btn.@{class-prefix}-active {
+    color: #e4d9ff;
+    background: rgba(126, 91, 183, 0.26);
+    border-color: rgba(157, 126, 216, 0.42);
   }
 }

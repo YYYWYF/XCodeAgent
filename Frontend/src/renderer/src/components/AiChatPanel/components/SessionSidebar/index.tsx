@@ -39,6 +39,7 @@ type SessionSidebarProps = {
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
   onOpenSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>, sessionId: string) => void
+  onPageSelect: (label: string) => void
   onReturnWelcome: () => void
   onShowFiles: () => void
   onShowSkills: () => void
@@ -52,7 +53,7 @@ type SessionSidebarProps = {
 type OutlineRowProps = {
   item: ApplicationMenuItem
   level: number
-  onSelect: (key: string) => void
+  onSelect: (key: string, label: string) => void
   selectedKey: string
   visibleKeys: Set<string>
 }
@@ -79,7 +80,7 @@ function OutlineRow({ item, level, onSelect, selectedKey, visibleKeys }: Outline
         className={cx('outline-row', selected && 'selected')}
         onClick={() => {
           if (isFolder) setExpanded((current) => !current)
-          else onSelect(item.key)
+          else onSelect(item.key, item.label)
         }}
         style={{ '--outline-level': level } as React.CSSProperties}
         type="button"
@@ -149,6 +150,7 @@ export default function SessionSidebar({
   application,
   filesActive,
   onCreateSession,
+  onPageSelect,
   onReturnWelcome,
   onShowFiles,
   onShowSkills,
@@ -308,7 +310,10 @@ export default function SessionSidebar({
                   item={item}
                   key={item.key}
                   level={0}
-                  onSelect={setSelectedKey}
+                  onSelect={(key, label) => {
+                    setSelectedKey(key)
+                    onPageSelect(label)
+                  }}
                   selectedKey={selectedKey}
                   visibleKeys={visibleKeys}
                 />

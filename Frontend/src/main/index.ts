@@ -193,11 +193,10 @@ function setupBrowserIpc() {
 
   ipcMain.handle('browser:open-preview-window', async (_event, url) => {
     const previewWindow = new BrowserWindow({
-      width: 1280,
-      height: 860,
+      fullscreen: true,
       minWidth: 960,
       minHeight: 640,
-      title: '网页预览',
+      title: '全屏预览',
       backgroundColor: '#ffffff',
       webPreferences: {
         contextIsolation: true,

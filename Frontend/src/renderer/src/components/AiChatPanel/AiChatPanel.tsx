@@ -1,6 +1,5 @@
 import { HolderOutlined } from '@ant-design/icons'
 import { Alert } from 'antd'
-import type { MenuProps } from 'antd'
 import type { ReactElement } from 'react'
 import { useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
@@ -41,6 +40,9 @@ export default function AiChatPanel({
   theme
 }: Props): ReactElement {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
+  const [activePageTitle, setActivePageTitle] = useState(
+    application.defaultPage || application.pages[0] || '页面'
+  )
   const [previewError, setPreviewError] = useState('')
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const { publishAiMessage } = useWorkbench()
@@ -110,15 +112,8 @@ export default function AiChatPanel({
   const copy = chatCopy[editorMode]
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
-  const activeSessionTitle = sessions.find((session) => session.id === activeSessionId)?.title
-
-  const handlePreviewAction: MenuProps['onClick'] = async ({ key }) => {
+  const handleOpenFullscreenPreview = async (): Promise<void> => {
     setPreviewError('')
-
-    if (key === 'embedded') {
-      setRightPanel({ type: 'preview' })
-      return
-    }
 
     try {
       await openPreviewWindow(getInitialPreviewUrl(application.id))
@@ -180,6 +175,7 @@ export default function AiChatPanel({
             if (event.key === 'Enter' || event.key === ' ') setActiveView('chat')
             handleOpenSessionKeyDown(event, sessionId)
           }}
+          onPageSelect={setActivePageTitle}
           onReturnWelcome={onReturnWelcome}
           onShowFiles={handleShowFiles}
           onShowSkills={handleShowSkills}
@@ -203,9 +199,10 @@ export default function AiChatPanel({
                   {showPreviewActions ? (
                     <PreviewActions
                       embeddedPreviewOpen={embeddedPreviewOpen}
-                      onCloseEmbeddedPreview={() => setRightPanel(undefined)}
-                      onPreviewAction={handlePreviewAction}
-                      theme={theme}
+                      onOpenFullscreenPreview={handleOpenFullscreenPreview}
+                      onToggleEmbeddedPreview={() =>
+                        setRightPanel(embeddedPreviewOpen ? undefined : { type: 'preview' })
+                      }
                     />
                   ) : null}
                   <SessionHistoryDropdown
@@ -224,12 +221,9 @@ export default function AiChatPanel({
                   />
                 </>
               }
-              copy={copy}
-              editorMode={editorMode}
               onThemeChange={onThemeChange}
+              pageTitle={activePageTitle}
               theme={theme}
-              title={activeSessionTitle || '新对话'}
-              workspaceName={application.name}
             />
 
             {previewError && (
