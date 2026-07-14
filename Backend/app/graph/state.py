@@ -42,7 +42,7 @@ class ProjectState(TypedDict, total=False):
     build_summary: dict[str, Any]
     build_events: Annotated[list[str], add]
     test_results: list[dict[str, Any]]
-    test_events: list[str]
+    test_events: Annotated[list[str], add]
     test_agent_review: dict[str, Any]
     test_report: dict[str, Any]
     test_report_path: str
