@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query
@@ -20,7 +21,12 @@ from app.protocols.user_skills import (
     build_user_skills_ag_ui_stream,
     user_skills_capabilities,
 )
+from app.protocols.agent_files import (
+    agent_files_capabilities,
+    build_agent_files_ag_ui_stream,
+)
 from app.config import Settings
+from app.services.agent_file_documents import ensure_agents_document
 from app.services.builtin_skills import available_builtin_skills
 from app.tools import antd_v4_docs
 from app.workspace import workspace as workspace_tools
@@ -28,10 +34,18 @@ from app.middleware.approvals import approval_store
 
 settings = Settings.from_env()
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    ensure_agents_document()
+    yield
+
+
 app = FastAPI(
     title="Local LangGraph Agent",
     description="A minimal local FastAPI backend powered by LangGraph and an OpenAI-compatible model.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -64,6 +78,7 @@ async def health() -> dict[str, object]:
             "workflow_run": workflow_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
             "user_skills": user_skills_capabilities(),
+            "agent_files": agent_files_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -91,6 +106,18 @@ async def run_user_skills(
 ) -> StreamingResponse:
     return StreamingResponse(
         build_user_skills_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/agent-files/run")
+async def run_agent_files(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    return StreamingResponse(
+        build_agent_files_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

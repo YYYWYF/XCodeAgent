@@ -1,4 +1,5 @@
 export { default as ActivityBar } from './ActivityBar/ActivityBar';
+export { default as AgentFilesPage } from './AgentFilesPage/AgentFilesPage';
 export { default as AiChatPanel } from './AiChatPanel';
 export { default as BrowserPreviewPanel } from './BrowserPreviewPanel/BrowserPreviewPanel';
 export { default as EditorPanel } from './EditorPanel/EditorPanel';

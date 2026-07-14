@@ -13,6 +13,7 @@ import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import MessageList from './components/MessageList'
 import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
+import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
@@ -29,6 +30,8 @@ type Props = {
   theme: 'light' | 'dark'
 }
 
+type ActiveView = 'chat' | 'skills' | 'files'
+
 export default function AiChatPanel({
   application,
   editorMode,
@@ -36,7 +39,7 @@ export default function AiChatPanel({
   onThemeChange,
   theme
 }: Props): ReactElement {
-  const [activeView, setActiveView] = useState<'chat' | 'skills'>('chat')
+  const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [previewError, setPreviewError] = useState('')
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const { publishAiMessage } = useWorkbench()
@@ -136,6 +139,12 @@ export default function AiChatPanel({
     setActiveView('skills')
   }
 
+  const handleShowFiles = (): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('files')
+  }
+
   const handleCreateChatSession = (): void => {
     setActiveView('chat')
     handleCreateSessionFromList()
@@ -171,7 +180,9 @@ export default function AiChatPanel({
             handleOpenSessionKeyDown(event, sessionId)
           }}
           onReturnWelcome={onReturnWelcome}
+          onShowFiles={handleShowFiles}
           onShowSkills={handleShowSkills}
+          filesActive={activeView === 'files'}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
           sessions={sessions}
@@ -181,6 +192,8 @@ export default function AiChatPanel({
 
         {activeView === 'skills' ? (
           <SkillsPage onThemeChange={onThemeChange} theme={theme} />
+        ) : activeView === 'files' ? (
+          <AgentFilesPage />
         ) : (
           <div className={cx('ai-chat-main')}>
             <ChatHeader

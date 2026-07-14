@@ -2,6 +2,7 @@ import {
   ArrowLeftOutlined,
   CloseOutlined,
   DeleteOutlined,
+  FileTextOutlined,
   FolderOpenOutlined,
   PlusOutlined,
   SearchOutlined,
@@ -23,12 +24,14 @@ type SessionSidebarProps = {
   activeSessionId?: string
   application: ApplicationConfig
   deletingSessionId?: string
+  filesActive: boolean
   loadingSessions: boolean
   onCreateSession: () => void
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
   onOpenSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>, sessionId: string) => void
   onReturnWelcome: () => void
+  onShowFiles: () => void
   onShowSkills: () => void
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
@@ -41,12 +44,14 @@ export default function SessionSidebar({
   activeSessionId,
   application,
   deletingSessionId,
+  filesActive,
   loadingSessions,
   onCreateSession,
   onDeleteSession,
   onOpenSession,
   onOpenSessionKeyDown,
   onReturnWelcome,
+  onShowFiles,
   onShowSkills,
   sessionError,
   sessionRunStates,
@@ -103,6 +108,15 @@ export default function SessionSidebar({
         技能
       </Button>
       <Button
+        aria-current={filesActive ? 'page' : undefined}
+        block
+        className={cx('session-skills-button', 'session-files-button', filesActive && 'active')}
+        icon={<FileTextOutlined />}
+        onClick={onShowFiles}
+      >
+        文件
+      </Button>
+      <Button
         block
         className={cx('session-new-button')}
         disabled={!application.workspaceRoot}
@@ -141,11 +155,11 @@ export default function SessionSidebar({
                 return (
                   <div
                     aria-current={
-                      !skillsActive && activeSessionId === session.id ? 'page' : undefined
+                      !skillsActive && !filesActive && activeSessionId === session.id ? 'page' : undefined
                     }
                     className={cx(
                       'session-item',
-                      !skillsActive && activeSessionId === session.id && 'active',
+                      !skillsActive && !filesActive && activeSessionId === session.id && 'active',
                       running && 'running'
                     )}
                     key={session.id}
