@@ -25,42 +25,34 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 return_value="skills-v1",
             ),
             patch(
+                "app.agents.registry.get_agent_memory_runtime_revision",
+                return_value="memory-v1",
+            ),
+            patch(
                 "app.agents.registry.create_user_skill_runtime_snapshot",
                 return_value=SimpleNamespace(backend="user-skills", issues=()),
+            ),
+            patch(
+                "app.agents.registry.create_agent_memory_runtime_snapshot",
+                return_value=SimpleNamespace(backend="agent-memory"),
             ),
             patch("app.agents.registry.Settings.from_env", return_value=object()),
             patch("app.agents.registry.create_chat_model", return_value="model"),
             patch(
                 "app.agents.registry.create_frontend_agent",
-                side_effect=lambda model, *, workspace_root=None, user_skills_backend: (
-                    "frontend",
-                    workspace_root,
-                    user_skills_backend,
-                ),
+                side_effect=lambda model, **kwargs: ("frontend", kwargs),
             ) as frontend_factory,
             patch(
                 "app.agents.registry.create_data_source_agent",
-                side_effect=lambda model, *, workspace_root=None, user_skills_backend: (
-                    "data_source",
-                    workspace_root,
-                    user_skills_backend,
-                ),
+                side_effect=lambda model, **kwargs: ("data_source", kwargs),
             ),
             patch(
                 "app.agents.registry.create_test_agent",
-                side_effect=lambda model, *, workspace_root=None, user_skills_backend: (
-                    "test",
-                    workspace_root,
-                    user_skills_backend,
-                ),
+                side_effect=lambda model, **kwargs: ("test", kwargs),
             ),
             patch(
                 "app.agents.registry.create_repair_planner_agent",
-                side_effect=lambda model, *, workspace_root=None, user_skills_backend: (
-                    "repair_planner",
-                    workspace_root,
-                    user_skills_backend,
-                ),
+                side_effect=lambda model, **kwargs: ("repair_planner", kwargs),
             ) as repair_planner_factory,
         ):
             first_bundle = registry.create_agent_bundle(first_workspace)
@@ -71,18 +63,31 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
         self.assertIsNot(first_bundle, second_bundle)
         self.assertEqual(frontend_factory.call_count, 2)
         self.assertEqual(repair_planner_factory.call_count, 2)
-        self.assertEqual(first_bundle.frontend[1], str(Path(first_workspace).resolve()))
-        self.assertEqual(second_bundle.frontend[1], str(Path(second_workspace).resolve()))
-        self.assertEqual(first_bundle.repair_planner[1], str(Path(first_workspace).resolve()))
-        self.assertEqual(second_bundle.repair_planner[1], str(Path(second_workspace).resolve()))
+        self.assertEqual(
+            first_bundle.frontend[1]["workspace_root"],
+            str(Path(first_workspace).resolve()),
+        )
+        self.assertEqual(
+            second_bundle.frontend[1]["workspace_root"],
+            str(Path(second_workspace).resolve()),
+        )
+        self.assertEqual(first_bundle.frontend[1]["agent_memory_backend"], "agent-memory")
+        self.assertEqual(
+            first_bundle.repair_planner[1]["agent_memory_backend"],
+            "agent-memory",
+        )
 
-    def test_agent_bundle_cache_changes_with_user_skill_revision(self) -> None:
+    def test_agent_bundle_cache_changes_with_skill_or_memory_revision(self) -> None:
         with (
             tempfile.TemporaryDirectory() as workspace,
             patch(
                 "app.agents.registry.get_user_skill_runtime_revision",
-                side_effect=["skills-v1", "skills-v1", "skills-v2"],
-            ),
+                return_value="skills-v1",
+            ) as skill_revision,
+            patch(
+                "app.agents.registry.get_agent_memory_runtime_revision",
+                return_value="memory-v1",
+            ) as memory_revision,
             patch(
                 "app.agents.registry.create_user_skill_runtime_snapshot",
                 side_effect=lambda revision: SimpleNamespace(
@@ -90,6 +95,12 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                     issues=(),
                 ),
             ) as snapshot_factory,
+            patch(
+                "app.agents.registry.create_agent_memory_runtime_snapshot",
+                side_effect=lambda revision: SimpleNamespace(
+                    backend=f"memory-{revision}",
+                ),
+            ) as memory_snapshot_factory,
             patch("app.agents.registry.Settings.from_env", return_value=object()),
             patch("app.agents.registry.create_chat_model", return_value="model"),
             patch(
@@ -114,13 +125,26 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
         ):
             first = registry.create_agent_bundle(workspace)
             unchanged = registry.create_agent_bundle(workspace)
+            memory_revision.return_value = "memory-v2"
             updated = registry.create_agent_bundle(workspace)
+            skill_revision.return_value = "skills-v2"
+            skills_updated = registry.create_agent_bundle(workspace)
 
         self.assertIs(first, unchanged)
         self.assertIsNot(first, updated)
-        self.assertEqual(snapshot_factory.call_count, 2)
+        self.assertIsNot(updated, skills_updated)
+        self.assertEqual(snapshot_factory.call_count, 3)
+        self.assertEqual(memory_snapshot_factory.call_count, 3)
         self.assertEqual(
             updated.frontend[1]["user_skills_backend"],
+            "backend-skills-v1",
+        )
+        self.assertEqual(
+            updated.frontend[1]["agent_memory_backend"],
+            "memory-memory-v2",
+        )
+        self.assertEqual(
+            skills_updated.frontend[1]["user_skills_backend"],
             "backend-skills-v2",
         )
 

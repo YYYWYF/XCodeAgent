@@ -5,6 +5,7 @@ from app.agents.workspace_scope import (
     create_workspace_backend,
     create_workspace_permissions,
 )
+from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.tools.delete_file import create_delete_file_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
@@ -15,6 +16,7 @@ def create_data_source_agent(
     workspace_root: str | None = None,
     *,
     user_skills_backend: BackendProtocol,
+    agent_memory_backend: BackendProtocol,
 ):
     return create_deep_agent(
         name="data-source-generation-agent",
@@ -33,14 +35,17 @@ def create_data_source_agent(
             "a file, use delete_file(file_path=\"/path\") with a virtual absolute path."
         ),
         skills=[USER_SKILLS_VIRTUAL_ROOT],
+        memory=[AGENT_MEMORY_VIRTUAL_PATH],
         tools=[create_delete_file_tool(workspace_root)],
         backend=create_workspace_backend(
             workspace_root,
             user_skills_backend=user_skills_backend,
+            agent_memory_backend=agent_memory_backend,
         ),
         permissions=create_workspace_permissions(
             workspace_root,
             mode="data_source",
             include_user_skills=True,
+            include_agent_memory=True,
         ),
     )

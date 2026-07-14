@@ -5,6 +5,7 @@ from app.agents.workspace_scope import (
     create_workspace_backend,
     create_workspace_permissions,
 )
+from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.tools.delete_file import create_delete_file_tool
@@ -16,11 +17,13 @@ def create_frontend_agent(
     workspace_root: str | None = None,
     *,
     user_skills_backend: BackendProtocol,
+    agent_memory_backend: BackendProtocol,
 ):
     backend = create_workspace_backend(
         workspace_root,
         include_builtin_skills=True,
         user_skills_backend=user_skills_backend,
+        agent_memory_backend=agent_memory_backend,
     )
     return create_deep_agent(
         name="frontend-generation-agent",
@@ -38,6 +41,7 @@ def create_frontend_agent(
             "use delete_file(file_path=\"/path\") with a virtual absolute path."
         ),
         skills=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
+        memory=[AGENT_MEMORY_VIRTUAL_PATH],
         tools=[create_delete_file_tool(workspace_root)],
         backend=backend,
         permissions=create_workspace_permissions(
@@ -45,5 +49,6 @@ def create_frontend_agent(
             mode="frontend",
             include_builtin_skills=True,
             include_user_skills=True,
+            include_agent_memory=True,
         ),
     )

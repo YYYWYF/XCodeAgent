@@ -7,6 +7,7 @@ from deepagents.backends import CompositeBackend, FilesystemBackend, StateBacken
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.permissions import FilesystemPermission
 
+from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_ROOT
 from app.services.builtin_skills import (
     BUILTIN_SKILLS_VIRTUAL_ROOT,
     validate_required_builtin_skills,
@@ -36,6 +37,7 @@ def create_workspace_backend(
     *,
     include_builtin_skills: bool = False,
     user_skills_backend: BackendProtocol | None = None,
+    agent_memory_backend: BackendProtocol | None = None,
 ) -> BackendProtocol:
     root = resolve_workspace_root(workspace_root)
     default_backend = (
@@ -52,6 +54,8 @@ def create_workspace_backend(
         )
     if user_skills_backend is not None:
         routes[USER_SKILLS_VIRTUAL_ROOT] = user_skills_backend
+    if agent_memory_backend is not None:
+        routes[AGENT_MEMORY_VIRTUAL_ROOT] = agent_memory_backend
     if not routes:
         return default_backend
 
@@ -67,13 +71,16 @@ def create_workspace_permissions(
     mode: AgentWorkspaceMode,
     include_builtin_skills: bool = False,
     include_user_skills: bool = False,
+    include_agent_memory: bool = False,
 ) -> list[FilesystemPermission]:
     root = resolve_workspace_root(workspace_root)
     skill_permissions: list[FilesystemPermission] = []
     if include_builtin_skills:
-        skill_permissions.extend(_read_only_skill_permissions(BUILTIN_SKILLS_VIRTUAL_ROOT))
+        skill_permissions.extend(_read_only_virtual_permissions(BUILTIN_SKILLS_VIRTUAL_ROOT))
     if include_user_skills:
-        skill_permissions.extend(_read_only_skill_permissions(USER_SKILLS_VIRTUAL_ROOT))
+        skill_permissions.extend(_read_only_virtual_permissions(USER_SKILLS_VIRTUAL_ROOT))
+    if include_agent_memory:
+        skill_permissions.extend(_read_only_virtual_permissions(AGENT_MEMORY_VIRTUAL_ROOT))
     if root is None:
         return [
             *skill_permissions,
@@ -116,18 +123,18 @@ def create_workspace_permissions(
     return permissions
 
 
-def _read_only_skill_permissions(virtual_root: str) -> list[FilesystemPermission]:
-    skill_root = virtual_root.rstrip("/")
-    skill_paths = [skill_root, f"{skill_root}/**"]
+def _read_only_virtual_permissions(virtual_root: str) -> list[FilesystemPermission]:
+    route_root = virtual_root.rstrip("/")
+    route_paths = [route_root, f"{route_root}/**"]
     return [
         FilesystemPermission(
             operations=["write"],
-            paths=skill_paths,
+            paths=route_paths,
             mode="deny",
         ),
         FilesystemPermission(
             operations=["read"],
-            paths=skill_paths,
+            paths=route_paths,
             mode="allow",
         ),
     ]

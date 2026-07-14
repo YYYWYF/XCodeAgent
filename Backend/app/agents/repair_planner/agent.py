@@ -5,6 +5,7 @@ from app.agents.workspace_scope import (
     create_workspace_backend,
     create_workspace_permissions,
 )
+from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
@@ -14,6 +15,7 @@ def create_repair_planner_agent(
     workspace_root: str | None = None,
     *,
     user_skills_backend: BackendProtocol,
+    agent_memory_backend: BackendProtocol,
 ):
     return create_deep_agent(
         name="repair-planner-agent",
@@ -33,13 +35,16 @@ def create_repair_planner_agent(
             f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}"
         ),
         skills=[USER_SKILLS_VIRTUAL_ROOT],
+        memory=[AGENT_MEMORY_VIRTUAL_PATH],
         backend=create_workspace_backend(
             workspace_root,
             user_skills_backend=user_skills_backend,
+            agent_memory_backend=agent_memory_backend,
         ),
         permissions=create_workspace_permissions(
             workspace_root,
             mode="repair_planner",
             include_user_skills=True,
+            include_agent_memory=True,
         ),
     )

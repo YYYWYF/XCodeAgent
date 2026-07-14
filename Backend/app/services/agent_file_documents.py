@@ -15,7 +15,9 @@ from app.services.user_skills import ApiModel, user_skills_working_dir
 
 
 AGENTS_FILE_NAME = "AGENTS.md"
-MAX_AGENTS_CONTENT_BYTES = 512 * 1024
+# Keep environment-level instructions small enough to fit safely in the
+# DeepAgents system context alongside workflow prompts, skills, and task input.
+MAX_AGENTS_CONTENT_BYTES = 32 * 1024
 DEFAULT_AGENTS_CONTENT = (
     "# XCodeAgent 工作区指令\n\n"
     "## 工作方式\n"
@@ -177,14 +179,14 @@ def _document_from_content(
 def _read_content_bytes(agents_file: Path) -> bytes:
     file_stat = _regular_file_stat(agents_file)
     if file_stat.st_size > MAX_AGENTS_CONTENT_BYTES:
-        raise AgentFileContentError("AGENTS.md 不能超过 512 KiB。")
+        raise AgentFileContentError("AGENTS.md 不能超过 32 KiB。")
     try:
         with agents_file.open("rb") as file:
             content = file.read(MAX_AGENTS_CONTENT_BYTES + 1)
     except OSError as exc:
         raise AgentFilePathError("无法读取 AGENTS.md。") from exc
     if len(content) > MAX_AGENTS_CONTENT_BYTES:
-        raise AgentFileContentError("AGENTS.md 不能超过 512 KiB。")
+        raise AgentFileContentError("AGENTS.md 不能超过 32 KiB。")
     return content
 
 
@@ -194,7 +196,7 @@ def _encode_content(content: str) -> bytes:
     except UnicodeEncodeError as exc:
         raise AgentFileContentError("AGENTS.md 必须是有效的 UTF-8 文本。") from exc
     if len(encoded_content) > MAX_AGENTS_CONTENT_BYTES:
-        raise AgentFileContentError("AGENTS.md 不能超过 512 KiB。")
+        raise AgentFileContentError("AGENTS.md 不能超过 32 KiB。")
     return encoded_content
 
 

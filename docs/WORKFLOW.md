@@ -328,6 +328,8 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 该设计映射到参考架构：learn-coding-agent 的紧凑“收集上下文—行动—验证”循环只读取当前任务需要的规范；OpenCode 风格把用户 Skill 作为可发现、可覆盖且错误隔离的 Agent 能力；Deep Agents 使用原生 SkillsMiddleware、FilesystemBackend 和 CompositeBackend。为遵守 128k 上下文预算，system prompt 只常驻 Skill 名称、描述和虚拟路径，模型命中任务后再读取完整 `SKILL.md` 与所需辅助资源，不把全部正文固定拼进每次请求。
 
+环境级 `~/.xcodeagent[_dev|_st|_uat]/AGENTS.md` 是四个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.xcodeagent/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
+
 外层主 Graph 不关心单个生成任务的执行细节，只根据 Build Subgraph 输出的任务状态和结果继续进入 `integration_test`。
 
 ### `integration_test` / Testing Subgraph
