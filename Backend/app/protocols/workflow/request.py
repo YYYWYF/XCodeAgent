@@ -226,8 +226,6 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "detail_selection",
         "selected_page_id",
         "selected_data_source_id",
-        "page_spec_draft",
-        "confirmed_page_spec",
         "data_source_spec_draft",
         "detail_plans",
         "detail_review_submission",

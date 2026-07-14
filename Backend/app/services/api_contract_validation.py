@@ -29,7 +29,7 @@ def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]
         )
 
     _validate_data_sources(project_plan, schema_refs, errors)
-    _validate_page_dependencies(project_plan, endpoint_index, errors)
+    _validate_page_api_dependencies(project_plan, endpoint_index, errors)
     _validate_page_bindings(project_plan, contracts, errors)
     return errors
 
@@ -113,17 +113,17 @@ def _validate_data_sources(
                 errors.append(f"Data source {source.get('id')} references unknown schema {ref}.")
 
 
-def _validate_page_dependencies(
+def _validate_page_api_dependencies(
     project_plan: dict[str, Any],
     endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]],
     errors: list[str],
 ) -> None:
-    for dependency in project_plan.get("page_data_dependencies", []):
-        for endpoint_dependency in dict_items(dependency.get("endpoint_dependencies")):
-            endpoint_id = str(endpoint_dependency.get("endpoint_id") or "")
+    for page_detail in project_plan.get("page_detail_plans", []):
+        for api_dependency in dict_items(page_detail.get("api_dependencies")):
+            endpoint_id = str(api_dependency.get("endpoint_id") or "")
             if endpoint_id not in endpoint_index:
                 errors.append(
-                    f"Page {dependency.get('page_id')} references unknown endpoint {endpoint_id}."
+                    f"Page {page_detail.get('page_id')} references unknown endpoint {endpoint_id}."
                 )
 
 
@@ -135,9 +135,7 @@ def _validate_page_bindings(
     for page_detail in project_plan.get("page_detail_plans", []):
         endpoint_ids = {
             str(item.get("endpoint_id"))
-            for item in dict_items(
-                page_detail.get("page_dependencies", {}).get("endpoint_dependencies")
-            )
+            for item in dict_items(page_detail.get("api_dependencies"))
             if item.get("endpoint_id")
         }
         for binding in dict_items(page_detail.get("response_bindings")):

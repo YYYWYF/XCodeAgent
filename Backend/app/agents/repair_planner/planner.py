@@ -20,7 +20,7 @@ def _test_repair_planning_prompt(
         "Review the test report and revision requests. Decide whether bounded "
         "repair is possible for specialist code agents. "
         "Do not mark failed tests as passed. Do not silently change confirmed "
-        "requirements, PageSpec, or API contracts. Do not edit files or mutate "
+        "requirements, PageDetail, or API contracts. Do not edit files or mutate "
         "workflow state.\n\n"
         "Return only one JSON object using this contract:\n"
         "{\n"

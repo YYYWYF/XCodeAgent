@@ -182,7 +182,7 @@ function ClarificationContext({
       {groups.map((group, index) => (
         <SelectionGroup group={group} key={`${group.type || group.title}-${index}`} />
       ))}
-      {context && <PageSpecContext context={context} />}
+      {context && <WorkflowContext context={context} />}
     </div>
   );
 }
@@ -219,7 +219,7 @@ function SelectionGroup({
   );
 }
 
-function PageSpecContext({
+function WorkflowContext({
   context,
 }: {
   context: Record<string, unknown>;

@@ -145,10 +145,9 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 - 页面清单；
 - 数据源清单；
 - 权限模型；
-- 页面和数据源之间的依赖；
-- 面向后续任务拆分的 `task_inputs`。
+- 页面和数据源之间的依赖。
 
-该节点由 project-planning 专用 ChatModel 执行项目级规划：读取 `RequirementSpec`，产出结构化 `ProjectPlan` 和总体计划书 Markdown 文档。这个阶段不生成业务代码。
+该节点由 project-planning 专用 ChatModel 执行项目级规划：读取 `RequirementSpec`，产出结构化 `ProjectPlan` 和用户可确认的总体计划书 Markdown 文档。这个阶段不生成业务代码。结构化 `ProjectPlan` 会保留后续任务拆分所需的内部 `task_inputs`，但 Markdown 计划书不展示这些执行输入。
 
 该节点通过 `agents/main/planner.py` 直接调用 `create_chat_model()` 生成结构化 JSON 规划建议，再由确定性 schema 合并和归一化后写入 Graph State。该调用不绑定任何工具，不创建 DeepAgent，也不扫描 workspace；模型输出只用于细化项目级判断，确定性归一化负责保证稳定 id、必需字段和后续任务拆分可读取的结构。
 
@@ -156,9 +155,9 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 等待 `project_plan_confirmation` 时，AG-UI workflow payload 的只读 `confirmationArtifact` 只返回当前 `project-plan.md`，不会同时返回 RequirementSpec 正文。用户提交调整意见并重新生成计划后，下一轮确认展示新写入的 Markdown；`detail_confirmation` 不复用该载荷展示 ProjectPlan。
 
-ProjectPlan 同样以 Markdown 作为用户确认入口。确认前若 Markdown 被直接编辑，节点先将改动同步到内部 ProjectPlan JSON，并执行 API 契约、页面依赖和数据源一致性校验；同步成功后才允许确认并进入后续节点。AG-UI 产物列表只展示 Markdown 等用户可读文件，所有 JSON 路径和 JSON 任务文件都属于内部工作流状态，不向用户呈现为可编辑产物。
+ProjectPlan 同样以 Markdown 作为用户确认入口。确认前若 Markdown 被直接编辑，节点先将改动同步到内部 ProjectPlan JSON，并执行 API 契约、页面清单和数据源一致性校验；同步成功后才允许确认并进入后续节点。AG-UI 产物列表只展示 Markdown 等用户可读文件，所有 JSON 路径和 JSON 任务文件都属于内部工作流状态，不向用户呈现为可编辑产物。
 
-API 契约在此阶段作为前后端共享的唯一字段事实来源生成。为保持简约和可扩展，每个 contract 只包含资源级 `schemas`、稳定 endpoint id、HTTP method、path、参数、请求/响应 schema 引用、错误码和权限要求。`data_sources` 只能保存 `schema_refs`，不得复制字段；`page_data_dependencies` 只能保存 endpoint 引用；页面详细设计只能通过 `response_bindings` 绑定已声明响应字段。`detail_confirmation` 若发现字段或接口缺口，应提出 ProjectPlan 调整并经过确认，不能自行补字段或发明独立接口。
+API 契约在此阶段作为前后端共享的唯一字段事实来源生成。为保持简约和可扩展，每个 contract 只包含资源级 `schemas`、稳定 endpoint id、HTTP method、path、参数、请求/响应 schema 引用、错误码和权限要求。`data_sources` 只能保存 `schema_refs`，不得复制字段；ProjectPlan 不生成页面与数据源/API 的绑定关系。页面详细设计只能通过 `api_dependencies` 和 `response_bindings` 引用已声明 endpoint 与响应字段。`detail_confirmation` 若发现字段或接口缺口，应提出 ProjectPlan 调整并经过确认，不能自行补字段或发明独立接口。
 
 `ProjectPlan` 至少包含：
 
@@ -166,14 +165,9 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - `project_acceptance_criteria`：整个需求在项目完成时必须满足的验收标准；
 - `architecture`：前端、后端、数据和测试策略；
 - `api_contracts`：唯一的业务字段 Schema、资源 endpoint 和输入输出 Schema 引用；
-- `frontend_pages`：页面路径、模块归属、数据依赖、状态和权限；
+- `frontend_pages`：页面路径、模块归属、状态和权限；
 - `data_sources`：数据源类型、实体、`schema_refs` 和 Seed 策略，不重复保存字段；
-- `page_data_dependencies`：页面、数据源、API 契约和具体 endpoint 之间的显式引用关系；
 - `permission_model`：角色、页面访问规则、操作权限和默认权限策略；
-- `task_inputs.frontend`：后续前端任务拆分输入；
-- `task_inputs.data_source`：后续数据源任务拆分输入；
-- `coordination_plan`：工作流对细节确认、构建分发、测试反馈和修复闭环的协调策略；
-- `planned_by`：执行规划的直接模型、运行方式和模型信息；
 - `risks`：后续细节确认阶段需要消化的风险和待细化点。
 
 ### `detail_confirmation`
@@ -192,20 +186,21 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 当前实现使用 `xcodeagent.detail_review.v1` 批量审阅 payload。首次进入该节点时，节点从 `ProjectPlan` 读取全部页面和数据源，生成完整 `page_detail_plans` 和 `data_source_detail_plans`，写入 `pending_project_plan`，然后一次性暂停。前端提交 `detail_review` 结构化结果并携带 `resumeState`，后端只合并白名单模板字段、执行契约一致性校验并确认当前计划，不再逐个选择对象或产生多轮中断。
 
-页面初版设计结合 `frontend_pages`、`api_contracts`、`page_data_dependencies` 和相关 `data_sources`，覆盖页面目标、基本布局、交互、状态、权限、依赖、响应字段绑定和验收标准。数据源初版设计覆盖实体引用、关系、校验、API 契约、依赖页面、Seed/Mock 策略和验收标准。页面的数据源、endpoint、Schema 和 `response_bindings`，以及数据源的实体、Schema 和 API 契约在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
+页面初版设计结合 `frontend_pages`、`api_contracts`、`data_sources`、`permission_model` 和业务流程，覆盖页面目标、页面布局设计、页面交互设计、API 依赖、响应字段绑定、页面跳转与依赖、权限与操作可见性、页面验收标准。`detail_confirmation` 对每个页面调用 `page_designer`，`page_designer` 从 ProjectPlan 中提取当前页面上下文，并直接基于 `ProjectPlan.api_contracts` 分析当前页面实际依赖的 API；`PageDetail.api_dependencies` 是页面详细设计确认后的实际 API 依赖。页面详细设计面向页面实现视角，页面数据访问必须直接引用具体 API/Endpoint，而不是把底层数据源作为主要确认对象。布局设计只描述信息组织、区域职责、主要内容呈现、操作入口位置和响应式/信息密度策略；loading、empty、error、success、confirm、validation 等反馈属于交互设计，不作为布局区域。数据源初版设计覆盖实体引用、关系、校验、API 契约、依赖页面、Seed/Mock 策略和验收标准。页面的 endpoint、Schema 和 `response_bindings`，以及数据源的实体、Schema 和 API 契约在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
 
 批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
-当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan/PageSpec 小型结构化状态，不把完整会话历史重新塞回上下文。
+当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan 和 detail review 小型结构化状态，不把完整会话历史重新塞回上下文。
 
 页面详细设计至少包含：
 
-- 页面目标；
-- 页面基本布局；
-- 页面交互；
-- 数据来源；
-- 页面权限；
-- 页面依赖；
+- 页面基本信息：页面 ID、名称、路由路径、页面目标；
+- 页面布局设计：整体布局、区域划分、主要内容呈现方式、操作入口位置、响应式与信息密度；
+- 页面交互设计：查询、新增、编辑、删除、刷新、批量操作、提交/取消、页面内跳转，以及 loading、empty、error、success、confirm、validation 等状态反馈；
+- API 依赖：页面直接使用的 API contract、endpoint、method、path、用途和请求/响应 Schema；
+- 响应字段绑定：接口响应字段到页面字段、表格列、详情项或表单初值的映射；
+- 页面跳转与依赖：内部页面跳转、目标页面/路径和触发条件；
+- 权限与操作可见性：页面访问角色、按钮/危险操作可见性和无权限行为；
 - 页面级验收标准。
 
 `prepare_build_tasks` 生成任务 DAG 前必须执行确定性的 API 契约一致性检查，并在 `integration_test.api_contract_check` 再次执行：数据源不得包含独立 `schema`；所有 schema/endpoint 引用必须存在；页面 `response_bindings.source_path` 必须来自所依赖 endpoint 的响应 Schema；写接口必须声明请求 Schema，非删除接口必须声明响应 Schema。任何错误都会阻止任务拆分或令质量门禁失败。
@@ -238,6 +233,8 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 校验循环依赖和缺失依赖。
 
 该节点不生成新需求，也不编写业务代码。`ProjectPlan` 和 `WorkspaceSnapshot` 是唯一输入上下文；模型负责将已确认的页面详细设计、相关数据源和当前工程结构转换成可执行任务 DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
+
+任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面验收和整体集成验证。内部 DAG 仍保留 API、数据、共享组件、权限、路由和测试等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
 
 该节点通过 `agents/main/task_preparer.py` 调用 direct ChatModel 生成任务编排建议，再由确定性 schema 归一化为静态 Build DAG。`build_task_plan.workspace_analysis` 优先使用模型返回的结构化摘要；缺省时由 `WorkspaceSnapshot` 兜底，并记录 `workspace_snapshot_ref` 以便恢复和审计。模型未返回可解析任务时，节点必须阻止进入 `build`，不能用硬编码任务清单代替模型规划结果。
 
@@ -482,7 +479,7 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 - 编写页面测试；
 - 执行前端 lint、typecheck 和单元测试。
 
-它不负责页面需求确认，也不负责自行修改 PageSpec。
+它不负责页面需求确认，也不负责自行修改 ProjectPlan 或 API 契约。
 
 ### Data Source Generation Agent
 

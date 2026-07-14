@@ -113,10 +113,16 @@ function PageReviewEditor({
     <div className={cx('workflow-detail-review-fields')}>
       <ReviewTextField disabled={disabled} label="页面目标" onChange={(value) => onChange('page_goal', value)} value={stringChange(changes.page_goal, target.page_goal)} />
       <ReviewListField disabled={disabled} label="基本布局" onChange={(value) => onChange('basic_layout', { ...layout, structure: value })} value={listChange(objectValue(changes.basic_layout).structure, layout.structure)} />
+      <ReadOnlyDetail label="页面布局设计" value={layoutDesignSummary(target.layout_design, target.basic_layout)} />
       <ReviewListField disabled={disabled} label="页面交互" onChange={(value) => onChange('interactions', value)} value={listChange(changes.interactions, target.interactions)} />
+      <ReadOnlyDetail label="主要操作交互" value={operationSummary(target.operation_interactions)} />
+      <ReadOnlyDetail label="状态反馈" value={stateFeedbackSummary(target.state_feedback)} />
+      <ReadOnlyDetail label="API 依赖" value={apiDependencySummary(target.api_dependencies)} />
+      <ReadOnlyDetail label="响应字段绑定" value={responseBindingSummary(target.response_bindings)} />
+      <ReadOnlyDetail label="页面跳转与依赖" value={navigationSummary(target.page_navigation)} />
       <ReviewListField disabled={disabled} label="页面权限" onChange={(value) => onChange('permissions', value)} value={listChange(changes.permissions, target.permissions)} />
+      <ReadOnlyDetail label="操作可见性" value={operationVisibilitySummary(target.operation_visibility)} />
       <ReviewListField disabled={disabled} label="验收标准" onChange={(value) => onChange('acceptance_criteria', value)} value={listChange(changes.acceptance_criteria, target.acceptance_criteria)} />
-      <ReadOnlyDetail label="API 与数据依赖" value={dependencySummary(target)} />
     </div>
   )
 }
@@ -203,9 +209,89 @@ function objectValue(value: unknown): Record<string, unknown> {
     : {}
 }
 
-function dependencySummary(target: WorkflowDetailReviewTarget): string {
-  const dependencies = objectValue(target.page_dependencies)
-  const apiContracts = Array.isArray(dependencies.api_contracts) ? dependencies.api_contracts.map(String) : []
-  const dataSources = Array.isArray(dependencies.data_sources) ? dependencies.data_sources.map(String) : []
-  return [`数据源：${dataSources.join('、') || '无'}`, `API：${apiContracts.join('、') || '无'}`].join('；')
+function recordItems(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : []
+}
+
+function stringItems(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : []
+}
+
+function layoutDesignSummary(value: unknown, fallbackLayout: unknown): string {
+  const layout = objectValue(value)
+  const fallback = objectValue(fallbackLayout)
+  const regions = recordItems(layout.regions)
+  const regionText = regions.length > 0
+    ? regions.map((item) => `${String(item.name || '页面区域')}：${String(item.responsibility || '待补充区域职责')}`).join('\n')
+    : stringItems(fallback.structure).map((item) => `${item}：待补充区域职责`).join('\n')
+  return [
+    `整体布局：${String(layout.overall_layout || '待补充')}`,
+    regionText ? `区域划分：\n${regionText}` : '区域划分：待补充',
+    `主要内容呈现：${String(layout.primary_content_presentation || '待补充')}`,
+    `操作入口位置：${String(layout.operation_entry_position || '待补充')}`,
+    `响应式与信息密度：${String(layout.responsive_strategy || fallback.responsive || '待补充')}`
+  ].join('\n')
+}
+
+function operationSummary(value: unknown): string {
+  const lines = recordItems(value).map((item) => {
+    const action = String(item.action || item.name || '页面操作')
+    const behavior = String(item.behavior || item.description || '待补充行为')
+    const endpoint = item.endpoint_id ? `；API ${String(item.endpoint_id)}` : ''
+    return `${action}：${behavior}${endpoint}`
+  })
+  return lines.join('\n') || '无'
+}
+
+function stateFeedbackSummary(value: unknown): string {
+  const lines = recordItems(value).map((item) => {
+    const state = String(item.state || item.name || '反馈状态')
+    const behavior = String(item.behavior || item.description || '待补充反馈')
+    const scope = String(item.scope || '相关业务区域')
+    return `${state}：${scope}；${behavior}`
+  })
+  return lines.join('\n') || '无'
+}
+
+function apiDependencySummary(value: unknown): string {
+  const lines = recordItems(value).map((item) => {
+    const endpoint = String(item.endpoint_id || 'endpoint')
+    const method = String(item.method || 'GET')
+    const path = String(item.path || '')
+    const usage = String(item.usage || 'read')
+    return `${endpoint}：${method} ${path}；${usage}`
+  })
+  return lines.join('\n') || '无'
+}
+
+function responseBindingSummary(value: unknown): string {
+  const lines = recordItems(value).map((item) => {
+    const endpoint = String(item.endpoint_id || 'endpoint')
+    const source = String(item.source_path || '')
+    const field = String(item.page_field || source || '页面字段')
+    return `${endpoint}：${source} -> ${field}`
+  })
+  return lines.join('\n') || '无'
+}
+
+function navigationSummary(value: unknown): string {
+  const lines = recordItems(value).map((item) => {
+    const trigger = String(item.trigger || item.action || '页面跳转')
+    const target = String(item.target_page_id || item.target_path || '待补充目标页面')
+    const behavior = String(item.behavior || item.description || '待补充行为')
+    return `${trigger}：${target}；${behavior}`
+  })
+  return lines.join('\n') || '无'
+}
+
+function operationVisibilitySummary(value: unknown): string {
+  const lines = recordItems(value).map((item) => {
+    const action = String(item.action || '页面操作')
+    const visibleTo = stringItems(item.visible_to).join('、') || '待补充'
+    const unauthorized = String(item.unauthorized_behavior || '隐藏操作入口或展示无权限提示')
+    return `${action}：${visibleTo}；${unauthorized}`
+  })
+  return lines.join('\n') || '无'
 }

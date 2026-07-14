@@ -78,6 +78,181 @@ def endpoint_dependencies_for_contracts(
     return dependencies
 
 
+def normalize_page_api_dependencies(
+    contracts: list[dict[str, Any]],
+    data_source_ids: list[str],
+    api_dependencies: Any,
+    *,
+    page_path: str = "",
+    page_name: str = "",
+) -> list[dict[str, Any]]:
+    """Normalize page-level API usage while preserving model-supplied intent."""
+
+    endpoint_index = {
+        str(endpoint.get("id")): (contract, endpoint)
+        for contract in contracts
+        for endpoint in dict_items(contract.get("endpoints"))
+        if endpoint.get("id")
+    }
+    normalized: list[dict[str, Any]] = []
+    for item in dict_items(api_dependencies):
+        endpoint_id = str(item.get("endpoint_id") or "")
+        if endpoint_id not in endpoint_index:
+            continue
+        contract, endpoint = endpoint_index[endpoint_id]
+        normalized.append(
+            _page_api_dependency_from_endpoint(
+                contract,
+                endpoint,
+                usage=str(item.get("usage") or _endpoint_usage(endpoint)),
+                trigger=str(item.get("trigger") or ""),
+                binds_to=_string_items(item.get("binds_to")),
+                required_for_initial_load=_required_for_initial_load(
+                    item,
+                    endpoint,
+                    str(item.get("usage") or _endpoint_usage(endpoint)),
+                ),
+            )
+        )
+    if normalized:
+        return _dedupe_page_api_dependencies(normalized)
+
+    return [
+        _page_api_dependency_from_endpoint(
+            contract,
+            endpoint,
+            usage=str(dependency.get("usage") or _endpoint_usage(endpoint)),
+            trigger=_default_endpoint_trigger(endpoint, str(dependency.get("usage") or "")),
+            binds_to=_default_endpoint_bindings(endpoint),
+            required_for_initial_load=bool(dependency.get("required")),
+        )
+        for dependency in endpoint_dependencies_for_contracts(
+            contracts,
+            data_source_ids,
+            page_path=page_path,
+            page_name=page_name,
+        )
+        for contract, endpoint in [endpoint_index.get(str(dependency.get("endpoint_id")), ({}, {}))]
+        if endpoint
+    ]
+
+
+def endpoint_dependencies_from_page_api_dependencies(
+    api_dependencies: Any,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "api_contract_id": item.get("api_contract_id"),
+            "endpoint_id": item.get("endpoint_id"),
+            "usage": item.get("usage") or "read",
+            "required": bool(item.get("required_for_initial_load")),
+        }
+        for item in dict_items(api_dependencies)
+        if item.get("api_contract_id") and item.get("endpoint_id")
+    ]
+
+
+def _page_api_dependency_from_endpoint(
+    contract: dict[str, Any],
+    endpoint: dict[str, Any],
+    *,
+    usage: str,
+    trigger: str,
+    binds_to: list[str],
+    required_for_initial_load: bool,
+) -> dict[str, Any]:
+    endpoint_id = str(endpoint.get("id") or "")
+    return {
+        "api_contract_id": str(contract.get("id") or ""),
+        "endpoint_id": endpoint_id,
+        "method": str(endpoint.get("method") or "GET").upper(),
+        "path": str(endpoint.get("path") or ""),
+        "summary": str(endpoint.get("summary") or endpoint_id),
+        "usage": usage,
+        "trigger": trigger or _default_endpoint_trigger(endpoint, usage),
+        "required_for_initial_load": required_for_initial_load,
+        "request_schema_ref": endpoint.get("request_schema_ref") or "",
+        "response_schema_ref": endpoint.get("response_schema_ref") or "",
+        "binds_to": binds_to or _default_endpoint_bindings(endpoint),
+    }
+
+
+def _endpoint_usage(endpoint: dict[str, Any]) -> str:
+    method = str(endpoint.get("method") or "GET").upper()
+    endpoint_id = str(endpoint.get("id") or "")
+    if method == "POST":
+        return "create"
+    if method in {"PUT", "PATCH"}:
+        return "update"
+    if method == "DELETE":
+        return "delete"
+    if endpoint_id.endswith(".detail"):
+        return "load_detail"
+    return "read"
+
+
+def _required_for_initial_load(
+    dependency: dict[str, Any],
+    endpoint: dict[str, Any],
+    usage: str,
+) -> bool:
+    if "required_for_initial_load" in dependency:
+        return bool(dependency.get("required_for_initial_load"))
+    if "required" in dependency:
+        return bool(dependency.get("required"))
+    method = str(endpoint.get("method") or "GET").upper()
+    return method == "GET" and usage in {"page_load", "load_detail", "read"}
+
+
+def _default_endpoint_trigger(endpoint: dict[str, Any], usage: str) -> str:
+    method = str(endpoint.get("method") or "GET").upper()
+    if usage == "page_load":
+        return "进入页面或提交筛选条件"
+    if usage == "load_detail":
+        return "点击查看详情或进入详情页"
+    if method == "POST":
+        return "提交新增表单"
+    if method in {"PUT", "PATCH"}:
+        return "提交编辑表单"
+    if method == "DELETE":
+        return "确认删除操作"
+    return "页面交互触发"
+
+
+def _default_endpoint_bindings(endpoint: dict[str, Any]) -> list[str]:
+    method = str(endpoint.get("method") or "GET").upper()
+    endpoint_id = str(endpoint.get("id") or "")
+    if method == "GET" and endpoint_id.endswith(".list"):
+        return ["主内容列表", "分页信息"]
+    if method == "GET":
+        return ["详情内容", "表单初值"]
+    if method == "POST":
+        return ["新增交互"]
+    if method in {"PUT", "PATCH"}:
+        return ["编辑交互"]
+    if method == "DELETE":
+        return ["删除交互"]
+    return ["页面交互"]
+
+
+def _string_items(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _dedupe_page_api_dependencies(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        endpoint_id = str(item.get("endpoint_id") or "")
+        if not endpoint_id or endpoint_id in seen:
+            continue
+        seen.add(endpoint_id)
+        result.append(item)
+    return result
+
+
 def contract_endpoints_for_dependencies(
     contract: dict[str, Any],
     endpoint_ids: set[str],
@@ -155,22 +330,35 @@ def normalize_response_bindings(
         if isinstance(item, dict) and item.get("endpoint_id")
     }
     provided_bindings = dict_items(bindings)
-    if provided_bindings:
-        return [
-            {
-                "endpoint_id": str(binding.get("endpoint_id") or ""),
-                "source_path": normalize_response_path(binding.get("source_path")),
-                "page_field": str(
-                    binding.get("page_field")
-                    or normalize_response_path(binding.get("source_path")).rsplit(
-                        ".",
-                        1,
-                    )[-1]
-                ),
-            }
-            for binding in provided_bindings
-        ]
     normalized: list[dict[str, str]] = []
+    if provided_bindings:
+        seen: set[tuple[str, str, str]] = set()
+        for binding in provided_bindings:
+            endpoint_id = str(binding.get("endpoint_id") or "")
+            source_path = normalize_response_path(binding.get("source_path"))
+            if (
+                endpoint_id not in allowed_by_endpoint
+                or source_path not in allowed_by_endpoint[endpoint_id]
+            ):
+                continue
+            page_field = str(
+                binding.get("page_field")
+                or source_path.rsplit(".", 1)[-1].replace("[]", "")
+            )
+            key = (endpoint_id, source_path, page_field)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(
+                {
+                    "endpoint_id": endpoint_id,
+                    "source_path": source_path,
+                    "page_field": page_field,
+                }
+            )
+        if normalized:
+            return normalized
+
     for endpoint_id, source_paths in allowed_by_endpoint.items():
         for source_path in sorted(source_paths):
             normalized.append(

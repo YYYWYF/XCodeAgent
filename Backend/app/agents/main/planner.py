@@ -38,14 +38,10 @@ def _planning_prompt(
         "JSON-Schema-like schemas and endpoints. Endpoints contain stable id, method, path, summary, "
         "parameters [{name, in, required, schema}], request_schema_ref, response_schema_ref, "
         "error_codes, and authentication. Schema refs must resolve inside the same contract\n"
-        "- frontend_pages: page list with path, module_id, data_dependencies, states, permissions\n"
+        "- frontend_pages: page list with path, module_id, states, permissions\n"
         "- data_sources: data source list with entities, schema_refs, and seed strategy; never duplicate fields\n"
-        "- page_data_dependencies: explicit dependencies between pages, data sources, API contracts, "
-        "and endpoint_dependencies [{api_contract_id, endpoint_id, usage, required}]\n"
         "- permission_model: roles, page access, operation permissions\n"
         "- task_inputs: frontend and data_source task inputs for later task planning\n"
-        "- coordination_plan: stages with owner, strategy, and outputs for detail confirmation, "
-        "build dispatch, and testing feedback\n"
         "- risks: planning risks and items to refine later\n\n"
         "API contracts are the canonical backend/frontend boundary. Data sources and pages may only "
         "reference contract schemas/endpoints and must not define additional fields. Define reusable "
@@ -96,12 +92,6 @@ def plan_project_with_chat_model(
         agent_plan=extract_json_object(agent_note),
         authoritative_agent_plan=True,
     )
-    plan["planned_by"] = {
-        "agent": "chat-model",
-        "mode": "direct",
-        "model": settings.model_name,
-        "source": planning_source,
-    }
     return plan
 
 

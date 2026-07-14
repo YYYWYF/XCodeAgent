@@ -34,7 +34,7 @@ def create_frontend_agent(
             "layouts, components, interactions, permissions, API integration, loading, "
             "empty, and error states. Add page tests and run frontend lint, typecheck, "
             "and unit tests when available. Do not confirm requirements, do not modify "
-            "PageSpec, and do not silently change API contracts. Return a concise "
+            "PageDetail, and do not silently change API contracts. Return a concise "
             "structured implementation report with changed files, commands, status, "
             "and any change request. "
             f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting a file, "

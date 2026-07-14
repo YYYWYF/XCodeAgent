@@ -53,11 +53,16 @@ export type WorkflowDetailReviewTarget = {
   path?: string
   page_goal?: string
   basic_layout?: Record<string, unknown>
+  layout_design?: Record<string, unknown>
   interactions?: string[]
+  state_feedback?: Array<Record<string, unknown>>
+  operation_interactions?: Array<Record<string, unknown>>
+  operation_visibility?: Array<Record<string, unknown>>
+  page_navigation?: Array<Record<string, unknown>>
   permissions?: string[]
   states?: string[]
+  api_dependencies?: Array<Record<string, unknown>>
   data_sources?: Array<Record<string, unknown>>
-  page_dependencies?: Record<string, unknown>
   response_bindings?: Array<Record<string, unknown>>
   acceptance_criteria?: string[]
   source_type?: string

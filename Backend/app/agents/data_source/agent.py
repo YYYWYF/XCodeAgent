@@ -28,7 +28,7 @@ def create_data_source_agent(
             "and backend tests while obeying the confirmed API contract. If the "
             "contract cannot be implemented, return a change request; never silently "
             "change the contract. Do not confirm requirements and do not modify "
-            "RequirementSpec, PageSpec, ProjectPlan, or the task DAG directly. Return "
+            "RequirementSpec, PageDetail, ProjectPlan, or the task DAG directly. Return "
             "a concise structured implementation report with changed files, commands, "
             "status, and any change request. "
             f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting "

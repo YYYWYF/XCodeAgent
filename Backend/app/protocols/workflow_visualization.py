@@ -1155,14 +1155,12 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                     "clarification": clarification,
                     "requiresUserInput": True,
                     "detailSelection": update.get("detail_selection"),
-                    "pageSpecDraft": update.get("page_spec_draft"),
                 },
             }
         return {
             "message": _detail_confirmation_completed_message(update),
             "data": {
                 "detailSelection": update.get("detail_selection"),
-                "pageSpecConfirmation": update.get("page_spec_confirmation"),
                 "detailPlans": update.get("detail_plans", []),
             },
         }
@@ -1423,7 +1421,6 @@ def _workflow_visual_payload(
         "detail_selection": result.get("detail_selection"),
         "selected_page_id": result.get("selected_page_id"),
         "selected_data_source_id": result.get("selected_data_source_id"),
-        "page_spec_draft": result.get("page_spec_draft"),
     }
     payload = {
         "runId": run_id,

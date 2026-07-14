@@ -23,11 +23,8 @@ class ProjectState(TypedDict, total=False):
     project_plan_json_path: str
     detail_selection: dict[str, Any]
     page_selection: dict[str, Any]
-    page_spec_confirmation: dict[str, Any]
     selected_page_id: str
     selected_data_source_id: str
-    page_spec_draft: dict[str, Any]
-    confirmed_page_spec: dict[str, Any]
     data_source_spec_draft: dict[str, Any]
     detail_plans: list[dict[str, Any]]
     detail_review_submission: dict[str, Any]

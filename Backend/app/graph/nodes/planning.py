@@ -17,8 +17,8 @@ from app.services.project_plan import apply_project_plan_feedback
 from app.services.page_detail_plan import (
     attach_data_source_detail_plan,
     attach_page_detail_plan,
-    create_page_spec_from_project_plan,
     detail_design_targets,
+    extract_page_detail_context,
 )
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
@@ -217,8 +217,8 @@ def _generate_all_detail_plans(project_plan: dict) -> dict:
         page_id = page.get("id") if isinstance(page, dict) else None
         if not page_id:
             continue
-        page_spec = create_page_spec_from_project_plan(updated_plan, page_id)
-        detail = design_page_with_chat_model(updated_plan, page_spec)
+        page_context = extract_page_detail_context(updated_plan, page_id)
+        detail = design_page_with_chat_model(updated_plan, page_context)
         detail["status"] = "pending_user_confirmation"
         detail["approved"] = False
         updated_plan = attach_page_detail_plan(updated_plan, detail)

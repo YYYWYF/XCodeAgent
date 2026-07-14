@@ -20,13 +20,24 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
 
 
 def _label_items(value: Any) -> list[str]:
-    return [
-        str(item.get("name") or item.get("id") or item)
-        if isinstance(item, dict)
-        else str(item)
-        for item in value
-        if str(item).strip()
-    ] if isinstance(value, list) else []
+    return (
+        [
+            (
+                str(item.get("name") or item.get("id") or item)
+                if isinstance(item, dict)
+                else str(item)
+            )
+            for item in value
+            if str(item).strip()
+        ]
+        if isinstance(value, list)
+        else []
+    )
+
+
+def _joined_labels(value: Any, *, empty: str = "无") -> str:
+    items = _label_items(value)
+    return "、".join(items) if items else empty
 
 
 def _text_item(value: Any) -> str:
@@ -44,83 +55,284 @@ def _text_items(value: Any) -> list[str]:
     return [text for item in value if (text := _text_item(item))]
 
 
+def _joined_items(value: Any, *, empty: str = "无") -> str:
+    items = _text_items(value)
+    return "、".join(items) if items else empty
+
+
+def _status_label(value: Any) -> str:
+    labels = {
+        "draft": "草稿",
+        "pending_user_confirmation": "待确认",
+        "confirmed": "已确认",
+    }
+    return labels.get(str(value), str(value or "草稿"))
+
+
+def _code_items(value: Any, *, empty: str = "无") -> str:
+    items = _text_items(value)
+    return "、".join(f"`{item}`" for item in items) if items else empty
+
+
+def _parameter_items(value: Any) -> str:
+    parameters = []
+    for item in _dict_items(value):
+        name = item.get("name")
+        if not name:
+            continue
+        location = item.get("in", "query")
+        required = "必填" if item.get("required") else "可选"
+        schema = item.get("schema")
+        schema_type = _schema_type(schema) if isinstance(schema, dict) else "unknown"
+        parameters.append(f"`{name}` {location}/{schema_type}/{required}")
+    return "、".join(parameters) if parameters else "无"
+
+
+def _layout_design_markdown(value: Any, fallback_layout: dict[str, Any]) -> str:
+    layout = value if isinstance(value, dict) else {}
+    regions = _dict_items(layout.get("regions"))
+    region_lines = [
+        f"- {region.get('name', '页面区域')}：{region.get('responsibility', '待补充区域职责')}"
+        for region in regions
+    ]
+    if not region_lines:
+        region_lines = [
+            f"- {region}：待补充区域职责"
+            for region in _text_items(fallback_layout.get("structure"))
+        ]
+    return "\n".join(
+        [
+            f"- 整体布局：{layout.get('overall_layout', '待补充整体布局')}",
+            "",
+            "区域划分：",
+            *(region_lines or ["- 待补充区域划分"]),
+            "",
+            f"- 主要内容呈现方式：{layout.get('primary_content_presentation', '待补充主要内容呈现方式')}",
+            f"- 操作入口位置：{layout.get('operation_entry_position', '待补充操作入口位置')}",
+            f"- 响应式与信息密度：{layout.get('responsive_strategy') or fallback_layout.get('responsive') or '待补充响应式策略'}",
+        ]
+    )
+
+
+def _api_dependencies_markdown(value: Any) -> str:
+    items = []
+    for item in _dict_items(value):
+        endpoint_id = item.get("endpoint_id") or "endpoint"
+        method = item.get("method") or "GET"
+        path = item.get("path") or ""
+        usage = item.get("usage") or "read"
+        summary = item.get("summary") or "待补充 API 用途"
+        initial = "，首屏加载依赖" if item.get("required_for_initial_load") else ""
+        request_schema = item.get("request_schema_ref") or "无"
+        response_schema = item.get("response_schema_ref") or "无"
+        trigger = item.get("trigger") or "页面交互触发"
+        binds_to = _joined_items(item.get("binds_to", []))
+        items.append(
+            f"- `{endpoint_id}` · `{method} {path}`：{summary}；用途 {usage}{initial}；"
+            f"触发 {trigger}；绑定 {binds_to}；"
+            f"请求 Schema {request_schema}，响应 Schema {response_schema}"
+        )
+    return "\n".join(items) if items else "- 暂无页面 API 依赖"
+
+
+def _operation_interactions_markdown(value: Any) -> str:
+    items = []
+    for item in _dict_items(value):
+        action = item.get("action") or item.get("name") or "页面操作"
+        trigger = item.get("trigger") or "用户操作"
+        behavior = item.get("behavior") or item.get("description") or "待补充"
+        endpoint = f"，API `{item['endpoint_id']}`" if item.get("endpoint_id") else ""
+        items.append(f"- {action}：触发 {trigger}；行为 {behavior}{endpoint}")
+    return "\n".join(items) if items else "- 待补充主要交互"
+
+
+def _state_feedback_markdown(value: Any) -> str:
+    items = []
+    for item in _dict_items(value):
+        state = item.get("state") or item.get("name") or "反馈状态"
+        trigger = item.get("trigger") or "页面交互"
+        behavior = item.get("behavior") or item.get("description") or "待补充"
+        scope = item.get("scope") or "相关业务区域"
+        items.append(f"- {state}：触发 {trigger}；作用于 {scope}；反馈 {behavior}")
+    return "\n".join(items) if items else "- 待补充状态反馈"
+
+
+def _response_bindings_markdown(value: Any) -> str:
+    items = []
+    for item in _dict_items(value):
+        endpoint_id = item.get("endpoint_id") or "endpoint"
+        source_path = item.get("source_path") or ""
+        page_field = item.get("page_field") or source_path or "页面字段"
+        items.append(f"- `{endpoint_id}`：`{source_path}` -> {page_field}")
+    return "\n".join(items) if items else "- 暂无响应字段绑定"
+
+
+def _page_navigation_markdown(value: Any) -> str:
+    items = []
+    for item in _dict_items(value):
+        trigger = item.get("trigger") or item.get("action") or "页面跳转"
+        target = item.get("target_page_id") or item.get("target_path") or "待补充目标页面"
+        behavior = item.get("behavior") or item.get("description") or "待补充"
+        items.append(f"- {trigger}：跳转到 {target}；行为 {behavior}")
+    return "\n".join(items) if items else "- 暂无页面跳转依赖"
+
+
+def _operation_visibility_markdown(value: Any) -> str:
+    items = []
+    for item in _dict_items(value):
+        action = item.get("action") or "页面操作"
+        visible_to = _joined_items(item.get("visible_to", []), empty="待补充")
+        unauthorized = item.get("unauthorized_behavior") or "隐藏操作入口或展示无权限提示。"
+        items.append(f"- {action}：可见角色 {visible_to}；无权限时 {unauthorized}")
+    return "\n".join(items) if items else "- 待补充操作可见性"
+
+
+def _page_detail_markdown(detail: dict[str, Any]) -> str:
+    layout = detail.get("basic_layout", {}) if isinstance(detail.get("basic_layout"), dict) else {}
+    return "\n".join(
+        [
+            f"### {detail.get('page_name', detail.get('page_id', '未命名页面'))} `{detail.get('path', '')}`",
+            "",
+            "#### 页面基本信息",
+            "",
+            f"- 页面 ID：`{detail.get('page_id', 'unknown')}`",
+            f"- 页面目标：{detail.get('page_goal', '待补充')}",
+            f"- 确认状态：{_status_label(detail.get('status', 'draft'))}",
+            "",
+            "#### 页面布局设计",
+            "",
+            _layout_design_markdown(detail.get("layout_design", {}), layout),
+            "",
+            "#### 页面交互设计",
+            "",
+            _operation_interactions_markdown(detail.get("operation_interactions", [])),
+            "",
+            "状态反馈：",
+            _state_feedback_markdown(detail.get("state_feedback", [])),
+            "",
+            "#### API 依赖",
+            "",
+            _api_dependencies_markdown(detail.get("api_dependencies", [])),
+            "",
+            "#### 响应字段绑定",
+            "",
+            _response_bindings_markdown(detail.get("response_bindings", [])),
+            "",
+            "#### 页面跳转与依赖",
+            "",
+            _page_navigation_markdown(detail.get("page_navigation", [])),
+            "",
+            "#### 权限与操作可见性",
+            "",
+            f"- 页面权限：{_joined_items(detail.get('permissions', []), empty='待补充')}",
+            _operation_visibility_markdown(detail.get("operation_visibility", [])),
+            "",
+            "#### 页面验收标准",
+            "",
+            _bullet_items(detail.get("acceptance_criteria", [])) or "- 待补充页面验收标准",
+        ]
+    )
+
+
+def _schema_type(schema: Any) -> str:
+    if not isinstance(schema, dict):
+        return "unknown"
+    schema_type = schema.get("type")
+    if schema_type:
+        return str(schema_type)
+    if schema.get("$ref"):
+        return f"ref:{schema['$ref']}"
+    return "object" if schema.get("properties") else "unknown"
+
+
+def _schema_summary(name: str, schema: Any) -> str:
+    if not isinstance(schema, dict):
+        return f"- `{name}`：{_text_item(schema)}"
+    properties = schema.get("properties")
+    required = set(schema.get("required", [])) if isinstance(schema.get("required"), list) else set()
+    if isinstance(properties, dict) and properties:
+        fields = "；".join(
+            f"`{field}` {_schema_type(field_schema)}"
+            f"{' 必填' if field in required else ''}"
+            for field, field_schema in properties.items()
+        )
+        return f"- `{name}`：{fields}"
+    return f"- `{name}`：{_schema_type(schema)}"
+
+
+def _api_contract_markdown(contract: dict[str, Any]) -> str:
+    schemas = contract.get("schemas", {})
+    schema_lines = (
+        "\n".join(
+            _schema_summary(str(name), schema)
+            for name, schema in schemas.items()
+        )
+        if isinstance(schemas, dict)
+        else "- 暂无 Schema 字段"
+    )
+    endpoint_lines = "\n".join(
+        "\n".join(
+            [
+                f"- `{endpoint.get('id', 'endpoint')}` · `{endpoint.get('method', 'GET')} {endpoint.get('path', '')}`：{endpoint.get('summary', '待补充接口说明')}",
+                f"  - 参数：{_parameter_items(endpoint.get('parameters', []))}",
+                f"  - 请求 Schema：{endpoint.get('request_schema_ref') or '无'}",
+                f"  - 响应 Schema：{endpoint.get('response_schema_ref') or '无'}",
+                f"  - 错误码：{_code_items(endpoint.get('error_codes', []))}",
+            ]
+        )
+        for endpoint in _dict_items(contract.get("endpoints", []))
+    )
+    return "\n".join(
+        [
+            f"### `{contract.get('base_path', '/api/resource')}` {contract.get('resource', contract.get('id', 'Resource'))}",
+            "",
+            "#### 字段 Schema",
+            "",
+            schema_lines,
+            "",
+            "#### Endpoint",
+            "",
+            endpoint_lines or "- 暂无 Endpoint",
+        ]
+    )
+
+
 def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     overview = plan.get("requirements_overview", {})
     acceptance_criteria = plan.get("project_acceptance_criteria") or plan.get(
         "acceptance_criteria",
         [],
     )
-    api_contracts = "\n".join(
-        "\n".join(
-            [
-                f"### `{contract.get('base_path', '/api/resource')}` {contract.get('resource', contract.get('id', 'Resource'))}",
-                f"- Schema：{list(contract.get('schemas', {}))}",
-                *[
-                    "\n".join(
-                        [
-                            f"- `{endpoint.get('id', 'endpoint')}` · `{endpoint.get('method', 'GET')} {endpoint.get('path', '')}`：{endpoint.get('summary', '待补充接口说明')}",
-                            f"  - 参数：{endpoint.get('parameters', []) or '无'}",
-                            f"  - 请求 Schema：{endpoint.get('request_schema_ref') or '无'}",
-                            f"  - 响应 Schema：{endpoint.get('response_schema_ref') or '无'}",
-                            f"  - 错误码：{endpoint.get('error_codes', []) or '无'}",
-                        ]
-                    )
-                    for endpoint in _dict_items(contract.get("endpoints", []))
-                ],
-            ]
-        )
+    api_contracts = "\n\n".join(
+        _api_contract_markdown(contract)
         for contract in _dict_items(plan.get("api_contracts", []))
     )
     pages = "\n".join(
         f"- `{page.get('path', '/')}` {page.get('name', page.get('id', '未命名页面'))}："
-        f"数据依赖 {page.get('data_dependencies') or ['无']}，权限 {page.get('permissions', [])}"
+        f"模块 `{page.get('module_id', 'core')}`，"
+        f"权限 {_joined_items(page.get('permissions', []))}"
         for page in _dict_items(plan.get("frontend_pages", []))
     )
     data_sources = "\n".join(
         f"- `{source.get('id', 'unknown')}` {source.get('name', '未命名数据源')}："
-        f"实体 {source.get('entities', [])}，Schema 引用 {source.get('schema_refs', []) or ['无']}，类型 {source.get('type', 'mock')}"
+        f"实体 {_joined_items(source.get('entities', []))}，"
+        f"Schema 引用 {_code_items(source.get('schema_refs', []))}，"
+        f"类型 {source.get('type', 'mock')}"
         for source in _dict_items(plan.get("data_sources", []))
-    )
-    page_data_dependencies = "\n".join(
-        f"- `{item.get('page_id', 'unknown')}`：数据源 {item.get('data_source_ids', []) or ['无']}，API {item.get('api_contract_ids', []) or ['无']}，Endpoint {[(dependency.get('endpoint_id'), dependency.get('usage')) for dependency in _dict_items(item.get('endpoint_dependencies', []))] or ['无']}"
-        for item in _dict_items(plan.get("page_data_dependencies", []))
     )
     permissions = plan.get("permission_model", {})
     page_access = "\n".join(
-        f"- `{item.get('path', item.get('page_id', 'unknown'))}`：{item.get('allowed_roles', [])}"
+        f"- `{item.get('path', item.get('page_id', 'unknown'))}`："
+        f"{_joined_items(item.get('allowed_roles', []))}"
         for item in _dict_items(permissions.get("page_access", []))
     )
     operation_permissions = "\n".join(
-        f"- `{item.get('role_id', 'unknown')}`：{item.get('operations', [])}"
+        f"- `{item.get('role_id', 'unknown')}`："
+        f"{_joined_items(item.get('operations', []))}"
         for item in _dict_items(permissions.get("operation_permissions", []))
     )
-    frontend_tasks = "\n".join(
-        f"- `{task.get('task_id', 'task')}`：{task.get('description', '待补充任务说明')} "
-        f"依赖 {task.get('depends_on') or ['无']}"
-        for task in _dict_items(plan.get("task_inputs", {}).get("frontend", []))
-    )
-    data_source_tasks = "\n".join(
-        f"- `{task.get('task_id', 'task')}`：{task.get('description', '待补充任务说明')}"
-        for task in _dict_items(plan.get("task_inputs", {}).get("data_source", []))
-    )
-    coordination = "\n".join(
-        f"- {stage}：{item.get('strategy', '待补充协调策略')} "
-        f"输出 {item.get('outputs', [])}"
-        for stage, item in plan.get("coordination_plan", {}).items()
-        if isinstance(item, dict)
-    )
     page_details = "\n\n".join(
-        "\n".join(
-            [
-                f"### {detail.get('page_name', detail.get('page_id', '未命名页面'))} `{detail.get('path', '')}`",
-                f"- 页面目标：{detail.get('page_goal', '待补充')}",
-                f"- 基本布局：{'、'.join(_text_items(detail.get('basic_layout', {}).get('structure', []))) or '待补充'}",
-                f"- 页面交互：{'；'.join(_text_items(detail.get('interactions', []))) or '待补充'}",
-                f"- 数据来源：{[source.get('id') for source in _dict_items(detail.get('data_sources', []))] or ['无']}",
-                f"- 页面权限：{detail.get('permissions', [])}",
-                f"- 状态：{detail.get('status', 'draft')}",
-            ]
-        )
+        _page_detail_markdown(detail)
         for detail in _dict_items(plan.get("page_detail_plans", []))
     )
     data_source_details = "\n\n".join(
@@ -146,19 +358,19 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 - 应用：{app.get('name', '未命名应用')}
 - 摘要：{app.get('summary', '待补充项目摘要')}
 - 目标：{overview.get('target', '生成一个可在本地运行的前后端应用工程。')}
-- 状态：{plan.get('status', 'draft')}
+- 状态：{_status_label(plan.get('confirmation_status') or plan.get('status', 'draft'))}
 - 版本：{plan.get('version', '0.1.0')}
 
 ## 需求概述
 
 - 需求摘要：{overview.get('summary', app.get('summary', '待补充需求摘要'))}
-- 用户角色：{_label_items(overview.get('roles', []))}
-- 功能模块：{_label_items(overview.get('modules', []))}
-- 业务流程：{_label_items(overview.get('business_flows', []))}
+- 用户角色：{_joined_labels(overview.get('roles', []))}
+- 功能模块：{_joined_labels(overview.get('modules', []))}
+- 业务流程：{_joined_labels(overview.get('business_flows', []))}
 
 ## 整体需求验收标准
 
-{_bullet_items(acceptance_criteria)}
+{_bullet_items(acceptance_criteria) or "- 待补充整体验收标准"}
 
 ## 技术架构
 
@@ -169,19 +381,15 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 ## API 契约
 
-{api_contracts}
+{api_contracts or "- 暂无 API 契约"}
 
 ## 前端页面清单
 
-{pages}
+{pages or "- 暂无前端页面"}
 
 ## 数据源清单
 
-{data_sources}
-
-## 页面与数据源依赖
-
-{page_data_dependencies or "- 暂无页面数据源依赖"}
+{data_sources or "- 暂无数据源"}
 
 ## 权限体系
 
@@ -195,23 +403,6 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 {operation_permissions or "- 暂无操作权限规则"}
 
-## 后续任务拆分输入
-
-### 前端任务
-
-{frontend_tasks}
-
-### 数据源任务
-
-{data_source_tasks}
-
-## Main Agent 协调计划
-
-- 规划来源：{plan.get('planning_source', 'main_agent_live')}
-- 规划 Agent：{plan.get('planned_by', {}).get('agent', 'main-agent')}
-
-{coordination}
-
 ## 页面详细设计
 
 {page_details or "- 尚未确认页面详细设计"}
@@ -222,7 +413,7 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 ## 风险与待细化点
 
-{_bullet_items(plan.get('risks', []))}
+{_bullet_items(plan.get('risks', [])) or "- 暂无风险与待细化点"}
 """
 
 

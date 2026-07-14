@@ -4,12 +4,21 @@ from copy import deepcopy
 from typing import Any
 
 from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.api_contracts import (
+    endpoint_dependencies_from_page_api_dependencies,
+    normalize_page_api_dependencies,
+    normalize_response_bindings,
+)
 
 
 PAGE_EDITABLE_FIELDS = {
     "page_goal",
     "basic_layout",
+    "layout_design",
     "interactions",
+    "state_feedback",
+    "operation_interactions",
+    "page_navigation",
     "permissions",
     "acceptance_criteria",
 }
@@ -22,6 +31,8 @@ DATA_SOURCE_EDITABLE_FIELDS = {
 
 
 def detail_review_payload(project_plan: dict[str, Any]) -> dict[str, Any]:
+    project_plan = deepcopy(project_plan)
+    _repair_page_contract_fields(project_plan)
     pages = [
         {
             "target_type": "page",
@@ -30,11 +41,16 @@ def detail_review_payload(project_plan: dict[str, Any]) -> dict[str, Any]:
             "path": detail.get("path"),
             "page_goal": detail.get("page_goal"),
             "basic_layout": detail.get("basic_layout", {}),
+            "layout_design": detail.get("layout_design", {}),
             "interactions": detail.get("interactions", []),
+            "state_feedback": detail.get("state_feedback", []),
+            "operation_interactions": detail.get("operation_interactions", []),
+            "operation_visibility": detail.get("operation_visibility", []),
+            "page_navigation": detail.get("page_navigation", []),
             "permissions": detail.get("permissions", []),
             "states": detail.get("basic_layout", {}).get("states", []),
+            "api_dependencies": detail.get("api_dependencies", []),
             "data_sources": detail.get("data_sources", []),
-            "page_dependencies": detail.get("page_dependencies", {}),
             "response_bindings": detail.get("response_bindings", []),
             "acceptance_criteria": detail.get("acceptance_criteria", []),
         }
@@ -126,6 +142,7 @@ def apply_detail_review_submission(
     for source in updated.get("data_sources", []):
         if isinstance(source, dict):
             source["detail_status"] = "confirmed"
+    _repair_page_contract_fields(updated)
     updated["confirmation_status"] = "confirmed"
     updated["detail_review"] = {
         "status": "confirmed",
@@ -137,6 +154,38 @@ def apply_detail_review_submission(
     if errors:
         raise ValueError("Detail review violates API contracts: " + "; ".join(errors))
     return updated
+
+
+def _repair_page_contract_fields(project_plan: dict[str, Any]) -> None:
+    contracts = project_plan.get("api_contracts", [])
+    data_source_ids = [
+        str(source.get("id"))
+        for source in project_plan.get("data_sources", [])
+        if isinstance(source, dict) and source.get("id")
+    ]
+    for detail in project_plan.get("page_detail_plans", []):
+        if not isinstance(detail, dict) or not detail.get("page_id"):
+            continue
+        api_dependencies = normalize_page_api_dependencies(
+            contracts if isinstance(contracts, list) else [],
+            data_source_ids if isinstance(data_source_ids, list) else [],
+            detail.get("api_dependencies") or [],
+            page_path=str(detail.get("path") or ""),
+            page_name=str(
+                detail.get("page_name")
+                or detail.get("page_id")
+                or "",
+            ),
+        )
+        endpoint_dependencies = endpoint_dependencies_from_page_api_dependencies(
+            api_dependencies
+        )
+        detail["api_dependencies"] = api_dependencies
+        detail["response_bindings"] = normalize_response_bindings(
+            contracts if isinstance(contracts, list) else [],
+            endpoint_dependencies if isinstance(endpoint_dependencies, list) else [],
+            detail.get("response_bindings"),
+        )
 
 
 def _apply_target_patch(
@@ -173,6 +222,19 @@ def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
             **layout,
             "structure": _string_list(layout.get("structure")),
         }
+    if key == "layout_design":
+        layout = value if isinstance(value, dict) else {}
+        return {
+            **(current if isinstance(current, dict) else {}),
+            **layout,
+            "regions": _dict_list(layout.get("regions")),
+        }
+    if key in {
+        "state_feedback",
+        "operation_interactions",
+        "page_navigation",
+    }:
+        return _dict_list(value)
     if key in {
         "interactions",
         "permissions",
@@ -191,3 +253,9 @@ def _string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return []
+
+
+def _dict_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]

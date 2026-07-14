@@ -24,7 +24,7 @@ def _data_source_generation_prompt(
         "data_sources.schema_refs select those schemas and must not be expanded with new fields. "
         "If the contract cannot be implemented, return a "
         "change_request instead of silently changing it.\n"
-        "Do not modify RequirementSpec, PageSpec, ProjectPlan, API contracts, or "
+        "Do not modify RequirementSpec, PageDetail, ProjectPlan, API contracts, or "
         "the task DAG directly.\n"
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n"
         "Treat every allowed_paths entry as relative to virtual root '/'. For example, "

@@ -16,38 +16,53 @@ from app.utils.model_output import extract_json_object
 
 def _page_design_prompt(
     project_plan: dict[str, Any],
-    confirmed_page_spec: dict[str, Any],
+    page_context: dict[str, Any],
 ) -> str:
     return (
         "You are the page-design model for an app-generation workflow.\n"
         "This is a design-only boundary. Do not call tools, do not call subagents, "
         "do not delegate tasks, and do not generate or modify code.\n"
-        "Create a detailed page design from the user-confirmed PageSpec.\n"
+        "Create a detailed page design for the current page extracted from ProjectPlan.\n"
         "Return only one complete JSON object without markdown fences or commentary. It must include "
-        "page_goal, basic_layout, interactions, response_bindings, permissions, page_dependencies, and "
-        "acceptance_criteria. Every response_binding must contain endpoint_id, source_path, and page_field; "
-        "endpoint_id must come from PageSpec.page_dependencies.endpoint_dependencies and source_path must "
-        "exist in that endpoint's response schema. Do not add fields, schemas, endpoints, or data sources. "
-        "Treat PageSpec.user_confirmation_note as the latest user feedback and "
-        "let it override conflicting defaults.\n"
-        "The ProjectPlan is only context for API contracts, data sources, and dependencies.\n"
-        "The PageSpec is the source of truth for page goal, layout, interactions, data sources, and permissions.\n\n"
-        "Pay special attention to ProjectPlan.api_contracts and ProjectPlan.page_data_dependencies; "
-        "the page design must not invent incompatible APIs or undeclared page/data dependencies.\n\n"
-        f"Confirmed PageSpec:\n{json.dumps(confirmed_page_spec, ensure_ascii=False)}\n\n"
+        "page_goal, basic_layout, layout_design, state_feedback, operation_interactions, page_navigation, "
+        "api_dependencies, "
+        "response_bindings, permissions, and acceptance_criteria. "
+        "layout_design must describe overall layout, business regions, primary content presentation, "
+        "operation entry positions, and responsive/information-density strategy. Do not model loading, "
+        "empty, error, toast, validation, or confirmation feedback as layout areas; put those in "
+        "state_feedback or operation_interactions. "
+        "state_feedback must describe loading, empty, error, ready, and operation feedback behavior "
+        "with related feedback components such as Spin, Empty, Alert, Message, or Modal.confirm. "
+        "operation_interactions must describe major in-page behavior such as query, create, update, "
+        "delete, submit, cancel, refresh, batch actions, and navigation clicks, with the related "
+        "endpoint_id when an API is used. api_dependencies must select the page's actual APIs from "
+        "ProjectPlan.api_contracts and include endpoint_id, usage, trigger, "
+        "required_for_initial_load, and binds_to. page_navigation must describe internal page jumps "
+        "and the target page/path when known. Every response_binding must contain endpoint_id, "
+        "source_path, and page_field; endpoint_id must come from selected api_dependencies and "
+        "source_path must exist in that endpoint's response schema. Do not add fields, schemas, "
+        "endpoints, or data sources. "
+        "Describe page data access through concrete API endpoints instead of underlying data sources. "
+        "If existing API contracts cannot support a required page interaction, state the gap in "
+        "acceptance_criteria or risks instead of inventing a new endpoint.\n"
+        "The page_context is the source of truth for the current page goal, layout, interactions, "
+        "permissions, related pages, data sources, and API contract context.\n\n"
+        "Pay special attention to ProjectPlan.api_contracts; the page design must not invent "
+        "incompatible APIs or undeclared endpoints.\n\n"
+        f"Current page context:\n{json.dumps(page_context, ensure_ascii=False)}\n\n"
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False)}"
     )
 
 
 def _invoke_live_chat_model(
     project_plan: dict[str, Any],
-    confirmed_page_spec: dict[str, Any],
+    page_context: dict[str, Any],
     *,
     settings: Settings | None = None,
 ) -> str:
     active_settings = settings or Settings.from_env()
     result = create_chat_model(active_settings).invoke(
-        _page_design_prompt(project_plan, confirmed_page_spec)
+        _page_design_prompt(project_plan, page_context)
     )
     content = getattr(result, "content", result)
     if isinstance(content, list):
@@ -61,13 +76,13 @@ def _invoke_live_chat_model(
 def _fallback_model_note(error: Exception) -> str:
     return (
         "页面设计模型调用失败，已降级使用 ProjectPlan 与用户确认的 "
-        f"PageSpec 生成确定性页面详细计划。错误：{type(error).__name__}: {error}"
+        f"页面上下文生成确定性页面详细计划。错误：{type(error).__name__}: {error}"
     )
 
 
 def design_page_with_chat_model(
     project_plan: dict[str, Any],
-    confirmed_page_spec: dict[str, Any],
+    page_context: dict[str, Any],
 ) -> dict[str, Any]:
     """Use a direct chat-model call to create a page detail plan."""
 
@@ -78,7 +93,7 @@ def design_page_with_chat_model(
         try:
             agent_note = _invoke_live_chat_model(
                 project_plan,
-                confirmed_page_spec,
+                page_context,
                 settings=settings,
             )
             break
@@ -92,7 +107,7 @@ def design_page_with_chat_model(
 
     detail_plan = create_page_detail_plan(
         project_plan,
-        confirmed_page_spec,
+        page_context,
         agent_note=agent_note,
         agent_detail_plan=extract_json_object(agent_note),
     )
