@@ -13,6 +13,7 @@ import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import MessageList from './components/MessageList'
 import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
+import SessionHistoryDropdown from './components/SessionHistoryDropdown'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
@@ -182,11 +183,13 @@ export default function AiChatPanel({
           onReturnWelcome={onReturnWelcome}
           onShowFiles={handleShowFiles}
           onShowSkills={handleShowSkills}
+          onThemeChange={onThemeChange}
           filesActive={activeView === 'files'}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
           sessions={sessions}
           skillsActive={activeView === 'skills'}
+          theme={theme}
           workspaceRoot={workspaceRoot}
         />
 
@@ -198,14 +201,30 @@ export default function AiChatPanel({
           <div className={cx('ai-chat-main')}>
             <ChatHeader
               actions={
-                showPreviewActions ? (
-                  <PreviewActions
-                    embeddedPreviewOpen={embeddedPreviewOpen}
-                    onCloseEmbeddedPreview={() => setRightPanel(undefined)}
-                    onPreviewAction={handlePreviewAction}
+                <>
+                  {showPreviewActions ? (
+                    <PreviewActions
+                      embeddedPreviewOpen={embeddedPreviewOpen}
+                      onCloseEmbeddedPreview={() => setRightPanel(undefined)}
+                      onPreviewAction={handlePreviewAction}
+                      theme={theme}
+                    />
+                  ) : null}
+                  <SessionHistoryDropdown
+                    activeSessionId={activeSessionId}
+                    deletingSessionId={deletingSessionId}
+                    loadingSessions={loadingSessions}
+                    onCreateSession={handleCreateChatSession}
+                    onDeleteSession={handleDeleteSession}
+                    onOpenSession={handleOpenChatSession}
+                    onOpenSessionKeyDown={handleOpenSessionKeyDown}
+                    sessionError={sessionError}
+                    sessionRunStates={sessionRunStates}
+                    sessions={sessions}
                     theme={theme}
+                    workspaceSelected={Boolean(application.workspaceRoot)}
                   />
-                ) : undefined
+                </>
               }
               copy={copy}
               editorMode={editorMode}

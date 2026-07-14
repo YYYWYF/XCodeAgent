@@ -1,0 +1,187 @@
+.@{class-prefix}-session-history-trigger.ant-btn {
+  height: 34px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface);
+  border-color: var(--wb-border);
+  border-radius: 7px;
+  box-shadow: none;
+
+  &:hover,
+  &:focus {
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+    border-color: var(--wb-border-strong);
+  }
+
+  .anticon:last-child { margin-left: 2px; font-size: 9px; }
+}
+
+.@{class-prefix}-session-history-dropdown {
+  width: 320px;
+  max-height: min(520px, calc(100vh - 96px));
+  padding: 12px;
+  color: #202942;
+  background: #fff;
+  border: 1px solid #e2e4ed;
+  border-radius: 9px;
+  box-shadow: 0 12px 36px rgba(29, 24, 55, 0.16);
+
+  .ant-input-affix-wrapper {
+    color: #425070;
+    background: #fafafe;
+    border-color: #dfe1ec;
+    border-radius: 6px;
+    box-shadow: none;
+
+    &:hover,
+    &:focus-within { border-color: rgba(91, 36, 245, 0.48); }
+
+    .ant-input { color: inherit; background: transparent; }
+  }
+
+  .ant-alert { margin-top: 8px; border-radius: 6px; }
+
+  .ant-empty { margin: 18px 0; }
+  .ant-empty-image { height: 38px; margin-bottom: 5px; opacity: 0.38; }
+  .ant-empty-description { color: #858c9d; font-size: 12px; }
+}
+
+.@{class-prefix}-session-history-dropdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+
+  .ant-typography { color: inherit; }
+  .ant-btn { color: #5b24f5; border-radius: 5px; }
+  .ant-btn:hover { color: #7458c8; background: rgba(91, 36, 245, 0.045); }
+}
+
+.@{class-prefix}-session-history-dropdown-list {
+  max-height: 365px;
+  margin-top: 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.@{class-prefix}-session-history-dropdown-loading {
+  display: flex;
+  min-height: 90px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+
+  .ant-typography { color: #7d849a; font-size: 12px; }
+}
+
+.@{class-prefix}-session-history-dropdown-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+}
+
+.@{class-prefix}-session-history-dropdown-group-label.ant-typography {
+  padding: 5px 8px 3px;
+  color: #8b91a3;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-session-history-dropdown-item {
+  display: flex;
+  min-height: 48px;
+  align-items: stretch;
+  color: #34405d;
+  background: transparent;
+  border-radius: 6px;
+  transition: background 0.16s ease, color 0.16s ease;
+
+  &:hover,
+  &:focus-within {
+    color: #7458c8;
+    background: rgba(91, 36, 245, 0.045);
+  }
+
+  &.@{class-prefix}-active {
+    color: #5b24f5;
+    background: rgba(91, 36, 245, 0.09);
+  }
+}
+
+.@{class-prefix}-session-history-dropdown-item-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 5px 6px 9px;
+  outline: none;
+  cursor: pointer;
+}
+
+.@{class-prefix}-session-history-dropdown-item-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-session-history-dropdown-item-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #7d849a;
+  font-size: 10px;
+
+  .ant-spin { line-height: 1; }
+}
+
+.@{class-prefix}-session-history-dropdown-delete.ant-btn {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  align-self: center;
+  margin-right: 4px;
+  border-radius: 5px;
+  opacity: 0;
+}
+
+.@{class-prefix}-session-history-dropdown-item:hover,
+.@{class-prefix}-session-history-dropdown-item:focus-within,
+.@{class-prefix}-session-history-dropdown-item.@{class-prefix}-active {
+  .@{class-prefix}-session-history-dropdown-delete.ant-btn { opacity: 0.78; }
+}
+
+.@{class-prefix}-session-history-dropdown.@{class-prefix}-dark {
+  color: #eef0f7;
+  background: #171d29;
+  border-color: #353b4a;
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.38);
+
+  .ant-input-affix-wrapper {
+    color: #d9dce5;
+    background: #121722;
+    border-color: #343a49;
+
+    .ant-input { color: #eef0f7; }
+  }
+
+  .@{class-prefix}-session-history-dropdown-header .ant-btn { color: #b8a2e8; }
+  .@{class-prefix}-session-history-dropdown-group-label.ant-typography,
+  .@{class-prefix}-session-history-dropdown-item-meta,
+  .@{class-prefix}-session-history-dropdown-loading .ant-typography { color: #949cad; }
+
+  .@{class-prefix}-session-history-dropdown-item { color: #d9dce5; }
+  .@{class-prefix}-session-history-dropdown-item:hover,
+  .@{class-prefix}-session-history-dropdown-item:focus-within {
+    color: #b8a2e8;
+    background: rgba(155, 112, 255, 0.075);
+  }
+  .@{class-prefix}-session-history-dropdown-item.@{class-prefix}-active {
+    color: #9b70ff;
+    background: rgba(155, 112, 255, 0.16);
+  }
+}

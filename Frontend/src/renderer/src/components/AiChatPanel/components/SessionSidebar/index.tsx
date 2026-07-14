@@ -1,24 +1,33 @@
 import {
-  ArrowLeftOutlined,
-  CloseOutlined,
-  DeleteOutlined,
+  ApiOutlined,
+  CaretDownOutlined,
+  DownOutlined,
   FileTextOutlined,
+  FilterOutlined,
   FolderOpenOutlined,
-  PlusOutlined,
+  MessageOutlined,
+  LeftOutlined,
+  RightOutlined,
   SearchOutlined,
-  ThunderboltOutlined
+  SettingOutlined,
+  ThunderboltOutlined,
+  UserOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Empty, Input, Popconfirm, Spin, Typography } from 'antd'
+import { Input, Switch, Typography } from 'antd'
 import type { KeyboardEvent, ReactElement } from 'react'
 import { useMemo, useState } from 'react'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
-import type { ApplicationConfig } from '../../../../typings'
+import type { ApplicationConfig, ApplicationMenuItem } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { formatSessionTime } from '../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import './SessionSidebar.less'
 
 const { Text } = Typography
+
+const COLLAPSED_SIDEBAR_WIDTH = 68
+const MIN_SIDEBAR_WIDTH = 240
+const MAX_SIDEBAR_WIDTH = 420
+const COLLAPSE_DRAG_THRESHOLD = 140
 
 type SessionSidebarProps = {
   activeSessionId?: string
@@ -33,187 +42,341 @@ type SessionSidebarProps = {
   onReturnWelcome: () => void
   onShowFiles: () => void
   onShowSkills: () => void
+  onThemeChange: (theme: 'light' | 'dark') => void
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
   skillsActive: boolean
+  theme: 'light' | 'dark'
   workspaceRoot: string
 }
 
+type OutlineRowProps = {
+  item: ApplicationMenuItem
+  level: number
+  onSelect: (key: string) => void
+  selectedKey: string
+  visibleKeys: Set<string>
+}
+
+const API_ITEMS = [
+  { method: 'POST', path: '/api/leave/applications' },
+  { method: 'GET', path: '/api/leave/applications' },
+  { method: 'GET', path: '/api/leave/applications/{id}' },
+  { method: 'PUT', path: '/api/leave/applications/{id}' },
+  { method: 'DELETE', path: '/api/leave/applications/{id}' }
+]
+
+function OutlineRow({ item, level, onSelect, selectedKey, visibleKeys }: OutlineRowProps) {
+  const [expanded, setExpanded] = useState(true)
+  const children = item.children?.filter((child) => visibleKeys.has(child.key)) || []
+  const isFolder = item.type === 'menu' || children.length > 0
+  const selected = selectedKey === item.key
+
+  return (
+    <div className={cx('outline-node')}>
+      <button
+        aria-current={selected ? 'page' : undefined}
+        aria-expanded={isFolder ? expanded : undefined}
+        className={cx('outline-row', selected && 'selected')}
+        onClick={() => {
+          if (isFolder) setExpanded((current) => !current)
+          else onSelect(item.key)
+        }}
+        style={{ '--outline-level': level } as React.CSSProperties}
+        type="button"
+      >
+        <span className={cx('outline-caret')}>
+          {isFolder ? <CaretDownOutlined className={cx(!expanded && 'collapsed')} /> : null}
+        </span>
+        <span className={cx('outline-icon')}>
+          {isFolder ? <FolderOpenOutlined /> : <FileTextOutlined />}
+        </span>
+        <span className={cx('outline-label')}>{item.label}</span>
+      </button>
+      {isFolder && expanded && children.length > 0 ? (
+        <div className={cx('outline-children')}>
+          {children.map((child) => (
+            <OutlineRow
+              item={child}
+              key={child.key}
+              level={level + 1}
+              onSelect={onSelect}
+              selectedKey={selectedKey}
+              visibleKeys={visibleKeys}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function collectVisibleKeys(items: ApplicationMenuItem[], query: string): Set<string> {
+  const visible = new Set<string>()
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+
+  const visit = (item: ApplicationMenuItem): boolean => {
+    const childMatches = item.children?.some(visit) || false
+    const selfMatches = !normalizedQuery || item.label.toLocaleLowerCase().includes(normalizedQuery)
+    if (selfMatches || childMatches) visible.add(item.key)
+    return selfMatches || childMatches
+  }
+
+  items.forEach(visit)
+  return visible
+}
+
+function collectRelatedKeys(items: ApplicationMenuItem[], selectedKey: string): Set<string> {
+  const related = new Set<string>()
+  const addDescendants = (item: ApplicationMenuItem): void => {
+    related.add(item.key)
+    item.children?.forEach(addDescendants)
+  }
+  const visit = (item: ApplicationMenuItem, ancestors: string[]): boolean => {
+    if (item.key === selectedKey) {
+      ancestors.forEach((key) => related.add(key))
+      addDescendants(item)
+      return true
+    }
+    return item.children?.some((child) => visit(child, [...ancestors, item.key])) || false
+  }
+
+  if (!selectedKey) items.forEach(addDescendants)
+  else items.some((item) => visit(item, []))
+  return related
+}
+
 export default function SessionSidebar({
-  activeSessionId,
   application,
-  deletingSessionId,
   filesActive,
-  loadingSessions,
   onCreateSession,
-  onDeleteSession,
-  onOpenSession,
-  onOpenSessionKeyDown,
   onReturnWelcome,
   onShowFiles,
   onShowSkills,
-  sessionError,
-  sessionRunStates,
-  sessions,
+  onThemeChange,
   skillsActive,
-  workspaceRoot
+  theme
 }: SessionSidebarProps): ReactElement {
-  const [query, setQuery] = useState('')
-  const filteredSessions = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase()
-    return normalizedQuery
-      ? sessions.filter((session) => session.title.toLocaleLowerCase().includes(normalizedQuery))
-      : sessions
-  }, [query, sessions])
-  const todayStart = new Date().setHours(0, 0, 0, 0)
-  const sessionGroups = [
-    { label: '今天', sessions: filteredSessions.filter((session) => session.updatedAt >= todayStart) },
-    { label: '更早', sessions: filteredSessions.filter((session) => session.updatedAt < todayStart) }
-  ].filter((group) => group.sessions.length > 0)
+  const [outlineQuery, setOutlineQuery] = useState('')
+  const [collapsed, setCollapsed] = useState(false)
+  const [resizing, setResizing] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(334)
+  const [pagesExpanded, setPagesExpanded] = useState(true)
+  const [apiExpanded, setApiExpanded] = useState(true)
+  const [apiGroupExpanded, setApiGroupExpanded] = useState(true)
+  const [onlyRelated, setOnlyRelated] = useState(false)
+  const initialSelectedKey = application.menus.homeMenuKey || application.menus.items[0]?.key || ''
+  const [selectedKey, setSelectedKey] = useState(initialSelectedKey)
+  const visibleKeys = useMemo(() => {
+    const matchingKeys = collectVisibleKeys(application.menus.items, outlineQuery)
+    if (!onlyRelated) return matchingKeys
+    const relatedKeys = collectRelatedKeys(application.menus.items, selectedKey)
+    if (relatedKeys.size === 0) return matchingKeys
+    return new Set([...matchingKeys].filter((key) => relatedKeys.has(key)))
+  }, [application.menus.items, onlyRelated, outlineQuery, selectedKey])
+  const appDescription = application.senario || '智能应用设计与开发工作区'
+
+  const handleResizeStart = (event: React.MouseEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const sidebarLeft = event.currentTarget.parentElement?.getBoundingClientRect().left || 0
+    setResizing(true)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const handleMouseMove = (moveEvent: MouseEvent): void => {
+      const nextWidth = moveEvent.clientX - sidebarLeft
+      if (nextWidth <= COLLAPSE_DRAG_THRESHOLD) {
+        setCollapsed(true)
+        return
+      }
+
+      setCollapsed(false)
+      setSidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, nextWidth)))
+    }
+    const handleMouseUp = (): void => {
+      setResizing(false)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }
+
+  const handleResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    if (event.key === 'ArrowLeft' && sidebarWidth <= MIN_SIDEBAR_WIDTH) {
+      setCollapsed(true)
+      return
+    }
+    setCollapsed(false)
+    setSidebarWidth((current) => Math.min(
+      MAX_SIDEBAR_WIDTH,
+      Math.max(MIN_SIDEBAR_WIDTH, current + (event.key === 'ArrowLeft' ? -16 : 16))
+    ))
+  }
 
   return (
-    <aside className={cx('session-sidebar')} aria-label="历史会话">
+    <aside
+      className={cx('session-sidebar', collapsed && 'collapsed', resizing && 'resizing')}
+      aria-label="应用大纲"
+      style={{
+        '--session-sidebar-width': `${collapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
+      } as React.CSSProperties}
+    >
+      <div
+        aria-label="调整左侧菜单宽度"
+        aria-orientation="vertical"
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        aria-valuemin={COLLAPSED_SIDEBAR_WIDTH}
+        aria-valuenow={collapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}
+        className={cx('session-resize-handle')}
+        onKeyDown={handleResizeKeyDown}
+        onMouseDown={handleResizeStart}
+        role="separator"
+        tabIndex={0}
+      >
+        <button
+          aria-label={collapsed ? '展开左侧菜单' : '收起左侧菜单'}
+          className={cx('session-collapse-button')}
+          onClick={() => setCollapsed((current) => !current)}
+          onMouseDown={(event) => event.stopPropagation()}
+          title={collapsed ? '展开左侧菜单' : '收起左侧菜单'}
+          type="button"
+        >
+          {collapsed ? <RightOutlined /> : <LeftOutlined />}
+        </button>
+      </div>
       <div className={cx('session-sidebar-header')}>
-        <div className={cx('session-brand-lockup')}>
-          <span className={cx('session-brand-mark')} aria-hidden="true"><CloseOutlined /></span>
+        <button className={cx('session-brand-lockup')} onClick={onReturnWelcome} type="button">
+          <span className={cx('session-brand-mark')} aria-hidden="true">
+            <i />
+            <i />
+            <i />
+            <i />
+          </span>
           <Text className={cx('session-brand')} strong>XCodeAgent</Text>
-        </div>
-        <Button
-          aria-label="返回欢迎页"
-          className={cx('session-return-button')}
-          icon={<ArrowLeftOutlined />}
-          onClick={onReturnWelcome}
-          size="small"
-          title="返回欢迎页"
-          type="text"
-        />
+        </button>
       </div>
-      <button className={cx('session-workspace')} title={workspaceRoot} type="button">
-        <span className={cx('session-workspace-icon')}><FolderOpenOutlined /></span>
-        <span>
-          <Text type="secondary">工作区</Text>
-          <Text className={cx('session-workspace-name')} strong>
-            {application.workspaceRoot ? application.name : '未选择工作目录'}
-          </Text>
+
+      <button className={cx('session-workspace')} onClick={onReturnWelcome} type="button">
+        <span className={cx('session-workspace-icon')}><FileTextOutlined /></span>
+        <span className={cx('session-workspace-copy')}>
+          <Text className={cx('session-workspace-name')} strong>{application.name}</Text>
+          <Text className={cx('session-workspace-description')}>{appDescription}</Text>
         </span>
+        <CaretDownOutlined className={cx('session-workspace-arrow')} rotate={-90} />
       </button>
-      <Button
-        aria-current={skillsActive ? 'page' : undefined}
-        block
-        className={cx('session-skills-button', skillsActive && 'active')}
-        icon={<ThunderboltOutlined />}
-        onClick={onShowSkills}
-      >
-        技能
-      </Button>
-      <Button
-        aria-current={filesActive ? 'page' : undefined}
-        block
-        className={cx('session-skills-button', 'session-files-button', filesActive && 'active')}
-        icon={<FileTextOutlined />}
-        onClick={onShowFiles}
-      >
-        文件
-      </Button>
-      <Button
-        block
-        className={cx('session-new-button')}
-        disabled={!application.workspaceRoot}
-        icon={<PlusOutlined />}
-        onClick={onCreateSession}
-      >
-        新对话
-      </Button>
-      <Input
-        allowClear
-        aria-label="搜索历史对话"
-        className={cx('session-search')}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="搜索历史对话"
-        prefix={<SearchOutlined />}
-        value={query}
-      />
-      <div className={cx('session-list')} aria-live="polite">
-        {loadingSessions ? (
-          <div className={cx('session-loading')}>
-            <Spin size="small" />
-            <Text type="secondary">读取会话...</Text>
-          </div>
-        ) : filteredSessions.length === 0 ? (
-          <Empty
-            description={query ? '没有匹配的对话' : application.workspaceRoot ? '暂无本地会话' : '选择工作目录后保存会话'}
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
+
+      <Text className={cx('session-section-title')} strong>应用大纲</Text>
+      <div className={cx('session-outline-content')}>
+          <Input
+            allowClear
+            aria-label="搜索页面或 API"
+            className={cx('session-search')}
+            onChange={(event) => setOutlineQuery(event.target.value)}
+            placeholder="搜索页面或 API"
+            prefix={<SearchOutlined />}
+            value={outlineQuery}
           />
-        ) : (
-          sessionGroups.map((group) => (
-            <section className={cx('session-group')} key={group.label}>
-              <Text className={cx('session-group-label')}>{group.label}</Text>
-              {group.sessions.map((session) => {
-                const runStatus = sessionRunStates[session.id]
-                const running = Boolean(runStatus)
-                return (
-                  <div
-                    aria-current={
-                      !skillsActive && !filesActive && activeSessionId === session.id ? 'page' : undefined
-                    }
-                    className={cx(
-                      'session-item',
-                      !skillsActive && !filesActive && activeSessionId === session.id && 'active',
-                      running && 'running'
-                    )}
-                    key={session.id}
-                  >
-                    <div
-                      className={cx('session-item-content')}
-                      onClick={() => onOpenSession(session.id)}
-                      onKeyDown={(event) => onOpenSessionKeyDown(event, session.id)}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <span className={cx('session-item-title')}>{session.title}</span>
-                      <span className={cx('session-item-meta')}>
-                        {running && <Spin size="small" />}
-                        {runStatus === 'stopping'
-                          ? '正在停止...'
-                          : runStatus === 'running'
-                            ? `运行中 · ${session.messageCount} 条消息`
-                            : `${formatSessionTime(session.updatedAt)} · ${session.messageCount} 条消息`}
-                      </span>
-                    </div>
-                    <Popconfirm
-                      cancelText="取消"
-                      disabled={running}
-                      okText="删除"
-                      okButtonProps={{ danger: true }}
-                      onCancel={(event) => event?.stopPropagation()}
-                      onConfirm={(event) => {
-                        event?.stopPropagation()
-                        return onDeleteSession(session.id)
-                      }}
-                      title="删除这个历史会话？"
-                    >
-                      <Button
-                        aria-label={`删除会话 ${session.title}`}
-                        className={cx('session-delete-button')}
-                        danger
-                        disabled={loadingSessions || running}
-                        icon={<DeleteOutlined />}
-                        loading={deletingSessionId === session.id}
-                        onClick={(event) => event.stopPropagation()}
-                        size="small"
-                        title="删除会话"
-                        type="text"
-                      />
-                    </Popconfirm>
-                  </div>
-                )
-              })}
-            </section>
-          ))
-        )}
+          <div className={cx('session-filter-row')}>
+            <span><FilterOutlined />只显示与当前选中相关</span>
+            <Switch
+              aria-label="只显示与当前选中相关"
+              checked={onlyRelated}
+              onChange={setOnlyRelated}
+              size="small"
+            />
+          </div>
+
+          <div className={cx('session-outline-scroll')}>
+        <section className={cx('outline-section')}>
+          <button
+            aria-expanded={pagesExpanded}
+            className={cx('outline-section-heading')}
+            onClick={() => setPagesExpanded((current) => !current)}
+            type="button"
+          >
+            <CaretDownOutlined className={cx(!pagesExpanded && 'collapsed')} />
+            <span>Pages</span>
+          </button>
+          {pagesExpanded ? <div className={cx('outline-tree')}>
+            {application.menus.items
+              .filter((item) => visibleKeys.has(item.key))
+              .map((item) => (
+                <OutlineRow
+                  item={item}
+                  key={item.key}
+                  level={0}
+                  onSelect={setSelectedKey}
+                  selectedKey={selectedKey}
+                  visibleKeys={visibleKeys}
+                />
+              ))}
+            {application.menus.items.length === 0 ? (
+              <div className={cx('outline-empty')}>暂无页面，请先在对话中创建页面</div>
+            ) : null}
+          </div> : null}
+        </section>
+
+        <section className={cx('outline-section', 'api-section')}>
+          <button
+            aria-expanded={apiExpanded}
+            className={cx('outline-section-heading')}
+            onClick={() => setApiExpanded((current) => !current)}
+            type="button"
+          >
+            <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
+            <span>API</span>
+          </button>
+          {apiExpanded ? <div className={cx('api-group')}>
+            <button
+              aria-expanded={apiGroupExpanded}
+              className={cx('api-group-title')}
+              onClick={() => setApiGroupExpanded((current) => !current)}
+              type="button"
+            >
+              <CaretDownOutlined className={cx(!apiGroupExpanded && 'collapsed')} />
+              <ApiOutlined />
+              <span>请假相关接口</span>
+            </button>
+            {apiGroupExpanded ? <div className={cx('api-list')}>
+              {API_ITEMS.map((item, index) => (
+                <button className={cx('api-row')} key={`${item.method}-${index}`} type="button">
+                  <span className={cx('api-method', item.method.toLocaleLowerCase())}>{item.method}</span>
+                  <code>{item.path}</code>
+                </button>
+              ))}
+            </div> : null}
+          </div> : null}
+        </section>
+
+          </div>
       </div>
-      {sessionError && <Alert message={sessionError} showIcon type="error" />}
+
+      <nav className={cx('session-footer-nav')} aria-label="快捷入口">
+        <button onClick={onCreateSession} title="推荐任务" type="button"><UserOutlined /><span>推荐任务</span></button>
+        <button onClick={onCreateSession} title="自由对话" type="button"><MessageOutlined /><span>自由对话</span></button>
+        <button className={cx(skillsActive && 'active')} onClick={onShowSkills} title="技能" type="button">
+          <ThunderboltOutlined /><span>技能</span>
+        </button>
+        <button className={cx(filesActive && 'active')} onClick={onShowFiles} title="文件" type="button">
+          <FileTextOutlined /><span>文件</span>
+        </button>
+        <button onClick={() => onThemeChange(theme === 'light' ? 'dark' : 'light')} title="设置" type="button">
+          <SettingOutlined /><span>设置</span>
+        </button>
+      </nav>
+
+      <button className={cx('session-user')} type="button">
+        <span className={cx('session-user-avatar')}>Y</span>
+        <span className={cx('session-user-name')}>yifei</span>
+        <DownOutlined />
+      </button>
     </aside>
   )
 }
