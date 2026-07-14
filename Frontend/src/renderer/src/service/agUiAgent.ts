@@ -3,6 +3,7 @@ import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import type {
   ApplicationConfig,
+  EditorMode,
   WorkflowClarificationAnswers,
   WorkflowConfirmationArtifact,
   WorkflowDebugOptions,
@@ -13,6 +14,7 @@ import type {
 
 type SendWorkflowMessageOptions = {
   workspaceRoot?: string
+  editorMode: EditorMode
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
   originalRequest?: string
@@ -141,6 +143,7 @@ export class AgUiChatSession {
           runId,
           forwardedProps: {
             workspaceRoot: options.workspaceRoot,
+            editorMode: options.editorMode,
             application: options.application,
             clarificationAnswers: options.clarificationAnswers,
             originalRequest: options.originalRequest,

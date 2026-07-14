@@ -122,6 +122,9 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 简单需求专用节点，负责在已有工程上下文中直接完成小范围修改：
 
+- `classify_request_complexity` 只有在 AG-UI 请求带有合法 `editorMode` 时才允许简单需求进入该节点；
+- `frontend` 会话的局部修改交给 Frontend Generation Agent，`backend` 会话交给 Data Source Generation Agent；
+- 缺少合法 owner、归属不清或需要跨层修改时回退完整需求与规划流程；
 - 识别修改目标和允许修改的文件范围；
 - 必要时按修改范围委派给 Frontend 或 Data Source CodeRunner；
 - 执行局部文件修改；
@@ -129,6 +132,8 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 - 进入 `integration_test`，复用后续测试、质量门禁、启动和验收流程。
 
 该节点不生成完整 RequirementSpec、项目级计划或任务 DAG。若执行过程中发现需求实际涉及架构、契约、数据模型或多页面联动，应升级为复杂需求并回到完整开发流程。
+
+该设计映射到 learn-coding-agent 的显式工具分派模式和 OpenCode 的命名专业 Agent 模式：外层 Graph 根据已校验的会话模式确定 owner，现有 CodeRunner 在其既有 workspace backend、memory 和权限边界内执行；不恢复已删除的 Main DeepAgent，也不通过任意字符串动态扩展 Agent 权限。
 
 ### `project_planning`
 

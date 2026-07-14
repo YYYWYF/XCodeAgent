@@ -88,6 +88,7 @@ def build_workflow_ag_ui_stream(
 
             project_id = workflow_inputs["project_id"] or None
             workspace = workflow_inputs["workspace"] or None
+            editor_mode = workflow_inputs["editor_mode"] or None
             workspace_lease = workspace_run_leases.acquire(
                 workspace_root=workspace,
                 project_id=project_id,
@@ -110,6 +111,9 @@ def build_workflow_ag_ui_stream(
 
             if workspace:
                 initial_state["workspace"] = workspace
+
+            if editor_mode:
+                initial_state["editor_mode"] = editor_mode
 
             config = {"configurable": {"thread_id": thread_id}}
 

@@ -21,6 +21,33 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["workspace"], "/Users/sbw/Downloads/test/manage")
 
+    def test_reads_supported_editor_mode_from_forwarded_props(self) -> None:
+        frontend_inputs = workflow_run_inputs(
+            {
+                "request": "修改按钮文案",
+                "forwardedProps": {"editorMode": "frontend"},
+            }
+        )
+        backend_inputs = workflow_run_inputs(
+            {
+                "request": "修复接口",
+                "forwardedProps": {"editorMode": "backend"},
+            }
+        )
+
+        self.assertEqual(frontend_inputs["editor_mode"], "frontend")
+        self.assertEqual(backend_inputs["editor_mode"], "backend")
+
+    def test_rejects_unsupported_editor_mode(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "修改代码",
+                "forwardedProps": {"editorMode": "unknown"},
+            }
+        )
+
+        self.assertEqual(inputs["editor_mode"], "")
+
     def test_reads_cancel_run_id_from_forwarded_props(self) -> None:
         inputs = workflow_run_inputs(
             {"forwardedProps": {"cancelRunId": "workflow-active-run"}}

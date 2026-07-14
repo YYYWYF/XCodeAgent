@@ -1,16 +1,59 @@
-from app.graph.nodes.common import capture_agent_file_changes, run_live, workspace_from_state
+from typing import Literal, cast
+
+from app.agents.messages import last_agent_text
+from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.workspace.code_changes import code_change_state_update
 
+DirectModificationOwner = Literal["frontend", "data_source"]
+_DIRECT_MODIFICATION_OWNERS = {"frontend", "data_source"}
 
-def direct_modification(state: ProjectState) -> dict:
+
+def _direct_modification_owner(state: ProjectState) -> DirectModificationOwner:
+    editor_mode = state.get("editor_mode")
+    owner = "data_source" if editor_mode == "backend" else editor_mode
+    if owner not in _DIRECT_MODIFICATION_OWNERS:
+        raise ValueError(
+            "Direct modification requires a validated frontend or data_source owner."
+        )
+    return cast(DirectModificationOwner, owner)
+
+
+def _run_direct_modification_agent(
+    *,
+    owner: DirectModificationOwner,
+    prompt: str,
+    workspace: str | None,
+) -> str:
+    # Lazy construction keeps the specialist Agent and its workspace permissions scoped to this run.
+    from app.agents import create_agent_bundle
+
+    bundle = create_agent_bundle(workspace)
+    agent = bundle.frontend if owner == "frontend" else bundle.data_source
+    result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    return last_agent_text(result)
+
+
+def _direct_modification_prompt(request: str, owner: DirectModificationOwner) -> str:
+    return (
+        f"Execute this approved {owner} direct-modification task in the existing workspace. "
+        "Keep the change local to the requested behavior, inspect the smallest relevant file set, "
+        "do not change product requirements or API contracts, and run focused verification. "
+        "If the request is cross-layer or cannot be completed safely by your role, do not make "
+        "speculative changes; report a change request instead. Report changed files and commands.\n\n"
+        f"User request:\n{request}"
+    )
+
+
+def direct_modification(state: ProjectState) -> dict[str, object]:
     workspace = workspace_from_state(state)
+    owner = _direct_modification_owner(state)
     captured = capture_agent_file_changes(
         workspace=workspace,
-        source_tool="main.direct_modification",
-        action=lambda: run_live(
-            "main",
-            f"Apply this simple local modification directly and report changed files: {state['request']}",
+        source_tool=f"{owner}.direct_modification",
+        action=lambda: _run_direct_modification_agent(
+            owner=owner,
+            prompt=_direct_modification_prompt(state["request"], owner),
             workspace=workspace,
         ),
     )
@@ -21,7 +64,7 @@ def direct_modification(state: ProjectState) -> dict:
         "tasks": [
             {
                 "id": "direct-modification",
-                "owner": "main",
+                "owner": owner,
                 "description": state["request"],
                 "dependencies": [],
                 "status": "completed",
@@ -30,6 +73,7 @@ def direct_modification(state: ProjectState) -> dict:
         "build_results": [
             {
                 "task_id": "direct-modification",
+                "owner": owner,
                 "status": "completed",
                 "agent_note": note,
             }

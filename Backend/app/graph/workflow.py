@@ -30,11 +30,12 @@ def route_workflow_start(state: ProjectState) -> str:
 
 
 def route_request_complexity(state: ProjectState) -> str:
-    return (
-        "direct_modification"
-        if state["request_complexity"] == "simple"
-        else "requirements"
-    )
+    if state["request_complexity"] == "simple" and state.get("editor_mode") in {
+        "frontend",
+        "backend",
+    }:
+        return "direct_modification"
+    return "requirements"
 
 
 def route_test_validation(state: ProjectState) -> str:

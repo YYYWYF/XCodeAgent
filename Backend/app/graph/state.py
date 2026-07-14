@@ -7,6 +7,7 @@ class ProjectState(TypedDict, total=False):
     project_id: str
     workspace: str
     workspace_path: str
+    editor_mode: str
     phase: str
     resume_from: str
     request_complexity: str

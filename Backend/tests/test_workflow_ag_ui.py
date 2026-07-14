@@ -12,10 +12,8 @@ from app.graph.state import ProjectState
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_confirmation_artifact
 from app.protocols.workflow_visualization import (
-    _workflow_confirmation_artifact,
     _workflow_summary,
     _workflow_visual_payload,
-    build_workflow_ag_ui_stream,
 )
 
 class FakeWorkflowGraph:
@@ -542,7 +540,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             )
         )
 
-    def test_stream_passes_forwarded_workspace_to_graph_state(self) -> None:
+    def test_stream_passes_forwarded_workspace_and_editor_mode_to_graph_state(self) -> None:
         graph = FakeWorkflowGraph()
 
         async def collect() -> list[str]:
@@ -553,7 +551,8 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "runId": "run-1",
                     "messages": [{"role": "user", "content": "make a tiny app"}],
                     "forwardedProps": {
-                        "workspaceRoot": "/Users/sbw/Documents/example-workspace"
+                        "workspaceRoot": "/Users/sbw/Documents/example-workspace",
+                        "editorMode": "frontend",
                     },
                 },
                 accept="text/event-stream",
@@ -566,12 +565,15 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             graph.initial_states[0]["workspace"],
             "/Users/sbw/Documents/example-workspace",
         )
+        self.assertEqual(graph.initial_states[0]["editor_mode"], "frontend")
 
     def test_project_state_schema_preserves_workspace(self) -> None:
         seen_workspaces: list[str | None] = []
+        seen_editor_modes: list[str | None] = []
 
         def capture_workspace(state: ProjectState) -> dict:
             seen_workspaces.append(state.get("workspace"))
+            seen_editor_modes.append(state.get("editor_mode"))
             return {"phase": "capture_workspace", "timeline": ["capture_workspace"]}
 
         builder = StateGraph(ProjectState)
@@ -584,6 +586,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             {
                 "request": "make a tiny app",
                 "workspace": "/Users/sbw/Documents/example-workspace",
+                "editor_mode": "backend",
                 "timeline": [],
             }
         )
@@ -596,6 +599,8 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             result["workspace"],
             "/Users/sbw/Documents/example-workspace",
         )
+        self.assertEqual(seen_editor_modes, ["backend"])
+        self.assertEqual(result["editor_mode"], "backend")
 
     def test_stream_exposes_code_changes_payload(self) -> None:
         graph = FakeCodeChangesGraph()

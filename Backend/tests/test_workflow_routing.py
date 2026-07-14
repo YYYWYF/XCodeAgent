@@ -6,6 +6,7 @@ from app.graph.workflow import (
     route_detail_confirmation,
     route_prepare_build_tasks,
     route_project_planning,
+    route_request_complexity,
     route_requirements,
     route_test_validation,
     route_workflow_start,
@@ -35,6 +36,27 @@ class WorkflowRoutingTests(unittest.TestCase):
         self.assertEqual(
             route_workflow_start({"resume_from": "project_planning"}),
             "project_planning",
+        )
+
+    def test_simple_frontend_request_routes_to_direct_modification(self) -> None:
+        self.assertEqual(
+            route_request_complexity(
+                {
+                    "request_complexity": "simple",
+                    "editor_mode": "frontend",
+                }
+            ),
+            "direct_modification",
+        )
+
+    def test_simple_request_without_valid_owner_routes_to_requirements(self) -> None:
+        self.assertEqual(
+            route_request_complexity(
+                {
+                    "request_complexity": "simple",
+                }
+            ),
+            "requirements",
         )
 
     def test_workflow_start_can_resume_from_prepare_build_tasks(self) -> None:

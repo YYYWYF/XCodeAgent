@@ -72,6 +72,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("workspaceRoot"))
         or _optional_text(application.get("workspaceRoot"))
     )
+    editor_mode = _supported_editor_mode(
+        _optional_text(payload.get("editor_mode"))
+        or _optional_text(payload.get("editorMode"))
+        or _optional_text(forwarded_props.get("editor_mode"))
+        or _optional_text(forwarded_props.get("editorMode"))
+    )
 
     return {
         "cancel_run_id": (
@@ -99,6 +105,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(application.get("id"))
         ),
         "workspace": workspace,
+        "editor_mode": editor_mode,
         "thread_id": (
             _optional_text(payload.get("thread_id"))
             or _optional_text(payload.get("threadId"))
@@ -148,6 +155,10 @@ def _optional_text(value: Any) -> str:
 
 def _optional_dict(value: Any) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
+
+
+def _supported_editor_mode(value: str) -> str:
+    return value if value in {"frontend", "backend"} else ""
 
 
 def _resume_from_state(value: dict[str, Any] | None) -> str:

@@ -91,6 +91,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "projectId": "Optional project id used by workflow document writers.",
             "workspace": "Optional project workspace path/context reference.",
             "forwardedProps.workspaceRoot": "Preferred workspace path for AG-UI callers.",
+            "forwardedProps.editorMode": "Frontend or backend session mode used to select the direct-modification CodeRunner.",
             "forwardedProps.application": "Optional application metadata; application.id and workspaceRoot are used as fallbacks.",
             "originalRequest": "Optional original request used when submitting clarification answers.",
             "clarificationAnswers": "Optional structured user answers that are merged with originalRequest before rerunning workflow.",

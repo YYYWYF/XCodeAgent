@@ -200,6 +200,7 @@ export function useWorkflowConversation({
         toolCalls: rawToolCalls
       } = await agUiSession.sendMessage(trimmedMessage, {
         workspaceRoot: identity.workspaceRoot,
+        editorMode: identity.editorMode,
         application,
         clarificationAnswers: options?.clarificationAnswers,
         originalRequest: options?.originalRequest,

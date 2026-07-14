@@ -147,6 +147,10 @@ class DeleteFileToolTests(unittest.TestCase):
                 root_dir=workspace,
                 virtual_mode=True,
             )
+            agent_memory_backend = FilesystemBackend(
+                root_dir=workspace,
+                virtual_mode=True,
+            )
             with (
                 patch(
                     "app.agents.frontend.agent.create_deep_agent",
@@ -169,21 +173,25 @@ class DeleteFileToolTests(unittest.TestCase):
                     "model",
                     workspace_root=workspace,
                     user_skills_backend=user_skills_backend,
+                    agent_memory_backend=agent_memory_backend,
                 )
                 data_source = create_data_source_agent(
                     "model",
                     workspace_root=workspace,
                     user_skills_backend=user_skills_backend,
+                    agent_memory_backend=agent_memory_backend,
                 )
                 test = create_test_agent(
                     "model",
                     workspace_root=workspace,
                     user_skills_backend=user_skills_backend,
+                    agent_memory_backend=agent_memory_backend,
                 )
                 repair_planner = create_repair_planner_agent(
                     "model",
                     workspace_root=workspace,
                     user_skills_backend=user_skills_backend,
+                    agent_memory_backend=agent_memory_backend,
                 )
 
         self.assertIn("delete_file", _tool_names(frontend.get("tools", [])))
