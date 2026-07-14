@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+import yaml
 
 
 USER_SKILLS_WORKING_DIR_ENV = "XCODEAGENT_WORKING_DIR"
@@ -188,39 +188,27 @@ def parse_skill_frontmatter(content: str) -> dict[str, str]:
     if closing_index is None:
         raise SkillFrontmatterError("YAML frontmatter 未在读取范围内结束。")
 
+    frontmatter = "\n".join(lines[1:closing_index])
+    try:
+        loaded = yaml.safe_load(frontmatter)
+    except yaml.YAMLError as exc:
+        raise SkillFrontmatterError("YAML frontmatter 格式无效。") from exc
+    if not isinstance(loaded, dict):
+        raise SkillFrontmatterError("YAML frontmatter 必须是对象。")
+
     metadata: dict[str, str] = {}
-    for line in lines[1:closing_index]:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or ":" not in line:
+    for key in ("name", "description", "version"):
+        value = loaded.get(key)
+        if value is None:
             continue
-        key, raw_value = line.split(":", 1)
-        normalized_key = key.strip()
-        if normalized_key not in {"name", "description", "version"}:
-            continue
-        value = _parse_scalar(raw_value.strip(), normalized_key)
-        if value:
-            metadata[normalized_key] = value
+        if not isinstance(value, str):
+            raise SkillFrontmatterError(f"{key} 必须是字符串。")
+        normalized_value = value.strip()
+        if normalized_value:
+            metadata[key] = normalized_value
 
     if not metadata.get("name"):
         raise SkillFrontmatterError("YAML frontmatter 缺少有效的 name。")
     if not metadata.get("description"):
         raise SkillFrontmatterError("YAML frontmatter 缺少有效的 description。")
     return metadata
-
-
-def _parse_scalar(raw_value: str, key: str) -> str:
-    if not raw_value:
-        return ""
-    if raw_value.startswith("|") or raw_value.startswith(">"):
-        raise SkillFrontmatterError(f"{key} 暂不支持多行 YAML 值。")
-    if raw_value.startswith('"'):
-        try:
-            value = json.loads(raw_value)
-        except json.JSONDecodeError as exc:
-            raise SkillFrontmatterError(f"{key} 的双引号值无效。") from exc
-        return str(value).strip()
-    if raw_value.startswith("'"):
-        if len(raw_value) < 2 or not raw_value.endswith("'"):
-            raise SkillFrontmatterError(f"{key} 的单引号值无效。")
-        return raw_value[1:-1].replace("''", "'").strip()
-    return raw_value.split(" #", 1)[0].strip()

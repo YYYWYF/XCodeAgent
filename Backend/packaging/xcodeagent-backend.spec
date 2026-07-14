@@ -26,6 +26,7 @@ for distribution_name in (
     "langchain-openai",
     "openai",
     "pydantic",
+    "PyYAML",
     "uvicorn",
 ):
     datas += copy_metadata(distribution_name)
@@ -42,6 +43,7 @@ for package_name in (
     "pydantic",
     "starlette",
     "uvicorn",
+    "yaml",
 ):
     hiddenimports += collect_submodules(package_name)
 

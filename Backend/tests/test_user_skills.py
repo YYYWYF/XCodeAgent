@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from app.protocols import user_skills as user_skills_protocol
 from app.services import user_skill_documents
+from app.services import user_skill_imports
 from app.services import user_skills
 
 
@@ -95,15 +96,23 @@ class UserSkillsServiceTests(unittest.TestCase):
         self.assertEqual(catalog.issues[0].relative_path, "linked/SKILL.md")
 
     def test_environment_selects_the_matching_user_skill_directory(self) -> None:
-        with patch.dict(
-            os.environ,
-            {user_skills.USER_SKILLS_WORKING_DIR_ENV: ".xcodeagent_st"},
+        for working_dir in (
+            ".xcodeagent_dev",
+            ".xcodeagent_st",
+            ".xcodeagent_uat",
+            ".xcodeagent",
         ):
-            self.assertEqual(
-                user_skills.resolve_user_skills_root(),
-                Path.home() / ".xcodeagent_st" / "skills",
-            )
-            self.assertEqual(user_skills.user_skills_root_label(), "~/.xcodeagent_st/skills")
+            with self.subTest(working_dir=working_dir), patch.dict(
+                os.environ,
+                {user_skills.USER_SKILLS_WORKING_DIR_ENV: working_dir},
+            ):
+                self.assertEqual(
+                    user_skills.resolve_user_skills_root(),
+                    Path.home() / working_dir / "skills",
+                )
+                self.assertEqual(
+                    user_skills.user_skills_root_label(), f"~/{working_dir}/skills"
+                )
 
     @staticmethod
     def _write_skill(
@@ -127,10 +136,10 @@ class UserSkillsServiceTests(unittest.TestCase):
 
 
 class UserSkillsAgUiTests(unittest.TestCase):
-    def test_capabilities_include_create_and_delete_actions(self) -> None:
+    def test_capabilities_include_catalog_and_import_actions(self) -> None:
         self.assertEqual(
             user_skills_protocol.user_skills_capabilities()["actions"],
-            ["list", "get", "save", "create", "delete"],
+            ["list", "get", "save", "create", "delete", "import"],
         )
 
     def test_stream_emits_catalog_lifecycle_and_result(self) -> None:
@@ -299,6 +308,86 @@ class UserSkillsAgUiTests(unittest.TestCase):
         self.assertIn('"relativePath":"sample/SKILL.md"', payload)
         self.assertIn("skill-catalog", payload)
         self.assertIn("STATE_SNAPSHOT", payload)
+        self.assertIn("RUN_FINISHED", payload)
+
+    def test_stream_supports_import_action(self) -> None:
+        imported = user_skill_imports.ImportedUserSkill(
+            root="~/.xcodeagent_dev/skills",
+            imported=user_skills.UserSkillSummary(
+                name="sample-import",
+                description="Imported skill",
+                directory_name="sample-import",
+                relative_path="sample-import/SKILL.md",
+                updated_at="2026-07-14T00:00:00+00:00",
+            ),
+        )
+
+        async def collect() -> str:
+            with patch.object(
+                user_skills_protocol,
+                "import_user_skill_archive",
+                return_value=imported,
+            ) as import_archive:
+                stream = user_skills_protocol.build_user_skills_ag_ui_stream(
+                    payload={
+                        "threadId": "skills-import-thread",
+                        "runId": "skills-import-run",
+                        "forwardedProps": {
+                            "skillCatalog": {
+                                "action": "import",
+                                "fileName": "sample.zip",
+                                "archiveBase64": "UEs=",
+                            }
+                        },
+                    },
+                    accept="text/event-stream",
+                )
+                result = "\n".join([frame async for frame in stream])
+                import_archive.assert_called_once_with("sample.zip", "UEs=")
+                return result
+
+        payload = asyncio.run(collect())
+
+        self.assertIn('"action":"import"', payload)
+        self.assertIn('"imported"', payload)
+        self.assertIn('"name":"sample-import"', payload)
+        self.assertIn('"root":"~/.xcodeagent_dev/skills"', payload)
+        self.assertIn('"status":"completed"', payload)
+        self.assertIn("skill-catalog", payload)
+        self.assertIn("STATE_SNAPSHOT", payload)
+        self.assertIn("RUN_FINISHED", payload)
+
+    def test_import_failure_includes_structured_error_code(self) -> None:
+        async def collect() -> str:
+            with patch.object(
+                user_skills_protocol,
+                "import_user_skill_archive",
+                side_effect=user_skill_imports.SkillArchivePathError(
+                    "ZIP 不允许路径穿越。"
+                ),
+            ):
+                stream = user_skills_protocol.build_user_skills_ag_ui_stream(
+                    payload={
+                        "threadId": "skills-import-thread",
+                        "runId": "skills-import-run",
+                        "forwardedProps": {
+                            "skillCatalog": {
+                                "action": "import",
+                                "fileName": "unsafe.zip",
+                                "archiveBase64": "UEs=",
+                            }
+                        },
+                    },
+                    accept="text/event-stream",
+                )
+                return "\n".join([frame async for frame in stream])
+
+        payload = asyncio.run(collect())
+
+        self.assertIn('"action":"import"', payload)
+        self.assertIn('"status":"failed"', payload)
+        self.assertIn('"code":"unsafe_archive_path"', payload)
+        self.assertIn("SkillArchivePathError", payload)
         self.assertIn("RUN_FINISHED", payload)
 
 

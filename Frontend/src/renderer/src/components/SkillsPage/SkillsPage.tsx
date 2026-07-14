@@ -18,6 +18,7 @@ import { deleteUserSkill, requestUserSkills } from '../../service/userSkills'
 import type { UserSkill, UserSkillCatalog } from '../../typings'
 import { cx } from '../../utils'
 import SkillEditorDrawer from './SkillEditorDrawer'
+import SkillZipImportModal from './SkillZipImportModal'
 import './SkillDelete.less'
 import './SkillsPage.less'
 
@@ -35,7 +36,6 @@ type PendingAction = {
 
 const pendingActions: PendingAction[] = [
   { label: '刷新', icon: <ReloadOutlined /> },
-  { label: 'ZIP 上传', icon: <CloudUploadOutlined /> },
   { label: '导入 Hub', icon: <ImportOutlined /> },
   { label: '批量操作', icon: <ToolOutlined /> }
 ]
@@ -58,6 +58,7 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
+  const [importingZip, setImportingZip] = useState(false)
   const [deletingSkillPath, setDeletingSkillPath] = useState('')
   const [selectedSkill, setSelectedSkill] = useState<UserSkill>()
   const mountedRef = useRef(true)
@@ -147,6 +148,14 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
               </span>
             </Tooltip>
           ))}
+          <Button
+            className={cx('skills-zip-upload-button')}
+            icon={<CloudUploadOutlined />}
+            onClick={() => setImportingZip(true)}
+            type="primary"
+          >
+            ZIP 上传
+          </Button>
           <Button
             className={cx('skills-create-button')}
             icon={<PlusOutlined />}
@@ -278,6 +287,13 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
           await loadSkills()
         }}
         open={creating}
+        theme={theme}
+      />
+      <SkillZipImportModal
+        existingSkillNames={(catalog?.skills || []).map((skill) => skill.name)}
+        onClose={() => setImportingZip(false)}
+        onImported={loadSkills}
+        open={importingZip}
         theme={theme}
       />
       <SkillEditorDrawer

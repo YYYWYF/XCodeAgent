@@ -17,6 +17,11 @@ from app.services.user_skill_documents import (
     read_user_skill_document,
     save_user_skill_document,
 )
+from app.services.user_skill_imports import (
+    ImportUserSkillRequest,
+    SkillImportError,
+    import_user_skill_archive,
+)
 from app.services.user_skills import (
     list_user_skills,
     user_skills_root_label,
@@ -31,7 +36,7 @@ def user_skills_capabilities() -> dict[str, Any]:
         "name": "user-skills",
         "endpoint": "/skills/run",
         "transport": "ag-ui-sse",
-        "actions": ["list", "get", "save", "create", "delete"],
+        "actions": ["list", "get", "save", "create", "delete", "import"],
         "customEventName": SKILL_CATALOG_EVENT_NAME,
         "stateSnapshotKey": "skillCatalog",
         "root": user_skills_root_label(),
@@ -86,9 +91,17 @@ def build_user_skills_ag_ui_stream(
                 "deleted": deleted.model_dump(by_alias=True),
             }
             message = f"已删除技能 {deleted.name}。"
+        elif action == "import":
+            request = ImportUserSkillRequest.model_validate(skill_input)
+            imported = import_user_skill_archive(
+                request.file_name,
+                request.archive_base64,
+            )
+            result_payload = imported.model_dump(by_alias=True, exclude_none=True)
+            message = f"已导入技能 {imported.imported.name}。"
         else:
             raise ValueError(
-                "skillCatalog.action 必须是 list、get、save、create 或 delete。"
+                "skillCatalog.action 必须是 list、get、save、create、delete 或 import。"
             )
         return AgUiActionResult(
             data={"action": action, **result_payload},
@@ -102,7 +115,14 @@ def build_user_skills_ag_ui_stream(
         run_id_prefix="skills",
         operation=operation,
         error_message_prefix="技能操作失败",
-        error_data=lambda _exc: {"action": action},
+        error_data=lambda exc: {
+            "action": action,
+            **(
+                {"code": exc.code}
+                if isinstance(exc, SkillImportError)
+                else {}
+            ),
+        },
         accept=accept,
     )
 

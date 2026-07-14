@@ -8,13 +8,14 @@ type SkillCatalogAgUiPayload = {
   runId: string
   threadId: string
   status: 'completed' | 'failed'
-  action?: 'list' | 'get' | 'save' | 'create' | 'delete'
+  action?: 'list' | 'get' | 'save' | 'create' | 'delete' | 'import'
   root?: string
   skills?: UserSkill[]
   skippedCount?: number
   issues?: UserSkillIssue[]
   document?: UserSkillDocument
   deleted?: { name: string; relativePath: string }
+  imported?: UserSkill
   error?: { type?: string; message?: string }
 }
 
@@ -135,4 +136,16 @@ export async function deleteUserSkill(relativePath: string): Promise<void> {
   if (response.deleted?.relativePath !== relativePath) {
     throw new Error('技能接口没有返回有效的删除结果。')
   }
+}
+
+export async function importUserSkillArchive(input: {
+  archiveBase64: string
+  fileName: string
+}): Promise<UserSkill> {
+  const response = await runSkillCatalogAgent(
+    { action: 'import', ...input },
+    `导入用户技能压缩包 ${input.fileName}。`
+  )
+  if (!response.imported) throw new Error('技能接口没有返回有效的导入结果。')
+  return response.imported
 }
