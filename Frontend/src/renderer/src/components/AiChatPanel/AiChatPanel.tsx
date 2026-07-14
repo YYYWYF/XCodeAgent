@@ -183,13 +183,11 @@ export default function AiChatPanel({
           onReturnWelcome={onReturnWelcome}
           onShowFiles={handleShowFiles}
           onShowSkills={handleShowSkills}
-          onThemeChange={onThemeChange}
           filesActive={activeView === 'files'}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
           sessions={sessions}
           skillsActive={activeView === 'skills'}
-          theme={theme}
           workspaceRoot={workspaceRoot}
         />
 

@@ -42,12 +42,10 @@ type SessionSidebarProps = {
   onReturnWelcome: () => void
   onShowFiles: () => void
   onShowSkills: () => void
-  onThemeChange: (theme: 'light' | 'dark') => void
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
   skillsActive: boolean
-  theme: 'light' | 'dark'
   workspaceRoot: string
 }
 
@@ -154,9 +152,7 @@ export default function SessionSidebar({
   onReturnWelcome,
   onShowFiles,
   onShowSkills,
-  onThemeChange,
-  skillsActive,
-  theme
+  skillsActive
 }: SessionSidebarProps): ReactElement {
   const [outlineQuery, setOutlineQuery] = useState('')
   const [collapsed, setCollapsed] = useState(false)
@@ -367,7 +363,7 @@ export default function SessionSidebar({
         <button className={cx(filesActive && 'active')} onClick={onShowFiles} title="文件" type="button">
           <FileTextOutlined /><span>文件</span>
         </button>
-        <button onClick={() => onThemeChange(theme === 'light' ? 'dark' : 'light')} title="设置" type="button">
+        <button title="设置" type="button">
           <SettingOutlined /><span>设置</span>
         </button>
       </nav>
