@@ -90,19 +90,17 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
       }
 
       const workspaceName = workspace.name || pathBasename(workspace.workspaceRoot)
-      const projectParentPath = pathDirname(workspace.workspaceRoot)
       const schema = buildApplicationSchema({
         ...initialApplicationDraft,
         appName: workspaceName,
-        projectParentPath,
-        projectDirectoryName: workspaceName
+        projectPath: workspace.workspaceRoot
       })
       const application: ApplicationConfig = {
         ...schema,
         id: createApplicationId(),
         name: workspaceName,
         workspaceRoot: workspace.workspaceRoot,
-        projectParentPath,
+        projectParentPath: pathDirname(workspace.workspaceRoot),
         projectDirectoryName: workspaceName,
         source: 'existing-workspace',
         audience: 'developer',

@@ -1,12 +1,11 @@
-import { FolderAddOutlined, FolderOpenOutlined } from '@ant-design/icons'
+import { FolderOpenOutlined } from '@ant-design/icons'
 import { Button, Form, Input, Radio, Select, Switch, Typography } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
 import { initialApplicationDraft, terminalLabels, trackMethodLabels } from './constants'
-import { joinLocalPath, validateProjectDirectoryName } from './utils'
 
-const { Text, Title } = Typography
+const { Title } = Typography
 const { TextArea } = Input
 
 type Props = {
@@ -54,7 +53,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
         <Form.Item label="项目创建在哪个文件夹下？" required>
           <Input.Group compact>
             <Form.Item
-              name="projectParentPath"
+              name="projectPath"
               noStyle
               rules={[{ required: true, message: '请选择项目创建位置' }]}
             >
@@ -69,26 +68,6 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
               选择文件夹
             </Button>
           </Input.Group>
-        </Form.Item>
-        <Form.Item
-          label="项目文件夹名"
-          name="projectDirectoryName"
-          rules={[{ validator: validateProjectDirectoryName }]}
-        >
-          <Input prefix={<FolderAddOutlined />} />
-        </Form.Item>
-        <Form.Item noStyle shouldUpdate>
-          {({ getFieldValue }) => {
-            const finalPath = joinLocalPath(
-              String(getFieldValue('projectParentPath') || ''),
-              String(getFieldValue('projectDirectoryName') || '')
-            )
-            return finalPath ? (
-              <Text className={cx('project-path-preview')} type="secondary">
-                将创建在：{finalPath}
-              </Text>
-            ) : null
-          }}
         </Form.Item>
       </section>
 

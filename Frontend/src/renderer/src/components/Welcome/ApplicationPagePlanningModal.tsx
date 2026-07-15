@@ -34,6 +34,7 @@ type Props = {
   questionsError?: string
   questionsLoading: boolean
   threadId: string
+  onCancel: () => void
   onConfirmed: (plan: ApplicationPagePlan, confirmation: ConfirmedPagePlan) => Promise<void>
   onRetryQuestions: () => void
 }
@@ -52,6 +53,7 @@ export default function ApplicationPagePlanningModal({
   questionsError,
   questionsLoading,
   threadId,
+  onCancel,
   onConfirmed,
   onRetryQuestions
 }: Props): JSX.Element {
@@ -126,6 +128,8 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
+  const backDisabled = generating || revising || confirming
+
   return (
     <Modal
       closable={false}
@@ -134,7 +138,21 @@ export default function ApplicationPagePlanningModal({
       keyboard={false}
       maskClosable={false}
       open
-      title={`规划「${application.appName}」的页面结构`}
+      title={
+        <div className={cx('page-planning-title')}>
+          <Button
+            className={cx('page-planning-title-back')}
+            disabled={backDisabled}
+            icon={<LeftOutlined />}
+            onClick={onCancel}
+            type="text"
+          >
+            返回
+          </Button>
+          <span className={cx('page-planning-title-divider')} />
+          <span>规划「{application.appName}」的页面结构</span>
+        </div>
+      }
       width={820}
     >
       <Steps className={cx('page-planning-steps')} current={plan ? 1 : 0} size="small">

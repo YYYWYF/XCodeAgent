@@ -178,29 +178,6 @@ function setupBrowserIpc(): void {
   });
 }
 
-/** 判断目录名称是否包含跨平台非法字符或 ASCII 控制字符。 */
-function hasInvalidDirectoryCharacter(value: string): boolean {
-  if (/[<>:"/\\|?*]/.test(value)) return true
-  for (const character of value) {
-    if (character.charCodeAt(0) <= 0x1f) return true
-  }
-  return false
-}
-
-/** 校验并返回安全的项目目录名称。 */
-function assertDirectoryName(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error('projectName must be a non-empty string');
-  }
-
-  const trimmedValue = value.trim();
-  if (trimmedValue !== path.basename(trimmedValue) || hasInvalidDirectoryCharacter(trimmedValue)) {
-    throw new Error('projectName contains invalid path characters');
-  }
-
-  return trimmedValue;
-}
-
 /** 校验并返回支持的编辑器模式。 */
 function assertEditorMode(value: unknown): EditorMode {
   if (value !== 'frontend' && value !== 'backend') {
@@ -511,8 +488,8 @@ function setupWorkspaceIpc(): void {
   });
 
   ipcMain.handle('workspace:create-project-directory', async (_event, payload = {}) => {
-    if (typeof payload.parentPath !== 'string' || !payload.parentPath.trim()) {
-      throw new Error('parentPath must be a non-empty string');
+    if (typeof payload.workspacePath !== 'string' || !payload.workspacePath.trim()) {
+      throw new Error('workspacePath must be a non-empty string');
     }
     if (
       !payload.applicationConfig ||
@@ -522,15 +499,14 @@ function setupWorkspaceIpc(): void {
       throw new Error('applicationConfig must be an object');
     }
 
-    const parentPath = path.resolve(payload.parentPath);
-    const projectName = assertDirectoryName(payload.projectName);
-    const projectPath = path.resolve(parentPath, projectName);
+    const projectPath = path.resolve(payload.workspacePath);
 
-    if (path.dirname(projectPath) !== parentPath) {
-      throw new Error('Project path escapes the selected parent directory');
+    try {
+      await fs.mkdir(projectPath, { recursive: false });
+    } catch (error: unknown) {
+      const errnoException = error as NodeJS.ErrnoException;
+      if (errnoException?.code !== 'EEXIST') throw error;
     }
-
-    await fs.mkdir(projectPath, { recursive: false });
     await fs.writeFile(
       path.join(projectPath, 'application.json'),
       `${JSON.stringify(payload.applicationConfig, null, 2)}\n`,

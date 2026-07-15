@@ -22,7 +22,7 @@ import './ApplicationFormModal.less'
 import './WelcomeModal.less'
 import { saveAndOpenApplication, saveApplication } from './applicationService'
 import { initialApplicationDraft } from './constants'
-import { buildApplicationSchema, createApplicationId, formatError } from './utils'
+import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
 
 type Props = {
   onOpenApplication: (application: ApplicationConfig) => void
@@ -39,6 +39,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
   const [planningQuestionsError, setPlanningQuestionsError] = useState('')
   const [planningQuestionsLoading, setPlanningQuestionsLoading] = useState(false)
   const [planningThreadId, setPlanningThreadId] = useState('')
+  const [savedFormValues, setSavedFormValues] = useState<ApplicationDraft>()
 
   const openModal = (): void => {
     setModalOpen(true)
@@ -55,7 +56,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
 
       const result = await workspaceApi.selectDirectory({ title: '选择新应用的创建位置' })
       if (!result.canceled && result.path) {
-        form.setFieldsValue({ projectParentPath: result.path })
+        form.setFieldsValue({ projectPath: result.path })
       }
     } catch (error) {
       message.error(formatError(error, '选择文件夹失败'))
@@ -73,12 +74,10 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
         throw new Error('当前环境不能创建本地项目目录，请在桌面客户端中使用。')
       }
 
-      const projectParentPath = values.projectParentPath.trim()
-      const projectDirectoryName = values.projectDirectoryName.trim()
+      const projectPath = values.projectPath.trim()
       const schema = buildApplicationSchema(values)
       const projectDirectory = await workspaceApi.createProjectDirectory({
-        parentPath: projectParentPath,
-        projectName: projectDirectoryName,
+        workspacePath: projectPath,
         applicationConfig: schema
       })
       const application: ApplicationConfig = {
@@ -86,8 +85,8 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
         id: createApplicationId(),
         name: schema.appName,
         workspaceRoot: projectDirectory.path,
-        projectParentPath,
-        projectDirectoryName,
+        projectParentPath: '',
+        projectDirectoryName: pathBasename(projectPath),
         source: 'new',
         enableAuth: schema.auth.enable,
         enableTracking: schema.track.enable || schema.apiTrack.enable,
@@ -101,6 +100,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
         createdAt: Date.now()
       }
       await saveApplication(application)
+      setSavedFormValues(values)
       setModalOpen(false)
       await loadPagePlanningQuestions(application, createPagePlanningThreadId())
     } catch (error) {
@@ -140,6 +140,14 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     }
   }
 
+  const handleCancelPlanning = (): void => {
+    setPlanningApplication(undefined)
+    setModalOpen(true)
+    if (savedFormValues) {
+      form.setFieldsValue(savedFormValues)
+    }
+  }
+
   const handlePagePlanConfirmed = async (
     plan: ApplicationPagePlan,
     confirmation: ConfirmedPagePlan
@@ -163,7 +171,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
       <WelcomeActionCard
         buttonIcon={<PlusOutlined />}
         buttonLabel="新建应用"
-        description="配置应用骨架、页面、主题和内置模块，并指定本地项目创建位置。"
+        description="配置应用骨架、页面、主题和内置模块，并指定项目创建位置。"
         icon={<PlusOutlined />}
         onClick={openModal}
         primary
@@ -171,7 +179,11 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
       />
 
       <Modal
-        afterClose={() => form.setFieldsValue(initialApplicationDraft)}
+        afterClose={() => {
+          if (!planningApplication) {
+            form.setFieldsValue(initialApplicationDraft)
+          }
+        }}
         cancelText="取消"
         confirmLoading={creating}
         destroyOnClose
@@ -205,6 +217,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
         <ApplicationPagePlanningModal
           application={planningApplication}
           key={planningApplication.id}
+          onCancel={handleCancelPlanning}
           onConfirmed={handlePagePlanConfirmed}
           onRetryQuestions={() => loadPagePlanningQuestions(planningApplication, planningThreadId)}
           questions={planningQuestions}

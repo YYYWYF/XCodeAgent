@@ -23,8 +23,7 @@ declare global {
       workspace?: {
         selectDirectory: (options?: { title?: string }) => Promise<{ canceled: boolean; path?: string }>;
         createProjectDirectory: (payload: {
-          parentPath: string;
-          projectName: string;
+          workspacePath: string;
           applicationConfig: ApplicationSchemaConfig;
         }) => Promise<{ ok?: boolean; path: string }>;
         readApplication: (payload: {

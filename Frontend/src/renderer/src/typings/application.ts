@@ -109,8 +109,7 @@ export interface ApplicationDraft {
   appName: string;
   appIcon: string;
   senario: string;
-  projectParentPath: string;
-  projectDirectoryName: string;
+  projectPath: string;
   terminal: ApplicationTerminal;
   layout: ApplicationSchemaConfig['layout'];
   theme: ApplicationSchemaConfig['theme'];

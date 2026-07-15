@@ -15,14 +15,6 @@ export function pathDirname(value: string) {
   return index > 0 ? normalizedValue.slice(0, index) : ''
 }
 
-export function joinLocalPath(parentPath: string, directoryName: string) {
-  const parent = parentPath.trim().replace(/[\\/]+$/, '')
-  const directory = directoryName.trim()
-  if (!parent || !directory) return ''
-  const separator = parent.includes('\\') ? '\\' : '/'
-  return `${parent}${separator}${directory}`
-}
-
 export function formatError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
 }
@@ -35,14 +27,6 @@ export function formatHistoryTime(value: number): string {
     hour: '2-digit',
     minute: '2-digit'
   }).format(value)
-}
-
-export function validateProjectDirectoryName(_: unknown, value?: string) {
-  if (!value?.trim()) return Promise.reject(new Error('请输入项目文件夹名'))
-  if (/[<>:"/\\|?*\x00-\x1F]/.test(value.trim())) {
-    return Promise.reject(new Error('项目文件夹名不能包含路径分隔符或特殊字符'))
-  }
-  return Promise.resolve()
 }
 
 function parseEnv(value?: string) {
