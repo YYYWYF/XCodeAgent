@@ -79,7 +79,7 @@ export default function DetailReview({
               <div className={cx("workflow-detail-review-title")}>
                 <Tag>{target.target_type === "page" ? "页面" : "数据源"}</Tag>
                 <Text strong>{target.name || target.target_id}</Text>
-                {changes[target.target_id] && <Tag color="blue">已修改</Tag>}
+                {changes[target.target_id] && <Tag color="purple">已修改</Tag>}
               </div>
             }
             key={`${target.target_type}:${target.target_id}`}

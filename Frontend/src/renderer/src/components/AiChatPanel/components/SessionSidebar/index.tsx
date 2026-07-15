@@ -5,17 +5,18 @@ import {
   FileTextOutlined,
   FilterOutlined,
   FolderOpenOutlined,
-  MessageOutlined,
+  FolderOutlined,
   LeftOutlined,
   RightOutlined,
   SearchOutlined,
   SettingOutlined,
-  ThunderboltOutlined,
-  UserOutlined
+  ThunderboltOutlined
 } from '@ant-design/icons'
 import { Input, Switch, Typography } from 'antd'
-import type { KeyboardEvent, ReactElement } from 'react'
+import type { CSSProperties, KeyboardEvent, ReactElement } from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import freeChatIcon from '../../../../assets/icons/free-chat.svg'
+import recommendedTasksIcon from '../../../../assets/icons/recommended-tasks.svg'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import type { ApplicationConfig, ApplicationMenuItem } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -28,6 +29,21 @@ const COLLAPSED_SIDEBAR_WIDTH = 68
 const MIN_SIDEBAR_WIDTH = 240
 const MAX_SIDEBAR_WIDTH = 420
 const COLLAPSE_DRAG_THRESHOLD = 140
+
+type SidebarAssetIconProps = {
+  source: string
+}
+
+/** 将集中管理的 SVG 资源渲染为可继承菜单状态颜色的图标。 */
+function SidebarAssetIcon({ source }: SidebarAssetIconProps): ReactElement {
+  return (
+    <span
+      aria-hidden="true"
+      className={cx('session-footer-icon')}
+      style={{ '--session-footer-icon-source': `url("${source}")` } as CSSProperties}
+    />
+  )
+}
 
 type SessionSidebarProps = {
   activeSessionId?: string
@@ -371,13 +387,13 @@ export default function SessionSidebar({
       </div>
 
       <nav className={cx('session-footer-nav')} aria-label="快捷入口">
-        <button onClick={onCreateSession} title="推荐任务" type="button"><UserOutlined /><span>推荐任务</span></button>
-        <button onClick={onCreateSession} title="自由对话" type="button"><MessageOutlined /><span>自由对话</span></button>
+        <button onClick={onCreateSession} title="推荐任务" type="button"><SidebarAssetIcon source={recommendedTasksIcon} /><span>推荐任务</span></button>
+        <button onClick={onCreateSession} title="自由对话" type="button"><SidebarAssetIcon source={freeChatIcon} /><span>自由对话</span></button>
         <button className={cx(skillsActive && 'active')} onClick={onShowSkills} title="技能" type="button">
           <ThunderboltOutlined /><span>技能</span>
         </button>
         <button className={cx(filesActive && 'active')} onClick={onShowFiles} title="文件" type="button">
-          <FileTextOutlined /><span>文件</span>
+          <FolderOutlined /><span>文件</span>
         </button>
         <button title="设置" type="button">
           <SettingOutlined /><span>设置</span>

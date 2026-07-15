@@ -1,15 +1,21 @@
 import { HolderOutlined } from '@ant-design/icons'
 import { Alert } from 'antd'
 import type { ReactElement } from 'react'
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
-import type { ApplicationConfig, EditorMode, WorkspaceCodeChangeSet } from '../../typings'
+import type {
+  ApplicationConfig,
+  ApplicationMenuItem,
+  EditorMode,
+  WorkspaceCodeChangeSet
+} from '../../typings'
 import { cx, getInitialPreviewUrl, openPreviewWindow } from '../../utils'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
 import ChatHeader from './components/ChatHeader'
 import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import MessageList from './components/MessageList'
+import PageContextHeader from './components/PageContextHeader'
 import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
 import SessionHistoryDropdown from './components/SessionHistoryDropdown'
@@ -32,6 +38,17 @@ type Props = {
 
 type ActiveView = 'chat' | 'skills' | 'files'
 
+/** 按页面名称递归查找对应的菜单配置。 */
+function findPageMenuItem(items: ApplicationMenuItem[], label: string): ApplicationMenuItem | undefined {
+  for (const item of items) {
+    if (item.label === label) return item
+    const matchedChild = findPageMenuItem(item.children || [], label)
+    if (matchedChild) return matchedChild
+  }
+  return undefined
+}
+
+/** 组织应用侧栏、对话区、页面信息与预览面板的主工作台。 */
 export default function AiChatPanel({
   application,
   editorMode,
@@ -113,6 +130,16 @@ export default function AiChatPanel({
   const copy = chatCopy[editorMode]
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
+  const activePage = useMemo(
+    () => findPageMenuItem(application.menus.items, activePageTitle),
+    [activePageTitle, application.menus.items]
+  )
+  const activeSessionUpdatedAt = sessions.find((session) => session.id === activeSessionId)?.updatedAt
+
+  /** 在右侧工作区打开当前页面预览。 */
+  const handleOpenPage = (): void => {
+    setRightPanel({ type: 'preview' })
+  }
   const handleOpenFullscreenPreview = async (): Promise<void> => {
     setPreviewError('')
 
@@ -224,6 +251,18 @@ export default function AiChatPanel({
               }
               onThemeChange={onThemeChange}
               pageTitle={activePageTitle}
+              theme={theme}
+            />
+
+            <PageContextHeader
+              description={activePage?.purpose || application.senario || '当前应用页面'}
+              keyFeatures={activePage?.keyFeatures || []}
+              lastAnalyzedAt={activeSessionUpdatedAt}
+              onOpenFullscreenPage={handleOpenFullscreenPreview}
+              onOpenPage={handleOpenPage}
+              pagePath={activePage?.path || '/'}
+              pageTitle={activePageTitle}
+              previewAvailable={showPreviewActions}
               theme={theme}
             />
 

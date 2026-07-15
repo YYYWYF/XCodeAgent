@@ -563,10 +563,11 @@ function workflowConfirmationArtifact(
   return artifact;
 }
 
+/** 将工作流状态映射为符合工作区语义色的标签颜色。 */
 function workflowStatusColor(status: string): string {
   if (status === "completed" || status === "passed") return "green";
   if (status === "failed" || status === "error") return "red";
   if (status === "requires_user_input") return "gold";
-  if (status === "running") return "blue";
+  if (status === "running") return "purple";
   return "default";
 }

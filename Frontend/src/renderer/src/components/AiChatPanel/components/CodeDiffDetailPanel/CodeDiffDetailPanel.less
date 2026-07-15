@@ -1,8 +1,8 @@
 .@{class-prefix}-code-diff-detail-panel {
   --code-panel-bg: #ffffff;
   --code-panel-header: #ffffff;
-  --code-panel-active: #eef5ff;
-  --code-panel-border: #d8e5f7;
+  --code-panel-active: #f4f0ff;
+  --code-panel-border: #e1d8f5;
   display: flex;
   height: 100%;
   min-width: 0;
@@ -76,7 +76,7 @@
   padding: 12px 16px;
   border-bottom: 1px solid var(--code-panel-border);
   background: color-mix(in srgb, var(--code-panel-active) 94%, transparent);
-  box-shadow: 0 1px 0 rgba(47, 114, 232, 0.05);
+  box-shadow: 0 1px 0 rgba(107, 60, 240, 0.05);
 
   > div {
     display: inline-flex;
@@ -228,8 +228,8 @@
 
   .@{class-prefix}-code-diff-close-button.ant-btn:hover,
   .@{class-prefix}-code-diff-close-button.ant-btn:focus-visible {
-    color: #1e63c5;
-    background: #e8f1ff;
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
   }
 }
 
