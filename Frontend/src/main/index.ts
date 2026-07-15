@@ -17,14 +17,14 @@ import {
   loginWithCmbDeviceFlow
 } from './auth'
 
-let mainWindow:BrowserWindow|null = null;
+let mainWindow: BrowserWindow | null = null;
 let loginWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
-const previewWindows = new Set();
+const previewWindows = new Set<BrowserWindow>();
 
-
-function getApplicationsFile() {
+/** 返回 Electron 用户数据目录中的应用列表文件路径。 */
+function getApplicationsFile(): string {
   return path.join(app.getPath('userData'), 'applications.json');
 }
 
@@ -50,6 +50,19 @@ type ChatSessionSummary = {
   messageCount: number
 }
 
+type JsonRecord = Record<string, unknown>
+
+type NormalizedChatSession = {
+  id: string
+  title: string
+  editorMode: EditorMode
+  threadId: string
+  createdAt: number
+  updatedAt: number
+  workspaceRoot: string
+  messages: JsonRecord[]
+}
+
 const MESSAGE_APPROVAL_STATUSES = new Set([
   'pending',
   'approved_once',
@@ -57,11 +70,13 @@ const MESSAGE_APPROVAL_STATUSES = new Set([
   'feedback',
 ])
 
-function getSeedApplicationsFile() {
+/** 返回随应用发布的初始应用列表文件路径。 */
+function getSeedApplicationsFile(): string {
   return path.join(__dirname, '..', 'data', 'applications.json');
 }
 
-async function ensureApplicationsFile() {
+/** 确保应用列表文件存在，并在首次运行时写入种子数据。 */
+async function ensureApplicationsFile(): Promise<string> {
   const applicationsFile = getApplicationsFile();
   await fs.mkdir(path.dirname(applicationsFile), { recursive: true });
 
@@ -83,14 +98,16 @@ async function ensureApplicationsFile() {
   return applicationsFile;
 }
 
-async function readApplications() {
+/** 读取持久化应用列表，非数组内容按空列表处理。 */
+async function readApplications(): Promise<unknown[]> {
   const applicationsFile = await ensureApplicationsFile();
   const rawValue = await fs.readFile(applicationsFile, 'utf8');
-  const parsed = JSON.parse(rawValue || '[]');
+  const parsed: unknown = JSON.parse(rawValue || '[]');
   return Array.isArray(parsed) ? parsed : [];
 }
 
-async function writeApplications(applications) {
+/** 校验并持久化应用列表。 */
+async function writeApplications(applications: unknown): Promise<void> {
   if (!Array.isArray(applications)) {
     throw new Error('applications must be an array');
   }
@@ -99,7 +116,8 @@ async function writeApplications(applications) {
   await fs.writeFile(applicationsFile, `${JSON.stringify(applications, null, 2)}\n`, 'utf8');
 }
 
-function setupApplicationStorageIpc() {
+/** 注册应用列表读取和保存所需的 IPC。 */
+function setupApplicationStorageIpc(): void {
   ipcMain.handle('applications:load', async () => ({
     applications: await readApplications(),
   }));
@@ -110,7 +128,8 @@ function setupApplicationStorageIpc() {
   });
 }
 
-function normalizeExternalUrl(url) {
+/** 校验并规范化允许由 Electron 打开的外部 HTTP 地址。 */
+function normalizeExternalUrl(url: unknown): string {
   if (typeof url !== 'string') {
     throw new Error('url must be a string');
   }
@@ -123,7 +142,8 @@ function normalizeExternalUrl(url) {
   return parsedUrl.toString();
 }
 
-function setupBrowserIpc() {
+/** 注册系统浏览器和独立预览窗口相关 IPC。 */
+function setupBrowserIpc(): void {
   ipcMain.handle('browser:open-external', async (_event, url) => {
     await shell.openExternal(normalizeExternalUrl(url));
     return { ok: true };
@@ -157,41 +177,55 @@ function setupBrowserIpc() {
   });
 }
 
-function assertDirectoryName(value) {
+/** 判断目录名称是否包含跨平台非法字符或 ASCII 控制字符。 */
+function hasInvalidDirectoryCharacter(value: string): boolean {
+  if (/[<>:"/\\|?*]/.test(value)) return true
+  for (const character of value) {
+    if (character.charCodeAt(0) <= 0x1f) return true
+  }
+  return false
+}
+
+/** 校验并返回安全的项目目录名称。 */
+function assertDirectoryName(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error('projectName must be a non-empty string');
   }
 
   const trimmedValue = value.trim();
-  if (trimmedValue !== path.basename(trimmedValue) || /[<>:"/\\|?*\x00-\x1F]/.test(trimmedValue)) {
+  if (trimmedValue !== path.basename(trimmedValue) || hasInvalidDirectoryCharacter(trimmedValue)) {
     throw new Error('projectName contains invalid path characters');
   }
 
   return trimmedValue;
 }
 
-function assertEditorMode(value) {
-  if (!['frontend', 'backend'].includes(value)) {
+/** 校验并返回支持的编辑器模式。 */
+function assertEditorMode(value: unknown): EditorMode {
+  if (value !== 'frontend' && value !== 'backend') {
     throw new Error('editorMode must be frontend or backend');
   }
   return value;
 }
 
-function assertSessionId(value) {
+/** 校验并返回可安全用于文件名的会话标识。 */
+function assertSessionId(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) {
     throw new Error('sessionId contains invalid characters');
   }
   return value;
 }
 
-function resolveWorkspaceRoot(value) {
+/** 校验并解析工作区绝对路径。 */
+function resolveWorkspaceRoot(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error('workspaceRoot must be a non-empty string');
   }
   return path.resolve(value);
 }
 
-function getWorkspaceSessionKey(workspaceRoot) {
+/** 根据工作区名称和绝对路径哈希生成稳定的会话目录键。 */
+function getWorkspaceSessionKey(workspaceRoot: unknown): string {
   const resolvedWorkspaceRoot = resolveWorkspaceRoot(workspaceRoot);
   const workspaceName =
     path.basename(resolvedWorkspaceRoot).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 80) || 'workspace';
@@ -203,23 +237,28 @@ function getWorkspaceSessionKey(workspaceRoot) {
   return `${workspaceName}-${workspaceHash}`;
 }
 
-function getWorkspaceSessionRoot(workspaceRoot) {
+/** 返回指定工作区在环境数据目录中的会话根目录。 */
+function getWorkspaceSessionRoot(workspaceRoot: unknown): string {
   return path.join(getXcodeAgentDataDir(), 'sessions', getWorkspaceSessionKey(workspaceRoot));
 }
 
+/** 返回当前环境全部会话工作区的存储根目录。 */
 function getSessionStorageRoot(): string {
   return path.join(getXcodeAgentDataDir(), 'sessions');
 }
 
-function getSessionsDir(workspaceRoot, editorMode) {
+/** 返回指定工作区和编辑器模式对应的会话目录。 */
+function getSessionsDir(workspaceRoot: unknown, editorMode: unknown): string {
   return path.join(getWorkspaceSessionRoot(workspaceRoot), assertEditorMode(editorMode));
 }
 
-function getSessionFile(workspaceRoot, editorMode, sessionId) {
+/** 返回校验后的单个会话文件路径。 */
+function getSessionFile(workspaceRoot: unknown, editorMode: unknown, sessionId: unknown): string {
   return path.join(getSessionsDir(workspaceRoot, editorMode), `${assertSessionId(sessionId)}.json`);
 }
 
-function getLegacyWorkspaceSessionsDir(workspaceRoot, editorMode): string {
+/** 返回旧版工作区内会话目录，用于兼容迁移。 */
+function getLegacyWorkspaceSessionsDir(workspaceRoot: unknown, editorMode: unknown): string {
   return path.join(
     resolveWorkspaceRoot(workspaceRoot),
     XCODE_AGENT_ENV.WORKING_DIR,
@@ -228,7 +267,8 @@ function getLegacyWorkspaceSessionsDir(workspaceRoot, editorMode): string {
   )
 }
 
-async function ensureSessionsDir(workspaceRoot, editorMode) {
+/** 创建环境级会话目录并更新其工作区元数据。 */
+async function ensureSessionsDir(workspaceRoot: unknown, editorMode: unknown): Promise<string> {
   const resolvedWorkspaceRoot = resolveWorkspaceRoot(workspaceRoot);
   const workspaceSessionRoot = getWorkspaceSessionRoot(resolvedWorkspaceRoot);
   const sessionsDir = path.join(workspaceSessionRoot, assertEditorMode(editorMode));
@@ -241,7 +281,12 @@ async function ensureSessionsDir(workspaceRoot, editorMode) {
   return sessionsDir;
 }
 
-async function migrateLegacyWorkspaceSessions(workspaceRoot, editorMode, sessionsDir) {
+/** 将旧版工作区内的有效会话按需迁移到环境级存储。 */
+async function migrateLegacyWorkspaceSessions(
+  workspaceRoot: unknown,
+  editorMode: unknown,
+  sessionsDir: string
+): Promise<void> {
   const legacySessionsDir = getLegacyWorkspaceSessionsDir(workspaceRoot, editorMode);
   if (path.resolve(legacySessionsDir) === path.resolve(sessionsDir)) return;
 
@@ -272,7 +317,8 @@ async function migrateLegacyWorkspaceSessions(workspaceRoot, editorMode, session
   }
 }
 
-function sessionSummary(session) {
+/** 将规范化会话转换为列表展示所需的摘要。 */
+function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
   const messages = Array.isArray(session.messages) ? session.messages : [];
   return {
     id: String(session.id || ''),
@@ -285,6 +331,7 @@ function sessionSummary(session) {
   };
 }
 
+/** 深拷贝可序列化 JSON 对象，无法序列化时返回空值。 */
 function cloneJsonRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
 
@@ -295,7 +342,13 @@ function cloneJsonRecord(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
-function normalizeSessionMessage(message): Record<string, unknown> {
+/** 判断未知值是否为非数组 JSON 对象。 */
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** 规范化单条会话消息，并保留受支持的扩展字段。 */
+function normalizeSessionMessage(message: JsonRecord): Record<string, unknown> {
   const normalizedMessage = {
     id: Number(message.id || Date.now()),
     role: message.role === 'assistant' ? 'assistant' : 'user',
@@ -306,21 +359,25 @@ function normalizeSessionMessage(message): Record<string, unknown> {
   const approval = cloneJsonRecord(message.approval)
   const codeChanges = cloneJsonRecord(message.codeChanges)
   const workflow = cloneJsonRecord(message.workflow)
+  const approvalStatus =
+    typeof message.approvalStatus === 'string' &&
+    MESSAGE_APPROVAL_STATUSES.has(message.approvalStatus)
+      ? message.approvalStatus
+      : undefined
 
   return {
     ...normalizedMessage,
     ...(orchestration ? { orchestration } : {}),
     ...(approval ? { approval } : {}),
-    ...(MESSAGE_APPROVAL_STATUSES.has(message.approvalStatus)
-      ? { approvalStatus: message.approvalStatus }
-      : {}),
+    ...(approvalStatus ? { approvalStatus } : {}),
     ...(codeChanges ? { codeChanges } : {}),
     ...(workflow ? { workflow } : {}),
   }
 }
 
-function normalizeSession(session) {
-  if (!session || typeof session !== 'object') {
+/** 校验外部会话数据并转换为可持久化的统一结构。 */
+function normalizeSession(session: unknown): NormalizedChatSession {
+  if (!isJsonRecord(session)) {
     throw new Error('session must be an object');
   }
 
@@ -328,7 +385,7 @@ function normalizeSession(session) {
   const id = assertSessionId(session.id);
   const messages = Array.isArray(session.messages)
     ? session.messages
-        .filter((message) => message && typeof message === 'object')
+        .filter(isJsonRecord)
         .map(normalizeSessionMessage)
     : [];
 
@@ -421,7 +478,8 @@ async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
   return workspaces.sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt);
 }
 
-function setupWorkspaceIpc() {
+/** 注册工作区读取、选择和项目创建相关 IPC。 */
+function setupWorkspaceIpc(): void {
   ipcMain.handle('workspace:read-application', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
     const applicationFile = path.join(workspaceRoot, 'application.json');
@@ -631,6 +689,7 @@ function createMainWindow(): void {
   loadRendererPage(mainWindow, 'index')
 }
 
+/** 创建或聚焦带有自定义关闭控件的无边框登录窗口。 */
 function createLoginWindow(): void {
   if (loginWindow && !loginWindow.isDestroyed()) {
     loginWindow.show()
@@ -639,14 +698,18 @@ function createLoginWindow(): void {
   }
 
   loginWindow = new BrowserWindow({
-    width: 440,
-    height: 520,
-    minWidth: 420,
-    minHeight: 480,
+    width: 760,
+    height: 620,
+    minWidth: 720,
+    minHeight: 580,
     title: 'XCode Agent 登录',
-    backgroundColor: '#eef2f6',
+    backgroundColor: '#07101f',
+    frame: false,
+    hasShadow: false,
     show: false,
     autoHideMenuBar: true,
+    minimizable: false,
+    maximizable: false,
     resizable: false,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
