@@ -33,6 +33,7 @@ type Props = {
   questions: PagePlanningQuestion[]
   questionsError?: string
   questionsLoading: boolean
+  theme: 'dark' | 'light'
   threadId: string
   onCancel: () => void
   onConfirmed: (plan: ApplicationPagePlan, confirmation: ConfirmedPagePlan) => Promise<void>
@@ -47,11 +48,13 @@ function toPageContext(application: ApplicationConfig): ApplicationPageContext {
   }
 }
 
+// 渲染页面结构规划弹窗，并复用首页当前的明暗主题与紫色强调样式。
 export default function ApplicationPagePlanningModal({
   application,
   questions,
   questionsError,
   questionsLoading,
+  theme,
   threadId,
   onCancel,
   onConfirmed,
@@ -154,6 +157,7 @@ export default function ApplicationPagePlanningModal({
         </div>
       }
       width={820}
+      wrapClassName={cx('welcome-modal', 'page-planning-modal', `theme-${theme}`)}
     >
       <Steps className={cx('page-planning-steps')} current={plan ? 1 : 0} size="small">
         <Step title="补充细节" />

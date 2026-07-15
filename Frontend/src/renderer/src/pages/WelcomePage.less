@@ -4,15 +4,15 @@
   overflow: hidden;
   color: #f3f7ff;
   background:
-    radial-gradient(circle at 72% 46%, rgba(0, 132, 255, 0.12), transparent 34%),
-    radial-gradient(circle at 16% 90%, rgba(18, 82, 132, 0.08), transparent 28%), #07111c;
+    radial-gradient(circle at 72% 46%, rgba(124, 58, 237, 0.13), transparent 34%),
+    radial-gradient(circle at 16% 90%, rgba(91, 33, 182, 0.08), transparent 28%), #07111c;
 
   &::before {
     position: absolute;
     inset: 0;
     pointer-events: none;
     content: '';
-    background-image: radial-gradient(rgba(70, 142, 201, 0.12) 0.7px, transparent 0.7px);
+    background-image: radial-gradient(rgba(167, 139, 250, 0.12) 0.7px, transparent 0.7px);
     background-size: 7px 7px;
     mask-image: linear-gradient(90deg, transparent 35%, #000 57%, #000 92%, transparent);
   }
@@ -60,12 +60,12 @@
     width: 8px;
     height: 29px;
     border-radius: 2px;
-    background: linear-gradient(180deg, #4ca0ff, #1474ff);
-    box-shadow: 0 0 14px rgba(37, 128, 255, 0.22);
+    background: linear-gradient(180deg, #c4b5fd, #8b5cf6);
+    box-shadow: 0 0 14px rgba(139, 92, 246, 0.24);
     transform: rotate(38deg);
 
     &:last-child {
-      background: linear-gradient(180deg, #1769e9, #35a2ff);
+      background: linear-gradient(180deg, #7c3aed, #c084fc);
       transform: rotate(-38deg);
     }
   }
@@ -85,8 +85,8 @@
 
     &:hover,
     &:focus {
-      color: #dceaff;
-      background: rgba(71, 126, 172, 0.12);
+      color: #ede9fe;
+      background: rgba(139, 92, 246, 0.12);
     }
   }
 }
@@ -107,13 +107,13 @@
 
     &:hover,
     &.ant-dropdown-menu-item-selected {
-      color: #edf6ff;
-      background: #1a344d;
+      color: #f5f3ff;
+      background: #30204b;
     }
   }
 
   .ant-dropdown-menu-item-icon {
-    color: #5ca9ff;
+    color: #a78bfa;
   }
 }
 
@@ -176,20 +176,20 @@
   &:hover,
   &:focus {
     color: #ffffff;
-    border-color: #4d9fff;
-    background: rgba(24, 54, 84, 0.72);
+    border-color: #a78bfa;
+    background: rgba(63, 38, 92, 0.72);
   }
 
   &.@{class-prefix}-primary {
     color: #ffffff;
-    border-color: #1679f4;
-    background: #1679f4;
-    box-shadow: 0 10px 28px rgba(0, 109, 255, 0.23);
+    border-color: #7c3aed;
+    background: #7c3aed;
+    box-shadow: 0 10px 28px rgba(124, 58, 237, 0.26);
 
     &:hover,
     &:focus {
-      border-color: #3492ff;
-      background: #2588ff;
+      border-color: #a78bfa;
+      background: #8b5cf6;
     }
   }
 }

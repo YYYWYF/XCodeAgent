@@ -223,6 +223,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
           questions={planningQuestions}
           questionsError={planningQuestionsError}
           questionsLoading={planningQuestionsLoading}
+          theme={theme}
           threadId={planningThreadId}
         />
       ) : null}

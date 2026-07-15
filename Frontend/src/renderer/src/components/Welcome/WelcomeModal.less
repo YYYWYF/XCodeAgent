@@ -1,6 +1,6 @@
 .@{class-prefix}-welcome-modal {
-  --modal-accent: #2588ff;
-  --modal-accent-hover: #4299ff;
+  --modal-accent: #8b5cf6;
+  --modal-accent-hover: #a78bfa;
   --modal-bg: #0d1825;
   --modal-surface: #111f2e;
   --modal-surface-hover: #15283a;
@@ -83,7 +83,7 @@
       color: #fff;
       border-color: var(--modal-accent);
       background: var(--modal-accent);
-      box-shadow: 0 8px 22px rgba(37, 136, 255, 0.2);
+      box-shadow: 0 8px 22px rgba(139, 92, 246, 0.24);
 
       &:hover,
       &:focus {
@@ -91,6 +91,33 @@
         border-color: var(--modal-accent-hover);
         background: var(--modal-accent-hover);
       }
+    }
+  }
+
+  .ant-modal-body .ant-btn-primary:not([disabled]) {
+    color: #fff;
+    border-color: var(--modal-accent);
+    background: var(--modal-accent);
+    box-shadow: 0 8px 22px rgba(139, 92, 246, 0.2);
+
+    &:hover,
+    &:focus {
+      color: #fff;
+      border-color: var(--modal-accent-hover);
+      background: var(--modal-accent-hover);
+    }
+  }
+
+  .ant-btn:not(.ant-btn-primary):not([disabled]) {
+    color: var(--modal-accent);
+    border-color: var(--modal-accent);
+
+    &:hover,
+    &:focus,
+    &:active {
+      color: var(--modal-accent-hover);
+      border-color: var(--modal-accent-hover);
+      background: rgba(139, 92, 246, 0.1);
     }
   }
 
@@ -129,7 +156,7 @@
   .ant-select-focused:not(.ant-select-disabled).ant-select:not(.ant-select-customize-input)
     .ant-select-selector {
     border-color: var(--modal-accent);
-    box-shadow: 0 0 0 2px rgba(37, 136, 255, 0.1);
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.12);
   }
 
   .ant-input-prefix,
@@ -160,6 +187,8 @@
   }
 
   &.@{class-prefix}-theme-light {
+    --modal-accent: #7c3aed;
+    --modal-accent-hover: #8b5cf6;
     --modal-bg: #ffffff;
     --modal-surface: #f5f8fc;
     --modal-surface-hover: #eef5fd;
@@ -197,17 +226,17 @@
   flex: 0 0 42px;
   align-items: center;
   justify-content: center;
-  color: #79b7ff;
+  color: #c4b5fd;
   font-size: 19px;
-  border: 1px solid rgba(74, 154, 246, 0.38);
+  border: 1px solid rgba(167, 139, 250, 0.4);
   border-radius: 10px;
-  background: rgba(26, 110, 208, 0.15);
+  background: rgba(124, 58, 237, 0.16);
 }
 
 .@{class-prefix}-theme-light .@{class-prefix}-welcome-modal-title-icon {
-  color: #1479ee;
-  border-color: #bfdbfa;
-  background: #eaf4ff;
+  color: #7c3aed;
+  border-color: #d8c8ff;
+  background: #f1ebff;
 }
 
 .@{class-prefix}-welcome-modal-title-copy {

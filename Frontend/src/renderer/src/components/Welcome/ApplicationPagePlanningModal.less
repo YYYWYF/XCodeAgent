@@ -62,9 +62,9 @@
   display: grid;
   gap: 10px;
   padding: 16px;
-  border: 1px solid #dfe5ed;
+  border: 1px solid var(--modal-border);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--modal-surface);
 
   h5.ant-typography,
   p.ant-typography {
@@ -80,4 +80,47 @@
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.@{class-prefix}-page-planning-modal {
+  .ant-steps-item-process .ant-steps-item-icon {
+    border-color: var(--modal-accent);
+    background: var(--modal-accent);
+  }
+
+  .ant-steps-item-finish .ant-steps-item-icon {
+    border-color: var(--modal-accent);
+
+    > .ant-steps-icon {
+      color: var(--modal-accent);
+    }
+  }
+
+  .ant-steps-item-finish > .ant-steps-item-container > .ant-steps-item-tail::after {
+    background: var(--modal-accent);
+  }
+
+  .ant-steps-item-title,
+  .ant-form-item-extra {
+    color: var(--modal-text-secondary) !important;
+  }
+
+  .ant-steps-item-process .ant-steps-item-title,
+  .ant-alert-message,
+  .ant-alert-description {
+    color: var(--modal-text) !important;
+  }
+
+  .ant-spin-dot-item {
+    background-color: var(--modal-accent);
+  }
+
+  .ant-alert-info {
+    border-color: rgba(139, 92, 246, 0.28);
+    background: rgba(139, 92, 246, 0.1);
+
+    .ant-alert-icon {
+      color: var(--modal-accent);
+    }
+  }
 }
