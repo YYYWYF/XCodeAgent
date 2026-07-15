@@ -13,7 +13,6 @@ import {
   getAccessToken,
   getXcodeAgentDataDir,
   hasValidAuthToken,
-  initializeAuthState,
   loginWithCmbDeviceFlow
 } from './auth'
 
@@ -22,6 +21,8 @@ let loginWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 const previewWindows = new Set<BrowserWindow>();
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+let primaryStartupPromise: Promise<boolean> | null = null
 
 /** 返回 Electron 用户数据目录中的应用列表文件路径。 */
 function getApplicationsFile(): string {
@@ -786,12 +787,30 @@ function setupTray(): void {
   })
 }
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.whenReady().then(async () => {
+/** 在冷启动阶段清除残留认证；失败时提示用户并阻止应用继续初始化。 */
+async function clearAuthStateBeforeStartup(): Promise<boolean> {
+  try {
+    await ensureXcodeAgentDataDir()
+    await clearAuthState()
+    return true
+  } catch (error) {
+    const authFile = path.join(getXcodeAgentDataDir(), 'auth.json')
+    console.error('Failed to clear auth token during startup', error)
+    dialog.showErrorBox(
+      '认证状态清理失败',
+      `无法清理本地登录凭证，应用将退出。\n请检查文件权限后重试：\n${authFile}`
+    )
+    app.quit()
+    return false
+  }
+}
+
+/** 初始化获得单实例锁的主进程，成功后才允许窗口恢复。 */
+async function initializePrimaryApplication(): Promise<boolean> {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
+
+  if (!(await clearAuthStateBeforeStartup())) return false
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -802,8 +821,6 @@ app.whenReady().then(async () => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
-  await ensureXcodeAgentDataDir()
-  await initializeAuthState()
   const backendBaseUrl = await startBackendService()
   console.log(`XCode Agent backend URL: ${backendBaseUrl}`)
   setupApplicationStorageIpc();
@@ -820,10 +837,40 @@ app.whenReady().then(async () => {
     // dock icon is clicked and there are no other windows open.
     void openAuthenticatedWindow()
   })
-}).catch((error) => {
+
+  return true
+}
+
+/** 处理主实例初始化中的非认证清理异常。 */
+function handlePrimaryStartupFailure(error: unknown): boolean {
   console.error('Failed to start XCode Agent', error)
   app.quit()
-})
+  return false
+}
+
+/** 第二实例启动时等待主实例完成初始化，然后聚焦当前登录窗口或主窗口。 */
+async function focusPrimaryWindowAfterStartup(): Promise<void> {
+  const startupPromise = primaryStartupPromise
+  if (!startupPromise || !(await startupPromise)) return
+  await openAuthenticatedWindow()
+}
+
+/** 接收第二实例通知，避免第二进程触碰当前实例的认证文件。 */
+function handleSecondInstance(): void {
+  void focusPrimaryWindowAfterStartup().catch((error) => {
+    console.error('Failed to focus the primary XCode Agent window', error)
+  })
+}
+
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', handleSecondInstance)
+  primaryStartupPromise = app
+    .whenReady()
+    .then(initializePrimaryApplication)
+    .catch(handlePrimaryStartupFailure)
+}
 
 let quitCleanupCompleted = false
 let quitCleanupStarted = false
@@ -843,24 +890,26 @@ async function cleanupBeforeQuit(): Promise<void> {
   }
 }
 
-app.on('before-quit', (event) => {
-  isQuitting = true
-  if (quitCleanupCompleted) return
+if (hasSingleInstanceLock) {
+  app.on('before-quit', (event) => {
+    isQuitting = true
+    if (quitCleanupCompleted) return
 
-  event.preventDefault()
-  if (quitCleanupStarted) return
-  quitCleanupStarted = true
+    event.preventDefault()
+    if (quitCleanupStarted) return
+    quitCleanupStarted = true
 
-  void cleanupBeforeQuit().finally(() => {
-    quitCleanupCompleted = true
-    app.quit()
+    void cleanupBeforeQuit().finally(() => {
+      quitCleanupCompleted = true
+      app.quit()
+    })
   })
-})
 
-// 普通关闭窗口时保持托盘运行，显式退出由 before-quit 统一清理。
-app.on('window-all-closed', () => {
-  // 不在此处退出应用。
-})
+  // 普通关闭窗口时保持托盘运行，显式退出由 before-quit 统一清理。
+  app.on('window-all-closed', () => {
+    // 不在此处退出应用。
+  })
+}
 
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and require them here.

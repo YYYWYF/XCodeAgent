@@ -36,24 +36,6 @@ function getAuthFile(): string {
   return path.join(getXcodeAgentDataDir(), 'auth.json')
 }
 
-/** 判断未知数据是否是只包含有效 access_token 的认证记录。 */
-function isAuthRecord(value: unknown): value is AuthRecord {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<AuthRecord>
-  return typeof candidate.access_token === 'string' && Boolean(candidate.access_token.trim())
-}
-
-/** 从当前环境的 auth.json 读取有效认证记录。 */
-async function readAuthRecord(): Promise<AuthRecord | null> {
-  try {
-    const rawValue = await fs.readFile(getAuthFile(), 'utf8')
-    const parsedValue = JSON.parse(rawValue || '{}')
-    return isAuthRecord(parsedValue) ? parsedValue : null
-  } catch {
-    return null
-  }
-}
-
 /** 将认证记录写入当前环境的 auth.json。 */
 async function writeAuthRecord(authRecord: AuthRecord): Promise<void> {
   await ensureXcodeAgentDataDir()
@@ -61,12 +43,6 @@ async function writeAuthRecord(authRecord: AuthRecord): Promise<void> {
     encoding: 'utf8',
     mode: 0o600
   })
-}
-
-/** 初始化主进程内存中的认证状态，旧 token 格式不会被接受。 */
-export async function initializeAuthState(): Promise<void> {
-  const authRecord = await readAuthRecord()
-  accessToken = authRecord?.access_token.trim() || null
 }
 
 /** 返回主进程内存中是否存在有效 access_token。 */
