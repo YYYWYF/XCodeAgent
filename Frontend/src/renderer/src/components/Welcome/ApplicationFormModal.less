@@ -6,21 +6,20 @@
 
 .@{class-prefix}-application-form-section {
   min-width: 0;
-  padding: 18px 18px 6px;
+  padding: 18px 20px 8px;
   border: 1px solid var(--modal-border);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--modal-surface);
+  transition: border-color 0.2s ease, opacity 0.2s ease;
 
-  &:first-child,
-  &:nth-child(2) {
+  // 基础信息、项目位置占整行
+  &--full {
     grid-column: 1 / -1;
   }
 
-  h5.ant-typography {
-    margin: 0 0 16px;
-    color: var(--modal-text);
-    font-size: 14px;
-    font-weight: 600;
+  // 开关类分区（认证 / 页面埋点 / 接口埋点）：关闭时整体灰显
+  &--disabled {
+    opacity: 0.55;
   }
 
   .ant-form-item {
@@ -43,6 +42,61 @@
   }
 }
 
+// 分区标题：左侧主题色竖条 + 图标 + 文案
+.@{class-prefix}-application-form-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.@{class-prefix}-application-form-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.@{class-prefix}-application-form-section-icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  color: var(--modal-accent);
+  font-size: 16px;
+  border-radius: 8px;
+  background: rgba(37, 136, 255, 0.12);
+}
+
+.@{class-prefix}-theme-light .@{class-prefix}-application-form-section-icon {
+  background: #eaf4ff;
+}
+
+.@{class-prefix}-application-form-section-text {
+  color: var(--modal-text);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.@{class-prefix}-application-form-switch {
+  margin-bottom: 0 !important;
+}
+
+// 双列字段网格：同分区内的短字段并排
+.@{class-prefix}-application-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+
+  .ant-form-item:last-child {
+    margin-bottom: 16px;
+  }
+}
+
 .@{class-prefix}-project-path-preview {
   display: block;
   margin: -4px 0 12px;
@@ -56,13 +110,42 @@
   word-break: break-all;
 }
 
+.@{class-prefix}-application-icon-picker {
+  .ant-radio-button-wrapper {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    font-size: 18px;
+    color: var(--modal-text-secondary);
+
+    .anticon {
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    &:hover {
+      color: var(--modal-text);
+    }
+
+    &-checked {
+      color: #fff;
+    }
+  }
+}
+
 @media (max-width: 720px) {
   .@{class-prefix}-application-form {
     grid-template-columns: 1fr;
   }
 
-  .@{class-prefix}-application-form-section:first-child,
-  .@{class-prefix}-application-form-section:nth-child(2) {
+  .@{class-prefix}-application-form-section--full {
     grid-column: auto;
+  }
+
+  .@{class-prefix}-application-form-grid {
+    grid-template-columns: 1fr;
   }
 }
