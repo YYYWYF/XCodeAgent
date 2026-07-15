@@ -5,6 +5,7 @@
   --outline-hover-bg: rgba(91, 36, 245, 0.045);
   --outline-panel: #fbfbfe;
   --outline-line: #e8e8f2;
+  --outline-scrollbar-thumb: rgba(91, 96, 124, 0.2);
   position: relative;
   display: flex;
   flex: 0 0 var(--session-sidebar-width, 334px);
@@ -261,7 +262,7 @@
   padding-right: 7px;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: #c8c8ed transparent;
+  scrollbar-color: var(--outline-scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
@@ -602,6 +603,7 @@
     --outline-hover-bg: rgba(155, 112, 255, 0.075);
     --outline-panel: #121722;
     --outline-line: #303646;
+    --outline-scrollbar-thumb: rgba(238, 240, 247, 0.18);
     color: #eef0f7;
   }
 

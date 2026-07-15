@@ -28,6 +28,7 @@ const xcodeAgentApi = {
   workspace: {
     selectDirectory: (options = {}) => ipcRenderer.invoke('workspace:select-directory', options),
     createProjectDirectory: (payload) => ipcRenderer.invoke('workspace:create-project-directory', payload),
+    readApplication: (payload) => ipcRenderer.invoke('workspace:read-application', payload),
   },
   sessions: {
     listWorkspaces: () => ipcRenderer.invoke('sessions:list-workspaces'),

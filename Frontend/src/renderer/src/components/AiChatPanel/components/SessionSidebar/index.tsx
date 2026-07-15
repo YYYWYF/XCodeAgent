@@ -15,7 +15,7 @@ import {
 } from '@ant-design/icons'
 import { Input, Switch, Typography } from 'antd'
 import type { KeyboardEvent, ReactElement } from 'react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import type { ApplicationConfig, ApplicationMenuItem } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -146,6 +146,10 @@ function collectRelatedKeys(items: ApplicationMenuItem[], selectedKey: string): 
   return related
 }
 
+function containsMenuKey(items: ApplicationMenuItem[], key: string): boolean {
+  return items.some((item) => item.key === key || containsMenuKey(item.children || [], key))
+}
+
 export default function SessionSidebar({
   application,
   filesActive,
@@ -166,6 +170,13 @@ export default function SessionSidebar({
   const [onlyRelated, setOnlyRelated] = useState(false)
   const initialSelectedKey = application.menus.homeMenuKey || application.menus.items[0]?.key || ''
   const [selectedKey, setSelectedKey] = useState(initialSelectedKey)
+  useEffect(() => {
+    setSelectedKey((current) => (
+      current && containsMenuKey(application.menus.items, current)
+        ? current
+        : initialSelectedKey
+    ))
+  }, [application.menus.items, initialSelectedKey])
   const visibleKeys = useMemo(() => {
     const matchingKeys = collectVisibleKeys(application.menus.items, outlineQuery)
     if (!onlyRelated) return matchingKeys

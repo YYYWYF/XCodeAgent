@@ -1,10 +1,14 @@
-import type { ApplicationConfig } from '../typings';
+import type { ApplicationConfig, ApplicationSchemaConfig } from '../typings';
 
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
 
 function normalizeApplications(value: unknown): ApplicationConfig[] {
   return Array.isArray(value) ? (value as ApplicationConfig[]) : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function cacheApplications(applications: ApplicationConfig[]) {
@@ -73,4 +77,19 @@ export async function saveStoredApplications(applications: ApplicationConfig[]) 
     // 文件写入仅在本地开发服务中可用，失败时保留 localStorage 兜底。
     console.warn(error);
   }
+}
+
+export async function loadWorkspaceApplicationConfig(
+  workspaceRoot: string
+): Promise<ApplicationSchemaConfig> {
+  const workspaceApi = window.xcodeAgent?.workspace;
+  if (!workspaceApi?.readApplication) {
+    throw new Error('当前环境不支持读取工作区 application.json');
+  }
+
+  const result = await workspaceApi.readApplication({ workspaceRoot });
+  if (!isRecord(result.application)) {
+    throw new Error('工作区 application.json 格式无效');
+  }
+  return result.application as unknown as ApplicationSchemaConfig;
 }

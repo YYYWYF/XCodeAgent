@@ -484,6 +484,23 @@ async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
 }
 
 function setupWorkspaceIpc() {
+  ipcMain.handle('workspace:read-application', async (_event, payload = {}) => {
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
+    const applicationFile = path.join(workspaceRoot, 'application.json');
+    const rawValue = await fs.readFile(applicationFile, 'utf8');
+    const applicationConfig = JSON.parse(rawValue || '{}');
+
+    if (
+      !applicationConfig ||
+      typeof applicationConfig !== 'object' ||
+      Array.isArray(applicationConfig)
+    ) {
+      throw new Error('application.json must be an object');
+    }
+
+    return { application: applicationConfig };
+  });
+
   ipcMain.handle('workspace:select-directory', async (_event, options = {}) => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: typeof options.title === 'string' ? options.title : '选择工作目录',

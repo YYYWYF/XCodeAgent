@@ -23,6 +23,9 @@ declare global {
         projectName: string;
         applicationConfig: unknown;
       }) => Promise<{ ok?: boolean; path: string }>;
+      readApplication: (payload: {
+        workspaceRoot: string;
+      }) => Promise<{ application?: unknown }>;
     };
     sessions?: {
       listWorkspaces: () => Promise<{ workspaces?: unknown }>;
