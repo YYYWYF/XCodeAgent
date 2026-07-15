@@ -7,6 +7,15 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
+import {
+  clearAuthState,
+  ensureXcodeAgentDataDir,
+  getAccessToken,
+  getXcodeAgentDataDir,
+  hasValidAuthToken,
+  initializeAuthState,
+  loginWithCmbDeviceFlow
+} from './auth'
 
 let mainWindow:BrowserWindow|null = null;
 let loginWindow: BrowserWindow | null = null
@@ -18,23 +27,6 @@ const previewWindows = new Set();
 function getApplicationsFile() {
   return path.join(app.getPath('userData'), 'applications.json');
 }
-
-function getXcodeAgentDataDir(): string {
-  return path.join(app.getPath('home'), XCODE_AGENT_ENV.WORKING_DIR)
-}
-
-async function ensureXcodeAgentDataDir(): Promise<string> {
-  const dataDir = getXcodeAgentDataDir()
-  await fs.mkdir(dataDir, { recursive: true })
-  return dataDir
-}
-
-type AuthRecord = {
-  token: string
-  createdAt: number
-}
-
-const MOCK_LOGIN_DELAY_MS = 2000
 
 type EditorMode = 'frontend' | 'backend'
 
@@ -64,60 +56,6 @@ const MESSAGE_APPROVAL_STATUSES = new Set([
   'approved_always',
   'feedback',
 ])
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
-}
-
-function getAuthFile(): string {
-  return path.join(getXcodeAgentDataDir(), 'auth.json')
-}
-
-function isAuthRecord(value: unknown): value is AuthRecord {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<AuthRecord>
-  return typeof candidate.token === 'string' && Boolean(candidate.token.trim())
-}
-
-async function readAuthRecord(): Promise<AuthRecord | null> {
-  try {
-    const rawValue = await fs.readFile(getAuthFile(), 'utf8')
-    const parsedValue = JSON.parse(rawValue || '{}')
-    return isAuthRecord(parsedValue) ? parsedValue : null
-  } catch {
-    return null
-  }
-}
-
-async function hasValidAuthToken(): Promise<boolean> {
-  return Boolean(await readAuthRecord())
-}
-
-async function writeMockAuthRecord(): Promise<AuthRecord> {
-  const authRecord = {
-    token: `mock-token-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`,
-    createdAt: Date.now()
-  }
-  await ensureXcodeAgentDataDir()
-  await fs.writeFile(getAuthFile(), `${JSON.stringify(authRecord, null, 2)}\n`, 'utf8')
-  return authRecord
-}
-
-async function clearAuthRecord(): Promise<void> {
-  try {
-    await fs.unlink(getAuthFile())
-  } catch (error) {
-    const errorCode =
-      error && typeof error === 'object' && 'code' in error
-        ? (error as { code?: string }).code
-        : undefined
-    if (errorCode !== 'ENOENT') {
-      throw error
-    }
-  }
-}
 
 function getSeedApplicationsFile() {
   return path.join(__dirname, '..', 'data', 'applications.json');
@@ -603,20 +541,33 @@ function setupSessionStorageIpc(): void {
   });
 }
 
+/** 注册登录、内存 token 读取和重新认证所需的 Electron IPC。 */
 function setupAuthIpc(): void {
   ipcMain.handle('auth:status', async () => ({
-    authenticated: await hasValidAuthToken()
+    authenticated: hasValidAuthToken()
+  }))
+
+  ipcMain.handle('auth:get-access-token', async () => ({
+    accessToken: getAccessToken()
   }))
 
   ipcMain.handle('auth:login', async () => {
-    await delay(MOCK_LOGIN_DELAY_MS)
-    const authRecord = await writeMockAuthRecord()
+    await loginWithCmbDeviceFlow()
     if (loginWindow && !loginWindow.isDestroyed()) {
       loginWindow.destroy()
     }
     loginWindow = null
     createMainWindow()
-    return { ok: true, token: authRecord.token }
+    return { ok: true }
+  })
+
+  ipcMain.handle('auth:reauthenticate', async () => {
+    await clearAuthState()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.hide()
+    }
+    createLoginWindow()
+    return { ok: true }
   })
 }
 
@@ -723,8 +674,9 @@ function createLoginWindow(): void {
   loadRendererPage(loginWindow, 'login')
 }
 
+/** 根据主进程内存中的登录态打开主窗口或登录窗口。 */
 async function openAuthenticatedWindow(): Promise<void> {
-  if (await hasValidAuthToken()) {
+  if (hasValidAuthToken()) {
     if (loginWindow && !loginWindow.isDestroyed()) {
       loginWindow.hide()
     }
@@ -738,15 +690,10 @@ async function openAuthenticatedWindow(): Promise<void> {
   createLoginWindow()
 }
 
-async function quitFromTray(): Promise<void> {
+/** 从托盘发起统一的应用退出流程。 */
+function quitFromTray(): void {
   isQuitting = true
-  try {
-    await clearAuthRecord()
-  } catch (error) {
-    console.error('Failed to clear auth token', error)
-  } finally {
-    app.quit()
-  }
+  app.quit()
 }
 
 function setupTray(): void {
@@ -766,7 +713,7 @@ function setupTray(): void {
       {
         label: '退出',
         click: () => {
-          void quitFromTray()
+          quitFromTray()
         }
       }
     ])
@@ -793,6 +740,7 @@ app.whenReady().then(async () => {
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
   await ensureXcodeAgentDataDir()
+  await initializeAuthState()
   const backendBaseUrl = await startBackendService()
   console.log(`XCode Agent backend URL: ${backendBaseUrl}`)
   setupApplicationStorageIpc();
@@ -814,32 +762,41 @@ app.whenReady().then(async () => {
   app.quit()
 })
 
-let backendStoppedBeforeQuit = false
-let backendStopBeforeQuitStarted = false
+let quitCleanupCompleted = false
+let quitCleanupStarted = false
+
+/** 在应用退出前清除认证状态并停止本地后端服务。 */
+async function cleanupBeforeQuit(): Promise<void> {
+  try {
+    await clearAuthState()
+  } catch (error) {
+    console.error('Failed to clear auth token', error)
+  }
+
+  try {
+    await stopBackendService()
+  } catch (error) {
+    console.error('Failed to stop backend service', error)
+  }
+}
 
 app.on('before-quit', (event) => {
   isQuitting = true
-  if (backendStoppedBeforeQuit) return
+  if (quitCleanupCompleted) return
 
   event.preventDefault()
-  if (backendStopBeforeQuitStarted) return
-  backendStopBeforeQuitStarted = true
+  if (quitCleanupStarted) return
+  quitCleanupStarted = true
 
-  void (async () => {
-    try {
-      await stopBackendService()
-    } catch (error) {
-      console.error('Failed to stop backend service', error)
-    } finally {
-      backendStoppedBeforeQuit = true
-      app.quit()
-    }
-  })()
+  void cleanupBeforeQuit().finally(() => {
+    quitCleanupCompleted = true
+    app.quit()
+  })
 })
 
-// Keep the app alive in the tray when windows are closed.
+// 普通关闭窗口时保持托盘运行，显式退出由 before-quit 统一清理。
 app.on('window-all-closed', () => {
-  // The tray menu controls the explicit quit path.
+  // 不在此处退出应用。
 })
 
 // In this file you can include the rest of your app's specific main process

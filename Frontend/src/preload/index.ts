@@ -15,6 +15,8 @@ const xcodeAgentApi = {
   auth: {
     login: () => ipcRenderer.invoke('auth:login'),
     status: () => ipcRenderer.invoke('auth:status'),
+    getAccessToken: () => ipcRenderer.invoke('auth:get-access-token'),
+    reauthenticate: () => ipcRenderer.invoke('auth:reauthenticate'),
   },
   applications: {
     load: () => ipcRenderer.invoke('applications:load'),

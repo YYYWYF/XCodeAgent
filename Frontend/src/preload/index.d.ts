@@ -9,8 +9,10 @@ declare global {
     agentBaseUrl: string;
     platform: string;
     auth: {
-      login: () => Promise<{ ok: boolean; token?: string }>;
+      login: () => Promise<{ ok: true }>;
       status: () => Promise<{ authenticated: boolean }>;
+      getAccessToken: () => Promise<{ accessToken: string | null }>;
+      reauthenticate: () => Promise<{ ok: true }>;
     };
     applications: {
       load: () => Promise<{ applications?: unknown }>;

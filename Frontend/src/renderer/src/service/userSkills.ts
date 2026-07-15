@@ -1,7 +1,8 @@
-import { HttpAgent, randomUUID } from '@ag-ui/client'
+import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import type { UserSkill, UserSkillCatalog, UserSkillDocument, UserSkillIssue } from '../typings'
+import { createAgUiHttpAgent } from './authentication'
 
 type SkillCatalogAgUiPayload = {
   schemaVersion: 1
@@ -53,7 +54,7 @@ async function runSkillCatalogAgent(
   messageContent: string
 ): Promise<SkillCatalogAgUiPayload> {
   const threadId = randomUUID()
-  const agent = new HttpAgent({ url: getSkillCatalogUrl(), threadId })
+  const agent = createAgUiHttpAgent({ url: getSkillCatalogUrl(), threadId })
   const message: Message = {
     id: randomUUID(),
     role: 'user',

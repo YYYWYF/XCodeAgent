@@ -1,6 +1,7 @@
-import { HttpAgent, randomUUID } from '@ag-ui/client'
-import type { AgentSubscriber } from '@ag-ui/client'
+import { randomUUID } from '@ag-ui/client'
+import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
+import { createAgUiHttpAgent, isAuthenticationFailure } from './authentication'
 import type {
   ApplicationConfig,
   EditorMode,
@@ -70,7 +71,7 @@ export class AgUiChatSession {
 
   constructor(threadId = randomUUID()) {
     this.threadId = threadId
-    this.agent = new HttpAgent({
+    this.agent = createAgUiHttpAgent({
       url: getWorkflowUrl(),
       threadId
     })
@@ -82,9 +83,11 @@ export class AgUiChatSession {
     if (runId) void this.cancelRun(runId)
   }
 
+  /** 发送 Workflow 消息，并在认证失败时回滚 HttpAgent 内部的未发送消息。 */
   async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
+    const userMessageId = randomUUID()
     this.agent.addMessage({
-      id: randomUUID(),
+      id: userMessageId,
       role: 'user',
       content: message
     })
@@ -154,6 +157,13 @@ export class AgUiChatSession {
         },
         subscriber
       )
+    } catch (error) {
+      if (isAuthenticationFailure(error)) {
+        this.agent.setMessages(
+          this.agent.messages.filter((existingMessage) => existingMessage.id !== userMessageId)
+        )
+      }
+      throw error
     } finally {
       if (this.activeRunId === runId) this.activeRunId = undefined
     }
@@ -178,7 +188,7 @@ export class AgUiChatSession {
   }
 
   private async cancelRun(targetRunId: string): Promise<void> {
-    const cancellationAgent = new HttpAgent({
+    const cancellationAgent = createAgUiHttpAgent({
       url: getWorkflowUrl(),
       threadId: this.threadId
     })

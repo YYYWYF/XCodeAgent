@@ -5,6 +5,7 @@ import {
   createPagePlanningThreadId,
   requestPagePlanningQuestions
 } from '../../service/applicationPagePlanning'
+import { isAuthenticationFailure } from '../../service/authentication'
 import type {
   ApplicationConfig,
   ApplicationDraft,
@@ -28,7 +29,7 @@ type Props = {
   theme: 'dark' | 'light'
 }
 
-export default function CreateApplicationAction({ onOpenApplication, theme }: Props) {
+export default function CreateApplicationAction({ onOpenApplication, theme }: Props): JSX.Element {
   const [form] = Form.useForm<ApplicationDraft>()
   const [modalOpen, setModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -39,11 +40,11 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
   const [planningQuestionsLoading, setPlanningQuestionsLoading] = useState(false)
   const [planningThreadId, setPlanningThreadId] = useState('')
 
-  const openModal = () => {
+  const openModal = (): void => {
     setModalOpen(true)
   }
 
-  const handleSelectProjectParent = async () => {
+  const handleSelectProjectParent = async (): Promise<void> => {
     setSelectingParent(true)
     try {
       const workspaceApi = window.xcodeAgent?.workspace
@@ -63,7 +64,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     }
   }
 
-  const handleCreateApplication = async () => {
+  const handleCreateApplication = async (): Promise<void> => {
     setCreating(true)
     try {
       const values = await form.validateFields()
@@ -109,7 +110,10 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     }
   }
 
-  const loadPagePlanningQuestions = async (application: ApplicationConfig, threadId: string) => {
+  const loadPagePlanningQuestions = async (
+    application: ApplicationConfig,
+    threadId: string
+  ): Promise<void> => {
     setPlanningApplication(application)
     setPlanningThreadId(threadId)
     setPlanningQuestions([])
@@ -126,7 +130,11 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
       )
       setPlanningQuestions(questions)
     } catch (error) {
-      setPlanningQuestionsError(formatError(error, '生成细节问题失败'))
+      setPlanningQuestionsError(
+        isAuthenticationFailure(error)
+          ? '请重新登录后重试页面规划。'
+          : formatError(error, '生成细节问题失败')
+      )
     } finally {
       setPlanningQuestionsLoading(false)
     }
@@ -135,7 +143,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
   const handlePagePlanConfirmed = async (
     plan: ApplicationPagePlan,
     confirmation: ConfirmedPagePlan
-  ) => {
+  ): Promise<void> => {
     if (!planningApplication) return
     const pageNames = plan.pages.map((page) => page.name)
     const schema = { ...planningApplication.schema, menus: confirmation.menus }

@@ -11,6 +11,7 @@ import {
   confirmApplicationPagePlan,
   requestApplicationPagePlan
 } from '../../service/applicationPagePlanning'
+import { isAuthenticationFailure } from '../../service/authentication'
 import type {
   ApplicationConfig,
   ApplicationPageContext,
@@ -53,7 +54,7 @@ export default function ApplicationPagePlanningModal({
   threadId,
   onConfirmed,
   onRetryQuestions
-}: Props) {
+}: Props): JSX.Element {
   const [form] = Form.useForm<{ answers: Record<string, string> }>()
   const [plan, setPlan] = useState<ApplicationPagePlan>()
   const [generating, setGenerating] = useState(false)
@@ -61,7 +62,7 @@ export default function ApplicationPagePlanningModal({
   const [revising, setRevising] = useState(false)
   const [confirming, setConfirming] = useState(false)
 
-  const handleGeneratePlan = async () => {
+  const handleGeneratePlan = async (): Promise<void> => {
     setGenerating(true)
     try {
       const values = await form.validateFields()
@@ -78,13 +79,14 @@ export default function ApplicationPagePlanningModal({
       setPlan(nextPlan)
     } catch (error) {
       if (error && typeof error === 'object' && 'errorFields' in error) return
+      if (isAuthenticationFailure(error)) return
       message.error(formatError(error, '生成页面结构失败'))
     } finally {
       setGenerating(false)
     }
   }
 
-  const handleConfirmPlan = async () => {
+  const handleConfirmPlan = async (): Promise<void> => {
     if (!application.workspaceRoot || !plan) return
     setConfirming(true)
     try {
@@ -92,13 +94,14 @@ export default function ApplicationPagePlanningModal({
       await onConfirmed(plan, confirmation)
       message.success('页面结构已确认并写入 application.json')
     } catch (error) {
+      if (isAuthenticationFailure(error)) return
       message.error(formatError(error, '保存 application.json 失败'))
     } finally {
       setConfirming(false)
     }
   }
 
-  const handleRevisePlan = async () => {
+  const handleRevisePlan = async (): Promise<void> => {
     const feedback = revisionFeedback.trim()
     if (!plan || !feedback) {
       message.warning('请先填写你希望如何调整页面结构')
@@ -116,6 +119,7 @@ export default function ApplicationPagePlanningModal({
       setRevisionFeedback('')
       message.success('已根据你的意见更新页面结构')
     } catch (error) {
+      if (isAuthenticationFailure(error)) return
       message.error(formatError(error, '调整页面结构失败'))
     } finally {
       setRevising(false)

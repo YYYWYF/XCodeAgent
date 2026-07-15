@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
+import { isAuthenticationFailure } from '../../../service/authentication'
 import type {
   ApplicationConfig,
   EditorMode,
@@ -100,6 +101,7 @@ export function useWorkflowConversation({
     await sendWorkflowMessage(message, { clearDraft: true, titleFrom: message, workflowDebug })
   }
 
+  /** 发送并持久化 Workflow 对话，认证失败时恢复发送前的界面状态。 */
   const sendWorkflowMessage = async (
     message: string,
     options?: {
@@ -144,7 +146,8 @@ export function useWorkflowConversation({
       content: '',
       createdAt: Date.now()
     }
-    const nextMessages = [...getSessionMessages(identity.key), userMessage, assistantMessage]
+    const previousMessages = getSessionMessages(identity.key)
+    const nextMessages = [...previousMessages, userMessage, assistantMessage]
 
     runningSessionsRef.current.set(identity.key, identity)
     setRunStates((current) => ({
@@ -246,6 +249,17 @@ export function useWorkflowConversation({
       })
       publishAiMessage(identity.editorMode, answer)
     } catch (caughtError) {
+      if (isAuthenticationFailure(caughtError)) {
+        setSessionMessages(identity.key, previousMessages)
+        if (options?.clearDraft) setDraftByKey(draftKey, trimmedMessage)
+        await persistSession({
+          editorMode: identity.editorMode,
+          messages: previousMessages,
+          sessionId: identity.sessionId,
+          threadId: identity.threadId
+        })
+        return
+      }
       if (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError)) {
         const answer = stoppedAnswer(streamedContent)
         const completedMessages = updateAssistantMessage(

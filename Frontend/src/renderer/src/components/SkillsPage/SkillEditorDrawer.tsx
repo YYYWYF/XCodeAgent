@@ -7,6 +7,7 @@ import {
   requestUserSkillDocument,
   saveUserSkillDocument
 } from '../../service/userSkills'
+import { isAuthenticationFailure } from '../../service/authentication'
 import type { UserSkill, UserSkillDocument } from '../../typings'
 import { cx } from '../../utils'
 import {
@@ -89,7 +90,13 @@ export default function SkillEditorDrawer(props: Props): ReactElement {
       })
       .catch((caughtError) => {
         if (!active) return
-        setLoadError(caughtError instanceof Error ? caughtError.message : '技能内容读取失败。')
+        setLoadError(
+          isAuthenticationFailure(caughtError)
+            ? '请重新登录后重新打开技能。'
+            : caughtError instanceof Error
+              ? caughtError.message
+              : '技能内容读取失败。'
+        )
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -159,6 +166,7 @@ export default function SkillEditorDrawer(props: Props): ReactElement {
       message.success(isCreate ? '技能已创建' : '技能已保存')
       await onSaved()
     } catch (caughtError) {
+      if (isAuthenticationFailure(caughtError)) return
       setSaveError(
         caughtError instanceof Error
           ? caughtError.message

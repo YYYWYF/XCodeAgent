@@ -1,4 +1,4 @@
-import { HttpAgent, randomUUID } from '@ag-ui/client'
+import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import type {
@@ -8,6 +8,7 @@ import type {
   PagePlanningAnswer,
   PagePlanningQuestion
 } from '../typings'
+import { createAgUiHttpAgent } from './authentication'
 
 function getAgentBaseUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
@@ -59,7 +60,7 @@ async function runPagePlanningAgent(
   message: string,
   input: Record<string, unknown>
 ): Promise<PagePlanningAgUiPayload> {
-  const agent = new HttpAgent({ url: getPagePlanningUrl(), threadId })
+  const agent = createAgUiHttpAgent({ url: getPagePlanningUrl(), threadId })
   const userMessage: Message = { id: randomUUID(), role: 'user', content: message }
   agent.addMessage(userMessage)
 

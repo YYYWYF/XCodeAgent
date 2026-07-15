@@ -7,6 +7,12 @@ body {
   background:
     linear-gradient(180deg, rgba(247, 249, 252, 0.98), rgba(232, 238, 245, 0.98)),
     #eef2f6;
+
+  &[data-theme='dark'] {
+    background:
+      linear-gradient(180deg, rgba(32, 35, 42, 0.98), rgba(19, 22, 28, 0.98)),
+      #171a20;
+  }
 }
 
 .@{class-prefix}-login-dialog {
@@ -23,5 +29,17 @@ body {
   .ant-btn {
     height: 44px;
     border-radius: 6px;
+  }
+}
+
+.@{class-prefix}-login-modal.@{class-prefix}-theme-dark {
+  .ant-modal-content {
+    background: #28282b;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 24px 72px rgba(0, 0, 0, 0.42);
+  }
+
+  .@{class-prefix}-login-dialog h3.ant-typography {
+    color: #f2f2f2;
   }
 }

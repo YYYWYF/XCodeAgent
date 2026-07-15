@@ -1,7 +1,8 @@
-import { HttpAgent, randomUUID } from '@ag-ui/client'
+import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import type { AgentFile, AgentFileDocument } from '../typings'
+import { createAgUiHttpAgent } from './authentication'
 
 type AgentFilesAction = 'get' | 'save'
 
@@ -68,7 +69,7 @@ async function runAgentFiles(
   messageContent: string
 ): Promise<AgentFilesAgUiPayload> {
   const threadId = randomUUID()
-  const agent = new HttpAgent({ url: getAgentFilesUrl(), threadId })
+  const agent = createAgUiHttpAgent({ url: getAgentFilesUrl(), threadId })
   const message: Message = {
     id: randomUUID(),
     role: 'user',

@@ -14,6 +14,7 @@ import {
 import { Alert, Button, Empty, Input, Modal, Spin, Tag, Tooltip, Typography, message } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { isAuthenticationFailure } from '../../service/authentication'
 import { deleteUserSkill, requestUserSkills } from '../../service/userSkills'
 import type { UserSkill, UserSkillCatalog } from '../../typings'
 import { cx } from '../../utils'
@@ -71,7 +72,13 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
       if (mountedRef.current) setCatalog(result)
     } catch (caughtError) {
       if (mountedRef.current) {
-        setError(caughtError instanceof Error ? caughtError.message : '技能列表读取失败。')
+        setError(
+          isAuthenticationFailure(caughtError)
+            ? '请重新登录后重试。'
+            : caughtError instanceof Error
+              ? caughtError.message
+              : '技能列表读取失败。'
+        )
       }
     } finally {
       if (mountedRef.current) setLoading(false)
@@ -114,6 +121,7 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
           message.success(`技能 ${skill.name} 已删除`)
           await loadSkills()
         } catch (caughtError) {
+          if (isAuthenticationFailure(caughtError)) return
           message.error(caughtError instanceof Error ? caughtError.message : '技能删除失败。')
         } finally {
           if (mountedRef.current) setDeletingSkillPath('')
@@ -210,7 +218,13 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
             <Text type="secondary">正在读取用户技能...</Text>
           </div>
         ) : error ? (
-          <Alert message="无法读取技能列表" description={error} showIcon type="error" />
+          <Alert
+            action={<Button onClick={() => void loadSkills()}>重试</Button>}
+            message="无法读取技能列表"
+            description={error}
+            showIcon
+            type="error"
+          />
         ) : filteredSkills.length === 0 ? (
           <Empty
             description={query ? '没有匹配的技能' : '用户技能目录中暂无可用技能'}

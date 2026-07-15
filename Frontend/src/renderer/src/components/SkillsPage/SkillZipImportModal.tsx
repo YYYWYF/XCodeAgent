@@ -3,6 +3,7 @@ import { Alert, Descriptions, Modal, Spin, Typography, Upload, message } from 'a
 import type { UploadProps } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useState } from 'react'
+import { isAuthenticationFailure } from '../../service/authentication'
 import { importUserSkillArchive } from '../../service/userSkills'
 import { cx } from '../../utils'
 import { inspectSkillZip, type SkillZipPreview } from './skillZip'
@@ -70,7 +71,9 @@ export default function SkillZipImportModal({
       await onImported()
       onClose()
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : '技能导入失败。')
+      if (!isAuthenticationFailure(caughtError)) {
+        setError(caughtError instanceof Error ? caughtError.message : '技能导入失败。')
+      }
     } finally {
       setImporting(false)
     }

@@ -2,6 +2,7 @@ import { FileTextOutlined, SaveOutlined } from '@ant-design/icons'
 import { Alert, Button, Empty, Input, Spin, Typography, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { isAuthenticationFailure } from '../../service/authentication'
 import { requestAgentFile, saveAgentFile } from '../../service/agentFiles'
 import type { AgentFile } from '../../typings'
 import { cx } from '../../utils'
@@ -51,7 +52,13 @@ export default function AgentFilesPage(): ReactElement {
       setAgentFile(result)
       setContent(result.document.content)
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'AGENTS.md 读取失败。')
+      setError(
+        isAuthenticationFailure(caughtError)
+          ? '请重新登录后重试。'
+          : caughtError instanceof Error
+            ? caughtError.message
+            : 'AGENTS.md 读取失败。'
+      )
     } finally {
       setLoading(false)
     }
@@ -81,7 +88,9 @@ export default function AgentFilesPage(): ReactElement {
       setContent(result.document.content)
       message.success('AGENTS.md 已保存')
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : 'AGENTS.md 保存失败。')
+      if (!isAuthenticationFailure(caughtError)) {
+        setError(caughtError instanceof Error ? caughtError.message : 'AGENTS.md 保存失败。')
+      }
     } finally {
       setSaving(false)
     }
