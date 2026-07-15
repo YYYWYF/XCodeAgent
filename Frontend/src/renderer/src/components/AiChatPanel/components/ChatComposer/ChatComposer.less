@@ -85,6 +85,21 @@
   }
 }
 
+.@{class-prefix}-workflow-debug-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+
+  .ant-btn-link {
+    height: 22px;
+    padding: 0 4px;
+    color: var(--wb-text-secondary);
+    font-size: 11px;
+  }
+}
+
 .@{class-prefix}-workflow-debug-fields {
   display: grid;
   min-width: 0;
@@ -112,6 +127,79 @@
 
 .@{class-prefix}-workflow-debug-node-select {
   min-width: 0;
+}
+
+.@{class-prefix}-workflow-trace-log {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-surface-subtle);
+}
+
+.@{class-prefix}-workflow-trace-meta,
+.@{class-prefix}-workflow-trace-event-line {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+
+  .ant-tag {
+    margin-right: 0;
+  }
+
+  a {
+    color: var(--wb-primary);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-workflow-trace-events {
+  display: flex;
+  max-height: 260px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+}
+
+.@{class-prefix}-workflow-trace-event {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.@{class-prefix}-workflow-trace-event-line {
+  align-items: flex-start;
+  flex-wrap: nowrap;
+
+  .ant-tag {
+    flex: 0 0 auto;
+  }
+}
+
+.@{class-prefix}-workflow-trace-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.@{class-prefix}-workflow-trace-data {
+  max-height: 160px;
+  margin: 0 0 0 28px;
+  padding: 7px 8px;
+  overflow: auto;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  background: var(--wb-surface);
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .@{class-prefix}-workspace-root-label {

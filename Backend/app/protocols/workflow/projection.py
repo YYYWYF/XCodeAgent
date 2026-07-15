@@ -402,6 +402,7 @@ def _workflow_summary(
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
         "clarification": clarification,
+        "observability": result.get("observability", {}),
     }
 
 
@@ -423,6 +424,7 @@ def _workflow_visual_payload(
         "phase": summary.get("phase"),
         "timeline": summary.get("timeline", []),
         "artifacts": summary.get("artifacts", {}),
+        "observability": summary.get("observability", {}),
         "qualityGatePassed": summary.get("qualityGatePassed"),
         "needsRevision": summary.get("needsRevision"),
         "previewUrl": summary.get("previewUrl"),

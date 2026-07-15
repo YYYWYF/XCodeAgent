@@ -85,6 +85,7 @@ export default function AiChatPanel({
   })
 
   const {
+    activeWorkflow,
     error,
     handleSend,
     handleStopGenerating,
@@ -244,6 +245,7 @@ export default function AiChatPanel({
             />
 
             <ChatComposer
+              activeWorkflow={activeWorkflow}
               copy={copy}
               draft={draft}
               error={error}

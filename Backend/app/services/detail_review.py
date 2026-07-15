@@ -18,14 +18,22 @@ PAGE_EDITABLE_FIELDS = {
     "interactions",
     "state_feedback",
     "operation_interactions",
+    "api_dependencies",
+    "response_bindings",
     "page_navigation",
     "permissions",
+    "operation_visibility",
     "acceptance_criteria",
 }
 DATA_SOURCE_EDITABLE_FIELDS = {
+    "source_type",
+    "entities",
+    "schema_refs",
     "relationships",
     "validation_rules",
     "seed_strategy",
+    "api_contracts",
+    "dependent_pages",
     "acceptance_criteria",
 }
 
@@ -232,17 +240,27 @@ def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
     if key in {
         "state_feedback",
         "operation_interactions",
+        "api_dependencies",
+        "response_bindings",
         "page_navigation",
+        "operation_visibility",
     }:
         return _dict_list(value)
     if key in {
         "interactions",
         "permissions",
         "acceptance_criteria",
+        "entities",
+        "schema_refs",
         "relationships",
         "validation_rules",
     }:
         return _string_list(value)
+    if key in {
+        "api_contracts",
+        "dependent_pages",
+    }:
+        return _dict_list(value)
     return str(value).strip() if value is not None else ""
 
 

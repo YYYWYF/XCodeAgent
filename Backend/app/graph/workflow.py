@@ -1,8 +1,11 @@
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from app.graph import nodes
 from app.graph.state import ProjectState
+from app.persistence.checkpoints import (
+    workflow_checkpoint_db_path,
+    workflow_checkpointer,
+)
 
 
 def route_workflow_start(state: ProjectState) -> str:
@@ -81,7 +84,7 @@ def route_prepare_build_tasks(state: ProjectState) -> str:
     )
 
 
-def build_graph():
+def build_graph(*, checkpointer):
     builder = StateGraph(ProjectState)
 
     builder.add_node("classify_request_complexity", nodes.classify_request_complexity)
@@ -173,7 +176,28 @@ def build_graph():
     builder.add_edge("finalize_project", END)
     builder.add_edge("handle_failure", END)
 
-    return builder.compile(checkpointer=MemorySaver())
+    return builder.compile(checkpointer=checkpointer)
 
 
-graph = build_graph()
+_WORKFLOW_GRAPHS = {}
+
+
+async def workflow_graph_for_request(
+    *,
+    workspace: str | None = None,
+    project_id: str | None = None,
+):
+    db_path = workflow_checkpoint_db_path(workspace=workspace, project_id=project_id)
+    cache_key = str(db_path)
+    if cache_key not in _WORKFLOW_GRAPHS:
+        _WORKFLOW_GRAPHS[cache_key] = build_graph(
+            checkpointer=await workflow_checkpointer(
+                workspace=workspace,
+                project_id=project_id,
+            )
+        )
+    return _WORKFLOW_GRAPHS[cache_key]
+
+
+def clear_workflow_graph_cache() -> None:
+    _WORKFLOW_GRAPHS.clear()

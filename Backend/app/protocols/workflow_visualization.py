@@ -352,7 +352,7 @@ def build_workflow_ag_ui_stream(
                             sequence=process_sequence,
                         )
 
-            result = dict(graph.get_state(config).values)
+            result = dict((await graph.aget_state(config)).values)
             summary = _workflow_summary(result, events)
             finished_event = _workflow_event(
                 events,
@@ -580,7 +580,7 @@ async def build_workflow_response(
                         message=f"正在执行：{_workflow_node_label(next_node)}",
                     )
 
-        result = dict(graph.get_state(config).values)
+        result = dict((await graph.aget_state(config)).values)
         summary = _workflow_summary(result, events)
         _workflow_event(
             events,

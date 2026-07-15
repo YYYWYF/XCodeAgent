@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.graph import graph
+from app.graph import clear_workflow_graph_cache, workflow_graph_for_request
 from app.protocols.workflow import (
     build_workflow_ag_ui_stream,
     workflow_capabilities,
@@ -31,6 +31,7 @@ from app.services.builtin_skills import available_builtin_skills
 from app.tools import antd_v4_docs
 from app.workspace import workspace as workspace_tools
 from app.middleware.approvals import approval_store
+from app.persistence.checkpoints import close_workflow_checkpointer
 
 settings = Settings.from_env()
 
@@ -38,7 +39,11 @@ settings = Settings.from_env()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ensure_agents_document()
-    yield
+    try:
+        yield
+    finally:
+        clear_workflow_graph_cache()
+        await close_workflow_checkpointer()
 
 
 app = FastAPI(
@@ -70,6 +75,13 @@ async def health() -> dict[str, object]:
         "configured_model": settings.model_name,
         "base_url": settings.model_base_url,
         "builtin_skills": available_builtin_skills(),
+        "observability": {
+            "langsmith": {
+                "enabled": settings.langsmith_tracing_enabled,
+                "project": settings.langsmith_project,
+                "endpoint": settings.langsmith_endpoint,
+            }
+        },
         "tools": {
             "antd_v4_docs": {
                 "available": antd_v4_docs.is_available(),
@@ -130,7 +142,11 @@ async def ag_ui(
 ) -> StreamingResponse:
     """Compatibility alias while the frontend migrates to /workflow/run."""
     return StreamingResponse(
-        build_workflow_ag_ui_stream(graph=graph, payload=input_data, accept=accept),
+        build_workflow_ag_ui_stream(
+            graph=workflow_graph_for_request,
+            payload=input_data,
+            accept=accept,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -258,7 +274,11 @@ async def run_workflow(
     accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
     return StreamingResponse(
-        build_workflow_ag_ui_stream(graph=graph, payload=input_data, accept=accept),
+        build_workflow_ag_ui_stream(
+            graph=workflow_graph_for_request,
+            payload=input_data,
+            accept=accept,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

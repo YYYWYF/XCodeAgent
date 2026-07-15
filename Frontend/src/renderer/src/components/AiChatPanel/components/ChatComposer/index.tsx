@@ -1,8 +1,14 @@
-import { BugOutlined, FolderOpenOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
-import { Alert, Button, Checkbox, Input, Select, Typography } from 'antd'
+import {
+  BugOutlined,
+  FileSearchOutlined,
+  FolderOpenOutlined,
+  SendOutlined,
+  StopOutlined
+} from '@ant-design/icons'
+import { Alert, Button, Checkbox, Input, Select, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useState } from 'react'
-import type { EditorMode, WorkflowDebugOptions } from '../../../../typings'
+import type { EditorMode, WorkflowDebugOptions, WorkflowRunPayload } from '../../../../typings'
 import { cx } from '../../../../utils'
 import type { ChatCopy } from '../../types'
 import './ChatComposer.less'
@@ -25,6 +31,7 @@ const resumeNodeOptions = [
 ]
 
 type ChatComposerProps = {
+  activeWorkflow?: WorkflowRunPayload
   copy: ChatCopy[EditorMode]
   draft: string
   error?: string
@@ -38,6 +45,7 @@ type ChatComposerProps = {
 }
 
 export default function ChatComposer({
+  activeWorkflow,
   copy,
   draft,
   error,
@@ -50,6 +58,7 @@ export default function ChatComposer({
   workspaceRoot
 }: ChatComposerProps): ReactElement {
   const [debugEnabled, setDebugEnabled] = useState(false)
+  const [traceOpen, setTraceOpen] = useState(false)
   const [resumeFrom, setResumeFrom] = useState('requirements')
   const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
   const canSend = debugEnabled ? hasDebugNode : Boolean(draft.trim())
@@ -87,13 +96,25 @@ export default function ChatComposer({
             }}
           />
           <div className={cx('workflow-debug-box', debugEnabled && 'enabled')}>
-            <Checkbox
-              checked={debugEnabled}
-              disabled={loading}
-              onChange={(event) => setDebugEnabled(event.target.checked)}
-            >
-              <BugOutlined /> Workflow 调试
-            </Checkbox>
+            <div className={cx('workflow-debug-actions')}>
+              <Checkbox
+                checked={debugEnabled}
+                disabled={loading}
+                onChange={(event) => setDebugEnabled(event.target.checked)}
+              >
+                <BugOutlined /> Workflow 调试
+              </Checkbox>
+              <Button
+                aria-expanded={traceOpen}
+                disabled={!activeWorkflow}
+                icon={<FileSearchOutlined />}
+                onClick={() => setTraceOpen((current) => !current)}
+                size="small"
+                type="link"
+              >
+                {traceOpen ? '收起 Trace' : 'Trace 日志'}
+              </Button>
+            </div>
             {debugEnabled && (
               <div className={cx('workflow-debug-fields')}>
                 <Select
@@ -113,6 +134,9 @@ export default function ChatComposer({
                   自动读取当前工作目录下的 .xcodeagent 产物
                 </Text>
               </div>
+            )}
+            {traceOpen && activeWorkflow && (
+              <WorkflowTraceLog workflow={activeWorkflow} />
             )}
           </div>
           <div className={cx('ai-chat-composer-footer')}>
@@ -152,4 +176,99 @@ export default function ChatComposer({
       </div>
     </div>
   )
+}
+
+function WorkflowTraceLog({ workflow }: { workflow: WorkflowRunPayload }): ReactElement {
+  const observability = workflowObservability(workflow)
+  return (
+    <div className={cx('workflow-trace-log')}>
+      <div className={cx('workflow-trace-meta')}>
+        <Tag color={observability.langsmith.enabled ? 'green' : 'default'}>
+          LangSmith {observability.langsmith.enabled ? '已开启' : '未开启'}
+        </Tag>
+        {observability.langsmith.project && <Text code>{observability.langsmith.project}</Text>}
+        {observability.langsmith.traceSearchUrl && (
+          <a href={observability.langsmith.traceSearchUrl} rel="noreferrer" target="_blank">
+            打开 LangSmith
+          </a>
+        )}
+      </div>
+      <div className={cx('workflow-trace-events')}>
+        {workflow.events.length > 0 ? (
+          workflow.events.map((event, index) => (
+            <div className={cx('workflow-trace-event')} key={`${event.type}-${event.timestamp}-${index}`}>
+              <div className={cx('workflow-trace-event-line')}>
+                <Tag>{event.nodeName || event.node?.id || event.type}</Tag>
+                <Text code>{event.type}</Text>
+                {event.timestamp && (
+                  <Text className={cx('workflow-trace-time')} type="secondary">
+                    {formatTraceTimestamp(event.timestamp)}
+                  </Text>
+                )}
+                <Text>{event.message || event.status || event.type}</Text>
+              </div>
+              {hasTraceData(event.data) && (
+                <pre className={cx('workflow-trace-data')}>
+                  {formatTraceData(event.data)}
+                </pre>
+              )}
+            </div>
+          ))
+        ) : (
+          <Text type="secondary">暂无 Workflow 事件</Text>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function workflowObservability(workflow: WorkflowRunPayload): {
+  langsmith: {
+    enabled: boolean
+    project: string
+    traceSearchUrl: string
+  }
+} {
+  const summaryObservability = objectValue(workflow.summary.observability)
+  const stateObservability = objectValue(workflow.state?.observability)
+  const eventObservability = workflow.events
+    .map((event) => objectValue(event.data?.observability))
+    .find((value) => Object.keys(value).length > 0) || {}
+  const observability =
+    firstRecord(summaryObservability, stateObservability, eventObservability)
+  const langsmith = objectValue(observability.langsmith)
+  return {
+    langsmith: {
+      enabled: Boolean(langsmith.enabled),
+      project: stringValue(langsmith.project),
+      traceSearchUrl: stringValue(langsmith.traceSearchUrl)
+    }
+  }
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function firstRecord(...values: Record<string, unknown>[]): Record<string, unknown> {
+  return values.find((value) => Object.keys(value).length > 0) || {}
+}
+
+function hasTraceData(value: unknown): boolean {
+  return Object.keys(objectValue(value)).length > 0
+}
+
+function formatTraceData(value: unknown): string {
+  return JSON.stringify(value, null, 2)
+}
+
+function formatTraceTimestamp(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString()
 }

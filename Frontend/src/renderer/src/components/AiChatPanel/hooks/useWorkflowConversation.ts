@@ -41,6 +41,7 @@ type UseWorkflowConversationParams = {
 }
 
 type UseWorkflowConversationResult = {
+  activeWorkflow?: WorkflowRunPayload
   error?: string
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleStopGenerating: () => void
@@ -72,11 +73,17 @@ export function useWorkflowConversation({
   const stopRequestedRef = useRef<Record<string, boolean>>({})
   const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
+  const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
 
   const activeRun = activeSession ? runStates[activeSession.key] : undefined
   const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
   const stopping = activeRun?.status === 'stopping'
   const error = activeSession ? errors[activeSession.key] : undefined
+  const activeWorkflow = activeSession
+    ? activeRun
+      ? liveWorkflows[activeSession.key]
+      : liveWorkflows[activeSession.key] ?? latestWorkflow(getSessionMessages(activeSession.key))
+    : undefined
   const workspaceBusy = Object.values(runStates).some(
     (entry) =>
       entry.identity.workspaceRoot === application.workspaceRoot &&
@@ -155,6 +162,7 @@ export function useWorkflowConversation({
       [identity.key]: { identity, status: 'running' }
     }))
     setErrors((current) => ({ ...current, [identity.key]: undefined }))
+    setLiveWorkflows((current) => omitKey(current, identity.key))
     stopRequestedRef.current[identity.key] = false
     setSessionMessages(identity.key, nextMessages)
     if (options?.clearDraft) setDraftByKey(draftKey, '')
@@ -215,6 +223,7 @@ export function useWorkflowConversation({
         },
         onWorkflow: (nextWorkflow) => {
           streamedWorkflow = nextWorkflow
+          setLiveWorkflows((current) => ({ ...current, [identity.key]: nextWorkflow }))
           updateAssistantMessage(streamedContent, nextWorkflow, streamedToolCalls)
         },
         onToolCalls: (nextToolCalls) => {
@@ -239,6 +248,13 @@ export function useWorkflowConversation({
         rawToolCalls.length > 0 ? rawToolCalls : streamedToolCalls,
         streamedProcessSteps
       )
+      const finalWorkflow = workflow ?? streamedWorkflow
+      if (finalWorkflow) {
+        setLiveWorkflows((current) => ({
+          ...current,
+          [identity.key]: finalWorkflow
+        }))
+      }
 
       await persistSession({
         editorMode: identity.editorMode,
@@ -318,6 +334,7 @@ export function useWorkflowConversation({
   }
 
   return {
+    activeWorkflow,
     error,
     handleSend,
     handleStopGenerating,
@@ -327,6 +344,14 @@ export function useWorkflowConversation({
     stopping,
     workspaceBusy
   }
+}
+
+function latestWorkflow(messages: AgentChatMessage[]): WorkflowRunPayload | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const workflow = messages[index].workflow
+    if (workflow) return workflow
+  }
+  return undefined
 }
 
 function findRunningSession(

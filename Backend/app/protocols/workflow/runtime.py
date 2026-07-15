@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, AsyncIterator
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from ag_ui.core import (
@@ -39,6 +40,8 @@ from app.protocols.workflow.stream_events import (
     _tool_result_frames,
     _workflow_ag_ui_frames,
 )
+from app.config import Settings
+from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
@@ -89,6 +92,23 @@ def build_workflow_ag_ui_stream(
             project_id = workflow_inputs["project_id"] or None
             workspace = workflow_inputs["workspace"] or None
             editor_mode = workflow_inputs["editor_mode"] or None
+            settings = Settings.from_env()
+            observability = _workflow_observability(
+                settings=settings,
+                run_id=run_id,
+                thread_id=thread_id,
+                project_id=project_id,
+                workspace=workspace,
+            )
+            active_graph = (
+                await graph(workspace=workspace, project_id=project_id)
+                if callable(graph)
+                else graph
+            )
+            await cleanup_workflow_checkpoints(
+                workspace=workspace,
+                project_id=project_id,
+            )
             workspace_lease = workspace_run_leases.acquire(
                 workspace_root=workspace,
                 project_id=project_id,
@@ -99,6 +119,7 @@ def build_workflow_ag_ui_stream(
             initial_state: dict[str, Any] = {
                 "request": request,
                 "timeline": [],
+                "observability": observability,
             }
             initial_state.update(workflow_inputs.get("resume_values") or {})
             first_node_name = _workflow_start_node(resume_from)
@@ -115,7 +136,23 @@ def build_workflow_ag_ui_stream(
             if editor_mode:
                 initial_state["editor_mode"] = editor_mode
 
-            config = {"configurable": {"thread_id": thread_id}}
+            config = {
+                "configurable": {"thread_id": thread_id},
+                "run_name": "xcodeagent-main-workflow",
+                "tags": [
+                    "xcodeagent",
+                    "workflow",
+                    *(["langsmith"] if observability["langsmith"]["enabled"] else []),
+                ],
+                "metadata": {
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "project_id": project_id,
+                    "workspace": workspace,
+                    "workflow": "xcodeagent-main",
+                    "langsmith_enabled": observability["langsmith"]["enabled"],
+                },
+            }
 
             started_event = _workflow_event(
                 events,
@@ -124,7 +161,12 @@ def build_workflow_ag_ui_stream(
                 thread_id=thread_id,
                 status="running",
                 message="Workflow run started.",
-                data={"request": request, "projectId": project_id, "resumeFrom": resume_from},
+                data={
+                    "request": request,
+                    "projectId": project_id,
+                    "resumeFrom": resume_from,
+                    "observability": observability,
+                },
             )
             for frame in _workflow_ag_ui_frames(
                 encoder,
@@ -165,7 +207,7 @@ def build_workflow_ag_ui_stream(
             tool_steps: dict[str, dict[str, str]] = {}
             tool_indexes: dict[int, str] = {}
 
-            async for stream_mode, chunk in graph.astream(
+            async for stream_mode, chunk in active_graph.astream(
                 initial_state,
                 config=config,
                 stream_mode=["updates", "messages"],
@@ -270,7 +312,7 @@ def build_workflow_ag_ui_stream(
                             sequence=process_sequence,
                         )
 
-            result = dict(graph.get_state(config).values)
+            result = dict((await active_graph.aget_state(config)).values)
             summary = _workflow_summary(result, events)
             finished_event = _workflow_event(
                 events,
@@ -393,3 +435,32 @@ def build_workflow_ag_ui_stream(
                 workspace_lease.release()
 
     return stream()
+
+
+def _workflow_observability(
+    *,
+    settings: Settings,
+    run_id: str,
+    thread_id: str,
+    project_id: str | None,
+    workspace: str | None,
+) -> dict[str, Any]:
+    project = settings.langsmith_project or "default"
+    trace_search_url = (
+        "https://smith.langchain.com/"
+        f"?{urlencode({'project': project, 'q': run_id})}"
+    )
+    return {
+        "langsmith": {
+            "enabled": settings.langsmith_tracing_enabled,
+            "project": settings.langsmith_project,
+            "endpoint": settings.langsmith_endpoint,
+            "runId": run_id,
+            "threadId": thread_id,
+            "projectId": project_id,
+            "workspace": workspace,
+            "traceSearchUrl": trace_search_url
+            if settings.langsmith_tracing_enabled
+            else "",
+        }
+    }

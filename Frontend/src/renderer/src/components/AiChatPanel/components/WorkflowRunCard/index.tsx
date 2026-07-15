@@ -38,7 +38,6 @@ export default function WorkflowRunCard({
 }: WorkflowRunCardProps): ReactElement {
   const status = String(workflow.summary.status || "unknown");
   const artifacts = workflow.summary.artifacts || {};
-  const recentEvents = workflow.events.slice(-8);
   const clarification = workflowClarification(workflow);
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification);
   const clarificationQuestions = clarification?.questions || [];
@@ -146,20 +145,6 @@ export default function WorkflowRunCard({
           )}
             </>
           )}
-        </div>
-      )}
-      {recentEvents.length > 0 && (
-        <div className={cx("workflow-events")}>
-          <Text type="secondary">最近事件</Text>
-          {recentEvents.map((event, index) => (
-            <div
-              className={cx("workflow-event")}
-              key={`${event.type}-${event.timestamp}-${index}`}
-            >
-              <Tag>{event.nodeName || event.node?.id || event.type}</Tag>
-              <Text>{event.message || event.status || event.type}</Text>
-            </div>
-          ))}
         </div>
       )}
     </div>

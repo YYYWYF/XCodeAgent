@@ -21,6 +21,8 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 
 后端通过 AG-UI 标准 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`、`TOOL_CALL_RESULT` 事件实时传输工具调用。`agent-process` 自定义事件仅补充思考和工作流阶段展示，不作为工具卡片的数据协议。
 
+`LANGSMITH_TRACING` 未配置时默认关闭；当显式设置为 `true` 时，主 workflow 会依赖 LangGraph/LangChain 的 LangSmith 集成生成外部 trace，并在 runnable config 中注入 `run_id`、`thread_id`、`project_id`、`workspace` 和 workflow 标签。桌面端仍以当前 AG-UI 事件展示本轮 workflow trace 日志；LangSmith 作为外部技术 trace 后端，用于查看节点、模型调用、工具调用、耗时和错误。
+
 ## 已确认的主 Graph
 
 主流程顺序如下：
@@ -110,7 +112,7 @@ START
 
 确认时以 Markdown 作为用户可读、可编辑的文档。如果用户在确认前直接修改了 RequirementSpec Markdown，节点必须先与当前结构化状态对比，以原 JSON 为基线同步 Markdown 中的业务变更并保留 Markdown 未表达的内部字段，然后更新内部 JSON；不得先重写 Markdown 或直接使用旧 JSON 继续。JSON 文件只供工作流节点读取，不作为前端可编辑产物展示。
 
-当前等待/续跑机制是显式的后端推断续跑点，还不是 LangGraph 原生 `interrupt` resume。后续如果切换到 LangGraph `interrupt`、checkpointer 和 command resume，应保持同样的原则：前端提交用户回答和 workflow 状态，不硬编码后端阶段名。
+当前等待/续跑机制是显式的后端推断续跑点，还不是 LangGraph 原生 `interrupt` resume。主 Graph 已接入 SQLite checkpointer，用于持久化 ProjectState、支持服务重启后的状态恢复和调试；但用户输入后的续跑路由仍由后端根据当前状态显式推断。后续如果切换到 LangGraph `interrupt` 和 command resume，应保持同样的原则：前端提交用户回答和 thread 标识，不硬编码后端阶段名。
 
 所有选项型 `ask_user` 问题（单选、多选、是/否）都自动包含“其他”选项。用户选中“其他”后必须填写补充内容；前端提交结构化答案 `{ selected, other }`，后端将其归并为“已选：…；其他补充：…”，与原始需求和既有选项一起输入给后续模型。文本题本身就是自由输入，不额外显示“其他”。
 
@@ -190,7 +192,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
-当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan 和 detail review 小型结构化状态，不把完整会话历史重新塞回上下文。
+当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。SQLite checkpointer 负责持久化每个 `thread_id` 的主 Graph 状态；后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan 和 detail review 小型结构化状态，不把完整会话历史重新塞回上下文。
 
 页面详细设计至少包含：
 
@@ -260,6 +262,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 ```text
 {workspace}/.xcodeagent/specs/requirement-spec.{md,json}
 {workspace}/.xcodeagent/plans/project-plan.{md,json}
+{workspace}/.xcodeagent/checkpoints/checkpoints.sqlite
 {workspace}/.xcodeagent/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json
 {workspace}/.xcodeagent/plans/build-task-plan.json
 {workspace}/.xcodeagent/plans/repair-task-plan.json

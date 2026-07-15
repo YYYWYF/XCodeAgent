@@ -150,8 +150,16 @@ MODEL_TRUST_ENV=false
 MODEL_OUTPUT_LOG_ENABLED=false
 ANTD_V4_DOCS_DIR=Backend/resources/docs/antd-v4
 XCODEAGENT_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
+XCODEAGENT_CHECKPOINT_RETENTION_DAYS=30
+LANGSMITH_TRACING=false
+LANGSMITH_API_KEY=replace-with-your-langsmith-key
+LANGSMITH_PROJECT=xcodeagent-workflow
 ```
 
 `MODEL_OUTPUT_LOG_ENABLED=true` 会在模型生成时把文本输出流式打印到后端控制台，并在调用结束后打印工具调用概要，便于调试。
 
 `ANTD_V4_DOCS_DIR` 默认指向仓库内相对路径 `Backend/resources/docs/antd-v4`，相对路径以仓库根目录为基准。如果离线文档移动了，只需要改这个变量。
+
+workflow checkpoint 默认写入当前工作区的 `.xcodeagent/checkpoints/checkpoints.sqlite`，用于持久化主 workflow 的 `ProjectState`，支持后端重启后的状态恢复。`XCODEAGENT_CHECKPOINT_DB` 可选用于强制覆盖 SQLite checkpoint 数据库位置；设置后所有 workflow 会共享该数据库。`XCODEAGENT_CHECKPOINT_RETENTION_DAYS` 控制旧 checkpoint 的默认保留天数，默认 30 天，每个 thread 至少保留最新 checkpoint，等待用户输入的 thread 不会被自动清理。
+
+`LANGSMITH_TRACING` 未配置或为空时默认关闭，不会影响后端启动；只有显式设置为 `true`、`1`、`yes` 或 `on` 时才会启用 LangSmith tracing。主 workflow 会向 LangGraph runnable config 注入 `run_id`、`thread_id`、`project_id`、`workspace` 等 metadata，并在桌面端 Workflow Run 卡片中显示 LangSmith 状态和跳转入口。非 US 区域账号还需要按 LangSmith 要求配置 `LANGSMITH_ENDPOINT`。
