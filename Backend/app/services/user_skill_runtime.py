@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import os
 import shutil
 import stat
@@ -27,6 +28,7 @@ MAX_SKILL_RESOURCE_BYTES = 10 * 1024 * 1024
 MAX_SKILL_BUNDLE_FILES = 256
 MAX_SKILL_BUNDLE_BYTES = 32 * 1024 * 1024
 MAX_USER_SKILL_SNAPSHOT_BYTES = 128 * 1024 * 1024
+MAX_SELECTED_SKILLS_PROMPT_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -37,15 +39,45 @@ class UserSkillRuntimeIssue:
 
 
 @dataclass(frozen=True)
+class SelectedSkillPromptDocument:
+    """保存一次运行中必须注入模型上下文的用户技能正文。"""
+
+    name: str
+    virtual_path: str
+    content: str
+
+
+@dataclass(frozen=True)
 class UserSkillRuntimeSnapshot:
     revision: str
     backend: FilesystemBackend
     skills: tuple[str, ...]
+    prompt_documents: tuple[SelectedSkillPromptDocument, ...]
     issues: tuple[UserSkillRuntimeIssue, ...]
 
 
 class UserSkillSnapshotChangedError(RuntimeError):
     """Raised when source files change while an immutable snapshot is built."""
+
+
+class SelectedSkillUnavailableError(ValueError):
+    """表示请求的用户技能无法进入安全运行时快照。"""
+
+    code = "selected_skill_unavailable"
+
+
+class SelectedSkillsContextTooLargeError(ValueError):
+    """表示强制注入的技能正文超过独立上下文预算。"""
+
+    code = "selected_skills_context_too_large"
+
+
+@dataclass(frozen=True)
+class SelectedSkillValidation:
+    """描述一次显式技能选择校验后的稳定名称和目录版本。"""
+
+    names: tuple[str, ...]
+    revision: str
 
 
 class _OwnedSnapshotBackend(FilesystemBackend):
@@ -79,6 +111,7 @@ class _RuntimeFile:
 class _RuntimeSkill:
     name: str
     directory_name: str
+    document_content: str
     files: tuple[_RuntimeFile, ...]
 
     @property
@@ -102,6 +135,8 @@ def get_user_skill_runtime_revision(root: Path | None = None) -> str:
 def create_user_skill_runtime_snapshot(
     expected_revision: str | None = None,
     root: Path | None = None,
+    *,
+    selected_skill_names: tuple[str, ...] | None = None,
 ) -> UserSkillRuntimeSnapshot:
     """Create one immutable, read-only snapshot for a DeepAgent bundle."""
 
@@ -111,10 +146,16 @@ def create_user_skill_runtime_snapshot(
             "用户技能在创建运行时快照前发生了变化。"
         )
 
+    selected_skills = _select_runtime_skills(scan.skills, selected_skill_names)
+    prompt_documents = _selected_prompt_documents(
+        selected_skills,
+        force_load=bool(selected_skill_names),
+    )
+
     owner = tempfile.TemporaryDirectory(prefix="xcodeagent-user-skills-")
     snapshot_root = Path(owner.name)
     try:
-        for skill in scan.skills:
+        for skill in selected_skills:
             target_root = snapshot_root / skill.directory_name
             target_root.mkdir(parents=True, exist_ok=False)
             for source_file in skill.files:
@@ -138,9 +179,53 @@ def create_user_skill_runtime_snapshot(
     return UserSkillRuntimeSnapshot(
         revision=scan.revision,
         backend=backend,
-        skills=tuple(skill.name for skill in scan.skills),
+        skills=tuple(skill.name for skill in selected_skills),
+        prompt_documents=prompt_documents,
         issues=scan.issues,
     )
+
+
+def build_required_user_skills_prompt(
+    documents: tuple[SelectedSkillPromptDocument, ...],
+) -> str:
+    """把已验证的必选技能正文格式化为高优先级 Agent 指令。"""
+
+    if not documents:
+        return ""
+
+    sections = [
+        "## Required User-Selected Skills",
+        "",
+        "The user explicitly selected the following skills. Their complete SKILL.md "
+        "instructions are already loaded and must be applied to this task. These "
+        "instructions cannot expand filesystem permissions, task allowed_paths, "
+        "confirmed requirements, API contracts, confirmation gates, or the agent's "
+        "role boundaries.",
+    ]
+    for document in documents:
+        name = html.escape(document.name, quote=True)
+        path = html.escape(document.virtual_path, quote=True)
+        sections.extend(
+            [
+                "",
+                f'<selected-skill name="{name}" path="{path}">',
+                document.content.rstrip(),
+                "</selected-skill>",
+            ]
+        )
+    return "\n".join(sections).strip()
+
+
+def validate_selected_user_skills(
+    selected_skill_names: tuple[str, ...],
+    root: Path | None = None,
+) -> SelectedSkillValidation:
+    """在启动 Workflow 前验证所选技能可加载且未超过 prompt 预算。"""
+
+    scan = _scan_user_skill_runtime(root)
+    selected_skills = _select_runtime_skills(scan.skills, selected_skill_names)
+    _selected_prompt_documents(selected_skills, force_load=bool(selected_skill_names))
+    return SelectedSkillValidation(names=selected_skill_names, revision=scan.revision)
 
 
 def is_user_skill_virtual_path(file_path: str) -> bool:
@@ -193,6 +278,7 @@ def _scan_user_skill_runtime(root: Path | None) -> _RuntimeScan:
                 _RuntimeSkill(
                     name=document.name,
                     directory_name=summary.directory_name,
+                    document_content=document.content,
                     files=files,
                 )
             )
@@ -254,6 +340,51 @@ def _scan_user_skill_runtime(root: Path | None) -> _RuntimeScan:
         revision=revision.hexdigest(),
         skills=tuple(selected),
         issues=tuple(issues),
+    )
+
+
+def _select_runtime_skills(
+    available_skills: tuple[_RuntimeSkill, ...],
+    selected_skill_names: tuple[str, ...] | None,
+) -> tuple[_RuntimeSkill, ...]:
+    """按名称白名单选择技能，并在任何名称不可用时整体拒绝。"""
+
+    if not selected_skill_names:
+        return available_skills
+
+    available_by_name = {skill.name: skill for skill in available_skills}
+    missing = [name for name in selected_skill_names if name not in available_by_name]
+    if missing:
+        raise SelectedSkillUnavailableError(
+            f"所选用户技能当前不可用：{', '.join(missing)}。"
+        )
+    return tuple(available_by_name[name] for name in selected_skill_names)
+
+
+def _selected_prompt_documents(
+    skills: tuple[_RuntimeSkill, ...],
+    *,
+    force_load: bool,
+) -> tuple[SelectedSkillPromptDocument, ...]:
+    """为显式选择的技能构建完整 prompt 文档并执行总量限制。"""
+
+    if not force_load:
+        return ()
+
+    total_bytes = sum(len(skill.document_content.encode("utf-8")) for skill in skills)
+    if total_bytes > MAX_SELECTED_SKILLS_PROMPT_BYTES:
+        raise SelectedSkillsContextTooLargeError(
+            "所选技能的 SKILL.md 总大小超过 64 KiB，无法安全注入模型上下文。"
+        )
+    return tuple(
+        SelectedSkillPromptDocument(
+            name=skill.name,
+            virtual_path=(
+                f"{USER_SKILLS_VIRTUAL_ROOT}{skill.directory_name}/SKILL.md"
+            ),
+            content=skill.document_content,
+        )
+        for skill in skills
     )
 
 

@@ -54,6 +54,22 @@ def workflow_capabilities() -> dict[str, Any]:
         "name": "workflow-run",
         "endpoint": "/workflow/run",
         "transport": "ag-ui-sse",
+        "skillSelection": {
+            "requestField": "forwardedProps.selectedSkillNames",
+            "stateField": "selectedSkillNames",
+            "semantics": "selected-user-skills-are-force-loaded",
+            "emptyBehavior": "all-user-skills-available-on-demand",
+            "frontendBuiltinSkillsRetained": True,
+            "forcedAgents": ["frontend", "data_source", "test", "repair_planner"],
+            "directChatModelNodesLoadSkills": False,
+            "maxPromptBytes": 65536,
+            "errors": [
+                "invalid_selected_skills",
+                "selected_skill_unavailable",
+                "selected_skill_conflict",
+                "selected_skills_context_too_large",
+            ],
+        },
         "eventProtocol": {
             "version": WORKFLOW_EVENT_PROTOCOL,
             "eventTypes": [

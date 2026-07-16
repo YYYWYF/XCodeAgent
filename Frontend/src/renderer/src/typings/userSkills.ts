@@ -7,6 +7,11 @@ export type UserSkill = {
   version?: string
 }
 
+export type ChatMessageSkill = {
+  name: string
+  description: string
+}
+
 export type UserSkillIssue = {
   relativePath: string
   code: 'invalid_frontmatter' | 'read_error' | 'symlink_ignored'

@@ -13,7 +13,7 @@ import {
   type ChatSessionRecord,
   type ChatSessionSummary
 } from '../../../service/chatSessions'
-import type { ApplicationConfig, EditorMode } from '../../../typings'
+import type { ApplicationConfig, ChatMessageSkill, EditorMode } from '../../../typings'
 import type { AgentChatMessage } from '../types'
 import {
   createSessionIdentity,
@@ -55,10 +55,12 @@ type UseChatSessionsResult = {
   handleOpenSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>, sessionId: string) => void
   loadingSessions: boolean
   messages: AgentChatMessage[]
+  selectedSkills: ChatMessageSkill[]
   persistSession: (input: PersistSessionInput) => Promise<void>
   sessionError?: string
   sessions: ChatSessionSummary[]
   setDraftByKey: (sessionKey: string, value: string) => void
+  setSelectedSkillsByKey: (sessionKey: string, value: ChatMessageSkill[]) => void
   setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
 }
 
@@ -89,7 +91,9 @@ export function useChatSessions({
     messagesForKey,
     registerSession,
     removeSession,
+    selectedSkillsForKey,
     setDraftByKey,
+    setSelectedSkillsByKey,
     setSessionMessages
   } = useSessionRuntimeStore()
 
@@ -119,6 +123,7 @@ export function useChatSessions({
   const draftKey = activeSession?.key || pendingDraftKey(workspaceRoot, editorMode)
   const draft = draftForKey(draftKey)
   const messages = activeSession ? messagesForKey(activeSession.key) : []
+  const selectedSkills = selectedSkillsForKey(draftKey)
   const loadingSessions = Boolean(sessionLoadingModes[editorMode])
   const deletingSessionId = deletingSessionIds[editorMode]
   const sessionError = sessionErrors[editorMode]
@@ -339,10 +344,12 @@ export function useChatSessions({
     handleOpenSessionKeyDown,
     loadingSessions,
     messages,
+    selectedSkills,
     persistSession,
     sessionError,
     sessions,
     setDraftByKey,
+    setSelectedSkillsByKey,
     setSessionMessages
   }
 }

@@ -1,10 +1,16 @@
 import type { ProcessStepRecord, ToolCallRecord } from '../../service/agUiAgent'
-import type { EditorMode, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../../typings'
+import type {
+  ChatMessageSkill,
+  EditorMode,
+  WorkflowRunPayload,
+  WorkspaceCodeChangeSet
+} from '../../typings'
 
 export type AgentChatMessage = {
   id: number
   role: 'user' | 'assistant'
   content: string
+  skills?: ChatMessageSkill[]
   workflow?: WorkflowRunPayload
   codeChanges?: WorkspaceCodeChangeSet
   toolCalls?: ToolCallRecord[]

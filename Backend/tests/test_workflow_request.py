@@ -9,6 +9,52 @@ from app.protocols.workflow.request import workflow_run_inputs
 
 
 class WorkflowRequestTests(unittest.TestCase):
+    def test_normalizes_selected_skill_names_from_forwarded_props(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "使用技能实现页面",
+                "forwardedProps": {
+                    "selectedSkillNames": [" beta ", "alpha", "alpha"],
+                },
+            }
+        )
+
+        self.assertEqual(inputs["selected_skill_names"], ["alpha", "beta"])
+        self.assertIsNone(inputs["selected_skills_error"])
+
+    def test_rejects_invalid_selected_skill_names_inside_workflow_lifecycle(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "使用技能实现页面",
+                "forwardedProps": {"selectedSkillNames": "alpha"},
+            }
+        )
+
+        self.assertEqual(inputs["selected_skill_names"], [])
+        self.assertEqual(inputs["selected_skills_error"].code, "invalid_selected_skills")
+
+    def test_resume_preserves_selection_and_rejects_replacement(self) -> None:
+        preserved = workflow_run_inputs(
+            {
+                "request": "继续",
+                "forwardedProps": {
+                    "resumeState": {"state": {"selectedSkillNames": ["alpha"]}}
+                },
+            }
+        )
+        conflict = workflow_run_inputs(
+            {
+                "request": "继续",
+                "forwardedProps": {
+                    "selectedSkillNames": ["beta"],
+                    "resumeState": {"state": {"selectedSkillNames": ["alpha"]}},
+                },
+            }
+        )
+
+        self.assertEqual(preserved["selected_skill_names"], ["alpha"])
+        self.assertEqual(conflict["selected_skills_error"].code, "selected_skill_conflict")
+
     def test_reads_workspace_root_from_forwarded_props(self) -> None:
         inputs = workflow_run_inputs(
             {

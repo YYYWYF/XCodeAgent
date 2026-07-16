@@ -152,6 +152,63 @@ class UserSkillRuntimeTests(unittest.TestCase):
             self.assertIn("old body", result.file_data["content"])
             self.assertNotIn("new body", result.file_data["content"])
 
+    def test_explicit_selection_filters_snapshot_and_force_loads_complete_document(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_root:
+            root = Path(temporary_root)
+            self._write_skill(root / "alpha", name="alpha", body="alpha instructions")
+            self._write_skill(root / "beta", name="beta", body="beta instructions")
+            reference = root / "alpha" / "references" / "guide.md"
+            reference.parent.mkdir()
+            reference.write_text("supporting resource", encoding="utf-8")
+
+            snapshot = user_skill_runtime.create_user_skill_runtime_snapshot(
+                root=root,
+                selected_skill_names=("alpha",),
+            )
+
+            self.assertEqual(snapshot.skills, ("alpha",))
+            self.assertEqual(len(snapshot.prompt_documents), 1)
+            self.assertEqual(
+                snapshot.prompt_documents[0].content,
+                (root / "alpha" / "SKILL.md").read_text(encoding="utf-8"),
+            )
+            self.assertIsNotNone(snapshot.backend.read("/beta/SKILL.md").error)
+            self.assertEqual(
+                snapshot.backend.read("/alpha/references/guide.md").file_data["content"],
+                "supporting resource",
+            )
+            prompt = user_skill_runtime.build_required_user_skills_prompt(
+                snapshot.prompt_documents
+            )
+            self.assertIn("<selected-skill name=\"alpha\"", prompt)
+            self.assertIn("# alpha instructions", prompt)
+            self.assertNotIn("supporting resource", prompt)
+
+    def test_unknown_explicit_selection_is_rejected_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_root:
+            root = Path(temporary_root)
+            self._write_skill(root / "alpha", name="alpha")
+
+            with self.assertRaises(user_skill_runtime.SelectedSkillUnavailableError):
+                user_skill_runtime.create_user_skill_runtime_snapshot(
+                    root=root,
+                    selected_skill_names=("missing",),
+                )
+
+    def test_explicit_selection_prompt_budget_rejects_without_truncation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_root:
+            root = Path(temporary_root)
+            self._write_skill(root / "alpha", name="alpha", body="完整技能指令")
+
+            with (
+                patch.object(user_skill_runtime, "MAX_SELECTED_SKILLS_PROMPT_BYTES", 4),
+                self.assertRaises(user_skill_runtime.SelectedSkillsContextTooLargeError),
+            ):
+                user_skill_runtime.create_user_skill_runtime_snapshot(
+                    root=root,
+                    selected_skill_names=("alpha",),
+                )
+
     def test_revision_changes_when_supporting_resource_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
             root = Path(temporary_root)

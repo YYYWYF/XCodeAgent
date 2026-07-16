@@ -42,6 +42,7 @@ from app.protocols.workflow.stream_events import (
 )
 from app.config import Settings
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
+from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
@@ -88,6 +89,13 @@ def build_workflow_ag_ui_stream(
                 raise ValueError(
                     "Workflow request is required. Provide request/message or a user message in messages."
                 )
+            selected_skills_error = workflow_inputs.get("selected_skills_error")
+            if selected_skills_error:
+                raise selected_skills_error
+            selected_skill_names = tuple(workflow_inputs["selected_skill_names"])
+            selected_skill_validation = validate_selected_user_skills(
+                selected_skill_names
+            )
 
             project_id = workflow_inputs["project_id"] or None
             workspace = workflow_inputs["workspace"] or None
@@ -118,6 +126,7 @@ def build_workflow_ag_ui_stream(
             resume_from = workflow_inputs.get("resume_from") or None
             initial_state: dict[str, Any] = {
                 "request": request,
+                "selected_skill_names": list(selected_skill_names),
                 "timeline": [],
                 "observability": observability,
             }
@@ -149,6 +158,8 @@ def build_workflow_ag_ui_stream(
                     "thread_id": thread_id,
                     "project_id": project_id,
                     "workspace": workspace,
+                    "selected_skill_names": list(selected_skill_names),
+                    "selected_skills_revision": selected_skill_validation.revision,
                     "workflow": "xcodeagent-main",
                     "langsmith_enabled": observability["langsmith"]["enabled"],
                 },
@@ -165,6 +176,8 @@ def build_workflow_ag_ui_stream(
                     "request": request,
                     "projectId": project_id,
                     "resumeFrom": resume_from,
+                    "selectedSkillNames": list(selected_skill_names),
+                    "selectedSkillsRevision": selected_skill_validation.revision,
                     "observability": observability,
                 },
             )

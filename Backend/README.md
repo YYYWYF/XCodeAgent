@@ -4,7 +4,7 @@
 
 当前后端还内置了：
 
-- `react-antd-v4-codegen` skill：通过 Deep Agents 原生 skill middleware 暴露给 Main 和 Frontend Agent；prompt 常驻元数据，完整规则和 references 按需读取。
+- `react-antd-v4-codegen` skill：通过 Deep Agents 原生 skill middleware 暴露给 Frontend Agent；用户显式选择的环境级 Skill 会被白名单隔离并完整注入四个 Deep Agent 的 system prompt。
 - `REACT_BEST_PRACTICES_GUIDE.md`：作为 React + TypeScript 代码生成规范入口，随 PyInstaller 后端一起打包并以只读虚拟路径 `/.xcodeagent/builtin-skills/` 访问。
 - `antd_v4_docs` 工具：读取本地 `antd-components` 离线文档，并按用户问题自动检索相关 Ant Design v4.24.16 组件片段。
 - `requirement_planner` 工具：分析用户需求，生成选择题式澄清问题，并在信息足够后输出结构化开发计划。
@@ -40,8 +40,10 @@ Workflow 调试入口在前端 Chat Composer 的“Workflow 调试”面板中�
 curl -N -X POST http://127.0.0.1:8000/workflow/run \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
-  -d '{"threadId":"demo-thread","messages":[{"role":"user","content":"创建一个库存管理应用"}]}'
+  -d '{"threadId":"demo-thread","messages":[{"role":"user","content":"创建一个库存管理应用"}],"forwardedProps":{"selectedSkillNames":["inventory-domain"]}}'
 ```
+
+`selectedSkillNames` 为可选字符串数组。非空时，Backend 会验证并只挂载这些用户 Skill，完整读取每个 `SKILL.md` 后强制注入 Frontend、Data Source、Test、RepairPlanner 四个 Deep Agent；空数组或字段缺失时保持“全部用户 Skill 可按需发现、正文不强制注入”的兼容行为。所选正文总量上限为 64 KiB，恢复中的 Workflow 不允许替换最初的技能集合。
 
 后续请求复用同一个 `threadId`，服务会用 LangGraph checkpointer 延续该主工作流。
 

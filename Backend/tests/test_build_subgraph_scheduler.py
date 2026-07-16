@@ -9,6 +9,7 @@ from app.graph.subgraphs.build import build
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
     def test_build_scheduler_runs_dependency_order_until_complete(self) -> None:
+        runner_skill_sets: list[list[str] | None] = []
         tasks = [
             {
                 "id": "api",
@@ -27,6 +28,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         ]
 
         def data_runner(**kwargs):
+            runner_skill_sets.append(kwargs.get("selected_skill_names"))
             return [
                 {
                     "task_id": task["id"],
@@ -37,6 +39,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             ]
 
         def frontend_runner(**kwargs):
+            runner_skill_sets.append(kwargs.get("selected_skill_names"))
             return [
                 {
                     "task_id": task["id"],
@@ -68,6 +71,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         },
                         "tasks": tasks,
                         "timeline": [],
+                        "selected_skill_names": ["workflow-skill"],
                     }
                 )
 
@@ -76,6 +80,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual([task["status"] for task in result["tasks"]], ["completed", "completed"])
         self.assertIn("scheduler:dispatch:api", result["build_events"])
         self.assertIn("scheduler:dispatch:page", result["build_events"])
+        self.assertEqual(runner_skill_sets, [["workflow-skill"], ["workflow-skill"]])
 
     def test_build_scheduler_plans_and_runs_repair_task(self) -> None:
         tasks = [
@@ -132,7 +137,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             }
                         ],
                     },
-                ),
+                ) as repair_planner,
             ):
                 result = build(
                     {
@@ -145,6 +150,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         },
                         "tasks": tasks,
                         "timeline": [],
+                        "selected_skill_names": ["repair-skill"],
                     }
                 )
 
@@ -153,6 +159,10 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertTrue(result["tasks"][0]["completed_by_repair"])
         self.assertEqual(result["repair_task_plan"]["status"], "ready")
         self.assertIn("scheduler:repair_planned:1", result["build_events"])
+        self.assertEqual(
+            repair_planner.call_args.kwargs["selected_skill_names"],
+            ["repair-skill"],
+        )
 
 
 if __name__ == "__main__":

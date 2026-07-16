@@ -17,22 +17,28 @@ def create_data_source_agent(
     *,
     user_skills_backend: BackendProtocol,
     agent_memory_backend: BackendProtocol,
+    required_user_skills_prompt: str = "",
 ):
+    """创建具备数据源工作区权限和必选技能指令的 Deep Agent。"""
+
+    base_system_prompt = (
+        "You are the Data Source Generation Agent. Execute only approved "
+        "data-source build tasks from the task DAG. Generate or modify data "
+        "models, migrations, seed or mock data, APIs, validation, permissions, "
+        "and backend tests while obeying the confirmed API contract. If the "
+        "contract cannot be implemented, return a change request; never silently "
+        "change the contract. Do not confirm requirements and do not modify "
+        "RequirementSpec, PageDetail, ProjectPlan, or the task DAG directly. Return "
+        "a concise structured implementation report with changed files, commands, "
+        "status, and any change request. "
+        f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting "
+        "a file, use delete_file(file_path=\"/path\") with a virtual absolute path."
+    )
     return create_deep_agent(
         name="data-source-generation-agent",
         model=model,
-        system_prompt=(
-            "You are the Data Source Generation Agent. Execute only approved "
-            "data-source build tasks from the task DAG. Generate or modify data "
-            "models, migrations, seed or mock data, APIs, validation, permissions, "
-            "and backend tests while obeying the confirmed API contract. If the "
-            "contract cannot be implemented, return a change request; never silently "
-            "change the contract. Do not confirm requirements and do not modify "
-            "RequirementSpec, PageDetail, ProjectPlan, or the task DAG directly. Return "
-            "a concise structured implementation report with changed files, commands, "
-            "status, and any change request. "
-            f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting "
-            "a file, use delete_file(file_path=\"/path\") with a virtual absolute path."
+        system_prompt="\n\n".join(
+            part for part in (base_system_prompt, required_user_skills_prompt) if part
         ),
         skills=[USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],

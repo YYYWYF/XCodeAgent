@@ -3,6 +3,7 @@ import type {
   AgentApprovalStatus,
   DevelopmentOrchestrationPayload,
   EditorMode,
+  ChatMessageSkill,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet,
 } from '../typings';
@@ -12,6 +13,7 @@ export type ChatSessionMessage = {
   id: number;
   role: 'user' | 'assistant';
   content: string;
+  skills?: ChatMessageSkill[];
   orchestration?: DevelopmentOrchestrationPayload;
   approval?: AgentApprovalRequest;
   approvalStatus?: AgentApprovalStatus;
@@ -74,6 +76,7 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
       id: Number(item.id || Date.now()),
       role: item.role === 'assistant' ? 'assistant' : 'user',
       content: String(item.content || ''),
+      skills: normalizeMessageSkills(item.skills),
       orchestration:
         item.orchestration && typeof item.orchestration === 'object'
           ? (item.orchestration as DevelopmentOrchestrationPayload)
@@ -102,6 +105,24 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
             : undefined,
       createdAt: Number(item.createdAt || Date.now()),
     }));
+}
+
+/** 过滤并规范化会话消息中的技能展示快照。 */
+export function normalizeMessageSkills(value: unknown): ChatMessageSkill[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const names = new Set<string>();
+  const skills = value
+    .filter((item): item is Partial<ChatMessageSkill> => Boolean(item && typeof item === 'object'))
+    .map((item) => ({
+      name: typeof item.name === 'string' ? item.name.trim() : '',
+      description: typeof item.description === 'string' ? item.description.trim() : '',
+    }))
+    .filter((item) => {
+      if (!item.name || names.has(item.name)) return false;
+      names.add(item.name);
+      return true;
+    });
+  return skills.length > 0 ? skills : undefined;
 }
 
 function normalizeProcessSteps(value: unknown): ProcessStepRecord[] | undefined {

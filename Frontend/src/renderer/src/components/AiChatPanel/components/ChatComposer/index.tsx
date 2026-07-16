@@ -8,9 +8,15 @@ import {
 import { Alert, Button, Checkbox, Input, Select, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useState } from 'react'
-import type { EditorMode, WorkflowDebugOptions, WorkflowRunPayload } from '../../../../typings'
+import type {
+  ChatMessageSkill,
+  EditorMode,
+  WorkflowDebugOptions,
+  WorkflowRunPayload
+} from '../../../../typings'
 import { cx } from '../../../../utils'
 import type { ChatCopy } from '../../types'
+import ResourceSkillMenu from './ResourceSkillMenu'
 import './ChatComposer.less'
 
 const { Text } = Typography
@@ -37,9 +43,11 @@ type ChatComposerProps = {
   error?: string
   loading: boolean
   onDraftChange: (value: string) => void
+  onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
   onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   onStopGenerating: () => void
   stopping: boolean
+  selectedSkills: ChatMessageSkill[]
   workspaceBusy: boolean
   workspaceRoot: string
 }
@@ -51,9 +59,11 @@ export default function ChatComposer({
   error,
   loading,
   onDraftChange,
+  onSelectedSkillsChange,
   onSend,
   onStopGenerating,
   stopping,
+  selectedSkills,
   workspaceBusy,
   workspaceRoot
 }: ChatComposerProps): ReactElement {
@@ -82,6 +92,24 @@ export default function ChatComposer({
         {error && <Alert message={error} showIcon type="error" />}
         <Text className={cx('composer-context-label')}>继续完善当前任务</Text>
         <div className={cx('ai-chat-composer-frame')}>
+          {selectedSkills.length > 0 && (
+            <div className={cx('composer-selected-skills')}>
+              {selectedSkills.map((skill) => (
+                <Tag
+                  closable={!loading}
+                  key={skill.name}
+                  onClose={() =>
+                    onSelectedSkillsChange(
+                      selectedSkills.filter((item) => item.name !== skill.name)
+                    )
+                  }
+                  title={skill.description}
+                >
+                  {skill.name}
+                </Tag>
+              ))}
+            </div>
+          )}
           <TextArea
             aria-label={`${copy.title}输出内容`}
             autoSize={{ minRows: 2, maxRows: 6 }}
@@ -140,9 +168,16 @@ export default function ChatComposer({
             )}
           </div>
           <div className={cx('ai-chat-composer-footer')}>
-            <Text className={cx('workspace-root-label')} title={workspaceRoot}>
-              <FolderOpenOutlined /> {workspaceRoot}
-            </Text>
+            <div className={cx('composer-resource-context')}>
+              <ResourceSkillMenu
+                disabled={loading || workspaceBusy}
+                onSelectedSkillsChange={onSelectedSkillsChange}
+                selectedSkills={selectedSkills}
+              />
+              <Text className={cx('workspace-root-label')} title={workspaceRoot}>
+                <FolderOpenOutlined /> {workspaceRoot}
+              </Text>
+            </div>
             {workspaceBusy && (
               <Text className={cx('workspace-busy-label')} type="warning">
                 其他会话正在执行

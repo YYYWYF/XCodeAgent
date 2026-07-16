@@ -80,10 +80,13 @@ def _invoke_repair_planner_agent(
     *,
     prompt: str,
     workspace: str | None = None,
+    selected_skill_names: list[str] | None = None,
 ) -> str:
+    """使用本次工作流的技能白名单调用修复规划 Deep Agent。"""
+
     from app.agents import create_agent_bundle
 
-    result = create_agent_bundle(workspace).repair_planner.invoke(
+    result = create_agent_bundle(workspace, selected_skill_names).repair_planner.invoke(
         {"messages": [{"role": "user", "content": prompt}]}
     )
     return last_agent_text(result)
@@ -93,11 +96,15 @@ def plan_build_failure_repair_with_repair_planner_agent(
     *,
     repair_input: dict[str, Any],
     workspace: str | None = None,
+    selected_skill_names: list[str] | None = None,
 ) -> dict[str, Any]:
+    """在相同技能集合下为构建失败生成受限修复计划。"""
+
     settings = Settings.from_env()
     agent_note = _invoke_repair_planner_agent(
         prompt=_build_failure_repair_prompt(repair_input=repair_input),
         workspace=workspace,
+        selected_skill_names=selected_skill_names,
     )
     parsed = extract_json_object(agent_note)
     if not parsed:
@@ -115,6 +122,7 @@ def plan_build_failure_repair_with_repair_planner_agent(
         "agent": "repair-planner-agent",
         "mode": "deep_agent",
         "model": settings.model_name,
+        "requiredSkillsLoaded": list(selected_skill_names or []),
     }
     return parsed
 
@@ -125,7 +133,10 @@ def plan_repairs_with_repair_planner_agent(
     revision_requests: list[dict[str, Any]],
     build_task_plan: dict[str, Any] | None = None,
     workspace: str | None = None,
+    selected_skill_names: list[str] | None = None,
 ) -> dict[str, Any]:
+    """在相同技能集合下为集成测试失败生成修复任务。"""
+
     settings = Settings.from_env()
     if not revision_requests:
         agent_note = "No repair required because all quality gate checks passed."
@@ -138,6 +149,7 @@ def plan_repairs_with_repair_planner_agent(
                 build_task_plan=build_task_plan,
             ),
             workspace=workspace,
+            selected_skill_names=selected_skill_names,
         )
         planner_decision = extract_json_object(agent_note) or {
             "decision": "repair",
@@ -161,6 +173,7 @@ def plan_repairs_with_repair_planner_agent(
                 "agent": "repair-planner-agent",
                 "mode": "deep_agent",
                 "model": settings.model_name,
+                "requiredSkillsLoaded": list(selected_skill_names or []),
             },
         }
 
@@ -170,6 +183,9 @@ def plan_repairs_with_repair_planner_agent(
     )
     repair_task_plan["prepared_by"]["agent"] = "repair-planner-agent"
     repair_task_plan["prepared_by"]["model"] = settings.model_name
+    repair_task_plan["prepared_by"]["requiredSkillsLoaded"] = list(
+        selected_skill_names or []
+    )
     repair_task_plan["planner_decision"] = planner_decision
     if planner_decision.get("strategy"):
         repair_task_plan["strategy"] = planner_decision["strategy"]

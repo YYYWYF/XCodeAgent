@@ -12,6 +12,22 @@ from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_j
 from app.services.workspace_inspector import snapshot_hash
 
 
+MAX_SELECTED_SKILLS = 64
+MAX_SELECTED_SKILL_NAME_CHARS = 128
+
+
+class InvalidSelectedSkillsError(ValueError):
+    """表示 Workflow 请求中的技能名称集合格式无效。"""
+
+    code = "invalid_selected_skills"
+
+
+class SelectedSkillConflictError(ValueError):
+    """表示恢复请求试图替换原 Workflow 的技能集合。"""
+
+    code = "selected_skill_conflict"
+
+
 def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     """应用兼容性回退规则并返回统一的运行时输入。
 
@@ -78,6 +94,21 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("editor_mode"))
         or _optional_text(forwarded_props.get("editorMode"))
     )
+    selected_skill_names, selected_skills_error = _workflow_selected_skill_names(
+        payload,
+        forwarded_props=forwarded_props,
+        resume_state=resume_state,
+    )
+    resume_values = {
+        **_resume_values(resume_state),
+        **_debug_resume_values(debug_state, workspace=workspace),
+        "selected_skill_names": list(selected_skill_names),
+        **(
+            {"detail_review_submission": detail_review_submission}
+            if detail_review_submission
+            else {}
+        ),
+    }
 
     return {
         "cancel_run_id": (
@@ -88,15 +119,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "request": request,
         "resume_from": resume_from,
-        "resume_values": {
-            **_resume_values(resume_state),
-            **_debug_resume_values(debug_state, workspace=workspace),
-            **(
-                {"detail_review_submission": detail_review_submission}
-                if detail_review_submission
-                else {}
-            ),
-        },
+        "resume_values": resume_values,
+        "selected_skill_names": list(selected_skill_names),
+        "selected_skills_error": selected_skills_error,
         "project_id": (
             _optional_text(payload.get("project_id"))
             or _optional_text(payload.get("projectId"))
@@ -115,6 +140,77 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(payload.get("runId"))
         ),
     }
+
+
+def _workflow_selected_skill_names(
+    payload: dict[str, Any],
+    *,
+    forwarded_props: dict[str, Any],
+    resume_state: dict[str, Any] | None,
+) -> tuple[tuple[str, ...], ValueError | None]:
+    """解析显式选择和恢复状态，并把校验错误延迟到 AG-UI 生命周期内。"""
+
+    try:
+        explicit_present, explicit_names = _selected_skill_names_from_sources(
+            payload,
+            forwarded_props,
+        )
+        resumed_present, resumed_names = _selected_skill_names_from_resume(resume_state)
+        if resumed_present:
+            if explicit_present and explicit_names != resumed_names:
+                raise SelectedSkillConflictError(
+                    "恢复 Workflow 时不能更换最初选择的用户技能。"
+                )
+            return resumed_names, None
+        return explicit_names, None
+    except (InvalidSelectedSkillsError, SelectedSkillConflictError) as exc:
+        return (), exc
+
+
+def _selected_skill_names_from_sources(
+    *sources: dict[str, Any],
+) -> tuple[bool, tuple[str, ...]]:
+    """按来源优先级读取 camelCase 或 snake_case 技能字段。"""
+
+    for source in sources:
+        for field_name in ("selectedSkillNames", "selected_skill_names"):
+            if field_name in source:
+                return True, _normalize_selected_skill_names(source[field_name])
+    return False, ()
+
+
+def _selected_skill_names_from_resume(
+    resume_state: dict[str, Any] | None,
+) -> tuple[bool, tuple[str, ...]]:
+    """从公开 state 或 result 中恢复初始技能集合。"""
+
+    if not resume_state:
+        return False, ()
+    state = _optional_dict(resume_state.get("state")) or {}
+    result = _optional_dict(resume_state.get("result")) or {}
+    return _selected_skill_names_from_sources(state, result)
+
+
+def _normalize_selected_skill_names(value: Any) -> tuple[str, ...]:
+    """严格校验并生成稳定、去重的技能名称元组。"""
+
+    if not isinstance(value, list):
+        raise InvalidSelectedSkillsError("selectedSkillNames 必须是字符串数组。")
+    if len(value) > MAX_SELECTED_SKILLS:
+        raise InvalidSelectedSkillsError(
+            f"一次最多选择 {MAX_SELECTED_SKILLS} 个用户技能。"
+        )
+    normalized: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise InvalidSelectedSkillsError("selectedSkillNames 只能包含字符串。")
+        name = item.strip()
+        if not name:
+            raise InvalidSelectedSkillsError("selectedSkillNames 不能包含空名称。")
+        if len(name) > MAX_SELECTED_SKILL_NAME_CHARS:
+            raise InvalidSelectedSkillsError("用户技能名称过长。")
+        normalized.add(name)
+    return tuple(sorted(normalized, key=lambda name: (name.casefold(), name)))
 
 
 def _last_user_message(messages: Any) -> str:
@@ -226,6 +322,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "detail_selection",
         "selected_page_id",
         "selected_data_source_id",
+        "page_spec_draft",
         "data_source_spec_draft",
         "detail_plans",
         "detail_review_submission",
@@ -239,6 +336,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan",
         "build_task_plan_path",
         "tasks",
+        "selected_skill_names",
     }
     return {
         key: merged[key]

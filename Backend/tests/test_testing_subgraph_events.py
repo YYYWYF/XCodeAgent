@@ -34,10 +34,10 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         ), patch(
             "app.graph.subgraphs.testing.summarize_tests_with_deep_agent",
             return_value=test_agent_value,
-        ), patch(
+        ) as test_agent, patch(
             "app.graph.subgraphs.testing.capture_agent_file_changes",
-            return_value=CapturedWorkspaceChanges(
-                value=test_agent_value, code_change_set=None
+            side_effect=lambda **kwargs: CapturedWorkspaceChanges(
+                value=kwargs["action"](), code_change_set=None
             ),
         ), patch(
             "app.graph.subgraphs.testing.evaluate_quality_gate",
@@ -65,6 +65,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                     "code_changes": {},
                     "code_change_sets": [],
                     "timeline": [],
+                    "selected_skill_names": ["workflow-skill"],
                 }
             )
 
@@ -88,6 +89,10 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                 "main_quality_gate",
                 "repair_planning:skipped",
             ],
+        )
+        self.assertEqual(
+            test_agent.call_args.kwargs["selected_skill_names"],
+            ["workflow-skill"],
         )
 
 

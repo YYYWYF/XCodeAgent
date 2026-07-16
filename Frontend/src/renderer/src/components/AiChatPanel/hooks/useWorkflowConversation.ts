@@ -5,6 +5,7 @@ import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAge
 import { isAuthenticationFailure } from '../../../service/authentication'
 import type {
   ApplicationConfig,
+  ChatMessageSkill,
   EditorMode,
   WorkflowDebugOptions,
   WorkflowRunPayload
@@ -15,6 +16,11 @@ import {
   type ClarificationAnswers
 } from '../components/WorkflowRunCard'
 import type { AgentChatMessage } from '../types'
+import {
+  beginOptimisticSkillSend,
+  rollbackSkillSelection,
+  selectedSkillNames
+} from '../skillSelection'
 import { stoppedAnswer, workflowCodeChanges } from '../utils'
 import type { PersistSessionInput } from './useChatSessions'
 import type { SessionIdentity, SessionRunStatus } from './sessionRuntime'
@@ -30,6 +36,7 @@ type UseWorkflowConversationParams = {
   application: ApplicationConfig
   draft: string
   draftKey: string
+  selectedSkills: ChatMessageSkill[]
   editorMode: EditorMode
   ensureActiveSession: () => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
@@ -37,6 +44,7 @@ type UseWorkflowConversationParams = {
   publishAiMessage: (mode: EditorMode, content: string) => void
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
   setDraftByKey: (sessionKey: string, value: string) => void
+  setSelectedSkillsByKey: (sessionKey: string, value: ChatMessageSkill[]) => void
   setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
 }
 
@@ -61,6 +69,7 @@ export function useWorkflowConversation({
   application,
   draft,
   draftKey,
+  selectedSkills,
   editorMode,
   ensureActiveSession,
   getSessionMessages,
@@ -68,6 +77,7 @@ export function useWorkflowConversation({
   publishAiMessage,
   runningSessionsRef,
   setDraftByKey,
+  setSelectedSkillsByKey,
   setSessionMessages
 }: UseWorkflowConversationParams): UseWorkflowConversationResult {
   const stopRequestedRef = useRef<Record<string, boolean>>({})
@@ -105,7 +115,12 @@ export function useWorkflowConversation({
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
-    await sendWorkflowMessage(message, { clearDraft: true, titleFrom: message, workflowDebug })
+    await sendWorkflowMessage(message, {
+      clearDraft: true,
+      selectedSkills,
+      titleFrom: message,
+      workflowDebug
+    })
   }
 
   /** 发送并持久化 Workflow 对话，认证失败时恢复发送前的界面状态。 */
@@ -115,6 +130,7 @@ export function useWorkflowConversation({
       clearDraft?: boolean
       clarificationAnswers?: ClarificationAnswers
       originalRequest?: string
+      selectedSkills?: ChatMessageSkill[]
       resumeState?: WorkflowRunPayload
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
@@ -140,10 +156,12 @@ export function useWorkflowConversation({
     const agUiSession =
       agUiSessionsRef.current[identity.key] ||
       (agUiSessionsRef.current[identity.key] = new AgUiChatSession(identity.threadId))
+    const optimisticSkills = beginOptimisticSkillSend(options?.selectedSkills || [])
     const userMessage: AgentChatMessage = {
       id: Date.now(),
       role: 'user',
       content: trimmedMessage,
+      skills: optimisticSkills.messageSkills,
       createdAt: Date.now()
     }
     const assistantMessageId = Date.now() + 1
@@ -165,7 +183,14 @@ export function useWorkflowConversation({
     setLiveWorkflows((current) => omitKey(current, identity.key))
     stopRequestedRef.current[identity.key] = false
     setSessionMessages(identity.key, nextMessages)
-    if (options?.clearDraft) setDraftByKey(draftKey, '')
+    if (options?.clearDraft) {
+      setDraftByKey(identity.key, '')
+      setSelectedSkillsByKey(identity.key, optimisticSkills.nextDraftSkills)
+      if (draftKey !== identity.key) {
+        setDraftByKey(draftKey, '')
+        setSelectedSkillsByKey(draftKey, [])
+      }
+    }
 
     let streamedContent = ''
     let streamedWorkflow: WorkflowRunPayload | undefined
@@ -215,6 +240,7 @@ export function useWorkflowConversation({
         application,
         clarificationAnswers: options?.clarificationAnswers,
         originalRequest: options?.originalRequest,
+        selectedSkillNames: selectedSkillNames(options?.selectedSkills),
         workflowDebug: options?.workflowDebug,
         resumeState: options?.resumeState,
         onContent: (content) => {
@@ -267,7 +293,13 @@ export function useWorkflowConversation({
     } catch (caughtError) {
       if (isAuthenticationFailure(caughtError)) {
         setSessionMessages(identity.key, previousMessages)
-        if (options?.clearDraft) setDraftByKey(draftKey, trimmedMessage)
+        if (options?.clearDraft) setDraftByKey(identity.key, trimmedMessage)
+        if (options?.clearDraft) {
+          setSelectedSkillsByKey(
+            identity.key,
+            rollbackSkillSelection(options.selectedSkills)
+          )
+        }
         await persistSession({
           editorMode: identity.editorMode,
           messages: previousMessages,

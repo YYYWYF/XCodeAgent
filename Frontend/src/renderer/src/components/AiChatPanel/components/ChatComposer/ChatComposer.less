@@ -63,6 +63,218 @@
   padding-top: 4px;
 }
 
+.@{class-prefix}-composer-selected-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 4px;
+
+  .ant-tag {
+    max-width: 240px;
+    margin: 0;
+    overflow: hidden;
+    color: var(--wb-text);
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent-border);
+    border-radius: 999px;
+    text-overflow: ellipsis;
+  }
+
+  .ant-tag-close-icon {
+    color: var(--wb-text-secondary);
+  }
+}
+
+.@{class-prefix}-composer-resource-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-composer-resource-button.ant-btn {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-subtle);
+  border-color: var(--wb-border);
+
+  &:hover,
+  &:focus {
+    color: var(--wb-accent);
+    background: var(--wb-surface-hover);
+    border-color: var(--wb-focus);
+  }
+}
+
+.@{class-prefix}-composer-resource-overlay {
+  .ant-popover-inner {
+    overflow: hidden;
+    background: var(--wb-surface);
+    border: 1px solid var(--wb-border);
+    border-radius: 12px;
+    box-shadow: var(--wb-shadow);
+  }
+
+  .ant-popover-inner-content {
+    padding: 0;
+  }
+
+  .ant-popover-arrow-content {
+    background: var(--wb-surface);
+  }
+}
+
+.@{class-prefix}-composer-resource-popover {
+  display: flex;
+  max-width: min(650px, calc(100vw - 32px));
+  color: var(--wb-text);
+}
+
+.@{class-prefix}-composer-resource-primary {
+  display: flex;
+  width: 220px;
+  flex: 0 0 220px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-composer-resource-item,
+.@{class-prefix}-composer-skill-item {
+  font: inherit;
+  color: var(--wb-text);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.@{class-prefix}-composer-resource-item {
+  display: grid;
+  min-height: 42px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  grid-template-columns: 20px 1fr 14px;
+  gap: 8px;
+  text-align: left;
+
+  &:hover,
+  &:focus-visible,
+  &.@{class-prefix}-active {
+    outline: 0;
+    background: var(--wb-surface-hover);
+  }
+
+  &[disabled] {
+    color: var(--wb-text-tertiary);
+    cursor: not-allowed;
+  }
+}
+
+.@{class-prefix}-composer-skill-panel {
+  display: flex;
+  width: 400px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--wb-surface);
+  border-left: 1px solid var(--wb-border);
+
+  .ant-input-affix-wrapper {
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+    border-radius: 8px;
+  }
+
+  .ant-input {
+    color: var(--wb-text);
+    background: transparent;
+  }
+}
+
+.@{class-prefix}-composer-skill-list {
+  display: flex;
+  max-height: 330px;
+  min-height: 120px;
+  flex-direction: column;
+  gap: 3px;
+  overflow: auto;
+
+  .ant-empty-description {
+    color: var(--wb-text-tertiary);
+  }
+}
+
+.@{class-prefix}-composer-skill-state {
+  display: flex;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+}
+
+.@{class-prefix}-composer-skill-item {
+  display: grid;
+  align-items: center;
+  padding: 9px 8px;
+  border-radius: 8px;
+  grid-template-columns: 30px minmax(0, 1fr) 20px;
+  gap: 9px;
+  text-align: left;
+
+  &:hover,
+  &:focus-visible,
+  &.@{class-prefix}-selected {
+    outline: 0;
+    background: var(--wb-surface-hover);
+  }
+}
+
+.@{class-prefix}-composer-skill-avatar {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.@{class-prefix}-composer-skill-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+
+  .ant-typography {
+    margin: 0;
+    overflow: hidden;
+    color: var(--wb-text);
+    line-height: 19px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-tertiary);
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-composer-skill-check {
+  color: var(--wb-accent);
+  text-align: center;
+}
+
 .@{class-prefix}-workflow-debug-box {
   display: flex;
   flex-direction: column;
@@ -268,5 +480,21 @@
 
   .@{class-prefix}-workspace-root-label {
     max-width: 55%;
+  }
+
+  .@{class-prefix}-composer-resource-popover {
+    width: min(92vw, 420px);
+    flex-direction: column;
+  }
+
+  .@{class-prefix}-composer-resource-primary,
+  .@{class-prefix}-composer-skill-panel {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .@{class-prefix}-composer-skill-panel {
+    border-top: 1px solid var(--wb-border);
+    border-left: 0;
   }
 }

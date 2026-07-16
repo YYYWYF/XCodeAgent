@@ -41,11 +41,14 @@ def _invoke_live_data_source_agent(
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
     workspace: str | None,
+    selected_skill_names: list[str] | None,
 ) -> str:
-    # Lazy import keeps Deep Agent construction at this live execution boundary.
+    """使用本次工作流的技能白名单调用数据源 Deep Agent。"""
+
+    # 延迟创建可确保 Agent 的工作区和技能权限只属于本次运行。
     from app.agents import create_agent_bundle
 
-    result = create_agent_bundle(workspace).data_source.invoke(
+    result = create_agent_bundle(workspace, selected_skill_names).data_source.invoke(
         {
             "messages": [
                 {
@@ -68,8 +71,9 @@ def generate_data_sources_with_deep_agent(
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
     workspace: str | None = None,
+    selected_skill_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Execute approved data-source tasks through the Data Source Deep Agent."""
+    """通过带技能白名单的 Data Source Deep Agent 执行已批准任务。"""
 
     if not tasks:
         return []
@@ -80,6 +84,7 @@ def generate_data_sources_with_deep_agent(
         build_task_plan=build_task_plan,
         tasks=tasks,
         workspace=workspace,
+        selected_skill_names=selected_skill_names,
     )
     return [
         create_agent_task_result(
@@ -90,6 +95,7 @@ def generate_data_sources_with_deep_agent(
                 "mode": "live",
                 "model": settings.model_name,
                 "source": "data_source_deep_agent",
+                "requiredSkillsLoaded": list(selected_skill_names or []),
             },
         )
         for task in tasks

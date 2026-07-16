@@ -55,6 +55,8 @@ def _execute_ready_tasks(
     state: ProjectState,
     ready_tasks: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """把同一批就绪任务和所选技能集合分发给对应 Deep Agent。"""
+
     workspace = workspace_from_state(state)
     all_results: list[dict[str, Any]] = []
     code_change_sets: list[dict[str, Any]] = []
@@ -87,6 +89,7 @@ def _execute_ready_tasks(
                 build_task_plan=state["build_task_plan"],
                 tasks=owner_tasks,
                 workspace=workspace,
+                selected_skill_names=state.get("selected_skill_names"),
             ),
         )
         if captured.code_change_set:
@@ -104,9 +107,12 @@ def _plan_build_repair_with_repair_planner(
     state: ProjectState,
     repair_input: dict[str, Any],
 ) -> dict[str, Any]:
+    """让修复规划 Agent 继承当前工作流的技能集合。"""
+
     return plan_build_failure_repair_with_repair_planner_agent(
         repair_input=repair_input,
         workspace=workspace_from_state(state),
+        selected_skill_names=state.get("selected_skill_names"),
     )
 
 

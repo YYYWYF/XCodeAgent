@@ -8,6 +8,7 @@ class ProjectState(TypedDict, total=False):
     workspace: str
     workspace_path: str
     editor_mode: str
+    selected_skill_names: list[str]
     phase: str
     resume_from: str
     request_complexity: str

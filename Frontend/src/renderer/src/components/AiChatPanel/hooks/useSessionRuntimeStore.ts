@@ -1,6 +1,7 @@
 import type { MutableRefObject, SetStateAction } from 'react'
 import { useRef, useState } from 'react'
 import { AgUiChatSession } from '../../../service/agUiAgent'
+import type { ChatMessageSkill } from '../../../typings'
 import type { AgentChatMessage } from '../types'
 import type { SessionIdentity } from './sessionRuntime'
 
@@ -11,6 +12,7 @@ type SessionRuntimeStore = {
   getIdentity: (sessionKey: string) => SessionIdentity | undefined
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   messagesForKey: (sessionKey: string) => AgentChatMessage[]
+  selectedSkillsForKey: (sessionKey: string) => ChatMessageSkill[]
   registerSession: (
     identity: SessionIdentity,
     messages: AgentChatMessage[],
@@ -18,18 +20,27 @@ type SessionRuntimeStore = {
   ) => void
   removeSession: (sessionKey: string) => void
   setDraftByKey: (sessionKey: string, value: string) => void
+  setSelectedSkillsByKey: (sessionKey: string, value: ChatMessageSkill[]) => void
   setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
 }
 
 export function useSessionRuntimeStore(): SessionRuntimeStore {
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [messagesBySession, setMessagesBySession] = useState<Record<string, AgentChatMessage[]>>({})
+  const [selectedSkillsBySession, setSelectedSkillsBySession] = useState<
+    Record<string, ChatMessageSkill[]>
+  >({})
   const agUiSessionsRef = useRef<Record<string, AgUiChatSession>>({})
   const identitiesRef = useRef<Record<string, SessionIdentity>>({})
   const messagesRef = useRef<Record<string, AgentChatMessage[]>>({})
 
   const setDraftByKey = (sessionKey: string, value: string): void => {
     setDrafts((current) => ({ ...current, [sessionKey]: value }))
+  }
+
+  /** 更新指定会话草稿内的技能标签，避免跨会话串用。 */
+  const setSelectedSkillsByKey = (sessionKey: string, value: ChatMessageSkill[]): void => {
+    setSelectedSkillsBySession((current) => ({ ...current, [sessionKey]: value }))
   }
 
   const setSessionMessages = (
@@ -70,6 +81,7 @@ export function useSessionRuntimeStore(): SessionRuntimeStore {
     delete messagesRef.current[sessionKey]
     setMessagesBySession((current) => omitKey(current, sessionKey))
     setDrafts((current) => omitKey(current, sessionKey))
+    setSelectedSkillsBySession((current) => omitKey(current, sessionKey))
   }
 
   return {
@@ -79,9 +91,11 @@ export function useSessionRuntimeStore(): SessionRuntimeStore {
     getIdentity: (sessionKey) => identitiesRef.current[sessionKey],
     getSessionMessages: (sessionKey) => messagesRef.current[sessionKey] || [],
     messagesForKey: (sessionKey) => messagesBySession[sessionKey] || [],
+    selectedSkillsForKey: (sessionKey) => selectedSkillsBySession[sessionKey] || [],
     registerSession,
     removeSession,
     setDraftByKey,
+    setSelectedSkillsByKey,
     setSessionMessages
   }
 }

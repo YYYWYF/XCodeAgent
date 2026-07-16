@@ -15,17 +15,23 @@ def create_test_agent(
     *,
     user_skills_backend: BackendProtocol,
     agent_memory_backend: BackendProtocol,
+    required_user_skills_prompt: str = "",
 ):
+    """创建只读测试审阅 Deep Agent，并注入用户必选技能。"""
+
+    base_system_prompt = (
+        "You are the Test Agent. Review deterministic evidence from install/build, "
+        "lint, typecheck, unit tests, API contract checks, integration tests, and "
+        "E2E tests. Do not replace command results with guesses. If any check fails, "
+        "explain the likely revision request for the Main Agent. Return a concise "
+        "validation report. Treat workspace filesystem write tools as unavailable "
+        "unless explicitly allowed by the harness."
+    )
     return create_deep_agent(
         name="test-agent",
         model=model,
-        system_prompt=(
-            "You are the Test Agent. Review deterministic evidence from install/build, "
-            "lint, typecheck, unit tests, API contract checks, integration tests, and "
-            "E2E tests. Do not replace command results with guesses. If any check fails, "
-            "explain the likely revision request for the Main Agent. Return a concise "
-            "validation report. Treat workspace filesystem write tools as unavailable "
-            "unless explicitly allowed by the harness."
+        system_prompt="\n\n".join(
+            part for part in (base_system_prompt, required_user_skills_prompt) if part
         ),
         skills=[USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],

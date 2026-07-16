@@ -151,6 +151,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
                     "model",
                     user_skills_backend="user-skills",
                     agent_memory_backend="agent-memory",
+                    required_user_skills_prompt="required selected skill body",
                 )
 
                 self.assertEqual(
@@ -160,6 +161,10 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
                 self.assertEqual(
                     create_backend.call_args.kwargs["agent_memory_backend"],
                     "agent-memory",
+                )
+                self.assertIn(
+                    "required selected skill body",
+                    create_deep_agent.call_args.kwargs["system_prompt"],
                 )
                 self.assertTrue(
                     create_permissions.call_args.kwargs["include_agent_memory"]

@@ -140,6 +140,25 @@
   white-space: pre-wrap;
 }
 
+.@{class-prefix}-message-skill-labels {
+  display: flex;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 7px;
+
+  .ant-tag {
+    max-width: 220px;
+    margin: 0;
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface);
+    border-color: var(--wb-accent-border);
+    border-radius: 999px;
+    text-overflow: ellipsis;
+  }
+}
+
 @media (max-width: 1000px) {
   .@{class-prefix}-ai-message-column {
     padding: 32px 24px 24px;

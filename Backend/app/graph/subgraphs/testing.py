@@ -80,6 +80,7 @@ def test_agent_review(state: ProjectState) -> dict:
             test_results=state.get("test_results", []),
             build_results=state.get("build_results", []),
             workspace=workspace,
+            selected_skill_names=state.get("selected_skill_names"),
         ),
     )
     return {
@@ -142,6 +143,7 @@ def repair_planning(state: ProjectState) -> dict:
             revision_requests=state.get("revision_requests", []),
             build_task_plan=state.get("build_task_plan"),
             workspace=workspace,
+            selected_skill_names=state.get("selected_skill_names"),
         ),
     )
     repair_task_plan = captured.value

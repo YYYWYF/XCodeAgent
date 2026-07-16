@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from langgraph.graph import END, START, StateGraph
 
@@ -64,6 +65,11 @@ class FakeWorkflowGraph:
                 },
             }
         )
+
+    async def aget_state(self, config):
+        """模拟真实 LangGraph 的异步状态读取接口。"""
+
+        return self.get_state(config)
 
 
 class FakeProjectPlanningWaitGraph:
@@ -287,6 +293,61 @@ def _fake_code_change_set() -> dict:
 
 
 class WorkflowAgUiStreamTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.cleanup_patcher = patch(
+            "app.protocols.workflow.runtime.cleanup_workflow_checkpoints",
+            new=AsyncMock(return_value=None),
+        )
+        self.cleanup_patcher.start()
+
+    def tearDown(self) -> None:
+        self.cleanup_patcher.stop()
+
+    def test_invalid_selected_skills_emits_structured_error(self) -> None:
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeWorkflowGraph(),
+                payload={
+                    "threadId": "thread-skills-error",
+                    "runId": "run-skills-error",
+                    "messages": [{"role": "user", "content": "use a skill"}],
+                    "forwardedProps": {"selectedSkillNames": "invalid"},
+                },
+            )
+            return [frame async for frame in stream]
+
+        payload = "\n".join(asyncio.run(collect()))
+
+        self.assertIn("invalid_selected_skills", payload)
+        self.assertIn("RUN_FINISHED", payload)
+
+    def test_selected_skills_are_forwarded_to_graph_state_and_metadata(self) -> None:
+        graph = FakeWorkflowGraph()
+        validation = SimpleNamespace(names=("alpha",), revision="skills-revision")
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-skills",
+                    "runId": "run-skills",
+                    "messages": [{"role": "user", "content": "use alpha"}],
+                    "forwardedProps": {"selectedSkillNames": ["alpha"]},
+                },
+            )
+            return [frame async for frame in stream]
+
+        with patch(
+            "app.protocols.workflow.runtime.validate_selected_user_skills",
+            return_value=validation,
+        ):
+            frames = asyncio.run(collect())
+
+        self.assertEqual(graph.initial_states[0]["selected_skill_names"], ["alpha"])
+        payload = "\n".join(frames)
+        self.assertIn('"selectedSkillNames":["alpha"]', payload)
+        self.assertIn("skills-revision", payload)
+
     def test_cancel_run_request_cancels_the_active_workflow_task(self) -> None:
         graph = FakeBlockingGraph()
 
@@ -542,29 +603,26 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
 
     def test_stream_passes_forwarded_workspace_and_editor_mode_to_graph_state(self) -> None:
         graph = FakeWorkflowGraph()
-
-        async def collect() -> list[str]:
-            stream = build_workflow_ag_ui_stream(
-                graph=graph,
-                payload={
-                    "threadId": "thread-1",
-                    "runId": "run-1",
-                    "messages": [{"role": "user", "content": "make a tiny app"}],
-                    "forwardedProps": {
-                        "workspaceRoot": "/Users/sbw/Documents/example-workspace",
-                        "editorMode": "frontend",
+        with tempfile.TemporaryDirectory() as workspace:
+            async def collect() -> list[str]:
+                stream = build_workflow_ag_ui_stream(
+                    graph=graph,
+                    payload={
+                        "threadId": "thread-1",
+                        "runId": "run-1",
+                        "messages": [{"role": "user", "content": "make a tiny app"}],
+                        "forwardedProps": {
+                            "workspaceRoot": workspace,
+                            "editorMode": "frontend",
+                        },
                     },
-                },
-                accept="text/event-stream",
-            )
-            return [frame async for frame in stream]
+                    accept="text/event-stream",
+                )
+                return [frame async for frame in stream]
 
-        asyncio.run(collect())
+            asyncio.run(collect())
 
-        self.assertEqual(
-            graph.initial_states[0]["workspace"],
-            "/Users/sbw/Documents/example-workspace",
-        )
+            self.assertEqual(graph.initial_states[0]["workspace"], workspace)
         self.assertEqual(graph.initial_states[0]["editor_mode"], "frontend")
 
     def test_project_state_schema_preserves_workspace(self) -> None:

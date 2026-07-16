@@ -337,6 +337,7 @@ function normalizeSessionMessage(message: JsonRecord): Record<string, unknown> {
   const approval = cloneJsonRecord(message.approval)
   const codeChanges = cloneJsonRecord(message.codeChanges)
   const workflow = cloneJsonRecord(message.workflow)
+  const skills = normalizeSessionMessageSkills(message.skills)
   const approvalStatus =
     typeof message.approvalStatus === 'string' &&
     MESSAGE_APPROVAL_STATUSES.has(message.approvalStatus)
@@ -350,7 +351,25 @@ function normalizeSessionMessage(message: JsonRecord): Record<string, unknown> {
     ...(approvalStatus ? { approvalStatus } : {}),
     ...(codeChanges ? { codeChanges } : {}),
     ...(workflow ? { workflow } : {}),
+    ...(skills.length > 0 ? { skills } : {}),
   }
+}
+
+/** 规范化用户消息携带的技能名称和描述快照。 */
+function normalizeSessionMessageSkills(value: unknown): Array<Record<string, string>> {
+  if (!Array.isArray(value)) return []
+  const names = new Set<string>()
+  return value
+    .filter(isJsonRecord)
+    .map((item) => ({
+      name: typeof item.name === 'string' ? item.name.trim() : '',
+      description: typeof item.description === 'string' ? item.description.trim() : '',
+    }))
+    .filter((item) => {
+      if (!item.name || names.has(item.name)) return false
+      names.add(item.name)
+      return true
+    })
 }
 
 /** 校验外部会话数据并转换为可持久化的统一结构。 */

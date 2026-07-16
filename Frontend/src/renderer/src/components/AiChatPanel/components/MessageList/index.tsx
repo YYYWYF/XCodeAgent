@@ -1,5 +1,5 @@
 import { CheckCircleOutlined, RobotOutlined } from '@ant-design/icons'
-import { Spin, Typography } from 'antd'
+import { Spin, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { EditorMode, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -107,7 +107,16 @@ export default function MessageList({
                       )}
                     </>
                   ) : (
-                    <Text className={cx('ai-message-text')}>{message.content}</Text>
+                    <>
+                      {message.skills && message.skills.length > 0 && (
+                        <div className={cx('message-skill-labels')}>
+                          {message.skills.map((skill) => (
+                            <Tag key={skill.name} title={skill.description}>{skill.name}</Tag>
+                          ))}
+                        </div>
+                      )}
+                      <Text className={cx('ai-message-text')}>{message.content}</Text>
+                    </>
                   )}
                 </div>
               </article>

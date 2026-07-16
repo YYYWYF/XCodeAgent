@@ -34,7 +34,7 @@ class DirectModificationTests(unittest.TestCase):
             return SimpleNamespace(value=kwargs["action"](), code_change_set=None)
 
         with (
-            patch("app.agents.create_agent_bundle", return_value=bundle),
+            patch("app.agents.create_agent_bundle", return_value=bundle) as bundle_factory,
             patch(
                 "app.graph.nodes.modification.capture_agent_file_changes",
                 side_effect=capture,
@@ -45,6 +45,7 @@ class DirectModificationTests(unittest.TestCase):
                     "request": "把提交按钮文案改成保存",
                     "workspace": "/tmp/demo",
                     "editor_mode": "frontend",
+                    "selected_skill_names": ["ui-skill"],
                 }
             )
 
@@ -53,6 +54,8 @@ class DirectModificationTests(unittest.TestCase):
         self.assertEqual(result["build_results"][0]["agent_note"], "frontend completed")
         self.assertEqual(capture_calls[0]["source_tool"], "frontend.direct_modification")
         self.assertEqual(len(frontend.payloads), 1)
+        bundle_factory.assert_called_once_with("/tmp/demo", ["ui-skill"])
+        self.assertEqual(result["build_results"][0]["requiredSkillsLoaded"], ["ui-skill"])
 
     def test_data_source_direct_modification_uses_data_source_agent(self) -> None:
         data_source = FakeAgent("backend completed")

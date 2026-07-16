@@ -90,9 +90,11 @@ export default function AiChatPanel({
     loadingSessions,
     messages,
     persistSession,
+    selectedSkills,
     sessionError,
     sessions,
     setDraftByKey,
+    setSelectedSkillsByKey,
     setSessionMessages
   } = useChatSessions({
     application,
@@ -123,7 +125,9 @@ export default function AiChatPanel({
     persistSession,
     publishAiMessage,
     runningSessionsRef,
+    selectedSkills,
     setDraftByKey,
+    setSelectedSkillsByKey,
     setSessionMessages
   })
 
@@ -290,9 +294,11 @@ export default function AiChatPanel({
               error={error}
               loading={loading}
               onDraftChange={(value) => setDraftByKey(draftKey, value)}
+              onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
               onSend={handleSend}
               onStopGenerating={handleStopGenerating}
               stopping={stopping}
+              selectedSkills={selectedSkills}
               workspaceBusy={workspaceBusy}
               workspaceRoot={workspaceRoot}
             />

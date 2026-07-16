@@ -90,7 +90,7 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             ) as memory_revision,
             patch(
                 "app.agents.registry.create_user_skill_runtime_snapshot",
-                side_effect=lambda revision: SimpleNamespace(
+                side_effect=lambda revision, **_kwargs: SimpleNamespace(
                     backend=f"backend-{revision}",
                     issues=(),
                 ),
@@ -147,6 +147,60 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             skills_updated.frontend[1]["user_skills_backend"],
             "backend-skills-v2",
         )
+
+    def test_agent_bundle_cache_and_prompt_are_scoped_to_normalized_selection(self) -> None:
+        prompt_document = SimpleNamespace(
+            name="alpha",
+            virtual_path="/.xcodeagent/user-skills/alpha/SKILL.md",
+            content="complete alpha instructions",
+        )
+        with (
+            tempfile.TemporaryDirectory() as workspace,
+            patch("app.agents.registry.get_user_skill_runtime_revision", return_value="skills-v1"),
+            patch("app.agents.registry.get_agent_memory_runtime_revision", return_value="memory-v1"),
+            patch(
+                "app.agents.registry.create_user_skill_runtime_snapshot",
+                side_effect=lambda _revision, selected_skill_names=None: SimpleNamespace(
+                    backend=f"skills:{selected_skill_names}",
+                    issues=(),
+                    prompt_documents=(prompt_document,) if selected_skill_names else (),
+                ),
+            ),
+            patch(
+                "app.agents.registry.create_agent_memory_runtime_snapshot",
+                return_value=SimpleNamespace(backend="agent-memory"),
+            ),
+            patch("app.agents.registry.Settings.from_env", return_value=object()),
+            patch("app.agents.registry.create_chat_model", return_value="model"),
+            patch(
+                "app.agents.registry.create_frontend_agent",
+                side_effect=lambda model, **kwargs: ("frontend", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_data_source_agent",
+                side_effect=lambda model, **kwargs: ("data_source", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_test_agent",
+                side_effect=lambda model, **kwargs: ("test", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_repair_planner_agent",
+                side_effect=lambda model, **kwargs: ("repair", kwargs),
+            ),
+        ):
+            first = registry.create_agent_bundle(workspace, ["beta", "alpha", "alpha"])
+            reordered = registry.create_agent_bundle(workspace, ["alpha", "beta"])
+            different = registry.create_agent_bundle(workspace, ["alpha"])
+
+        self.assertIs(first, reordered)
+        self.assertIsNot(first, different)
+        self.assertEqual(first.selected_skill_names, ("alpha", "beta"))
+        for agent in (first.frontend, first.data_source, first.test, first.repair_planner):
+            self.assertIn(
+                "complete alpha instructions",
+                agent[1]["required_user_skills_prompt"],
+            )
 
 
 if __name__ == "__main__":

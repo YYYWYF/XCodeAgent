@@ -24,11 +24,14 @@ def _run_direct_modification_agent(
     owner: DirectModificationOwner,
     prompt: str,
     workspace: str | None,
+    selected_skill_names: list[str] | None,
 ) -> str:
-    # Lazy construction keeps the specialist Agent and its workspace permissions scoped to this run.
+    """使用当前工作流的技能白名单执行直接修改。"""
+
+    # 延迟创建可确保 Agent 的工作区和技能权限只属于本次运行。
     from app.agents import create_agent_bundle
 
-    bundle = create_agent_bundle(workspace)
+    bundle = create_agent_bundle(workspace, selected_skill_names)
     agent = bundle.frontend if owner == "frontend" else bundle.data_source
     result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
     return last_agent_text(result)
@@ -55,6 +58,7 @@ def direct_modification(state: ProjectState) -> dict[str, object]:
             owner=owner,
             prompt=_direct_modification_prompt(state["request"], owner),
             workspace=workspace,
+            selected_skill_names=state.get("selected_skill_names"),
         ),
     )
     note = captured.value
@@ -76,6 +80,7 @@ def direct_modification(state: ProjectState) -> dict[str, object]:
                 "owner": owner,
                 "status": "completed",
                 "agent_note": note,
+                "requiredSkillsLoaded": list(state.get("selected_skill_names") or []),
             }
         ],
         "timeline": ["direct_modification"],

@@ -329,9 +329,13 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 内置 skill 的宿主目录在源码模式为 `Backend/app/builtin_skills/`，在 PyInstaller onedir 模式为后端资源目录 `_internal/app/builtin_skills/`。Agent 不接触宿主绝对路径，而是通过只读 CompositeBackend 路由 `/.xcodeagent/builtin-skills/` 发现和读取 skill；文件权限与 `delete_file` 都拒绝写入或删除该命名空间。Backend Python 是必需 skill 名称和文件的唯一事实来源：PyInstaller staging 和 Backend 启动执行完整性校验并在缺失时 fail fast；Electron 打包前和启动前只检查通用 `builtin_skills` 资源目录，不复制具体 skill 清单。
 
-用户 Skill 来自当前环境的 `~/.xcodeagent[_dev|_st|_uat]/skills`。每次创建 Agent bundle 前，Backend 会把有效直属 Skill 的完整目录复制为不可变只读快照，并通过 `/.xcodeagent/user-skills/` 挂载；符号链接、非常规文件和超限 Skill 会被隔离跳过。bundle 缓存键包含工作区和快照 revision，因此保存或外部修改会在下一次调用生效，已经运行中的 Agent 继续读取原快照。
+用户 Skill 来自当前环境的 `~/.xcodeagent[_dev|_st|_uat]/skills`。Chat Composer 通过既有 `/skills/run` AG-UI 目录接口提供搜索和多选，并在 `/workflow/run` 的 `forwardedProps.selectedSkillNames` 中发送稳定、去重的名称数组。该数组写入 `ProjectState.selected_skill_names`，在 RequirementSpec、ProjectPlan 确认以及 Build/Testing Subgraph 恢复时保持不变；恢复请求试图替换集合会返回 `selected_skill_conflict`。用户消息同时保存技能名称/描述快照，因此历史会话只展示当次发送的标签，不依赖当前目录是否仍存在。
 
-该设计映射到参考架构：learn-coding-agent 的紧凑“收集上下文—行动—验证”循环只读取当前任务需要的规范；OpenCode 风格把用户 Skill 作为可发现、可覆盖且错误隔离的 Agent 能力；Deep Agents 使用原生 SkillsMiddleware、FilesystemBackend 和 CompositeBackend。为遵守 128k 上下文预算，system prompt 只常驻 Skill 名称、描述和虚拟路径，模型命中任务后再读取完整 `SKILL.md` 与所需辅助资源，不把全部正文固定拼进每次请求。
+当 `selectedSkillNames` 非空时，Backend 会精确验证所有名称，只把所选技能的完整目录复制到 `/.xcodeagent/user-skills/` 不可变只读快照；未选技能不可发现且虚拟路径不可读。所选 `SKILL.md` 会由 Backend 在模型调用前完整读取，并以明确的 `<selected-skill>` 边界强制拼入 Frontend、Data Source、Test、RepairPlanner 四个 Deep Agent 的 system prompt；references、scripts、assets 仍只从筛选后的快照按需读取。Frontend Agent 的内置 `react-antd-v4-codegen` skill 保持可用，direct ChatModel 节点仍不加载技能。空数组或字段缺失保持兼容行为：全部有效用户技能只通过 SkillsMiddleware 按需发现，不强制注入正文。
+
+显式选择的 `SKILL.md` 正文按 UTF-8 总字节设置独立 64 KiB 上限，整体超限返回 `selected_skills_context_too_large`，不会截断指令；无效格式、不可用技能和恢复冲突分别返回 `invalid_selected_skills`、`selected_skill_unavailable`、`selected_skill_conflict`。技能指令不能扩大 filesystem permissions、任务 `allowed_paths`、已确认需求、API 契约、确认门禁或 Agent 角色边界。bundle 缓存键包含规范化技能集合、工作区、用户技能 revision 和 AGENTS.md revision；顺序不同但集合相同会复用，集合不同绝不复用。任务执行元数据记录 `requiredSkillsLoaded`，Workflow 开始事件记录选择名称和 snapshot revision。
+
+该设计映射到参考架构：learn-coding-agent 的紧凑“收集上下文—行动—验证”循环只读取当前任务需要的规范；OpenCode 风格把用户 Skill 作为显式可选、错误隔离的 Agent 能力；Deep Agents 继续使用原生 SkillsMiddleware、FilesystemBackend 和 CompositeBackend。为遵守 128k 上下文预算，默认模式只常驻技能元数据；只有用户显式选择的有限正文进入 system prompt，辅助资源和未选技能正文都不固定进入上下文。
 
 环境级 `~/.xcodeagent[_dev|_st|_uat]/AGENTS.md` 是四个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.xcodeagent/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
 

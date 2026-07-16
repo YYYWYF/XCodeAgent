@@ -439,6 +439,7 @@ def _workflow_visual_payload(
         "detail_selection": result.get("detail_selection"),
         "selected_page_id": result.get("selected_page_id"),
         "selected_data_source_id": result.get("selected_data_source_id"),
+        "selectedSkillNames": result.get("selected_skill_names", []),
     }
     payload = {
         "runId": run_id,

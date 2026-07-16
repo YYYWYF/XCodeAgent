@@ -19,12 +19,30 @@ type SendWorkflowMessageOptions = {
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
   originalRequest?: string
+  selectedSkillNames?: string[]
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   onContent?: (content: string) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onToolCalls?: (toolCalls: ToolCallRecord[]) => void
   onProcessSteps?: (steps: ProcessStepRecord[]) => void
+}
+
+/** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能字段位置。 */
+export function buildWorkflowForwardedProps(
+  options: SendWorkflowMessageOptions
+): Record<string, unknown> {
+  return {
+    workspaceRoot: options.workspaceRoot,
+    editorMode: options.editorMode,
+    application: options.application,
+    clarificationAnswers: options.clarificationAnswers,
+    originalRequest: options.originalRequest,
+    selectedSkillNames: options.selectedSkillNames,
+    workflowDebug: options.workflowDebug,
+    resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
+    resumeState: options.resumeState
+  }
 }
 
 export type AgUiChatResult = {
@@ -144,16 +162,7 @@ export class AgUiChatSession {
       result = await this.agent.runAgent(
         {
           runId,
-          forwardedProps: {
-            workspaceRoot: options.workspaceRoot,
-            editorMode: options.editorMode,
-            application: options.application,
-            clarificationAnswers: options.clarificationAnswers,
-            originalRequest: options.originalRequest,
-            workflowDebug: options.workflowDebug,
-            resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
-            resumeState: options.resumeState
-          }
+          forwardedProps: buildWorkflowForwardedProps(options)
         },
         subscriber
       )

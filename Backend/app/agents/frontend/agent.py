@@ -18,27 +18,33 @@ def create_frontend_agent(
     *,
     user_skills_backend: BackendProtocol,
     agent_memory_backend: BackendProtocol,
+    required_user_skills_prompt: str = "",
 ):
+    """创建具备前端工作区权限和必选技能指令的 Deep Agent。"""
+
     backend = create_workspace_backend(
         workspace_root,
         include_builtin_skills=True,
         user_skills_backend=user_skills_backend,
         agent_memory_backend=agent_memory_backend,
     )
+    base_system_prompt = (
+        "You are the Frontend Generation Agent. Execute only approved frontend "
+        "build tasks from the task DAG. Generate or modify frontend code for "
+        "layouts, components, interactions, permissions, API integration, loading, "
+        "empty, and error states. Add page tests and run frontend lint, typecheck, "
+        "and unit tests when available. Do not confirm requirements, do not modify "
+        "PageDetail, and do not silently change API contracts. Return a concise "
+        "structured implementation report with changed files, commands, status, "
+        "and any change request. "
+        f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting a file, "
+        "use delete_file(file_path=\"/path\") with a virtual absolute path."
+    )
     return create_deep_agent(
         name="frontend-generation-agent",
         model=model,
-        system_prompt=(
-            "You are the Frontend Generation Agent. Execute only approved frontend "
-            "build tasks from the task DAG. Generate or modify frontend code for "
-            "layouts, components, interactions, permissions, API integration, loading, "
-            "empty, and error states. Add page tests and run frontend lint, typecheck, "
-            "and unit tests when available. Do not confirm requirements, do not modify "
-            "PageDetail, and do not silently change API contracts. Return a concise "
-            "structured implementation report with changed files, commands, status, "
-            "and any change request. "
-            f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting a file, "
-            "use delete_file(file_path=\"/path\") with a virtual absolute path."
+        system_prompt="\n\n".join(
+            part for part in (base_system_prompt, required_user_skills_prompt) if part
         ),
         skills=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
