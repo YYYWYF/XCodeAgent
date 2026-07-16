@@ -10,7 +10,7 @@
 
   h2 {
     margin: 0;
-    color: #edf3fb;
+    color: #f4edff;
     font-size: 17px;
     font-weight: 500;
   }
@@ -25,7 +25,7 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
-  scrollbar-color: rgba(112, 140, 169, 0.42) transparent;
+  scrollbar-color: rgba(151, 117, 187, 0.42) transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
 
@@ -38,7 +38,7 @@
   }
 
   &::-webkit-scrollbar-thumb {
-    background: rgba(112, 140, 169, 0.32);
+    background: rgba(151, 117, 187, 0.32);
     border-radius: 999px;
   }
 }
@@ -51,11 +51,11 @@
   align-items: center;
   gap: 16px;
   padding: 12px 15px;
-  color: #c9d4e2;
+  color: #d4c8e4;
   text-align: left;
-  border: 1px solid #1e2c3b;
+  border: 1px solid #362448;
   border-radius: 8px;
-  background: rgba(14, 27, 41, 0.82);
+  background: rgba(25, 14, 40, 0.84);
   cursor: pointer;
   transition:
     border-color 160ms ease,
@@ -66,7 +66,7 @@
   &:focus-visible {
     border-color: #5d477e;
     outline: none;
-    background: rgba(19, 37, 56, 0.96);
+    background: rgba(39, 22, 59, 0.96);
     transform: translateX(2px);
   }
 
@@ -74,16 +74,16 @@
     cursor: default;
     background: linear-gradient(
       100deg,
-      rgba(18, 31, 44, 0.8) 30%,
-      rgba(30, 49, 68, 0.8) 50%,
-      rgba(18, 31, 44, 0.8) 70%
+      rgba(29, 17, 43, 0.8) 30%,
+      rgba(53, 31, 72, 0.8) 50%,
+      rgba(29, 17, 43, 0.8) 70%
     );
     background-size: 220% 100%;
     animation: welcome-loading 1.4s linear infinite;
   }
 
   time {
-    color: #8d9caf;
+    color: #a391b6;
     white-space: nowrap;
   }
 }
@@ -116,7 +116,7 @@
 
   strong {
     overflow: hidden;
-    color: #f1f5fa;
+    color: #f7f2fc;
     font-size: 16px;
     font-weight: 500;
     text-overflow: ellipsis;
@@ -125,7 +125,7 @@
 
   code {
     overflow: hidden;
-    color: #7f8fa3;
+    color: #9885aa;
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
     font-size: 12px;
     text-overflow: ellipsis;
@@ -135,7 +135,7 @@
 
 .@{class-prefix}-welcome-project-description {
   overflow: hidden;
-  color: #a2afbf;
+  color: #b4a4c4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -146,10 +146,10 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  color: #718197;
-  border: 1px dashed #25384b;
+  color: #917da5;
+  border: 1px dashed #3c2850;
   border-radius: 8px;
-  background: rgba(13, 25, 38, 0.56);
+  background: rgba(24, 13, 38, 0.58);
 }
 
 @keyframes welcome-loading {
