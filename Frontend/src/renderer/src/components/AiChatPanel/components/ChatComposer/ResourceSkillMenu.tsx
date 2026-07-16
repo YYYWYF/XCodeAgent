@@ -99,18 +99,6 @@ export default function ResourceSkillMenu({
     }
   }, [visible])
 
-  /** 切换技能选中状态，保持面板开启以支持连续多选。 */
-  const handleToggleSkill = (skill: UserSkill): void => {
-    if (selectedNames.has(skill.name)) {
-      onSelectedSkillsChange(selectedSkills.filter((item) => item.name !== skill.name))
-      return
-    }
-    onSelectedSkillsChange([
-      ...selectedSkills,
-      { name: skill.name, description: skill.description }
-    ])
-  }
-
   /** 同步弹层开关，并在关闭时复位二级菜单和搜索词。 */
   const handleVisibleChange = (nextVisible: boolean): void => {
     setVisible(nextVisible)
@@ -118,6 +106,15 @@ export default function ResourceSkillMenu({
       setSkillPanelOpen(false)
       setSearch('')
     }
+  }
+
+  /** 切换一个技能后立即关闭面板，用户可再次打开以继续多选。 */
+  const handleToggleSkill = (skill: UserSkill): void => {
+    const nextSkills = selectedNames.has(skill.name)
+      ? selectedSkills.filter((item) => item.name !== skill.name)
+      : [...selectedSkills, { name: skill.name, description: skill.description }]
+    onSelectedSkillsChange(nextSkills)
+    handleVisibleChange(false)
   }
 
   const content = (
@@ -134,7 +131,7 @@ export default function ResourceSkillMenu({
         </button>
         <button className={cx('composer-resource-item')} disabled type="button">
           <PaperClipOutlined />
-          <span>添加文件（暂未开放）</span>
+          <span>添加文件</span>
         </button>
       </div>
       {skillPanelOpen && (
@@ -149,13 +146,18 @@ export default function ResourceSkillMenu({
           />
           <div className={cx('composer-skill-list')}>
             {loading ? (
-              <div className={cx('composer-skill-state')}><Spin size="small" /></div>
+              <div className={cx('composer-skill-state')}>
+                <Spin size="small" />
+              </div>
             ) : error ? (
               <div className={cx('composer-skill-state', 'error')}>
                 <Text type="danger">{error}</Text>
               </div>
             ) : filteredSkills.length === 0 ? (
-              <Empty description={search ? '没有匹配技能' : '暂无可用技能'} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              <Empty
+                description={search ? '没有匹配技能' : '暂无可用技能'}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
             ) : (
               filteredSkills.map((skill) => {
                 const selected = selectedNames.has(skill.name)
@@ -167,12 +169,16 @@ export default function ResourceSkillMenu({
                     onClick={() => handleToggleSkill(skill)}
                     type="button"
                   >
-                    <span className={cx('composer-skill-avatar')}>{skill.name.slice(0, 1).toUpperCase()}</span>
+                    <span className={cx('composer-skill-avatar')}>
+                      {skill.name.slice(0, 1).toUpperCase()}
+                    </span>
                     <span className={cx('composer-skill-copy')}>
                       <Text>{skill.name}</Text>
                       <Text type="secondary">{skill.description || '暂无描述'}</Text>
                     </span>
-                    <span className={cx('composer-skill-check')}>{selected && <CheckOutlined />}</span>
+                    <span className={cx('composer-skill-check')}>
+                      {selected && <CheckOutlined />}
+                    </span>
                   </button>
                 )
               })
@@ -200,6 +206,7 @@ export default function ResourceSkillMenu({
         icon={<PlusOutlined />}
         shape="circle"
         title="添加技能或文件"
+        type="text"
       />
     </Popover>
   )

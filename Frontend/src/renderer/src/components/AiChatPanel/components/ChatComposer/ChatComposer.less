@@ -24,28 +24,48 @@
 
 .@{class-prefix}-ai-chat-composer-frame {
   display: flex;
+  min-height: 148px;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 14px 11px;
+  padding: 14px 16px 12px;
   background: var(--wb-canvas);
   border: 1px solid var(--wb-accent-border);
-  border-radius: 10px;
+  border-radius: 18px;
   box-shadow: 0 8px 26px rgba(107, 60, 240, 0.07);
+}
 
-  &:focus-within {
-    border-color: var(--wb-focus);
-  }
+.@{class-prefix}-composer-inline-input {
+  display: flex;
+  min-width: 0;
+  min-height: 72px;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: flex-start;
+  gap: 6px;
 
   > .ant-input {
-    padding: 4px 5px;
+    width: auto;
+    min-width: 140px;
+    min-height: 30px;
+    flex: 1 1 180px;
+    padding: 3px 2px;
     resize: none;
     color: var(--wb-text);
-    font-size: 14px;
-    line-height: 1.65;
+    font-size: 15px;
+    line-height: 24px;
     background: transparent;
-    border: 0;
+    border: 0 !important;
     border-radius: 0;
-    box-shadow: none;
+    outline: 0 !important;
+    box-shadow: none !important;
+
+    &:hover,
+    &:focus {
+      border: 0 !important;
+      outline: 0 !important;
+      box-shadow: none !important;
+    }
 
     &::placeholder {
       color: var(--wb-text-tertiary);
@@ -64,20 +84,25 @@
 }
 
 .@{class-prefix}-composer-selected-skills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 4px;
+  display: contents;
 
   .ant-tag {
     max-width: 240px;
     margin: 0;
+    padding: 2px 8px;
     overflow: hidden;
     color: var(--wb-text);
-    background: var(--wb-accent-soft);
-    border-color: var(--wb-accent-border);
-    border-radius: 999px;
+    background: var(--wb-surface-hover);
+    border-color: transparent;
+    border-radius: 7px;
+    font-size: 14px;
+    line-height: 24px;
     text-overflow: ellipsis;
+    white-space: nowrap;
+
+    .anticon {
+      margin-right: 5px;
+    }
   }
 
   .ant-tag-close-icon {
@@ -85,30 +110,78 @@
   }
 }
 
-.@{class-prefix}-composer-resource-context {
+.@{class-prefix}-composer-toolbar {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
 }
 
-.@{class-prefix}-composer-resource-button.ant-btn {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
+.@{class-prefix}-composer-resource-button.ant-btn,
+.@{class-prefix}-composer-tool-button.ant-btn {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  padding: 0;
   color: var(--wb-text-secondary);
-  background: var(--wb-surface-subtle);
-  border-color: var(--wb-border);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+
+  .anticon {
+    font-size: 17px;
+  }
 
   &:hover,
   &:focus {
+    color: var(--wb-text-secondary);
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  &.@{class-prefix}-active {
     color: var(--wb-accent);
-    background: var(--wb-surface-hover);
-    border-color: var(--wb-focus);
+    background: var(--wb-accent-soft);
+  }
+}
+
+.@{class-prefix}-composer-resource-button.ant-btn .anticon {
+  font-size: 21px;
+}
+
+.@{class-prefix}-composer-tool-tooltip {
+  &.ant-tooltip-placement-top,
+  &.ant-tooltip-placement-topLeft,
+  &.ant-tooltip-placement-topRight {
+    padding-bottom: 2px;
+  }
+
+  .ant-tooltip-arrow {
+    display: none;
+  }
+
+  .ant-tooltip-inner {
+    min-height: 24px;
+    padding: 3px 7px;
+    overflow: hidden;
+    border-radius: 8px;
+    font-size: 11px;
+    line-height: 18px;
   }
 }
 
 .@{class-prefix}-composer-resource-overlay {
+  &.ant-popover-placement-top,
+  &.ant-popover-placement-topLeft,
+  &.ant-popover-placement-topRight {
+    padding-bottom: 2px;
+  }
+
+  .ant-popover-arrow {
+    display: none;
+  }
+
   .ant-popover-inner {
     overflow: hidden;
     background: var(--wb-surface);
@@ -120,25 +193,21 @@
   .ant-popover-inner-content {
     padding: 0;
   }
-
-  .ant-popover-arrow-content {
-    background: var(--wb-surface);
-  }
 }
 
 .@{class-prefix}-composer-resource-popover {
   display: flex;
-  max-width: min(650px, calc(100vw - 32px));
+  max-width: min(470px, calc(100vw - 32px));
   color: var(--wb-text);
 }
 
 .@{class-prefix}-composer-resource-primary {
   display: flex;
-  width: 220px;
-  flex: 0 0 220px;
+  width: 150px;
+  flex: 0 0 150px;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px;
+  gap: 2px;
+  padding: 6px;
   background: var(--wb-surface);
 }
 
@@ -153,12 +222,13 @@
 
 .@{class-prefix}-composer-resource-item {
   display: grid;
-  min-height: 42px;
+  min-height: 34px;
   align-items: center;
-  padding: 8px 10px;
-  border-radius: 8px;
-  grid-template-columns: 20px 1fr 14px;
-  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  grid-template-columns: 18px 1fr 12px;
+  gap: 6px;
+  font-size: 13px;
   text-align: left;
 
   &:hover,
@@ -176,15 +246,16 @@
 
 .@{class-prefix}-composer-skill-panel {
   display: flex;
-  width: 400px;
+  width: 310px;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
+  gap: 6px;
+  padding: 8px;
   background: var(--wb-surface);
   border-left: 1px solid var(--wb-border);
 
   .ant-input-affix-wrapper {
+    min-height: 32px;
     color: var(--wb-text-secondary);
     background: var(--wb-surface-subtle);
     border-color: var(--wb-border);
@@ -194,13 +265,23 @@
   .ant-input {
     color: var(--wb-text);
     background: transparent;
+    border: 0 !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+
+    &:hover,
+    &:focus {
+      border: 0 !important;
+      outline: 0 !important;
+      box-shadow: none !important;
+    }
   }
 }
 
 .@{class-prefix}-composer-skill-list {
   display: flex;
-  max-height: 330px;
-  min-height: 120px;
+  max-height: 240px;
+  min-height: 88px;
   flex-direction: column;
   gap: 3px;
   overflow: auto;
@@ -212,7 +293,7 @@
 
 .@{class-prefix}-composer-skill-state {
   display: flex;
-  min-height: 120px;
+  min-height: 88px;
   align-items: center;
   justify-content: center;
   padding: 16px;
@@ -222,10 +303,10 @@
 .@{class-prefix}-composer-skill-item {
   display: grid;
   align-items: center;
-  padding: 9px 8px;
-  border-radius: 8px;
-  grid-template-columns: 30px minmax(0, 1fr) 20px;
-  gap: 9px;
+  padding: 6px;
+  border-radius: 7px;
+  grid-template-columns: 26px minmax(0, 1fr) 18px;
+  gap: 7px;
   text-align: left;
 
   &:hover,
@@ -238,8 +319,8 @@
 
 .@{class-prefix}-composer-skill-avatar {
   display: inline-flex;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   align-items: center;
   justify-content: center;
   color: var(--wb-accent);
@@ -279,37 +360,9 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 4px 5px 6px;
+  padding: 8px 2px;
+  border-top: 1px solid var(--wb-border);
   border-bottom: 1px solid var(--wb-border);
-
-  .ant-checkbox-wrapper {
-    display: inline-flex;
-    width: fit-content;
-    align-items: center;
-    color: var(--wb-text-secondary);
-    font-size: 11px;
-    line-height: 20px;
-  }
-
-  .anticon {
-    margin-right: 4px;
-    color: var(--wb-text-secondary);
-  }
-}
-
-.@{class-prefix}-workflow-debug-actions {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-
-  .ant-btn-link {
-    height: 22px;
-    padding: 0 4px;
-    color: var(--wb-text-secondary);
-    font-size: 11px;
-  }
 }
 
 .@{class-prefix}-workflow-debug-fields {
@@ -414,28 +467,6 @@
   white-space: pre-wrap;
 }
 
-.@{class-prefix}-workspace-root-label {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  color: var(--wb-text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  line-height: 32px;
-
-  .anticon {
-    flex: 0 0 auto;
-  }
-}
-
-.@{class-prefix}-workspace-root-label.ant-typography {
-  overflow: hidden;
-  color: var(--wb-text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .@{class-prefix}-workspace-busy-label.ant-typography {
   flex: 0 0 auto;
   color: var(--wb-warning);
@@ -478,12 +509,8 @@
     padding: 12px 16px 16px;
   }
 
-  .@{class-prefix}-workspace-root-label {
-    max-width: 55%;
-  }
-
   .@{class-prefix}-composer-resource-popover {
-    width: min(92vw, 420px);
+    width: min(92vw, 360px);
     flex-direction: column;
   }
 

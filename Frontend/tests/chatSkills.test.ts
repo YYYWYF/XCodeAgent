@@ -4,7 +4,8 @@ import {
   beginOptimisticSkillSend,
   normalizeChatSkills,
   rollbackSkillSelection,
-  selectedSkillNames
+  selectedSkillNames,
+  skillsAfterEmptyBackspace
 } from '../src/renderer/src/components/AiChatPanel/skillSelection'
 import { buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
 import { normalizeMessageSkills } from '../src/renderer/src/service/chatSessions'
@@ -52,4 +53,16 @@ test('会话恢复只保留有效技能名称与描述字段', () => {
     ]),
     [{ name: 'alpha', description: 'first' }]
   )
+})
+
+test('输入文本为空时 Backspace 依次删除最后一个技能标签', () => {
+  const skills = [
+    { name: 'alpha', description: 'first' },
+    { name: 'beta', description: 'second' }
+  ]
+
+  assert.deepEqual(skillsAfterEmptyBackspace('Backspace', '', skills), [skills[0]])
+  assert.equal(skillsAfterEmptyBackspace('Backspace', 'hello', skills), undefined)
+  assert.equal(skillsAfterEmptyBackspace('Enter', '', skills), undefined)
+  assert.equal(skillsAfterEmptyBackspace('Backspace', '', []), undefined)
 })

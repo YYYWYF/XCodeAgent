@@ -21,9 +21,7 @@ export function normalizeChatSkills(skills: ChatMessageSkill[]): ChatMessageSkil
 }
 
 /** 生成发送时的消息快照，并清空下一份会话草稿技能。 */
-export function beginOptimisticSkillSend(
-  skills: ChatMessageSkill[]
-): OptimisticSkillSelection {
+export function beginOptimisticSkillSend(skills: ChatMessageSkill[]): OptimisticSkillSelection {
   const normalized = normalizeChatSkills(skills)
   return {
     messageSkills: normalized.length > 0 ? normalized : undefined,
@@ -40,4 +38,14 @@ export function rollbackSkillSelection(skills?: ChatMessageSkill[]): ChatMessage
 export function selectedSkillNames(skills?: ChatMessageSkill[]): string[] | undefined {
   const names = normalizeChatSkills(skills || []).map((skill) => skill.name)
   return names.length > 0 ? names : undefined
+}
+
+/** 空文本输入框收到 Backspace 时，返回删除最后一个标签后的技能集合。 */
+export function skillsAfterEmptyBackspace(
+  key: string,
+  draft: string,
+  skills: ChatMessageSkill[]
+): ChatMessageSkill[] | undefined {
+  if (key !== 'Backspace' || draft.length > 0 || skills.length === 0) return undefined
+  return skills.slice(0, -1)
 }
