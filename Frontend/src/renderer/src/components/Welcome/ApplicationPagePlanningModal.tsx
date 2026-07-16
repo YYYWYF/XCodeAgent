@@ -1,12 +1,27 @@
 import {
+  AppstoreOutlined,
+  BankOutlined,
   CheckCircleOutlined,
   BulbOutlined,
+  CloudOutlined,
+  DashboardOutlined,
+  DesktopOutlined,
   EditOutlined,
+  FundOutlined,
   LeftOutlined,
-  ReloadOutlined
+  MessageOutlined,
+  ReloadOutlined,
+  SettingOutlined,
+  ShopOutlined,
+  ShoppingOutlined,
+  TeamOutlined,
+  ToolOutlined,
+  UserOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Form, Input, List, message, Modal, Result, Spin, Steps, Tag, Typography } from 'antd'
-import { useState } from 'react'
+import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon'
+import { Alert, Button, Collapse, Form, Input, List, message, Modal, Radio, Result, Select, Spin, Steps, Switch, Tag, Typography } from 'antd'
+import type { ComponentType, ReactNode } from 'react'
+import { useMemo, useState } from 'react'
 import {
   confirmApplicationPagePlan,
   requestApplicationPagePlan
@@ -21,12 +36,37 @@ import type {
   PagePlanningQuestion
 } from '../../typings'
 import { cx } from '../../utils'
+import { applicationIconOptions, trackMethodOptions } from './constants'
 import { formatError } from './utils'
 import './ApplicationPagePlanningModal.less'
 
 const { Paragraph, Text, Title } = Typography
 const { Step } = Steps
 const { TextArea } = Input
+
+const iconComponents: Record<string, ComponentType<AntdIconProps>> = {
+  AppstoreOutlined,
+  DesktopOutlined,
+  DashboardOutlined,
+  ShopOutlined,
+  ShoppingOutlined,
+  TeamOutlined,
+  UserOutlined,
+  ToolOutlined,
+  CloudOutlined,
+  MessageOutlined,
+  BankOutlined,
+  FundOutlined
+}
+
+export type SettingsValues = {
+  appName: string
+  appIcon: string
+  layout: ApplicationConfig['layout']
+  auth: ApplicationConfig['auth']
+  track: ApplicationConfig['track']
+  apiTrack: ApplicationConfig['apiTrack']
+}
 
 type Props = {
   application: ApplicationConfig
@@ -38,6 +78,7 @@ type Props = {
   onCancel: () => void
   onConfirmed: (plan: ApplicationPagePlan, confirmation: ConfirmedPagePlan) => Promise<void>
   onRetryQuestions: () => void
+  onSettingsSave: (values: SettingsValues) => Promise<void>
 }
 
 function toPageContext(application: ApplicationConfig): ApplicationPageContext {
@@ -58,14 +99,44 @@ export default function ApplicationPagePlanningModal({
   threadId,
   onCancel,
   onConfirmed,
-  onRetryQuestions
+  onRetryQuestions,
+  onSettingsSave
 }: Props): JSX.Element {
   const [form] = Form.useForm<{ answers: Record<string, string> }>()
+  const [settingsForm] = Form.useForm<SettingsValues>()
   const [plan, setPlan] = useState<ApplicationPagePlan>()
   const [generating, setGenerating] = useState(false)
   const [revisionFeedback, setRevisionFeedback] = useState('')
   const [revising, setRevising] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [savingSettings, setSavingSettings] = useState(false)
+
+  const settingsInitialValues = useMemo<SettingsValues>(
+    () => ({
+      appName: application.appName,
+      appIcon: application.appIcon,
+      layout: application.layout,
+      auth: application.auth,
+      track: application.track,
+      apiTrack: application.apiTrack
+    }),
+    [application]
+  )
+
+  const handleSaveSettings = async (): Promise<void> => {
+    setSavingSettings(true)
+    try {
+      const values = await settingsForm.validateFields()
+      await onSettingsSave(values)
+      message.success('设置已保存')
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) return
+      if (isAuthenticationFailure(error)) return
+      message.error(formatError(error, '保存设置失败'))
+    } finally {
+      setSavingSettings(false)
+    }
+  }
 
   const handleGeneratePlan = async (): Promise<void> => {
     setGenerating(true)
@@ -273,6 +344,155 @@ export default function ApplicationPagePlanningModal({
           </div>
         </Form>
       )}
+
+      <Collapse
+        className={cx('page-planning-settings')}
+        ghost
+        items={[{
+          key: 'settings',
+          label: (
+            <span className={cx('page-planning-settings-label')}>
+              <SettingOutlined />
+              设置
+            </span>
+          ),
+          children: (
+            <Form
+              className={cx('settings-form')}
+              form={settingsForm}
+              initialValues={settingsInitialValues}
+              layout="horizontal"
+              labelCol={{ flex: '0 0 96px' }}
+              wrapperCol={{ flex: '1 1 auto' }}
+            >
+              <div className={cx('settings-card')}>
+                <div className={cx('settings-card-head')}>基础信息</div>
+                <Form.Item label="应用名称" name="appName" rules={[{ required: true, message: '请输入应用名称' }]}>
+                  <Input />
+                </Form.Item>
+                <Form.Item label="应用图标" name="appIcon">
+                  <Select>
+                    {applicationIconOptions.map((option) => {
+                      const Icon = iconComponents[option.value]
+                      return (
+                        <Select.Option key={option.value} value={option.value}>
+                          {Icon ? <Icon /> : null} {option.label}
+                        </Select.Option>
+                      )
+                    })}
+                  </Select>
+                </Form.Item>
+              </div>
+
+              <div className={cx('settings-card')}>
+                <div className={cx('settings-card-head')}>导航模式</div>
+                <Form.Item label="布局方式" name={['layout', 'type']}>
+                  <Radio.Group optionType="button" buttonStyle="solid">
+                    <Radio.Button value="side">左侧导航</Radio.Button>
+                    <Radio.Button value="top">顶部导航</Radio.Button>
+                    <Radio.Button value="mix">混合导航</Radio.Button>
+                  </Radio.Group>
+                </Form.Item>
+                <Form.Item label="开启头部" name={['layout', 'useHeader']} valuePropName="checked">
+                  <Switch checkedChildren="开" unCheckedChildren="关" />
+                </Form.Item>
+                <Form.Item label="开启底部" name={['layout', 'useFooter']} valuePropName="checked">
+                  <Switch checkedChildren="开" unCheckedChildren="关" />
+                </Form.Item>
+              </div>
+
+              <SettingsToggleSection
+                title="认证"
+                enableName={['auth', 'enable']}
+                form={settingsForm}
+              >
+                <Form.Item label="认证来源" name={['auth', 'authnSource']}>
+                  <Input />
+                </Form.Item>
+                <Form.Item label="clientId" name={['auth', 'yht', 'clientId']}>
+                  <Input />
+                </Form.Item>
+              </SettingsToggleSection>
+
+              <SettingsToggleSection
+                title="页面埋点"
+                enableName={['track', 'enable']}
+                form={settingsForm}
+              >
+                <Form.Item label="上传标识" name={['track', 'uploadId']}>
+                  <Input />
+                </Form.Item>
+                <Form.Item label="上报地址" name={['track', 'apiHost']}>
+                  <Input />
+                </Form.Item>
+                <Form.Item label="请求方式" name={['track', 'method']}>
+                  <Select>
+                    {trackMethodOptions.map((option) => (
+                      <Select.Option key={option.value} value={option.value}>
+                        {option.label}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              </SettingsToggleSection>
+
+              <SettingsToggleSection
+                title="接口埋点"
+                enableName={['apiTrack', 'enable']}
+                form={settingsForm}
+              >
+                <Form.Item label="业务标识" name={['apiTrack', 'businessId']}>
+                  <Input />
+                </Form.Item>
+                <Form.Item label="链路透传" name={['apiTrack', 'traceBaggage']}>
+                  <Input />
+                </Form.Item>
+                <Form.Item label="埋点地址" name={['apiTrack', 'apiTrackHost']}>
+                  <Input />
+                </Form.Item>
+              </SettingsToggleSection>
+
+              <div className={cx('settings-save-bar')}>
+                <Button
+                  icon={<CheckCircleOutlined />}
+                  loading={savingSettings}
+                  onClick={handleSaveSettings}
+                  type="primary"
+                >
+                  保存设置
+                </Button>
+              </div>
+            </Form>
+          )
+        }]}
+      />
     </Modal>
+  )
+}
+
+function SettingsToggleSection({
+  title,
+  enableName,
+  form,
+  children
+}: {
+  title: string
+  enableName: string[]
+  form: ReturnType<typeof Form.useForm<SettingsValues>>[0]
+  children: ReactNode
+}): JSX.Element {
+  const enabled = Form.useWatch(enableName as never, form) ?? true
+  return (
+    <div className={cx('settings-card', !enabled && 'settings-card--disabled')}>
+      <div className={cx('settings-card-head')}>
+        {title}
+        <Form.Item name={enableName} valuePropName="checked" noStyle>
+          <Switch checkedChildren="启用" unCheckedChildren="关闭" size="small" />
+        </Form.Item>
+      </div>
+      <div className={cx('settings-card-body')}>
+        {children}
+      </div>
+    </div>
   )
 }

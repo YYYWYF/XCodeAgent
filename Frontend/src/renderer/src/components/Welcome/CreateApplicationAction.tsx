@@ -23,6 +23,7 @@ import './WelcomeModal.less'
 import { saveAndOpenApplication, saveApplication } from './applicationService'
 import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
+import type { SettingsValues } from './ApplicationPagePlanningModal'
 
 type Props = {
   onOpenApplication: (application: ApplicationConfig) => void
@@ -148,6 +149,34 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     }
   }
 
+  const handleSettingsSave = async (values: SettingsValues): Promise<void> => {
+    if (!planningApplication) return
+    const updatedSchema = {
+      ...planningApplication.schema,
+      appName: values.appName,
+      appIcon: values.appIcon,
+      layout: values.layout,
+      auth: values.auth,
+      track: values.track,
+      apiTrack: values.apiTrack
+    }
+    const updatedApp: ApplicationConfig = {
+      ...planningApplication,
+      appName: values.appName,
+      appIcon: values.appIcon,
+      name: values.appName,
+      layout: values.layout,
+      auth: values.auth,
+      track: values.track,
+      apiTrack: values.apiTrack,
+      enableAuth: values.auth.enable,
+      enableTracking: values.track.enable || values.apiTrack.enable,
+      schema: updatedSchema
+    }
+    setPlanningApplication(updatedApp)
+    await saveApplication(updatedApp)
+  }
+
   const handlePagePlanConfirmed = async (
     plan: ApplicationPagePlan,
     confirmation: ConfirmedPagePlan
@@ -220,6 +249,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
           onCancel={handleCancelPlanning}
           onConfirmed={handlePagePlanConfirmed}
           onRetryQuestions={() => loadPagePlanningQuestions(planningApplication, planningThreadId)}
+          onSettingsSave={handleSettingsSave}
           questions={planningQuestions}
           questionsError={planningQuestionsError}
           questionsLoading={planningQuestionsLoading}

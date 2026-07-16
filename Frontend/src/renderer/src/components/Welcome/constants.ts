@@ -25,7 +25,7 @@ export const initialApplicationDraft: ApplicationDraft = {
   senario: '',
   projectPath: '',
   terminal: 'PC',
-  layout: { type: '', useHeader: true, useFooter: true },
+  layout: { type: '', useHeader: true, useFooter: false },
   theme: { primaryColor: '' },
   datasource: {
     type: '',

@@ -1,7 +1,7 @@
 import type { DevelopmentContract } from './developmentContract';
 
 export type ApplicationTerminal = 'PC' | 'Mobile';
-export type ApplicationLayoutType = '' | 'LEFT_RIGHT_ONE' | 'TOP_BOTTOM_ONE' | 'TOP_LEFT_RIGHT' | 'FULL_SCREEN';
+export type ApplicationLayoutType = '' | 'side' | 'top' | 'mix';
 export type ApplicationDatasourceType = '' | 'DataBase' | 'API' | 'None';
 export type ApplicationTrackMethod = string;
 

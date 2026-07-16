@@ -58,10 +58,12 @@ type SessionSidebarProps = {
   onPageSelect: (label: string) => void
   onReturnWelcome: () => void
   onShowFiles: () => void
+  onShowSettings: () => void
   onShowSkills: () => void
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
+  settingsActive: boolean
   skillsActive: boolean
   workspaceRoot: string
 }
@@ -173,7 +175,9 @@ export default function SessionSidebar({
   onPageSelect,
   onReturnWelcome,
   onShowFiles,
+  onShowSettings,
   onShowSkills,
+  settingsActive,
   skillsActive
 }: SessionSidebarProps): ReactElement {
   const [outlineQuery, setOutlineQuery] = useState('')
@@ -395,7 +399,7 @@ export default function SessionSidebar({
         <button className={cx(filesActive && 'active')} onClick={onShowFiles} title="文件" type="button">
           <FolderOutlined /><span>文件</span>
         </button>
-        <button title="设置" type="button">
+        <button className={cx(settingsActive && 'active')} onClick={onShowSettings} title="设置" type="button">
           <SettingOutlined /><span>设置</span>
         </button>
       </nav>

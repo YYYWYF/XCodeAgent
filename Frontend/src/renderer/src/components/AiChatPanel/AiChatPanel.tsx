@@ -20,6 +20,7 @@ import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
 import SessionHistoryDropdown from './components/SessionHistoryDropdown'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
+import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
@@ -31,12 +32,13 @@ import './AiChatPanel.less'
 type Props = {
   application: ApplicationConfig
   editorMode: EditorMode
+  onApplicationUpdate: (application: ApplicationConfig) => void
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
 }
 
-type ActiveView = 'chat' | 'skills' | 'files'
+type ActiveView = 'chat' | 'skills' | 'files' | 'settings'
 
 /** 按页面名称递归查找对应的菜单配置。 */
 function findPageMenuItem(items: ApplicationMenuItem[], label: string): ApplicationMenuItem | undefined {
@@ -52,6 +54,7 @@ function findPageMenuItem(items: ApplicationMenuItem[], label: string): Applicat
 export default function AiChatPanel({
   application,
   editorMode,
+  onApplicationUpdate,
   onReturnWelcome,
   onThemeChange,
   theme
@@ -173,6 +176,12 @@ export default function AiChatPanel({
     setActiveView('files')
   }
 
+  const handleShowSettings = (): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('settings')
+  }
+
   const handleCreateChatSession = (): void => {
     setActiveView('chat')
     handleCreateSessionFromList()
@@ -210,11 +219,13 @@ export default function AiChatPanel({
           onPageSelect={setActivePageTitle}
           onReturnWelcome={onReturnWelcome}
           onShowFiles={handleShowFiles}
+          onShowSettings={handleShowSettings}
           onShowSkills={handleShowSkills}
           filesActive={activeView === 'files'}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
           sessions={sessions}
+          settingsActive={activeView === 'settings'}
           skillsActive={activeView === 'skills'}
           workspaceRoot={workspaceRoot}
         />
@@ -223,6 +234,8 @@ export default function AiChatPanel({
           <SkillsPage onThemeChange={onThemeChange} theme={theme} />
         ) : activeView === 'files' ? (
           <AgentFilesPage />
+        ) : activeView === 'settings' ? (
+          <SettingsPage application={application} onSaved={onApplicationUpdate} />
         ) : (
           <div className={cx('ai-chat-main')}>
             <ChatHeader

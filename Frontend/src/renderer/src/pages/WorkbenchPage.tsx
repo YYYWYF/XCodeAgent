@@ -56,11 +56,16 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
     window.localStorage.setItem(THEME_PREFERENCE_KEY, nextTheme);
   };
 
+  const handleApplicationUpdate = (updatedApplication: ApplicationConfig): void => {
+    setWorkspaceApplication(updatedApplication);
+  };
+
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       <LeftPanel
         application={workspaceApplication}
         editorMode={editorMode}
+        onApplicationUpdate={handleApplicationUpdate}
         onReturnWelcome={onReturnWelcome}
         onThemeChange={handleThemeChange}
         theme={theme}

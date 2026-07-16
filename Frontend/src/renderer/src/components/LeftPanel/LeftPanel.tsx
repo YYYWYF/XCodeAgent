@@ -9,6 +9,7 @@ const { Sider } = Layout;
 type Props = {
   application: ApplicationConfig;
   editorMode: EditorMode;
+  onApplicationUpdate: (application: ApplicationConfig) => void;
   onReturnWelcome: () => void;
   onThemeChange: (theme: 'light' | 'dark') => void;
   theme: 'light' | 'dark';
@@ -17,6 +18,7 @@ type Props = {
 export default function LeftPanel({
   application,
   editorMode,
+  onApplicationUpdate,
   onReturnWelcome,
   onThemeChange,
   theme,
@@ -28,6 +30,7 @@ export default function LeftPanel({
           <AiChatPanel
             application={application}
             editorMode={editorMode}
+            onApplicationUpdate={onApplicationUpdate}
             onReturnWelcome={onReturnWelcome}
             onThemeChange={onThemeChange}
             theme={theme}

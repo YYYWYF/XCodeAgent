@@ -82,6 +82,78 @@
   gap: 10px;
 }
 
+.@{class-prefix}-page-planning-settings {
+  margin-top: 20px;
+  border-top: 1px solid var(--modal-border);
+  padding-top: 12px;
+
+  .ant-collapse-header {
+    padding: 4px 0 !important;
+  }
+
+  .ant-collapse-content-box {
+    padding: 12px 0 0 !important;
+  }
+}
+
+.@{class-prefix}-page-planning-settings-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--modal-text);
+}
+
+.@{class-prefix}-settings-form {
+  .ant-form-item {
+    margin-bottom: 12px;
+  }
+
+  .ant-form-item-label > label {
+    font-size: 13px;
+    color: var(--modal-text-secondary);
+  }
+}
+
+.@{class-prefix}-settings-card {
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  border: 1px solid var(--modal-border);
+  border-radius: 8px;
+  background: var(--modal-surface);
+  transition: opacity .2s ease;
+
+  &--disabled {
+    opacity: 0.45;
+  }
+}
+
+.@{class-prefix}-settings-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--modal-text);
+
+  .ant-switch {
+    margin-left: auto;
+  }
+}
+
+.@{class-prefix}-settings-card-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.@{class-prefix}-settings-save-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
 .@{class-prefix}-page-planning-modal {
   .ant-steps-item-process .ant-steps-item-icon {
     border-color: var(--modal-accent);
