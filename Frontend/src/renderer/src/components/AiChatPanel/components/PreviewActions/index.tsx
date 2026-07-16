@@ -18,14 +18,21 @@ export default function PreviewActions({
   return (
     <div className={cx('preview-actions')}>
       <Button
+        aria-label={embeddedPreviewOpen ? '关闭嵌入预览' : '打开嵌入预览'}
         aria-pressed={embeddedPreviewOpen}
         className={cx(embeddedPreviewOpen && 'active')}
         icon={<DesktopOutlined />}
         onClick={onToggleEmbeddedPreview}
+        title={embeddedPreviewOpen ? '关闭预览' : '预览应用'}
       >
         {embeddedPreviewOpen ? '关闭预览' : '预览应用'}
       </Button>
-      <Button icon={<ExpandOutlined />} onClick={onOpenFullscreenPreview}>
+      <Button
+        aria-label="全屏预览"
+        icon={<ExpandOutlined />}
+        onClick={onOpenFullscreenPreview}
+        title="全屏预览"
+      >
         全屏预览
       </Button>
     </div>

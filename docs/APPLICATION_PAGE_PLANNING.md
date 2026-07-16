@@ -5,10 +5,10 @@
 After a new application directory is created, XCodeAgent runs a standalone page-planning flow:
 
 1. Ask the configured model for focused clarification questions using the application name and scenario.
-2. Ask the model for a compact page structure after the user answers those questions.
-3. Show the proposed pages and their purposes to the user for review.
+2. Ask the model for a compact page directory, page relationships, user interactions, and supporting API functional contracts after the user answers those questions.
+3. Stream structured AG-UI progress stages and model text deltas while the design is running, then show the complete page and API proposal for review.
 4. Let the user submit free-form revision feedback and repeatedly update the current proposal.
-5. Update the application workspace's `application.json` with the confirmed menu structure.
+5. Update the application workspace's `application.json` with the confirmed `menus` and `apis` design.
 
 This flow does not call, resume, or modify the existing LangGraph workflow. Questions, page proposals, and confirmed persistence all use the dedicated `/application-page-planning/run` AG-UI SSE endpoint and one page-planning thread id; transient review state stays in the creation UI.
 
@@ -18,15 +18,23 @@ This flow does not call, resume, or modify the existing LangGraph workflow. Ques
 - **OpenCode:** treat the review as a human-in-the-loop permission boundary. Model output is untrusted structured input; Pydantic validates and normalizes it before the UI or filesystem consumes it.
 - **Deep Agents:** use progressive disclosure and filesystem-backed durable state. Only the confirmed artifact is durable; intermediate prompts and model output stay out of the main workflow graph and session history.
 
-XCodeAgent intentionally uses a small, graph-free AG-UI agent endpoint instead of a new agent graph because this feature has only two bounded reasoning steps and one deterministic write. The same page-planning thread id ties the clarification and proposal runs together without coupling them to the workflow thread or state.
+XCodeAgent intentionally uses a small, graph-free AG-UI agent endpoint instead of a new agent graph because this feature has only two bounded reasoning steps and one deterministic write. The same page-planning thread id ties the clarification and proposal runs together without coupling them to the workflow thread or state. Like OpenCode's incremental message-part updates, long model waits expose validated `in_progress` custom events and assistant text deltas instead of leaving the session visually idle.
 
 ## Context Budget
 
-The model receives only application metadata, at most five short question/answer pairs, and—during revision—the current normalized proposal plus the latest user feedback. Responses are limited to five questions or twelve pages with short purpose and feature fields. No repository tree, workflow history, tool logs, or generated source files are included, keeping the flow safely within the 128k context budget.
+The model receives only application metadata, at most five short question/answer pairs, and—during revision—the current normalized proposal plus the latest user feedback. Responses are limited to five questions, twelve pages, eight interactions per page, and twenty-four API designs with bounded text fields. No repository tree, workflow history, tool logs, or generated source files are included, keeping the flow safely within the 128k context budget.
+
+## Progress Contract
+
+- Long-running actions emit the standard AG-UI run start and assistant message start, followed by one or more custom events and state snapshots whose status is `in_progress`.
+- Each progress payload contains `progress.stage`, `progress.message`, `progress.detail`, and `progress.percent`; the page-planning action is included so the client can keep questions, planning, revision, and confirmation state separate.
+- Question and plan model calls use the model's async chunk stream. Every non-empty chunk is forwarded as an AG-UI `TEXT_MESSAGE_CONTENT` delta for live display, while the backend separately accumulates the same chunks and parses only the completed JSON.
+- Planning stages cover requirement analysis, page-directory design, interaction/API design, and relationship validation. Confirmation reports validation and atomic persistence.
+- The final `completed` or `failed` custom event and state snapshot replace transient progress state, then the stream emits message end and run finish.
 
 ## Persistence and Safety
 
-- `application.json` is updated only by the explicit AG-UI `confirm` action. Existing application configuration is preserved; `menus.homeMenuKey` is `default`, same-level page routes become `items`, and shared first-level route paths become a `menu` whose `children` are page entries. Every menu/page object stores its own `purpose` and `keyFeatures`.
+- `application.json` is updated only by the explicit AG-UI `confirm` action. Existing application configuration is preserved; `menus.homeMenuKey` is `default`, same-level page routes become `items`, and shared first-level route paths become a `menu` whose `children` are page entries. Every page menu object stores `purpose`, `keyFeatures`, `relatedPageIds`, `apiIds`, and `interactions`; the root-level `apis` list stores each API's method, path, purpose, request/response design, and using page ids.
 - Clarification answers and the intermediate `pagePlan` are never persisted. Confirmation also removes stale `pagePlan`, `clarification`, or `clarifications` fields left by an earlier version.
 - Model runs are transported with `@ag-ui/client`, `@ag-ui/core`, AG-UI events, and state snapshots; no handwritten SSE parsing is used.
 - The target is always the fixed filename `application.json` directly under a validated workspace directory; callers cannot provide an arbitrary relative file path.

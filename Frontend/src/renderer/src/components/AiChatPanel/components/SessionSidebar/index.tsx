@@ -21,6 +21,7 @@ import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import type { ApplicationConfig, ApplicationMenuItem } from '../../../../typings'
 import { cx } from '../../../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
+import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
 import './SessionSidebar.less'
 
 const { Text } = Typography
@@ -182,6 +183,7 @@ export default function SessionSidebar({
 }: SessionSidebarProps): ReactElement {
   const [outlineQuery, setOutlineQuery] = useState('')
   const [collapsed, setCollapsed] = useState(false)
+  const [compactExpanded, setCompactExpanded] = useState(false)
   const [resizing, setResizing] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(334)
   const [pagesExpanded, setPagesExpanded] = useState(true)
@@ -205,8 +207,16 @@ export default function SessionSidebar({
     return new Set([...matchingKeys].filter((key) => relatedKeys.has(key)))
   }, [application.menus.items, onlyRelated, outlineQuery, selectedKey])
   const appDescription = application.senario || '智能应用设计与开发工作区'
+  const compactLayout = useCompactWorkbench()
+  const effectiveCollapsed = compactLayout ? !compactExpanded : collapsed
 
+  useEffect(() => {
+    if (!compactLayout) setCompactExpanded(false)
+  }, [compactLayout])
+
+  /** 在常规宽度下启动侧栏拖动调整，窄屏覆盖层保持固定宽度。 */
   const handleResizeStart = (event: React.MouseEvent<HTMLDivElement>): void => {
+    if (compactLayout) return
     event.preventDefault()
     const sidebarLeft = event.currentTarget.parentElement?.getBoundingClientRect().left || 0
     setResizing(true)
@@ -235,7 +245,9 @@ export default function SessionSidebar({
     document.addEventListener('mouseup', handleMouseUp)
   }
 
+  /** 支持键盘调整常规侧栏宽度，并在到达最小值后收起。 */
   const handleResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (compactLayout) return
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()
     if (event.key === 'ArrowLeft' && sidebarWidth <= MIN_SIDEBAR_WIDTH) {
@@ -251,10 +263,16 @@ export default function SessionSidebar({
 
   return (
     <aside
-      className={cx('session-sidebar', collapsed && 'collapsed', resizing && 'resizing')}
+      className={cx(
+        'session-sidebar',
+        effectiveCollapsed && 'collapsed',
+        compactLayout && 'compact-layout',
+        compactLayout && compactExpanded && 'compact-expanded',
+        resizing && 'resizing'
+      )}
       aria-label="应用大纲"
       style={{
-        '--session-sidebar-width': `${collapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
+        '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
       } as React.CSSProperties}
     >
       <div
@@ -262,7 +280,7 @@ export default function SessionSidebar({
         aria-orientation="vertical"
         aria-valuemax={MAX_SIDEBAR_WIDTH}
         aria-valuemin={COLLAPSED_SIDEBAR_WIDTH}
-        aria-valuenow={collapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}
+        aria-valuenow={effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}
         className={cx('session-resize-handle')}
         onKeyDown={handleResizeKeyDown}
         onMouseDown={handleResizeStart}
@@ -270,14 +288,17 @@ export default function SessionSidebar({
         tabIndex={0}
       >
         <button
-          aria-label={collapsed ? '展开左侧菜单' : '收起左侧菜单'}
+          aria-label={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
           className={cx('session-collapse-button')}
-          onClick={() => setCollapsed((current) => !current)}
+          onClick={() => {
+            if (compactLayout) setCompactExpanded((current) => !current)
+            else setCollapsed((current) => !current)
+          }}
           onMouseDown={(event) => event.stopPropagation()}
-          title={collapsed ? '展开左侧菜单' : '收起左侧菜单'}
+          title={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
           type="button"
         >
-          {collapsed ? <RightOutlined /> : <LeftOutlined />}
+          {effectiveCollapsed ? <RightOutlined /> : <LeftOutlined />}
         </button>
       </div>
       <div className={cx('session-sidebar-header')}>

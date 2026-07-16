@@ -172,3 +172,35 @@
     }
   }
 }
+
+@media (max-width: 900px) {
+  .@{class-prefix}-ai-chat-panel.@{class-prefix}-embedded-preview-open,
+  .@{class-prefix}-ai-chat-panel.@{class-prefix}-diff-panel-open {
+    flex-direction: column;
+
+    .@{class-prefix}-ai-chat-assistant {
+      width: 100%;
+      min-width: 0;
+      min-height: 340px;
+      flex: 1 1 58%;
+    }
+
+    .@{class-prefix}-embedded-preview-pane {
+      width: 100%;
+      min-width: 0;
+      min-height: 220px;
+      flex: 1 1 42%;
+      border-top: 1px solid var(--wb-border);
+      border-left: 0;
+    }
+  }
+
+  .@{class-prefix}-panel-split-handle {
+    display: none;
+  }
+
+  .@{class-prefix}-diff-detail-pane {
+    width: 100%;
+    flex-basis: auto;
+  }
+}

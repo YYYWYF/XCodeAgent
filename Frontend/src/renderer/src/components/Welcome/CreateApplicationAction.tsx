@@ -11,11 +11,13 @@ import type {
   ApplicationDraft,
   ApplicationPagePlan,
   ConfirmedPagePlan,
+  PagePlanningProgress,
   PagePlanningQuestion
 } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'
 import ApplicationPagePlanningModal from './ApplicationPagePlanningModal'
+import { appendPagePlanningProgress } from './ApplicationPlanningProgress'
 import WelcomeActionCard from './WelcomeActionCard'
 import WelcomeModalTitle from './WelcomeModalTitle'
 import './ApplicationFormModal.less'
@@ -39,6 +41,8 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
   const [planningQuestions, setPlanningQuestions] = useState<PagePlanningQuestion[]>([])
   const [planningQuestionsError, setPlanningQuestionsError] = useState('')
   const [planningQuestionsLoading, setPlanningQuestionsLoading] = useState(false)
+  const [planningQuestionsProgressEvents, setPlanningQuestionsProgressEvents] = useState<PagePlanningProgress[]>([])
+  const [planningQuestionsStream, setPlanningQuestionsStream] = useState('')
   const [planningThreadId, setPlanningThreadId] = useState('')
   const [savedFormValues, setSavedFormValues] = useState<ApplicationDraft>()
 
@@ -111,6 +115,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     }
   }
 
+  // 创建页面规划线程并实时加载业务澄清问题。
   const loadPagePlanningQuestions = async (
     application: ApplicationConfig,
     threadId: string
@@ -120,6 +125,8 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     setPlanningQuestions([])
     setPlanningQuestionsError('')
     setPlanningQuestionsLoading(true)
+    setPlanningQuestionsProgressEvents([])
+    setPlanningQuestionsStream('')
     try {
       const questions = await requestPagePlanningQuestions(
         {
@@ -127,7 +134,11 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
           scenario: application.senario,
           terminal: application.terminal
         },
-        threadId
+        threadId,
+        (progress) => setPlanningQuestionsProgressEvents(
+          (history) => appendPagePlanningProgress(history, progress)
+        ),
+        setPlanningQuestionsStream
       )
       setPlanningQuestions(questions)
     } catch (error) {
@@ -149,6 +160,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     }
   }
 
+  // 在页面规划阶段同步应用设置到本地索引与完整 schema。
   const handleSettingsSave = async (values: SettingsValues): Promise<void> => {
     if (!planningApplication) return
     const updatedSchema = {
@@ -177,16 +189,22 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     await saveApplication(updatedApp)
   }
 
+  // 同步已确认的 menus 与 apis 到本地应用索引后打开应用。
   const handlePagePlanConfirmed = async (
     plan: ApplicationPagePlan,
     confirmation: ConfirmedPagePlan
   ): Promise<void> => {
     if (!planningApplication) return
     const pageNames = plan.pages.map((page) => page.name)
-    const schema = { ...planningApplication.schema, menus: confirmation.menus }
+    const schema = {
+      ...planningApplication.schema,
+      menus: confirmation.menus,
+      apis: confirmation.apis
+    }
     const application = {
       ...planningApplication,
       menus: confirmation.menus,
+      apis: confirmation.apis,
       schema,
       pages: pageNames,
       defaultPage: pageNames[0] || planningApplication.defaultPage
@@ -253,6 +271,8 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
           questions={planningQuestions}
           questionsError={planningQuestionsError}
           questionsLoading={planningQuestionsLoading}
+          questionsProgressEvents={planningQuestionsProgressEvents}
+          questionsStream={planningQuestionsStream}
           theme={theme}
           threadId={planningThreadId}
         />

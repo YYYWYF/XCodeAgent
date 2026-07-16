@@ -21,6 +21,20 @@
   }
 }
 
+@media (max-width: 760px) {
+  .@{class-prefix}-preview-actions {
+    gap: 6px;
+
+    .ant-btn {
+      width: 34px;
+      padding: 0;
+      font-size: 0;
+
+      .anticon { margin: 0; font-size: 14px; }
+    }
+  }
+}
+
 .@{class-prefix}-workbench-shell[data-theme='dark'] {
   .@{class-prefix}-preview-actions .ant-btn:not(.@{class-prefix}-active) {
     background: transparent;

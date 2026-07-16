@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -12,6 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
+
+
+ModelTextReporter = Callable[[str], Awaitable[None]]
 
 
 def _to_camel(value: str) -> str:
@@ -56,6 +60,31 @@ class ApplicationPageDefinition(ApiModel):
     path: str = Field(min_length=1, max_length=160)
     purpose: str = Field(min_length=1, max_length=500)
     key_features: list[str] = Field(default_factory=list, max_length=8)
+    related_page_ids: list[str] = Field(default_factory=list, max_length=8)
+    api_ids: list[str] = Field(default_factory=list, max_length=12)
+    interactions: list["ApplicationPageInteraction"] = Field(
+        default_factory=list, max_length=8
+    )
+
+
+class ApplicationPageInteraction(ApiModel):
+    name: str = Field(min_length=1, max_length=120)
+    trigger: str = Field(min_length=1, max_length=240)
+    user_action: str = Field(min_length=1, max_length=500)
+    system_response: str = Field(min_length=1, max_length=500)
+    target_page_id: str | None = Field(default=None, max_length=60)
+    api_ids: list[str] = Field(default_factory=list, max_length=8)
+
+
+class ApplicationApiDefinition(ApiModel):
+    id: str = Field(min_length=1, max_length=60)
+    name: str = Field(min_length=1, max_length=120)
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+    path: str = Field(min_length=1, max_length=200)
+    purpose: str = Field(min_length=1, max_length=500)
+    request_design: str = Field(default="无需业务请求参数", max_length=1000)
+    response_design: str = Field(min_length=1, max_length=1000)
+    used_by_page_ids: list[str] = Field(default_factory=list, max_length=12)
 
 
 class ApplicationPagePlan(ApiModel):
@@ -63,6 +92,7 @@ class ApplicationPagePlan(ApiModel):
     application: ApplicationPageContext
     clarifications: list[PagePlanningAnswer] = Field(default_factory=list, max_length=5)
     pages: list[ApplicationPageDefinition] = Field(min_length=1, max_length=12)
+    apis: list[ApplicationApiDefinition] = Field(default_factory=list, max_length=24)
 
 
 class ApplicationMenuItem(ApiModel):
@@ -72,6 +102,9 @@ class ApplicationMenuItem(ApiModel):
     type: Literal["menu", "page"]
     purpose: str = Field(min_length=1, max_length=500)
     key_features: list[str] = Field(default_factory=list, max_length=8)
+    related_page_ids: list[str] = Field(default_factory=list, max_length=8)
+    api_ids: list[str] = Field(default_factory=list, max_length=12)
+    interactions: list[ApplicationPageInteraction] = Field(default_factory=list, max_length=8)
     page_key: str | None = None
     children: list["ApplicationMenuItem"] | None = None
 
@@ -102,6 +135,7 @@ class ConfirmPagePlanResponse(ApiModel):
     sha256: str
     confirmed_at: str
     menus: ApplicationMenus
+    apis: list[ApplicationApiDefinition]
 
 
 class PagePlanningModelError(RuntimeError):
@@ -120,7 +154,8 @@ _QUESTION_SYSTEM_PROMPT = (
 _PAGE_PLAN_SYSTEM_PROMPT = (
     "你是一名资深产品架构师。请根据应用信息和用户对细节问题的回答，设计精简且完整的页面结构。"
     "当用户提供页面结构调整意见时，最新调整意见拥有最高优先级，必须据此删除、合并、保留或修改页面。"
-    "页面必须有清晰职责，避免把弹窗、抽屉或微小组件误列成独立页面。只返回 JSON，不要使用 Markdown。"
+    "页面必须有清晰职责，避免把弹窗、抽屉或微小组件误列成独立页面。"
+    "同时设计支撑页面交互的业务 API，但不要输出任何实现代码。只返回 JSON，不要使用 Markdown。"
 )
 
 
@@ -138,6 +173,24 @@ def _message_text(content: Any) -> str:
                     parts.append(text)
         return "\n".join(parts)
     return str(content or "")
+
+
+async def _stream_model_text(
+    messages: list[SystemMessage | HumanMessage],
+    on_text_delta: ModelTextReporter | None,
+) -> str:
+    """流式读取模型文本，逐块上报给协议层并保留可解析的完整结果。"""
+
+    model = create_chat_model(Settings.from_env())
+    chunks: list[str] = []
+    async for chunk in model.astream(messages):
+        text = _message_text(getattr(chunk, "content", ""))
+        if not text:
+            continue
+        chunks.append(text)
+        if on_text_delta:
+            await on_text_delta(text)
+    return "".join(chunks)
 
 
 def _json_object(text: str) -> dict[str, Any]:
@@ -201,6 +254,8 @@ def _normalize_path(value: Any, index: int) -> str:
 
 
 def _normalize_pages(payload: dict[str, Any]) -> list[ApplicationPageDefinition]:
+    """规范页面、页面关系和页面内交互设计。"""
+
     raw_pages = payload.get("pages")
     if not isinstance(raw_pages, list):
         raise PagePlanningModelError("模型没有返回 pages 数组。")
@@ -229,6 +284,54 @@ def _normalize_pages(payload: dict[str, Any]) -> list[ApplicationPageDefinition]
             if isinstance(raw_features, list)
             else []
         )
+        interactions: list[ApplicationPageInteraction] = []
+        raw_interactions = item.get("interactions") or []
+        if isinstance(raw_interactions, list):
+            for interaction_index, interaction in enumerate(raw_interactions[:8], start=1):
+                if not isinstance(interaction, dict):
+                    continue
+                trigger = _clean_text(interaction.get("trigger"))
+                user_action = _clean_text(
+                    interaction.get("userAction") or interaction.get("user_action")
+                )
+                system_response = _clean_text(
+                    interaction.get("systemResponse")
+                    or interaction.get("system_response")
+                )
+                if not trigger or not user_action or not system_response:
+                    continue
+                raw_interaction_api_ids = (
+                    interaction.get("apiIds") or interaction.get("api_ids") or []
+                )
+                interactions.append(
+                    ApplicationPageInteraction(
+                        name=_clean_text(
+                            interaction.get("name"),
+                            fallback=f"交互 {interaction_index}",
+                        )[:120],
+                        trigger=trigger[:240],
+                        user_action=user_action[:500],
+                        system_response=system_response[:500],
+                        target_page_id=_clean_text(
+                            interaction.get("targetPageId")
+                            or interaction.get("target_page_id")
+                        )[:60]
+                        or None,
+                        api_ids=(
+                            [
+                                _clean_text(value)[:60]
+                                for value in raw_interaction_api_ids
+                                if _clean_text(value)
+                            ][:8]
+                            if isinstance(raw_interaction_api_ids, list)
+                            else []
+                        ),
+                    )
+                )
+        raw_related_page_ids = (
+            item.get("relatedPageIds") or item.get("related_page_ids") or []
+        )
+        raw_api_ids = item.get("apiIds") or item.get("api_ids") or []
         pages.append(
             ApplicationPageDefinition(
                 id=page_id,
@@ -236,6 +339,21 @@ def _normalize_pages(payload: dict[str, Any]) -> list[ApplicationPageDefinition]
                 path=path,
                 purpose=purpose[:500],
                 key_features=features,
+                related_page_ids=(
+                    [
+                        _clean_text(value)[:60]
+                        for value in raw_related_page_ids
+                        if _clean_text(value)
+                    ][:8]
+                    if isinstance(raw_related_page_ids, list)
+                    else []
+                ),
+                api_ids=(
+                    [_clean_text(value)[:60] for value in raw_api_ids if _clean_text(value)][:12]
+                    if isinstance(raw_api_ids, list)
+                    else []
+                ),
+                interactions=interactions,
             )
         )
         used_ids.add(page_id)
@@ -244,6 +362,118 @@ def _normalize_pages(payload: dict[str, Any]) -> list[ApplicationPageDefinition]
     if not pages:
         raise PagePlanningModelError("模型没有返回有效页面。")
     return pages
+
+
+def _normalize_api_path(value: Any, index: int) -> str:
+    """把模型输出的 API 路径规范为可读且稳定的设计路径。"""
+
+    path = _clean_text(value).strip()
+    if not path.startswith("/"):
+        path = f"/{path}"
+    if not re.fullmatch(r"/[A-Za-z0-9_{}:/.-]*", path):
+        return f"/api/resource-{index}"
+    return path[:200]
+
+
+def _normalize_apis(payload: dict[str, Any]) -> list[ApplicationApiDefinition]:
+    """校验并规范模型返回的 API 功能设计列表。"""
+
+    raw_apis = payload.get("apis")
+    if not isinstance(raw_apis, list):
+        raise PagePlanningModelError("模型没有返回 apis 数组。")
+
+    apis: list[ApplicationApiDefinition] = []
+    used_ids: set[str] = set()
+    allowed_methods = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+    for index, item in enumerate(raw_apis[:24], start=1):
+        if not isinstance(item, dict):
+            continue
+        name = _clean_text(item.get("name"))
+        purpose = _clean_text(item.get("purpose"))
+        response_design = _clean_text(
+            item.get("responseDesign") or item.get("response_design")
+        )
+        method = _clean_text(item.get("method")).upper()
+        if not name or not purpose or not response_design or method not in allowed_methods:
+            continue
+        api_id = _safe_id(item.get("id"), f"api-{index}")
+        if api_id in used_ids:
+            api_id = f"{api_id}-{index}"
+        raw_page_ids = (
+            item.get("usedByPageIds") or item.get("used_by_page_ids") or []
+        )
+        apis.append(
+            ApplicationApiDefinition(
+                id=api_id,
+                name=name[:120],
+                method=method,
+                path=_normalize_api_path(item.get("path"), index),
+                purpose=purpose[:500],
+                request_design=_clean_text(
+                    item.get("requestDesign") or item.get("request_design"),
+                    fallback="无需业务请求参数",
+                )[:1000],
+                response_design=response_design[:1000],
+                used_by_page_ids=(
+                    [_clean_text(value)[:60] for value in raw_page_ids if _clean_text(value)][:12]
+                    if isinstance(raw_page_ids, list)
+                    else []
+                ),
+            )
+        )
+        used_ids.add(api_id)
+    return apis
+
+
+def _normalize_plan_relations(
+    pages: list[ApplicationPageDefinition],
+    apis: list[ApplicationApiDefinition],
+) -> tuple[list[ApplicationPageDefinition], list[ApplicationApiDefinition]]:
+    """移除指向不存在页面或 API 的模型引用，保证方案内部关系一致。"""
+
+    page_ids = {page.id for page in pages}
+    api_ids = {api.id for api in apis}
+    normalized_pages: list[ApplicationPageDefinition] = []
+    for page in pages:
+        interactions = [
+            interaction.model_copy(
+                update={
+                    "target_page_id": (
+                        interaction.target_page_id
+                        if interaction.target_page_id in page_ids
+                        else None
+                    ),
+                    "api_ids": [
+                        api_id for api_id in interaction.api_ids if api_id in api_ids
+                    ],
+                }
+            )
+            for interaction in page.interactions
+        ]
+        normalized_pages.append(
+            page.model_copy(
+                update={
+                    "related_page_ids": [
+                        page_id
+                        for page_id in page.related_page_ids
+                        if page_id in page_ids and page_id != page.id
+                    ],
+                    "api_ids": [api_id for api_id in page.api_ids if api_id in api_ids],
+                    "interactions": interactions,
+                }
+            )
+        )
+    normalized_apis = [
+        api.model_copy(
+            update={
+                "used_by_page_ids": [
+                    page_id for page_id in api.used_by_page_ids if page_id in page_ids
+                ]
+            }
+        )
+        for api in apis
+    ]
+    return normalized_pages, normalized_apis
 
 
 def _page_key(page: ApplicationPageDefinition) -> str:
@@ -260,6 +490,8 @@ def _menu_item_for_page(
     *,
     key: str | None = None,
 ) -> ApplicationMenuItem:
+    """把已校验页面设计转换为 application.json 的页面菜单项。"""
+
     return ApplicationMenuItem(
         key=key or _safe_id(_menu_path(page), page.id),
         path=_menu_path(page),
@@ -267,6 +499,9 @@ def _menu_item_for_page(
         type="page",
         purpose=page.purpose,
         key_features=page.key_features,
+        related_page_ids=page.related_page_ids,
+        api_ids=page.api_ids,
+        interactions=page.interactions,
         page_key=_page_key(page),
     )
 
@@ -347,7 +582,10 @@ def _page_plan_menus(plan: ApplicationPagePlan) -> ApplicationMenus:
 
 async def generate_page_planning_questions(
     request: PagePlanningQuestionsRequest,
+    on_text_delta: ModelTextReporter | None = None,
 ) -> PagePlanningQuestionsResponse:
+    """流式生成决定页面结构所需的业务澄清问题。"""
+
     application = request.application
     prompt = f"""请提出 3 到 5 个会显著影响页面划分的细节问题。
 
@@ -372,17 +610,20 @@ async def generate_page_planning_questions(
 应用场景：{application.scenario or "用户未填写"}
 终端类型：{application.terminal}
 """
-    model = create_chat_model(Settings.from_env())
-    result = await model.ainvoke(
-        [SystemMessage(content=_QUESTION_SYSTEM_PROMPT), HumanMessage(content=prompt)]
+    result_text = await _stream_model_text(
+        [SystemMessage(content=_QUESTION_SYSTEM_PROMPT), HumanMessage(content=prompt)],
+        on_text_delta,
     )
-    payload = _json_object(_message_text(getattr(result, "content", "")))
+    payload = _json_object(result_text)
     return PagePlanningQuestionsResponse(questions=_normalize_questions(payload))
 
 
 async def generate_application_page_plan(
     request: GeneratePagePlanRequest,
+    on_text_delta: ModelTextReporter | None = None,
 ) -> GeneratePagePlanResponse:
+    """调用模型生成仅供审核的页面、交互和 API 功能设计方案。"""
+
     application = request.application
     answers = [answer.model_dump(by_alias=True) for answer in request.answers]
     revision_context = ""
@@ -395,21 +636,26 @@ async def generate_application_page_plan(
 用户修改意见：
 {request.feedback}
 
-这是一次页面结构修订任务。请以“用户修改意见”为最高优先级，返回落实意见后的完整 pages 数组。
+这是一次产品设计方案修订任务。请以“用户修改意见”为最高优先级，返回落实意见后的完整 pages 和 apis 数组。
 修订规则：
 - 如果用户要求删除、不需要、不要、只保留、只需要或仅保留某些页面，返回结果中必须移除其他页面。
 - 如果用户要求合并页面，返回结果中必须减少对应页面，并把必要能力合并到保留页面的 purpose 或 keyFeatures。
 - 如果用户要求新增、重命名、调整路径或修改职责，返回结果中必须体现这些变更。
+- 页面变化后同步更新页面关联、交互步骤及 API 的引用关系，不得保留悬空引用。
+- 如果用户要求调整 API 功能、路径、请求或响应设计，必须同步更新 apis 以及相关页面的 apiIds。
 - 只保留与用户意见不冲突、且仍服务核心流程的页面；不要因为当前页面结构中已有某页面就默认保留。
 - 不要新增用户没有要求、应用信息也不能支持的页面。
 """
-    prompt = f"""请设计 1 到 12 个页面，并说明每个页面的大致作用。
+    prompt = f"""请设计 1 到 12 个页面及支撑这些页面交互的业务 API，输出可供用户确认的产品设计方案。
 
 要求：
 - 覆盖用户的核心端到端任务，但不要为假设中的未来需求增加页面。
 - path 使用小写英文 kebab-case 路径；首页可以使用 /。
-- keyFeatures 只列出该页面最关键的 2 到 5 项能力。
-- 不要输出页面之外的实现方案。
+- keyFeatures 列出页面最关键的 2 到 5 项功能。
+- relatedPageIds 使用页面 id，说明用户可从该页面关联或跳转到哪些页面。
+- interactions 说明触发条件、用户动作、系统反馈、目标页面和调用的 apiIds。
+- API 只做功能契约设计，使用 /api 开头的路径，说明用途、请求和响应数据语义；不要生成代码、框架或数据库实现。
+- 只设计当前页面实际需要的 API；纯前端交互不需要虚构 API。
 
 返回格式：
 {{
@@ -418,8 +664,32 @@ async def generate_application_page_plan(
       "id": "英文短标识",
       "name": "页面名称",
       "path": "/route-path",
-      "purpose": "页面的大致作用",
-      "keyFeatures": ["关键能力"]
+      "purpose": "页面的功能与职责详情",
+      "keyFeatures": ["关键能力"],
+      "relatedPageIds": ["related-page-id"],
+      "apiIds": ["api-id"],
+      "interactions": [
+        {{
+          "name": "交互名称",
+          "trigger": "何时发生",
+          "userAction": "用户如何操作",
+          "systemResponse": "系统如何反馈",
+          "targetPageId": "可选目标页面 id",
+          "apiIds": ["api-id"]
+        }}
+      ]
+    }}
+  ],
+  "apis": [
+    {{
+      "id": "api-id",
+      "name": "API 名称",
+      "method": "GET|POST|PUT|PATCH|DELETE",
+      "path": "/api/resource",
+      "purpose": "API 的业务功能",
+      "requestDesign": "请求参数、筛选、分页或业务约束的语义说明",
+      "responseDesign": "响应数据、状态和错误语义说明",
+      "usedByPageIds": ["page-id"]
     }}
   ]
 }}
@@ -431,15 +701,20 @@ async def generate_application_page_plan(
 {json.dumps(answers, ensure_ascii=False)}
 {revision_context}
 """
-    model = create_chat_model(Settings.from_env())
-    result = await model.ainvoke(
-        [SystemMessage(content=_PAGE_PLAN_SYSTEM_PROMPT), HumanMessage(content=prompt)]
+    result_text = await _stream_model_text(
+        [SystemMessage(content=_PAGE_PLAN_SYSTEM_PROMPT), HumanMessage(content=prompt)],
+        on_text_delta,
     )
-    payload = _json_object(_message_text(getattr(result, "content", "")))
+    payload = _json_object(result_text)
+    pages, apis = _normalize_plan_relations(
+        _normalize_pages(payload),
+        _normalize_apis(payload),
+    )
     plan = ApplicationPagePlan(
         application=application,
         clarifications=request.answers,
-        pages=_normalize_pages(payload),
+        pages=pages,
+        apis=apis,
     )
     return GeneratePagePlanResponse(plan=plan)
 
@@ -447,6 +722,8 @@ async def generate_application_page_plan(
 def confirm_application_page_plan(
     request: ConfirmPagePlanRequest,
 ) -> ConfirmPagePlanResponse:
+    """在用户明确确认后原子写入 application.json 的 menus 与 apis。"""
+
     workspace_root = Path(request.workspace_root).expanduser().resolve()
     if not workspace_root.exists() or not workspace_root.is_dir():
         raise ValueError(f"工作目录不存在或不是文件夹：{workspace_root}")
@@ -468,6 +745,9 @@ def confirm_application_page_plan(
     payload = {
         **existing,
         "menus": menus.model_dump(by_alias=True, exclude_none=True),
+        "apis": [
+            api.model_dump(by_alias=True, exclude_none=True) for api in request.plan.apis
+        ],
     }
     content = f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
     temporary = workspace_root / ".application.json.tmp"
@@ -478,4 +758,5 @@ def confirm_application_page_plan(
         sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
         confirmed_at=confirmed_at,
         menus=menus,
+        apis=request.plan.apis,
     )

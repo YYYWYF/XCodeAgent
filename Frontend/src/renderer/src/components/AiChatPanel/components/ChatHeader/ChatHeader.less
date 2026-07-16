@@ -107,3 +107,32 @@
     max-width: 24vw;
   }
 }
+
+@media (max-width: 760px) {
+  .@{class-prefix}-ai-chat-header {
+    min-height: 54px;
+    gap: 10px;
+    padding: 8px 12px;
+  }
+
+  .@{class-prefix}-ai-chat-breadcrumb {
+    gap: 8px;
+
+    > .ant-typography:not(.@{class-prefix}-ai-chat-page-title) {
+      display: none;
+    }
+  }
+
+  .@{class-prefix}-ai-chat-page-title.ant-typography {
+    max-width: 28vw;
+  }
+
+  .@{class-prefix}-ai-chat-header-actions {
+    gap: 6px;
+
+    > .ant-btn {
+      width: 34px;
+      padding: 0;
+    }
+  }
+}

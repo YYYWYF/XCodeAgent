@@ -19,7 +19,7 @@ import {
   UserOutlined
 } from '@ant-design/icons'
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon'
-import { Alert, Button, Collapse, Form, Input, List, message, Modal, Radio, Result, Select, Spin, Steps, Switch, Tag, Typography } from 'antd'
+import { Alert, Button, Collapse, Form, Input, message, Modal, Radio, Result, Select, Steps, Switch, Typography } from 'antd'
 import type { ComponentType, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
 import {
@@ -33,14 +33,19 @@ import type {
   ApplicationPagePlan,
   ConfirmedPagePlan,
   PagePlanningAnswer,
+  PagePlanningProgress,
   PagePlanningQuestion
 } from '../../typings'
 import { cx } from '../../utils'
 import { applicationIconOptions, trackMethodOptions } from './constants'
 import { formatError } from './utils'
+import ApplicationPagePlanReview from './ApplicationPagePlanReview'
+import ApplicationPlanningProgress, {
+  appendPagePlanningProgress
+} from './ApplicationPlanningProgress'
 import './ApplicationPagePlanningModal.less'
 
-const { Paragraph, Text, Title } = Typography
+const { Paragraph, Title } = Typography
 const { Step } = Steps
 const { TextArea } = Input
 
@@ -73,6 +78,8 @@ type Props = {
   questions: PagePlanningQuestion[]
   questionsError?: string
   questionsLoading: boolean
+  questionsProgressEvents: PagePlanningProgress[]
+  questionsStream?: string
   theme: 'dark' | 'light'
   threadId: string
   onCancel: () => void
@@ -95,6 +102,8 @@ export default function ApplicationPagePlanningModal({
   questions,
   questionsError,
   questionsLoading,
+  questionsProgressEvents,
+  questionsStream,
   theme,
   threadId,
   onCancel,
@@ -110,6 +119,8 @@ export default function ApplicationPagePlanningModal({
   const [revising, setRevising] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [savingSettings, setSavingSettings] = useState(false)
+  const [planningProgressEvents, setPlanningProgressEvents] = useState<PagePlanningProgress[]>([])
+  const [planningStream, setPlanningStream] = useState('')
 
   const settingsInitialValues = useMemo<SettingsValues>(
     () => ({
@@ -123,6 +134,7 @@ export default function ApplicationPagePlanningModal({
     [application]
   )
 
+  // 验证并持久化规划期间修改的应用基础设置。
   const handleSaveSettings = async (): Promise<void> => {
     setSavingSettings(true)
     try {
@@ -138,10 +150,18 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
+  // 累积 AG-UI 进度事件，使界面可以展示完整阶段而非仅展示最后一条。
+  const handlePlanningProgress = (progress: PagePlanningProgress): void => {
+    setPlanningProgressEvents((history) => appendPagePlanningProgress(history, progress))
+  }
+
+  // 根据用户回答生成首版页面与 API 设计方案。
   const handleGeneratePlan = async (): Promise<void> => {
-    setGenerating(true)
     try {
       const values = await form.validateFields()
+      setGenerating(true)
+      setPlanningProgressEvents([])
+      setPlanningStream('')
       const answers: PagePlanningAnswer[] = questions.map((question) => ({
         questionId: question.id,
         question: question.question,
@@ -150,7 +170,10 @@ export default function ApplicationPagePlanningModal({
       const nextPlan = await requestApplicationPagePlan(
         toPageContext(application),
         answers,
-        threadId
+        threadId,
+        undefined,
+        handlePlanningProgress,
+        setPlanningStream
       )
       setPlan(nextPlan)
     } catch (error) {
@@ -162,13 +185,21 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
+  // 用户明确确认后保存当前方案并进入应用。
   const handleConfirmPlan = async (): Promise<void> => {
     if (!application.workspaceRoot || !plan) return
     setConfirming(true)
+    setPlanningProgressEvents([])
+    setPlanningStream('')
     try {
-      const confirmation = await confirmApplicationPagePlan(application.workspaceRoot, plan, threadId)
+      const confirmation = await confirmApplicationPagePlan(
+        application.workspaceRoot,
+        plan,
+        threadId,
+        handlePlanningProgress
+      )
       await onConfirmed(plan, confirmation)
-      message.success('页面结构已确认并写入 application.json')
+      message.success('页面与 API 设计已确认并写入 application.json')
     } catch (error) {
       if (isAuthenticationFailure(error)) return
       message.error(formatError(error, '保存 application.json 失败'))
@@ -177,6 +208,7 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
+  // 将用户的二次修改意见应用到完整设计方案后继续审核。
   const handleRevisePlan = async (): Promise<void> => {
     const feedback = revisionFeedback.trim()
     if (!plan || !feedback) {
@@ -184,12 +216,16 @@ export default function ApplicationPagePlanningModal({
       return
     }
     setRevising(true)
+    setPlanningProgressEvents([])
+    setPlanningStream('')
     try {
       const nextPlan = await requestApplicationPagePlan(
         toPageContext(application),
         plan.clarifications,
         threadId,
-        { currentPlan: plan, feedback }
+        { currentPlan: plan, feedback },
+        handlePlanningProgress,
+        setPlanningStream
       )
       setPlan(nextPlan)
       setRevisionFeedback('')
@@ -202,7 +238,7 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
-  const backDisabled = generating || revising || confirming
+  const backDisabled = generating || revising || confirming || savingSettings
 
   return (
     <Modal
@@ -227,7 +263,7 @@ export default function ApplicationPagePlanningModal({
           <span>规划「{application.appName}」的页面结构</span>
         </div>
       }
-      width={820}
+      width={980}
       wrapClassName={cx('welcome-modal', 'page-planning-modal', `theme-${theme}`)}
     >
       <Steps className={cx('page-planning-steps')} current={plan ? 1 : 0} size="small">
@@ -237,7 +273,12 @@ export default function ApplicationPagePlanningModal({
 
       {questionsLoading ? (
         <div className={cx('page-planning-loading')}>
-          <Spin tip="模型正在根据应用名称和场景整理细节问题…" />
+          <ApplicationPlanningProgress
+            events={questionsProgressEvents}
+            fallbackMessage="正在连接规划 Agent，准备分析应用场景…"
+            streamingContent={questionsStream}
+            title="正在准备规划问题"
+          />
         </div>
       ) : questionsError ? (
         <Result
@@ -253,27 +294,19 @@ export default function ApplicationPagePlanningModal({
       ) : plan ? (
         <section className={cx('page-planning-review')}>
           <Alert
-            message="请确认这些页面能覆盖应用的核心使用流程。确认后将更新工作目录 application.json 中的菜单和页面规划。"
+            message="请审核页面目录、功能、页面关系、交互流程和 API 设计。确认前不会生成代码；确认后才会写入 application.json 的 menus 和 apis。"
             showIcon
             type="info"
           />
-          <List
-            dataSource={plan.pages}
-            renderItem={(page) => (
-              <List.Item className={cx('page-planning-page')}>
-                <div>
-                  <Title level={5}>{page.name}</Title>
-                  <Text code>{page.path}</Text>
-                  <Paragraph>{page.purpose}</Paragraph>
-                  <div>
-                    {page.keyFeatures.map((feature) => (
-                      <Tag key={feature}>{feature}</Tag>
-                    ))}
-                  </div>
-                </div>
-              </List.Item>
-            )}
-          />
+          {revising || confirming ? (
+            <ApplicationPlanningProgress
+              events={planningProgressEvents}
+              fallbackMessage={confirming ? '正在准备保存已确认方案…' : '正在准备重新分析设计方案…'}
+              streamingContent={planningStream}
+              title={confirming ? '正在确认并保存' : '正在根据意见调整方案'}
+            />
+          ) : null}
+          <ApplicationPagePlanReview plan={plan} />
           <section className={cx('page-planning-feedback')}>
             <Title level={5}>还有调整意见？</Title>
             <Paragraph type="secondary">
@@ -313,6 +346,15 @@ export default function ApplicationPagePlanningModal({
             </Button>
           </div>
         </section>
+      ) : generating ? (
+        <div className={cx('page-planning-loading')}>
+          <ApplicationPlanningProgress
+            events={planningProgressEvents}
+            fallbackMessage="正在连接规划 Agent，准备生成页面与 API 方案…"
+            streamingContent={planningStream}
+            title="正在生成设计方案"
+          />
+        </div>
       ) : (
         <Form form={form} layout="vertical">
           <Paragraph type="secondary">
@@ -348,23 +390,24 @@ export default function ApplicationPagePlanningModal({
       <Collapse
         className={cx('page-planning-settings')}
         ghost
-        items={[{
-          key: 'settings',
-          label: (
+      >
+        <Collapse.Panel
+          header={
             <span className={cx('page-planning-settings-label')}>
               <SettingOutlined />
               设置
             </span>
-          ),
-          children: (
-            <Form
-              className={cx('settings-form')}
-              form={settingsForm}
-              initialValues={settingsInitialValues}
-              layout="horizontal"
-              labelCol={{ flex: '0 0 96px' }}
-              wrapperCol={{ flex: '1 1 auto' }}
-            >
+          }
+          key="settings"
+        >
+          <Form
+            className={cx('settings-form')}
+            form={settingsForm}
+            initialValues={settingsInitialValues}
+            layout="horizontal"
+            labelCol={{ flex: '0 0 96px' }}
+            wrapperCol={{ flex: '1 1 auto' }}
+          >
               <div className={cx('settings-card')}>
                 <div className={cx('settings-card-head')}>基础信息</div>
                 <Form.Item label="应用名称" name="appName" rules={[{ required: true, message: '请输入应用名称' }]}>
@@ -462,14 +505,14 @@ export default function ApplicationPagePlanningModal({
                   保存设置
                 </Button>
               </div>
-            </Form>
-          )
-        }]}
-      />
+          </Form>
+        </Collapse.Panel>
+      </Collapse>
     </Modal>
   )
 }
 
+// 渲染可单独启停的应用设置分组，关闭时保留已填内容。
 function SettingsToggleSection({
   title,
   enableName,

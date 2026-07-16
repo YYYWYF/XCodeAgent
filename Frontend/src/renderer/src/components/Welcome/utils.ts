@@ -36,6 +36,7 @@ function parseEnv(value?: string) {
     .filter(Boolean)
 }
 
+// 把新建应用表单转换为可写入 application.json 的初始配置。
 export function buildApplicationSchema(values: ApplicationDraft): ApplicationSchemaConfig {
   return {
     appName: values.appName.trim(),
@@ -47,6 +48,7 @@ export function buildApplicationSchema(values: ApplicationDraft): ApplicationSch
     datasource: values.datasource,
     env: parseEnv(values.envText),
     menus: { homeMenuKey: '', items: [] },
+    apis: [],
     auth: values.auth,
     track: values.track,
     apiTrack: values.apiTrack

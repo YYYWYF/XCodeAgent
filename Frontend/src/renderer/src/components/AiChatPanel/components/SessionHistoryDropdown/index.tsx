@@ -184,7 +184,12 @@ export default function SessionHistoryDropdown({
       trigger={['click']}
       visible={visible}
     >
-      <Button className={cx('session-history-trigger')} icon={<HistoryOutlined />}>
+      <Button
+        aria-label="历史会话"
+        className={cx('session-history-trigger')}
+        icon={<HistoryOutlined />}
+        title="历史会话"
+      >
         历史会话 <DownOutlined />
       </Button>
     </Dropdown>

@@ -16,6 +16,21 @@
   .anticon:last-child { margin-left: 2px; font-size: 9px; }
 }
 
+@media (max-width: 760px) {
+  .@{class-prefix}-session-history-trigger.ant-btn {
+    width: 34px;
+    padding: 0;
+    font-size: 0;
+
+    .anticon { margin: 0; font-size: 14px; }
+    .anticon:last-child { display: none; }
+  }
+
+  .@{class-prefix}-session-history-dropdown {
+    width: min(320px, calc(100vw - 24px));
+  }
+}
+
 .@{class-prefix}-session-history-dropdown {
   --session-history-accent: #6b3cf0;
   --session-history-hover-text: #7658c8;

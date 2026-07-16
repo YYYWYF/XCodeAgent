@@ -226,10 +226,18 @@
 }
 
 @media (max-width: 760px) {
-  .@{class-prefix}-page-context-header { margin-inline: 10px; }
+  .@{class-prefix}-page-context-header {
+    min-height: auto;
+    margin: 10px 10px 0;
+    padding: 12px;
+  }
   .@{class-prefix}-page-context-icon { width: 52px; height: 52px; flex-basis: 52px; }
   .@{class-prefix}-page-context-analysis { display: none; }
-  .@{class-prefix}-page-context-actions { justify-content: flex-start; }
+  .@{class-prefix}-page-context-actions {
+    justify-content: flex-start;
+
+    .ant-btn { height: 36px; padding-inline: 12px; }
+  }
   .@{class-prefix}-page-context-title.ant-typography { max-width: 42vw; }
   .@{class-prefix}-page-context-path.ant-typography { display: none; }
 }

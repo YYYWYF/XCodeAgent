@@ -51,6 +51,7 @@ export interface ApplicationSchemaConfig {
     homeMenuKey: string;
     items: ApplicationMenuItem[];
   };
+  apis: ApplicationApiDefinition[];
   auth: {
     enable: boolean;
     authnSource: string;
@@ -79,8 +80,31 @@ export interface ApplicationMenuItem {
   type: 'menu' | 'page';
   purpose: string;
   keyFeatures: string[];
+  relatedPageIds?: string[];
+  apiIds?: string[];
+  interactions?: ApplicationPageInteraction[];
   pageKey?: string;
   children?: ApplicationMenuItem[];
+}
+
+export interface ApplicationPageInteraction {
+  name: string;
+  trigger: string;
+  userAction: string;
+  systemResponse: string;
+  targetPageId?: string;
+  apiIds: string[];
+}
+
+export interface ApplicationApiDefinition {
+  id: string;
+  name: string;
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  path: string;
+  purpose: string;
+  requestDesign: string;
+  responseDesign: string;
+  usedByPageIds: string[];
 }
 
 export interface ApplicationConfig extends ApplicationSchemaConfig {

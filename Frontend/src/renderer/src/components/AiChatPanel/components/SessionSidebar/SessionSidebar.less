@@ -672,3 +672,31 @@
     width: var(--session-sidebar-width, 68px);
   }
 }
+
+@media (max-width: 900px) {
+  .@{class-prefix}-session-sidebar.@{class-prefix}-compact-layout {
+    z-index: 20;
+  }
+
+  .@{class-prefix}-session-sidebar.@{class-prefix}-compact-expanded {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(334px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+    flex-basis: auto;
+    box-shadow: 18px 0 42px rgba(29, 24, 55, 0.16);
+  }
+
+  .@{class-prefix}-session-sidebar.@{class-prefix}-compact-layout {
+    .@{class-prefix}-session-resize-handle {
+      cursor: default;
+    }
+  }
+
+  .@{class-prefix}-workbench-shell[data-theme='dark']
+    .@{class-prefix}-session-sidebar.@{class-prefix}-compact-expanded {
+    box-shadow: 18px 0 42px rgba(0, 0, 0, 0.4);
+  }
+}

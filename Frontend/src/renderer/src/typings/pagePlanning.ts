@@ -1,4 +1,9 @@
-import type { ApplicationMenuItem, ApplicationTerminal } from './application'
+import type {
+  ApplicationApiDefinition,
+  ApplicationMenuItem,
+  ApplicationPageInteraction,
+  ApplicationTerminal
+} from './application'
 
 export type ApplicationPageContext = {
   name: string
@@ -25,6 +30,9 @@ export type ApplicationPageDefinition = {
   path: string
   purpose: string
   keyFeatures: string[]
+  relatedPageIds: string[]
+  apiIds: string[]
+  interactions: ApplicationPageInteraction[]
 }
 
 export type ApplicationPagePlan = {
@@ -32,6 +40,14 @@ export type ApplicationPagePlan = {
   application: ApplicationPageContext
   clarifications: PagePlanningAnswer[]
   pages: ApplicationPageDefinition[]
+  apis: ApplicationApiDefinition[]
+}
+
+export type PagePlanningProgress = {
+  stage: string
+  message: string
+  detail: string
+  percent: number
 }
 
 export type ConfirmedPagePlan = {
@@ -42,4 +58,5 @@ export type ConfirmedPagePlan = {
     homeMenuKey: string
     items: ApplicationMenuItem[]
   }
+  apis: ApplicationApiDefinition[]
 }
