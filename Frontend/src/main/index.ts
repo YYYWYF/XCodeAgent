@@ -694,12 +694,12 @@ function createLoginWindow(): void {
   }
 
   loginWindow = new BrowserWindow({
-    width: 760,
+    width: 880,
     height: 620,
-    minWidth: 720,
+    minWidth: 840,
     minHeight: 580,
     title: 'XCode Agent 登录',
-    backgroundColor: '#07101f',
+    backgroundColor: '#2f1d49',
     frame: false,
     hasShadow: false,
     show: false,

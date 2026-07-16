@@ -1,4 +1,4 @@
-import { CheckCircleOutlined, RobotOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, RobotOutlined, ToolOutlined } from '@ant-design/icons'
 import { Spin, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { EditorMode, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../../../../typings'
@@ -111,7 +111,10 @@ export default function MessageList({
                       {message.skills && message.skills.length > 0 && (
                         <div className={cx('message-skill-labels')}>
                           {message.skills.map((skill) => (
-                            <Tag key={skill.name} title={skill.description}>{skill.name}</Tag>
+                            <Tag key={skill.name} title={skill.description}>
+                              <ToolOutlined />
+                              <span>{skill.name}</span>
+                            </Tag>
                           ))}
                         </div>
                       )}

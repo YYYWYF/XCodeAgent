@@ -150,12 +150,20 @@
   .ant-tag {
     max-width: 220px;
     margin: 0;
+    padding: 2px 8px;
     overflow: hidden;
-    color: var(--wb-text-secondary);
-    background: var(--wb-surface);
-    border-color: var(--wb-accent-border);
-    border-radius: 999px;
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+    border-color: transparent;
+    border-radius: 7px;
+    font-size: 14px;
+    line-height: 24px;
     text-overflow: ellipsis;
+    white-space: nowrap;
+
+    .anticon {
+      margin-right: 5px;
+    }
   }
 }
 
