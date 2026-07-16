@@ -1,14 +1,18 @@
 import {
   AppstoreOutlined,
   BankOutlined,
+  CheckCircleFilled,
   CloudOutlined,
   DashboardOutlined,
+  DatabaseOutlined,
   DesktopOutlined,
   FundOutlined,
   LayoutOutlined,
+  LinkOutlined,
   LockOutlined,
   MessageOutlined,
   RadarChartOutlined,
+  SafetyCertificateOutlined,
   SaveOutlined,
   SettingOutlined,
   ShopOutlined,
@@ -18,7 +22,7 @@ import {
   UserOutlined
 } from '@ant-design/icons'
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon'
-import { AutoComplete, Button, Form, Input, Radio, Switch, Typography, message } from 'antd'
+import { Anchor, AutoComplete, Button, Form, Input, Radio, Switch, Typography, message } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useMemo, useState, type ComponentType } from 'react'
 import type { ApplicationConfig } from '../../typings'
@@ -51,7 +55,7 @@ type Props = {
 
 type SettingsFormValues = Pick<
   ApplicationConfig,
-  'appName' | 'appIcon' | 'senario' | 'layout' | 'auth' | 'track' | 'apiTrack'
+  'appName' | 'appIcon' | 'senario' | 'layout' | 'auth' | 'track' | 'apiTrack' | 'database'
 >
 
 function SettingsCard({
@@ -59,16 +63,20 @@ function SettingsCard({
   title,
   children,
   extra,
-  disabled
+  disabled,
+  id,
+  compact
 }: {
   icon: ReactNode
   title: string
   children: ReactNode
   extra?: ReactNode
   disabled?: boolean
+  id?: string
+  compact?: boolean
 }) {
   return (
-    <section className={cx('settings-card', disabled && 'settings-card--disabled')}>
+    <section id={id} className={cx('settings-card', disabled && 'settings-card--disabled')}>
       <header className={cx('settings-card-header')}>
         <span className={cx('settings-card-title')}>
           <span className={cx('settings-card-icon')}>{icon}</span>
@@ -76,7 +84,7 @@ function SettingsCard({
         </span>
         {extra ? <span className={cx('settings-card-extra')}>{extra}</span> : null}
       </header>
-      <div className={cx('settings-card-body')}>{children}</div>
+      <div className={cx('settings-card-body', compact && 'settings-card-body--compact')}>{children}</div>
     </section>
   )
 }
@@ -86,11 +94,12 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
   const [saving, setSaving] = useState(false)
 
   // antd v4 的 Form.useWatch 在 Form 挂载前可能返回 undefined，用 getFieldValue 兜底更安全
-  const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? application?.auth?.enable ?? true
-  const trackEnabled = Form.useWatch(['track', 'enable'], form) ?? application?.track?.enable ?? true
-  const apiTrackEnabled = Form.useWatch(['apiTrack', 'enable'], form) ?? application?.apiTrack?.enable ?? true
+  const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? application?.auth?.enable ?? false
+  const trackEnabled = Form.useWatch(['track', 'enable'], form) ?? application?.track?.enable ?? false
+  const apiTrackEnabled = Form.useWatch(['apiTrack', 'enable'], form) ?? application?.apiTrack?.enable ?? false
   const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? application?.layout?.useHeader ?? true
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? application?.layout?.useFooter ?? false
+  const dbConnectionMode = Form.useWatch(['database', 'connectionMode'], form) ?? application?.database?.connectionMode ?? 'dbid'
 
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
@@ -131,9 +140,19 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
 
   // 兜底 initialValues，防止 application 字段缺失导致 Form 报错
   const safeLayout = application?.layout ?? { type: '', useHeader: true, useFooter: false }
-  const safeAuth = application?.auth ?? { enable: true, authnSource: '', yht: { clientId: '' } }
-  const safeTrack = application?.track ?? { enable: true, uploadId: '', apiHost: '', method: 'post' }
-  const safeApiTrack = application?.apiTrack ?? { enable: true, businessId: '', traceBaggage: '', apiTrackHost: '' }
+  const safeAuth = application?.auth ?? { enable: false, authnSource: '', yht: { clientId: '' } }
+  const safeTrack = application?.track ?? { enable: false, uploadId: '', apiHost: '', method: 'post' }
+  const safeApiTrack = application?.apiTrack ?? { enable: false, businessId: '', traceBaggage: '', apiTrackHost: '' }
+  const safeDatabase = application?.database ?? {
+    connectionMode: 'dbid' as const,
+    schema: '',
+    devDbid: '',
+    prodDbid: '',
+    host: '',
+    port: '',
+    username: '',
+    password: ''
+  }
 
   return (
     <div className={cx('settings-page')}>
@@ -155,7 +174,26 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
         </div>
       </header>
 
-      <div className={cx('settings-page-scroll')}>
+      <div className={cx('settings-page-body')}>
+        <aside className={cx('settings-page-anchor')}>
+          <Anchor
+            affix={false}
+            getCurrentAnchor={(active) => active || '#settings-basic'}
+            onClick={(e, link) => {
+              e.preventDefault()
+              const el = document.querySelector(link.href)
+              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }}
+          >
+            <Anchor.Link href="#settings-basic" title={<span className={cx('settings-anchor-item')}><AppstoreOutlined /><span>基础信息</span></span>} />
+            <Anchor.Link href="#settings-layout" title={<span className={cx('settings-anchor-item')}><LayoutOutlined /><span>导航模式</span></span>} />
+            <Anchor.Link href="#settings-auth" title={<span className={cx('settings-anchor-item')}><LockOutlined /><span>认证</span></span>} />
+            <Anchor.Link href="#settings-page-track" title={<span className={cx('settings-anchor-item')}><RadarChartOutlined /><span>页面埋点</span></span>} />
+            <Anchor.Link href="#settings-api-track" title={<span className={cx('settings-anchor-item')}><RadarChartOutlined /><span>接口埋点</span></span>} />
+            <Anchor.Link href="#settings-database" title={<span className={cx('settings-anchor-item')}><DatabaseOutlined /><span>数据库</span></span>} />
+          </Anchor>
+        </aside>
+        <div className={cx('settings-page-scroll')}>
         <Form
           form={form}
           layout="horizontal"
@@ -166,13 +204,14 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
             layout: safeLayout,
             auth: safeAuth,
             track: safeTrack,
-            apiTrack: safeApiTrack
+            apiTrack: safeApiTrack,
+            database: safeDatabase
           }}
-          labelCol={{ flex: '100px' }}
+          labelCol={{ flex: '0 0 155px' }}
           wrapperCol={{ flex: 'auto' }}
           className={cx('settings-form')}
         >
-          <SettingsCard icon={<AppstoreOutlined />} title="基础信息">
+          <SettingsCard id="settings-basic" icon={<AppstoreOutlined />} title="基础信息">
             <Form.Item label="应用名称" name="appName" rules={[{ required: true, message: '请输入应用名称' }]}>
               <Input />
             </Form.Item>
@@ -193,7 +232,7 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
             </Form.Item>
           </SettingsCard>
 
-          <SettingsCard icon={<LayoutOutlined />} title="导航模式">
+          <SettingsCard id="settings-layout" icon={<LayoutOutlined />} title="导航模式">
             <Form.Item label="布局方式" name={['layout', 'type']}>
               <Radio.Group className={cx('settings-nav-picker')} optionType="button" buttonStyle="solid">
                 <Radio.Button value="side">
@@ -281,12 +320,14 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
           </SettingsCard>
 
           <SettingsCard
+            id="settings-auth"
             icon={<LockOutlined />}
             title="认证"
+            compact
             disabled={!authEnabled}
             extra={
               <Form.Item name={['auth', 'enable']} valuePropName="checked" noStyle>
-                <Switch size="small" checkedChildren="开" unCheckedChildren="关" />
+                <Switch checkedChildren="开启" unCheckedChildren="关闭" />
               </Form.Item>
             }
           >
@@ -299,12 +340,14 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
           </SettingsCard>
 
           <SettingsCard
+            id="settings-page-track"
             icon={<RadarChartOutlined />}
             title="页面埋点"
+            compact
             disabled={!trackEnabled}
             extra={
               <Form.Item name={['track', 'enable']} valuePropName="checked" noStyle>
-                <Switch size="small" checkedChildren="开" unCheckedChildren="关" />
+                <Switch checkedChildren="开启" unCheckedChildren="关闭" />
               </Form.Item>
             }
           >
@@ -329,12 +372,14 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
           </SettingsCard>
 
           <SettingsCard
+            id="settings-api-track"
             icon={<RadarChartOutlined />}
             title="接口埋点"
+            compact
             disabled={!apiTrackEnabled}
             extra={
               <Form.Item name={['apiTrack', 'enable']} valuePropName="checked" noStyle>
-                <Switch size="small" checkedChildren="开" unCheckedChildren="关" />
+                <Switch checkedChildren="开启" unCheckedChildren="关闭" />
               </Form.Item>
             }
           >
@@ -348,7 +393,115 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
               <Input disabled={!apiTrackEnabled} />
             </Form.Item>
           </SettingsCard>
+
+          <SettingsCard id="settings-database" icon={<DatabaseOutlined />} title="数据库">
+            <Form.Item label="数据库类型">
+              <div style={{ lineHeight: '22px' }}>
+                <Text>TDSQL</Text>
+                <br />
+                <Text type="secondary" style={{ fontSize: 12 }}>符合我行国产化验收标准</Text>
+              </div>
+            </Form.Item>
+
+            <Form.Item
+              label="连接方式"
+              name={['database', 'connectionMode']}
+              rules={[{ required: true, message: '请选择连接方式' }]}
+            >
+              <div className={cx('settings-db-mode-cards')}>
+                <div
+                  className={cx('settings-db-mode-card', dbConnectionMode === 'dbid' && 'settings-db-mode-card--selected')}
+                  onClick={() => form.setFieldValue(['database', 'connectionMode'], 'dbid')}
+                >
+                  {dbConnectionMode === 'dbid' && (
+                    <CheckCircleFilled className={cx('settings-db-mode-check')} />
+                  )}
+                  <SafetyCertificateOutlined className={cx('settings-db-mode-icon')} />
+                  <div className={cx('settings-db-mode-body')}>
+                    <Text strong className={cx('settings-db-mode-title')}>DBID密码服务</Text>
+                    <Text type="secondary" className={cx('settings-db-mode-desc')}>安全连接方式，须通过审批流程获取</Text>
+                  </div>
+                </div>
+                <div
+                  className={cx('settings-db-mode-card', dbConnectionMode === 'connectionString' && 'settings-db-mode-card--selected')}
+                  onClick={() => form.setFieldValue(['database', 'connectionMode'], 'connectionString')}
+                >
+                  {dbConnectionMode === 'connectionString' && (
+                    <CheckCircleFilled className={cx('settings-db-mode-check')} />
+                  )}
+                  <LinkOutlined className={cx('settings-db-mode-icon')} />
+                  <div className={cx('settings-db-mode-body')}>
+                    <Text strong className={cx('settings-db-mode-title')}>数据库连接字符串</Text>
+                    <Text type="secondary" className={cx('settings-db-mode-desc')}>传统连接方式，通过环境变量配置</Text>
+                  </div>
+                </div>
+              </div>
+            </Form.Item>
+
+            {dbConnectionMode === 'dbid' ? (
+              <>
+                <Form.Item
+                  label="数据库名称(Schema名)"
+                  name={['database', 'schema']}
+                  rules={[{ required: true, message: '请输入数据库名称' }]}
+                >
+                  <Input />
+                </Form.Item>
+                <Form.Item
+                  label="开发环境DBID"
+                  name={['database', 'devDbid']}
+                  rules={[{ required: true, message: '请输入开发环境DBID' }]}
+                >
+                  <Input />
+                </Form.Item>
+                <Form.Item
+                  label="生产环境DBID"
+                  name={['database', 'prodDbid']}
+                  rules={[{ required: true, message: '请输入生产环境DBID' }]}
+                >
+                  <Input />
+                </Form.Item>
+              </>
+            ) : (
+              <>
+                <Form.Item
+                  label="数据库地址"
+                  name={['database', 'host']}
+                  rules={[{ required: true, message: '请输入数据库地址' }]}
+                >
+                  <Input />
+                </Form.Item>
+                <Form.Item
+                  label="端口号"
+                  name={['database', 'port']}
+                  rules={[{ required: true, message: '请输入端口号' }]}
+                >
+                  <Input />
+                </Form.Item>
+                <Form.Item
+                  label="用户名"
+                  name={['database', 'username']}
+                  rules={[{ required: true, message: '请输入用户名' }]}
+                >
+                  <Input />
+                </Form.Item>
+                <Form.Item
+                  label="密码"
+                  name={['database', 'password']}
+                  rules={[{ required: true, message: '请输入密码' }]}
+                >
+                  <div>
+                    <Input.Password />
+                    <div className={cx('settings-db-pwd-tip')}>
+                      <Text type="secondary">仅限密文类型</Text>
+                    </div>
+                  </div>
+                </Form.Item>
+              </>
+            )}
+          </SettingsCard>
         </Form>
+      </div>
       </div>
 
     </div>

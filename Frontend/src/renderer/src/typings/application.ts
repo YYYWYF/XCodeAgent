@@ -4,6 +4,7 @@ export type ApplicationTerminal = 'PC' | 'Mobile';
 export type ApplicationLayoutType = '' | 'side' | 'top' | 'mix';
 export type ApplicationDatasourceType = '' | 'DataBase' | 'API' | 'None';
 export type ApplicationTrackMethod = string;
+export type DatabaseConnectionMode = 'dbid' | 'connectionString';
 
 export type ApplicationAudience =
   | 'operator'
@@ -70,6 +71,23 @@ export interface ApplicationSchemaConfig {
     businessId: string;
     traceBaggage: string;
     apiTrackHost: string;
+  };
+  database: {
+    connectionMode: DatabaseConnectionMode;
+    /** DBID 密码服务 — 数据库名称（Schema 名） */
+    schema: string;
+    /** DBID 密码服务 — 开发环境 DBID */
+    devDbid: string;
+    /** DBID 密码服务 — 生产环境 DBID */
+    prodDbid: string;
+    /** 连接字符串方式 — 数据库地址 */
+    host: string;
+    /** 连接字符串方式 — 端口号 */
+    port: string;
+    /** 连接字符串方式 — 用户名 */
+    username: string;
+    /** 连接字符串方式 — 密码（仅限密文类型） */
+    password: string;
   };
 }
 
@@ -142,6 +160,7 @@ export interface ApplicationDraft {
   auth: ApplicationSchemaConfig['auth'];
   track: ApplicationSchemaConfig['track'];
   apiTrack: ApplicationSchemaConfig['apiTrack'];
+  database: ApplicationSchemaConfig['database'];
 }
 
 export type RequirementDevelopmentPlan = DevelopmentContract;

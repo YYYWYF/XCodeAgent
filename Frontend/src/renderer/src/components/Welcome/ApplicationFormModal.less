@@ -17,7 +17,14 @@
     grid-column: 1 / -1;
   }
 
-  // 开关类分区（认证 / 页面埋点 / 接口埋点）：关闭时整体灰显
+  // 开关类分区（认证 / 页面埋点 / 接口埋点）
+  &--toggle {
+    .ant-form-item {
+      margin-bottom: 8px;
+    }
+  }
+
+  // 关闭时整体灰显
   &--disabled {
     opacity: 0.55;
   }

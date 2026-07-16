@@ -25,7 +25,7 @@ export const initialApplicationDraft: ApplicationDraft = {
   senario: '',
   projectPath: '',
   terminal: 'PC',
-  layout: { type: '', useHeader: true, useFooter: false },
+  layout: { type: 'side', useHeader: true, useFooter: false },
   theme: { primaryColor: '' },
   datasource: {
     type: '',
@@ -34,9 +34,19 @@ export const initialApplicationDraft: ApplicationDraft = {
     }
   },
   envText: '',
-  auth: { enable: true, authnSource: '', yht: { clientId: '' } },
-  track: { enable: true, uploadId: '', apiHost: '', method: 'post' },
-  apiTrack: { enable: true, businessId: '', traceBaggage: '', apiTrackHost: '' }
+  auth: { enable: false, authnSource: '', yht: { clientId: '' } },
+  track: { enable: false, uploadId: '', apiHost: '', method: 'post' },
+  apiTrack: { enable: false, businessId: '', traceBaggage: '', apiTrackHost: '' },
+  database: {
+    connectionMode: 'dbid',
+    schema: '',
+    devDbid: '',
+    prodDbid: '',
+    host: '',
+    port: '',
+    username: '',
+    password: ''
+  }
 }
 
 export const terminalLabels: Record<ApplicationTerminal, string> = {

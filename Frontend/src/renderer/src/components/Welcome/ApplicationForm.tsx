@@ -245,7 +245,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       </section>
 
       <section
-        className={cx('application-form-section', 'application-form-section--toggle', !authEnabled && 'application-form-section--disabled')}
+        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !authEnabled && 'application-form-section--disabled')}
       >
         <div className={cx('application-form-section-head')}>
           <SectionTitle icon={<LockOutlined />}>认证</SectionTitle>
@@ -275,7 +275,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       </section>
 
       <section
-        className={cx('application-form-section', 'application-form-section--toggle', !trackEnabled && 'application-form-section--disabled')}
+        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !trackEnabled && 'application-form-section--disabled')}
       >
         <div className={cx('application-form-section-head')}>
           <SectionTitle icon={<RadarChartOutlined />}>页面埋点</SectionTitle>
@@ -313,7 +313,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       </section>
 
       <section
-        className={cx('application-form-section', 'application-form-section--toggle', !apiTrackEnabled && 'application-form-section--disabled')}
+        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !apiTrackEnabled && 'application-form-section--disabled')}
       >
         <div className={cx('application-form-section-head')}>
           <SectionTitle icon={<RadarChartOutlined />}>接口埋点</SectionTitle>

@@ -1,5 +1,4 @@
 import { app } from 'electron'
-import { is } from '@electron-toolkit/utils'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
 import http from 'node:http'
@@ -104,7 +103,7 @@ export async function stopBackendService(): Promise<void> {
 }
 
 function shouldStartBundledBackend(): boolean {
-  return !is.dev && app.isPackaged && Boolean(BACKEND_EXECUTABLE_NAMES[process.platform])
+  return app.isPackaged && Boolean(BACKEND_EXECUTABLE_NAMES[process.platform])
 }
 
 async function resolveBundledBackendPaths(): Promise<BundledBackendPaths> {

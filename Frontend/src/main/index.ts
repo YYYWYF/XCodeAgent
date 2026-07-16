@@ -3,7 +3,6 @@ import { join } from 'path'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
@@ -629,7 +628,7 @@ type RendererPage = 'index' | 'login'
 
 function loadRendererPage(targetWindow: BrowserWindow, pageName: RendererPage): void {
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
-  if (is.dev && rendererUrl) {
+  if (rendererUrl) {
     const pageUrl = pageName === 'index' ? rendererUrl : `${rendererUrl.replace(/\/$/, '')}/${pageName}.html`
     void targetWindow.loadURL(pageUrl)
     return
@@ -803,15 +802,19 @@ async function clearAuthStateBeforeStartup(): Promise<boolean> {
 /** 初始化获得单实例锁的主进程，成功后才允许窗口恢复。 */
 async function initializePrimaryApplication(): Promise<boolean> {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(process.execPath)
+  }
 
   if (!(await clearAuthStateBeforeStartup())) return false
 
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
+  // Allow F12 to toggle DevTools in development
   app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+    window.webContents.on('before-input-event', (_event, input) => {
+      if (input.key === 'F12') {
+        window.webContents.toggleDevTools()
+      }
+    })
   })
 
   // IPC test
