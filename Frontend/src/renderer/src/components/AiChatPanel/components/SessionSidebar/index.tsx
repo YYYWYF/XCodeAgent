@@ -182,7 +182,8 @@ export default function SessionSidebar({
   onShowSkills,
   outlineLocked,
   settingsActive,
-  skillsActive
+  skillsActive,
+  workspaceRoot
 }: SessionSidebarProps): ReactElement {
   const [outlineQuery, setOutlineQuery] = useState('')
   const [collapsed, setCollapsed] = useState(false)
@@ -209,7 +210,6 @@ export default function SessionSidebar({
     if (relatedKeys.size === 0) return matchingKeys
     return new Set([...matchingKeys].filter((key) => relatedKeys.has(key)))
   }, [application.menus.items, onlyRelated, outlineQuery, selectedKey])
-  const appDescription = application.senario || '智能应用设计与开发工作区'
   const compactLayout = useCompactWorkbench()
   const effectiveCollapsed = compactLayout ? !compactExpanded : collapsed
 
@@ -320,7 +320,10 @@ export default function SessionSidebar({
         <span className={cx('session-workspace-icon')}><FileTextOutlined /></span>
         <span className={cx('session-workspace-copy')}>
           <Text className={cx('session-workspace-name')} strong>{application.name}</Text>
-          <Text className={cx('session-workspace-description')}>{appDescription}</Text>
+          <Text className={cx('session-workspace-description')} title={workspaceRoot}>
+            <FolderOutlined />
+            <span className={cx('session-workspace-path')}>{workspaceRoot}</span>
+          </Text>
         </span>
         <CaretDownOutlined className={cx('session-workspace-arrow')} rotate={-90} />
       </button>
