@@ -744,6 +744,281 @@
   gap: 10px;
 }
 
+.@{class-prefix}-planning-question-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.@{class-prefix}-planning-question-panel-header {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: start;
+  gap: 13px;
+  padding: 16px 18px;
+  border: 1px solid rgba(139, 92, 246, 0.22);
+  border-radius: 12px;
+  background: linear-gradient(110deg, rgba(139, 92, 246, 0.11), rgba(139, 92, 246, 0.025));
+
+  h4.ant-typography,
+  p.ant-typography {
+    margin: 0;
+  }
+
+  p.ant-typography {
+    margin-top: 4px;
+    line-height: 1.65;
+  }
+}
+
+.@{class-prefix}-planning-question-panel-icon,
+.@{class-prefix}-planning-artifact-icon {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(145deg, #7c3aed, #a855f7);
+  box-shadow: 0 7px 18px rgba(124, 58, 237, 0.24);
+}
+
+.@{class-prefix}-planning-question-panel-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  font-size: 18px;
+}
+
+.@{class-prefix}-planning-question-form {
+  display: grid;
+  gap: 14px;
+}
+
+.@{class-prefix}-planning-question-card {
+  padding: 17px 18px 18px;
+  border: 1px solid var(--modal-border);
+  border-radius: 12px;
+  background: var(--modal-surface);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.04);
+  transition: border-color .2s ease, box-shadow .2s ease;
+
+  &:focus-within {
+    border-color: rgba(139, 92, 246, 0.5);
+    box-shadow: 0 8px 24px rgba(124, 58, 237, 0.09);
+  }
+
+  .ant-form-item {
+    margin: 14px 0 0;
+  }
+
+  textarea.ant-input {
+    padding: 11px 13px;
+    border-color: var(--modal-border);
+    border-radius: 9px;
+    color: var(--modal-text);
+    background: var(--modal-bg);
+    line-height: 1.7;
+
+    &:hover,
+    &:focus {
+      border-color: var(--modal-accent);
+      box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.1);
+    }
+  }
+}
+
+.@{class-prefix}-planning-question-card-heading {
+  h5.ant-typography,
+  p.ant-typography {
+    margin: 0;
+  }
+
+  p.ant-typography {
+    margin-top: 6px;
+    line-height: 1.6;
+  }
+}
+
+.@{class-prefix}-planning-question-title {
+  display: block;
+  min-width: 0;
+  line-height: 1.65;
+
+  .ant-tag {
+    margin: 0 8px 0 0;
+    border-color: rgba(139, 92, 246, 0.22);
+    border-radius: 6px;
+    color: var(--modal-accent);
+    background: rgba(139, 92, 246, 0.08);
+    vertical-align: 2px;
+  }
+
+  h5.ant-typography {
+    display: inline;
+    margin: 0;
+    overflow-wrap: anywhere;
+    line-height: inherit;
+  }
+}
+
+.@{class-prefix}-planning-question-required {
+  margin-right: 8px;
+  color: #ff4d4f;
+  font-family: SimSun, sans-serif;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.@{class-prefix}-planning-question-control {
+  display: grid;
+  gap: 12px;
+}
+
+.@{class-prefix}-planning-question-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.@{class-prefix}-planning-question-option.ant-radio-wrapper,
+.@{class-prefix}-planning-question-option.ant-checkbox-wrapper {
+  display: flex;
+  align-items: flex-start;
+  min-height: 58px;
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--modal-border);
+  border-radius: 9px;
+  color: var(--modal-text);
+  background: var(--modal-bg);
+  transition: border-color .2s ease, background .2s ease, box-shadow .2s ease;
+
+  &:hover {
+    border-color: rgba(139, 92, 246, 0.55);
+    background: rgba(139, 92, 246, 0.06);
+
+    .ant-radio-inner,
+    .ant-checkbox-inner {
+      border-color: var(--modal-accent);
+    }
+  }
+
+  &.ant-radio-wrapper-checked,
+  &.ant-checkbox-wrapper-checked {
+    border-color: var(--modal-accent);
+    background: rgba(139, 92, 246, 0.09);
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.08);
+  }
+
+  .ant-radio,
+  .ant-checkbox {
+    margin-top: 2px;
+  }
+
+  .ant-radio-checked .ant-radio-inner,
+  .ant-checkbox-checked .ant-checkbox-inner {
+    border-color: var(--modal-accent);
+  }
+
+  .ant-radio-inner::after,
+  .ant-checkbox-checked .ant-checkbox-inner {
+    background-color: var(--modal-accent);
+  }
+
+  .ant-radio:hover .ant-radio-inner,
+  .ant-radio-input:focus + .ant-radio-inner,
+  .ant-checkbox:hover .ant-checkbox-inner,
+  .ant-checkbox-input:focus + .ant-checkbox-inner {
+    border-color: var(--modal-accent);
+  }
+
+  .ant-radio-input:focus + .ant-radio-inner,
+  .ant-checkbox-input:focus + .ant-checkbox-inner {
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.16);
+  }
+
+  .ant-checkbox-checked::after {
+    border-color: var(--modal-accent);
+  }
+}
+
+.@{class-prefix}-planning-question-option-copy {
+  display: grid;
+  gap: 2px;
+  line-height: 1.45;
+
+  .ant-typography {
+    color: var(--modal-text);
+  }
+
+  .ant-typography-secondary {
+    color: var(--modal-text-secondary);
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-planning-question-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+.@{class-prefix}-planning-artifact-card {
+  overflow: hidden;
+  border: 1px solid var(--modal-border);
+  border-radius: 12px;
+  background: var(--modal-surface);
+
+  > header {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 11px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--modal-border);
+    background: linear-gradient(100deg, rgba(139, 92, 246, 0.09), transparent);
+
+    > div {
+      display: grid;
+      gap: 2px;
+    }
+
+    .ant-tag {
+      margin: 0;
+      color: var(--modal-accent);
+      background: rgba(139, 92, 246, 0.08);
+      border-color: rgba(139, 92, 246, 0.2);
+    }
+  }
+}
+
+.@{class-prefix}-planning-artifact-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.@{class-prefix}-planning-artifact-content {
+  max-height: 430px;
+  padding: 18px 20px;
+  overflow: auto;
+  color: var(--modal-text);
+  background: var(--modal-bg);
+}
+
+.@{class-prefix}-planning-question-panel.@{class-prefix}-is-detail-review {
+  .@{class-prefix}-workflow-detail-review {
+    gap: 14px;
+    padding: 16px 18px;
+    border: 1px solid var(--modal-border);
+    border-radius: 12px;
+    background: var(--modal-surface);
+  }
+
+  .ant-collapse {
+    border-radius: 9px;
+    background: var(--modal-bg);
+  }
+}
+
 .@{class-prefix}-page-planning-settings {
   margin-top: 20px;
   border-top: 1px solid var(--modal-border);

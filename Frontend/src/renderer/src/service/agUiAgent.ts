@@ -13,7 +13,7 @@ import type {
   WorkspaceCodeChangeSet
 } from '../typings'
 
-type SendWorkflowMessageOptions = {
+export type SendWorkflowMessageOptions = {
   workspaceRoot?: string
   editorMode: EditorMode
   application?: ApplicationConfig
@@ -22,6 +22,7 @@ type SendWorkflowMessageOptions = {
   selectedSkillNames?: string[]
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
+  workflowScope?: string
   onContent?: (content: string) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onToolCalls?: (toolCalls: ToolCallRecord[]) => void
@@ -41,7 +42,8 @@ export function buildWorkflowForwardedProps(
     selectedSkillNames: options.selectedSkillNames,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
-    resumeState: options.resumeState
+    resumeState: options.resumeState,
+    workflowScope: options.workflowScope
   }
 }
 
@@ -87,10 +89,11 @@ export class AgUiChatSession {
   private readonly agent: HttpAgent
   private activeRunId?: string
 
-  constructor(threadId = randomUUID()) {
+  /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
+  constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
     this.threadId = threadId
     this.agent = createAgUiHttpAgent({
-      url: getWorkflowUrl(),
+      url,
       threadId
     })
   }

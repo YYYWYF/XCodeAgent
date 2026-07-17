@@ -1,23 +1,15 @@
 import { PlusOutlined } from '@ant-design/icons'
 import { Form, message, Modal } from 'antd'
 import { useState } from 'react'
-import {
-  createPagePlanningThreadId,
-  requestPagePlanningQuestions
-} from '../../service/applicationPagePlanning'
-import { isAuthenticationFailure } from '../../service/authentication'
+import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
 import type {
   ApplicationConfig,
   ApplicationDraft,
-  ApplicationPagePlan,
-  ConfirmedPagePlan,
-  PagePlanningProgress,
-  PagePlanningQuestion
+  ApplicationPlanningConfirmation
 } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'
 import ApplicationPagePlanningModal from './ApplicationPagePlanningModal'
-import { appendPagePlanningProgress } from './ApplicationPlanningProgress'
 import WelcomeActionCard from './WelcomeActionCard'
 import WelcomeModalTitle from './WelcomeModalTitle'
 import './ApplicationFormModal.less'
@@ -38,11 +30,6 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
   const [creating, setCreating] = useState(false)
   const [selectingParent, setSelectingParent] = useState(false)
   const [planningApplication, setPlanningApplication] = useState<ApplicationConfig>()
-  const [planningQuestions, setPlanningQuestions] = useState<PagePlanningQuestion[]>([])
-  const [planningQuestionsError, setPlanningQuestionsError] = useState('')
-  const [planningQuestionsLoading, setPlanningQuestionsLoading] = useState(false)
-  const [planningQuestionsProgressEvents, setPlanningQuestionsProgressEvents] = useState<PagePlanningProgress[]>([])
-  const [planningQuestionsStream, setPlanningQuestionsStream] = useState('')
   const [planningThreadId, setPlanningThreadId] = useState('')
   const [savedFormValues, setSavedFormValues] = useState<ApplicationDraft>()
 
@@ -107,48 +94,12 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
       await saveApplication(application)
       setSavedFormValues(values)
       setModalOpen(false)
-      await loadPagePlanningQuestions(application, createPagePlanningThreadId())
+      setPlanningThreadId(createPagePlanningThreadId())
+      setPlanningApplication(application)
     } catch (error) {
       message.error(formatError(error, '创建应用失败'))
     } finally {
       setCreating(false)
-    }
-  }
-
-  // 创建页面规划线程并实时加载业务澄清问题。
-  const loadPagePlanningQuestions = async (
-    application: ApplicationConfig,
-    threadId: string
-  ): Promise<void> => {
-    setPlanningApplication(application)
-    setPlanningThreadId(threadId)
-    setPlanningQuestions([])
-    setPlanningQuestionsError('')
-    setPlanningQuestionsLoading(true)
-    setPlanningQuestionsProgressEvents([])
-    setPlanningQuestionsStream('')
-    try {
-      const questions = await requestPagePlanningQuestions(
-        {
-          name: application.appName,
-          scenario: application.senario,
-          terminal: application.terminal
-        },
-        threadId,
-        (progress) => setPlanningQuestionsProgressEvents(
-          (history) => appendPagePlanningProgress(history, progress)
-        ),
-        setPlanningQuestionsStream
-      )
-      setPlanningQuestions(questions)
-    } catch (error) {
-      setPlanningQuestionsError(
-        isAuthenticationFailure(error)
-          ? '请重新登录后重试页面规划。'
-          : formatError(error, '生成细节问题失败')
-      )
-    } finally {
-      setPlanningQuestionsLoading(false)
     }
   }
 
@@ -189,25 +140,19 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     await saveApplication(updatedApp)
   }
 
-  // 同步已确认的 menus 与 apis 到本地应用索引后打开应用。
-  const handlePagePlanConfirmed = async (
-    plan: ApplicationPagePlan,
-    confirmation: ConfirmedPagePlan
-  ): Promise<void> => {
+  // 只同步两份已确认规划 JSON 到本地应用索引后打开工作台。
+  const handlePagePlanConfirmed = async (confirmation: ApplicationPlanningConfirmation): Promise<void> => {
     if (!planningApplication) return
-    const pageNames = plan.pages.map((page) => page.name)
     const schema = {
       ...planningApplication.schema,
-      menus: confirmation.menus,
-      apis: confirmation.apis
+      schemaVersion: 2 as const,
+      planning: confirmation.planning
     }
     const application = {
       ...planningApplication,
-      menus: confirmation.menus,
-      apis: confirmation.apis,
-      schema,
-      pages: pageNames,
-      defaultPage: pageNames[0] || planningApplication.defaultPage
+      schemaVersion: 2 as const,
+      planning: confirmation.planning,
+      schema
     }
     await saveAndOpenApplication(application, onOpenApplication)
     setPlanningApplication(undefined)
@@ -266,13 +211,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
           key={planningApplication.id}
           onCancel={handleCancelPlanning}
           onConfirmed={handlePagePlanConfirmed}
-          onRetryQuestions={() => loadPagePlanningQuestions(planningApplication, planningThreadId)}
           onSettingsSave={handleSettingsSave}
-          questions={planningQuestions}
-          questionsError={planningQuestionsError}
-          questionsLoading={planningQuestionsLoading}
-          questionsProgressEvents={planningQuestionsProgressEvents}
-          questionsStream={planningQuestionsStream}
           theme={theme}
           threadId={planningThreadId}
         />

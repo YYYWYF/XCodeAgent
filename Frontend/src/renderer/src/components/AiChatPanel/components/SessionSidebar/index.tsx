@@ -7,6 +7,7 @@ import {
   FolderOpenOutlined,
   FolderOutlined,
   LeftOutlined,
+  LockOutlined,
   RightOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -56,6 +57,7 @@ type SessionSidebarProps = {
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
   onOpenSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>, sessionId: string) => void
+  outlineLocked: boolean
   onPageSelect: (label: string) => void
   onReturnWelcome: () => void
   onShowFiles: () => void
@@ -178,6 +180,7 @@ export default function SessionSidebar({
   onShowFiles,
   onShowSettings,
   onShowSkills,
+  outlineLocked,
   settingsActive,
   skillsActive
 }: SessionSidebarProps): ReactElement {
@@ -323,6 +326,11 @@ export default function SessionSidebar({
       </button>
 
       <Text className={cx('session-section-title')} strong>应用大纲</Text>
+      <fieldset
+        aria-label={outlineLocked ? '应用大纲暂不可操作' : '应用大纲'}
+        className={cx('session-outline-lock-shell')}
+        disabled={outlineLocked}
+      >
       <div className={cx('session-outline-content')}>
           <Input
             allowClear
@@ -410,6 +418,13 @@ export default function SessionSidebar({
 
           </div>
       </div>
+      {outlineLocked ? (
+        <div className={cx('session-outline-lock')}>
+          <LockOutlined />
+          <Text>生成应用开发计划后可操作大纲</Text>
+        </div>
+      ) : null}
+      </fieldset>
 
       <nav className={cx('session-footer-nav')} aria-label="快捷入口">
         <button onClick={onCreateSession} title="推荐任务" type="button"><SidebarAssetIcon source={recommendedTasksIcon} /><span>推荐任务</span></button>

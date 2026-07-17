@@ -1,3 +1,4 @@
+import { CheckCircleOutlined } from "@ant-design/icons";
 import { Button, Collapse, Input, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
@@ -32,6 +33,7 @@ export default function DetailReview({
   >({});
   const [overallNote, setOverallNote] = useState("");
 
+  // 记录单个审核对象的字段改动，并保留同对象此前已编辑的内容。
   const updateField = (
     target: WorkflowDetailReviewTarget,
     field: string,
@@ -46,6 +48,7 @@ export default function DetailReview({
     }));
   };
 
+  // 汇总实际发生的修改并提交本轮细节确认。
   const confirm = (): void => {
     onConfirm({
       review_status: "confirmed",
@@ -102,16 +105,27 @@ export default function DetailReview({
           </Panel>
         ))}
       </Collapse>
-      <TextArea
-        autoSize={{ minRows: 2, maxRows: 4 }}
-        disabled={disabled}
-        onChange={(event) => setOverallNote(event.target.value)}
-        placeholder="整体补充说明（可选）"
-        value={overallNote}
-      />
-      <Button disabled={disabled} onClick={confirm} type="primary">
-        确认全部设计并继续
-      </Button>
+      <div className={cx("workflow-detail-review-actions")}>
+        <label className={cx("workflow-detail-review-note")}>
+          <Text strong>整体补充说明</Text>
+          <TextArea
+            autoSize={{ minRows: 2, maxRows: 4 }}
+            disabled={disabled}
+            onChange={(event) => setOverallNote(event.target.value)}
+            placeholder="可选：补充跨页面规则、统一交互或其他全局调整"
+            value={overallNote}
+          />
+        </label>
+        <Button
+          disabled={disabled}
+          icon={<CheckCircleOutlined />}
+          onClick={confirm}
+          size="large"
+          type="primary"
+        >
+          确认全部设计并继续
+        </Button>
+      </div>
     </div>
   );
 }

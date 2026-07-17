@@ -28,6 +28,11 @@ function getApplicationsFile(): string {
   return path.join(app.getPath('userData'), 'applications.json');
 }
 
+/** 返回工作区元数据目录中的应用配置文件路径。 */
+function getWorkspaceApplicationFile(workspaceRoot: string): string {
+  return path.join(workspaceRoot, '.xcodeagent', 'application.json');
+}
+
 type EditorMode = 'frontend' | 'backend'
 
 type SessionWorkspaceSummary = {
@@ -478,7 +483,7 @@ async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
 function setupWorkspaceIpc(): void {
   ipcMain.handle('workspace:read-application', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
-    const applicationFile = path.join(workspaceRoot, 'application.json');
+    const applicationFile = getWorkspaceApplicationFile(workspaceRoot);
     const rawValue = await fs.readFile(applicationFile, 'utf8');
     const applicationConfig = JSON.parse(rawValue || '{}');
 
@@ -525,8 +530,10 @@ function setupWorkspaceIpc(): void {
       const errnoException = error as NodeJS.ErrnoException;
       if (errnoException?.code !== 'EEXIST') throw error;
     }
+    const applicationFile = getWorkspaceApplicationFile(projectPath);
+    await fs.mkdir(path.dirname(applicationFile), { recursive: true });
     await fs.writeFile(
-      path.join(projectPath, 'application.json'),
+      applicationFile,
       `${JSON.stringify(payload.applicationConfig, null, 2)}\n`,
       'utf8',
     );

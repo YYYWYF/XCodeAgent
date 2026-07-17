@@ -9,6 +9,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.graph import clear_workflow_graph_cache, workflow_graph_for_request
+from app.graph.application_planning_workflow import (
+    application_planning_graph_for_request,
+    clear_application_planning_graph_cache,
+)
 from app.protocols.workflow import (
     build_workflow_ag_ui_stream,
     workflow_capabilities,
@@ -16,6 +20,10 @@ from app.protocols.workflow import (
 from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
+)
+from app.protocols.application_development_planning import (
+    application_development_planning_capabilities,
+    build_application_development_planning_ag_ui_stream,
 )
 from app.protocols.user_skills import (
     build_user_skills_ag_ui_stream,
@@ -43,6 +51,7 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         clear_workflow_graph_cache()
+        clear_application_planning_graph_cache()
         await close_workflow_checkpointer()
 
 
@@ -89,6 +98,7 @@ async def health() -> dict[str, object]:
             },
             "workflow_run": workflow_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
+            "application_development_planning": application_development_planning_capabilities(),
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
             "workspace": workspace_tools.capabilities(),
@@ -103,6 +113,24 @@ async def run_application_page_planning(
 ) -> StreamingResponse:
     return StreamingResponse(
         build_application_page_planning_ag_ui_stream(
+            graph=application_planning_graph_for_request,
+            payload=input_data,
+            accept=accept,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/application-development-planning/run")
+async def run_application_development_planning(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """运行独立于主工作流的工作台应用开发计划 AG-UI 动作。"""
+
+    return StreamingResponse(
+        build_application_development_planning_ag_ui_stream(
             payload=input_data,
             accept=accept,
         ),

@@ -49,6 +49,7 @@ def requirements(state: ProjectState) -> dict:
     analysis = analyze_requirements_with_chat_model(
         state["request"],
         existing_spec=existing_spec,
+        allow_clarification=state.get("workflow_scope") != "application_planning",
     )
     spec = analysis["requirement_spec"]
     clarification = analysis["clarification"]

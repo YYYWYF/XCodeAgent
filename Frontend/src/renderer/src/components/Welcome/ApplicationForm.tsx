@@ -149,7 +149,12 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             })}
           </Radio.Group>
         </Form.Item>
-        <Form.Item className={cx('application-form-scenario')} label="应用场景" name="senario">
+        <Form.Item
+          className={cx('application-form-scenario')}
+          label="应用场景"
+          name="senario"
+          rules={[{ required: true, whitespace: true, message: '请输入应用场景' }]}
+        >
           <TextArea rows={3} />
         </Form.Item>
       </section>

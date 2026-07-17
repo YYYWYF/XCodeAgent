@@ -83,9 +83,13 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     if node_name == "project_planning":
         if update.get("status") == "requires_user_input":
             return []
+        if update.get("workflow_scope") == "application_planning":
+            return []
         return ["detail_confirmation"]
     if node_name == "detail_confirmation":
         if update.get("status") == "requires_user_input":
+            return []
+        if update.get("workflow_scope") == "application_planning":
             return []
         return ["prepare_build_tasks"]
     if node_name == "prepare_build_tasks":

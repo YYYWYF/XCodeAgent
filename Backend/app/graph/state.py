@@ -8,6 +8,7 @@ class ProjectState(TypedDict, total=False):
     workspace: str
     workspace_path: str
     editor_mode: str
+    workflow_scope: str
     selected_skill_names: list[str]
     phase: str
     resume_from: str
@@ -29,6 +30,7 @@ class ProjectState(TypedDict, total=False):
     data_source_spec_draft: dict[str, Any]
     detail_plans: list[dict[str, Any]]
     detail_review_submission: dict[str, Any]
+    application_planning_confirmation: dict[str, Any]
     workspace_snapshot_summary: dict[str, Any]
     workspace_snapshot_path: str
     workspace_snapshot_hash: str

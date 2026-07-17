@@ -20,6 +20,7 @@ import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
 import SessionHistoryDropdown from './components/SessionHistoryDropdown'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
+import ApplicationDevelopmentPlanningGate from '../ApplicationDevelopmentPlanningGate'
 import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
@@ -31,8 +32,11 @@ import './AiChatPanel.less'
 
 type Props = {
   application: ApplicationConfig
+  developmentPlanningReady: boolean
+  developmentPlanningRequired: boolean
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
+  onDevelopmentPlanConfirmed: () => Promise<void>
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
@@ -56,8 +60,11 @@ function findPageMenuItem(
 /** 组织应用侧栏、对话区、页面信息与预览面板的主工作台。 */
 export default function AiChatPanel({
   application,
+  developmentPlanningReady,
+  developmentPlanningRequired,
   editorMode,
   onApplicationUpdate,
+  onDevelopmentPlanConfirmed,
   onReturnWelcome,
   onThemeChange,
   theme
@@ -216,6 +223,7 @@ export default function AiChatPanel({
           application={application}
           deletingSessionId={deletingSessionId}
           loadingSessions={loadingSessions}
+          outlineLocked={developmentPlanningRequired}
           onCreateSession={handleCreateChatSession}
           onDeleteSession={handleDeleteSession}
           onOpenSession={handleOpenChatSession}
@@ -243,6 +251,15 @@ export default function AiChatPanel({
           <AgentFilesPage />
         ) : activeView === 'settings' ? (
           <SettingsPage application={application} onSaved={onApplicationUpdate} />
+        ) : developmentPlanningRequired && application.workspaceRoot ? (
+          <div className={cx('ai-chat-main')}>
+            <ApplicationDevelopmentPlanningGate
+              applicationName={application.appName || application.name}
+              onConfirmed={onDevelopmentPlanConfirmed}
+              ready={developmentPlanningReady}
+              workspaceRoot={application.workspaceRoot}
+            />
+          </div>
         ) : (
           <div className={cx('ai-chat-main')}>
             <ChatHeader

@@ -16,6 +16,8 @@ from app.utils.model_output import extract_json_object
 def _requirements_prompt(
     request: str,
     existing_spec: dict[str, Any] | None = None,
+    *,
+    allow_clarification: bool = True,
 ) -> str:
     revision_context = (
         "Revise the existing RequirementSpec using the latest user feedback. "
@@ -43,6 +45,14 @@ def _requirements_prompt(
         and existing_spec.get("confirmation_status") == "pending_user_input"
         else ""
     )
+    creation_planning_policy = (
+        "This request is the bounded new-application planning gate. Do not call ask_user. "
+        "Use explicit, conservative assumptions for every unspecified role, page, data source, "
+        "business flow, API-supporting detail, and acceptance criterion, then return the complete "
+        "RequirementSpec JSON. Later workbench stages may refine derived application JSON.\n"
+        if not allow_clarification
+        else ""
+    )
     return (
         "You are the requirements model for an app-generation workflow.\n"
         "This is a requirements-only boundary. Do not call subagents, do not delegate tasks, "
@@ -54,6 +64,7 @@ def _requirements_prompt(
         "页面清单, 数据源清单, 业务流程, 验收标准.\n"
         f"{clarification_policy}"
         f"{followup_policy}"
+        f"{creation_planning_policy}"
         "When asking, questions can be choice, text, or yesno. For every choice question, first decide "
         "whether the options are mutually exclusive. Set multiSelect=true for independently combinable "
         "capabilities or requirements (for example search, filtering, import/export, and pagination); "
@@ -73,13 +84,20 @@ def _invoke_live_chat_model(
     request: str,
     *,
     existing_spec: dict[str, Any] | None = None,
+    allow_clarification: bool = True,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
+    """按创建范围决定是否向需求模型暴露澄清工具。"""
+
     active_settings = settings or Settings.from_env()
-    result = (
-        create_chat_model(active_settings)
-        .bind_tools([ask_user])
-        .invoke(_requirements_prompt(request, existing_spec))
+    model = create_chat_model(active_settings)
+    runnable = model.bind_tools([ask_user]) if allow_clarification else model
+    result = runnable.invoke(
+        _requirements_prompt(
+            request,
+            existing_spec,
+            allow_clarification=allow_clarification,
+        )
     )
     return {"messages": [result]}
 
@@ -87,13 +105,16 @@ def _invoke_live_chat_model(
 def analyze_requirements_with_chat_model(
     request: str,
     existing_spec: dict[str, Any] | None = None,
+    *,
+    allow_clarification: bool = True,
 ) -> dict[str, Any]:
-    """Use a direct chat-model call to create RequirementSpec and clarifications."""
+    """直接调用需求模型生成 RequirementSpec，并按范围决定是否允许澄清。"""
 
     settings = Settings.from_env()
     agent_result = _invoke_live_chat_model(
         request,
         existing_spec=existing_spec,
+        allow_clarification=allow_clarification,
         settings=settings,
     )
     messages = agent_result.get("messages", [])

@@ -1,138 +1,193 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.services.application_page_planning import (
-    ApplicationApiDefinition,
-    ApplicationPageContext,
-    ApplicationPageDefinition,
-    ApplicationPageInteraction,
-    ApplicationPagePlan,
-    ConfirmPagePlanRequest,
-    PagePlanningQuestionsRequest,
-    confirm_application_page_plan,
-    generate_page_planning_questions,
+from langchain_core.messages import AIMessage
+
+from app.agents.main import requirements_analyzer
+from app.graph.application_planning_workflow import (
+    _project_planning,
+    _route_requirements,
+    _route_start,
 )
+from app.protocols.application_page_planning import application_page_planning_capabilities
+from app.services.application_planning_persistence import persist_confirmed_application_plan
+
+
+def _confirmed_state(workspace: Path) -> dict[str, object]:
+    """构造包含已确认 RequirementSpec、ProjectPlan 和 API 契约的最小状态。"""
+
+    requirement_path = workspace / ".xcodeagent" / "specs" / "requirement-spec.md"
+    project_plan_path = workspace / ".xcodeagent" / "plans" / "project-plan.md"
+    requirement_path.parent.mkdir(parents=True, exist_ok=True)
+    project_plan_path.parent.mkdir(parents=True, exist_ok=True)
+    requirement_path.write_text("# RequirementSpec\n\n任务中心需求。\n", encoding="utf-8")
+    project_plan_path.write_text("# ProjectPlan\n\n任务中心计划。\n", encoding="utf-8")
+    return {
+        "workspace": str(workspace),
+        "requirement_spec_path": str(requirement_path),
+        "project_plan_path": str(project_plan_path),
+        "requirement_spec": {
+            "confirmation_status": "confirmed",
+            "summary": "任务中心需求。",
+            "app_info": {"name": "任务中心"},
+        },
+        "project_plan": {
+            "confirmation_status": "confirmed",
+            "frontend_pages": [{
+                "id": "tasks",
+                "name": "任务列表",
+                "path": "/tasks",
+                "description": "查看并完成任务。",
+                "permissions": ["user"],
+            }],
+            "api_contracts": [{
+                "id": "tasks",
+                "base_path": "/api/tasks",
+                "authentication": {"required": True, "roles": ["user"]},
+                "schemas": {"Task": {"type": "object"}},
+                "endpoints": [{
+                    "id": "tasks.update",
+                    "method": "PATCH",
+                    "path": "/api/tasks/{id}",
+                    "summary": "完成任务",
+                    "request_schema_ref": "Task",
+                    "response_schema_ref": "Task",
+                    "error_codes": ["NOT_FOUND"],
+                }],
+            }],
+            "data_sources": [{
+                "id": "tasks_source",
+                "name": "任务数据",
+                "type": "db",
+                "entities": ["Task"],
+                "schema_refs": ["Task"],
+                "seed_strategy": "demo_records",
+            }],
+        },
+    }
 
 
 class ApplicationPagePlanningTests(unittest.TestCase):
-    def test_question_generation_forwards_chunks_and_parses_complete_json(self) -> None:
-        """澄清问题应逐块上报，但只用完整模型文本构造最终结果。"""
-
-        chunks = [
-            '{"questions":[',
-            '{"id":"role","question":"谁使用？"},',
-            '{"id":"flow","question":"核心流程是什么？"},',
-            '{"id":"scope","question":"数据范围是什么？"}',
-            "]}",
-        ]
+    def test_creation_requirements_do_not_expose_clarification_tool(self) -> None:
+        """新建应用两阶段门禁应直接生成 JSON，不为派生结构追加澄清。"""
 
         class FakeModel:
-            async def astream(self, _messages):
-                """按测试定义的边界模拟模型流式输出。"""
+            """记录模型工具绑定与提示词，避免测试发起真实模型调用。"""
 
-                for chunk in chunks:
-                    yield SimpleNamespace(content=chunk)
+            def __init__(self) -> None:
+                self.bound = False
+                self.prompt = ""
 
-        received: list[str] = []
+            def bind_tools(self, _tools: list[object]) -> "FakeModel":
+                """记录是否暴露了工具。"""
 
-        async def report_text(delta: str) -> None:
-            """记录协议层收到的每个模型文本增量。"""
+                self.bound = True
+                return self
 
-            received.append(delta)
+            def invoke(self, prompt: str) -> AIMessage:
+                """返回最小结构化需求结果。"""
 
-        async def run_generation():
-            """运行一次使用假模型的澄清问题生成。"""
+                self.prompt = prompt
+                return AIMessage(content='{"app_info":{"name":"任务中心"}}')
 
-            request = PagePlanningQuestionsRequest(
-                application=ApplicationPageContext(
-                    name="客户中心", scenario="维护客户资料", terminal="PC"
-                )
-            )
-            return await generate_page_planning_questions(request, report_text)
-
-        with patch(
-            "app.services.application_page_planning.create_chat_model",
-            return_value=FakeModel(),
+        model = FakeModel()
+        settings = type("Settings", (), {"model_name": "test-model"})()
+        with (
+            patch.object(requirements_analyzer.Settings, "from_env", return_value=settings),
+            patch.object(requirements_analyzer, "create_chat_model", return_value=model),
         ):
-            response = asyncio.run(run_generation())
+            result = requirements_analyzer.analyze_requirements_with_chat_model(
+                "创建任务中心",
+                allow_clarification=False,
+            )
 
-        self.assertEqual(received, chunks)
-        self.assertEqual(len(response.questions), 3)
-        self.assertEqual(response.questions[0].id, "role")
+        self.assertFalse(model.bound)
+        self.assertIn("Do not call ask_user", model.prompt)
+        self.assertEqual(result["clarification"]["status"], "clear")
 
-    def test_confirm_persists_page_details_and_api_design(self) -> None:
-        """确认后应原子保存 menus 页面设计与新增 apis，同时保留既有配置。"""
+    def test_routes_only_cover_two_planning_nodes(self) -> None:
+        """独立创建 Graph 应从 requirements 启动并在确认门禁等待。"""
+
+        self.assertEqual(_route_start({}), "requirements")
+        self.assertEqual(_route_start({"resume_from": "project_planning"}), "project_planning")
+        self.assertEqual(_route_start({"resume_from": "detail_confirmation"}), "requirements")
+        self.assertEqual(
+            _route_requirements({"clarification": {"status": "requires_user_input"}}),
+            "await_user_input",
+        )
+
+    def test_confirmed_plan_only_persists_two_planning_json_documents(self) -> None:
+        """项目规划确认后只应落盘两份规划 JSON，不提前写派生结构。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            target = workspace / "application.json"
-            target.write_text(
-                json.dumps({"appName": "客户中心", "pagePlan": {"stale": True}}),
-                encoding="utf-8",
-            )
-            plan = ApplicationPagePlan(
-                application=ApplicationPageContext(
-                    name="客户中心", scenario="维护客户资料", terminal="PC"
-                ),
-                pages=[
-                    ApplicationPageDefinition(
-                        id="customer-list",
-                        name="客户列表",
-                        path="/customers",
-                        purpose="查询和筛选客户",
-                        key_features=["查询客户"],
-                        related_page_ids=["customer-detail"],
-                        api_ids=["list-customers"],
-                        interactions=[
-                            ApplicationPageInteraction(
-                                name="查看客户",
-                                trigger="点击客户名称",
-                                user_action="选择一条客户记录",
-                                system_response="打开客户详情",
-                                target_page_id="customer-detail",
-                                api_ids=["list-customers"],
-                            )
-                        ],
-                    ),
-                    ApplicationPageDefinition(
-                        id="customer-detail",
-                        name="客户详情",
-                        path="/customers/:id",
-                        purpose="查看客户完整资料",
-                    ),
-                ],
-                apis=[
-                    ApplicationApiDefinition(
-                        id="list-customers",
-                        name="查询客户列表",
-                        method="GET",
-                        path="/api/customers",
-                        purpose="按条件查询客户",
-                        request_design="支持关键词和分页参数",
-                        response_design="返回客户摘要列表和总数",
-                        used_by_page_ids=["customer-list"],
-                    )
-                ],
-            )
+            target = workspace / ".xcodeagent" / "application.json"
+            target.parent.mkdir()
+            target.write_text(json.dumps({"appName": "任务中心", "preserved": True}), encoding="utf-8")
 
-            response = confirm_application_page_plan(
-                ConfirmPagePlanRequest(workspace_root=str(workspace), plan=plan)
-            )
+            confirmation = persist_confirmed_application_plan(_confirmed_state(workspace))
             saved = json.loads(target.read_text(encoding="utf-8"))
 
-            self.assertEqual(saved["appName"], "客户中心")
-            self.assertNotIn("pagePlan", saved)
-            self.assertEqual(saved["apis"][0]["id"], "list-customers")
-            customer_page = saved["menus"]["items"][0]["children"][0]
-            self.assertEqual(customer_page["apiIds"], ["list-customers"])
-            self.assertEqual(response.apis[0].used_by_page_ids, ["customer-list"])
+            self.assertTrue(saved["preserved"])
+            self.assertNotIn("menus", saved)
+            self.assertNotIn("apis", saved)
+            self.assertNotIn("schemas", saved)
+            self.assertNotIn("dataSources", saved)
+            self.assertEqual(saved["planning"]["status"], "confirmed")
+            self.assertEqual(saved["planning"]["requirementSpec"]["summary"], "任务中心需求。")
+            self.assertEqual(saved["planning"]["projectPlan"]["frontend_pages"][0]["id"], "tasks")
+            self.assertEqual(
+                saved["planning"]["documents"]["requirementSpec"]["path"],
+                ".xcodeagent/specs/requirement-spec.md",
+            )
+            self.assertEqual(len(saved["planning"]["documents"]["projectPlan"]["sha256"]), 64)
+            self.assertEqual(confirmation["planning"], saved["planning"])
+            self.assertEqual(set(confirmation), {"path", "sha256", "confirmedAt", "planning"})
+
+    def test_project_planning_confirmation_persists_without_detail_node(self) -> None:
+        """第二步确认完成时应直接持久化，不再调用细节确认节点。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            target = workspace / ".xcodeagent" / "application.json"
+            target.parent.mkdir()
+            target.write_text(
+                json.dumps({"appName": "任务中心"}),
+                encoding="utf-8",
+            )
+            state = _confirmed_state(workspace)
+            update = {
+                "phase": "project_planning",
+                "status": "completed",
+                "project_plan": state["project_plan"],
+                "project_plan_path": state["project_plan_path"],
+            }
+
+            with patch(
+                "app.graph.application_planning_workflow.nodes.project_planning",
+                return_value=update,
+            ) as project_planning:
+                result = _project_planning(state)
+
+            project_planning.assert_called_once_with(state)
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["workflow_scope"], "application_planning")
+            self.assertIn("application_planning_confirmation", result)
+
+    def test_capability_exposes_workflow_visualization_contract(self) -> None:
+        """页面规划端点应声明标准 Workflow 事件和两阶段。"""
+
+        capability = application_page_planning_capabilities()
+        self.assertEqual(capability["customEventName"], "workflow-run")
+        self.assertEqual(capability["phases"], ["requirements", "project_planning"])
+        self.assertEqual(capability["confirmationArtifacts"], ["requirement_spec", "project_plan"])
+        self.assertEqual(capability["persistedPlanningFields"], ["planning.requirementSpec", "planning.projectPlan"])
+        self.assertEqual(capability["deferredApplicationFields"], ["menus", "apis", "schemas", "dataSources"])
 
 
 if __name__ == "__main__":

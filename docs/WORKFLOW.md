@@ -53,6 +53,18 @@ START
 
 项目初始化不属于本 Graph 的职责。进入 Graph 前，外部系统应已经完成项目创建、工作目录准备、持久化上下文初始化和运行资源准备，并将必要的 `project_id`、`workspace` 或上下文引用作为 Graph 输入传入。
 
+### 新建应用两阶段规划 Graph
+
+首页“创建并规划页面”使用独立的 `application_planning_workflow`，只组合主 Workflow 已有的 `requirements → project_planning` 节点函数。它不修改主 Graph 的节点、路由、状态语义或 `/workflow/run` 入口，也不会进入页面细节确认、工作区检查、任务拆分、代码生成和测试阶段。
+
+- 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照、`resumeState` 和 `clarificationAnswers`。
+- RequirementSpec 与 ProjectPlan 继续使用现有 Markdown 产物和显式用户确认门禁；回答澄清问题不能替代产物确认。
+- 用户确认第二步 ProjectPlan 后，独立 Graph 的包装节点立即写入 `.xcodeagent/application.json`，但创建门禁只要求并保存这两步的 JSON：`planning.requirementSpec` 保存已确认需求快照，`planning.projectPlan` 保存已确认项目计划，`planning.documents` 保存两份 Markdown 的工作区相对路径和 SHA-256。`menus`、`apis`、`schemas`、`dataSources` 不再阻塞创建流程，由工作台开发规划阶段从已确认 ProjectPlan 延迟投射并在确认任务时一并写入。该写入不是主 Workflow 节点。
+- 创建弹窗只展示需求确认和项目规划两个阶段；该独立创建范围对未明确的信息采用保守假设，不再为了后续派生 JSON 追加普通澄清卡。两份文档分别确认并写入成功后，前端直接打开工作台，由工作台自己的开发规划门禁补齐派生结构和后续任务。
+- 主 Workflow 的 `detail_confirmation` 节点保持不变；它只是不再属于首页的新建应用规划流程。
+
+本次变更没有重新设计 Agent 循环、权限、工具或上下文策略，只复用仓库内既有的两个只读规划节点。因此不引入新的参考架构差异；上下文仍由 RequirementSpec、ProjectPlan 和文件路径承载，公开状态不加载仓库全文，满足 128k 上下文预算。
+
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
 当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。当前已支持从 `requirements`、`project_planning`、`detail_confirmation`、`inspect_workspace`、`prepare_build_tasks` 和后续执行节点续跑；后续计划确认等节点接入用户确认时，应扩展后端推断逻辑，而不是让前端传固定阶段名。
@@ -153,7 +165,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 该节点通过 `agents/main/planner.py` 直接调用 `create_chat_model()` 生成结构化 JSON 规划建议，再由确定性 schema 合并和归一化后写入 Graph State。该调用不绑定任何工具，不创建 DeepAgent，也不扫描 workspace；模型输出只用于细化项目级判断，确定性归一化负责保证稳定 id、必需字段和后续任务拆分可读取的结构。
 
-`project_planning` 在输出计划前会内部核对 API 契约、页面清单、数据源清单、依赖、角色、流程和验收标准；普通缺口以明确假设和风险写入同一份计划，而不是拆成后续多轮追问。生成计划书后进入一次 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点才输出 `status = completed` 并进入 `detail_confirmation`；如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
+`project_planning` 在输出计划前会内部核对 API 契约、页面清单、数据源清单、依赖、角色、流程和验收标准；普通缺口以明确假设和风险写入同一份计划，而不是拆成后续多轮追问。生成计划书后进入一次 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点才输出 `status = completed`；主 Workflow 随后进入 `detail_confirmation`，而首页的新建应用规划流程直接持久化计划并打开工作台。如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
 
 等待 `project_plan_confirmation` 时，AG-UI workflow payload 的只读 `confirmationArtifact` 只返回当前 `project-plan.md`，不会同时返回 RequirementSpec 正文。用户提交调整意见并重新生成计划后，下一轮确认展示新写入的 Markdown；`detail_confirmation` 不复用该载荷展示 ProjectPlan。
 

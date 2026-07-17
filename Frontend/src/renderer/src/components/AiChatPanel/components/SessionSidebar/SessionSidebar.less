@@ -210,6 +210,47 @@
   flex-direction: column;
 }
 
+.@{class-prefix}-session-outline-lock-shell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.@{class-prefix}-session-outline-lock {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 9px;
+  padding: 18px;
+  color: #5c5870;
+  text-align: center;
+  background: rgba(251, 251, 254, 0.62);
+  border: 1px solid rgba(107, 60, 240, 0.12);
+  border-radius: 8px;
+  backdrop-filter: blur(1.5px);
+
+  > .anticon {
+    color: var(--outline-accent);
+    font-size: 20px;
+  }
+
+  .ant-typography {
+    max-width: 180px;
+    color: inherit;
+    font-size: 12px;
+  }
+}
+
 .@{class-prefix}-session-search.ant-input-affix-wrapper {
   height: 31px;
   padding: 4px 8px;
@@ -561,6 +602,7 @@
   .@{class-prefix}-session-workspace-copy,
   .@{class-prefix}-session-workspace-arrow,
   .@{class-prefix}-session-section-title,
+  .@{class-prefix}-session-outline-lock-shell,
   .@{class-prefix}-session-outline-content,
   .@{class-prefix}-session-user-name,
   .@{class-prefix}-session-user > .anticon:last-child {
@@ -659,6 +701,11 @@
   .@{class-prefix}-outline-children::before,
   .@{class-prefix}-api-list::before { background: #303646; }
   .@{class-prefix}-outline-empty { color: #858c9d; }
+  .@{class-prefix}-session-outline-lock {
+    color: #c2c5cf;
+    background: rgba(18, 23, 34, 0.68);
+    border-color: rgba(167, 130, 255, 0.18);
+  }
 }
 
 @media (max-width: 1100px) {

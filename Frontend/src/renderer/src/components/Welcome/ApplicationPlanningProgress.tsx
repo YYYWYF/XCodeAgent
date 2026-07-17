@@ -1,40 +1,29 @@
 import { CheckOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
-import type { PagePlanningProgress } from '../../typings'
 import { cx } from '../../utils'
 
 const { Text } = Typography
 
 const STAGE_LABELS: Record<string, string> = {
-  analyzing_context: '理解应用场景',
-  generating_questions: '整理关键问题',
-  validating_questions: '校验问题质量',
-  analyzing_requirements: '分析业务需求',
-  designing_pages: '规划页面目录',
-  designing_interactions_and_apis: '设计交互与 API',
-  validating_plan: '校验方案关系',
-  validating_confirmation: '校验确认内容',
-  persisting_application: '写入应用配置'
+  requirements: '需求确认',
+  project_planning: '项目规划'
+}
+
+export type ApplicationPlanningProgressEvent = {
+  stage: string
+  percent: number
+  message: string
+  detail?: string
 }
 
 type Props = {
-  events: PagePlanningProgress[]
+  events: ApplicationPlanningProgressEvent[]
   fallbackMessage: string
   streamingContent?: string
   title: string
 }
 
-// 追加或更新同一阶段的 AG-UI 进度，保留完整阶段历史且避免重复事件。
-export function appendPagePlanningProgress(
-  history: PagePlanningProgress[],
-  nextProgress: PagePlanningProgress
-): PagePlanningProgress[] {
-  const existingIndex = history.findIndex((item) => item.stage === nextProgress.stage)
-  if (existingIndex < 0) return [...history, nextProgress]
-  return history.map((item, index) => index === existingIndex ? nextProgress : item)
-}
-
-// 将 AG-UI 进度事件渲染成紫色动态进度轨、阶段时间线和实时消息。
+// 使用原创建规划页面的动态视觉展示两节点进度、时间线与 AG-UI 实时消息。
 export default function ApplicationPlanningProgress({
   events,
   fallbackMessage,

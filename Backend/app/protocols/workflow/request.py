@@ -131,6 +131,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "workspace": workspace,
         "editor_mode": editor_mode,
+        "workflow_scope": (
+            _optional_text(payload.get("workflowScope"))
+            or _optional_text(forwarded_props.get("workflowScope"))
+        ),
         "thread_id": (
             _optional_text(payload.get("thread_id"))
             or _optional_text(payload.get("threadId"))
@@ -337,6 +341,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan_path",
         "tasks",
         "selected_skill_names",
+        "workflow_scope",
     }
     return {
         key: merged[key]

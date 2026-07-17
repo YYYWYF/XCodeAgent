@@ -8,8 +8,11 @@ const { Sider } = Layout;
 
 type Props = {
   application: ApplicationConfig;
+  developmentPlanningReady: boolean;
+  developmentPlanningRequired: boolean;
   editorMode: EditorMode;
   onApplicationUpdate: (application: ApplicationConfig) => void;
+  onDevelopmentPlanConfirmed: () => Promise<void>;
   onReturnWelcome: () => void;
   onThemeChange: (theme: 'light' | 'dark') => void;
   theme: 'light' | 'dark';
@@ -17,8 +20,11 @@ type Props = {
 
 export default function LeftPanel({
   application,
+  developmentPlanningReady,
+  developmentPlanningRequired,
   editorMode,
   onApplicationUpdate,
+  onDevelopmentPlanConfirmed,
   onReturnWelcome,
   onThemeChange,
   theme,
@@ -29,8 +35,11 @@ export default function LeftPanel({
         <div className={cx('pane-content')}>
           <AiChatPanel
             application={application}
+            developmentPlanningReady={developmentPlanningReady}
+            developmentPlanningRequired={developmentPlanningRequired}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}
+            onDevelopmentPlanConfirmed={onDevelopmentPlanConfirmed}
             onReturnWelcome={onReturnWelcome}
             onThemeChange={onThemeChange}
             theme={theme}

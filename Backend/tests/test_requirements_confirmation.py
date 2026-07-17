@@ -88,7 +88,11 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     encoding="utf-8"
                 )
 
-        analyzer.assert_called_once_with("创建一个库存管理系统", existing_spec=None)
+        analyzer.assert_called_once_with(
+            "创建一个库存管理系统",
+            existing_spec=None,
+            allow_clarification=True,
+        )
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
             result["clarification"]["mode"],

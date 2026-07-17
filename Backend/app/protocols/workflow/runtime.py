@@ -100,6 +100,7 @@ def build_workflow_ag_ui_stream(
             project_id = workflow_inputs["project_id"] or None
             workspace = workflow_inputs["workspace"] or None
             editor_mode = workflow_inputs["editor_mode"] or None
+            workflow_scope = workflow_inputs.get("workflow_scope") or None
             settings = Settings.from_env()
             observability = _workflow_observability(
                 settings=settings,
@@ -144,6 +145,9 @@ def build_workflow_ag_ui_stream(
 
             if editor_mode:
                 initial_state["editor_mode"] = editor_mode
+
+            if workflow_scope:
+                initial_state["workflow_scope"] = workflow_scope
 
             config = {
                 "configurable": {"thread_id": thread_id},
