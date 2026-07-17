@@ -71,15 +71,15 @@ async function runDevelopmentPlanningAgent(threadId: string, message: string, in
 export function createDevelopmentPlanningThreadId(): string { return randomUUID() }
 
 // 请求模型生成澄清问题或完整应用开发计划。
-export async function requestApplicationDevelopmentPlan(workspaceRoot: string, answers: DevelopmentPlanningAnswer[], threadId: string, onProgress?: (progress: DevelopmentPlanningProgress) => void, onStreamingContent?: (content: string) => void): Promise<{ questions?: DevelopmentPlanningQuestion[]; plan?: ApplicationDevelopmentPlan }> {
-  const response = await runDevelopmentPlanningAgent(threadId, '请基于当前 application.json 生成页面级应用开发计划。', { action: 'plan', workspaceRoot, answers }, onProgress, onStreamingContent)
+export async function requestApplicationDevelopmentPlan(workspaceRoot: string, selectedPageKey: string, answers: DevelopmentPlanningAnswer[], threadId: string, onProgress?: (progress: DevelopmentPlanningProgress) => void, onStreamingContent?: (content: string) => void): Promise<{ questions?: DevelopmentPlanningQuestion[]; plan?: ApplicationDevelopmentPlan }> {
+  const response = await runDevelopmentPlanningAgent(threadId, `请基于当前 application.json 生成页面 ${selectedPageKey} 的应用开发计划。`, { action: 'plan', workspaceRoot, selectedPageKey, answers }, onProgress, onStreamingContent)
   if (!response.questions?.length && !response.plan) throw new Error('模型没有返回问题或开发计划。')
   return { questions: response.questions, plan: response.plan }
 }
 
 // 用户确认后把完整任务清单原子写入 application.json。
-export async function confirmApplicationDevelopmentPlan(workspaceRoot: string, plan: ApplicationDevelopmentPlan, threadId: string, onProgress?: (progress: DevelopmentPlanningProgress) => void): Promise<ConfirmedDevelopmentPlan> {
-  const response = await runDevelopmentPlanningAgent(threadId, '我确认使用这个应用开发计划。', { action: 'confirm', workspaceRoot, plan }, onProgress)
+export async function confirmApplicationDevelopmentPlan(workspaceRoot: string, selectedPageKey: string, plan: ApplicationDevelopmentPlan, threadId: string, onProgress?: (progress: DevelopmentPlanningProgress) => void): Promise<ConfirmedDevelopmentPlan> {
+  const response = await runDevelopmentPlanningAgent(threadId, '我确认使用这个页面开发计划。', { action: 'confirm', workspaceRoot, selectedPageKey, plan }, onProgress)
   if (!response.confirmation) throw new Error('开发计划接口没有返回确认结果。')
   return response.confirmation
 }

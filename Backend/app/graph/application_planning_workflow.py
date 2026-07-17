@@ -5,7 +5,7 @@ from langgraph.graph import END, START, StateGraph
 from app.graph import nodes
 from app.graph.state import ProjectState
 from app.persistence.checkpoints import workflow_checkpoint_db_path, workflow_checkpointer
-from app.services.application_planning_persistence import persist_confirmed_application_plan
+from app.services.application_planning_persistence import confirm_application_planning_artifacts
 
 
 def _route_start(state: ProjectState) -> str:
@@ -23,7 +23,7 @@ def _route_requirements(state: ProjectState) -> str:
 
 
 def _project_planning(state: ProjectState) -> dict:
-    """复用项目规划节点，并在用户确认后写回 application.json。"""
+    """复用项目规划节点，并在用户确认后校验 specs/plans 产物。"""
 
     update = nodes.project_planning(state)
     if update.get("status") != "completed":
@@ -32,7 +32,7 @@ def _project_planning(state: ProjectState) -> dict:
     return {
         **update,
         "workflow_scope": "application_planning",
-        "application_planning_confirmation": persist_confirmed_application_plan(merged_state),
+        "application_planning_confirmation": confirm_application_planning_artifacts(merged_state),
     }
 
 

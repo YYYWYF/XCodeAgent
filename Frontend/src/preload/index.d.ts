@@ -27,6 +27,14 @@ declare global {
       readApplication: (payload: {
         workspaceRoot: string;
       }) => Promise<{ application?: unknown }>;
+      inspectPlanningArtifacts: (payload: {
+        workspaceRoot: string;
+      }) => Promise<{
+        ready: boolean;
+        missing: string[];
+        invalid: string[];
+        pages: Array<{ key: string; label: string; path: string; purpose: string }>;
+      }>;
     };
     sessions?: {
       listWorkspaces: () => Promise<{ workspaces?: unknown }>;

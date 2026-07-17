@@ -1,4 +1,4 @@
-import type { ApplicationConfig, ApplicationSchemaConfig } from '../typings';
+import type { ApplicationConfig, ApplicationSchemaConfig, DevelopmentPlanningPageOption } from '../typings';
 
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
@@ -92,4 +92,20 @@ export async function loadWorkspaceApplicationConfig(
     throw new Error('工作区 application.json 格式无效');
   }
   return result.application as unknown as ApplicationSchemaConfig;
+}
+
+// 只检查 specs/plans 两个规划目录中的正式产物是否完整且已确认。
+export async function inspectWorkspacePlanningArtifacts(
+  workspaceRoot: string
+): Promise<{
+  ready: boolean;
+  missing: string[];
+  invalid: string[];
+  pages: DevelopmentPlanningPageOption[];
+}> {
+  const workspaceApi = window.xcodeAgent?.workspace;
+  if (!workspaceApi?.inspectPlanningArtifacts) {
+    throw new Error('当前环境不支持检查工作区规划产物');
+  }
+  return workspaceApi.inspectPlanningArtifacts({ workspaceRoot });
 }

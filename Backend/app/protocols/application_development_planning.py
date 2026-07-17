@@ -28,6 +28,8 @@ def application_development_planning_capabilities() -> dict[str, Any]:
         "endpoint": "/application-development-planning/run",
         "transport": "ag-ui-sse",
         "actions": ["plan", "confirm"],
+        "selectionField": "forwardedProps.developmentPlanning.selectedPageKey",
+        "planningScope": "selected-page",
         "progressEvents": True,
         "textMessageStreaming": True,
         "customEventName": DEVELOPMENT_PLANNING_EVENT_NAME,
@@ -68,21 +70,21 @@ def build_application_development_planning_ag_ui_stream(
             ))
             await report(AgUiActionProgress(
                 stage="planning_dependencies",
-                message="正在拆分页面任务并编排依赖与阻塞关系…",
-                detail="确保每个菜单功能都有任务、验收条件和明确的前置工作。",
+                message="正在拆分所选页面任务并编排依赖与阻塞关系…",
+                detail="确保所选页面的功能都有任务、验收条件和明确的前置工作。",
                 percent=56,
                 data={"action": action},
             ))
             response = await generate_application_development_plan(request, report_text)
             await report(AgUiActionProgress(
                 stage="validating_plan",
-                message="正在校验菜单覆盖、任务引用和执行顺序…",
-                detail="检查全部菜单项、编号任务、验收项及全局任务 id 是否一致。",
+                message="正在校验页面覆盖、任务引用和执行顺序…",
+                detail="检查所选页面、编号任务、验收项及任务 id 是否一致。",
                 percent=92,
                 data={"action": action},
             ))
             result = response.model_dump(by_alias=True, exclude_none=True)
-            message = "需要补充少量信息后再生成计划。" if response.questions else "应用开发计划已生成，请确认。"
+            message = "需要补充少量信息后再生成计划。" if response.questions else "页面开发计划已生成，请确认。"
         elif action == "confirm":
             await report(AgUiActionProgress(
                 stage="persisting_plan",
@@ -95,7 +97,7 @@ def build_application_development_planning_ag_ui_stream(
                 ConfirmDevelopmentPlanRequest.model_validate(planning_input)
             )
             result = {"confirmation": response.model_dump(by_alias=True)}
-            message = "开发计划已确认并写入每个菜单项。"
+            message = "开发计划已确认并写入所选页面。"
         else:
             raise ValueError("developmentPlanning.action 必须是 plan 或 confirm。")
         return AgUiActionResult(data={"action": action, **result}, message=message)

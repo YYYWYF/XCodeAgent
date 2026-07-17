@@ -15,7 +15,7 @@ from app.graph.application_planning_workflow import (
     _route_start,
 )
 from app.protocols.application_page_planning import application_page_planning_capabilities
-from app.services.application_planning_persistence import persist_confirmed_application_plan
+from app.services.application_planning_persistence import confirm_application_planning_artifacts
 
 
 def _confirmed_state(workspace: Path) -> dict[str, object]:
@@ -27,7 +27,7 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
     project_plan_path.parent.mkdir(parents=True, exist_ok=True)
     requirement_path.write_text("# RequirementSpec\n\n任务中心需求。\n", encoding="utf-8")
     project_plan_path.write_text("# ProjectPlan\n\n任务中心计划。\n", encoding="utf-8")
-    return {
+    state = {
         "workspace": str(workspace),
         "requirement_spec_path": str(requirement_path),
         "project_plan_path": str(project_plan_path),
@@ -70,6 +70,13 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
             }],
         },
     }
+    requirement_path.with_suffix(".json").write_text(
+        json.dumps(state["requirement_spec"], ensure_ascii=False), encoding="utf-8"
+    )
+    project_plan_path.with_suffix(".json").write_text(
+        json.dumps(state["project_plan"], ensure_ascii=False), encoding="utf-8"
+    )
+    return state
 
 
 class ApplicationPagePlanningTests(unittest.TestCase):
@@ -121,8 +128,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             "await_user_input",
         )
 
-    def test_confirmed_plan_only_persists_two_planning_json_documents(self) -> None:
-        """项目规划确认后只应落盘两份规划 JSON，不提前写派生结构。"""
+    def test_confirmed_plan_only_validates_planning_artifacts(self) -> None:
+        """项目规划确认后只应校验 specs/plans 产物，不改写 application.json。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -130,36 +137,28 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             target.parent.mkdir()
             target.write_text(json.dumps({"appName": "任务中心", "preserved": True}), encoding="utf-8")
 
-            confirmation = persist_confirmed_application_plan(_confirmed_state(workspace))
+            original = target.read_text(encoding="utf-8")
+            confirmation = confirm_application_planning_artifacts(_confirmed_state(workspace))
             saved = json.loads(target.read_text(encoding="utf-8"))
 
+            self.assertEqual(target.read_text(encoding="utf-8"), original)
             self.assertTrue(saved["preserved"])
-            self.assertNotIn("menus", saved)
-            self.assertNotIn("apis", saved)
-            self.assertNotIn("schemas", saved)
-            self.assertNotIn("dataSources", saved)
-            self.assertEqual(saved["planning"]["status"], "confirmed")
-            self.assertEqual(saved["planning"]["requirementSpec"]["summary"], "任务中心需求。")
-            self.assertEqual(saved["planning"]["projectPlan"]["frontend_pages"][0]["id"], "tasks")
             self.assertEqual(
-                saved["planning"]["documents"]["requirementSpec"]["path"],
+                confirmation["artifacts"]["requirementSpec"]["markdown"]["path"],
                 ".xcodeagent/specs/requirement-spec.md",
             )
-            self.assertEqual(len(saved["planning"]["documents"]["projectPlan"]["sha256"]), 64)
-            self.assertEqual(confirmation["planning"], saved["planning"])
-            self.assertEqual(set(confirmation), {"path", "sha256", "confirmedAt", "planning"})
+            self.assertEqual(
+                confirmation["artifacts"]["projectPlan"]["json"]["path"],
+                ".xcodeagent/plans/project-plan.json",
+            )
+            self.assertEqual(len(confirmation["artifacts"]["projectPlan"]["markdown"]["sha256"]), 64)
+            self.assertEqual(set(confirmation), {"confirmedAt", "directories", "artifacts"})
 
-    def test_project_planning_confirmation_persists_without_detail_node(self) -> None:
-        """第二步确认完成时应直接持久化，不再调用细节确认节点。"""
+    def test_project_planning_confirmation_validates_without_detail_node(self) -> None:
+        """第二步确认完成时应直接校验目录产物，不再调用细节确认节点。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            target = workspace / ".xcodeagent" / "application.json"
-            target.parent.mkdir()
-            target.write_text(
-                json.dumps({"appName": "任务中心"}),
-                encoding="utf-8",
-            )
             state = _confirmed_state(workspace)
             update = {
                 "phase": "project_planning",
@@ -179,6 +178,18 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             self.assertEqual(result["workflow_scope"], "application_planning")
             self.assertIn("application_planning_confirmation", result)
 
+    def test_artifact_gate_rejects_unconfirmed_plan_json(self) -> None:
+        """plans 中未确认的 ProjectPlan JSON 不得通过工作区入口门禁。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = _confirmed_state(workspace)
+            plan_json = workspace / ".xcodeagent" / "plans" / "project-plan.json"
+            plan_json.write_text(json.dumps({"confirmation_status": "pending_user_confirmation"}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "必须是已确认的 JSON 对象"):
+                confirm_application_planning_artifacts(state)
+
     def test_capability_exposes_workflow_visualization_contract(self) -> None:
         """页面规划端点应声明标准 Workflow 事件和两阶段。"""
 
@@ -186,8 +197,9 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(capability["customEventName"], "workflow-run")
         self.assertEqual(capability["phases"], ["requirements", "project_planning"])
         self.assertEqual(capability["confirmationArtifacts"], ["requirement_spec", "project_plan"])
-        self.assertEqual(capability["persistedPlanningFields"], ["planning.requirementSpec", "planning.projectPlan"])
-        self.assertEqual(capability["deferredApplicationFields"], ["menus", "apis", "schemas", "dataSources"])
+        self.assertFalse(capability["writesApplicationJsonAfterConfirmation"])
+        self.assertEqual(capability["artifactDirectories"], [".xcodeagent/specs", ".xcodeagent/plans"])
+        self.assertEqual(capability["workspaceGate"], "planning-artifacts")
 
 
 if __name__ == "__main__":

@@ -51,6 +51,8 @@ export function buildApplicationSchema(values: ApplicationDraft): ApplicationSch
     apis: [],
     auth: values.auth,
     track: values.track,
-    apiTrack: values.apiTrack
+    apiTrack: values.apiTrack,
+    environment: values.environment,
+    database: values.database
   }
 }

@@ -1,8 +1,8 @@
 import { CheckCircleOutlined, LoadingOutlined, PlayCircleOutlined, ReloadOutlined, RocketOutlined } from '@ant-design/icons'
-import { Button, Form, Input, Progress, Tag, Typography, message } from 'antd'
-import { useMemo, useState } from 'react'
+import { Button, Form, Input, Progress, Radio, Tag, Typography, message } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
 import { confirmApplicationDevelopmentPlan, createDevelopmentPlanningThreadId, requestApplicationDevelopmentPlan } from '../../service/applicationDevelopmentPlanning'
-import type { ApplicationDevelopmentPlan, ApplicationDevelopmentTask, ConfirmedDevelopmentPlan, DevelopmentPlanningAnswer, DevelopmentPlanningProgress, DevelopmentPlanningQuestion } from '../../typings'
+import type { ApplicationDevelopmentPlan, ApplicationDevelopmentTask, ConfirmedDevelopmentPlan, DevelopmentPlanningAnswer, DevelopmentPlanningPageOption, DevelopmentPlanningProgress, DevelopmentPlanningQuestion } from '../../typings'
 import { cx } from '../../utils'
 import './ApplicationDevelopmentPlanningGate.less'
 
@@ -11,6 +11,7 @@ const { TextArea } = Input
 
 type Props = {
   applicationName: string
+  pages: DevelopmentPlanningPageOption[]
   ready: boolean
   workspaceRoot: string
   onConfirmed: (confirmation: ConfirmedDevelopmentPlan) => Promise<void>
@@ -90,7 +91,7 @@ function DevelopmentTaskCard({ task, index }: { task: ApplicationDevelopmentTask
 }
 
 // 在工作台功能启用前承载开发计划生成，并始终允许用户返回主页。
-export default function ApplicationDevelopmentPlanningGate({ applicationName, ready, workspaceRoot, onConfirmed }: Props): JSX.Element {
+export default function ApplicationDevelopmentPlanningGate({ applicationName, pages, ready, workspaceRoot, onConfirmed }: Props): JSX.Element {
   const [form] = Form.useForm<{ answers: Record<string, string> }>()
   const [phase, setPhase] = useState<Phase>('intro')
   const [threadId] = useState(createDevelopmentPlanningThreadId)
@@ -101,12 +102,24 @@ export default function ApplicationDevelopmentPlanningGate({ applicationName, re
   const [streamingContent, setStreamingContent] = useState('')
   const [error, setError] = useState('')
   const [failedAction, setFailedAction] = useState<'plan' | 'confirm'>('plan')
+  const [selectedPageKey, setSelectedPageKey] = useState('')
 
   const currentProgress = progressEvents[progressEvents.length - 1]
   const taskCount = useMemo(() => plan ? plan.menuPlans.reduce((sum, item) => sum + item.tasks.length, 0) : 0, [plan])
+  const selectedPage = useMemo(() => pages.find((page) => page.key === selectedPageKey), [pages, selectedPageKey])
+
+  // 页面清单异步读取完成后默认选中第一个可规划页面。
+  useEffect(() => {
+    if (!pages.some((page) => page.key === selectedPageKey)) setSelectedPageKey(pages[0]?.key || '')
+  }, [pages, selectedPageKey])
 
   // 调用模型生成计划；模型认为信息不足时切换为澄清表单。
   const generatePlan = async (nextAnswers: DevelopmentPlanningAnswer[] = answers): Promise<void> => {
+    if (!selectedPageKey) {
+      setError('当前 ProjectPlan 中没有可规划的页面。')
+      setPhase('error')
+      return
+    }
     setPhase('planning')
     setProgressEvents([])
     setStreamingContent('')
@@ -114,6 +127,7 @@ export default function ApplicationDevelopmentPlanningGate({ applicationName, re
     try {
       const result = await requestApplicationDevelopmentPlan(
         workspaceRoot,
+        selectedPageKey,
         nextAnswers,
         threadId,
         (progress) => setProgressEvents((history) => appendProgress(history, progress)),
@@ -161,6 +175,7 @@ export default function ApplicationDevelopmentPlanningGate({ applicationName, re
     try {
       const confirmation = await confirmApplicationDevelopmentPlan(
         workspaceRoot,
+        selectedPageKey,
         plan,
         threadId,
         (progress) => setProgressEvents((history) => appendProgress(history, progress))
@@ -181,16 +196,27 @@ export default function ApplicationDevelopmentPlanningGate({ applicationName, re
         {!ready ? (
           <section aria-live="polite" className={cx('development-planning-loading')}>
             <span className={cx('development-planning-spinner')}><LoadingOutlined spin /></span>
-            <Title level={3}>正在读取 application.json…</Title>
-            <Paragraph>准备检查每个菜单项的应用开发任务。</Paragraph>
+            <Title level={3}>正在检查规划产物…</Title>
+            <Paragraph>仅确认 specs 与 plans 目录中的两步规划结果。</Paragraph>
           </section>
         ) : phase === 'intro' ? (
           <section className={cx('development-planning-intro')}>
             <span className={cx('development-planning-logo')}><RocketOutlined /></span>
             <Text className={cx('development-planning-eyebrow')}>WORKBENCH READY</Text>
-            <Title level={2}>为「{applicationName}」生成应用开发计划</Title>
-            <Paragraph>我会复用工程现有的路由、API 调用、导航和布局能力，只拆分各菜单的业务开发任务、依赖关系与验收清单。确认前不会写入配置。</Paragraph>
-            <Button className={cx('development-planning-primary-action')} icon={<PlayCircleOutlined />} onClick={() => void generatePlan([])} size="large" type="primary">生成应用开发计划</Button>
+            <Title level={2}>想先从「{applicationName}」的哪个页面开始？</Title>
+            <Paragraph>选择第一个要开发的页面。我会复用现有路由、API 调用、导航和布局能力，为该页面拆分任务、依赖与验收清单。</Paragraph>
+            {pages.length ? (
+              <Radio.Group className={cx('development-planning-page-options')} onChange={(event) => setSelectedPageKey(event.target.value)} value={selectedPageKey}>
+                {pages.map((page) => (
+                  <Radio.Button key={page.key} value={page.key}>
+                    <span className={cx('development-planning-page-name')}>{page.label}</span>
+                    <span className={cx('development-planning-page-path')}>{page.path}</span>
+                    <span className={cx('development-planning-page-purpose')}>{page.purpose}</span>
+                  </Radio.Button>
+                ))}
+              </Radio.Group>
+            ) : <Text type="secondary">已确认的 ProjectPlan 中没有可规划页面。</Text>}
+            <Button className={cx('development-planning-primary-action')} disabled={!selectedPageKey} icon={<PlayCircleOutlined />} onClick={() => void generatePlan([])} size="large" type="primary">为「{selectedPage?.label || '所选页面'}」生成开发计划</Button>
           </section>
         ) : null}
 

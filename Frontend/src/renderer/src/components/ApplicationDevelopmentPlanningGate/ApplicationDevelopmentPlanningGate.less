@@ -106,6 +106,35 @@
 
 .@{class-prefix}-development-planning-eyebrow { color: var(--wb-accent) !important; font-size: 11px; font-weight: 700; letter-spacing: 0.18em; }
 
+.@{class-prefix}-development-planning-page-options {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 24px;
+  text-align: left;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.@{class-prefix}-development-planning-page-options .ant-radio-button-wrapper {
+  display: flex;
+  width: 100%;
+  height: auto;
+  min-height: 112px;
+  padding: 16px;
+  color: var(--wb-text);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 14px;
+  box-shadow: none;
+  flex-direction: column;
+}
+
+.@{class-prefix}-development-planning-page-options .ant-radio-button-wrapper::before { display: none; }
+.@{class-prefix}-development-planning-page-options .ant-radio-button-wrapper:hover { color: var(--wb-accent); border-color: var(--wb-accent-border); }
+.@{class-prefix}-development-planning-page-options .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) { color: var(--wb-text); background: var(--wb-accent-soft); border-color: var(--wb-accent); box-shadow: 0 0 0 2px var(--wb-accent-soft); }
+.@{class-prefix}-development-planning-page-name { font-weight: 700; }
+.@{class-prefix}-development-planning-page-path { color: var(--wb-accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.@{class-prefix}-development-planning-page-purpose { margin-top: 8px; overflow: hidden; color: var(--wb-text-secondary); font-size: 12px; line-height: 1.5; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+
 .@{class-prefix}-development-planning-loading { max-width: 760px; margin: 0 auto; text-align: center; }
 .@{class-prefix}-development-planning-loading > p { color: var(--wb-text-secondary); }
 .@{class-prefix}-development-planning-timeline { display: grid; gap: 10px; margin: 26px 0; text-align: left; }

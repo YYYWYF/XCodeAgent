@@ -69,7 +69,6 @@ export interface ApplicationSchemaConfig {
   apis: ApplicationApiDefinition[];
   schemas?: Record<string, Record<string, unknown>>;
   dataSources?: ApplicationDataSourceDefinition[];
-  planning?: ApplicationPlanningSnapshot;
   auth: {
     enable: boolean;
     authnSource: string;
@@ -110,24 +109,6 @@ export interface ApplicationSchemaConfig {
     /** 连接字符串方式 — 密码（仅限密文类型） */
     password: string;
   };
-}
-
-export interface ApplicationPlanningDocument {
-  format: 'markdown';
-  path: string;
-  sha256: string;
-}
-
-export interface ApplicationPlanningSnapshot {
-  schemaVersion: 1;
-  status: 'confirmed';
-  confirmedAt: string;
-  documents: {
-    requirementSpec: ApplicationPlanningDocument;
-    projectPlan: ApplicationPlanningDocument;
-  };
-  requirementSpec: Record<string, unknown>;
-  projectPlan: Record<string, unknown>;
 }
 
 export interface ApplicationMenuItem {

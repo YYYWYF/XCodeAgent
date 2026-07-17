@@ -1,8 +1,8 @@
 import { Layout } from 'antd';
 import { useEffect, useState } from 'react';
 import { LeftPanel } from '../components';
-import { loadWorkspaceApplicationConfig } from '../service/applicationStorage';
-import type { ApplicationConfig, EditorMode } from '../typings';
+import { inspectWorkspacePlanningArtifacts, loadWorkspaceApplicationConfig } from '../service/applicationStorage';
+import type { ApplicationConfig, DevelopmentPlanningPageOption, EditorMode } from '../typings';
 import { cx } from '../utils';
 
 type Props = {
@@ -19,29 +19,23 @@ function getTheme(): Theme {
   return storedPreference === 'light' || storedPreference === 'dark' ? storedPreference : 'light';
 }
 
-// 递归检查每个菜单项是否都已有非空开发待办清单。
-function hasCompleteDevelopmentTasks(items: ApplicationConfig['menus']['items']): boolean {
-  if (!items.length) return false;
-  return items.every((item) => Boolean(item.developmentTasks?.length) && hasCompleteDevelopmentTasksForChildren(item.children));
-}
-
-// 把没有子菜单视为完成，否则继续递归检查全部子项。
-function hasCompleteDevelopmentTasksForChildren(items?: ApplicationConfig['menus']['items']): boolean {
-  return !items?.length || hasCompleteDevelopmentTasks(items);
-}
-
+// 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
 function WorkbenchPage({ application, onReturnWelcome }: Props) {
   const editorMode: EditorMode = 'frontend';
   const [theme, setTheme] = useState<Theme>(getTheme);
   const [workspaceApplication, setWorkspaceApplication] = useState(application);
-  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [planningArtifactsLoaded, setPlanningArtifactsLoaded] = useState(false);
+  const [planningArtifactsReady, setPlanningArtifactsReady] = useState(false);
+  const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<DevelopmentPlanningPageOption[]>([]);
 
   useEffect(() => {
     let active = true;
 
+    // 同步可选的应用配置，并独立读取规划产物及其中的页面清单。
     const syncWorkspaceApplication = async (): Promise<void> => {
       if (!application.workspaceRoot) {
-        setWorkspaceLoaded(true);
+        setPlanningArtifactsLoaded(true);
+        setPlanningArtifactsReady(false);
         return;
       }
       try {
@@ -54,13 +48,29 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
         });
       } catch (error) {
         console.warn('读取工作区 application.json 失败，继续使用已保存应用配置。', error);
+      }
+      try {
+        const inspection = await inspectWorkspacePlanningArtifacts(application.workspaceRoot);
+        if (!active) return;
+        setPlanningArtifactsReady(inspection.ready);
+        setDevelopmentPlanningPages(inspection.pages);
+        if (!inspection.ready) {
+          console.warn('工作区规划产物不完整。', inspection);
+        }
+      } catch (error) {
+        if (!active) return;
+        setPlanningArtifactsReady(false);
+        setDevelopmentPlanningPages([]);
+        console.warn('检查 specs/plans 规划产物失败。', error);
       } finally {
-        if (active) setWorkspaceLoaded(true);
+        if (active) setPlanningArtifactsLoaded(true);
       }
     };
 
     setWorkspaceApplication(application);
-    setWorkspaceLoaded(false);
+    setPlanningArtifactsLoaded(false);
+    setPlanningArtifactsReady(false);
+    setDevelopmentPlanningPages([]);
     void syncWorkspaceApplication();
     window.addEventListener('focus', syncWorkspaceApplication);
     return () => {
@@ -78,7 +88,7 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
     setWorkspaceApplication(updatedApplication);
   };
 
-  // 开发计划确认后重新读取工作区配置，确保菜单任务来自最终落盘内容。
+  // 后续页面计划确认后刷新应用配置；入口门禁仍只依赖 specs/plans。
   const handleDevelopmentPlanConfirmed = async (): Promise<void> => {
     if (!application.workspaceRoot) return;
     const applicationConfig = await loadWorkspaceApplicationConfig(application.workspaceRoot);
@@ -89,14 +99,15 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
     }));
   };
 
-  const needsDevelopmentPlan = workspaceLoaded && !hasCompleteDevelopmentTasks(workspaceApplication.menus.items);
+  const needsDevelopmentPlan = planningArtifactsLoaded && !planningArtifactsReady;
 
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       <LeftPanel
         application={workspaceApplication}
-        developmentPlanningReady={workspaceLoaded}
-        developmentPlanningRequired={!workspaceLoaded || needsDevelopmentPlan}
+        developmentPlanningReady={planningArtifactsLoaded}
+        developmentPlanningRequired={!planningArtifactsLoaded || needsDevelopmentPlan}
+        developmentPlanningPages={developmentPlanningPages}
         editorMode={editorMode}
         onApplicationUpdate={handleApplicationUpdate}
         onDevelopmentPlanConfirmed={handleDevelopmentPlanConfirmed}

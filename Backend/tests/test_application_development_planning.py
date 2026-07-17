@@ -107,7 +107,7 @@ class ApplicationDevelopmentPlanningTests(unittest.TestCase):
             )
 
             confirm_application_development_plan(
-                ConfirmDevelopmentPlanRequest(workspace_root=str(workspace), plan=plan)
+                ConfirmDevelopmentPlanRequest(workspace_root=str(workspace), selected_page_key="tasks", plan=plan)
             )
             saved = json.loads(target.read_text(encoding="utf-8"))
 
@@ -118,8 +118,8 @@ class ApplicationDevelopmentPlanningTests(unittest.TestCase):
             self.assertEqual(saved["schemas"], {})
             self.assertEqual(saved["dataSources"], [])
 
-    def test_confirm_writes_every_numbered_menu_task(self) -> None:
-        """确认后应按数组顺序递归写入每个菜单任务及其验收项。"""
+    def test_confirm_writes_only_selected_page_tasks(self) -> None:
+        """确认后应只写入用户选中页面的编号任务及其验收项。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -127,33 +127,28 @@ class ApplicationDevelopmentPlanningTests(unittest.TestCase):
             target.parent.mkdir()
             target.write_text(json.dumps(_application_payload()), encoding="utf-8")
             plan = ApplicationDevelopmentPlan(
-                summary="复用现有基础能力，依次开发客户目录与列表。",
-                execution_order=["customers-shell", "customer-list-page"],
+                summary="复用现有基础能力，开发客户列表。",
+                execution_order=["customer-list-page"],
                 menu_plans=[
-                    MenuDevelopmentPlan(
-                        menu_key="customers",
-                        menu_label="客户管理",
-                        tasks=[_task("customers-shell", kind="integration", covers_features=["客户管理"])],
-                    ),
                     MenuDevelopmentPlan(
                         menu_key="customer-list",
                         menu_label="客户列表",
-                        tasks=[_task("customer-list-page", depends_on=["customers-shell"], covers_features=["筛选客户"])],
+                        tasks=[_task("customer-list-page", covers_features=["筛选客户"])],
                     ),
                 ],
             )
 
             response = confirm_application_development_plan(
-                ConfirmDevelopmentPlanRequest(workspace_root=str(workspace), plan=plan)
+                ConfirmDevelopmentPlanRequest(workspace_root=str(workspace), selected_page_key="customer-list", plan=plan)
             )
             saved = json.loads(target.read_text(encoding="utf-8"))
 
             self.assertTrue(saved["preserved"])
-            self.assertEqual(saved["menus"]["items"][0]["developmentTasks"][0]["id"], "customers-shell")
+            self.assertNotIn("developmentTasks", saved["menus"]["items"][0])
             self.assertEqual(saved["menus"]["items"][0]["children"][0]["developmentTasks"][0]["id"], "customer-list-page")
-            self.assertEqual(saved["menus"]["items"][0]["developmentTasks"][0]["acceptanceCriteria"], ["核心功能可按设计完成操作", "页面结果与预期业务状态一致"])
+            self.assertEqual(saved["menus"]["items"][0]["children"][0]["developmentTasks"][0]["acceptanceCriteria"], ["核心功能可按设计完成操作", "页面结果与预期业务状态一致"])
             self.assertEqual(saved["menus"]["sharedModules"], [])
-            self.assertEqual(response.menus["developmentPlan"]["executionOrder"][0], "customers-shell")
+            self.assertEqual(response.menus["developmentPlan"]["executionOrder"][0], "customer-list-page")
 
     def test_confirm_rejects_new_shared_modules(self) -> None:
         """工程基础能力已具备时应拒绝模型再次规划公共模块。"""
@@ -181,7 +176,7 @@ class ApplicationDevelopmentPlanningTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "不得新增 sharedModules"):
                 confirm_application_development_plan(
-                    ConfirmDevelopmentPlanRequest(workspace_root=str(workspace), plan=plan)
+                    ConfirmDevelopmentPlanRequest(workspace_root=str(workspace), selected_page_key="customer-list", plan=plan)
                 )
 
     def test_confirm_rejects_dependency_cycle(self) -> None:
@@ -194,16 +189,18 @@ class ApplicationDevelopmentPlanningTests(unittest.TestCase):
             target.write_text(json.dumps(_application_payload()), encoding="utf-8")
             plan = ApplicationDevelopmentPlan(
                 summary="无效循环计划。",
-                execution_order=["customers-shell", "customer-list-page"],
+                execution_order=["customer-list-filter", "customer-list-page"],
                 menu_plans=[
-                    MenuDevelopmentPlan(menu_key="customers", menu_label="客户管理", tasks=[_task("customers-shell", depends_on=["customer-list-page"], covers_features=["客户管理"])]),
-                    MenuDevelopmentPlan(menu_key="customer-list", menu_label="客户列表", tasks=[_task("customer-list-page", depends_on=["customers-shell"], covers_features=["筛选客户"])]),
+                    MenuDevelopmentPlan(menu_key="customer-list", menu_label="客户列表", tasks=[
+                        _task("customer-list-filter", depends_on=["customer-list-page"], covers_features=["筛选客户"]),
+                        _task("customer-list-page", depends_on=["customer-list-filter"]),
+                    ]),
                 ],
             )
 
             with self.assertRaisesRegex(ValueError, "循环依赖"):
                 confirm_application_development_plan(
-                    ConfirmDevelopmentPlanRequest(workspace_root=str(workspace), plan=plan)
+                    ConfirmDevelopmentPlanRequest(workspace_root=str(workspace), selected_page_key="customer-list", plan=plan)
                 )
 
 

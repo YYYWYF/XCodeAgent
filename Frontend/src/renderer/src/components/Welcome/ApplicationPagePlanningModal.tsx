@@ -57,7 +57,7 @@ const phaseProgress: Record<string, { active: number; complete: number; message:
   }
 }
 
-// 从 Workflow 公开状态中读取创建规划完成后的 application.json 摘要。
+// 从 Workflow 公开状态中读取 specs/plans 产物校验结果。
 function workflowConfirmation(workflow?: WorkflowRunPayload): ApplicationPlanningConfirmation | undefined {
   for (const source of [workflow?.result, workflow?.state]) {
     const value = source?.application_planning_confirmation

@@ -95,6 +95,7 @@ class GenerateDevelopmentPlanRequest(ApiModel):
     """校验一次模型规划调用所需的 application.json 与可选回答。"""
 
     workspace_root: str = Field(min_length=1)
+    selected_page_key: str = Field(min_length=1, max_length=120)
     answers: list[DevelopmentPlanningAnswer] = Field(default_factory=list, max_length=5)
 
 
@@ -117,6 +118,7 @@ class ConfirmDevelopmentPlanRequest(ApiModel):
     """校验用户确认计划时的工作区与计划内容。"""
 
     workspace_root: str = Field(min_length=1)
+    selected_page_key: str = Field(min_length=1, max_length=120)
     plan: ApplicationDevelopmentPlan
 
 
@@ -226,6 +228,7 @@ def _normalize_plan(
     plan: ApplicationDevelopmentPlan,
     menu_items: list[dict[str, Any]],
     *,
+    expected_menu_keys: set[str] | None = None,
     require_todo: bool = False,
 ) -> ApplicationDevelopmentPlan:
     """校验菜单覆盖与任务引用，并从依赖关系反向推导阻塞关系。"""
@@ -235,10 +238,13 @@ def _normalize_plan(
     menu_keys = {str(item["key"]) for item in menu_items}
     if len(menu_keys) != len(menu_items):
         raise ValueError("application.json 的菜单 key 必须全局唯一。")
+    required_keys = expected_menu_keys or menu_keys
+    if not required_keys <= menu_keys:
+        raise ValueError(f"开发计划包含未知页面：{sorted(required_keys - menu_keys)}。")
     planned_keys = {item.menu_key for item in plan.menu_plans}
-    if planned_keys != menu_keys or len(plan.menu_plans) != len(menu_keys):
-        missing = sorted(menu_keys - planned_keys)
-        unknown = sorted(planned_keys - menu_keys)
+    if planned_keys != required_keys or len(plan.menu_plans) != len(required_keys):
+        missing = sorted(required_keys - planned_keys)
+        unknown = sorted(planned_keys - required_keys)
         raise ValueError(f"开发计划菜单覆盖不完整，缺少 {missing}，未知 {unknown}。")
     feature_map = {str(item["key"]): set(item.get("keyFeatures", [])) for item in menu_items}
     for menu_plan in plan.menu_plans:
@@ -291,7 +297,11 @@ async def generate_application_development_plan(
         raise ValueError("application.json 必须是 JSON 对象。")
     derived_application = _application_payload_for_development(application)
     menus = derived_application["menus"]
-    menu_items = _menu_identity(menus.get("items"))
+    all_menu_items = _menu_identity(menus.get("items"))
+    selected_items = [item for item in all_menu_items if item["key"] == request.selected_page_key and item["type"] == "page"]
+    if not selected_items:
+        raise ValueError(f"所选页面不存在或不是可开发页面：{request.selected_page_key}")
+    menu_items = selected_items
     compact_application = {
         "appName": application.get("appName"),
         "senario": application.get("senario"),
@@ -348,13 +358,16 @@ application.json：
             raise ValueError("模型澄清问题数量必须为 1 到 5 个。")
         return GenerateDevelopmentPlanResponse(questions=questions)
     plan = ApplicationDevelopmentPlan.model_validate(raw.get("plan"))
-    return GenerateDevelopmentPlanResponse(
-        plan=_normalize_plan(plan, menu_items, require_todo=True)
-    )
+    return GenerateDevelopmentPlanResponse(plan=_normalize_plan(
+        plan,
+        all_menu_items,
+        expected_menu_keys={request.selected_page_key},
+        require_todo=True,
+    ))
 
 
 def _apply_menu_tasks(items: Any, task_map: dict[str, list[dict[str, Any]]]) -> None:
-    """递归把已确认任务写入每个现有菜单项且保留原有页面设计字段。"""
+    """递归写入本次确认页面的任务，并保留其他页面和设计字段。"""
 
     if not isinstance(items, list):
         return
@@ -362,8 +375,28 @@ def _apply_menu_tasks(items: Any, task_map: dict[str, list[dict[str, Any]]]) -> 
         if not isinstance(item, dict):
             continue
         key = str(item.get("key") or "")
-        item["developmentTasks"] = task_map[key]
+        if key in task_map:
+            item["developmentTasks"] = task_map[key]
         _apply_menu_tasks(item.get("children"), task_map)
+
+
+def _existing_task_ids(items: Any, excluded_menu_key: str) -> list[str]:
+    """按菜单顺序收集其他页面已经持久化的任务 id。"""
+
+    result: list[str] = []
+    if not isinstance(items, list):
+        return result
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("key") or "") != excluded_menu_key:
+            result.extend(
+                str(task.get("id"))
+                for task in item.get("developmentTasks", [])
+                if isinstance(task, dict) and task.get("id")
+            )
+        result.extend(_existing_task_ids(item.get("children"), excluded_menu_key))
+    return result
 
 
 def confirm_application_development_plan(
@@ -381,7 +414,11 @@ def confirm_application_development_plan(
     derived_application = _application_payload_for_development(existing)
     existing.update(derived_application)
     menu_items = _menu_identity(existing["menus"].get("items"))
-    plan = _normalize_plan(request.plan, menu_items)
+    plan = _normalize_plan(
+        request.plan,
+        menu_items,
+        expected_menu_keys={request.selected_page_key},
+    )
     task_map = {
         item.menu_key: [task.model_dump(by_alias=True) for task in item.tasks]
         for item in plan.menu_plans
@@ -393,7 +430,10 @@ def confirm_application_development_plan(
     existing["menus"]["developmentPlan"] = {
         "schemaVersion": plan.schema_version,
         "summary": plan.summary,
-        "executionOrder": plan.execution_order,
+        "executionOrder": [
+            *_existing_task_ids(existing["menus"].get("items"), request.selected_page_key),
+            *plan.execution_order,
+        ],
     }
     content = f"{json.dumps(existing, ensure_ascii=False, indent=2)}\n"
     temporary = target.with_name(".application.json.tmp")

@@ -1,9 +1,8 @@
-import type { ApplicationPlanningSnapshot } from './application'
-
-
 export type ApplicationPlanningConfirmation = {
-  path: string
-  sha256: string
   confirmedAt: string
-  planning: ApplicationPlanningSnapshot
+  directories: {
+    specs: string
+    plans: string
+  }
+  artifacts: Record<string, Record<string, { format: string; path: string; sha256: string }>>
 }

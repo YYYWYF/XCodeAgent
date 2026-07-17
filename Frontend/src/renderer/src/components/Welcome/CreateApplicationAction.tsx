@@ -140,21 +140,10 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     await saveApplication(updatedApp)
   }
 
-  // 只同步两份已确认规划 JSON 到本地应用索引后打开工作台。
-  const handlePagePlanConfirmed = async (confirmation: ApplicationPlanningConfirmation): Promise<void> => {
+  // specs/plans 产物确认完整后直接打开工作台，不改写应用配置。
+  const handlePagePlanConfirmed = async (_confirmation: ApplicationPlanningConfirmation): Promise<void> => {
     if (!planningApplication) return
-    const schema = {
-      ...planningApplication.schema,
-      schemaVersion: 2 as const,
-      planning: confirmation.planning
-    }
-    const application = {
-      ...planningApplication,
-      schemaVersion: 2 as const,
-      planning: confirmation.planning,
-      schema
-    }
-    await saveAndOpenApplication(application, onOpenApplication)
+    await saveAndOpenApplication(planningApplication, onOpenApplication)
     setPlanningApplication(undefined)
   }
 

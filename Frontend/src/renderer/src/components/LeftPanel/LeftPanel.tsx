@@ -1,5 +1,5 @@
 import { Layout } from 'antd';
-import type { ApplicationConfig, EditorMode } from '../../typings';
+import type { ApplicationConfig, DevelopmentPlanningPageOption, EditorMode } from '../../typings';
 import { cx } from '../../utils';
 import AiChatPanel from '../AiChatPanel';
 import './LeftPanel.less';
@@ -10,6 +10,7 @@ type Props = {
   application: ApplicationConfig;
   developmentPlanningReady: boolean;
   developmentPlanningRequired: boolean;
+  developmentPlanningPages: DevelopmentPlanningPageOption[];
   editorMode: EditorMode;
   onApplicationUpdate: (application: ApplicationConfig) => void;
   onDevelopmentPlanConfirmed: () => Promise<void>;
@@ -22,6 +23,7 @@ export default function LeftPanel({
   application,
   developmentPlanningReady,
   developmentPlanningRequired,
+  developmentPlanningPages,
   editorMode,
   onApplicationUpdate,
   onDevelopmentPlanConfirmed,
@@ -37,6 +39,7 @@ export default function LeftPanel({
             application={application}
             developmentPlanningReady={developmentPlanningReady}
             developmentPlanningRequired={developmentPlanningRequired}
+            developmentPlanningPages={developmentPlanningPages}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}
             onDevelopmentPlanConfirmed={onDevelopmentPlanConfirmed}

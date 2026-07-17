@@ -33,6 +33,62 @@ function getWorkspaceApplicationFile(workspaceRoot: string): string {
   return path.join(workspaceRoot, '.xcodeagent', 'application.json');
 }
 
+/** 校验工作区 specs/plans 中两份已确认规划，不读取 application.json。 */
+async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise<{
+  ready: boolean;
+  missing: string[];
+  invalid: string[];
+  pages: Array<{ key: string; label: string; path: string; purpose: string }>;
+}> {
+  const artifactRoot = path.join(workspaceRoot, '.xcodeagent');
+  const artifacts = [
+    { relativePath: 'specs/requirement-spec.md', format: 'markdown' },
+    { relativePath: 'specs/requirement-spec.json', format: 'json' },
+    { relativePath: 'plans/project-plan.md', format: 'markdown' },
+    { relativePath: 'plans/project-plan.json', format: 'json' },
+  ];
+  const missing: string[] = [];
+  const invalid: string[] = [];
+  let pages: Array<{ key: string; label: string; path: string; purpose: string }> = [];
+
+  for (const artifact of artifacts) {
+    const artifactPath = path.join(artifactRoot, artifact.relativePath);
+    try {
+      const content = await fs.readFile(artifactPath, 'utf8');
+      if (!content.trim()) {
+        invalid.push(artifact.relativePath);
+        continue;
+      }
+      if (artifact.format === 'json') {
+        const value = JSON.parse(content);
+        if (!value || typeof value !== 'object' || Array.isArray(value) || value.confirmation_status !== 'confirmed') {
+          invalid.push(artifact.relativePath);
+        } else if (artifact.relativePath === 'plans/project-plan.json') {
+          const frontendPages = Array.isArray(value.frontend_pages) ? value.frontend_pages : [];
+          pages = frontendPages.flatMap((page: unknown, index: number) => {
+            if (!page || typeof page !== 'object' || Array.isArray(page)) return [];
+            const record = page as Record<string, unknown>;
+            const key = String(record.id || '').trim();
+            if (!key) return [];
+            return [{
+              key,
+              label: String(record.name || key),
+              path: String(record.path || '/'),
+              purpose: String(record.description || record.name || `页面 ${index + 1}`),
+            }];
+          });
+        }
+      }
+    } catch (error: unknown) {
+      const errnoException = error as NodeJS.ErrnoException;
+      if (errnoException?.code === 'ENOENT') missing.push(artifact.relativePath);
+      else invalid.push(artifact.relativePath);
+    }
+  }
+
+  return { ready: missing.length === 0 && invalid.length === 0, missing, invalid, pages };
+}
+
 type EditorMode = 'frontend' | 'backend'
 
 type SessionWorkspaceSummary = {
@@ -481,6 +537,11 @@ async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
 
 /** 注册工作区读取、选择和项目创建相关 IPC。 */
 function setupWorkspaceIpc(): void {
+  ipcMain.handle('workspace:inspect-planning-artifacts', async (_event, payload = {}) => {
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
+    return inspectWorkspacePlanningArtifacts(workspaceRoot);
+  });
+
   ipcMain.handle('workspace:read-application', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
     const applicationFile = getWorkspaceApplicationFile(workspaceRoot);

@@ -114,7 +114,7 @@ export default function ApplicationPlanningQuestionPanel({
     return (
       <section className={cx('planning-question-panel', 'is-detail-review')}>
         <PlanningPanelHeader
-          description="逐项检查页面目标、布局、交互、权限、API 和数据源设计，确认后才会写入 application.json。"
+          description="逐项检查页面目标、布局、交互、权限、API 和数据源设计，确认后保留在 plans 目录。"
           review
           title={panelTitle(clarification.mode)}
         />

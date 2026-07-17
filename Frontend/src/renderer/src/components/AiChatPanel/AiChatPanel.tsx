@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
 import type {
   ApplicationConfig,
+  DevelopmentPlanningPageOption,
   ApplicationMenuItem,
   EditorMode,
   WorkspaceCodeChangeSet
@@ -35,6 +36,7 @@ type Props = {
   application: ApplicationConfig
   developmentPlanningReady: boolean
   developmentPlanningRequired: boolean
+  developmentPlanningPages: DevelopmentPlanningPageOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
   onDevelopmentPlanConfirmed: () => Promise<void>
@@ -63,6 +65,7 @@ export default function AiChatPanel({
   application,
   developmentPlanningReady,
   developmentPlanningRequired,
+  developmentPlanningPages,
   editorMode,
   onApplicationUpdate,
   onDevelopmentPlanConfirmed,
@@ -266,6 +269,7 @@ export default function AiChatPanel({
             <ApplicationDevelopmentPlanningGate
               applicationName={application.appName || application.name}
               onConfirmed={onDevelopmentPlanConfirmed}
+              pages={developmentPlanningPages}
               ready={developmentPlanningReady}
               workspaceRoot={application.workspaceRoot}
             />

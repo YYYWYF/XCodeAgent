@@ -17,9 +17,9 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "customEventName": "workflow-run",
         "phases": ["requirements", "project_planning"],
         "confirmationArtifacts": ["requirement_spec", "project_plan"],
-        "writesApplicationJsonAfterConfirmation": True,
-        "persistedPlanningFields": ["planning.requirementSpec", "planning.projectPlan"],
-        "deferredApplicationFields": ["menus", "apis", "schemas", "dataSources"],
+        "writesApplicationJsonAfterConfirmation": False,
+        "artifactDirectories": [".xcodeagent/specs", ".xcodeagent/plans"],
+        "workspaceGate": "planning-artifacts",
         "mainWorkflowIndependent": True,
     }
 

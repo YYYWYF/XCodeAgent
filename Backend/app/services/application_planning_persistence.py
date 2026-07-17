@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -261,8 +260,14 @@ def project_plan_application_payload(project_plan: dict[str, Any]) -> dict[str, 
     }
 
 
-def _document_descriptor(workspace: Path, value: Any, label: str) -> dict[str, str]:
-    """为已确认 Markdown 产物生成可迁移的相对路径与内容摘要。"""
+def _document_descriptor(
+    workspace: Path,
+    value: Any,
+    label: str,
+    artifact_format: str,
+    expected_directory: str,
+) -> dict[str, str]:
+    """校验规划产物位于指定目录，并生成相对路径与内容摘要。"""
 
     candidate = Path(str(value or "")).expanduser()
     document = (candidate if candidate.is_absolute() else workspace / candidate).resolve()
@@ -272,68 +277,73 @@ def _document_descriptor(workspace: Path, value: Any, label: str) -> dict[str, s
         raise ValueError(f"{label} 不在应用工作区内：{document}") from exc
     if not document.is_file():
         raise ValueError(f"{label} 不存在：{document}")
+    if relative_path.parent.as_posix() != expected_directory:
+        raise ValueError(f"{label} 必须位于 {expected_directory}：{document}")
     content = document.read_bytes()
+    if not content.strip():
+        raise ValueError(f"{label} 不能为空：{document}")
+    if artifact_format == "json":
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict) or parsed.get("confirmation_status") != "confirmed":
+            raise ValueError(f"{label} 必须是已确认的 JSON 对象：{document}")
     return {
-        "format": "markdown",
+        "format": artifact_format,
         "path": relative_path.as_posix(),
         "sha256": hashlib.sha256(content).hexdigest(),
     }
 
 
-def _planning_snapshot(state: dict[str, Any], workspace: Path, confirmed_at: str) -> dict[str, Any]:
-    """构造 application.json 中带版本和文档索引的最终规划快照。"""
+def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, Any]:
+    """校验两步规划状态，并只返回 specs/plans 中正式产物的索引。"""
 
     requirement_spec = state.get("requirement_spec")
     project_plan = state.get("project_plan")
     if not isinstance(requirement_spec, dict) or requirement_spec.get("confirmation_status") != "confirmed":
-        raise ValueError("RequirementSpec 必须经用户确认后才能写入 application.json。")
+        raise ValueError("RequirementSpec 必须经用户确认后才能进入工作区。")
     if not isinstance(project_plan, dict) or project_plan.get("confirmation_status") != "confirmed":
-        raise ValueError("ProjectPlan 必须经用户确认后才能写入 application.json。")
+        raise ValueError("ProjectPlan 必须经用户确认后才能进入工作区。")
+    requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))
+    project_plan_markdown = Path(str(state.get("project_plan_path") or ""))
     return {
-        "schemaVersion": 1,
-        "status": "confirmed",
-        "confirmedAt": confirmed_at,
-        "documents": {
-            "requirementSpec": _document_descriptor(
-                workspace,
-                state.get("requirement_spec_path"),
-                "RequirementSpec Markdown",
+        "requirementSpec": {
+            "markdown": _document_descriptor(
+                workspace, requirement_markdown, "RequirementSpec Markdown", "markdown", ".xcodeagent/specs"
             ),
-            "projectPlan": _document_descriptor(
+            "json": _document_descriptor(
                 workspace,
-                state.get("project_plan_path"),
-                "ProjectPlan Markdown",
+                state.get("requirement_spec_json_path") or requirement_markdown.with_suffix(".json"),
+                "RequirementSpec JSON",
+                "json",
+                ".xcodeagent/specs",
             ),
         },
-        "requirementSpec": deepcopy(requirement_spec),
-        "projectPlan": deepcopy(project_plan),
+        "projectPlan": {
+            "markdown": _document_descriptor(
+                workspace, project_plan_markdown, "ProjectPlan Markdown", "markdown", ".xcodeagent/plans"
+            ),
+            "json": _document_descriptor(
+                workspace,
+                state.get("project_plan_json_path") or project_plan_markdown.with_suffix(".json"),
+                "ProjectPlan JSON",
+                "json",
+                ".xcodeagent/plans",
+            ),
+        },
     }
 
 
-def persist_confirmed_application_plan(state: dict[str, Any]) -> dict[str, Any]:
-    """只把独立两节点 Graph 的两份已确认 JSON 原子写回 application.json。"""
+def confirm_application_planning_artifacts(state: dict[str, Any]) -> dict[str, Any]:
+    """确认 specs/plans 产物完整，不读取或改写 application.json。"""
 
     workspace = Path(str(state.get("workspace") or "")).expanduser().resolve()
-    target = workspace / ".xcodeagent" / "application.json"
-    if not workspace.is_dir() or not target.is_file():
-        raise ValueError(f"应用配置不存在：{target}")
-    existing = json.loads(target.read_text(encoding="utf-8"))
-    if not isinstance(existing, dict):
-        raise ValueError("application.json 必须是 JSON 对象。")
+    if not workspace.is_dir():
+        raise ValueError(f"应用工作区不存在：{workspace}")
     confirmed_at = datetime.now(UTC).isoformat()
-    planning = _planning_snapshot(state, workspace, confirmed_at)
-    payload = {
-        **existing,
-        "schemaVersion": 2,
-        "planning": planning,
-    }
-    content = f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
-    temporary = target.with_name(".application.json.tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(target)
     return {
-        "path": str(target),
-        "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         "confirmedAt": confirmed_at,
-        "planning": planning,
+        "directories": {
+            "specs": ".xcodeagent/specs",
+            "plans": ".xcodeagent/plans",
+        },
+        "artifacts": _confirmed_artifacts(state, workspace),
     }
