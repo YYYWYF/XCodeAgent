@@ -137,6 +137,10 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
     [envVars]
   )
 
+  const scrollToEnvironment = () => {
+    document.getElementById('settings-environment')?.scrollIntoView({ behavior: 'smooth' })
+  }
+
   // 环境变量名被删除时，自动清除数据库卡片中已引用但已不存在的变量
   useEffect(() => {
     const validValues = new Set((envVars ?? []).filter((v) => v.key).map((v) => `\${${v.key}}`))
@@ -673,6 +677,20 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
                     options={envVarOptions}
                     placeholder="选择环境变量"
                     notFoundContent="暂无环境变量"
+                    dropdownRender={(menu) => (
+                      <>
+                        {menu}
+                        <div
+                          className={cx('settings-db-select-footer')}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={scrollToEnvironment}
+                        >
+                          <Text type="secondary">没有找到？去</Text>
+                          <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
+                          <Text type="secondary">新建或修改</Text>
+                        </div>
+                      </>
+                    )}
                   />
                 </Form.Item>
                 <Form.Item
@@ -684,6 +702,20 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
                     options={envVarOptions}
                     placeholder="选择环境变量"
                     notFoundContent="暂无环境变量"
+                    dropdownRender={(menu) => (
+                      <>
+                        {menu}
+                        <div
+                          className={cx('settings-db-select-footer')}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={scrollToEnvironment}
+                        >
+                          <Text type="secondary">没有找到？去</Text>
+                          <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
+                          <Text type="secondary">新建或修改</Text>
+                        </div>
+                      </>
+                    )}
                   />
                 </Form.Item>
                 <Form.Item
@@ -695,6 +727,20 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
                     options={envVarOptions}
                     placeholder="选择环境变量"
                     notFoundContent="暂无环境变量"
+                    dropdownRender={(menu) => (
+                      <>
+                        {menu}
+                        <div
+                          className={cx('settings-db-select-footer')}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={scrollToEnvironment}
+                        >
+                          <Text type="secondary">没有找到？去</Text>
+                          <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
+                          <Text type="secondary">新建或修改</Text>
+                        </div>
+                      </>
+                    )}
                   />
                 </Form.Item>
                 <Form.Item
@@ -707,6 +753,20 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
                     options={encryptedEnvVarOptions}
                     placeholder="选择加密环境变量"
                     notFoundContent="暂无加密环境变量"
+                    dropdownRender={(menu) => (
+                      <>
+                        {menu}
+                        <div
+                          className={cx('settings-db-select-footer')}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={scrollToEnvironment}
+                        >
+                          <Text type="secondary">没有找到？去</Text>
+                          <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
+                          <Text type="secondary">新建或修改</Text>
+                        </div>
+                      </>
+                    )}
                   />
                 </Form.Item>
               </>

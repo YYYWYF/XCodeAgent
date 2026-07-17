@@ -581,3 +581,30 @@
     font-size: 12px;
   }
 }
+
+// Select 下拉底部链接
+.@{class-prefix}-settings-db-select-footer {
+  padding: 8px 12px;
+  border-top: 1px solid var(--wb-border);
+  cursor: pointer;
+  text-align: center;
+  font-size: 13px;
+
+  .ant-typography-secondary {
+    font-size: 13px;
+  }
+
+  &:hover {
+    background: var(--wb-accent-soft, rgba(107, 60, 240, 0.06));
+  }
+}
+
+.@{class-prefix}-settings-db-select-footer-link {
+  color: var(--wb-accent, #6b3cf0);
+  cursor: pointer;
+  font-size: 13px;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
