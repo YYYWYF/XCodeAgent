@@ -187,8 +187,13 @@ def _operation_visibility_markdown(value: Any) -> str:
     return "\n".join(items) if items else "- 待补充操作可见性"
 
 
-def _page_detail_markdown(detail: dict[str, Any]) -> str:
+def render_page_detail_markdown(detail: dict[str, Any]) -> str:
+    """渲染单个页面详细设计的独立 Markdown 文档。"""
     layout = detail.get("basic_layout", {}) if isinstance(detail.get("basic_layout"), dict) else {}
+    references = detail.get("references", {}) if isinstance(detail.get("references"), dict) else {}
+    endpoint_dependencies = detail.get("api_dependencies") or references.get("endpoint_dependencies", [])
+    navigation_targets = detail.get("page_navigation") or references.get("navigation_targets", [])
+    permissions = detail.get("permissions") or references.get("permissions", [])
     return "\n".join(
         [
             f"### {detail.get('page_name', detail.get('page_id', '未命名页面'))} `{detail.get('path', '')}`",
@@ -212,7 +217,7 @@ def _page_detail_markdown(detail: dict[str, Any]) -> str:
             "",
             "#### API 依赖",
             "",
-            _api_dependencies_markdown(detail.get("api_dependencies", [])),
+            _api_dependencies_markdown(endpoint_dependencies),
             "",
             "#### 响应字段绑定",
             "",
@@ -220,16 +225,50 @@ def _page_detail_markdown(detail: dict[str, Any]) -> str:
             "",
             "#### 页面跳转与依赖",
             "",
-            _page_navigation_markdown(detail.get("page_navigation", [])),
+            _page_navigation_markdown(navigation_targets),
             "",
             "#### 权限与操作可见性",
             "",
-            f"- 页面权限：{_joined_items(detail.get('permissions', []), empty='待补充')}",
+            f"- 页面权限：{_joined_items(permissions, empty='待补充')}",
             _operation_visibility_markdown(detail.get("operation_visibility", [])),
             "",
             "#### 页面验收标准",
             "",
             _bullet_items(detail.get("acceptance_criteria", [])) or "- 待补充页面验收标准",
+        ]
+    )
+
+
+def render_data_source_detail_markdown(detail: dict[str, Any]) -> str:
+    """渲染单个数据源详细设计的独立 Markdown 文档。"""
+
+    return "\n".join(
+        [
+            f"# {detail.get('data_source_name', detail.get('data_source_id', '未命名数据源'))}数据源设计",
+            "",
+            f"- 数据源 ID：`{detail.get('data_source_id', 'unknown')}`",
+            f"- 确认状态：{_status_label(detail.get('status', 'draft'))}",
+            f"- 实体：{_joined_items(detail.get('entities', []))}",
+            f"- Schema 引用：{_code_items(detail.get('schema_refs', []))}",
+            "",
+            "## 关系与校验",
+            "",
+            _bullet_items(detail.get("relationships", [])) or "- 暂无关系定义",
+            _bullet_items(detail.get("validation_rules", [])) or "- 暂无校验规则",
+            "",
+            "## Seed / Mock 策略",
+            "",
+            str(detail.get("seed_strategy") or "待补充"),
+            "",
+            "## 关联 API 与页面",
+            "",
+            f"- API 契约：{_joined_labels(detail.get('api_contracts', []))}",
+            f"- 依赖页面：{_joined_labels(detail.get('dependent_pages', []))}",
+            "",
+            "## 验收标准",
+            "",
+            _bullet_items(detail.get("acceptance_criteria", [])) or "- 待补充数据源验收标准",
+            "",
         ]
     )
 
@@ -297,6 +336,37 @@ def _api_contract_markdown(contract: dict[str, Any]) -> str:
     )
 
 
+def _page_references_markdown(page: dict[str, Any]) -> str:
+    """渲染 ProjectPlan 中页面的不可变引用依赖，供用户确认。"""
+
+    references = page.get("references") if isinstance(page.get("references"), dict) else {}
+    permissions = references.get("permissions") or page.get("permissions", [])
+    endpoints = references.get("endpoint_dependencies") or page.get("endpoint_dependencies", [])
+    navigation = references.get("navigation_targets") or page.get("navigation_targets", [])
+    endpoint_lines = [
+        f"  - `{item.get('endpoint_id', 'unknown')}`：{item.get('usage', 'read')}；"
+        f"触发 {item.get('trigger', '页面交互')}；"
+        f"{'首屏依赖' if item.get('required_for_initial_load') else '非首屏依赖'}"
+        for item in _dict_items(endpoints)
+    ]
+    navigation_lines = [
+        f"  - `{item.get('target_page_id', 'unknown')}`：{item.get('trigger', '页面跳转')}"
+        for item in _dict_items(navigation)
+    ]
+    return "\n".join(
+        [
+            f"### `{page.get('id', 'unknown')}` {page.get('name', '未命名页面')} `{page.get('path', '/')}`",
+            "",
+            f"- 模块：`{page.get('module_id', 'core')}`",
+            f"- 页面权限：{_joined_items(permissions)}",
+            "- endpoint_dependencies:",
+            *(endpoint_lines or ["  - 无；静态页面或需在 ProjectPlan 补充接口依赖"]),
+            "- navigation_targets:",
+            *(navigation_lines or ["  - 无"]),
+        ]
+    )
+
+
 def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     overview = plan.get("requirements_overview", {})
     acceptance_criteria = plan.get("project_acceptance_criteria") or plan.get(
@@ -307,10 +377,8 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         _api_contract_markdown(contract)
         for contract in _dict_items(plan.get("api_contracts", []))
     )
-    pages = "\n".join(
-        f"- `{page.get('path', '/')}` {page.get('name', page.get('id', '未命名页面'))}："
-        f"模块 `{page.get('module_id', 'core')}`，"
-        f"权限 {_joined_items(page.get('permissions', []))}"
+    pages = "\n\n".join(
+        _page_references_markdown(page)
         for page in _dict_items(plan.get("frontend_pages", []))
     )
     data_sources = "\n".join(
@@ -331,21 +399,15 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         f"{_joined_items(item.get('operations', []))}"
         for item in _dict_items(permissions.get("operation_permissions", []))
     )
-    page_details = "\n\n".join(
-        _page_detail_markdown(detail)
-        for detail in _dict_items(plan.get("page_detail_plans", []))
+    page_details = "\n".join(
+        f"- {page.get('name', page.get('id', '未命名页面'))}：{page.get('detail_design', {}).get('markdown_path', '尚未生成独立详细设计')}"
+        for page in _dict_items(plan.get("frontend_pages", []))
+        if isinstance(page.get("detail_design"), dict)
     )
-    data_source_details = "\n\n".join(
-        "\n".join(
-            [
-                f"### {detail.get('data_source_name', detail.get('data_source_id', '未命名数据源'))}",
-                f"- 实体：{detail.get('entities', [])}",
-                f"- API 契约：{[contract.get('id') for contract in _dict_items(detail.get('api_contracts', []))] or ['无']}",
-                f"- 依赖页面：{[page.get('page_id') for page in _dict_items(detail.get('dependent_pages', []))] or ['无']}",
-                f"- 状态：{detail.get('status', 'draft')}",
-            ]
-        )
-        for detail in _dict_items(plan.get("data_source_detail_plans", []))
+    data_source_details = "\n".join(
+        f"- {source.get('name', source.get('id', '未命名数据源'))}：{source.get('detail_design', {}).get('markdown_path', '尚未生成独立详细设计')}"
+        for source in _dict_items(plan.get("data_sources", []))
+        if isinstance(source.get("detail_design"), dict)
     )
 
     app = plan.get("app", {})
@@ -418,10 +480,13 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 
 def write_project_plan_document(state: dict[str, Any], plan: dict[str, Any]) -> str:
+    """写入主计划 Markdown，并先将详细设计拆分为独立产物。"""
+
     path = project_plan_markdown_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_project_plan_markdown(plan), encoding="utf-8")
     write_project_plan_json(state, plan)
+    compact_plan = load_project_plan_json(project_plan_json_path(state))
+    path.write_text(render_project_plan_markdown(compact_plan), encoding="utf-8")
     return str(path)
 
 
@@ -441,6 +506,8 @@ def edited_project_plan_markdown(
     path = project_plan_markdown_path(state)
     if not path.is_file():
         return None
+    if plan.get("page_detail_plans") or plan.get("data_source_detail_plans"):
+        return None
     content = path.read_text(encoding="utf-8")
     return content if content != render_project_plan_markdown(plan) else None
 
@@ -455,12 +522,13 @@ def project_plan_json_path(state: dict[str, Any]) -> Path:
 
 
 def write_project_plan_json(state: dict[str, Any], plan: dict[str, Any]) -> str:
+    """持久化轻量 ProjectPlan，并把页面和数据源详情拆分为独立文件。"""
+
+    from app.workspace.detail_design_documents import write_compact_project_plan
+
     path = project_plan_json_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(plan, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_compact_project_plan(state, path, plan)
     return str(path)
 
 

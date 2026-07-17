@@ -198,7 +198,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 用户只展开需要调整的对象，按页面目标、布局、交互、权限、关系、校验和 Seed 等模板字段修改；
 - 核对数据模型、关系、校验规则和 API 映射；如需字段变更则返回 ProjectPlan 契约调整；
 - 未修改时允许一键确认全部设计；
-- 将确认后的页面详细设计写回 `ProjectPlan` 和总体计划书 Markdown，保证 Graph State 与规划文档一致。
+- 将确认后的页面详细设计写入 `.xcodeagent/plans/pages/`，数据源详细设计写入 `.xcodeagent/plans/data-source/`；`ProjectPlan` 只保存每个产物的路径、状态、哈希和生成依赖，作为单页面生成的唯一索引入口。
 
 该阶段由只读规划逻辑和 page-design 专用 ChatModel 负责，不由代码生成 Agent 负责。
 
@@ -206,7 +206,9 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 页面初版设计结合 `frontend_pages`、`api_contracts`、`data_sources`、`permission_model` 和业务流程，覆盖页面目标、页面布局设计、页面交互设计、API 依赖、响应字段绑定、页面跳转与依赖、权限与操作可见性、页面验收标准。`detail_confirmation` 对每个页面调用 `page_designer`，`page_designer` 从 ProjectPlan 中提取当前页面上下文，并直接基于 `ProjectPlan.api_contracts` 分析当前页面实际依赖的 API；`PageDetail.api_dependencies` 是页面详细设计确认后的实际 API 依赖。页面详细设计面向页面实现视角，页面数据访问必须直接引用具体 API/Endpoint，而不是把底层数据源作为主要确认对象。布局设计只描述信息组织、区域职责、主要内容呈现、操作入口位置和响应式/信息密度策略；loading、empty、error、success、confirm、validation 等反馈属于交互设计，不作为布局区域。数据源初版设计覆盖实体引用、关系、校验、API 契约、依赖页面、Seed/Mock 策略和验收标准。页面的 endpoint、Schema 和 `response_bindings`，以及数据源的实体、Schema 和 API 契约在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
 
-批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
+批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`；详细设计文件和轻量 ProjectPlan 索引一起持久化，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
+
+正式 `project-plan.json` 不内嵌 `page_detail_plans` 或 `data_source_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面的 `id` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`；页面设计模型不得新增、删除或替换这些引用。选择单个页面时，后端只生成该页面经 endpoint 反查得到的数据源设计，并在该页面 `detail_design.generation_dependencies` 中记录 `endpoint_ids` 与 `navigation_target_page_ids`。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与数据源详情，不得重新加载全部页面详情；模型发现缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
 
 当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。SQLite checkpointer 负责持久化每个 `thread_id` 的主 Graph 状态；后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan 和 detail review 小型结构化状态，不把完整会话历史重新塞回上下文。
 

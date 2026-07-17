@@ -7,8 +7,10 @@ from typing import Any
 
 from app.services.api_contracts import (
     contract_endpoints_for_dependencies,
+    normalize_page_api_dependencies,
     normalize_response_bindings,
 )
+from app.services.page_dependencies import page_design_references
 
 
 def detail_design_targets(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -507,6 +509,36 @@ def extract_page_detail_context(
     page = _find_by_id(project_plan["frontend_pages"], page_id)
     page_name = str(page.get("name") or page_id)
     page_path = str(page.get("path") or "/")
+    references = page_design_references(project_plan, page_id)
+    endpoint_ids = {
+        str(item.get("endpoint_id"))
+        for item in references["endpoint_dependencies"]
+    }
+    relevant_contracts = [
+        {
+            **contract,
+            "endpoints": [
+                endpoint
+                for endpoint in _dict_items(contract.get("endpoints"))
+                if str(endpoint.get("id")) in endpoint_ids
+            ],
+        }
+        for contract in _dict_items(project_plan.get("api_contracts"))
+        if any(
+            str(endpoint.get("id")) in endpoint_ids
+            for endpoint in _dict_items(contract.get("endpoints"))
+        )
+    ]
+    navigation_pages = [
+        {
+            "id": candidate.get("id"),
+            "name": candidate.get("name"),
+            "path": candidate.get("path"),
+        }
+        for candidate in _dict_items(project_plan.get("frontend_pages"))
+        if str(candidate.get("id"))
+        in {str(item.get("target_page_id")) for item in references["navigation_targets"]}
+    ]
     return {
         "type": "page",
         "page_id": page_id,
@@ -525,17 +557,9 @@ def extract_page_detail_context(
             "interactions",
             ["进入页面后加载数据", "支持查看主要业务内容", "展示 loading、empty、error、ready 状态"],
         ),
-        "permissions": page.get("permissions", []),
-        "current_page": page,
-        "all_pages": _dict_items(project_plan.get("frontend_pages")),
-        "data_sources": _dict_items(project_plan.get("data_sources")),
-        "api_contracts": _dict_items(project_plan.get("api_contracts")),
-        "permission_model": project_plan.get("permission_model", {}),
-        "business_flows": _dict_items(project_plan.get("business_flows")),
-        "project_acceptance_criteria": _text_items(
-            project_plan.get("project_acceptance_criteria")
-            or project_plan.get("acceptance_criteria")
-        ),
+        "references": references,
+        "endpoint_contracts": relevant_contracts,
+        "navigation_pages": navigation_pages,
     }
 
 
@@ -642,10 +666,10 @@ def create_page_detail_plan(
     page_name = str(page.get("name") or page_id)
     page_path = str(page.get("path") or "/")
     api_contracts = _dict_items(project_plan.get("api_contracts"))
-    api_endpoints = _api_endpoints_for_contracts(api_contracts)
-    api_dependencies = _selected_api_dependencies(
-        api_endpoints,
-        (agent_detail_plan or {}).get("api_dependencies"),
+    api_dependencies = normalize_page_api_dependencies(
+        api_contracts,
+        [],
+        page_context.get("references", {}).get("endpoint_dependencies", []),
         page_path=page_path,
         page_name=page_name,
     )
@@ -681,6 +705,7 @@ def create_page_detail_plan(
         }
         for contract in api_contracts
         if contract.get("data_source_id")
+        and str(contract.get("id")) in endpoint_ids_by_contract
     ]
     component_structure = _component_structure(
         page_name,
@@ -694,17 +719,24 @@ def create_page_detail_plan(
         layout,
         (agent_detail_plan or {}).get("layout_design"),
     )
-    page_navigation = _page_navigation(
-        page,
-        (agent_detail_plan or {}).get("page_navigation"),
-    )
+    page_navigation = [
+        {
+            **item,
+            "target_path": str(
+                _find_by_id(project_plan["frontend_pages"], item["target_page_id"]).get("path")
+                or ""
+            ),
+        }
+        for item in page_context.get("references", {}).get("navigation_targets", [])
+        if item.get("target_page_id")
+    ]
     operation_interactions = _operation_interactions(
         api_dependencies,
         (agent_detail_plan or {}).get("operation_interactions"),
     )
     operation_visibility = _operation_visibility(
         operation_interactions,
-        page_context.get("permissions", []),
+        page_context.get("references", {}).get("permissions", []),
     )
     state_feedback = _state_feedback(
         {
@@ -748,7 +780,9 @@ def create_page_detail_plan(
         "page_navigation": page_navigation,
         "api_dependencies": api_dependencies,
         "data_sources": contract_data_sources,
-        "permissions": page_context["permissions"],
+        "permissions": page_context.get("references", {}).get("permissions", []),
+        "endpoint_dependencies": page_context.get("references", {}).get("endpoint_dependencies", []),
+        "navigation_targets": page_context.get("references", {}).get("navigation_targets", []),
         "response_bindings": response_bindings,
         "acceptance_criteria": [
             f"用户可以访问 {page_path} 并看到 {page_name} 的主要内容。",
@@ -759,8 +793,6 @@ def create_page_detail_plan(
         "agent_note": agent_note,
         "approved": True,
     }
-    if isinstance(agent_detail_plan, dict):
-        detail_plan.update(agent_detail_plan)
     if not isinstance(detail_plan.get("basic_layout"), dict):
         detail_plan["basic_layout"] = {}
     detail_plan["basic_layout"] = _normalize_basic_layout(detail_plan["basic_layout"])

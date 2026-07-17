@@ -18,10 +18,7 @@ PAGE_EDITABLE_FIELDS = {
     "interactions",
     "state_feedback",
     "operation_interactions",
-    "api_dependencies",
     "response_bindings",
-    "page_navigation",
-    "permissions",
     "operation_visibility",
     "acceptance_criteria",
 }
@@ -144,11 +141,22 @@ def apply_detail_review_submission(
         if isinstance(detail, dict):
             detail["status"] = "confirmed"
             detail["approved"] = True
+    # 仅提升本轮实际生成并审阅过的对象，避免选中单页时误确认其他页面。
+    confirmed_page_ids = {
+        str(detail.get("page_id"))
+        for detail in updated.get("page_detail_plans", [])
+        if isinstance(detail, dict) and detail.get("page_id")
+    }
+    confirmed_data_source_ids = {
+        str(detail.get("data_source_id"))
+        for detail in updated.get("data_source_detail_plans", [])
+        if isinstance(detail, dict) and detail.get("data_source_id")
+    }
     for page in updated.get("frontend_pages", []):
-        if isinstance(page, dict):
+        if isinstance(page, dict) and str(page.get("id")) in confirmed_page_ids:
             page["detail_status"] = "confirmed"
     for source in updated.get("data_sources", []):
-        if isinstance(source, dict):
+        if isinstance(source, dict) and str(source.get("id")) in confirmed_data_source_ids:
             source["detail_status"] = "confirmed"
     _repair_page_contract_fields(updated)
     updated["confirmation_status"] = "confirmed"

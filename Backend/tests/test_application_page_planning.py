@@ -14,7 +14,10 @@ from app.graph.application_planning_workflow import (
     _route_requirements,
     _route_start,
 )
-from app.protocols.application_page_planning import application_page_planning_capabilities
+from app.protocols.application_page_planning import (
+    application_page_planning_capabilities,
+    build_application_page_planning_ag_ui_stream,
+)
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 
 
@@ -200,6 +203,22 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertFalse(capability["writesApplicationJsonAfterConfirmation"])
         self.assertEqual(capability["artifactDirectories"], [".xcodeagent/specs", ".xcodeagent/plans"])
         self.assertEqual(capability["workspaceGate"], "planning-artifacts")
+
+    def test_endpoint_forces_application_planning_scope(self) -> None:
+        """专用端点不能依赖前端 forwardedProps 才禁用需求澄清。"""
+
+        sentinel = object()
+        with patch(
+            "app.protocols.application_page_planning.build_workflow_ag_ui_stream",
+            return_value=sentinel,
+        ) as stream:
+            result = build_application_page_planning_ag_ui_stream(
+                graph=object(),
+                payload={"workflowScope": "unexpected", "forwardedProps": {}},
+            )
+
+        self.assertIs(result, sentinel)
+        self.assertEqual(stream.call_args.kwargs["payload"]["workflowScope"], "application_planning")
 
 
 if __name__ == "__main__":

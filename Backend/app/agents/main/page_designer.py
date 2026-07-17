@@ -14,6 +14,10 @@ from app.services.page_detail_plan import (
 from app.utils.model_output import extract_json_object
 
 
+class PageDependencyGapError(ValueError):
+    """表示页面设计需要 ProjectPlan 尚未声明的接口或跳转依赖。"""
+
+
 def _page_design_prompt(
     project_plan: dict[str, Any],
     page_context: dict[str, Any],
@@ -23,6 +27,10 @@ def _page_design_prompt(
         "This is a design-only boundary. Do not call tools, do not call subagents, "
         "do not delegate tasks, and do not generate or modify code.\n"
         "Create a detailed page design for the current page extracted from ProjectPlan.\n"
+        "The references.permissions, references.endpoint_dependencies, and "
+        "references.navigation_targets in page_context are immutable ProjectPlan projections. "
+        "Do not add, remove, or replace any dependency. If the page needs a missing API or navigation "
+        "target, return dependency_gap with a concise reason and no invented endpoint.\n"
         "Return only one complete JSON object without markdown fences or commentary. It must include "
         "page_goal, basic_layout, layout_design, state_feedback, operation_interactions, page_navigation, "
         "api_dependencies, "
@@ -45,12 +53,9 @@ def _page_design_prompt(
         "Describe page data access through concrete API endpoints instead of underlying data sources. "
         "If existing API contracts cannot support a required page interaction, state the gap in "
         "acceptance_criteria or risks instead of inventing a new endpoint.\n"
-        "The page_context is the source of truth for the current page goal, layout, interactions, "
-        "permissions, related pages, data sources, and API contract context.\n\n"
-        "Pay special attention to ProjectPlan.api_contracts; the page design must not invent "
-        "incompatible APIs or undeclared endpoints.\n\n"
-        f"Current page context:\n{json.dumps(page_context, ensure_ascii=False)}\n\n"
-        f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False)}"
+        "The page_context is the source of truth for the current page goal, layout, immutable references, "
+        "related-page summaries, and selected endpoint contract context.\n\n"
+        f"Current page context:\n{json.dumps(page_context, ensure_ascii=False)}"
     )
 
 
@@ -105,11 +110,20 @@ def design_page_with_chat_model(
             agent_note = _fallback_model_note(exc)
             design_source = "deterministic_fallback_after_chat_model_error"
 
+    agent_detail_plan = extract_json_object(agent_note)
+    dependency_gap = agent_detail_plan.get("dependency_gap") if isinstance(agent_detail_plan, dict) else None
+    if dependency_gap:
+        message = (
+            str(dependency_gap.get("message") or dependency_gap.get("reason") or "")
+            if isinstance(dependency_gap, dict)
+            else str(dependency_gap)
+        )
+        raise PageDependencyGapError(message or "页面设计需要修订 ProjectPlan 依赖。")
     detail_plan = create_page_detail_plan(
         project_plan,
         page_context,
         agent_note=agent_note,
-        agent_detail_plan=extract_json_object(agent_note),
+        agent_detail_plan=agent_detail_plan,
     )
     detail_plan["designed_by"] = {
         "agent": "chat-model",

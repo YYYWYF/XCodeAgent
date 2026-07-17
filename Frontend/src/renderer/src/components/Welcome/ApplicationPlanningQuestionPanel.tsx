@@ -89,6 +89,7 @@ function panelTitle(mode?: string): string {
 function submitLabel(mode?: string): string {
   if (mode === 'requirement_spec_confirmation') return '确认需求并继续规划'
   if (mode === 'project_plan_confirmation') return '确认计划并进入工作区'
+  if (!mode) return '重新生成当前规划'
   return '提交回答并继续'
 }
 
@@ -127,6 +128,7 @@ export default function ApplicationPlanningQuestionPanel({
   const clarification = planningClarification(workflow)
   const questions = clarification?.questions || []
   const isRequirementConfirmation = clarification?.mode === 'requirement_spec_confirmation'
+  const hasRecoveryAction = clarification?.status === 'requires_user_input' && !questions.length
   const artifact = workflow.confirmationArtifact
   const spec = artifact?.id === 'requirement_spec' ? requirementSpec(workflow) : undefined
   const canShowSummary = Boolean(spec)
@@ -136,7 +138,9 @@ export default function ApplicationPlanningQuestionPanel({
   // 需求确认只收集可选修改意见；空提交代表用户确认当前文档。
   const handleSubmit = (values: { answers?: WorkflowClarificationAnswers }): void => {
     if (!isRequirementConfirmation) {
-      onSubmit(workflow, values.answers || {})
+      onSubmit(workflow, questions.length
+        ? values.answers || {}
+        : { planning_recovery: '请重新生成当前规划，并提供可确认的正式文档或可填写的问题。' })
       return
     }
     const feedback = values.answers?.requirement_spec_feedback
@@ -269,6 +273,18 @@ export default function ApplicationPlanningQuestionPanel({
               {submitLabel(clarification.mode)}
             </Button>
           </div>
+        ) : null}
+        {hasRecoveryAction ? (
+          <section className={cx('planning-question-card')}>
+            <Paragraph type="secondary">
+              当前规划没有返回可填写的问题，无法安全继续。可重新生成本阶段规划；不会修改已保存的应用设置。
+            </Paragraph>
+            <div className={cx('page-planning-actions')}>
+              <Button disabled={disabled} htmlType="submit" icon={<BulbOutlined />} type="primary">
+                重新生成当前规划
+              </Button>
+            </div>
+          </section>
         ) : null}
       </Form>
     </section>

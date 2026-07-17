@@ -8,6 +8,7 @@ from app.services.api_contracts import (
     normalize_api_contracts,
     schema_refs_for_data_source,
 )
+from app.services.page_dependencies import normalize_page_dependencies, page_data_source_ids
 
 
 def _agent_section(agent_plan: dict[str, Any] | None, key: str) -> Any:
@@ -308,6 +309,13 @@ def _frontend_pages(spec: dict[str, Any]) -> list[dict[str, Any]]:
             for source_id in data_source_ids
             if module_id in source_id or module_id == "access_control"
         ]
+        if not related_sources:
+            # RequirementSpec 的模块 id 与数据源 id 不一定同名；首次规划仍需给业务页面绑定可解析 API。
+            related_sources = [
+                source_id
+                for source_id in data_source_ids
+                if source_id not in {"user_source", "auth_source"}
+            ][:1] or data_source_ids[:1]
         pages.append(
             {
                 "id": page_id,
@@ -342,7 +350,9 @@ def _planned_data_sources(spec: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _task_inputs(
-    plan_pages: list[dict[str, Any]], plan_sources: list[dict[str, Any]]
+    plan_pages: list[dict[str, Any]],
+    plan_sources: list[dict[str, Any]],
+    api_contracts: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "frontend": [
@@ -352,7 +362,7 @@ def _task_inputs(
                 "description": f"生成页面 {page['name']}（{page['path']}）。",
                 "depends_on": [
                     f"data_source:{source_id}"
-                    for source_id in page["data_dependencies"]
+                    for source_id in page_data_source_ids(page, api_contracts)
                 ],
             }
             for page in plan_pages
@@ -464,6 +474,7 @@ def apply_project_plan_feedback(
         updated["task_inputs"] = _task_inputs(
             updated.get("frontend_pages", []),
             updated.get("data_sources", []),
+            updated.get("api_contracts", []),
         )
         updated.setdefault("plan_feedback_updates", []).append(
             {
@@ -491,7 +502,7 @@ def _permission_model(
             {
                 "page_id": page["id"],
                 "path": page["path"],
-                "allowed_roles": page["permissions"],
+                "allowed_roles": page.get("references", {}).get("permissions", []),
             }
             for page in plan_pages
         ],
@@ -555,7 +566,8 @@ def create_project_plan(
             authoritative=authoritative_agent_plan,
         )
     )
-    task_inputs = _task_inputs(frontend_pages, data_sources)
+    frontend_pages = normalize_page_dependencies(frontend_pages, api_contracts)
+    task_inputs = _task_inputs(frontend_pages, data_sources, api_contracts)
 
     agent_architecture = _agent_section(agent_plan, "architecture")
     architecture = {

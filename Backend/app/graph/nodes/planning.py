@@ -4,6 +4,7 @@ from app.agents.main.planner import (
     revise_project_plan_with_chat_model,
 )
 from app.agents.main.page_designer import (
+    PageDependencyGapError,
     design_data_source_with_chat_model,
     design_page_with_chat_model,
 )
@@ -14,6 +15,7 @@ from app.services.detail_review import (
     detail_review_payload,
 )
 from app.services.project_plan import apply_project_plan_feedback
+from app.services.page_dependencies import page_data_source_ids, validate_project_plan_dependencies
 from app.services.page_detail_plan import (
     attach_data_source_detail_plan,
     attach_page_detail_plan,
@@ -54,6 +56,26 @@ def project_planning(state: ProjectState) -> dict:
             ),
             "confirmation_status": "confirmed",
         }
+        dependency_errors = validate_project_plan_dependencies(project_plan)
+        if dependency_errors:
+            repaired_plan, remaining_errors = _repair_project_plan_dependencies(
+                project_plan,
+                dependency_errors,
+            )
+            repaired_path = write_project_plan_document(state, repaired_plan)
+            return {
+                "phase": "project_planning",
+                "status": "requires_user_input",
+                "project_plan": repaired_plan,
+                "project_plan_path": repaired_path,
+                "project_plan_json_path": _project_plan_json_path_for_state(state),
+                "clarification": (
+                    _project_plan_dependency_error_payload(remaining_errors)
+                    if remaining_errors
+                    else _project_plan_confirmation_payload(repaired_plan)
+                ),
+                "timeline": ["project_planning"],
+            }
         markdown_path = project_plan_markdown_path(state)
         if markdown_path.is_file():
             project_plan_path = str(markdown_path)
@@ -89,8 +111,18 @@ def project_planning(state: ProjectState) -> dict:
         state.get("request", ""),
     )
     project_plan["confirmation_status"] = "pending_user_confirmation"
+    dependency_errors = validate_project_plan_dependencies(project_plan)
+    if dependency_errors:
+        project_plan, dependency_errors = _repair_project_plan_dependencies(
+            project_plan,
+            dependency_errors,
+        )
     project_plan_path = write_project_plan_document(state, project_plan)
-    clarification = _project_plan_confirmation_payload(project_plan)
+    clarification = (
+        _project_plan_dependency_error_payload(dependency_errors)
+        if dependency_errors
+        else _project_plan_confirmation_payload(project_plan)
+    )
 
     return {
         "phase": "project_planning",
@@ -185,11 +217,20 @@ def detail_confirmation(state: ProjectState) -> dict:
             "主 Workflow 需要工作区 .xcodeagent/plans/project-plan.json "
             "（兼容 plans/project-plan.json）作为初始输入。"
         )
-    pending_plan = _generate_all_detail_plans(
-        project_plan,
-        frontend_pages=state.get("frontend_pages"),
-        selected_page_id=state.get("selected_page_id"),
-    )
+    try:
+        pending_plan = _generate_all_detail_plans(
+            project_plan,
+            frontend_pages=state.get("frontend_pages"),
+            selected_page_id=state.get("selected_page_id"),
+        )
+    except PageDependencyGapError as exc:
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "clarification": _project_plan_revision_required_payload(str(exc)),
+            "timeline": ["detail_confirmation"],
+        }
     pending_plan["confirmation_status"] = "pending_user_confirmation"
     project_plan_path = write_project_plan_document(state, pending_plan)
     targets = detail_design_targets(pending_plan)
@@ -223,15 +264,6 @@ def _generate_all_detail_plans(
     """为计划中的数据源及用户选中的初始页面生成功能详细设计。"""
 
     updated_plan = project_plan
-    for source in project_plan.get("data_sources", []):
-        source_id = source.get("id") if isinstance(source, dict) else None
-        if not source_id:
-            continue
-        detail = design_data_source_with_chat_model(updated_plan, source_id, "")
-        detail["status"] = "pending_user_confirmation"
-        detail["approved"] = False
-        updated_plan = attach_data_source_detail_plan(updated_plan, detail)
-
     pages = frontend_pages if isinstance(frontend_pages, list) else project_plan.get(
         "frontend_pages", []
     )
@@ -243,6 +275,24 @@ def _generate_all_detail_plans(
         ]
         if not pages:
             raise ValueError(f"ProjectPlan 中不存在页面：{selected_page_id}")
+    selected_source_ids = {
+        str(source_id)
+        for page in pages if isinstance(page, dict)
+        for source_id in page_data_source_ids(
+            page,
+            [contract for contract in project_plan.get("api_contracts", []) if isinstance(contract, dict)],
+        )
+        if source_id
+    }
+    for source in project_plan.get("data_sources", []):
+        source_id = source.get("id") if isinstance(source, dict) else None
+        if not source_id or (selected_page_id and str(source_id) not in selected_source_ids):
+            continue
+        detail = design_data_source_with_chat_model(updated_plan, source_id, "")
+        detail["status"] = "pending_user_confirmation"
+        detail["approved"] = False
+        updated_plan = attach_data_source_detail_plan(updated_plan, detail)
+
     for page in pages:
         page_id = page.get("id") if isinstance(page, dict) else None
         if not page_id:
@@ -269,7 +319,9 @@ def _generate_all_detail_plans(
         ):
             page["detail_status"] = "pending_user_confirmation"
     for source in updated_plan.get("data_sources", []):
-        if isinstance(source, dict):
+        if isinstance(source, dict) and (
+            not selected_page_id or str(source.get("id")) in selected_source_ids
+        ):
             source["detail_status"] = "pending_user_confirmation"
     return updated_plan
 
@@ -296,6 +348,58 @@ def _project_plan_confirmation_payload(project_plan: dict) -> dict:
     payload["mode"] = "project_plan_confirmation"
     payload["message"] = "请确认 ProjectPlan 后再继续页面/数据源细节设计。"
     payload["plan_summary"] = project_plan.get("app", {}).get("name", "未命名应用")
+    return payload
+
+
+def _project_plan_dependency_error_payload(errors: list[str]) -> dict:
+    """要求用户回到 ProjectPlan 修订页面依赖、路由或跳转缺口。"""
+
+    payload = build_ask_user_payload(
+        [
+            AskUserQuestion(
+                header="计划依赖校验",
+                question="系统已自动尝试修复 ProjectPlan 页面依赖，但仍有无法安全推断的问题。请补充业务决策后，我会重新生成 ProjectPlan；无需手动编辑 JSON。",
+                type="text",
+                placeholder="例如：为入职表单补充 create endpoint，并修正页面路由。",
+            )
+        ]
+    )
+    payload["mode"] = "project_plan_dependency_validation_error"
+    payload["message"] = "ProjectPlan 自动修复后仍未通过依赖校验，页面设计未开始。"
+    payload["errors"] = errors
+    return payload
+
+
+def _repair_project_plan_dependencies(
+    project_plan: dict,
+    errors: list[str],
+) -> tuple[dict, list[str]]:
+    """把确定性校验错误回灌给规划模型，最多自动修订一次页面依赖。"""
+
+    feedback = "系统依赖校验失败，请在本次重新生成中完整修复以下问题：\n" + "\n".join(
+        f"- {error}" for error in errors
+    )
+    repaired = revise_project_plan_with_chat_model(project_plan, feedback)
+    repaired["confirmation_status"] = "pending_user_confirmation"
+    return repaired, validate_project_plan_dependencies(repaired)
+
+
+def _project_plan_revision_required_payload(reason: str) -> dict:
+    """页面设计发现依赖缺口时阻止自由扩展，并要求修订 ProjectPlan。"""
+
+    payload = build_ask_user_payload(
+        [
+            AskUserQuestion(
+                header="需要修订计划",
+                question="页面设计需要尚未声明的 endpoint 或跳转目标，不能自由添加。请返回 ProjectPlan 修订依赖后重新确认。",
+                type="text",
+                placeholder="例如：在入职页面的 endpoint_dependencies 中补充员工创建接口。",
+            )
+        ]
+    )
+    payload["mode"] = "project_plan_revision_required"
+    payload["message"] = "页面设计已停止，必须先修订并重新确认 ProjectPlan。"
+    payload["reason"] = reason
     return payload
 
 

@@ -8,6 +8,7 @@ from app.graph.nodes.confirmation import (
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.page_dependencies import validate_project_plan_dependencies
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
     edited_project_plan_markdown,
@@ -69,7 +70,10 @@ def prepare_build_tasks(state: ProjectState) -> dict:
                 "timeline": ["prepare_build_tasks"],
             }
 
-    contract_errors = validate_api_contract_consistency(project_plan)
+    contract_errors = [
+        *validate_project_plan_dependencies(project_plan),
+        *validate_api_contract_consistency(project_plan),
+    ]
     if contract_errors:
         return {
             "phase": "prepare_build_tasks",

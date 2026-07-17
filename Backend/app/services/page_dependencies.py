@@ -1,0 +1,247 @@
+"""ProjectPlan 页面依赖的归一化、校验与页面设计投射。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from app.services.api_contracts import dict_items, endpoint_dependencies_for_contracts
+
+
+def normalize_page_dependencies(
+    pages: list[dict[str, Any]],
+    api_contracts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """为每个页面生成唯一的 references 依赖容器。"""
+
+    endpoint_index = _endpoint_index(api_contracts)
+    page_ids = {str(page.get("id") or "") for page in pages}
+    normalized: list[dict[str, Any]] = []
+    for page in pages:
+        endpoint_dependencies = _normalize_endpoint_dependencies(
+            page,
+            endpoint_index=endpoint_index,
+            api_contracts=api_contracts,
+        )
+        navigation_targets = _normalize_navigation_targets(
+            _references_value(page, "navigation_targets"), page_ids=page_ids
+        )
+        normalized.append(
+            {
+                "id": str(page.get("id") or ""),
+                "name": str(page.get("name") or page.get("id") or "页面"),
+                "path": str(page.get("path") or "/"),
+                "module_id": str(page.get("module_id") or "core"),
+                "description": str(page.get("description") or page.get("name") or "业务页面"),
+                "references": {
+                    "permissions": _string_items(_references_value(page, "permissions")),
+                    "endpoint_dependencies": [
+                        dict(item) for item in endpoint_dependencies
+                    ],
+                    "navigation_targets": [dict(item) for item in navigation_targets],
+                },
+            }
+        )
+    return normalized
+
+
+def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str]:
+    """校验页面 id、路由、endpoint 与跳转均可由 ProjectPlan 独立解析。"""
+
+    pages = dict_items(project_plan.get("frontend_pages"))
+    contracts = dict_items(project_plan.get("api_contracts"))
+    endpoint_index = _endpoint_index(contracts)
+    errors: list[str] = []
+    _validate_unique_values(pages, "id", "page_id", errors)
+    _validate_unique_values(pages, "path", "page path", errors)
+    page_ids = {str(page.get("id") or "") for page in pages}
+    for page in pages:
+        page_id = str(page.get("id") or "")
+        references = page.get("references") if isinstance(page.get("references"), dict) else {}
+        for dependency in dict_items(references.get("endpoint_dependencies") or page.get("endpoint_dependencies")):
+            endpoint_id = str(dependency.get("endpoint_id") or "")
+            if not endpoint_id:
+                errors.append(
+                    f"Page {page_id} contains an endpoint dependency without endpoint_id."
+                )
+            elif endpoint_id not in endpoint_index:
+                errors.append(
+                    f"Page {page_id} references unknown endpoint {endpoint_id}."
+                )
+        for target in dict_items(references.get("navigation_targets") or page.get("navigation_targets")):
+            target_page_id = str(target.get("target_page_id") or "")
+            if not target_page_id or target_page_id not in page_ids:
+                errors.append(
+                    f"Page {page_id} references unknown navigation target {target_page_id}."
+                )
+    return errors
+
+
+def page_design_references(
+    project_plan: dict[str, Any], page_id: str
+) -> dict[str, Any]:
+    """从 ProjectPlan 原样复制页面设计允许使用的全部引用型依赖。"""
+
+    page = next(
+        (
+            item
+            for item in dict_items(project_plan.get("frontend_pages"))
+            if item.get("id") == page_id
+        ),
+        None,
+    )
+    if page is None:
+        raise ValueError(f"ProjectPlan 中不存在页面：{page_id}")
+    references = (
+        page.get("references") if isinstance(page.get("references"), dict) else {}
+    )
+    return {
+        "permissions": list(
+            references.get("permissions") or page.get("permissions") or []
+        ),
+        "endpoint_dependencies": [
+            dict(item)
+            for item in dict_items(
+                references.get("endpoint_dependencies")
+                or page.get("endpoint_dependencies")
+            )
+        ],
+        "navigation_targets": [
+            dict(item)
+            for item in dict_items(
+                references.get("navigation_targets") or page.get("navigation_targets")
+            )
+        ],
+    }
+
+
+def page_data_source_ids(page: dict[str, Any], api_contracts: list[dict[str, Any]]) -> list[str]:
+    """根据页面 endpoint 引用反查数据源，避免页面索引重复保存 data_dependencies。"""
+
+    endpoint_index = _endpoint_index(api_contracts)
+    references = page_design_references({"frontend_pages": [page]}, str(page.get("id") or ""))
+    return _data_source_ids_for_endpoints(
+        references["endpoint_dependencies"], endpoint_index=endpoint_index
+    )
+
+
+def _references_value(page: dict[str, Any], key: str) -> Any:
+    """优先读取新 references，并兼容历史 ProjectPlan 的根字段。"""
+
+    references = page.get("references")
+    return references.get(key) if isinstance(references, dict) and key in references else page.get(key)
+
+
+def _string_items(value: Any) -> list[str]:
+    """标准化字符串数组并移除空值。"""
+
+    if not isinstance(value, list):
+        return []
+    return list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+
+
+def _endpoint_index(api_contracts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """建立 endpoint 到所属契约和数据源的确定性反向索引。"""
+
+    return {
+        str(endpoint.get("id")): {
+            "api_contract_id": str(contract.get("id") or ""),
+            "data_source_id": str(contract.get("data_source_id") or ""),
+            "endpoint": endpoint,
+        }
+        for contract in api_contracts
+        for endpoint in dict_items(contract.get("endpoints"))
+        if endpoint.get("id")
+    }
+
+
+def _normalize_endpoint_dependencies(
+    page: dict[str, Any],
+    *,
+    endpoint_index: dict[str, dict[str, Any]],
+    api_contracts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """接受规划模型的 endpoint 引用；缺失时仅按页面数据源生成保守读取默认值。"""
+
+    supplied = dict_items(_references_value(page, "endpoint_dependencies"))
+    if not supplied:
+        supplied = endpoint_dependencies_for_contracts(
+            api_contracts,
+            [str(item) for item in page.get("data_dependencies", [])],
+            page_path=str(page.get("path") or ""),
+            page_name=str(page.get("name") or ""),
+        )
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in supplied:
+        endpoint_id = str(item.get("endpoint_id") or "")
+        if not endpoint_id or endpoint_id in seen:
+            continue
+        seen.add(endpoint_id)
+        result.append(
+            {
+                "endpoint_id": endpoint_id,
+                "usage": str(item.get("usage") or "read"),
+                "trigger": str(item.get("trigger") or "页面交互触发"),
+                "required_for_initial_load": bool(
+                    item.get("required_for_initial_load", item.get("required", False))
+                ),
+            }
+        )
+    return result
+
+
+def _normalize_navigation_targets(
+    value: Any, *, page_ids: set[str]
+) -> list[dict[str, Any]]:
+    """规范页面跳转引用，忽略模型未声明 target_page_id 的自由文本。"""
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in dict_items(value):
+        target_page_id = str(item.get("target_page_id") or "")
+        if not target_page_id or target_page_id in seen:
+            continue
+        seen.add(target_page_id)
+        result.append(
+            {
+                "target_page_id": target_page_id,
+                "trigger": str(item.get("trigger") or "页面跳转"),
+            }
+        )
+    return result
+
+
+def _data_source_ids_for_endpoints(
+    endpoint_dependencies: list[dict[str, Any]],
+    *,
+    endpoint_index: dict[str, dict[str, Any]],
+) -> list[str]:
+    """根据 endpoint 反查数据源，避免页面自行维护第二份数据源依赖。"""
+
+    return list(
+        dict.fromkeys(
+            endpoint_index[str(item["endpoint_id"])]["data_source_id"]
+            for item in endpoint_dependencies
+            if endpoint_index.get(str(item.get("endpoint_id") or ""), {}).get(
+                "data_source_id"
+            )
+        )
+    )
+
+
+def _validate_unique_values(
+    pages: list[dict[str, Any]],
+    field: str,
+    label: str,
+    errors: list[str],
+) -> None:
+    """校验页面标识或路由非空且全局唯一。"""
+
+    values = [str(page.get(field) or "") for page in pages]
+    if any(not value for value in values):
+        errors.append(f"Every {label} must be non-empty.")
+    duplicates = sorted(
+        {value for value in values if value and values.count(value) > 1}
+    )
+    for value in duplicates:
+        errors.append(f"Duplicate {label}: {value}.")
