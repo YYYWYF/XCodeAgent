@@ -21,6 +21,7 @@ from app.workspace.workspace import (
 )
 
 MAX_SNAPSHOT_FILE_BYTES = 1_000_000
+CODE_CHANGE_IGNORED_DIRS = {".xcodeagent"}
 T = TypeVar("T")
 
 
@@ -58,6 +59,7 @@ def snapshot_workspace(workspace_root: str | None) -> WorkspaceSnapshot | None:
             name
             for name in sorted(dirnames)
             if not _should_ignore(current / name, root, include_hidden=True)
+            and not _is_internal_code_change_path(current / name, root)
         ]
 
         for filename in sorted(filenames):
@@ -234,9 +236,21 @@ def merge_code_change_sets(
 def _skip_snapshot_path(path: Path, root: Path) -> bool:
     if path.is_symlink() or not path.is_file():
         return True
+    if _is_internal_code_change_path(path, root):
+        return True
     if _should_ignore(path, root, include_hidden=True):
         return True
     return _is_sensitive_path(path)
+
+
+def _is_internal_code_change_path(path: Path, root: Path) -> bool:
+    """判断路径是否位于不应展示给用户的 Agent 内部状态目录。"""
+
+    try:
+        relative_parts = path.relative_to(root).parts
+    except ValueError:
+        return True
+    return any(part in CODE_CHANGE_IGNORED_DIRS for part in relative_parts)
 
 
 def _code_change_payload_from_snapshots(

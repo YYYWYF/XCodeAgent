@@ -1,4 +1,9 @@
-import type { CSSProperties, MouseEvent as ReactMouseEvent, RefObject } from 'react'
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  RefObject
+} from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { DEFAULT_ASSISTANT_PANEL_WIDTH } from '../constants'
 import type { RightPanelState } from '../types'
@@ -7,6 +12,7 @@ import { clampAssistantPanelWidth } from '../utils'
 type AssistantPreviewLayout = {
   assistantPanelWidth: number
   embeddedPreviewOpen: boolean
+  handlePanelSplitKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void
   handlePanelSplitDragStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   panelRef: RefObject<HTMLElement>
   panelStyle?: CSSProperties
@@ -42,6 +48,20 @@ export function useAssistantPreviewLayout(): AssistantPreviewLayout {
   }, [assistantPanelWidth, rightPanelOpen])
 
   useEffect(() => {
+    if (!rightPanelOpen) return undefined
+
+    /** 在窗口尺寸改变后重新约束左右面板宽度。 */
+    const handleWindowResize = (): void => {
+      setAssistantPanelWidth((currentWidth) =>
+        clampAssistantPanelWidth(currentWidth, panelRef.current)
+      )
+    }
+
+    window.addEventListener('resize', handleWindowResize)
+    return () => window.removeEventListener('resize', handleWindowResize)
+  }, [rightPanelOpen])
+
+  useEffect(() => {
     if (!splitDragging) return undefined
 
     const previousCursor = document.body.style.cursor
@@ -75,9 +95,20 @@ export function useAssistantPreviewLayout(): AssistantPreviewLayout {
     setSplitDragging(true)
   }
 
+  /** 支持使用方向键无障碍调整左右面板宽度。 */
+  const handlePanelSplitKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const direction = event.key === 'ArrowLeft' ? -1 : 1
+    setAssistantPanelWidth((currentWidth) =>
+      clampAssistantPanelWidth(currentWidth + direction * 24, panelRef.current)
+    )
+  }
+
   return {
     assistantPanelWidth,
     embeddedPreviewOpen,
+    handlePanelSplitKeyDown,
     handlePanelSplitDragStart,
     panelRef,
     panelStyle,

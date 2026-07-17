@@ -41,7 +41,10 @@ type Props = {
 type ActiveView = 'chat' | 'skills' | 'files' | 'settings'
 
 /** 按页面名称递归查找对应的菜单配置。 */
-function findPageMenuItem(items: ApplicationMenuItem[], label: string): ApplicationMenuItem | undefined {
+function findPageMenuItem(
+  items: ApplicationMenuItem[],
+  label: string
+): ApplicationMenuItem | undefined {
   for (const item of items) {
     if (item.label === label) return item
     const matchedChild = findPageMenuItem(item.children || [], label)
@@ -67,7 +70,9 @@ export default function AiChatPanel({
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const { publishAiMessage } = useWorkbench()
   const {
+    assistantPanelWidth,
     embeddedPreviewOpen,
+    handlePanelSplitKeyDown,
     handlePanelSplitDragStart,
     panelRef,
     panelStyle,
@@ -141,7 +146,9 @@ export default function AiChatPanel({
     () => findPageMenuItem(application.menus.items, activePageTitle),
     [activePageTitle, application.menus.items]
   )
-  const activeSessionUpdatedAt = sessions.find((session) => session.id === activeSessionId)?.updatedAt
+  const activeSessionUpdatedAt = sessions.find(
+    (session) => session.id === activeSessionId
+  )?.updatedAt
 
   /** 在右侧工作区打开当前页面预览。 */
   const handleOpenPage = (): void => {
@@ -319,13 +326,16 @@ export default function AiChatPanel({
         )}
       </div>
 
-      {rightPanel?.type === 'preview' && (
+      {rightPanelOpen && (
         <div
           aria-label="拖动调整右侧面板宽度"
           aria-orientation="vertical"
+          aria-valuenow={assistantPanelWidth}
           className={cx('panel-split-handle', splitDragging && 'dragging')}
+          onKeyDown={handlePanelSplitKeyDown}
           onMouseDown={handlePanelSplitDragStart}
           role="separator"
+          tabIndex={0}
           title="拖动调整左右面板宽度"
         >
           <HolderOutlined className={cx('panel-split-handle-icon')} />

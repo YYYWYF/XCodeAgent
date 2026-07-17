@@ -85,6 +85,25 @@ class WorkspaceCodeChangeTests(unittest.TestCase):
 
             self.assertEqual(files, [])
 
+    def test_agent_internal_directory_is_not_included(self) -> None:
+        """验证工作目录中的 .xcodeagent 状态文件不会进入用户代码变更集。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            before = snapshot_workspace(workspace)
+
+            internal_dir = root / ".xcodeagent" / "cache"
+            internal_dir.mkdir(parents=True)
+            (internal_dir / "workspace.json").write_text("{}\n", encoding="utf-8")
+            (root / "visible.py").write_text("print('visible')\n", encoding="utf-8")
+            after = snapshot_workspace(workspace)
+
+            files = diff_workspace_snapshots(before, after, source_tool="test.agent")
+
+            self.assertEqual([item["path"] for item in files], ["visible.py"])
+            assert after is not None
+            self.assertNotIn(".xcodeagent/cache/workspace.json", after.files)
+
     def test_binary_file_change_does_not_expose_text_diff(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
