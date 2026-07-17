@@ -15,7 +15,11 @@ import { Diff, parseDiff, type FileData, type GutterOptions } from 'react-diff-v
 import 'react-diff-view/style/index.css'
 import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { groupWorkspaceCodeChanges, summarizeWorkspaceCodeChanges } from '../../utils'
+import {
+  groupWorkspaceCodeChanges,
+  splitWorkspacePath,
+  summarizeWorkspaceCodeChanges
+} from '../../utils'
 import './CodeDiffDetailPanel.less'
 
 const { Text, Title } = Typography
@@ -157,22 +161,6 @@ export default function CodeDiffDetailPanel({
       </div>
     </section>
   )
-}
-
-type WorkspacePathParts = {
-  directory: string
-  fileName: string
-}
-
-/** 将工作区相对路径拆分为目录和文件名，便于在窄面板中优先保留文件名。 */
-function splitWorkspacePath(path: string): WorkspacePathParts {
-  const normalizedPath = path.replaceAll('\\', '/')
-  const separatorIndex = normalizedPath.lastIndexOf('/')
-  if (separatorIndex < 0) return { directory: '', fileName: normalizedPath }
-  return {
-    directory: normalizedPath.slice(0, separatorIndex),
-    fileName: normalizedPath.slice(separatorIndex + 1)
-  }
 }
 
 type HighlightedDiffProps = {

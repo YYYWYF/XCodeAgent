@@ -62,6 +62,7 @@ class WorkspaceCodeChangeTests(unittest.TestCase):
             self.assertIsNotNone(code_change_set)
             assert code_change_set is not None
             self.assertEqual(code_change_set["status"], "applied")
+            self.assertEqual(code_change_set["workspaceName"], Path(workspace).name)
             self.assertEqual(code_change_set["summary"]["files"], 2)
             self.assertEqual(code_change_set["summary"]["additions"], 3)
             self.assertEqual(code_change_set["summary"]["deletions"], 4)
@@ -103,6 +104,22 @@ class WorkspaceCodeChangeTests(unittest.TestCase):
             self.assertEqual([item["path"] for item in files], ["visible.py"])
             assert after is not None
             self.assertNotIn(".xcodeagent/cache/workspace.json", after.files)
+
+    def test_nested_paths_are_workspace_relative_posix_paths(self) -> None:
+        """验证 Python 端始终返回从工作目录开始的完整 POSIX 相对路径。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            before = snapshot_workspace(workspace)
+            nested_file = root / "Frontend" / "src" / "components" / "Panel.tsx"
+            nested_file.parent.mkdir(parents=True)
+            nested_file.write_text("export default {}\n", encoding="utf-8")
+            after = snapshot_workspace(workspace)
+
+            files = diff_workspace_snapshots(before, after, source_tool="test.agent")
+
+            self.assertEqual(files[0]["path"], "Frontend/src/components/Panel.tsx")
+            self.assertFalse(Path(files[0]["path"]).is_absolute())
 
     def test_binary_file_change_does_not_expose_text_diff(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:

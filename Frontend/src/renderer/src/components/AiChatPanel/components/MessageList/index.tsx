@@ -15,21 +15,27 @@ import './MessageList.less'
 const { Text } = Typography
 
 type MessageListProps = {
+  codeChangeActionsDisabled: boolean
   copy: ChatCopy[EditorMode]
   loading: boolean
   messages: AgentChatMessage[]
+  onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
   onSubmitClarification: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
   ) => Promise<void>
   onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
+  revertingCodeChangeIds: ReadonlySet<string>
 }
 
 export default function MessageList({
+  codeChangeActionsDisabled,
   copy,
   loading,
   messages,
   onOpenCodeChangeFile,
+  onRevertCodeChanges,
+  revertingCodeChangeIds,
   onSubmitClarification
 }: MessageListProps): ReactElement {
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
@@ -103,6 +109,9 @@ export default function MessageList({
                           loading={messageLoading}
                           onApproveAll={() => undefined}
                           onOpenFile={(path) => onOpenCodeChangeFile(codeChanges, path)}
+                          onRevert={() => onRevertCodeChanges(message.id, codeChanges)}
+                          revertDisabled={codeChangeActionsDisabled}
+                          reverting={revertingCodeChangeIds.has(codeChanges.id)}
                         />
                       )}
                     </>

@@ -1,12 +1,11 @@
 @import './CodeDiffSyntax.less';
 
 .@{class-prefix}-code-diff-detail-panel {
-  --code-panel-bg: #f7f9fc;
+  --code-panel-bg: #ffffff;
   --code-panel-code-bg: #ffffff;
   --code-panel-header: rgba(255, 255, 255, 0.96);
   --code-panel-active: #f0f3ff;
   --code-panel-border: #d8deeb;
-  --code-panel-grid: rgba(88, 105, 140, 0.055);
   --code-panel-insert: #e6f4ea;
   --code-panel-delete: #fce8e6;
   display: flex;
@@ -24,7 +23,6 @@
   --code-panel-header: var(--wb-canvas);
   --code-panel-active: var(--wb-surface-subtle);
   --code-panel-border: var(--wb-border);
-  --code-panel-grid: rgba(133, 148, 180, 0.07);
   --code-panel-insert: rgba(46, 160, 67, 0.2);
   --code-panel-delete: rgba(248, 81, 73, 0.2);
 }
@@ -36,23 +34,9 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  overflow: hidden;
   padding: 16px 20px 14px;
   border-bottom: 1px solid var(--code-panel-border);
-  background:
-    linear-gradient(135deg, var(--wb-accent-soft), transparent 48%), var(--code-panel-header);
-
-  &::after {
-    position: absolute;
-    inset: 0;
-    content: '';
-    background-image:
-      linear-gradient(var(--code-panel-grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--code-panel-grid) 1px, transparent 1px);
-    background-size: 20px 20px;
-    mask-image: linear-gradient(90deg, transparent 36%, #000);
-    pointer-events: none;
-  }
+  background: var(--code-panel-header);
 
   h4.ant-typography {
     position: relative;
@@ -108,11 +92,7 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  background-color: var(--code-panel-bg);
-  background-image:
-    linear-gradient(var(--code-panel-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--code-panel-grid) 1px, transparent 1px);
-  background-size: 24px 24px;
+  background: var(--code-panel-code-bg);
   scrollbar-color: var(--wb-border-strong) transparent;
   scrollbar-gutter: auto;
   scrollbar-width: thin;

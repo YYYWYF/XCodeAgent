@@ -72,7 +72,7 @@ def snapshot_workspace(workspace_root: str | None) -> WorkspaceSnapshot | None:
             except OSError:
                 continue
 
-            rel = _relative_path(path, root)
+            rel = Path(_relative_path(path, root)).as_posix()
             binary = _looks_binary(raw) or len(raw) > MAX_SNAPSHOT_FILE_BYTES
             files[rel] = WorkspaceFileSnapshot(
                 path=rel,
@@ -144,6 +144,7 @@ def build_code_change_set(
         "id": f"code-change-set:{digest}",
         "status": "applied",
         "workspaceRoot": str(root),
+        "workspaceName": root.name,
         "summary": {
             "files": len({str(item.get("path")) for item in files if item.get("path")}),
             "additions": sum(_safe_int(item.get("additions")) for item in files),
@@ -203,6 +204,11 @@ def merge_code_change_sets(
         return None
 
     workspace_root = str(sets[-1].get("workspaceRoot") or sets[0].get("workspaceRoot") or "")
+    workspace_name = str(
+        sets[-1].get("workspaceName")
+        or sets[0].get("workspaceName")
+        or Path(workspace_root).name
+    )
     digest_source = json.dumps(
         {
             "workspaceRoot": workspace_root,
@@ -224,6 +230,7 @@ def merge_code_change_sets(
         "id": f"code-change-set:{digest}",
         "status": "applied",
         "workspaceRoot": workspace_root,
+        "workspaceName": workspace_name,
         "summary": {
             "files": len({str(item.get("path")) for item in files if item.get("path")}),
             "additions": sum(_safe_int(item.get("additions")) for item in files),

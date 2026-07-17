@@ -9,6 +9,11 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/skillSelection'
 import { buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
 import { normalizeMessageSkills } from '../src/renderer/src/service/chatSessions'
+import { DEFAULT_DIFF_PANEL_WIDTH } from '../src/renderer/src/components/AiChatPanel/constants'
+import {
+  splitWorkspacePath,
+  workspaceCodeChangeDisplayPath
+} from '../src/renderer/src/components/AiChatPanel/utils'
 
 test('技能选择按名称去空白去重并保留首次顺序', () => {
   assert.deepEqual(
@@ -65,4 +70,26 @@ test('输入文本为空时 Backspace 依次删除最后一个技能标签', () 
   assert.equal(skillsAfterEmptyBackspace('Backspace', 'hello', skills), undefined)
   assert.equal(skillsAfterEmptyBackspace('Enter', '', skills), undefined)
   assert.equal(skillsAfterEmptyBackspace('Backspace', '', []), undefined)
+})
+
+test('工作区文件路径拆分后保留完整目录和最终文件名', () => {
+  assert.deepEqual(
+    splitWorkspacePath(
+      'Frontend/src/renderer/src/components/AiChatPanel/components/CodeDiffDetailPanel/index.tsx'
+    ),
+    {
+      directory: 'Frontend/src/renderer/src/components/AiChatPanel/components/CodeDiffDetailPanel',
+      fileName: 'index.tsx'
+    }
+  )
+  assert.deepEqual(splitWorkspacePath('Backend\\app\\main.py'), {
+    directory: 'Backend/app',
+    fileName: 'main.py'
+  })
+})
+
+test('历史变更路径包含工作区根目录且 Diff 默认宽度为 500px', () => {
+  assert.equal(workspaceCodeChangeDisplayPath('aa/b.js', '/Users/example/c', 'c'), 'c/aa/b.js')
+  assert.equal(workspaceCodeChangeDisplayPath('aa\\b.js', 'C:\\workspace\\c'), 'c/aa/b.js')
+  assert.equal(DEFAULT_DIFF_PANEL_WIDTH, 500)
 })

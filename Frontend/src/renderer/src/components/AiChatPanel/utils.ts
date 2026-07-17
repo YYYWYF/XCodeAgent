@@ -19,6 +19,38 @@ export type WorkspaceCodeChangeSummary = {
   deletions: number
 }
 
+export type WorkspacePathParts = {
+  directory: string
+  fileName: string
+}
+
+/** 将工作区相对路径拆分为目录和文件名，供窄面板优先展示文件名。 */
+export function splitWorkspacePath(path: string): WorkspacePathParts {
+  const normalizedPath = path.replaceAll('\\', '/')
+  const separatorIndex = normalizedPath.lastIndexOf('/')
+  if (separatorIndex < 0) return { directory: '', fileName: normalizedPath }
+  return {
+    directory: normalizedPath.slice(0, separatorIndex),
+    fileName: normalizedPath.slice(separatorIndex + 1)
+  }
+}
+
+/** 拼接工作区根目录名称和文件相对路径，并兼容缺少 workspaceName 的旧记录。 */
+export function workspaceCodeChangeDisplayPath(
+  filePath: string,
+  workspaceRoot: string,
+  workspaceName?: string
+): string {
+  const normalizedPath = filePath.replaceAll('\\', '/').replace(/^\.\//, '')
+  const normalizedRoot = workspaceRoot.replaceAll('\\', '/').replace(/\/+$/, '')
+  const derivedWorkspaceName = normalizedRoot.split('/').filter(Boolean).at(-1) || ''
+  const rootName = workspaceName?.trim() || derivedWorkspaceName
+  if (!rootName || normalizedPath === rootName || normalizedPath.startsWith(`${rootName}/`)) {
+    return normalizedPath
+  }
+  return `${rootName}/${normalizedPath}`
+}
+
 export function formatSessionTime(value: number): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '未知时间'

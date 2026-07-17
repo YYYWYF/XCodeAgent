@@ -25,6 +25,7 @@ import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
+import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import { chatCopy } from './constants'
@@ -143,6 +144,15 @@ export default function AiChatPanel({
     selectedSkills,
     setDraftByKey,
     setSelectedSkillsByKey,
+    setSessionMessages
+  })
+  const { requestCodeChangeRevert, revertingCodeChangeIds } = useCodeChangeRevert({
+    activeSession,
+    disabled: loading || workspaceBusy,
+    getSessionMessages,
+    persistSession,
+    rightPanel,
+    setRightPanel,
     setSessionMessages
   })
 
@@ -317,11 +327,14 @@ export default function AiChatPanel({
             )}
 
             <MessageList
+              codeChangeActionsDisabled={loading || workspaceBusy}
               copy={copy}
               loading={loading}
               messages={messages}
               onOpenCodeChangeFile={handleOpenCodeChangeFile}
+              onRevertCodeChanges={requestCodeChangeRevert}
               onSubmitClarification={handleSubmitClarification}
+              revertingCodeChangeIds={revertingCodeChangeIds}
             />
 
             <ChatComposer

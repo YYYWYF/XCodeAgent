@@ -1,6 +1,7 @@
 import type { ChatCopy } from './types'
 
 export const DEFAULT_ASSISTANT_PANEL_WIDTH = 660
+export const DEFAULT_DIFF_PANEL_WIDTH = 500
 export const MIN_ASSISTANT_PANEL_WIDTH = 520
 export const MIN_RIGHT_PANEL_WIDTH = 380
 export const SPLIT_HANDLE_WIDTH = 10

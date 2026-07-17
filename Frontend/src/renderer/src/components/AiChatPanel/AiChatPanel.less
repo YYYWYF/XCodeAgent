@@ -83,27 +83,24 @@
     height: 100%;
     content: '';
     background: transparent;
-    transition: background 0.16s ease;
   }
 
-  &:hover,
   &.@{class-prefix}-dragging,
   &:focus-visible {
-    outline: none;
-
     &::before {
       background: var(--wb-border);
       box-shadow: none;
-    }
-
-    &::after {
-      background: var(--wb-surface-hover);
     }
 
     .@{class-prefix}-panel-split-handle-icon {
       opacity: 1;
       transform: translate(-50%, -50%) scale(1);
     }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: -2px;
   }
 }
 

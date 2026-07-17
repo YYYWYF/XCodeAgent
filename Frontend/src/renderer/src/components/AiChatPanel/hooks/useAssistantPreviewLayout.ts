@@ -4,8 +4,8 @@ import type {
   MouseEvent as ReactMouseEvent,
   RefObject
 } from 'react'
-import { useEffect, useRef, useState } from 'react'
-import { DEFAULT_ASSISTANT_PANEL_WIDTH } from '../constants'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { DEFAULT_ASSISTANT_PANEL_WIDTH, DEFAULT_DIFF_PANEL_WIDTH } from '../constants'
 import type { RightPanelState } from '../types'
 import { clampAssistantPanelWidth } from '../utils'
 
@@ -25,6 +25,7 @@ type AssistantPreviewLayout = {
 export function useAssistantPreviewLayout(): AssistantPreviewLayout {
   const panelRef = useRef<HTMLElement | null>(null)
   const [rightPanel, setRightPanel] = useState<RightPanelState>()
+  const previousRightPanelTypeRef = useRef<RightPanelState['type']>()
   const [assistantPanelWidth, setAssistantPanelWidth] = useState(DEFAULT_ASSISTANT_PANEL_WIDTH)
   const [splitDragging, setSplitDragging] = useState(false)
   const embeddedPreviewOpen = rightPanel?.type === 'preview'
@@ -34,6 +35,19 @@ export function useAssistantPreviewLayout(): AssistantPreviewLayout {
         '--assistant-panel-width': `${assistantPanelWidth}px`
       } as CSSProperties)
     : undefined
+
+  /** 每次首次打开 Diff 面板时按 500px 目标宽度初始化，拖拽后的宽度仍由用户控制。 */
+  useLayoutEffect(() => {
+    const previousType = previousRightPanelTypeRef.current
+    previousRightPanelTypeRef.current = rightPanel?.type
+    if (rightPanel?.type !== 'diff' || previousType === 'diff') return
+
+    const panelWidth = panelRef.current?.getBoundingClientRect().width ?? 0
+    if (panelWidth <= 0) return
+    setAssistantPanelWidth(
+      clampAssistantPanelWidth(panelWidth - DEFAULT_DIFF_PANEL_WIDTH, panelRef.current)
+    )
+  }, [rightPanel?.type])
 
   useEffect(() => {
     if (!rightPanelOpen) {

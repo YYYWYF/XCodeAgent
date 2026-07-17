@@ -33,6 +33,10 @@ from app.protocols.agent_files import (
     agent_files_capabilities,
     build_agent_files_ag_ui_stream,
 )
+from app.protocols.code_changes import (
+    build_code_changes_ag_ui_stream,
+    code_changes_capabilities,
+)
 from app.config import Settings
 from app.services.agent_file_documents import ensure_agents_document
 from app.services.builtin_skills import available_builtin_skills
@@ -101,6 +105,7 @@ async def health() -> dict[str, object]:
             "application_development_planning": application_development_planning_capabilities(),
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
+            "code_changes": code_changes_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -158,6 +163,20 @@ async def run_agent_files(
 ) -> StreamingResponse:
     return StreamingResponse(
         build_agent_files_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/code-changes/run")
+async def run_code_changes(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流执行代码变更撤销。"""
+
+    return StreamingResponse(
+        build_code_changes_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

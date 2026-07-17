@@ -1,14 +1,14 @@
-import {
-  CheckCircleOutlined,
-  CodeOutlined,
-  ExportOutlined,
-  FileTextOutlined
-} from '@ant-design/icons'
+import { CheckCircleOutlined, CodeOutlined, UndoOutlined } from '@ant-design/icons'
 import { Button, Space, Tag, Typography } from 'antd'
 import { useMemo, type ReactElement } from 'react'
-import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../../../typings'
+import type { WorkspaceCodeChangeSet } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { groupWorkspaceCodeChanges, summarizeWorkspaceCodeChanges } from '../../utils'
+import {
+  groupWorkspaceCodeChanges,
+  splitWorkspacePath,
+  summarizeWorkspaceCodeChanges,
+  workspaceCodeChangeDisplayPath
+} from '../../utils'
 import './CodeChangeCard.less'
 
 const { Text } = Typography
@@ -18,12 +18,9 @@ type Props = {
   loading: boolean
   onApproveAll: () => void
   onOpenFile: (path: string) => void
-}
-
-const changeTypeCopy: Record<WorkspaceCodeChangeFile['changeType'], string> = {
-  added: '新增',
-  modified: '修改',
-  deleted: '删除'
+  onRevert: () => void
+  revertDisabled: boolean
+  reverting: boolean
 }
 
 /** 展示一次工作流产生的可审阅文件列表与汇总数据。 */
@@ -31,7 +28,10 @@ export default function CodeChangeCard({
   codeChanges,
   loading,
   onApproveAll,
-  onOpenFile
+  onOpenFile,
+  onRevert,
+  revertDisabled,
+  reverting
 }: Props): ReactElement {
   const groupedChanges = useMemo(
     () => groupWorkspaceCodeChanges(codeChanges.files),
@@ -40,7 +40,8 @@ export default function CodeChangeCard({
   const summary = useMemo(() => summarizeWorkspaceCodeChanges(groupedChanges), [groupedChanges])
   const pending =
     codeChanges.status === 'pending_approval' && Boolean(codeChanges.approvals?.length)
-  const resolved = codeChanges.status === 'applied' || codeChanges.status === 'rejected'
+  const reverted = codeChanges.status === 'reverted'
+  const resolved = codeChanges.status === 'applied' || codeChanges.status === 'rejected' || reverted
 
   return (
     <div className={cx('code-change-card', pending && 'pending', resolved && 'resolved')}>
@@ -59,36 +60,55 @@ export default function CodeChangeCard({
           </div>
         </Space>
         {!pending && groupedChanges.length > 0 && (
-          <Button
-            icon={<ExportOutlined />}
-            onClick={() => onOpenFile(groupedChanges[0].path)}
-            size="small"
-          >
-            查看全部变更
-          </Button>
+          <div className={cx('code-change-header-actions')}>
+            <Button
+              className={cx(reverted && 'code-change-reverted-button')}
+              danger
+              disabled={reverted || revertDisabled}
+              icon={<UndoOutlined />}
+              loading={reverting}
+              onClick={onRevert}
+              size="small"
+              type="text"
+            >
+              {reverted ? '已撤销' : '撤销'}
+            </Button>
+            <Button onClick={() => onOpenFile(groupedChanges[0].path)} size="small">
+              审核
+            </Button>
+          </div>
         )}
         {pending && <Tag color="gold">{formatStatus(codeChanges.status)}</Tag>}
       </div>
 
       <div className={cx('code-change-file-list')}>
-        {groupedChanges.map((file) => (
-          <button
-            className={cx('code-change-file-row')}
-            key={file.path}
-            onClick={() => onOpenFile(file.path)}
-            type="button"
-          >
-            <span className={cx('code-change-file-name')}>
-              <FileTextOutlined />
-              <span>{file.path}</span>
-              <Tag>{changeTypeCopy[file.changeType]}</Tag>
-            </span>
-            <span className={cx('code-change-file-stats')}>
-              <span className={cx('addition')}>+{file.additions}</span>
-              <span className={cx('deletion')}>-{file.deletions}</span>
-            </span>
-          </button>
-        ))}
+        {groupedChanges.map((file) => {
+          const displayPath = workspaceCodeChangeDisplayPath(
+            file.path,
+            codeChanges.workspaceRoot,
+            codeChanges.workspaceName
+          )
+          const pathParts = splitWorkspacePath(displayPath)
+          return (
+            <button
+              className={cx('code-change-file-row')}
+              key={file.path}
+              onClick={() => onOpenFile(file.path)}
+              type="button"
+            >
+              <span className={cx('code-change-file-path')} title={displayPath}>
+                {pathParts.directory && (
+                  <span className={cx('code-change-file-directory')}>{pathParts.directory}/</span>
+                )}
+                <span className={cx('code-change-file-name')}>{pathParts.fileName}</span>
+              </span>
+              <span className={cx('code-change-file-stats')}>
+                <span className={cx('addition')}>+{file.additions}</span>
+                <span className={cx('deletion')}>-{file.deletions}</span>
+              </span>
+            </button>
+          )
+        })}
       </div>
 
       {pending && (
@@ -101,7 +121,7 @@ export default function CodeChangeCard({
 
       {resolved && (
         <span className={cx('code-change-resolved-mark')}>
-          <CheckCircleOutlined />
+          {reverted ? <UndoOutlined /> : <CheckCircleOutlined />}
         </span>
       )}
     </div>
@@ -112,5 +132,6 @@ export default function CodeChangeCard({
 function formatStatus(status: WorkspaceCodeChangeSet['status']): string {
   if (status === 'pending_approval') return '待审核'
   if (status === 'rejected') return '已退回'
+  if (status === 'reverted') return '已撤销'
   return '已应用'
 }
