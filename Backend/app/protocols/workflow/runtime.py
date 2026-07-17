@@ -132,7 +132,7 @@ def build_workflow_ag_ui_stream(
                 "observability": observability,
             }
             initial_state.update(workflow_inputs.get("resume_values") or {})
-            first_node_name = _workflow_start_node(resume_from)
+            first_node_name = _workflow_start_node(resume_from, workflow_scope)
 
             if resume_from:
                 initial_state["resume_from"] = resume_from

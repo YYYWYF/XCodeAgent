@@ -29,14 +29,10 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 
 ```text
 START
-  → classify_request_complexity
-      ├─ 复杂需求 → requirements //direct ChatModel负责
-      │            → project_planning //direct ChatModel负责
-      │            → detail_confirmation //direct ChatModel负责页面设计
-      │            → inspect_workspace //确定性工作区快照
-      │            → prepare_build_tasks //direct ChatModel 基于快照生成静态 Build DAG
-      │            → build //BuildScheduler 派发给 CodeRunner
-      └─ 简单需求 → direct_modification
+  → detail_confirmation //direct ChatModel负责页面设计
+  → inspect_workspace //确定性工作区快照
+  → prepare_build_tasks //direct ChatModel 基于快照生成静态 Build DAG
+  → build //BuildScheduler 派发给 CodeRunner
   → integration_test
       ├─ 测试与质量门禁通过 → launch_project
       │                         → 提示用户验收并结束本轮
@@ -51,23 +47,30 @@ START
                          → END
 ```
 
-项目初始化不属于本 Graph 的职责。进入 Graph 前，外部系统应已经完成项目创建、工作目录准备、持久化上下文初始化和运行资源准备，并将必要的 `project_id`、`workspace` 或上下文引用作为 Graph 输入传入。
+需求确认和项目级规划由首页独立的 `application_planning_workflow` 完成，不再作为主 Graph 节点注册。主 `/workflow/run` 根据 `workspace` 自动读取 `.xcodeagent/plans/project-plan.json`（兼容 `plans/project-plan.json`），把完整 `project_plan` 与其中的 `frontend_pages` 页面功能概览同时放入初始 Graph State，并直接从 `detail_confirmation` 开始。项目初始化仍不属于本 Graph 的职责；进入主 Graph 前，外部系统必须已经完成计划确认和工作目录准备。
+
+### 主 Graph 起点的参考架构映射与上下文预算
+
+- learn-coding-agent：沿用“先从文件获取任务上下文，再执行、验证”的紧凑循环；主 Graph 不重复生成已经持久化的 RequirementSpec 和 ProjectPlan。
+- OpenCode：沿用 session/run 从可序列化文件状态恢复的边界；正式 ProjectPlan 是跨阶段事实来源，后续节点只恢复所需的小型结构化状态。
+- Deep Agents：外层确定性 Graph 负责阶段门禁，页面设计和后续专业 Agent 只接收已确认计划及相关文件引用。
+- 128k 上下文：`frontend_pages` 作为紧凑页面功能概览显式传入，完整计划作为结构化初始状态传入；仓库源码、历史消息和大型工具输出仍不注入主 Graph 上下文。
 
 ### 新建应用两阶段规划 Graph
 
-首页“创建并规划页面”使用独立的 `application_planning_workflow`，只组合主 Workflow 已有的 `requirements → project_planning` 节点函数。它不修改主 Graph 的节点、路由、状态语义或 `/workflow/run` 入口，也不会进入页面细节确认、工作区检查、任务拆分、代码生成和测试阶段。
+首页“创建并规划页面”使用独立的 `application_planning_workflow`，组合 `requirements → project_planning` 节点函数，并负责生成主 Graph 的正式初始计划。它不会进入页面细节确认、工作区检查、任务拆分、代码生成和测试阶段。
 
 - 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照、`resumeState` 和 `clarificationAnswers`。
 - RequirementSpec 与 ProjectPlan 继续使用现有 Markdown 产物和显式用户确认门禁；回答澄清问题不能替代产物确认。
 - 用户确认第二步 ProjectPlan 后，独立 Graph 的包装节点只校验 `.xcodeagent/specs` 与 `.xcodeagent/plans` 中 RequirementSpec、ProjectPlan 的 Markdown/JSON 正式产物及确认状态，不读取或改写 `.xcodeagent/application.json`。菜单、API、Schema 和数据源等派生结构不属于创建门禁。
 - 创建弹窗只展示需求确认和项目规划两个阶段；该独立创建范围对未明确的信息采用保守假设，不再为了后续派生 JSON 追加普通澄清卡。两份文档分别确认且目录产物校验成功后，前端直接打开工作台。
-- 主 Workflow 的 `detail_confirmation` 节点保持不变；它只是不再属于首页的新建应用规划流程。
+- 主 Workflow 直接以 `detail_confirmation` 为入口，并使用首页流程确认后写入的 ProjectPlan 与页面功能概览。
 
 本次变更没有重新设计 Agent 循环、权限、工具或上下文策略，只复用仓库内既有的两个只读规划节点。因此不引入新的参考架构差异；上下文仍由 RequirementSpec、ProjectPlan 和文件路径承载，公开状态不加载仓库全文，满足 128k 上下文预算。
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
-当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。当前已支持从 `requirements`、`project_planning`、`detail_confirmation`、`inspect_workspace`、`prepare_build_tasks` 和后续执行节点续跑；后续计划确认等节点接入用户确认时，应扩展后端推断逻辑，而不是让前端传固定阶段名。
+当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。主 Graph 当前支持从 `detail_confirmation`、`inspect_workspace`、`prepare_build_tasks` 和后续执行节点续跑；首页独立规划 Graph 继续自行处理 `requirements` 与 `project_planning` 的恢复。
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
@@ -165,7 +168,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 该节点通过 `agents/main/planner.py` 直接调用 `create_chat_model()` 生成结构化 JSON 规划建议，再由确定性 schema 合并和归一化后写入 Graph State。该调用不绑定任何工具，不创建 DeepAgent，也不扫描 workspace；模型输出只用于细化项目级判断，确定性归一化负责保证稳定 id、必需字段和后续任务拆分可读取的结构。
 
-`project_planning` 在输出计划前会内部核对 API 契约、页面清单、数据源清单、依赖、角色、流程和验收标准；普通缺口以明确假设和风险写入同一份计划，而不是拆成后续多轮追问。生成计划书后进入一次 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点才输出 `status = completed`；主 Workflow 随后进入 `detail_confirmation`，而首页的新建应用规划流程校验 specs/plans 产物后直接打开工作台。如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
+`project_planning` 在输出计划前会内部核对 API 契约、页面清单、数据源清单、依赖、角色、流程和验收标准；普通缺口以明确假设和风险写入同一份计划，而不是拆成后续多轮追问。生成计划书后进入一次 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点才输出 `status = completed`；首页的新建应用规划流程校验 specs/plans 产物后直接打开工作台，由用户从 `frontend_pages` 中选择页面，再启动主 Workflow 的 `detail_confirmation`。如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
 
 等待 `project_plan_confirmation` 时，AG-UI workflow payload 的只读 `confirmationArtifact` 只返回当前 `project-plan.md`，不会同时返回 RequirementSpec 正文。用户提交调整意见并重新生成计划后，下一轮确认展示新写入的 Markdown；`detail_confirmation` 不复用该载荷展示 ProjectPlan。
 
@@ -186,10 +189,11 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 ### `detail_confirmation`
 
-批量生成并整体审阅全部页面和数据源详细设计，负责：
+基于用户在工作台选择的页面生成并审阅详细设计，负责：
 
 - 读取 `ProjectPlan.frontend_pages` 和 `ProjectPlan.data_sources`；
-- 一次性为所有页面和数据源生成初版详细设计；
+- 将工作台通过 AG-UI 提交的 `selectedPageId` 写入 `ProjectState.selected_page_id`；
+- 为所选页面和计划内数据源生成初版详细设计；未提供选择时兼容原有全部页面行为；
 - 在同一审阅界面按页面和数据源分组展示，默认折叠；
 - 用户只展开需要调整的对象，按页面目标、布局、交互、权限、关系、校验和 Seed 等模板字段修改；
 - 核对数据模型、关系、校验规则和 API 映射；如需字段变更则返回 ProjectPlan 契约调整；
@@ -198,7 +202,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 该阶段由只读规划逻辑和 page-design 专用 ChatModel 负责，不由代码生成 Agent 负责。
 
-当前实现使用 `xcodeagent.detail_review.v1` 批量审阅 payload。首次进入该节点时，节点从 `ProjectPlan` 读取全部页面和数据源，生成完整 `page_detail_plans` 和 `data_source_detail_plans`，写入 `pending_project_plan`，然后一次性暂停。前端提交 `detail_review` 结构化结果并携带 `resumeState`，后端只合并白名单模板字段、执行契约一致性校验并确认当前计划，不再逐个选择对象或产生多轮中断。
+当前实现使用 `xcodeagent.detail_review.v1` 审阅 payload。首次进入该节点时，节点从 `ProjectPlan` 读取用户选择的页面和数据源，生成对应 `page_detail_plans` 和 `data_source_detail_plans`，写入 `pending_project_plan`，然后一次性暂停。前端提交 `detail_review` 结构化结果并携带 `resumeState`，后端只合并白名单模板字段、执行契约一致性校验并确认当前计划，不再逐个选择对象或产生多轮中断。
 
 页面初版设计结合 `frontend_pages`、`api_contracts`、`data_sources`、`permission_model` 和业务流程，覆盖页面目标、页面布局设计、页面交互设计、API 依赖、响应字段绑定、页面跳转与依赖、权限与操作可见性、页面验收标准。`detail_confirmation` 对每个页面调用 `page_designer`，`page_designer` 从 ProjectPlan 中提取当前页面上下文，并直接基于 `ProjectPlan.api_contracts` 分析当前页面实际依赖的 API；`PageDetail.api_dependencies` 是页面详细设计确认后的实际 API 依赖。页面详细设计面向页面实现视角，页面数据访问必须直接引用具体 API/Endpoint，而不是把底层数据源作为主要确认对象。布局设计只描述信息组织、区域职责、主要内容呈现、操作入口位置和响应式/信息密度策略；loading、empty、error、success、confirm、validation 等反馈属于交互设计，不作为布局区域。数据源初版设计覆盖实体引用、关系、校验、API 契约、依赖页面、Seed/Mock 策略和验收标准。页面的 endpoint、Schema 和 `response_bindings`，以及数据源的实体、Schema 和 API 契约在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
 

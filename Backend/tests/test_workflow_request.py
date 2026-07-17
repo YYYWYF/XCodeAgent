@@ -125,7 +125,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertIn("普通员工、库管员", request)
         self.assertIn("入库管理、出库管理、库存查询", request)
 
-    def test_infers_resume_from_forwarded_resume_state(self) -> None:
+    def test_removed_requirements_resume_falls_back_to_main_start(self) -> None:
         inputs = workflow_run_inputs(
             {
                 "request": "补充后的需求",
@@ -143,9 +143,9 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "requirements")
+        self.assertEqual(inputs["resume_from"], "")
 
-    def test_clarification_answers_default_to_requirements_resume(self) -> None:
+    def test_clarification_answers_default_to_detail_confirmation_resume(self) -> None:
         inputs = workflow_run_inputs(
             {
                 "originalRequest": "帮我做一个库房系统",
@@ -153,9 +153,29 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "requirements")
+        self.assertEqual(inputs["resume_from"], "detail_confirmation")
         self.assertNotIn("原始需求：\n请基于原始需求", inputs["request"])
         self.assertIn("回答：库管员", inputs["request"])
+
+    def test_application_planning_keeps_its_two_resume_nodes(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "正确，继续",
+                "forwardedProps": {
+                    "workflowScope": "application_planning",
+                    "resumeState": {
+                        "events": [
+                            {
+                                "nodeName": "project_planning",
+                                "status": "requires_user_input",
+                            }
+                        ]
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "project_planning")
 
     def test_merges_other_choice_input_as_a_requirement_supplement(self) -> None:
         inputs = workflow_run_inputs(
@@ -225,7 +245,7 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "requirements")
+        self.assertEqual(inputs["resume_from"], "")
         self.assertEqual(
             inputs["resume_values"]["requirement_spec"]["confirmation_status"],
             "pending_user_input",
@@ -272,7 +292,7 @@ class WorkflowRequestTests(unittest.TestCase):
             submission,
         )
 
-    def test_infers_project_planning_resume_and_preserves_plan_state(self) -> None:
+    def test_removed_project_planning_resume_preserves_plan_state(self) -> None:
         inputs = workflow_run_inputs(
             {
                 "request": "正确，继续",
@@ -294,11 +314,57 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "project_planning")
+        self.assertEqual(inputs["resume_from"], "")
         self.assertEqual(inputs["resume_values"]["project_plan"], {"version": "0.1.0"})
         self.assertEqual(
             inputs["resume_values"]["requirement_spec"],
             {"version": "0.1.0"},
+        )
+
+    def test_loads_project_plan_and_frontend_pages_for_normal_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            plans_dir = workspace / "plans"
+            plans_dir.mkdir()
+            project_plan = {
+                "version": "0.1.0",
+                "frontend_pages": [
+                    {
+                        "id": "inventory_page",
+                        "name": "库存页面",
+                        "description": "查看、筛选和导出库存。",
+                    }
+                ],
+            }
+            (plans_dir / "project-plan.json").write_text(
+                json.dumps(project_plan, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            inputs = workflow_run_inputs(
+                {
+                    "request": "开始开发",
+                    "forwardedProps": {"workspaceRoot": str(workspace)},
+                }
+            )
+
+        self.assertEqual(inputs["resume_values"]["project_plan"], project_plan)
+        self.assertEqual(
+            inputs["resume_values"]["frontend_pages"],
+            project_plan["frontend_pages"],
+        )
+
+    def test_forwards_selected_page_id_to_detail_confirmation_state(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "request": "开始设计库存页面",
+                "forwardedProps": {"selectedPageId": "inventory_page"},
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["selected_page_id"],
+            "inventory_page",
         )
 
     def test_infers_prepare_build_tasks_resume_for_plan_confirmation_guard(self) -> None:

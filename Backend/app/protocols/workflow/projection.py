@@ -48,49 +48,38 @@ def _workflow_node_label(node_name: str) -> str:
     return WORKFLOW_NODE_LABELS.get(node_name, node_name)
 
 
-def _workflow_start_node(resume_from: str | None) -> str:
-    supported = set(WORKFLOW_NODE_LABELS) - {
-        "classify_request_complexity",
-        "direct_modification",
-        "handle_failure",
-    }
-    return resume_from if resume_from in supported else "classify_request_complexity"
+def _workflow_start_node(
+    resume_from: str | None,
+    workflow_scope: str | None = None,
+) -> str:
+    """返回页面细节确认或其后的主 Workflow 展示入口。"""
+
+    if workflow_scope == "application_planning":
+        return (
+            resume_from
+            if resume_from in {"requirements", "project_planning"}
+            else "requirements"
+        )
+    supported = set(WORKFLOW_NODE_LABELS) - {"handle_failure"}
+    return resume_from if resume_from in supported else "detail_confirmation"
 
 
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     """仅预测下一个 UI 时间线节点，不参与 LangGraph 实际路由。"""
 
-    if node_name == "classify_request_complexity":
-        return (
-            ["direct_modification"]
-            if update.get("request_complexity") == "simple"
-            else ["requirements"]
-        )
     if node_name == "integration_test":
         return (
             ["launch_project"]
             if update.get("quality_gate_passed")
             else ["handle_failure"]
         )
-    if node_name == "requirements":
-        clarification = update.get("clarification")
-        if (
-            isinstance(clarification, dict)
-            and clarification.get("status") == "requires_user_input"
-        ):
-            return []
-        return ["project_planning"]
-    if node_name == "project_planning":
-        if update.get("status") == "requires_user_input":
-            return []
-        if update.get("workflow_scope") == "application_planning":
-            return []
-        return ["detail_confirmation"]
     if node_name == "detail_confirmation":
         if update.get("status") == "requires_user_input":
             return []
         if update.get("workflow_scope") == "application_planning":
             return []
+        return ["inspect_workspace"]
+    if node_name == "inspect_workspace":
         return ["prepare_build_tasks"]
     if node_name == "prepare_build_tasks":
         if update.get("status") == "requires_user_input":

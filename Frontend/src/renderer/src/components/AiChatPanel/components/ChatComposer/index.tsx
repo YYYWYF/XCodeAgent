@@ -25,8 +25,6 @@ const { TextArea } = Input
 const { Option } = Select
 
 const resumeNodeOptions = [
-  { value: 'requirements', label: 'requirements' },
-  { value: 'project_planning', label: 'project_planning' },
   { value: 'detail_confirmation', label: 'detail_confirmation' },
   { value: 'inspect_workspace', label: 'inspect_workspace' },
   { value: 'prepare_build_tasks', label: 'prepare_build_tasks' },

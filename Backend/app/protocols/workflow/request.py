@@ -68,20 +68,37 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_dict(forwarded_props.get("debugState"))
         or {}
     )
-    resume_from = (
-        _resume_from_state(resume_state)
-        or _optional_text(debug_state.get("resume_from"))
-        or _optional_text(debug_state.get("resumeFrom"))
-        or _optional_text(payload.get("resume_from"))
-        or _optional_text(payload.get("resumeFrom"))
-        or _optional_text(forwarded_props.get("resume_from"))
-        or _optional_text(forwarded_props.get("resumeFrom"))
+    workflow_scope = (
+        _optional_text(payload.get("workflowScope"))
+        or _optional_text(forwarded_props.get("workflowScope"))
+    )
+    resume_from = _supported_resume_node(
+        (
+            _resume_from_state(resume_state, workflow_scope=workflow_scope)
+            or _optional_text(debug_state.get("resume_from"))
+            or _optional_text(debug_state.get("resumeFrom"))
+            or _optional_text(payload.get("resume_from"))
+            or _optional_text(payload.get("resumeFrom"))
+            or _optional_text(forwarded_props.get("resume_from"))
+            or _optional_text(forwarded_props.get("resumeFrom"))
+        ),
+        workflow_scope=workflow_scope,
     )
     if not resume_from and _clarification_answers_to_text(clarification_answers):
-        resume_from = "requirements"
+        resume_from = (
+            "requirements"
+            if workflow_scope == "application_planning"
+            else "detail_confirmation"
+        )
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     detail_review_submission = _detail_review_submission(clarification_answers)
+    selected_page_id = (
+        _optional_text(payload.get("selected_page_id"))
+        or _optional_text(payload.get("selectedPageId"))
+        or _optional_text(forwarded_props.get("selected_page_id"))
+        or _optional_text(forwarded_props.get("selectedPageId"))
+    )
     workspace = (
         _optional_text(payload.get("workspace"))
         or _optional_text(payload.get("workspaceRoot"))
@@ -100,6 +117,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         resume_state=resume_state,
     )
     resume_values = {
+        **(
+            _project_plan_start_values(workspace)
+            if workflow_scope != "application_planning"
+            else {}
+        ),
         **_resume_values(resume_state),
         **_debug_resume_values(debug_state, workspace=workspace),
         "selected_skill_names": list(selected_skill_names),
@@ -108,6 +130,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             if detail_review_submission
             else {}
         ),
+        **({"selected_page_id": selected_page_id} if selected_page_id else {}),
     }
 
     return {
@@ -131,10 +154,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "workspace": workspace,
         "editor_mode": editor_mode,
-        "workflow_scope": (
-            _optional_text(payload.get("workflowScope"))
-            or _optional_text(forwarded_props.get("workflowScope"))
-        ),
+        "workflow_scope": workflow_scope,
         "thread_id": (
             _optional_text(payload.get("thread_id"))
             or _optional_text(payload.get("threadId"))
@@ -261,7 +281,13 @@ def _supported_editor_mode(value: str) -> str:
     return value if value in {"frontend", "backend"} else ""
 
 
-def _resume_from_state(value: dict[str, Any] | None) -> str:
+def _resume_from_state(
+    value: dict[str, Any] | None,
+    *,
+    workflow_scope: str = "",
+) -> str:
+    """根据当前 Graph 范围从公开状态推断可恢复节点。"""
+
     if not value:
         return ""
 
@@ -274,11 +300,17 @@ def _resume_from_state(value: dict[str, Any] | None) -> str:
                 continue
             node_name = _optional_text(event.get("nodeName"))
             if node_name:
-                return _supported_resume_node(node_name)
+                return _supported_resume_node(
+                    node_name,
+                    workflow_scope=workflow_scope,
+                )
             node = _optional_dict(event.get("node"))
             node_id = _optional_text(node.get("id")) if node else ""
             if node_id:
-                return _supported_resume_node(node_id)
+                return _supported_resume_node(
+                    node_id,
+                    workflow_scope=workflow_scope,
+                )
 
     state = _optional_dict(value.get("state")) or {}
     summary = _optional_dict(value.get("summary")) or {}
@@ -286,18 +318,21 @@ def _resume_from_state(value: dict[str, Any] | None) -> str:
         if source.get("status") == "requires_user_input":
             phase = _optional_text(source.get("phase"))
             if phase:
-                return _supported_resume_node(phase)
+                return _supported_resume_node(
+                    phase,
+                    workflow_scope=workflow_scope,
+                )
 
     return ""
 
 
-def _supported_resume_node(node_name: str) -> str:
-    return (
-        node_name
-        if node_name
-        in {
-            "requirements",
-            "project_planning",
+def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
+    """限制独立规划 Graph 与主 Graph 各自可恢复的节点集合。"""
+
+    supported = (
+        {"requirements", "project_planning"}
+        if workflow_scope == "application_planning"
+        else {
             "detail_confirmation",
             "inspect_workspace",
             "prepare_build_tasks",
@@ -307,8 +342,8 @@ def _supported_resume_node(node_name: str) -> str:
             "acceptance",
             "finalize_project",
         }
-        else ""
     )
+    return node_name if node_name in supported else ""
 
 
 def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
@@ -320,6 +355,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     merged = {**state, **result}
     allowed_keys = {
         "project_plan",
+        "frontend_pages",
         "pending_project_plan",
         "project_plan_path",
         "project_plan_json_path",
@@ -348,6 +384,34 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         for key in allowed_keys
         if key in merged and merged[key] is not None
     }
+
+
+def _project_plan_start_values(workspace: str) -> dict[str, Any]:
+    """从工作区正式计划文件加载主 Workflow 的完整计划和页面功能概览。"""
+
+    workspace_root = _workspace_root_path(workspace)
+    if workspace_root is None:
+        return {}
+    for relative_path in (
+        Path(".xcodeagent/plans/project-plan.json"),
+        Path("plans/project-plan.json"),
+    ):
+        project_plan_path = workspace_root / relative_path
+        if not project_plan_path.is_file():
+            continue
+        project_plan = load_project_plan_json(project_plan_path)
+        if not isinstance(project_plan, dict):
+            raise ValueError("project-plan.json 的根结构必须是 JSON 对象。")
+        frontend_pages = project_plan.get("frontend_pages", [])
+        return {
+            "project_plan": project_plan,
+            "frontend_pages": (
+                frontend_pages if isinstance(frontend_pages, list) else []
+            ),
+            "project_plan_path": _markdown_sibling_path(project_plan_path),
+            "project_plan_json_path": str(project_plan_path),
+        }
+    return {}
 
 
 def _debug_resume_values(

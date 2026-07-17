@@ -9,11 +9,8 @@ PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
-    "classify_request_complexity": "判断需求复杂度",
-    "requirements": "需求确认与 RequirementSpec",
-    "direct_modification": "简单需求直接修改",
-    "project_planning": "项目级计划生成",
     "detail_confirmation": "页面细节确认",
+    "inspect_workspace": "工作区快照检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
     "integration_test": "集成测试与质量门禁",
@@ -25,10 +22,8 @@ WORKFLOW_NODE_LABELS = {
 
 # 仅用于可视化层的兜底预测；实际节点路由始终以 LangGraph 为准。
 WORKFLOW_STATIC_NEXT_NODES = {
-    "requirements": ["project_planning"],
-    "direct_modification": ["integration_test"],
-    "project_planning": ["detail_confirmation"],
-    "detail_confirmation": ["prepare_build_tasks"],
+    "detail_confirmation": ["inspect_workspace"],
+    "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
     "build": ["integration_test"],
     "launch_project": ["acceptance"],

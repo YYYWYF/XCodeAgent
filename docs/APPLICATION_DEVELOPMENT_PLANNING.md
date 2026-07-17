@@ -2,7 +2,9 @@
 
 ## Scope
 
-Workbench entry no longer checks `application.json`, `menus.items`, or `developmentTasks`. It validates the confirmed RequirementSpec and ProjectPlan Markdown/JSON artifacts under `.xcodeagent/specs` and `.xcodeagent/plans`; once those two creation steps are complete, the conversation workspace opens immediately. The page-level development planner remains an independent AG-UI action for later explicit use and is not a third new-application gate.
+Workbench entry renders the original full-area selection overlay with page choices projected from ProjectPlan `frontend_pages`; it does not use `application.json`, `menus.items`, `developmentTasks`, or planning-readiness conditions to decide whether the initial overlay appears. Selecting a page submits `selectedPageId` through the primary `/workflow/run` AG-UI endpoint and starts `detail_confirmation`. The page-level development planner remains an independent AG-UI action for later explicit use and is not this workbench entry action.
+
+The overlay remains while the selected-page generation request runs. After that request returns, the workbench switches to the normal chat view so generated artifacts and the detail-review card are displayed through the existing Workflow message UI.
 
 This flow uses the independent `/application-development-planning/run` AG-UI endpoint and its own thread id. It never enters or resumes the primary LangGraph workflow. A normal generation requires one model call; if the model returns genuine blocking questions, the answers are supplied to a second generation call. Confirmation is deterministic and model-free.
 

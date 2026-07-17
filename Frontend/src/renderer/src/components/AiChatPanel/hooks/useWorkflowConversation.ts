@@ -52,6 +52,10 @@ type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
   error?: string
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
+  handleStartDetailConfirmation: (
+    selectedPageId: string,
+    pageLabel: string
+  ) => Promise<void>
   handleStopGenerating: () => void
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -134,6 +138,7 @@ export function useWorkflowConversation({
       resumeState?: WorkflowRunPayload
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
+      selectedPageId?: string
     }
   ): Promise<void> => {
     const trimmedMessage = message.trim()
@@ -241,6 +246,7 @@ export function useWorkflowConversation({
         clarificationAnswers: options?.clarificationAnswers,
         originalRequest: options?.originalRequest,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
+        selectedPageId: options?.selectedPageId,
         workflowDebug: options?.workflowDebug,
         resumeState: options?.resumeState,
         onContent: (content) => {
@@ -352,6 +358,18 @@ export function useWorkflowConversation({
     })
   }
 
+  /** 以用户选择的 ProjectPlan 页面作为主 Workflow 细节设计起点。 */
+  const handleStartDetailConfirmation = async (
+    selectedPageId: string,
+    pageLabel: string
+  ): Promise<void> => {
+    if (!selectedPageId || loading || workspaceBusy) return
+    await sendWorkflowMessage(`开始设计页面：${pageLabel}`, {
+      selectedPageId,
+      titleFrom: `设计页面：${pageLabel}`
+    })
+  }
+
   const handleStopGenerating = (): void => {
     if (!activeSession || !loading || stopping) return
     const agUiSession = agUiSessionsRef.current[activeSession.key]
@@ -369,6 +387,7 @@ export function useWorkflowConversation({
     activeWorkflow,
     error,
     handleSend,
+    handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,
     loading,

@@ -33,10 +33,6 @@ PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
-    "classify_request_complexity": "判断需求复杂度",
-    "requirements": "需求确认与 RequirementSpec",
-    "direct_modification": "简单需求直接修改",
-    "project_planning": "项目级计划生成",
     "detail_confirmation": "页面细节确认",
     "inspect_workspace": "工作区快照检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
@@ -49,9 +45,6 @@ WORKFLOW_NODE_LABELS = {
 }
 
 WORKFLOW_STATIC_NEXT_NODES = {
-    "requirements": ["project_planning"],
-    "direct_modification": ["integration_test"],
-    "project_planning": ["detail_confirmation"],
     "detail_confirmation": ["inspect_workspace"],
     "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
@@ -178,7 +171,7 @@ def build_workflow_ag_ui_stream(
                 "timeline": [],
             }
             initial_state.update(workflow_inputs.get("resume_values") or {})
-            first_node_name = _workflow_start_node(resume_from)
+            first_node_name = _workflow_start_node(resume_from, workflow_scope)
 
             if resume_from:
                 initial_state["resume_from"] = resume_from
@@ -996,11 +989,18 @@ def _workflow_node_label(node_name: str) -> str:
     return WORKFLOW_NODE_LABELS.get(node_name, node_name)
 
 
-def _workflow_start_node(resume_from: str | None) -> str:
-    if resume_from == "requirements":
-        return "requirements"
-    if resume_from == "project_planning":
-        return "project_planning"
+def _workflow_start_node(
+    resume_from: str | None,
+    workflow_scope: str | None = None,
+) -> str:
+    """返回页面细节确认或其后的兼容可视化入口。"""
+
+    if workflow_scope == "application_planning":
+        return (
+            resume_from
+            if resume_from in {"requirements", "project_planning"}
+            else "requirements"
+        )
     if resume_from == "detail_confirmation":
         return "detail_confirmation"
     if resume_from == "inspect_workspace":
@@ -1017,34 +1017,16 @@ def _workflow_start_node(resume_from: str | None) -> str:
         return "acceptance"
     if resume_from == "finalize_project":
         return "finalize_project"
-    return "classify_request_complexity"
+    return "detail_confirmation"
 
 
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
-    if node_name == "classify_request_complexity":
-        return (
-            ["direct_modification"]
-            if update.get("request_complexity") == "simple"
-            else ["requirements"]
-        )
     if node_name == "integration_test":
         return (
             ["launch_project"]
             if update.get("quality_gate_passed")
             else ["handle_failure"]
         )
-    if node_name == "requirements":
-        clarification = update.get("clarification")
-        if (
-            isinstance(clarification, dict)
-            and clarification.get("status") == "requires_user_input"
-        ):
-            return []
-        return ["project_planning"]
-    if node_name == "project_planning":
-        if update.get("status") == "requires_user_input":
-            return []
-        return ["detail_confirmation"]
     if node_name == "detail_confirmation":
         if update.get("status") == "requires_user_input":
             return []

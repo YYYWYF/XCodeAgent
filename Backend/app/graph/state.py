@@ -20,6 +20,7 @@ class ProjectState(TypedDict, total=False):
     requirement_spec_json_path: str
     clarification: dict[str, Any]
     project_plan: dict[str, Any]
+    frontend_pages: list[dict[str, Any]]
     pending_project_plan: dict[str, Any]
     project_plan_path: str
     project_plan_json_path: str

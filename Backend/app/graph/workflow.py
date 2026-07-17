@@ -9,10 +9,8 @@ from app.persistence.checkpoints import (
 
 
 def route_workflow_start(state: ProjectState) -> str:
-    if state.get("resume_from") == "requirements":
-        return "requirements"
-    if state.get("resume_from") == "project_planning":
-        return "project_planning"
+    """让主 Workflow 从页面细节确认或其后的恢复节点开始执行。"""
+
     if state.get("resume_from") == "detail_confirmation":
         return "detail_confirmation"
     if state.get("resume_from") == "inspect_workspace":
@@ -29,16 +27,7 @@ def route_workflow_start(state: ProjectState) -> str:
         return "acceptance"
     if state.get("resume_from") == "finalize_project":
         return "finalize_project"
-    return "classify_request_complexity"
-
-
-def route_request_complexity(state: ProjectState) -> str:
-    if state["request_complexity"] == "simple" and state.get("editor_mode") in {
-        "frontend",
-        "backend",
-    }:
-        return "direct_modification"
-    return "requirements"
+    return "detail_confirmation"
 
 
 def route_test_validation(state: ProjectState) -> str:
@@ -50,24 +39,6 @@ def route_test_validation(state: ProjectState) -> str:
     if next_action == "await_user_input":
         return "await_user_input"
     return "handle_failure"
-
-
-def route_requirements(state: ProjectState) -> str:
-    clarification = state.get("clarification", {})
-    if (
-        isinstance(clarification, dict)
-        and clarification.get("status") == "requires_user_input"
-    ):
-        return "await_user_input"
-    return "project_planning"
-
-
-def route_project_planning(state: ProjectState) -> str:
-    return (
-        "await_user_input"
-        if state.get("status") == "requires_user_input"
-        else "detail_confirmation"
-    )
 
 
 def route_detail_confirmation(state: ProjectState) -> str:
@@ -85,12 +56,10 @@ def route_prepare_build_tasks(state: ProjectState) -> str:
 
 
 def build_graph(*, checkpointer):
+    """构建从 ProjectPlan 页面细节确认开始的主应用开发图。"""
+
     builder = StateGraph(ProjectState)
 
-    builder.add_node("classify_request_complexity", nodes.classify_request_complexity)
-    builder.add_node("requirements", nodes.requirements)
-    builder.add_node("direct_modification", nodes.direct_modification)
-    builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("detail_confirmation", nodes.detail_confirmation)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
     builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
@@ -105,9 +74,6 @@ def build_graph(*, checkpointer):
         START,
         route_workflow_start,
         {
-            "classify_request_complexity": "classify_request_complexity",
-            "requirements": "requirements",
-            "project_planning": "project_planning",
             "detail_confirmation": "detail_confirmation",
             "inspect_workspace": "inspect_workspace",
             "prepare_build_tasks": "prepare_build_tasks",
@@ -116,30 +82,6 @@ def build_graph(*, checkpointer):
             "launch_project": "launch_project",
             "acceptance": "acceptance",
             "finalize_project": "finalize_project",
-        },
-    )
-    builder.add_conditional_edges(
-        "classify_request_complexity",
-        route_request_complexity,
-        {
-            "requirements": "requirements",
-            "direct_modification": "direct_modification",
-        },
-    )
-    builder.add_conditional_edges(
-        "requirements",
-        route_requirements,
-        {
-            "project_planning": "project_planning",
-            "await_user_input": END,
-        },
-    )
-    builder.add_conditional_edges(
-        "project_planning",
-        route_project_planning,
-        {
-            "detail_confirmation": "detail_confirmation",
-            "await_user_input": END,
         },
     )
     builder.add_conditional_edges(
@@ -160,7 +102,6 @@ def build_graph(*, checkpointer):
         },
     )
     builder.add_edge("build", "integration_test")
-    builder.add_edge("direct_modification", "integration_test")
     builder.add_conditional_edges(
         "integration_test",
         route_test_validation,

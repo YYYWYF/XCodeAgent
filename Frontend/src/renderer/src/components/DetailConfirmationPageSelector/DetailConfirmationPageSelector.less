@@ -1,0 +1,139 @@
+.@{class-prefix}-detail-page-selector {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 40px;
+  color: var(--wb-text);
+  background: var(--wb-bg);
+  place-items: center;
+}
+
+.@{class-prefix}-detail-page-selector-aurora {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 14%, rgba(124, 77, 255, 0.22), transparent 32%),
+    radial-gradient(circle at 82% 80%, rgba(53, 208, 186, 0.16), transparent 30%);
+}
+
+.@{class-prefix}-detail-page-selector-panel {
+  position: relative;
+  width: min(1040px, 100%);
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  padding: 42px;
+  background: color-mix(in srgb, var(--wb-canvas) 94%, transparent);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 24px;
+  box-shadow: 0 28px 90px rgba(18, 9, 43, 0.24);
+
+  .ant-typography { color: var(--wb-text); }
+  .ant-typography-secondary { color: var(--wb-text-secondary); }
+}
+
+.@{class-prefix}-detail-page-selector-heading {
+  max-width: 720px;
+  margin: 0 auto 30px;
+  text-align: center;
+
+  h2 { margin: 12px 0 10px; color: var(--wb-text); }
+  .ant-typography-secondary { color: var(--wb-text-secondary); }
+}
+
+.@{class-prefix}-detail-page-selector-logo {
+  display: grid;
+  width: 68px;
+  height: 68px;
+  margin: 0 auto 20px;
+  color: #fff;
+  font-size: 30px;
+  background: linear-gradient(135deg, #6b3cf0, #35d0ba);
+  border-radius: 22px;
+  box-shadow: 0 14px 40px rgba(107, 60, 240, 0.3);
+  place-items: center;
+}
+
+.@{class-prefix}-detail-page-selector-eyebrow {
+  color: var(--wb-accent) !important;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+.@{class-prefix}-detail-page-selector-options {
+  display: grid;
+  gap: 9px;
+  margin-bottom: 28px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.@{class-prefix}-detail-page-selector-options .ant-radio-button-wrapper {
+  display: flex;
+  width: 100%;
+  height: auto;
+  min-height: 112px;
+  padding: 16px;
+  color: var(--wb-text);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 12px;
+  box-shadow: none;
+  flex-direction: column;
+}
+
+.@{class-prefix}-detail-page-selector-options .ant-radio-button-wrapper::before { display: none; }
+.@{class-prefix}-detail-page-selector-options .ant-radio-button-wrapper:hover { color: var(--wb-accent); border-color: var(--wb-accent-border); }
+.@{class-prefix}-detail-page-selector-options .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
+  color: var(--wb-text);
+  background: var(--wb-accent-soft);
+  border-color: var(--wb-accent);
+  box-shadow: 0 0 0 2px var(--wb-accent-soft);
+}
+
+.@{class-prefix}-detail-page-selector-name { font-weight: 700; }
+.@{class-prefix}-detail-page-selector-path { color: var(--wb-accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.@{class-prefix}-detail-page-selector-purpose {
+  margin-top: 6px;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ant-btn.@{class-prefix}-detail-page-selector-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 260px;
+  height: 46px;
+  margin: 0 auto;
+  color: #fff !important;
+  font-weight: 600;
+  background: linear-gradient(115deg, #7659df, #52b9ad) !important;
+  border: 0 !important;
+  border-radius: 13px;
+  box-shadow: 0 10px 26px rgba(92, 63, 190, 0.24);
+  justify-content: center;
+
+  > .anticon {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+  }
+}
+
+.ant-btn.@{class-prefix}-detail-page-selector-action:hover,
+.ant-btn.@{class-prefix}-detail-page-selector-action:focus { color: #fff !important; filter: brightness(1.06); }
+.ant-btn.@{class-prefix}-detail-page-selector-action:focus-visible { box-shadow: 0 0 0 3px var(--wb-accent-soft); }
+
+@media (max-width: 760px) {
+  .@{class-prefix}-detail-page-selector { padding: 16px; }
+  .@{class-prefix}-detail-page-selector-panel { max-height: calc(100vh - 32px); padding: 24px; }
+  .ant-btn.@{class-prefix}-detail-page-selector-action { width: 100%; min-width: 0; }
+}

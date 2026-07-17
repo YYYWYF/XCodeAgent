@@ -33,6 +33,26 @@ function getWorkspaceApplicationFile(workspaceRoot: string): string {
   return path.join(workspaceRoot, '.xcodeagent', 'application.json');
 }
 
+/** 从 ProjectPlan 的 frontend_pages 生成工作台页面选择项。 */
+function projectPlanPageOptions(value: unknown): Array<{ key: string; label: string; path: string; purpose: string }> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const frontendPages = Array.isArray((value as Record<string, unknown>).frontend_pages)
+    ? (value as Record<string, unknown>).frontend_pages as unknown[]
+    : [];
+  return frontendPages.flatMap((page: unknown, index: number) => {
+    if (!page || typeof page !== 'object' || Array.isArray(page)) return [];
+    const record = page as Record<string, unknown>;
+    const key = String(record.id || '').trim();
+    if (!key) return [];
+    return [{
+      key,
+      label: String(record.name || key),
+      path: String(record.path || '/'),
+      purpose: String(record.description || record.name || `页面 ${index + 1}`),
+    }];
+  });
+}
+
 /** 校验工作区 specs/plans 中两份已确认规划，不读取 application.json。 */
 async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise<{
   ready: boolean;
@@ -61,28 +81,28 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
       }
       if (artifact.format === 'json') {
         const value = JSON.parse(content);
+        if (artifact.relativePath === 'plans/project-plan.json') {
+          pages = projectPlanPageOptions(value);
+        }
         if (!value || typeof value !== 'object' || Array.isArray(value) || value.confirmation_status !== 'confirmed') {
           invalid.push(artifact.relativePath);
-        } else if (artifact.relativePath === 'plans/project-plan.json') {
-          const frontendPages = Array.isArray(value.frontend_pages) ? value.frontend_pages : [];
-          pages = frontendPages.flatMap((page: unknown, index: number) => {
-            if (!page || typeof page !== 'object' || Array.isArray(page)) return [];
-            const record = page as Record<string, unknown>;
-            const key = String(record.id || '').trim();
-            if (!key) return [];
-            return [{
-              key,
-              label: String(record.name || key),
-              path: String(record.path || '/'),
-              purpose: String(record.description || record.name || `页面 ${index + 1}`),
-            }];
-          });
         }
       }
     } catch (error: unknown) {
       const errnoException = error as NodeJS.ErrnoException;
       if (errnoException?.code === 'ENOENT') missing.push(artifact.relativePath);
       else invalid.push(artifact.relativePath);
+    }
+  }
+
+  if (!pages.length) {
+    try {
+      const fallbackPlan = JSON.parse(
+        await fs.readFile(path.join(workspaceRoot, 'plans', 'project-plan.json'), 'utf8')
+      );
+      pages = projectPlanPageOptions(fallbackPlan);
+    } catch {
+      // 兼容路径不存在时保持正式 .xcodeagent 产物的检查结果。
     }
   }
 

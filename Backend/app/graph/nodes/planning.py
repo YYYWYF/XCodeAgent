@@ -104,6 +104,8 @@ def project_planning(state: ProjectState) -> dict:
 
 
 def detail_confirmation(state: ProjectState) -> dict:
+    """基于完整 ProjectPlan 和初始页面功能概览生成批量细节确认。"""
+
     pending_plan = state.get("pending_project_plan")
     submission = state.get("detail_review_submission")
     if pending_plan and isinstance(submission, dict):
@@ -177,7 +179,17 @@ def detail_confirmation(state: ProjectState) -> dict:
             "timeline": ["detail_confirmation"],
         }
 
-    pending_plan = _generate_all_detail_plans(state["project_plan"])
+    project_plan = state.get("project_plan")
+    if not isinstance(project_plan, dict):
+        raise ValueError(
+            "主 Workflow 需要工作区 .xcodeagent/plans/project-plan.json "
+            "（兼容 plans/project-plan.json）作为初始输入。"
+        )
+    pending_plan = _generate_all_detail_plans(
+        project_plan,
+        frontend_pages=state.get("frontend_pages"),
+        selected_page_id=state.get("selected_page_id"),
+    )
     pending_plan["confirmation_status"] = "pending_user_confirmation"
     project_plan_path = write_project_plan_document(state, pending_plan)
     targets = detail_design_targets(pending_plan)
@@ -186,7 +198,7 @@ def detail_confirmation(state: ProjectState) -> dict:
         "status": "requires_user_input",
         "clarification": detail_review_payload(pending_plan),
         "pending_project_plan": pending_plan,
-        "project_plan": state["project_plan"],
+        "project_plan": project_plan,
         "project_plan_path": project_plan_path,
         "project_plan_json_path": _project_plan_json_path_for_state(state),
         "detail_selection": {
@@ -202,7 +214,14 @@ def detail_confirmation(state: ProjectState) -> dict:
     }
 
 
-def _generate_all_detail_plans(project_plan: dict) -> dict:
+def _generate_all_detail_plans(
+    project_plan: dict,
+    *,
+    frontend_pages: list[dict] | None = None,
+    selected_page_id: str | None = None,
+) -> dict:
+    """为计划中的数据源及用户选中的初始页面生成功能详细设计。"""
+
     updated_plan = project_plan
     for source in project_plan.get("data_sources", []):
         source_id = source.get("id") if isinstance(source, dict) else None
@@ -213,7 +232,18 @@ def _generate_all_detail_plans(project_plan: dict) -> dict:
         detail["approved"] = False
         updated_plan = attach_data_source_detail_plan(updated_plan, detail)
 
-    for page in project_plan.get("frontend_pages", []):
+    pages = frontend_pages if isinstance(frontend_pages, list) else project_plan.get(
+        "frontend_pages", []
+    )
+    if selected_page_id:
+        pages = [
+            page
+            for page in pages
+            if isinstance(page, dict) and page.get("id") == selected_page_id
+        ]
+        if not pages:
+            raise ValueError(f"ProjectPlan 中不存在页面：{selected_page_id}")
+    for page in pages:
         page_id = page.get("id") if isinstance(page, dict) else None
         if not page_id:
             continue
@@ -226,12 +256,17 @@ def _generate_all_detail_plans(project_plan: dict) -> dict:
     updated_plan["detail_confirmation_summary"] = {
         "confirmed_pages": 0,
         "confirmed_data_sources": 0,
-        "total_pages": len(updated_plan.get("frontend_pages", [])),
+        "total_pages": len(pages),
         "total_data_sources": len(updated_plan.get("data_sources", [])),
         "mode": "batch_review",
     }
+    selected_page_ids = {
+        str(page.get("id")) for page in pages if isinstance(page, dict) and page.get("id")
+    }
     for page in updated_plan.get("frontend_pages", []):
-        if isinstance(page, dict):
+        if isinstance(page, dict) and (
+            not selected_page_id or str(page.get("id")) in selected_page_ids
+        ):
             page["detail_status"] = "pending_user_confirmation"
     for source in updated_plan.get("data_sources", []):
         if isinstance(source, dict):

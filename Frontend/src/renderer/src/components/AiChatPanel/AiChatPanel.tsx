@@ -21,7 +21,7 @@ import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
 import SessionHistoryDropdown from './components/SessionHistoryDropdown'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
-import ApplicationDevelopmentPlanningGate from '../ApplicationDevelopmentPlanningGate'
+import DetailConfirmationPageSelector from '../DetailConfirmationPageSelector'
 import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
@@ -35,11 +35,9 @@ import './AiChatPanel.less'
 type Props = {
   application: ApplicationConfig
   developmentPlanningReady: boolean
-  developmentPlanningRequired: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
-  onDevelopmentPlanConfirmed: () => Promise<void>
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
@@ -64,11 +62,9 @@ function findPageMenuItem(
 export default function AiChatPanel({
   application,
   developmentPlanningReady,
-  developmentPlanningRequired,
   developmentPlanningPages,
   editorMode,
   onApplicationUpdate,
-  onDevelopmentPlanConfirmed,
   onReturnWelcome,
   onThemeChange,
   theme
@@ -78,6 +74,7 @@ export default function AiChatPanel({
     application.defaultPage || application.pages[0] || '页面'
   )
   const [previewError, setPreviewError] = useState('')
+  const [detailGenerationFinished, setDetailGenerationFinished] = useState(false)
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const { publishAiMessage } = useWorkbench()
   const {
@@ -126,6 +123,7 @@ export default function AiChatPanel({
     activeWorkflow,
     error,
     handleSend,
+    handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,
     loading,
@@ -236,7 +234,7 @@ export default function AiChatPanel({
           application={application}
           deletingSessionId={deletingSessionId}
           loadingSessions={loadingSessions}
-          outlineLocked={developmentPlanningRequired}
+          outlineLocked={false}
           onCreateSession={handleCreateChatSession}
           onDeleteSession={handleDeleteSession}
           onOpenSession={handleOpenChatSession}
@@ -264,14 +262,17 @@ export default function AiChatPanel({
           <AgentFilesPage />
         ) : activeView === 'settings' ? (
           <SettingsPage application={application} onSaved={onApplicationUpdate} />
-        ) : developmentPlanningRequired && application.workspaceRoot ? (
+        ) : !detailGenerationFinished ? (
           <div className={cx('ai-chat-main')}>
-            <ApplicationDevelopmentPlanningGate
-              applicationName={application.appName || application.name}
-              onConfirmed={onDevelopmentPlanConfirmed}
+            <DetailConfirmationPageSelector
+              disabled={loading || workspaceBusy}
+              loading={!developmentPlanningReady}
+              onStart={async (pageId, pageLabel) => {
+                setActivePageTitle(pageLabel)
+                await handleStartDetailConfirmation(pageId, pageLabel)
+                setDetailGenerationFinished(true)
+              }}
               pages={developmentPlanningPages}
-              ready={developmentPlanningReady}
-              workspaceRoot={application.workspaceRoot}
             />
           </div>
         ) : (

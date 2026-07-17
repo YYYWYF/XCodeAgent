@@ -24,8 +24,7 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
   const editorMode: EditorMode = 'frontend';
   const [theme, setTheme] = useState<Theme>(getTheme);
   const [workspaceApplication, setWorkspaceApplication] = useState(application);
-  const [planningArtifactsLoaded, setPlanningArtifactsLoaded] = useState(false);
-  const [planningArtifactsReady, setPlanningArtifactsReady] = useState(false);
+  const [developmentPlanningPagesLoaded, setDevelopmentPlanningPagesLoaded] = useState(false);
   const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<DevelopmentPlanningPageOption[]>([]);
 
   useEffect(() => {
@@ -34,8 +33,7 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
     // 同步可选的应用配置，并独立读取规划产物及其中的页面清单。
     const syncWorkspaceApplication = async (): Promise<void> => {
       if (!application.workspaceRoot) {
-        setPlanningArtifactsLoaded(true);
-        setPlanningArtifactsReady(false);
+        setDevelopmentPlanningPagesLoaded(true);
         return;
       }
       try {
@@ -52,24 +50,21 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
       try {
         const inspection = await inspectWorkspacePlanningArtifacts(application.workspaceRoot);
         if (!active) return;
-        setPlanningArtifactsReady(inspection.ready);
         setDevelopmentPlanningPages(inspection.pages);
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection);
         }
       } catch (error) {
         if (!active) return;
-        setPlanningArtifactsReady(false);
         setDevelopmentPlanningPages([]);
         console.warn('检查 specs/plans 规划产物失败。', error);
       } finally {
-        if (active) setPlanningArtifactsLoaded(true);
+        if (active) setDevelopmentPlanningPagesLoaded(true);
       }
     };
 
     setWorkspaceApplication(application);
-    setPlanningArtifactsLoaded(false);
-    setPlanningArtifactsReady(false);
+    setDevelopmentPlanningPagesLoaded(false);
     setDevelopmentPlanningPages([]);
     void syncWorkspaceApplication();
     window.addEventListener('focus', syncWorkspaceApplication);
@@ -88,29 +83,14 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
     setWorkspaceApplication(updatedApplication);
   };
 
-  // 后续页面计划确认后刷新应用配置；入口门禁仍只依赖 specs/plans。
-  const handleDevelopmentPlanConfirmed = async (): Promise<void> => {
-    if (!application.workspaceRoot) return;
-    const applicationConfig = await loadWorkspaceApplicationConfig(application.workspaceRoot);
-    setWorkspaceApplication((current) => ({
-      ...current,
-      ...applicationConfig,
-      schema: { ...current.schema, ...applicationConfig }
-    }));
-  };
-
-  const needsDevelopmentPlan = planningArtifactsLoaded && !planningArtifactsReady;
-
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       <LeftPanel
         application={workspaceApplication}
-        developmentPlanningReady={planningArtifactsLoaded}
-        developmentPlanningRequired={!planningArtifactsLoaded || needsDevelopmentPlan}
+        developmentPlanningReady={developmentPlanningPagesLoaded}
         developmentPlanningPages={developmentPlanningPages}
         editorMode={editorMode}
         onApplicationUpdate={handleApplicationUpdate}
-        onDevelopmentPlanConfirmed={handleDevelopmentPlanConfirmed}
         onReturnWelcome={onReturnWelcome}
         onThemeChange={handleThemeChange}
         theme={theme}
