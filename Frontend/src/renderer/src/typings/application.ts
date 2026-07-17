@@ -6,6 +6,12 @@ export type ApplicationDatasourceType = '' | 'DataBase' | 'API' | 'None';
 export type ApplicationTrackMethod = string;
 export type DatabaseConnectionMode = 'dbid' | 'connectionString';
 
+export interface EnvironmentVariable {
+  key: string;
+  value: string;
+  encrypted: boolean;
+}
+
 export type ApplicationAudience =
   | 'operator'
   | 'admin'
@@ -71,6 +77,10 @@ export interface ApplicationSchemaConfig {
     businessId: string;
     traceBaggage: string;
     apiTrackHost: string;
+  };
+  environment: {
+    dev: EnvironmentVariable[];
+    prod: EnvironmentVariable[];
   };
   database: {
     connectionMode: DatabaseConnectionMode;
@@ -160,6 +170,7 @@ export interface ApplicationDraft {
   auth: ApplicationSchemaConfig['auth'];
   track: ApplicationSchemaConfig['track'];
   apiTrack: ApplicationSchemaConfig['apiTrack'];
+  environment: ApplicationSchemaConfig['environment'];
   database: ApplicationSchemaConfig['database'];
 }
 

@@ -55,9 +55,19 @@
   border-radius: 8px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--wb-accent, #6b3cf0);
-  background: var(--wb-accent-soft);
-  border-color: transparent;
+  color: var(--wb-accent, #6b3cf0) !important;
+  background: #fff !important;
+  border: 1px solid var(--wb-accent, #6b3cf0) !important;
+
+  &:hover {
+    color: #fff !important;
+    background: var(--wb-accent, #6b3cf0) !important;
+  }
+
+  &:active,
+  &:focus-visible {
+    background: #fff !important;
+  }
 
   &:hover {
     background: var(--wb-accent-hover, #7e50f4) !important;
@@ -166,7 +176,7 @@
   .ant-form-item-label > label {
     color: var(--wb-text-secondary);
     font-size: 13px;
-    white-space: normal;
+    white-space: nowrap;
     height: auto;
     line-height: 1.4;
   }
@@ -345,6 +355,155 @@
 
 .@{class-prefix}-settings-page-footer {
   display: none;
+}
+
+// --- Environment Variables ---
+
+// 开发/生产环境标签行（纯展示）
+.@{class-prefix}-settings-env-labels {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.@{class-prefix}-settings-env-labels-key {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--wb-text-secondary);
+  font-weight: 500;
+}
+
+// 环境徽章（内层元素，不影响列宽对齐）
+.@{class-prefix}-settings-env-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+
+  &::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  &--dev {
+    background: rgba(82, 196, 26, 0.08);
+    &::before { background: #52c41a; }
+    .ant-typography { color: #389e0d; }
+  }
+
+  &--prod {
+    background: rgba(255, 77, 79, 0.08);
+    &::before { background: #ff4d4f; }
+    .ant-typography { color: #cf1322; }
+  }
+
+  .ant-typography {
+    font-size: 13px;
+  }
+}
+
+// 列头 spacer（对齐删除按钮位置）
+.@{class-prefix}-settings-env-var-header-spacer {
+  width: 36px;
+  flex-shrink: 0;
+}
+
+// 变量行滚动容器
+.@{class-prefix}-settings-env-var-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+// 空状态
+.@{class-prefix}-settings-env-var-empty {
+  padding: 16px 0;
+  text-align: center;
+  font-size: 13px;
+}
+
+// 变量行（4列：key | devValue | prodValue | delete）
+.@{class-prefix}-settings-env-var-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+
+  .ant-form-item {
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 0;
+  }
+
+  // Form.List 内的 Form.Item 不需要左侧 label
+  .ant-form-item-label {
+    display: none;
+  }
+
+  .ant-form-item-control {
+    max-width: 100%;
+  }
+}
+
+// Form.Item 在行内作为 flex 子元素
+.@{class-prefix}-settings-env-var-field-item {
+  // 由 .settings-env-var-row 的 .ant-form-item 样式覆盖
+}
+
+.@{class-prefix}-settings-env-var-lock {
+  color: #52c41a;
+  font-size: 14px;
+}
+
+.@{class-prefix}-settings-env-var-delete {
+  flex-shrink: 0;
+  width: 36px;
+  height: 32px;
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--wb-text-secondary);
+
+  &:hover {
+    color: #ff4d4f;
+  }
+}
+
+// 操作按钮行
+.@{class-prefix}-settings-env-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+
+  .ant-btn {
+    border-radius: 8px;
+    font-size: 13px;
+    height: 34px;
+    padding: 0 16px;
+    color: var(--wb-accent, #6b3cf0);
+    border: 1px solid var(--wb-accent, #6b3cf0);
+    background: #fff !important;
+
+    &:hover {
+      color: #fff !important;
+      border-color: var(--wb-accent, #6b3cf0) !important;
+      background: var(--wb-accent, #6b3cf0) !important;
+    }
+
+    &:active,
+    &:focus-visible {
+      background: #fff !important;
+    }
+  }
 }
 
 // --- Database ---

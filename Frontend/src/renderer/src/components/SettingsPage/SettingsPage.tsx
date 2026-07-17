@@ -3,14 +3,17 @@ import {
   BankOutlined,
   CheckCircleFilled,
   CloudOutlined,
+  CodeOutlined,
   DashboardOutlined,
   DatabaseOutlined,
+  DeleteOutlined,
   DesktopOutlined,
   FundOutlined,
   LayoutOutlined,
   LinkOutlined,
   LockOutlined,
   MessageOutlined,
+  PlusOutlined,
   RadarChartOutlined,
   SafetyCertificateOutlined,
   SaveOutlined,
@@ -22,9 +25,9 @@ import {
   UserOutlined
 } from '@ant-design/icons'
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon'
-import { Anchor, AutoComplete, Button, Form, Input, Radio, Switch, Typography, message } from 'antd'
+import { Anchor, AutoComplete, Button, Form, Input, Radio, Select, Switch, Typography, message } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import { useMemo, useState, type ComponentType } from 'react'
+import { useMemo, useState, useEffect, type ComponentType } from 'react'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
 import { applicationIconOptions, trackMethodOptions } from '../Welcome/constants'
@@ -48,6 +51,13 @@ const iconComponents: Record<string, ComponentType<AntdIconProps>> = {
   FundOutlined
 }
 
+type EnvVariable = {
+  key: string
+  devValue: string
+  prodValue: string
+  encrypted: boolean
+}
+
 type Props = {
   application: ApplicationConfig
   onSaved: (application: ApplicationConfig) => void
@@ -56,7 +66,9 @@ type Props = {
 type SettingsFormValues = Pick<
   ApplicationConfig,
   'appName' | 'appIcon' | 'senario' | 'layout' | 'auth' | 'track' | 'apiTrack' | 'database'
->
+> & {
+  envVariables: EnvVariable[]
+}
 
 function SettingsCard({
   icon,
@@ -101,6 +113,54 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? application?.layout?.useFooter ?? false
   const dbConnectionMode = Form.useWatch(['database', 'connectionMode'], form) ?? application?.database?.connectionMode ?? 'dbid'
 
+  // 环境变量 — 将 { dev:[], prod:[] } 合并为统一的 flat list
+  const safeEnvVariables = useMemo<EnvVariable[]>(() => {
+    const devVars = application?.environment?.dev ?? []
+    const prodVars = application?.environment?.prod ?? []
+    const maxLen = Math.max(devVars.length, prodVars.length)
+    return Array.from({ length: maxLen }, (_, i) => ({
+      key: devVars[i]?.key ?? prodVars[i]?.key ?? '',
+      devValue: devVars[i]?.value ?? '',
+      prodValue: prodVars[i]?.value ?? '',
+      encrypted: devVars[i]?.encrypted ?? prodVars[i]?.encrypted ?? false
+    }))
+  }, [application?.environment?.dev, application?.environment?.prod])
+
+  const envVars: EnvVariable[] = Form.useWatch('envVariables', form) ?? safeEnvVariables
+
+  const envVarOptions = useMemo(
+    () => (envVars ?? []).filter((v) => v.key).map((v) => ({ label: `\${${v.key}}`, value: `\${${v.key}}` })),
+    [envVars]
+  )
+  const encryptedEnvVarOptions = useMemo(
+    () => (envVars ?? []).filter((v) => v.key && v.encrypted).map((v) => ({ label: `\${${v.key}}`, value: `\${${v.key}}` })),
+    [envVars]
+  )
+
+  // 环境变量名被删除时，自动清除数据库卡片中已引用但已不存在的变量
+  useEffect(() => {
+    const validValues = new Set((envVars ?? []).filter((v) => v.key).map((v) => `\${${v.key}}`))
+    const validEncrypted = new Set((envVars ?? []).filter((v) => v.key && v.encrypted).map((v) => `\${${v.key}}`))
+
+    const fieldsToClear: Array<{ name: string[]; value: undefined }> = []
+
+    ;(['host', 'port', 'username'] as const).forEach((field) => {
+      const current = form.getFieldValue(['database', field])
+      if (current && !validValues.has(current)) {
+        fieldsToClear.push({ name: ['database', field], value: undefined })
+      }
+    })
+
+    const pwdCurrent = form.getFieldValue(['database', 'password'])
+    if (pwdCurrent && !validEncrypted.has(pwdCurrent)) {
+      fieldsToClear.push({ name: ['database', 'password'], value: undefined })
+    }
+
+    if (fieldsToClear.length > 0) {
+      form.setFields(fieldsToClear)
+    }
+  }, [envVars, form])
+
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
     const keyword = trackMethodSearch.trim().toLowerCase()
@@ -121,16 +181,45 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
     try {
       const values = await form.validateFields()
       setSaving(true)
+      const { envVariables, ...rest } = values
+      const environment = {
+        dev: (envVariables ?? []).map((v) => ({ key: v.key, value: v.devValue, encrypted: v.encrypted })),
+        prod: (envVariables ?? []).map((v) => ({ key: v.key, value: v.prodValue, encrypted: v.encrypted }))
+      }
       const updatedApplication: ApplicationConfig = {
         ...application,
-        ...values,
-        schema: { ...application.schema, ...values }
+        ...rest,
+        environment,
+        schema: { ...application.schema, ...rest, environment }
       }
       await saveApplication(updatedApplication)
       onSaved(updatedApplication)
       message.success('保存成功')
-    } catch (error) {
-      if (error instanceof Error) {
+    } catch (error: any) {
+      // antd validateFields 校验失败时返回 { errorFields, values }，非 Error 实例
+      // errorFields 按字段注册顺序排列（静态字段先于 Form.List 动态字段），
+      // 需要按 DOM 视觉位置（从上到下）找出第一个可见的错误
+      if (error?.errorFields?.length) {
+        // 扫描所有带 .ant-form-item-has-error 的 DOM 元素，按 Y 坐标排序
+        const errorNodes = document.querySelectorAll('.ant-form-item-has-error')
+        const byPosition = Array.from(errorNodes)
+          .map((el) => ({ el, top: el.getBoundingClientRect().top }))
+          .filter(({ top }) => top > 0) // 过滤 hidden 面板中的元素（top≈0）
+          .sort((a, b) => a.top - b.top)
+
+        const firstVisible = byPosition[0]?.el
+        if (firstVisible) {
+          const errorText = firstVisible.querySelector('.ant-form-item-explain-error')?.textContent
+          if (errorText) {
+            message.error(errorText)
+          }
+          firstVisible.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        } else {
+          // 回退：无可视错误元素时用 errorFields[0]
+          const firstErr = error.errorFields[0]?.errors?.[0]
+          if (firstErr) message.error(firstErr)
+        }
+      } else if (error instanceof Error) {
         message.error(`保存失败：${error.message}`)
       }
     } finally {
@@ -167,7 +256,6 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
             icon={<SaveOutlined />}
             loading={saving}
             onClick={handleSave}
-            type="primary"
           >
             保存设置
           </Button>
@@ -190,6 +278,7 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
             <Anchor.Link href="#settings-auth" title={<span className={cx('settings-anchor-item')}><LockOutlined /><span>认证</span></span>} />
             <Anchor.Link href="#settings-page-track" title={<span className={cx('settings-anchor-item')}><RadarChartOutlined /><span>页面埋点</span></span>} />
             <Anchor.Link href="#settings-api-track" title={<span className={cx('settings-anchor-item')}><RadarChartOutlined /><span>接口埋点</span></span>} />
+            <Anchor.Link href="#settings-environment" title={<span className={cx('settings-anchor-item')}><CodeOutlined /><span>环境变量</span></span>} />
             <Anchor.Link href="#settings-database" title={<span className={cx('settings-anchor-item')}><DatabaseOutlined /><span>数据库</span></span>} />
           </Anchor>
         </aside>
@@ -205,9 +294,10 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
             auth: safeAuth,
             track: safeTrack,
             apiTrack: safeApiTrack,
+            envVariables: safeEnvVariables,
             database: safeDatabase
           }}
-          labelCol={{ flex: '0 0 155px' }}
+          labelCol={{ flex: '0 0 170px' }}
           wrapperCol={{ flex: 'auto' }}
           className={cx('settings-form')}
         >
@@ -394,6 +484,116 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
             </Form.Item>
           </SettingsCard>
 
+          <SettingsCard id="settings-environment" icon={<CodeOutlined />} title="环境变量">
+            {/* 第一行：开发/生产环境标签 — 纯展示 */}
+            <div className={cx('settings-env-labels')}>
+              <span className={cx('settings-env-labels-key')} />
+              <div className={cx('settings-env-labels-key')}>
+                <span className={cx('settings-env-badge', 'settings-env-badge--dev')}>
+                  <Text strong>开发环境</Text>
+                </span>
+              </div>
+              <div className={cx('settings-env-labels-key')}>
+                <span className={cx('settings-env-badge', 'settings-env-badge--prod')}>
+                  <Text strong>生产环境</Text>
+                </span>
+              </div>
+              <span className={cx('settings-env-var-header-spacer')} />
+            </div>
+
+            {/* 第二行：变量名 / 变量值 列头 */}
+            <div className={cx('settings-env-labels')}>
+              <span className={cx('settings-env-labels-key')}>变量名</span>
+              <span className={cx('settings-env-labels-key')}>变量值</span>
+              <span className={cx('settings-env-labels-key')}>变量值</span>
+              <span className={cx('settings-env-var-header-spacer')} />
+            </div>
+
+            <Form.List name="envVariables">
+              {(fields, { add, remove }) => (
+                <>
+                  <div className={cx('settings-env-var-scroll')}>
+                    {fields.length === 0 ? (
+                      <div className={cx('settings-env-var-empty')}>
+                        <Text type="secondary">暂无数据</Text>
+                      </div>
+                    ) : (
+                      fields.map(({ key, name, ...restField }, index) => {
+                        const encrypted = envVars[index]?.encrypted ?? false
+
+                        return (
+                          <div key={key} className={cx('settings-env-var-row')}>
+                            <Form.Item
+                              {...restField}
+                              className={cx('settings-env-var-field-item')}
+                              name={[name, 'key']}
+                              rules={[
+                                { required: true, message: '请输入变量名' },
+                                {
+                                  pattern: /^[A-Z][A-Z0-9_]*$/,
+                                  message: '仅限大写字母、下划线和数字，且大写字母开头'
+                                }
+                              ]}
+                            >
+                              <Input
+                                placeholder="变量名，如NAME_1"
+                                prefix={encrypted ? <LockOutlined className={cx('settings-env-var-lock')} /> : undefined}
+                              />
+                            </Form.Item>
+                            <Form.Item
+                              {...restField}
+                              className={cx('settings-env-var-field-item')}
+                              name={[name, 'devValue']}
+                            >
+                              {encrypted ? (
+                                <Input.Password placeholder="值" visibilityToggle />
+                              ) : (
+                                <Input placeholder="值" />
+                              )}
+                            </Form.Item>
+                            <Form.Item
+                              {...restField}
+                              className={cx('settings-env-var-field-item')}
+                              name={[name, 'prodValue']}
+                            >
+                              {encrypted ? (
+                                <Input.Password placeholder="值" visibilityToggle />
+                              ) : (
+                                <Input placeholder="值" />
+                              )}
+                            </Form.Item>
+                            <Button
+                              className={cx('settings-env-var-delete')}
+                              danger
+                              icon={<DeleteOutlined />}
+                              onClick={() => remove(name)}
+                              type="text"
+                            />
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+
+                  <div className={cx('settings-env-actions')}>
+                    <Button
+                      icon={<PlusOutlined />}
+                      onClick={() => add({ key: '', devValue: '', prodValue: '', encrypted: false })}
+                    >
+                      新增环境变量
+                    </Button>
+                    <Button
+                      icon={<PlusOutlined />}
+                      onClick={() => add({ key: '', devValue: '', prodValue: '', encrypted: true })}
+                    >
+                      新增加密环境变量
+                    </Button>
+                  </div>
+                </>
+              )}
+            </Form.List>
+          </SettingsCard>
+
           <SettingsCard id="settings-database" icon={<DatabaseOutlined />} title="数据库">
             <Form.Item label="数据库类型">
               <div style={{ lineHeight: '22px' }}>
@@ -467,35 +667,47 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
                 <Form.Item
                   label="数据库地址"
                   name={['database', 'host']}
-                  rules={[{ required: true, message: '请输入数据库地址' }]}
+                  rules={[{ required: true, message: '请选择数据库地址' }]}
                 >
-                  <Input />
+                  <Select
+                    options={envVarOptions}
+                    placeholder="选择环境变量"
+                    notFoundContent="暂无环境变量"
+                  />
                 </Form.Item>
                 <Form.Item
                   label="端口号"
                   name={['database', 'port']}
-                  rules={[{ required: true, message: '请输入端口号' }]}
+                  rules={[{ required: true, message: '请选择端口号' }]}
                 >
-                  <Input />
+                  <Select
+                    options={envVarOptions}
+                    placeholder="选择环境变量"
+                    notFoundContent="暂无环境变量"
+                  />
                 </Form.Item>
                 <Form.Item
                   label="用户名"
                   name={['database', 'username']}
-                  rules={[{ required: true, message: '请输入用户名' }]}
+                  rules={[{ required: true, message: '请选择用户名' }]}
                 >
-                  <Input />
+                  <Select
+                    options={envVarOptions}
+                    placeholder="选择环境变量"
+                    notFoundContent="暂无环境变量"
+                  />
                 </Form.Item>
                 <Form.Item
                   label="密码"
                   name={['database', 'password']}
-                  rules={[{ required: true, message: '请输入密码' }]}
+                  rules={[{ required: true, message: '请选择密码' }]}
+                  extra={<Text type="secondary" style={{ fontSize: 12 }}>仅限密文类型</Text>}
                 >
-                  <div>
-                    <Input.Password />
-                    <div className={cx('settings-db-pwd-tip')}>
-                      <Text type="secondary">仅限密文类型</Text>
-                    </div>
-                  </div>
+                  <Select
+                    options={encryptedEnvVarOptions}
+                    placeholder="选择加密环境变量"
+                    notFoundContent="暂无加密环境变量"
+                  />
                 </Form.Item>
               </>
             )}
