@@ -19,7 +19,7 @@ import { useEffect, useMemo, useState } from 'react'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import recommendedTasksIcon from '../../../../assets/icons/recommended-tasks.svg'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
-import type { ApplicationConfig, ApplicationMenuItem } from '../../../../typings'
+import type { ApplicationConfig, ApplicationMenuItem, DevelopmentPlanningPageOption } from '../../../../typings'
 import { cx } from '../../../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
@@ -63,6 +63,7 @@ type SessionSidebarProps = {
   onShowFiles: () => void
   onShowSettings: () => void
   onShowSkills: () => void
+  pages: DevelopmentPlanningPageOption[]
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
@@ -171,6 +172,7 @@ function containsMenuKey(items: ApplicationMenuItem[], key: string): boolean {
   return items.some((item) => item.key === key || containsMenuKey(item.children || [], key))
 }
 
+/** 使用 ProjectPlan 页面清单组织工作台左侧大纲与快捷入口。 */
 export default function SessionSidebar({
   application,
   filesActive,
@@ -181,6 +183,7 @@ export default function SessionSidebar({
   onShowSettings,
   onShowSkills,
   outlineLocked,
+  pages,
   settingsActive,
   skillsActive,
   workspaceRoot
@@ -194,22 +197,30 @@ export default function SessionSidebar({
   const [apiExpanded, setApiExpanded] = useState(true)
   const [apiGroupExpanded, setApiGroupExpanded] = useState(true)
   const [onlyRelated, setOnlyRelated] = useState(false)
-  const initialSelectedKey = application.menus.homeMenuKey || application.menus.items[0]?.key || ''
+  const pageItems = useMemo<ApplicationMenuItem[]>(() => pages.map((page) => ({
+    key: page.key,
+    path: page.path,
+    label: page.label,
+    type: 'page',
+    purpose: page.purpose,
+    keyFeatures: []
+  })), [pages])
+  const initialSelectedKey = pageItems[0]?.key || ''
   const [selectedKey, setSelectedKey] = useState(initialSelectedKey)
   useEffect(() => {
     setSelectedKey((current) => (
-      current && containsMenuKey(application.menus.items, current)
+      current && containsMenuKey(pageItems, current)
         ? current
         : initialSelectedKey
     ))
-  }, [application.menus.items, initialSelectedKey])
+  }, [initialSelectedKey, pageItems])
   const visibleKeys = useMemo(() => {
-    const matchingKeys = collectVisibleKeys(application.menus.items, outlineQuery)
+    const matchingKeys = collectVisibleKeys(pageItems, outlineQuery)
     if (!onlyRelated) return matchingKeys
-    const relatedKeys = collectRelatedKeys(application.menus.items, selectedKey)
+    const relatedKeys = collectRelatedKeys(pageItems, selectedKey)
     if (relatedKeys.size === 0) return matchingKeys
     return new Set([...matchingKeys].filter((key) => relatedKeys.has(key)))
-  }, [application.menus.items, onlyRelated, outlineQuery, selectedKey])
+  }, [onlyRelated, outlineQuery, pageItems, selectedKey])
   const compactLayout = useCompactWorkbench()
   const effectiveCollapsed = compactLayout ? !compactExpanded : collapsed
 
@@ -366,7 +377,7 @@ export default function SessionSidebar({
             <span>Pages</span>
           </button>
           {pagesExpanded ? <div className={cx('outline-tree')}>
-            {application.menus.items
+            {pageItems
               .filter((item) => visibleKeys.has(item.key))
               .map((item) => (
                 <OutlineRow
@@ -381,8 +392,8 @@ export default function SessionSidebar({
                   visibleKeys={visibleKeys}
                 />
               ))}
-            {application.menus.items.length === 0 ? (
-              <div className={cx('outline-empty')}>暂无页面，请先在对话中创建页面</div>
+            {pageItems.length === 0 ? (
+              <div className={cx('outline-empty')}>project_plan.json 的 frontend_pages 中暂无页面</div>
             ) : null}
           </div> : null}
         </section>

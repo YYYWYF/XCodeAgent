@@ -1,0 +1,157 @@
+.@{class-prefix}-requirement-summary {
+  display: grid;
+  gap: 14px;
+}
+
+.@{class-prefix}-requirement-summary-hero {
+  padding: 2px 2px 4px;
+
+  h3.ant-typography,
+  p.ant-typography {
+    margin: 0;
+  }
+
+  h3.ant-typography {
+    margin-top: 2px;
+    color: var(--modal-text);
+    font-size: 21px;
+  }
+
+  p.ant-typography {
+    max-width: 610px;
+    margin-top: 5px;
+    color: var(--modal-text-secondary);
+    line-height: 1.65;
+  }
+
+  .ant-typography-secondary {
+    color: var(--modal-text-secondary);
+  }
+}
+
+.@{class-prefix}-requirement-summary-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--modal-border);
+  border-radius: 11px;
+  background: var(--modal-surface);
+
+  > header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    h5.ant-typography {
+      margin: 0;
+      color: var(--modal-text);
+      font-size: 14px;
+    }
+  }
+}
+
+.@{class-prefix}-requirement-summary-section-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  place-items: center;
+  color: var(--modal-accent);
+  background: rgba(139, 92, 246, 0.1);
+}
+
+.@{class-prefix}-requirement-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.@{class-prefix}-requirement-summary-item {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--modal-border);
+  border-radius: 9px;
+  background: var(--modal-bg);
+
+  > .ant-typography {
+    color: var(--modal-text);
+  }
+
+  p.ant-typography {
+    margin: 0;
+    color: var(--modal-text-secondary);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+}
+
+.@{class-prefix}-requirement-summary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+
+  .ant-tag {
+    margin: 0;
+    border-color: rgba(139, 92, 246, 0.18);
+    border-radius: 5px;
+    color: var(--modal-accent);
+    background: rgba(139, 92, 246, 0.07);
+    font-size: 11px;
+    line-height: 19px;
+  }
+}
+
+.@{class-prefix}-requirement-summary-list,
+.@{class-prefix}-requirement-summary-flow,
+.@{class-prefix}-requirement-summary-notes {
+  display: grid;
+  gap: 8px;
+}
+
+.@{class-prefix}-requirement-summary-flow {
+  padding: 11px 12px;
+  border: 1px solid var(--modal-border);
+  border-radius: 9px;
+  background: var(--modal-bg);
+
+  > .ant-typography {
+    color: var(--modal-text);
+  }
+
+  > .ant-typography-secondary {
+    color: var(--modal-text-secondary);
+    font-size: 12px;
+  }
+
+  ol {
+    display: grid;
+    gap: 5px;
+    margin: 2px 0 0;
+    padding-left: 20px;
+    color: var(--modal-text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
+.@{class-prefix}-requirement-summary-notes > .ant-typography {
+  display: flex;
+  gap: 8px;
+  color: var(--modal-text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+
+  .anticon {
+    margin-top: 3px;
+    color: var(--modal-accent);
+  }
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-requirement-summary-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}

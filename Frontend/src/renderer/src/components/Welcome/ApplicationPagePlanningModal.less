@@ -964,17 +964,18 @@
 .@{class-prefix}-planning-artifact-card {
   overflow: hidden;
   border: 1px solid var(--modal-border);
-  border-radius: 12px;
-  background: var(--modal-surface);
+  border-radius: 10px;
+  background: var(--modal-bg);
+  box-shadow: 0 10px 30px rgba(30, 19, 44, 0.06);
 
   > header {
     display: grid;
-    grid-template-columns: 38px minmax(0, 1fr) auto;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 11px;
-    padding: 12px 16px;
+    gap: 10px;
+    padding: 11px 14px;
     border-bottom: 1px solid var(--modal-border);
-    background: linear-gradient(100deg, rgba(139, 92, 246, 0.09), transparent);
+    background: var(--modal-surface);
 
     > div {
       display: grid;
@@ -991,17 +992,37 @@
 }
 
 .@{class-prefix}-planning-artifact-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
+  width: 32px;
+  height: 36px;
+  border: 1px solid var(--modal-border-strong);
+  border-radius: 5px;
+  color: var(--modal-text-secondary);
+  background: var(--modal-bg);
+  box-shadow: none;
+}
+
+.@{class-prefix}-planning-artifact-toggle.ant-btn {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 8px;
+  color: var(--modal-accent);
+  background: rgba(139, 92, 246, 0.07);
+
+  &:hover,
+  &:focus {
+    border-color: rgba(139, 92, 246, 0.45);
+    color: var(--modal-accent);
+    background: rgba(139, 92, 246, 0.13);
+  }
 }
 
 .@{class-prefix}-planning-artifact-content {
   max-height: 430px;
-  padding: 18px 20px;
+  padding: 20px;
   overflow: auto;
   color: var(--modal-text);
-  background: var(--modal-bg);
+  background: var(--modal-field);
 }
 
 .@{class-prefix}-planning-question-panel.@{class-prefix}-is-detail-review {
@@ -1092,6 +1113,23 @@
 }
 
 .@{class-prefix}-page-planning-modal {
+  .ant-modal {
+    height: 90vh;
+    padding-bottom: 0;
+  }
+
+  .ant-modal-content {
+    display: flex;
+    height: 100%;
+    flex-direction: column;
+  }
+
+  .ant-modal-body {
+    min-height: 0;
+    max-height: none;
+    flex: 1;
+  }
+
   .ant-steps-item-process .ant-steps-item-icon {
     border-color: var(--modal-accent);
     background: var(--modal-accent);

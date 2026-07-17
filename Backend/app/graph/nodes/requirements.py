@@ -85,12 +85,11 @@ def _requirement_spec_confirmation_payload(spec: dict) -> dict:
             AskUserQuestion(
                 header="需求确认",
                 question=(
-                    "请确认已生成的需求文档是否正确。"
-                    "如果正确，请回复“正确，继续规划”；"
-                    "如果需要修改，请直接写出要调整的应用信息、角色、功能、页面、数据源、流程或验收标准。"
+                    "请审核已生成的需求文档。"
+                    "如需调整，可填写修改意见；直接确认则表示文档正确并继续规划。"
                 ),
                 type="text",
-                placeholder="例如：正确，继续规划 / 需要增加审批人角色和盘点页面。",
+                placeholder="例如：需要增加审批人角色和盘点页面。",
             )
         ]
     )

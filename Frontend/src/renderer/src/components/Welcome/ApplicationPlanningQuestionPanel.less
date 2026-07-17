@@ -81,24 +81,22 @@
 
 .@{class-prefix}-planning-question-panel-header {
   position: relative;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 14px;
-  padding: 15px 16px;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 13px;
+  padding: 14px 16px;
   overflow: hidden;
-  border-color: rgba(139, 92, 246, 0.2);
-  border-radius: 12px;
-  background:
-    radial-gradient(circle at 100% 0, rgba(139, 92, 246, 0.12), transparent 38%),
-    var(--modal-surface);
-  box-shadow: 0 8px 24px rgba(45, 25, 65, 0.05);
+  border: 0;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.06);
+  box-shadow: none;
 
   &::after {
     position: absolute;
     top: 0;
     bottom: 0;
     left: 0;
-    width: 3px;
-    background: linear-gradient(180deg, #8b5cf6, #a855f7);
+    width: 4px;
+    background: var(--modal-accent);
     content: '';
   }
 
@@ -117,12 +115,12 @@
 }
 
 .@{class-prefix}-planning-question-panel-icon {
-  width: 40px;
-  height: 40px;
-  border: 1px solid rgba(139, 92, 246, 0.24);
-  border-radius: 11px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
   color: var(--modal-accent);
-  background: rgba(139, 92, 246, 0.1);
+  background: rgba(139, 92, 246, 0.11);
   box-shadow: none;
 }
 

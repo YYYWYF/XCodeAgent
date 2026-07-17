@@ -46,7 +46,7 @@ const phaseProgress: Record<string, { active: number; complete: number; message:
   requirements: {
     active: 18,
     complete: 34,
-    message: '正在分析需求并生成 RequirementSpec…',
+    message: '正在分析需求并生成需求文档…',
     title: '正在确认产品需求'
   },
   project_planning: {
@@ -221,11 +221,12 @@ export default function ApplicationPagePlanningModal({
           <span>规划「{application.appName}」</span>
         </div>
       }
-      width={980}
+      style={{ top: '5vh' }}
+      width="90vw"
       wrapClassName={cx('welcome-modal', 'page-planning-modal', `theme-${theme}`)}
     >
       <Steps className={cx('page-planning-steps')} current={workflowStep(workflow)} size="small">
-        <Step title="需求确认" description="RequirementSpec" />
+        <Step title="需求确认" description="需求文档" />
         <Step title="项目规划" description="ProjectPlan" />
       </Steps>
 

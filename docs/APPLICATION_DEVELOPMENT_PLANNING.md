@@ -2,7 +2,7 @@
 
 ## Scope
 
-Workbench entry renders the original full-area selection overlay with page choices projected from ProjectPlan `frontend_pages`; it does not use `application.json`, `menus.items`, `developmentTasks`, or planning-readiness conditions to decide whether the initial overlay appears. Selecting a page submits `selectedPageId` through the primary `/workflow/run` AG-UI endpoint and starts `detail_confirmation`. The page-level development planner remains an independent AG-UI action for later explicit use and is not this workbench entry action.
+Workbench entry renders the original full-area selection overlay and the left `Pages` outline with page choices projected from ProjectPlan `frontend_pages`. The desktop reader prefers `.xcodeagent/project_plan.json` for this page list and falls back to the confirmed `.xcodeagent/plans/project-plan.json`; neither UI uses `application.json`, `menus.items`, `developmentTasks`, or planning-readiness conditions to decide which pages appear. Selecting a page in the entry overlay submits `selectedPageId` through the primary `/workflow/run` AG-UI endpoint and starts `detail_confirmation`. The page-level development planner remains an independent AG-UI action for later explicit use and is not this workbench entry action.
 
 The overlay remains while the selected-page generation request runs. After that request returns, the workbench switches to the normal chat view so generated artifacts and the detail-review card are displayed through the existing Workflow message UI.
 

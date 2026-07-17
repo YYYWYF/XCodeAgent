@@ -247,6 +247,7 @@ export default function AiChatPanel({
           onShowFiles={handleShowFiles}
           onShowSettings={handleShowSettings}
           onShowSkills={handleShowSkills}
+          pages={developmentPlanningPages}
           filesActive={activeView === 'files'}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}

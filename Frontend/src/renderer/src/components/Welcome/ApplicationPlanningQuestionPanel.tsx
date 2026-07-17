@@ -1,8 +1,16 @@
-import { BulbOutlined, CheckCircleOutlined, FileTextOutlined } from '@ant-design/icons'
+import {
+  ArrowLeftOutlined,
+  BulbOutlined,
+  CheckCircleOutlined,
+  EyeOutlined,
+  FileTextOutlined
+} from '@ant-design/icons'
 import { Button, Checkbox, Form, Input, Radio, Tag, Typography } from 'antd'
+import { useState } from 'react'
 import type { ReactElement } from 'react'
 import MarkdownContent from '../MarkdownContent/MarkdownContent'
 import DetailReview from '../AiChatPanel/components/WorkflowRunCard/DetailReview'
+import RequirementSpecSummary from './RequirementSpecSummary'
 import type {
   WorkflowClarification,
   WorkflowClarificationAnswer,
@@ -87,7 +95,7 @@ function submitLabel(mode?: string): string {
 // 将 Workflow 的通用提示转换为创建规划页面自己的中文说明。
 function panelDescription(clarification: WorkflowClarification): string {
   if (clarification.mode === 'requirement_spec_confirmation') {
-    return '请完整审核需求文档。确认无误后才会进入项目规划，需要调整时直接在下方说明。'
+    return '请审核需求文档；如有需要调整的内容，可在下方填写修改意见。直接确认即表示文档正确并继续规划。'
   }
   if (clarification.mode === 'project_plan_confirmation') {
     return '请审核当前 ProjectPlan。确认后会立即进入工作区，菜单、API、Schema 和数据源等派生 JSON 将在后续开发规划阶段补齐。'
@@ -97,6 +105,17 @@ function panelDescription(clarification: WorkflowClarification): string {
   return '为了让页面和功能规划更贴近真实业务，请补充下面这些关键信息。'
 }
 
+// 从公开 Workflow 结果中读取 RequirementSpec 结构化状态，供默认概览视图使用。
+function requirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
+  for (const source of [workflow.result, workflow.state]) {
+    const value = source?.requirement_spec
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
 // 使用创建规划页面自己的表单视觉展示问题和正式产物，不渲染通用 Workflow 卡片。
 export default function ApplicationPlanningQuestionPanel({
   disabled,
@@ -104,11 +123,30 @@ export default function ApplicationPlanningQuestionPanel({
   workflow
 }: Props): ReactElement | null {
   const [form] = Form.useForm<{ answers: WorkflowClarificationAnswers }>()
+  const [showArtifactDetail, setShowArtifactDetail] = useState(false)
   const clarification = planningClarification(workflow)
   const questions = clarification?.questions || []
+  const isRequirementConfirmation = clarification?.mode === 'requirement_spec_confirmation'
   const artifact = workflow.confirmationArtifact
+  const spec = artifact?.id === 'requirement_spec' ? requirementSpec(workflow) : undefined
+  const canShowSummary = Boolean(spec)
 
   if (!clarification) return null
+
+  // 需求确认只收集可选修改意见；空提交代表用户确认当前文档。
+  const handleSubmit = (values: { answers?: WorkflowClarificationAnswers }): void => {
+    if (!isRequirementConfirmation) {
+      onSubmit(workflow, values.answers || {})
+      return
+    }
+    const feedback = values.answers?.requirement_spec_feedback
+    const feedbackText = typeof feedback === 'string' ? feedback.trim() : ''
+    onSubmit(workflow, {
+      requirement_spec_confirmation: feedbackText
+        ? `需要修改：${feedbackText}`
+        : '正确，继续规划'
+    })
+  }
 
   if (clarification.mode === 'detail_review' && clarification.review) {
     return (
@@ -139,13 +177,25 @@ export default function ApplicationPlanningQuestionPanel({
           <header>
             <span className={cx('planning-artifact-icon')}><FileTextOutlined /></span>
             <div>
-              <Text strong>{artifact.id === 'requirement_spec' ? 'RequirementSpec' : 'ProjectPlan'}</Text>
+              <Text strong>{artifact.id === 'requirement_spec' ? '需求文档' : 'ProjectPlan'}</Text>
               <Text type="secondary">{artifact.name}</Text>
             </div>
-            <Tag>Markdown</Tag>
+            {canShowSummary ? (
+              <Button
+                className={cx('planning-artifact-toggle')}
+                icon={showArtifactDetail ? <ArrowLeftOutlined /> : <EyeOutlined />}
+                onClick={() => setShowArtifactDetail((current) => !current)}
+                size="small"
+                type="text"
+              >
+                {showArtifactDetail ? '返回概览' : '查看详情'}
+              </Button>
+            ) : <Tag>Markdown</Tag>}
           </header>
           <div className={cx('planning-artifact-content')}>
-            <MarkdownContent content={artifact.content} />
+            {canShowSummary && !showArtifactDetail
+              ? <RequirementSpecSummary spec={spec!} />
+              : <MarkdownContent content={artifact.content} />}
           </div>
         </section>
       ) : null}
@@ -154,9 +204,25 @@ export default function ApplicationPlanningQuestionPanel({
         className={cx('planning-question-form')}
         form={form}
         layout="vertical"
-        onFinish={(values) => onSubmit(workflow, values.answers)}
+        onFinish={handleSubmit}
       >
-        {questions.map((question, index) => {
+        {isRequirementConfirmation ? (
+          <section className={cx('planning-question-card')}>
+            <div className={cx('planning-question-card-heading')}>
+              <div className={cx('planning-question-title')}>
+                <Title level={5}>修改意见（可选）</Title>
+              </div>
+              <Paragraph type="secondary">留空并确认，即表示需求文档正确并继续项目规划。</Paragraph>
+            </div>
+            <Form.Item name={['answers', 'requirement_spec_feedback']}>
+              <TextArea
+                autoSize={{ minRows: 3, maxRows: 7 }}
+                disabled={disabled}
+                placeholder="例如：增加审批人角色，并补充审批页面。"
+              />
+            </Form.Item>
+          </section>
+        ) : questions.map((question, index) => {
           const key = questionKey(question, index)
           return (
             <section className={cx('planning-question-card')} key={key}>
@@ -192,7 +258,7 @@ export default function ApplicationPlanningQuestionPanel({
           )
         })}
 
-        {questions.length ? (
+        {(isRequirementConfirmation || questions.length) ? (
           <div className={cx('page-planning-actions')}>
             <Button
               disabled={disabled}

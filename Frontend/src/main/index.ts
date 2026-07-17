@@ -53,7 +53,7 @@ function projectPlanPageOptions(value: unknown): Array<{ key: string; label: str
   });
 }
 
-/** 校验工作区 specs/plans 中两份已确认规划，不读取 application.json。 */
+/** 校验工作区 specs/plans 中两份已确认规划，并优先从根级 project_plan.json 读取页面。 */
 async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise<{
   ready: boolean;
   missing: string[];
@@ -71,6 +71,15 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   const invalid: string[] = [];
   let pages: Array<{ key: string; label: string; path: string; purpose: string }> = [];
 
+  try {
+    const projectPlan = JSON.parse(
+      await fs.readFile(path.join(artifactRoot, 'project_plan.json'), 'utf8')
+    );
+    pages = projectPlanPageOptions(projectPlan);
+  } catch {
+    // 根级页面规划不存在或无效时，继续兼容正式 plans 目录中的 ProjectPlan。
+  }
+
   for (const artifact of artifacts) {
     const artifactPath = path.join(artifactRoot, artifact.relativePath);
     try {
@@ -81,7 +90,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
       }
       if (artifact.format === 'json') {
         const value = JSON.parse(content);
-        if (artifact.relativePath === 'plans/project-plan.json') {
+        if (artifact.relativePath === 'plans/project-plan.json' && !pages.length) {
           pages = projectPlanPageOptions(value);
         }
         if (!value || typeof value !== 'object' || Array.isArray(value) || value.confirmation_status !== 'confirmed') {
