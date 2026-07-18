@@ -1,29 +1,34 @@
 import { LockOutlined, PlayCircleOutlined, RocketOutlined } from '@ant-design/icons'
 import { Button, Radio, Skeleton, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
-import type { DevelopmentPlanningPageOption } from '../../typings'
+import type { DevelopmentPlanningPageOption, WorkflowEvent } from '../../typings'
 import { cx } from '../../utils'
+import PageDesignProgress from './PageDesignProgress'
 import './DetailConfirmationPageSelector.less'
 
 const { Text, Title } = Typography
 
 type Props = {
   disabled: boolean
+  generating?: boolean
   loading: boolean
   mode?: 'initial' | 'locked'
   onStart: (pageId: string, pageLabel: string, hasDetailPlan: boolean) => Promise<void>
   pages: DevelopmentPlanningPageOption[]
   selectedPage?: DevelopmentPlanningPageOption
+  workflowEvents?: WorkflowEvent[]
 }
 
 /** 在首次进入或选择待设计页面时提供唯一的详细设计入口。 */
 export default function DetailConfirmationPageSelector({
   disabled,
+  generating = false,
   loading,
   mode = 'initial',
   onStart,
   pages,
-  selectedPage: lockedPage
+  selectedPage: lockedPage,
+  workflowEvents
 }: Props): JSX.Element {
   const [selectedPageId, setSelectedPageId] = useState('')
   const selectedPage = useMemo(
@@ -37,6 +42,21 @@ export default function DetailConfirmationPageSelector({
       setSelectedPageId(pages[0]?.key || '')
     }
   }, [lockedPage, pages, selectedPageId])
+
+  if (generating && selectedPage) {
+    return (
+      <section className={cx('detail-page-selector', mode === 'locked' && 'locked-mode')}>
+        {mode === 'locked' ? (
+          <div className={cx('detail-page-selector-backdrop')} />
+        ) : (
+          <div className={cx('detail-page-selector-aurora')} />
+        )}
+        <main className={cx('detail-page-selector-panel', 'progress-panel')}>
+          <PageDesignProgress events={workflowEvents} pageLabel={selectedPage.label} />
+        </main>
+      </section>
+    )
+  }
 
   if (mode === 'locked' && selectedPage) {
     return (

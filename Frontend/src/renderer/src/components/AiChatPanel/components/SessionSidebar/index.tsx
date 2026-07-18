@@ -448,7 +448,7 @@ export default function SessionSidebar({
                 >
                   <CaretDownOutlined className={cx(!contractExpanded && 'collapsed')} />
                   <ApiOutlined />
-                  <span>{contract.label}</span>
+                  <code>{contract.label}</code>
                 </button>
                 {contractExpanded ? <div className={cx('api-list')}>
                   {contract.endpoints.map((endpoint) => (

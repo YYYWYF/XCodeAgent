@@ -153,7 +153,10 @@ export function useChatSessions({
         setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
         return
       }
-      await openChatSession(mode, nextSessions[0].id)
+      // 优先恢复最近一条有内容的会话，避免空白“新对话”遮住已经落盘的页面设计记录。
+      const sessionToOpen = nextSessions.find((session) => session.messageCount > 0)
+        || nextSessions[0]
+      await openChatSession(mode, sessionToOpen.id)
     } catch (caughtError) {
       setSessionErrors((current) => ({
         ...current,

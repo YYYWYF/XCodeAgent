@@ -314,9 +314,11 @@ export default function AiChatPanel({
           <div className={cx('ai-chat-main')}>
             <DetailConfirmationPageSelector
               disabled={loading || workspaceBusy}
+              generating={loading}
               loading={!developmentPlanningReady}
               onStart={handleStartPageDesign}
               pages={developmentPlanningPages}
+              workflowEvents={activeWorkflow?.events}
             />
           </div>
         ) : (
@@ -405,11 +407,13 @@ export default function AiChatPanel({
             {activePageOption && !activePageDesigned ? (
               <DetailConfirmationPageSelector
                 disabled={loading || workspaceBusy}
+                generating={loading}
                 loading={false}
                 mode="locked"
                 onStart={handleStartPageDesign}
                 pages={developmentPlanningPages}
                 selectedPage={activePageOption}
+                workflowEvents={activeWorkflow?.events}
               />
             ) : null}
           </div>

@@ -1,0 +1,194 @@
+.@{class-prefix}-detail-page-selector-panel.@{class-prefix}-progress-panel {
+  width: min(720px, 100%);
+  overflow: hidden;
+  padding: 44px;
+  border-color: color-mix(in srgb, var(--wb-accent) 46%, var(--wb-border));
+  box-shadow: 0 28px 100px rgba(29, 18, 69, 0.28);
+}
+
+.@{class-prefix}-detail-page-progress {
+  position: relative;
+  text-align: center;
+
+  h3 {
+    margin: 12px 0 7px;
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-detail-page-progress-visual {
+  position: relative;
+  display: grid;
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 20px;
+  color: #fff;
+  background: linear-gradient(145deg, #7252de, #3ebcaf);
+  border-radius: 25px;
+  box-shadow: 0 16px 38px rgba(91, 65, 199, 0.3);
+  place-items: center;
+}
+
+.@{class-prefix}-detail-page-progress-loading { font-size: 27px; }
+
+.@{class-prefix}-detail-page-progress-orbit {
+  position: absolute;
+  inset: -8px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 35%, transparent);
+  border-radius: 28px;
+  animation: detail-page-progress-orbit 5s linear infinite;
+
+  span {
+    position: absolute;
+    top: -3px;
+    left: 50%;
+    width: 6px;
+    height: 6px;
+    background: #51d4c2;
+    border-radius: 50%;
+    box-shadow: 0 0 13px #51d4c2;
+  }
+}
+
+.@{class-prefix}-detail-page-progress-current,
+.@{class-prefix}-detail-page-progress-detail { display: block; }
+
+.@{class-prefix}-detail-page-progress-current {
+  color: var(--wb-text) !important;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.@{class-prefix}-detail-page-progress-detail {
+  min-height: 22px;
+  margin-top: 4px;
+}
+
+.@{class-prefix}-detail-page-progress-summary {
+  display: flex;
+  justify-content: space-between;
+  margin: 30px 0 9px;
+
+  .ant-typography { font-size: 12px; }
+}
+
+.@{class-prefix}-detail-page-progress-track {
+  height: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--wb-border) 68%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wb-border) 82%, transparent);
+  border-radius: 999px;
+}
+
+.@{class-prefix}-detail-page-progress-bar {
+  position: relative;
+  display: block;
+  height: 100%;
+  overflow: hidden;
+  background: linear-gradient(90deg, #7557df 0%, #597ddd 46%, #45c6b5 100%);
+  border-radius: inherit;
+  box-shadow: 0 0 18px color-mix(in srgb, var(--wb-accent) 46%, transparent);
+  transition: width 500ms ease;
+
+  span {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 20%, rgba(255, 255, 255, 0.5) 48%, transparent 72%);
+    animation: detail-page-progress-shimmer 1.8s ease-in-out infinite;
+  }
+}
+
+.@{class-prefix}-detail-page-progress-stages {
+  display: grid;
+  margin-top: 28px;
+  grid-template-columns: repeat(5, 1fr);
+}
+
+.@{class-prefix}-detail-page-progress-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  color: var(--wb-text-secondary);
+  flex-direction: column;
+  gap: 8px;
+
+  &::before {
+    position: absolute;
+    z-index: 0;
+    top: 14px;
+    right: 50%;
+    left: -50%;
+    height: 1px;
+    background: var(--wb-border);
+    content: '';
+  }
+
+  &:first-child::before { display: none; }
+
+  .ant-typography {
+    color: inherit;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  &.@{class-prefix}-is-done,
+  &.@{class-prefix}-is-active { color: var(--wb-accent); }
+
+  &.@{class-prefix}-is-done::before,
+  &.@{class-prefix}-is-active::before {
+    background: color-mix(in srgb, var(--wb-accent) 68%, var(--wb-border));
+  }
+}
+
+.@{class-prefix}-detail-page-progress-stage-icon {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 50%;
+  place-items: center;
+
+  .@{class-prefix}-is-done & {
+    color: #fff;
+    background: #4eb8a8;
+    border-color: #4eb8a8;
+  }
+
+  .@{class-prefix}-is-active & {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--wb-accent-soft) 65%, transparent);
+  }
+}
+
+.@{class-prefix}-detail-page-progress-hint {
+  display: block;
+  margin-top: 24px;
+  font-size: 10px;
+}
+
+@keyframes detail-page-progress-orbit {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes detail-page-progress-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-detail-page-selector-panel.@{class-prefix}-progress-panel { padding: 30px 20px; }
+  .@{class-prefix}-detail-page-progress-stage .ant-typography { font-size: 9px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .@{class-prefix}-detail-page-progress-orbit,
+  .@{class-prefix}-detail-page-progress-bar span { animation: none; }
+}
