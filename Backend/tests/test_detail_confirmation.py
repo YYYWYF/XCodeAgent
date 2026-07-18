@@ -7,7 +7,7 @@ from app.graph.nodes.planning import detail_confirmation
 from app.services.page_detail_plan import (
     create_data_source_detail_plan,
     create_page_detail_plan,
-    create_page_spec_from_project_plan,
+    extract_page_detail_context,
 )
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
@@ -19,13 +19,13 @@ class DetailConfirmationTests(unittest.TestCase):
         project_plan = create_project_plan(
             create_requirement_spec("创建一个库存管理系统")
         )
-        page_spec = create_page_spec_from_project_plan(
+        page_context = extract_page_detail_context(
             project_plan,
             "inventory_management_list_page",
         )
         page_detail = create_page_detail_plan(
             project_plan,
-            page_spec,
+            page_context,
             agent_detail_plan={"interactions": ["仅查看，不允许删除"]},
         )
         data_detail = create_data_source_detail_plan(
@@ -44,7 +44,7 @@ class DetailConfirmationTests(unittest.TestCase):
         )
         project_plan["frontend_pages"] = [
             {
-                "id": "people_list",
+                "pageId": "people_list",
                 "name": "人员列表",
                 "path": "/people",
                 "data_dependencies": [],
@@ -52,10 +52,10 @@ class DetailConfirmationTests(unittest.TestCase):
             }
         ]
 
-        page_spec = create_page_spec_from_project_plan(project_plan, "people_list")
+        page_context = extract_page_detail_context(project_plan, "people_list")
 
-        self.assertEqual(page_spec["page_id"], "people_list")
-        self.assertIn("人员列表", page_spec["page_goal"])
+        self.assertEqual(page_context["pageId"], "people_list")
+        self.assertIn("人员列表", page_context["page_goal"])
 
     def test_page_detail_tolerates_api_contract_without_data_source_id(self) -> None:
         project_plan = create_project_plan(
@@ -64,13 +64,13 @@ class DetailConfirmationTests(unittest.TestCase):
         for contract in project_plan["api_contracts"]:
             contract.pop("data_source_id", None)
 
-        page_spec = create_page_spec_from_project_plan(
+        page_context = extract_page_detail_context(
             project_plan,
             "inventory_management_list_page",
         )
-        page_detail = create_page_detail_plan(project_plan, page_spec)
+        page_detail = create_page_detail_plan(project_plan, page_context)
 
-        self.assertTrue(page_spec["api_contract_ids"])
+        self.assertTrue(page_context["endpoint_contracts"])
         self.assertEqual(
             page_detail["data_sources"][0]["id"],
             "inventory_management_source",
@@ -80,14 +80,14 @@ class DetailConfirmationTests(unittest.TestCase):
         project_plan = create_project_plan(
             create_requirement_spec("创建一个库存管理系统")
         )
-        page_spec = create_page_spec_from_project_plan(
+        page_context = extract_page_detail_context(
             project_plan,
             "inventory_management_list_page",
         )
 
         page_detail = create_page_detail_plan(
             project_plan,
-            page_spec,
+            page_context,
             agent_detail_plan={
                 "basic_layout": {
                     "structure": [
@@ -110,11 +110,11 @@ class DetailConfirmationTests(unittest.TestCase):
         project_plan = create_project_plan(
             create_requirement_spec("创建一个库存管理系统")
         )
-        page_spec = create_page_spec_from_project_plan(
+        page_context = extract_page_detail_context(
             project_plan,
             "inventory_management_list_page",
         )
-        page_spec["page_dependencies"]["endpoint_dependencies"] = [
+        page_context["references"]["endpoint_dependencies"] = [
             {
                 "api_contract_id": "inventory_management_source_api",
                 "endpoint_id": "inventory_management_source_api.list",
@@ -125,7 +125,7 @@ class DetailConfirmationTests(unittest.TestCase):
             }
         ]
 
-        page_detail = create_page_detail_plan(project_plan, page_spec)
+        page_detail = create_page_detail_plan(project_plan, page_context)
 
         endpoints = page_detail["data_sources"][0]["endpoints"]
         self.assertEqual([endpoint["id"] for endpoint in endpoints], [
@@ -173,17 +173,17 @@ class DetailConfirmationTests(unittest.TestCase):
 
     def test_detail_review_applies_page_patch_and_confirms_once(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建库存系统"))
-        page_spec = create_page_spec_from_project_plan(
+        page_context = extract_page_detail_context(
             project_plan,
-            project_plan["frontend_pages"][0]["id"],
+            project_plan["frontend_pages"][0]["pageId"],
         )
         pending_plan = {
             **project_plan,
-            "page_detail_plans": [create_page_detail_plan(project_plan, page_spec)],
+            "page_detail_plans": [create_page_detail_plan(project_plan, page_context)],
             "data_source_detail_plans": [],
             "confirmation_status": "pending_user_confirmation",
         }
-        page_id = page_spec["page_id"]
+        pageId = page_context["pageId"]
 
         result = detail_confirmation(
             {
@@ -195,7 +195,7 @@ class DetailConfirmationTests(unittest.TestCase):
                     "target_changes": [
                         {
                             "target_type": "page",
-                            "target_id": page_id,
+                            "target_id": pageId,
                             "changes": {
                                 "page_goal": "快速查看库存并支持批量导出",
                                 "interactions": ["搜索", "筛选", "批量导出"],
@@ -224,7 +224,7 @@ class DetailConfirmationTests(unittest.TestCase):
             "page_detail_plans": [
                 {
                     "id": "page_detail:inventory_management_list_page",
-                    "page_id": "inventory_management_list_page",
+                    "pageId": "inventory_management_list_page",
                 }
             ],
         }
@@ -241,7 +241,7 @@ class DetailConfirmationTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
         self.assertEqual(
-            result["project_plan"]["page_detail_plans"][0]["page_id"],
+            result["project_plan"]["page_detail_plans"][0]["pageId"],
             "inventory_management_list_page",
         )
 

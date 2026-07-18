@@ -1,5 +1,5 @@
 import { PlayCircleOutlined, RocketOutlined } from '@ant-design/icons'
-import { Button, Radio, Skeleton, Typography } from 'antd'
+import { Button, Radio, Skeleton, Tag, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { DevelopmentPlanningPageOption } from '../../typings'
 import { cx } from '../../utils'
@@ -10,7 +10,7 @@ const { Text, Title } = Typography
 type Props = {
   disabled: boolean
   loading: boolean
-  onStart: (pageId: string, pageLabel: string) => Promise<void>
+  onStart: (pageId: string, pageLabel: string, hasDetailPlan: boolean) => Promise<void>
   pages: DevelopmentPlanningPageOption[]
 }
 
@@ -23,14 +23,14 @@ export default function DetailConfirmationPageSelector({
 }: Props): JSX.Element {
   const [selectedPageId, setSelectedPageId] = useState('')
   const selectedPage = useMemo(
-    () => pages.find((page) => page.key === selectedPageId),
+    () => pages.find((page) => page.pageId === selectedPageId),
     [pages, selectedPageId]
   )
 
   // 页面清单刷新后保留有效选择，否则默认选择第一个页面。
   useEffect(() => {
-    if (!pages.some((page) => page.key === selectedPageId)) {
-      setSelectedPageId(pages[0]?.key || '')
+    if (!pages.some((page) => page.pageId === selectedPageId)) {
+      setSelectedPageId(pages[0]?.pageId || '')
     }
   }, [pages, selectedPageId])
 
@@ -55,10 +55,15 @@ export default function DetailConfirmationPageSelector({
             value={selectedPageId}
           >
             {pages.map((page) => (
-              <Radio.Button key={page.key} value={page.key}>
+              <Radio.Button key={page.pageId} value={page.pageId}>
                 <span className={cx('detail-page-selector-name')}>{page.label}</span>
                 <span className={cx('detail-page-selector-path')}>{page.path}</span>
                 <span className={cx('detail-page-selector-purpose')}>{page.purpose}</span>
+                {page.hasDetailPlan ? (
+                  <Tag color="green">已有 plan</Tag>
+                ) : (
+                  <Tag>未生成</Tag>
+                )}
               </Radio.Button>
             ))}
           </Radio.Group>
@@ -71,11 +76,17 @@ export default function DetailConfirmationPageSelector({
           disabled={disabled || !selectedPage}
           icon={<PlayCircleOutlined />}
           loading={disabled}
-          onClick={() => selectedPage && void onStart(selectedPage.key, selectedPage.label)}
+          onClick={() =>
+            selectedPage && void onStart(
+              selectedPage.pageId,
+              selectedPage.label,
+              Boolean(selectedPage.hasDetailPlan),
+            )
+          }
           size="large"
           type="primary"
         >
-          开始生成「{selectedPage?.label || '所选页面'}」
+          {selectedPage?.hasDetailPlan ? '查看并确认' : '开始生成'}「{selectedPage?.label || '所选页面'}」
         </Button>
       </main>
     </section>

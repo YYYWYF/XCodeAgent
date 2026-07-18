@@ -140,6 +140,7 @@ def detail_confirmation(state: ProjectState) -> dict:
 
     pending_plan = state.get("pending_project_plan")
     submission = state.get("detail_review_submission")
+    selectedPageId = str(state.get("selectedPageId") or "")
     if pending_plan and isinstance(submission, dict):
         edited_markdown = edited_project_plan_markdown(state, pending_plan)
         synchronized_plan = (
@@ -154,6 +155,7 @@ def detail_confirmation(state: ProjectState) -> dict:
         confirmed_plan = apply_detail_review_submission(
             synchronized_plan,
             submission,
+            selectedPageId=selectedPageId or None,
         )
         project_plan_path = write_project_plan_document(state, confirmed_plan)
         return {
@@ -169,6 +171,7 @@ def detail_confirmation(state: ProjectState) -> dict:
                 "mode": "batch_review",
                 "targets": [],
             },
+            "selectedPageId": selectedPageId or None,
             "detail_plans": [
                 *confirmed_plan.get("page_detail_plans", []),
                 *confirmed_plan.get("data_source_detail_plans", []),
@@ -186,6 +189,40 @@ def detail_confirmation(state: ProjectState) -> dict:
         return detail_confirmation(
             {**state, "detail_review_submission": legacy_submission}
         )
+
+    if pending_plan and selectedPageId:
+        review_plan = (
+            pending_plan
+            if _has_selected_page_detail(pending_plan, selectedPageId)
+            else state.get("project_plan")
+        )
+        if not isinstance(review_plan, dict):
+            review_plan = pending_plan
+        clarification = detail_review_payload(
+            review_plan,
+            selectedPageId=selectedPageId,
+        )
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "clarification": clarification,
+            "pending_project_plan": review_plan,
+            "project_plan": state.get("project_plan"),
+            "project_plan_path": state.get("project_plan_path"),
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
+            "detail_selection": {
+                "status": "requires_user_input",
+                "mode": "batch_review",
+                "selectedPageId": selectedPageId,
+                "targets": _selected_detail_design_targets(
+                    review_plan,
+                    selectedPageId,
+                ),
+            },
+            "selectedPageId": selectedPageId,
+            "detail_plans": _selected_detail_plans(review_plan, selectedPageId),
+            "timeline": ["detail_confirmation"],
+        }
 
     if pending_plan:
         revised_plan = revise_project_plan_with_chat_model(
@@ -217,11 +254,38 @@ def detail_confirmation(state: ProjectState) -> dict:
             "主 Workflow 需要工作区 .xcodeagent/plans/project-plan.json "
             "（兼容 plans/project-plan.json）作为初始输入。"
         )
+    if not selectedPageId:
+        raise ValueError("开始页面设计时必须提供 selectedPageId。")
+    if _has_selected_page_detail(project_plan, selectedPageId):
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "clarification": detail_review_payload(
+                project_plan,
+                selectedPageId=selectedPageId,
+            ),
+            "pending_project_plan": project_plan,
+            "project_plan": project_plan,
+            "project_plan_path": state.get("project_plan_path"),
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
+            "detail_selection": {
+                "status": "requires_user_input",
+                "mode": "batch_review",
+                "selectedPageId": selectedPageId,
+                "targets": _selected_detail_design_targets(
+                    project_plan,
+                    selectedPageId,
+                ),
+            },
+            "selectedPageId": selectedPageId,
+            "detail_plans": _selected_detail_plans(project_plan, selectedPageId),
+            "timeline": ["detail_confirmation"],
+        }
     try:
         pending_plan = _generate_all_detail_plans(
             project_plan,
             frontend_pages=state.get("frontend_pages"),
-            selected_page_id=state.get("selected_page_id"),
+            selectedPageId=selectedPageId or None,
         )
     except PageDependencyGapError as exc:
         return {
@@ -237,7 +301,10 @@ def detail_confirmation(state: ProjectState) -> dict:
     return {
         "phase": "detail_confirmation",
         "status": "requires_user_input",
-        "clarification": detail_review_payload(pending_plan),
+        "clarification": detail_review_payload(
+            pending_plan,
+            selectedPageId=selectedPageId or None,
+        ),
         "pending_project_plan": pending_plan,
         "project_plan": project_plan,
         "project_plan_path": project_plan_path,
@@ -245,8 +312,10 @@ def detail_confirmation(state: ProjectState) -> dict:
         "detail_selection": {
             "status": "requires_user_input",
             "mode": "batch_review",
+            "selectedPageId": selectedPageId or None,
             "targets": targets,
         },
+        "selectedPageId": selectedPageId or None,
         "detail_plans": [
             *pending_plan.get("page_detail_plans", []),
             *pending_plan.get("data_source_detail_plans", []),
@@ -259,7 +328,7 @@ def _generate_all_detail_plans(
     project_plan: dict,
     *,
     frontend_pages: list[dict] | None = None,
-    selected_page_id: str | None = None,
+    selectedPageId: str | None = None,
 ) -> dict:
     """为计划中的数据源及用户选中的初始页面生成功能详细设计。"""
 
@@ -267,14 +336,20 @@ def _generate_all_detail_plans(
     pages = frontend_pages if isinstance(frontend_pages, list) else project_plan.get(
         "frontend_pages", []
     )
-    if selected_page_id:
+    if selectedPageId:
         pages = [
             page
             for page in pages
-            if isinstance(page, dict) and page.get("id") == selected_page_id
+            if isinstance(page, dict) and page.get("pageId") == selectedPageId
         ]
         if not pages:
-            raise ValueError(f"ProjectPlan 中不存在页面：{selected_page_id}")
+            raise ValueError(f"ProjectPlan 中不存在页面：{selectedPageId}")
+        # 单页设计不能混入上一轮或其他页面遗留的内存详情，避免审核界面展示错误对象。
+        updated_plan = {
+            **project_plan,
+            "page_detail_plans": [],
+            "data_source_detail_plans": [],
+        }
     selected_source_ids = {
         str(source_id)
         for page in pages if isinstance(page, dict)
@@ -286,7 +361,7 @@ def _generate_all_detail_plans(
     }
     for source in project_plan.get("data_sources", []):
         source_id = source.get("id") if isinstance(source, dict) else None
-        if not source_id or (selected_page_id and str(source_id) not in selected_source_ids):
+        if not source_id or (selectedPageId and str(source_id) not in selected_source_ids):
             continue
         detail = design_data_source_with_chat_model(updated_plan, source_id, "")
         detail["status"] = "pending_user_confirmation"
@@ -294,10 +369,10 @@ def _generate_all_detail_plans(
         updated_plan = attach_data_source_detail_plan(updated_plan, detail)
 
     for page in pages:
-        page_id = page.get("id") if isinstance(page, dict) else None
-        if not page_id:
+        pageId = page.get("pageId") if isinstance(page, dict) else None
+        if not pageId:
             continue
-        page_context = extract_page_detail_context(updated_plan, page_id)
+        page_context = extract_page_detail_context(updated_plan, pageId)
         detail = design_page_with_chat_model(updated_plan, page_context)
         detail["status"] = "pending_user_confirmation"
         detail["approved"] = False
@@ -307,23 +382,86 @@ def _generate_all_detail_plans(
         "confirmed_pages": 0,
         "confirmed_data_sources": 0,
         "total_pages": len(pages),
-        "total_data_sources": len(updated_plan.get("data_sources", [])),
+        "total_data_sources": (
+            len(selected_source_ids)
+            if selectedPageId
+            else len(updated_plan.get("data_sources", []))
+        ),
         "mode": "batch_review",
     }
-    selected_page_ids = {
-        str(page.get("id")) for page in pages if isinstance(page, dict) and page.get("id")
+    selectedPageIds = {
+        str(page.get("pageId")) for page in pages if isinstance(page, dict) and page.get("pageId")
     }
     for page in updated_plan.get("frontend_pages", []):
         if isinstance(page, dict) and (
-            not selected_page_id or str(page.get("id")) in selected_page_ids
+            not selectedPageId or str(page.get("pageId")) in selectedPageIds
         ):
             page["detail_status"] = "pending_user_confirmation"
     for source in updated_plan.get("data_sources", []):
         if isinstance(source, dict) and (
-            not selected_page_id or str(source.get("id")) in selected_source_ids
+            not selectedPageId or str(source.get("id")) in selected_source_ids
         ):
             source["detail_status"] = "pending_user_confirmation"
     return updated_plan
+
+
+def _selected_detail_plans(project_plan: dict, selectedPageId: str) -> list[dict]:
+    """只返回当前页面及其直接数据源的详细设计。"""
+
+    selected_page_details = [
+        detail
+        for detail in project_plan.get("page_detail_plans", [])
+        if isinstance(detail, dict)
+        and str(detail.get("pageId") or "") == selectedPageId
+    ]
+    selected_source_ids = {
+        str(item.get("id") or item.get("data_source_id") or "")
+        for detail in selected_page_details
+        for item in detail.get("data_sources", [])
+        if isinstance(item, dict) and (item.get("id") or item.get("data_source_id"))
+    }
+    selected_source_ids.update(
+        str(item.get("data_source_id") or "")
+        for detail in selected_page_details
+        for item in detail.get("api_dependencies", [])
+        if isinstance(item, dict) and item.get("data_source_id")
+    )
+    selected_source_details = [
+        detail
+        for detail in project_plan.get("data_source_detail_plans", [])
+        if isinstance(detail, dict)
+        and str(detail.get("data_source_id") or "") in selected_source_ids
+    ]
+    return [*selected_page_details, *selected_source_details]
+
+
+def _has_selected_page_detail(project_plan: dict, selectedPageId: str) -> bool:
+    """判断计划中是否已经包含当前页面的详情正文。"""
+
+    return any(
+        isinstance(detail, dict)
+        and str(detail.get("pageId") or "") == selectedPageId
+        for detail in project_plan.get("page_detail_plans", [])
+    )
+
+
+def _selected_detail_design_targets(
+    project_plan: dict,
+    selectedPageId: str,
+) -> list[dict]:
+    """把全量目标清单收敛到当前页面及其直接数据源。"""
+
+    selected_plans = _selected_detail_plans(project_plan, selectedPageId)
+    selected_ids = {
+        str(plan.get("pageId") or plan.get("data_source_id") or "")
+        for plan in selected_plans
+        if isinstance(plan, dict) and (plan.get("pageId") or plan.get("data_source_id"))
+    }
+    return [
+        target
+        for target in detail_design_targets(project_plan)
+        if str(target.get("id") or "") in selected_ids
+    ]
 
 
 def _project_plan_json_path_for_state(state: ProjectState) -> str:
@@ -354,11 +492,16 @@ def _project_plan_confirmation_payload(project_plan: dict) -> dict:
 def _project_plan_dependency_error_payload(errors: list[str]) -> dict:
     """要求用户回到 ProjectPlan 修订页面依赖、路由或跳转缺口。"""
 
+    error_summary = _project_plan_dependency_error_summary(errors)
     payload = build_ask_user_payload(
         [
             AskUserQuestion(
                 header="计划依赖校验",
-                question="系统已自动尝试修复 ProjectPlan 页面依赖，但仍有无法安全推断的问题。请补充业务决策后，我会重新生成 ProjectPlan；无需手动编辑 JSON。",
+                question=(
+                    "系统已自动尝试修复 ProjectPlan 页面依赖，但仍有无法安全推断的问题。"
+                    f"{error_summary}"
+                    "请补充业务决策后，我会重新生成 ProjectPlan；无需手动编辑 JSON。"
+                ),
                 type="text",
                 placeholder="例如：为入职表单补充 create endpoint，并修正页面路由。",
             )
@@ -368,6 +511,19 @@ def _project_plan_dependency_error_payload(errors: list[str]) -> dict:
     payload["message"] = "ProjectPlan 自动修复后仍未通过依赖校验，页面设计未开始。"
     payload["errors"] = errors
     return payload
+
+
+def _project_plan_dependency_error_summary(errors: list[str]) -> str:
+    """把依赖校验错误压缩成用户可见的简短问题清单。"""
+
+    visible_errors = [
+        str(error).strip()
+        for error in errors
+        if str(error).strip()
+    ][:5]
+    if not visible_errors:
+        return ""
+    return "当前剩余问题：" + "；".join(visible_errors) + "。"
 
 
 def _repair_project_plan_dependencies(

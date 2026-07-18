@@ -6,7 +6,7 @@ from app.services.project_plan import create_project_plan
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.page_detail_plan import (
     create_page_detail_plan,
-    create_page_spec_from_project_plan,
+    extract_page_detail_context,
 )
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import render_project_plan_markdown
@@ -24,10 +24,9 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertIn("api_contracts", plan)
         self.assertIn("frontend_pages", plan)
         self.assertIn("data_sources", plan)
-        self.assertIn("page_data_dependencies", plan)
         self.assertIn("permission_model", plan)
         self.assertIn("task_inputs", plan)
-        self.assertTrue(plan["page_data_dependencies"])
+        self.assertTrue(plan["frontend_pages"][0]["references"]["endpoint_dependencies"])
         self.assertTrue(plan["permission_model"]["page_access"])
         self.assertTrue(plan["project_acceptance_criteria"])
         self.assertTrue(plan["task_inputs"]["frontend"])
@@ -41,7 +40,7 @@ class ProjectPlanTests(unittest.TestCase):
             },
             "frontend_pages": [
                 {
-                    "id": "dashboard_page",
+                    "pageId": "dashboard_page",
                     "description": "Main Agent refined dashboard.",
                 }
             ],
@@ -76,7 +75,7 @@ class ProjectPlanTests(unittest.TestCase):
     def test_authoritative_agent_plan_can_replace_page_and_role_scoped_content(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         only_page = {
-            "id": "inventory_only",
+            "pageId": "inventory_only",
             "name": "库存列表",
             "path": "/inventory",
             "module_id": "inventory_management",
@@ -92,9 +91,65 @@ class ProjectPlanTests(unittest.TestCase):
             authoritative_agent_plan=True,
         )
 
-        self.assertEqual([page["id"] for page in plan["frontend_pages"]], ["inventory_only"])
+        self.assertEqual([page["pageId"] for page in plan["frontend_pages"]], ["inventory_only"])
 
-    def test_coordination_plan_missing_outputs_is_normalized_and_renderable(self) -> None:
+    def test_agent_pages_without_paths_get_unique_pageId_routes(self) -> None:
+        spec = create_requirement_spec("创建一个人员管理系统")
+
+        plan = create_project_plan(
+            spec,
+            agent_plan={
+                "frontend_pages": [
+                    {"pageId": "dashboard_page", "name": "仪表盘"},
+                    {"pageId": "employees_list", "name": "员工列表"},
+                    {"pageId": "onboarding_form", "name": "入职表单"},
+                ]
+            },
+            authoritative_agent_plan=True,
+        )
+
+        paths = [page["path"] for page in plan["frontend_pages"]]
+        self.assertEqual(paths, ["/", "/employees-list", "/onboarding-form"])
+
+    def test_requirement_pages_with_duplicate_root_paths_get_unique_routes(self) -> None:
+        spec = create_requirement_spec(
+            "创建一个人员管理系统",
+            agent_spec={
+                "pages": [
+                    {"pageId": "dashboard_page", "name": "仪表盘", "path": "/"},
+                    {"pageId": "employees_list", "name": "员工列表", "path": "/"},
+                    {"pageId": "offboarding_form", "name": "离职表单", "path": "/"},
+                ]
+            },
+            authoritative_agent_spec=True,
+        )
+
+        plan = create_project_plan(spec)
+
+        self.assertEqual(
+            [page["path"] for page in plan["frontend_pages"]],
+            ["/", "/employees-list", "/offboarding-form"],
+        )
+
+    def test_requirement_spec_does_not_emit_duplicate_root_page_paths(self) -> None:
+        spec = create_requirement_spec(
+            "创建一个人员管理系统",
+            agent_spec={
+                "pages": [
+                    {"pageId": "dashboard_page", "name": "仪表盘", "path": "/"},
+                    {"pageId": "employees_list", "name": "员工列表", "path": "/"},
+                    {"pageId": "onboarding_form", "name": "入职表单", "path": "/"},
+                ]
+            },
+            authoritative_agent_spec=True,
+        )
+
+        self.assertEqual(
+            [page["path"] for page in spec["pages"]],
+            ["/", "/employees-list", "/onboarding-form"],
+        )
+
+    def test_project_plan_with_coordination_note_is_renderable(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         plan = create_project_plan(
             spec,
@@ -108,14 +163,13 @@ class ProjectPlanTests(unittest.TestCase):
             authoritative_agent_plan=True,
         )
 
-        self.assertTrue(plan["coordination_plan"]["detail_confirmation"]["outputs"])
-        self.assertIn("逐项确认页面和数据源", render_project_plan_markdown(plan))
+        self.assertIn("库存管理应用总体计划书", render_project_plan_markdown(plan))
 
     def test_project_plan_tolerates_requirement_page_without_description(self) -> None:
         spec = create_requirement_spec("创建一个人员管理系统")
         spec["pages"] = [
             {
-                "id": "people_list",
+                "pageId": "people_list",
                 "name": "人员列表",
                 "path": "/people",
                 "module_id": "people",
@@ -136,22 +190,27 @@ class ProjectPlanTests(unittest.TestCase):
 
         self.assertIn("## 需求概述", markdown)
         self.assertIn("## 整体需求验收标准", markdown)
-        self.assertIn("## 页面与数据源依赖", markdown)
+        self.assertIn("## 前端页面清单", markdown)
+        self.assertIn("endpoint_dependencies", markdown)
         self.assertIn("## 权限体系", markdown)
 
     def test_project_plan_generates_complete_api_endpoint_contracts(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
 
         plan = create_project_plan(spec)
-        dependency = next(
-            item
-            for item in plan["page_data_dependencies"]
-            if item["endpoint_dependencies"]
+        endpoint_dependency = next(
+            dependency
+            for page in plan["frontend_pages"]
+            for dependency in page["references"]["endpoint_dependencies"]
+            if dependency.get("endpoint_id")
         )
         contract = next(
-            item
-            for item in plan["api_contracts"]
-            if item["id"] == dependency["api_contract_ids"][0]
+            contract
+            for contract in plan["api_contracts"]
+            if any(
+                endpoint.get("id") == endpoint_dependency["endpoint_id"]
+                for endpoint in contract["endpoints"]
+            )
         )
         endpoint = contract["endpoints"][0]
 
@@ -167,11 +226,8 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertIn(create_endpoint["request_schema_ref"], contract["schemas"])
         self.assertNotIn("schema", plan["data_sources"][0])
         self.assertTrue(plan["data_sources"][0]["schema_refs"])
-        self.assertTrue(dependency["endpoint_dependencies"])
-        self.assertEqual(
-            dependency["endpoint_dependencies"][0]["api_contract_id"],
-            contract["id"],
-        )
+        self.assertTrue(endpoint_dependency["endpoint_id"])
+        self.assertTrue(any(endpoint["id"] == endpoint_dependency["endpoint_id"] for endpoint in contract["endpoints"]))
 
     def test_project_plan_normalizes_agent_endpoint_contract_shapes(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
@@ -221,23 +277,21 @@ class ProjectPlanTests(unittest.TestCase):
 
     def test_contract_consistency_rejects_unknown_page_response_field(self) -> None:
         plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
-        page_spec = create_page_spec_from_project_plan(
+        page_context = extract_page_detail_context(
             plan,
             "inventory_management_list_page",
         )
         page_detail = create_page_detail_plan(
             plan,
-            page_spec,
-            agent_detail_plan={
-                "response_bindings": [
-                    {
-                        "endpoint_id": "inventory_management_source_api.list",
-                        "source_path": "items[].field_not_in_contract",
-                        "page_field": "invalid",
-                    }
-                ]
-            },
+            page_context,
         )
+        page_detail["response_bindings"] = [
+            {
+                "endpoint_id": "inventory_management_source_api.list",
+                "source_path": "items[].field_not_in_contract",
+                "page_field": "invalid",
+            }
+        ]
         plan["page_detail_plans"] = [page_detail]
 
         errors = validate_api_contract_consistency(plan)
@@ -246,23 +300,27 @@ class ProjectPlanTests(unittest.TestCase):
 
     def test_contract_consistency_accepts_jsonpath_list_response_bindings(self) -> None:
         plan = create_project_plan(create_requirement_spec("创建一个人员管理系统"))
-        page_dependency = next(
-            dependency
-            for dependency in plan["page_data_dependencies"]
-            if dependency.get("endpoint_dependencies")
-            and str(
-                dependency["endpoint_dependencies"][0].get("endpoint_id", "")
-            ).endswith(".list")
+        page = next(
+            page
+            for page in plan["frontend_pages"]
+            if any(
+                str(dependency.get("endpoint_id", "")).endswith(".list")
+                for dependency in page["references"]["endpoint_dependencies"]
+            )
         )
-        page_id = page_dependency["page_id"]
-        endpoint_id = page_dependency["endpoint_dependencies"][0]["endpoint_id"]
-        page_spec = create_page_spec_from_project_plan(
+        pageId = page["pageId"]
+        endpoint_id = next(
+            dependency["endpoint_id"]
+            for dependency in page["references"]["endpoint_dependencies"]
+            if str(dependency.get("endpoint_id", "")).endswith(".list")
+        )
+        page_context = extract_page_detail_context(
             plan,
-            page_id,
+            pageId,
         )
         page_detail = create_page_detail_plan(
             plan,
-            page_spec,
+            page_context,
             agent_detail_plan={
                 "response_bindings": [
                     {
@@ -293,7 +351,7 @@ class ProjectPlanTests(unittest.TestCase):
             },
             "frontend_pages": [
                 {
-                    "id": "dashboard_page",
+                    "pageId": "dashboard_page",
                     "data_dependencies": "inventory_source",
                     "permissions": "admin",
                 },
@@ -308,7 +366,7 @@ class ProjectPlanTests(unittest.TestCase):
             ],
             "page_data_dependencies": [
                 {
-                    "page_id": "dashboard_page",
+                    "pageId": "dashboard_page",
                     "data_source_ids": "inventory_source",
                     "api_contract_ids": "inventory_source_api",
                 },
@@ -319,8 +377,8 @@ class ProjectPlanTests(unittest.TestCase):
         plan = create_project_plan(spec, agent_plan=agent_plan)
         markdown = render_project_plan_markdown(plan)
 
-        self.assertIsInstance(plan["frontend_pages"][0]["data_dependencies"], list)
-        self.assertTrue(plan["frontend_pages"][0]["permissions"])
+        self.assertIsInstance(plan["frontend_pages"][0]["references"]["endpoint_dependencies"], list)
+        self.assertTrue(plan["frontend_pages"][0]["references"]["permissions"])
         self.assertIsInstance(plan["api_contracts"][0]["endpoints"], list)
         self.assertIn("## API 契约", markdown)
 

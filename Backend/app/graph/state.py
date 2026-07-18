@@ -26,7 +26,7 @@ class ProjectState(TypedDict, total=False):
     project_plan_json_path: str
     detail_selection: dict[str, Any]
     page_selection: dict[str, Any]
-    selected_page_id: str
+    selectedPageId: str
     selected_data_source_id: str
     data_source_spec_draft: dict[str, Any]
     detail_plans: list[dict[str, Any]]

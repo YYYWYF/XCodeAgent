@@ -192,8 +192,8 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 基于用户在工作台选择的页面生成并审阅详细设计，负责：
 
 - 读取 `ProjectPlan.frontend_pages` 和 `ProjectPlan.data_sources`；
-- 将工作台通过 AG-UI 提交的 `selectedPageId` 写入 `ProjectState.selected_page_id`；
-- 为所选页面和计划内数据源生成初版详细设计；未提供选择时兼容原有全部页面行为；
+- 将工作台通过 AG-UI 提交的 `selectedPageId` 写入 `ProjectState.selectedPageId`；
+- 为所选页面和计划内数据源生成初版详细设计；未提供选择时按全量页面审阅；
 - 在同一审阅界面按页面和数据源分组展示，默认折叠；
 - 用户只展开需要调整的对象，按页面目标、布局、交互、权限、关系、校验和 Seed 等模板字段修改；
 - 核对数据模型、关系、校验规则和 API 映射；如需字段变更则返回 ProjectPlan 契约调整；
@@ -208,7 +208,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`；详细设计文件和轻量 ProjectPlan 索引一起持久化，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
-正式 `project-plan.json` 不内嵌 `page_detail_plans` 或 `data_source_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面的 `id` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`；页面设计模型不得新增、删除或替换这些引用。选择单个页面时，后端只生成该页面经 endpoint 反查得到的数据源设计，并在该页面 `detail_design.generation_dependencies` 中记录 `endpoint_ids` 与 `navigation_target_page_ids`。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与数据源详情，不得重新加载全部页面详情；模型发现缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
+正式 `project-plan.json` 不内嵌 `page_detail_plans` 或 `data_source_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面的 `pageId` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`；页面设计模型不得新增、删除或替换这些引用。选择单个页面时，后端只生成该页面经 endpoint 反查得到的数据源设计，并在该页面 `detail_design.generation_dependencies` 中记录 `endpoint_ids` 与 `navigationTargetPageIds`。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与数据源详情，不得重新加载全部页面详情；模型发现缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
 
 当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。SQLite checkpointer 负责持久化每个 `thread_id` 的主 Graph 状态；后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan 和 detail review 小型结构化状态，不把完整会话历史重新塞回上下文。
 

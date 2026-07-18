@@ -54,7 +54,8 @@ type UseWorkflowConversationResult = {
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleStartDetailConfirmation: (
     selectedPageId: string,
-    pageLabel: string
+    pageLabel: string,
+    hasDetailPlan?: boolean
   ) => Promise<void>
   handleStopGenerating: () => void
   handleSubmitClarification: (
@@ -361,13 +362,17 @@ export function useWorkflowConversation({
   /** 以用户选择的 ProjectPlan 页面作为主 Workflow 细节设计起点。 */
   const handleStartDetailConfirmation = async (
     selectedPageId: string,
-    pageLabel: string
+    pageLabel: string,
+    hasDetailPlan?: boolean
   ): Promise<void> => {
     if (!selectedPageId || loading || workspaceBusy) return
-    await sendWorkflowMessage(`开始设计页面：${pageLabel}`, {
-      selectedPageId,
-      titleFrom: `设计页面：${pageLabel}`
-    })
+    await sendWorkflowMessage(
+      `${hasDetailPlan ? '查看已生成页面计划' : '开始设计页面'}：${pageLabel}`,
+      {
+        selectedPageId,
+        titleFrom: `${hasDetailPlan ? '确认页面' : '设计页面'}：${pageLabel}`
+      }
+    )
   }
 
   const handleStopGenerating = (): void => {

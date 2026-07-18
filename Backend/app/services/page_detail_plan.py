@@ -16,17 +16,17 @@ from app.services.page_dependencies import page_design_references
 def detail_design_targets(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
     page_targets = [
         {
-            "id": page.get("id"),
+            "id": page.get("pageId"),
             "type": "page",
-            "label": f"页面：{page.get('name') or page.get('id') or '未命名页面'}",
-            "name": page.get("name") or page.get("id") or "未命名页面",
+            "label": f"页面：{page.get('name') or page.get('pageId') or '未命名页面'}",
+            "name": page.get("name") or page.get("pageId") or "未命名页面",
             "description": (
                 f"{page.get('path') or '/'}，"
                 f"{page.get('description') or page.get('name') or '待补充页面目标'}"
             ),
         }
         for page in project_plan.get("frontend_pages", [])
-        if isinstance(page, dict) and page.get("id")
+        if isinstance(page, dict) and page.get("pageId")
     ]
     data_source_targets = [
         {
@@ -45,12 +45,12 @@ def detail_design_targets(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
 def resolve_detail_design_target(
     project_plan: dict[str, Any],
     request: str,
-    selected_page_id: str | None = None,
+    selectedPageId: str | None = None,
     selected_data_source_id: str | None = None,
 ) -> dict[str, Any] | None:
     targets = detail_design_targets(project_plan)
     for target in targets:
-        if target["type"] == "page" and target["id"] == selected_page_id:
+        if target["type"] == "page" and target["id"] == selectedPageId:
             return target
         if target["type"] == "data_source" and target["id"] == selected_data_source_id:
             return target
@@ -72,10 +72,21 @@ def resolve_detail_design_target(
 
 
 def _find_by_id(items: list[dict[str, Any]], item_id: str) -> dict[str, Any]:
+    """按通用 id 查找非页面对象。"""
+
     for item in items:
         if item.get("id") == item_id:
             return item
     raise ValueError(f"Unknown item id: {item_id}")
+
+
+def _find_page_by_pageId(items: list[dict[str, Any]], pageId: str) -> dict[str, Any]:
+    """按页面唯一标识 pageId 查找页面对象。"""
+
+    for item in items:
+        if item.get("pageId") == pageId:
+            return item
+    raise ValueError(f"ProjectPlan 中不存在页面：{pageId}")
 
 
 def _text_items(value: Any) -> list[str]:
@@ -490,7 +501,7 @@ def _page_navigation(page: dict[str, Any], agent_value: Any) -> list[dict[str, A
             {
                 **item,
                 "trigger": str(item.get("trigger") or item.get("action") or "页面跳转"),
-                "target_page_id": str(item.get("target_page_id") or ""),
+                "targetPageId": str(item.get("targetPageId") or ""),
                 "target_path": str(item.get("target_path") or item.get("path") or ""),
                 "behavior": str(item.get("behavior") or item.get("description") or ""),
             }
@@ -504,12 +515,12 @@ def _page_navigation(page: dict[str, Any], agent_value: Any) -> list[dict[str, A
 
 def extract_page_detail_context(
     project_plan: dict[str, Any],
-    page_id: str,
+    pageId: str,
 ) -> dict[str, Any]:
-    page = _find_by_id(project_plan["frontend_pages"], page_id)
-    page_name = str(page.get("name") or page_id)
+    page = _find_page_by_pageId(project_plan["frontend_pages"], pageId)
+    page_name = str(page.get("name") or pageId)
     page_path = str(page.get("path") or "/")
-    references = page_design_references(project_plan, page_id)
+    references = page_design_references(project_plan, pageId)
     endpoint_ids = {
         str(item.get("endpoint_id"))
         for item in references["endpoint_dependencies"]
@@ -531,17 +542,17 @@ def extract_page_detail_context(
     ]
     navigation_pages = [
         {
-            "id": candidate.get("id"),
+            "pageId": candidate.get("pageId"),
             "name": candidate.get("name"),
             "path": candidate.get("path"),
         }
         for candidate in _dict_items(project_plan.get("frontend_pages"))
-        if str(candidate.get("id"))
-        in {str(item.get("target_page_id")) for item in references["navigation_targets"]}
+        if str(candidate.get("pageId"))
+        in {str(item.get("targetPageId")) for item in references["navigation_targets"]}
     ]
     return {
         "type": "page",
-        "page_id": page_id,
+        "pageId": pageId,
         "page_name": page_name,
         "path": page_path,
         "module_id": str(page.get("module_id") or "core"),
@@ -577,7 +588,7 @@ def create_data_source_detail_plan(
     ]
     dependent_pages = [
         {
-            "page_id": page.get("id"),
+            "pageId": page.get("pageId"),
             "page_name": page.get("name"),
             "path": page.get("path"),
         }
@@ -661,9 +672,9 @@ def create_page_detail_plan(
     agent_note: str = "live main-agent page detail design",
     agent_detail_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    page_id = page_context["page_id"]
-    page = _find_by_id(project_plan["frontend_pages"], page_id)
-    page_name = str(page.get("name") or page_id)
+    pageId = page_context["pageId"]
+    page = _find_page_by_pageId(project_plan["frontend_pages"], pageId)
+    page_name = str(page.get("name") or pageId)
     page_path = str(page.get("path") or "/")
     api_contracts = _dict_items(project_plan.get("api_contracts"))
     api_dependencies = normalize_page_api_dependencies(
@@ -723,12 +734,14 @@ def create_page_detail_plan(
         {
             **item,
             "target_path": str(
-                _find_by_id(project_plan["frontend_pages"], item["target_page_id"]).get("path")
+                _find_page_by_pageId(
+                    project_plan["frontend_pages"], item["targetPageId"]
+                ).get("path")
                 or ""
             ),
         }
         for item in page_context.get("references", {}).get("navigation_targets", [])
-        if item.get("target_page_id")
+        if item.get("targetPageId")
     ]
     operation_interactions = _operation_interactions(
         api_dependencies,
@@ -751,9 +764,9 @@ def create_page_detail_plan(
         (agent_detail_plan or {}).get("response_bindings"),
     )
     detail_plan = {
-        "id": f"page_detail:{page_id}",
+        "id": f"page_detail:{pageId}",
         "type": "page",
-        "page_id": page_id,
+        "pageId": pageId,
         "page_name": page_name,
         "path": page_path,
         "status": "confirmed",
@@ -814,9 +827,9 @@ def create_page_detail_plan(
         detail_plan[key] = _text_items(detail_plan.get(key))
     detail_plan.update(
         {
-            "id": f"page_detail:{page_id}",
+            "id": f"page_detail:{pageId}",
             "type": "page",
-            "page_id": page_id,
+            "pageId": pageId,
             "page_name": page_name,
             "path": page_path,
             "status": "confirmed",
@@ -844,21 +857,21 @@ def attach_page_detail_plan(
 ) -> dict[str, Any]:
     updated_plan = deepcopy(project_plan)
     existing_details = {
-        item["page_id"]: item
+        item["pageId"]: item
         for item in updated_plan.get("page_detail_plans", [])
-        if isinstance(item, dict) and item.get("page_id")
+        if isinstance(item, dict) and item.get("pageId")
     }
-    existing_details[detail_plan["page_id"]] = detail_plan
+    existing_details[detail_plan["pageId"]] = detail_plan
     updated_plan["page_detail_plans"] = list(existing_details.values())
 
     for page in updated_plan["frontend_pages"]:
-        if page.get("id") == detail_plan["page_id"]:
+        if page.get("pageId") == detail_plan["pageId"]:
             page["detail_status"] = "confirmed"
             page["detail_plan_id"] = detail_plan["id"]
 
     updated_plan["detail_confirmation_summary"] = {
         "confirmed_pages": len(updated_plan["page_detail_plans"]),
         "total_pages": len(updated_plan["frontend_pages"]),
-        "latest_page_id": detail_plan["page_id"],
+        "latestPageId": detail_plan["pageId"],
     }
     return updated_plan

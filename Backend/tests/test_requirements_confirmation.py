@@ -33,7 +33,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 "app_info": {"name": "人员管理应用", "target": "管理人员信息"},
                 "user_roles": [{"id": "user", "name": "普通用户", "description": "使用系统"}],
                 "feature_modules": [{"id": "people", "name": "人员管理", "description": "人员列表", "priority": "must"}],
-                "pages": [{"id": "people_list", "name": "人员列表", "path": "/", "module_id": "people", "description": "唯一页面"}],
+                "pages": [{"pageId": "people_list", "name": "人员列表", "path": "/", "module_id": "people", "description": "唯一页面"}],
                 "data_sources": [{"id": "people_source", "name": "人员数据", "type": "database", "entities": ["Person"], "description": "人员信息"}],
                 "business_flows": [{"id": "browse_people", "name": "浏览人员", "steps": ["打开列表"]}],
                 "acceptance_criteria": ["列表可以展示人员信息"],
@@ -42,8 +42,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
         )
 
         self.assertEqual([role["id"] for role in spec["user_roles"]], ["user"])
-        self.assertEqual([page["id"] for page in spec["pages"]], ["people_list"])
-        self.assertNotIn("login_page", [page["id"] for page in spec["pages"]])
+        self.assertEqual([page["pageId"] for page in spec["pages"]], ["people_list"])
+        self.assertNotIn("login_page", [page["pageId"] for page in spec["pages"]])
 
     def test_clarification_answers_merge_into_requirement_spec_fields(self) -> None:
         spec = create_requirement_spec("创建一个业务管理系统")

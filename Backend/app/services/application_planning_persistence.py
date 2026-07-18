@@ -31,9 +31,9 @@ def _page_detail_map(project_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """按页面 id 索引已确认的页面详细设计。"""
 
     return {
-        str(item["page_id"]): item
+        str(item["pageId"]): item
         for item in _dict_items(project_plan.get("page_detail_plans"))
-        if item.get("page_id")
+        if item.get("pageId")
     }
 
 
@@ -109,7 +109,7 @@ def _interactions(detail: dict[str, Any]) -> list[dict[str, Any]]:
             **({"endpointId": str(item["endpoint_id"])} if item.get("endpoint_id") else {}),
         })
     for index, item in enumerate(_dict_items(detail.get("page_navigation")), start=1):
-        target = str(item.get("target_page_id") or "")
+        target = str(item.get("targetPageId") or "")
         if not target:
             continue
         result.append({
@@ -161,21 +161,21 @@ def _menus(project_plan: dict[str, Any]) -> dict[str, Any]:
     details = _page_detail_map(project_plan)
     items = []
     for page in _dict_items(project_plan.get("frontend_pages")):
-        page_id = str(page.get("id") or f"page-{len(items) + 1}")
-        detail = details.get(page_id, {})
+        pageId = str(page.get("pageId") or f"page-{len(items) + 1}")
+        detail = details.get(pageId, {})
         features = [
             str(item.get("action"))
             for item in _dict_items(detail.get("operation_interactions"))
             if item.get("action")
         ]
         items.append({
-            "key": page_id,
+            "key": pageId,
             "path": str(page.get("path") or "/"),
-            "label": str(page.get("name") or page_id),
+            "label": str(page.get("name") or pageId),
             "type": "page",
             "purpose": str(page.get("description") or detail.get("page_goal") or page.get("name") or "业务页面"),
             "keyFeatures": features or [str(page.get("description") or page.get("name") or "页面核心功能")],
-            "pageKey": page_id,
+            "pageKey": pageId,
             "design": _page_design(page, detail),
         })
     if not items:

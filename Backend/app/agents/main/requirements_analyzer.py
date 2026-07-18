@@ -74,8 +74,11 @@ def _requirements_prompt(
         "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
         "without markdown fences or commentary. It must include app_info, user_roles, "
         "feature_modules, pages, data_sources, business_flows, acceptance_criteria, and assumptions. "
-        "Every role, module, page, data source, and flow must have a stable id and the fields needed "
-        "to describe it. The JSON must represent the complete current requirement, not a patch.\n\n"
+        "Every role, module, data source, and flow must have a stable id. Every page must have a "
+        "stable pageId, name, unique path, module_id, and description. Use '/' only for the single "
+        "home/dashboard page; all other pages must have business routes derived from their pageId, "
+        "such as '/employees-list' or '/onboarding-form'. Never return multiple pages with path '/'. "
+        "The JSON must represent the complete current requirement, not a patch.\n\n"
         f"{revision_context}Latest user request or feedback:\n{request}"
     )
 

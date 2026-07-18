@@ -82,6 +82,8 @@ export type WorkflowDetailReview = {
     page_count?: number
     data_source_count?: number
     api_contract_count?: number
+    missingSelectedPagePlan?: boolean
+    selectedPageId?: string
   }
 }
 

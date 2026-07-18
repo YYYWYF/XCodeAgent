@@ -100,6 +100,7 @@ export default function WorkflowRunCard({
           {detailReview ? (
             <DetailReview
               disabled={disabled}
+              message={clarification?.message}
               onConfirm={(submission) => onSubmitClarification?.(
                 workflow,
                 { detail_review: submission },

@@ -12,19 +12,19 @@ class WorkflowSelectedPageTests(unittest.TestCase):
     def test_generates_detail_for_selected_frontend_page_only(self) -> None:
         project_plan = {
             "frontend_pages": [
-                {"id": "dashboard", "name": "首页"},
-                {"id": "inventory", "name": "库存页"},
+                {"pageId": "dashboard", "name": "首页"},
+                {"pageId": "inventory", "name": "库存页"},
             ],
             "data_sources": [],
         }
         with (
             patch(
                 "app.graph.nodes.planning.extract_page_detail_context",
-                return_value={"page_id": "inventory"},
+                return_value={"pageId": "inventory"},
             ) as extract_context,
             patch(
                 "app.graph.nodes.planning.design_page_with_chat_model",
-                return_value={"page_id": "inventory"},
+                return_value={"pageId": "inventory"},
             ) as design_page,
             patch(
                 "app.graph.nodes.planning.attach_page_detail_plan",
@@ -34,7 +34,7 @@ class WorkflowSelectedPageTests(unittest.TestCase):
             result = _generate_all_detail_plans(
                 project_plan,
                 frontend_pages=project_plan["frontend_pages"],
-                selected_page_id="inventory",
+                selectedPageId="inventory",
             )
 
         extract_context.assert_called_once_with(project_plan, "inventory")

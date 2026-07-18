@@ -35,7 +35,15 @@ declare global {
         ready: boolean;
         missing: string[];
         invalid: string[];
-        pages: Array<{ key: string; label: string; path: string; purpose: string }>;
+        pages: Array<{
+          key: string;
+          pageId: string;
+          label: string;
+          path: string;
+          purpose: string;
+          detailPlanStatus?: string;
+          hasDetailPlan: boolean;
+        }>;
       }>;
       };
       sessions?: {

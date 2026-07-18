@@ -24,29 +24,36 @@ def _merge_agent_items(
     *,
     authoritative: bool = False,
 ) -> list[dict[str, Any]]:
+    """按业务主键合并模型补充项；页面统一使用 pageId。"""
+
     agent_items = _agent_section(agent_plan, key)
     if not isinstance(agent_items, list):
         return default_items
 
+    identity_key = "pageId" if key == "frontend_pages" else "id"
     agent_items = [
-        item for item in agent_items if isinstance(item, dict) and item.get("id")
+        item
+        for item in agent_items
+        if isinstance(item, dict) and item.get(identity_key)
     ]
     if authoritative:
         defaults_by_id = {
-            str(item["id"]): item for item in default_items if item.get("id")
+            str(item[identity_key]): item
+            for item in default_items
+            if item.get(identity_key)
         }
         return [
-            _merge_agent_item(defaults_by_id.get(str(item["id"]), {}), item)
+            _merge_agent_item(defaults_by_id.get(str(item[identity_key]), {}), item)
             for item in agent_items
         ]
 
     by_id = {
-        str(item["id"]): item
+        str(item[identity_key]): item
         for item in agent_items
-        if isinstance(item, dict) and item.get("id")
+        if isinstance(item, dict) and item.get(identity_key)
     }
     return [
-        _merge_agent_item(item, by_id.get(str(item["id"]), {}))
+        _merge_agent_item(item, by_id.get(str(item[identity_key]), {}))
         for item in default_items
     ]
 
@@ -100,6 +107,16 @@ def _dedupe_strings(values: list[str]) -> list[str]:
     return result
 
 
+def _path_from_pageId(pageId: str) -> str:
+    """根据 pageId 生成稳定路由，避免缺省页面统一落到根路径。"""
+
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(pageId or "page")).strip("-_")
+    route = normalized.replace("_", "-").lower() or "page"
+    if route.endswith("-page") and route != "dashboard-page":
+        route = route[: -len("-page")] or route
+    return "/" if route in {"dashboard", "dashboard-page", "home", "index"} else f"/{route}"
+
+
 def _normalize_data_sources(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for item in items:
@@ -122,12 +139,19 @@ def _normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _normalize_frontend_pages(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
+    used_paths: set[str] = set()
     for item in items:
+        pageId = str(item.get("pageId") or "page")
+        path = _unique_page_path(
+            str(item.get("path") or _path_from_pageId(pageId)),
+            pageId,
+            used_paths,
+        )
         normalized.append(
             {
                 **item,
-                "name": str(item.get("name") or item.get("id") or "页面"),
-                "path": str(item.get("path") or "/"),
+                "name": str(item.get("name") or pageId or "页面"),
+                "path": path,
                 "module_id": str(item.get("module_id") or "core"),
                 "description": str(
                     item.get("description") or item.get("name") or "业务页面"
@@ -138,6 +162,35 @@ def _normalize_frontend_pages(items: list[dict[str, Any]]) -> list[dict[str, Any
             }
         )
     return normalized
+
+
+def _unique_page_path(path: str, pageId: str, used_paths: set[str]) -> str:
+    """把重复或空路由确定性改成由 pageId 派生的唯一业务路由。"""
+
+    normalized = path.strip() or _path_from_pageId(pageId)
+    if normalized != "/" and not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+    if normalized not in used_paths:
+        used_paths.add(normalized)
+        return normalized
+
+    candidate = _path_from_pageId(pageId)
+    if candidate == "/" or candidate in used_paths:
+        base = candidate if candidate != "/" else f"/{_route_slug(pageId)}"
+        suffix = 2
+        candidate = base
+        while candidate in used_paths:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+    used_paths.add(candidate)
+    return candidate
+
+
+def _route_slug(value: str) -> str:
+    """把页面标识转换为路由片段。"""
+
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value or "page")).strip("-_")
+    return normalized.replace("_", "-").lower() or "page"
 
 
 def _entity_name_from_source(data_source: dict[str, Any]) -> str:
@@ -300,10 +353,16 @@ def _write_schema(entity_schema: dict[str, Any], *, partial: bool) -> dict[str, 
 def _frontend_pages(spec: dict[str, Any]) -> list[dict[str, Any]]:
     data_source_ids = [source["id"] for source in spec["data_sources"]]
     pages = []
+    used_paths: set[str] = set()
     for page in spec["pages"]:
-        page_id = str(page.get("id") or "page")
-        page_name = str(page.get("name") or page_id)
+        pageId = str(page.get("pageId") or "page")
+        page_name = str(page.get("name") or pageId)
         module_id = str(page.get("module_id") or "core")
+        path = _unique_page_path(
+            str(page.get("path") or _path_from_pageId(pageId)),
+            pageId,
+            used_paths,
+        )
         related_sources = [
             source_id
             for source_id in data_source_ids
@@ -318,9 +377,9 @@ def _frontend_pages(spec: dict[str, Any]) -> list[dict[str, Any]]:
             ][:1] or data_source_ids[:1]
         pages.append(
             {
-                "id": page_id,
+                "pageId": pageId,
                 "name": page_name,
-                "path": str(page.get("path") or "/"),
+                "path": path,
                 "module_id": module_id,
                 "description": str(page.get("description") or page_name or "业务页面"),
                 "data_dependencies": related_sources,
@@ -357,8 +416,8 @@ def _task_inputs(
     return {
         "frontend": [
             {
-                "task_id": f"page:{page['id']}",
-                "page_id": page["id"],
+                "task_id": f"page:{page['pageId']}",
+                "pageId": page["pageId"],
                 "description": f"生成页面 {page['name']}（{page['path']}）。",
                 "depends_on": [
                     f"data_source:{source_id}"
@@ -500,7 +559,7 @@ def _permission_model(
         "roles": spec["user_roles"],
         "page_access": [
             {
-                "page_id": page["id"],
+                "pageId": page["pageId"],
                 "path": page["path"],
                 "allowed_roles": page.get("references", {}).get("permissions", []),
             }

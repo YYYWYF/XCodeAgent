@@ -143,6 +143,38 @@ def _stable_id(prefix: str, name: str, index: int) -> str:
     return f"{prefix}_{ascii_slug or index + 1}"
 
 
+def _path_from_pageId(pageId: str) -> str:
+    """根据 pageId 生成稳定页面路由。"""
+
+    route = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(pageId or "page")).strip("-_")
+    route = route.replace("_", "-").lower() or "page"
+    if route.endswith("-page") and route != "dashboard-page":
+        route = route[: -len("-page")] or route
+    return "/" if route in {"dashboard", "dashboard-page", "home", "index"} else f"/{route}"
+
+
+def _unique_page_path(path: str, pageId: str, used_paths: set[str]) -> str:
+    """把重复页面路由改成基于 pageId 的唯一值。"""
+
+    normalized = path.strip() or _path_from_pageId(pageId)
+    if normalized != "/" and not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+    if normalized not in used_paths:
+        used_paths.add(normalized)
+        return normalized
+
+    candidate = _path_from_pageId(pageId)
+    if candidate == "/" or candidate in used_paths:
+        base = candidate if candidate != "/" else f"/{pageId.replace('_', '-').lower() or 'page'}"
+        suffix = 2
+        candidate = base
+        while candidate in used_paths:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+    used_paths.add(candidate)
+    return candidate
+
+
 def merge_clarification_answers_into_spec(
     spec: dict[str, Any],
     request: str,
@@ -176,7 +208,7 @@ def merge_clarification_answers_into_spec(
         elif "页面" in question or "菜单" in question:
             merged["pages"] = [
                 {
-                    "id": _stable_id("page", value, index),
+                    "pageId": _stable_id("page", value, index),
                     "name": value,
                     "path": f"/{_stable_id('page', value, index).removeprefix('page_').replace('_', '-')}",
                     "module_id": "core_management",
@@ -304,7 +336,7 @@ def _feature_modules(request: str) -> list[dict[str, Any]]:
 def _pages(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     pages = [
         {
-            "id": "dashboard_page",
+            "pageId": "dashboard_page",
             "name": "概览页",
             "path": "/",
             "module_id": "dashboard",
@@ -319,7 +351,7 @@ def _pages(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if module_id == "access_control":
             pages.append(
                 {
-                    "id": "login_page",
+                    "pageId": "login_page",
                     "name": "登录页",
                     "path": "/login",
                     "module_id": module_id,
@@ -330,14 +362,14 @@ def _pages(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
         pages.extend(
             [
                 {
-                    "id": f"{module_id}_list_page",
+                    "pageId": f"{module_id}_list_page",
                     "name": f"{module['name']}列表页",
                     "path": f"/{module_id.replace('_', '-')}",
                     "module_id": module_id,
                     "description": f"展示{module['name']}数据，支持搜索、筛选和主要操作。",
                 },
                 {
-                    "id": f"{module_id}_detail_page",
+                    "pageId": f"{module_id}_detail_page",
                     "name": f"{module['name']}详情页",
                     "path": f"/{module_id.replace('_', '-')}/:id",
                     "module_id": module_id,
@@ -433,6 +465,7 @@ def _normalize_requirement_items(
     *,
     prefix: str,
     defaults: dict[str, Any],
+    identity_key: str = "id",
 ) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -440,8 +473,8 @@ def _normalize_requirement_items(
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             continue
-        item_id = str(item.get("id") or f"{prefix}_{index + 1}")
-        normalized_item = {**defaults, **item, "id": item_id}
+        item_id = str(item.get(identity_key) or f"{prefix}_{index + 1}")
+        normalized_item = {**defaults, **item, identity_key: item_id}
         normalized_item["name"] = str(
             normalized_item.get("name") or item_id
         )
@@ -523,6 +556,7 @@ def create_requirement_spec(
         "pages": (
             "page",
             {"name": "业务页面", "path": "/", "module_id": "core", "description": "业务页面。"},
+            "pageId",
         ),
         "data_sources": (
             "source",
@@ -530,11 +564,14 @@ def create_requirement_spec(
         ),
         "business_flows": ("flow", {"name": "业务流程", "steps": []}),
     }
-    for key, (prefix, defaults) in item_defaults.items():
+    for key, config in item_defaults.items():
+        prefix, defaults = config[0], config[1]
+        identity_key = config[2] if len(config) > 2 else "id"
         normalized = _normalize_requirement_items(
             spec.get(key),
             prefix=prefix,
             defaults=defaults,
+            identity_key=identity_key,
         )
         has_authoritative_list = (
             authoritative_agent_spec
@@ -556,6 +593,10 @@ def create_requirement_spec(
             if isinstance(steps, list)
             else []
         )
+    used_page_paths: set[str] = set()
+    for page in spec["pages"]:
+        pageId = str(page.get("pageId") or "")
+        page["path"] = _unique_page_path(str(page.get("path") or ""), pageId, used_page_paths)
 
     criteria = spec.get("acceptance_criteria")
     normalized_criteria = (

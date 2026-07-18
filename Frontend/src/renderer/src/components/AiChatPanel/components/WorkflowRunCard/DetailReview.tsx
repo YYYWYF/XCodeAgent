@@ -1,5 +1,5 @@
 import { CheckCircleOutlined } from "@ant-design/icons";
-import { Button, Collapse, Input, Tag, Typography } from "antd";
+import { Alert, Button, Collapse, Input, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
 import type {
@@ -15,12 +15,14 @@ const { TextArea } = Input;
 
 type DetailReviewProps = {
   disabled?: boolean;
+  message?: string;
   onConfirm: (submission: WorkflowDetailReviewSubmission) => void;
   review: WorkflowDetailReview;
 };
 
 export default function DetailReview({
   disabled,
+  message,
   onConfirm,
   review,
 }: DetailReviewProps): ReactElement {
@@ -32,6 +34,9 @@ export default function DetailReview({
     Record<string, Record<string, unknown>>
   >({});
   const [overallNote, setOverallNote] = useState("");
+  const missingSelectedPagePlan = Boolean(
+    review.summary?.missingSelectedPagePlan,
+  );
 
   // 记录单个审核对象的字段改动，并保留同对象此前已编辑的内容。
   const updateField = (
@@ -72,39 +77,51 @@ export default function DetailReview({
         <Tag>数据源 {review.summary?.data_source_count || 0}</Tag>
         <Tag>API 契约 {review.summary?.api_contract_count || 0}</Tag>
         <Text type="secondary">
-          初版设计已全部生成，只需展开需要调整的对象。
+          本轮生成的设计如下；只需展开需要调整的对象。
         </Text>
       </div>
-      <Collapse bordered={false}>
-        {targets.map((target) => (
-          <Panel
-            header={
-              <div className={cx("workflow-detail-review-title")}>
-                <Tag>{target.target_type === "page" ? "页面" : "数据源"}</Tag>
-                <Text strong>{target.name || target.target_id}</Text>
-                {changes[target.target_id] && <Tag color="purple">已修改</Tag>}
-              </div>
-            }
-            key={`${target.target_type}:${target.target_id}`}
-          >
-            {target.target_type === "page" ? (
-              <PageReviewEditor
-                changes={changes[target.target_id] || {}}
-                disabled={disabled}
-                onChange={(field, value) => updateField(target, field, value)}
-                target={target}
-              />
-            ) : (
-              <DataSourceReviewEditor
-                changes={changes[target.target_id] || {}}
-                disabled={disabled}
-                onChange={(field, value) => updateField(target, field, value)}
-                target={target}
-              />
-            )}
-          </Panel>
-        ))}
-      </Collapse>
+      {missingSelectedPagePlan || targets.length === 0 ? (
+        <Alert
+          message={
+            message ||
+            `页面 ${review.summary?.selectedPageId || ""} 还没有生成细节设计，请先生成该页面的 plan。`
+          }
+          showIcon
+          type="warning"
+        />
+      ) : (
+        <Collapse bordered={false}>
+          {targets.map((target) => (
+            <Panel
+              header={
+                <div className={cx("workflow-detail-review-title")}>
+                  <Tag>{target.target_type === "page" ? "页面" : "数据源"}</Tag>
+                  <Text strong>{target.name || target.target_id}</Text>
+                  <Text type="secondary">{target.target_id}</Text>
+                  {changes[target.target_id] && <Tag color="purple">已修改</Tag>}
+                </div>
+              }
+              key={`${target.target_type}:${target.target_id}`}
+            >
+              {target.target_type === "page" ? (
+                <PageReviewEditor
+                  changes={changes[target.target_id] || {}}
+                  disabled={disabled}
+                  onChange={(field, value) => updateField(target, field, value)}
+                  target={target}
+                />
+              ) : (
+                <DataSourceReviewEditor
+                  changes={changes[target.target_id] || {}}
+                  disabled={disabled}
+                  onChange={(field, value) => updateField(target, field, value)}
+                  target={target}
+                />
+              )}
+            </Panel>
+          ))}
+        </Collapse>
+      )}
       <div className={cx("workflow-detail-review-actions")}>
         <label className={cx("workflow-detail-review-note")}>
           <Text strong>整体补充说明</Text>
@@ -117,7 +134,7 @@ export default function DetailReview({
           />
         </label>
         <Button
-          disabled={disabled}
+          disabled={disabled || missingSelectedPagePlan || targets.length === 0}
           icon={<CheckCircleOutlined />}
           onClick={confirm}
           size="large"
@@ -683,7 +700,7 @@ function navigationSummary(value: unknown): string {
   const lines = recordItems(value).map((item) => {
     const trigger = String(item.trigger || item.action || "页面跳转");
     const target = String(
-      item.target_page_id || item.target_path || "待补充目标页面",
+      item.targetPageId || item.target_path || "待补充目标页面",
     );
     const behavior = String(item.behavior || item.description || "待补充行为");
     return `${trigger}：${target}；${behavior}`;
@@ -697,7 +714,7 @@ function parseNavigationSummary(value: string): Array<Record<string, unknown>> {
     const [target, behavior] = splitPair(detail, "；");
     return {
       trigger: trigger || "页面跳转",
-      target_page_id: target || "待补充目标页面",
+      targetPageId: target || "待补充目标页面",
       behavior: behavior || detail || "待补充行为",
     };
   });
@@ -736,7 +753,7 @@ function parseOperationVisibilitySummary(
 
 function dependentPagesSummary(value: unknown): string {
   const lines = recordItems(value).map((item) => {
-    const id = String(item.page_id || item.id || item.name || "页面");
+    const id = String(item.pageId || item.id || item.name || "页面");
     const reason = String(item.reason || item.description || "");
     return reason ? `${id}：${reason}` : id;
   });
@@ -747,7 +764,7 @@ function parseDependentPages(value: string): Array<Record<string, unknown>> {
   return summaryLines(value).map((line) => {
     const [page, reason] = splitPair(line, "：");
     return {
-      page_id: page || "页面",
+      pageId: page || "页面",
       ...(reason ? { reason } : {}),
     };
   });

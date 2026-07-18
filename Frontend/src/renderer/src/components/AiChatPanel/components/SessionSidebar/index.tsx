@@ -198,7 +198,8 @@ export default function SessionSidebar({
   const [apiGroupExpanded, setApiGroupExpanded] = useState(true)
   const [onlyRelated, setOnlyRelated] = useState(false)
   const pageItems = useMemo<ApplicationMenuItem[]>(() => pages.map((page) => ({
-    key: page.key,
+    key: page.pageId,
+    pageKey: page.pageId,
     path: page.path,
     label: page.label,
     type: 'page',

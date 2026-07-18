@@ -2,7 +2,15 @@ import type { ApplicationDevelopmentTask, ApplicationMenuItem, ApplicationShared
 
 export type DevelopmentPlanningQuestion = { id: string; question: string; rationale: string; placeholder: string }
 export type DevelopmentPlanningAnswer = { questionId: string; question: string; answer: string }
-export type DevelopmentPlanningPageOption = { key: string; label: string; path: string; purpose: string }
+export type DevelopmentPlanningPageOption = {
+  pageId: string
+  key: string
+  label: string
+  path: string
+  purpose: string
+  detailPlanStatus?: string
+  hasDetailPlan?: boolean
+}
 export type MenuDevelopmentPlan = { menuKey: string; menuLabel: string; tasks: ApplicationDevelopmentTask[] }
 
 export type ApplicationDevelopmentPlan = {

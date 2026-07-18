@@ -93,10 +93,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     detail_review_submission = _detail_review_submission(clarification_answers)
-    selected_page_id = (
-        _optional_text(payload.get("selected_page_id"))
-        or _optional_text(payload.get("selectedPageId"))
-        or _optional_text(forwarded_props.get("selected_page_id"))
+    selectedPageId = (
+        _optional_text(payload.get("selectedPageId"))
         or _optional_text(forwarded_props.get("selectedPageId"))
     )
     workspace = (
@@ -130,7 +128,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             if detail_review_submission
             else {}
         ),
-        **({"selected_page_id": selected_page_id} if selected_page_id else {}),
+        **({"selectedPageId": selectedPageId} if selectedPageId else {}),
     }
 
     return {
@@ -360,7 +358,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "project_plan_path",
         "project_plan_json_path",
         "detail_selection",
-        "selected_page_id",
+        "selectedPageId",
         "selected_data_source_id",
         "page_spec_draft",
         "data_source_spec_draft",
@@ -399,7 +397,10 @@ def _project_plan_start_values(workspace: str) -> dict[str, Any]:
         project_plan_path = workspace_root / relative_path
         if not project_plan_path.is_file():
             continue
-        project_plan = load_project_plan_json(project_plan_path)
+        project_plan = load_project_plan_json(
+            project_plan_path,
+            hydrate_detail_designs=True,
+        )
         if not isinstance(project_plan, dict):
             raise ValueError("project-plan.json 的根结构必须是 JSON 对象。")
         frontend_pages = project_plan.get("frontend_pages", [])
@@ -451,7 +452,10 @@ def _debug_resume_values(
     if project_plan_path:
         values["project_plan_path"] = _markdown_sibling_path(project_plan_path)
         values["project_plan_json_path"] = str(project_plan_path)
-        values["project_plan"] = load_project_plan_json(project_plan_path)
+        values["project_plan"] = load_project_plan_json(
+            project_plan_path,
+            hydrate_detail_designs=True,
+        )
 
     build_task_plan_path = _resolve_debug_json_path(
         debug_state,

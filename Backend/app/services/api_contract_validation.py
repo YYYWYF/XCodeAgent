@@ -123,7 +123,7 @@ def _validate_page_api_dependencies(
             endpoint_id = str(api_dependency.get("endpoint_id") or "")
             if endpoint_id not in endpoint_index:
                 errors.append(
-                    f"Page {page_detail.get('page_id')} references unknown endpoint {endpoint_id}."
+                    f"Page {page_detail.get('pageId')} references unknown endpoint {endpoint_id}."
                 )
 
 
@@ -143,14 +143,14 @@ def _validate_page_bindings(
             source_path = normalize_response_path(binding.get("source_path"))
             if endpoint_id not in endpoint_ids:
                 errors.append(
-                    f"Page {page_detail.get('page_id')} binds undeclared endpoint {endpoint_id}."
+                    f"Page {page_detail.get('pageId')} binds undeclared endpoint {endpoint_id}."
                 )
             elif source_path not in {
                 normalize_response_path(path)
                 for path in response_field_paths(contracts, endpoint_id)
             }:
                 errors.append(
-                    f"Page {page_detail.get('page_id')} binds unknown response field {source_path}."
+                    f"Page {page_detail.get('pageId')} binds unknown response field {source_path}."
                 )
 
 

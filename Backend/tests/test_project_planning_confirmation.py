@@ -130,7 +130,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
             ],
             "page_data_dependencies": [
                 {
-                    "page_id": "personnel_list_page",
+                    "pageId": "personnel_list_page",
                     "data_source_ids": ["无"],
                     "api_contract_ids": ["无"],
                     "endpoint_dependencies": [],
@@ -165,7 +165,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         existing_plan = create_project_plan(spec)
         existing_plan["frontend_pages"] = [
             {
-                "id": "personnel_list_page",
+                "pageId": "personnel_list_page",
                 "name": "人员列表页",
                 "path": "/personnel",
                 "module_id": "personnel",
@@ -202,7 +202,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         ]
         existing_plan["page_data_dependencies"] = [
             {
-                "page_id": "personnel_list_page",
+                "pageId": "personnel_list_page",
                 "data_source_ids": [],
                 "api_contract_ids": [],
                 "endpoint_dependencies": [],

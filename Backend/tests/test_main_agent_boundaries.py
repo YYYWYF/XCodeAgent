@@ -7,7 +7,7 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage
 
 from app.agents.main import page_designer, planner, requirements_analyzer
-from app.services.page_detail_plan import create_page_spec_from_project_plan
+from app.services.page_detail_plan import extract_page_detail_context
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
 from app.tools.ask_user import ask_user
@@ -119,9 +119,9 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
         project_plan = create_project_plan(
             create_requirement_spec("创建一个库存管理系统")
         )
-        page_spec = create_page_spec_from_project_plan(
+        page_context = extract_page_detail_context(
             project_plan,
-            project_plan["frontend_pages"][0]["id"],
+            project_plan["frontend_pages"][0]["pageId"],
         )
 
         with (
@@ -137,7 +137,7 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
         ):
             result = page_designer.design_page_with_chat_model(
                 project_plan,
-                page_spec,
+                page_context,
             )
 
         from_env.assert_called_once_with()

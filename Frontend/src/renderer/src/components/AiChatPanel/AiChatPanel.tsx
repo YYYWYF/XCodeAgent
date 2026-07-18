@@ -268,9 +268,9 @@ export default function AiChatPanel({
             <DetailConfirmationPageSelector
               disabled={loading || workspaceBusy}
               loading={!developmentPlanningReady}
-              onStart={async (pageId, pageLabel) => {
+              onStart={async (pageId, pageLabel, hasDetailPlan) => {
                 setActivePageTitle(pageLabel)
-                await handleStartDetailConfirmation(pageId, pageLabel)
+                await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan)
                 setDetailGenerationFinished(true)
               }}
               pages={developmentPlanningPages}

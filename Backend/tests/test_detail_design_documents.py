@@ -9,6 +9,7 @@ from app.services.page_detail_plan import (
     create_page_detail_plan,
     extract_page_detail_context,
 )
+from app.services.detail_review import apply_detail_review_submission, detail_review_payload
 from app.services.page_dependencies import (
     page_data_source_ids,
     validate_project_plan_dependencies,
@@ -33,7 +34,7 @@ class DetailDesignDocumentsTests(unittest.TestCase):
         source_id = page_data_source_ids(page, project_plan["api_contracts"])[0]
         page_detail = create_page_detail_plan(
             project_plan,
-            extract_page_detail_context(project_plan, page["id"]),
+            extract_page_detail_context(project_plan, page["pageId"]),
         )
         data_source_detail = create_data_source_detail_plan(project_plan, source_id)
         project_plan["page_detail_plans"] = [page_detail]
@@ -52,7 +53,7 @@ class DetailDesignDocumentsTests(unittest.TestCase):
             page_reference = next(
                 stored_page["detail_design"]
                 for stored_page in stored["frontend_pages"]
-                if stored_page["id"] == page["id"]
+                if stored_page["pageId"] == page["pageId"]
             )
             source_reference = next(
                 source["detail_design"]
@@ -73,6 +74,20 @@ class DetailDesignDocumentsTests(unittest.TestCase):
             self.assertNotIn("api_dependencies", persisted_detail)
             self.assertNotIn("data_sources", persisted_detail)
 
+            hydrated = load_project_plan_json(
+                workspace / ".xcodeagent" / "plans" / "project-plan.json",
+                hydrate_detail_designs=True,
+            )
+            review = detail_review_payload(hydrated, selectedPageId=page["pageId"])
+            self.assertEqual(
+                review["review"]["pages"][0]["page_goal"],
+                page_detail["page_goal"],
+            )
+            self.assertEqual(
+                review["review"]["pages"][0]["api_dependencies"],
+                page_detail["endpoint_dependencies"],
+            )
+
     def test_page_detail_cannot_replace_project_plan_references(self) -> None:
         """模型返回的任意依赖都不得覆盖 ProjectPlan 的页面引用。"""
 
@@ -84,11 +99,11 @@ class DetailDesignDocumentsTests(unittest.TestCase):
         )
         detail = create_page_detail_plan(
             project_plan,
-            extract_page_detail_context(project_plan, page["id"]),
+            extract_page_detail_context(project_plan, page["pageId"]),
             agent_detail_plan={
                 "permissions": ["invented_role"],
                 "api_dependencies": [{"endpoint_id": "invented.endpoint"}],
-                "page_navigation": [{"target_page_id": "invented_page"}],
+                "page_navigation": [{"targetPageId": "invented_page"}],
             },
         )
 
@@ -121,12 +136,96 @@ class DetailDesignDocumentsTests(unittest.TestCase):
 
         self.assertEqual(
             set(page),
-            {"id", "name", "path", "module_id", "description", "references"},
+            {"pageId", "name", "path", "module_id", "description", "references"},
         )
         self.assertEqual(
             set(page["references"]),
             {"permissions", "endpoint_dependencies", "navigation_targets"},
         )
+
+    def test_selected_page_review_only_contains_matching_page_detail(self) -> None:
+        """单页审核载荷不得混入其他页面详情。"""
+
+        project_plan = create_project_plan(create_requirement_spec("创建库存管理系统"))
+        pages_with_sources = [
+            page
+            for page in project_plan["frontend_pages"]
+            if page_data_source_ids(page, project_plan["api_contracts"])
+        ]
+        first_page, second_page = pages_with_sources[:2]
+        first_source_id = page_data_source_ids(
+            first_page,
+            project_plan["api_contracts"],
+        )[0]
+        second_source_id = page_data_source_ids(
+            second_page,
+            project_plan["api_contracts"],
+        )[0]
+        first_detail = create_page_detail_plan(
+            project_plan,
+            extract_page_detail_context(project_plan, first_page["pageId"]),
+        )
+        second_detail = create_page_detail_plan(
+            project_plan,
+            extract_page_detail_context(project_plan, second_page["pageId"]),
+        )
+        project_plan["page_detail_plans"] = [first_detail, second_detail]
+        project_plan["data_source_detail_plans"] = [
+            create_data_source_detail_plan(project_plan, first_source_id),
+            create_data_source_detail_plan(project_plan, second_source_id),
+        ]
+
+        review = detail_review_payload(project_plan, selectedPageId=second_page["pageId"])
+
+        self.assertEqual(
+            [item["target_id"] for item in review["review"]["pages"]],
+            [second_page["pageId"]],
+        )
+        self.assertEqual(
+            [item["target_id"] for item in review["review"]["data_sources"]],
+            [second_source_id],
+        )
+
+    def test_selected_page_confirmation_only_confirms_matching_detail(self) -> None:
+        """单页审核提交不得确认其他页面的待审核详情。"""
+
+        project_plan = create_project_plan(create_requirement_spec("创建库存管理系统"))
+        first_page, second_page = project_plan["frontend_pages"][:2]
+        first_detail = create_page_detail_plan(
+            project_plan,
+            extract_page_detail_context(project_plan, first_page["pageId"]),
+        )
+        second_detail = create_page_detail_plan(
+            project_plan,
+            extract_page_detail_context(project_plan, second_page["pageId"]),
+        )
+        first_detail["status"] = "pending_user_confirmation"
+        first_detail["approved"] = False
+        second_detail["status"] = "pending_user_confirmation"
+        second_detail["approved"] = False
+        project_plan["page_detail_plans"] = [first_detail, second_detail]
+
+        confirmed = apply_detail_review_submission(
+            project_plan,
+            {
+                "review_status": "confirmed",
+                "target_changes": [],
+            },
+            selectedPageId=second_page["pageId"],
+        )
+
+        page_statuses = {
+            detail["pageId"]: detail["status"]
+            for detail in confirmed["page_detail_plans"]
+        }
+        frontend_page_statuses = {
+            page["pageId"]: page.get("detail_status")
+            for page in confirmed["frontend_pages"]
+        }
+        self.assertEqual(page_statuses[first_page["pageId"]], "pending_user_confirmation")
+        self.assertEqual(page_statuses[second_page["pageId"]], "confirmed")
+        self.assertNotEqual(frontend_page_statuses[first_page["pageId"]], "confirmed")
+        self.assertEqual(frontend_page_statuses[second_page["pageId"]], "confirmed")
 
 
 if __name__ == "__main__":

@@ -34,23 +34,74 @@ function getWorkspaceApplicationFile(workspaceRoot: string): string {
 }
 
 /** 从 ProjectPlan 的 frontend_pages 生成工作台页面选择项。 */
-function projectPlanPageOptions(value: unknown): Array<{ key: string; label: string; path: string; purpose: string }> {
+async function projectPlanPageOptions(
+  workspaceRoot: string,
+  value: unknown
+): Promise<Array<{
+  key: string
+  pageId: string
+  label: string
+  path: string
+  purpose: string
+  detailPlanStatus?: string
+  hasDetailPlan: boolean
+}>> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
   const frontendPages = Array.isArray((value as Record<string, unknown>).frontend_pages)
     ? (value as Record<string, unknown>).frontend_pages as unknown[]
     : [];
-  return frontendPages.flatMap((page: unknown, index: number) => {
+  const pageOptions = await Promise.all(frontendPages.map(async (page: unknown, index: number) => {
     if (!page || typeof page !== 'object' || Array.isArray(page)) return [];
     const record = page as Record<string, unknown>;
-    const key = String(record.id || '').trim();
-    if (!key) return [];
+    const pageId = String(record.pageId || '').trim();
+    if (!pageId) return [];
+    const detailDesign = record.detail_design && typeof record.detail_design === 'object' && !Array.isArray(record.detail_design)
+      ? record.detail_design as Record<string, unknown>
+      : {};
+    const hasDetailPlan = await pageDetailPlanExists(workspaceRoot, pageId, detailDesign);
     return [{
-      key,
-      label: String(record.name || key),
+      key: pageId,
+      pageId,
+      label: String(record.name || pageId),
       path: String(record.path || '/'),
       purpose: String(record.description || record.name || `页面 ${index + 1}`),
+      detailPlanStatus: String(detailDesign.status || ''),
+      hasDetailPlan,
     }];
-  });
+  }));
+  return pageOptions.flat();
+}
+
+/** 将页面 id 转成与后端详情文件一致的安全文件名。 */
+function detailFileStem(value: string, prefix: string): string {
+  const normalized = value.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '');
+  return `${prefix}${normalized || 'unknown'}`;
+}
+
+/** 检查选中页面是否已经存在外置详情 JSON。 */
+async function pageDetailPlanExists(
+  workspaceRoot: string,
+  pageId: string,
+  detailDesign: Record<string, unknown>
+): Promise<boolean> {
+  const rawJsonPath = String(detailDesign.json_path || '').trim();
+  const candidates = [
+    rawJsonPath
+      ? path.isAbsolute(rawJsonPath)
+        ? rawJsonPath
+        : path.join(workspaceRoot, rawJsonPath)
+      : '',
+    path.join(workspaceRoot, '.xcodeagent', 'plans', 'pages', `${detailFileStem(pageId, 'page--')}.json`),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      const content = await fs.readFile(candidate, 'utf8');
+      if (content.trim()) return true;
+    } catch {
+      // 继续尝试下一个候选路径。
+    }
+  }
+  return false;
 }
 
 /** 校验工作区 specs/plans 中两份已确认规划，并优先从根级 project_plan.json 读取页面。 */
@@ -58,7 +109,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   ready: boolean;
   missing: string[];
   invalid: string[];
-  pages: Array<{ key: string; label: string; path: string; purpose: string }>;
+  pages: Array<{ key: string; pageId: string; label: string; path: string; purpose: string; detailPlanStatus?: string; hasDetailPlan: boolean }>;
 }> {
   const artifactRoot = path.join(workspaceRoot, '.xcodeagent');
   const artifacts = [
@@ -69,13 +120,13 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   ];
   const missing: string[] = [];
   const invalid: string[] = [];
-  let pages: Array<{ key: string; label: string; path: string; purpose: string }> = [];
+  let pages: Array<{ key: string; pageId: string; label: string; path: string; purpose: string; detailPlanStatus?: string; hasDetailPlan: boolean }> = [];
 
   try {
     const projectPlan = JSON.parse(
       await fs.readFile(path.join(artifactRoot, 'project_plan.json'), 'utf8')
     );
-    pages = projectPlanPageOptions(projectPlan);
+    pages = await projectPlanPageOptions(workspaceRoot, projectPlan);
   } catch {
     // 根级页面规划不存在或无效时，继续兼容正式 plans 目录中的 ProjectPlan。
   }
@@ -91,7 +142,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
       if (artifact.format === 'json') {
         const value = JSON.parse(content);
         if (artifact.relativePath === 'plans/project-plan.json' && !pages.length) {
-          pages = projectPlanPageOptions(value);
+          pages = await projectPlanPageOptions(workspaceRoot, value);
         }
         if (!value || typeof value !== 'object' || Array.isArray(value) || value.confirmation_status !== 'confirmed') {
           invalid.push(artifact.relativePath);
@@ -109,7 +160,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
       const fallbackPlan = JSON.parse(
         await fs.readFile(path.join(workspaceRoot, 'plans', 'project-plan.json'), 'utf8')
       );
-      pages = projectPlanPageOptions(fallbackPlan);
+      pages = await projectPlanPageOptions(workspaceRoot, fallbackPlan);
     } catch {
       // 兼容路径不存在时保持正式 .xcodeagent 产物的检查结果。
     }

@@ -210,7 +210,7 @@ class WorkflowRequestTests(unittest.TestCase):
                         "result": {
                             "project_plan": {"frontend_pages": []},
                             "project_plan_path": "var/plans/project-plan.md",
-                            "page_spec_draft": {"page_id": "inventory_page"},
+                            "page_spec_draft": {"pageId": "inventory_page"},
                         },
                     }
                 },
@@ -221,7 +221,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["project_plan"], {"frontend_pages": []})
         self.assertEqual(
             inputs["resume_values"]["page_spec_draft"],
-            {"page_id": "inventory_page"},
+            {"pageId": "inventory_page"},
         )
 
     def test_preserves_requirement_spec_from_state_snapshot_resume(self) -> None:
@@ -354,7 +354,7 @@ class WorkflowRequestTests(unittest.TestCase):
             project_plan["frontend_pages"],
         )
 
-    def test_forwards_selected_page_id_to_detail_confirmation_state(self) -> None:
+    def test_forwards_selectedPageId_to_detail_confirmation_state(self) -> None:
         inputs = workflow_run_inputs(
             {
                 "request": "开始设计库存页面",
@@ -363,7 +363,7 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            inputs["resume_values"]["selected_page_id"],
+            inputs["resume_values"]["selectedPageId"],
             "inventory_page",
         )
 

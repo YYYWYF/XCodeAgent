@@ -63,6 +63,95 @@ def _write_project_plan_atomically(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _read_json_object(path: Path) -> dict[str, Any] | None:
+    """读取已存在的详情 JSON；格式不匹配时忽略该详情。"""
+
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _resolve_detail_json_path(
+    project_plan_path: Path,
+    reference: dict[str, Any],
+    *,
+    fallback_directory: str,
+    fallback_stem: str,
+) -> Path | None:
+    """按索引路径或约定文件名定位外置详情 JSON。"""
+
+    raw_path = str(reference.get("json_path") or "").strip()
+    candidates: list[Path] = []
+    if raw_path:
+        indexed_path = Path(raw_path).expanduser()
+        if indexed_path.is_absolute():
+            candidates.append(indexed_path)
+        else:
+            workspace_root = project_plan_path.parent.parent.parent
+            candidates.extend(
+                [
+                    workspace_root / indexed_path,
+                    project_plan_path.parent / indexed_path,
+                    project_plan_path.parent.parent / indexed_path,
+                ]
+            )
+    candidates.append(project_plan_path.parent / fallback_directory / f"{fallback_stem}.json")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def hydrate_external_detail_designs(
+    project_plan_path: str | Path,
+    project_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """把外置页面/数据源详情按原文件内容读回内存，供 Workflow 展示和确认。"""
+
+    plan_path = Path(project_plan_path).expanduser()
+    hydrated = deepcopy(project_plan)
+    page_details: list[dict[str, Any]] = []
+    data_source_details: list[dict[str, Any]] = []
+
+    for page in _dict_items(hydrated.get("frontend_pages")):
+        pageId = str(page.get("pageId") or "")
+        if not pageId:
+            continue
+        detail_path = _resolve_detail_json_path(
+            plan_path,
+            page.get("detail_design") if isinstance(page.get("detail_design"), dict) else {},
+            fallback_directory="pages",
+            fallback_stem=_safe_file_stem(pageId, prefix="page--"),
+        )
+        detail = _read_json_object(detail_path) if detail_path else None
+        if isinstance(detail, dict):
+            page_details.append(detail)
+
+    for source in _dict_items(hydrated.get("data_sources")):
+        source_id = str(source.get("id") or "")
+        if not source_id:
+            continue
+        detail_path = _resolve_detail_json_path(
+            plan_path,
+            source.get("detail_design") if isinstance(source.get("detail_design"), dict) else {},
+            fallback_directory="data-source",
+            fallback_stem=_safe_file_stem(source_id, prefix="data-source--"),
+        )
+        detail = _read_json_object(detail_path) if detail_path else None
+        if isinstance(detail, dict):
+            data_source_details.append(detail)
+
+    if page_details:
+        hydrated["page_detail_plans"] = page_details
+    if data_source_details:
+        hydrated["data_source_detail_plans"] = data_source_details
+    return hydrated
+
+
 def _write_markdown_atomically(path: Path, content: str) -> None:
     """通过同目录临时文件原子替换用户可读的 Markdown 详细设计文件。"""
 
@@ -80,14 +169,14 @@ def _page_dependencies(plan: dict[str, Any], detail: dict[str, Any]) -> dict[str
         for item in _dict_items(detail.get("endpoint_dependencies"))
         if item.get("endpoint_id")
     }
-    page_ids = {
-        str(item.get("target_page_id"))
+    pageIds = {
+        str(item.get("targetPageId"))
         for item in _dict_items(detail.get("navigation_targets"))
-        if item.get("target_page_id")
+        if item.get("targetPageId")
     }
     return {
         "endpoint_ids": sorted(endpoint_ids),
-        "navigation_target_page_ids": sorted(page_ids),
+        "navigationTargetPageIds": sorted(pageIds),
     }
 
 
@@ -121,18 +210,19 @@ def _persisted_page_detail(detail: dict[str, Any]) -> dict[str, Any]:
 def _data_source_dependencies(detail: dict[str, Any]) -> dict[str, list[str]]:
     """从数据源详情中提取它关联的契约和页面，供后续任务装配使用。"""
 
+    dependentPageIds = []
+    for item in detail.get("dependent_pages", []):
+        if isinstance(item, dict) and item.get("pageId"):
+            dependentPageIds.append(str(item.get("pageId")))
+        elif isinstance(item, str) and item.strip():
+            dependentPageIds.append(item.strip())
     return {
         "api_contract_ids": sorted(
             str(item.get("id"))
             for item in _dict_items(detail.get("api_contracts"))
             if item.get("id")
         ),
-        "page_ids": sorted(
-            str(item.get("page_id") or item.get("id") or item)
-            for item in detail.get("dependent_pages", [])
-            if isinstance(item, dict) and (item.get("page_id") or item.get("id"))
-            or isinstance(item, str) and item.strip()
-        ),
+        "pageIds": sorted(dict.fromkeys(dependentPageIds)),
     }
 
 
@@ -171,10 +261,10 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
     data_source_directory.mkdir(parents=True, exist_ok=True)
 
     for detail in _dict_items(plan.get("page_detail_plans")):
-        page_id = str(detail.get("page_id") or "")
-        if not page_id:
+        pageId = str(detail.get("pageId") or "")
+        if not pageId:
             continue
-        stem = _safe_file_stem(page_id, prefix="page--")
+        stem = _safe_file_stem(pageId, prefix="page--")
         json_path = page_directory / f"{stem}.json"
         markdown_path = page_directory / f"{stem}.md"
         persisted_detail = _persisted_page_detail(detail)
@@ -189,7 +279,7 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
             dependencies=_page_dependencies(plan, detail),
         )
         for page in _dict_items(compact_plan.get("frontend_pages")):
-            if str(page.get("id") or "") == page_id:
+            if str(page.get("pageId") or "") == pageId:
                 page["detail_design"] = reference
                 page["detail_status"] = reference["status"]
                 break

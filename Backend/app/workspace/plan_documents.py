@@ -171,7 +171,7 @@ def _page_navigation_markdown(value: Any) -> str:
     items = []
     for item in _dict_items(value):
         trigger = item.get("trigger") or item.get("action") or "页面跳转"
-        target = item.get("target_page_id") or item.get("target_path") or "待补充目标页面"
+        target = item.get("targetPageId") or item.get("target_path") or "待补充目标页面"
         behavior = item.get("behavior") or item.get("description") or "待补充"
         items.append(f"- {trigger}：跳转到 {target}；行为 {behavior}")
     return "\n".join(items) if items else "- 暂无页面跳转依赖"
@@ -196,11 +196,11 @@ def render_page_detail_markdown(detail: dict[str, Any]) -> str:
     permissions = detail.get("permissions") or references.get("permissions", [])
     return "\n".join(
         [
-            f"### {detail.get('page_name', detail.get('page_id', '未命名页面'))} `{detail.get('path', '')}`",
+            f"### {detail.get('page_name', detail.get('pageId', '未命名页面'))} `{detail.get('path', '')}`",
             "",
             "#### 页面基本信息",
             "",
-            f"- 页面 ID：`{detail.get('page_id', 'unknown')}`",
+            f"- 页面 ID：`{detail.get('pageId', 'unknown')}`",
             f"- 页面目标：{detail.get('page_goal', '待补充')}",
             f"- 确认状态：{_status_label(detail.get('status', 'draft'))}",
             "",
@@ -350,12 +350,12 @@ def _page_references_markdown(page: dict[str, Any]) -> str:
         for item in _dict_items(endpoints)
     ]
     navigation_lines = [
-        f"  - `{item.get('target_page_id', 'unknown')}`：{item.get('trigger', '页面跳转')}"
+        f"  - `{item.get('targetPageId', 'unknown')}`：{item.get('trigger', '页面跳转')}"
         for item in _dict_items(navigation)
     ]
     return "\n".join(
         [
-            f"### `{page.get('id', 'unknown')}` {page.get('name', '未命名页面')} `{page.get('path', '/')}`",
+            f"### `{page.get('pageId', 'unknown')}` {page.get('name', '未命名页面')} `{page.get('path', '/')}`",
             "",
             f"- 模块：`{page.get('module_id', 'core')}`",
             f"- 页面权限：{_joined_items(permissions)}",
@@ -390,7 +390,7 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     )
     permissions = plan.get("permission_model", {})
     page_access = "\n".join(
-        f"- `{item.get('path', item.get('page_id', 'unknown'))}`："
+        f"- `{item.get('path', item.get('pageId', 'unknown'))}`："
         f"{_joined_items(item.get('allowed_roles', []))}"
         for item in _dict_items(permissions.get("page_access", []))
     )
@@ -400,7 +400,7 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         for item in _dict_items(permissions.get("operation_permissions", []))
     )
     page_details = "\n".join(
-        f"- {page.get('name', page.get('id', '未命名页面'))}：{page.get('detail_design', {}).get('markdown_path', '尚未生成独立详细设计')}"
+        f"- {page.get('name', page.get('pageId', '未命名页面'))}：{page.get('detail_design', {}).get('markdown_path', '尚未生成独立详细设计')}"
         for page in _dict_items(plan.get("frontend_pages", []))
         if isinstance(page.get("detail_design"), dict)
     )
@@ -532,5 +532,18 @@ def write_project_plan_json(state: dict[str, Any], plan: dict[str, Any]) -> str:
     return str(path)
 
 
-def load_project_plan_json(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+def load_project_plan_json(
+    path: str | Path,
+    *,
+    hydrate_detail_designs: bool = False,
+) -> dict[str, Any]:
+    """读取 ProjectPlan JSON；按需把外置详情文件读回内存。"""
+
+    plan_path = Path(path)
+    project_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    if not hydrate_detail_designs or not isinstance(project_plan, dict):
+        return project_plan
+
+    from app.workspace.detail_design_documents import hydrate_external_detail_designs
+
+    return hydrate_external_detail_designs(plan_path, project_plan)

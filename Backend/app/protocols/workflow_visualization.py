@@ -1401,7 +1401,7 @@ def _workflow_visual_payload(
         "pending_project_plan": result.get("pending_project_plan"),
         "project_plan_path": result.get("project_plan_path"),
         "detail_selection": result.get("detail_selection"),
-        "selected_page_id": result.get("selected_page_id"),
+        "selectedPageId": result.get("selectedPageId"),
         "selected_data_source_id": result.get("selected_data_source_id"),
     }
     payload = {
