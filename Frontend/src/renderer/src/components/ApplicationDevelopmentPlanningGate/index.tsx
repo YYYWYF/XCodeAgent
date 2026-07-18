@@ -51,15 +51,15 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error || '生成开发计划失败')
 }
 
-// 为开发计划的每个真实阶段设置保守上限，完成事件到达前不会显示为已完成。
+// 为开发计划的每个真实阶段保留下一锚点，并让当前阶段有足够空间持续推进。
 function developmentProgressCeiling(stage: string | undefined, target: number): number {
   if (target >= 100) return 100
-  if (stage === 'reading_application') return 31
-  if (stage === 'identifying_shared_modules') return 53
-  if (stage === 'planning_dependencies') return 90
-  if (stage === 'validating_plan') return 98
-  if (stage === 'persisting_plan') return 96
-  return 16
+  if (stage === 'reading_application') return 33.9
+  if (stage === 'identifying_shared_modules') return 55.9
+  if (stage === 'planning_dependencies') return 91.9
+  if (stage === 'validating_plan') return 99.9
+  if (stage === 'persisting_plan') return 99.9
+  return 17.9
 }
 
 // 展示由 AG-UI 阶段锚点、模型活动和缓动共同驱动的开发计划进度。
@@ -86,7 +86,12 @@ function DevelopmentPlanningLoading({
       <Text className={cx('development-planning-eyebrow')}>{phase === 'confirming' ? 'SAVING PLAN' : 'PLANNING WITH AG-UI'}</Text>
       <Title level={3}>{currentProgress?.message || (phase === 'confirming' ? '正在保存已确认计划…' : '正在连接规划模型…')}</Title>
       <Paragraph>{currentProgress?.detail || '正在准备页面功能和任务上下文。'}</Paragraph>
-      <Progress percent={percent} strokeColor={{ from: '#7c4dff', to: '#35d0ba' }} />
+      <Progress
+        format={() => `${percent.toFixed(1)}%`}
+        percent={percent}
+        status={percent >= 100 ? 'success' : 'active'}
+        strokeColor={{ from: '#7c4dff', to: '#35d0ba' }}
+      />
       <div className={cx('development-planning-timeline')}>
         {progressEvents.map((event, index) => (
           <div className={cx('development-planning-stage', index === progressEvents.length - 1 && 'is-active')} key={event.stage}>

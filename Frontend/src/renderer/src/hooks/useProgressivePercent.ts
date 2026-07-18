@@ -25,22 +25,20 @@ export function useProgressivePercent(target: number, ceiling: number, activityK
     const now = Date.now()
     if (now - lastActivityAtRef.current < 1200) return
     lastActivityAtRef.current = now
-    setDisplayed((current) => Math.min(safeCeiling, Math.max(current, safeTarget) + 0.9))
+    setDisplayed((current) => Math.min(safeCeiling, Math.max(current, safeTarget) + 0.4))
   }, [activityKey, safeCeiling, safeTarget])
 
-  // 长耗时阶段采用越接近上限越慢的推进速度，避免固定百分比长时间卡住。
+  // 等待后端新阶段时按稳定节奏增加 0.1%，让总百分比本身持续产生可见变化。
   useEffect(() => {
     if (safeTarget >= 100) return undefined
     const timer = window.setInterval(() => {
       setDisplayed((current) => {
-        if (current >= safeCeiling) return current
-        const remaining = safeCeiling - current
-        const increment = Math.max(0.18, Math.min(0.85, remaining * 0.04))
-        return Math.min(safeCeiling, Math.max(current, safeTarget) + increment)
+        const baseline = Math.max(current, safeTarget)
+        return Math.min(safeCeiling, baseline + 0.1)
       })
-    }, 900)
+    }, 500)
     return () => window.clearInterval(timer)
   }, [safeCeiling, safeTarget])
 
-  return Math.round(displayed)
+  return Math.round(displayed * 10) / 10
 }

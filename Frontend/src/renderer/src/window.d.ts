@@ -33,6 +33,7 @@ declare global {
         workspaceRoot: string;
       }) => Promise<{
         ready: boolean;
+        hasPageDesigns: boolean;
         missing: string[];
         invalid: string[];
         pages: Array<{
@@ -44,6 +45,11 @@ declare global {
           detailPlanStatus?: string;
           hasDetailPlan: boolean;
           designed: boolean;
+        }>;
+        apiContracts: Array<{
+          id: string;
+          label: string;
+          endpoints: Array<{ id: string; method: string; path: string; summary: string }>;
         }>;
       }>;
       };

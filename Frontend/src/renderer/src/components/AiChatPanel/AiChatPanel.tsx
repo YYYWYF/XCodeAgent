@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
 import type {
   ApplicationConfig,
+  DevelopmentPlanningApiContract,
   DevelopmentPlanningPageOption,
   ApplicationMenuItem,
   EditorMode,
@@ -35,9 +36,12 @@ import './AiChatPanel.less'
 type Props = {
   application: ApplicationConfig
   developmentPlanningReady: boolean
+  hasPageDesigns: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
+  developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
+  onPlanningArtifactsRefresh: () => void
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
@@ -62,9 +66,12 @@ function findPageMenuItem(
 export default function AiChatPanel({
   application,
   developmentPlanningReady,
+  hasPageDesigns,
   developmentPlanningPages,
+  developmentPlanningApiContracts,
   editorMode,
   onApplicationUpdate,
+  onPlanningArtifactsRefresh,
   onReturnWelcome,
   onThemeChange,
   theme
@@ -72,9 +79,6 @@ export default function AiChatPanel({
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [activePageId, setActivePageId] = useState('')
   const [previewError, setPreviewError] = useState('')
-  const [locallyDesignedPageIds, setLocallyDesignedPageIds] = useState<Set<string>>(
-    () => new Set()
-  )
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const { publishAiMessage } = useWorkbench()
   const {
@@ -172,13 +176,8 @@ export default function AiChatPanel({
     () => findPageMenuItem(application.menus.items, activePageTitle),
     [activePageTitle, application.menus.items]
   )
-  const hasDesignedPage = developmentPlanningPages.some((page) => page.designed)
-  const initialPageSelectionRequired = !developmentPlanningReady
-    || (!hasDesignedPage && locallyDesignedPageIds.size === 0)
-  const activePageDesigned = Boolean(
-    activePageOption?.designed
-      || (activePageOption && locallyDesignedPageIds.has(activePageOption.key))
-  )
+  const initialPageSelectionRequired = !developmentPlanningReady || !hasPageDesigns
+  const activePageDesigned = Boolean(activePageOption?.designed)
   const activeSessionUpdatedAt = sessions.find(
     (session) => session.id === activeSessionId
   )?.updatedAt
@@ -194,11 +193,6 @@ export default function AiChatPanel({
         || ''
     })
   }, [developmentPlanningPages])
-
-  // 切换工作区时清除仅用于当前运行周期的设计完成标记。
-  useEffect(() => {
-    setLocallyDesignedPageIds(new Set())
-  }, [application.workspaceRoot])
 
   /** 在右侧工作区打开当前页面预览。 */
   const handleOpenPage = (): void => {
@@ -252,7 +246,7 @@ export default function AiChatPanel({
     setActivePageId(page.key)
   }
 
-  /** 启动当前页面的详细设计，并在本次工作台会话中解锁其对话区域。 */
+  /** 启动当前页面的详细设计；解锁状态仍以后续持久化目录检查为准。 */
   const handleStartPageDesign = async (
     pageId: string,
     pageLabel: string,
@@ -260,9 +254,7 @@ export default function AiChatPanel({
   ): Promise<void> => {
     setActivePageId(pageId)
     const started = await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan)
-    if (started) {
-      setLocallyDesignedPageIds((current) => new Set(current).add(pageId))
-    }
+    if (started) onPlanningArtifactsRefresh()
   }
 
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
@@ -301,6 +293,7 @@ export default function AiChatPanel({
           onShowSettings={handleShowSettings}
           onShowSkills={handleShowSkills}
           pages={developmentPlanningPages}
+          apiContracts={developmentPlanningApiContracts}
           selectedPageId={activePageId}
           filesActive={activeView === 'files'}
           sessionError={sessionError}

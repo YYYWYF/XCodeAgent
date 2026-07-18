@@ -174,13 +174,18 @@ export default function RequirementSpecEditor({ onChange, spec }: Props): ReactE
       <EditorSection
         icon={<DesktopOutlined />}
         onAdd={() =>
-          addItem('pages', { id: draftId('page'), name: '新页面', path: '/', description: '' })
+          addItem('pages', {
+            pageId: draftId('page'),
+            name: '新页面',
+            path: '/',
+            description: ''
+          })
         }
         title="页面"
       >
         {recordList(spec.pages).map((item, index) => (
           <EditorItem
-            key={textValue(item.id) || `page-${index}`}
+            key={textValue(item.pageId) || `page-${index}`}
             onRemove={() => removeItem('pages', index)}
           >
             <EditorField label="页面名称">

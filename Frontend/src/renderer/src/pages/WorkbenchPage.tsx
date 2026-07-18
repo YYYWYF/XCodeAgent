@@ -2,7 +2,12 @@ import { Layout } from 'antd';
 import { useEffect, useState } from 'react';
 import { LeftPanel } from '../components';
 import { inspectWorkspacePlanningArtifacts, loadWorkspaceApplicationConfig } from '../service/applicationStorage';
-import type { ApplicationConfig, DevelopmentPlanningPageOption, EditorMode } from '../typings';
+import type {
+  ApplicationConfig,
+  DevelopmentPlanningApiContract,
+  DevelopmentPlanningPageOption,
+  EditorMode
+} from '../typings';
 import { cx } from '../utils';
 
 type Props = {
@@ -25,7 +30,10 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
   const [theme, setTheme] = useState<Theme>(getTheme);
   const [workspaceApplication, setWorkspaceApplication] = useState(application);
   const [developmentPlanningPagesLoaded, setDevelopmentPlanningPagesLoaded] = useState(false);
+  const [hasPageDesigns, setHasPageDesigns] = useState(false);
   const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<DevelopmentPlanningPageOption[]>([]);
+  const [developmentPlanningApiContracts, setDevelopmentPlanningApiContracts] = useState<DevelopmentPlanningApiContract[]>([]);
+  const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -51,12 +59,18 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
         const inspection = await inspectWorkspacePlanningArtifacts(application.workspaceRoot);
         if (!active) return;
         setDevelopmentPlanningPages(inspection.pages);
+        setDevelopmentPlanningApiContracts(
+          Array.isArray(inspection.apiContracts) ? inspection.apiContracts : []
+        );
+        setHasPageDesigns(inspection.hasPageDesigns);
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection);
         }
       } catch (error) {
         if (!active) return;
         setDevelopmentPlanningPages([]);
+        setDevelopmentPlanningApiContracts([]);
+        setHasPageDesigns(false);
         console.warn('检查 specs/plans 规划产物失败。', error);
       } finally {
         if (active) setDevelopmentPlanningPagesLoaded(true);
@@ -65,14 +79,16 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
 
     setWorkspaceApplication(application);
     setDevelopmentPlanningPagesLoaded(false);
+    setHasPageDesigns(false);
     setDevelopmentPlanningPages([]);
+    setDevelopmentPlanningApiContracts([]);
     void syncWorkspaceApplication();
     window.addEventListener('focus', syncWorkspaceApplication);
     return () => {
       active = false;
       window.removeEventListener('focus', syncWorkspaceApplication);
     };
-  }, [application]);
+  }, [application, planningRefreshRevision]);
 
   const handleThemeChange = (nextTheme: Theme): void => {
     setTheme(nextTheme);
@@ -83,14 +99,22 @@ function WorkbenchPage({ application, onReturnWelcome }: Props) {
     setWorkspaceApplication(updatedApplication);
   };
 
+  // 页面设计运行结束后重新读取 pages 目录，避免用内存状态推测是否已经持久化。
+  const handlePlanningArtifactsRefresh = (): void => {
+    setPlanningRefreshRevision((current) => current + 1);
+  };
+
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       <LeftPanel
         application={workspaceApplication}
         developmentPlanningReady={developmentPlanningPagesLoaded}
+        hasPageDesigns={hasPageDesigns}
         developmentPlanningPages={developmentPlanningPages}
+        developmentPlanningApiContracts={developmentPlanningApiContracts}
         editorMode={editorMode}
         onApplicationUpdate={handleApplicationUpdate}
+        onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
         onReturnWelcome={onReturnWelcome}
         onThemeChange={handleThemeChange}
         theme={theme}

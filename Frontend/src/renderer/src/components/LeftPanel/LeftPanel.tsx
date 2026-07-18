@@ -1,5 +1,10 @@
 import { Layout } from 'antd';
-import type { ApplicationConfig, DevelopmentPlanningPageOption, EditorMode } from '../../typings';
+import type {
+  ApplicationConfig,
+  DevelopmentPlanningApiContract,
+  DevelopmentPlanningPageOption,
+  EditorMode
+} from '../../typings';
 import { cx } from '../../utils';
 import AiChatPanel from '../AiChatPanel';
 import './LeftPanel.less';
@@ -9,9 +14,12 @@ const { Sider } = Layout;
 type Props = {
   application: ApplicationConfig;
   developmentPlanningReady: boolean;
+  hasPageDesigns: boolean;
   developmentPlanningPages: DevelopmentPlanningPageOption[];
+  developmentPlanningApiContracts: DevelopmentPlanningApiContract[];
   editorMode: EditorMode;
   onApplicationUpdate: (application: ApplicationConfig) => void;
+  onPlanningArtifactsRefresh: () => void;
   onReturnWelcome: () => void;
   onThemeChange: (theme: 'light' | 'dark') => void;
   theme: 'light' | 'dark';
@@ -20,9 +28,12 @@ type Props = {
 export default function LeftPanel({
   application,
   developmentPlanningReady,
+  hasPageDesigns,
   developmentPlanningPages,
+  developmentPlanningApiContracts,
   editorMode,
   onApplicationUpdate,
+  onPlanningArtifactsRefresh,
   onReturnWelcome,
   onThemeChange,
   theme,
@@ -34,9 +45,12 @@ export default function LeftPanel({
           <AiChatPanel
             application={application}
             developmentPlanningReady={developmentPlanningReady}
+            hasPageDesigns={hasPageDesigns}
             developmentPlanningPages={developmentPlanningPages}
+            developmentPlanningApiContracts={developmentPlanningApiContracts}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}
+            onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}
             onReturnWelcome={onReturnWelcome}
             onThemeChange={onThemeChange}
             theme={theme}

@@ -19,7 +19,12 @@ import { useEffect, useMemo, useState } from 'react'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import recommendedTasksIcon from '../../../../assets/icons/recommended-tasks.svg'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
-import type { ApplicationConfig, ApplicationMenuItem, DevelopmentPlanningPageOption } from '../../../../typings'
+import type {
+  ApplicationConfig,
+  ApplicationMenuItem,
+  DevelopmentPlanningApiContract,
+  DevelopmentPlanningPageOption
+} from '../../../../typings'
 import { cx } from '../../../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
@@ -49,6 +54,7 @@ function SidebarAssetIcon({ source }: SidebarAssetIconProps): ReactElement {
 
 type SessionSidebarProps = {
   activeSessionId?: string
+  apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
   deletingSessionId?: string
   filesActive: boolean
@@ -81,14 +87,6 @@ type OutlineRowProps = {
   selectedKey: string
   visibleKeys: Set<string>
 }
-
-const API_ITEMS = [
-  { method: 'POST', path: '/api/leave/applications' },
-  { method: 'GET', path: '/api/leave/applications' },
-  { method: 'GET', path: '/api/leave/applications/{id}' },
-  { method: 'PUT', path: '/api/leave/applications/{id}' },
-  { method: 'DELETE', path: '/api/leave/applications/{id}' }
-]
 
 /** 渲染单个页面目录节点，并展示其详细设计状态。 */
 function OutlineRow({ designed, item, level, onSelect, selectedKey, visibleKeys }: OutlineRowProps) {
@@ -183,6 +181,7 @@ function containsMenuKey(items: ApplicationMenuItem[], key: string): boolean {
 
 /** 使用 ProjectPlan 页面清单组织工作台左侧大纲与快捷入口。 */
 export default function SessionSidebar({
+  apiContracts = [],
   application,
   filesActive,
   onCreateSession,
@@ -205,7 +204,7 @@ export default function SessionSidebar({
   const [sidebarWidth, setSidebarWidth] = useState(334)
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apiExpanded, setApiExpanded] = useState(true)
-  const [apiGroupExpanded, setApiGroupExpanded] = useState(true)
+  const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(() => new Set())
   const [onlyRelated, setOnlyRelated] = useState(false)
   const pageItems = useMemo<ApplicationMenuItem[]>(() => pages.map((page) => ({
     key: page.pageId,
@@ -226,10 +225,35 @@ export default function SessionSidebar({
   }, [onlyRelated, outlineQuery, pageItems, selectedKey])
   const compactLayout = useCompactWorkbench()
   const effectiveCollapsed = compactLayout ? !compactExpanded : collapsed
+  const visibleApiContracts = useMemo(() => {
+    const query = outlineQuery.trim().toLocaleLowerCase()
+    if (!query) return apiContracts
+    return apiContracts.flatMap((contract) => {
+      const contractMatches = contract.label.toLocaleLowerCase().includes(query)
+      const endpoints = contractMatches
+        ? contract.endpoints
+        : contract.endpoints.filter((endpoint) => (
+          endpoint.method.toLocaleLowerCase().includes(query)
+          || endpoint.path.toLocaleLowerCase().includes(query)
+          || endpoint.summary.toLocaleLowerCase().includes(query)
+        ))
+      return endpoints.length > 0 ? [{ ...contract, endpoints }] : []
+    })
+  }, [apiContracts, outlineQuery])
 
   useEffect(() => {
     if (!compactLayout) setCompactExpanded(false)
   }, [compactLayout])
+
+  /** 独立切换一个 API contract 分组，避免多个资源同时收起或展开。 */
+  const handleApiContractToggle = (contractId: string): void => {
+    setCollapsedApiContractIds((current) => {
+      const next = new Set(current)
+      if (next.has(contractId)) next.delete(contractId)
+      else next.add(contractId)
+      return next
+    })
+  }
 
   /** 在常规宽度下启动侧栏拖动调整，窄屏覆盖层保持固定宽度。 */
   const handleResizeStart = (event: React.MouseEvent<HTMLDivElement>): void => {
@@ -397,7 +421,7 @@ export default function SessionSidebar({
                 />
               ))}
             {pageItems.length === 0 ? (
-              <div className={cx('outline-empty')}>requirement-spec.json 的 pages 中暂无页面</div>
+              <div className={cx('outline-empty')}>project_plan.json 的 frontend_pages 中暂无页面</div>
             ) : null}
           </div> : null}
         </section>
@@ -413,24 +437,32 @@ export default function SessionSidebar({
             <span>API</span>
           </button>
           {apiExpanded ? <div className={cx('api-group')}>
-            <button
-              aria-expanded={apiGroupExpanded}
-              className={cx('api-group-title')}
-              onClick={() => setApiGroupExpanded((current) => !current)}
-              type="button"
-            >
-              <CaretDownOutlined className={cx(!apiGroupExpanded && 'collapsed')} />
-              <ApiOutlined />
-              <span>请假相关接口</span>
-            </button>
-            {apiGroupExpanded ? <div className={cx('api-list')}>
-              {API_ITEMS.map((item, index) => (
-                <button className={cx('api-row')} key={`${item.method}-${index}`} type="button">
-                  <span className={cx('api-method', item.method.toLocaleLowerCase())}>{item.method}</span>
-                  <code>{item.path}</code>
+            {visibleApiContracts.map((contract) => {
+              const contractExpanded = !collapsedApiContractIds.has(contract.id)
+              return <div key={contract.id}>
+                <button
+                  aria-expanded={contractExpanded}
+                  className={cx('api-group-title')}
+                  onClick={() => handleApiContractToggle(contract.id)}
+                  type="button"
+                >
+                  <CaretDownOutlined className={cx(!contractExpanded && 'collapsed')} />
+                  <ApiOutlined />
+                  <span>{contract.label}</span>
                 </button>
-              ))}
-            </div> : null}
+                {contractExpanded ? <div className={cx('api-list')}>
+                  {contract.endpoints.map((endpoint) => (
+                    <button className={cx('api-row')} key={`${contract.id}-${endpoint.id}`} title={endpoint.summary} type="button">
+                      <span className={cx('api-method', endpoint.method.toLocaleLowerCase())}>{endpoint.method}</span>
+                      <code>{endpoint.path}</code>
+                    </button>
+                  ))}
+                </div> : null}
+              </div>
+            })}
+            {visibleApiContracts.length === 0 ? (
+              <div className={cx('outline-empty')}>project_plan.json 的 api_contracts 中暂无接口</div>
+            ) : null}
           </div> : null}
         </section>
 

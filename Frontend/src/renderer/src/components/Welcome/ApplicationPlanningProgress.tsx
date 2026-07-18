@@ -24,12 +24,12 @@ type Props = {
   title: string
 }
 
-// 为当前真实工作流阶段设置保守上限，只有后端完成节点后才允许跨入下一阶段。
+// 为当前真实工作流阶段保留下一锚点，项目规划未完成前最多推进到 99.9%。
 function progressCeiling(stage: string | undefined, target: number): number {
   if (target >= 100) return 100
-  if (stage === 'requirements') return 33
-  if (stage === 'project_planning') return 97
-  return 16
+  if (stage === 'requirements') return 57.9
+  if (stage === 'project_planning') return 99.9
+  return 17.9
 }
 
 // 使用原创建规划页面的动态视觉展示两节点进度、时间线与 AG-UI 实时消息。
@@ -47,6 +47,7 @@ export default function ApplicationPlanningProgress({
     progressCeiling(current?.stage, targetPercent),
     activityKey
   )
+  const percentLabel = percent.toFixed(1)
   const streamLines = (streamingContent || '')
     .split('\n')
     .map((line) => line.trim())
@@ -68,11 +69,11 @@ export default function ApplicationPlanningProgress({
             <Text className={cx('planning-progress-detail')}>{current.detail}</Text>
           ) : null}
         </div>
-        <span className={cx('planning-progress-percent')}>{percent}%</span>
+        <span className={cx('planning-progress-percent')}>{percentLabel}%</span>
       </div>
 
       <div
-        aria-label={`当前进度 ${percent}%`}
+        aria-label={`当前进度 ${percentLabel}%`}
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={percent}

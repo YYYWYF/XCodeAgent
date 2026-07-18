@@ -130,6 +130,10 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertIn("RUN_FINISHED", frames)
         self.assertEqual(saved["app_info"]["name"], "协作任务中心")
         self.assertEqual(saved["confirmation_status"], "pending_user_confirmation")
+        self.assertEqual(
+            [page["pageId"] for page in saved["pages"]],
+            [page["pageId"] for page in spec["pages"]],
+        )
 
     def test_creation_requirements_do_not_expose_clarification_tool(self) -> None:
         """新建应用两阶段门禁应直接生成 JSON，不为派生结构追加澄清。"""

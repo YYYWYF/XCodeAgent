@@ -2,9 +2,9 @@
 
 ## Scope
 
-Workbench 的左侧 `Pages` 大纲始终投射 RequirementSpec `pages`，ProjectPlan `frontend_pages` 只标识已经进入详细设计的页面。若 `frontend_pages` 为空，工作区首次进入时在对话区显示页面选择界面，同时以现有锁层禁止操作左侧应用大纲；首个页面详细设计成功后才解锁大纲。若已有任一已设计页面，则直接进入正常工作台并默认定位首个已设计页面。用户在大纲中选择尚未出现在 `frontend_pages` 的页面时，保留正常对话布局但以蒙层锁住对话区，只允许启动该页详细设计。选择动作提交 `selectedPageId` 到主 `/workflow/run` AG-UI endpoint 并启动 `detail_confirmation`；请求适配器会从 RequirementSpec 将该页的基础定义加入本次 ProjectPlan 输入，以复用现有细节设计节点。页面级开发任务规划仍是后续独立 AG-UI action，不属于本入口动作。
+Workbench 的左侧 `Pages` 大纲投射 `.xcodeagent/plans/project_plan.json` 的 `frontend_pages`，并兼容读取既有 `.xcodeagent/plans/project-plan.json`。工作区是否已经存在页面设计只检查 `.xcodeagent/plans/pages/` 是否包含目录项：目录为空或不存在时，首次进入在对话区显示页面选择界面，同时以现有锁层禁止操作左侧应用大纲；目录非空时直接进入正常工作台。单个页面的“已设计”状态仍以对应的 `page--<pageId>.json` 详情文件为准。用户在大纲中选择尚无详情文件的页面时，保留正常对话布局但以蒙层锁住对话区，只允许启动该页详细设计。选择动作提交 `selectedPageId` 到主 `/workflow/run` AG-UI endpoint 并启动 `detail_confirmation`。页面级开发任务规划仍是后续独立 AG-UI action，不属于本入口动作。
 
-首次选择界面或待设计页面蒙层会在所选页面生成或复核请求运行期间保持锁定。页面统一使用 `pageId` 作为标识；若已存在 `plans/pages/page--<pageId>.json` 详情计划，入口会显示为查看/确认而非重新生成。请求返回后，本次工作台会话解锁该页并显示正常对话，以便通过既有 Workflow 消息 UI 展示生成产物和详细设计确认卡；再次进入工作区时则以持久化 ProjectPlan 与外置详情文件为准。主 Workflow 加载 ProjectPlan 时会补全 `plans/pages/` 和 `plans/data-source/` 下的外置详情 JSON；`detail_confirmation` 只展示当前选中页及其直接数据源。若该页尚无详情计划，返回空复核且设置 `summary.missingSelectedPagePlan=true`，由 UI 引导用户先生成。
+首次选择界面或待设计页面蒙层会在所选页面生成或复核请求运行期间保持锁定。页面统一使用 `pageId` 作为标识。首次选择界面只展示页面信息和“开始生成”动作，不显示或判断页面的设计状态，因为该界面仅在 `plans/pages/` 为空时出现。请求返回后，工作台重新检查 `plans/pages/`，不使用仅存在于前端内存的临时完成标记提前解锁。主 Workflow 加载 ProjectPlan 时会补全 `plans/pages/` 和 `plans/data-source/` 下的外置详情 JSON；`detail_confirmation` 只展示当前选中页及其直接数据源。若该页尚无详情计划，返回空复核且设置 `summary.missingSelectedPagePlan=true`，由 UI 引导用户先生成。
 
 This flow uses the independent `/application-development-planning/run` AG-UI endpoint and its own thread id. It never enters or resumes the primary LangGraph workflow. A normal generation requires one model call; if the model returns genuine blocking questions, the answers are supplied to a second generation call. Confirmation is deterministic and model-free.
 

@@ -131,6 +131,10 @@ class DetailConfirmationTests(unittest.TestCase):
         self.assertEqual([endpoint["id"] for endpoint in endpoints], [
             "inventory_management_source_api.list"
         ])
+        self.assertEqual(
+            page_detail["endpoint_dependencies"],
+            page_context["references"]["endpoint_dependencies"],
+        )
 
     def test_detail_confirmation_generates_all_targets_for_one_batch_review(self) -> None:
         project_plan = create_project_plan(

@@ -98,7 +98,7 @@ function panelTitle(mode?: string): string {
 
 // 根据确认阶段给出下一步按钮文案。
 function submitLabel(mode?: string): string {
-  if (mode === 'requirement_spec_confirmation') return '确认需求并继续规划'
+  if (mode === 'requirement_spec_confirmation') return '文档正确，继续规划'
   if (mode === 'project_plan_confirmation') return '确认计划并进入工作区'
   if (!mode) return '重新生成当前规划'
   return '提交回答并继续'
@@ -107,7 +107,7 @@ function submitLabel(mode?: string): string {
 // 将 Workflow 的通用提示转换为创建规划页面自己的中文说明。
 function panelDescription(clarification: WorkflowClarification): string {
   if (clarification.mode === 'requirement_spec_confirmation') {
-    return '请审核需求文档；可在下方填写意见或备注。点击右下角按钮即确认当前文档并继续规划。'
+    return '请审核需求文档。需要补充时只在下方填写意见；文档正确时，直接点击右下角按钮继续。'
   }
   if (clarification.mode === 'project_plan_confirmation') {
     return '请审核当前 ProjectPlan。确认后会立即进入工作区，菜单、API、Schema 和数据源等派生 JSON 将在后续开发规划阶段补齐。'
@@ -297,14 +297,15 @@ export default function ApplicationPlanningQuestionPanel({
                 <Title level={5}>意见（可选）</Title>
               </div>
               <Paragraph type="secondary">
-                填写内容将作为确认备注保存；点击右下角按钮即确认并继续项目规划。
+                这里只填写修改意见或备注，无需输入“正确”。
               </Paragraph>
             </div>
             <Form.Item name={['answers', 'requirement_spec_feedback']}>
               <TextArea
+                aria-label="需求文档意见"
                 autoSize={{ minRows: 3, maxRows: 7 }}
                 disabled={disabled}
-                placeholder="填写对当前需求文档的意见或备注。"
+                placeholder="如需调整，请填写具体意见；无意见可留空。"
               />
             </Form.Item>
           </section>
@@ -351,8 +352,19 @@ export default function ApplicationPlanningQuestionPanel({
         )}
 
         {isRequirementConfirmation || questions.length ? (
-          <div className={cx('page-planning-actions')}>
+          <div
+            className={cx(
+              'page-planning-actions',
+              isRequirementConfirmation && 'is-requirement-confirmation'
+            )}
+          >
+            {isRequirementConfirmation ? (
+              <Text className={cx('page-planning-confirm-hint')} type="secondary">
+                确认动作以右侧按钮为准
+              </Text>
+            ) : null}
             <Button
+              aria-label={isRequirementConfirmation ? '确认需求文档正确并继续规划' : undefined}
               disabled={disabled}
               htmlType="submit"
               icon={
@@ -364,7 +376,7 @@ export default function ApplicationPlanningQuestionPanel({
               }
               type="primary"
             >
-              {editingRequirement ? '保存修改并继续规划' : submitLabel(clarification.mode)}
+              {editingRequirement ? '确认修改并继续规划' : submitLabel(clarification.mode)}
             </Button>
           </div>
         ) : null}

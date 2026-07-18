@@ -1,4 +1,9 @@
-import type { ApplicationConfig, ApplicationSchemaConfig, DevelopmentPlanningPageOption } from '../typings';
+import type {
+  ApplicationConfig,
+  ApplicationSchemaConfig,
+  DevelopmentPlanningApiContract,
+  DevelopmentPlanningPageOption
+} from '../typings';
 
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
@@ -94,14 +99,16 @@ export async function loadWorkspaceApplicationConfig(
   return result.application as unknown as ApplicationSchemaConfig;
 }
 
-// 只检查 specs/plans 两个规划目录中的正式产物是否完整且已确认。
+// 检查正式规划产物，并返回 ProjectPlan 页面大纲及 pages 目录设计状态。
 export async function inspectWorkspacePlanningArtifacts(
   workspaceRoot: string
 ): Promise<{
   ready: boolean;
+  hasPageDesigns: boolean;
   missing: string[];
   invalid: string[];
   pages: DevelopmentPlanningPageOption[];
+  apiContracts: DevelopmentPlanningApiContract[];
 }> {
   const workspaceApi = window.xcodeAgent?.workspace;
   if (!workspaceApi?.inspectPlanningArtifacts) {

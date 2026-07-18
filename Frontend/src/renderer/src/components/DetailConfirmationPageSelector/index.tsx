@@ -1,5 +1,5 @@
-import { CheckCircleFilled, LockOutlined, PlayCircleOutlined, RocketOutlined } from '@ant-design/icons'
-import { Button, Radio, Skeleton, Tag, Typography } from 'antd'
+import { LockOutlined, PlayCircleOutlined, RocketOutlined } from '@ant-design/icons'
+import { Button, Radio, Skeleton, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { DevelopmentPlanningPageOption } from '../../typings'
 import { cx } from '../../utils'
@@ -87,7 +87,7 @@ export default function DetailConfirmationPageSelector({
           <span className={cx('detail-page-selector-logo')}><RocketOutlined /></span>
           <Text className={cx('detail-page-selector-eyebrow')}>PAGE DESIGN</Text>
           <Title level={2}>选择要开始设计的页面</Title>
-          <Text type="secondary">页面目录来自 RequirementSpec。选择一个页面，开始第一份详细设计。</Text>
+          <Text type="secondary">页面目录来自 ProjectPlan。选择一个页面，开始第一份详细设计。</Text>
         </header>
 
         {loading ? (
@@ -104,18 +104,11 @@ export default function DetailConfirmationPageSelector({
                 <span className={cx('detail-page-selector-name')}>{page.label}</span>
                 <span className={cx('detail-page-selector-path')}>{page.path}</span>
                 <span className={cx('detail-page-selector-purpose')}>{page.purpose}</span>
-                {page.hasDetailPlan ? (
-                  <Tag color="green"><CheckCircleFilled /> 已有 plan</Tag>
-                ) : page.designed ? (
-                  <Tag color="blue"><CheckCircleFilled /> 已设计</Tag>
-                ) : (
-                  <Tag>待设计</Tag>
-                )}
               </Radio.Button>
             ))}
           </Radio.Group>
         ) : (
-          <Text type="secondary">RequirementSpec 的 pages 中暂无可设计页面。</Text>
+          <Text type="secondary">ProjectPlan 的 frontend_pages 中暂无可设计页面。</Text>
         )}
 
         <Button
@@ -127,13 +120,13 @@ export default function DetailConfirmationPageSelector({
             selectedPage && void onStart(
               selectedPage.pageId,
               selectedPage.label,
-              Boolean(selectedPage.hasDetailPlan),
+              false,
             )
           }
           size="large"
           type="primary"
         >
-          {selectedPage?.hasDetailPlan ? '查看并确认' : '开始生成'}「{selectedPage?.label || '所选页面'}」
+          开始生成「{selectedPage?.label || '所选页面'}」
         </Button>
       </main>
     </section>

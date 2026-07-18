@@ -663,7 +663,7 @@ def create_requirement_spec(
 
 _EDITOR_ITEM_FIELDS: dict[str, tuple[str, ...]] = {
     "user_roles": ("id", "name", "description", "permissions"),
-    "pages": ("id", "name", "path", "module_id", "description", "components"),
+    "pages": ("pageId", "name", "path", "module_id", "description", "components"),
     "business_flows": ("id", "name", "description", "steps"),
     "data_sources": ("id", "name", "type", "description", "entities"),
 }
@@ -675,7 +675,7 @@ def apply_requirement_spec_editor_changes(
 ) -> dict[str, Any]:
     """将概览编辑器的可见字段合并回 RequirementSpec。
 
-    数组以用户提交为准，以支持新增和删除；已有条目依据 id
+    数组以用户提交为准，以支持新增和删除；页面依据 pageId、其余条目依据 id
     保留未在界面中展示的内部字段。
     """
 
@@ -700,16 +700,17 @@ def apply_requirement_spec_editor_changes(
         edited_items = edited_spec.get(field_name)
         if not isinstance(edited_items, list):
             continue
+        identity_key = "pageId" if field_name == "pages" else "id"
         existing_items = {
-            str(item.get("id")): item
+            str(item.get(identity_key)): item
             for item in existing_spec.get(field_name, [])
-            if isinstance(item, dict) and item.get("id")
+            if isinstance(item, dict) and item.get(identity_key)
         }
         sanitized_items: list[dict[str, Any]] = []
         for item in edited_items:
             if not isinstance(item, dict):
                 continue
-            item_id = str(item.get("id") or "").strip()
+            item_id = str(item.get(identity_key) or "").strip()
             sanitized = deepcopy(existing_items.get(item_id, {}))
             sanitized.update(
                 {
