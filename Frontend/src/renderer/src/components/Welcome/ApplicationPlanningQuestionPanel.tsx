@@ -2,6 +2,7 @@ import {
   ArrowLeftOutlined,
   BulbOutlined,
   CheckCircleOutlined,
+  EditOutlined,
   EyeOutlined,
   FileTextOutlined
 } from '@ant-design/icons'
@@ -11,6 +12,7 @@ import type { ReactElement } from 'react'
 import MarkdownContent from '../MarkdownContent/MarkdownContent'
 import DetailReview from '../AiChatPanel/components/WorkflowRunCard/DetailReview'
 import RequirementSpecSummary from './RequirementSpecSummary'
+import RequirementSpecEditor from './RequirementSpecEditor'
 import type {
   WorkflowClarification,
   WorkflowClarificationAnswer,
@@ -27,7 +29,16 @@ const OTHER_OPTION_VALUE = '__other__'
 
 type Props = {
   disabled?: boolean
-  onSubmit: (workflow: WorkflowRunPayload, answers: WorkflowClarificationAnswers) => void
+  onSaveRequirementSpec: (
+    workflow: WorkflowRunPayload,
+    spec: Record<string, unknown>
+  ) => Promise<Record<string, unknown> | undefined>
+  onSubmit: (
+    workflow: WorkflowRunPayload,
+    answers: WorkflowClarificationAnswers,
+    editedRequirementSpec?: Record<string, unknown>,
+    requirementSpecFeedback?: string
+  ) => void
   workflow: WorkflowRunPayload
 }
 
@@ -38,8 +49,8 @@ function planningClarification(workflow: WorkflowRunPayload): WorkflowClarificat
     workflow.state?.clarification,
     workflow.result?.clarification
   ]
-  return candidates.find(
-    (value): value is WorkflowClarification => Boolean(value && typeof value === 'object')
+  return candidates.find((value): value is WorkflowClarification =>
+    Boolean(value && typeof value === 'object')
   )
 }
 
@@ -96,7 +107,7 @@ function submitLabel(mode?: string): string {
 // 将 Workflow 的通用提示转换为创建规划页面自己的中文说明。
 function panelDescription(clarification: WorkflowClarification): string {
   if (clarification.mode === 'requirement_spec_confirmation') {
-    return '请审核需求文档；如有需要调整的内容，可在下方填写修改意见。直接确认即表示文档正确并继续规划。'
+    return '请审核需求文档；可在下方填写意见或备注。点击右下角按钮即确认当前文档并继续规划。'
   }
   if (clarification.mode === 'project_plan_confirmation') {
     return '请审核当前 ProjectPlan。确认后会立即进入工作区，菜单、API、Schema 和数据源等派生 JSON 将在后续开发规划阶段补齐。'
@@ -120,22 +131,27 @@ function requirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> 
 // 使用创建规划页面自己的表单视觉展示问题和正式产物，不渲染通用 Workflow 卡片。
 export default function ApplicationPlanningQuestionPanel({
   disabled,
+  onSaveRequirementSpec,
   onSubmit,
   workflow
 }: Props): ReactElement | null {
   const [form] = Form.useForm<{ answers: WorkflowClarificationAnswers }>()
   const [showArtifactDetail, setShowArtifactDetail] = useState(false)
+  const [editingRequirement, setEditingRequirement] = useState(false)
+  const [requirementDraft, setRequirementDraft] = useState<Record<string, unknown>>()
+  const [savingRequirement, setSavingRequirement] = useState(false)
   const clarification = planningClarification(workflow)
   const questions = clarification?.questions || []
   const isRequirementConfirmation = clarification?.mode === 'requirement_spec_confirmation'
   const hasRecoveryAction = clarification?.status === 'requires_user_input' && !questions.length
   const artifact = workflow.confirmationArtifact
   const spec = artifact?.id === 'requirement_spec' ? requirementSpec(workflow) : undefined
+  const displayedSpec = requirementDraft || spec
   const canShowSummary = Boolean(spec)
 
   if (!clarification) return null
 
-  // 需求确认只收集可选修改意见；空提交代表用户确认当前文档。
+  // 右下角提交始终确认当前文档，可选意见通过独立字段作为内部备注保存。
   const handleSubmit = (values: { answers?: WorkflowClarificationAnswers }): void => {
     if (!isRequirementConfirmation) {
       onSubmit(workflow, questions.length
@@ -145,11 +161,38 @@ export default function ApplicationPlanningQuestionPanel({
     }
     const feedback = values.answers?.requirement_spec_feedback
     const feedbackText = typeof feedback === 'string' ? feedback.trim() : ''
-    onSubmit(workflow, {
-      requirement_spec_confirmation: feedbackText
-        ? `需要修改：${feedbackText}`
-        : '正确，继续规划'
-    })
+    onSubmit(
+      workflow,
+      {
+        requirement_spec_confirmation: '正确，继续规划'
+      },
+      requirementDraft,
+      feedbackText || undefined
+    )
+  }
+
+  // 从当前结构化需求创建隔离草稿，再次进入编辑时继续使用已保存内容。
+  const startRequirementEditing = (): void => {
+    if (!spec) return
+    setRequirementDraft(
+      (current) => current ?? (JSON.parse(JSON.stringify(spec)) as Record<string, unknown>)
+    )
+    setShowArtifactDetail(false)
+    setEditingRequirement(true)
+  }
+
+  // 通过 AG-UI 保存并重写后端 Markdown，成功后才退出编辑模式。
+  const saveRequirementEditing = async (): Promise<void> => {
+    if (!requirementDraft || savingRequirement) return
+    setSavingRequirement(true)
+    try {
+      const savedSpec = await onSaveRequirementSpec(workflow, requirementDraft)
+      if (!savedSpec) return
+      setRequirementDraft(savedSpec)
+      setEditingRequirement(false)
+    } finally {
+      setSavingRequirement(false)
+    }
   }
 
   if (clarification.mode === 'detail_review' && clarification.review) {
@@ -179,27 +222,64 @@ export default function ApplicationPlanningQuestionPanel({
       {artifact?.content ? (
         <section className={cx('planning-artifact-card')}>
           <header>
-            <span className={cx('planning-artifact-icon')}><FileTextOutlined /></span>
+            <span className={cx('planning-artifact-icon')}>
+              <FileTextOutlined />
+            </span>
             <div>
               <Text strong>{artifact.id === 'requirement_spec' ? '需求文档' : 'ProjectPlan'}</Text>
               <Text type="secondary">{artifact.name}</Text>
             </div>
             {canShowSummary ? (
-              <Button
-                className={cx('planning-artifact-toggle')}
-                icon={showArtifactDetail ? <ArrowLeftOutlined /> : <EyeOutlined />}
-                onClick={() => setShowArtifactDetail((current) => !current)}
-                size="small"
-                type="text"
-              >
-                {showArtifactDetail ? '返回概览' : '查看详情'}
-              </Button>
-            ) : <Tag>Markdown</Tag>}
+              <div className={cx('planning-artifact-actions')}>
+                {editingRequirement ? (
+                  <Button
+                    aria-label="保存需求文档修改并退出编辑模式"
+                    className={cx('planning-artifact-edit')}
+                    disabled={disabled}
+                    icon={<CheckCircleOutlined />}
+                    loading={savingRequirement}
+                    onClick={() => void saveRequirementEditing()}
+                    size="small"
+                    type="text"
+                  >
+                    保存并退出编辑
+                  </Button>
+                ) : (
+                  <Button
+                    className={cx('planning-artifact-toggle')}
+                    icon={showArtifactDetail ? <ArrowLeftOutlined /> : <EyeOutlined />}
+                    onClick={() => setShowArtifactDetail((current) => !current)}
+                    size="small"
+                    type="text"
+                  >
+                    {showArtifactDetail ? '返回概览' : '查看详细设计'}
+                  </Button>
+                )}
+                {!editingRequirement && !showArtifactDetail ? (
+                  <Button
+                    aria-label="进入需求文档编辑模式"
+                    className={cx('planning-artifact-edit')}
+                    icon={<EditOutlined />}
+                    onClick={startRequirementEditing}
+                    size="small"
+                    type="text"
+                  >
+                    进入编辑模式
+                  </Button>
+                ) : null}
+              </div>
+            ) : (
+              <Tag>Markdown</Tag>
+            )}
           </header>
           <div className={cx('planning-artifact-content')}>
-            {canShowSummary && !showArtifactDetail
-              ? <RequirementSpecSummary spec={spec!} />
-              : <MarkdownContent content={artifact.content} />}
+            {editingRequirement && requirementDraft ? (
+              <RequirementSpecEditor onChange={setRequirementDraft} spec={requirementDraft} />
+            ) : canShowSummary && !showArtifactDetail ? (
+              <RequirementSpecSummary spec={displayedSpec!} />
+            ) : (
+              <MarkdownContent content={artifact.content} />
+            )}
           </div>
         </section>
       ) : null}
@@ -210,67 +290,81 @@ export default function ApplicationPlanningQuestionPanel({
         layout="vertical"
         onFinish={handleSubmit}
       >
-        {isRequirementConfirmation ? (
+        {isRequirementConfirmation && !editingRequirement ? (
           <section className={cx('planning-question-card')}>
             <div className={cx('planning-question-card-heading')}>
               <div className={cx('planning-question-title')}>
-                <Title level={5}>修改意见（可选）</Title>
+                <Title level={5}>意见（可选）</Title>
               </div>
-              <Paragraph type="secondary">留空并确认，即表示需求文档正确并继续项目规划。</Paragraph>
+              <Paragraph type="secondary">
+                填写内容将作为确认备注保存；点击右下角按钮即确认并继续项目规划。
+              </Paragraph>
             </div>
             <Form.Item name={['answers', 'requirement_spec_feedback']}>
               <TextArea
                 autoSize={{ minRows: 3, maxRows: 7 }}
                 disabled={disabled}
-                placeholder="例如：增加审批人角色，并补充审批页面。"
+                placeholder="填写对当前需求文档的意见或备注。"
               />
             </Form.Item>
           </section>
-        ) : questions.map((question, index) => {
-          const key = questionKey(question, index)
-          return (
-            <section className={cx('planning-question-card')} key={key}>
-              <div className={cx('planning-question-card-heading')}>
-                <div>
-                  <div className={cx('planning-question-title')}>
-                    {question.header || question.dimension ? (
-                      <Tag>{question.header || question.dimension}</Tag>
+        ) : (
+          questions.map((question, index) => {
+            const key = questionKey(question, index)
+            return (
+              <section className={cx('planning-question-card')} key={key}>
+                <div className={cx('planning-question-card-heading')}>
+                  <div>
+                    <div className={cx('planning-question-title')}>
+                      {question.header || question.dimension ? (
+                        <Tag>{question.header || question.dimension}</Tag>
+                      ) : null}
+                      <span aria-hidden className={cx('planning-question-required')}>
+                        *
+                      </span>
+                      <Title level={5}>{question.question || '请补充规划细节'}</Title>
+                    </div>
+                    {question.default_assumption ? (
+                      <Paragraph type="secondary">
+                        默认建议：{question.default_assumption}
+                      </Paragraph>
                     ) : null}
-                    <span aria-hidden className={cx('planning-question-required')}>*</span>
-                    <Title level={5}>{question.question || '请补充规划细节'}</Title>
                   </div>
-                  {question.default_assumption ? (
-                    <Paragraph type="secondary">默认建议：{question.default_assumption}</Paragraph>
-                  ) : null}
                 </div>
-              </div>
-              <Form.Item
-                name={['answers', key]}
-                required
-                rules={[{
-                  validator: (_rule, value) => answerComplete(question, value)
-                    ? Promise.resolve()
-                    : Promise.reject(new Error('请选择或补充这个问题'))
-                }]}
-              >
-                <PlanningQuestionControl
-                  disabled={disabled}
-                  question={question}
-                />
-              </Form.Item>
-            </section>
-          )
-        })}
+                <Form.Item
+                  name={['answers', key]}
+                  required
+                  rules={[
+                    {
+                      validator: (_rule, value) =>
+                        answerComplete(question, value)
+                          ? Promise.resolve()
+                          : Promise.reject(new Error('请选择或补充这个问题'))
+                    }
+                  ]}
+                >
+                  <PlanningQuestionControl disabled={disabled} question={question} />
+                </Form.Item>
+              </section>
+            )
+          })
+        )}
 
-        {(isRequirementConfirmation || questions.length) ? (
+        {isRequirementConfirmation || questions.length ? (
           <div className={cx('page-planning-actions')}>
             <Button
               disabled={disabled}
               htmlType="submit"
-              icon={clarification.mode?.includes('confirmation') ? <CheckCircleOutlined /> : <BulbOutlined />}
+              icon={
+                clarification.mode?.includes('confirmation') ? (
+                  <CheckCircleOutlined />
+                ) : (
+                  <BulbOutlined />
+                )
+              }
               type="primary"
             >
-              {submitLabel(clarification.mode)}
+              {editingRequirement ? '保存修改并继续规划' : submitLabel(clarification.mode)}
             </Button>
           </div>
         ) : null}
@@ -303,22 +397,26 @@ function PlanningQuestionControl({
   question: WorkflowClarificationQuestion
   value?: WorkflowClarificationAnswer
 }): ReactElement {
-  const options = question.type === 'yesno'
-    ? [
-        { label: '是', description: '', value: '是' },
-        { label: '否', description: '', value: '否' }
-      ]
-    : (question.options || [])
-        .filter((option) => option.label)
-        .map((option) => ({
-          label: option.label || '',
-          description: option.description || '',
-          value: option.value || option.label || ''
-        }))
-  const optionsWithOther = question.allowOther !== false
-    && !options.some((option) => option.value === OTHER_OPTION_VALUE)
-    ? [...options, { label: '其他', description: '补充未覆盖的需求或偏好。', value: OTHER_OPTION_VALUE }]
-    : options
+  const options =
+    question.type === 'yesno'
+      ? [
+          { label: '是', description: '', value: '是' },
+          { label: '否', description: '', value: '否' }
+        ]
+      : (question.options || [])
+          .filter((option) => option.label)
+          .map((option) => ({
+            label: option.label || '',
+            description: option.description || '',
+            value: option.value || option.label || ''
+          }))
+  const optionsWithOther =
+    question.allowOther !== false && !options.some((option) => option.value === OTHER_OPTION_VALUE)
+      ? [
+          ...options,
+          { label: '其他', description: '补充未覆盖的需求或偏好。', value: OTHER_OPTION_VALUE }
+        ]
+      : options
   const selected = selectedAnswerValues(value)
   const other = otherAnswerText(value)
   const emitSelection = (nextSelected: string[]): void => {
@@ -339,7 +437,11 @@ function PlanningQuestionControl({
             value={selected}
           >
             {optionsWithOther.map((option) => (
-              <Checkbox className={cx('planning-question-option')} key={option.value} value={option.value}>
+              <Checkbox
+                className={cx('planning-question-option')}
+                key={option.value}
+                value={option.value}
+              >
                 <OptionCopy description={option.description} label={option.label} />
               </Checkbox>
             ))}
@@ -352,7 +454,11 @@ function PlanningQuestionControl({
             value={selected[0]}
           >
             {optionsWithOther.map((option) => (
-              <Radio className={cx('planning-question-option')} key={option.value} value={option.value}>
+              <Radio
+                className={cx('planning-question-option')}
+                key={option.value}
+                value={option.value}
+              >
                 <OptionCopy description={option.description} label={option.label} />
               </Radio>
             ))}

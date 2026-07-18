@@ -56,7 +56,7 @@ type UseWorkflowConversationResult = {
     selectedPageId: string,
     pageLabel: string,
     hasDetailPlan?: boolean
-  ) => Promise<void>
+  ) => Promise<boolean>
   handleStopGenerating: () => void
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -141,9 +141,9 @@ export function useWorkflowConversation({
       workflowDebug?: WorkflowDebugOptions
       selectedPageId?: string
     }
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const trimmedMessage = message.trim()
-    if (!trimmedMessage) return
+    if (!trimmedMessage) return false
 
     const identity = await ensureActiveSession()
     const competingSession = findRunningSession(
@@ -156,7 +156,7 @@ export function useWorkflowConversation({
         ...current,
         [identity.key]: competingSession ? '工作区中另一个会话正在执行。' : '当前会话正在执行。'
       }))
-      return
+      return false
     }
 
     const agUiSession =
@@ -297,6 +297,7 @@ export function useWorkflowConversation({
         titleFrom: options?.titleFrom || trimmedMessage
       })
       publishAiMessage(identity.editorMode, answer)
+      return true
     } catch (caughtError) {
       if (isAuthenticationFailure(caughtError)) {
         setSessionMessages(identity.key, previousMessages)
@@ -313,7 +314,7 @@ export function useWorkflowConversation({
           sessionId: identity.sessionId,
           threadId: identity.threadId
         })
-        return
+        return false
       }
       if (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError)) {
         const answer = stoppedAnswer(streamedContent)
@@ -331,12 +332,13 @@ export function useWorkflowConversation({
           titleFrom: message
         })
         publishAiMessage(identity.editorMode, answer)
-        return
+        return false
       }
       setErrors((current) => ({
         ...current,
         [identity.key]: caughtError instanceof Error ? caughtError.message : '调用 Workflow 失败。'
       }))
+      return false
     } finally {
       runningSessionsRef.current.delete(identity.key)
       setRunStates((current) => omitKey(current, identity.key))
@@ -359,14 +361,14 @@ export function useWorkflowConversation({
     })
   }
 
-  /** 以用户选择的 ProjectPlan 页面作为主 Workflow 细节设计起点。 */
+  /** 以用户选择的 RequirementSpec 页面作为主 Workflow 细节设计起点。 */
   const handleStartDetailConfirmation = async (
     selectedPageId: string,
     pageLabel: string,
     hasDetailPlan?: boolean
-  ): Promise<void> => {
-    if (!selectedPageId || loading || workspaceBusy) return
-    await sendWorkflowMessage(
+  ): Promise<boolean> => {
+    if (!selectedPageId || loading || workspaceBusy) return false
+    return sendWorkflowMessage(
       `${hasDetailPlan ? '查看已生成页面计划' : '开始设计页面'}：${pageLabel}`,
       {
         selectedPageId,

@@ -16,6 +16,8 @@ class ProjectState(TypedDict, total=False):
     complexity_reason: str
     complexity_decision: dict[str, Any]
     requirement_spec: dict[str, Any]
+    edited_requirement_spec: dict[str, Any]
+    requirement_spec_feedback: str
     requirement_spec_path: str
     requirement_spec_json_path: str
     clarification: dict[str, Any]

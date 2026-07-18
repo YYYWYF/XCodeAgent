@@ -60,13 +60,13 @@ START
 
 首页“创建并规划页面”使用独立的 `application_planning_workflow`，组合 `requirements → project_planning` 节点函数，并负责生成主 Graph 的正式初始计划。它不会进入页面细节确认、工作区检查、任务拆分、代码生成和测试阶段。
 
-- 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照、`resumeState` 和 `clarificationAnswers`。
+- 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照、`resumeState` 和 `clarificationAnswers`；需求概览的“保存并退出编辑”复用同一端点的 `requirementSpecDraft.action = save` AG-UI 动作，只持久化草稿，不续跑 Graph。
 - RequirementSpec 与 ProjectPlan 继续使用现有 Markdown 产物和显式用户确认门禁；回答澄清问题不能替代产物确认。
 - 用户确认第二步 ProjectPlan 后，独立 Graph 的包装节点只校验 `.xcodeagent/specs` 与 `.xcodeagent/plans` 中 RequirementSpec、ProjectPlan 的 Markdown/JSON 正式产物及确认状态，不读取或改写 `.xcodeagent/application.json`。菜单、API、Schema 和数据源等派生结构不属于创建门禁。
 - 创建弹窗只展示需求确认和项目规划两个阶段；该独立创建范围对未明确的信息采用保守假设，不再为了后续派生 JSON 追加普通澄清卡。两份文档分别确认且目录产物校验成功后，前端直接打开工作台。
 - 主 Workflow 直接以 `detail_confirmation` 为入口，并使用首页流程确认后写入的 ProjectPlan 与页面功能概览。
 
-本次变更没有重新设计 Agent 循环、权限、工具或上下文策略，只复用仓库内既有的两个只读规划节点。因此不引入新的参考架构差异；上下文仍由 RequirementSpec、ProjectPlan 和文件路径承载，公开状态不加载仓库全文，满足 128k 上下文预算。
+需求草稿保存遵循 learn-coding-agent 的“读取当前事实、执行一次确定性写入、立即返回验证结果”紧凑边界，并沿用 OpenCode 的可恢复 session/event 思路，通过完整 AG-UI 生命周期返回新文档状态。它不调用 Deep Agent，也不把仓库或会话历史注入上下文；请求仅包含当前 RequirementSpec 草稿，后端再以工作区 JSON 为基线合并，因此继续满足 128k 上下文预算且不引入新的 Agent 权限。
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
@@ -123,9 +123,9 @@ START
 
 无论初始需求是否需要澄清，只要 `requirements` 生成或更新了需求文档，就必须进入 `requirement_spec_confirmation`，要求用户明确确认文档是否正确。澄清问题的回答只用于补充需求，不能等同于对生成后文档的确认；只有用户确认当前版本后，节点才输出 `status = completed` 并继续进入 `project_planning`。若用户补充后仍存在重要缺口，模型可以再次发起一次集中澄清。用户提出修改意见时，需要重新生成文档，并再次经过确认。
 
-等待 `requirement_spec_confirmation` 时，AG-UI workflow payload 通过只读 `confirmationArtifact` 返回当前 `requirement-spec.md` 的文件名、路径和完整 Markdown 正文，供确认卡片展示。普通需求澄清不返回该正文；用户仍通过原确认输入框提交确认或修改意见，前端不提供额外的文档编辑/写回协议。
+等待 `requirement_spec_confirmation` 时，AG-UI workflow payload 通过只读 `confirmationArtifact` 返回当前 `requirement-spec.md` 的文件名、路径和完整 Markdown 正文，供确认卡片展示。普通需求澄清不返回该正文。首页独立规划流程还会从公开 `requirement_spec` 状态生成结构化概览；用户可在概览右上角进入编辑态，修改应用定位、页面、角色、核心业务流程和数据源。“保存并退出编辑”通过同一 AG-UI 端点的 `forwardedProps.requirementSpecDraft` 保存动作立即重写待确认 Markdown/JSON 并刷新确认卡，但保持 `pending_user_confirmation`；最终确认仍通过恢复请求的 `forwardedProps.editedRequirementSpec` 进入确认门禁。确认卡右下角按钮始终表示确认并继续，意见框通过独立的 `forwardedProps.requirementSpecFeedback` 保存为内部确认备注，不参与正负确认语义判断，也不会额外触发一轮需求修改。
 
-确认时以 Markdown 作为用户可读、可编辑的文档。如果用户在确认前直接修改了 RequirementSpec Markdown，节点必须先与当前结构化状态对比，以原 JSON 为基线同步 Markdown 中的业务变更并保留 Markdown 未表达的内部字段，然后更新内部 JSON；不得先重写 Markdown 或直接使用旧 JSON 继续。JSON 文件只供工作流节点读取，不作为前端可编辑产物展示。
+确认时以 Markdown 作为用户可读、可编辑的文档。概览编辑器保存时，后端只合并白名单可见字段，已有条目按稳定 id 保留隐藏结构，然后由同一份待确认 RequirementSpec 同时重写 `requirement-spec.md` 与 `requirement-spec.json`；该保存动作不等同于确认，也不允许进入 ProjectPlan。最终确认时再次以当前草稿为准同步并标记 confirmed。如果用户在确认前直接修改了 RequirementSpec Markdown，节点必须先与当前结构化状态对比，以原 JSON 为基线同步 Markdown 中的业务变更并保留 Markdown 未表达的内部字段，然后更新内部 JSON；不得先重写 Markdown 或直接使用旧 JSON 继续。JSON 文件只供工作流节点读取，不作为前端可编辑产物展示。
 
 当前等待/续跑机制是显式的后端推断续跑点，还不是 LangGraph 原生 `interrupt` resume。主 Graph 已接入 SQLite checkpointer，用于持久化 ProjectState、支持服务重启后的状态恢复和调试；但用户输入后的续跑路由仍由后端根据当前状态显式推断。后续如果切换到 LangGraph `interrupt` 和 command resume，应保持同样的原则：前端提交用户回答和 thread 标识，不硬编码后端阶段名。
 

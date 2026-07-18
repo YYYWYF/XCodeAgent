@@ -1,5 +1,6 @@
 import { CheckOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
+import { useProgressivePercent } from '../../hooks/useProgressivePercent'
 import { cx } from '../../utils'
 
 const { Text } = Typography
@@ -23,6 +24,14 @@ type Props = {
   title: string
 }
 
+// 为当前真实工作流阶段设置保守上限，只有后端完成节点后才允许跨入下一阶段。
+function progressCeiling(stage: string | undefined, target: number): number {
+  if (target >= 100) return 100
+  if (stage === 'requirements') return 33
+  if (stage === 'project_planning') return 97
+  return 16
+}
+
 // 使用原创建规划页面的动态视觉展示两节点进度、时间线与 AG-UI 实时消息。
 export default function ApplicationPlanningProgress({
   events,
@@ -31,7 +40,13 @@ export default function ApplicationPlanningProgress({
   title
 }: Props): JSX.Element {
   const current = events[events.length - 1]
-  const percent = current?.percent ?? 6
+  const targetPercent = current?.percent ?? 6
+  const activityKey = (streamingContent || '').length
+  const percent = useProgressivePercent(
+    targetPercent,
+    progressCeiling(current?.stage, targetPercent),
+    activityKey
+  )
   const streamLines = (streamingContent || '')
     .split('\n')
     .map((line) => line.trim())

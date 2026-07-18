@@ -1,4 +1,4 @@
-import { PlayCircleOutlined, RocketOutlined } from '@ant-design/icons'
+import { CheckCircleFilled, LockOutlined, PlayCircleOutlined, RocketOutlined } from '@ant-design/icons'
 import { Button, Radio, Skeleton, Tag, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { DevelopmentPlanningPageOption } from '../../typings'
@@ -10,29 +10,74 @@ const { Text, Title } = Typography
 type Props = {
   disabled: boolean
   loading: boolean
+  mode?: 'initial' | 'locked'
   onStart: (pageId: string, pageLabel: string, hasDetailPlan: boolean) => Promise<void>
   pages: DevelopmentPlanningPageOption[]
+  selectedPage?: DevelopmentPlanningPageOption
 }
 
-/** 通过全屏蒙层展示 ProjectPlan 页面概览，并让用户选择细节设计起点。 */
+/** 在首次进入或选择待设计页面时提供唯一的详细设计入口。 */
 export default function DetailConfirmationPageSelector({
   disabled,
   loading,
+  mode = 'initial',
   onStart,
-  pages
+  pages,
+  selectedPage: lockedPage
 }: Props): JSX.Element {
   const [selectedPageId, setSelectedPageId] = useState('')
   const selectedPage = useMemo(
-    () => pages.find((page) => page.pageId === selectedPageId),
-    [pages, selectedPageId]
+    () => lockedPage || pages.find((page) => page.key === selectedPageId),
+    [lockedPage, pages, selectedPageId]
   )
 
   // 页面清单刷新后保留有效选择，否则默认选择第一个页面。
   useEffect(() => {
-    if (!pages.some((page) => page.pageId === selectedPageId)) {
-      setSelectedPageId(pages[0]?.pageId || '')
+    if (!lockedPage && !pages.some((page) => page.key === selectedPageId)) {
+      setSelectedPageId(pages[0]?.key || '')
     }
-  }, [pages, selectedPageId])
+  }, [lockedPage, pages, selectedPageId])
+
+  if (mode === 'locked' && selectedPage) {
+    return (
+      <section className={cx('detail-page-selector', 'locked-mode')}>
+        <div className={cx('detail-page-selector-backdrop')} />
+        <main className={cx('detail-page-selector-panel', 'locked-panel')}>
+          <span className={cx('detail-page-selector-lock-icon')}><LockOutlined /></span>
+          <Text className={cx('detail-page-selector-eyebrow')}>DETAIL DESIGN REQUIRED</Text>
+          <Title level={3}>「{selectedPage.label}」尚未进行详细设计</Title>
+          <Text className={cx('detail-page-selector-locked-copy')} type="secondary">
+            为避免自由对话跳过页面设计，请先生成该页面的布局、状态、交互与验收标准。
+          </Text>
+          <div className={cx('detail-page-selector-target')}>
+            <div>
+              <Text strong>{selectedPage.label}</Text>
+              <Text code>{selectedPage.path}</Text>
+            </div>
+            <Text type="secondary">{selectedPage.purpose}</Text>
+          </div>
+          <Button
+            className={cx('detail-page-selector-action')}
+            disabled={disabled}
+            icon={<PlayCircleOutlined />}
+            loading={disabled}
+            onClick={() => void onStart(
+              selectedPage.pageId,
+              selectedPage.label,
+              Boolean(selectedPage.hasDetailPlan)
+            )}
+            size="large"
+            type="primary"
+          >
+            开始详细设计
+          </Button>
+          <Text className={cx('detail-page-selector-lock-hint')} type="secondary">
+            完成生成后将自动解锁当前对话区
+          </Text>
+        </main>
+      </section>
+    )
+  }
 
   return (
     <section className={cx('detail-page-selector')}>
@@ -42,7 +87,7 @@ export default function DetailConfirmationPageSelector({
           <span className={cx('detail-page-selector-logo')}><RocketOutlined /></span>
           <Text className={cx('detail-page-selector-eyebrow')}>PAGE DESIGN</Text>
           <Title level={2}>选择要开始设计的页面</Title>
-          <Text type="secondary">页面来自 ProjectPlan 的 frontend_pages。选择一个具体页面后开始生成。</Text>
+          <Text type="secondary">页面目录来自 RequirementSpec。选择一个页面，开始第一份详细设计。</Text>
         </header>
 
         {loading ? (
@@ -60,15 +105,17 @@ export default function DetailConfirmationPageSelector({
                 <span className={cx('detail-page-selector-path')}>{page.path}</span>
                 <span className={cx('detail-page-selector-purpose')}>{page.purpose}</span>
                 {page.hasDetailPlan ? (
-                  <Tag color="green">已有 plan</Tag>
+                  <Tag color="green"><CheckCircleFilled /> 已有 plan</Tag>
+                ) : page.designed ? (
+                  <Tag color="blue"><CheckCircleFilled /> 已设计</Tag>
                 ) : (
-                  <Tag>未生成</Tag>
+                  <Tag>待设计</Tag>
                 )}
               </Radio.Button>
             ))}
           </Radio.Group>
         ) : (
-          <Text type="secondary">ProjectPlan 的 frontend_pages 中暂无可设计页面。</Text>
+          <Text type="secondary">RequirementSpec 的 pages 中暂无可设计页面。</Text>
         )}
 
         <Button

@@ -2,6 +2,7 @@ from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import analyze_requirements_with_chat_model
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.state import ProjectState
+from app.services.requirement_spec import apply_requirement_spec_editor_changes
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload, clear_clarification
 from app.workspace.spec_documents import (
     edited_requirement_spec_markdown,
@@ -19,20 +20,36 @@ def requirements(state: ProjectState) -> dict:
         and existing_spec.get("confirmation_status") == "pending_user_confirmation"
         and _user_confirmed_requirement_spec(state.get("request", ""))
     ):
-        edited_markdown = edited_requirement_spec_markdown(state, existing_spec)
-        synchronized_spec = (
-            sync_requirement_spec_from_markdown(existing_spec, edited_markdown)
-            if edited_markdown is not None
-            else existing_spec
-        )
+        editor_changes = state.get("edited_requirement_spec")
+        if isinstance(editor_changes, dict):
+            synchronized_spec = apply_requirement_spec_editor_changes(
+                existing_spec,
+                editor_changes,
+            )
+            edited_markdown = None
+        else:
+            edited_markdown = edited_requirement_spec_markdown(state, existing_spec)
+            synchronized_spec = (
+                sync_requirement_spec_from_markdown(existing_spec, edited_markdown)
+                if edited_markdown is not None
+                else existing_spec
+            )
         spec = {
             **synchronized_spec,
             "clarification_questions": [],
             "clarification_status": "clear",
             "confirmation_status": "confirmed",
+            **(
+                {"confirmation_feedback": state["requirement_spec_feedback"].strip()}
+                if isinstance(state.get("requirement_spec_feedback"), str)
+                and state["requirement_spec_feedback"].strip()
+                else {}
+            ),
         }
         markdown_path = requirement_spec_markdown_path(state)
-        if markdown_path.is_file():
+        if isinstance(editor_changes, dict):
+            spec_path = write_requirement_spec_document(state, spec)
+        elif markdown_path.is_file():
             spec_path = str(markdown_path)
             write_requirement_spec_json(state, spec)
         else:
@@ -43,6 +60,8 @@ def requirements(state: ProjectState) -> dict:
             "requirement_spec": spec,
             "requirement_spec_path": spec_path,
             "requirement_spec_json_path": str(requirement_spec_json_path(state)),
+            "edited_requirement_spec": {},
+            "requirement_spec_feedback": "",
             "clarification": _requirement_spec_confirmed_payload(spec),
             "timeline": ["requirements"],
         }

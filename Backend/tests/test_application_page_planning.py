@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -19,6 +20,8 @@ from app.protocols.application_page_planning import (
     build_application_page_planning_ag_ui_stream,
 )
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
+from app.services.requirement_spec import create_requirement_spec
+from app.workspace.spec_documents import write_requirement_spec_document
 
 
 def _confirmed_state(workspace: Path) -> dict[str, object]:
@@ -83,6 +86,51 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
 
 
 class ApplicationPagePlanningTests(unittest.TestCase):
+    def test_requirement_spec_draft_save_uses_ag_ui_without_running_graph(self) -> None:
+        """草稿保存应返回完整 AG-UI 生命周期，并保持需求处于待确认状态。"""
+
+        spec = create_requirement_spec("创建任务中心")
+        spec["confirmation_status"] = "pending_user_confirmation"
+        edited = {
+            **spec,
+            "app_info": {**spec["app_info"], "name": "协作任务中心"},
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            write_requirement_spec_document({"workspace": directory}, spec)
+            stream = build_application_page_planning_ag_ui_stream(
+                graph=object(),
+                payload={
+                    "threadId": "draft-thread",
+                    "runId": "draft-run",
+                    "forwardedProps": {
+                        "requirementSpecDraft": {
+                            "action": "save",
+                            "workspaceRoot": directory,
+                            "spec": edited,
+                        }
+                    },
+                },
+            )
+
+            async def collect() -> str:
+                """消费测试事件流并合并为可断言文本。"""
+
+                return "".join([frame async for frame in stream])
+
+            frames = asyncio.run(collect())
+            saved = json.loads(
+                (Path(directory) / ".xcodeagent/specs/requirement-spec.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertIn("requirement-spec-draft", frames)
+        self.assertIn("RUN_STARTED", frames)
+        self.assertIn("RUN_FINISHED", frames)
+        self.assertEqual(saved["app_info"]["name"], "协作任务中心")
+        self.assertEqual(saved["confirmation_status"], "pending_user_confirmation")
+
     def test_creation_requirements_do_not_expose_clarification_tool(self) -> None:
         """新建应用两阶段门禁应直接生成 JSON，不为派生结构追加澄清。"""
 
@@ -200,6 +248,14 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(capability["customEventName"], "workflow-run")
         self.assertEqual(capability["phases"], ["requirements", "project_planning"])
         self.assertEqual(capability["confirmationArtifacts"], ["requirement_spec", "project_plan"])
+        self.assertEqual(
+            capability["editableArtifacts"]["requirement_spec"]["actions"],
+            ["save"],
+        )
+        self.assertEqual(
+            capability["editableArtifacts"]["requirement_spec"]["saveActionField"],
+            "forwardedProps.requirementSpecDraft",
+        )
         self.assertFalse(capability["writesApplicationJsonAfterConfirmation"])
         self.assertEqual(capability["artifactDirectories"], [".xcodeagent/specs", ".xcodeagent/plans"])
         self.assertEqual(capability["workspaceGate"], "planning-artifacts")

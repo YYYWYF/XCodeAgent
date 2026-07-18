@@ -9,6 +9,51 @@ from app.protocols.workflow.request import workflow_run_inputs
 
 
 class WorkflowRequestTests(unittest.TestCase):
+    def test_application_planning_forwards_edited_requirement_spec(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowScope": "application_planning",
+                    "editedRequirementSpec": {
+                        "app_info": {"name": "仓储管理应用"},
+                        "pages": [],
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["edited_requirement_spec"]["app_info"]["name"],
+            "仓储管理应用",
+        )
+
+    def test_application_planning_forwards_feedback_separately_from_confirmation(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowScope": "application_planning",
+                    "requirementSpecFeedback": "建议后续关注移动端适配。",
+                }
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["requirement_spec_feedback"],
+            "建议后续关注移动端适配。",
+        )
+
+    def test_main_workflow_ignores_edited_requirement_spec(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowScope": "main",
+                    "editedRequirementSpec": {"app_info": {"name": "不应接收"}},
+                }
+            }
+        )
+
+        self.assertNotIn("edited_requirement_spec", inputs["resume_values"])
+
     def test_normalizes_selected_skill_names_from_forwarded_props(self) -> None:
         inputs = workflow_run_inputs(
             {
@@ -354,7 +399,49 @@ class WorkflowRequestTests(unittest.TestCase):
             project_plan["frontend_pages"],
         )
 
-    def test_forwards_selectedPageId_to_detail_confirmation_state(self) -> None:
+    def test_selected_requirement_page_is_added_for_detail_design(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            plans_dir = workspace / ".xcodeagent" / "plans"
+            specs_dir = workspace / ".xcodeagent" / "specs"
+            plans_dir.mkdir(parents=True)
+            specs_dir.mkdir(parents=True)
+            (plans_dir / "project-plan.json").write_text(
+                json.dumps({"frontend_pages": []}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            requirement_page = {
+                "id": "inventory_page",
+                "name": "库存页面",
+                "path": "/inventory",
+                "module_id": "inventory",
+                "description": "查看和筛选库存。",
+            }
+            (specs_dir / "requirement-spec.json").write_text(
+                json.dumps({"pages": [requirement_page]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            inputs = workflow_run_inputs(
+                {
+                    "request": "开始设计库存页面",
+                    "forwardedProps": {
+                        "workspaceRoot": str(workspace),
+                        "selectedPageId": "inventory_page",
+                    },
+                }
+            )
+
+        self.assertEqual(
+            inputs["resume_values"]["frontend_pages"],
+            [requirement_page],
+        )
+        self.assertEqual(
+            inputs["resume_values"]["project_plan"]["frontend_pages"],
+            [requirement_page],
+        )
+
+    def test_forwards_selected_page_id_to_detail_confirmation_state(self) -> None:
         inputs = workflow_run_inputs(
             {
                 "request": "开始设计库存页面",

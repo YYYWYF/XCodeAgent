@@ -36,23 +36,28 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     pages = "\n".join(
         f"- `{page.get('path', '/')}` {page.get('name', page.get('id', '业务页面'))}："
         f"{page.get('description', '待补充页面说明')}"
+        f"{'；组件：' + '、'.join(str(item) for item in page.get('components', [])) if page.get('components') else ''}"
         for page in spec.get("pages", [])
         if isinstance(page, dict)
     )
     data_sources = "\n".join(
         f"- `{source.get('id', 'source')}` {source.get('name', '业务数据源')}"
         f"（{source.get('type', 'mock')}）：{source.get('description', '待补充数据源说明')}"
+        f"{'；实体：' + '、'.join(str(item) for item in source.get('entities', [])) if source.get('entities') else ''}"
         for source in spec.get("data_sources", [])
         if isinstance(source, dict)
     )
     roles = "\n".join(
         f"- `{role.get('id', 'user')}` {role.get('name', '用户')}："
         f"{role.get('description', '使用应用。')}"
+        f"{'；权限：' + '、'.join(str(item) for item in role.get('permissions', [])) if role.get('permissions') else ''}"
         for role in spec.get("user_roles", [])
         if isinstance(role, dict)
     )
     flows = "\n".join(
-        f"- {flow.get('name', '业务流程')}：{' → '.join(str(step) for step in flow.get('steps', []))}"
+        f"- {flow.get('name', '业务流程')}："
+        f"{flow.get('description', '') + '；' if flow.get('description') else ''}"
+        f"{' → '.join(str(step) for step in flow.get('steps', []))}"
         for flow in spec.get("business_flows", [])
         if isinstance(flow, dict)
     )

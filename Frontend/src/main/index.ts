@@ -33,43 +33,38 @@ function getWorkspaceApplicationFile(workspaceRoot: string): string {
   return path.join(workspaceRoot, '.xcodeagent', 'application.json');
 }
 
-/** 从 ProjectPlan 的 frontend_pages 生成工作台页面选择项。 */
-async function projectPlanPageOptions(
-  workspaceRoot: string,
-  value: unknown
-): Promise<Array<{
-  key: string
-  pageId: string
-  label: string
-  path: string
-  purpose: string
-  detailPlanStatus?: string
-  hasDetailPlan: boolean
-}>> {
+type WorkbenchPageOption = {
+  key: string;
+  pageId: string;
+  label: string;
+  path: string;
+  purpose: string;
+  designed: boolean;
+  detailPlanStatus?: string;
+  hasDetailPlan: boolean;
+};
+
+/** 从 RequirementSpec 的 pages 生成完整的工作台页面目录。 */
+function requirementSpecPageOptions(value: unknown): WorkbenchPageOption[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
-  const frontendPages = Array.isArray((value as Record<string, unknown>).frontend_pages)
-    ? (value as Record<string, unknown>).frontend_pages as unknown[]
+  const pages = Array.isArray((value as Record<string, unknown>).pages)
+    ? (value as Record<string, unknown>).pages as unknown[]
     : [];
-  const pageOptions = await Promise.all(frontendPages.map(async (page: unknown, index: number) => {
+  return pages.flatMap((page: unknown, index: number) => {
     if (!page || typeof page !== 'object' || Array.isArray(page)) return [];
     const record = page as Record<string, unknown>;
-    const pageId = String(record.pageId || '').trim();
+    const pageId = String(record.id || record.pageId || '').trim();
     if (!pageId) return [];
-    const detailDesign = record.detail_design && typeof record.detail_design === 'object' && !Array.isArray(record.detail_design)
-      ? record.detail_design as Record<string, unknown>
-      : {};
-    const hasDetailPlan = await pageDetailPlanExists(workspaceRoot, pageId, detailDesign);
     return [{
       key: pageId,
       pageId,
       label: String(record.name || pageId),
       path: String(record.path || '/'),
       purpose: String(record.description || record.name || `页面 ${index + 1}`),
-      detailPlanStatus: String(detailDesign.status || ''),
-      hasDetailPlan,
+      designed: false,
+      hasDetailPlan: false,
     }];
-  }));
-  return pageOptions.flat();
+  });
 }
 
 /** 将页面 id 转成与后端详情文件一致的安全文件名。 */
@@ -104,12 +99,65 @@ async function pageDetailPlanExists(
   return false;
 }
 
-/** 校验工作区 specs/plans 中两份已确认规划，并优先从根级 project_plan.json 读取页面。 */
+/** 从 ProjectPlan 中按页面标识收集已进入详细设计的页面。 */
+function projectPlanPages(value: unknown): Map<string, Record<string, unknown>> {
+  const result = new Map<string, Record<string, unknown>>();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+  const frontendPages = Array.isArray((value as Record<string, unknown>).frontend_pages)
+    ? (value as Record<string, unknown>).frontend_pages as unknown[]
+    : [];
+  frontendPages.forEach((page) => {
+    if (!page || typeof page !== 'object' || Array.isArray(page)) return;
+    const record = page as Record<string, unknown>;
+    const pageId = String(record.id || record.pageId || '').trim();
+    if (pageId) result.set(pageId, record);
+  });
+  return result;
+}
+
+/** 从 ProjectPlan 生成兼容旧工作区的页面目录。 */
+function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
+  return [...projectPlanPages(value).entries()].map(([pageId, record], index) => ({
+    key: pageId,
+    pageId,
+    label: String(record.name || pageId),
+    path: String(record.path || '/'),
+    purpose: String(record.description || record.name || `页面 ${index + 1}`),
+    designed: true,
+    detailPlanStatus: '',
+    hasDetailPlan: false,
+  }));
+}
+
+/** 合并 RequirementSpec 页面目录、ProjectPlan 设计状态与外置详情文件。 */
+async function mergeWorkbenchPageStatus(
+  workspaceRoot: string,
+  pages: WorkbenchPageOption[],
+  plannedPages: Map<string, Record<string, unknown>>
+): Promise<WorkbenchPageOption[]> {
+  return Promise.all(pages.map(async (page) => {
+    const plannedPage = plannedPages.get(page.pageId);
+    const detailDesign = plannedPage?.detail_design
+      && typeof plannedPage.detail_design === 'object'
+      && !Array.isArray(plannedPage.detail_design)
+      ? plannedPage.detail_design as Record<string, unknown>
+      : {};
+    const hasDetailPlan = await pageDetailPlanExists(workspaceRoot, page.pageId, detailDesign);
+    return {
+      ...page,
+      designed: Boolean(plannedPage) || hasDetailPlan,
+      detailPlanStatus: String(detailDesign.status || ''),
+      hasDetailPlan,
+    };
+  }));
+}
+
+/** 校验正式规划产物，并合并完整页面目录与详细设计状态。 */
 async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise<{
   ready: boolean;
   missing: string[];
   invalid: string[];
-  pages: Array<{ key: string; pageId: string; label: string; path: string; purpose: string; detailPlanStatus?: string; hasDetailPlan: boolean }>;
+  pages: WorkbenchPageOption[];
 }> {
   const artifactRoot = path.join(workspaceRoot, '.xcodeagent');
   const artifacts = [
@@ -120,16 +168,9 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   ];
   const missing: string[] = [];
   const invalid: string[] = [];
-  let pages: Array<{ key: string; pageId: string; label: string; path: string; purpose: string; detailPlanStatus?: string; hasDetailPlan: boolean }> = [];
-
-  try {
-    const projectPlan = JSON.parse(
-      await fs.readFile(path.join(artifactRoot, 'project_plan.json'), 'utf8')
-    );
-    pages = await projectPlanPageOptions(workspaceRoot, projectPlan);
-  } catch {
-    // 根级页面规划不存在或无效时，继续兼容正式 plans 目录中的 ProjectPlan。
-  }
+  let pages: WorkbenchPageOption[] = [];
+  let plannedPages = new Map<string, Record<string, unknown>>();
+  let projectPlanLoaded = false;
 
   for (const artifact of artifacts) {
     const artifactPath = path.join(artifactRoot, artifact.relativePath);
@@ -141,8 +182,12 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
       }
       if (artifact.format === 'json') {
         const value = JSON.parse(content);
-        if (artifact.relativePath === 'plans/project-plan.json' && !pages.length) {
-          pages = await projectPlanPageOptions(workspaceRoot, value);
+        if (artifact.relativePath === 'specs/requirement-spec.json') {
+          pages = requirementSpecPageOptions(value);
+        }
+        if (artifact.relativePath === 'plans/project-plan.json') {
+          plannedPages = projectPlanPages(value);
+          projectPlanLoaded = true;
         }
         if (!value || typeof value !== 'object' || Array.isArray(value) || value.confirmation_status !== 'confirmed') {
           invalid.push(artifact.relativePath);
@@ -157,14 +202,33 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
 
   if (!pages.length) {
     try {
-      const fallbackPlan = JSON.parse(
-        await fs.readFile(path.join(workspaceRoot, 'plans', 'project-plan.json'), 'utf8')
+      const fallbackSpec = JSON.parse(
+        await fs.readFile(path.join(workspaceRoot, 'specs', 'requirement-spec.json'), 'utf8')
       );
-      pages = await projectPlanPageOptions(workspaceRoot, fallbackPlan);
+      pages = requirementSpecPageOptions(fallbackSpec);
     } catch {
       // 兼容路径不存在时保持正式 .xcodeagent 产物的检查结果。
     }
   }
+
+  if (!projectPlanLoaded) {
+    for (const relativePath of ['project_plan.json', '../plans/project-plan.json']) {
+      try {
+        const fallbackPlan = JSON.parse(
+          await fs.readFile(path.join(artifactRoot, relativePath), 'utf8')
+        );
+        plannedPages = projectPlanPages(fallbackPlan);
+        if (plannedPages.size > 0) break;
+      } catch {
+        // 逐个尝试历史 ProjectPlan 路径，均不存在时表示尚无页面详细设计。
+      }
+    }
+  }
+
+  if (!pages.length && plannedPages.size > 0) {
+    pages = projectPlanPageOptions({ frontend_pages: [...plannedPages.values()] });
+  }
+  pages = await mergeWorkbenchPageStatus(workspaceRoot, pages, plannedPages);
 
   return { ready: missing.length === 0 && invalid.length === 0, missing, invalid, pages };
 }

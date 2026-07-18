@@ -18,6 +18,8 @@ export type SendWorkflowMessageOptions = {
   editorMode: EditorMode
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
+  editedRequirementSpec?: Record<string, unknown>
+  requirementSpecFeedback?: string
   originalRequest?: string
   selectedSkillNames?: string[]
   selectedPageId?: string
@@ -39,6 +41,8 @@ export function buildWorkflowForwardedProps(
     editorMode: options.editorMode,
     application: options.application,
     clarificationAnswers: options.clarificationAnswers,
+    editedRequirementSpec: options.editedRequirementSpec,
+    requirementSpecFeedback: options.requirementSpecFeedback,
     originalRequest: options.originalRequest,
     selectedSkillNames: options.selectedSkillNames,
     selectedPageId: options.selectedPageId,
@@ -216,21 +220,25 @@ export class AgUiChatSession {
   }
 }
 
-function mergeProcessStep(steps: ProcessStepRecord[], step: ProcessStepRecord): ProcessStepRecord[] {
+function mergeProcessStep(
+  steps: ProcessStepRecord[],
+  step: ProcessStepRecord
+): ProcessStepRecord[] {
   const existingIndex = steps.findIndex((item) => item.id === step.id)
   const existing = existingIndex >= 0 ? steps[existingIndex] : undefined
   const mergedStep = {
     ...existing,
     ...step,
-    detail: step.appendDetail ? `${existing?.detail || ''}${step.detail}`.slice(-24_000) : step.detail,
+    detail: step.appendDetail
+      ? `${existing?.detail || ''}${step.detail}`.slice(-24_000)
+      : step.detail,
     appendDetail: false,
     sequence: existing?.sequence ?? step.sequence
   }
-  const next = existingIndex < 0
-    ? [...steps, mergedStep]
-    : steps.map((item, index) => (
-        index === existingIndex ? mergedStep : item
-      ))
+  const next =
+    existingIndex < 0
+      ? [...steps, mergedStep]
+      : steps.map((item, index) => (index === existingIndex ? mergedStep : item))
   return next.sort((left, right) => left.sequence - right.sequence)
 }
 
@@ -378,7 +386,6 @@ function readCodeChangesPayload(value: unknown): WorkspaceCodeChangeSet | undefi
   if (!codeChanges.summary || typeof codeChanges.summary !== 'object') return undefined
   return codeChanges as WorkspaceCodeChangeSet
 }
-
 
 function readWorkflowEvent(value: unknown): WorkflowEvent {
   if (!value || typeof value !== 'object') return { type: 'workflow.event' }

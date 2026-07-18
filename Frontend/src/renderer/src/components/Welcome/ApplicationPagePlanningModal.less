@@ -1017,6 +1017,31 @@
   }
 }
 
+.@{class-prefix}-planning-artifact-card > header > .@{class-prefix}-planning-artifact-actions {
+  display: flex;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-planning-artifact-edit.ant-btn {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--modal-border-strong);
+  border-radius: 8px;
+  color: var(--modal-text);
+  background: var(--modal-bg);
+
+  &:hover,
+  &:focus {
+    border-color: rgba(139, 92, 246, 0.45);
+    color: var(--modal-accent);
+    background: rgba(139, 92, 246, 0.09);
+  }
+}
+
 .@{class-prefix}-planning-artifact-content {
   max-height: 430px;
   padding: 20px;

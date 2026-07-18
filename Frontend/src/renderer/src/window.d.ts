@@ -43,6 +43,7 @@ declare global {
           purpose: string;
           detailPlanStatus?: string;
           hasDetailPlan: boolean;
+          designed: boolean;
         }>;
       }>;
       };

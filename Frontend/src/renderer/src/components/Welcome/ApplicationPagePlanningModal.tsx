@@ -9,7 +9,8 @@ import type {
 } from '../../typings'
 import {
   buildApplicationPlanningRequest,
-  createApplicationPlanningSession
+  createApplicationPlanningSession,
+  saveRequirementSpecDraft
 } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { cx } from '../../utils'
@@ -42,7 +43,10 @@ type Props = {
 
 const phaseOrder = ['requirements', 'project_planning']
 
-const phaseProgress: Record<string, { active: number; complete: number; message: string; title: string }> = {
+const phaseProgress: Record<
+  string,
+  { active: number; complete: number; message: string; title: string }
+> = {
   requirements: {
     active: 18,
     complete: 34,
@@ -58,12 +62,27 @@ const phaseProgress: Record<string, { active: number; complete: number; message:
 }
 
 // 从 Workflow 公开状态中读取 specs/plans 产物校验结果。
-function workflowConfirmation(workflow?: WorkflowRunPayload): ApplicationPlanningConfirmation | undefined {
+function workflowConfirmation(
+  workflow?: WorkflowRunPayload
+): ApplicationPlanningConfirmation | undefined {
   for (const source of [workflow?.result, workflow?.state]) {
     const value = source?.application_planning_confirmation
     if (value && typeof value === 'object') return value as ApplicationPlanningConfirmation
   }
   return undefined
+}
+
+// 把后端保存后的 RequirementSpec 和 Markdown 正文合并回当前确认卡。
+function withSavedRequirementSpec(
+  workflow: WorkflowRunPayload,
+  saved: Awaited<ReturnType<typeof saveRequirementSpecDraft>>
+): WorkflowRunPayload {
+  return {
+    ...workflow,
+    confirmationArtifact: saved.artifact,
+    state: { ...workflow.state, requirement_spec: saved.requirementSpec },
+    result: { ...workflow.result, requirement_spec: saved.requirementSpec }
+  }
 }
 
 // 根据当前阶段计算两步规划条的高亮位置。
@@ -85,9 +104,10 @@ function workflowProgressEvents(workflow?: WorkflowRunPayload): ApplicationPlann
       stage,
       percent: completed ? meta.complete : meta.active,
       message: completed ? `${meta.title.replace('正在', '')}已完成` : meta.message,
-      detail: index === currentIndex && workflow.summary.message
-        ? String(workflow.summary.message)
-        : undefined
+      detail:
+        index === currentIndex && workflow.summary.message
+          ? String(workflow.summary.message)
+          : undefined
     }
   })
 }
@@ -120,20 +140,25 @@ export default function ApplicationPagePlanningModal({
   const [error, setError] = useState('')
   const progressCopy = workflowProgressCopy(workflow)
 
-  const settingsInitialValues = useMemo<SettingsValues>(() => ({
-    appName: application.appName,
-    appIcon: application.appIcon,
-    layout: application.layout,
-    auth: application.auth,
-    track: application.track,
-    apiTrack: application.apiTrack
-  }), [application])
+  const settingsInitialValues = useMemo<SettingsValues>(
+    () => ({
+      appName: application.appName,
+      appIcon: application.appIcon,
+      layout: application.layout,
+      auth: application.auth,
+      track: application.track,
+      apiTrack: application.apiTrack
+    }),
+    [application]
+  )
 
   // 运行初始或恢复轮次，并在项目规划确认后直接打开工作台。
   const runPlanning = async (
     messageText: string,
     answers?: WorkflowClarificationAnswers,
-    resumeState?: WorkflowRunPayload
+    resumeState?: WorkflowRunPayload,
+    editedRequirementSpec?: Record<string, unknown>,
+    requirementSpecFeedback?: string
   ): Promise<void> => {
     if (!application.workspaceRoot) return
     setRunning(true)
@@ -143,6 +168,8 @@ export default function ApplicationPagePlanningModal({
       const result = await session.sendMessage(messageText, {
         application,
         clarificationAnswers: answers,
+        editedRequirementSpec,
+        requirementSpecFeedback,
         editorMode: 'frontend',
         originalRequest,
         resumeState,
@@ -177,9 +204,39 @@ export default function ApplicationPagePlanningModal({
   // 提交当前确认卡答案，并由后端从公开状态推断恢复节点。
   const handleSubmitClarification = (
     currentWorkflow: WorkflowRunPayload,
-    answers: WorkflowClarificationAnswers
+    answers: WorkflowClarificationAnswers,
+    editedRequirementSpec?: Record<string, unknown>,
+    requirementSpecFeedback?: string
   ): void => {
-    void runPlanning('请根据本轮确认继续创建规划。', answers, currentWorkflow)
+    void runPlanning(
+      '请根据本轮确认继续创建规划。',
+      answers,
+      currentWorkflow,
+      editedRequirementSpec,
+      requirementSpecFeedback
+    )
+  }
+
+  // 保存需求编辑草稿并刷新当前确认卡，不确认文档也不继续规划。
+  const handleSaveRequirementSpec = async (
+    currentWorkflow: WorkflowRunPayload,
+    spec: Record<string, unknown>
+  ): Promise<Record<string, unknown> | undefined> => {
+    if (!application.workspaceRoot) return undefined
+    try {
+      const saved = await saveRequirementSpecDraft(
+        application.workspaceRoot,
+        spec,
+        currentWorkflow.threadId || threadId
+      )
+      setWorkflow((current) => (current ? withSavedRequirementSpec(current, saved) : current))
+      message.success('需求文档修改已同步到 Markdown')
+      return saved.requirementSpec
+    } catch (reason) {
+      if (isAuthenticationFailure(reason)) return undefined
+      message.error(formatError(reason, '保存需求文档失败'))
+      return undefined
+    }
   }
 
   // 验证并持久化规划期间修改的应用基础设置。
@@ -214,7 +271,12 @@ export default function ApplicationPagePlanningModal({
       open
       title={
         <div className={cx('page-planning-title')}>
-          <Button className={cx('page-planning-title-back')} icon={<LeftOutlined />} onClick={handleCancel} type="text">
+          <Button
+            className={cx('page-planning-title-back')}
+            icon={<LeftOutlined />}
+            onClick={handleCancel}
+            type="text"
+          >
             返回
           </Button>
           <span className={cx('page-planning-title-divider')} />
@@ -232,7 +294,15 @@ export default function ApplicationPagePlanningModal({
 
       {error ? (
         <Result
-          extra={<Button icon={<ReloadOutlined />} onClick={() => void runPlanning(originalRequest)} type="primary">重试</Button>}
+          extra={
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => void runPlanning(originalRequest)}
+              type="primary"
+            >
+              重试
+            </Button>
+          }
           status="error"
           subTitle={error}
           title="规划流程暂时中断"
@@ -252,6 +322,7 @@ export default function ApplicationPagePlanningModal({
           {!running && workflow ? (
             <ApplicationPlanningQuestionPanel
               disabled={running}
+              onSaveRequirementSpec={handleSaveRequirementSpec}
               onSubmit={handleSubmitClarification}
               workflow={workflow}
             />
@@ -260,21 +331,45 @@ export default function ApplicationPagePlanningModal({
       )}
 
       <Collapse className={cx('page-planning-settings')} ghost>
-        <Collapse.Panel header={<span className={cx('page-planning-settings-label')}><SettingOutlined />设置</span>} key="settings">
+        <Collapse.Panel
+          header={
+            <span className={cx('page-planning-settings-label')}>
+              <SettingOutlined />
+              设置
+            </span>
+          }
+          key="settings"
+        >
           <Form form={settingsForm} initialValues={settingsInitialValues} layout="vertical">
-            <Form.Item label="应用名称" name="appName" rules={[{ required: true, message: '请输入应用名称' }]}>
+            <Form.Item
+              label="应用名称"
+              name="appName"
+              rules={[{ required: true, message: '请输入应用名称' }]}
+            >
               <Input />
             </Form.Item>
             <Form.Item label="导航布局" name={['layout', 'type']}>
-              <Select options={[
-                { label: '侧边导航', value: 'side' },
-                { label: '顶部导航', value: 'top' },
-                { label: '混合导航', value: 'mix' }
-              ]} />
+              <Select
+                options={[
+                  { label: '侧边导航', value: 'side' },
+                  { label: '顶部导航', value: 'top' },
+                  { label: '混合导航', value: 'mix' }
+                ]}
+              />
             </Form.Item>
-            <Form.Item label="启用认证" name={['auth', 'enable']} valuePropName="checked"><Switch /></Form.Item>
-            <Form.Item label="启用埋点" name={['track', 'enable']} valuePropName="checked"><Switch /></Form.Item>
-            <Button loading={savingSettings} onClick={() => void handleSaveSettings()} type="primary">保存设置</Button>
+            <Form.Item label="启用认证" name={['auth', 'enable']} valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item label="启用埋点" name={['track', 'enable']} valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Button
+              loading={savingSettings}
+              onClick={() => void handleSaveSettings()}
+              type="primary"
+            >
+              保存设置
+            </Button>
           </Form>
         </Collapse.Panel>
       </Collapse>

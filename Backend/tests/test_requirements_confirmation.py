@@ -8,8 +8,10 @@ from unittest.mock import patch
 
 from app.graph.nodes.requirements import requirements
 from app.services.requirement_spec import (
+    SaveRequirementSpecDraftRequest,
     create_requirement_spec,
     merge_clarification_answers_into_spec,
+    save_requirement_spec_draft,
 )
 from app.tools.ask_user import clear_clarification
 from app.workspace.spec_documents import write_requirement_spec_document
@@ -128,8 +130,122 @@ class RequirementsConfirmationTests(unittest.TestCase):
             result["requirement_spec"]["confirmation_status"],
             "confirmed",
         )
+
+    def test_confirmation_feedback_is_saved_without_blocking_confirmation(self) -> None:
+        """意见应作为内部确认备注保存，不得被解释为重新修改需求。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        spec["confirmation_status"] = "pending_user_confirmation"
+        with tempfile.TemporaryDirectory() as workspace:
+            result = requirements(
+                {
+                    "request": "正确，继续规划",
+                    "workspace": workspace,
+                    "requirement_spec": spec,
+                    "requirement_spec_feedback": "建议后续补充移动端说明。",
+                    "timeline": [],
+                }
+            )
+            internal_json = json.loads(
+                Path(result["requirement_spec_json_path"]).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(
+            result["requirement_spec"]["confirmation_feedback"],
+            "建议后续补充移动端说明。",
+        )
+        self.assertEqual(
+            internal_json["confirmation_feedback"],
+            "建议后续补充移动端说明。",
+        )
+        self.assertEqual(result["requirement_spec_feedback"], "")
+
+    def test_summary_editor_updates_json_and_markdown_before_confirmation(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+        spec["confirmation_status"] = "pending_user_confirmation"
+        edited = {
+            **spec,
+            "app_info": {**spec["app_info"], "name": "仓储管理应用"},
+            "pages": [
+                {
+                    **spec["pages"][0],
+                    "name": "库存总览",
+                    "description": "查看全部仓库的库存与预警。",
+                    "components": ["库存预警卡片"],
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            state = {"workspace": workspace}
+            markdown_path = Path(write_requirement_spec_document(state, spec))
+            result = requirements(
+                {
+                    "request": "正确，继续规划",
+                    "workspace": workspace,
+                    "requirement_spec": spec,
+                    "requirement_spec_path": str(markdown_path),
+                    "edited_requirement_spec": edited,
+                    "timeline": [],
+                }
+            )
+            markdown = markdown_path.read_text(encoding="utf-8")
+            internal_json = json.loads(
+                Path(result["requirement_spec_json_path"]).read_text(encoding="utf-8")
+            )
+
+        self.assertIn("# 仓储管理应用需求 Spec", markdown)
+        self.assertIn("库存总览", markdown)
+        self.assertIn("组件：库存预警卡片", markdown)
+        self.assertEqual(internal_json["app_info"]["name"], "仓储管理应用")
+        self.assertEqual(internal_json["pages"][0]["name"], "库存总览")
+        self.assertEqual(internal_json["confirmation_status"], "confirmed")
+        self.assertEqual(result["edited_requirement_spec"], {})
         self.assertEqual(result["requirement_spec"]["clarification_questions"], [])
         self.assertEqual(result["requirement_spec"]["clarification_status"], "clear")
+
+    def test_summary_editor_can_save_markdown_without_confirming(self) -> None:
+        """退出编辑时应同步 Markdown/JSON，但不能越过需求确认门禁。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        spec["confirmation_status"] = "pending_user_confirmation"
+        edited = {
+            **spec,
+            "app_info": {**spec["app_info"], "name": "仓储运营中心"},
+            "pages": [
+                {
+                    **spec["pages"][0],
+                    "name": "仓储总览",
+                    "description": "查看仓储运营指标。",
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            state = {"workspace": workspace}
+            write_requirement_spec_document(state, spec)
+            saved = save_requirement_spec_draft(
+                SaveRequirementSpecDraftRequest.model_validate(
+                    {
+                        "action": "save",
+                        "workspaceRoot": workspace,
+                        "spec": edited,
+                    }
+                )
+            )
+            markdown = Path(saved["artifact"]["path"]).read_text(encoding="utf-8")
+            internal_json = json.loads(
+                (Path(workspace) / ".xcodeagent/specs/requirement-spec.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertIn("# 仓储运营中心需求 Spec", markdown)
+        self.assertIn("仓储总览", markdown)
+        self.assertEqual(saved["requirementSpec"]["confirmation_status"], "pending_user_confirmation")
+        self.assertEqual(internal_json["confirmation_status"], "pending_user_confirmation")
+        self.assertEqual(saved["artifact"]["content"], markdown)
 
     def test_generated_spec_requires_confirmation_after_clarification(self) -> None:
         existing_spec = create_requirement_spec("创建一个库存管理系统")

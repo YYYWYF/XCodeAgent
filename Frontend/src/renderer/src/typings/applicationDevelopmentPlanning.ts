@@ -10,6 +10,7 @@ export type DevelopmentPlanningPageOption = {
   purpose: string
   detailPlanStatus?: string
   hasDetailPlan?: boolean
+  designed: boolean
 }
 export type MenuDevelopmentPlan = { menuKey: string; menuLabel: string; tasks: ApplicationDevelopmentTask[] }
 

@@ -2,8 +2,29 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime
+from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.workspace.spec_documents import (
+    load_requirement_spec_json,
+    render_requirement_spec_markdown,
+    requirement_spec_json_path,
+    requirement_spec_markdown_path,
+    write_requirement_spec_document,
+)
+
+
+class SaveRequirementSpecDraftRequest(BaseModel):
+    """校验需求概览编辑器提交的独立保存动作。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    action: Literal["save"]
+    workspace_root: str = Field(alias="workspaceRoot", min_length=1)
+    spec: dict[str, Any]
 
 
 def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
@@ -638,3 +659,121 @@ def create_requirement_spec(
         "summary": source_text,
     }
     return spec
+
+
+_EDITOR_ITEM_FIELDS: dict[str, tuple[str, ...]] = {
+    "user_roles": ("id", "name", "description", "permissions"),
+    "pages": ("id", "name", "path", "module_id", "description", "components"),
+    "business_flows": ("id", "name", "description", "steps"),
+    "data_sources": ("id", "name", "type", "description", "entities"),
+}
+
+
+def apply_requirement_spec_editor_changes(
+    existing_spec: dict[str, Any],
+    edited_spec: dict[str, Any],
+) -> dict[str, Any]:
+    """将概览编辑器的可见字段合并回 RequirementSpec。
+
+    数组以用户提交为准，以支持新增和删除；已有条目依据 id
+    保留未在界面中展示的内部字段。
+    """
+
+    merged = deepcopy(existing_spec)
+    existing_app = (
+        existing_spec.get("app_info")
+        if isinstance(existing_spec.get("app_info"), dict)
+        else {}
+    )
+    edited_app = edited_spec.get("app_info")
+    if isinstance(edited_app, dict):
+        merged["app_info"] = {
+            **existing_app,
+            **{
+                key: str(edited_app.get(key) or "").strip()
+                for key in ("name", "target", "description", "summary")
+                if key in edited_app
+            },
+        }
+
+    for field_name, allowed_fields in _EDITOR_ITEM_FIELDS.items():
+        edited_items = edited_spec.get(field_name)
+        if not isinstance(edited_items, list):
+            continue
+        existing_items = {
+            str(item.get("id")): item
+            for item in existing_spec.get(field_name, [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        sanitized_items: list[dict[str, Any]] = []
+        for item in edited_items:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "").strip()
+            sanitized = deepcopy(existing_items.get(item_id, {}))
+            sanitized.update(
+                {
+                    key: deepcopy(item[key])
+                    for key in allowed_fields
+                    if key in item
+                }
+            )
+            sanitized_items.append(sanitized)
+        merged[field_name] = sanitized_items
+
+    request = str(existing_spec.get("source_request") or existing_spec.get("summary") or "")
+    normalized = create_requirement_spec(
+        request,
+        agent_note="synchronized from RequirementSpec summary editor",
+        agent_spec=merged,
+        authoritative_agent_spec=True,
+    )
+    normalized["editor_sync"] = {
+        "status": "synchronized",
+        "source": "requirement_spec_summary_editor",
+    }
+    return normalized
+
+
+def save_requirement_spec_draft(
+    request: SaveRequirementSpecDraftRequest,
+) -> dict[str, Any]:
+    """合并编辑器草稿并重写待确认的 RequirementSpec Markdown 与内部 JSON。"""
+
+    workspace = Path(request.workspace_root).expanduser().resolve()
+    if not workspace.is_dir():
+        raise ValueError("需求文档工作区不存在或不是目录。")
+
+    state: dict[str, Any] = {"workspace": str(workspace)}
+    json_path = requirement_spec_json_path(state)
+    if not json_path.is_file():
+        raise ValueError("尚未生成可编辑的 RequirementSpec JSON。")
+
+    existing_spec = load_requirement_spec_json(json_path)
+    if not isinstance(existing_spec, dict):
+        raise ValueError("RequirementSpec JSON 必须是对象。")
+    if existing_spec.get("confirmation_status") != "pending_user_confirmation":
+        raise ValueError("只有待确认的 RequirementSpec 才能保存编辑草稿。")
+
+    synchronized_spec = apply_requirement_spec_editor_changes(
+        existing_spec,
+        request.spec,
+    )
+    synchronized_spec.update(
+        {
+            "confirmation_status": "pending_user_confirmation",
+            "clarification_status": existing_spec.get("clarification_status", "clear"),
+            "clarification_questions": existing_spec.get("clarification_questions", []),
+        }
+    )
+    markdown_path = Path(write_requirement_spec_document(state, synchronized_spec))
+    return {
+        "requirementSpec": synchronized_spec,
+        "artifact": {
+            "id": "requirement_spec",
+            "name": markdown_path.name,
+            "path": str(requirement_spec_markdown_path(state)),
+            "format": "markdown",
+            "content": render_requirement_spec_markdown(synchronized_spec),
+        },
+    }

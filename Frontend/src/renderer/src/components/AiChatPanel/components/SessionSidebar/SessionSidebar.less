@@ -245,8 +245,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-direction: column;
-  gap: 9px;
+  flex-direction: row;
+  gap: 7px;
   padding: 18px;
   color: #5c5870;
   text-align: center;
@@ -261,9 +261,9 @@
   }
 
   .ant-typography {
-    max-width: 180px;
     color: inherit;
     font-size: 12px;
+    white-space: nowrap;
   }
 }
 
@@ -431,11 +431,28 @@
 }
 
 .@{class-prefix}-outline-label {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   font-size: 12px;
   line-height: 20px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.@{class-prefix}-outline-design-status {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  color: #8a6be0;
+  font-size: 9px;
+  line-height: 15px;
+  background: rgba(107, 60, 240, 0.08);
+  border-radius: 8px;
+
+  &.@{class-prefix}-designed {
+    color: #268b72;
+    background: rgba(38, 139, 114, 0.1);
+  }
 }
 
 .@{class-prefix}-outline-empty {
@@ -717,6 +734,15 @@
   .@{class-prefix}-outline-children::before,
   .@{class-prefix}-api-list::before { background: #303646; }
   .@{class-prefix}-outline-empty { color: #858c9d; }
+  .@{class-prefix}-outline-design-status {
+    color: #c3adff;
+    background: rgba(167, 130, 255, 0.13);
+
+    &.@{class-prefix}-designed {
+      color: #79d6bc;
+      background: rgba(80, 190, 158, 0.13);
+    }
+  }
   .@{class-prefix}-session-outline-lock {
     color: #c2c5cf;
     background: rgba(18, 23, 34, 0.68);

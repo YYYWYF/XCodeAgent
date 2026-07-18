@@ -10,6 +10,21 @@
   place-items: center;
 }
 
+.@{class-prefix}-detail-page-selector.@{class-prefix}-locked-mode {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  padding: 28px;
+  background: transparent;
+}
+
+.@{class-prefix}-detail-page-selector-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--wb-canvas) 58%, transparent);
+  backdrop-filter: blur(9px) saturate(0.82);
+}
+
 .@{class-prefix}-detail-page-selector-aurora {
   position: absolute;
   inset: 0;
@@ -32,6 +47,66 @@
 
   .ant-typography { color: var(--wb-text); }
   .ant-typography-secondary { color: var(--wb-text-secondary); }
+}
+
+.@{class-prefix}-detail-page-selector-panel.@{class-prefix}-locked-panel {
+  width: min(560px, 100%);
+  padding: 38px;
+  text-align: center;
+  border-color: color-mix(in srgb, var(--wb-accent) 38%, var(--wb-border));
+  box-shadow: 0 30px 100px rgba(20, 13, 45, 0.28);
+
+  h3 {
+    margin: 14px 0 8px;
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-detail-page-selector-lock-icon {
+  display: grid;
+  width: 62px;
+  height: 62px;
+  margin: 0 auto 18px;
+  color: #fff;
+  font-size: 24px;
+  background: linear-gradient(145deg, #7252de, #4aafa4);
+  border-radius: 20px;
+  box-shadow: 0 13px 34px rgba(88, 62, 190, 0.28);
+  place-items: center;
+}
+
+.@{class-prefix}-detail-page-selector-locked-copy {
+  display: block;
+  max-width: 440px;
+  margin: 0 auto;
+  line-height: 1.7;
+}
+
+.@{class-prefix}-detail-page-selector-target {
+  display: flex;
+  margin: 24px 0;
+  padding: 16px 18px;
+  text-align: left;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 14px;
+  flex-direction: column;
+  gap: 8px;
+
+  > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .ant-typography { margin: 0; }
+}
+
+.@{class-prefix}-detail-page-selector-lock-hint {
+  display: block;
+  margin-top: 12px;
+  font-size: 11px;
 }
 
 .@{class-prefix}-detail-page-selector-heading {
@@ -104,6 +179,21 @@
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.@{class-prefix}-detail-page-selector-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  margin-top: 10px;
+  padding: 2px 7px;
+  color: var(--wb-text-secondary);
+  font-size: 10px;
+  background: color-mix(in srgb, var(--wb-border) 48%, transparent);
+  border-radius: 9px;
+
+  .anticon { color: #2f9b7f; }
 }
 
 .ant-btn.@{class-prefix}-detail-page-selector-action {

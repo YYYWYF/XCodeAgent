@@ -97,11 +97,14 @@ export type WorkflowDetailReviewSubmission = {
   overall_note?: string
 }
 
+export type WorkflowRequirementSpecEdit = Record<string, unknown>
+
 export type WorkflowClarificationAnswer =
   | string
   | string[]
   | WorkflowClarificationChoiceAnswer
   | WorkflowDetailReviewSubmission
+  | WorkflowRequirementSpecEdit
 
 export type WorkflowClarificationAnswers = Record<
   string,

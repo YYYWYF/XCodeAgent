@@ -42,6 +42,18 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         payload.get("clarificationAnswers")
         or forwarded_props.get("clarificationAnswers")
     )
+    edited_requirement_spec = (
+        _optional_dict(payload.get("editedRequirementSpec"))
+        or _optional_dict(payload.get("edited_requirement_spec"))
+        or _optional_dict(forwarded_props.get("editedRequirementSpec"))
+        or _optional_dict(forwarded_props.get("edited_requirement_spec"))
+    )
+    requirement_spec_feedback = (
+        _optional_text(payload.get("requirementSpecFeedback"))
+        or _optional_text(payload.get("requirement_spec_feedback"))
+        or _optional_text(forwarded_props.get("requirementSpecFeedback"))
+        or _optional_text(forwarded_props.get("requirement_spec_feedback"))
+    )
     request = (
         _optional_text(payload.get("request"))
         or _optional_text(payload.get("message"))
@@ -95,7 +107,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     detail_review_submission = _detail_review_submission(clarification_answers)
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
+        or _optional_text(payload.get("selected_page_id"))
         or _optional_text(forwarded_props.get("selectedPageId"))
+        or _optional_text(forwarded_props.get("selected_page_id"))
     )
     workspace = (
         _optional_text(payload.get("workspace"))
@@ -116,7 +130,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     )
     resume_values = {
         **(
-            _project_plan_start_values(workspace)
+            _project_plan_start_values(workspace, selected_page_id=selectedPageId)
             if workflow_scope != "application_planning"
             else {}
         ),
@@ -129,6 +143,16 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
+        **(
+            {"edited_requirement_spec": edited_requirement_spec}
+            if edited_requirement_spec and workflow_scope == "application_planning"
+            else {}
+        ),
+        **(
+            {"requirement_spec_feedback": requirement_spec_feedback}
+            if requirement_spec_feedback and workflow_scope == "application_planning"
+            else {}
+        ),
     }
 
     return {
@@ -384,8 +408,12 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _project_plan_start_values(workspace: str) -> dict[str, Any]:
-    """从工作区正式计划文件加载主 Workflow 的完整计划和页面功能概览。"""
+def _project_plan_start_values(
+    workspace: str,
+    *,
+    selected_page_id: str = "",
+) -> dict[str, Any]:
+    """加载主 Workflow 计划，并按需接入 RequirementSpec 中的待设计页面。"""
 
     workspace_root = _workspace_root_path(workspace)
     if workspace_root is None:
@@ -404,15 +432,55 @@ def _project_plan_start_values(workspace: str) -> dict[str, Any]:
         if not isinstance(project_plan, dict):
             raise ValueError("project-plan.json 的根结构必须是 JSON 对象。")
         frontend_pages = project_plan.get("frontend_pages", [])
+        normalized_pages = (
+            [dict(page) for page in frontend_pages if isinstance(page, dict)]
+            if isinstance(frontend_pages, list)
+            else []
+        )
+        selected_page = _selected_requirement_page(
+            workspace_root,
+            selected_page_id,
+        )
+        if selected_page and not any(
+            str(page.get("id") or "") == selected_page_id
+            for page in normalized_pages
+        ):
+            normalized_pages.append(selected_page)
+            project_plan = {**project_plan, "frontend_pages": normalized_pages}
         return {
             "project_plan": project_plan,
-            "frontend_pages": (
-                frontend_pages if isinstance(frontend_pages, list) else []
-            ),
+            "frontend_pages": normalized_pages,
             "project_plan_path": _markdown_sibling_path(project_plan_path),
             "project_plan_json_path": str(project_plan_path),
         }
     return {}
+
+
+def _selected_requirement_page(
+    workspace_root: Path,
+    selected_page_id: str,
+) -> dict[str, Any] | None:
+    """从 RequirementSpec 读取用户选择的页面，供现有细节设计节点消费。"""
+
+    if not selected_page_id:
+        return None
+    for relative_path in (
+        Path(".xcodeagent/specs/requirement-spec.json"),
+        Path("specs/requirement-spec.json"),
+    ):
+        spec_path = workspace_root / relative_path
+        if not spec_path.is_file():
+            continue
+        requirement_spec = load_requirement_spec_json(spec_path)
+        pages = requirement_spec.get("pages", [])
+        if not isinstance(pages, list):
+            continue
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            if str(page.get("id") or "") == selected_page_id:
+                return dict(page)
+    return None
 
 
 def _debug_resume_values(

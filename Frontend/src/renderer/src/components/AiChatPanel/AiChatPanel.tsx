@@ -1,7 +1,7 @@
 import { HolderOutlined } from '@ant-design/icons'
 import { Alert } from 'antd'
 import type { ReactElement } from 'react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
 import type {
   ApplicationConfig,
@@ -70,11 +70,11 @@ export default function AiChatPanel({
   theme
 }: Props): ReactElement {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
-  const [activePageTitle, setActivePageTitle] = useState(
-    application.defaultPage || application.pages[0] || '页面'
-  )
+  const [activePageId, setActivePageId] = useState('')
   const [previewError, setPreviewError] = useState('')
-  const [detailGenerationFinished, setDetailGenerationFinished] = useState(false)
+  const [locallyDesignedPageIds, setLocallyDesignedPageIds] = useState<Set<string>>(
+    () => new Set()
+  )
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const { publishAiMessage } = useWorkbench()
   const {
@@ -160,13 +160,45 @@ export default function AiChatPanel({
   const copy = chatCopy[editorMode]
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
+  const activePageOption = useMemo(
+    () => developmentPlanningPages.find((page) => page.key === activePageId),
+    [activePageId, developmentPlanningPages]
+  )
+  const activePageTitle = activePageOption?.label
+    || application.defaultPage
+    || application.pages[0]
+    || '页面'
   const activePage = useMemo(
     () => findPageMenuItem(application.menus.items, activePageTitle),
     [activePageTitle, application.menus.items]
   )
+  const hasDesignedPage = developmentPlanningPages.some((page) => page.designed)
+  const initialPageSelectionRequired = !developmentPlanningReady
+    || (!hasDesignedPage && locallyDesignedPageIds.size === 0)
+  const activePageDesigned = Boolean(
+    activePageOption?.designed
+      || (activePageOption && locallyDesignedPageIds.has(activePageOption.key))
+  )
   const activeSessionUpdatedAt = sessions.find(
     (session) => session.id === activeSessionId
   )?.updatedAt
+
+  // 页面目录加载后优先定位首个已设计页面，避免再次显示首次选择界面。
+  useEffect(() => {
+    setActivePageId((currentPageId) => {
+      if (developmentPlanningPages.some((page) => page.key === currentPageId)) {
+        return currentPageId
+      }
+      return developmentPlanningPages.find((page) => page.designed)?.key
+        || developmentPlanningPages[0]?.key
+        || ''
+    })
+  }, [developmentPlanningPages])
+
+  // 切换工作区时清除仅用于当前运行周期的设计完成标记。
+  useEffect(() => {
+    setLocallyDesignedPageIds(new Set())
+  }, [application.workspaceRoot])
 
   /** 在右侧工作区打开当前页面预览。 */
   const handleOpenPage = (): void => {
@@ -212,6 +244,27 @@ export default function AiChatPanel({
     handleCreateSessionFromList()
   }
 
+  /** 从应用大纲切换页面，并确保页面状态在对话区域呈现。 */
+  const handlePageSelect = (page: DevelopmentPlanningPageOption): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    setActivePageId(page.key)
+  }
+
+  /** 启动当前页面的详细设计，并在本次工作台会话中解锁其对话区域。 */
+  const handleStartPageDesign = async (
+    pageId: string,
+    pageLabel: string,
+    hasDetailPlan: boolean
+  ): Promise<void> => {
+    setActivePageId(pageId)
+    const started = await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan)
+    if (started) {
+      setLocallyDesignedPageIds((current) => new Set(current).add(pageId))
+    }
+  }
+
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
     setActiveView('chat')
     await handleOpenSession(sessionId)
@@ -234,7 +287,7 @@ export default function AiChatPanel({
           application={application}
           deletingSessionId={deletingSessionId}
           loadingSessions={loadingSessions}
-          outlineLocked={false}
+          outlineLocked={initialPageSelectionRequired}
           onCreateSession={handleCreateChatSession}
           onDeleteSession={handleDeleteSession}
           onOpenSession={handleOpenChatSession}
@@ -242,12 +295,13 @@ export default function AiChatPanel({
             if (event.key === 'Enter' || event.key === ' ') setActiveView('chat')
             handleOpenSessionKeyDown(event, sessionId)
           }}
-          onPageSelect={setActivePageTitle}
+          onPageSelect={handlePageSelect}
           onReturnWelcome={onReturnWelcome}
           onShowFiles={handleShowFiles}
           onShowSettings={handleShowSettings}
           onShowSkills={handleShowSkills}
           pages={developmentPlanningPages}
+          selectedPageId={activePageId}
           filesActive={activeView === 'files'}
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
@@ -263,16 +317,12 @@ export default function AiChatPanel({
           <AgentFilesPage />
         ) : activeView === 'settings' ? (
           <SettingsPage application={application} onSaved={onApplicationUpdate} />
-        ) : !detailGenerationFinished ? (
+        ) : initialPageSelectionRequired ? (
           <div className={cx('ai-chat-main')}>
             <DetailConfirmationPageSelector
               disabled={loading || workspaceBusy}
               loading={!developmentPlanningReady}
-              onStart={async (pageId, pageLabel, hasDetailPlan) => {
-                setActivePageTitle(pageLabel)
-                await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan)
-                setDetailGenerationFinished(true)
-              }}
+              onStart={handleStartPageDesign}
               pages={developmentPlanningPages}
             />
           </div>
@@ -312,12 +362,12 @@ export default function AiChatPanel({
             />
 
             <PageContextHeader
-              description={activePage?.purpose || application.senario || '当前应用页面'}
+              description={activePageOption?.purpose || activePage?.purpose || application.senario || '当前应用页面'}
               keyFeatures={activePage?.keyFeatures || []}
               lastAnalyzedAt={activeSessionUpdatedAt}
               onOpenFullscreenPage={handleOpenFullscreenPreview}
               onOpenPage={handleOpenPage}
-              pagePath={activePage?.path || '/'}
+              pagePath={activePageOption?.path || activePage?.path || '/'}
               pageTitle={activePageTitle}
               previewAvailable={showPreviewActions}
               theme={theme}
@@ -358,6 +408,17 @@ export default function AiChatPanel({
               workspaceBusy={workspaceBusy}
               workspaceRoot={workspaceRoot}
             />
+
+            {activePageOption && !activePageDesigned ? (
+              <DetailConfirmationPageSelector
+                disabled={loading || workspaceBusy}
+                loading={false}
+                mode="locked"
+                onStart={handleStartPageDesign}
+                pages={developmentPlanningPages}
+                selectedPage={activePageOption}
+              />
+            ) : null}
           </div>
         )}
       </div>

@@ -58,12 +58,13 @@ type SessionSidebarProps = {
   onOpenSession: (sessionId: string) => Promise<void>
   onOpenSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>, sessionId: string) => void
   outlineLocked: boolean
-  onPageSelect: (label: string) => void
+  onPageSelect: (page: DevelopmentPlanningPageOption) => void
   onReturnWelcome: () => void
   onShowFiles: () => void
   onShowSettings: () => void
   onShowSkills: () => void
   pages: DevelopmentPlanningPageOption[]
+  selectedPageId: string
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
@@ -73,9 +74,10 @@ type SessionSidebarProps = {
 }
 
 type OutlineRowProps = {
+  designed: boolean
   item: ApplicationMenuItem
   level: number
-  onSelect: (key: string, label: string) => void
+  onSelect: (key: string) => void
   selectedKey: string
   visibleKeys: Set<string>
 }
@@ -88,7 +90,8 @@ const API_ITEMS = [
   { method: 'DELETE', path: '/api/leave/applications/{id}' }
 ]
 
-function OutlineRow({ item, level, onSelect, selectedKey, visibleKeys }: OutlineRowProps) {
+/** 渲染单个页面目录节点，并展示其详细设计状态。 */
+function OutlineRow({ designed, item, level, onSelect, selectedKey, visibleKeys }: OutlineRowProps) {
   const [expanded, setExpanded] = useState(true)
   const children = item.children?.filter((child) => visibleKeys.has(child.key)) || []
   const isFolder = item.type === 'menu' || children.length > 0
@@ -102,7 +105,7 @@ function OutlineRow({ item, level, onSelect, selectedKey, visibleKeys }: Outline
         className={cx('outline-row', selected && 'selected')}
         onClick={() => {
           if (isFolder) setExpanded((current) => !current)
-          else onSelect(item.key, item.label)
+          else onSelect(item.key)
         }}
         style={{ '--outline-level': level } as React.CSSProperties}
         type="button"
@@ -114,11 +117,17 @@ function OutlineRow({ item, level, onSelect, selectedKey, visibleKeys }: Outline
           {isFolder ? <FolderOpenOutlined /> : <FileTextOutlined />}
         </span>
         <span className={cx('outline-label')}>{item.label}</span>
+        {!isFolder ? (
+          <span className={cx('outline-design-status', designed ? 'designed' : 'undesign')}>
+            {designed ? '已设计' : '待设计'}
+          </span>
+        ) : null}
       </button>
       {isFolder && expanded && children.length > 0 ? (
         <div className={cx('outline-children')}>
           {children.map((child) => (
             <OutlineRow
+              designed={designed}
               item={child}
               key={child.key}
               level={level + 1}
@@ -184,6 +193,7 @@ export default function SessionSidebar({
   onShowSkills,
   outlineLocked,
   pages,
+  selectedPageId,
   settingsActive,
   skillsActive,
   workspaceRoot
@@ -206,15 +216,7 @@ export default function SessionSidebar({
     purpose: page.purpose,
     keyFeatures: []
   })), [pages])
-  const initialSelectedKey = pageItems[0]?.key || ''
-  const [selectedKey, setSelectedKey] = useState(initialSelectedKey)
-  useEffect(() => {
-    setSelectedKey((current) => (
-      current && containsMenuKey(pageItems, current)
-        ? current
-        : initialSelectedKey
-    ))
-  }, [initialSelectedKey, pageItems])
+  const selectedKey = containsMenuKey(pageItems, selectedPageId) ? selectedPageId : ''
   const visibleKeys = useMemo(() => {
     const matchingKeys = collectVisibleKeys(pageItems, outlineQuery)
     if (!onlyRelated) return matchingKeys
@@ -382,19 +384,20 @@ export default function SessionSidebar({
               .filter((item) => visibleKeys.has(item.key))
               .map((item) => (
                 <OutlineRow
+                  designed={Boolean(pages.find((page) => page.key === item.key)?.designed)}
                   item={item}
                   key={item.key}
                   level={0}
-                  onSelect={(key, label) => {
-                    setSelectedKey(key)
-                    onPageSelect(label)
+                  onSelect={(key) => {
+                    const selectedPage = pages.find((page) => page.key === key)
+                    if (selectedPage) onPageSelect(selectedPage)
                   }}
                   selectedKey={selectedKey}
                   visibleKeys={visibleKeys}
                 />
               ))}
             {pageItems.length === 0 ? (
-              <div className={cx('outline-empty')}>project_plan.json 的 frontend_pages 中暂无页面</div>
+              <div className={cx('outline-empty')}>requirement-spec.json 的 pages 中暂无页面</div>
             ) : null}
           </div> : null}
         </section>
@@ -436,7 +439,7 @@ export default function SessionSidebar({
       {outlineLocked ? (
         <div className={cx('session-outline-lock')}>
           <LockOutlined />
-          <Text>生成应用开发计划后可操作大纲</Text>
+          <Text>完成首个页面设计后解锁</Text>
         </div>
       ) : null}
       </fieldset>
