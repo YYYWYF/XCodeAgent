@@ -1,5 +1,6 @@
 .@{class-prefix}-welcome-page {
   position: relative;
+  height: 100vh;
   min-height: 100vh;
   overflow: hidden;
   color: #f7f2ff;
@@ -24,10 +25,30 @@
   display: flex;
   width: 100%;
   max-width: 1540px;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
   margin: 0 auto;
   padding: 26px 34px 34px;
+}
+
+.@{class-prefix}-welcome-page.@{class-prefix}-has-active-planning {
+  .@{class-prefix}-welcome-content {
+    padding-top: 20px;
+    padding-bottom: 14px;
+  }
+
+  .@{class-prefix}-welcome-hero p {
+    margin-top: 14px;
+  }
+
+  .@{class-prefix}-welcome-actions {
+    margin-top: 28px;
+  }
+
+  .@{class-prefix}-active-planning-action.ant-btn {
+    margin-top: 12px;
+  }
 }
 
 .@{class-prefix}-welcome-topbar {
@@ -119,16 +140,24 @@
 
 .@{class-prefix}-welcome-content {
   display: grid;
+  min-height: 0;
   flex: 1;
   grid-template-columns: minmax(440px, 0.9fr) minmax(570px, 1.1fr);
-  align-items: center;
+  align-items: stretch;
   gap: clamp(48px, 5vw, 92px);
   padding: 36px 32px 24px;
 }
 
 .@{class-prefix}-welcome-primary {
+  display: flex;
   min-width: 0;
+  min-height: 0;
+  flex-direction: column;
   padding-bottom: 6px;
+}
+
+.@{class-prefix}-welcome-primary > .@{class-prefix}-welcome-recents {
+  margin-top: auto;
 }
 
 .@{class-prefix}-welcome-hero {
@@ -157,6 +186,96 @@
   margin-top: 42px;
 }
 
+.@{class-prefix}-active-planning-action.ant-btn {
+  display: grid;
+  width: min(504px, 100%);
+  height: auto;
+  min-height: 72px;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 12px 16px;
+  color: #f5f0ff;
+  border: 1px solid rgba(167, 139, 250, 0.38);
+  border-radius: 10px;
+  background: rgba(34, 20, 54, 0.78);
+  text-align: left;
+  box-shadow: 0 10px 28px rgba(15, 7, 28, 0.18);
+
+  &:hover,
+  &:focus {
+    color: #ffffff;
+    border-color: #a78bfa;
+    background: rgba(62, 37, 91, 0.88);
+  }
+}
+
+.@{class-prefix}-active-planning-action.ant-btn > .@{class-prefix}-active-planning-action-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  color: #c4b5fd;
+  border-radius: 10px;
+  background: rgba(139, 92, 246, 0.16);
+  font-size: 20px;
+}
+
+.@{class-prefix}-active-planning-action.@{class-prefix}-status-ready.ant-btn {
+  border-color: rgba(34, 197, 94, 0.4);
+
+  > .@{class-prefix}-active-planning-action-icon {
+    color: #4ade80;
+    background: rgba(34, 197, 94, 0.13);
+  }
+}
+
+.@{class-prefix}-active-planning-action.@{class-prefix}-status-error.ant-btn {
+  border-color: rgba(251, 146, 60, 0.42);
+
+  > .@{class-prefix}-active-planning-action-icon {
+    color: #fb923c;
+    background: rgba(251, 146, 60, 0.13);
+  }
+}
+
+.@{class-prefix}-active-planning-action.ant-btn > .@{class-prefix}-active-planning-action-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  line-height: 1.4;
+  white-space: normal;
+
+  strong,
+  small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    color: inherit;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  small {
+    color: #aa9abd;
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-active-planning-action.ant-btn > .@{class-prefix}-active-planning-action-open {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 7px;
+  color: #c4b5fd;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .@{class-prefix}-welcome-action-button.ant-btn {
   min-width: 242px;
   height: 60px;
@@ -180,6 +299,16 @@
     background: rgba(63, 38, 92, 0.72);
   }
 
+  &[disabled],
+  &[disabled]:hover,
+  &[disabled]:focus {
+    color: #8e819e;
+    border-color: #514261;
+    background: rgba(24, 13, 40, 0.48);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
   &.@{class-prefix}-primary {
     color: #ffffff;
     border-color: #7c3aed;
@@ -190,6 +319,15 @@
     &:focus {
       border-color: #a78bfa;
       background: #8b5cf6;
+    }
+
+    &[disabled],
+    &[disabled]:hover,
+    &[disabled]:focus {
+      color: #9688a6;
+      border-color: #514261;
+      background: rgba(50, 37, 65, 0.72);
+      box-shadow: none;
     }
   }
 }
@@ -206,19 +344,54 @@
 }
 
 @media (max-width: 1120px) {
-  .@{class-prefix}-welcome-page {
-    overflow: auto;
-  }
   .@{class-prefix}-welcome-content {
     grid-template-columns: 1fr;
-    padding-top: 70px;
+    padding-top: 34px;
   }
   .@{class-prefix}-welcome-primary {
     max-width: 680px;
     margin: 0 auto;
   }
   .@{class-prefix}-agent-preview {
-    max-width: 760px;
-    margin: 50px auto 0;
+    display: none;
+  }
+}
+
+@media (max-height: 720px) {
+  .@{class-prefix}-welcome-shell {
+    padding-top: 18px;
+    padding-bottom: 20px;
+  }
+
+  .@{class-prefix}-welcome-content {
+    padding-top: 16px;
+    padding-bottom: 8px;
+  }
+
+  .@{class-prefix}-welcome-hero h1 {
+    font-size: clamp(40px, 3.5vw, 54px);
+  }
+
+  .@{class-prefix}-welcome-hero p {
+    margin-top: 12px;
+  }
+
+  .@{class-prefix}-welcome-actions {
+    margin-top: 24px;
+  }
+
+}
+
+@media (max-width: 620px) {
+  .@{class-prefix}-welcome-actions {
+    flex-direction: column;
+  }
+
+  .@{class-prefix}-active-planning-action.ant-btn {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .@{class-prefix}-active-planning-action.ant-btn > .@{class-prefix}-active-planning-action-open {
+    display: none;
   }
 }

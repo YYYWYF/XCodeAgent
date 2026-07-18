@@ -38,18 +38,6 @@ function textValue(value: unknown): string {
   return typeof value === 'string' ? value : value == null ? '' : String(value)
 }
 
-// 把标签型字段统一为非空字符串数组。
-function textList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value
-        .map((item) => {
-          const record = asRecord(item)
-          return textValue(record.description || record.name || record.label || item).trim()
-        })
-        .filter(Boolean)
-    : []
-}
-
 // 为新增条目生成当前草稿内稳定的标识。
 function draftId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
@@ -288,24 +276,6 @@ export default function RequirementSpecEditor({ onChange, spec }: Props): ReactE
                 value={textValue(item.description)}
               />
             </EditorField>
-            <EditorField label="流程步骤">
-              <TextArea
-                autoSize={{ minRows: 3, maxRows: 8 }}
-                onChange={(event) =>
-                  updateItem(
-                    'business_flows',
-                    index,
-                    'steps',
-                    event.target.value
-                      .split('\n')
-                      .map((step) => step.trim())
-                      .filter(Boolean)
-                  )
-                }
-                placeholder="每行一个流程步骤"
-                value={textList(item.steps).join('\n')}
-              />
-            </EditorField>
           </EditorItem>
         ))}
       </EditorSection>
@@ -339,9 +309,9 @@ export default function RequirementSpecEditor({ onChange, spec }: Props): ReactE
               <Select
                 onChange={(value) => updateItem('data_sources', index, 'type', value)}
                 options={[
-                  { label: 'Mock', value: 'mock' },
+                  { label: '模拟数据', value: 'mock' },
                   { label: '数据库', value: 'database' },
-                  { label: '外部 API', value: 'external_api' },
+                  { label: '外部接口', value: 'external_api' },
                   { label: '静态数据', value: 'static' }
                 ]}
                 value={textValue(item.type) || 'mock'}

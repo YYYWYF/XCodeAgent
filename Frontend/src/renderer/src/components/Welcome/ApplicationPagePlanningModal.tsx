@@ -1,5 +1,5 @@
-import { LeftOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons'
-import { Button, Collapse, Form, Input, message, Modal, Result, Select, Steps, Switch } from 'antd'
+import { ReloadOutlined } from '@ant-design/icons'
+import { Button, message, Result, Steps } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ApplicationConfig,
@@ -19,26 +19,37 @@ import ApplicationPlanningProgress, {
   type ApplicationPlanningProgressEvent
 } from './ApplicationPlanningProgress'
 import ApplicationPlanningQuestionPanel from './ApplicationPlanningQuestionPanel'
+import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
 import './ApplicationPagePlanningModal.less'
 
 const { Step } = Steps
 
-export type SettingsValues = {
-  appName: string
-  appIcon: string
-  layout: ApplicationConfig['layout']
-  auth: ApplicationConfig['auth']
-  track: ApplicationConfig['track']
-  apiTrack: ApplicationConfig['apiTrack']
+// 绘制带轻微弧度的单向返回箭头，避免视觉上接近刷新图标。
+function CurvedBackIcon(): JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      className={cx('page-planning-back-glyph')}
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <path d="M10 7.5 5.5 12 10 16.5" />
+      <path d="M6 12h7.2c3.4 0 5.8 2.1 5.8 5" />
+    </svg>
+  )
 }
 
 type Props = {
   application: ApplicationConfig
+  initialStatus: ActivePlanningStatus
+  initialWorkflow?: WorkflowRunPayload
   theme: 'dark' | 'light'
   threadId: string
-  onCancel: () => void
+  visible: boolean
+  onReturnHome: () => void
   onConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<void>
-  onSettingsSave: (values: SettingsValues) => Promise<void>
+  onStatusChange: (status: ActivePlanningStatus) => void
+  onWorkflowChange: (workflow: WorkflowRunPayload) => void
 }
 
 const phaseOrder = ['requirements', 'project_planning']
@@ -122,35 +133,43 @@ function workflowProgressCopy(workflow?: WorkflowRunPayload): { fallback: string
 // 在创建应用弹窗中运行并可视化独立的两节点规划 Graph。
 export default function ApplicationPagePlanningModal({
   application,
+  initialStatus,
+  initialWorkflow,
   theme,
   threadId,
-  onCancel,
+  visible,
+  onReturnHome,
   onConfirmed,
-  onSettingsSave
+  onStatusChange,
+  onWorkflowChange
 }: Props): JSX.Element {
-  const [settingsForm] = Form.useForm<SettingsValues>()
   const session = useMemo(() => createApplicationPlanningSession(threadId), [threadId])
   const originalRequest = useMemo(() => buildApplicationPlanningRequest(application), [application])
   const startedRef = useRef(false)
   const completedRef = useRef(false)
-  const [workflow, setWorkflow] = useState<WorkflowRunPayload>()
+  const [workflow, setWorkflow] = useState<WorkflowRunPayload | undefined>(initialWorkflow)
   const [running, setRunning] = useState(false)
-  const [savingSettings, setSavingSettings] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
-  const [error, setError] = useState('')
+  const [error, setError] = useState(
+    initialStatus === 'error' ? '上次规划流程中断，请重试或检查当前规划内容。' : ''
+  )
   const progressCopy = workflowProgressCopy(workflow)
 
-  const settingsInitialValues = useMemo<SettingsValues>(
-    () => ({
-      appName: application.appName,
-      appIcon: application.appIcon,
-      layout: application.layout,
-      auth: application.auth,
-      track: application.track,
-      apiTrack: application.apiTrack
-    }),
-    [application]
-  )
+  // 将运行、待查看或异常状态同步给首页的规划入口。
+  useEffect(() => {
+    const status: ActivePlanningStatus = error
+      ? 'error'
+      : running || !workflow
+        ? 'running'
+        : 'ready'
+    onStatusChange(status)
+  }, [error, onStatusChange, running, workflow])
+
+  // 同步组件内 Workflow 展示状态与可跨重启恢复的外部快照。
+  const handleWorkflowChange = (nextWorkflow: WorkflowRunPayload): void => {
+    setWorkflow(nextWorkflow)
+    onWorkflowChange(nextWorkflow)
+  }
 
   // 运行初始或恢复轮次，并在项目规划确认后直接打开工作台。
   const runPlanning = async (
@@ -177,9 +196,9 @@ export default function ApplicationPagePlanningModal({
         workflowScope: 'application_planning',
         workspaceRoot: application.workspaceRoot,
         onContent: setStreamingContent,
-        onWorkflow: setWorkflow
+        onWorkflow: handleWorkflowChange
       })
-      setWorkflow(result.workflow)
+      if (result.workflow) handleWorkflowChange(result.workflow)
       const confirmation = workflowConfirmation(result.workflow)
       if (confirmation && !completedRef.current) {
         completedRef.current = true
@@ -194,10 +213,15 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
-  // 弹窗首次挂载时从 requirements 节点启动独立规划 Graph。
+  // 首次挂载时启动新规划，或使用同一线程和最新快照恢复未完成规划。
   useEffect(() => {
     if (startedRef.current) return
     startedRef.current = true
+    if (initialWorkflow && initialStatus !== 'running') return
+    if (initialWorkflow) {
+      void runPlanning('请从上次保存的规划状态继续执行。', undefined, initialWorkflow)
+      return
+    }
     void runPlanning(originalRequest)
   }, [originalRequest])
 
@@ -239,140 +263,88 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
-  // 验证并持久化规划期间修改的应用基础设置。
-  const handleSaveSettings = async (): Promise<void> => {
-    setSavingSettings(true)
-    try {
-      const values = await settingsForm.validateFields()
-      await onSettingsSave(values)
-      message.success('设置已保存')
-    } catch (reason) {
-      if (reason && typeof reason === 'object' && 'errorFields' in reason) return
-      if (isAuthenticationFailure(reason)) return
-      message.error(formatError(reason, '保存设置失败'))
-    } finally {
-      setSavingSettings(false)
-    }
-  }
-
-  // 停止当前请求并返回创建表单。
-  const handleCancel = (): void => {
-    if (running) session.stop()
-    onCancel()
-  }
-
   return (
-    <Modal
-      closable={false}
-      destroyOnClose
-      footer={null}
-      keyboard={false}
-      maskClosable={false}
-      open
-      title={
+    <main
+      aria-hidden={!visible}
+      className={cx(
+        'welcome-modal',
+        'page-planning-modal',
+        'page-planning-screen',
+        `theme-${theme}`,
+        !visible && 'is-hidden'
+      )}
+    >
+      <header className={cx('page-planning-screen-header')}>
         <div className={cx('page-planning-title')}>
           <Button
+            aria-label="回到首页"
             className={cx('page-planning-title-back')}
-            icon={<LeftOutlined />}
-            onClick={handleCancel}
+            icon={<CurvedBackIcon />}
+            onClick={onReturnHome}
+            title="回到首页"
             type="text"
-          >
-            返回
-          </Button>
+          />
           <span className={cx('page-planning-title-divider')} />
-          <span>规划「{application.appName}」</span>
+          <span className={cx('page-planning-title-copy')}>
+            <strong>生成应用规划</strong>
+            <small>「{application.appName}」</small>
+          </span>
         </div>
-      }
-      style={{ top: '5vh' }}
-      width="90vw"
-      wrapClassName={cx('welcome-modal', 'page-planning-modal', `theme-${theme}`)}
-    >
-      <Steps className={cx('page-planning-steps')} current={workflowStep(workflow)} size="small">
-        <Step title="需求确认" description="需求文档" />
-        <Step title="项目规划" description="ProjectPlan" />
-      </Steps>
+        <span className={cx('page-planning-background-hint')}>
+          返回首页后，规划将在后台继续运行
+        </span>
+      </header>
 
-      {error ? (
-        <Result
-          extra={
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={() => void runPlanning(originalRequest)}
-              type="primary"
-            >
-              重试
-            </Button>
-          }
-          status="error"
-          subTitle={error}
-          title="规划流程暂时中断"
-        />
-      ) : (
-        <section className={cx('page-planning-review')}>
-          {running || !workflow ? (
-            <div className={cx('page-planning-loading')}>
-              <ApplicationPlanningProgress
-                events={workflowProgressEvents(workflow)}
-                fallbackMessage={progressCopy.fallback}
-                streamingContent={streamingContent}
-                title={progressCopy.title}
-              />
-            </div>
-          ) : null}
-          {!running && workflow ? (
-            <ApplicationPlanningQuestionPanel
-              disabled={running}
-              onSaveRequirementSpec={handleSaveRequirementSpec}
-              onSubmit={handleSubmitClarification}
-              workflow={workflow}
+      <div className={cx('page-planning-screen-body')}>
+        <div className={cx('page-planning-screen-content')}>
+          <Steps
+            className={cx('page-planning-steps')}
+            current={workflowStep(workflow)}
+            size="small"
+          >
+            <Step title="需求确认" description="需求文档" />
+            <Step title="项目规划" description="ProjectPlan" />
+          </Steps>
+
+          {error ? (
+            <Result
+              extra={
+                <Button
+                  icon={<ReloadOutlined />}
+                  onClick={() => void runPlanning(originalRequest)}
+                  type="primary"
+                >
+                  重试
+                </Button>
+              }
+              status="error"
+              subTitle={error}
+              title="规划流程暂时中断"
             />
-          ) : null}
-        </section>
-      )}
-
-      <Collapse className={cx('page-planning-settings')} ghost>
-        <Collapse.Panel
-          header={
-            <span className={cx('page-planning-settings-label')}>
-              <SettingOutlined />
-              设置
-            </span>
-          }
-          key="settings"
-        >
-          <Form form={settingsForm} initialValues={settingsInitialValues} layout="vertical">
-            <Form.Item
-              label="应用名称"
-              name="appName"
-              rules={[{ required: true, message: '请输入应用名称' }]}
-            >
-              <Input />
-            </Form.Item>
-            <Form.Item label="导航布局" name={['layout', 'type']}>
-              <Select
-                options={[
-                  { label: '侧边导航', value: 'side' },
-                  { label: '顶部导航', value: 'top' },
-                  { label: '混合导航', value: 'mix' }
-                ]}
-              />
-            </Form.Item>
-            <Form.Item label="启用认证" name={['auth', 'enable']} valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label="启用埋点" name={['track', 'enable']} valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Button
-              loading={savingSettings}
-              onClick={() => void handleSaveSettings()}
-              type="primary"
-            >
-              保存设置
-            </Button>
-          </Form>
-        </Collapse.Panel>
-      </Collapse>
-    </Modal>
+          ) : (
+            <section className={cx('page-planning-review')}>
+              {running || !workflow ? (
+                <div className={cx('page-planning-loading')}>
+                  <ApplicationPlanningProgress
+                    events={workflowProgressEvents(workflow)}
+                    fallbackMessage={progressCopy.fallback}
+                    streamingContent={streamingContent}
+                    title={progressCopy.title}
+                  />
+                </div>
+              ) : null}
+              {!running && workflow ? (
+                <ApplicationPlanningQuestionPanel
+                  disabled={running}
+                  onSaveRequirementSpec={handleSaveRequirementSpec}
+                  onSubmit={handleSubmitClarification}
+                  workflow={workflow}
+                />
+              ) : null}
+            </section>
+          )}
+        </div>
+      </div>
+    </main>
   )
 }

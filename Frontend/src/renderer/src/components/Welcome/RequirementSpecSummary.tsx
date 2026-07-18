@@ -53,6 +53,26 @@ function itemLabels(value: unknown): string[] {
     .filter(Boolean)
 }
 
+const dataSourceTypeLabels: Record<string, string> = {
+  api: '接口数据',
+  database: '数据库',
+  external_api: '外部接口',
+  file: '文件数据',
+  internal: '内部数据来源',
+  internal_data_source: '内部数据来源',
+  local: '本地数据',
+  mock: '模拟数据',
+  none: '无数据源',
+  static: '静态数据'
+}
+
+// 将数据源类型转换为单个中文标签，不暴露具体业务字段。
+function dataSourceLabels(item: unknown): string[] {
+  const type = itemText(item, ['type'])
+  const typeLabel = dataSourceTypeLabels[type.toLowerCase()] || (/[\u3400-\u9fff]/.test(type) ? type : '其他数据源')
+  return [typeLabel]
+}
+
 // 渲染带图标和标题的需求概览分区。
 function SummarySection({
   children,
@@ -78,15 +98,20 @@ function SummarySection({
 function SummaryItem({
   description,
   labels,
-  name
+  name,
+  route
 }: {
   description?: string
   labels?: string[]
   name: string
+  route?: string
 }): ReactElement {
   return (
     <article className={cx('requirement-summary-item')}>
-      <Text strong>{name}</Text>
+      <div className={cx('requirement-summary-item-title')}>
+        <Text strong>{name}</Text>
+        {route ? <code>{route}</code> : null}
+      </div>
       {description ? <Paragraph type="secondary">{description}</Paragraph> : null}
       {labels?.length ? (
         <div className={cx('requirement-summary-tags')}>
@@ -106,15 +131,13 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
   const flows = asArray(spec.business_flows)
   const assumptions = itemLabels(spec.assumptions)
   const appName = itemText(app, ['name']) || '未命名应用'
-  const appDescription = itemText(app, ['description', 'summary']) || itemText(spec, ['summary'])
 
   return (
     <div className={cx('requirement-summary')}>
       <section className={cx('requirement-summary-hero')}>
         <div>
-          <Text type="secondary">应用定位</Text>
+          <Text type="secondary">应用名称</Text>
           <Title level={3}>{appName}</Title>
-          {appDescription ? <Paragraph>{appDescription}</Paragraph> : null}
         </div>
       </section>
 
@@ -129,6 +152,7 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
                   key={itemText(item, ['id', 'name']) || `page-${index}`}
                   labels={itemLabels(record?.components)}
                   name={itemText(item, ['name']) || `页面 ${index + 1}`}
+                  route={itemText(item, ['path', 'route', 'route_path', 'routePath'])}
                 />
               )
             })}
@@ -181,12 +205,11 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
         <SummarySection icon={<DatabaseOutlined />} title="数据来源">
           <div className={cx('requirement-summary-grid')}>
             {dataSources.map((item, index) => {
-              const record = asRecord(item)
               return (
                 <SummaryItem
                   description={itemText(item, ['description'])}
                   key={itemText(item, ['id', 'name']) || `source-${index}`}
-                  labels={[itemText(item, ['type']), ...itemLabels(record?.entities)].filter(Boolean)}
+                  labels={dataSourceLabels(item)}
                   name={itemText(item, ['name']) || `数据源 ${index + 1}`}
                 />
               )

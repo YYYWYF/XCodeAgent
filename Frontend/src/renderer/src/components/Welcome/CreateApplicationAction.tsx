@@ -2,41 +2,39 @@ import { PlusOutlined } from '@ant-design/icons'
 import { Form, message, Modal } from 'antd'
 import { useState } from 'react'
 import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
-import type {
-  ApplicationConfig,
-  ApplicationDraft,
-  ApplicationPlanningConfirmation
-} from '../../typings'
+import type { ApplicationConfig, ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'
-import ApplicationPagePlanningModal from './ApplicationPagePlanningModal'
 import WelcomeActionCard from './WelcomeActionCard'
 import WelcomeModalTitle from './WelcomeModalTitle'
 import './ApplicationFormModal.less'
 import './WelcomeModal.less'
-import { saveAndOpenApplication, saveApplication } from './applicationService'
+import { saveApplication } from './applicationService'
 import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
-import type { SettingsValues } from './ApplicationPagePlanningModal'
-
 type Props = {
-  onOpenApplication: (application: ApplicationConfig) => void
+  disabled?: boolean
+  onStartPlanning: (application: ApplicationConfig, threadId: string) => void
   theme: 'dark' | 'light'
 }
 
-export default function CreateApplicationAction({ onOpenApplication, theme }: Props): JSX.Element {
+// 创建应用基础配置，并把新应用交给独立的全屏规划页。
+export default function CreateApplicationAction({
+  disabled,
+  onStartPlanning,
+  theme
+}: Props): JSX.Element {
   const [form] = Form.useForm<ApplicationDraft>()
   const [modalOpen, setModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [selectingParent, setSelectingParent] = useState(false)
-  const [planningApplication, setPlanningApplication] = useState<ApplicationConfig>()
-  const [planningThreadId, setPlanningThreadId] = useState('')
-  const [savedFormValues, setSavedFormValues] = useState<ApplicationDraft>()
 
+  // 打开应用基础配置弹窗。
   const openModal = (): void => {
     setModalOpen(true)
   }
 
+  // 调用桌面端目录选择器填写项目创建位置。
   const handleSelectProjectParent = async (): Promise<void> => {
     setSelectingParent(true)
     try {
@@ -57,6 +55,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     }
   }
 
+  // 创建项目目录和应用索引，然后进入全屏页面规划。
   const handleCreateApplication = async (): Promise<void> => {
     setCreating(true)
     try {
@@ -68,6 +67,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
 
       const projectPath = values.projectPath.trim()
       const schema = buildApplicationSchema(values)
+      const planningThreadId = createPagePlanningThreadId()
       const projectDirectory = await workspaceApi.createProjectDirectory({
         workspacePath: projectPath,
         applicationConfig: schema
@@ -88,14 +88,13 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
         pages: ['默认页面'],
         defaultPage: '默认页面',
         hasDynamicRoutes: false,
+        planningThreadId,
         schema,
         createdAt: Date.now()
       }
       await saveApplication(application)
-      setSavedFormValues(values)
       setModalOpen(false)
-      setPlanningThreadId(createPagePlanningThreadId())
-      setPlanningApplication(application)
+      onStartPlanning(application, planningThreadId)
     } catch (error) {
       message.error(formatError(error, '创建应用失败'))
     } finally {
@@ -103,56 +102,17 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
     }
   }
 
-  const handleCancelPlanning = (): void => {
-    setPlanningApplication(undefined)
-    setModalOpen(true)
-    if (savedFormValues) {
-      form.setFieldsValue(savedFormValues)
-    }
-  }
-
-  // 在页面规划阶段同步应用设置到本地索引与完整 schema。
-  const handleSettingsSave = async (values: SettingsValues): Promise<void> => {
-    if (!planningApplication) return
-    const updatedSchema = {
-      ...planningApplication.schema,
-      appName: values.appName,
-      appIcon: values.appIcon,
-      layout: values.layout,
-      auth: values.auth,
-      track: values.track,
-      apiTrack: values.apiTrack
-    }
-    const updatedApp: ApplicationConfig = {
-      ...planningApplication,
-      appName: values.appName,
-      appIcon: values.appIcon,
-      name: values.appName,
-      layout: values.layout,
-      auth: values.auth,
-      track: values.track,
-      apiTrack: values.apiTrack,
-      enableAuth: values.auth.enable,
-      enableTracking: values.track.enable || values.apiTrack.enable,
-      schema: updatedSchema
-    }
-    setPlanningApplication(updatedApp)
-    await saveApplication(updatedApp)
-  }
-
-  // specs/plans 产物确认完整后直接打开工作台，不改写应用配置。
-  const handlePagePlanConfirmed = async (_confirmation: ApplicationPlanningConfirmation): Promise<void> => {
-    if (!planningApplication) return
-    await saveAndOpenApplication(planningApplication, onOpenApplication)
-    setPlanningApplication(undefined)
-  }
-
   return (
     <>
       <WelcomeActionCard
         buttonIcon={<PlusOutlined />}
         buttonLabel="新建应用"
-        description="配置应用骨架、页面、主题和内置模块，并指定项目创建位置。"
+        disabled={disabled}
+        description={
+          disabled
+            ? '请先完成当前页面规划，再创建新的应用。'
+            : '配置应用骨架、页面、主题和内置模块，并指定项目创建位置。'
+        }
         icon={<PlusOutlined />}
         onClick={openModal}
         primary
@@ -161,9 +121,7 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
 
       <Modal
         afterClose={() => {
-          if (!planningApplication) {
-            form.setFieldsValue(initialApplicationDraft)
-          }
+          form.setFieldsValue(initialApplicationDraft)
         }}
         cancelText="取消"
         confirmLoading={creating}
@@ -193,18 +151,6 @@ export default function CreateApplicationAction({ onOpenApplication, theme }: Pr
           selectingParent={selectingParent}
         />
       </Modal>
-
-      {planningApplication ? (
-        <ApplicationPagePlanningModal
-          application={planningApplication}
-          key={planningApplication.id}
-          onCancel={handleCancelPlanning}
-          onConfirmed={handlePagePlanConfirmed}
-          onSettingsSave={handleSettingsSave}
-          theme={theme}
-          threadId={planningThreadId}
-        />
-      ) : null}
     </>
   )
 }

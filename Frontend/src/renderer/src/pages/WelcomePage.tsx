@@ -2,34 +2,51 @@ import { QuestionCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import { Button, message, Tooltip } from 'antd'
 import {
   CreateApplicationAction,
+  ActivePlanningAction,
   OpenWorkspaceAction,
   WelcomeAgentTrack,
   WelcomeHero,
   WelcomeRecentProjects
 } from '../components/Welcome'
 import type { ApplicationConfig } from '../typings'
+import type { ActivePlanningStatus } from '../service/activeApplicationPlanning'
 import { cx } from '../utils'
 import './WelcomePage.less'
 import './WelcomePageLight.less'
 
 type Props = {
+  activePlanning?: ApplicationConfig
+  activePlanningStatus?: ActivePlanningStatus
   onOpenApplication: (application: ApplicationConfig) => void
+  onOpenPlanning: () => void
+  onStartPlanning: (application: ApplicationConfig, threadId: string) => void
 }
 
 type WelcomeTheme = 'dark' | 'light'
 
 const THEME_PREFERENCE_KEY = 'xcode-agent-theme-preference'
 
+// 读取欢迎页主题偏好，缺省使用浅色主题。
 function getTheme(): WelcomeTheme {
   const storedPreference = window.localStorage.getItem(THEME_PREFERENCE_KEY)
   return storedPreference === 'light' || storedPreference === 'dark' ? storedPreference : 'light'
 }
 
-export default function WelcomePage({ onOpenApplication }: Props): JSX.Element {
+// 渲染首页，并在存在未完成规划时显示唯一的恢复入口。
+export default function WelcomePage({
+  activePlanning,
+  activePlanningStatus,
+  onOpenApplication,
+  onOpenPlanning,
+  onStartPlanning
+}: Props): JSX.Element {
   const theme = getTheme()
 
   return (
-    <main className={cx('welcome-page')} data-theme={theme}>
+    <main
+      className={cx('welcome-page', activePlanning && 'has-active-planning')}
+      data-theme={theme}
+    >
       <section className={cx('welcome-shell')}>
         <header className={cx('welcome-topbar')}>
           <div className={cx('welcome-brand')} aria-label="XCodeAgent">
@@ -58,9 +75,21 @@ export default function WelcomePage({ onOpenApplication }: Props): JSX.Element {
             <WelcomeHero />
 
             <section className={cx('welcome-actions')} aria-label="开始使用 XCodeAgent">
-              <CreateApplicationAction onOpenApplication={onOpenApplication} theme={theme} />
+              <CreateApplicationAction
+                disabled={activePlanningStatus === 'running' || activePlanningStatus === 'error'}
+                onStartPlanning={onStartPlanning}
+                theme={theme}
+              />
               <OpenWorkspaceAction onOpenApplication={onOpenApplication} theme={theme} />
             </section>
+
+            {activePlanning ? (
+              <ActivePlanningAction
+                application={activePlanning}
+                onOpen={onOpenPlanning}
+                status={activePlanningStatus || 'running'}
+              />
+            ) : null}
 
             <WelcomeRecentProjects onOpenApplication={onOpenApplication} />
           </section>

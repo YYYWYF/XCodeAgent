@@ -47,7 +47,8 @@ export default function ApplicationPlanningProgress({
     progressCeiling(current?.stage, targetPercent),
     activityKey
   )
-  const percentLabel = percent.toFixed(1)
+  // 视觉文案只展示缓慢递增的整数，进度条宽度仍保留细粒度变化以保证动画平滑。
+  const percentLabel = Math.floor(percent)
   const streamLines = (streamingContent || '')
     .split('\n')
     .map((line) => line.trim())
@@ -76,7 +77,7 @@ export default function ApplicationPlanningProgress({
         aria-label={`当前进度 ${percentLabel}%`}
         aria-valuemax={100}
         aria-valuemin={0}
-        aria-valuenow={percent}
+        aria-valuenow={percentLabel}
         className={cx('planning-progress-track')}
         role="progressbar"
       >
