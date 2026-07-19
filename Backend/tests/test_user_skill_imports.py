@@ -10,11 +10,13 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from app.services import user_skill_imports
+from app.services import user_skill_imports, user_skill_settings
 
 
 class UserSkillImportTests(unittest.TestCase):
     def test_imports_root_skill_and_preserves_resources(self) -> None:
+        """确认导入技能保留资源并清理同路径遗留关闭状态。"""
+
         archive = self._archive(
             {
                 "SKILL.md": self._skill("weather-query"),
@@ -25,6 +27,11 @@ class UserSkillImportTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temporary_root:
             root = Path(temporary_root) / "skills"
+            user_skill_settings.set_user_skill_enabled(
+                root,
+                "weather-query/SKILL.md",
+                False,
+            )
             result = user_skill_imports.import_user_skill_archive(
                 "weather.zip",
                 base64.b64encode(archive).decode("ascii"),
@@ -38,6 +45,10 @@ class UserSkillImportTests(unittest.TestCase):
                 "print('ok')\n",
             )
             self.assertFalse((root / "weather-query" / ".DS_Store").exists())
+            self.assertEqual(
+                user_skill_settings.read_skill_settings(root).disabled_skills,
+                [],
+            )
 
     def test_imports_single_wrapper_and_multiline_description(self) -> None:
         content = (

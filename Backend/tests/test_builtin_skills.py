@@ -11,6 +11,8 @@ from app.services import builtin_skills
 
 class BuiltinSkillsTests(unittest.TestCase):
     def test_source_tree_skills_are_available_and_complete(self) -> None:
+        """确认源码内置技能完整且能生成页面卡片元数据。"""
+
         root = builtin_skills.validate_required_builtin_skills()
 
         self.assertIn(
@@ -20,6 +22,15 @@ class BuiltinSkillsTests(unittest.TestCase):
         self.assertIn(
             builtin_skills.REACT_DEV_SPEC_SKILL_NAME,
             builtin_skills.available_builtin_skills(root),
+        )
+        summaries = builtin_skills.list_builtin_skills(root)
+        self.assertIn(
+            builtin_skills.REACT_ANTD_V4_SKILL_NAME,
+            [skill.name for skill in summaries],
+        )
+        self.assertTrue(all(skill.description for skill in summaries))
+        self.assertTrue(
+            all(not skill.relative_path.startswith(str(root)) for skill in summaries)
         )
 
     def test_environment_override_controls_skill_root(self) -> None:

@@ -20,6 +20,7 @@ from app.services.user_skills import (
     resolve_user_skills_root,
     user_skills_root_label,
 )
+from app.services.user_skill_settings import clear_user_skill_setting
 
 
 MAX_SKILL_CONTENT_BYTES = 512 * 1024
@@ -105,7 +106,7 @@ def create_user_skill_document(
     *,
     root: Path | None = None,
 ) -> UserSkillDocument:
-    """Create a direct-child user Skill without overwriting existing data."""
+    """创建直属用户技能，并清理同路径遗留的关闭状态。"""
 
     encoded_content = _encode_skill_content(content)
     metadata = _parse_create_skill_frontmatter(content)
@@ -137,6 +138,7 @@ def create_user_skill_document(
         raise
 
     relative_path = f"{name}/SKILL.md"
+    clear_user_skill_setting(skills_root, relative_path)
     return UserSkillDocument(
         name=name,
         relative_path=relative_path,
@@ -178,9 +180,10 @@ def delete_user_skill(
     *,
     root: Path | None = None,
 ) -> DeletedUserSkill:
-    """Delete one direct-child user Skill directory without following symlinks."""
+    """删除直属用户技能目录，并同步清理启用状态。"""
 
-    skill_file = _resolve_user_skill_file(relative_path, root=root)
+    skills_root = root or resolve_user_skills_root()
+    skill_file = _resolve_user_skill_file(relative_path, root=skills_root)
     raw_content = _read_skill_content_bytes(skill_file)
     try:
         content = raw_content.decode("utf-8")
@@ -192,6 +195,7 @@ def delete_user_skill(
         shutil.rmtree(skill_directory)
     except OSError as exc:
         raise SkillPathError("无法删除技能目录。") from exc
+    clear_user_skill_setting(skills_root, relative_path)
     return DeletedUserSkill(name=metadata["name"], relative_path=relative_path)
 
 

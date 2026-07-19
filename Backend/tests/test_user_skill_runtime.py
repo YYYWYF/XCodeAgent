@@ -11,6 +11,7 @@ from deepagents.middleware.skills import SkillsMiddleware
 
 from app.agents.workspace_scope import create_workspace_backend
 from app.services import user_skill_runtime
+from app.services import user_skills
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 
 
@@ -193,6 +194,32 @@ class UserSkillRuntimeTests(unittest.TestCase):
                 user_skill_runtime.create_user_skill_runtime_snapshot(
                     root=root,
                     selected_skill_names=("missing",),
+                )
+
+    def test_disabled_skill_is_removed_from_snapshot_and_explicit_selection(self) -> None:
+        """确认关闭技能不会进入快照且无法被显式强制选择。"""
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            root = Path(temporary_root) / "environment" / "skills"
+            self._write_skill(root / "alpha", name="alpha")
+            self._write_skill(root / "beta", name="beta")
+            first_revision = user_skill_runtime.get_user_skill_runtime_revision(root)
+
+            user_skills.update_user_skill_enabled(
+                "beta/SKILL.md",
+                False,
+                root=root,
+            )
+            snapshot = user_skill_runtime.create_user_skill_runtime_snapshot(root=root)
+            second_revision = user_skill_runtime.get_user_skill_runtime_revision(root)
+
+            self.assertEqual(snapshot.skills, ("alpha",))
+            self.assertIsNotNone(snapshot.backend.read("/beta/SKILL.md").error)
+            self.assertNotEqual(first_revision, second_revision)
+            with self.assertRaises(user_skill_runtime.SelectedSkillUnavailableError):
+                user_skill_runtime.create_user_skill_runtime_snapshot(
+                    root=root,
+                    selected_skill_names=("beta",),
                 )
 
     def test_explicit_selection_prompt_budget_rejects_without_truncation(self) -> None:

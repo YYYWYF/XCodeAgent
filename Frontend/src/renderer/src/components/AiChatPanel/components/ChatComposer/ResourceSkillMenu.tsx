@@ -12,6 +12,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { requestUserSkills } from '../../../../service/userSkills'
 import type { ChatMessageSkill, UserSkill } from '../../../../typings'
 import { cx } from '../../../../utils'
+import {
+  enabledUserSkills,
+  reconcileEnabledChatSkills
+} from '../../../SkillsPage/skillCatalog'
 
 const { Text } = Typography
 
@@ -65,17 +69,10 @@ export default function ResourceSkillMenu({
     requestUserSkills()
       .then((catalog) => {
         if (!active) return
-        setSkills(catalog.skills)
-        const available = new Map(
-          catalog.skills.map((skill) => [skill.name, skill.description] as const)
-        )
+        const availableSkills = enabledUserSkills(catalog.skills)
+        setSkills(availableSkills)
         const currentSelection = selectedSkillsRef.current
-        const reconciled = currentSelection
-          .filter((skill) => available.has(skill.name))
-          .map((skill) => ({
-            name: skill.name,
-            description: available.get(skill.name) || skill.description
-          }))
+        const reconciled = reconcileEnabledChatSkills(currentSelection, catalog.skills)
         if (reconciled.length !== currentSelection.length) {
           onSelectedSkillsChangeRef.current(reconciled)
           message.warning('部分已选技能已失效，标签已移除。')

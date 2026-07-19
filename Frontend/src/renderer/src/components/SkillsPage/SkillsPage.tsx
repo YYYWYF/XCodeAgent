@@ -1,31 +1,40 @@
 import {
-  AppstoreOutlined,
   CloudUploadOutlined,
-  DeleteOutlined,
   ImportOutlined,
   MoonOutlined,
   PlusOutlined,
   ReloadOutlined,
-  SearchOutlined,
   SunOutlined,
   ThunderboltOutlined,
   ToolOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Empty, Input, Modal, Spin, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Empty, Modal, Spin, Tag, Tooltip, Typography, message } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isAuthenticationFailure } from '../../service/authentication'
-import { deleteUserSkill, requestUserSkills } from '../../service/userSkills'
+import {
+  deleteUserSkill,
+  requestUserSkills,
+  setUserSkillEnabled
+} from '../../service/userSkills'
 import type { UserSkill, UserSkillCatalog } from '../../typings'
 import { cx } from '../../utils'
 import SkillEditorDrawer from './SkillEditorDrawer'
 import SkillZipImportModal from './SkillZipImportModal'
+import SkillCatalogCard from './SkillCatalogCard'
+import SkillCatalogToolbar from './SkillCatalogToolbar'
+import {
+  DEFAULT_SKILL_CATEGORY,
+  filterCatalogSkills,
+  type SkillCategory
+} from './skillCatalog'
 import './SkillDelete.less'
 import './SkillsPage.less'
 
-const { Paragraph, Text, Title } = Typography
+const { Text, Title } = Typography
 
 type Props = {
+  onSkillDisabled?: (skillName: string) => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
 }
@@ -36,73 +45,126 @@ type PendingAction = {
 }
 
 const pendingActions: PendingAction[] = [
-  { label: '刷新', icon: <ReloadOutlined /> },
   { label: '导入 Hub', icon: <ImportOutlined /> },
   { label: '批量操作', icon: <ToolOutlined /> }
 ]
 
-function formatUpdatedAt(value: string): string {
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return '未知时间'
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(timestamp)
-}
-
-export default function SkillsPage({ onThemeChange, theme }: Props): ReactElement {
+/** 渲染支持来源分类、启停、刷新和用户技能维护的技能页面。 */
+export default function SkillsPage({
+  onSkillDisabled,
+  onThemeChange,
+  theme
+}: Props): ReactElement {
   const [catalog, setCatalog] = useState<UserSkillCatalog>()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [category, setCategory] = useState<SkillCategory>(DEFAULT_SKILL_CATEGORY)
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
   const [importingZip, setImportingZip] = useState(false)
   const [deletingSkillPath, setDeletingSkillPath] = useState('')
+  const [togglingSkillPaths, setTogglingSkillPaths] = useState<Set<string>>(new Set())
   const [selectedSkill, setSelectedSkill] = useState<UserSkill>()
   const mountedRef = useRef(true)
+  const catalogRef = useRef<UserSkillCatalog>()
+  const loadSequenceRef = useRef(0)
 
-  const loadSkills = useCallback(async (): Promise<void> => {
-    setLoading(true)
+  const loadSkills = useCallback(async (manualRefresh = false): Promise<void> => {
+    /** 重新扫描两类技能目录，并忽略晚于当前请求返回的旧响应。 */
+    const sequence = loadSequenceRef.current + 1
+    loadSequenceRef.current = sequence
+    if (manualRefresh && catalogRef.current) setRefreshing(true)
+    else setLoading(true)
     setError('')
     try {
       const result = await requestUserSkills()
-      if (mountedRef.current) setCatalog(result)
+      if (!mountedRef.current || sequence !== loadSequenceRef.current) return
+      catalogRef.current = result
+      setCatalog(result)
+      setSelectedSkill((current) => {
+        if (!current) return current
+        const refreshed = result.skills.find((skill) => skill.relativePath === current.relativePath)
+        if (refreshed) return refreshed
+        if (manualRefresh) message.warning(`技能 ${current.name} 已不存在，编辑器已关闭。`)
+        return undefined
+      })
+      if (manualRefresh) message.success('技能列表已刷新')
     } catch (caughtError) {
-      if (mountedRef.current) {
-        setError(
-          isAuthenticationFailure(caughtError)
-            ? '请重新登录后重试。'
-            : caughtError instanceof Error
-              ? caughtError.message
-              : '技能列表读取失败。'
-        )
-      }
+      if (!mountedRef.current || sequence !== loadSequenceRef.current) return
+      const errorMessage = isAuthenticationFailure(caughtError)
+        ? '请重新登录后重试。'
+        : caughtError instanceof Error
+          ? caughtError.message
+          : '技能列表读取失败。'
+      if (catalogRef.current) message.error(errorMessage)
+      else setError(errorMessage)
     } finally {
-      if (mountedRef.current) setLoading(false)
+      if (mountedRef.current && sequence === loadSequenceRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [])
 
   useEffect(() => {
     mountedRef.current = true
-    void loadSkills()
+    void loadSkills(false)
     return () => {
       mountedRef.current = false
     }
   }, [loadSkills])
 
-  const filteredSkills = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase()
-    if (!normalizedQuery) return catalog?.skills || []
-    return (catalog?.skills || []).filter((skill) =>
-      `${skill.name}\n${skill.description}\n${skill.directoryName}`
-        .toLocaleLowerCase()
-        .includes(normalizedQuery)
-    )
-  }, [catalog, query])
+  const filteredSkills = useMemo(
+    () => filterCatalogSkills(catalog, category, query),
+    [catalog, category, query]
+  )
+  const categorySkills = category === 'user' ? catalog?.skills || [] : catalog?.builtinSkills || []
+  const categoryRoot = category === 'user' ? catalog?.root : catalog?.builtinRoot
 
+  /** 切换技能来源时关闭用户编辑器，避免只读分类保留编辑状态。 */
+  const handleCategoryChange = (nextCategory: SkillCategory): void => {
+    setCategory(nextCategory)
+    setSelectedSkill(undefined)
+  }
+
+  /** 持久化用户技能开关，并只在服务端确认后更新卡片和草稿标签。 */
+  const handleToggleSkill = async (skill: UserSkill, enabled: boolean): Promise<void> => {
+    setTogglingSkillPaths((current) => new Set(current).add(skill.relativePath))
+    try {
+      const updated = await setUserSkillEnabled({ relativePath: skill.relativePath, enabled })
+      if (!mountedRef.current) return
+      setCatalog((current) => {
+        if (!current) return current
+        const next = {
+          ...current,
+          skills: current.skills.map((item) =>
+            item.relativePath === updated.relativePath ? updated : item
+          )
+        }
+        catalogRef.current = next
+        return next
+      })
+      setSelectedSkill((current) =>
+        current?.relativePath === updated.relativePath ? updated : current
+      )
+      if (!updated.enabled) onSkillDisabled?.(updated.name)
+      message.success(`技能 ${updated.name} 已${updated.enabled ? '开启' : '关闭'}`)
+    } catch (caughtError) {
+      if (isAuthenticationFailure(caughtError)) return
+      message.error(caughtError instanceof Error ? caughtError.message : '技能状态更新失败。')
+    } finally {
+      if (mountedRef.current) {
+        setTogglingSkillPaths((current) => {
+          const next = new Set(current)
+          next.delete(skill.relativePath)
+          return next
+        })
+      }
+    }
+  }
+
+  /** 弹出不可恢复删除确认，并在完成后重新扫描技能目录。 */
   const confirmDeleteSkill = (skill: UserSkill): void => {
     Modal.confirm({
       cancelText: '取消',
@@ -119,7 +181,7 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
             setSelectedSkill(undefined)
           }
           message.success(`技能 ${skill.name} 已删除`)
-          await loadSkills()
+          await loadSkills(false)
         } catch (caughtError) {
           if (isAuthenticationFailure(caughtError)) return
           message.error(caughtError instanceof Error ? caughtError.message : '技能删除失败。')
@@ -132,7 +194,7 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
   }
 
   return (
-    <section className={cx('skills-page')} aria-label="用户技能">
+    <section className={cx('skills-page')} aria-label="技能">
       <header className={cx('skills-header')}>
         <div className={cx('skills-title')}>
           <span className={cx('skills-title-icon')} aria-hidden="true">
@@ -141,40 +203,51 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
           <div>
             <div className={cx('skills-title-line')}>
               <Title level={4}>技能</Title>
-              <Tag>{catalog?.skills.length || 0} 个可用</Tag>
+              <Tag>{categorySkills.length} 个{category === 'user' ? '用户' : '内置'}</Tag>
             </div>
-            <Text>{catalog?.root || '~/.xcodeagent_dev/skills'}</Text>
+            <Text>{categoryRoot || (category === 'user' ? '~/.xcodeagent_dev/skills' : '/.xcodeagent/builtin-skills')}</Text>
           </div>
         </div>
         <div className={cx('skills-actions')}>
-          {pendingActions.map((action) => (
-            <Tooltip key={action.label} title="即将开放">
-              <span>
-                <Button disabled icon={action.icon}>
-                  {action.label}
-                </Button>
-              </span>
-            </Tooltip>
-          ))}
           <Button
-            className={cx('skills-zip-upload-button')}
-            icon={<CloudUploadOutlined />}
-            onClick={() => setImportingZip(true)}
-            type="primary"
+            icon={<ReloadOutlined />}
+            loading={refreshing}
+            onClick={() => void loadSkills(true)}
           >
-            ZIP 上传
+            刷新
           </Button>
-          <Button
-            className={cx('skills-create-button')}
-            icon={<PlusOutlined />}
-            onClick={() => {
-              setSelectedSkill(undefined)
-              setCreating(true)
-            }}
-            type="primary"
-          >
-            创建技能
-          </Button>
+          {category === 'user' && (
+            <>
+              {pendingActions.map((action) => (
+                <Tooltip key={action.label} title="即将开放">
+                  <span>
+                    <Button disabled icon={action.icon}>
+                      {action.label}
+                    </Button>
+                  </span>
+                </Tooltip>
+              ))}
+              <Button
+                className={cx('skills-zip-upload-button')}
+                icon={<CloudUploadOutlined />}
+                onClick={() => setImportingZip(true)}
+                type="primary"
+              >
+                ZIP 上传
+              </Button>
+              <Button
+                className={cx('skills-create-button')}
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  setSelectedSkill(undefined)
+                  setCreating(true)
+                }}
+                type="primary"
+              >
+                创建技能
+              </Button>
+            </>
+          )}
           <Button
             aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
             icon={theme === 'dark' ? <MoonOutlined /> : <SunOutlined />}
@@ -185,21 +258,15 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
         </div>
       </header>
 
-      <div className={cx('skills-toolbar')}>
-        <Input
-          allowClear
-          aria-label="搜索技能"
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="按名称、描述或目录筛选"
-          prefix={<SearchOutlined />}
-          value={query}
-        />
-        <Text type="secondary">
-          {query ? `${filteredSkills.length} 个匹配` : `${catalog?.skills.length || 0} 个技能`}
-        </Text>
-      </div>
+      <SkillCatalogToolbar
+        category={category}
+        countLabel={query ? `${filteredSkills.length} 个匹配` : `${categorySkills.length} 个技能`}
+        onCategoryChange={handleCategoryChange}
+        onQueryChange={setQuery}
+        query={query}
+      />
 
-      {catalog && catalog.skippedCount > 0 && (
+      {category === 'user' && catalog && catalog.skippedCount > 0 && (
         <Alert
           className={cx('skills-warning')}
           message={`已跳过 ${catalog.skippedCount} 个无效技能`}
@@ -219,7 +286,7 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
           </div>
         ) : error ? (
           <Alert
-            action={<Button onClick={() => void loadSkills()}>重试</Button>}
+            action={<Button onClick={() => void loadSkills(false)}>重试</Button>}
             message="无法读取技能列表"
             description={error}
             showIcon
@@ -227,68 +294,31 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
           />
         ) : filteredSkills.length === 0 ? (
           <Empty
-            description={query ? '没有匹配的技能' : '用户技能目录中暂无可用技能'}
+            description={
+              query
+                ? '没有匹配的技能'
+                : category === 'user'
+                  ? '用户技能目录中暂无可用技能'
+                  : '暂无可展示的内置技能'
+            }
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         ) : (
           <div className={cx('skills-grid')}>
             {filteredSkills.map((skill) => (
-              <div className={cx('skill-card-shell')} key={skill.relativePath}>
-                <article
-                  aria-expanded={selectedSkill?.relativePath === skill.relativePath}
-                  className={cx(
-                    'skill-card',
-                    selectedSkill?.relativePath === skill.relativePath && 'active'
-                  )}
-                  onClick={() => setSelectedSkill(skill)}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return
-                    event.preventDefault()
-                    setSelectedSkill(skill)
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  title={`编辑技能 ${skill.name}`}
-                >
-                  <div className={cx('skill-card-heading')}>
-                    <span className={cx('skill-card-icon')} aria-hidden="true">
-                      <AppstoreOutlined />
-                    </span>
-                    <div className={cx('skill-card-name')}>
-                      <Title level={5}>{skill.name}</Title>
-                      <Tag>用户技能</Tag>
-                    </div>
-                  </div>
-                  <Paragraph className={cx('skill-card-description')}>
-                    {skill.description}
-                  </Paragraph>
-                  <dl className={cx('skill-card-meta')}>
-                    <div>
-                      <dt>目录</dt>
-                      <dd title={skill.relativePath}>{skill.directoryName}</dd>
-                    </div>
-                    <div>
-                      <dt>更新时间</dt>
-                      <dd>{formatUpdatedAt(skill.updatedAt)}</dd>
-                    </div>
-                    <div>
-                      <dt>版本</dt>
-                      <dd>{skill.version || '未标注'}</dd>
-                    </div>
-                  </dl>
-                </article>
-                <Button
-                  aria-label={`删除技能 ${skill.name}`}
-                  className={cx('skill-card-delete-button')}
-                  danger
-                  icon={<DeleteOutlined />}
-                  loading={deletingSkillPath === skill.relativePath}
-                  onClick={() => confirmDeleteSkill(skill)}
-                  shape="circle"
-                  title={`删除技能 ${skill.name}`}
-                  type="text"
-                />
-              </div>
+              <SkillCatalogCard
+                active={
+                  category === 'user' && selectedSkill?.relativePath === skill.relativePath
+                }
+                category={category}
+                deleting={deletingSkillPath === skill.relativePath}
+                key={`${category}:${skill.relativePath}`}
+                onDelete={confirmDeleteSkill}
+                onOpen={setSelectedSkill}
+                onToggle={(target, enabled) => void handleToggleSkill(target, enabled)}
+                skill={skill}
+                toggling={togglingSkillPaths.has(skill.relativePath)}
+              />
             ))}
           </div>
         )}
@@ -298,7 +328,7 @@ export default function SkillsPage({ onThemeChange, theme }: Props): ReactElemen
         onClose={() => setCreating(false)}
         onSaved={async () => {
           setCreating(false)
-          await loadSkills()
+          await loadSkills(false)
         }}
         open={creating}
         theme={theme}

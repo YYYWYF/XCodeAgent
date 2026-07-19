@@ -147,15 +147,38 @@
   gap: 16px;
   padding: 20px 30px 14px;
 
+  .ant-segmented {
+    flex: 0 0 auto;
+    padding: 3px;
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface-subtle);
+    border: 1px solid var(--wb-border);
+    border-radius: 9px;
+
+    .ant-segmented-item-selected {
+      color: var(--wb-text);
+      background: var(--wb-surface);
+      box-shadow: var(--wb-shadow);
+    }
+  }
+
   .ant-input-affix-wrapper {
-    width: min(620px, 72%);
+    width: min(620px, 64%);
+    flex: 1 1 420px;
     height: 40px;
     border-radius: 9px;
 
     &:focus-within,
     &.ant-input-affix-wrapper-focused {
-      border-color: var(--wb-accent-border);
-      box-shadow: 0 0 0 2px var(--wb-accent-soft);
+      border-color: var(--wb-border) !important;
+      box-shadow: none !important;
+    }
+
+    .ant-input:focus,
+    .ant-input:focus:hover {
+      border-color: transparent !important;
+      box-shadow: none !important;
+      outline: none;
     }
   }
 
@@ -252,6 +275,54 @@
     box-shadow:
       0 0 0 3px var(--wb-accent-soft),
       var(--wb-shadow);
+  }
+
+  &.@{class-prefix}-readonly {
+    cursor: default;
+
+    &:focus,
+    &:hover {
+      border-color: var(--wb-border);
+      box-shadow: var(--wb-shadow);
+      transform: none;
+    }
+  }
+
+  &.@{class-prefix}-pending {
+    cursor: wait;
+
+    &:hover {
+      border-color: var(--wb-border);
+      box-shadow: var(--wb-shadow);
+      transform: none;
+    }
+  }
+
+  &.@{class-prefix}-has-controls {
+    .@{class-prefix}-skill-card-heading {
+      padding-right: 90px;
+    }
+  }
+}
+
+.@{class-prefix}-skill-card-controls {
+  position: absolute;
+  z-index: 4;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-skill-card-switch {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+
+  .ant-switch-checked {
+    background: var(--wb-accent);
   }
 }
 
@@ -355,5 +426,14 @@
   .@{class-prefix}-skills-warning.ant-alert {
     margin-right: 20px;
     margin-left: 20px;
+  }
+
+  .@{class-prefix}-skills-toolbar {
+    flex-wrap: wrap;
+
+    .ant-input-affix-wrapper {
+      width: 100%;
+      flex-basis: calc(100% - 130px);
+    }
   }
 }

@@ -262,6 +262,14 @@ export default function AiChatPanel({
     await handleOpenSession(sessionId)
   }
 
+  /** 用户关闭技能后立即清理当前会话草稿中的同名标签。 */
+  const handleSkillDisabled = (skillName: string): void => {
+    const nextSkills = selectedSkills.filter((skill) => skill.name !== skillName)
+    if (nextSkills.length !== selectedSkills.length) {
+      setSelectedSkillsByKey(draftKey, nextSkills)
+    }
+  }
+
   return (
     <section
       className={cx(
@@ -305,7 +313,11 @@ export default function AiChatPanel({
         />
 
         {activeView === 'skills' ? (
-          <SkillsPage onThemeChange={onThemeChange} theme={theme} />
+          <SkillsPage
+            onSkillDisabled={handleSkillDisabled}
+            onThemeChange={onThemeChange}
+            theme={theme}
+          />
         ) : activeView === 'files' ? (
           <AgentFilesPage />
         ) : activeView === 'settings' ? (

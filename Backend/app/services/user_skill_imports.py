@@ -26,6 +26,7 @@ from app.services.user_skills import (
     resolve_user_skills_root,
     user_skills_root_label,
 )
+from app.services.user_skill_settings import clear_user_skill_setting
 
 
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
@@ -84,7 +85,7 @@ def import_user_skill_archive(
     *,
     root: Path | None = None,
 ) -> ImportedUserSkill:
-    """Validate and atomically import one user Skill ZIP archive."""
+    """校验并原子导入一个用户技能 ZIP，同时恢复默认开启状态。"""
 
     if not file_name.strip().lower().endswith(".zip"):
         raise SkillArchiveFormatError("只支持 ZIP 技能包。")
@@ -120,6 +121,8 @@ def import_user_skill_archive(
         raise SkillImportFilesystemError("无法导入技能 ZIP。") from exc
 
     skill_file = target / "SKILL.md"
+    relative_path = f"{skill_name}/SKILL.md"
+    clear_user_skill_setting(skills_root, relative_path)
     updated_at = datetime.fromtimestamp(
         skill_file.stat().st_mtime, tz=timezone.utc
     ).isoformat()
@@ -129,9 +132,10 @@ def import_user_skill_archive(
             name=skill_name,
             description=metadata["description"],
             directory_name=skill_name,
-            relative_path=f"{skill_name}/SKILL.md",
+            relative_path=relative_path,
             updated_at=updated_at,
             version=metadata.get("version"),
+            enabled=True,
         ),
     )
 

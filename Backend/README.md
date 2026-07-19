@@ -43,7 +43,7 @@ curl -N -X POST http://127.0.0.1:8000/workflow/run \
   -d '{"threadId":"demo-thread","messages":[{"role":"user","content":"创建一个库存管理应用"}],"forwardedProps":{"selectedSkillNames":["inventory-domain"]}}'
 ```
 
-`selectedSkillNames` 为可选字符串数组。非空时，Backend 会验证并只挂载这些用户 Skill，完整读取每个 `SKILL.md` 后强制注入 Frontend、Data Source、Test、RepairPlanner 四个 Deep Agent；空数组或字段缺失时保持“全部用户 Skill 可按需发现、正文不强制注入”的兼容行为。所选正文总量上限为 64 KiB，恢复中的 Workflow 不允许替换最初的技能集合。
+`selectedSkillNames` 为可选字符串数组。非空时，Backend 会验证并只挂载这些已开启的用户 Skill，完整读取每个 `SKILL.md` 后强制注入 Frontend、Data Source、Test、RepairPlanner 四个 Deep Agent；空数组或字段缺失时，只有已开启用户 Skill 可按需发现，正文不强制注入。用户技能默认开启，关闭项按环境持久化在 `~/.xcodeagent[_dev|_st|_uat]/skill-settings.json`；关闭的技能不能被显式选择，并从下一次 Agent bundle 创建或后续运行开始失效。所选正文总量上限为 64 KiB，恢复中的 Workflow 不允许替换最初的技能集合。
 
 后续请求复用同一个 `threadId`，服务会用 LangGraph checkpointer 延续该主工作流。
 

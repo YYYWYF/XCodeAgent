@@ -14,6 +14,46 @@ import {
   splitWorkspacePath,
   workspaceCodeChangeDisplayPath
 } from '../src/renderer/src/components/AiChatPanel/utils'
+import {
+  DEFAULT_SKILL_CATEGORY,
+  enabledUserSkills,
+  filterCatalogSkills,
+  reconcileEnabledChatSkills
+} from '../src/renderer/src/components/SkillsPage/skillCatalog'
+import type { UserSkillCatalog } from '../src/renderer/src/typings'
+
+const skillCatalog: UserSkillCatalog = {
+  root: '~/.xcodeagent_dev/skills',
+  builtinRoot: '/.xcodeagent/builtin-skills',
+  skills: [
+    {
+      name: 'alpha',
+      description: 'First user skill',
+      directoryName: 'alpha',
+      relativePath: 'alpha/SKILL.md',
+      updatedAt: '2026-07-19T00:00:00Z',
+      enabled: true
+    },
+    {
+      name: 'beta',
+      description: 'Disabled user skill',
+      directoryName: 'beta',
+      relativePath: 'beta/SKILL.md',
+      updatedAt: '2026-07-19T00:00:00Z',
+      enabled: false
+    }
+  ],
+  builtinSkills: [
+    {
+      name: 'builtin-react',
+      description: 'Built-in React skill',
+      directoryName: 'builtin-react',
+      relativePath: 'builtin-react/SKILL.md'
+    }
+  ],
+  skippedCount: 0,
+  issues: []
+}
 
 test('技能选择按名称去空白去重并保留首次顺序', () => {
   assert.deepEqual(
@@ -70,6 +110,33 @@ test('输入文本为空时 Backspace 依次删除最后一个技能标签', () 
   assert.equal(skillsAfterEmptyBackspace('Backspace', 'hello', skills), undefined)
   assert.equal(skillsAfterEmptyBackspace('Enter', '', skills), undefined)
   assert.equal(skillsAfterEmptyBackspace('Backspace', '', []), undefined)
+})
+
+test('技能页面默认展示用户分类并按当前分类搜索', () => {
+  assert.equal(DEFAULT_SKILL_CATEGORY, 'user')
+  assert.deepEqual(
+    filterCatalogSkills(skillCatalog, 'user', 'disabled').map((skill) => skill.name),
+    ['beta']
+  )
+  assert.deepEqual(
+    filterCatalogSkills(skillCatalog, 'builtin', 'react').map((skill) => skill.name),
+    ['builtin-react']
+  )
+})
+
+test('聊天技能目录隐藏关闭项并清理陈旧选择', () => {
+  assert.deepEqual(enabledUserSkills(skillCatalog.skills).map((skill) => skill.name), ['alpha'])
+  assert.deepEqual(
+    reconcileEnabledChatSkills(
+      [
+        { name: 'alpha', description: 'old description' },
+        { name: 'beta', description: 'disabled' },
+        { name: 'missing', description: 'missing' }
+      ],
+      skillCatalog.skills
+    ),
+    [{ name: 'alpha', description: 'First user skill' }]
+  )
 })
 
 test('工作区文件路径拆分后保留完整目录和最终文件名', () => {

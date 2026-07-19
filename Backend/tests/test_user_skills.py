@@ -10,6 +10,7 @@ from unittest.mock import patch
 from app.protocols import user_skills as user_skills_protocol
 from app.services import user_skill_documents
 from app.services import user_skill_imports
+from app.services import user_skill_settings
 from app.services import user_skills
 
 
@@ -139,7 +140,15 @@ class UserSkillsAgUiTests(unittest.TestCase):
     def test_capabilities_include_catalog_and_import_actions(self) -> None:
         self.assertEqual(
             user_skills_protocol.user_skills_capabilities()["actions"],
-            ["list", "get", "save", "create", "delete", "import"],
+            [
+                "list",
+                "get",
+                "save",
+                "create",
+                "delete",
+                "import",
+                "set-enabled",
+            ],
         )
 
     def test_stream_emits_catalog_lifecycle_and_result(self) -> None:
@@ -181,6 +190,111 @@ class UserSkillsAgUiTests(unittest.TestCase):
         self.assertIn("RUN_FINISHED", payload)
         self.assertIn('"status":"completed"', payload)
         self.assertIn('"directoryName":"sample"', payload)
+        self.assertIn('"builtinSkills"', payload)
+
+    def test_stream_supports_set_enabled_action(self) -> None:
+        """确认启停动作返回完整 AG-UI 生命周期和更新后的摘要。"""
+
+        skill = user_skills.UserSkillSummary(
+            name="sample",
+            description="Sample skill",
+            directory_name="sample",
+            relative_path="sample/SKILL.md",
+            updated_at="2026-07-19T00:00:00+00:00",
+            enabled=False,
+        )
+
+        async def collect() -> str:
+            with patch.object(
+                user_skills_protocol,
+                "update_user_skill_enabled",
+                return_value=skill,
+            ) as update_enabled:
+                stream = user_skills_protocol.build_user_skills_ag_ui_stream(
+                    payload={
+                        "threadId": "skills-enabled-thread",
+                        "runId": "skills-enabled-run",
+                        "forwardedProps": {
+                            "skillCatalog": {
+                                "action": "set-enabled",
+                                "relativePath": "sample/SKILL.md",
+                                "enabled": False,
+                            }
+                        },
+                    },
+                    accept="text/event-stream",
+                )
+                result = "\n".join([frame async for frame in stream])
+                update_enabled.assert_called_once_with("sample/SKILL.md", False)
+                return result
+
+        payload = asyncio.run(collect())
+
+        self.assertIn('"action":"set-enabled"', payload)
+        self.assertIn('"enabled":false', payload)
+        self.assertIn('"skill"', payload)
+        self.assertIn("STATE_SNAPSHOT", payload)
+        self.assertIn("RUN_FINISHED", payload)
+
+    def test_set_enabled_rejects_missing_boolean(self) -> None:
+        """确认启停参数缺失时通过完整 AG-UI 失败生命周期返回。"""
+
+        async def collect() -> str:
+            stream = user_skills_protocol.build_user_skills_ag_ui_stream(
+                payload={
+                    "threadId": "skills-enabled-thread",
+                    "runId": "skills-enabled-run",
+                    "forwardedProps": {
+                        "skillCatalog": {
+                            "action": "set-enabled",
+                            "relativePath": "sample/SKILL.md",
+                        }
+                    },
+                },
+                accept="text/event-stream",
+            )
+            return "\n".join([frame async for frame in stream])
+
+        payload = asyncio.run(collect())
+
+        self.assertIn('"action":"set-enabled"', payload)
+        self.assertIn('"status":"failed"', payload)
+        self.assertIn("ValidationError", payload)
+        self.assertIn("RUN_FINISHED", payload)
+
+    def test_set_enabled_reports_settings_write_failure(self) -> None:
+        """确认状态文件写入失败时保留完整 AG-UI 错误生命周期。"""
+
+        async def collect() -> str:
+            with patch.object(
+                user_skills_protocol,
+                "update_user_skill_enabled",
+                side_effect=user_skill_settings.SkillSettingsError(
+                    "无法保存用户技能启用状态。"
+                ),
+            ):
+                stream = user_skills_protocol.build_user_skills_ag_ui_stream(
+                    payload={
+                        "threadId": "skills-enabled-thread",
+                        "runId": "skills-enabled-run",
+                        "forwardedProps": {
+                            "skillCatalog": {
+                                "action": "set-enabled",
+                                "relativePath": "sample/SKILL.md",
+                                "enabled": False,
+                            }
+                        },
+                    },
+                    accept="text/event-stream",
+                )
+                return "\n".join([frame async for frame in stream])
+
+        payload = asyncio.run(collect())
+
+        self.assertIn('"status":"failed"', payload)
+        self.assertIn("SkillSettingsError", payload)
+        self.assertIn("无法保存用户技能启用状态", payload)
+        self.assertIn("RUN_FINISHED", payload)
 
     def test_invalid_action_is_returned_as_structured_failure(self) -> None:
         async def collect() -> list[str]:

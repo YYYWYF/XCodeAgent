@@ -53,7 +53,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "requestField": "forwardedProps.selectedSkillNames",
             "stateField": "selectedSkillNames",
             "semantics": "selected-user-skills-are-force-loaded",
-            "emptyBehavior": "all-user-skills-available-on-demand",
+            "emptyBehavior": "all-enabled-user-skills-available-on-demand",
             "frontendBuiltinSkillsRetained": True,
             "forcedAgents": ["frontend", "data_source", "test", "repair_planner"],
             "directChatModelNodesLoadSkills": False,

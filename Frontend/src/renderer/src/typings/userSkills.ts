@@ -5,6 +5,15 @@ export type UserSkill = {
   relativePath: string
   updatedAt: string
   version?: string
+  enabled: boolean
+}
+
+export type BuiltinSkill = {
+  name: string
+  description: string
+  directoryName: string
+  relativePath: string
+  version?: string
 }
 
 export type ChatMessageSkill = {
@@ -21,6 +30,8 @@ export type UserSkillIssue = {
 export type UserSkillCatalog = {
   root: string
   skills: UserSkill[]
+  builtinRoot: string
+  builtinSkills: BuiltinSkill[]
   skippedCount: number
   issues: UserSkillIssue[]
 }

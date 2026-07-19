@@ -7,14 +7,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.services import user_skill_documents, user_skills
+from app.services import user_skill_documents, user_skill_settings, user_skills
 
 
 class UserSkillDocumentTests(unittest.TestCase):
     def test_create_uses_frontmatter_name_and_creates_missing_root(self) -> None:
+        """确认创建技能会使用 frontmatter 名称并清理旧关闭状态。"""
+
         with tempfile.TemporaryDirectory() as temporary_root:
             root = Path(temporary_root) / "skills"
             content = self._new_skill_content("weather_query")
+            user_skill_settings.set_user_skill_enabled(
+                root,
+                "weather_query/SKILL.md",
+                False,
+            )
 
             document = user_skill_documents.create_user_skill_document(
                 content,
@@ -28,6 +35,10 @@ class UserSkillDocumentTests(unittest.TestCase):
             self.assertEqual(
                 document.revision,
                 hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            )
+            self.assertEqual(
+                user_skill_settings.read_skill_settings(root).disabled_skills,
+                [],
             )
 
     def test_create_uses_environment_specific_resolved_root(self) -> None:
@@ -146,13 +157,20 @@ class UserSkillDocumentTests(unittest.TestCase):
             self.assertNotIn(str(root), str(error_context.exception))
 
     def test_delete_removes_skill_directory_and_supporting_resources(self) -> None:
+        """确认删除技能会移除完整目录和对应启用状态。"""
+
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root)
+            root = Path(temporary_root) / "environment" / "skills"
             skill_directory = root / "sample"
             self._write_skill(skill_directory)
             references = skill_directory / "references"
             references.mkdir()
             (references / "guide.md").write_text("Guide", encoding="utf-8")
+            user_skill_settings.set_user_skill_enabled(
+                root,
+                "sample/SKILL.md",
+                False,
+            )
 
             deleted = user_skill_documents.delete_user_skill(
                 "sample/SKILL.md",
@@ -163,6 +181,10 @@ class UserSkillDocumentTests(unittest.TestCase):
             self.assertEqual(deleted.relative_path, "sample/SKILL.md")
             self.assertFalse(skill_directory.exists())
             self.assertTrue(root.is_dir())
+            self.assertEqual(
+                user_skill_settings.read_skill_settings(root).disabled_skills,
+                [],
+            )
 
     def test_delete_rejects_symlink_and_sanitizes_delete_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:

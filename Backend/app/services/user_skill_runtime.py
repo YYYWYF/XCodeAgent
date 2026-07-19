@@ -269,6 +269,8 @@ def _scan_user_skill_runtime(root: Path | None) -> _RuntimeScan:
     )
     discovered: list[_RuntimeSkill] = []
     for summary in catalog.skills:
+        if not summary.enabled:
+            continue
         try:
             document = read_user_skill_document(summary.relative_path, root=skills_root)
             files = _collect_skill_files(skills_root, summary)

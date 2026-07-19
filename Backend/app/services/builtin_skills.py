@@ -4,6 +4,10 @@ import os
 import sys
 from pathlib import Path
 
+from pydantic import Field
+
+from app.services.user_skills import ApiModel, parse_skill_frontmatter
+
 
 BUILTIN_SKILLS_DIR_ENV = "XCODEAGENT_BUILTIN_SKILLS_DIR"
 BUILTIN_SKILLS_VIRTUAL_ROOT = "/.xcodeagent/builtin-skills/"
@@ -46,8 +50,18 @@ REQUIRED_BUILTIN_SKILL_FILES = {
 }
 
 
+class BuiltinSkillSummary(ApiModel):
+    """描述技能页面展示所需的只读内置技能元数据。"""
+
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    directory_name: str = Field(min_length=1)
+    relative_path: str = Field(min_length=1)
+    version: str | None = None
+
+
 def resolve_builtin_skills_root() -> Path:
-    """Resolve bundled skills without depending on the process working directory."""
+    """在源码和冻结布局中解析内置技能目录。"""
 
     configured_path = os.getenv(BUILTIN_SKILLS_DIR_ENV)
     if configured_path:
@@ -66,6 +80,8 @@ def resolve_builtin_skills_root() -> Path:
 
 
 def required_builtin_skill_paths(root: Path | None = None) -> list[Path]:
+    """返回构建和启动阶段必须存在的全部内置技能文件。"""
+
     skills_root = root or resolve_builtin_skills_root()
     return [
         skills_root / skill_name / relative_path
@@ -75,6 +91,8 @@ def required_builtin_skill_paths(root: Path | None = None) -> list[Path]:
 
 
 def validate_required_builtin_skills(root: Path | None = None) -> Path:
+    """验证内置技能资源完整并返回解析后的目录。"""
+
     skills_root = (root or resolve_builtin_skills_root()).resolve()
     missing = [
         path.relative_to(skills_root).as_posix()
@@ -90,6 +108,8 @@ def validate_required_builtin_skills(root: Path | None = None) -> Path:
 
 
 def available_builtin_skills(root: Path | None = None) -> list[str]:
+    """返回健康检查使用的内置技能目录名列表。"""
+
     skills_root = root or resolve_builtin_skills_root()
     if not skills_root.is_dir():
         return []
@@ -100,6 +120,43 @@ def available_builtin_skills(root: Path | None = None) -> list[str]:
     )
 
 
+def builtin_skills_root_label() -> str:
+    """返回不会暴露宿主路径的内置技能虚拟目录。"""
+
+    return BUILTIN_SKILLS_VIRTUAL_ROOT.rstrip("/")
+
+
+def list_builtin_skills(root: Path | None = None) -> list[BuiltinSkillSummary]:
+    """从内置 SKILL.md 读取技能页面所需的只读卡片摘要。"""
+
+    skills_root = root or resolve_builtin_skills_root()
+    if not skills_root.is_dir():
+        return []
+
+    summaries: list[BuiltinSkillSummary] = []
+    for directory_name in available_builtin_skills(skills_root):
+        skill_file = skills_root / directory_name / "SKILL.md"
+        try:
+            metadata = parse_skill_frontmatter(skill_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise RuntimeError(f"内置技能 {directory_name} 的元数据无效。") from exc
+        summaries.append(
+            BuiltinSkillSummary(
+                name=metadata["name"],
+                description=metadata["description"],
+                directory_name=directory_name,
+                relative_path=f"{directory_name}/SKILL.md",
+                version=metadata.get("version"),
+            )
+        )
+    return sorted(
+        summaries,
+        key=lambda skill: (skill.name.casefold(), skill.relative_path.casefold()),
+    )
+
+
 def is_builtin_skill_virtual_path(file_path: str) -> bool:
+    """判断虚拟路径是否属于只读内置技能命名空间。"""
+
     root = BUILTIN_SKILLS_VIRTUAL_ROOT.rstrip("/")
     return file_path == root or file_path.startswith(f"{root}/")
