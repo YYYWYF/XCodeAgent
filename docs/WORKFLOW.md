@@ -74,7 +74,7 @@ START
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
-`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。集成测试失败后的修复不回到 `prepare_build_tasks`；RepairPlanner 只追加受限 repair tasks，然后回到 `build` 由 BuildScheduler 调度执行。
+`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。集成测试失败后的修复不回到 `prepare_build_tasks`；包括 API 契约错误在内的失败都由 RepairPlanner 生成受限 repair tasks，然后回到 `build` 由 BuildScheduler 调度执行。
 
 ### `classify_request_complexity`
 
@@ -379,7 +379,7 @@ testing.START
   → testing.END
 ```
 
-`main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；质量门禁通过时跳过修复计划并输出 `integration_next_action = launch_project`。
+`main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；API 契约错误作为 `contract_mismatch` 证据传给 RepairPlanner，并确定性覆盖模型可能返回的确认决策，生成 Data Source 修复任务。质量门禁通过时跳过修复计划并输出 `integration_next_action = launch_project`。
 
 质量门禁至少应覆盖：
 
@@ -439,7 +439,9 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 - `await_user_input`：修复需要扩大范围、改变契约或做产品决策，本轮结束等待用户确认；
 - `handle_failure`：证据不足、修复预算耗尽或不可恢复失败，进入失败处理。
 
-为避免卡死，Graph State 记录 `repair_iteration` 和 `max_repair_iterations`。超过预算后，Testing Subgraph 返回 `terminal_failure` 并路由到 `handle_failure`。
+为避免卡死，Graph State 记录 `repair_iteration` 和 `max_repair_iterations`。超过预算后，Testing Subgraph 会先持久化包含计数和原因的 `terminal_failure` repair plan，再路由到 `handle_failure`；AG-UI 最终摘要和前端结果标题必须显示失败，不能复用旧的预览地址或显示“任务已完成”。用户从节点调试器显式选择 `integration_test` 时代表新的验证循环，因此请求适配器会清空旧 repair plan/tasks 并把预算重置为 `0/3`；正常工作流的自动复测仍沿用同一轮预算。
+
+该修复闭环沿用以下参考架构边界：learn-coding-agent 的执行—验证—修复紧凑循环覆盖代码、测试和 API 契约错误；OpenCode 风格的可恢复 session 状态持久化修复计数、计划和终止原因；Deep Agents 的 RepairPlanner 只接收结构化失败证据并生成受限任务。为满足 128k 上下文预算，不注入完整仓库、全量日志或会话历史。
 
 ### `launch_project`
 

@@ -11,6 +11,11 @@ export type WorkflowPreviewTarget = {
   url: string
 }
 
+export type WorkflowFinalResultPresentation = {
+  failed: boolean
+  title: string
+}
+
 export type GroupedWorkspaceCodeChange = {
   path: string
   additions: number
@@ -153,6 +158,17 @@ export function workflowCodeChanges(
   }
 
   return undefined
+}
+
+/** 根据 Workflow 最终状态生成结果标题，避免失败运行被标记为任务完成。 */
+export function workflowFinalResultPresentation(
+  workflow: WorkflowRunPayload | undefined
+): WorkflowFinalResultPresentation {
+  const failed = workflow?.summary.status === 'failed'
+  return {
+    failed,
+    title: failed ? '任务执行失败' : '任务已完成'
+  }
 }
 
 /** 从实时且成功的启动节点中提取一次性预览导航目标。 */

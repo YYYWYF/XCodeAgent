@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { workflowPreviewTarget } from '../src/renderer/src/components/AiChatPanel/utils'
+import {
+  workflowFinalResultPresentation,
+  workflowPreviewTarget
+} from '../src/renderer/src/components/AiChatPanel/utils'
 import { navigatePreviewHistory } from '../src/renderer/src/utils/previewUrl'
 import type { WorkflowRunPayload } from '../src/renderer/src/typings'
 
@@ -45,6 +48,17 @@ test('不同运行返回相同 URL 时仍生成不同的一次性目标', () => 
 
   assert.notEqual(first?.key, second?.key)
   assert.equal(first?.url, second?.url)
+})
+
+test('最终结果标题区分成功和失败 Workflow', () => {
+  assert.deepEqual(workflowFinalResultPresentation(previewWorkflow()), {
+    failed: false,
+    title: '任务已完成'
+  })
+  assert.deepEqual(workflowFinalResultPresentation(previewWorkflow({ status: 'failed' })), {
+    failed: true,
+    title: '任务执行失败'
+  })
 })
 
 test('重复地址不追加历史，新地址会截断旧前进记录', () => {

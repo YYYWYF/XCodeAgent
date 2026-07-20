@@ -31,6 +31,8 @@ def route_workflow_start(state: ProjectState) -> str:
 
 
 def route_test_validation(state: ProjectState) -> str:
+    """根据质量门禁和修复规划结果选择后续节点。"""
+
     if state.get("quality_gate_passed"):
         return "launch_project"
     next_action = state.get("integration_next_action")

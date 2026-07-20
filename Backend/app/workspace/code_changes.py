@@ -22,6 +22,7 @@ from app.workspace.workspace import (
 
 MAX_SNAPSHOT_FILE_BYTES = 1_000_000
 CODE_CHANGE_IGNORED_DIRS = {".xcodeagent"}
+CODE_CHANGE_IGNORED_FILE_NAMES = {".ds_store"}
 T = TypeVar("T")
 
 
@@ -241,7 +242,11 @@ def merge_code_change_sets(
 
 
 def _skip_snapshot_path(path: Path, root: Path) -> bool:
+    """判断文件是否应从面向用户的工作区变更快照中排除。"""
+
     if path.is_symlink() or not path.is_file():
+        return True
+    if path.name.casefold() in CODE_CHANGE_IGNORED_FILE_NAMES:
         return True
     if _is_internal_code_change_path(path, root):
         return True

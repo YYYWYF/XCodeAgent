@@ -1,4 +1,9 @@
-import { CheckCircleOutlined, RobotOutlined, ToolOutlined } from '@ant-design/icons'
+import {
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  RobotOutlined,
+  ToolOutlined
+} from '@ant-design/icons'
 import { Spin, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { EditorMode, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../../../../typings'
@@ -9,7 +14,7 @@ import ToolCallCard from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
 import type { AgentChatMessage, ChatCopy } from '../../types'
-import { workflowCodeChanges } from '../../utils'
+import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
 import './MessageList.less'
 
 const { Text } = Typography
@@ -28,6 +33,7 @@ type MessageListProps = {
   revertingCodeChangeIds: ReadonlySet<string>
 }
 
+/** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
   codeChangeActionsDisabled,
   copy,
@@ -58,6 +64,7 @@ export default function MessageList({
           messages.map((message) => {
             const messageLoading = message.id === activeAssistantMessageId
             const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
+            const finalResult = workflowFinalResultPresentation(message.workflow)
             const nonToolSteps = message.processSteps?.filter(
               (step) => step.kind !== 'tool' && step.kind !== 'command'
             )
@@ -83,12 +90,12 @@ export default function MessageList({
                           <ToolCallCard key={toolCall.id} toolCall={toolCall} />
                         ))}
                       {!messageLoading && codeChanges && (
-                        <div className={cx('final-result-heading')}>
+                        <div className={cx('final-result-heading', finalResult.failed && 'failed')}>
                           <span>
-                            <CheckCircleOutlined />
+                            {finalResult.failed ? <CloseCircleOutlined /> : <CheckCircleOutlined />}
                           </span>
                           <div>
-                            <Text strong>任务已完成</Text>
+                            <Text strong>{finalResult.title}</Text>
                             <Text type="secondary">最终结果</Text>
                           </div>
                         </div>

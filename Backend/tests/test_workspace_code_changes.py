@@ -105,6 +105,27 @@ class WorkspaceCodeChangeTests(unittest.TestCase):
             assert after is not None
             self.assertNotIn(".xcodeagent/cache/workspace.json", after.files)
 
+    def test_macos_metadata_files_are_not_included(self) -> None:
+        """验证任意目录中的 macOS 元数据文件不会进入用户代码变更集。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            before = snapshot_workspace(workspace)
+
+            (root / ".DS_Store").write_bytes(b"root metadata")
+            nested_dir = root / "Frontend" / "src"
+            nested_dir.mkdir(parents=True)
+            (nested_dir / ".DS_Store").write_bytes(b"nested metadata")
+            (nested_dir / "main.ts").write_text("export {}\n", encoding="utf-8")
+            after = snapshot_workspace(workspace)
+
+            files = diff_workspace_snapshots(before, after, source_tool="test.agent")
+
+            self.assertEqual([item["path"] for item in files], ["Frontend/src/main.ts"])
+            assert after is not None
+            self.assertNotIn(".DS_Store", after.files)
+            self.assertNotIn("Frontend/src/.DS_Store", after.files)
+
     def test_nested_paths_are_workspace_relative_posix_paths(self) -> None:
         """验证 Python 端始终返回从工作目录开始的完整 POSIX 相对路径。"""
 

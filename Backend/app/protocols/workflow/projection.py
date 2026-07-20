@@ -68,11 +68,14 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     """仅预测下一个 UI 时间线节点，不参与 LangGraph 实际路由。"""
 
     if node_name == "integration_test":
-        return (
-            ["launch_project"]
-            if update.get("quality_gate_passed")
-            else ["handle_failure"]
-        )
+        if update.get("quality_gate_passed"):
+            return ["launch_project"]
+        next_action = update.get("integration_next_action")
+        if next_action == "repair_build":
+            return ["build"]
+        if next_action == "await_user_input":
+            return []
+        return ["handle_failure"]
     if node_name == "detail_confirmation":
         if update.get("status") == "requires_user_input":
             return []
@@ -110,6 +113,8 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
+    """把节点内部更新投射为前端可展示的摘要和结构化数据。"""
+
     if node_name == "classify_request_complexity":
         return {
             "message": f"复杂度={update.get('request_complexity')}，原因={update.get('complexity_reason')}",
@@ -341,6 +346,8 @@ def _workflow_event(
 def _workflow_summary(
     result: dict[str, Any], events: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    """生成最终 Workflow 摘要，并解释修复终止原因。"""
+
     status = str(result.get("status") or "completed")
     completed_nodes = [
         event for event in events if event.get("type") == "workflow.node.completed"
@@ -374,7 +381,17 @@ def _workflow_summary(
             f"Workflow {status}：完成 {len(completed_nodes)} 个节点，"
             f"质量门禁={'通过' if result.get('quality_gate_passed') else '未通过'}。"
         )
-    if result.get("preview_url"):
+        terminal_reason = _repair_terminal_reason(result)
+        if terminal_reason:
+            repair_iteration = result.get("repair_iteration")
+            max_repair_iterations = result.get("max_repair_iterations")
+            iteration_text = (
+                f" 修复次数={repair_iteration}/{max_repair_iterations}。"
+                if repair_iteration is not None and max_repair_iterations is not None
+                else ""
+            )
+            message += f"{iteration_text} 终止原因：{terminal_reason}"
+    if result.get("preview_url") and status != "failed":
         message += f" 预览地址：{result.get('preview_url')}。"
 
     return {
@@ -503,6 +520,17 @@ def _workflow_confirmation_artifact(
         "format": "markdown",
         "content": content,
     }
+
+
+def _repair_terminal_reason(result: dict[str, Any]) -> str:
+    """提取修复计划中的终止原因，供最终摘要直接解释失败。"""
+
+    repair_task_plan = result.get("repair_task_plan")
+    if not isinstance(repair_task_plan, dict):
+        return ""
+    if repair_task_plan.get("status") != "terminal_failure":
+        return ""
+    return str(repair_task_plan.get("reason") or "").strip()
 
 
 def _workflow_code_changes(value: dict[str, Any]) -> dict[str, Any] | None:

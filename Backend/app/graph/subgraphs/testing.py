@@ -35,6 +35,8 @@ def actual_project_checks(state: ProjectState) -> dict:
 
 
 def api_contract_check(state: ProjectState) -> dict:
+    """校验正式 ProjectPlan 契约，并区分计划错误与未完成构建。"""
+
     errors = validate_api_contract_consistency(state.get("project_plan", {}))
     passed = _build_is_clean(state) and not errors
     return {
@@ -55,7 +57,13 @@ def api_contract_check(state: ProjectState) -> dict:
                     else "; ".join(errors)
                     or f"Build summary is not clean: {state.get('build_summary', {})}"
                 ),
-                "failure_category": None if passed else "contract_mismatch",
+                "failure_category": (
+                    None
+                    if passed
+                    else "contract_mismatch"
+                    if errors
+                    else "build_incomplete"
+                ),
                 "execution": {
                     "tool": "deterministic_validator",
                     "argv": ["project-plan-contract-validation"],
@@ -110,6 +118,8 @@ def main_quality_gate(state: ProjectState) -> dict:
 
 
 def repair_planning(state: ProjectState) -> dict:
+    """根据质量门禁结果选择 RepairPlanner 修复任务或终止路径。"""
+
     if state.get("quality_gate_passed"):
         return {
             "repair_task_plan": {},
@@ -121,15 +131,20 @@ def repair_planning(state: ProjectState) -> dict:
     repair_iteration = int(state.get("repair_iteration", 0) or 0)
     max_repair_iterations = int(state.get("max_repair_iterations", 3) or 3)
     if repair_iteration >= max_repair_iterations:
+        repair_task_plan = {
+            "version": "0.1.0",
+            "status": "terminal_failure",
+            "decision": "terminal_failure",
+            "reason": "Integration repair iteration budget exhausted.",
+            "tasks": [],
+        }
+        repair_task_plan_path = write_repair_task_plan_json(state, repair_task_plan)
         return {
-            "repair_task_plan": {
-                "version": "0.1.0",
-                "status": "terminal_failure",
-                "decision": "terminal_failure",
-                "reason": "Integration repair iteration budget exhausted.",
-                "tasks": [],
-            },
+            "repair_task_plan": repair_task_plan,
+            "repair_task_plan_path": repair_task_plan_path,
             "repair_tasks": [],
+            "repair_iteration": repair_iteration,
+            "max_repair_iterations": max_repair_iterations,
             "integration_next_action": "handle_failure",
             "test_events": ["repair_planning:budget_exhausted"],
         }

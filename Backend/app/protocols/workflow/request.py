@@ -369,6 +369,8 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
 
 
 def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
+    """从前端 Workflow 快照恢复主流程允许公开往返的紧凑状态。"""
+
     if not value:
         return {}
 
@@ -488,10 +490,26 @@ def _debug_resume_values(
     *,
     workspace: str = "",
 ) -> dict[str, Any]:
+    """加载节点调试产物，并为显式集成测试调试初始化独立修复预算。"""
+
     if not debug_state or debug_state.get("enabled") is False:
         return {}
 
     values: dict[str, Any] = {}
+    debug_resume_from = _optional_text(
+        debug_state.get("resume_from") or debug_state.get("resumeFrom")
+    )
+    if debug_resume_from == "integration_test":
+        # 显式节点调试代表新的验证循环，不能继承同一 thread 已耗尽的修复预算。
+        values.update(
+            {
+                "repair_task_plan": {},
+                "repair_tasks": [],
+                "repair_iteration": 0,
+                "max_repair_iterations": 3,
+                "integration_next_action": "",
+            }
+        )
     requirement_path = _resolve_debug_json_path(
         debug_state,
         ("requirement_spec_path", "requirementSpecPath", "requirementSpecDirectory"),
