@@ -1,6 +1,7 @@
 import {
   AppstoreOutlined,
   BankOutlined,
+  BgColorsOutlined,
   CloudOutlined,
   DashboardOutlined,
   DesktopOutlined,
@@ -68,6 +69,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
   const apiTrackEnabled = Form.useWatch(['apiTrack', 'enable'], form) ?? true
   const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? true
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? false
+  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#2c68ff'
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
     const keyword = trackMethodSearch.trim().toLowerCase()
@@ -247,6 +249,43 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             </Form.Item>
           </div>
         </div>
+      </section>
+
+      <section className={cx('application-form-section', 'application-form-section--full')}>
+        <SectionTitle icon={<BgColorsOutlined />}>主题</SectionTitle>
+        <Form.Item
+          label="主题色"
+        >
+          <Form.Item name={['theme', 'primaryColor']} hidden>
+            <Input />
+          </Form.Item>
+          <div className={cx('theme-color-picker-row')}>
+            <div className={cx('theme-color-swatch-wrapper')}>
+              <div
+                className={cx('theme-color-swatch')}
+                style={{ backgroundColor: themePrimaryColor || '#2c68ff' }}
+              />
+              <input
+                type="color"
+                className={cx('theme-color-input')}
+                value={themePrimaryColor || '#2c68ff'}
+                onChange={(e) => {
+                  const color = e.target.value
+                  form.setFields([{ name: ['theme', 'primaryColor'], value: color }])
+                }}
+              />
+            </div>
+            <Input
+              placeholder="#2c68ff"
+              style={{ flex: 1 }}
+              value={themePrimaryColor || ''}
+              onChange={(e) => {
+                  const color = e.target.value
+                  form.setFields([{ name: ['theme', 'primaryColor'], value: color }])
+                }}
+            />
+          </div>
+        </Form.Item>
       </section>
 
       <section

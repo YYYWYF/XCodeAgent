@@ -12,6 +12,9 @@ import './WelcomeModal.less'
 import { saveApplication } from './applicationService'
 import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
+import type { SettingsValues } from './ApplicationPagePlanningModal'
+import { fetchTemplateCode } from '../../service/templateApi'
+
 type Props = {
   disabled?: boolean
   onStartPlanning: (application: ApplicationConfig, threadId: string) => void
@@ -27,6 +30,7 @@ export default function CreateApplicationAction({
   const [form] = Form.useForm<ApplicationDraft>()
   const [modalOpen, setModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [fetchingTemplate, setFetchingTemplate] = useState(false)
   const [selectingParent, setSelectingParent] = useState(false)
 
   // 打开应用基础配置弹窗。
@@ -93,6 +97,21 @@ export default function CreateApplicationAction({
         createdAt: Date.now()
       }
       await saveApplication(application)
+
+      // 调用模板工程拉取接口
+      setFetchingTemplate(true)
+      let templateResult: { code: number; message: string; data: { templateVersion: string; generatedAt: number; fileCount: number } } | undefined
+      try {
+        templateResult = await fetchTemplateCode(schema)
+        console.log('[模板拉取成功]', templateResult)
+      } catch (templateError) {
+        console.error('[模板拉取失败]', templateError)
+        // 模板拉取失败不阻塞流程，继续打开规划页面
+        message.warning('模板拉取失败，请稍后在规划页面重试')
+      } finally {
+        setFetchingTemplate(false)
+      }
+
       setModalOpen(false)
       onStartPlanning(application, planningThreadId)
     } catch (error) {
@@ -124,7 +143,7 @@ export default function CreateApplicationAction({
           form.setFieldsValue(initialApplicationDraft)
         }}
         cancelText="取消"
-        confirmLoading={creating}
+        confirmLoading={creating || fetchingTemplate}
         destroyOnClose
         forceRender
         maskClosable={false}

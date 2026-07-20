@@ -214,6 +214,37 @@
   }
 }
 
+// 主题颜色选择器
+.@{class-prefix}-theme-color-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.@{class-prefix}-theme-color-swatch-wrapper {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.@{class-prefix}-theme-color-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 2px solid var(--modal-border);
+}
+
+.@{class-prefix}-theme-color-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
 @media (max-width: 720px) {
   .@{class-prefix}-application-form {
     grid-template-columns: 1fr;
