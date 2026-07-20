@@ -206,6 +206,8 @@ def apply_detail_review_submission(
 
 
 def _repair_page_contract_fields(project_plan: dict[str, Any]) -> None:
+    """按页面声明的 Endpoint 依赖重建受契约控制的依赖和响应绑定。"""
+
     contracts = project_plan.get("api_contracts", [])
     data_source_ids = [
         str(source.get("id"))
@@ -215,10 +217,15 @@ def _repair_page_contract_fields(project_plan: dict[str, Any]) -> None:
     for detail in project_plan.get("page_detail_plans", []):
         if not isinstance(detail, dict) or not detail.get("pageId"):
             continue
+        declared_api_dependencies = _page_reference_items(
+            detail,
+            "endpoint_dependencies",
+            "api_dependencies",
+        )
         api_dependencies = normalize_page_api_dependencies(
             contracts if isinstance(contracts, list) else [],
             data_source_ids if isinstance(data_source_ids, list) else [],
-            detail.get("api_dependencies") or [],
+            declared_api_dependencies,
             page_path=str(detail.get("path") or ""),
             page_name=str(
                 detail.get("page_name")

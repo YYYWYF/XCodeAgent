@@ -7,6 +7,7 @@ from app.services.api_contracts import (
     normalize_response_path,
     response_field_paths,
 )
+from app.services.api_schema_refs import normalize_local_schema_ref
 
 
 def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]:
@@ -39,9 +40,12 @@ def _validate_contract_schemas(
     schemas: dict[str, Any],
     errors: list[str],
 ) -> None:
+    """校验契约内所有 Schema 引用均能解析到同一契约。"""
+
     for schema_id, schema in schemas.items():
         for ref in _collect_schema_refs(schema):
-            if ref not in schemas:
+            resolved_ref = normalize_local_schema_ref(ref, contract_id=contract_id)
+            if resolved_ref not in schemas:
                 errors.append(
                     f"Schema {contract_id}.{schema_id} references unknown schema {ref}."
                 )
@@ -53,6 +57,8 @@ def _index_and_validate_endpoints(
     endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]],
     errors: list[str],
 ) -> None:
+    """建立 Endpoint 索引并校验单个契约的 Endpoint。"""
+
     contract_id = str(contract.get("id") or "")
     schemas = contract.get("schemas", {})
     for endpoint in dict_items(contract.get("endpoints")):
@@ -63,15 +69,24 @@ def _index_and_validate_endpoints(
         if endpoint_id in endpoint_index:
             errors.append(f"Duplicate endpoint id: {endpoint_id}.")
         endpoint_index[endpoint_id] = (contract, endpoint)
-        _validate_endpoint(endpoint_id, endpoint, schemas, errors)
+        _validate_endpoint(
+            contract_id,
+            endpoint_id,
+            endpoint,
+            schemas,
+            errors,
+        )
 
 
 def _validate_endpoint(
+    contract_id: str,
     endpoint_id: str,
     endpoint: dict[str, Any],
     schemas: dict[str, Any],
     errors: list[str],
 ) -> None:
+    """校验 Endpoint 方法、路径参数及 Schema 引用。"""
+
     method = str(endpoint.get("method") or "")
     path = str(endpoint.get("path") or "")
     if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
@@ -96,7 +111,8 @@ def _validate_endpoint(
         errors.append(f"Endpoint {endpoint_id} does not define response schema.")
     for key in ("request_schema_ref", "response_schema_ref"):
         ref = endpoint.get(key)
-        if ref and ref not in schemas:
+        resolved_ref = normalize_local_schema_ref(ref, contract_id=contract_id)
+        if ref and resolved_ref not in schemas:
             errors.append(f"Endpoint {endpoint_id} references unknown schema {ref}.")
 
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.project_plan import create_project_plan
 from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.api_contracts import response_field_paths
 from app.services.page_detail_plan import (
     create_page_detail_plan,
     extract_page_detail_context,
 )
+from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import render_project_plan_markdown
 
@@ -266,6 +267,112 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertEqual(endpoint["path"], "/api/inventory")
         self.assertEqual(endpoint["response_schema_ref"], "Inventory")
         self.assertEqual(validate_api_contract_consistency(plan), [])
+
+    def test_project_plan_normalizes_json_pointer_schema_refs(self) -> None:
+        spec = create_requirement_spec("创建一个库存管理系统")
+        plan = create_project_plan(
+            spec,
+            agent_plan={
+                "api_contracts": [
+                    {
+                        "id": "inventory_api",
+                        "data_source_id": "inventory_management_source",
+                        "schemas": {
+                            "Inventory": {
+                                "type": "object",
+                                "properties": {"id": {"type": "string"}},
+                            },
+                            "InventoryList": {
+                                "type": "object",
+                                "properties": {
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"$ref": "#/schemas/Inventory"},
+                                    }
+                                },
+                            },
+                        },
+                        "endpoints": [
+                            {
+                                "id": "inventory.list",
+                                "method": "GET",
+                                "path": "/api/inventory",
+                                "response_schema_ref": "#/schemas/InventoryList",
+                            }
+                        ],
+                    }
+                ]
+            },
+            authoritative_agent_plan=True,
+        )
+
+        contract = plan["api_contracts"][0]
+        self.assertEqual(
+            contract["schemas"]["InventoryList"]["properties"]["items"]["items"][
+                "$ref"
+            ],
+            "Inventory",
+        )
+        self.assertEqual(
+            contract["endpoints"][0]["response_schema_ref"],
+            "InventoryList",
+        )
+        self.assertEqual(validate_api_contract_consistency(plan), [])
+
+    def test_legacy_json_pointer_refs_validate_and_expand_all_of_paths(self) -> None:
+        plan = {
+            "api_contracts": [
+                {
+                    "id": "app_api",
+                    "schemas": {
+                        "Item": {
+                            "type": "object",
+                            "properties": {"id": {"type": "string"}},
+                        },
+                        "Detail": {
+                            "allOf": [
+                                {"$ref": "#/schemas/Item"},
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "relatedItems": {
+                                            "type": "array",
+                                            "items": {"$ref": "#/schemas/Item"},
+                                        }
+                                    },
+                                },
+                            ]
+                        },
+                    },
+                    "endpoints": [
+                        {
+                            "id": "getDetail",
+                            "method": "GET",
+                            "path": "/api/detail",
+                            "response_schema_ref": "#/schemas/Detail",
+                        }
+                    ],
+                }
+            ],
+            "data_sources": [],
+            "page_detail_plans": [],
+        }
+
+        self.assertEqual(validate_api_contract_consistency(plan), [])
+        self.assertEqual(
+            set(response_field_paths(plan["api_contracts"], "getDetail")),
+            {"id", "relatedItems", "relatedItems[].id"},
+        )
+
+        plan["api_contracts"][0]["endpoints"][0][
+            "response_schema_ref"
+        ] = "other_api#/schemas/Detail"
+        self.assertTrue(
+            any(
+                "unknown schema other_api#/schemas/Detail" in error
+                for error in validate_api_contract_consistency(plan)
+            )
+        )
 
     def test_contract_consistency_rejects_fields_defined_by_data_source(self) -> None:
         plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))

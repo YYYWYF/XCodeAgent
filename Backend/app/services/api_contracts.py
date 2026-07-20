@@ -3,6 +3,12 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from app.services.api_schema_refs import (
+    normalize_local_schema_ref,
+    normalize_schema_references,
+    schema_field_paths,
+)
+
 
 def dict_items(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
@@ -11,12 +17,12 @@ def dict_items(value: Any) -> list[dict[str, Any]]:
 
 
 def normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Normalize compact business contracts without duplicating field definitions."""
+    """规范化紧凑业务契约，并把契约内 Schema 引用统一为裸名称。"""
 
     normalized: list[dict[str, Any]] = []
     for item in items:
         contract_id = str(item.get("id") or "resource_api")
-        schemas = _normalize_schemas(item.get("schemas"))
+        schemas = _normalize_schemas(item.get("schemas"), contract_id=contract_id)
         authentication = _normalize_authentication(item.get("authentication"))
         endpoints = [
             _normalize_endpoint(
@@ -283,12 +289,19 @@ def response_field_paths(
     contracts: list[dict[str, Any]],
     endpoint_id: str,
 ) -> list[str]:
+    """返回 Endpoint 响应 Schema 的全部可绑定字段路径。"""
+
     contract, endpoint = _find_endpoint(contracts, endpoint_id)
     if not contract or not endpoint:
         return []
-    schema_ref = endpoint.get("response_schema_ref")
-    schema = contract.get("schemas", {}).get(schema_ref)
-    return _schema_paths(schema, contract.get("schemas", {}))
+    contract_id = str(contract.get("id") or "")
+    schemas = contract.get("schemas", {})
+    schema_ref = normalize_local_schema_ref(
+        endpoint.get("response_schema_ref"),
+        contract_id=contract_id,
+    )
+    schema = schemas.get(schema_ref)
+    return schema_field_paths(schema, schemas, contract_id=contract_id)
 
 
 def normalize_response_path(value: Any) -> str:
@@ -371,22 +384,38 @@ def normalize_response_bindings(
     return normalized
 
 
-def _normalize_schemas(value: Any) -> dict[str, dict[str, Any]]:
+def _normalize_schemas(
+    value: Any,
+    *,
+    contract_id: str,
+) -> dict[str, dict[str, Any]]:
+    """规范化 Schema 集合及其中的本地引用。"""
+
     if not isinstance(value, dict):
         return {}
     return {
-        str(schema_id): _normalize_schema(schema)
+        str(schema_id): _normalize_schema(schema, contract_id=contract_id)
         for schema_id, schema in value.items()
         if isinstance(schema, dict)
     }
 
 
-def _normalize_schema(value: dict[str, Any]) -> dict[str, Any]:
-    schema = {**value, "type": str(value.get("type") or "object")}
+def _normalize_schema(
+    value: dict[str, Any],
+    *,
+    contract_id: str,
+) -> dict[str, Any]:
+    """规范化单个 Schema，同时递归统一嵌套的 ``$ref``。"""
+
+    normalized_value = normalize_schema_references(value, contract_id=contract_id)
+    schema = {
+        **normalized_value,
+        "type": str(normalized_value.get("type") or "object"),
+    }
     if schema["type"] == "object":
-        properties = value.get("properties")
+        properties = normalized_value.get("properties")
         schema["properties"] = properties if isinstance(properties, dict) else {}
-        required = value.get("required")
+        required = normalized_value.get("required")
         schema["required"] = [str(item) for item in required] if isinstance(required, list) else []
     return schema
 
@@ -398,6 +427,8 @@ def _normalize_endpoint(
     base_path: str,
     contract_authentication: dict[str, Any],
 ) -> dict[str, Any]:
+    """规范化 Endpoint 字段及其请求、响应 Schema 引用。"""
+
     method = str(endpoint.get("method") or "GET").upper()
     path = str(endpoint.get("path") or endpoint.get("url") or base_path)
     endpoint_id = str(endpoint.get("id") or f"{contract_id}.{method.lower()}")
@@ -409,8 +440,18 @@ def _normalize_endpoint(
         "path": path,
         "summary": str(endpoint.get("summary") or endpoint.get("description") or endpoint_id),
         "parameters": _normalize_parameters(endpoint.get("parameters")),
-        "request_schema_ref": _optional_text(endpoint.get("request_schema_ref")),
-        "response_schema_ref": _optional_text(endpoint.get("response_schema_ref")),
+        "request_schema_ref": _optional_text(
+            normalize_local_schema_ref(
+                endpoint.get("request_schema_ref"),
+                contract_id=contract_id,
+            )
+        ),
+        "response_schema_ref": _optional_text(
+            normalize_local_schema_ref(
+                endpoint.get("response_schema_ref"),
+                contract_id=contract_id,
+            )
+        ),
         "error_codes": [str(item) for item in endpoint.get("error_codes", [])]
         if isinstance(endpoint.get("error_codes"), list)
         else [],
@@ -459,27 +500,3 @@ def _find_endpoint(
             if endpoint.get("id") == endpoint_id:
                 return contract, endpoint
     return None, None
-
-
-def _schema_paths(
-    schema: Any,
-    schemas: dict[str, dict[str, Any]],
-    *,
-    prefix: str = "",
-) -> list[str]:
-    if not isinstance(schema, dict):
-        return []
-    ref = schema.get("$ref")
-    if isinstance(ref, str):
-        return _schema_paths(schemas.get(ref), schemas, prefix=prefix)
-    if schema.get("type") == "array":
-        return _schema_paths(schema.get("items"), schemas, prefix=f"{prefix}[]")
-    if schema.get("type") != "object":
-        return [prefix] if prefix else []
-    paths: list[str] = []
-    for name, child in schema.get("properties", {}).items():
-        child_prefix = f"{prefix}.{name}" if prefix else str(name)
-        paths.append(child_prefix)
-        child_paths = _schema_paths(child, schemas, prefix=child_prefix)
-        paths.extend(path for path in child_paths if path != child_prefix)
-    return paths

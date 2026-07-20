@@ -49,6 +49,28 @@ class DetailReviewTests(unittest.TestCase):
         self.assertEqual(result["confirmation_status"], "confirmed")
         self.assertEqual(result["page_detail_plans"][0]["status"], "confirmed")
 
+    def test_confirmation_repairs_bindings_from_external_detail_references(self) -> None:
+        detail = self.plan["page_detail_plans"][0]
+        page = next(
+            item
+            for item in self.plan["frontend_pages"]
+            if item["pageId"] == detail["pageId"]
+        )
+        detail.pop("api_dependencies", None)
+        detail["references"] = {
+            "endpoint_dependencies": page["references"]["endpoint_dependencies"]
+        }
+        detail["response_bindings"] = []
+
+        result = apply_detail_review_submission(
+            self.plan,
+            {"review_status": "confirmed", "target_changes": []},
+        )
+
+        confirmed_detail = result["page_detail_plans"][0]
+        self.assertTrue(confirmed_detail["api_dependencies"])
+        self.assertTrue(confirmed_detail["response_bindings"])
+
 
 if __name__ == "__main__":
     unittest.main()
