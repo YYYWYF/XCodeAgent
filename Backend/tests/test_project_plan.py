@@ -4,6 +4,7 @@ import unittest
 
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.api_contracts import response_field_paths
+from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_detail_plan import (
     create_page_detail_plan,
     extract_page_detail_context,
@@ -267,6 +268,91 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertEqual(endpoint["path"], "/api/inventory")
         self.assertEqual(endpoint["response_schema_ref"], "Inventory")
         self.assertEqual(validate_api_contract_consistency(plan), [])
+
+    def test_project_plan_accepts_contract_id_alias_without_losing_contract(self) -> None:
+        """模型使用 contract_id 时仍保留契约并补齐唯一数据源关联。"""
+
+        spec = create_requirement_spec("创建一个天气预报系统")
+        source_id = "weather_source"
+        plan = create_project_plan(
+            spec,
+            agent_plan={
+                "data_sources": [
+                    {
+                        "id": source_id,
+                        "name": "天气数据源",
+                        "type": "api",
+                        "entities": ["Weather"],
+                        "schema_refs": ["Weather"],
+                    }
+                ],
+                "api_contracts": [
+                    {
+                        "contract_id": "weather_contract",
+                        "schemas": {
+                            "Weather": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                                "required": ["city"],
+                            }
+                        },
+                        "endpoints": [
+                            {
+                                "id": "weather.get",
+                                "method": "GET",
+                                "path": "/api/weather",
+                                "response_schema_ref": "Weather",
+                            }
+                        ],
+                    }
+                ]
+            },
+            authoritative_agent_plan=True,
+        )
+
+        self.assertEqual(len(plan["api_contracts"]), 1)
+        self.assertEqual(plan["api_contracts"][0]["id"], "weather_contract")
+        self.assertEqual(plan["api_contracts"][0]["data_source_id"], source_id)
+        self.assertNotIn("contract_id", plan["api_contracts"][0])
+        self.assertEqual(validate_api_contract_consistency(plan), [])
+
+    def test_project_plan_keeps_default_contract_when_model_returns_empty_list(self) -> None:
+        """业务数据源存在时不允许模型空数组删除确定性默认契约。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        plan = create_project_plan(
+            spec,
+            agent_plan={"api_contracts": []},
+            authoritative_agent_plan=True,
+        )
+
+        self.assertTrue(plan["api_contracts"])
+        self.assertEqual(validate_api_contract_consistency(plan), [])
+
+    def test_contract_consistency_rejects_empty_contracts_for_data_sources(self) -> None:
+        """数据源存在但契约为空时在用户确认前返回明确错误。"""
+
+        errors = validate_api_contract_consistency(
+            {
+                "api_contracts": [],
+                "data_sources": [{"id": "weather_source", "schema_refs": []}],
+            }
+        )
+
+        self.assertIn(
+            "ProjectPlan defines data sources but api_contracts is empty.",
+            errors,
+        )
+        self.assertIn(
+            "ProjectPlan defines data sources but api_contracts is empty.",
+            validate_project_plan_dependencies(
+                {
+                    "api_contracts": [],
+                    "data_sources": [{"id": "weather_source"}],
+                    "frontend_pages": [],
+                }
+            ),
+        )
 
     def test_project_plan_normalizes_json_pointer_schema_refs(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")

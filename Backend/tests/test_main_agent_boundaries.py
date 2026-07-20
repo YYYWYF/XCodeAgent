@@ -29,6 +29,14 @@ class FakeChatModel:
 
 
 class DirectChatModelBoundaryTests(unittest.TestCase):
+    def test_project_planning_prompt_requires_canonical_contract_id(self) -> None:
+        """项目规划提示必须固定契约主键，避免模型改用 contract_id。"""
+
+        prompt = planner._planning_prompt(create_requirement_spec("创建天气预报系统"))
+
+        self.assertIn("never contract_id or contractId", prompt)
+        self.assertIn("data_source_id are required non-empty strings", prompt)
+
     def test_requirements_uses_direct_model_with_only_ask_user(self) -> None:
         message = AIMessage(
             content="",

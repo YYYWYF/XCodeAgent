@@ -32,18 +32,38 @@ def _merge_agent_items(
 
     identity_key = "pageId" if key == "frontend_pages" else "id"
     agent_items = [
-        item
+        _normalize_agent_item_aliases(item, key)
         for item in agent_items
-        if isinstance(item, dict) and item.get(identity_key)
+        if isinstance(item, dict)
     ]
+    agent_items = [item for item in agent_items if item.get(identity_key)]
     if authoritative:
+        # 模型显式返回空契约时保留由数据源确定性生成的契约，避免业务计划静默退化为空数组。
+        if key == "api_contracts" and not agent_items and default_items:
+            return default_items
         defaults_by_id = {
             str(item[identity_key]): item
             for item in default_items
             if item.get(identity_key)
         }
+        defaults_by_source = {
+            str(item.get("data_source_id")): item
+            for item in default_items
+            if item.get("data_source_id")
+        }
         return [
-            _merge_agent_item(defaults_by_id.get(str(item[identity_key]), {}), item)
+            _merge_agent_item(
+                defaults_by_id.get(str(item[identity_key]))
+                or defaults_by_source.get(str(item.get("data_source_id") or ""))
+                or (
+                    default_items[0]
+                    if key == "api_contracts"
+                    and len(default_items) == 1
+                    and len(agent_items) == 1
+                    else {}
+                ),
+                item,
+            )
             for item in agent_items
         ]
 
@@ -56,6 +76,27 @@ def _merge_agent_items(
         _merge_agent_item(item, by_id.get(str(item[identity_key]), {}))
         for item in default_items
     ]
+
+
+def _normalize_agent_item_aliases(item: dict[str, Any], key: str) -> dict[str, Any]:
+    """把模型常见字段别名转换为 ProjectPlan 的唯一内部命名。"""
+
+    normalized = dict(item)
+    if key != "api_contracts":
+        return normalized
+    if not normalized.get("id"):
+        contract_id = normalized.get("contract_id") or normalized.get("contractId")
+        if contract_id:
+            normalized["id"] = contract_id
+    if not normalized.get("data_source_id"):
+        data_source_id = normalized.get("dataSourceId") or normalized.get("source_id")
+        if data_source_id:
+            normalized["data_source_id"] = data_source_id
+    normalized.pop("contract_id", None)
+    normalized.pop("contractId", None)
+    normalized.pop("dataSourceId", None)
+    normalized.pop("source_id", None)
+    return normalized
 
 
 def _merge_agent_item(

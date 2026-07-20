@@ -49,8 +49,11 @@ def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str
 
     pages = dict_items(project_plan.get("frontend_pages"))
     contracts = dict_items(project_plan.get("api_contracts"))
+    data_sources = dict_items(project_plan.get("data_sources"))
     endpoint_index = _endpoint_index(contracts)
     errors: list[str] = []
+    if data_sources and not contracts:
+        errors.append("ProjectPlan defines data sources but api_contracts is empty.")
     _validate_unique_values(pages, "pageId", "pageId", errors)
     _validate_unique_values(pages, "path", "page path", errors)
     pageIds = {str(page.get("pageId") or "") for page in pages}

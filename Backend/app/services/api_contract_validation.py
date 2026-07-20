@@ -11,12 +11,29 @@ from app.services.api_schema_refs import normalize_local_schema_ref
 
 
 def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]:
-    contracts = project_plan.get("api_contracts", [])
+    """校验项目计划中的 API 契约、数据源和页面字段引用是否闭合。"""
+
+    contracts = dict_items(project_plan.get("api_contracts"))
+    data_sources = dict_items(project_plan.get("data_sources"))
     errors: list[str] = []
     endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     schema_refs: set[str] = set()
+    data_source_ids = {
+        str(source.get("id")) for source in data_sources if source.get("id")
+    }
+    if data_sources and not contracts:
+        errors.append("ProjectPlan defines data sources but api_contracts is empty.")
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
+        data_source_id = str(contract.get("data_source_id") or "")
+        if not contract_id:
+            errors.append("API contract does not define id.")
+        if data_source_ids and not data_source_id:
+            errors.append(f"API contract {contract_id} does not define data_source_id.")
+        elif data_source_id and data_source_id not in data_source_ids:
+            errors.append(
+                f"API contract {contract_id} references unknown data source {data_source_id}."
+            )
         schemas = contract.get("schemas", {})
         if not schemas:
             errors.append(f"API contract {contract_id} does not define schemas.")
@@ -28,6 +45,8 @@ def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]
             endpoint_index=endpoint_index,
             errors=errors,
         )
+        if not dict_items(contract.get("endpoints")):
+            errors.append(f"API contract {contract_id} does not define endpoints.")
 
     _validate_data_sources(project_plan, schema_refs, errors)
     _validate_page_api_dependencies(project_plan, endpoint_index, errors)
