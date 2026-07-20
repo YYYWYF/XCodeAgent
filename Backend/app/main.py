@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
-from fastapi import Body, FastAPI, Header, HTTPException, Query
+from fastapi import Body, FastAPI, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -40,7 +40,6 @@ from app.protocols.code_changes import (
 from app.config import Settings
 from app.services.agent_file_documents import ensure_agents_document
 from app.services.builtin_skills import available_builtin_skills
-from app.tools import antd_v4_docs
 from app.workspace import workspace as workspace_tools
 from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
@@ -96,10 +95,6 @@ async def health() -> dict[str, object]:
             }
         },
         "tools": {
-            "antd_v4_docs": {
-                "available": antd_v4_docs.is_available(),
-                "docs_dir": str(antd_v4_docs.docs_root()),
-            },
             "workflow_run": workflow_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
             "application_development_planning": application_development_planning_capabilities(),
@@ -280,39 +275,6 @@ async def git_status(request: workspace_tools.GitStatusRequest) -> dict[str, Any
 @app.post("/tools/git/diff")
 async def git_diff(request: workspace_tools.GitDiffRequest) -> dict[str, Any]:
     return workspace_tools.git_diff(request)
-
-
-@app.get("/tools/antd-v4/components")
-async def list_antd_v4_components() -> dict[str, object]:
-    return {
-        "version": "4.24.16",
-        "components": antd_v4_docs.list_components(),
-    }
-
-
-@app.get("/tools/antd-v4/components/{slug}")
-async def get_antd_v4_component(slug: str) -> dict[str, object]:
-    try:
-        return antd_v4_docs.get_component_doc(slug)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@app.get("/tools/antd-v4/search")
-async def search_antd_v4_docs(
-    q: str = Query(min_length=1),
-    limit: int = Query(default=5, ge=1, le=10),
-    max_text_chars: int = Query(default=1200, ge=200, le=6000),
-) -> dict[str, object]:
-    results = antd_v4_docs.search(q, limit=limit)
-    return {
-        "version": "4.24.16",
-        "query": q,
-        "results": [
-            antd_v4_docs.search_result_to_dict(result, max_text_chars=max_text_chars)
-            for result in results
-        ],
-    }
 
 
 @app.post("/workflow/run")

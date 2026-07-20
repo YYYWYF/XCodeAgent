@@ -28,10 +28,6 @@ def load_backend_env() -> None:
     if env_file:
         load_dotenv(env_file, override=False)
 
-    bundled_docs_dir = resolve_bundled_docs_dir()
-    if bundled_docs_dir:
-        os.environ.setdefault("ANTD_V4_DOCS_DIR", str(bundled_docs_dir))
-
     from app.services.builtin_skills import validate_required_builtin_skills
 
     validate_required_builtin_skills()
@@ -44,25 +40,6 @@ def resolve_env_file() -> Path | None:
 
     default_env_file = executable_dir() / ".env"
     return default_env_file if default_env_file.is_file() else None
-
-
-def resolve_bundled_docs_dir() -> Path | None:
-    candidates = [
-        resource_root() / "resources" / "docs" / "antd-v4",
-        executable_dir() / "resources" / "docs" / "antd-v4",
-        executable_dir() / "_internal" / "resources" / "docs" / "antd-v4",
-    ]
-    for candidate in candidates:
-        if candidate.is_dir():
-            return candidate
-    return None
-
-
-def resource_root() -> Path:
-    frozen_root = getattr(sys, "_MEIPASS", None)
-    if frozen_root:
-        return Path(frozen_root).resolve()
-    return Path(__file__).resolve().parents[1]
 
 
 def executable_dir() -> Path:

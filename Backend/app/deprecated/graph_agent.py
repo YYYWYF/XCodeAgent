@@ -19,7 +19,6 @@
 # from app.services.builtin_skills import load_react_antd_v4_codegen_prompt
 # from app.config import Settings
 # from app.services.llm_client import ModelResponse, create_model_provider
-# from app.tools.antd_v4_docs import build_prompt_context
 # from app.workspace import workspace as workspace_tools
 # from app.workspace.workspace import build_prompt_context as build_workspace_tools_prompt_context
 # 

@@ -23,7 +23,6 @@ type BundledBackendPaths = {
   backendDir: string
   executablePath: string
   envFilePath: string
-  docsDir?: string
 }
 
 export function getBackendBaseUrl(): string {
@@ -50,10 +49,6 @@ export async function startBackendService(): Promise<string> {
     XCODEAGENT_BACKEND_ENV_FILE: bundledBackend.envFilePath,
     XCODEAGENT_WORKING_DIR: XCODE_AGENT_ENV.WORKING_DIR,
     PYTHONUTF8: '1'
-  }
-
-  if (bundledBackend.docsDir) {
-    env.ANTD_V4_DOCS_DIR = bundledBackend.docsDir
   }
 
   const child = spawn(bundledBackend.executablePath, [], {
@@ -119,24 +114,13 @@ async function resolveBundledBackendPaths(): Promise<BundledBackendPaths> {
   await assertFileExists(executablePath, 'Packaged backend executable')
   await assertFileExists(envFilePath, 'Packaged backend .env')
 
-  const bundledSkillsDir = path.join(
-    backendDir,
-    '_internal',
-    'app',
-    'builtin_skills'
-  )
+  const bundledSkillsDir = path.join(backendDir, '_internal', 'app', 'builtin_skills')
   await assertDirectoryExists(bundledSkillsDir, 'Packaged backend built-in skills directory')
-
-  const docsDir = await firstExistingDirectory([
-    path.join(backendDir, '_internal', 'resources', 'docs', 'antd-v4'),
-    path.join(backendDir, 'resources', 'docs', 'antd-v4')
-  ])
 
   return {
     backendDir,
     executablePath,
-    envFilePath,
-    docsDir
+    envFilePath
   }
 }
 
@@ -158,18 +142,6 @@ async function assertDirectoryExists(directoryPath: string, label: string): Prom
     // The clearer error below includes the packaged path Electron tried to use.
   }
   throw new Error(`${label} not found: ${directoryPath}`)
-}
-
-async function firstExistingDirectory(candidates: string[]): Promise<string | undefined> {
-  for (const candidate of candidates) {
-    try {
-      const stat = await fs.stat(candidate)
-      if (stat.isDirectory()) return candidate
-    } catch {
-      // Try the next PyInstaller layout candidate.
-    }
-  }
-  return undefined
 }
 
 function wireBackendLogging(child: ChildProcess): void {

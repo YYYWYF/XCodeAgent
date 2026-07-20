@@ -12,7 +12,6 @@ datas = [
         str(backend_root / "app" / "builtin_skills"),
         "app/builtin_skills",
     ),
-    (str(backend_root / "resources" / "docs" / "antd-v4"), "resources/docs/antd-v4"),
 ]
 
 for package_name in ("ag_ui", "langchain_core", "langgraph"):

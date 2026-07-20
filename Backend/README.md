@@ -6,7 +6,6 @@
 
 - `react-antd-v4-codegen` skill：通过 Deep Agents 原生 skill middleware 暴露给 Frontend Agent；用户显式选择的环境级 Skill 会被白名单隔离并完整注入四个 Deep Agent 的 system prompt。
 - `REACT_BEST_PRACTICES_GUIDE.md`：作为 React + TypeScript 代码生成规范入口，随 PyInstaller 后端一起打包并以只读虚拟路径 `/.xcodeagent/builtin-skills/` 访问。
-- `antd_v4_docs` 工具：读取本地 `antd-components` 离线文档，并按用户问题自动检索相关 Ant Design v4.24.16 组件片段。
 - `requirement_planner` 工具：分析用户需求，生成选择题式澄清问题，并在信息足够后输出结构化开发计划。
 - `development_orchestrator` 工具：把需求澄清、统一 SDD、功能切片计划、任务 DAG、并行批次和验证计划串成一套开发编排流程。
 - 本地工作区工具：给 Electron 前端和 agent 调用的文件、搜索、命令和 Git 工具，所有路径都限制在 `workspace_root` 内。
@@ -27,9 +26,6 @@ Workflow 调试入口在前端 Chat Composer 的“Workflow 调试”面板中�
 - 健康检查：http://127.0.0.1:8000/health
 - Swagger 文档：http://127.0.0.1:8000/docs
 - AG-UI 流式接口：http://127.0.0.1:8000/workflow/run
-- Antd v4 组件列表：http://127.0.0.1:8000/tools/antd-v4/components
-- Antd v4 文档搜索：http://127.0.0.1:8000/tools/antd-v4/search?q=Form
-- Antd v4 组件详情：http://127.0.0.1:8000/tools/antd-v4/components/form
 - 需求规划工具：http://127.0.0.1:8000/tools/requirement-planner
 - 开发编排器：http://127.0.0.1:8000/tools/development-orchestrator
 - 工作区工具能力：http://127.0.0.1:8000/tools/workspace/capabilities
@@ -150,7 +146,6 @@ AGENT_TEMPERATURE=0.2
 AGENT_MAX_TOKENS=2048
 MODEL_TRUST_ENV=false
 MODEL_OUTPUT_LOG_ENABLED=false
-ANTD_V4_DOCS_DIR=Backend/resources/docs/antd-v4
 XCODEAGENT_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
 XCODEAGENT_CHECKPOINT_RETENTION_DAYS=30
 LANGSMITH_TRACING=false
@@ -159,8 +154,6 @@ LANGSMITH_PROJECT=xcodeagent-workflow
 ```
 
 `MODEL_OUTPUT_LOG_ENABLED=true` 会在模型生成时把文本输出流式打印到后端控制台，并在调用结束后打印工具调用概要，便于调试。
-
-`ANTD_V4_DOCS_DIR` 默认指向仓库内相对路径 `Backend/resources/docs/antd-v4`，相对路径以仓库根目录为基准。如果离线文档移动了，只需要改这个变量。
 
 workflow checkpoint 默认写入当前工作区的 `.xcodeagent/checkpoints/checkpoints.sqlite`，用于持久化主 workflow 的 `ProjectState`，支持后端重启后的状态恢复。`XCODEAGENT_CHECKPOINT_DB` 可选用于强制覆盖 SQLite checkpoint 数据库位置；设置后所有 workflow 会共享该数据库。`XCODEAGENT_CHECKPOINT_RETENTION_DAYS` 控制旧 checkpoint 的默认保留天数，默认 30 天，每个 thread 至少保留最新 checkpoint，等待用户输入的 thread 不会被自动清理。
 
