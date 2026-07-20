@@ -34,6 +34,7 @@ import './SessionSidebar.less'
 const { Text } = Typography
 
 const COLLAPSED_SIDEBAR_WIDTH = 68
+const DEFAULT_SIDEBAR_WIDTH = 300
 const MIN_SIDEBAR_WIDTH = 240
 const MAX_SIDEBAR_WIDTH = 420
 const COLLAPSE_DRAG_THRESHOLD = 140
@@ -259,7 +260,7 @@ export default function SessionSidebar({
   const [collapsed, setCollapsed] = useState(false)
   const [compactExpanded, setCompactExpanded] = useState(false)
   const [resizing, setResizing] = useState(false)
-  const [sidebarWidth, setSidebarWidth] = useState(334)
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apiExpanded, setApiExpanded] = useState(true)
   const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(() => new Set())
