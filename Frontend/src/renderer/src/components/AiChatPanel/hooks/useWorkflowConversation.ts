@@ -40,6 +40,7 @@ type UseWorkflowConversationParams = {
   selectedSkills: ChatMessageSkill[]
   editorMode: EditorMode
   ensureActiveSession: () => Promise<SessionIdentity>
+  ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
   onPreviewReady: (target: WorkflowPreviewTarget) => void
@@ -79,6 +80,7 @@ export function useWorkflowConversation({
   selectedSkills,
   editorMode,
   ensureActiveSession,
+  ensurePageSession,
   getSessionMessages,
   persistSession,
   onPreviewReady,
@@ -152,12 +154,13 @@ export function useWorkflowConversation({
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
       selectedPageId?: string
+      sessionIdentity?: SessionIdentity
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
     if (!trimmedMessage) return false
 
-    const identity = await ensureActiveSession()
+    const identity = options?.sessionIdentity || await ensureActiveSession()
     const competingSession = findRunningSession(
       runningSessionsRef.current,
       identity.workspaceRoot,
@@ -259,6 +262,7 @@ export function useWorkflowConversation({
         messages: nextMessages,
         sessionId: identity.sessionId,
         threadId: identity.threadId,
+        pageId: identity.pageId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
       const {
@@ -272,7 +276,7 @@ export function useWorkflowConversation({
         clarificationAnswers: options?.clarificationAnswers,
         originalRequest: options?.originalRequest,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
-        selectedPageId: options?.selectedPageId,
+        selectedPageId: options?.selectedPageId || identity.pageId,
         workflowDebug: options?.workflowDebug,
         resumeState: options?.resumeState,
         onContent: (content) => {
@@ -317,6 +321,7 @@ export function useWorkflowConversation({
         messages: completedMessages,
         sessionId: identity.sessionId,
         threadId: identity.threadId,
+        pageId: identity.pageId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
       publishAiMessage(identity.editorMode, answer)
@@ -335,7 +340,8 @@ export function useWorkflowConversation({
           editorMode: identity.editorMode,
           messages: previousMessages,
           sessionId: identity.sessionId,
-          threadId: identity.threadId
+          threadId: identity.threadId,
+          pageId: identity.pageId
         })
         return false
       }
@@ -352,6 +358,7 @@ export function useWorkflowConversation({
           messages: completedMessages,
           sessionId: identity.sessionId,
           threadId: identity.threadId,
+          pageId: identity.pageId,
           titleFrom: message
         })
         publishAiMessage(identity.editorMode, answer)
@@ -391,10 +398,12 @@ export function useWorkflowConversation({
     hasDetailPlan?: boolean
   ): Promise<boolean> => {
     if (!selectedPageId || loading || workspaceBusy) return false
+    const identity = await ensurePageSession(selectedPageId, pageLabel)
     return sendWorkflowMessage(
       `${hasDetailPlan ? '查看已生成页面计划' : '开始设计页面'}：${pageLabel}`,
       {
         selectedPageId,
+        sessionIdentity: identity,
         titleFrom: `${hasDetailPlan ? '确认页面' : '设计页面'}：${pageLabel}`
       }
     )

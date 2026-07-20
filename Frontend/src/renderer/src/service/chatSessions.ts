@@ -29,6 +29,7 @@ export type ChatSessionRecord = {
   title: string;
   editorMode: EditorMode;
   threadId: string;
+  pageId?: string;
   workspaceRoot: string;
   messages: ChatSessionMessage[];
   createdAt: number;
@@ -40,6 +41,7 @@ export type ChatSessionSummary = {
   title: string;
   editorMode: EditorMode;
   threadId: string;
+  pageId?: string;
   createdAt: number;
   updatedAt: number;
   messageCount: number;
@@ -159,6 +161,7 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
     title: String(session.title || '新对话'),
     editorMode: session.editorMode,
     threadId: String(session.threadId),
+    pageId: normalizePageId(session.pageId) || inferPageIdFromMessages(session.messages),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
     createdAt: Number(session.createdAt || Date.now()),
@@ -172,6 +175,7 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     title: session.title,
     editorMode: session.editorMode,
     threadId: session.threadId,
+    pageId: session.pageId,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
@@ -187,11 +191,37 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       title: String(item.title || '新对话'),
       editorMode: item.editorMode || 'frontend',
       threadId: String(item.threadId || item.id || ''),
+      pageId: normalizePageId(item.pageId),
       createdAt: Number(item.createdAt || Date.now()),
       updatedAt: Number(item.updatedAt || Date.now()),
       messageCount: Number(item.messageCount || 0),
     }))
     .filter((item) => item.id);
+}
+
+/** 规范化页面会话标识，空值不写入本地会话契约。 */
+function normalizePageId(value: unknown): string | undefined {
+  const pageId = typeof value === 'string' ? value.trim() : '';
+  return pageId || undefined;
+}
+
+/** 从旧会话保存的 Workflow 快照中恢复页面归属。 */
+function inferPageIdFromMessages(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    const message = value[index];
+    if (!message || typeof message !== 'object') continue;
+    const workflow = (message as { workflow?: unknown }).workflow;
+    if (!workflow || typeof workflow !== 'object') continue;
+    const payload = workflow as {
+      state?: { selectedPageId?: unknown };
+      result?: { selectedPageId?: unknown };
+    };
+    const pageId = normalizePageId(payload.state?.selectedPageId)
+      || normalizePageId(payload.result?.selectedPageId);
+    if (pageId) return pageId;
+  }
+  return undefined;
 }
 
 function normalizeSessionWorkspaces(value: unknown): SessionWorkspaceSummary[] {

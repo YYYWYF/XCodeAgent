@@ -5,6 +5,7 @@ export type SessionIdentity = {
   key: string
   sessionId: string
   threadId: string
+  pageId?: string
   editorMode: EditorMode
   workspaceRoot: string
 }
@@ -24,6 +25,7 @@ export function createSessionIdentity(input: {
   editorMode: EditorMode
   sessionId: string
   threadId: string
+  pageId?: string
 }): SessionIdentity {
   return {
     ...input,
@@ -45,6 +47,7 @@ export function sessionIdentityFromSummary(
     workspaceRoot,
     editorMode,
     sessionId: summary.id,
-    threadId: summary.threadId
+    threadId: summary.threadId,
+    pageId: summary.pageId
   })
 }

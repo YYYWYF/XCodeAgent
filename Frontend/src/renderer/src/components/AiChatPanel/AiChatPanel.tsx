@@ -20,7 +20,6 @@ import MessageList from './components/MessageList'
 import PageContextHeader from './components/PageContextHeader'
 import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
-import SessionHistoryDropdown from './components/SessionHistoryDropdown'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import DetailConfirmationPageSelector from '../DetailConfirmationPageSelector'
 import SettingsPage from '../SettingsPage/SettingsPage'
@@ -112,15 +111,16 @@ export default function AiChatPanel({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    createPageSession,
     deletingSessionId,
     draft,
     draftKey,
     ensureActiveSession,
+    ensurePageSession,
     getSessionMessages,
     handleCreateSessionFromList,
     handleDeleteSession,
     handleOpenSession,
-    handleOpenSessionKeyDown,
     loadingSessions,
     messages,
     persistSession,
@@ -156,6 +156,7 @@ export default function AiChatPanel({
     draftKey,
     editorMode,
     ensureActiveSession,
+    ensurePageSession,
     getSessionMessages,
     persistSession,
     onPreviewReady: handlePreviewReady,
@@ -210,6 +211,12 @@ export default function AiChatPanel({
     })
   }, [developmentPlanningPages])
 
+  // 打开历史页面会话时同步页面上下文，避免标题与消息归属不一致。
+  useEffect(() => {
+    const sessionPageId = sessions.find((session) => session.id === activeSessionId)?.pageId
+    if (sessionPageId) setActivePageId(sessionPageId)
+  }, [activeSessionId, sessions])
+
   /** 在右侧工作区打开当前页面预览。 */
   const handleOpenPage = (): void => {
     setRightPanel({ type: 'preview' })
@@ -260,12 +267,22 @@ export default function AiChatPanel({
     handleCreateSessionFromList()
   }
 
+  /** 在指定页面下新建独立会话，并立即切换到该页面。 */
+  const handleCreatePageSession = async (pageId: string, pageLabel: string): Promise<void> => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    setActivePageId(pageId)
+    await createPageSession(pageId, pageLabel)
+  }
+
   /** 从应用大纲切换页面，并确保页面状态在对话区域呈现。 */
   const handlePageSelect = (page: DevelopmentPlanningPageOption): void => {
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
     setActivePageId(page.key)
+    ensurePageSession(page.pageId, page.label).catch(() => undefined)
   }
 
   /** 启动当前页面的详细设计；解锁状态仍以后续持久化目录检查为准。 */
@@ -281,6 +298,8 @@ export default function AiChatPanel({
 
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
     setActiveView('chat')
+    const sessionPageId = sessions.find((session) => session.id === sessionId)?.pageId
+    if (sessionPageId) setActivePageId(sessionPageId)
     await handleOpenSession(sessionId)
   }
 
@@ -311,12 +330,9 @@ export default function AiChatPanel({
           loadingSessions={loadingSessions}
           outlineLocked={initialPageSelectionRequired}
           onCreateSession={handleCreateChatSession}
+          onCreatePageSession={handleCreatePageSession}
           onDeleteSession={handleDeleteSession}
           onOpenSession={handleOpenChatSession}
-          onOpenSessionKeyDown={(event, sessionId) => {
-            if (event.key === 'Enter' || event.key === ' ') setActiveView('chat')
-            handleOpenSessionKeyDown(event, sessionId)
-          }}
           onPageSelect={handlePageSelect}
           onReturnWelcome={onReturnWelcome}
           onShowFiles={handleShowFiles}
@@ -359,8 +375,7 @@ export default function AiChatPanel({
           <div className={cx('ai-chat-main')}>
             <ChatHeader
               actions={
-                <>
-                  {showPreviewActions ? (
+                showPreviewActions ? (
                     <PreviewActions
                       embeddedPreviewOpen={embeddedPreviewOpen}
                       onOpenFullscreenPreview={handleOpenFullscreenPreview}
@@ -368,22 +383,7 @@ export default function AiChatPanel({
                         setRightPanel(embeddedPreviewOpen ? undefined : { type: 'preview' })
                       }
                     />
-                  ) : null}
-                  <SessionHistoryDropdown
-                    activeSessionId={activeSessionId}
-                    deletingSessionId={deletingSessionId}
-                    loadingSessions={loadingSessions}
-                    onCreateSession={handleCreateChatSession}
-                    onDeleteSession={handleDeleteSession}
-                    onOpenSession={handleOpenChatSession}
-                    onOpenSessionKeyDown={handleOpenSessionKeyDown}
-                    sessionError={sessionError}
-                    sessionRunStates={sessionRunStates}
-                    sessions={sessions}
-                    theme={theme}
-                    workspaceSelected={Boolean(application.workspaceRoot)}
-                  />
-                </>
+                  ) : null
               }
               onThemeChange={onThemeChange}
               pageTitle={activePageTitle}

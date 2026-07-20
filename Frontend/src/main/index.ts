@@ -289,6 +289,7 @@ type ChatSessionSummary = {
   title: string
   editorMode: EditorMode
   threadId: string
+  pageId?: string
   createdAt: number
   updatedAt: number
   messageCount: number
@@ -301,6 +302,7 @@ type NormalizedChatSession = {
   title: string
   editorMode: EditorMode
   threadId: string
+  pageId?: string
   createdAt: number
   updatedAt: number
   workspaceRoot: string
@@ -579,6 +581,7 @@ function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
     title: String(session.title || '新对话'),
     editorMode: assertEditorMode(session.editorMode),
     threadId: String(session.threadId || ''),
+    pageId: session.pageId,
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
     messageCount: messages.length,
@@ -662,16 +665,38 @@ function normalizeSession(session: unknown): NormalizedChatSession {
         .map(normalizeSessionMessage)
     : [];
 
+  const pageId = normalizeSessionPageId(session.pageId) || inferSessionPageId(messages)
   return {
     id,
     title: String(session.title || '新对话'),
     editorMode,
     threadId: String(session.threadId || id),
+    ...(pageId ? { pageId } : {}),
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
     workspaceRoot: typeof session.workspaceRoot === 'string' ? session.workspaceRoot : '',
     messages,
   };
+}
+
+/** 规范化页面会话标识，避免空字符串污染持久化索引。 */
+function normalizeSessionPageId(value: unknown): string | undefined {
+  const pageId = typeof value === 'string' ? value.trim() : ''
+  return pageId || undefined
+}
+
+/** 从旧版消息中的 Workflow 状态快照推断页面会话归属。 */
+function inferSessionPageId(messages: JsonRecord[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const workflow = messages[index].workflow
+    if (!isJsonRecord(workflow)) continue
+    const state = isJsonRecord(workflow.state) ? workflow.state : undefined
+    const result = isJsonRecord(workflow.result) ? workflow.result : undefined
+    const pageId = normalizeSessionPageId(state?.selectedPageId)
+      || normalizeSessionPageId(result?.selectedPageId)
+    if (pageId) return pageId
+  }
+  return undefined
 }
 
 async function readSessionSummariesFromDir(

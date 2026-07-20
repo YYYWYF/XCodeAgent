@@ -14,7 +14,7 @@ import {
   ThunderboltOutlined
 } from '@ant-design/icons'
 import { Input, Switch, Typography } from 'antd'
-import type { CSSProperties, KeyboardEvent, ReactElement } from 'react'
+import type { CSSProperties, ReactElement } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import recommendedTasksIcon from '../../../../assets/icons/recommended-tasks.svg'
@@ -28,6 +28,7 @@ import type {
 import { cx } from '../../../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
+import PageSessionHistory from './PageSessionHistory'
 import './SessionSidebar.less'
 
 const { Text } = Typography
@@ -60,9 +61,9 @@ type SessionSidebarProps = {
   filesActive: boolean
   loadingSessions: boolean
   onCreateSession: () => void
+  onCreatePageSession: (pageId: string, pageLabel: string) => Promise<void>
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
-  onOpenSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>, sessionId: string) => void
   outlineLocked: boolean
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   onReturnWelcome: () => void
@@ -80,16 +81,41 @@ type SessionSidebarProps = {
 }
 
 type OutlineRowProps = {
+  activeSessionId?: string
+  deletingSessionId?: string
   designed: boolean
   item: ApplicationMenuItem
   level: number
+  loadingSessions: boolean
+  onCreatePageSession: (pageId: string, pageLabel: string) => Promise<void>
+  onDeleteSession: (sessionId: string) => Promise<void>
+  onOpenSession: (sessionId: string) => Promise<void>
   onSelect: (key: string) => void
   selectedKey: string
+  sessionError?: string
+  sessionRunStates: Record<string, SessionRunStatus>
+  sessions: ChatSessionSummary[]
   visibleKeys: Set<string>
 }
 
 /** 渲染单个页面目录节点，并展示其详细设计状态。 */
-function OutlineRow({ designed, item, level, onSelect, selectedKey, visibleKeys }: OutlineRowProps) {
+function OutlineRow({
+  activeSessionId,
+  deletingSessionId,
+  designed,
+  item,
+  level,
+  loadingSessions,
+  onCreatePageSession,
+  onDeleteSession,
+  onOpenSession,
+  onSelect,
+  selectedKey,
+  sessionError,
+  sessionRunStates,
+  sessions,
+  visibleKeys
+}: OutlineRowProps): ReactElement {
   const [expanded, setExpanded] = useState(true)
   const children = item.children?.filter((child) => visibleKeys.has(child.key)) || []
   const isFolder = item.type === 'menu' || children.length > 0
@@ -121,16 +147,39 @@ function OutlineRow({ designed, item, level, onSelect, selectedKey, visibleKeys 
           </span>
         ) : null}
       </button>
+      {!isFolder ? (
+        <PageSessionHistory
+          activeSessionId={activeSessionId}
+          deletingSessionId={deletingSessionId}
+          loadingSessions={loadingSessions}
+          onCreateSession={() => onCreatePageSession(item.pageKey || item.key, item.label)}
+          onDeleteSession={onDeleteSession}
+          onOpenSession={onOpenSession}
+          pageLabel={item.label}
+          sessionError={sessionError}
+          sessionRunStates={sessionRunStates}
+          sessions={sessions}
+        />
+      ) : null}
       {isFolder && expanded && children.length > 0 ? (
         <div className={cx('outline-children')}>
           {children.map((child) => (
             <OutlineRow
+              activeSessionId={activeSessionId}
+              deletingSessionId={deletingSessionId}
               designed={designed}
               item={child}
               key={child.key}
               level={level + 1}
+              loadingSessions={loadingSessions}
+              onCreatePageSession={onCreatePageSession}
+              onDeleteSession={onDeleteSession}
+              onOpenSession={onOpenSession}
               onSelect={onSelect}
               selectedKey={selectedKey}
+              sessionError={sessionError}
+              sessionRunStates={sessionRunStates}
+              sessions={sessions.filter((session) => session.pageId === (child.pageKey || child.key))}
               visibleKeys={visibleKeys}
             />
           ))}
@@ -181,10 +230,16 @@ function containsMenuKey(items: ApplicationMenuItem[], key: string): boolean {
 
 /** 使用 ProjectPlan 页面清单组织工作台左侧大纲与快捷入口。 */
 export default function SessionSidebar({
+  activeSessionId,
   apiContracts = [],
   application,
+  deletingSessionId,
   filesActive,
+  loadingSessions,
   onCreateSession,
+  onCreatePageSession,
+  onDeleteSession,
+  onOpenSession,
   onPageSelect,
   onReturnWelcome,
   onShowFiles,
@@ -193,6 +248,9 @@ export default function SessionSidebar({
   outlineLocked,
   pages,
   selectedPageId,
+  sessionError,
+  sessionRunStates,
+  sessions,
   settingsActive,
   skillsActive,
   workspaceRoot
@@ -215,6 +273,16 @@ export default function SessionSidebar({
     purpose: page.purpose,
     keyFeatures: []
   })), [pages])
+  const sessionsByPageId = useMemo(() => {
+    const groupedSessions = new Map<string, ChatSessionSummary[]>()
+    sessions.forEach((session) => {
+      if (!session.pageId) return
+      const pageSessions = groupedSessions.get(session.pageId) || []
+      pageSessions.push(session)
+      groupedSessions.set(session.pageId, pageSessions)
+    })
+    return groupedSessions
+  }, [sessions])
   const selectedKey = containsMenuKey(pageItems, selectedPageId) ? selectedPageId : ''
   const visibleKeys = useMemo(() => {
     const matchingKeys = collectVisibleKeys(pageItems, outlineQuery)
@@ -408,15 +476,24 @@ export default function SessionSidebar({
               .filter((item) => visibleKeys.has(item.key))
               .map((item) => (
                 <OutlineRow
+                  activeSessionId={activeSessionId}
+                  deletingSessionId={deletingSessionId}
                   designed={Boolean(pages.find((page) => page.key === item.key)?.designed)}
                   item={item}
                   key={item.key}
                   level={0}
+                  loadingSessions={loadingSessions}
+                  onCreatePageSession={onCreatePageSession}
+                  onDeleteSession={onDeleteSession}
+                  onOpenSession={onOpenSession}
                   onSelect={(key) => {
                     const selectedPage = pages.find((page) => page.key === key)
                     if (selectedPage) onPageSelect(selectedPage)
                   }}
                   selectedKey={selectedKey}
+                  sessionError={selectedKey === item.key ? sessionError : undefined}
+                  sessionRunStates={sessionRunStates}
+                  sessions={sessionsByPageId.get(item.pageKey || item.key) || []}
                   visibleKeys={visibleKeys}
                 />
               ))}

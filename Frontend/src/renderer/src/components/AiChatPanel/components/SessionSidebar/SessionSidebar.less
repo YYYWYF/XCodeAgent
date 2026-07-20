@@ -371,6 +371,10 @@
 
 .@{class-prefix}-outline-node {
   position: relative;
+
+  > .@{class-prefix}-outline-row {
+    padding-right: 52px;
+  }
 }
 
 .@{class-prefix}-outline-children {
@@ -453,6 +457,165 @@
     color: #268b72;
     background: rgba(38, 139, 114, 0.1);
   }
+}
+
+.@{class-prefix}-page-session-history-toggle {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  z-index: 1;
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  color: #777f95;
+  font-size: 9px;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible,
+  &.@{class-prefix}-expanded {
+    color: var(--outline-accent);
+    background: var(--outline-hover-bg);
+    outline: none;
+  }
+
+  > .anticon:last-child {
+    font-size: 7px;
+    transition: transform 0.16s ease;
+  }
+
+  .@{class-prefix}-collapsed { transform: rotate(-90deg); }
+}
+
+.@{class-prefix}-page-session-history-panel {
+  margin: 3px 4px 8px 25px;
+  padding: 7px;
+  color: #34405d;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--outline-line);
+  border-radius: 7px;
+  box-shadow: 0 4px 13px rgba(39, 28, 82, 0.05);
+
+  .ant-empty { margin: 8px 0 5px; }
+  .ant-empty-image { height: 24px; margin-bottom: 3px; opacity: 0.36; }
+  .ant-empty-description { color: #8b91a3; font-size: 10px; }
+}
+
+.@{class-prefix}-page-session-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px 5px;
+
+  > .ant-typography {
+    color: inherit;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .ant-btn {
+    height: 23px;
+    padding: 0 5px;
+    color: var(--outline-accent);
+    font-size: 10px;
+    border-radius: 4px;
+  }
+
+  .ant-btn:hover,
+  .ant-btn:focus { color: var(--outline-hover-text); background: var(--outline-hover-bg); }
+}
+
+.@{class-prefix}-page-session-history-list {
+  display: flex;
+  max-height: 210px;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.@{class-prefix}-page-session-history-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  border-radius: 5px;
+
+  &:hover,
+  &:focus-within { color: var(--outline-hover-text); background: var(--outline-hover-bg); }
+
+  &.@{class-prefix}-active {
+    color: var(--outline-accent);
+    background: var(--outline-accent-soft);
+  }
+
+  > .ant-popover-open,
+  > .ant-btn {
+    flex: 0 0 auto;
+  }
+
+  .ant-btn {
+    width: 25px;
+    min-width: 25px;
+    height: 25px;
+    padding: 0;
+    border-radius: 4px;
+    opacity: 0;
+  }
+
+  &:hover .ant-btn,
+  &:focus-within .ant-btn { opacity: 0.72; }
+}
+
+.@{class-prefix}-page-session-history-open {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 4px 5px 6px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.@{class-prefix}-page-session-history-title {
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-page-session-history-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #858c9d;
+  font-size: 9px;
+}
+
+.@{class-prefix}-page-session-history-loading {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+
+  .ant-typography { color: #858c9d; font-size: 10px; }
+}
+
+.@{class-prefix}-page-session-history-error.ant-typography {
+  display: block;
+  padding: 5px 4px 0;
+  color: #c2415d;
+  font-size: 9px;
 }
 
 .@{class-prefix}-outline-empty {
@@ -752,6 +915,16 @@
       background: rgba(80, 190, 158, 0.13);
     }
   }
+  .@{class-prefix}-page-session-history-toggle { color: #949cad; }
+  .@{class-prefix}-page-session-history-panel {
+    color: #d9dce5;
+    background: rgba(23, 29, 41, 0.82);
+    border-color: #343a49;
+    box-shadow: none;
+  }
+  .@{class-prefix}-page-session-history-meta,
+  .@{class-prefix}-page-session-history-loading .ant-typography,
+  .@{class-prefix}-page-session-history-panel .ant-empty-description { color: #949cad; }
   .@{class-prefix}-session-outline-lock {
     color: #c2c5cf;
     background: rgba(18, 23, 34, 0.68);

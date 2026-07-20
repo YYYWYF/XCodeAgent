@@ -1,5 +1,5 @@
 import { message as antdMessage } from 'antd'
-import type { KeyboardEvent, MutableRefObject, SetStateAction } from 'react'
+import type { MutableRefObject, SetStateAction } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import {
@@ -29,6 +29,7 @@ export type PersistSessionInput = {
   messages: ChatSessionMessage[]
   sessionId: string
   threadId: string
+  pageId?: string
   titleFrom?: string
 }
 
@@ -46,13 +47,13 @@ type UseChatSessionsResult = {
   deletingSessionId?: string
   draft: string
   draftKey: string
+  createPageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   ensureActiveSession: () => Promise<SessionIdentity>
+  ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   handleCreateSessionFromList: () => void
-  handleCreateSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
-  handleOpenSessionKeyDown: (event: KeyboardEvent<HTMLDivElement>, sessionId: string) => void
   loadingSessions: boolean
   messages: AgentChatMessage[]
   selectedSkills: ChatMessageSkill[]
@@ -82,6 +83,7 @@ export function useChatSessions({
     {}
   )
   const sessionSummariesRef = useRef(sessionSummaries)
+  const pageSessionPromisesRef = useRef<Record<string, Promise<SessionIdentity>>>({})
   const {
     agUiSessionsRef,
     draftForKey,
@@ -129,11 +131,17 @@ export function useChatSessions({
   const sessionError = sessionErrors[editorMode]
 
   const replaceSessionSummary = (mode: EditorMode, summary: ChatSessionSummary): void => {
+    const nextModeSummaries = [
+      summary,
+      ...sessionSummariesRef.current[mode].filter((item) => item.id !== summary.id)
+    ].sort((a, b) => b.updatedAt - a.updatedAt)
+    sessionSummariesRef.current = {
+      ...sessionSummariesRef.current,
+      [mode]: nextModeSummaries
+    }
     setSessionSummaries((currentSummaries) => ({
       ...currentSummaries,
-      [mode]: [summary, ...currentSummaries[mode].filter((item) => item.id !== summary.id)].sort(
-        (a, b) => b.updatedAt - a.updatedAt
-      )
+      [mode]: nextModeSummaries
     }))
   }
 
@@ -148,6 +156,10 @@ export function useChatSessions({
     setSessionErrors((current) => ({ ...current, [mode]: undefined }))
     try {
       const nextSessions = await listChatSessions(application.workspaceRoot, mode)
+      sessionSummariesRef.current = {
+        ...sessionSummariesRef.current,
+        [mode]: nextSessions
+      }
       setSessionSummaries((current) => ({ ...current, [mode]: nextSessions }))
       if (nextSessions.length === 0) {
         setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
@@ -177,7 +189,8 @@ export function useChatSessions({
         workspaceRoot: application.workspaceRoot,
         editorMode: mode,
         sessionId: session.id,
-        threadId: session.threadId
+        threadId: session.threadId,
+        pageId: session.pageId
       })
       registerSession(identity, session.messages)
     }
@@ -202,16 +215,11 @@ export function useChatSessions({
     }
   }
 
-  const handleOpenSessionKeyDown = (
-    event: KeyboardEvent<HTMLDivElement>,
-    sessionId: string
-  ): void => {
-    if (event.key !== 'Enter' && event.key !== ' ') return
-    event.preventDefault()
-    handleOpenSession(sessionId)
-  }
-
-  const createNewSession = async (): Promise<SessionIdentity> => {
+  /** 创建普通会话或带页面归属的独立设计会话。 */
+  const createNewSession = async (
+    pageId?: string,
+    pageLabel?: string
+  ): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
       throw new Error('创建会话前需要选择工作目录。')
     }
@@ -223,13 +231,15 @@ export function useChatSessions({
       workspaceRoot: application.workspaceRoot,
       editorMode,
       sessionId,
-      threadId: agUiSession.threadId
+      threadId: agUiSession.threadId,
+      pageId
     })
     const session: ChatSessionRecord = {
       id: sessionId,
-      title: '新对话',
+      title: pageLabel ? `页面新会话：${pageLabel}` : '新对话',
       editorMode,
       threadId: identity.threadId,
+      pageId: identity.pageId,
       workspaceRoot: application.workspaceRoot,
       messages: [],
       createdAt: now,
@@ -254,14 +264,58 @@ export function useChatSessions({
     return createNewSession()
   }
 
-  const handleCreateSessionFromList = (): void => {
-    if (!application.workspaceRoot) return
-    createNewSession().catch(reportSessionError)
+  /** 为指定页面显式创建一个新的独立会话和 AG-UI thread。 */
+  const createPageSession = async (
+    pageId: string,
+    pageLabel: string
+  ): Promise<SessionIdentity> => {
+    const normalizedPageId = pageId.trim()
+    if (!normalizedPageId) throw new Error('页面标识不能为空。')
+    try {
+      return await createNewSession(normalizedPageId, pageLabel)
+    } catch (caughtError) {
+      reportSessionError(caughtError)
+      throw caughtError
+    }
   }
 
-  const handleCreateSessionKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (!application.workspaceRoot || (event.key !== 'Enter' && event.key !== ' ')) return
-    event.preventDefault()
+  /** 按页面恢复既有会话，首次进入该页面时创建独立 session 与 thread。 */
+  const ensurePageSession = async (
+    pageId: string,
+    pageLabel: string
+  ): Promise<SessionIdentity> => {
+    const normalizedPageId = pageId.trim()
+    if (!normalizedPageId) throw new Error('页面标识不能为空。')
+    const promiseKey = `${editorMode}:${normalizedPageId}`
+    const pendingPromise = pageSessionPromisesRef.current[promiseKey]
+    if (pendingPromise) return pendingPromise
+
+    const sessionPromise = (async (): Promise<SessionIdentity> => {
+      const existingSession = sessionSummariesRef.current[editorMode].find(
+        (session) => session.pageId === normalizedPageId
+      )
+      if (existingSession) {
+        await openChatSession(editorMode, existingSession.id)
+        const key = sessionRuntimeKey(workspaceRoot, editorMode, existingSession.id)
+        const identity = getIdentity(key)
+          || sessionIdentityFromSummary(existingSession, editorMode, workspaceRoot)
+        if (identity) return identity
+      }
+      return createNewSession(normalizedPageId, pageLabel)
+    })()
+    pageSessionPromisesRef.current[promiseKey] = sessionPromise
+    try {
+      return await sessionPromise
+    } catch (caughtError) {
+      reportSessionError(caughtError)
+      throw caughtError
+    } finally {
+      delete pageSessionPromisesRef.current[promiseKey]
+    }
+  }
+
+  const handleCreateSessionFromList = (): void => {
+    if (!application.workspaceRoot) return
     createNewSession().catch(reportSessionError)
   }
 
@@ -317,11 +371,16 @@ export function useChatSessions({
     const session: ChatSessionRecord = {
       id: input.sessionId,
       title:
-        input.titleFrom && (!existingSummary || existingSummary.title === '新对话')
+        input.titleFrom && (
+          !existingSummary
+          || existingSummary.title === '新对话'
+          || existingSummary.title.startsWith('页面新会话：')
+        )
           ? createChatSessionTitle(input.titleFrom)
           : existingSummary?.title || '新对话',
       editorMode: input.editorMode,
       threadId: input.threadId,
+      pageId: input.pageId || existingSummary?.pageId,
       workspaceRoot: application.workspaceRoot,
       messages: input.messages,
       createdAt: existingSummary?.createdAt || now,
@@ -335,16 +394,16 @@ export function useChatSessions({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    createPageSession,
     deletingSessionId,
     draft,
     draftKey,
     ensureActiveSession,
+    ensurePageSession,
     getSessionMessages,
     handleCreateSessionFromList,
-    handleCreateSessionKeyDown,
     handleDeleteSession,
     handleOpenSession,
-    handleOpenSessionKeyDown,
     loadingSessions,
     messages,
     selectedSkills,
