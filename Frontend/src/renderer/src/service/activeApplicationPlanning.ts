@@ -94,6 +94,19 @@ export function clearActiveApplicationPlanning(threadId?: string): void {
   window.localStorage.removeItem(ACTIVE_PLANNING_STORAGE_KEY)
 }
 
+// 校验活动规划是否仍对应应用索引中的同一条未完成记录。
+export async function isActiveApplicationPlanningIndexed(
+  planning: PersistedActivePlanning
+): Promise<boolean> {
+  const applications = await loadStoredApplications()
+  return applications.some(
+    (application) =>
+      application.id === planning.application.id &&
+      !application.planningConfirmedAt &&
+      (!application.planningThreadId || application.planningThreadId === planning.threadId)
+  )
+}
+
 // 从应用索引找回丢失的规划记录；兼容本次修复前创建但尚未完成的最近应用。
 export async function recoverActiveApplicationPlanning(): Promise<
   PersistedActivePlanning | undefined

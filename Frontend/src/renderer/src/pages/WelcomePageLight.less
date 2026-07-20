@@ -149,7 +149,7 @@
     box-shadow: 0 7px 20px rgba(91, 33, 182, 0.04);
 
     &:hover,
-    &:focus-visible {
+    &:focus-within {
       border-color: #bda6df;
       background: #ffffff;
       box-shadow: 0 10px 24px rgba(91, 33, 182, 0.09);
@@ -192,6 +192,16 @@
 
   .@{class-prefix}-welcome-project-description {
     color: #78668e;
+  }
+
+  .@{class-prefix}-welcome-project-delete.ant-btn {
+    color: #88759d;
+
+    &:hover,
+    &:focus {
+      color: #c02626;
+      background: #fff1f2;
+    }
   }
 
   .@{class-prefix}-welcome-project-empty {

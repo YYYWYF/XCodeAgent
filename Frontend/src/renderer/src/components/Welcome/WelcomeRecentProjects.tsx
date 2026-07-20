@@ -1,15 +1,24 @@
-import { AppstoreOutlined, CodeOutlined, GlobalOutlined } from '@ant-design/icons'
+import { AppstoreOutlined, CodeOutlined, DeleteOutlined, GlobalOutlined } from '@ant-design/icons'
+import { Button, message, Modal, Radio } from 'antd'
 import { useEffect, useState } from 'react'
-import { loadStoredApplications } from '../../service/applicationStorage'
+import {
+  deleteStoredProject,
+  loadStoredApplications,
+  removeStoredApplication
+} from '../../service/applicationStorage'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
+import './WelcomeModal.less'
 import './WelcomeRecentProjects.less'
 
 type Props = {
   onOpenApplication: (application: ApplicationConfig) => void
+  theme: 'dark' | 'light'
 }
 
 const projectIcons = [AppstoreOutlined, CodeOutlined, GlobalOutlined]
+
+type DeleteMode = 'index' | 'project'
 
 function formatRecentTime(value: number): string {
   const elapsed = Math.max(0, Date.now() - value)
@@ -22,9 +31,12 @@ function formatRecentTime(value: number): string {
   return days < 30 ? `${days} 天前` : new Intl.DateTimeFormat('zh-CN').format(value)
 }
 
-export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX.Element {
+export default function WelcomeRecentProjects({ onOpenApplication, theme }: Props): JSX.Element {
   const [applications, setApplications] = useState<ApplicationConfig[]>([])
   const [loading, setLoading] = useState(true)
+  const [applicationToDelete, setApplicationToDelete] = useState<ApplicationConfig>()
+  const [deleteMode, setDeleteMode] = useState<DeleteMode>('index')
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -39,6 +51,40 @@ export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX
       active = false
     }
   }, [])
+
+  // 打开删除选择框，并默认采用不会触碰真实项目目录的安全方式。
+  const openDeleteDialog = (application: ApplicationConfig): void => {
+    setApplicationToDelete(application)
+    setDeleteMode('index')
+  }
+
+  // 根据用户选项移除首页索引，必要时先由主进程安全删除真实目录。
+  const confirmDelete = async (): Promise<void> => {
+    if (!applicationToDelete) return
+    setDeleting(true)
+    try {
+      if (deleteMode === 'project') {
+        if (!applicationToDelete.workspaceRoot) {
+          throw new Error('该项目没有可删除的本地目录')
+        }
+        await deleteStoredProject(applicationToDelete.workspaceRoot)
+      }
+      await removeStoredApplication(applicationToDelete.id)
+      setApplications((current) =>
+        current.filter((application) => application.id !== applicationToDelete.id)
+      )
+      message.success(deleteMode === 'project' ? '本地项目及其首页索引已删除' : '项目已从首页移除')
+      setApplicationToDelete(undefined)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '删除项目失败')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const projectDirectoryCanBeDeleted = Boolean(
+    applicationToDelete?.workspaceRoot && window.xcodeAgent?.applications.deleteProject
+  )
 
   return (
     <section className={cx('welcome-recents')} aria-labelledby="welcome-recents-title">
@@ -55,28 +101,37 @@ export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX
           applications.map((application, index) => {
             const ProjectIcon = projectIcons[index % projectIcons.length]
             return (
-              <button
-                className={cx('welcome-project-row')}
-                key={application.id}
-                onClick={() => onOpenApplication(application)}
-                type="button"
-              >
-                <span className={cx('welcome-project-icon', `tone-${index % 3}`)}>
-                  <ProjectIcon />
-                </span>
-                <span className={cx('welcome-project-main')}>
-                  <strong>{application.name}</strong>
-                  <code>
-                    {application.workspaceRoot || application.projectDirectoryName || '本地应用'}
-                  </code>
-                </span>
-                <span className={cx('welcome-project-description')}>
-                  {application.senario || '继续上一次开发会话'}
-                </span>
-                <time dateTime={new Date(application.createdAt).toISOString()}>
-                  {formatRecentTime(application.createdAt)}
-                </time>
-              </button>
+              <div className={cx('welcome-project-row')} key={application.id}>
+                <button
+                  className={cx('welcome-project-open')}
+                  onClick={() => onOpenApplication(application)}
+                  type="button"
+                >
+                  <span className={cx('welcome-project-icon', `tone-${index % 3}`)}>
+                    <ProjectIcon />
+                  </span>
+                  <span className={cx('welcome-project-main')}>
+                    <strong>{application.name}</strong>
+                    <code>
+                      {application.workspaceRoot || application.projectDirectoryName || '本地应用'}
+                    </code>
+                  </span>
+                  <span className={cx('welcome-project-description')}>
+                    {application.senario || '继续上一次开发会话'}
+                  </span>
+                  <time dateTime={new Date(application.createdAt).toISOString()}>
+                    {formatRecentTime(application.createdAt)}
+                  </time>
+                </button>
+                <Button
+                  aria-label={`删除 ${application.name}`}
+                  className={cx('welcome-project-delete')}
+                  icon={<DeleteOutlined />}
+                  onClick={() => openDeleteDialog(application)}
+                  title={`删除 ${application.name}`}
+                  type="text"
+                />
+              </div>
             )
           })
         ) : (
@@ -86,6 +141,42 @@ export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX
           </div>
         )}
       </div>
+
+      <Modal
+        cancelText="取消"
+        centered
+        className={cx('welcome-modal', 'welcome-project-delete-modal', `theme-${theme}`)}
+        confirmLoading={deleting}
+        okButtonProps={{ danger: deleteMode === 'project' }}
+        okText={deleteMode === 'project' ? '删除本地项目' : '移除索引'}
+        onCancel={() => !deleting && setApplicationToDelete(undefined)}
+        onOk={() => void confirmDelete()}
+        open={Boolean(applicationToDelete)}
+        title={`删除「${applicationToDelete?.name || ''}」`}
+      >
+        <Radio.Group
+          className={cx('welcome-project-delete-options')}
+          onChange={(event) => setDeleteMode(event.target.value as DeleteMode)}
+          value={deleteMode}
+        >
+          <Radio value="index">
+            仅删除索引
+            <span>保留本地项目目录和其中的所有文件。</span>
+          </Radio>
+          <Radio disabled={!projectDirectoryCanBeDeleted} value="project">
+            删除本地项目
+            <span>
+              永久删除 {applicationToDelete?.workspaceRoot || '项目目录'}{' '}
+              及其中所有文件，且无法恢复。
+            </span>
+          </Radio>
+        </Radio.Group>
+        {!projectDirectoryCanBeDeleted ? (
+          <p className={cx('welcome-project-delete-hint')}>
+            仅 XCodeAgent 创建且带有项目标识的本地目录可以在此删除。
+          </p>
+        ) : null}
+      </Modal>
     </section>
   )
 }

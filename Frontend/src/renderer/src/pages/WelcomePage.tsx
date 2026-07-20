@@ -94,7 +94,7 @@ export default function WelcomePage({
               />
             ) : null}
 
-            <WelcomeRecentProjects onOpenApplication={onOpenApplication} />
+            <WelcomeRecentProjects onOpenApplication={onOpenApplication} theme={theme} />
           </section>
 
           <WelcomeAgentTrack />

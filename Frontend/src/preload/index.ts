@@ -26,6 +26,7 @@ const xcodeAgentApi = {
       }
       return ipcRenderer.invoke('applications:save', applications);
     },
+    deleteProject: (payload) => ipcRenderer.invoke('applications:delete-project', payload),
   },
   workspace: {
     selectDirectory: (options = {}) => ipcRenderer.invoke('workspace:select-directory', options),

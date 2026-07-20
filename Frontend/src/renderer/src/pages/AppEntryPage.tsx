@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
 import {
   clearActiveApplicationPlanning,
+  isActiveApplicationPlanningIndexed,
   isApplicationPlanningConfirmed,
   loadActiveApplicationPlanning,
   recoverActiveApplicationPlanning,
@@ -9,6 +10,7 @@ import {
   type ActivePlanningStatus,
   type PersistedActivePlanning
 } from '../service/activeApplicationPlanning'
+import { APPLICATIONS_CHANGED_EVENT } from '../service/applicationStorage'
 import { saveApplication } from '../components/Welcome/applicationService'
 import type {
   ApplicationConfig,
@@ -36,17 +38,34 @@ export default function AppEntryPage() {
     if (activePlanning) saveActiveApplicationPlanning(activePlanning)
   }, [activePlanning])
 
-  // 兼容旧版本丢失的内存状态，从持久化应用索引恢复最近的规划线程。
+  // 启动及应用索引变化时校验活动规划，避免已删除应用继续显示旧确认文档。
   useEffect(() => {
-    if (activePlanning) return
     let disposed = false
-    void recoverActiveApplicationPlanning().then((recovered) => {
-      if (disposed || !recovered) return
+    let refreshId = 0
+
+    const reconcileActivePlanning = async (): Promise<void> => {
+      const currentRefreshId = ++refreshId
+      const persisted = loadActiveApplicationPlanning()
+      if (persisted && (await isActiveApplicationPlanningIndexed(persisted))) return
+      if (persisted) clearActiveApplicationPlanning(persisted.threadId)
+
+      const recovered = await recoverActiveApplicationPlanning()
+      if (disposed || currentRefreshId !== refreshId) return
       setActivePlanning(recovered)
+      if (!recovered) return
+      saveActiveApplicationPlanning(recovered)
       void saveApplication(recovered.application)
-    })
+    }
+
+    const handleApplicationsChanged = (): void => {
+      void reconcileActivePlanning()
+    }
+
+    void reconcileActivePlanning()
+    window.addEventListener(APPLICATIONS_CHANGED_EVENT, handleApplicationsChanged)
     return () => {
       disposed = true
+      window.removeEventListener(APPLICATIONS_CHANGED_EVENT, handleApplicationsChanged)
     }
   }, [])
 

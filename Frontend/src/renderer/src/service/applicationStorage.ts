@@ -7,6 +7,7 @@ import type {
 
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
+export const APPLICATIONS_CHANGED_EVENT = 'xcode-agent-applications-changed';
 
 function normalizeApplications(value: unknown): ApplicationConfig[] {
   return Array.isArray(value) ? (value as ApplicationConfig[]) : [];
@@ -18,6 +19,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cacheApplications(applications: ApplicationConfig[]) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(applications));
+}
+
+// 通知当前渲染窗口重新校验依赖应用索引的派生状态。
+function notifyApplicationsChanged() {
+  window.dispatchEvent(new Event(APPLICATIONS_CHANGED_EVENT));
 }
 
 export function loadCachedApplications() {
@@ -65,6 +71,7 @@ export async function saveStoredApplications(applications: ApplicationConfig[]) 
   if (electronApplications) {
     try {
       await electronApplications.save(applications);
+      notifyApplicationsChanged();
       return;
     } catch (error) {
       console.warn(error);
@@ -82,6 +89,24 @@ export async function saveStoredApplications(applications: ApplicationConfig[]) 
     // 文件写入仅在本地开发服务中可用，失败时保留 localStorage 兜底。
     console.warn(error);
   }
+  notifyApplicationsChanged();
+}
+
+// 从首页应用索引中移除指定项目，不会删除工作区中的任何文件。
+export async function removeStoredApplication(applicationId: string) {
+  const applications = await loadStoredApplications();
+  await saveStoredApplications(
+    applications.filter((application) => application.id !== applicationId)
+  );
+}
+
+// 请求桌面主进程删除受 XCodeAgent 管理的真实项目目录。
+export async function deleteStoredProject(workspaceRoot: string) {
+  const electronApplications = window.xcodeAgent?.applications;
+  if (!electronApplications?.deleteProject) {
+    throw new Error('当前环境不支持删除本地项目目录');
+  }
+  await electronApplications.deleteProject({ workspaceRoot });
 }
 
 export async function loadWorkspaceApplicationConfig(

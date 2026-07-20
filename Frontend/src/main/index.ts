@@ -360,6 +360,34 @@ async function writeApplications(applications: unknown): Promise<void> {
   await fs.writeFile(applicationsFile, `${JSON.stringify(applications, null, 2)}\n`, 'utf8');
 }
 
+/** 仅删除带有 XCodeAgent 项目标识的安全工作区目录。 */
+async function deleteProjectDirectory(workspaceRoot: unknown): Promise<void> {
+  const projectRoot = resolveWorkspaceRoot(workspaceRoot);
+  const protectedRoots = new Set([
+    path.parse(projectRoot).root,
+    path.resolve(app.getPath('home')),
+    path.resolve(app.getPath('userData')),
+    path.resolve(getXcodeAgentDataDir()),
+  ]);
+  if (protectedRoots.has(projectRoot)) {
+    throw new Error('不能删除系统、用户或 XCodeAgent 数据目录');
+  }
+
+  const projectMetadataFile = getWorkspaceApplicationFile(projectRoot);
+  const projectStats = await fs.lstat(projectRoot);
+  if (!projectStats.isDirectory() || projectStats.isSymbolicLink()) {
+    throw new Error('只能删除非符号链接的项目目录');
+  }
+
+  try {
+    await fs.access(projectMetadataFile);
+  } catch {
+    throw new Error('该目录不是由 XCodeAgent 管理的项目，不能直接删除');
+  }
+
+  await fs.rm(projectRoot, { force: false, maxRetries: 3, recursive: true, retryDelay: 150 });
+}
+
 /** 注册应用列表读取和保存所需的 IPC。 */
 function setupApplicationStorageIpc(): void {
   ipcMain.handle('applications:load', async () => ({
@@ -368,6 +396,11 @@ function setupApplicationStorageIpc(): void {
 
   ipcMain.handle('applications:save', async (_event, applications) => {
     await writeApplications(applications);
+    return { ok: true };
+  });
+
+  ipcMain.handle('applications:delete-project', async (_event, payload = {}) => {
+    await deleteProjectDirectory(payload.workspaceRoot);
     return { ok: true };
   });
 }
