@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.page_detail_plan import (
     create_data_source_detail_plan,
     create_page_detail_plan,
@@ -113,6 +114,38 @@ class DetailDesignDocumentsTests(unittest.TestCase):
         )
         self.assertEqual(detail["navigation_targets"], page["references"]["navigation_targets"])
         self.assertEqual(validate_project_plan_dependencies(project_plan), [])
+
+    def test_hydration_restores_api_dependencies_from_project_plan(self) -> None:
+        """外置详情缺少依赖时应从主计划恢复，避免契约校验误报。"""
+
+        project_plan = create_project_plan(create_requirement_spec("创建库存管理系统"))
+        page = next(
+            candidate
+            for candidate in project_plan["frontend_pages"]
+            if candidate["references"]["endpoint_dependencies"]
+        )
+        page_detail = create_page_detail_plan(
+            project_plan,
+            extract_page_detail_context(project_plan, page["pageId"]),
+        )
+        page_detail["endpoint_dependencies"] = []
+        project_plan["page_detail_plans"] = [page_detail]
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            plan_path = workspace / ".xcodeagent" / "plans" / "project-plan.json"
+            write_project_plan_document({"workspace": str(workspace)}, project_plan)
+            hydrated = load_project_plan_json(plan_path, hydrate_detail_designs=True)
+
+        hydrated_detail = hydrated["page_detail_plans"][0]
+        self.assertEqual(
+            [item["endpoint_id"] for item in hydrated_detail["api_dependencies"]],
+            [
+                item["endpoint_id"]
+                for item in page["references"]["endpoint_dependencies"]
+            ],
+        )
+        self.assertEqual(validate_api_contract_consistency(hydrated), [])
 
     def test_project_plan_rejects_duplicate_routes_and_unknown_endpoints(self) -> None:
         """ProjectPlan 必须在页面详情生成前拦截不可解析的页面依赖。"""

@@ -392,8 +392,7 @@ testing.START
 - 后端 Java 静态检查；
 - 后端 Java 单元测试；
 - API 契约有效；
-- 前后端集成测试通过；
-- E2E 测试通过。
+- 前后端集成测试通过。
 
 输出至少包含：
 
@@ -411,10 +410,9 @@ testing.START
 
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：
 
-- 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm`、`yarn` 或 `npm`，执行 install、build、lint、typecheck、unit test 和 e2e/integration scripts；
+- 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm`、`yarn` 或 `npm`，执行 install、build、lint、typecheck、unit test 和 integration scripts；
 - 后端：优先复用 Maven Wrapper / Maven（`mvnw`、`pom.xml`），也支持 Python 项目的 `python3 -m pytest`；
-- E2E：优先复用 `test:e2e` / `e2e` script；若存在 Playwright 配置，则使用 `npx playwright test`；
-- 未声明的可选检查（lint、typecheck、unit/e2e/integration 等）会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。
+- 未声明的可选检查（lint、typecheck、unit/integration 等）会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。
 
 每个真实命令都会写入 `.xcodeagent/runtime/tests/<check_id>/stdout.log` 和 `stderr.log`，`test_results` 只保存日志引用、命令、cwd、returncode、timeout 和失败分类，避免把大日志塞入 Graph State。
 
@@ -424,7 +422,7 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 
 - 前端检查失败 → Frontend Generation Agent；
 - 后端或 API 契约检查失败 → Data Source Generation Agent；
-- 前后端集成或 E2E 失败 → RepairPlanner Agent 先判断归因，再拆分给专业 Agent。
+- 前后端集成失败 → RepairPlanner Agent 先判断归因，再拆分给专业 Agent。
 
 `revision_requests[*].failed_attempt` 使用统一格式返回给 RepairPlanner / 后续调度器，至少包含：
 
@@ -528,8 +526,7 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 
 职责：
 
-- 执行集成测试和 E2E 测试；
-- 收集确定性测试证据；
+- 审阅确定性集成测试证据；
 - 输出结构化测试报告和缺陷；
 - 只负责发现问题，不直接修改业务代码。
 

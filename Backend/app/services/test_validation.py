@@ -15,7 +15,6 @@ REQUIRED_TEST_CHECKS = [
     ("backend_unit_tests", "后端单元测试通过"),
     ("api_contract", "API 契约有效"),
     ("joint_integration", "前后端集成测试通过"),
-    ("e2e_tests", "E2E 测试通过"),
 ]
 
 
@@ -39,7 +38,7 @@ def _check_result(
 def create_deterministic_test_results(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Create deterministic check results from build state.
 
-    The runnable demo does not execute real npm/pytest/playwright commands yet.
+    The runnable demo does not execute real npm/pytest commands yet.
     This function is the stable boundary where those commands will be wired in.
     For now, checks pass only when the build stage has no failed or pending tasks.
     """

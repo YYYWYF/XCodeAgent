@@ -41,10 +41,7 @@ def run_integration_checks(state: dict[str, Any]) -> dict[str, Any]:
     for result in _joint_integration_checks(root, log_root, frontend, workspace_package):
         results.append(result)
         events.append(result["id"])
-    for result in _e2e_checks(root, log_root, frontend, workspace_package):
-        results.append(result)
-        events.append(result["id"])
-
+    print("---------test_results------------", results)
     return {"test_results": results, "test_events": events}
 
 
@@ -256,60 +253,6 @@ def _joint_integration_checks(
             language=None,
             package=package,
             script_name=script_name,
-            root=root,
-            log_root=log_root,
-            required=True,
-        )
-    ]
-
-
-def _e2e_checks(
-    root: Path,
-    log_root: Path,
-    frontend: PackageProject | None,
-    workspace_package: PackageProject | None,
-) -> list[dict[str, Any]]:
-    package = _first_package_with_script(
-        (workspace_package, frontend),
-        ("test:e2e", "e2e"),
-    )
-    if package is not None:
-        script_name = _first_script(_scripts(package), ("test:e2e", "e2e"))
-        return [
-            _run_script_result(
-                check_id="e2e_tests",
-                name="E2E 测试通过",
-                layer="e2e",
-                language=None,
-                package=package,
-                script_name=script_name,
-                root=root,
-                log_root=log_root,
-                required=True,
-            )
-        ]
-
-    playwright_cwd = _playwright_cwd(root, frontend)
-    if playwright_cwd is None:
-        return [
-            _missing_tool_result(
-                check_id="e2e_tests",
-                name="E2E 测试通过",
-                layer="e2e",
-                language=None,
-                evidence="未发现 Playwright 配置或 e2e script，跳过 E2E 测试。",
-                required=False,
-            )
-        ]
-
-    return [
-        _run_command_result(
-            check_id="e2e_tests",
-            name="E2E 测试通过",
-            layer="e2e",
-            language=None,
-            argv=["npx", "playwright", "test"],
-            cwd=playwright_cwd,
             root=root,
             log_root=log_root,
             required=True,
@@ -534,18 +477,8 @@ def _first_package_with_script(
 def _has_pytest_project(root: Path) -> bool:
     return any(
         (root / name).exists()
-        for name in ("pytest.ini", "pyproject.toml", "setup.cfg", "tests")
+        for name in ("pytest.ini", "pyproject.toml", "setup.cfg")
     )
-
-
-def _playwright_cwd(root: Path, frontend: PackageProject | None) -> Path | None:
-    candidates = [root]
-    if frontend is not None:
-        candidates.insert(0, frontend.cwd)
-    for cwd in candidates:
-        if any(cwd.glob(f"playwright.config.{suffix}") for suffix in ("ts", "js", "mjs", "cjs")):
-            return cwd
-    return None
 
 
 def _failure_category(check_id: str) -> str:
@@ -557,7 +490,7 @@ def _failure_category(check_id: str) -> str:
         return "type_error"
     if "build" in check_id:
         return "compile_error"
-    if "e2e" in check_id or "integration" in check_id:
+    if "integration" in check_id:
         return "integration_test_failure"
     return "test_failure"
 

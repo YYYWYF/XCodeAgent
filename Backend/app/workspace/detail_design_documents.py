@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.services.api_contracts import normalize_page_api_dependencies
 from app.workspace.spec_documents import workflow_artifact_root
 
 
@@ -106,6 +107,39 @@ def _resolve_detail_json_path(
     return None
 
 
+def _hydrate_page_detail_runtime_fields(
+    project_plan: dict[str, Any],
+    page: dict[str, Any],
+    detail: dict[str, Any],
+) -> dict[str, Any]:
+    """从主计划的页面引用恢复外置详情中省略的运行期字段。"""
+
+    hydrated_detail = deepcopy(detail)
+    page_references = page.get("references")
+    detail_references = detail.get("references")
+    references = (
+        page_references
+        if isinstance(page_references, dict)
+        else detail_references if isinstance(detail_references, dict) else {}
+    )
+    endpoint_dependencies = [
+        dict(item) for item in _dict_items(references.get("endpoint_dependencies"))
+    ]
+    hydrated_detail["permissions"] = list(references.get("permissions") or [])
+    hydrated_detail["endpoint_dependencies"] = endpoint_dependencies
+    hydrated_detail["navigation_targets"] = [
+        dict(item) for item in _dict_items(references.get("navigation_targets"))
+    ]
+    hydrated_detail["api_dependencies"] = normalize_page_api_dependencies(
+        _dict_items(project_plan.get("api_contracts")),
+        [],
+        endpoint_dependencies,
+        page_path=str(page.get("path") or detail.get("path") or ""),
+        page_name=str(page.get("name") or detail.get("page_name") or ""),
+    )
+    return hydrated_detail
+
+
 def hydrate_external_detail_designs(
     project_plan_path: str | Path,
     project_plan: dict[str, Any],
@@ -129,7 +163,9 @@ def hydrate_external_detail_designs(
         )
         detail = _read_json_object(detail_path) if detail_path else None
         if isinstance(detail, dict):
-            page_details.append(detail)
+            page_details.append(
+                _hydrate_page_detail_runtime_fields(hydrated, page, detail)
+            )
 
     for source in _dict_items(hydrated.get("data_sources")):
         source_id = str(source.get("id") or "")

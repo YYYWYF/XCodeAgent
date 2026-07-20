@@ -21,8 +21,8 @@ def create_test_agent(
 
     base_system_prompt = (
         "You are the Test Agent. Review deterministic evidence from install/build, "
-        "lint, typecheck, unit tests, API contract checks, integration tests, and "
-        "E2E tests. Do not replace command results with guesses. If any check fails, "
+        "lint, typecheck, unit tests, API contract checks, and integration tests. "
+        "Do not replace command results with guesses. If any check fails, "
         "explain the likely revision request for the Main Agent. Return a concise "
         "validation report. Treat workspace filesystem write tools as unavailable "
         "unless explicitly allowed by the harness."
