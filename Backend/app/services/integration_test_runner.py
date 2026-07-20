@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 
@@ -378,12 +379,13 @@ def _run_command_result(
             timeout=COMMAND_TIMEOUT_SECONDS,
             check=False,
         )
-        stdout = completed.stdout
-        stderr = completed.stderr
+        stdout = subprocess_output_text(completed.stdout)
+        stderr = subprocess_output_text(completed.stderr)
         returncode = completed.returncode
     except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
+        # TimeoutExpired 即使在 text=True 下也可能携带 bytes，写日志前必须解码。
+        stdout = subprocess_output_text(exc.stdout)
+        stderr = subprocess_output_text(exc.stderr)
         timed_out = True
     except OSError as exc:
         error = str(exc)

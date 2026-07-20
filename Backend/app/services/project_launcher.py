@@ -12,6 +12,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 
@@ -164,13 +165,14 @@ def _run_install(
             timeout=INSTALL_TIMEOUT_SECONDS,
             check=False,
         )
-        stdout = completed.stdout
-        stderr = completed.stderr
+        stdout = subprocess_output_text(completed.stdout)
+        stderr = subprocess_output_text(completed.stderr)
         returncode = completed.returncode
         timed_out = False
     except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
+        # TimeoutExpired 的输出可能是 bytes，统一解码后再写入运行日志。
+        stdout = subprocess_output_text(exc.stdout)
+        stderr = subprocess_output_text(exc.stderr)
         returncode = None
         timed_out = True
 

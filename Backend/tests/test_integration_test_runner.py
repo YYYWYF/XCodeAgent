@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +42,42 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         self.assertIn(["pnpm", "run", "build"], calls)
         self.assertTrue(all(item["passed"] for item in result["test_results"]))
         self.assertTrue(all("execution" in item for item in result["test_results"]))
+
+    def test_timeout_bytes_are_decoded_and_recorded_as_failed_check(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "frontend"
+            frontend.mkdir()
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"vite build"}}',
+                encoding="utf-8",
+            )
+            timeout = subprocess.TimeoutExpired(
+                cmd=["npm", "install"],
+                timeout=180,
+                output="安装中".encode(),
+                stderr=b"network timeout",
+            )
+
+            with patch(
+                "app.services.integration_test_runner.subprocess.run",
+                side_effect=timeout,
+            ):
+                result = run_integration_checks({"workspace": workspace})
+
+            install = next(
+                item
+                for item in result["test_results"]
+                if item["id"] == "frontend_install"
+            )
+            stdout_log = Path(install["execution"]["stdout_log"])
+            stderr_log = Path(install["execution"]["stderr_log"])
+            self.assertFalse(install["passed"])
+            self.assertTrue(install["execution"]["timed_out"])
+            self.assertEqual(stdout_log.read_text(encoding="utf-8"), "安装中")
+            self.assertEqual(
+                stderr_log.read_text(encoding="utf-8"),
+                "network timeout",
+            )
 
     def test_failed_result_becomes_scheduler_friendly_revision_request(self) -> None:
         failed_result = {

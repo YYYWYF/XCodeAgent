@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +45,39 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["server"]["pid"], 12345)
         self.assertEqual(run.call_args.args[0], ["pnpm", "install"])
         self.assertEqual(popen.call_args.args[0], ["pnpm", "run", "dev"])
+
+    def test_install_timeout_bytes_are_logged_without_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "frontend"
+            frontend.mkdir()
+            (frontend / "package.json").write_text(
+                '{"scripts":{"start":"react-scripts start"}}',
+                encoding="utf-8",
+            )
+            timeout = subprocess.TimeoutExpired(
+                cmd=["npm", "install"],
+                timeout=120,
+                output=b"partial output",
+                stderr=b"network timeout",
+            )
+            with (
+                patch(
+                    "app.services.project_launcher.shutil.which",
+                    return_value="/usr/bin/npm",
+                ),
+                patch(
+                    "app.services.project_launcher.subprocess.run",
+                    side_effect=timeout,
+                ),
+            ):
+                result = launch_frontend_project({"workspace": workspace})
+
+            self.assertEqual(result["status"], "failed")
+            self.assertTrue(result["install"]["timed_out"])
+            self.assertEqual(
+                Path(result["install"]["stdout_log"]).read_text(encoding="utf-8"),
+                "partial output",
+            )
 
     def test_launch_project_returns_acceptance_request_after_successful_launch(self) -> None:
         launch_result = {
