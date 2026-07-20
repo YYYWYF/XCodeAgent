@@ -394,6 +394,33 @@
   min-width: 0;
 }
 
+.@{class-prefix}-workflow-debug-build-scope {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(120px, 170px) minmax(180px, 1fr) minmax(160px, 1fr);
+  gap: 7px;
+
+  .ant-input,
+  .ant-select-selector {
+    color: var(--wb-text);
+    font-size: 11px;
+    background: var(--wb-surface-subtle) !important;
+    border-color: var(--wb-border) !important;
+  }
+}
+
+.@{class-prefix}-workflow-debug-scope-select {
+  min-width: 0;
+}
+
+.@{class-prefix}-workflow-debug-scope-hint.ant-typography {
+  min-width: 0;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+}
+
 .@{class-prefix}-workflow-trace-log {
   display: flex;
   min-width: 0;
@@ -500,6 +527,10 @@
 
 @media (max-width: 1050px) {
   .@{class-prefix}-workflow-debug-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-workflow-debug-build-scope {
     grid-template-columns: 1fr;
   }
 }

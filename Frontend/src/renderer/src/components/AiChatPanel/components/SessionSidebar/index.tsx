@@ -479,7 +479,7 @@ export default function SessionSidebar({
                 <OutlineRow
                   activeSessionId={activeSessionId}
                   deletingSessionId={deletingSessionId}
-                  designed={Boolean(pages.find((page) => page.key === item.key)?.designed)}
+                  designed={Boolean(pages.find((page) => page.pageId === item.key)?.designed)}
                   item={item}
                   key={item.key}
                   level={0}

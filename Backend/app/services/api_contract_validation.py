@@ -154,8 +154,7 @@ def _validate_page_api_dependencies(
     errors: list[str],
 ) -> None:
     for page_detail in project_plan.get("page_detail_plans", []):
-        for api_dependency in dict_items(page_detail.get("api_dependencies")):
-            endpoint_id = str(api_dependency.get("endpoint_id") or "")
+        for endpoint_id in _page_endpoint_ids(page_detail):
             if endpoint_id not in endpoint_index:
                 errors.append(
                     f"Page {page_detail.get('pageId')} references unknown endpoint {endpoint_id}."
@@ -168,11 +167,7 @@ def _validate_page_bindings(
     errors: list[str],
 ) -> None:
     for page_detail in project_plan.get("page_detail_plans", []):
-        endpoint_ids = {
-            str(item.get("endpoint_id"))
-            for item in dict_items(page_detail.get("api_dependencies"))
-            if item.get("endpoint_id")
-        }
+        endpoint_ids = set(_page_endpoint_ids(page_detail))
         for binding in dict_items(page_detail.get("response_bindings")):
             endpoint_id = str(binding.get("endpoint_id") or "")
             source_path = normalize_response_path(binding.get("source_path"))
@@ -187,6 +182,27 @@ def _validate_page_bindings(
                 errors.append(
                     f"Page {page_detail.get('pageId')} binds unknown response field {source_path}."
                 )
+
+
+def _page_endpoint_ids(page_detail: dict[str, Any]) -> list[str]:
+    """统一读取页面详情的 endpoint 引用，不要求页面重复声明数据源依赖。"""
+
+    references = (
+        page_detail.get("references")
+        if isinstance(page_detail.get("references"), dict)
+        else {}
+    )
+    dependencies = [
+        *dict_items(page_detail.get("endpoint_dependencies")),
+        *dict_items(references.get("endpoint_dependencies")),
+        *dict_items(page_detail.get("api_dependencies")),
+    ]
+    endpoint_ids: list[str] = []
+    for dependency in dependencies:
+        endpoint_id = str(dependency.get("endpoint_id") or "")
+        if endpoint_id and endpoint_id not in endpoint_ids:
+            endpoint_ids.append(endpoint_id)
+    return endpoint_ids
 
 
 def _collect_schema_refs(schema: Any) -> list[str]:

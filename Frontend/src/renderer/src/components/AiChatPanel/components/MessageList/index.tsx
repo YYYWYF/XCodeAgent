@@ -73,6 +73,7 @@ export default function MessageList({
             )?.filter((step) => step.kind !== 'tool' && step.kind !== 'command')
             const requiresClarification =
               message.workflow?.summary.clarification?.status === 'requires_user_input'
+            const hasScopedBuildProgress = workflowHasScopedBuildProgress(message.workflow)
             return (
               <article
                 className={cx(
@@ -106,7 +107,7 @@ export default function MessageList({
                       <div className={cx(!messageLoading && codeChanges && 'final-result-content')}>
                         <MarkdownContent content={message.content} />
                       </div>
-                      {message.workflow && requiresClarification && (
+                      {message.workflow && (messageLoading || requiresClarification || hasScopedBuildProgress) && (
                         <WorkflowRunCard
                           disabled={messageLoading}
                           onSubmitClarification={onSubmitClarification}
@@ -195,6 +196,18 @@ function mergeIntegrationTestChecks(
   const checksById = new Map(current?.map((check) => [check.id, check]) ?? [])
   for (const check of finalChecks) checksById.set(check.id, check)
   return [...checksById.values()]
+}
+
+function workflowHasScopedBuildProgress(workflow?: WorkflowRunPayload): boolean {
+  /** 判断当前消息是否包含页面或数据源范围的构建进度。 */
+
+  const state = workflow?.state || {}
+  const result = workflow?.result || {}
+  const slice = state.buildExecutionSlice || state.build_execution_slice
+    || result.buildExecutionSlice || result.build_execution_slice
+  if (!slice || typeof slice !== 'object') return false
+  const scope = (slice as { scope?: { type?: unknown } }).scope
+  return scope?.type === 'page' || scope?.type === 'data_source'
 }
 
 function findLastAssistantMessageId(messages: AgentChatMessage[]): number | undefined {

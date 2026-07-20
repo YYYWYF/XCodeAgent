@@ -9,7 +9,7 @@ from app.services.api_contracts import (
     normalize_api_contracts,
     schema_refs_for_data_source,
 )
-from app.services.page_dependencies import normalize_page_dependencies, page_data_source_ids
+from app.services.page_dependencies import normalize_page_dependencies
 
 
 def _agent_section(agent_plan: dict[str, Any] | None, key: str) -> Any:
@@ -450,36 +450,6 @@ def _planned_data_sources(spec: dict[str, Any]) -> list[dict[str, Any]]:
     return planned_sources
 
 
-def _task_inputs(
-    plan_pages: list[dict[str, Any]],
-    plan_sources: list[dict[str, Any]],
-    api_contracts: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "frontend": [
-            {
-                "task_id": f"page:{page['pageId']}",
-                "pageId": page["pageId"],
-                "description": f"生成页面 {page['name']}（{page['path']}）。",
-                "depends_on": [
-                    f"data_source:{source_id}"
-                    for source_id in page_data_source_ids(page, api_contracts)
-                ],
-            }
-            for page in plan_pages
-        ],
-        "data_source": [
-            {
-                "task_id": f"data_source:{source['id']}",
-                "data_source_id": source["id"],
-                "description": f"生成数据源 {source['name']} 及对应 API。",
-                "depends_on": [],
-            }
-            for source in plan_sources
-        ],
-    }
-
-
 def _requirements_overview(
     spec: dict[str, Any],
     agent_plan: dict[str, Any] | None,
@@ -547,14 +517,9 @@ def apply_project_plan_feedback(
         "api_contracts": [
             dict(contract) for contract in _dict_items(plan.get("api_contracts"))
         ],
-        "task_inputs": {
-            **(
-                plan.get("task_inputs")
-                if isinstance(plan.get("task_inputs"), dict)
-                else {}
-            ),
-        },
     }
+    # task_inputs 是旧版派生字段，确认反馈后不再继续持久化。
+    updated.pop("task_inputs", None)
 
     applied = False
     if _mentions_database(user_feedback):
@@ -572,11 +537,6 @@ def apply_project_plan_feedback(
         applied = True
 
     if applied:
-        updated["task_inputs"] = _task_inputs(
-            updated.get("frontend_pages", []),
-            updated.get("data_sources", []),
-            updated.get("api_contracts", []),
-        )
         updated.setdefault("plan_feedback_updates", []).append(
             {
                 "source": "project_plan_confirmation_feedback",
@@ -668,7 +628,6 @@ def create_project_plan(
         )
     )
     frontend_pages = normalize_page_dependencies(frontend_pages, api_contracts)
-    task_inputs = _task_inputs(frontend_pages, data_sources, api_contracts)
 
     agent_architecture = _agent_section(agent_plan, "architecture")
     architecture = {
@@ -711,7 +670,6 @@ def create_project_plan(
             and _string_items(_agent_section(agent_plan, "acceptance_criteria"))
             else spec["acceptance_criteria"]
         ),
-        "task_inputs": task_inputs,
         "risks": (
             _string_items(_agent_section(agent_plan, "risks"))
             if authoritative_agent_plan

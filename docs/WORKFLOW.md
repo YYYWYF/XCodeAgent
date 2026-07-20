@@ -166,7 +166,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 - 权限模型；
 - 页面和数据源之间的依赖。
 
-该节点由 project-planning 专用 ChatModel 执行项目级规划：读取 `RequirementSpec`，产出结构化 `ProjectPlan` 和用户可确认的总体计划书 Markdown 文档。这个阶段不生成业务代码。结构化 `ProjectPlan` 会保留后续任务拆分所需的内部 `task_inputs`，但 Markdown 计划书不展示这些执行输入。
+该节点由 project-planning 专用 ChatModel 执行项目级规划：读取 `RequirementSpec`，产出结构化 `ProjectPlan` 和用户可确认的总体计划书 Markdown 文档。这个阶段不生成业务代码。后续任务拆分直接从 `ProjectPlan` 的页面、数据源、API 契约和已确认详情中派生执行输入，避免在计划阶段持久化重复的 `task_inputs`。
 
 该节点通过 `agents/main/planner.py` 直接调用 `create_chat_model()` 生成结构化 JSON 规划建议，再由确定性 schema 合并和归一化后写入 Graph State。该调用不绑定任何工具，不创建 DeepAgent，也不扫描 workspace；模型输出只用于细化项目级判断，确定性归一化负责保证稳定 id、必需字段和后续任务拆分可读取的结构。
 
@@ -241,7 +241,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 ### `prepare_build_tasks`
 
-由 planning-only ChatModel 根据已经确认并写回的 `ProjectPlan` 和 `WorkspaceSnapshot` 生成可执行静态 Build DAG：
+先由确定性服务根据已经确认并写回的 `ProjectPlan` 生成完整 Unit DAG 骨架，再由 planning-only ChatModel 只根据当前范围的 `PageDetail`/`DataSourceDetail` 和 `WorkspaceSnapshot` 生成可执行静态 task DAG：
 
 - 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为唯一工作区事实来源，不读取、创建、修改或删除代码文件；
 - 生成稳定的 `task_id`；
@@ -254,7 +254,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 初始化任务状态为 `pending`，后续只在 `pending/running/completed/failed` 中流转；
 - 校验循环依赖和缺失依赖。
 
-该节点不生成新需求，也不编写业务代码。`ProjectPlan` 和 `WorkspaceSnapshot` 是唯一输入上下文；模型负责将已确认的页面详细设计、相关数据源和当前工程结构转换成可执行任务 DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
+该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。模型负责将当前已确认的页面详细设计、相关数据源详情和当前工程结构转换成可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
 
 任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面验收和整体集成验证。内部 DAG 仍保留 API、数据、共享组件、权限、路由和测试等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
 

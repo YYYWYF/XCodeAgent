@@ -174,8 +174,45 @@ export type WorkflowRunPayload = {
 export type WorkflowDebugOptions = {
   enabled: boolean
   resumeFrom?: string
+  buildExecutionScope?: WorkflowBuildExecutionScope
   requirementSpecPath?: string
   projectPlanPath?: string
   workspaceSnapshotPath?: string
   buildTaskPlanPath?: string
+}
+
+export type WorkflowBuildExecutionScope = {
+  type: 'application' | 'page' | 'data_source'
+  targetId?: string
+}
+
+export type WorkflowBuildExecutionTask = {
+  id?: string
+  task_id?: string
+  unit_id?: string
+  owner?: string
+  title?: string
+  description?: string
+  status?: 'pending' | 'running' | 'completed' | 'failed' | string
+  dependencies?: string[]
+  dependsOn?: string[]
+  source_refs?: Record<string, unknown>
+}
+
+export type WorkflowBuildExecutionSlice = {
+  scope?: WorkflowBuildExecutionScope
+  target_unit_ids?: string[]
+  unit_ids?: string[]
+  task_ids?: string[]
+  pending_task_ids?: string[]
+  reusable_task_ids?: string[]
+  tasks?: WorkflowBuildExecutionTask[]
+  summary?: {
+    total?: number
+    pending?: number
+    running?: number
+    reused?: number
+    completed?: number
+    failed?: number
+  }
 }

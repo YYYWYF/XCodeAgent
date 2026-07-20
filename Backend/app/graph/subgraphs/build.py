@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from langgraph.config import get_stream_writer
+
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
 from app.agents.frontend.generator import generate_frontend_with_deep_agent
 from app.agents.repair_planner import (
@@ -15,9 +17,14 @@ from app.services.build_repair_planner import (
     create_build_failure_repair_plan,
 )
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
+from app.services.build_task_planner import (
+    replace_build_task_plan_tasks,
+    tasks_from_build_task_plan,
+)
 from app.services.build_scheduler import (
     mark_tasks_running,
     normalize_task_results,
+    resolve_execution_slice,
     select_ready_build_batch,
     summarize_build_runtime,
     verify_task_file_changes,
@@ -35,6 +42,7 @@ from app.workspace.task_documents import write_repair_task_plan_json
 
 
 Runner = Callable[..., list[dict[str, Any]]]
+ProgressWriter = Callable[[dict[str, Any]], None]
 
 
 def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
@@ -129,7 +137,7 @@ def _apply_scheduler_results(
 ) -> dict[str, Any]:
     updated = apply_agent_results_with_scheduler(
         project_plan=state["project_plan"],
-        build_task_plan={**state["build_task_plan"], "tasks": tasks},
+        build_task_plan=replace_build_task_plan_tasks(state["build_task_plan"], tasks),
         tasks=tasks,
         existing_results=state.get("build_results", []),
         new_results=results,
@@ -141,10 +149,10 @@ def _apply_scheduler_results(
     )
     if repaired_tasks != updated["tasks"]:
         updated["tasks"] = repaired_tasks
-        updated["build_task_plan"] = {
-            **updated["build_task_plan"],
-            "tasks": repaired_tasks,
-        }
+        updated["build_task_plan"] = replace_build_task_plan_tasks(
+            updated["build_task_plan"],
+            repaired_tasks,
+        )
         updated["build_summary"] = summarize_build_runtime(
             repaired_tasks,
             updated.get("build_results", []),
@@ -161,7 +169,78 @@ def _apply_scheduler_results(
     }
 
 
-def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
+def _results_for_tasks(
+    results: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """只保留当前执行切片内任务对应的构建结果。"""
+
+    task_ids = {str(task.get("id") or "") for task in tasks}
+    return [result for result in results if str(result.get("task_id") or "") in task_ids]
+
+
+def _build_progress_writer() -> ProgressWriter | None:
+    """在 LangGraph 节点上下文中获取实时进度写入器，直接单测时返回空。"""
+
+    try:
+        return get_stream_writer()
+    except (KeyError, RuntimeError):
+        return None
+
+
+def _emit_build_progress(
+    progress_writer: ProgressWriter | None,
+    *,
+    current_state: ProjectState,
+    build_execution_scope: dict[str, Any] | None,
+    build_events: list[str],
+    message: str,
+) -> None:
+    """向 AG-UI 自定义流发送当前构建切片，供前端实时刷新任务进度。"""
+
+    if progress_writer is None:
+        return
+    execution_slice = resolve_execution_slice(
+        build_task_plan=current_state["build_task_plan"],
+        tasks=current_state["tasks"],
+        build_execution_scope=build_execution_scope,
+    )
+    build_summary = summarize_build_runtime(
+        execution_slice["tasks"],
+        _results_for_tasks(
+            current_state.get("build_results", []),
+            execution_slice["tasks"],
+        ),
+    )
+    progress_writer(
+        {
+            "type": "workflow.build.progress",
+            "node_name": "build",
+            "phase": "build",
+            "status": "running",
+            "message": message,
+            "state": {
+                "phase": "build",
+                "status": "running",
+                "tasks": current_state["tasks"],
+                "build_results": current_state.get("build_results", []),
+                "build_summary": build_summary,
+                "build_execution_scope": build_execution_scope,
+                "build_execution_slice": execution_slice,
+                "build_events": list(build_events),
+                "timeline": ["build"],
+            },
+        }
+    )
+
+
+def run_build_scheduler(
+    state: ProjectState,
+    *,
+    progress_writer: ProgressWriter | None = None,
+) -> dict[str, Any]:
+    """按 build_execution_scope 裁剪任务图，并持续调度到当前切片完成或阻塞。"""
+
     build_task_plan = dict(state.get("build_task_plan") or {})
     incoming_repair_task_plan = state.get("repair_task_plan")
     if (
@@ -170,16 +249,14 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
         and incoming_repair_task_plan.get("decision", "repair") == "repair"
     ):
         build_task_plan = append_repair_tasks_to_build_plan(
-            build_task_plan={
-                **build_task_plan,
-                "tasks": list(state.get("tasks") or build_task_plan.get("tasks") or []),
-            },
+            build_task_plan=replace_build_task_plan_tasks(
+                build_task_plan,
+                list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan)),
+            ),
             repair_task_plan=incoming_repair_task_plan,
         )
 
-    tasks = list(state.get("tasks") or build_task_plan.get("tasks") or [])
-    if build_task_plan.get("tasks"):
-        tasks = list(build_task_plan["tasks"])
+    tasks = list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
     if not tasks:
         return {
             "phase": "build",
@@ -198,20 +275,34 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
     current_state: ProjectState = {
         **state,
         "tasks": tasks,
-        "build_task_plan": {
-            **build_task_plan,
-            "tasks": tasks,
-        },
+        "build_task_plan": replace_build_task_plan_tasks(build_task_plan, tasks),
         "build_results": list(state.get("build_results", [])),
     }
+    build_execution_scope = state.get("build_execution_scope")
+    execution_slice = resolve_execution_slice(
+        build_task_plan=current_state["build_task_plan"],
+        tasks=current_state["tasks"],
+        build_execution_scope=build_execution_scope,
+    )
     build_events: list[str] = []
     all_code_change_sets: list[dict[str, Any]] = []
     repair_task_plan: dict[str, Any] = state.get("repair_task_plan", {})
     repair_task_plan_path = state.get("repair_task_plan_path")
     max_iterations = max(len(tasks) * 2, 1)
+    progress_writer = progress_writer if progress_writer is not None else _build_progress_writer()
 
     for iteration in range(1, max_iterations + 1):
-        selection = select_ready_build_batch(current_state["tasks"])
+        execution_slice = resolve_execution_slice(
+            build_task_plan=current_state["build_task_plan"],
+            tasks=current_state["tasks"],
+            build_execution_scope=build_execution_scope,
+        )
+        slice_tasks = execution_slice["tasks"]
+        if not slice_tasks:
+            build_events.append("scheduler:no_tasks_in_scope")
+            break
+
+        selection = select_ready_build_batch(slice_tasks)
         if selection["errors"]:
             build_events.append("scheduler:invalid_dag")
             break
@@ -226,6 +317,13 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
         ready_ids = selection["ready_task_ids"]
         build_events.append(f"scheduler:dispatch:{','.join(ready_ids)}")
         running_tasks = mark_tasks_running(current_state["tasks"], ready_ids)
+        _emit_build_progress(
+            progress_writer,
+            current_state={**current_state, "tasks": running_tasks},
+            build_execution_scope=build_execution_scope,
+            build_events=build_events,
+            message=f"正在执行构建任务：{', '.join(ready_ids)}",
+        )
         results, code_change_sets = _execute_ready_tasks(
             {**current_state, "tasks": running_tasks},
             ready_tasks,
@@ -239,16 +337,30 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
         )
         current_state = {**current_state, **updated}
         build_events.append(f"scheduler:results:{len(results)}")
+        _emit_build_progress(
+            progress_writer,
+            current_state=current_state,
+            build_execution_scope=build_execution_scope,
+            build_events=build_events,
+            message=f"构建任务结果已更新：{len(results)} 个任务返回结果。",
+        )
 
         summary = summarize_build_runtime(
-            current_state["tasks"],
-            current_state.get("build_results", []),
+            resolve_execution_slice(
+                build_task_plan=current_state["build_task_plan"],
+                tasks=current_state["tasks"],
+                build_execution_scope=build_execution_scope,
+            )["tasks"],
+            _results_for_tasks(current_state.get("build_results", []), slice_tasks),
         )
         if summary["status"] == "needs_repair":
             repair_task_plan = create_build_failure_repair_plan(
                 failed_results=[
                     result
-                    for result in current_state.get("build_results", [])
+                    for result in _results_for_tasks(
+                        current_state.get("build_results", []),
+                        slice_tasks,
+                    )
                     if result.get("status") == "failed"
                 ],
                 tasks=current_state["tasks"],
@@ -291,7 +403,7 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
             current_state = {
                 **current_state,
                 "build_task_plan": next_build_task_plan,
-                "tasks": next_build_task_plan["tasks"],
+                "tasks": tasks_from_build_task_plan(next_build_task_plan),
                 "repair_task_plan": repair_task_plan,
                 "repair_task_plan_path": repair_task_plan_path,
                 "repair_tasks": repair_task_plan["tasks"],
@@ -307,6 +419,13 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
             current_state["build_task_plan_path"] = build_task_plan_path
             current_state["build_task_dag_path"] = build_task_dag_path
             build_events.append(f"scheduler:repair_planned:{len(repair_task_plan['tasks'])}")
+            _emit_build_progress(
+                progress_writer,
+                current_state=current_state,
+                build_execution_scope=build_execution_scope,
+                build_events=build_events,
+                message=f"已生成修复任务：{len(repair_task_plan['tasks'])} 个。",
+            )
             continue
 
         if summary["status"] in {"requires_confirmation", "failed"}:
@@ -316,7 +435,15 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
         build_events.append("scheduler:iteration_budget_exhausted")
 
     build_results = current_state.get("build_results", [])
-    build_summary = summarize_build_runtime(current_state["tasks"], build_results)
+    execution_slice = resolve_execution_slice(
+        build_task_plan=current_state["build_task_plan"],
+        tasks=current_state["tasks"],
+        build_execution_scope=build_execution_scope,
+    )
+    build_summary = summarize_build_runtime(
+        execution_slice["tasks"],
+        _results_for_tasks(build_results, execution_slice["tasks"]),
+    )
     merged_code_changes = merge_code_change_sets(all_code_change_sets)
 
     return {
@@ -341,6 +468,8 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
         "ready_tasks": [],
         "build_results": build_results,
         "build_summary": build_summary,
+        "build_execution_scope": build_execution_scope,
+        "build_execution_slice": execution_slice,
         "repair_task_plan": repair_task_plan,
         "repair_task_plan_path": repair_task_plan_path,
         "repair_tasks": repair_task_plan.get("tasks", []) if isinstance(repair_task_plan, dict) else [],
@@ -351,4 +480,6 @@ def run_build_scheduler(state: ProjectState) -> dict[str, Any]:
 
 
 def build(state: ProjectState) -> dict:
+    """运行构建调度节点，并在 LangGraph 流中报告逐任务进度。"""
+
     return run_build_scheduler(state)

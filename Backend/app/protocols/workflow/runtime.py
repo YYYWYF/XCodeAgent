@@ -231,6 +231,49 @@ def build_workflow_ag_ui_stream(
                 config=config,
                 stream_mode=["updates", "messages", "custom"],
             ):
+                if stream_mode == "custom":
+                    progress = chunk if isinstance(chunk, dict) else {}
+                    if progress.get("type") != "workflow.build.progress":
+                        continue
+                    progress_state = (
+                        progress.get("state")
+                        if isinstance(progress.get("state"), dict)
+                        else {}
+                    )
+                    progress_node = str(progress.get("node_name") or "build")
+                    progress_message = str(
+                        progress.get("message") or "构建任务进度已更新。"
+                    )
+                    _workflow_event(
+                        events,
+                        "workflow.node.progress",
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        node_name=progress_node,
+                        status=str(progress.get("status") or "running"),
+                        message=progress_message,
+                        data={
+                            "phase": progress_state.get("phase", progress_node),
+                            "stateDelta": _public_workflow_state(progress_state),
+                            "detail": {
+                                "buildSummary": progress_state.get("build_summary", {}),
+                                "buildExecutionSlice": progress_state.get(
+                                    "build_execution_slice"
+                                ),
+                                "buildEvents": progress_state.get("build_events", []),
+                            },
+                        },
+                    )
+                    for frame in _workflow_ag_ui_frames(
+                        encoder,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        events=events,
+                        result=progress_state,
+                    ):
+                        yield frame
+                    continue
+
                 if stream_mode == "messages":
                     message_chunk, metadata = chunk
                     process_frames, process_sequence = _message_process_frames(

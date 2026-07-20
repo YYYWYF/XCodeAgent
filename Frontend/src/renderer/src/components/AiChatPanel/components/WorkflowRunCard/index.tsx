@@ -1,7 +1,9 @@
-import { Button, Checkbox, Input, Radio, Tag, Typography } from "antd";
+import { Button, Checkbox, Input, Progress, Radio, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useState } from "react";
 import type {
+  WorkflowBuildExecutionSlice,
+  WorkflowBuildExecutionTask,
   WorkflowClarification,
   WorkflowClarificationQuestion,
   WorkflowClarificationSelectionGroup,
@@ -38,6 +40,7 @@ export default function WorkflowRunCard({
 }: WorkflowRunCardProps): ReactElement {
   const status = String(workflow.summary.status || "unknown");
   const artifacts = workflow.summary.artifacts || {};
+  const buildExecutionSlice = workflowBuildExecutionSlice(workflow);
   const clarification = workflowClarification(workflow);
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification);
   const clarificationQuestions = clarification?.questions || [];
@@ -101,6 +104,9 @@ export default function WorkflowRunCard({
             </div>
           ))}
         </div>
+      )}
+      {buildExecutionSlice && (
+        <BuildExecutionSliceProgress executionSlice={buildExecutionSlice} />
       )}
       {(clarificationQuestions.length > 0 || detailReview) && (
         <div className={cx("workflow-clarification")}>
@@ -169,6 +175,121 @@ export default function WorkflowRunCard({
             </>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function BuildExecutionSliceProgress({
+  executionSlice,
+}: {
+  executionSlice: WorkflowBuildExecutionSlice;
+}): ReactElement | null {
+  /** 展示当前页面或数据源范围的构建进度，不做应用级汇总。 */
+
+  const scope = executionSlice.scope;
+  if (!scope || scope.type === "application") return null;
+  const tasks = Array.isArray(executionSlice.tasks) ? executionSlice.tasks : [];
+  const summary = executionSlice.summary || {};
+  const total = numberValue(summary.total, tasks.length);
+  const completed = numberValue(
+    summary.completed,
+    tasks.filter((task) => task.status === "completed").length,
+  );
+  const failed = numberValue(
+    summary.failed,
+    tasks.filter((task) => task.status === "failed").length,
+  );
+  const reused = numberValue(summary.reused, executionSlice.reusable_task_ids?.length || 0);
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const targetLabel = scope.type === "page" ? "页面" : "数据源";
+  const targetId = scope.targetId || executionSlice.target_unit_ids?.[0] || "";
+
+  return (
+    <div className={cx("workflow-build-progress")}>
+      <div className={cx("workflow-build-progress-header")}>
+        <div>
+          <Text strong>{targetLabel}生成进度</Text>
+          <Text type="secondary">
+            {targetId ? `当前范围：${targetId}` : "当前范围"}
+          </Text>
+        </div>
+        <Tag color={failed > 0 ? "red" : completed === total && total > 0 ? "green" : "blue"}>
+          {completed}/{total}
+        </Tag>
+      </div>
+      <Progress
+        percent={percent}
+        showInfo={false}
+        status={failed > 0 ? "exception" : completed === total && total > 0 ? "success" : "active"}
+      />
+      <div className={cx("workflow-build-progress-stats")}>
+        <BuildProgressStat label="已完成" value={completed} />
+        <BuildProgressStat label="运行中" value={numberValue(summary.running, 0)} />
+        <BuildProgressStat label="待执行" value={numberValue(summary.pending, 0)} />
+        <BuildProgressStat label="已复用" value={reused} />
+        <BuildProgressStat label="失败" tone={failed > 0 ? "danger" : undefined} value={failed} />
+      </div>
+      {tasks.length > 0 && (
+        <div className={cx("workflow-build-task-list")}>
+          {tasks.map((task) => (
+            <BuildExecutionTaskRow key={taskId(task)} task={task} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BuildProgressStat({
+  label,
+  tone,
+  value,
+}: {
+  label: string;
+  tone?: "danger";
+  value: number;
+}): ReactElement {
+  /** 渲染当前构建范围内的单项计数，避免上升到应用级统计。 */
+
+  return (
+    <span className={cx("workflow-build-progress-stat", tone)}>
+      <Text type="secondary">{label}</Text>
+      <Text strong>{value}</Text>
+    </span>
+  );
+}
+
+function BuildExecutionTaskRow({
+  task,
+}: {
+  task: WorkflowBuildExecutionTask;
+}): ReactElement {
+  /** 渲染当前页面生成闭包内的单个任务状态。 */
+
+  const dependencies = Array.isArray(task.dependencies)
+    ? task.dependencies
+    : Array.isArray(task.dependsOn)
+      ? task.dependsOn
+      : [];
+  return (
+    <div className={cx("workflow-build-task-row", task.status || "pending")}>
+      <div className={cx("workflow-build-task-main")}>
+        <Tag color={taskStatusColor(String(task.status || "pending"))}>
+          {taskStatusText(String(task.status || "pending"))}
+        </Tag>
+        <div>
+          <Text>{task.title || task.description || taskId(task)}</Text>
+          <Text type="secondary">
+            {task.unit_id || "application:root"}
+            {task.owner ? ` · ${task.owner}` : ""}
+          </Text>
+        </div>
+      </div>
+      {dependencies.length > 0 && (
+        <Text className={cx("workflow-build-task-deps")} type="secondary">
+          依赖：{dependencies.join("、")}
+        </Text>
       )}
     </div>
   );
@@ -584,6 +705,52 @@ function workflowConfirmationArtifact(
   }
 
   return artifact;
+}
+
+function workflowBuildExecutionSlice(
+  workflow: WorkflowRunPayload,
+): WorkflowBuildExecutionSlice | undefined {
+  /** 从 AG-UI state/result 中读取当前页面或数据源执行切片。 */
+
+  const candidates = [
+    workflow.state?.buildExecutionSlice,
+    workflow.state?.build_execution_slice,
+    workflow.result?.buildExecutionSlice,
+    workflow.result?.build_execution_slice,
+  ];
+  const slice = candidates.find((candidate) => candidate && typeof candidate === "object");
+  if (!slice || typeof slice !== "object") return undefined;
+  return slice as WorkflowBuildExecutionSlice;
+}
+
+function taskId(task: WorkflowBuildExecutionTask): string {
+  /** 读取 task 的稳定 ID，兼容 task_id 字段。 */
+
+  return task.id || task.task_id || "unknown-task";
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  /** 将后端计数字段规整为有限数字。 */
+
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function taskStatusColor(status: string): string {
+  /** 将任务状态映射为 Ant Design 标签颜色。 */
+
+  if (status === "completed") return "green";
+  if (status === "failed") return "red";
+  if (status === "running") return "blue";
+  return "default";
+}
+
+function taskStatusText(status: string): string {
+  /** 将任务状态映射为用户可读中文文案。 */
+
+  if (status === "completed") return "完成";
+  if (status === "failed") return "失败";
+  if (status === "running") return "运行中";
+  return "待执行";
 }
 
 /** 将工作流状态映射为符合工作区语义色的标签颜色。 */

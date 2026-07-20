@@ -32,14 +32,14 @@ export default function DetailConfirmationPageSelector({
 }: Props): JSX.Element {
   const [selectedPageId, setSelectedPageId] = useState('')
   const selectedPage = useMemo(
-    () => lockedPage || pages.find((page) => page.key === selectedPageId),
+    () => lockedPage || pages.find((page) => page.pageId === selectedPageId),
     [lockedPage, pages, selectedPageId]
   )
 
   // 页面清单刷新后保留有效选择，否则默认选择第一个页面。
   useEffect(() => {
-    if (!lockedPage && !pages.some((page) => page.key === selectedPageId)) {
-      setSelectedPageId(pages[0]?.key || '')
+    if (!lockedPage && !pages.some((page) => page.pageId === selectedPageId)) {
+      setSelectedPageId(pages[0]?.pageId || '')
     }
   }, [lockedPage, pages, selectedPageId])
 

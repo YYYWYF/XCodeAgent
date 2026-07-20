@@ -4,6 +4,8 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
+from app.services.build_task_planner import replace_build_task_plan_tasks
+
 
 def create_agent_task_result(
     task: dict[str, Any],
@@ -81,8 +83,10 @@ def apply_agent_results_with_scheduler(
     all_results = [*existing_results, *new_results]
     summary = _task_status_counts(updated_tasks)
 
-    updated_build_task_plan = deepcopy(build_task_plan)
-    updated_build_task_plan["tasks"] = updated_tasks
+    updated_build_task_plan = replace_build_task_plan_tasks(
+        deepcopy(build_task_plan),
+        updated_tasks,
+    )
     updated_build_task_plan["summary"] = {
         **updated_build_task_plan.get("summary", {}),
         **summary,

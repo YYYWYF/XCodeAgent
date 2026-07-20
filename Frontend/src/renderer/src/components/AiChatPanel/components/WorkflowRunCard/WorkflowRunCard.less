@@ -24,6 +24,7 @@
 
 .@{class-prefix}-workflow-artifacts,
 .@{class-prefix}-workflow-clarification,
+.@{class-prefix}-workflow-build-progress,
 .@{class-prefix}-workflow-events {
   display: flex;
   min-width: 0;
@@ -31,11 +32,110 @@
   gap: 6px;
 }
 
+.@{class-prefix}-workflow-build-progress {
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface);
+
+  .ant-progress-inner {
+    background: var(--wb-surface-subtle);
+  }
+}
+
+.@{class-prefix}-workflow-build-progress-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+.@{class-prefix}-workflow-build-progress-stats {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.@{class-prefix}-workflow-build-progress-stat {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-canvas);
+
+  &.danger {
+    border-color: var(--wb-danger-border, #ffccc7);
+  }
+}
+
+.@{class-prefix}-workflow-build-task-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.@{class-prefix}-workflow-build-task-row {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-canvas);
+
+  &.running {
+    border-color: var(--wb-accent-border, var(--wb-border-strong));
+  }
+
+  &.failed {
+    border-color: var(--wb-danger-border, #ffccc7);
+  }
+}
+
+.@{class-prefix}-workflow-build-task-main {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+
+  > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+.@{class-prefix}-workflow-build-task-deps {
+  overflow-wrap: anywhere;
+}
+
 .@{class-prefix}-workflow-clarification {
   padding: 10px;
   border: 1px solid var(--wb-border-strong);
   border-radius: 8px;
   background: var(--wb-surface);
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-workflow-build-progress-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .@{class-prefix}-workflow-confirmation-artifact {

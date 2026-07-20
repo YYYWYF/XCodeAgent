@@ -89,7 +89,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         )
         self.assertEqual(len(result["project_plan"]["frontend_pages"]), 1)
 
-    def test_project_plan_feedback_updates_page_data_api_dependencies(self) -> None:
+    def test_project_plan_feedback_updates_database_type_without_task_inputs(self) -> None:
         plan = {
             "frontend_pages": [
                 {
@@ -147,20 +147,14 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
 
         page = updated["frontend_pages"][0]
         dependency = updated["page_data_dependencies"][0]
-        self.assertEqual(page["data_dependencies"], ["personnel_source"])
-        self.assertEqual(dependency["data_source_ids"], ["personnel_source"])
-        self.assertEqual(dependency["api_contract_ids"], ["personnel_source_api"])
-        self.assertEqual(
-            dependency["endpoint_dependencies"][0]["endpoint_id"],
-            "personnel_source_api.list",
-        )
+        self.assertEqual(page["data_dependencies"], [])
+        self.assertEqual(dependency["data_source_ids"], ["无"])
+        self.assertEqual(dependency["api_contract_ids"], ["无"])
+        self.assertEqual(dependency["endpoint_dependencies"], [])
         self.assertEqual(updated["data_sources"][0]["type"], "database")
-        self.assertEqual(
-            updated["task_inputs"]["frontend"][0]["depends_on"],
-            ["data_source:personnel_source"],
-        )
+        self.assertNotIn("task_inputs", updated)
 
-    def test_project_plan_revision_applies_dependency_feedback_after_model(self) -> None:
+    def test_project_plan_revision_feedback_updates_database_type_only(self) -> None:
         spec = create_requirement_spec("创建一个人员管理系统")
         existing_plan = create_project_plan(spec)
         existing_plan["frontend_pages"] = [
@@ -225,12 +219,11 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                 )
 
         dependency = result["project_plan"]["page_data_dependencies"][0]
-        self.assertEqual(dependency["data_source_ids"], ["personnel_source"])
-        self.assertEqual(dependency["api_contract_ids"], ["personnel_source_api"])
-        self.assertEqual(
-            dependency["endpoint_dependencies"][0]["endpoint_id"],
-            "personnel_source_api.list",
-        )
+        self.assertEqual(dependency["data_source_ids"], [])
+        self.assertEqual(dependency["api_contract_ids"], [])
+        self.assertEqual(dependency["endpoint_dependencies"], [])
+        self.assertEqual(result["project_plan"]["data_sources"][0]["type"], "database")
+        self.assertNotIn("task_inputs", result["project_plan"])
 
     def test_project_plan_confirmation_ignores_question_text_negative_words(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")

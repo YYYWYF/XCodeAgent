@@ -73,6 +73,19 @@ type UseWorkflowConversationResult = {
   workspaceBusy: boolean
 }
 
+/** 从 Workflow 快照中读取最近一次页面选择，作为确认继续时的兜底上下文。 */
+function workflowSelectedPageId(workflow: WorkflowRunPayload): string | undefined {
+  const stateValue = workflow.state?.selectedPageId
+  const resultValue = workflow.result?.selectedPageId
+  const statePageId = typeof stateValue === 'string'
+    ? stateValue.trim()
+    : ''
+  const resultPageId = typeof resultValue === 'string'
+    ? resultValue.trim()
+    : ''
+  return statePageId || resultPageId || undefined
+}
+
 export function useWorkflowConversation({
   activeSession,
   agUiSessionsRef,
@@ -397,6 +410,7 @@ export function useWorkflowConversation({
       clarificationAnswers: answers,
       originalRequest,
       resumeState: workflow,
+      selectedPageId: workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId,
       titleFrom: originalRequest || '补充需求确认'
     })
   }

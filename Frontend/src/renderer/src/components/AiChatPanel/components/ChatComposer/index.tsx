@@ -11,6 +11,7 @@ import { useState } from 'react'
 import type {
   ChatMessageSkill,
   EditorMode,
+  WorkflowBuildExecutionScope,
   WorkflowDebugOptions,
   WorkflowRunPayload
 } from '../../../../typings'
@@ -33,6 +34,12 @@ const resumeNodeOptions = [
   { value: 'launch_project', label: 'launch_project' },
   { value: 'acceptance', label: 'acceptance' },
   { value: 'finalize_project', label: 'finalize_project' }
+]
+
+const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; label: string }> = [
+  { value: 'application', label: '整个应用' },
+  { value: 'page', label: '单个页面' },
+  { value: 'data_source', label: '单个数据源' }
 ]
 
 type ChatComposerProps = {
@@ -69,15 +76,31 @@ export default function ChatComposer({
   const [debugEnabled, setDebugEnabled] = useState(false)
   const [traceOpen, setTraceOpen] = useState(false)
   const [resumeFrom, setResumeFrom] = useState('requirements')
+  const [buildScopeType, setBuildScopeType] = useState<WorkflowBuildExecutionScope['type']>('application')
+  const [buildScopeTargetId, setBuildScopeTargetId] = useState('')
   const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
-  const canSend = debugEnabled ? hasDebugNode : Boolean(draft.trim())
+  const isBuildTaskDebug = debugEnabled && resumeFrom === 'prepare_build_tasks'
+  const hasBuildScopeTarget = buildScopeType === 'application' || Boolean(buildScopeTargetId.trim())
+  const canSend = debugEnabled
+    ? hasDebugNode && (!isBuildTaskDebug || hasBuildScopeTarget)
+    : Boolean(draft.trim())
 
-  /** 根据调试开关生成 Workflow 调试参数。 */
+  /** 根据调试开关生成 Workflow 调试参数，并在任务拆分节点附带分层 DAG 范围。 */
   const currentDebugOptions = (): WorkflowDebugOptions | undefined =>
     debugEnabled
       ? {
           enabled: true,
-          resumeFrom
+          resumeFrom,
+          ...(isBuildTaskDebug
+            ? {
+                buildExecutionScope: {
+                  type: buildScopeType,
+                  ...(buildScopeType === 'application'
+                    ? {}
+                    : { targetId: buildScopeTargetId.trim() })
+                }
+              }
+            : {})
         }
       : undefined
 
@@ -157,6 +180,38 @@ export default function ChatComposer({
                   <Text className={cx('workflow-debug-auto-paths')} title={workspaceRoot}>
                     自动读取当前工作目录下的 .xcodeagent 产物
                   </Text>
+                  {resumeFrom === 'prepare_build_tasks' && (
+                    <div className={cx('workflow-debug-build-scope')}>
+                      <Select
+                        className={cx('workflow-debug-scope-select')}
+                        disabled={loading}
+                        value={buildScopeType}
+                        onChange={(value) =>
+                          setBuildScopeType(value as WorkflowBuildExecutionScope['type'])
+                        }
+                      >
+                        {buildScopeOptions.map((option) => (
+                          <Option key={option.value} value={option.value}>
+                            {option.label}
+                          </Option>
+                        ))}
+                      </Select>
+                      {buildScopeType !== 'application' && (
+                        <Input
+                          aria-label={buildScopeType === 'page' ? '页面 ID' : '数据源 ID'}
+                          disabled={loading}
+                          placeholder={buildScopeType === 'page' ? '输入 pageId，例如 orders' : '输入 dataSourceId，例如 orders'}
+                          value={buildScopeTargetId}
+                          onChange={(event) => setBuildScopeTargetId(event.target.value)}
+                        />
+                      )}
+                      <Text className={cx('workflow-debug-scope-hint')}>
+                        {buildScopeType === 'application'
+                          ? '生成应用级分层 DAG'
+                          : '只生成目标及其直接依赖的 DAG'}
+                      </Text>
+                    </div>
+                  )}
                 </div>
               )}
               {traceOpen && activeWorkflow && <WorkflowTraceLog workflow={activeWorkflow} />}

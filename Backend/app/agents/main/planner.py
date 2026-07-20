@@ -54,7 +54,6 @@ def _planning_prompt(
         "endpoint_dependencies, navigation_targets, data_dependencies, or states fields\n"
         "- data_sources: data source list with entities, schema_refs, and seed strategy; never duplicate fields\n"
         "- permission_model: roles, page access, operation permissions\n"
-        "- task_inputs: frontend and data_source task inputs for later task planning\n"
         "- risks: planning risks and items to refine later\n\n"
         "API contracts are the canonical backend/frontend boundary. The first generated ProjectPlan must "
         "already satisfy the following non-negotiable dependency contract:\n"

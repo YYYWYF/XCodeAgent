@@ -9,6 +9,7 @@ from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json
 from app.workspace.task_documents import load_build_task_plan_json
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
+from app.services.build_task_planner import tasks_from_build_task_plan
 from app.services.workspace_inspector import snapshot_hash
 
 
@@ -73,6 +74,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_dict(forwarded_props.get("resumeState"))
         or _optional_dict(forwarded_props.get("resume_state"))
     )
+    resume_values_from_state = _resume_values(resume_state)
     debug_state = (
         _optional_dict(payload.get("workflowDebug"))
         or _optional_dict(payload.get("debugState"))
@@ -110,6 +112,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(payload.get("selected_page_id"))
         or _optional_text(forwarded_props.get("selectedPageId"))
         or _optional_text(forwarded_props.get("selected_page_id"))
+        or _optional_text(resume_values_from_state.get("selectedPageId"))
     )
     workspace = (
         _optional_text(payload.get("workspace"))
@@ -128,13 +131,24 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         forwarded_props=forwarded_props,
         resume_state=resume_state,
     )
+    project_plan_start_values = (
+        _project_plan_start_values(workspace, selected_page_id=selectedPageId)
+        if workflow_scope != "application_planning"
+        else {}
+    )
+    selectedPageId = _canonical_selected_page_id(
+        project_plan_start_values.get("project_plan"),
+        selectedPageId,
+    )
+    build_execution_scope = _build_execution_scope(
+        payload,
+        forwarded_props=forwarded_props,
+        resume_values=resume_values_from_state,
+        selected_page_id=selectedPageId,
+    )
     resume_values = {
-        **(
-            _project_plan_start_values(workspace, selected_page_id=selectedPageId)
-            if workflow_scope != "application_planning"
-            else {}
-        ),
-        **_resume_values(resume_state),
+        **resume_values_from_state,
+        **project_plan_start_values,
         **_debug_resume_values(debug_state, workspace=workspace),
         "selected_skill_names": list(selected_skill_names),
         **(
@@ -143,6 +157,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
+        "build_execution_scope": build_execution_scope,
         **(
             {"edited_requirement_spec": edited_requirement_spec}
             if edited_requirement_spec and workflow_scope == "application_planning"
@@ -154,7 +169,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
     }
-
     return {
         "cancel_run_id": (
             _optional_text(payload.get("cancelRunId"))
@@ -186,6 +200,80 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(payload.get("runId"))
         ),
     }
+
+
+def _build_execution_scope(
+    payload: dict[str, Any],
+    *,
+    forwarded_props: dict[str, Any],
+    resume_values: dict[str, Any],
+    selected_page_id: str,
+) -> dict[str, str]:
+    """标准化 AG-UI 构建范围，并为既有单页入口推导 page scope。"""
+
+    explicit_scope = (
+        _optional_dict(payload.get("buildExecutionScope"))
+        or _optional_dict(payload.get("build_execution_scope"))
+        or _optional_dict(forwarded_props.get("buildExecutionScope"))
+        or _optional_dict(forwarded_props.get("build_execution_scope"))
+    )
+    if selected_page_id and not explicit_scope:
+        return {"type": "page", "targetId": selected_page_id}
+    raw_scope = explicit_scope or _optional_dict(
+        resume_values.get("build_execution_scope")
+    )
+    if not raw_scope:
+        return (
+            {"type": "page", "targetId": selected_page_id}
+            if selected_page_id
+            else {"type": "application", "targetId": "application"}
+        )
+    target_type = _optional_text(raw_scope.get("type"))
+    target_id = _optional_text(raw_scope.get("targetId") or raw_scope.get("target_id"))
+    if target_type not in {"application", "page", "data_source"}:
+        raise ValueError("buildExecutionScope.type 必须是 application、page 或 data_source。")
+    if target_type == "application":
+        if selected_page_id and not explicit_scope:
+            return {"type": "page", "targetId": selected_page_id}
+        return {"type": "application", "targetId": "application"}
+    if not target_id:
+        raise ValueError("页面或数据源构建必须提供 buildExecutionScope.targetId。")
+    return {"type": target_type, "targetId": target_id}
+
+
+def _canonical_selected_page_id(project_plan: Any, selected_page_id: str) -> str:
+    """用最新 ProjectPlan 中的正式 pageId 纠正旧会话或旧快照里的页面标识。"""
+
+    selected = selected_page_id.strip()
+    if not selected:
+        return ""
+    page_ids = _project_plan_page_ids(project_plan)
+    if not page_ids or selected in page_ids:
+        return selected
+    selected_alias = _page_id_alias(selected)
+    for page_id in page_ids:
+        if _page_id_alias(page_id) == selected_alias:
+            return page_id
+    return page_ids[0] if len(page_ids) == 1 else selected
+
+
+def _project_plan_page_ids(project_plan: Any) -> list[str]:
+    """从 ProjectPlan 页面目录中提取去重后的正式 pageId。"""
+
+    plan = project_plan if isinstance(project_plan, dict) else {}
+    result: list[str] = []
+    for page in _dict_items(plan.get("frontend_pages")):
+        page_id = _optional_text(page.get("pageId") or page.get("id"))
+        if page_id and page_id not in result:
+            result.append(page_id)
+    return result
+
+
+def _page_id_alias(value: str) -> str:
+    """生成页面标识的宽松别名，用于兼容 page- 前缀和下划线差异。"""
+
+    normalized = value.strip().lower().replace("_", "-")
+    return normalized.removeprefix("page-")
 
 
 def _workflow_selected_skill_names(
@@ -299,6 +387,12 @@ def _optional_dict(value: Any) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _dict_items(value: Any) -> list[dict[str, Any]]:
+    """从不可信列表中筛出字典项，供协议边界安全读取。"""
+
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 def _supported_editor_mode(value: str) -> str:
     return value if value in {"frontend", "backend"} else ""
 
@@ -399,6 +493,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "requirement_spec_json_path",
         "build_task_plan",
         "build_task_plan_path",
+        "build_execution_scope",
         "tasks",
         "selected_skill_names",
         "workflow_scope",
@@ -557,8 +652,7 @@ def _debug_resume_values(
         build_task_plan = load_build_task_plan_json(build_task_plan_path)
         values["build_task_plan_path"] = str(build_task_plan_path)
         values["build_task_plan"] = build_task_plan
-        if isinstance(build_task_plan.get("tasks"), list):
-            values["tasks"] = build_task_plan["tasks"]
+        values["tasks"] = tasks_from_build_task_plan(build_task_plan)
 
     workspace_snapshot_path = _resolve_debug_workspace_snapshot_path(
         debug_state,

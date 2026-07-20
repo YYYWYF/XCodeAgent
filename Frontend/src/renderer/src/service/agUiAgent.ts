@@ -48,6 +48,9 @@ export function buildWorkflowForwardedProps(
     selectedPageId: options.selectedPageId,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
+    buildExecutionScope: options.workflowDebug?.enabled
+      ? options.workflowDebug.buildExecutionScope
+      : undefined,
     resumeState: options.resumeState,
     workflowScope: options.workflowScope
   }

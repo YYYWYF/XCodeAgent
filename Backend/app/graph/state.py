@@ -38,9 +38,17 @@ class ProjectState(TypedDict, total=False):
     workspace_snapshot_path: str
     workspace_snapshot_hash: str
     workspace_revision: str
+    build_execution_scope: dict[str, str]
+    build_execution_slice: dict[str, Any]
+    build_context: dict[str, Any]
     build_task_plan: dict[str, Any]
     build_task_plan_path: str
     build_task_dag_path: str
+    build_units: dict[str, dict[str, Any]]
+    unit_graph: dict[str, Any]
+    task_registry: dict[str, dict[str, Any]]
+    task_graph: dict[str, Any]
+    execution_history: list[dict[str, Any]]
     tasks: list[dict[str, Any]]
     ready_tasks: list[dict[str, Any]]
     pending_build_results: list[dict[str, Any]]

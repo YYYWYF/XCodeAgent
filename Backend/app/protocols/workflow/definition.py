@@ -69,6 +69,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "eventTypes": [
                 "workflow.run.started",
                 "workflow.node.started",
+                "workflow.node.progress",
                 "workflow.node.completed",
                 "agent-process",
                 "workflow.run.finished",

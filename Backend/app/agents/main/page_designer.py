@@ -66,7 +66,9 @@ def _invoke_live_chat_model(
     settings: Settings | None = None,
 ) -> str:
     active_settings = settings or Settings.from_env()
-    result = create_chat_model(active_settings).invoke(
+    result = create_chat_model(active_settings).bind(
+        max_tokens=active_settings.default_max_tokens
+    ).invoke(
         _page_design_prompt(project_plan, page_context)
     )
     content = getattr(result, "content", result)
@@ -165,7 +167,9 @@ def design_data_source_with_chat_model(
     user_request: str,
 ) -> dict[str, Any]:
     settings = Settings.from_env()
-    result = create_chat_model(settings).invoke(
+    result = create_chat_model(settings).bind(
+        max_tokens=settings.default_max_tokens
+    ).invoke(
         _data_source_design_prompt(project_plan, data_source_id, user_request)
     )
     content = getattr(result, "content", "")

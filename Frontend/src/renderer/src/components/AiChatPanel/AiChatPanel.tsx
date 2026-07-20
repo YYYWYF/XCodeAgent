@@ -62,6 +62,24 @@ function findPageMenuItem(
   return undefined
 }
 
+/** 在最新 ProjectPlan 页面目录中解析会话保存的页面标识，避免旧 pageId 覆盖当前选择。 */
+function resolvePlanningPageId(
+  pages: DevelopmentPlanningPageOption[],
+  pageId: string
+): string {
+  const normalizedPageId = pageId.trim()
+  if (!normalizedPageId) return ''
+  const matched = pages.find((page) => page.pageId === normalizedPageId)
+  if (matched) return matched.pageId
+  const alias = pageIdAlias(normalizedPageId)
+  return pages.find((page) => pageIdAlias(page.pageId) === alias)?.pageId || ''
+}
+
+/** 生成页面标识的宽松别名，兼容历史会话里的 page- 前缀差异。 */
+function pageIdAlias(value: string): string {
+  return value.trim().toLowerCase().replace(/_/g, '-').replace(/^page-/, '')
+}
+
 /** 组织应用侧栏、对话区、页面信息与预览面板的主工作台。 */
 export default function AiChatPanel({
   application,
@@ -95,7 +113,7 @@ export default function AiChatPanel({
     splitDragging
   } = useAssistantPreviewLayout()
   const activePageOption = useMemo(
-    () => developmentPlanningPages.find((page) => page.key === activePageId),
+    () => developmentPlanningPages.find((page) => page.pageId === activePageId),
     [activePageId, developmentPlanningPages]
   )
 
@@ -203,12 +221,12 @@ export default function AiChatPanel({
   useEffect(() => {
     setActivePageId((currentPageId) => {
       if (developmentPlanningPages.length === 0) return currentPageId
-      if (developmentPlanningPages.some((page) => page.key === currentPageId)) {
+      if (developmentPlanningPages.some((page) => page.pageId === currentPageId)) {
         return currentPageId
       }
       return (
-        developmentPlanningPages.find((page) => page.designed)?.key ||
-        developmentPlanningPages[0]?.key ||
+        developmentPlanningPages.find((page) => page.designed)?.pageId ||
+        developmentPlanningPages[0]?.pageId ||
         ''
       )
     })
@@ -217,8 +235,10 @@ export default function AiChatPanel({
   // 打开历史页面会话时同步页面上下文，避免标题与消息归属不一致。
   useEffect(() => {
     const sessionPageId = sessions.find((session) => session.id === activeSessionId)?.pageId
-    if (sessionPageId) setActivePageId(sessionPageId)
-  }, [activeSessionId, sessions])
+    if (!sessionPageId) return
+    const resolvedPageId = resolvePlanningPageId(developmentPlanningPages, sessionPageId)
+    if (resolvedPageId) setActivePageId(resolvedPageId)
+  }, [activeSessionId, developmentPlanningPages, sessions])
 
   /** 在右侧工作区打开当前页面预览。 */
   const handleOpenPage = (): void => {
@@ -284,8 +304,8 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
-    setActivePageId(page.key)
-    handleSelectPage(page.pageId || page.key).catch(() => undefined)
+    setActivePageId(page.pageId)
+    handleSelectPage(page.pageId).catch(() => undefined)
   }
 
   /** 启动当前页面的详细设计；解锁状态仍以后续持久化目录检查为准。 */

@@ -1183,10 +1183,11 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             }
         tasks = update.get("tasks") if isinstance(update.get("tasks"), list) else []
         return {
-            "message": f"任务数={len(tasks)}，任务 DAG 已生成",
+            "message": f"任务数={len(tasks)}，任务 DAG 已按范围生成",
             "data": {
                 "buildTaskPlan": update.get("build_task_plan"),
                 "taskCount": len(tasks),
+                "buildExecutionScope": update.get("build_execution_scope"),
             },
         }
     if node_name == "build":
@@ -1195,6 +1196,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "message": f"完成={summary.get('completed', 0)}，失败={summary.get('failed', 0)}",
             "data": {
                 "buildSummary": summary,
+                "buildExecutionSlice": update.get("build_execution_slice"),
                 "buildEvents": update.get("build_events", []),
                 "buildResults": update.get("build_results", []),
             },
@@ -1391,6 +1393,7 @@ def _workflow_visual_payload(
         "previewUrl": summary.get("previewUrl"),
         "tasks": result.get("tasks", []),
         "buildSummary": result.get("build_summary", {}),
+        "buildExecutionSlice": result.get("build_execution_slice"),
         "testReport": result.get("test_report", {}),
         "repairTaskPlan": result.get("repair_task_plan"),
         "clarification": result.get("clarification", {}),
@@ -1403,6 +1406,7 @@ def _workflow_visual_payload(
         "detail_selection": result.get("detail_selection"),
         "selectedPageId": result.get("selectedPageId"),
         "selected_data_source_id": result.get("selected_data_source_id"),
+        "buildExecutionScope": result.get("build_execution_scope"),
     }
     payload = {
         "runId": run_id,

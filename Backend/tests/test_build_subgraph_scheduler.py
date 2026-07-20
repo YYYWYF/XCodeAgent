@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from app.graph.subgraphs.build import build
+from app.graph.subgraphs.build import build, run_build_scheduler
+from app.services.build_task_planner import replace_build_task_plan_tasks
 
 
 def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
@@ -77,12 +78,20 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
-                        "build_task_plan": {
-                            "version": "0.3.0",
-                            "tasks": tasks,
-                            "summary": {"total": 2},
-                        },
-                        "tasks": tasks,
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v2",
+                                "build_units": {
+                                    "application:root": {
+                                        "id": "application:root",
+                                        "kind": "application",
+                                        "task_ids": ["api", "page"],
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["application:root"], "edges": []},
+                            },
+                            tasks,
+                        ),
                         "timeline": [],
                         "selected_skill_names": ["workflow-skill"],
                     }
@@ -94,6 +103,101 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertIn("scheduler:dispatch:api", result["build_events"])
         self.assertIn("scheduler:dispatch:page", result["build_events"])
         self.assertEqual(runner_skill_sets, [["workflow-skill"], ["workflow-skill"]])
+
+    def test_build_scheduler_streams_task_progress_snapshots(self) -> None:
+        """调度器应在任务运行和结果应用时输出当前执行切片。"""
+
+        progress_events: list[dict] = []
+        tasks = [
+            {
+                "id": "api",
+                "unit_id": "data-source:orders",
+                "owner": "data_source",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [{"path": "Backend/app/orders.py"}],
+            },
+            {
+                "id": "page",
+                "unit_id": "page:orders",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": ["api"],
+                "change_scope": [{"path": "Frontend/src/Orders.tsx"}],
+            },
+        ]
+
+        def complete_runner(**kwargs):
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": task["owner"],
+                    "status": "completed",
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_data_sources_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_execution_scope": {
+                            "type": "page",
+                            "targetId": "orders",
+                        },
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v2",
+                                "build_units": {
+                                    "data-source:orders": {
+                                        "id": "data-source:orders",
+                                        "kind": "data_source",
+                                    },
+                                    "page:orders": {"id": "page:orders", "kind": "page"},
+                                },
+                                "unit_graph": {
+                                    "nodes": ["data-source:orders", "page:orders"],
+                                    "edges": [
+                                        {
+                                            "from": "data-source:orders",
+                                            "to": "page:orders",
+                                            "type": "depends_on",
+                                        }
+                                    ],
+                                },
+                            },
+                            tasks,
+                        ),
+                        "timeline": [],
+                    },
+                    progress_writer=progress_events.append,
+                )
+
+        self.assertEqual(result["build_summary"]["status"], "completed")
+        self.assertGreaterEqual(len(progress_events), 4)
+        first_slice = progress_events[0]["state"]["build_execution_slice"]
+        self.assertEqual(first_slice["scope"], {"type": "page", "targetId": "orders"})
+        self.assertEqual(first_slice["summary"]["running"], 1)
+        self.assertEqual(
+            {task["id"]: task["status"] for task in first_slice["tasks"]},
+            {"api": "running", "page": "pending"},
+        )
+        final_slice = progress_events[-1]["state"]["build_execution_slice"]
+        self.assertEqual(final_slice["summary"]["completed"], 2)
+        self.assertTrue(
+            all(task["status"] == "completed" for task in final_slice["tasks"])
+        )
 
     def test_build_scheduler_plans_and_runs_repair_task(self) -> None:
         tasks = [
@@ -157,12 +261,20 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
-                        "build_task_plan": {
-                            "version": "0.3.0",
-                            "tasks": tasks,
-                            "summary": {"total": 1},
-                        },
-                        "tasks": tasks,
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v2",
+                                "build_units": {
+                                    "application:root": {
+                                        "id": "application:root",
+                                        "kind": "application",
+                                        "task_ids": ["page"],
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["application:root"], "edges": []},
+                            },
+                            tasks,
+                        ),
                         "timeline": [],
                         "selected_skill_names": ["repair-skill"],
                     }
@@ -177,6 +289,107 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             repair_planner.call_args.kwargs["selected_skill_names"],
             ["repair-skill"],
         )
+
+    def test_page_scope_does_not_execute_unrelated_page_tasks(self) -> None:
+        """页面范围只调度目标页面闭包内任务，不更新其他页面任务。"""
+
+        dispatched_task_ids: list[str] = []
+        tasks = [
+            {
+                "id": "orders-api",
+                "unit_id": "data-source:orders",
+                "owner": "data_source",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [{"path": "Backend/app/orders.py"}],
+            },
+            {
+                "id": "orders-page",
+                "unit_id": "page:orders",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": ["orders-api"],
+                "change_scope": [{"path": "Frontend/src/Orders.tsx"}],
+            },
+            {
+                "id": "customers-page",
+                "unit_id": "page:customers",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [{"path": "Frontend/src/Customers.tsx"}],
+            },
+        ]
+
+        def complete_runner(**kwargs):
+            dispatched_task_ids.extend(task["id"] for task in kwargs["tasks"])
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": task["owner"],
+                    "status": "completed",
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_data_sources_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+            ):
+                result = build(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_execution_scope": {"type": "page", "targetId": "orders"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v2",
+                                "build_units": {
+                                    "data-source:orders": {
+                                        "id": "data-source:orders",
+                                        "kind": "data_source",
+                                    },
+                                    "page:orders": {"id": "page:orders", "kind": "page"},
+                                    "page:customers": {
+                                        "id": "page:customers",
+                                        "kind": "page",
+                                    },
+                                },
+                                "unit_graph": {
+                                    "nodes": [
+                                        "data-source:orders",
+                                        "page:orders",
+                                        "page:customers",
+                                    ],
+                                    "edges": [
+                                        {
+                                            "from": "data-source:orders",
+                                            "to": "page:orders",
+                                            "type": "depends_on",
+                                        }
+                                    ],
+                                },
+                            },
+                            tasks,
+                        ),
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(dispatched_task_ids, ["orders-api", "orders-page"])
+        statuses = {task["id"]: task["status"] for task in result["tasks"]}
+        self.assertEqual(statuses["orders-api"], "completed")
+        self.assertEqual(statuses["orders-page"], "completed")
+        self.assertEqual(statuses["customers-page"], "pending")
+        self.assertEqual(result["build_execution_slice"]["task_ids"], ["orders-api", "orders-page"])
+        self.assertEqual(result["build_summary"]["status"], "completed")
 
 
 if __name__ == "__main__":

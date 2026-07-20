@@ -7,6 +7,10 @@ from app.services.build_repair_planner import (
     close_repaired_parent_tasks,
     create_build_failure_repair_plan,
 )
+from app.services.build_task_planner import (
+    replace_build_task_plan_tasks,
+    tasks_from_build_task_plan,
+)
 
 
 class BuildRepairPlannerTests(unittest.TestCase):
@@ -90,11 +94,17 @@ class BuildRepairPlannerTests(unittest.TestCase):
     def test_appends_repair_tasks_to_build_plan(self) -> None:
         repair_task = {"id": "repair:page:test", "kind": "repair", "status": "pending"}
         updated = append_repair_tasks_to_build_plan(
-            build_task_plan={"tasks": [{"id": "page", "status": "failed"}]},
+            build_task_plan=replace_build_task_plan_tasks(
+                {"schema_version": "build-dag.v2", "build_units": {}, "unit_graph": {}},
+                [{"id": "page", "owner": "frontend", "status": "failed", "dependencies": []}],
+            ),
             repair_task_plan={"tasks": [repair_task]},
         )
 
-        self.assertEqual([task["id"] for task in updated["tasks"]], ["page", "repair:page:test"])
+        self.assertEqual(
+            [task["id"] for task in tasks_from_build_task_plan(updated)],
+            ["page", "repair:page:test"],
+        )
         self.assertEqual(updated["summary"]["repair"], 1)
 
     def test_closes_parent_task_when_repair_succeeds(self) -> None:

@@ -31,7 +31,7 @@ CONFIRMATION_FAILURES = {
 
 
 def select_ready_build_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    """Select the next dependency-ready, lock-compatible task batch."""
+    """选择下一批依赖满足且文件锁兼容的构建任务。"""
 
     tasks_by_id = {str(task.get("id")): task for task in tasks if task.get("id")}
     completed = {
@@ -89,6 +89,8 @@ def mark_tasks_running(
     tasks: list[dict[str, Any]],
     ready_task_ids: list[str],
 ) -> list[dict[str, Any]]:
+    """将本轮派发的任务标记为 running，并记录调度开始时间。"""
+
     now = datetime.now(UTC).isoformat()
     ready = set(ready_task_ids)
     return [
@@ -117,7 +119,7 @@ def normalize_task_results(
     dispatched_tasks: list[dict[str, Any]],
     raw_results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Validate runner output and convert malformed/missing results into failures."""
+    """校验 runner 输出，并将缺失或畸形结果转为失败记录。"""
 
     dispatched_by_id = {task["id"]: task for task in dispatched_tasks}
     results_by_task_id = {
@@ -155,6 +157,8 @@ def normalize_task_results(
 
 
 def classify_task_result(result: dict[str, Any]) -> dict[str, str]:
+    """把任务失败类型归类为重试、修复、确认或终止失败。"""
+
     if result.get("status") == "completed":
         return {"action": "complete", "reason": "runner_completed"}
 
@@ -223,6 +227,8 @@ def summarize_build_runtime(
     tasks: list[dict[str, Any]],
     build_results: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """汇总当前执行切片内任务的运行状态。"""
+
     counts = defaultdict(int)
     for task in tasks:
         counts[str(task.get("status") or RUNNABLE_STATUS)] += 1
@@ -253,11 +259,59 @@ def summarize_build_runtime(
     }
 
 
+def resolve_execution_slice(
+    *,
+    build_task_plan: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    build_execution_scope: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """按应用、页面或数据源范围裁剪 BuildScheduler 的可执行任务视图。"""
+
+    scope = _normalized_scope(build_execution_scope)
+    unit_ids = _execution_unit_ids(build_task_plan, scope)
+    task_ids = [
+        str(task.get("id"))
+        for task in tasks
+        if task.get("id") and str(task.get("unit_id") or "application:root") in unit_ids
+    ]
+    task_id_set = set(task_ids)
+    sliced_tasks = [task for task in tasks if str(task.get("id") or "") in task_id_set]
+    reusable_task_ids = [
+        str(task.get("id"))
+        for task in sliced_tasks
+        if task.get("status") == "completed"
+    ]
+    pending_task_ids = [
+        str(task.get("id"))
+        for task in sliced_tasks
+        if task.get("status", RUNNABLE_STATUS) == RUNNABLE_STATUS
+    ]
+    return {
+        "scope": scope,
+        "target_unit_ids": _target_unit_ids(scope),
+        "unit_ids": unit_ids,
+        "task_ids": task_ids,
+        "pending_task_ids": pending_task_ids,
+        "reusable_task_ids": reusable_task_ids,
+        "tasks": sliced_tasks,
+        "summary": {
+            "total": len(sliced_tasks),
+            "pending": len(pending_task_ids),
+            "running": len([task for task in sliced_tasks if task.get("status") == "running"]),
+            "reused": len(reusable_task_ids),
+            "completed": len([task for task in sliced_tasks if task.get("status") == "completed"]),
+            "failed": len([task for task in sliced_tasks if task.get("status") == "failed"]),
+        },
+    }
+
+
 def _overall_status(
     tasks: list[dict[str, Any]],
     repairable: list[dict[str, Any]],
     confirmation: list[dict[str, Any]],
 ) -> str:
+    """根据切片任务和失败分类计算构建总体状态。"""
+
     if tasks and all(task.get("status") == "completed" for task in tasks):
         return "completed"
     if confirmation:
@@ -270,6 +324,8 @@ def _overall_status(
 
 
 def _dependencies(task: dict[str, Any]) -> list[str]:
+    """读取任务依赖 ID，兼容 dependencies 与 dependsOn。"""
+
     value = task.get("dependencies") or task.get("dependsOn") or []
     return (
         [str(item) for item in value if str(item).strip()]
@@ -282,6 +338,8 @@ def _missing_dependency_errors(
     tasks: list[dict[str, Any]],
     tasks_by_id: dict[str, dict[str, Any]],
 ) -> list[str]:
+    """检查当前可见任务集中是否存在缺失依赖。"""
+
     return [
         f"Task {task.get('id')} depends on missing task {dependency}."
         for task in tasks
@@ -291,6 +349,8 @@ def _missing_dependency_errors(
 
 
 def _lock_compatible_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """从就绪任务中选择文件锁不冲突的一批任务。"""
+
     if not tasks:
         return []
     serial = [
@@ -313,6 +373,8 @@ def _lock_compatible_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _task_locks(task: dict[str, Any]) -> list[str]:
+    """从 lock_scope、change_scope、targetFiles 和 allowed_paths 推导写锁。"""
+
     locks = _string_list(task.get("lock_scope"))
     if locks:
         return locks
@@ -329,17 +391,23 @@ def _task_locks(task: dict[str, Any]) -> list[str]:
 
 
 def _string_list(value: Any) -> list[str]:
+    """将列表输入规整为去空字符串列表。"""
+
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, str]:
+    """为调度选择提供稳定排序，数据源任务优先于前端任务。"""
+
     owner_priority = {"data_source": 0, "frontend": 1}
     return (owner_priority.get(str(task.get("owner")), 9), str(task.get("id")))
 
 
 def _protocol_failure(task: dict[str, Any], reason: str) -> dict[str, Any]:
+    """把 runner 协议异常包装为标准失败结果。"""
+
     result = {
         "task_id": task["id"],
         "owner": task.get("owner"),
@@ -351,4 +419,83 @@ def _protocol_failure(task: dict[str, Any], reason: str) -> dict[str, Any]:
         "change_request": None,
     }
     result["scheduler_decision"] = classify_task_result(result)
+    return result
+
+
+def _normalized_scope(scope: dict[str, Any] | None) -> dict[str, str]:
+    """规整构建范围，缺省时执行已准备的整应用任务。"""
+
+    value = scope if isinstance(scope, dict) else {}
+    target_type = str(value.get("type") or "application").strip()
+    target_id = str(value.get("targetId") or value.get("target_id") or "").strip()
+    if target_type not in {"application", "page", "data_source"}:
+        target_type = "application"
+    if target_type == "application":
+        target_id = target_id or "application"
+    return {"type": target_type, "targetId": target_id}
+
+
+def _target_unit_ids(scope: dict[str, str]) -> list[str]:
+    """将外部 scope 映射为目标 Unit ID。"""
+
+    if scope["type"] == "page" and scope.get("targetId"):
+        return [f"page:{scope['targetId']}"]
+    if scope["type"] == "data_source" and scope.get("targetId"):
+        return [f"data-source:{scope['targetId']}"]
+    return ["application:root"]
+
+
+def _execution_unit_ids(
+    build_task_plan: dict[str, Any],
+    scope: dict[str, str],
+) -> list[str]:
+    """按 Unit Graph 解析目标 Unit 及其直接/传递前置 Unit。"""
+
+    unit_graph = build_task_plan.get("unit_graph")
+    unit_ids = _string_list(
+        (unit_graph if isinstance(unit_graph, dict) else {}).get("nodes")
+    )
+    if scope["type"] == "application":
+        return unit_ids
+
+    available = set(unit_ids)
+    selected: list[str] = []
+    dependency_map = _unit_dependency_map(unit_graph)
+    stack = [unit_id for unit_id in _target_unit_ids(scope) if unit_id in available]
+    while stack:
+        unit_id = stack.pop(0)
+        if unit_id in selected:
+            continue
+        selected.append(unit_id)
+        for dependency_unit_id in dependency_map.get(unit_id, []):
+            if dependency_unit_id in available and dependency_unit_id not in selected:
+                stack.append(dependency_unit_id)
+    return selected
+
+
+def _unit_dependency_map(unit_graph: Any) -> dict[str, list[str]]:
+    """读取 Unit Graph depends_on 边，用于切片前置依赖闭包。"""
+
+    graph = unit_graph if isinstance(unit_graph, dict) else {}
+    result: dict[str, list[str]] = {}
+    for edge in graph.get("edges", []) if isinstance(graph.get("edges"), list) else []:
+        if not isinstance(edge, dict) or edge.get("type") != "depends_on":
+            continue
+        source = str(edge.get("from") or "")
+        target = str(edge.get("to") or "")
+        if source and target:
+            result.setdefault(target, []).append(source)
+    return {unit_id: _dedupe_strings(dependencies) for unit_id, dependencies in result.items()}
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    """按首次出现顺序去重字符串。"""
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
     return result

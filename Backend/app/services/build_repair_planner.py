@@ -4,6 +4,11 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from app.services.build_task_planner import (
+    replace_build_task_plan_tasks,
+    tasks_from_build_task_plan,
+)
+
 
 MAX_REPAIR_DEPTH = 1
 RepairPlanner = Callable[[dict[str, Any]], dict[str, Any]]
@@ -22,7 +27,7 @@ def create_build_failure_repair_plan(
 
     tasks_by_id = {str(task.get("id")): task for task in tasks if task.get("id")}
     existing_keys = {
-        _repair_key(task.get("source_ref", {}))
+        _repair_key(_repair_source_ref(task))
         for task in existing_repair_tasks or []
         if isinstance(task, dict)
     }
@@ -239,6 +244,8 @@ def append_repair_tasks_to_build_plan(
     build_task_plan: dict[str, Any],
     repair_task_plan: dict[str, Any],
 ) -> dict[str, Any]:
+    """把修复任务追加回全局 Build DAG，保留原任务所属 Unit。"""
+
     repair_tasks = [
         task
         for task in repair_task_plan.get("tasks", [])
@@ -247,11 +254,7 @@ def append_repair_tasks_to_build_plan(
     if not repair_tasks:
         return build_task_plan
 
-    existing_tasks = [
-        task
-        for task in build_task_plan.get("tasks", [])
-        if isinstance(task, dict) and task.get("id")
-    ]
+    existing_tasks = tasks_from_build_task_plan(build_task_plan)
     existing_ids = {str(task["id"]) for task in existing_tasks}
     next_tasks = [
         *existing_tasks,
@@ -267,8 +270,7 @@ def append_repair_tasks_to_build_plan(
         "repair": len([task for task in next_tasks if _is_repair_task(task)]),
     }
     return {
-        **build_task_plan,
-        "tasks": next_tasks,
+        **replace_build_task_plan_tasks(build_task_plan, next_tasks),
         "summary": summary,
         "repair_task_plan": repair_task_plan,
     }
@@ -313,6 +315,8 @@ def _repair_task(
     strategy: str = "",
     boundaries: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """基于失败父任务创建受限修复任务，并继承 Unit 与来源引用。"""
+
     raw_task = raw_task or {}
     parent_id = str(parent_task["id"])
     repair_id = f"repair:{parent_id}:{source_ref['failure_signature'][:12]}"
@@ -335,13 +339,21 @@ def _repair_task(
         "kind": "repair",
         "owner": parent_task.get("owner"),
         "type": parent_task.get("type"),
+        "unit_id": parent_task.get("unit_id", "application:root"),
         "title": str(raw_task.get("title") or "").strip()
         or f"修复 {parent_task.get('title') or parent_id}",
         "description": description,
         "dependencies": [],
         "dependsOn": [],
         "status": "pending",
-        "source_ref": source_ref,
+        "source_refs": {
+            "parent": (
+                parent_task.get("source_refs")
+                if isinstance(parent_task.get("source_refs"), dict)
+                else {}
+            ),
+            "repair": source_ref,
+        },
         "repairs": {
             "task_id": parent_id,
             "result_task_id": result.get("task_id"),
@@ -404,8 +416,18 @@ def _repair_key(source_ref: Any) -> tuple[str, str]:
     )
 
 
+def _repair_source_ref(task: dict[str, Any]) -> dict[str, Any]:
+    """读取 repair 任务附带的内部修复来源，避免污染通用来源引用。"""
+
+    source_refs = task.get("source_refs")
+    if not isinstance(source_refs, dict):
+        return {}
+    repair = source_refs.get("repair")
+    return repair if isinstance(repair, dict) else {}
+
+
 def _repair_depth(task: dict[str, Any]) -> int:
-    source_ref = task.get("source_ref") if isinstance(task.get("source_ref"), dict) else {}
+    source_ref = _repair_source_ref(task)
     try:
         return int(source_ref.get("repair_depth") or 0)
     except (TypeError, ValueError):
@@ -414,14 +436,13 @@ def _repair_depth(task: dict[str, Any]) -> int:
 
 def _is_repair_task(task: dict[str, Any]) -> bool:
     return task.get("kind") == "repair" or (
-        isinstance(task.get("source_ref"), dict)
-        and task["source_ref"].get("type") == "build_task_failure"
+        _repair_source_ref(task).get("type") == "build_task_failure"
     )
 
 
 def _parent_task_id(task: dict[str, Any]) -> str:
     repairs = task.get("repairs") if isinstance(task.get("repairs"), dict) else {}
-    source_ref = task.get("source_ref") if isinstance(task.get("source_ref"), dict) else {}
+    source_ref = _repair_source_ref(task)
     return str(repairs.get("task_id") or source_ref.get("parent_task_id") or "")
 
 

@@ -27,12 +27,11 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertIn("frontend_pages", plan)
         self.assertIn("data_sources", plan)
         self.assertIn("permission_model", plan)
-        self.assertIn("task_inputs", plan)
+        self.assertNotIn("task_inputs", plan)
         self.assertTrue(plan["frontend_pages"][0]["references"]["endpoint_dependencies"])
         self.assertTrue(plan["permission_model"]["page_access"])
         self.assertTrue(plan["project_acceptance_criteria"])
-        self.assertTrue(plan["task_inputs"]["frontend"])
-        self.assertTrue(plan["task_inputs"]["data_source"])
+        self.assertTrue(plan["data_sources"])
 
     def test_project_plan_merges_main_agent_json_sections(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")

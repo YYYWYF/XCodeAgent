@@ -27,6 +27,20 @@ class ModelOutputTests(unittest.TestCase):
     def test_extracts_object_nested_in_array_text(self) -> None:
         self.assertEqual(extract_json_object('[{"id": 1}]'), {"id": 1})
 
+    def test_logs_outer_json_error_when_falling_back_to_nested_object(self) -> None:
+        """最外层对象无效而回退到嵌套对象时，应记录错误位置而不记录原文。"""
+
+        text = '{"workspace_analysis": {"stack": ["React"]}, "tasks": [}'
+
+        with self.assertLogs("app.utils.model_output", level="WARNING") as logs:
+            parsed = extract_json_object(text)
+
+        self.assertEqual(parsed, {"stack": ["React"]})
+        self.assertIn("model_json_nested_object_fallback", logs.output[0])
+        self.assertIn("root_error_position=", logs.output[0])
+        self.assertIn("root_error_context=chars[", logs.output[0])
+        self.assertNotIn("React", logs.output[0])
+
 
 if __name__ == "__main__":
     unittest.main()

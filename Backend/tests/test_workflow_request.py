@@ -454,6 +454,155 @@ class WorkflowRequestTests(unittest.TestCase):
             "inventory_page",
         )
 
+    def test_restores_selected_page_scope_from_resume_state(self) -> None:
+        """确认 PageDetail 后只携带恢复态时仍应恢复页面构建范围。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "正确，继续",
+                "forwardedProps": {
+                    "resumeState": {
+                        "state": {
+                            "phase": "detail_confirmation",
+                            "status": "requires_user_input",
+                            "selectedPageId": "page_1",
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "detail_confirmation")
+        self.assertEqual(inputs["resume_values"]["selectedPageId"], "page_1")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "page", "targetId": "page_1"},
+        )
+
+    def test_forwards_explicit_build_execution_scope(self) -> None:
+        """AG-UI 请求应把页面/数据源范围作为 Workflow State 的结构化输入。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "生成订单数据源",
+                "forwardedProps": {
+                    "buildExecutionScope": {"type": "data_source", "targetId": "orders"},
+                },
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "data_source", "targetId": "orders"},
+        )
+
+    def test_selected_page_overrides_stale_resumed_application_scope(self) -> None:
+        """恢复态存在旧 application 范围时，选中页面应纠正为页面范围。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "正确，继续",
+                "forwardedProps": {
+                    "resumeState": {
+                        "state": {
+                            "phase": "detail_confirmation",
+                            "status": "requires_user_input",
+                            "selectedPageId": "page_1",
+                            "build_execution_scope": {
+                                "type": "application",
+                                "targetId": "application",
+                            },
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "page", "targetId": "page_1"},
+        )
+
+    def test_selected_page_overrides_stale_resumed_page_scope(self) -> None:
+        """用户重新选择页面后，应以本次选择覆盖恢复态中的旧页面范围。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "正确，继续",
+                "forwardedProps": {
+                    "selectedPageId": "personnel-list",
+                    "resumeState": {
+                        "state": {
+                            "phase": "detail_confirmation",
+                            "status": "requires_user_input",
+                            "selectedPageId": "page_1",
+                            "build_execution_scope": {
+                                "type": "page",
+                                "targetId": "page_1",
+                            },
+                        }
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_values"]["selectedPageId"], "personnel-list")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "page", "targetId": "personnel-list"},
+        )
+
+    def test_selected_page_uses_canonical_project_plan_page_id(self) -> None:
+        """最新 ProjectPlan 有正式 pageId 时，应纠正旧页面别名并生成页面范围。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            plans_dir = workspace / ".xcodeagent" / "plans"
+            plans_dir.mkdir(parents=True)
+            (plans_dir / "project-plan.json").write_text(
+                json.dumps(
+                    {
+                        "confirmation_status": "confirmed",
+                        "frontend_pages": [
+                            {
+                                "pageId": "page-personnel-list",
+                                "name": "人员列表",
+                                "path": "/",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            inputs = workflow_run_inputs(
+                {
+                    "request": "正确，继续",
+                    "forwardedProps": {
+                        "workspaceRoot": str(workspace),
+                        "selectedPageId": "personnel-list",
+                        "resumeState": {
+                            "state": {
+                                "phase": "detail_confirmation",
+                                "status": "requires_user_input",
+                                "selectedPageId": "page_1",
+                                "build_execution_scope": {
+                                    "type": "page",
+                                    "targetId": "page_1",
+                                },
+                            }
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_values"]["selectedPageId"], "page-personnel-list")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "page", "targetId": "page-personnel-list"},
+        )
+
     def test_infers_prepare_build_tasks_resume_for_plan_confirmation_guard(self) -> None:
         inputs = workflow_run_inputs(
             {
@@ -564,7 +713,13 @@ class WorkflowRequestTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (plans_dir / "build-task-plan.json").write_text(
-                json.dumps({"tasks": [{"id": "task-1"}]}),
+                json.dumps(
+                    {
+                        "schema_version": "build-dag.v2",
+                        "task_registry": {"task-1": {"id": "task-1"}},
+                        "task_graph": {"nodes": ["task-1"], "edges": []},
+                    }
+                ),
                 encoding="utf-8",
             )
             (snapshots_dir / "rev.1.0.0.json").write_text(
