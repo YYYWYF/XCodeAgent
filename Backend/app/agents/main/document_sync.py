@@ -119,7 +119,7 @@ def sync_project_plan_from_markdown(
             normalized[key] = value
     errors = validate_api_contract_consistency(normalized)
     if errors:
-        raise ValueError("Edited ProjectPlan is inconsistent: " + "; ".join(errors))
+        raise ValueError("编辑后的项目计划存在不一致：" + "; ".join(errors))
     normalized["markdown_sync"] = {
         "status": "synchronized",
         "source": "user_edited_markdown",

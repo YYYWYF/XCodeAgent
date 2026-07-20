@@ -107,7 +107,7 @@ export default function DetailConfirmationPageSelector({
           <span className={cx('detail-page-selector-logo')}><RocketOutlined /></span>
           <Text className={cx('detail-page-selector-eyebrow')}>PAGE DESIGN</Text>
           <Title level={2}>选择要开始设计的页面</Title>
-          <Text type="secondary">页面目录来自 ProjectPlan。选择一个页面，开始第一份详细设计。</Text>
+          <Text type="secondary">页面目录来自项目计划。选择一个页面，开始第一份详细设计。</Text>
         </header>
 
         {loading ? (
@@ -128,7 +128,7 @@ export default function DetailConfirmationPageSelector({
             ))}
           </Radio.Group>
         ) : (
-          <Text type="secondary">ProjectPlan 的 frontend_pages 中暂无可设计页面。</Text>
+          <Text type="secondary">项目计划中暂无可设计页面。</Text>
         )}
 
         <Button

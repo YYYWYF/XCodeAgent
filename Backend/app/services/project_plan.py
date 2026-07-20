@@ -632,7 +632,7 @@ def create_project_plan(
     architecture = {
         "frontend": "基于单页应用生成页面、路由和 API 客户端。",
         "backend": "本地 API 服务提供资源接口和业务契约实现。",
-        "data": "根据 RequirementSpec 使用 Mock 或数据库型数据源。",
+        "data": "根据需求文档使用 Mock 或数据库型数据源。",
         "testing": "交付前执行单元、契约、集成和冒烟检查。",
     }
     if isinstance(agent_architecture, dict):
@@ -675,7 +675,7 @@ def create_project_plan(
             if authoritative_agent_plan
             and isinstance(_agent_section(agent_plan, "risks"), list)
             else [
-                "API 契约字段模型仍是初版；细节确认若发现缺口，必须回到 ProjectPlan 调整并重新确认。",
+                "API 契约字段模型仍是初版；细节确认若发现缺口，必须回到项目计划调整并重新确认。",
                 "权限规则当前按角色粗粒度规划，后续需要确认到页面和操作级别。",
             ]
         ),

@@ -109,6 +109,7 @@ export default function AppEntryPage() {
           <WelcomePage
             activePlanning={activePlanning?.application}
             activePlanningStatus={activePlanning?.status}
+            activePlanningWorkflow={activePlanning?.workflow}
             onOpenApplication={setActiveApplication}
             onOpenPlanning={() => setPlanningVisible(true)}
             onStartPlanning={handleStartPlanning}

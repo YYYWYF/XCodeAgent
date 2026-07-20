@@ -98,7 +98,7 @@ def _workspace_analysis(value: Any) -> dict[str, Any]:
         "conventions": _string_list(source.get("conventions")),
         "summary": _text(
             source.get("summary"),
-            "Main Agent 返回中缺少可解析的工作目录检查摘要，已使用 ProjectPlan 兜底拆分任务。",
+            "主 Agent 返回中缺少可解析的工作目录检查摘要，已使用项目计划兜底拆分任务。",
         ),
     }
 

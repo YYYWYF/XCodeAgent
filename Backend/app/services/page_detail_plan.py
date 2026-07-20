@@ -86,7 +86,7 @@ def _find_page_by_pageId(items: list[dict[str, Any]], pageId: str) -> dict[str, 
     for item in items:
         if item.get("pageId") == pageId:
             return item
-    raise ValueError(f"ProjectPlan 中不存在页面：{pageId}")
+    raise ValueError(f"项目计划中不存在页面：{pageId}")
 
 
 def _text_items(value: Any) -> list[str]:
@@ -611,7 +611,7 @@ def create_data_source_detail_plan(
         "user_confirmation_note": user_request.strip(),
         "acceptance_criteria": [
             f"数据源 {source['name']} 可以提供已约定实体和字段。",
-            "相关 API 契约与 ProjectPlan.api_contracts 保持一致。",
+            "相关 API 契约与项目计划保持一致。",
             "依赖该数据源的页面只能通过已声明 API 访问数据。",
         ],
         "approved": True,
@@ -800,8 +800,8 @@ def create_page_detail_plan(
         "acceptance_criteria": [
             f"用户可以访问 {page_path} 并看到 {page_name} 的主要内容。",
             "页面具备 loading、empty、error、ready 四类基础状态。",
-            "页面只访问 ProjectPlan.api_contracts 中已声明的 API。",
-            "页面权限与 ProjectPlan 页面清单保持一致。",
+            "页面只访问项目计划中已声明的 API。",
+            "页面权限与项目计划中的页面清单保持一致。",
         ],
         "agent_note": agent_note,
         "approved": True,

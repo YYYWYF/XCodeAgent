@@ -343,7 +343,7 @@ def _generate_all_detail_plans(
             if isinstance(page, dict) and page.get("pageId") == selectedPageId
         ]
         if not pages:
-            raise ValueError(f"ProjectPlan 中不存在页面：{selectedPageId}")
+            raise ValueError(f"项目计划中不存在页面：{selectedPageId}")
         # 单页设计不能混入上一轮或其他页面遗留的内存详情，避免审核界面展示错误对象。
         updated_plan = {
             **project_plan,
@@ -484,7 +484,7 @@ def _project_plan_confirmation_payload(project_plan: dict) -> dict:
         ]
     )
     payload["mode"] = "project_plan_confirmation"
-    payload["message"] = "请确认 ProjectPlan 后再继续页面/数据源细节设计。"
+    payload["message"] = "请确认项目计划后再继续页面/数据源细节设计。"
     payload["plan_summary"] = project_plan.get("app", {}).get("name", "未命名应用")
     return payload
 
@@ -498,9 +498,9 @@ def _project_plan_dependency_error_payload(errors: list[str]) -> dict:
             AskUserQuestion(
                 header="计划依赖校验",
                 question=(
-                    "系统已自动尝试修复 ProjectPlan 页面依赖，但仍有无法安全推断的问题。"
+                    "系统已自动尝试修复项目计划中的页面依赖，但仍有无法安全推断的问题。"
                     f"{error_summary}"
-                    "请补充业务决策后，我会重新生成 ProjectPlan；无需手动编辑 JSON。"
+                    "请补充业务决策后，我会重新生成项目计划；无需手动编辑 JSON。"
                 ),
                 type="text",
                 placeholder="例如：为入职表单补充 create endpoint，并修正页面路由。",
@@ -508,7 +508,7 @@ def _project_plan_dependency_error_payload(errors: list[str]) -> dict:
         ]
     )
     payload["mode"] = "project_plan_dependency_validation_error"
-    payload["message"] = "ProjectPlan 自动修复后仍未通过依赖校验，页面设计未开始。"
+    payload["message"] = "项目计划自动修复后仍未通过依赖校验，页面设计未开始。"
     payload["errors"] = errors
     return payload
 
@@ -547,14 +547,14 @@ def _project_plan_revision_required_payload(reason: str) -> dict:
         [
             AskUserQuestion(
                 header="需要修订计划",
-                question="页面设计需要尚未声明的 endpoint 或跳转目标，不能自由添加。请返回 ProjectPlan 修订依赖后重新确认。",
+                question="页面设计需要尚未声明的 endpoint 或跳转目标，不能自由添加。请返回项目计划修订依赖后重新确认。",
                 type="text",
                 placeholder="例如：在入职页面的 endpoint_dependencies 中补充员工创建接口。",
             )
         ]
     )
     payload["mode"] = "project_plan_revision_required"
-    payload["message"] = "页面设计已停止，必须先修订并重新确认 ProjectPlan。"
+    payload["message"] = "页面设计已停止，必须先修订并重新确认项目计划。"
     payload["reason"] = reason
     return payload
 
@@ -566,7 +566,7 @@ def _project_plan_confirmed_payload(project_plan: dict) -> dict:
         "question_schema": "gemini_cli.ask_user.v1",
         "questions": [],
         "assumptions": [],
-        "message": "ProjectPlan 已由用户确认，可以继续后续 workflow。",
+        "message": "项目计划已由用户确认，可以继续后续流程。",
         "plan_summary": project_plan.get("app", {}).get("name", "未命名应用"),
     }
 

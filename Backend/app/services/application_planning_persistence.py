@@ -179,7 +179,7 @@ def _menus(project_plan: dict[str, Any]) -> dict[str, Any]:
             "design": _page_design(page, detail),
         })
     if not items:
-        raise ValueError("已确认的 ProjectPlan 中没有可写入的 frontend_pages。")
+        raise ValueError("已确认的项目计划中没有可写入的页面清单。")
     return {"homeMenuKey": items[0]["key"], "items": items}
 
 
@@ -299,32 +299,32 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
     requirement_spec = state.get("requirement_spec")
     project_plan = state.get("project_plan")
     if not isinstance(requirement_spec, dict) or requirement_spec.get("confirmation_status") != "confirmed":
-        raise ValueError("RequirementSpec 必须经用户确认后才能进入工作区。")
+        raise ValueError("需求文档必须经用户确认后才能进入工作区。")
     if not isinstance(project_plan, dict) or project_plan.get("confirmation_status") != "confirmed":
-        raise ValueError("ProjectPlan 必须经用户确认后才能进入工作区。")
+        raise ValueError("项目计划必须经用户确认后才能进入工作区。")
     requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))
     project_plan_markdown = Path(str(state.get("project_plan_path") or ""))
     return {
         "requirementSpec": {
             "markdown": _document_descriptor(
-                workspace, requirement_markdown, "RequirementSpec Markdown", "markdown", ".xcodeagent/specs"
+                workspace, requirement_markdown, "需求文档", "markdown", ".xcodeagent/specs"
             ),
             "json": _document_descriptor(
                 workspace,
                 state.get("requirement_spec_json_path") or requirement_markdown.with_suffix(".json"),
-                "RequirementSpec JSON",
+                "需求文档内部数据",
                 "json",
                 ".xcodeagent/specs",
             ),
         },
         "projectPlan": {
             "markdown": _document_descriptor(
-                workspace, project_plan_markdown, "ProjectPlan Markdown", "markdown", ".xcodeagent/plans"
+                workspace, project_plan_markdown, "项目计划", "markdown", ".xcodeagent/plans"
             ),
             "json": _document_descriptor(
                 workspace,
                 state.get("project_plan_json_path") or project_plan_markdown.with_suffix(".json"),
-                "ProjectPlan JSON",
+                "项目计划内部数据",
                 "json",
                 ".xcodeagent/plans",
             ),

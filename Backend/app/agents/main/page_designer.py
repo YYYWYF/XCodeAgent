@@ -80,7 +80,7 @@ def _invoke_live_chat_model(
 
 def _fallback_model_note(error: Exception) -> str:
     return (
-        "页面设计模型调用失败，已降级使用 ProjectPlan 与用户确认的 "
+        "页面设计模型调用失败，已降级使用项目计划与用户确认的 "
         f"页面上下文生成确定性页面详细计划。错误：{type(error).__name__}: {error}"
     )
 
@@ -118,7 +118,7 @@ def design_page_with_chat_model(
             if isinstance(dependency_gap, dict)
             else str(dependency_gap)
         )
-        raise PageDependencyGapError(message or "页面设计需要修订 ProjectPlan 依赖。")
+        raise PageDependencyGapError(message or "页面设计需要修订项目计划中的依赖。")
     detail_plan = create_page_detail_plan(
         project_plan,
         page_context,

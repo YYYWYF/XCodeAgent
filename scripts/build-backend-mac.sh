@@ -6,10 +6,16 @@ BACKEND_ROOT="${BACKEND_ROOT:-"$ROOT_DIR/Backend"}"
 FRONTEND_ROOT="${FRONTEND_ROOT:-"$ROOT_DIR/Frontend"}"
 if [ -n "${PYTHON:-}" ]; then
   PYTHON_BIN="$PYTHON"
-elif [ -x "$BACKEND_ROOT/.venv/bin/python" ]; then
-  PYTHON_BIN="$BACKEND_ROOT/.venv/bin/python"
+elif [ -x "$BACKEND_ROOT/.venv/bin/python3.12" ]; then
+  PYTHON_BIN="$BACKEND_ROOT/.venv/bin/python3.12"
 else
-  PYTHON_BIN="python3"
+  PYTHON_BIN="python3.12"
+fi
+
+PYTHON_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [ "$PYTHON_VERSION" != "3.12" ]; then
+  echo "Python 3.12 is required to build the macOS backend. Current Python version: $PYTHON_VERSION" >&2
+  exit 1
 fi
 
 ENV_FILE="$BACKEND_ROOT/.env"

@@ -357,11 +357,11 @@ def _repair_task(
         "repair_boundaries": boundaries or _repair_boundaries(parent_task, {}),
         "acceptance_criteria": [
             *acceptance,
-            "不得扩大原任务 change_scope、allowed_paths、API 契约或 ProjectPlan 边界。",
+            "不得扩大原任务 change_scope、allowed_paths、API 契约或项目计划边界。",
         ],
         "acceptanceCriteria": [
             *acceptance,
-            "不得扩大原任务 change_scope、allowed_paths、API 契约或 ProjectPlan 边界。",
+            "不得扩大原任务 change_scope、allowed_paths、API 契约或项目计划边界。",
         ],
         "failure_evidence": {
             "failure_category": result.get("failure_category"),

@@ -133,7 +133,7 @@ def _project_plan_confirmation_payload(project_plan: dict) -> dict:
             AskUserQuestion(
                 header="计划确认",
                 question=(
-                    "代码生成即将开始，但当前 ProjectPlan 尚未由用户确认。"
+                    "代码生成即将开始，但当前项目计划尚未由用户确认。"
                     "请确认项目规划书是否正确。正确请回复“正确，继续”；"
                     "如需调整，请说明要修改的架构、API、页面、数据源、权限或验收标准。"
                 ),
@@ -143,7 +143,7 @@ def _project_plan_confirmation_payload(project_plan: dict) -> dict:
         ]
     )
     payload["mode"] = "project_plan_confirmation"
-    payload["message"] = "ProjectPlan 未确认，已阻止任务拆分和代码生成。"
+    payload["message"] = "项目计划未确认，已阻止任务拆分和代码生成。"
     payload["plan_summary"] = project_plan.get("app", {}).get("name", "未命名应用")
     return payload
 

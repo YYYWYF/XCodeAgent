@@ -170,7 +170,7 @@ export default function ApplicationDevelopmentPlanningGate({ applicationName, pa
   // 调用模型生成计划；模型认为信息不足时切换为澄清表单。
   const generatePlan = async (nextAnswers: DevelopmentPlanningAnswer[] = answers): Promise<void> => {
     if (!selectedPageKey) {
-      setError('当前 ProjectPlan 中没有可规划的页面。')
+      setError('当前项目计划中没有可规划的页面。')
       setPhase('error')
       return
     }
@@ -269,7 +269,7 @@ export default function ApplicationDevelopmentPlanningGate({ applicationName, pa
                   </Radio.Button>
                 ))}
               </Radio.Group>
-            ) : <Text type="secondary">已确认的 ProjectPlan 中没有可规划页面。</Text>}
+            ) : <Text type="secondary">已确认的项目计划中没有可规划页面。</Text>}
             <Button className={cx('development-planning-primary-action')} disabled={!selectedPageKey} icon={<PlayCircleOutlined />} onClick={() => void generatePlan([])} size="large" type="primary">为「{selectedPage?.label || '所选页面'}」生成开发计划</Button>
           </section>
         ) : null}

@@ -220,7 +220,7 @@ def _application_payload_for_development(application: dict[str, Any]) -> dict[st
     planning = application.get("planning")
     project_plan = planning.get("projectPlan") if isinstance(planning, dict) else None
     if not isinstance(project_plan, dict) or project_plan.get("confirmation_status") != "confirmed":
-        raise ValueError("application.json 中没有已确认的 ProjectPlan。")
+        raise ValueError("当前应用中没有已确认的项目计划。")
     return project_plan_application_payload(project_plan)
 
 

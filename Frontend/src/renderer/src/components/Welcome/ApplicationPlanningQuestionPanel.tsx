@@ -110,7 +110,7 @@ function panelDescription(clarification: WorkflowClarification): string {
     return '请审核需求文档。需要补充时只在下方填写意见；文档正确时，直接点击右下角按钮继续。'
   }
   if (clarification.mode === 'project_plan_confirmation') {
-    return '请审核当前 ProjectPlan。确认后会立即进入工作区，菜单、API、Schema 和数据源等派生 JSON 将在后续开发规划阶段补齐。'
+    return '请审核当前项目计划。确认后会立即进入工作区，菜单、API、Schema 和数据源等派生 JSON 将在后续开发规划阶段补齐。'
   }
   const message = String(clarification.message || '')
   if (message && !message.toLowerCase().includes('agent requested user input')) return message
@@ -264,7 +264,7 @@ export default function ApplicationPlanningQuestionPanel({
                   ? '需求文档'
                   : artifact.id === 'project_plan'
                     ? '项目规划'
-                    : 'ProjectPlan'}
+                    : '项目计划'}
               </Text>
               <Text type="secondary">
                 {isRequirementConfirmation

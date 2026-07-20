@@ -113,7 +113,7 @@ def _requirement_spec_confirmation_payload(spec: dict) -> dict:
         ]
     )
     payload["mode"] = "requirement_spec_confirmation"
-    payload["message"] = "请确认 RequirementSpec 是否正确后再继续项目规划。"
+    payload["message"] = "请确认需求文档是否正确后再继续项目规划。"
     payload["spec_summary"] = spec.get("app_info", {}).get("name", "未命名应用")
     return payload
 
@@ -125,7 +125,7 @@ def _requirement_spec_confirmed_payload(spec: dict) -> dict:
         "question_schema": "gemini_cli.ask_user.v1",
         "questions": [],
         "assumptions": spec.get("assumptions", []),
-        "message": "RequirementSpec 已由用户确认，可以继续项目规划。",
+        "message": "需求文档已由用户确认，可以继续项目规划。",
         "spec_summary": spec.get("app_info", {}).get("name", "未命名应用"),
     }
 

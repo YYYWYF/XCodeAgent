@@ -70,7 +70,7 @@ export async function saveRequirementSpecDraft(
   const userMessage: Message = {
     id: randomUUID(),
     role: 'user',
-    content: '保存当前 RequirementSpec 编辑草稿。'
+    content: '保存当前需求文档编辑草稿。'
   }
   agent.addMessage(userMessage)
 
@@ -124,6 +124,6 @@ export function buildApplicationPlanningRequest(application: ApplicationConfig):
     `导航布局：${layout.type || '由规划阶段确定'}，页头=${layout.useHeader ? '启用' : '禁用'}，页脚=${layout.useFooter ? '启用' : '禁用'}。`,
     `数据源偏好：${datasource}。`,
     `认证：${authEnabled ? '启用' : '不启用'}。`,
-    '本轮只完成 RequirementSpec 和 ProjectPlan，不生成页面细节或代码。'
+    '本轮只完成需求文档和项目计划，不生成页面细节或代码。'
   ].join('\n')
 }

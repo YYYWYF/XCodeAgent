@@ -67,7 +67,7 @@ const phaseProgress: Record<
   project_planning: {
     active: 58,
     complete: 100,
-    message: '正在生成项目级 ProjectPlan…',
+    message: '正在生成项目计划…',
     title: '正在规划项目结构'
   }
 }
@@ -302,8 +302,8 @@ export default function ApplicationPagePlanningModal({
             current={workflowStep(workflow)}
             size="small"
           >
-            <Step title="需求确认" description="需求文档" />
-            <Step title="项目规划" description="ProjectPlan" />
+            <Step title="需求确认" />
+            <Step title="项目规划" />
           </Steps>
 
           {error ? (

@@ -205,7 +205,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 else []
             )
             return {
-                "message": f"ProjectPlan 未确认，已阻止代码生成，待确认问题={len(questions)}",
+                "message": f"项目计划未确认，已阻止代码生成，待确认问题={len(questions)}",
                 "data": {
                     "projectPlan": update.get("project_plan"),
                     "clarification": clarification,

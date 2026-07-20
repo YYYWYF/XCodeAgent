@@ -360,7 +360,7 @@ def _page_references_markdown(page: dict[str, Any]) -> str:
             f"- 模块：`{page.get('module_id', 'core')}`",
             f"- 页面权限：{_joined_items(permissions)}",
             "- endpoint_dependencies:",
-            *(endpoint_lines or ["  - 无；静态页面或需在 ProjectPlan 补充接口依赖"]),
+            *(endpoint_lines or ["  - 无；静态页面或需在项目计划中补充接口依赖"]),
             "- navigation_targets:",
             *(navigation_lines or ["  - 无"]),
         ]

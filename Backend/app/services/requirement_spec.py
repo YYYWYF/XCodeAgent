@@ -748,13 +748,13 @@ def save_requirement_spec_draft(
     state: dict[str, Any] = {"workspace": str(workspace)}
     json_path = requirement_spec_json_path(state)
     if not json_path.is_file():
-        raise ValueError("尚未生成可编辑的 RequirementSpec JSON。")
+        raise ValueError("尚未生成可编辑的需求文档。")
 
     existing_spec = load_requirement_spec_json(json_path)
     if not isinstance(existing_spec, dict):
-        raise ValueError("RequirementSpec JSON 必须是对象。")
+        raise ValueError("需求文档内部数据必须是对象。")
     if existing_spec.get("confirmation_status") != "pending_user_confirmation":
-        raise ValueError("只有待确认的 RequirementSpec 才能保存编辑草稿。")
+        raise ValueError("只有待确认的需求文档才能保存编辑草稿。")
 
     synchronized_spec = apply_requirement_spec_editor_changes(
         existing_spec,
