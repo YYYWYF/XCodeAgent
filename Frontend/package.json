@@ -12,6 +12,7 @@
     "typecheck": "pnpm typecheck:node && pnpm typecheck:web",
     "test:auth": "node scripts/run-auth-tests.mjs",
     "test:chat-skills": "node scripts/run-chat-skills-tests.mjs",
+    "test:workflow-preview": "node scripts/run-workflow-preview-tests.mjs",
     "start": "electron-vite preview",
     "dev": "cross-env APP_ENV=dev electron-vite dev",
     "dev:st": "cross-env APP_ENV=st electron-vite dev",

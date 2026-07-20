@@ -85,6 +85,8 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("status") == "requires_user_input":
             return []
         return ["build"]
+    if node_name == "launch_project":
+        return []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
 
 

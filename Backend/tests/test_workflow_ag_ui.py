@@ -11,7 +11,10 @@ from langgraph.graph import END, START, StateGraph
 
 from app.graph.state import ProjectState
 from app.protocols.workflow import build_workflow_ag_ui_stream
-from app.protocols.workflow.projection import _workflow_confirmation_artifact
+from app.protocols.workflow.projection import (
+    _workflow_confirmation_artifact,
+    _workflow_next_nodes,
+)
 from app.protocols.workflow_visualization import (
     _workflow_summary,
     _workflow_visual_payload,
@@ -302,6 +305,18 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.cleanup_patcher.stop()
+
+    def test_launch_project_is_current_run_terminal_in_visual_timeline(self) -> None:
+        """验证启动成功或失败后都不会伪造尚未执行的验收节点事件。"""
+
+        self.assertEqual(
+            _workflow_next_nodes("launch_project", {"status": "requires_user_input"}),
+            [],
+        )
+        self.assertEqual(
+            _workflow_next_nodes("launch_project", {"status": "failed"}),
+            [],
+        )
 
     def test_invalid_selected_skills_emits_structured_error(self) -> None:
         async def collect() -> list[str]:

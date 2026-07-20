@@ -5,72 +5,87 @@ import {
   ExpandOutlined,
   MobileOutlined,
   ReloadOutlined,
-  TabletOutlined,
-} from '@ant-design/icons';
-import { Button, Input, Segmented, Select, Tooltip, Typography } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
-import type { ApplicationConfig } from '../../typings';
+  TabletOutlined
+} from '@ant-design/icons'
+import { Button, Input, Segmented, Select, Tooltip, Typography } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import type { ReactElement } from 'react'
+import type { ApplicationConfig } from '../../typings'
 import {
   cx,
   getInitialPreviewUrl,
+  navigatePreviewHistory,
   normalizePreviewUrl,
   openExternalPreviewUrl,
-  storePreviewUrl,
-} from '../../utils';
-import './BrowserPreviewPanel.less';
+  storePreviewUrl
+} from '../../utils'
+import './BrowserPreviewPanel.less'
 
-const { Text } = Typography;
+const { Text } = Typography
 
-type PreviewViewport = 'desktop' | 'tablet' | 'mobile';
+type PreviewViewport = 'desktop' | 'tablet' | 'mobile'
 
 type Props = {
-  application: ApplicationConfig;
-};
+  application: ApplicationConfig
+  requestKey?: string
+  requestedUrl?: string
+}
 
-export default function BrowserPreviewPanel({ application }: Props) {
-  const [history, setHistory] = useState(() => [getInitialPreviewUrl(application.id)]);
-  const [historyIndex, setHistoryIndex] = useState(0);
-  const [draftUrl, setDraftUrl] = useState(history[0]);
-  const [selectedPage, setSelectedPage] = useState(application.defaultPage || application.pages[0]);
-  const [viewport, setViewport] = useState<PreviewViewport>('desktop');
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [openError, setOpenError] = useState('');
-  const previewUrl = history[historyIndex];
+/** 展示可由 Workflow 目标地址驱动的内嵌浏览器预览。 */
+export default function BrowserPreviewPanel({
+  application,
+  requestKey,
+  requestedUrl
+}: Props): ReactElement {
+  const initialUrl = normalizePreviewUrl(requestedUrl || '') || getInitialPreviewUrl(application.id)
+  const [navigation, setNavigation] = useState(() => ({ history: [initialUrl], index: 0 }))
+  const [draftUrl, setDraftUrl] = useState(initialUrl)
+  const [selectedPage, setSelectedPage] = useState(application.defaultPage || application.pages[0])
+  const [viewport, setViewport] = useState<PreviewViewport>('desktop')
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [openError, setOpenError] = useState('')
+  const previewUrl = navigation.history[navigation.index]
 
   const pageOptions = useMemo(
     () => application.pages.map((page) => ({ label: page, value: page })),
-    [application.pages],
-  );
+    [application.pages]
+  )
 
   useEffect(() => {
-    setDraftUrl(previewUrl);
-    setOpenError('');
-    storePreviewUrl(application.id, previewUrl);
-  }, [application.id, previewUrl]);
+    setDraftUrl(previewUrl)
+    setOpenError('')
+    storePreviewUrl(application.id, previewUrl)
+  }, [application.id, previewUrl])
 
-  const navigateTo = (rawUrl: string) => {
-    const nextUrl = normalizePreviewUrl(rawUrl);
+  useEffect(() => {
+    if (!requestedUrl) return
+    setNavigation((current) => navigatePreviewHistory(current, requestedUrl))
+  }, [requestKey, requestedUrl])
+
+  /** 将手动输入的地址加入预览导航历史。 */
+  const navigateTo = (rawUrl: string): void => {
+    const nextUrl = normalizePreviewUrl(rawUrl)
     if (!nextUrl || nextUrl === previewUrl) {
-      setDraftUrl(previewUrl);
-      return;
+      setDraftUrl(previewUrl)
+      return
     }
 
-    setHistory((currentHistory) => [...currentHistory.slice(0, historyIndex + 1), nextUrl]);
-    setHistoryIndex((currentIndex) => currentIndex + 1);
-  };
+    setNavigation((current) => navigatePreviewHistory(current, nextUrl))
+  }
 
-  const openInBrowser = async () => {
-    const targetUrl = normalizePreviewUrl(draftUrl) || previewUrl;
-    if (!targetUrl) return;
+  /** 在系统浏览器中打开当前地址栏指向的预览页面。 */
+  const openInBrowser = async (): Promise<void> => {
+    const targetUrl = normalizePreviewUrl(draftUrl) || previewUrl
+    if (!targetUrl) return
 
-    setOpenError('');
+    setOpenError('')
 
     try {
-      await openExternalPreviewUrl(targetUrl);
+      await openExternalPreviewUrl(targetUrl)
     } catch (error) {
-      setOpenError(error instanceof Error ? error.message : '无法打开浏览器');
+      setOpenError(error instanceof Error ? error.message : '无法打开浏览器')
     }
-  };
+  }
 
   return (
     <section className={cx('browser-preview-panel')}>
@@ -84,19 +99,27 @@ export default function BrowserPreviewPanel({ application }: Props) {
           <Tooltip title="后退">
             <Button
               aria-label="后退"
-              disabled={historyIndex === 0}
+              disabled={navigation.index === 0}
               icon={<ArrowLeftOutlined />}
-              onClick={() => setHistoryIndex((currentIndex) => Math.max(0, currentIndex - 1))}
+              onClick={() =>
+                setNavigation((current) => ({
+                  ...current,
+                  index: Math.max(0, current.index - 1)
+                }))
+              }
               type="text"
             />
           </Tooltip>
           <Tooltip title="前进">
             <Button
               aria-label="前进"
-              disabled={historyIndex >= history.length - 1}
+              disabled={navigation.index >= navigation.history.length - 1}
               icon={<ArrowRightOutlined />}
               onClick={() =>
-                setHistoryIndex((currentIndex) => Math.min(history.length - 1, currentIndex + 1))
+                setNavigation((current) => ({
+                  ...current,
+                  index: Math.min(current.history.length - 1, current.index + 1)
+                }))
               }
               type="text"
             />
@@ -131,7 +154,7 @@ export default function BrowserPreviewPanel({ application }: Props) {
           options={[
             { label: <DesktopOutlined />, value: 'desktop' },
             { label: <TabletOutlined />, value: 'tablet' },
-            { label: <MobileOutlined />, value: 'mobile' },
+            { label: <MobileOutlined />, value: 'mobile' }
           ]}
           value={viewport}
           onChange={(value) => setViewport(value as PreviewViewport)}
@@ -164,5 +187,5 @@ export default function BrowserPreviewPanel({ application }: Props) {
         </Text>
       )}
     </section>
-  );
+  )
 }

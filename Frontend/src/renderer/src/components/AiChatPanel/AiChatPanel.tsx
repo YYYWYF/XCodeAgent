@@ -1,7 +1,7 @@
 import { HolderOutlined } from '@ant-design/icons'
 import { Alert } from 'antd'
 import type { ReactElement } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
 import type {
   ApplicationConfig,
@@ -11,7 +11,7 @@ import type {
   EditorMode,
   WorkspaceCodeChangeSet
 } from '../../typings'
-import { cx, getInitialPreviewUrl, openPreviewWindow } from '../../utils'
+import { cx, getInitialPreviewUrl, openPreviewWindow, storePreviewUrl } from '../../utils'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
 import ChatHeader from './components/ChatHeader'
@@ -31,6 +31,7 @@ import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import { chatCopy } from './constants'
+import type { WorkflowPreviewTarget } from './utils'
 import './AiChatPanel.less'
 
 type Props = {
@@ -80,6 +81,7 @@ export default function AiChatPanel({
   const [activePageId, setActivePageId] = useState('')
   const [previewError, setPreviewError] = useState('')
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
+  const handledPreviewTargetRef = useRef('')
   const { publishAiMessage } = useWorkbench()
   const {
     assistantPanelWidth,
@@ -93,6 +95,18 @@ export default function AiChatPanel({
     setRightPanel,
     splitDragging
   } = useAssistantPreviewLayout()
+
+  /** 接收实时 launch 结果并复用手动预览入口打开右侧面板。 */
+  const handlePreviewReady = useCallback(
+    (target: WorkflowPreviewTarget) => {
+      if (handledPreviewTargetRef.current === target.key) return
+      handledPreviewTargetRef.current = target.key
+      setPreviewError('')
+      storePreviewUrl(application.id, target.url)
+      setRightPanel({ type: 'preview', requestKey: target.key, url: target.url })
+    },
+    [application.id, setRightPanel]
+  )
 
   const {
     activeSession,
@@ -144,6 +158,7 @@ export default function AiChatPanel({
     ensureActiveSession,
     getSessionMessages,
     persistSession,
+    onPreviewReady: handlePreviewReady,
     publishAiMessage,
     runningSessionsRef,
     selectedSkills,
@@ -168,10 +183,8 @@ export default function AiChatPanel({
     () => developmentPlanningPages.find((page) => page.key === activePageId),
     [activePageId, developmentPlanningPages]
   )
-  const activePageTitle = activePageOption?.label
-    || application.defaultPage
-    || application.pages[0]
-    || '页面'
+  const activePageTitle =
+    activePageOption?.label || application.defaultPage || application.pages[0] || '页面'
   const activePage = useMemo(
     () => findPageMenuItem(application.menus.items, activePageTitle),
     [activePageTitle, application.menus.items]
@@ -189,9 +202,11 @@ export default function AiChatPanel({
       if (developmentPlanningPages.some((page) => page.key === currentPageId)) {
         return currentPageId
       }
-      return developmentPlanningPages.find((page) => page.designed)?.key
-        || developmentPlanningPages[0]?.key
-        || ''
+      return (
+        developmentPlanningPages.find((page) => page.designed)?.key ||
+        developmentPlanningPages[0]?.key ||
+        ''
+      )
     })
   }, [developmentPlanningPages])
 
@@ -199,11 +214,17 @@ export default function AiChatPanel({
   const handleOpenPage = (): void => {
     setRightPanel({ type: 'preview' })
   }
+
+  /** 使用最近一次成功启动地址打开独立全屏预览窗口。 */
   const handleOpenFullscreenPreview = async (): Promise<void> => {
     setPreviewError('')
 
     try {
-      await openPreviewWindow(getInitialPreviewUrl(application.id))
+      const targetUrl =
+        rightPanel?.type === 'preview' && rightPanel.url
+          ? rightPanel.url
+          : getInitialPreviewUrl(application.id)
+      await openPreviewWindow(targetUrl)
     } catch (caughtError) {
       setPreviewError(caughtError instanceof Error ? caughtError.message : '无法打开网页预览')
     }
@@ -370,7 +391,12 @@ export default function AiChatPanel({
             />
 
             <PageContextHeader
-              description={activePageOption?.purpose || activePage?.purpose || application.senario || '当前应用页面'}
+              description={
+                activePageOption?.purpose ||
+                activePage?.purpose ||
+                application.senario ||
+                '当前应用页面'
+              }
               keyFeatures={activePage?.keyFeatures || []}
               lastAnalyzedAt={activeSessionUpdatedAt}
               onOpenFullscreenPage={handleOpenFullscreenPreview}
@@ -451,7 +477,11 @@ export default function AiChatPanel({
 
       {rightPanel?.type === 'preview' && (
         <div className={cx('embedded-preview-pane')}>
-          <BrowserPreviewPanel application={application} />
+          <BrowserPreviewPanel
+            application={application}
+            requestKey={rightPanel.requestKey}
+            requestedUrl={rightPanel.url}
+          />
         </div>
       )}
 

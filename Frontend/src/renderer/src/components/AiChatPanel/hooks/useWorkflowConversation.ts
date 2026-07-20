@@ -21,7 +21,8 @@ import {
   rollbackSkillSelection,
   selectedSkillNames
 } from '../skillSelection'
-import { stoppedAnswer, workflowCodeChanges } from '../utils'
+import { stoppedAnswer, workflowCodeChanges, workflowPreviewTarget } from '../utils'
+import type { WorkflowPreviewTarget } from '../utils'
 import type { PersistSessionInput } from './useChatSessions'
 import type { SessionIdentity, SessionRunStatus } from './sessionRuntime'
 
@@ -41,6 +42,7 @@ type UseWorkflowConversationParams = {
   ensureActiveSession: () => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
+  onPreviewReady: (target: WorkflowPreviewTarget) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
   setDraftByKey: (sessionKey: string, value: string) => void
@@ -79,6 +81,7 @@ export function useWorkflowConversation({
   ensureActiveSession,
   getSessionMessages,
   persistSession,
+  onPreviewReady,
   publishAiMessage,
   runningSessionsRef,
   setDraftByKey,
@@ -86,6 +89,7 @@ export function useWorkflowConversation({
   setSessionMessages
 }: UseWorkflowConversationParams): UseWorkflowConversationResult {
   const stopRequestedRef = useRef<Record<string, boolean>>({})
+  const notifiedPreviewTargetsRef = useRef<Set<string>>(new Set())
   const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
@@ -236,6 +240,19 @@ export function useWorkflowConversation({
       return latestMessages
     }
 
+    /** 在 AG-UI 实时回调中立即转交一次成功启动信号，避免被最终运行态更新批处理丢失。 */
+    const updateWorkflow = (nextWorkflow: WorkflowRunPayload): void => {
+      streamedWorkflow = nextWorkflow
+      setLiveWorkflows((current) => ({ ...current, [identity.key]: nextWorkflow }))
+      updateAssistantMessage(streamedContent, nextWorkflow, streamedToolCalls)
+
+      if (editorMode !== 'frontend') return
+      const previewTarget = workflowPreviewTarget(nextWorkflow, true)
+      if (!previewTarget || notifiedPreviewTargetsRef.current.has(previewTarget.key)) return
+      notifiedPreviewTargetsRef.current.add(previewTarget.key)
+      onPreviewReady(previewTarget)
+    }
+
     try {
       await persistSession({
         editorMode: identity.editorMode,
@@ -263,9 +280,7 @@ export function useWorkflowConversation({
           updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
         },
         onWorkflow: (nextWorkflow) => {
-          streamedWorkflow = nextWorkflow
-          setLiveWorkflows((current) => ({ ...current, [identity.key]: nextWorkflow }))
-          updateAssistantMessage(streamedContent, nextWorkflow, streamedToolCalls)
+          updateWorkflow(nextWorkflow)
         },
         onToolCalls: (nextToolCalls) => {
           streamedToolCalls = nextToolCalls

@@ -19,7 +19,7 @@ export type AgentChatMessage = {
 }
 
 export type RightPanelState =
-  | { type: 'preview' }
+  | { type: 'preview'; requestKey?: string; url?: string }
   | {
       type: 'diff'
       codeChanges: WorkspaceCodeChangeSet

@@ -453,7 +453,7 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 - 写入 `acceptance_request` 并提示用户验收；
 - 保存和清理进程信息。
 
-`launch_project` 是质量门禁通过后的本轮终点。它返回 `preview_url` 和 `acceptance_request`，并将状态设为 `requires_user_input`，前端应展示预览地址和验收提示。工作流不会自动进入 `acceptance`；用户确认验收后，下一轮从 `acceptance` 续跑。
+`launch_project` 是质量门禁通过后的本轮终点。只有启动进程仍存活且预览地址通过 HTTP 健康检查时，它才返回 `preview_url` 和 `acceptance_request`，并将状态设为 `requires_user_input`；进程提前退出或健康检查超时会返回启动失败，不进入验收。前端收到实时 Workflow 的成功 `summary.previewUrl` 后，会自动打开右侧预览面板并导航到该地址；重复状态快照不会重复导航，历史会话也不会自动弹出预览。工作流不会自动进入 `acceptance`；用户确认验收后，下一轮从 `acceptance` 续跑。
 
 当前启动策略：
 
@@ -461,8 +461,11 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 - 根据 lockfile 选择包管理器：`pnpm-lock.yaml → pnpm`，`yarn.lock → yarn`，否则使用 `npm`；
 - 执行 `<package-manager> install` 安装依赖；
 - 优先执行 `dev` script，其次执行 `start` script；
+- 启动时设置 `BROWSER=none`；对于 `react-scripts` 不强制注入 `HOST=127.0.0.1`，避免带代理配置的 CRA 项目生成非法 `allowedHosts`；其它启动脚本继续使用本地 loopback host；
 - 将前端 dev server 作为后台进程启动，pid、stdout/stderr 日志和安装日志写入 `.xcodeagent/runtime/launch/`；
+- 调试续跑时，如果 pid 文件对应的预览地址已经可访问，则复用现有服务，不重复启动并争抢同一端口；
 - 根据 script 推断预览地址：Vite 默认 `http://127.0.0.1:5173`，其它 dev server 默认 `http://127.0.0.1:3000`，若脚本声明 `--port` 或 `PORT=` 则使用声明端口；
+- 健康检查在配置的启动窗口内持续监督启动进程：优先通过 urllib 接收 2xx–4xx HTTP 响应；如果运行沙箱禁止 Python 主动连接本地端口，则只读取本次启动后追加的 stdout，通过 CRA/Vite/Webpack 的 `Compiled successfully`、`ready in`、`Local:` 等标志确认就绪。日志读取记录启动前偏移量，不会被历史成功日志误导；
 - 将启动结果写入 `launch_result`，将可展示给用户的验收信息写入 `acceptance_request`。
 
 ### `acceptance`

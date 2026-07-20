@@ -19,8 +19,27 @@ export type WorkflowSummary = {
   status?: string
   message?: string
   phase?: string
+  previewUrl?: string
+  launchResult?: WorkflowLaunchResult
+  acceptanceRequest?: WorkflowAcceptanceRequest
   artifacts?: Record<string, string>
   clarification?: WorkflowClarification
+  [key: string]: unknown
+}
+
+export type WorkflowLaunchResult = {
+  status?: string
+  message?: string
+  preview_url?: string
+  server?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type WorkflowAcceptanceRequest = {
+  status?: string
+  message?: string
+  preview_url?: string
+  server?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -106,10 +125,7 @@ export type WorkflowClarificationAnswer =
   | WorkflowDetailReviewSubmission
   | WorkflowRequirementSpecEdit
 
-export type WorkflowClarificationAnswers = Record<
-  string,
-  WorkflowClarificationAnswer
->
+export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer>
 
 export type WorkflowClarificationSelectionGroup = {
   type?: string

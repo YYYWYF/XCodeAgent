@@ -4,6 +4,12 @@ import type {
   WorkspaceCodeChangeFile,
   WorkspaceCodeChangeSet
 } from '../../typings'
+import { normalizePreviewUrl } from '../../utils/previewUrl'
+
+export type WorkflowPreviewTarget = {
+  key: string
+  url: string
+}
 
 export type GroupedWorkspaceCodeChange = {
   path: string
@@ -147,4 +153,26 @@ export function workflowCodeChanges(
   }
 
   return undefined
+}
+
+/** 从实时且成功的启动节点中提取一次性预览导航目标。 */
+export function workflowPreviewTarget(
+  workflow: WorkflowRunPayload | undefined,
+  live: boolean
+): WorkflowPreviewTarget | undefined {
+  if (
+    !live ||
+    !workflow ||
+    workflow.summary.phase !== 'launch_project' ||
+    workflow.summary.status !== 'requires_user_input'
+  ) {
+    return undefined
+  }
+
+  const url = normalizePreviewUrl(workflow.summary.previewUrl || '')
+  if (!url) return undefined
+  return {
+    key: `${workflow.threadId}:${workflow.runId}:${url}`,
+    url
+  }
 }

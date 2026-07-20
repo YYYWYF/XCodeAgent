@@ -26,7 +26,6 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
     "build": ["integration_test"],
-    "launch_project": ["acceptance"],
     "acceptance": ["finalize_project"],
 }
 
