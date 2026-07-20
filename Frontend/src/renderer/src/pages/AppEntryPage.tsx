@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { message } from 'antd'
 import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
 import {
   clearActiveApplicationPlanning,
@@ -12,6 +13,7 @@ import {
 } from '../service/activeApplicationPlanning'
 import { APPLICATIONS_CHANGED_EVENT } from '../service/applicationStorage'
 import { saveApplication } from '../components/Welcome/applicationService'
+import { generatePageFiles } from '../service/templateApi'
 import type {
   ApplicationConfig,
   ApplicationPlanningConfirmation,
@@ -106,6 +108,7 @@ export default function AppEntryPage() {
   }, [])
 
   // 在 RequirementSpec 与 ProjectPlan 均确认后结束规划入口并打开工作台。
+  // 进入工作台前，先把规划产出的页面追加到模板工程 apps/<应用名>/frontend/src/pages/ 下。
   const handlePlanningConfirmed = async (
     _confirmation: ApplicationPlanningConfirmation
   ): Promise<void> => {
@@ -115,6 +118,26 @@ export default function AppEntryPage() {
       planningConfirmedAt: Date.now()
     }
     await saveApplication(confirmedApplication)
+
+    // 生成页面占位文件（hello agent!），失败不阻塞进入工作台
+    try {
+      const projectPath =
+        confirmedApplication.workspaceRoot ||
+        confirmedApplication.projectParentPath ||
+        ''
+      const result = await generatePageFiles(
+        confirmedApplication.schema,
+        projectPath,
+        activePlanning.workflow
+      )
+      if (result.written.length > 0) {
+        message.success(`已生成 ${result.written.length} 个页面文件，正在进入工作台`)
+      }
+    } catch (reason) {
+      console.error('[页面文件生成失败]', reason)
+      message.warning('页面文件生成失败，可在工作台中重试')
+    }
+
     clearActiveApplicationPlanning(activePlanning.threadId)
     setActivePlanning(undefined)
     setPlanningVisible(false)

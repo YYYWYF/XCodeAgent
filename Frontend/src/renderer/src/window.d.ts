@@ -27,6 +27,16 @@ declare global {
           workspacePath: string;
           applicationConfig: ApplicationSchemaConfig;
         }) => Promise<{ ok?: boolean; path: string }>;
+        cloneTemplate: (payload: {
+          projectPath: string;
+          appName: string;
+          templateUrl?: string;
+        }) => Promise<{ ok?: boolean; path: string; templateUrl: string }>;
+        writeTemplatePages: (payload: {
+          projectPath: string;
+          appName: string;
+          pages: Array<{ pageKey: string; name?: string; menuPath: string }>;
+        }) => Promise<{ ok?: boolean; pagesDir: string; written: Array<{ pageKey: string; path: string }> }>;
         readApplication: (payload: {
           workspaceRoot: string;
         }) => Promise<{ application?: unknown }>;

@@ -12,8 +12,7 @@ import './WelcomeModal.less'
 import { saveApplication } from './applicationService'
 import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
-import type { SettingsValues } from './ApplicationPagePlanningModal'
-import { fetchTemplateCode } from '../../service/templateApi'
+import { fetchTemplateCode, type TemplateInitResponse } from '../../service/templateApi'
 
 type Props = {
   disabled?: boolean
@@ -100,9 +99,9 @@ export default function CreateApplicationAction({
 
       // 调用模板工程拉取接口
       setFetchingTemplate(true)
-      let templateResult: { code: number; message: string; data: { templateVersion: string; generatedAt: number; fileCount: number } } | undefined
+      let templateResult: TemplateInitResponse | undefined
       try {
-        templateResult = await fetchTemplateCode(schema)
+        templateResult = await fetchTemplateCode(schema, projectDirectory.path)
         console.log('[模板拉取成功]', templateResult)
       } catch (templateError) {
         console.error('[模板拉取失败]', templateError)

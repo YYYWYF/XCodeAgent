@@ -31,6 +31,8 @@ const xcodeAgentApi = {
   workspace: {
     selectDirectory: (options = {}) => ipcRenderer.invoke('workspace:select-directory', options),
     createProjectDirectory: (payload) => ipcRenderer.invoke('workspace:create-project-directory', payload),
+    cloneTemplate: (payload) => ipcRenderer.invoke('workspace:clone-template', payload),
+    writeTemplatePages: (payload) => ipcRenderer.invoke('workspace:write-template-pages', payload),
     readApplication: (payload) => ipcRenderer.invoke('workspace:read-application', payload),
     inspectPlanningArtifacts: (payload) => ipcRenderer.invoke('workspace:inspect-planning-artifacts', payload),
   },

@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray } from 'electron'
 import { join } from 'path'
 import crypto from 'node:crypto'
+import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import icon from '../../resources/icon.png?asset'
@@ -845,6 +846,240 @@ function setupWorkspaceIpc(): void {
       path: projectPath,
     };
   });
+
+  // 从远程模板仓库拉取前端模板工程，放到 <项目位置>/apps/<应用名称>/frontend/ 下。
+  ipcMain.handle('workspace:clone-template', async (_event, payload = {}) => {
+    if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
+      throw new Error('projectPath must be a non-empty string');
+    }
+    if (typeof payload.appName !== 'string' || !payload.appName.trim()) {
+      throw new Error('appName must be a non-empty string');
+    }
+    const templateUrl =
+      typeof payload.templateUrl === 'string' && payload.templateUrl.trim()
+        ? payload.templateUrl.trim()
+        : 'https://github.com/ruyue1/frontend-template.git';
+
+    const projectPath = path.resolve(payload.projectPath);
+    const appName = payload.appName.trim();
+    // 目标路径：项目位置/apps/应用名称/frontend
+    const frontendDir = path.join(projectPath, 'apps', appName, 'frontend');
+
+    // 确保父目录存在；frontend 目录本身不能预先存在（git clone 要求目标为空或不存在）
+    await fs.mkdir(path.dirname(frontendDir), { recursive: true });
+
+    // 若 frontend 已存在且非空，先清空，避免 git clone 报错
+    try {
+      const entries = await fs.readdir(frontendDir);
+      if (entries.length > 0) {
+        await fs.rm(frontendDir, { recursive: true, force: true });
+      }
+    } catch (error: unknown) {
+      const errnoException = error as NodeJS.ErrnoException;
+      if (errnoException?.code !== 'ENOENT') throw error;
+    }
+
+    // 执行 git clone，用 execFile 避免 shell 注入；超时 120s。
+    // GitHub 网络不稳定时 clone 可能中途断开（curl 18 transfer closed），
+    // 失败后清理半成品并重试，最多 3 次。
+    let cloneError: Error | null = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      // 每次重试前清理可能存在的半成品目录
+      try {
+        await fs.rm(frontendDir, { recursive: true, force: true });
+      } catch {
+        // 忽略清理失败
+      }
+      try {
+        await new Promise<void>((resolve, reject) => {
+          execFile(
+            'git',
+            ['clone', '--depth', '1', templateUrl, frontendDir],
+            { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
+            (error, _stdout, stderr) => {
+              if (error) {
+                reject(
+                  new Error(
+                    `git clone 失败：${error.message}${stderr ? `\n${stderr}` : ''}`,
+                  ),
+                );
+                return;
+              }
+              resolve();
+            },
+          );
+        });
+        cloneError = null;
+        break;
+      } catch (error) {
+        cloneError = error instanceof Error ? error : new Error(String(error));
+        // 最后一次失败才真正抛出，否则继续重试
+      }
+    }
+    if (cloneError) throw cloneError;
+
+    // 删除 clone 下来的 .git 目录，模板工程不需要保留版本历史
+    try {
+      await fs.rm(path.join(frontendDir, '.git'), { recursive: true, force: true });
+    } catch {
+      // 忽略 .git 删除失败
+    }
+
+    return {
+      ok: true,
+      path: frontendDir,
+      templateUrl,
+    };
+  });
+
+  // 在模板工程 apps/<应用名>/frontend/src/pages/ 下追加规划出的页面文件。
+  // 每个页面生成一个目录 <PageKey>/index.tsx，内容为临时占位代码。
+  ipcMain.handle('workspace:write-template-pages', async (_event, payload = {}) => {
+    if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
+      throw new Error('projectPath must be a non-empty string');
+    }
+    if (typeof payload.appName !== 'string' || !payload.appName.trim()) {
+      throw new Error('appName must be a non-empty string');
+    }
+    if (!Array.isArray(payload.pages)) {
+      throw new Error('pages must be an array');
+    }
+
+    const projectPath = path.resolve(payload.projectPath);
+    const appName = payload.appName.trim();
+    const pagesDir = path.join(projectPath, 'apps', appName, 'frontend', 'src', 'pages');
+
+    await fs.mkdir(pagesDir, { recursive: true });
+
+    const written: Array<{ pageKey: string; path: string }> = [];
+    for (const page of payload.pages) {
+      const pageKey = typeof page?.pageKey === 'string' ? page.pageKey.trim() : '';
+      if (!pageKey) continue;
+      // pageKey 仅允许字母、数字、下划线、连字符，防目录穿越
+      if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(pageKey)) {
+        throw new Error(`非法 pageKey: ${pageKey}`);
+      }
+      const pageDir = path.join(pagesDir, pageKey);
+      await fs.mkdir(pageDir, { recursive: true });
+      const filePath = path.join(pageDir, 'index.tsx');
+      const componentName = pageKey.replace(/(^|[-_])([A-Za-z])/g, (_m, _s, c) => c.toUpperCase());
+      const content = `// ${page?.name ? page.name : pageKey} 页面（临时占位，待 Agent 生成真实内容）
+export default function ${componentName}() {
+  return <div>hello agent!</div>
+}
+`;
+      await fs.writeFile(filePath, content, 'utf8');
+      written.push({ pageKey, path: filePath });
+    }
+
+    // 把新页面注入 menus.ts 的 BIZ_MENUS -> firstLevel -> children
+    const menusPath = path.join(projectPath, 'apps', appName, 'frontend', 'src', 'constants', 'menus.ts');
+    try {
+      await injectPagesIntoMenus(menusPath, payload.pages);
+    } catch (error) {
+      // menus.ts 注入失败不阻塞页面生成，仅记录
+      console.error('[write-template-pages] 注入 menus.ts 失败:', error);
+    }
+
+    return {
+      ok: true,
+      pagesDir,
+      written,
+    };
+  });
+}
+
+// 把新页面追加到 menus.ts 中 BIZ_MENUS 第一个 path:'firstLevel' 项的 children 数组里。
+// 用括号匹配定位 children:[ ... ] 的闭合位置，在 ] 前插入新菜单项。
+async function injectPagesIntoMenus(
+  menusPath: string,
+  pages: Array<{ pageKey?: string; name?: string; menuPath?: string }>
+): Promise<void> {
+  let content: string;
+  try {
+    content = await fs.readFile(menusPath, 'utf8');
+  } catch {
+    // menus.ts 不存在则跳过
+    return;
+  }
+
+  // 定位 path: 'firstLevel'（允许单双引号、空格）
+  const firstLevelMatch = content.match(/path:\s*['"]firstLevel['"]/);
+  if (!firstLevelMatch || firstLevelMatch.index === undefined) return;
+
+  // 从 firstLevel 之后找 children: [
+  const afterFirstLevel = firstLevelMatch.index + firstLevelMatch[0].length;
+  const childrenMatch = content.slice(afterFirstLevel).match(/children:\s*\[/);
+  if (!childrenMatch || childrenMatch.index === undefined) return;
+
+  const childrenOpen = afterFirstLevel + childrenMatch.index + childrenMatch[0].length;
+  // 从 children:[ 之后做括号匹配，找到对应的闭合 ]。
+  // 需要跳过字符串和 // 注释，避免注释里的引号/括号干扰匹配。
+  let depth = 1;
+  let i = childrenOpen;
+  let inString: string | null = null;
+  while (i < content.length && depth > 0) {
+    const ch = content[i];
+    if (inString) {
+      if (ch === '\\') { i += 2; continue; }
+      if (ch === inString) inString = null;
+      i += 1;
+      continue;
+    }
+    // 识别 // 注释，跳过到行尾
+    if (ch === '/' && content[i + 1] === '/') {
+      const nl = content.indexOf('\n', i);
+      i = nl === -1 ? content.length : nl + 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      inString = ch;
+    } else if (ch === '[' || ch === '{' || ch === '(') {
+      depth += 1;
+    } else if (ch === ']' || ch === '}' || ch === ')') {
+      depth -= 1;
+      if (depth === 0) break;
+    }
+    i += 1;
+  }
+  if (depth !== 0) return; // 没找到匹配的闭合括号
+
+  const childrenClose = i; // 指向 children 的闭合 ]
+
+  // 收集已存在的 key，避免重复注入
+  const childrenBlock = content.slice(childrenOpen, childrenClose);
+  const existingKeys = new Set<string>();
+  const keyRegex = /key:\s*['"]([A-Za-z0-9_-]+)['"]/g;
+  let km: RegExpExecArray | null;
+  while ((km = keyRegex.exec(childrenBlock)) !== null) {
+    existingKeys.add(km[1]);
+  }
+
+  // 构造新菜单项字符串
+  const newItems: string[] = [];
+  for (const page of pages) {
+    const pageKey = typeof page?.pageKey === 'string' ? page.pageKey.trim() : '';
+    if (!pageKey || existingKeys.has(pageKey)) continue;
+    const name = typeof page?.name === 'string' && page.name.trim() ? page.name : pageKey;
+    const menuPath = typeof page?.menuPath === 'string' && page.menuPath.trim() ? page.menuPath : pageKey.charAt(0).toLowerCase() + pageKey.slice(1);
+    newItems.push(
+      `      {\n        path: '${menuPath}',\n        name: '${name}',\n        key: '${pageKey}'\n      }`
+    );
+  }
+  if (newItems.length === 0) return;
+
+  // 插入点：children 块内最后一个非空白字符之后（这样逗号紧跟在最后一项的 } 后面）
+  let lastNonWs = childrenClose - 1;
+  while (lastNonWs >= childrenOpen && /\s/.test(content[lastNonWs])) {
+    lastNonWs -= 1;
+  }
+  const hasContent = lastNonWs >= childrenOpen;
+  const separator = hasContent ? ',\n' : '\n';
+  const insertText = separator + newItems.join(',\n') + '\n    ';
+
+  const insertPos = lastNonWs + 1;
+  const newContent = content.slice(0, insertPos) + insertText + content.slice(insertPos);
+  await fs.writeFile(menusPath, newContent, 'utf8');
 }
 
 function setupSessionStorageIpc(): void {
@@ -983,6 +1218,32 @@ function createMainWindow(): void {
   })
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+  })
+
+  // TEMP DEBUG: 捕获渲染进程 console 与崩溃，定位白屏原因
+  mainWindow.webContents.on('console-message', (_e, ...args: any[]) => {
+    let level: any
+    let msg: any
+    let src: any
+    let line: any
+    if (args.length === 1 && typeof args[0] === 'object' && args[0] !== null) {
+      const d = args[0]
+      level = d.level
+      msg = d.message
+      src = d.sourceUrl ?? d.sourceId
+      line = d.lineNumber
+    } else {
+      // 旧版位置参数: (level, message, line, sourceId)
+      ;[level, msg, line, src] = args
+    }
+    const text = typeof msg === 'string' ? msg : JSON.stringify(msg)
+    require('node:fs').appendFileSync('/tmp/xca_renderer.log', `[L${level}] ${text} (${src}:${line})\n`)
+  })
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    require('node:fs').appendFileSync('/tmp/xca_renderer.log', `[GONE] ${JSON.stringify(details)}\n`)
+  })
+  mainWindow.webContents.on('did-fail-load', (_e: any, code: any, desc: any, url: any) => {
+    require('node:fs').appendFileSync('/tmp/xca_renderer.log', `[FAIL-LOAD] ${code} ${desc} ${url}\n`)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
