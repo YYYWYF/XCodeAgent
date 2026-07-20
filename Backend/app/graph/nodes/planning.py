@@ -191,13 +191,30 @@ def detail_confirmation(state: ProjectState) -> dict:
         )
 
     if pending_plan and selectedPageId:
-        review_plan = (
-            pending_plan
-            if _has_selected_page_detail(pending_plan, selectedPageId)
-            else state.get("project_plan")
-        )
-        if not isinstance(review_plan, dict):
-            review_plan = pending_plan
+        review_plan = pending_plan
+        project_plan_path = state.get("project_plan_path")
+        if not _has_selected_page_detail(review_plan, selectedPageId):
+            # 旧会话可能保留上一页面的待确认计划；新选择的页面缺失时必须基于最新正式计划补生成。
+            source_plan = state.get("project_plan")
+            if not isinstance(source_plan, dict):
+                source_plan = pending_plan
+            try:
+                review_plan = _generate_all_detail_plans(
+                    source_plan,
+                    frontend_pages=state.get("frontend_pages"),
+                    selectedPageId=selectedPageId,
+                )
+            except PageDependencyGapError as exc:
+                return {
+                    "phase": "detail_confirmation",
+                    "status": "requires_user_input",
+                    "project_plan": source_plan,
+                    "clarification": _project_plan_revision_required_payload(str(exc)),
+                    "selectedPageId": selectedPageId,
+                    "timeline": ["detail_confirmation"],
+                }
+            review_plan["confirmation_status"] = "pending_user_confirmation"
+            project_plan_path = write_project_plan_document(state, review_plan)
         clarification = detail_review_payload(
             review_plan,
             selectedPageId=selectedPageId,
@@ -208,7 +225,7 @@ def detail_confirmation(state: ProjectState) -> dict:
             "clarification": clarification,
             "pending_project_plan": review_plan,
             "project_plan": state.get("project_plan"),
-            "project_plan_path": state.get("project_plan_path"),
+            "project_plan_path": project_plan_path,
             "project_plan_json_path": _project_plan_json_path_for_state(state),
             "detail_selection": {
                 "status": "requires_user_input",
@@ -332,21 +349,38 @@ def _generate_all_detail_plans(
 ) -> dict:
     """为计划中的数据源及用户选中的初始页面生成功能详细设计。"""
 
-    updated_plan = project_plan
-    pages = frontend_pages if isinstance(frontend_pages, list) else project_plan.get(
-        "frontend_pages", []
+    project_pages = project_plan.get("frontend_pages", [])
+    normalized_project_pages = [
+        _normalize_detail_page(page)
+        for page in project_pages
+        if isinstance(page, dict)
+    ]
+    updated_plan = (
+        project_plan
+        if normalized_project_pages == project_pages
+        else {**project_plan, "frontend_pages": normalized_project_pages}
     )
+    source_pages = (
+        frontend_pages
+        if isinstance(frontend_pages, list)
+        else normalized_project_pages
+    )
+    pages = [
+        _normalize_detail_page(page)
+        for page in source_pages
+        if isinstance(page, dict)
+    ]
     if selectedPageId:
         pages = [
             page
             for page in pages
-            if isinstance(page, dict) and page.get("pageId") == selectedPageId
+            if page.get("pageId") == selectedPageId
         ]
         if not pages:
             raise ValueError(f"项目计划中不存在页面：{selectedPageId}")
         # 单页设计不能混入上一轮或其他页面遗留的内存详情，避免审核界面展示错误对象。
         updated_plan = {
-            **project_plan,
+            **updated_plan,
             "page_detail_plans": [],
             "data_source_detail_plans": [],
         }
@@ -403,6 +437,15 @@ def _generate_all_detail_plans(
         ):
             source["detail_status"] = "pending_user_confirmation"
     return updated_plan
+
+
+def _normalize_detail_page(page: dict) -> dict:
+    """把正式计划中的 id 兼容映射为细节设计内部使用的 pageId。"""
+
+    pageId = str(page.get("pageId") or page.get("id") or "").strip()
+    if not pageId or page.get("pageId") == pageId:
+        return page
+    return {**page, "pageId": pageId}
 
 
 def _selected_detail_plans(project_plan: dict, selectedPageId: str) -> list[dict]:

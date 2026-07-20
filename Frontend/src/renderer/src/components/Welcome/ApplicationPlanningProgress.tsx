@@ -24,12 +24,10 @@ type Props = {
   title: string
 }
 
-// 为当前真实工作流阶段保留下一锚点，项目规划未完成前最多推进到 99.9%。
-function progressCeiling(stage: string | undefined, target: number): number {
+// 真实完成前统一推进到 98% 等待，避免不同阶段出现过早停顿。
+function progressCeiling(target: number): number {
   if (target >= 100) return 100
-  if (stage === 'requirements') return 57.9
-  if (stage === 'project_planning') return 99.9
-  return 17.9
+  return 98
 }
 
 // 使用原创建规划页面的动态视觉展示两节点进度、时间线与 AG-UI 实时消息。
@@ -44,11 +42,11 @@ export default function ApplicationPlanningProgress({
   const activityKey = (streamingContent || '').length
   const percent = useProgressivePercent(
     targetPercent,
-    progressCeiling(current?.stage, targetPercent),
+    progressCeiling(targetPercent),
     activityKey
   )
-  // 视觉文案只展示缓慢递增的整数，进度条宽度仍保留细粒度变化以保证动画平滑。
-  const percentLabel = Math.floor(percent)
+  // 百分比文案与进度条都使用同一个整数，避免出现小数或读数不一致。
+  const percentLabel = percent
   const streamLines = (streamingContent || '')
     .split('\n')
     .map((line) => line.trim())
@@ -81,9 +79,7 @@ export default function ApplicationPlanningProgress({
         className={cx('planning-progress-track')}
         role="progressbar"
       >
-        <span className={cx('planning-progress-bar')} style={{ width: `${percent}%` }}>
-          <span className={cx('planning-progress-glow')} />
-        </span>
+        <span className={cx('planning-progress-bar')} style={{ width: `${percent}%` }} />
       </div>
 
       {events.length ? (

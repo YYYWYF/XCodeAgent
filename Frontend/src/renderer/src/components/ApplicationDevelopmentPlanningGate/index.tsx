@@ -51,15 +51,10 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error || '生成开发计划失败')
 }
 
-// 为开发计划的每个真实阶段保留下一锚点，并让当前阶段有足够空间持续推进。
-function developmentProgressCeiling(stage: string | undefined, target: number): number {
+// 真实完成前统一推进到 98% 等待，完成事件到达后再显示 100%。
+function developmentProgressCeiling(target: number): number {
   if (target >= 100) return 100
-  if (stage === 'reading_application') return 33.9
-  if (stage === 'identifying_shared_modules') return 55.9
-  if (stage === 'planning_dependencies') return 91.9
-  if (stage === 'validating_plan') return 99.9
-  if (stage === 'persisting_plan') return 99.9
-  return 17.9
+  return 98
 }
 
 // 展示由 AG-UI 阶段锚点、模型活动和缓动共同驱动的开发计划进度。
@@ -76,7 +71,7 @@ function DevelopmentPlanningLoading({
   const targetPercent = currentProgress?.percent ?? 6
   const percent = useProgressivePercent(
     targetPercent,
-    developmentProgressCeiling(currentProgress?.stage, targetPercent),
+    developmentProgressCeiling(targetPercent),
     streamingContent.length
   )
 
@@ -87,7 +82,7 @@ function DevelopmentPlanningLoading({
       <Title level={3}>{currentProgress?.message || (phase === 'confirming' ? '正在保存已确认计划…' : '正在连接规划模型…')}</Title>
       <Paragraph>{currentProgress?.detail || '正在准备页面功能和任务上下文。'}</Paragraph>
       <Progress
-        format={() => `${percent.toFixed(1)}%`}
+        format={() => `${percent}%`}
         percent={percent}
         status={percent >= 100 ? 'success' : 'active'}
         strokeColor={{ from: '#7c4dff', to: '#35d0ba' }}

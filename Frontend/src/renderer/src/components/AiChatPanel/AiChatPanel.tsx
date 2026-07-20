@@ -182,9 +182,10 @@ export default function AiChatPanel({
     (session) => session.id === activeSessionId
   )?.updatedAt
 
-  // 页面目录加载后优先定位首个已设计页面，避免再次显示首次选择界面。
+  // 页面目录刷新时保留当前页面上下文；仅在清单稳定且当前页面失效时回退。
   useEffect(() => {
     setActivePageId((currentPageId) => {
+      if (developmentPlanningPages.length === 0) return currentPageId
       if (developmentPlanningPages.some((page) => page.key === currentPageId)) {
         return currentPageId
       }

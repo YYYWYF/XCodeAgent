@@ -1,6 +1,6 @@
 import { CheckOutlined, LoadingOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useProgressivePercent } from '../../hooks/useProgressivePercent'
 import type { WorkflowEvent } from '../../typings'
 import { cx } from '../../utils'
@@ -28,30 +28,22 @@ function detailDesignCompleted(events: WorkflowEvent[]): boolean {
   )
 }
 
-/** 在后端细粒度阶段不可见时，以稳定节奏展示页面设计的大致进度。 */
+/** 根据唯一的百分比状态定位当前步骤，保证步骤条不会与进度条错位。 */
+function stageIndexForPercent(percent: number): number {
+  const nextStageIndex = DESIGN_STAGES.findIndex((stage) => percent <= stage.target)
+  return nextStageIndex < 0 ? DESIGN_STAGES.length - 1 : nextStageIndex
+}
+
+/** 在后端细粒度阶段不可见时，让百分比与步骤条使用同一个推进状态。 */
 export default function PageDesignProgress({ events = [], pageLabel }: Props): JSX.Element {
-  const [timedStage, setTimedStage] = useState(0)
   const completed = detailDesignCompleted(events)
-  const stageIndex = completed ? DESIGN_STAGES.length - 1 : timedStage
-  const stage = DESIGN_STAGES[stageIndex]
-  const target = completed ? 98 : stage.target
-  const ceiling = completed
-    ? 99.8
-    : DESIGN_STAGES[Math.min(stageIndex + 1, DESIGN_STAGES.length - 1)].target - 0.2
   const activityKey = useMemo(
     () => events.reduce((total, event) => total + (event.message?.length || 1), 0),
     [events]
   )
-  const percent = useProgressivePercent(target, ceiling, activityKey)
-
-  // 长耗时模型调用没有内部事件时逐步切换说明，最终完成仍以后端事件为准。
-  useEffect(() => {
-    setTimedStage(0)
-    const timer = window.setInterval(() => {
-      setTimedStage((current) => Math.min(current + 1, DESIGN_STAGES.length - 1))
-    }, 4200)
-    return () => window.clearInterval(timer)
-  }, [pageLabel])
+  const percent = useProgressivePercent(completed ? 100 : 6, completed ? 100 : 98, activityKey)
+  const stageIndex = stageIndexForPercent(percent)
+  const stage = DESIGN_STAGES[stageIndex]
 
   return (
     <section aria-live="polite" className={cx('detail-page-progress')}>
@@ -65,14 +57,16 @@ export default function PageDesignProgress({ events = [], pageLabel }: Props): J
       <Text className={cx('detail-page-selector-eyebrow')}>GENERATING PAGE DESIGN</Text>
       <Title level={3}>正在设计「{pageLabel}」</Title>
       <Text className={cx('detail-page-progress-current')}>{stage.label}</Text>
-      <Text className={cx('detail-page-progress-detail')} type="secondary">{stage.detail}</Text>
+      <Text className={cx('detail-page-progress-detail')} type="secondary">
+        {stage.detail}
+      </Text>
 
       <div className={cx('detail-page-progress-summary')}>
         <Text>设计进度</Text>
-        <Text strong>{percent.toFixed(1)}%</Text>
+        <Text strong>{percent}%</Text>
       </div>
       <div
-        aria-label={`页面设计进度 ${percent.toFixed(1)}%`}
+        aria-label={`页面设计进度 ${percent}%`}
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={percent}
@@ -86,8 +80,8 @@ export default function PageDesignProgress({ events = [], pageLabel }: Props): J
 
       <div className={cx('detail-page-progress-stages')}>
         {DESIGN_STAGES.map((item, index) => {
-          const isDone = index < stageIndex
-          const isActive = index === stageIndex
+          const isDone = completed || index < stageIndex
+          const isActive = !completed && index === stageIndex
           return (
             <div
               className={cx(
@@ -107,7 +101,7 @@ export default function PageDesignProgress({ events = [], pageLabel }: Props): J
       </div>
 
       <Text className={cx('detail-page-progress-hint')} type="secondary">
-        阶段为生成过程的近似展示，完成状态以工作流返回结果为准
+        百分比与当前步骤同步推进，最终完成状态以工作流返回结果为准
       </Text>
     </section>
   )

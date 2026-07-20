@@ -90,14 +90,22 @@ export function useWorkflowConversation({
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
 
-  const activeRun = activeSession ? runStates[activeSession.key] : undefined
+  // 首次从页面设计入口创建会话时，React 还未提交 activeSession；先按工作区接住刚启动的运行态，避免进度页闪退。
+  const activeRun = activeSession
+    ? runStates[activeSession.key]
+    : Object.values(runStates).find(
+        (entry) =>
+          entry.identity.workspaceRoot === application.workspaceRoot &&
+          entry.identity.editorMode === editorMode
+      )
+  const activeRuntimeKey = activeSession?.key || activeRun?.identity.key
   const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
   const stopping = activeRun?.status === 'stopping'
-  const error = activeSession ? errors[activeSession.key] : undefined
-  const activeWorkflow = activeSession
+  const error = activeRuntimeKey ? errors[activeRuntimeKey] : undefined
+  const activeWorkflow = activeRuntimeKey
     ? activeRun
-      ? liveWorkflows[activeSession.key]
-      : liveWorkflows[activeSession.key] ?? latestWorkflow(getSessionMessages(activeSession.key))
+      ? liveWorkflows[activeRuntimeKey]
+      : liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey))
     : undefined
   const workspaceBusy = Object.values(runStates).some(
     (entry) =>
