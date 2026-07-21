@@ -66,9 +66,12 @@
     .ant-btn {
       min-width: 88px;
       height: 40px;
+      border-radius: 7px;
+    }
+
+    .ant-btn:not(.ant-btn-primary) {
       color: var(--modal-text);
       border-color: var(--modal-border-strong);
-      border-radius: 7px;
       background: transparent;
 
       &:hover,
@@ -80,32 +83,12 @@
 
     .ant-btn-primary {
       min-width: 148px;
-      color: #fff;
-      border-color: var(--modal-accent);
-      background: var(--modal-accent);
       box-shadow: 0 8px 22px rgba(139, 92, 246, 0.24);
-
-      &:hover,
-      &:focus {
-        color: #fff;
-        border-color: var(--modal-accent-hover);
-        background: var(--modal-accent-hover);
-      }
     }
   }
 
   .ant-modal-body .ant-btn-primary:not([disabled]) {
-    color: #fff;
-    border-color: var(--modal-accent);
-    background: var(--modal-accent);
     box-shadow: 0 8px 22px rgba(139, 92, 246, 0.2);
-
-    &:hover,
-    &:focus {
-      color: #fff;
-      border-color: var(--modal-accent-hover);
-      background: var(--modal-accent-hover);
-    }
   }
 
   .ant-btn:not(.ant-btn-primary):not([disabled]) {
@@ -135,12 +118,21 @@
 
   .ant-input,
   .ant-input-affix-wrapper,
-  .ant-select:not(.ant-select-customize-input) .ant-select-selector,
-  .ant-radio-button-wrapper {
+  .ant-select:not(.ant-select-customize-input) .ant-select-selector {
     color: var(--modal-text);
     border-color: var(--modal-border);
     background: var(--modal-field);
     font-size: 14px;
+  }
+
+  .ant-radio-button-wrapper {
+    font-size: 14px;
+  }
+
+  .ant-radio-button-wrapper:not(.ant-radio-button-wrapper-checked) {
+    color: var(--modal-text);
+    border-color: var(--modal-border);
+    background: var(--modal-field);
   }
 
   .ant-input,
@@ -166,25 +158,14 @@
     color: var(--modal-text-secondary);
   }
 
-  .ant-radio-button-wrapper {
+  .ant-radio-button-wrapper:not(.ant-radio-button-wrapper-checked) {
     &:hover {
       color: var(--modal-accent-hover);
     }
-
-    &.ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
-      color: #fff;
-      border-color: var(--modal-accent);
-      background: var(--modal-accent);
-      box-shadow: none;
-    }
   }
 
-  .ant-switch {
+  .ant-switch:not(.ant-switch-checked) {
     background: #69537b;
-
-    &.ant-switch-checked {
-      background: var(--modal-accent);
-    }
   }
 
   &.@{class-prefix}-theme-light {

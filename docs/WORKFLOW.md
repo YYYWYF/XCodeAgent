@@ -63,8 +63,10 @@ START
 - 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照、`resumeState` 和 `clarificationAnswers`；需求概览的“保存并退出编辑”复用同一端点的 `requirementSpecDraft.action = save` AG-UI 动作，只持久化草稿，不续跑 Graph。
 - RequirementSpec 与 ProjectPlan 继续使用现有 Markdown 产物和显式用户确认门禁；回答澄清问题不能替代产物确认。
 - 用户确认第二步 ProjectPlan 后，独立 Graph 的包装节点只校验 `.xcodeagent/specs` 与 `.xcodeagent/plans` 中 RequirementSpec、ProjectPlan 的 Markdown/JSON 正式产物及确认状态，不读取或改写 `.xcodeagent/application.json`。菜单、API、Schema 和数据源等派生结构不属于创建门禁。
-- 创建弹窗只展示需求确认和项目规划两个阶段；该独立创建范围对未明确的信息采用保守假设，不再为了后续派生 JSON 追加普通澄清卡。两份文档分别确认且目录产物校验成功后，前端直接打开工作台。
+- 创建弹窗只展示需求确认和项目规划两个阶段。需求模型必须先统一审视角色、核心任务、页面边界、数据来源、权限、核心业务流程与验收标准；对无法安全推断且会实质影响产品设计的缺口，一次集中提出 1-4 个问题，对次要细节才采用显式保守假设。两份文档分别确认且目录产物校验成功后，前端直接打开工作台。
 - 主 Workflow 直接以 `detail_confirmation` 为入口，并使用首页流程确认后写入的 ProjectPlan 与页面功能概览。
+
+该澄清边界映射到参考架构时，沿用 learn-coding-agent 的 AskUserQuestion 工具循环与可恢复会话记录、OpenCode 的 session/tool-call 问答关联，以及 Deep Agents 的外层确定性门禁：需求模型只生成结构化问题，Graph 在 `requirements` 后结束当前轮次，AG-UI 持久化公开状态与回答，恢复轮次将答案合并回 RequirementSpec。澄清回答只补足需求，不能替代后续 RequirementSpec 的显式确认。每轮仅携带当前请求、紧凑 RequirementSpec 和结构化回答，不加载仓库或完整会话历史，继续满足 128k 上下文预算。
 
 需求草稿保存遵循 learn-coding-agent 的“读取当前事实、执行一次确定性写入、立即返回验证结果”紧凑边界，并沿用 OpenCode 的可恢复 session/event 思路，通过完整 AG-UI 生命周期返回新文档状态。它不调用 Deep Agent，也不把仓库或会话历史注入上下文；请求仅包含当前 RequirementSpec 草稿，后端再以工作区 JSON 为基线合并，因此继续满足 128k 上下文预算且不引入新的 Agent 权限。
 

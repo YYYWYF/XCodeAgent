@@ -2,6 +2,7 @@ import { AppstoreOutlined, CodeOutlined, DeleteOutlined, GlobalOutlined } from '
 import { Button, message, Modal, Radio } from 'antd'
 import { useEffect, useState } from 'react'
 import {
+  canOpenApplicationWorkbench,
   deleteStoredProject,
   loadStoredApplications,
   removeStoredApplication
@@ -42,7 +43,9 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
     let active = true
     void loadStoredApplications()
       .then((storedApplications) => {
-        if (active) setApplications(storedApplications)
+        if (active) {
+          setApplications(storedApplications.filter(canOpenApplicationWorkbench))
+        }
       })
       .finally(() => {
         if (active) setLoading(false)

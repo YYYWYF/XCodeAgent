@@ -73,6 +73,39 @@
   gap: 14px;
 }
 
+.@{class-prefix}-planning-question-section-header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border: 1px solid var(--modal-border);
+  border-radius: 10px;
+  background: var(--modal-surface);
+  box-shadow: 0 10px 30px rgba(30, 19, 44, 0.06);
+
+  .@{class-prefix}-planning-artifact-icon {
+    height: 36px;
+  }
+
+  > div {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+
+    > .ant-typography:first-child {
+      color: var(--modal-text);
+      font-size: 14px;
+    }
+
+    > .ant-typography-secondary {
+      color: var(--modal-text-secondary);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+  }
+}
+
 .@{class-prefix}-planning-question-panel-header {
   position: relative;
   grid-template-columns: 38px minmax(0, 1fr);

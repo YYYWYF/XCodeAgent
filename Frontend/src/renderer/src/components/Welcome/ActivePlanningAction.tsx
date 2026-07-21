@@ -8,6 +8,7 @@ import { Button } from 'antd'
 import type { ApplicationConfig, WorkflowRunPayload } from '../../typings'
 import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
 import { cx } from '../../utils'
+import { planningWorkflowPhase } from './planningWorkflowState'
 
 type Props = {
   application: ApplicationConfig
@@ -17,9 +18,12 @@ type Props = {
 }
 
 type PlanningPresentationStage =
+  | 'detail-review'
   | 'error'
   | 'project-planning'
+  | 'project-plan-revision'
   | 'project-plan-confirmation'
+  | 'requirement-clarification'
   | 'requirement-confirmation'
   | 'requirements'
   | 'unknown-confirmation'
@@ -44,15 +48,27 @@ function planningPresentationStage(
   workflow?: WorkflowRunPayload
 ): PlanningPresentationStage {
   if (status === 'error') return 'error'
-  const phase = String(workflow?.summary.phase || '')
+  const phase = planningWorkflowPhase(workflow)
   const clarificationMode = workflowClarificationMode(workflow)
   if (status === 'running') {
     return phase === 'project_planning' ? 'project-planning' : 'requirements'
   }
+  if (clarificationMode === 'detail_review') return 'detail-review'
+  if (clarificationMode === 'direct') return 'requirement-clarification'
   if (clarificationMode === 'requirement_spec_confirmation') return 'requirement-confirmation'
   if (clarificationMode === 'project_plan_confirmation') return 'project-plan-confirmation'
-  if (phase === 'requirements') return 'requirement-confirmation'
-  if (phase === 'project_planning') return 'project-plan-confirmation'
+  if (
+    clarificationMode === 'project_plan_dependency_validation_error' ||
+    clarificationMode === 'project_plan_revision_required'
+  ) {
+    return 'project-plan-revision'
+  }
+  if (workflow?.confirmationArtifact?.id === 'requirement_spec') {
+    return 'requirement-confirmation'
+  }
+  if (workflow?.confirmationArtifact?.id === 'project_plan') {
+    return 'project-plan-confirmation'
+  }
   return 'unknown-confirmation'
 }
 
@@ -63,6 +79,13 @@ function planningStatusPresentation(
   workflow?: WorkflowRunPayload
 ): { description: string; icon: JSX.Element; title: string } {
   const stage = planningPresentationStage(status, workflow)
+  if (stage === 'requirement-clarification') {
+    return {
+      description: '需要补充关键信息，完成后继续生成需求文档',
+      icon: <CheckCircleFilled />,
+      title: `阶段 1/2：补充「${application.appName}」的需求细节`
+    }
+  }
   if (stage === 'requirement-confirmation') {
     return {
       description: '需求文档已生成，确认后继续生成项目计划',
@@ -75,6 +98,20 @@ function planningStatusPresentation(
       description: '项目计划已生成，确认后进入工作台',
       icon: <CheckCircleFilled />,
       title: `阶段 2/2：确认「${application.appName}」的项目规划`
+    }
+  }
+  if (stage === 'project-plan-revision') {
+    return {
+      description: '项目规划仍有待补充或修订的内容，处理后才能继续',
+      icon: <ExclamationCircleFilled />,
+      title: `阶段 2/2：完善「${application.appName}」的项目规划`
+    }
+  }
+  if (stage === 'detail-review') {
+    return {
+      description: '项目计划已确认，请审核并补充页面与数据源设计',
+      icon: <CheckCircleFilled />,
+      title: `阶段 2/2：补充「${application.appName}」的页面与数据源细节`
     }
   }
   if (stage === 'error') {

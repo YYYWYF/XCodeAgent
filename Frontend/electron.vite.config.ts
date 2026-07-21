@@ -49,9 +49,10 @@ export default defineConfig({
           // antd v4 的 themes/index.less 用 `@import './@{root-entry-name}.less'`
           // 动态选择主题，但该变量默认未定义，less 4.x 会编译失败并抛出
           // "Cannot read properties of undefined (reading 'message')" 的二次错误。
-          // 全局注入 default 主题变量以修复编译。
+          // 同时在 Ant Design 的编译入口统一品牌主色，未单独覆写的主按钮和交互态默认使用紫色。
           modifyVars: {
-            '@root-entry-name': 'default'
+            '@root-entry-name': 'default',
+            '@primary-color': '#6b3cf0'
           }
         }
       }

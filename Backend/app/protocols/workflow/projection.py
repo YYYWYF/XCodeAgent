@@ -24,11 +24,17 @@ def _workflow_progress_summary(
     ]
     failed_events = [event for event in events if str(event.get("status")) == "failed"]
     node = last_event.get("node") if isinstance(last_event.get("node"), dict) else {}
+    started_node = (
+        node.get("id")
+        if last_event.get("type") == "workflow.node.started"
+        else None
+    )
     code_changes = _workflow_code_changes(result)
 
     return {
         "status": last_event.get("status") or result.get("status") or "running",
-        "phase": result.get("phase") or node.get("id"),
+        # 下一节点刚开始时，result 仍属于上一节点，必须优先展示正在执行的节点。
+        "phase": started_node or result.get("phase") or node.get("id"),
         "message": last_event.get("message") or "Workflow is running.",
         "completedNodeCount": len(completed_nodes),
         "failedEventCount": len(failed_events),

@@ -9,6 +9,11 @@ const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
 export const APPLICATIONS_CHANGED_EVENT = 'xcode-agent-applications-changed';
 
+// 判断应用是否已经满足进入工作台的条件；创建流程中的应用必须先完成最终规划确认。
+export function canOpenApplicationWorkbench(application: ApplicationConfig): boolean {
+  return !application.planningThreadId || Boolean(application.planningConfirmedAt);
+}
+
 function normalizeApplications(value: unknown): ApplicationConfig[] {
   return Array.isArray(value) ? (value as ApplicationConfig[]) : [];
 }

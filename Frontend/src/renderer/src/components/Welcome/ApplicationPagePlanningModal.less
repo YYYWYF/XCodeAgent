@@ -773,25 +773,22 @@
   .ant-btn-primary {
     min-width: 190px;
     height: 40px;
-    color: #fff;
-    border-color: var(--modal-accent);
     border-radius: 9px;
-    background: var(--modal-accent);
     box-shadow: 0 8px 22px rgba(124, 58, 237, 0.24);
     font-weight: 600;
-
-    &:hover,
-    &:focus {
-      color: #fff;
-      border-color: var(--modal-accent-hover);
-      background: var(--modal-accent-hover);
-    }
   }
 }
 
 .@{class-prefix}-planning-question-panel {
   display: grid;
+  min-height: 0;
   gap: 18px;
+  padding-right: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-color: var(--modal-border-strong) transparent;
+  scrollbar-gutter: stable;
 }
 
 .@{class-prefix}-planning-question-panel-header {
@@ -841,6 +838,8 @@
   height: 100%;
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 10px;
+  padding-right: 0;
+  overflow: hidden;
   background: var(--modal-bg);
 
   > .@{class-prefix}-planning-artifact-card {
@@ -1004,11 +1003,6 @@
   &:hover {
     border-color: rgba(139, 92, 246, 0.55);
     background: rgba(139, 92, 246, 0.06);
-
-    .ant-radio-inner,
-    .ant-checkbox-inner {
-      border-color: var(--modal-accent);
-    }
   }
 
   &.ant-radio-wrapper-checked,
@@ -1021,32 +1015,6 @@
   .ant-radio,
   .ant-checkbox {
     margin-top: 2px;
-  }
-
-  .ant-radio-checked .ant-radio-inner,
-  .ant-checkbox-checked .ant-checkbox-inner {
-    border-color: var(--modal-accent);
-  }
-
-  .ant-radio-inner::after,
-  .ant-checkbox-checked .ant-checkbox-inner {
-    background-color: var(--modal-accent);
-  }
-
-  .ant-radio:hover .ant-radio-inner,
-  .ant-radio-input:focus + .ant-radio-inner,
-  .ant-checkbox:hover .ant-checkbox-inner,
-  .ant-checkbox-input:focus + .ant-checkbox-inner {
-    border-color: var(--modal-accent);
-  }
-
-  .ant-radio-input:focus + .ant-radio-inner,
-  .ant-checkbox-input:focus + .ant-checkbox-inner {
-    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.16);
-  }
-
-  .ant-checkbox-checked::after {
-    border-color: var(--modal-accent);
   }
 }
 
@@ -1290,10 +1258,6 @@
   .ant-alert-message,
   .ant-alert-description {
     color: var(--modal-text) !important;
-  }
-
-  .ant-spin-dot-item {
-    background-color: var(--modal-accent);
   }
 
   .ant-alert-info {

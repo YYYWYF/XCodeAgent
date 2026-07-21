@@ -48,7 +48,7 @@ def build_application_page_planning_ag_ui_stream(
 ) -> AsyncIterator[str]:
     """使用主 Workflow 的稳定 AG-UI 投射运行独立两节点 Graph。"""
 
-    # 专用端点的范围由服务端固定，避免前端重启或恢复时丢失 forwardedProps 后重新开放需求澄清。
+    # 专用端点的范围由服务端固定，确保重启或恢复时仍从创建规划节点续跑。
     normalized_payload = {
         **payload,
         "workflowScope": "application_planning",

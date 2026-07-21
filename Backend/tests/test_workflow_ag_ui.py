@@ -14,6 +14,7 @@ from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import (
     _workflow_confirmation_artifact,
     _workflow_next_nodes,
+    _workflow_progress_summary,
 )
 from app.protocols.workflow_visualization import (
     _workflow_summary,
@@ -296,6 +297,35 @@ def _fake_code_change_set() -> dict:
 
 
 class WorkflowAgUiStreamTests(unittest.TestCase):
+    def test_progress_summary_prefers_newly_started_node_over_previous_result(self) -> None:
+        """节点切换后应立即展示新阶段，不能继续沿用上一节点的 phase。"""
+
+        summary = _workflow_progress_summary(
+            {
+                "phase": "requirements",
+                "status": "completed",
+                "clarification": {
+                    "mode": "requirement_spec_confirmation",
+                    "status": "clear",
+                },
+            },
+            [
+                {
+                    "type": "workflow.node.completed",
+                    "node": {"id": "requirements", "label": "需求确认"},
+                    "status": "completed",
+                },
+                {
+                    "type": "workflow.node.started",
+                    "node": {"id": "project_planning", "label": "项目规划"},
+                    "status": "running",
+                },
+            ],
+        )
+
+        self.assertEqual(summary["phase"], "project_planning")
+        self.assertEqual(summary["status"], "running")
+
     def setUp(self) -> None:
         self.cleanup_patcher = patch(
             "app.protocols.workflow.runtime.cleanup_workflow_checkpoints",

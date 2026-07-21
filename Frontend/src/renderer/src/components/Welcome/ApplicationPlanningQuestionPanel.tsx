@@ -104,19 +104,6 @@ function submitLabel(mode?: string): string {
   return '提交回答并继续'
 }
 
-// 将 Workflow 的通用提示转换为创建规划页面自己的中文说明。
-function panelDescription(clarification: WorkflowClarification): string {
-  if (clarification.mode === 'requirement_spec_confirmation') {
-    return '请审核需求文档。需要补充时只在下方填写意见；文档正确时，直接点击右下角按钮继续。'
-  }
-  if (clarification.mode === 'project_plan_confirmation') {
-    return '请审核当前项目计划。确认后会立即进入工作区，菜单、API、Schema 和数据源等派生 JSON 将在后续开发规划阶段补齐。'
-  }
-  const message = String(clarification.message || '')
-  if (message && !message.toLowerCase().includes('agent requested user input')) return message
-  return '为了让页面和功能规划更贴近真实业务，请补充下面这些关键信息。'
-}
-
 // 从公开 Workflow 结果中读取 RequirementSpec 结构化状态，供默认概览视图使用。
 function requirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
   for (const source of [workflow.result, workflow.state]) {
@@ -245,13 +232,6 @@ export default function ApplicationPlanningQuestionPanel({
         isDocumentConfirmation && 'is-document-confirmation'
       )}
     >
-      {!isDocumentConfirmation ? (
-        <PlanningPanelHeader
-          description={panelDescription(clarification)}
-          title={panelTitle(clarification.mode)}
-        />
-      ) : null}
-
       {artifact?.content ? (
         <section className={cx('planning-artifact-card')}>
           <header>
@@ -339,6 +319,19 @@ export default function ApplicationPlanningQuestionPanel({
           layout="vertical"
           onFinish={handleSubmit}
         >
+          {!isDocumentConfirmation && questions.length ? (
+            <header className={cx('planning-question-section-header')}>
+              <span className={cx('planning-artifact-icon')}>
+                <FileTextOutlined />
+              </span>
+              <div>
+                <Text strong>补充细节</Text>
+                <Text type="secondary">
+                  为了让页面和功能规划更贴近真实业务，请补充下面这些关键信息。
+                </Text>
+              </div>
+            </header>
+          ) : null}
         {isDocumentConfirmation && !editingRequirement ? (
           <Form.Item
             className={cx('planning-confirmation-feedback')}

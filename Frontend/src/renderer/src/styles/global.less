@@ -208,20 +208,14 @@ body:has(.@{class-prefix}-welcome-page[data-theme='dark']) {
     color: var(--wb-text-secondary);
   }
 
-  .ant-checkbox-inner,
-  .ant-radio-inner {
+  .ant-checkbox:not(.ant-checkbox-checked) .ant-checkbox-inner,
+  .ant-radio:not(.ant-radio-checked) .ant-radio-inner {
     background: var(--wb-surface);
     border-color: var(--wb-border-strong);
   }
 
-  .ant-checkbox-checked .ant-checkbox-inner {
-    background: var(--wb-accent);
-    border-color: var(--wb-accent);
-  }
-
   .ant-radio-checked .ant-radio-inner {
     background: var(--wb-surface);
-    border-color: var(--wb-accent);
   }
 }
 
@@ -230,12 +224,7 @@ body:has(.@{class-prefix}-welcome-page[data-theme='dark']) {
     box-shadow: none;
   }
 
-  .ant-spin-dot-item {
-    background-color: var(--wb-accent);
-  }
-
-  .ant-btn-default,
-  .ant-btn-primary {
+  .ant-btn-default {
     color: var(--wb-text);
     background: var(--wb-control);
     border-color: var(--wb-border);
@@ -255,43 +244,6 @@ body:has(.@{class-prefix}-welcome-page[data-theme='dark']) {
     background: var(--wb-surface);
     border-color: var(--wb-border);
     box-shadow: none;
-  }
-
-  .ant-input:hover,
-  .ant-input:focus,
-  .ant-input-affix-wrapper:hover,
-  .ant-input-affix-wrapper-focused,
-  .ant-select:not(.ant-select-disabled):hover .ant-select-selector,
-  .ant-select-focused:not(.ant-select-disabled) .ant-select-selector {
-    border-color: var(--wb-accent-border) !important;
-    box-shadow: 0 0 0 2px var(--wb-accent-soft) !important;
-  }
-
-  .ant-checkbox-checked .ant-checkbox-inner {
-    background: var(--wb-accent);
-    border-color: var(--wb-accent);
-  }
-
-  .ant-checkbox-wrapper:hover .ant-checkbox-inner,
-  .ant-checkbox:hover .ant-checkbox-inner,
-  .ant-radio-wrapper:hover .ant-radio-inner,
-  .ant-radio:hover .ant-radio-inner,
-  .ant-radio-checked .ant-radio-inner {
-    border-color: var(--wb-accent);
-  }
-
-  .ant-radio-inner::after {
-    background: var(--wb-accent);
-  }
-
-  .ant-checkbox-input:focus + .ant-checkbox-inner,
-  .ant-radio-input:focus + .ant-radio-inner {
-    border-color: var(--wb-accent);
-    box-shadow: 0 0 0 2px var(--wb-accent-soft);
-  }
-
-  .ant-switch-checked {
-    background: var(--wb-accent);
   }
 
   .ant-tag {

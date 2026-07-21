@@ -1,7 +1,5 @@
 .@{class-prefix}-code-change-revert-confirm {
   --revert-modal-accent: #6b3cf0;
-  --revert-modal-accent-hover: #7e50f4;
-  --revert-modal-accent-active: #5d31dc;
   --revert-modal-accent-soft: rgba(107, 60, 240, 0.16);
 
   .ant-modal-content {
@@ -16,23 +14,7 @@
   }
 
   .ant-btn-primary {
-    color: #ffffff;
-    background: var(--revert-modal-accent);
-    border-color: var(--revert-modal-accent);
     box-shadow: 0 6px 18px var(--revert-modal-accent-soft);
-
-    &:hover,
-    &:focus {
-      color: #ffffff;
-      background: var(--revert-modal-accent-hover);
-      border-color: var(--revert-modal-accent-hover);
-    }
-
-    &:active {
-      color: #ffffff;
-      background: var(--revert-modal-accent-active);
-      border-color: var(--revert-modal-accent-active);
-    }
   }
 
   .ant-btn-default:hover,
@@ -51,8 +33,6 @@ body:has(.@{class-prefix}-code-change-revert-confirm) .ant-modal-mask {
 body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
   .@{class-prefix}-code-change-revert-confirm {
   --revert-modal-accent: #a782ff;
-  --revert-modal-accent-hover: #b488ff;
-  --revert-modal-accent-active: #8d62ea;
   --revert-modal-accent-soft: rgba(167, 130, 255, 0.2);
 
   .ant-modal-content {

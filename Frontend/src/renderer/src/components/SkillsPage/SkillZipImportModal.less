@@ -66,10 +66,13 @@
     .ant-btn {
       min-width: 88px;
       height: 38px;
+      border-radius: 8px;
+    }
+
+    .ant-btn:not(.ant-btn-primary) {
       color: var(--skill-modal-text);
       background: transparent;
       border-color: var(--skill-modal-border-strong);
-      border-radius: 8px;
 
       &:hover,
       &:focus {
@@ -86,17 +89,7 @@
     }
 
     .ant-btn-primary:not([disabled]) {
-      color: #ffffff;
-      background: var(--skill-modal-accent);
-      border-color: var(--skill-modal-accent);
       box-shadow: 0 8px 20px rgba(107, 60, 240, 0.2);
-
-      &:hover,
-      &:focus {
-        color: #ffffff;
-        background: var(--skill-modal-accent-hover);
-        border-color: var(--skill-modal-accent-hover);
-      }
     }
   }
 

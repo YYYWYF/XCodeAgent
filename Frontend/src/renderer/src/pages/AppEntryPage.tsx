@@ -11,7 +11,10 @@ import {
   type ActivePlanningStatus,
   type PersistedActivePlanning
 } from '../service/activeApplicationPlanning'
-import { APPLICATIONS_CHANGED_EVENT } from '../service/applicationStorage'
+import {
+  APPLICATIONS_CHANGED_EVENT,
+  canOpenApplicationWorkbench
+} from '../service/applicationStorage'
 import { saveApplication } from '../components/Welcome/applicationService'
 import { generatePageFiles } from '../service/templateApi'
 import type {
@@ -94,6 +97,22 @@ export default function AppEntryPage() {
     setPlanningVisible(true)
   }
 
+  // 仅允许最终规划已确认的创建项目进入工作台，未确认项目继续回到原规划会话。
+  const handleOpenApplication = useCallback(
+    (application: ApplicationConfig): void => {
+      if (activePlanning?.application.id === application.id) {
+        setPlanningVisible(true)
+        return
+      }
+      if (canOpenApplicationWorkbench(application)) {
+        setActiveApplication(application)
+        return
+      }
+      message.info('请先完成并确认应用计划')
+    },
+    [activePlanning]
+  )
+
   // 接收规划页状态，并避免相同状态造成无意义的首页重渲染。
   const handlePlanningStatusChange = useCallback((status: ActivePlanningStatus): void => {
     setActivePlanning((current) => {
@@ -152,7 +171,7 @@ export default function AppEntryPage() {
             activePlanning={activePlanning?.application}
             activePlanningStatus={activePlanning?.status}
             activePlanningWorkflow={activePlanning?.workflow}
-            onOpenApplication={setActiveApplication}
+            onOpenApplication={handleOpenApplication}
             onOpenPlanning={() => setPlanningVisible(true)}
             onStartPlanning={handleStartPlanning}
           />

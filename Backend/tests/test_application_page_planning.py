@@ -135,8 +135,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             [page["pageId"] for page in spec["pages"]],
         )
 
-    def test_creation_requirements_do_not_expose_clarification_tool(self) -> None:
-        """新建应用两阶段门禁应直接生成 JSON，不为派生结构追加澄清。"""
+    def test_creation_requirements_expose_clarification_tool(self) -> None:
+        """新建应用需求不足时应允许模型集中提出关键澄清问题。"""
 
         class FakeModel:
             """记录模型工具绑定与提示词，避免测试发起真实模型调用。"""
@@ -152,10 +152,24 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 return self
 
             def invoke(self, prompt: str) -> AIMessage:
-                """返回最小结构化需求结果。"""
+                """模拟模型发现角色信息不足并调用澄清工具。"""
 
                 self.prompt = prompt
-                return AIMessage(content='{"app_info":{"name":"任务中心"}}')
+                return AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "ask_user",
+                        "args": {
+                            "questions": [{
+                                "header": "用户角色",
+                                "question": "哪些角色会使用任务中心？",
+                                "type": "text",
+                            }]
+                        },
+                        "id": "creation-clarification-1",
+                        "type": "tool_call",
+                    }],
+                )
 
         model = FakeModel()
         settings = type("Settings", (), {"model_name": "test-model"})()
@@ -165,12 +179,13 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         ):
             result = requirements_analyzer.analyze_requirements_with_chat_model(
                 "创建任务中心",
-                allow_clarification=False,
             )
 
-        self.assertFalse(model.bound)
-        self.assertIn("Do not call ask_user", model.prompt)
-        self.assertEqual(result["clarification"]["status"], "clear")
+        self.assertTrue(model.bound)
+        self.assertNotIn("Do not call ask_user", model.prompt)
+        self.assertIn("name and a broad scenario alone are not sufficient", model.prompt)
+        self.assertEqual(result["clarification"]["status"], "requires_user_input")
+        self.assertEqual(result["clarification"]["questions"][0]["header"], "用户角色")
 
     def test_routes_only_cover_two_planning_nodes(self) -> None:
         """独立创建 Graph 应从 requirements 启动并在确认门禁等待。"""

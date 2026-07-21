@@ -19,6 +19,7 @@ import ApplicationPlanningProgress, {
   type ApplicationPlanningProgressEvent
 } from './ApplicationPlanningProgress'
 import ApplicationPlanningQuestionPanel from './ApplicationPlanningQuestionPanel'
+import { planningWorkflowPhase } from './planningWorkflowState'
 import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
 import './ApplicationPagePlanningModal.less'
 
@@ -98,7 +99,7 @@ function withSavedRequirementSpec(
 
 // 根据当前阶段计算两步规划条的高亮位置。
 function workflowStep(workflow?: WorkflowRunPayload): number {
-  const phase = String(workflow?.summary.phase || '')
+  const phase = planningWorkflowPhase(workflow)
   const index = phaseOrder.indexOf(phase)
   return index >= 0 ? index : 0
 }
