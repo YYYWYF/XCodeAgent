@@ -17,11 +17,10 @@ import {
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon'
 import { AutoComplete, Button, Form, Input, Radio, Switch } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactNode } from 'react'
-import { useMemo, useState, type ComponentType } from 'react'
+import { useMemo, useState } from 'react'
 import type { ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
 import {
@@ -33,7 +32,7 @@ import {
 
 const { TextArea } = Input
 
-const iconComponents: Record<string, ComponentType<AntdIconProps>> = {
+const iconComponents: Record<string, typeof AppstoreOutlined> = {
   AppstoreOutlined,
   DesktopOutlined,
   DashboardOutlined,

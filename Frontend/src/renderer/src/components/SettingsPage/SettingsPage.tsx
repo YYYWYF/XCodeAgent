@@ -24,10 +24,9 @@ import {
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon'
 import { Anchor, AutoComplete, Button, Form, Input, Radio, Select, Switch, Typography, message } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import { useMemo, useState, useEffect, type ComponentType } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
 import { applicationIconOptions, trackMethodOptions } from '../Welcome/constants'
@@ -36,7 +35,7 @@ import './SettingsPage.less'
 
 const { Title, Text } = Typography
 
-const iconComponents: Record<string, ComponentType<AntdIconProps>> = {
+const iconComponents: Record<string, typeof AppstoreOutlined> = {
   AppstoreOutlined,
   DesktopOutlined,
   DashboardOutlined,
