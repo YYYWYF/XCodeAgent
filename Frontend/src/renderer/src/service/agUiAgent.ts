@@ -293,9 +293,15 @@ export function readIntegrationTestChecks(
     const check = item as Record<string, unknown>
     const id = stringValue(check.id)
     const name = stringValue(check.name)
-    const status = stringValue(check.status)
+    const declaredStatus = stringValue(check.status)
+    const status = ['running', 'passed', 'skipped', 'failed'].includes(declaredStatus)
+      ? declaredStatus
+      : check.skipped === true && check.passed === true
+        ? 'skipped'
+        : check.passed === true
+          ? 'passed'
+          : 'failed'
     if (!id || !name || seenIds.has(id)) continue
-    if (!['running', 'passed', 'skipped', 'failed'].includes(status)) continue
     seenIds.add(id)
     const evidence = stringValue(check.evidence).slice(0, 1_000)
     checks.push({

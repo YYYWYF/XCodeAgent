@@ -43,6 +43,59 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertIn("Integration repair iteration budget exhausted.", summary["message"])
         self.assertNotIn("预览地址", summary["message"])
 
+    def test_acceptance_summary_describes_preview_without_fake_questions(self) -> None:
+        """验证预览验收不再被描述成等待补充零个问题。"""
+
+        summary = _workflow_summary(
+            {
+                "phase": "launch_project",
+                "status": "requires_user_input",
+                "preview_url": "http://127.0.0.1:3000",
+                "acceptance_request": {"status": "requires_user_input"},
+            },
+            [],
+        )
+
+        self.assertIn("项目预览已就绪", summary["message"])
+        self.assertIn("http://127.0.0.1:3000", summary["message"])
+        self.assertNotIn("Workflow", summary["message"])
+        self.assertNotIn("待确认问题 0", summary["message"])
+
+    def test_clarification_summary_reports_real_question_count(self) -> None:
+        """验证确有澄清问题时使用面向用户的数量提示。"""
+
+        summary = _workflow_summary(
+            {
+                "phase": "requirements",
+                "status": "requires_user_input",
+                "clarification": {
+                    "status": "requires_user_input",
+                    "questions": [{"id": "role"}, {"id": "scope"}],
+                },
+            },
+            [],
+        )
+
+        self.assertEqual(summary["message"], "还有 2 个问题需要补充，完成后将继续执行。")
+
+    def test_confirmation_summary_names_the_pending_artifact(self) -> None:
+        """验证无问题的正式文档确认门禁显示具体待确认对象。"""
+
+        summary = _workflow_summary(
+            {
+                "phase": "project_planning",
+                "status": "requires_user_input",
+                "clarification": {
+                    "status": "requires_user_input",
+                    "mode": "project_plan_confirmation",
+                    "questions": [],
+                },
+            },
+            [],
+        )
+
+        self.assertEqual(summary["message"], "项目计划已生成，请确认后继续。")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,7 @@ import {
   LoadingOutlined,
   MinusCircleOutlined,
   RobotOutlined,
+  SafetyCertificateOutlined,
   ToolOutlined
 } from '@ant-design/icons'
 import { Typography } from 'antd'
@@ -21,6 +22,7 @@ type Props = {
   steps: ProcessStepRecord[]
 }
 
+/** 渲染一条可折叠的 Agent 执行轨迹，并在测试步骤中保留结构化检查结果。 */
 export default function ProcessSteps({ loading, steps }: Props): ReactElement {
   const [open, setOpen] = useState(loading)
   const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
@@ -40,9 +42,9 @@ export default function ProcessSteps({ loading, steps }: Props): ReactElement {
           {loading ? <LoadingOutlined spin /> : <CheckCircleOutlined />}
         </span>
         <span className={cx('process-steps-heading')}>
-          <Text strong>{loading ? 'Agent 正在执行' : '任务已完成'}</Text>
+          <Text strong>{loading ? 'Agent 正在执行' : 'Agent 执行完成'}</Text>
           <Text type="secondary">
-            {loading ? currentStepLabel(steps) : `${steps.length} 个步骤`}
+            {loading ? currentStepLabel(steps) : `已归档 ${steps.length} 个步骤`}
           </Text>
         </span>
       </summary>
@@ -60,6 +62,7 @@ export default function ProcessSteps({ loading, steps }: Props): ReactElement {
   )
 }
 
+/** 渲染单个 Agent 步骤，并根据运行状态自动展开当前步骤与检查清单。 */
 function ProcessStep({
   isLast,
   settled,
@@ -113,24 +116,77 @@ function IntegrationTestChecklist({
   checks: IntegrationTestCheckRecord[]
 }): ReactElement {
   const summary = testCheckSummary(checks)
+  const counts = testCheckCounts(checks)
+  const metrics: Array<{
+    label: string
+    status: IntegrationTestCheckRecord['status']
+    value: number
+  }> = [
+    { label: '通过', status: 'passed', value: counts.passed },
+    { label: '跳过', status: 'skipped', value: counts.skipped },
+    { label: '失败', status: 'failed', value: counts.failed },
+    { label: '运行', status: 'running', value: counts.running }
+  ]
 
   return (
-    <section className={cx('integration-test-checklist')}>
+    <section
+      aria-label={summary}
+      className={cx('integration-test-checklist', counts.running > 0 ? 'running' : 'settled')}
+    >
       <div className={cx('integration-test-checklist-header')}>
-        <Text className={cx('process-step-detail-label')}>检查结果</Text>
-        <Text type="secondary">{summary}</Text>
+        <div className={cx('integration-test-checklist-identity')}>
+          <span className={cx('integration-test-checklist-mark')}>
+            <SafetyCertificateOutlined />
+          </span>
+          <span>
+            <Text className={cx('integration-test-checklist-eyebrow')}>QUALITY GATE</Text>
+            <Text className={cx('integration-test-checklist-title')} strong>
+              集成检查矩阵
+            </Text>
+          </span>
+        </div>
+        <div className={cx('integration-test-checklist-metrics')}>
+          {metrics.map((metric) => (
+            <span
+              className={cx('integration-test-checklist-metric', metric.status)}
+              key={metric.status}
+            >
+              <strong>{metric.value}</strong>
+              <small>{metric.label}</small>
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className={cx('integration-test-checklist-progress')} aria-hidden="true">
+        {metrics
+          .filter((metric) => metric.value > 0)
+          .map((metric) => (
+            <i
+              className={cx(metric.status)}
+              key={metric.status}
+              style={{ flexGrow: metric.value }}
+            />
+          ))}
       </div>
       <ul>
-        {checks.map((check) => (
+        {checks.map((check, index) => (
           <li className={cx('integration-test-check', check.status)} key={check.id}>
+            <span className={cx('integration-test-check-index')}>
+              {String(index + 1).padStart(2, '0')}
+            </span>
             <span className={cx('integration-test-check-icon')}>{testCheckIcon(check.status)}</span>
             <span className={cx('integration-test-check-content')}>
-              <Text>{check.name}</Text>
-              {check.status === 'failed' && check.evidence && (
+              <span className={cx('integration-test-check-heading')}>
+                <Text>{check.name}</Text>
+                <span className={cx('integration-test-check-scope')}>
+                  {check.required ? 'REQUIRED' : 'OPTIONAL'}
+                </span>
+              </span>
+              {(check.status === 'failed' || check.status === 'skipped') && check.evidence && (
                 <Text type="secondary">{check.evidence}</Text>
               )}
             </span>
-            <Text className={cx('integration-test-check-status')} type="secondary">
+            <Text className={cx('integration-test-check-status')}>
               {testCheckStatusLabel(check.status)}
             </Text>
           </li>
@@ -140,12 +196,14 @@ function IntegrationTestChecklist({
   )
 }
 
+/** 返回当前执行步骤在总步骤中的位置与标题。 */
 function currentStepLabel(steps: ProcessStepRecord[]): string {
   const activeIndex = steps.findIndex((step) => step.status === 'running')
   if (activeIndex < 0) return `正在准备 · ${steps.length} 个步骤`
   return `第 ${activeIndex + 1} / ${steps.length} 步 · ${steps[activeIndex].title}`
 }
 
+/** 渲染非结构化步骤的详情或执行结果。 */
 function DetailBlock({ label, value }: { label: string; value: string }): ReactElement {
   return (
     <section>
@@ -157,18 +215,23 @@ function DetailBlock({ label, value }: { label: string; value: string }): ReactE
 
 /** 汇总已完成、通过、跳过和失败的集成测试检查数量。 */
 function testCheckSummary(checks: IntegrationTestCheckRecord[]): string {
-  const count = (status: IntegrationTestCheckRecord['status']): number =>
-    checks.filter((check) => check.status === status).length
-  const passed = count('passed')
-  const skipped = count('skipped')
-  const failed = count('failed')
-  const running = count('running')
+  const { passed, skipped, failed, running } = testCheckCounts(checks)
   const parts = [`已完成 ${checks.length - running}/${checks.length} 项`]
   if (passed) parts.push(`通过 ${passed} 项`)
   if (skipped) parts.push(`跳过 ${skipped} 项`)
   if (failed) parts.push(`失败 ${failed} 项`)
   if (running) parts.push(`进行中 ${running} 项`)
   return parts.join('，')
+}
+
+/** 按状态统计检查数量，供摘要、进度条和指标卡共同使用。 */
+function testCheckCounts(
+  checks: IntegrationTestCheckRecord[]
+): Record<IntegrationTestCheckRecord['status'], number> {
+  return checks.reduce<Record<IntegrationTestCheckRecord['status'], number>>(
+    (counts, check) => ({ ...counts, [check.status]: counts[check.status] + 1 }),
+    { running: 0, passed: 0, skipped: 0, failed: 0 }
+  )
 }
 
 /** 根据检查状态返回与主题匹配的状态图标。 */
@@ -187,14 +250,17 @@ function testCheckStatusLabel(status: IntegrationTestCheckRecord['status']): str
   return '未通过'
 }
 
+/** 根据步骤类型与终态选择时间线图标。 */
 function stepIcon(step: ProcessStepRecord, settled: boolean): ReactElement {
   if (step.status === 'running' && !settled) return <LoadingOutlined spin />
+  if (step.status === 'failed') return <CloseCircleOutlined />
   if (step.kind === 'reasoning') return <RobotOutlined />
   if (step.kind === 'command') return <CodeOutlined />
   if (step.kind === 'tool') return <ToolOutlined />
   return <CheckCircleOutlined />
 }
 
+/** 将实时步骤标题转换为完成态文案。 */
 function settledTitle(title: string): string {
   return title
     .replace(/^正在思考/, '已思考')
@@ -202,6 +268,7 @@ function settledTitle(title: string): string {
     .replace(/^正在执行/, '已执行')
 }
 
+/** 将 JSON 字符串格式化为便于阅读的详情，普通文本保持原样。 */
 function formatValue(value: string): string {
   try {
     return JSON.stringify(JSON.parse(value), null, 2)

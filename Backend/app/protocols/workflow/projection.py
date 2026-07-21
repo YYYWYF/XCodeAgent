@@ -382,8 +382,7 @@ def _workflow_summary(
     artifacts = _workflow_artifacts(result)
     code_changes = _workflow_code_changes(result)
     if status == "requires_user_input":
-        question_count = len(clarification.get("questions", []))
-        message = f"Workflow 等待用户确认/补充：完成 {len(completed_nodes)} 个节点，待确认问题 {question_count} 个。"
+        message = _workflow_user_input_message(result, clarification)
     else:
         message = (
             f"Workflow {status}：完成 {len(completed_nodes)} 个节点，"
@@ -424,6 +423,30 @@ def _workflow_summary(
         "clarification": clarification,
         "observability": result.get("observability", {}),
     }
+
+
+def _workflow_user_input_message(
+    result: dict[str, Any], clarification: dict[str, Any]
+) -> str:
+    """按实际门禁类型生成面向用户的等待提示，避免把验收误写成待补充问题。"""
+
+    acceptance_request = result.get("acceptance_request")
+    if isinstance(acceptance_request, dict):
+        return "项目预览已就绪，请确认是否符合预期。"
+
+    questions = clarification.get("questions")
+    question_count = len(questions) if isinstance(questions, list) else 0
+    if question_count > 0:
+        return f"还有 {question_count} 个问题需要补充，完成后将继续执行。"
+
+    confirmation_labels = {
+        "requirement_spec_confirmation": "需求文档已生成，请确认后继续。",
+        "project_plan_confirmation": "项目计划已生成，请确认后继续。",
+        "batch_review": "页面与数据源设计已生成，请确认后继续。",
+        "detail_review": "页面与数据源设计已生成，请确认后继续。",
+    }
+    mode = str(clarification.get("mode") or "")
+    return confirmation_labels.get(mode, "当前阶段需要你的确认后继续。")
 
 
 def _workflow_visual_payload(

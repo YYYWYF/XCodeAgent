@@ -13,8 +13,10 @@ import CodeChangeCard from '../CodeChangeCard'
 import ToolCallCard from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
-import { readIntegrationTestChecks } from '../../../../service/agUiAgent'
-import type { ProcessStepRecord } from '../../../../service/agUiAgent'
+import {
+  processStepsForDisplay,
+  workflowMessageContentForDisplay
+} from '../../../../service/processStepHistory'
 import type { AgentChatMessage, ChatCopy } from '../../types'
 import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
 import './MessageList.less'
@@ -67,13 +69,17 @@ export default function MessageList({
             const messageLoading = message.id === activeAssistantMessageId
             const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
             const finalResult = workflowFinalResultPresentation(message.workflow)
-            const nonToolSteps = stepsWithIntegrationTestChecks(
+            const nonToolSteps = processStepsForDisplay(
               message.processSteps,
               message.workflow
             )?.filter((step) => step.kind !== 'tool' && step.kind !== 'command')
             const requiresClarification =
               message.workflow?.summary.clarification?.status === 'requires_user_input'
-            const hasScopedBuildProgress = workflowHasScopedBuildProgress(message.workflow)
+            const visibleAssistantContent = workflowMessageContentForDisplay(
+              message.content,
+              message.workflow,
+              Boolean(nonToolSteps?.length)
+            )
             return (
               <article
                 className={cx(
@@ -104,10 +110,14 @@ export default function MessageList({
                           </div>
                         </div>
                       )}
-                      <div className={cx(!messageLoading && codeChanges && 'final-result-content')}>
-                        <MarkdownContent content={message.content} />
-                      </div>
-                      {message.workflow && (messageLoading || requiresClarification || hasScopedBuildProgress) && (
+                      {visibleAssistantContent && (
+                        <div
+                          className={cx(!messageLoading && codeChanges && 'final-result-content')}
+                        >
+                          <MarkdownContent content={visibleAssistantContent} />
+                        </div>
+                      )}
+                      {message.workflow && requiresClarification && (
                         <WorkflowRunCard
                           disabled={messageLoading}
                           onSubmitClarification={onSubmitClarification}
@@ -157,59 +167,7 @@ export default function MessageList({
   )
 }
 
-/** 从最终工作流快照回填集成测试清单，确保会话恢复后仍可展示检查项。 */
-function stepsWithIntegrationTestChecks(
-  steps: ProcessStepRecord[] | undefined,
-  workflow: WorkflowRunPayload | undefined
-): ProcessStepRecord[] | undefined {
-  if (!steps?.length) return steps
-  const finalChecks = completedIntegrationTestChecks(workflow)
-  if (!finalChecks?.length) return steps
-
-  return steps.map((step) => {
-    if (step.id !== 'workflow:integration_test') return step
-    return {
-      ...step,
-      checks: mergeIntegrationTestChecks(step.checks, finalChecks)
-    }
-  })
-}
-
-/** 从 integration_test 完成事件或状态快照读取最终检查清单。 */
-function completedIntegrationTestChecks(
-  workflow: WorkflowRunPayload | undefined
-): ReturnType<typeof readIntegrationTestChecks> {
-  if (!workflow) return undefined
-  const event = [...workflow.events]
-    .reverse()
-    .find((item) => item.nodeName === 'integration_test' && item.type === 'workflow.node.completed')
-  const eventChecks = readIntegrationTestChecks(event?.data?.testReport)
-  if (eventChecks?.length) return eventChecks
-  return readIntegrationTestChecks(workflow.state?.testReport)
-}
-
-/** 按稳定检查 id 合并实时与完成态快照，完成态覆盖同名检查的最终结果。 */
-function mergeIntegrationTestChecks(
-  current: ProcessStepRecord['checks'],
-  finalChecks: NonNullable<ReturnType<typeof readIntegrationTestChecks>>
-): NonNullable<ProcessStepRecord['checks']> {
-  const checksById = new Map(current?.map((check) => [check.id, check]) ?? [])
-  for (const check of finalChecks) checksById.set(check.id, check)
-  return [...checksById.values()]
-}
-
-function workflowHasScopedBuildProgress(workflow?: WorkflowRunPayload): boolean {
-  /** 判断当前消息是否包含页面或数据源范围的构建进度。 */
-
-  const state = workflow?.state || {}
-  const result = workflow?.result || {}
-  const slice = state.buildExecutionSlice || state.build_execution_slice
-    || result.buildExecutionSlice || result.build_execution_slice
-  if (!slice || typeof slice !== 'object') return false
-  const scope = (slice as { scope?: { type?: unknown } }).scope
-  return scope?.type === 'page' || scope?.type === 'data_source'
-}
-
+/** 从消息末尾向前查找当前正在流式更新的 Assistant 消息。 */
 function findLastAssistantMessageId(messages: AgentChatMessage[]): number | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === 'assistant') return messages[index].id

@@ -7,6 +7,7 @@ import path from 'node:path'
 import icon from '../../resources/icon.png?asset'
 import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
+import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -16,88 +17,85 @@ import {
   loginWithCmbDeviceFlow
 } from './auth'
 
-let mainWindow: BrowserWindow | null = null;
+let mainWindow: BrowserWindow | null = null
 let loginWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
-const previewWindows = new Set<BrowserWindow>();
+const previewWindows = new Set<BrowserWindow>()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 let primaryStartupPromise: Promise<boolean> | null = null
 
 /** 返回 Electron 用户数据目录中的应用列表文件路径。 */
 function getApplicationsFile(): string {
-  return path.join(app.getPath('userData'), 'applications.json');
+  return path.join(app.getPath('userData'), 'applications.json')
 }
 
 /** 返回工作区元数据目录中的应用配置文件路径。 */
 function getWorkspaceApplicationFile(workspaceRoot: string): string {
-  return path.join(workspaceRoot, '.xcodeagent', 'application.json');
+  return path.join(workspaceRoot, '.xcodeagent', 'application.json')
 }
 
 type WorkbenchPageOption = {
-  key: string;
-  pageId: string;
-  label: string;
-  path: string;
-  purpose: string;
-  designed: boolean;
-  detailPlanStatus?: string;
-  hasDetailPlan: boolean;
-};
+  key: string
+  pageId: string
+  label: string
+  path: string
+  purpose: string
+  designed: boolean
+  detailPlanStatus?: string
+  hasDetailPlan: boolean
+}
 
 type WorkbenchApiContract = {
-  id: string;
-  label: string;
-  endpoints: Array<{ id: string; method: string; path: string; summary: string }>;
-};
+  id: string
+  label: string
+  endpoints: Array<{ id: string; method: string; path: string; summary: string }>
+}
 
 /** 将 API 路径统一为带前导斜杠的目录形式。 */
 function normalizeApiPath(value: unknown, fallback = '/api'): string {
-  const text = String(value || '').trim();
-  if (!text) return fallback;
-  return `/${text}`.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+  const text = String(value || '').trim()
+  if (!text) return fallback
+  return `/${text}`.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
 }
 
 /** 将页面 id 转成与后端详情文件一致的安全文件名。 */
 function detailFileStem(value: string, prefix: string): string {
-  const normalized = value.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '');
-  return `${prefix}${normalized || 'unknown'}`;
+  const normalized = value.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '')
+  return `${prefix}${normalized || 'unknown'}`
 }
 
 /** 检查选中页面是否已经存在外置详情 JSON。 */
-async function pageDetailPlanExists(
-  workspaceRoot: string,
-  pageId: string,
-): Promise<boolean> {
+async function pageDetailPlanExists(workspaceRoot: string, pageId: string): Promise<boolean> {
   const detailPath = path.join(
     workspaceRoot,
     '.xcodeagent',
     'plans',
     'pages',
-    `${detailFileStem(pageId, 'page--')}.json`,
-  );
+    `${detailFileStem(pageId, 'page--')}.json`
+  )
   try {
-    const content = await fs.readFile(detailPath, 'utf8');
-    return Boolean(content.trim());
+    const content = await fs.readFile(detailPath, 'utf8')
+    return Boolean(content.trim())
   } catch {
-    return false;
+    return false
   }
 }
 
 /** 从 ProjectPlan 中按页面标识收集应用大纲页面。 */
 function projectPlanPages(value: unknown): Map<string, Record<string, unknown>> {
-  const result = new Map<string, Record<string, unknown>>();
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+  const result = new Map<string, Record<string, unknown>>()
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result
   const frontendPages = Array.isArray((value as Record<string, unknown>).frontend_pages)
-    ? (value as Record<string, unknown>).frontend_pages as unknown[]
-    : [];
+    ? ((value as Record<string, unknown>).frontend_pages as unknown[])
+    : []
   frontendPages.forEach((page) => {
-    if (!page || typeof page !== 'object' || Array.isArray(page)) return;
-    const record = page as Record<string, unknown>;
-    const pageId = String(record.id || record.pageId || '').trim();
-    if (pageId) result.set(pageId, record);
-  });
-  return result;
+    if (!page || typeof page !== 'object' || Array.isArray(page)) return
+    const record = page as Record<string, unknown>
+    const pageId = String(record.id || record.pageId || '').trim()
+    if (pageId) result.set(pageId, record)
+  })
+  return result
 }
 
 /** 从 ProjectPlan 的 frontend_pages 生成工作台页面目录。 */
@@ -110,46 +108,50 @@ function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
     purpose: String(record.description || record.name || `页面 ${index + 1}`),
     designed: false,
     detailPlanStatus: '',
-    hasDetailPlan: false,
-  }));
+    hasDetailPlan: false
+  }))
 }
 
 /** 按 base_path 合并 ProjectPlan contracts，同一目录下展示所有具体 API。 */
 function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
   const contracts = Array.isArray((value as Record<string, unknown>).api_contracts)
-    ? (value as Record<string, unknown>).api_contracts as unknown[]
-    : [];
-  const groupedContracts = new Map<string, WorkbenchApiContract>();
+    ? ((value as Record<string, unknown>).api_contracts as unknown[])
+    : []
+  const groupedContracts = new Map<string, WorkbenchApiContract>()
   contracts.forEach((contract, contractIndex) => {
-    if (!contract || typeof contract !== 'object' || Array.isArray(contract)) return;
-    const record = contract as Record<string, unknown>;
-    const contractId = String(record.id || `api-contract-${contractIndex + 1}`).trim();
-    const basePath = normalizeApiPath(record.base_path, `/${contractId}`);
-    const endpoints = Array.isArray(record.endpoints) ? record.endpoints : [];
+    if (!contract || typeof contract !== 'object' || Array.isArray(contract)) return
+    const record = contract as Record<string, unknown>
+    const contractId = String(record.id || `api-contract-${contractIndex + 1}`).trim()
+    const basePath = normalizeApiPath(record.base_path, `/${contractId}`)
+    const endpoints = Array.isArray(record.endpoints) ? record.endpoints : []
     const group = groupedContracts.get(basePath) || {
       id: basePath,
       label: basePath,
-      endpoints: [],
-    };
+      endpoints: []
+    }
     group.endpoints.push(
       ...endpoints.flatMap((endpoint, endpointIndex) => {
-        if (!endpoint || typeof endpoint !== 'object' || Array.isArray(endpoint)) return [];
-        const endpointRecord = endpoint as Record<string, unknown>;
-        const method = String(endpointRecord.method || 'GET').trim().toUpperCase();
-        const endpointPath = String(endpointRecord.path || '').trim();
-        if (!endpointPath) return [];
-        return [{
-          id: `${contractId}:${String(endpointRecord.id || endpointIndex + 1)}`,
-          method,
-          path: normalizeApiPath(endpointPath, '/'),
-          summary: String(endpointRecord.summary || ''),
-        }];
+        if (!endpoint || typeof endpoint !== 'object' || Array.isArray(endpoint)) return []
+        const endpointRecord = endpoint as Record<string, unknown>
+        const method = String(endpointRecord.method || 'GET')
+          .trim()
+          .toUpperCase()
+        const endpointPath = String(endpointRecord.path || '').trim()
+        if (!endpointPath) return []
+        return [
+          {
+            id: `${contractId}:${String(endpointRecord.id || endpointIndex + 1)}`,
+            method,
+            path: normalizeApiPath(endpointPath, '/'),
+            summary: String(endpointRecord.summary || '')
+          }
+        ]
       })
-    );
-    groupedContracts.set(basePath, group);
-  });
-  return [...groupedContracts.values()];
+    )
+    groupedContracts.set(basePath, group)
+  })
+  return [...groupedContracts.values()]
 }
 
 /** 只根据外置页面详情文件补充每个页面的设计状态。 */
@@ -158,110 +160,118 @@ async function mergeWorkbenchPageStatus(
   pages: WorkbenchPageOption[],
   plannedPages: Map<string, Record<string, unknown>>
 ): Promise<WorkbenchPageOption[]> {
-  return Promise.all(pages.map(async (page) => {
-    const plannedPage = plannedPages.get(page.pageId);
-    const detailDesign = plannedPage?.detail_design
-      && typeof plannedPage.detail_design === 'object'
-      && !Array.isArray(plannedPage.detail_design)
-      ? plannedPage.detail_design as Record<string, unknown>
-      : {};
-    const hasDetailPlan = await pageDetailPlanExists(workspaceRoot, page.pageId);
-    return {
-      ...page,
-      designed: hasDetailPlan,
-      detailPlanStatus: String(detailDesign.status || ''),
-      hasDetailPlan,
-    };
-  }));
+  return Promise.all(
+    pages.map(async (page) => {
+      const plannedPage = plannedPages.get(page.pageId)
+      const detailDesign =
+        plannedPage?.detail_design &&
+        typeof plannedPage.detail_design === 'object' &&
+        !Array.isArray(plannedPage.detail_design)
+          ? (plannedPage.detail_design as Record<string, unknown>)
+          : {}
+      const hasDetailPlan = await pageDetailPlanExists(workspaceRoot, page.pageId)
+      return {
+        ...page,
+        designed: hasDetailPlan,
+        detailPlanStatus: String(detailDesign.status || ''),
+        hasDetailPlan
+      }
+    })
+  )
 }
 
 /** 判断页面设计目录是否包含任意持久化产物。 */
 async function pageDesignDirectoryHasEntries(workspaceRoot: string): Promise<boolean> {
   try {
-    const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', 'pages'));
-    return entries.length > 0;
+    const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', 'pages'))
+    return entries.length > 0
   } catch (error: unknown) {
-    const errnoException = error as NodeJS.ErrnoException;
-    if (errnoException?.code === 'ENOENT') return false;
-    throw error;
+    const errnoException = error as NodeJS.ErrnoException
+    if (errnoException?.code === 'ENOENT') return false
+    throw error
   }
 }
 
 /** 校验正式规划产物，并从 ProjectPlan 投射应用大纲与页面设计状态。 */
 async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise<{
-  ready: boolean;
-  hasPageDesigns: boolean;
-  missing: string[];
-  invalid: string[];
-  pages: WorkbenchPageOption[];
-  apiContracts: WorkbenchApiContract[];
+  ready: boolean
+  hasPageDesigns: boolean
+  missing: string[]
+  invalid: string[]
+  pages: WorkbenchPageOption[]
+  apiContracts: WorkbenchApiContract[]
 }> {
-  const artifactRoot = path.join(workspaceRoot, '.xcodeagent');
+  const artifactRoot = path.join(workspaceRoot, '.xcodeagent')
   const artifacts = [
     { relativePath: 'specs/requirement-spec.md', format: 'markdown' },
     { relativePath: 'specs/requirement-spec.json', format: 'json' },
-    { relativePath: 'plans/project-plan.md', format: 'markdown' },
-  ];
-  const missing: string[] = [];
-  const invalid: string[] = [];
-  let plannedPages = new Map<string, Record<string, unknown>>();
-  let apiContracts: WorkbenchApiContract[] = [];
-  let projectPlanLoaded = false;
+    { relativePath: 'plans/project-plan.md', format: 'markdown' }
+  ]
+  const missing: string[] = []
+  const invalid: string[] = []
+  let plannedPages = new Map<string, Record<string, unknown>>()
+  let apiContracts: WorkbenchApiContract[] = []
+  let projectPlanLoaded = false
 
   for (const artifact of artifacts) {
-    const artifactPath = path.join(artifactRoot, artifact.relativePath);
+    const artifactPath = path.join(artifactRoot, artifact.relativePath)
     try {
-      const content = await fs.readFile(artifactPath, 'utf8');
+      const content = await fs.readFile(artifactPath, 'utf8')
       if (!content.trim()) {
-        invalid.push(artifact.relativePath);
-        continue;
+        invalid.push(artifact.relativePath)
+        continue
       }
       if (artifact.format === 'json') {
-        const value = JSON.parse(content);
-        if (!value || typeof value !== 'object' || Array.isArray(value) || value.confirmation_status !== 'confirmed') {
-          invalid.push(artifact.relativePath);
+        const value = JSON.parse(content)
+        if (
+          !value ||
+          typeof value !== 'object' ||
+          Array.isArray(value) ||
+          value.confirmation_status !== 'confirmed'
+        ) {
+          invalid.push(artifact.relativePath)
         }
       }
     } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException;
-      if (errnoException?.code === 'ENOENT') missing.push(artifact.relativePath);
-      else invalid.push(artifact.relativePath);
+      const errnoException = error as NodeJS.ErrnoException
+      if (errnoException?.code === 'ENOENT') missing.push(artifact.relativePath)
+      else invalid.push(artifact.relativePath)
     }
   }
 
   // 新工作区以 plans/project_plan.json 为大纲唯一语义来源，并兼容既有连字符文件名。
   for (const relativePath of ['plans/project_plan.json', 'plans/project-plan.json']) {
     try {
-      const content = await fs.readFile(path.join(artifactRoot, relativePath), 'utf8');
-      const projectPlan = JSON.parse(content);
+      const content = await fs.readFile(path.join(artifactRoot, relativePath), 'utf8')
+      const projectPlan = JSON.parse(content)
       if (
-        !projectPlan
-        || typeof projectPlan !== 'object'
-        || Array.isArray(projectPlan)
-        || projectPlan.confirmation_status !== 'confirmed'
+        !projectPlan ||
+        typeof projectPlan !== 'object' ||
+        Array.isArray(projectPlan) ||
+        projectPlan.confirmation_status !== 'confirmed'
       ) {
-        invalid.push(relativePath);
+        invalid.push(relativePath)
       }
-      plannedPages = projectPlanPages(projectPlan);
-      apiContracts = projectPlanApiContracts(projectPlan);
-      projectPlanLoaded = true;
-      break;
+      plannedPages = projectPlanPages(projectPlan)
+      apiContracts = projectPlanApiContracts(projectPlan)
+      projectPlanLoaded = true
+      break
     } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException;
-      if (errnoException?.code === 'ENOENT') continue;
-      invalid.push(relativePath);
-      projectPlanLoaded = true;
-      break;
+      const errnoException = error as NodeJS.ErrnoException
+      if (errnoException?.code === 'ENOENT') continue
+      invalid.push(relativePath)
+      projectPlanLoaded = true
+      break
     }
   }
-  if (!projectPlanLoaded) missing.push('plans/project_plan.json');
+  if (!projectPlanLoaded) missing.push('plans/project_plan.json')
 
   const pages = await mergeWorkbenchPageStatus(
     workspaceRoot,
     projectPlanPageOptions({ frontend_pages: [...plannedPages.values()] }),
-    plannedPages,
-  );
-  const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot);
+    plannedPages
+  )
+  const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
 
   return {
     ready: missing.length === 0 && invalid.length === 0,
@@ -269,8 +279,8 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     missing,
     invalid,
     pages,
-    apiContracts,
-  };
+    apiContracts
+  }
 }
 
 type EditorMode = 'frontend' | 'backend'
@@ -310,124 +320,117 @@ type NormalizedChatSession = {
   messages: JsonRecord[]
 }
 
-const MESSAGE_APPROVAL_STATUSES = new Set([
-  'pending',
-  'approved_once',
-  'approved_always',
-  'feedback',
-])
-
 /** 返回随应用发布的初始应用列表文件路径。 */
 function getSeedApplicationsFile(): string {
-  return path.join(__dirname, '..', 'data', 'applications.json');
+  return path.join(__dirname, '..', 'data', 'applications.json')
 }
 
 /** 确保应用列表文件存在，并在首次运行时写入种子数据。 */
 async function ensureApplicationsFile(): Promise<string> {
-  const applicationsFile = getApplicationsFile();
-  await fs.mkdir(path.dirname(applicationsFile), { recursive: true });
+  const applicationsFile = getApplicationsFile()
+  await fs.mkdir(path.dirname(applicationsFile), { recursive: true })
 
   try {
-    await fs.access(applicationsFile);
-    return applicationsFile;
+    await fs.access(applicationsFile)
+    return applicationsFile
   } catch {
     // Continue and seed the file below.
   }
 
-  let seedValue = '[]\n';
+  let seedValue = '[]\n'
   try {
-    seedValue = await fs.readFile(getSeedApplicationsFile(), 'utf8');
+    seedValue = await fs.readFile(getSeedApplicationsFile(), 'utf8')
   } catch {
     // Keep an empty store when the seed file is not shipped.
   }
 
-  await fs.writeFile(applicationsFile, seedValue, 'utf8');
-  return applicationsFile;
+  await fs.writeFile(applicationsFile, seedValue, 'utf8')
+  return applicationsFile
 }
 
 /** 读取持久化应用列表，非数组内容按空列表处理。 */
 async function readApplications(): Promise<unknown[]> {
-  const applicationsFile = await ensureApplicationsFile();
-  const rawValue = await fs.readFile(applicationsFile, 'utf8');
-  const parsed: unknown = JSON.parse(rawValue || '[]');
-  return Array.isArray(parsed) ? parsed : [];
+  const applicationsFile = await ensureApplicationsFile()
+  const rawValue = await fs.readFile(applicationsFile, 'utf8')
+  const parsed: unknown = JSON.parse(rawValue || '[]')
+  return Array.isArray(parsed) ? parsed : []
 }
 
 /** 校验并持久化应用列表。 */
 async function writeApplications(applications: unknown): Promise<void> {
   if (!Array.isArray(applications)) {
-    throw new Error('applications must be an array');
+    throw new Error('applications must be an array')
   }
 
-  const applicationsFile = await ensureApplicationsFile();
-  await fs.writeFile(applicationsFile, `${JSON.stringify(applications, null, 2)}\n`, 'utf8');
+  const applicationsFile = await ensureApplicationsFile()
+  await fs.writeFile(applicationsFile, `${JSON.stringify(applications, null, 2)}\n`, 'utf8')
 }
 
 /** 仅删除带有 XCodeAgent 项目标识的安全工作区目录。 */
 async function deleteProjectDirectory(workspaceRoot: unknown): Promise<void> {
-  const projectRoot = resolveWorkspaceRoot(workspaceRoot);
+  const projectRoot = resolveWorkspaceRoot(workspaceRoot)
   const protectedRoots = new Set([
     path.parse(projectRoot).root,
     path.resolve(app.getPath('home')),
     path.resolve(app.getPath('userData')),
-    path.resolve(getXcodeAgentDataDir()),
-  ]);
+    path.resolve(getXcodeAgentDataDir())
+  ])
   if (protectedRoots.has(projectRoot)) {
-    throw new Error('不能删除系统、用户或 XCodeAgent 数据目录');
+    throw new Error('不能删除系统、用户或 XCodeAgent 数据目录')
   }
 
-  const projectMetadataFile = getWorkspaceApplicationFile(projectRoot);
-  const projectStats = await fs.lstat(projectRoot);
+  const projectMetadataFile = getWorkspaceApplicationFile(projectRoot)
+  const projectStats = await fs.lstat(projectRoot)
   if (!projectStats.isDirectory() || projectStats.isSymbolicLink()) {
-    throw new Error('只能删除非符号链接的项目目录');
+    throw new Error('只能删除非符号链接的项目目录')
   }
 
   try {
-    await fs.access(projectMetadataFile);
+    await fs.access(projectMetadataFile)
   } catch {
-    throw new Error('该目录不是由 XCodeAgent 管理的项目，不能直接删除');
+    throw new Error('该目录不是由 XCodeAgent 管理的项目，不能直接删除')
   }
 
-  await fs.rm(projectRoot, { force: false, maxRetries: 3, recursive: true, retryDelay: 150 });
+  await fs.rm(projectRoot, { force: false, maxRetries: 3, recursive: true, retryDelay: 150 })
 }
 
 /** 注册应用列表读取和保存所需的 IPC。 */
 function setupApplicationStorageIpc(): void {
   ipcMain.handle('applications:load', async () => ({
-    applications: await readApplications(),
-  }));
+    applications: await readApplications()
+  }))
 
   ipcMain.handle('applications:save', async (_event, applications) => {
-    await writeApplications(applications);
-    return { ok: true };
-  });
+    await writeApplications(applications)
+    return { ok: true }
+  })
 
   ipcMain.handle('applications:delete-project', async (_event, payload = {}) => {
-    await deleteProjectDirectory(payload.workspaceRoot);
-    return { ok: true };
-  });
+    await deleteProjectDirectory(payload.workspaceRoot)
+    return { ok: true }
+  })
 }
 
 /** 校验并规范化允许由 Electron 打开的外部 HTTP 地址。 */
 function normalizeExternalUrl(url: unknown): string {
   if (typeof url !== 'string') {
-    throw new Error('url must be a string');
+    throw new Error('url must be a string')
   }
 
-  const parsedUrl = new URL(url);
+  const parsedUrl = new URL(url)
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-    throw new Error('Only http and https URLs can be opened');
+    throw new Error('Only http and https URLs can be opened')
   }
 
-  return parsedUrl.toString();
+  return parsedUrl.toString()
 }
 
 /** 注册系统浏览器和独立预览窗口相关 IPC。 */
 function setupBrowserIpc(): void {
   ipcMain.handle('browser:open-external', async (_event, url) => {
-    await shell.openExternal(normalizeExternalUrl(url));
-    return { ok: true };
-  });
+    await shell.openExternal(normalizeExternalUrl(url))
+    return { ok: true }
+  })
 
   ipcMain.handle('browser:open-preview-window', async (_event, url) => {
     const previewWindow = new BrowserWindow({
@@ -439,79 +442,82 @@ function setupBrowserIpc(): void {
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: true,
-      },
-    });
+        sandbox: true
+      }
+    })
 
-    previewWindows.add(previewWindow);
+    previewWindows.add(previewWindow)
     previewWindow.once('closed', () => {
-      previewWindows.delete(previewWindow);
-    });
+      previewWindows.delete(previewWindow)
+    })
     previewWindow.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
-      shell.openExternal(nextUrl);
-      return { action: 'deny' };
-    });
-    await previewWindow.loadURL(normalizeExternalUrl(url));
-    previewWindow.show();
-    return { ok: true };
-  });
+      shell.openExternal(nextUrl)
+      return { action: 'deny' }
+    })
+    await previewWindow.loadURL(normalizeExternalUrl(url))
+    previewWindow.show()
+    return { ok: true }
+  })
 }
 
 /** 校验并返回支持的编辑器模式。 */
 function assertEditorMode(value: unknown): EditorMode {
   if (value !== 'frontend' && value !== 'backend') {
-    throw new Error('editorMode must be frontend or backend');
+    throw new Error('editorMode must be frontend or backend')
   }
-  return value;
+  return value
 }
 
 /** 校验并返回可安全用于文件名的会话标识。 */
 function assertSessionId(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) {
-    throw new Error('sessionId contains invalid characters');
+    throw new Error('sessionId contains invalid characters')
   }
-  return value;
+  return value
 }
 
 /** 校验并解析工作区绝对路径。 */
 function resolveWorkspaceRoot(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
-    throw new Error('workspaceRoot must be a non-empty string');
+    throw new Error('workspaceRoot must be a non-empty string')
   }
-  return path.resolve(value);
+  return path.resolve(value)
 }
 
 /** 根据工作区名称和绝对路径哈希生成稳定的会话目录键。 */
 function getWorkspaceSessionKey(workspaceRoot: unknown): string {
-  const resolvedWorkspaceRoot = resolveWorkspaceRoot(workspaceRoot);
+  const resolvedWorkspaceRoot = resolveWorkspaceRoot(workspaceRoot)
   const workspaceName =
-    path.basename(resolvedWorkspaceRoot).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 80) || 'workspace';
+    path
+      .basename(resolvedWorkspaceRoot)
+      .replace(/[^A-Za-z0-9._-]/g, '-')
+      .slice(0, 80) || 'workspace'
   const workspaceHash = crypto
     .createHash('sha1')
     .update(resolvedWorkspaceRoot)
     .digest('hex')
-    .slice(0, 12);
-  return `${workspaceName}-${workspaceHash}`;
+    .slice(0, 12)
+  return `${workspaceName}-${workspaceHash}`
 }
 
 /** 返回指定工作区在环境数据目录中的会话根目录。 */
 function getWorkspaceSessionRoot(workspaceRoot: unknown): string {
-  return path.join(getXcodeAgentDataDir(), 'sessions', getWorkspaceSessionKey(workspaceRoot));
+  return path.join(getXcodeAgentDataDir(), 'sessions', getWorkspaceSessionKey(workspaceRoot))
 }
 
 /** 返回当前环境全部会话工作区的存储根目录。 */
 function getSessionStorageRoot(): string {
-  return path.join(getXcodeAgentDataDir(), 'sessions');
+  return path.join(getXcodeAgentDataDir(), 'sessions')
 }
 
 /** 返回指定工作区和编辑器模式对应的会话目录。 */
 function getSessionsDir(workspaceRoot: unknown, editorMode: unknown): string {
-  return path.join(getWorkspaceSessionRoot(workspaceRoot), assertEditorMode(editorMode));
+  return path.join(getWorkspaceSessionRoot(workspaceRoot), assertEditorMode(editorMode))
 }
 
 /** 返回校验后的单个会话文件路径。 */
 function getSessionFile(workspaceRoot: unknown, editorMode: unknown, sessionId: unknown): string {
-  return path.join(getSessionsDir(workspaceRoot, editorMode), `${assertSessionId(sessionId)}.json`);
+  return path.join(getSessionsDir(workspaceRoot, editorMode), `${assertSessionId(sessionId)}.json`)
 }
 
 /** 返回旧版工作区内会话目录，用于兼容迁移。 */
@@ -526,16 +532,16 @@ function getLegacyWorkspaceSessionsDir(workspaceRoot: unknown, editorMode: unkno
 
 /** 创建环境级会话目录并更新其工作区元数据。 */
 async function ensureSessionsDir(workspaceRoot: unknown, editorMode: unknown): Promise<string> {
-  const resolvedWorkspaceRoot = resolveWorkspaceRoot(workspaceRoot);
-  const workspaceSessionRoot = getWorkspaceSessionRoot(resolvedWorkspaceRoot);
-  const sessionsDir = path.join(workspaceSessionRoot, assertEditorMode(editorMode));
-  await fs.mkdir(sessionsDir, { recursive: true });
+  const resolvedWorkspaceRoot = resolveWorkspaceRoot(workspaceRoot)
+  const workspaceSessionRoot = getWorkspaceSessionRoot(resolvedWorkspaceRoot)
+  const sessionsDir = path.join(workspaceSessionRoot, assertEditorMode(editorMode))
+  await fs.mkdir(sessionsDir, { recursive: true })
   await fs.writeFile(
     path.join(workspaceSessionRoot, 'workspace.json'),
     `${JSON.stringify({ workspaceRoot: resolvedWorkspaceRoot, updatedAt: Date.now() }, null, 2)}\n`,
-    'utf8',
-  );
-  return sessionsDir;
+    'utf8'
+  )
+  return sessionsDir
 }
 
 /** 将旧版工作区内的有效会话按需迁移到环境级存储。 */
@@ -544,30 +550,30 @@ async function migrateLegacyWorkspaceSessions(
   editorMode: unknown,
   sessionsDir: string
 ): Promise<void> {
-  const legacySessionsDir = getLegacyWorkspaceSessionsDir(workspaceRoot, editorMode);
-  if (path.resolve(legacySessionsDir) === path.resolve(sessionsDir)) return;
+  const legacySessionsDir = getLegacyWorkspaceSessionsDir(workspaceRoot, editorMode)
+  if (path.resolve(legacySessionsDir) === path.resolve(sessionsDir)) return
 
-  let entries;
+  let entries
   try {
-    entries = await fs.readdir(legacySessionsDir, { withFileTypes: true });
+    entries = await fs.readdir(legacySessionsDir, { withFileTypes: true })
   } catch {
-    return;
+    return
   }
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue
 
     try {
-      const rawValue = await fs.readFile(path.join(legacySessionsDir, entry.name), 'utf8');
-      const session = normalizeSession(JSON.parse(rawValue || '{}'));
-      const targetFile = getSessionFile(workspaceRoot, editorMode, session.id);
+      const rawValue = await fs.readFile(path.join(legacySessionsDir, entry.name), 'utf8')
+      const session = normalizeSession(JSON.parse(rawValue || '{}'))
+      const targetFile = getSessionFile(workspaceRoot, editorMode, session.id)
       try {
-        await fs.access(targetFile);
-        continue;
+        await fs.access(targetFile)
+        continue
       } catch {
         // Missing target files are copied into the app-owned environment store below.
       }
-      await fs.writeFile(targetFile, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+      await fs.writeFile(targetFile, `${JSON.stringify(session, null, 2)}\n`, 'utf8')
     } catch {
       // Ignore malformed legacy files so migration never blocks the current app store.
     }
@@ -576,7 +582,7 @@ async function migrateLegacyWorkspaceSessions(
 
 /** 将规范化会话转换为列表展示所需的摘要。 */
 function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
-  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const messages = Array.isArray(session.messages) ? session.messages : []
   return {
     id: String(session.id || ''),
     title: String(session.title || '新对话'),
@@ -585,18 +591,7 @@ function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
     pageId: session.pageId,
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
-    messageCount: messages.length,
-  };
-}
-
-/** 深拷贝可序列化 JSON 对象，无法序列化时返回空值。 */
-function cloneJsonRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-
-  try {
-    return JSON.parse(JSON.stringify(value)) as Record<string, unknown>
-  } catch {
-    return undefined
+    messageCount: messages.length
   }
 }
 
@@ -605,66 +600,17 @@ function isJsonRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-/** 规范化单条会话消息，并保留受支持的扩展字段。 */
-function normalizeSessionMessage(message: JsonRecord): Record<string, unknown> {
-  const normalizedMessage = {
-    id: Number(message.id || Date.now()),
-    role: message.role === 'assistant' ? 'assistant' : 'user',
-    content: String(message.content || ''),
-    createdAt: Number(message.createdAt || Date.now()),
-  }
-  const orchestration = cloneJsonRecord(message.orchestration)
-  const approval = cloneJsonRecord(message.approval)
-  const codeChanges = cloneJsonRecord(message.codeChanges)
-  const workflow = cloneJsonRecord(message.workflow)
-  const skills = normalizeSessionMessageSkills(message.skills)
-  const approvalStatus =
-    typeof message.approvalStatus === 'string' &&
-    MESSAGE_APPROVAL_STATUSES.has(message.approvalStatus)
-      ? message.approvalStatus
-      : undefined
-
-  return {
-    ...normalizedMessage,
-    ...(orchestration ? { orchestration } : {}),
-    ...(approval ? { approval } : {}),
-    ...(approvalStatus ? { approvalStatus } : {}),
-    ...(codeChanges ? { codeChanges } : {}),
-    ...(workflow ? { workflow } : {}),
-    ...(skills.length > 0 ? { skills } : {}),
-  }
-}
-
-/** 规范化用户消息携带的技能名称和描述快照。 */
-function normalizeSessionMessageSkills(value: unknown): Array<Record<string, string>> {
-  if (!Array.isArray(value)) return []
-  const names = new Set<string>()
-  return value
-    .filter(isJsonRecord)
-    .map((item) => ({
-      name: typeof item.name === 'string' ? item.name.trim() : '',
-      description: typeof item.description === 'string' ? item.description.trim() : '',
-    }))
-    .filter((item) => {
-      if (!item.name || names.has(item.name)) return false
-      names.add(item.name)
-      return true
-    })
-}
-
 /** 校验外部会话数据并转换为可持久化的统一结构。 */
 function normalizeSession(session: unknown): NormalizedChatSession {
   if (!isJsonRecord(session)) {
-    throw new Error('session must be an object');
+    throw new Error('session must be an object')
   }
 
-  const editorMode = assertEditorMode(session.editorMode);
-  const id = assertSessionId(session.id);
+  const editorMode = assertEditorMode(session.editorMode)
+  const id = assertSessionId(session.id)
   const messages = Array.isArray(session.messages)
-    ? session.messages
-        .filter(isJsonRecord)
-        .map(normalizeSessionMessage)
-    : [];
+    ? session.messages.filter(isJsonRecord).map(normalizePersistentSessionMessage)
+    : []
 
   const pageId = normalizeSessionPageId(session.pageId) || inferSessionPageId(messages)
   return {
@@ -676,8 +622,8 @@ function normalizeSession(session: unknown): NormalizedChatSession {
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
     workspaceRoot: typeof session.workspaceRoot === 'string' ? session.workspaceRoot : '',
-    messages,
-  };
+    messages
+  }
 }
 
 /** 规范化页面会话标识，避免空字符串污染持久化索引。 */
@@ -693,8 +639,9 @@ function inferSessionPageId(messages: JsonRecord[]): string | undefined {
     if (!isJsonRecord(workflow)) continue
     const state = isJsonRecord(workflow.state) ? workflow.state : undefined
     const result = isJsonRecord(workflow.result) ? workflow.result : undefined
-    const pageId = normalizeSessionPageId(state?.selectedPageId)
-      || normalizeSessionPageId(result?.selectedPageId)
+    const pageId =
+      normalizeSessionPageId(state?.selectedPageId) ||
+      normalizeSessionPageId(result?.selectedPageId)
     if (pageId) return pageId
   }
   return undefined
@@ -704,65 +651,68 @@ async function readSessionSummariesFromDir(
   sessionsDir: string,
   editorMode: EditorMode
 ): Promise<ChatSessionSummary[]> {
-  let entries;
+  let entries
   try {
-    entries = await fs.readdir(sessionsDir, { withFileTypes: true });
+    entries = await fs.readdir(sessionsDir, { withFileTypes: true })
   } catch {
-    return [];
+    return []
   }
 
-  const sessions: ChatSessionSummary[] = [];
+  const sessions: ChatSessionSummary[] = []
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue
     try {
-      const rawValue = await fs.readFile(path.join(sessionsDir, entry.name), 'utf8');
-      const session = normalizeSession(JSON.parse(rawValue || '{}'));
-      if (session.editorMode !== editorMode) continue;
-      sessions.push(sessionSummary(session));
+      const rawValue = await fs.readFile(path.join(sessionsDir, entry.name), 'utf8')
+      const session = normalizeSession(JSON.parse(rawValue || '{}'))
+      if (session.editorMode !== editorMode) continue
+      sessions.push(sessionSummary(session))
     } catch {
       // Ignore malformed session files so one bad record does not hide the workspace.
     }
   }
-  return sessions;
+  return sessions
 }
 
 async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
-  const sessionsRoot = getSessionStorageRoot();
-  let entries;
+  const sessionsRoot = getSessionStorageRoot()
+  let entries
   try {
-    entries = await fs.readdir(sessionsRoot, { withFileTypes: true });
+    entries = await fs.readdir(sessionsRoot, { withFileTypes: true })
   } catch {
-    return [];
+    return []
   }
 
-  const workspaces: SessionWorkspaceSummary[] = [];
+  const workspaces: SessionWorkspaceSummary[] = []
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory()) continue
 
-    const workspaceSessionRoot = path.join(sessionsRoot, entry.name);
-    let workspaceRoot: string;
+    const workspaceSessionRoot = path.join(sessionsRoot, entry.name)
+    let workspaceRoot: string
     try {
-      const rawWorkspace = await fs.readFile(path.join(workspaceSessionRoot, 'workspace.json'), 'utf8');
-      const workspaceRecord = JSON.parse(rawWorkspace || '{}');
-      workspaceRoot = resolveWorkspaceRoot(workspaceRecord.workspaceRoot);
+      const rawWorkspace = await fs.readFile(
+        path.join(workspaceSessionRoot, 'workspace.json'),
+        'utf8'
+      )
+      const workspaceRecord = JSON.parse(rawWorkspace || '{}')
+      workspaceRoot = resolveWorkspaceRoot(workspaceRecord.workspaceRoot)
     } catch {
-      continue;
+      continue
     }
 
     const frontendSessions = await readSessionSummariesFromDir(
       path.join(workspaceSessionRoot, 'frontend'),
-      'frontend',
-    );
+      'frontend'
+    )
     const backendSessions = await readSessionSummariesFromDir(
       path.join(workspaceSessionRoot, 'backend'),
-      'backend',
-    );
+      'backend'
+    )
     const allSessions = [...frontendSessions, ...backendSessions].sort(
-      (a, b) => b.updatedAt - a.updatedAt,
-    );
-    if (allSessions.length === 0) continue;
+      (a, b) => b.updatedAt - a.updatedAt
+    )
+    if (allSessions.length === 0) continue
 
-    const latestSession = allSessions[0];
+    const latestSession = allSessions[0]
     workspaces.push({
       workspaceRoot,
       name: path.basename(workspaceRoot) || workspaceRoot,
@@ -770,123 +720,123 @@ async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
       frontendCount: frontendSessions.length,
       backendCount: backendSessions.length,
       latestUpdatedAt: latestSession.updatedAt,
-      latestTitle: latestSession.title,
-    });
+      latestTitle: latestSession.title
+    })
   }
 
-  return workspaces.sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt);
+  return workspaces.sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt)
 }
 
 /** 注册工作区读取、选择和项目创建相关 IPC。 */
 function setupWorkspaceIpc(): void {
   ipcMain.handle('workspace:inspect-planning-artifacts', async (_event, payload = {}) => {
-    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
-    return inspectWorkspacePlanningArtifacts(workspaceRoot);
-  });
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    return inspectWorkspacePlanningArtifacts(workspaceRoot)
+  })
 
   ipcMain.handle('workspace:read-application', async (_event, payload = {}) => {
-    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
-    const applicationFile = getWorkspaceApplicationFile(workspaceRoot);
-    const rawValue = await fs.readFile(applicationFile, 'utf8');
-    const applicationConfig = JSON.parse(rawValue || '{}');
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    const applicationFile = getWorkspaceApplicationFile(workspaceRoot)
+    const rawValue = await fs.readFile(applicationFile, 'utf8')
+    const applicationConfig = JSON.parse(rawValue || '{}')
 
     if (
       !applicationConfig ||
       typeof applicationConfig !== 'object' ||
       Array.isArray(applicationConfig)
     ) {
-      throw new Error('application.json must be an object');
+      throw new Error('application.json must be an object')
     }
 
-    return { application: applicationConfig };
-  });
+    return { application: applicationConfig }
+  })
 
   ipcMain.handle('workspace:select-directory', async (_event, options = {}) => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: typeof options.title === 'string' ? options.title : '选择工作目录',
-      properties: ['openDirectory', 'createDirectory'],
-    });
+      properties: ['openDirectory', 'createDirectory']
+    })
 
     return {
       canceled: result.canceled,
-      path: result.filePaths[0],
-    };
-  });
+      path: result.filePaths[0]
+    }
+  })
 
   ipcMain.handle('workspace:create-project-directory', async (_event, payload = {}) => {
     if (typeof payload.workspacePath !== 'string' || !payload.workspacePath.trim()) {
-      throw new Error('workspacePath must be a non-empty string');
+      throw new Error('workspacePath must be a non-empty string')
     }
     if (
       !payload.applicationConfig ||
       typeof payload.applicationConfig !== 'object' ||
       Array.isArray(payload.applicationConfig)
     ) {
-      throw new Error('applicationConfig must be an object');
+      throw new Error('applicationConfig must be an object')
     }
 
-    const projectPath = path.resolve(payload.workspacePath);
+    const projectPath = path.resolve(payload.workspacePath)
 
     try {
-      await fs.mkdir(projectPath, { recursive: false });
+      await fs.mkdir(projectPath, { recursive: false })
     } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException;
-      if (errnoException?.code !== 'EEXIST') throw error;
+      const errnoException = error as NodeJS.ErrnoException
+      if (errnoException?.code !== 'EEXIST') throw error
     }
-    const applicationFile = getWorkspaceApplicationFile(projectPath);
-    await fs.mkdir(path.dirname(applicationFile), { recursive: true });
+    const applicationFile = getWorkspaceApplicationFile(projectPath)
+    await fs.mkdir(path.dirname(applicationFile), { recursive: true })
     await fs.writeFile(
       applicationFile,
       `${JSON.stringify(payload.applicationConfig, null, 2)}\n`,
-      'utf8',
-    );
+      'utf8'
+    )
 
     return {
       ok: true,
-      path: projectPath,
-    };
-  });
+      path: projectPath
+    }
+  })
 
   // 从远程模板仓库拉取前端模板工程，放到 <项目位置>/apps/<应用名称>/frontend/ 下。
   ipcMain.handle('workspace:clone-template', async (_event, payload = {}) => {
     if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
-      throw new Error('projectPath must be a non-empty string');
+      throw new Error('projectPath must be a non-empty string')
     }
     if (typeof payload.appName !== 'string' || !payload.appName.trim()) {
-      throw new Error('appName must be a non-empty string');
+      throw new Error('appName must be a non-empty string')
     }
     const templateUrl =
       typeof payload.templateUrl === 'string' && payload.templateUrl.trim()
         ? payload.templateUrl.trim()
-        : 'https://github.com/ruyue1/frontend-template.git';
+        : 'https://github.com/ruyue1/frontend-template.git'
 
-    const projectPath = path.resolve(payload.projectPath);
-    const appName = payload.appName.trim();
+    const projectPath = path.resolve(payload.projectPath)
+    const appName = payload.appName.trim()
     // 目标路径：项目位置/apps/应用名称/frontend
-    const frontendDir = path.join(projectPath, 'apps', appName, 'frontend');
+    const frontendDir = path.join(projectPath, 'apps', appName, 'frontend')
 
     // 确保父目录存在；frontend 目录本身不能预先存在（git clone 要求目标为空或不存在）
-    await fs.mkdir(path.dirname(frontendDir), { recursive: true });
+    await fs.mkdir(path.dirname(frontendDir), { recursive: true })
 
     // 若 frontend 已存在且非空，先清空，避免 git clone 报错
     try {
-      const entries = await fs.readdir(frontendDir);
+      const entries = await fs.readdir(frontendDir)
       if (entries.length > 0) {
-        await fs.rm(frontendDir, { recursive: true, force: true });
+        await fs.rm(frontendDir, { recursive: true, force: true })
       }
     } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException;
-      if (errnoException?.code !== 'ENOENT') throw error;
+      const errnoException = error as NodeJS.ErrnoException
+      if (errnoException?.code !== 'ENOENT') throw error
     }
 
     // 执行 git clone，用 execFile 避免 shell 注入；超时 120s。
     // GitHub 网络不稳定时 clone 可能中途断开（curl 18 transfer closed），
     // 失败后清理半成品并重试，最多 3 次。
-    let cloneError: Error | null = null;
+    let cloneError: Error | null = null
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       // 每次重试前清理可能存在的半成品目录
       try {
-        await fs.rm(frontendDir, { recursive: true, force: true });
+        await fs.rm(frontendDir, { recursive: true, force: true })
       } catch {
         // 忽略清理失败
       }
@@ -898,29 +848,25 @@ function setupWorkspaceIpc(): void {
             { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
             (error, _stdout, stderr) => {
               if (error) {
-                reject(
-                  new Error(
-                    `git clone 失败：${error.message}${stderr ? `\n${stderr}` : ''}`,
-                  ),
-                );
-                return;
+                reject(new Error(`git clone 失败：${error.message}${stderr ? `\n${stderr}` : ''}`))
+                return
               }
-              resolve();
-            },
-          );
-        });
-        cloneError = null;
-        break;
+              resolve()
+            }
+          )
+        })
+        cloneError = null
+        break
       } catch (error) {
-        cloneError = error instanceof Error ? error : new Error(String(error));
+        cloneError = error instanceof Error ? error : new Error(String(error))
         // 最后一次失败才真正抛出，否则继续重试
       }
     }
-    if (cloneError) throw cloneError;
+    if (cloneError) throw cloneError
 
     // 删除 clone 下来的 .git 目录，模板工程不需要保留版本历史
     try {
-      await fs.rm(path.join(frontendDir, '.git'), { recursive: true, force: true });
+      await fs.rm(path.join(frontendDir, '.git'), { recursive: true, force: true })
     } catch {
       // 忽略 .git 删除失败
     }
@@ -928,65 +874,73 @@ function setupWorkspaceIpc(): void {
     return {
       ok: true,
       path: frontendDir,
-      templateUrl,
-    };
-  });
+      templateUrl
+    }
+  })
 
   // 在模板工程 apps/<应用名>/frontend/src/pages/ 下追加规划出的页面文件。
   // 每个页面生成一个目录 <PageKey>/index.tsx，内容为临时占位代码。
   ipcMain.handle('workspace:write-template-pages', async (_event, payload = {}) => {
     if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
-      throw new Error('projectPath must be a non-empty string');
+      throw new Error('projectPath must be a non-empty string')
     }
     if (typeof payload.appName !== 'string' || !payload.appName.trim()) {
-      throw new Error('appName must be a non-empty string');
+      throw new Error('appName must be a non-empty string')
     }
     if (!Array.isArray(payload.pages)) {
-      throw new Error('pages must be an array');
+      throw new Error('pages must be an array')
     }
 
-    const projectPath = path.resolve(payload.projectPath);
-    const appName = payload.appName.trim();
-    const pagesDir = path.join(projectPath, 'apps', appName, 'frontend', 'src', 'pages');
+    const projectPath = path.resolve(payload.projectPath)
+    const appName = payload.appName.trim()
+    const pagesDir = path.join(projectPath, 'apps', appName, 'frontend', 'src', 'pages')
 
-    await fs.mkdir(pagesDir, { recursive: true });
+    await fs.mkdir(pagesDir, { recursive: true })
 
-    const written: Array<{ pageKey: string; path: string }> = [];
+    const written: Array<{ pageKey: string; path: string }> = []
     for (const page of payload.pages) {
-      const pageKey = typeof page?.pageKey === 'string' ? page.pageKey.trim() : '';
-      if (!pageKey) continue;
+      const pageKey = typeof page?.pageKey === 'string' ? page.pageKey.trim() : ''
+      if (!pageKey) continue
       // pageKey 仅允许字母、数字、下划线、连字符，防目录穿越
       if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(pageKey)) {
-        throw new Error(`非法 pageKey: ${pageKey}`);
+        throw new Error(`非法 pageKey: ${pageKey}`)
       }
-      const pageDir = path.join(pagesDir, pageKey);
-      await fs.mkdir(pageDir, { recursive: true });
-      const filePath = path.join(pageDir, 'index.tsx');
-      const componentName = pageKey.replace(/(^|[-_])([A-Za-z])/g, (_m, _s, c) => c.toUpperCase());
+      const pageDir = path.join(pagesDir, pageKey)
+      await fs.mkdir(pageDir, { recursive: true })
+      const filePath = path.join(pageDir, 'index.tsx')
+      const componentName = pageKey.replace(/(^|[-_])([A-Za-z])/g, (_m, _s, c) => c.toUpperCase())
       const content = `// ${page?.name ? page.name : pageKey} 页面（临时占位，待 Agent 生成真实内容）
 export default function ${componentName}() {
   return <div>hello agent!</div>
 }
-`;
-      await fs.writeFile(filePath, content, 'utf8');
-      written.push({ pageKey, path: filePath });
+`
+      await fs.writeFile(filePath, content, 'utf8')
+      written.push({ pageKey, path: filePath })
     }
 
     // 把新页面注入 menus.ts 的 BIZ_MENUS -> firstLevel -> children
-    const menusPath = path.join(projectPath, 'apps', appName, 'frontend', 'src', 'constants', 'menus.ts');
+    const menusPath = path.join(
+      projectPath,
+      'apps',
+      appName,
+      'frontend',
+      'src',
+      'constants',
+      'menus.ts'
+    )
     try {
-      await injectPagesIntoMenus(menusPath, payload.pages);
+      await injectPagesIntoMenus(menusPath, payload.pages)
     } catch (error) {
       // menus.ts 注入失败不阻塞页面生成，仅记录
-      console.error('[write-template-pages] 注入 menus.ts 失败:', error);
+      console.error('[write-template-pages] 注入 menus.ts 失败:', error)
     }
 
     return {
       ok: true,
       pagesDir,
-      written,
-    };
-  });
+      written
+    }
+  })
 }
 
 // 把新页面追加到 menus.ts 中 BIZ_MENUS 第一个 path:'firstLevel' 项的 children 数组里。
@@ -995,147 +949,153 @@ async function injectPagesIntoMenus(
   menusPath: string,
   pages: Array<{ pageKey?: string; name?: string; menuPath?: string }>
 ): Promise<void> {
-  let content: string;
+  let content: string
   try {
-    content = await fs.readFile(menusPath, 'utf8');
+    content = await fs.readFile(menusPath, 'utf8')
   } catch {
     // menus.ts 不存在则跳过
-    return;
+    return
   }
 
   // 定位 path: 'firstLevel'（允许单双引号、空格）
-  const firstLevelMatch = content.match(/path:\s*['"]firstLevel['"]/);
-  if (!firstLevelMatch || firstLevelMatch.index === undefined) return;
+  const firstLevelMatch = content.match(/path:\s*['"]firstLevel['"]/)
+  if (!firstLevelMatch || firstLevelMatch.index === undefined) return
 
   // 从 firstLevel 之后找 children: [
-  const afterFirstLevel = firstLevelMatch.index + firstLevelMatch[0].length;
-  const childrenMatch = content.slice(afterFirstLevel).match(/children:\s*\[/);
-  if (!childrenMatch || childrenMatch.index === undefined) return;
+  const afterFirstLevel = firstLevelMatch.index + firstLevelMatch[0].length
+  const childrenMatch = content.slice(afterFirstLevel).match(/children:\s*\[/)
+  if (!childrenMatch || childrenMatch.index === undefined) return
 
-  const childrenOpen = afterFirstLevel + childrenMatch.index + childrenMatch[0].length;
+  const childrenOpen = afterFirstLevel + childrenMatch.index + childrenMatch[0].length
   // 从 children:[ 之后做括号匹配，找到对应的闭合 ]。
   // 需要跳过字符串和 // 注释，避免注释里的引号/括号干扰匹配。
-  let depth = 1;
-  let i = childrenOpen;
-  let inString: string | null = null;
+  let depth = 1
+  let i = childrenOpen
+  let inString: string | null = null
   while (i < content.length && depth > 0) {
-    const ch = content[i];
+    const ch = content[i]
     if (inString) {
-      if (ch === '\\') { i += 2; continue; }
-      if (ch === inString) inString = null;
-      i += 1;
-      continue;
+      if (ch === '\\') {
+        i += 2
+        continue
+      }
+      if (ch === inString) inString = null
+      i += 1
+      continue
     }
     // 识别 // 注释，跳过到行尾
     if (ch === '/' && content[i + 1] === '/') {
-      const nl = content.indexOf('\n', i);
-      i = nl === -1 ? content.length : nl + 1;
-      continue;
+      const nl = content.indexOf('\n', i)
+      i = nl === -1 ? content.length : nl + 1
+      continue
     }
     if (ch === "'" || ch === '"' || ch === '`') {
-      inString = ch;
+      inString = ch
     } else if (ch === '[' || ch === '{' || ch === '(') {
-      depth += 1;
+      depth += 1
     } else if (ch === ']' || ch === '}' || ch === ')') {
-      depth -= 1;
-      if (depth === 0) break;
+      depth -= 1
+      if (depth === 0) break
     }
-    i += 1;
+    i += 1
   }
-  if (depth !== 0) return; // 没找到匹配的闭合括号
+  if (depth !== 0) return // 没找到匹配的闭合括号
 
-  const childrenClose = i; // 指向 children 的闭合 ]
+  const childrenClose = i // 指向 children 的闭合 ]
 
   // 收集已存在的 key，避免重复注入
-  const childrenBlock = content.slice(childrenOpen, childrenClose);
-  const existingKeys = new Set<string>();
-  const keyRegex = /key:\s*['"]([A-Za-z0-9_-]+)['"]/g;
-  let km: RegExpExecArray | null;
+  const childrenBlock = content.slice(childrenOpen, childrenClose)
+  const existingKeys = new Set<string>()
+  const keyRegex = /key:\s*['"]([A-Za-z0-9_-]+)['"]/g
+  let km: RegExpExecArray | null
   while ((km = keyRegex.exec(childrenBlock)) !== null) {
-    existingKeys.add(km[1]);
+    existingKeys.add(km[1])
   }
 
   // 构造新菜单项字符串
-  const newItems: string[] = [];
+  const newItems: string[] = []
   for (const page of pages) {
-    const pageKey = typeof page?.pageKey === 'string' ? page.pageKey.trim() : '';
-    if (!pageKey || existingKeys.has(pageKey)) continue;
-    const name = typeof page?.name === 'string' && page.name.trim() ? page.name : pageKey;
-    const menuPath = typeof page?.menuPath === 'string' && page.menuPath.trim() ? page.menuPath : pageKey.charAt(0).toLowerCase() + pageKey.slice(1);
+    const pageKey = typeof page?.pageKey === 'string' ? page.pageKey.trim() : ''
+    if (!pageKey || existingKeys.has(pageKey)) continue
+    const name = typeof page?.name === 'string' && page.name.trim() ? page.name : pageKey
+    const menuPath =
+      typeof page?.menuPath === 'string' && page.menuPath.trim()
+        ? page.menuPath
+        : pageKey.charAt(0).toLowerCase() + pageKey.slice(1)
     newItems.push(
       `      {\n        path: '${menuPath}',\n        name: '${name}',\n        key: '${pageKey}'\n      }`
-    );
+    )
   }
-  if (newItems.length === 0) return;
+  if (newItems.length === 0) return
 
   // 插入点：children 块内最后一个非空白字符之后（这样逗号紧跟在最后一项的 } 后面）
-  let lastNonWs = childrenClose - 1;
+  let lastNonWs = childrenClose - 1
   while (lastNonWs >= childrenOpen && /\s/.test(content[lastNonWs])) {
-    lastNonWs -= 1;
+    lastNonWs -= 1
   }
-  const hasContent = lastNonWs >= childrenOpen;
-  const separator = hasContent ? ',\n' : '\n';
-  const insertText = separator + newItems.join(',\n') + '\n    ';
+  const hasContent = lastNonWs >= childrenOpen
+  const separator = hasContent ? ',\n' : '\n'
+  const insertText = separator + newItems.join(',\n') + '\n    '
 
-  const insertPos = lastNonWs + 1;
-  const newContent = content.slice(0, insertPos) + insertText + content.slice(insertPos);
-  await fs.writeFile(menusPath, newContent, 'utf8');
+  const insertPos = lastNonWs + 1
+  const newContent = content.slice(0, insertPos) + insertText + content.slice(insertPos)
+  await fs.writeFile(menusPath, newContent, 'utf8')
 }
 
 function setupSessionStorageIpc(): void {
   ipcMain.handle('sessions:list-workspaces', async () => ({
-    workspaces: await listSessionWorkspaces(),
-  }));
+    workspaces: await listSessionWorkspaces()
+  }))
 
   ipcMain.handle('sessions:list', async (_event, payload = {}) => {
-    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
-    const editorMode = assertEditorMode(payload.editorMode);
-    const sessionsDir = await ensureSessionsDir(workspaceRoot, editorMode);
-    await migrateLegacyWorkspaceSessions(workspaceRoot, editorMode, sessionsDir);
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    const editorMode = assertEditorMode(payload.editorMode)
+    const sessionsDir = await ensureSessionsDir(workspaceRoot, editorMode)
+    await migrateLegacyWorkspaceSessions(workspaceRoot, editorMode, sessionsDir)
 
-    const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
-    const sessions: ChatSessionSummary[] = [];
+    const entries = await fs.readdir(sessionsDir, { withFileTypes: true })
+    const sessions: ChatSessionSummary[] = []
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue
       try {
-        const rawValue = await fs.readFile(path.join(sessionsDir, entry.name), 'utf8');
-        const session = normalizeSession(JSON.parse(rawValue || '{}'));
-        sessions.push(sessionSummary(session));
+        const rawValue = await fs.readFile(path.join(sessionsDir, entry.name), 'utf8')
+        const session = normalizeSession(JSON.parse(rawValue || '{}'))
+        sessions.push(sessionSummary(session))
       } catch {
         // Ignore malformed session files so one bad record does not hide the full history.
       }
     }
 
-    sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-    return { sessions };
-  });
+    sessions.sort((a, b) => b.updatedAt - a.updatedAt)
+    return { sessions }
+  })
 
   ipcMain.handle('sessions:read', async (_event, payload = {}) => {
-    const sessionFile = getSessionFile(payload.workspaceRoot, payload.editorMode, payload.sessionId);
-    const rawValue = await fs.readFile(sessionFile, 'utf8');
-    return { session: normalizeSession(JSON.parse(rawValue || '{}')) };
-  });
+    const sessionFile = getSessionFile(payload.workspaceRoot, payload.editorMode, payload.sessionId)
+    const rawValue = await fs.readFile(sessionFile, 'utf8')
+    return { session: normalizeSession(JSON.parse(rawValue || '{}')) }
+  })
 
   ipcMain.handle('sessions:save', async (_event, payload = {}) => {
-    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot);
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
     const session = normalizeSession({
       ...payload.session,
-      workspaceRoot,
-    });
-    await ensureSessionsDir(workspaceRoot, session.editorMode);
+      workspaceRoot
+    })
+    await ensureSessionsDir(workspaceRoot, session.editorMode)
     await fs.writeFile(
       getSessionFile(workspaceRoot, session.editorMode, session.id),
       `${JSON.stringify(session, null, 2)}\n`,
-      'utf8',
-    );
-    return { ok: true, session: sessionSummary(session) };
-  });
+      'utf8'
+    )
+    return { ok: true, session: sessionSummary(session) }
+  })
 
   ipcMain.handle('sessions:delete', async (_event, payload = {}) => {
-    const sessionFile = getSessionFile(payload.workspaceRoot, payload.editorMode, payload.sessionId);
-    await fs.rm(sessionFile, { force: true });
-    return { ok: true };
-  });
+    const sessionFile = getSessionFile(payload.workspaceRoot, payload.editorMode, payload.sessionId)
+    await fs.rm(sessionFile, { force: true })
+    return { ok: true }
+  })
 }
 
 /** 注册登录、内存 token 读取和重新认证所需的 Electron IPC。 */
@@ -1173,7 +1133,8 @@ type RendererPage = 'index' | 'login'
 function loadRendererPage(targetWindow: BrowserWindow, pageName: RendererPage): void {
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
   if (rendererUrl) {
-    const pageUrl = pageName === 'index' ? rendererUrl : `${rendererUrl.replace(/\/$/, '')}/${pageName}.html`
+    const pageUrl =
+      pageName === 'index' ? rendererUrl : `${rendererUrl.replace(/\/$/, '')}/${pageName}.html`
     void targetWindow.loadURL(pageUrl)
     return
   }
@@ -1203,11 +1164,11 @@ function createMainWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--xcode-agent-base-url=${getBackendBaseUrl()}`],
+      additionalArguments: [`--xcode-agent-base-url=${getBackendBaseUrl()}`]
     }
   })
 
-  mainWindow.setMenuBarVisibility(false);
+  mainWindow.setMenuBarVisibility(false)
   mainWindow.on('close', (event) => {
     if (isQuitting) return
     event.preventDefault()
@@ -1237,13 +1198,22 @@ function createMainWindow(): void {
       ;[level, msg, line, src] = args
     }
     const text = typeof msg === 'string' ? msg : JSON.stringify(msg)
-    require('node:fs').appendFileSync('/tmp/xca_renderer.log', `[L${level}] ${text} (${src}:${line})\n`)
+    require('node:fs').appendFileSync(
+      '/tmp/xca_renderer.log',
+      `[L${level}] ${text} (${src}:${line})\n`
+    )
   })
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
-    require('node:fs').appendFileSync('/tmp/xca_renderer.log', `[GONE] ${JSON.stringify(details)}\n`)
+    require('node:fs').appendFileSync(
+      '/tmp/xca_renderer.log',
+      `[GONE] ${JSON.stringify(details)}\n`
+    )
   })
   mainWindow.webContents.on('did-fail-load', (_e: any, code: any, desc: any, url: any) => {
-    require('node:fs').appendFileSync('/tmp/xca_renderer.log', `[FAIL-LOAD] ${code} ${desc} ${url}\n`)
+    require('node:fs').appendFileSync(
+      '/tmp/xca_renderer.log',
+      `[FAIL-LOAD] ${code} ${desc} ${url}\n`
+    )
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -1391,11 +1361,11 @@ async function initializePrimaryApplication(): Promise<boolean> {
   ipcMain.on('ping', () => console.log('pong'))
   const backendBaseUrl = await startBackendService()
   console.log(`XCode Agent backend URL: ${backendBaseUrl}`)
-  setupApplicationStorageIpc();
+  setupApplicationStorageIpc()
   setupAuthIpc()
-  setupBrowserIpc();
-  setupWorkspaceIpc();
-  setupSessionStorageIpc();
+  setupBrowserIpc()
+  setupWorkspaceIpc()
+  setupSessionStorageIpc()
   setupTray()
 
   await openAuthenticatedWindow()

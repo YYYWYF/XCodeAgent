@@ -1313,6 +1313,8 @@ def _workflow_event(
 def _workflow_summary(
     result: dict[str, Any], events: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    """生成兼容可视化入口的最终 Workflow 摘要。"""
+
     status = str(result.get("status") or "completed")
     completed_nodes = [
         event for event in events if event.get("type") == "workflow.node.completed"
@@ -1339,8 +1341,14 @@ def _workflow_summary(
     artifacts = _workflow_artifacts(result)
     code_changes = _workflow_code_changes(result)
     if status == "requires_user_input":
-        question_count = len(clarification.get("questions", []))
-        message = f"Workflow 等待用户确认/补充：完成 {len(completed_nodes)} 个节点，待确认问题 {question_count} 个。"
+        questions = clarification.get("questions")
+        question_count = len(questions) if isinstance(questions, list) else 0
+        if isinstance(result.get("acceptance_request"), dict):
+            message = "项目预览已就绪，请确认是否符合预期。"
+        elif question_count > 0:
+            message = f"还有 {question_count} 个问题需要补充，完成后将继续执行。"
+        else:
+            message = "当前阶段需要你的确认后继续。"
     else:
         message = (
             f"Workflow {status}：完成 {len(completed_nodes)} 个节点，"

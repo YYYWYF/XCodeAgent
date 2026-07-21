@@ -11,6 +11,11 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/skillSelection'
 import { AgUiChatSession, buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
+import {
+  processStepsForDisplay,
+  workflowMessageContentForDisplay
+} from '../src/renderer/src/service/processStepHistory'
+import { normalizePersistentSessionMessage } from '../src/main/sessionMessageNormalization'
 import { normalizeMessageSkills } from '../src/renderer/src/service/chatSessions'
 import { DEFAULT_DIFF_PANEL_WIDTH } from '../src/renderer/src/components/AiChatPanel/constants'
 import {
@@ -223,9 +228,180 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
 
   assert.match(markup, /前端构建检查/)
   assert.match(markup, /前端 lint 通过/)
+  assert.match(markup, /QUALITY GATE/)
+  assert.match(markup, /REQUIRED/)
+  assert.match(markup, /OPTIONAL/)
   assert.match(markup, /已通过/)
   assert.match(markup, /已跳过/)
   assert.doesNotMatch(markup, /<pre>[^<]*已完成 2\/2 项，通过 1 项，跳过 1 项/)
+})
+
+test('结构化步骤存在时隐藏重复 Workflow 摘要并保留真实回复', () => {
+  const workflow = {
+    runId: 'run-summary',
+    threadId: 'thread-summary',
+    summary: {
+      status: 'requires_user_input',
+      message: '项目预览已就绪，请确认是否符合预期。 预览地址：http://127.0.0.1:3000。',
+      completedNodeCount: 2,
+      failedEventCount: 0,
+      timeline: []
+    },
+    events: [],
+    state: {},
+    result: {}
+  }
+
+  assert.equal(
+    workflowMessageContentForDisplay(`${workflow.summary.message}\n`, workflow, true),
+    ''
+  )
+  assert.equal(
+    workflowMessageContentForDisplay('这是 Agent 生成的最终说明。', workflow, true),
+    '这是 Agent 生成的最终说明。'
+  )
+  assert.equal(
+    workflowMessageContentForDisplay(
+      'Workflow 等待用户确认/补充：完成 2 个节点，待确认问题 0 个。 预览地址：http://127.0.0.1:3000。',
+      undefined,
+      true
+    ),
+    ''
+  )
+})
+
+test('Electron 会话持久化保留 Agent 步骤、检查清单和工具调用', () => {
+  const message = normalizePersistentSessionMessage({
+    id: 1,
+    role: 'assistant',
+    content: 'done',
+    createdAt: 2,
+    processSteps: [
+      {
+        id: 'workflow:integration_test',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成 集成测试与质量门禁',
+        detail: '检查完成',
+        sequence: 1,
+        checks: [
+          {
+            id: 'frontend_build',
+            name: '前端构建检查',
+            status: 'passed',
+            required: true,
+            evidence: '命令执行通过。'
+          }
+        ]
+      }
+    ],
+    toolCalls: [
+      {
+        id: 'tool-1',
+        name: 'read_file',
+        args: '{"path":"README.md"}',
+        result: 'ok',
+        status: 'completed'
+      }
+    ]
+  })
+
+  assert.equal((message.processSteps as Array<Record<string, unknown>>).length, 1)
+  assert.equal(
+    ((message.processSteps as Array<Record<string, unknown>>)[0].checks as unknown[]).length,
+    1
+  )
+  assert.equal((message.toolCalls as Array<Record<string, unknown>>)[0].status, 'completed')
+})
+
+test('旧 session 可从 Workflow 完成事件重建 Agent 步骤和检查清单', () => {
+  const steps = processStepsForDisplay(undefined, {
+    runId: 'run-history',
+    threadId: 'thread-history',
+    summary: { status: 'requires_user_input' },
+    events: [
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'integration_test',
+        node: { id: 'integration_test', label: '集成测试与质量门禁' },
+        status: 'completed',
+        message: '通过=True，检查=2/2',
+        data: {
+          detail: {
+            testReport: {
+              checks: [
+                {
+                  id: 'frontend_build',
+                  name: '前端构建检查',
+                  passed: true,
+                  skipped: false,
+                  required: true
+                },
+                {
+                  id: 'frontend_lint',
+                  name: '前端 lint 通过',
+                  passed: true,
+                  skipped: true,
+                  required: false
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'launch_project',
+        node: { id: 'launch_project', label: '启动本地预览' },
+        status: 'completed',
+        message: '预览地址=http://127.0.0.1:3000'
+      }
+    ]
+  })
+
+  assert.deepEqual(
+    steps?.map((step) => step.id),
+    ['workflow:integration_test', 'workflow:launch_project']
+  )
+  assert.deepEqual(
+    steps?.[0].checks?.map((check) => [check.name, check.status]),
+    [
+      ['前端构建检查', 'passed'],
+      ['前端 lint 通过', 'skipped']
+    ]
+  )
+})
+
+test('更早的 session 可从 timeline 和 snake_case 测试报告恢复步骤', () => {
+  const steps = processStepsForDisplay(undefined, {
+    runId: 'run-legacy',
+    threadId: 'thread-legacy',
+    summary: { status: 'requires_user_input' },
+    events: [],
+    result: {
+      timeline: ['integration_test', 'launch_project', 'integration_test'],
+      test_report: {
+        checks: [
+          {
+            id: 'api_contract',
+            name: 'API 契约有效',
+            passed: true,
+            skipped: false,
+            required: true
+          }
+        ]
+      }
+    }
+  })
+
+  assert.deepEqual(
+    steps?.map((step) => step.id),
+    ['workflow:integration_test', 'workflow:launch_project']
+  )
+  assert.deepEqual(
+    steps?.[0].checks?.map((check) => [check.name, check.status]),
+    [['API 契约有效', 'passed']]
+  )
 })
 
 test('发送清空草稿标签，认证失败可恢复独立快照', () => {
