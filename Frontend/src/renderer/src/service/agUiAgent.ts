@@ -1,7 +1,7 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
-import { createAgUiHttpAgent, isAuthenticationFailure } from './authentication'
+import { createAgUiHttpAgent } from './authentication'
 import type {
   ApplicationConfig,
   EditorMode,
@@ -92,28 +92,31 @@ function getWorkflowUrl(): string {
 export class AgUiChatSession {
   readonly threadId: string
 
-  private readonly agent: HttpAgent
+  private readonly url: string
+  private activeAgent?: HttpAgent
   private activeRunId?: string
 
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
   constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
     this.threadId = threadId
-    this.agent = createAgUiHttpAgent({
-      url,
-      threadId
-    })
+    this.url = url
   }
 
+  /** 中止当前请求流，并通知同一 AG-UI 端点取消对应的后端运行。 */
   stop(): void {
     const runId = this.activeRunId
-    this.agent.abortRun()
+    this.activeAgent?.abortRun()
     if (runId) void this.cancelRun(runId)
   }
 
-  /** 发送 Workflow 消息，并在认证失败时回滚 HttpAgent 内部的未发送消息。 */
+  /** 使用请求级 HttpAgent 发送当前消息，避免把本地会话历史和旧状态重复传输。 */
   async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
+    const requestAgent = createAgUiHttpAgent({
+      url: this.url,
+      threadId: this.threadId
+    })
     const userMessageId = randomUUID()
-    this.agent.addMessage({
+    requestAgent.addMessage({
       id: userMessageId,
       role: 'user',
       content: message
@@ -165,25 +168,22 @@ export class AgUiChatSession {
     }
 
     const runId = randomUUID()
+    this.activeAgent = requestAgent
     this.activeRunId = runId
     let result: Awaited<ReturnType<HttpAgent['runAgent']>>
     try {
-      result = await this.agent.runAgent(
+      result = await requestAgent.runAgent(
         {
           runId,
           forwardedProps: buildWorkflowForwardedProps(options)
         },
         subscriber
       )
-    } catch (error) {
-      if (isAuthenticationFailure(error)) {
-        this.agent.setMessages(
-          this.agent.messages.filter((existingMessage) => existingMessage.id !== userMessageId)
-        )
-      }
-      throw error
     } finally {
-      if (this.activeRunId === runId) this.activeRunId = undefined
+      if (this.activeAgent === requestAgent) {
+        this.activeAgent = undefined
+        this.activeRunId = undefined
+      }
     }
     const assistantMessage = result.newMessages.find(
       (newMessage) => newMessage.role === 'assistant'
@@ -205,9 +205,10 @@ export class AgUiChatSession {
     }
   }
 
+  /** 通过当前会话的实际端点发送独立取消控制请求。 */
   private async cancelRun(targetRunId: string): Promise<void> {
     const cancellationAgent = createAgUiHttpAgent({
-      url: getWorkflowUrl(),
+      url: this.url,
       threadId: this.threadId
     })
     try {

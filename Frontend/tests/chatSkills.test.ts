@@ -7,7 +7,10 @@ import {
   selectedSkillNames,
   skillsAfterEmptyBackspace
 } from '../src/renderer/src/components/AiChatPanel/skillSelection'
-import { buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
+import {
+  AgUiChatSession,
+  buildWorkflowForwardedProps
+} from '../src/renderer/src/service/agUiAgent'
 import { normalizeMessageSkills } from '../src/renderer/src/service/chatSessions'
 import { DEFAULT_DIFF_PANEL_WIDTH } from '../src/renderer/src/components/AiChatPanel/constants'
 import {
@@ -76,6 +79,51 @@ test('AG-UI forwardedProps 在约定字段发送技能名称', () => {
   })
 
   assert.deepEqual(forwardedProps.selectedSkillNames, ['alpha', 'beta'])
+})
+
+test('AG-UI 连续请求只发送当前用户消息', async () => {
+  const originalFetch = globalThis.fetch
+  const requestBodies: Array<Record<string, unknown>> = []
+  globalThis.fetch = async (_input, init) => {
+    requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+    const request = requestBodies.at(-1)!
+    const threadId = String(request.threadId)
+    const runId = String(request.runId)
+    const messageId = `assistant-${requestBodies.length}`
+    const events = [
+      { type: 'RUN_STARTED', threadId, runId },
+      { type: 'TEXT_MESSAGE_START', messageId, role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId, delta: 'ok' },
+      { type: 'TEXT_MESSAGE_END', messageId },
+      { type: 'RUN_FINISHED', threadId, runId, result: {} }
+    ]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' },
+      status: 200
+    })
+  }
+
+  try {
+    const session = new AgUiChatSession('thread-1', 'http://agent.test/workflow/run')
+    await session.sendMessage('第一条', { editorMode: 'frontend' })
+    await session.sendMessage('第二条', { editorMode: 'frontend' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert.equal(requestBodies.length, 2)
+  assert.deepEqual(
+    requestBodies.map((body) =>
+      (body.messages as Array<{ role: string; content: string }>).map(({ role, content }) => ({
+        role,
+        content
+      }))
+    ),
+    [
+      [{ role: 'user', content: '第一条' }],
+      [{ role: 'user', content: '第二条' }]
+    ]
+  )
 })
 
 test('发送清空草稿标签，认证失败可恢复独立快照', () => {
