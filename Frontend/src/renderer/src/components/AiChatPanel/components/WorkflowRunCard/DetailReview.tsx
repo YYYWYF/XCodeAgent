@@ -1,4 +1,7 @@
-import { CheckCircleOutlined } from "@ant-design/icons";
+import {
+  CheckCircleOutlined,
+  DatabaseOutlined,
+} from "@ant-design/icons";
 import { Alert, Button, Collapse, Input, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
@@ -73,12 +76,14 @@ export default function DetailReview({
   return (
     <div className={cx("workflow-detail-review")}>
       <div className={cx("workflow-detail-review-summary")}>
-        <Tag>页面 {review.summary?.page_count || 0}</Tag>
-        <Tag>数据源 {review.summary?.data_source_count || 0}</Tag>
-        <Tag>API 契约 {review.summary?.api_contract_count || 0}</Tag>
-        <Text type="secondary">
-          本轮生成的设计如下；只需展开需要调整的对象。
-        </Text>
+        <div className={cx("workflow-detail-review-intro")}>
+          <Text strong>本轮设计已生成</Text>
+        </div>
+        <div className={cx("workflow-detail-review-metrics")}>
+          <Tag>页面 <strong>{review.summary?.page_count || 0}</strong></Tag>
+          <Tag>数据源 <strong>{review.summary?.data_source_count || 0}</strong></Tag>
+          <Tag>API 契约 <strong>{review.summary?.api_contract_count || 0}</strong></Tag>
+        </div>
       </div>
       {missingSelectedPagePlan || targets.length === 0 ? (
         <Alert
@@ -95,9 +100,17 @@ export default function DetailReview({
             <Panel
               header={
                 <div className={cx("workflow-detail-review-title")}>
-                  <Tag>{target.target_type === "page" ? "页面" : "数据源"}</Tag>
-                  <Text strong>{target.name || target.target_id}</Text>
-                  <Text type="secondary">{target.target_id}</Text>
+                  {target.target_type !== "page" && (
+                    <span className={cx("workflow-detail-review-target-icon")}>
+                      <DatabaseOutlined />
+                    </span>
+                  )}
+                  <span className={cx("workflow-detail-review-target-kind")}>
+                    {target.target_type === "page" ? "页面" : "数据源"}
+                  </span>
+                  <Text className={cx("workflow-detail-review-target-name")} strong>
+                    {target.name || target.target_id}
+                  </Text>
                   {changes[target.target_id] && <Tag color="purple">已修改</Tag>}
                 </div>
               }
@@ -124,9 +137,11 @@ export default function DetailReview({
       )}
       <div className={cx("workflow-detail-review-actions")}>
         <label className={cx("workflow-detail-review-note")}>
-          <Text strong>整体补充说明</Text>
+          <div className={cx("workflow-detail-review-note-heading")}>
+            <Text strong>整体补充说明</Text>
+          </div>
           <TextArea
-            autoSize={{ minRows: 2, maxRows: 4 }}
+            autoSize={false}
             disabled={disabled}
             onChange={(event) => setOverallNote(event.target.value)}
             placeholder="可选：补充跨页面规则、统一交互或其他全局调整"
@@ -140,7 +155,7 @@ export default function DetailReview({
           size="large"
           type="primary"
         >
-          确认全部设计并继续
+          确认设计并进入构建
         </Button>
       </div>
     </div>
@@ -366,6 +381,7 @@ type ReviewEditorProps = {
   target: WorkflowDetailReviewTarget;
 };
 
+// 渲染简短文本配置项，并保留标准受控输入行为。
 function ReviewTextField({
   disabled,
   label,
@@ -373,9 +389,10 @@ function ReviewTextField({
   value,
 }: FieldProps<string>): ReactElement {
   return (
-    <label className={cx("workflow-detail-review-field")}>
+    <label className={cx("workflow-detail-review-field", "workflow-detail-review-field-compact")}>
       <Text type="secondary">{label}</Text>
       <TextArea
+        autoSize={{ minRows: 4, maxRows: 4 }}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         value={value}
@@ -384,6 +401,7 @@ function ReviewTextField({
   );
 }
 
+// 渲染多项配置输入，并将每行内容同步为字符串列表。
 function ReviewListField({
   disabled,
   label,
@@ -391,10 +409,10 @@ function ReviewListField({
   value,
 }: FieldProps<string[]>): ReactElement {
   return (
-    <label className={cx("workflow-detail-review-field")}>
+    <label className={cx("workflow-detail-review-field", "workflow-detail-review-field-structured")}>
       <Text type="secondary">{label}</Text>
       <TextArea
-        autoSize={{ minRows: 2, maxRows: 5 }}
+        autoSize={{ minRows: 4, maxRows: 4 }}
         disabled={disabled}
         onChange={(event) => onChange(splitLines(event.target.value))}
         value={value.join("\n")}
@@ -403,6 +421,7 @@ function ReviewListField({
   );
 }
 
+// 渲染需要完整展示的设计说明输入。
 function ReviewSummaryField({
   disabled,
   label,
@@ -410,10 +429,10 @@ function ReviewSummaryField({
   value,
 }: FieldProps<string>): ReactElement {
   return (
-    <label className={cx("workflow-detail-review-field")}>
+    <label className={cx("workflow-detail-review-field", "workflow-detail-review-field-expanded")}>
       <Text type="secondary">{label}</Text>
       <TextArea
-        autoSize={{ minRows: 3, maxRows: 8 }}
+        autoSize={{ minRows: 4, maxRows: 4 }}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         value={value}

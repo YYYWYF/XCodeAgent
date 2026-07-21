@@ -47,6 +47,7 @@ export default function WorkflowRunCard({
   const confirmationItemCount = detailReview
     ? (detailReview.pages?.length || 0) + (detailReview.data_sources?.length || 0)
     : clarificationQuestions.length;
+  const requiresConfirmation = clarification?.status === "requires_user_input";
   const [answers, setAnswers] = useState<ClarificationAnswers>({});
   const canSubmitClarification =
     clarification?.status === "requires_user_input" &&
@@ -65,31 +66,52 @@ export default function WorkflowRunCard({
   };
 
   return (
-    <div className={cx("workflow-run-card")}>
+    <div
+      className={cx(
+        "workflow-run-card",
+        requiresConfirmation && "workflow-run-card-pending",
+      )}
+    >
       <div className={cx("workflow-run-header")}>
-        <Text strong>Workflow Run</Text>
-        <Tag color={workflowStatusColor(status)}>{status}</Tag>
+        <div className={cx("workflow-run-title")}>
+          <span className={cx("workflow-run-signal")} aria-hidden="true" />
+          <div>
+            <Text className={cx("workflow-run-name")} strong>Workflow Run</Text>
+          </div>
+        </div>
+        <Tag className={cx("workflow-run-status")} color={workflowStatusColor(status)}>
+          {status}
+        </Tag>
       </div>
       {workflow.summary.message && (
-        <Text>{String(workflow.summary.message)}</Text>
+        <div className={cx("workflow-run-message")}>
+          <Text>{String(workflow.summary.message)}</Text>
+        </div>
       )}
       {Object.keys(artifacts).length > 0 && (
         <div className={cx("workflow-artifacts")}>
-          <Text type="secondary">产物</Text>
+          <div className={cx("workflow-section-heading")}>
+            <Text type="secondary">已生成产物</Text>
+            <span>{Object.keys(artifacts).length} 个</span>
+          </div>
           {Object.entries(artifacts).map(([name, path]) => (
-            <Text code key={name}>
-              {name}: {path}
-            </Text>
+            <div className={cx("workflow-artifact-item")} key={name}>
+              <span className={cx("workflow-artifact-marker")} aria-hidden="true" />
+              <Text code>{name}: {path}</Text>
+            </div>
           ))}
         </div>
       )}
       {(clarificationQuestions.length > 0 || detailReview) && (
         <div className={cx("workflow-clarification")}>
           <div className={cx("workflow-clarification-header")}>
-            <Text type="secondary">待确认事项</Text>
+            <div>
+              <Text strong>待确认事项</Text>
+            </div>
             <Tag
+              className={cx("workflow-confirmation-count")}
               color={
-                clarification?.status === "requires_user_input"
+                requiresConfirmation
                   ? "gold"
                   : "default"
               }

@@ -1,0 +1,75 @@
+// 展开态字段仅保留标题与输入控件，使用网格控制整体排版。
+.@{class-prefix}-workflow-detail-review-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 24px;
+  align-items: start;
+}
+
+.@{class-prefix}-workflow-detail-review-field {
+  > .ant-typography-secondary {
+    position: relative;
+    display: block;
+    margin-bottom: 7px;
+    padding-left: 9px;
+    color: var(--wb-text);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.4;
+
+    &::before {
+      position: absolute;
+      top: 2px;
+      bottom: 2px;
+      left: 0;
+      width: 3px;
+      content: '';
+      background: var(--wb-accent);
+      border-radius: 3px;
+    }
+  }
+
+  .ant-input {
+    height: 112px !important;
+    min-height: 112px !important;
+    max-height: 112px !important;
+    color: var(--wb-text);
+    background: var(--wb-canvas);
+    border-color: var(--wb-border-strong);
+    border-radius: 8px;
+    box-shadow: none;
+    resize: none;
+    transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+
+    &:hover {
+      border-color: var(--wb-accent-border);
+    }
+
+    &:focus {
+      background: var(--wb-canvas);
+      border-color: var(--wb-accent);
+      box-shadow: 0 0 0 3px var(--wb-accent-soft);
+    }
+  }
+}
+
+.@{class-prefix}-workflow-detail-review-field-compact,
+.@{class-prefix}-workflow-detail-review-field-structured {
+  grid-column: span 1;
+}
+
+.@{class-prefix}-workflow-detail-review-field-expanded {
+  grid-column: span 1;
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-workflow-detail-review-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-workflow-detail-review-field-compact,
+  .@{class-prefix}-workflow-detail-review-field-structured,
+  .@{class-prefix}-workflow-detail-review-field-expanded {
+    grid-column: 1;
+  }
+}
