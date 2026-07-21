@@ -196,6 +196,11 @@ export type WorkflowBuildExecutionTask = {
   status?: 'pending' | 'running' | 'completed' | 'failed' | string
   dependencies?: string[]
   dependsOn?: string[]
+  targetFiles?: string[]
+  target_files?: string[]
+  allowedPaths?: string[]
+  allowed_paths?: string[]
+  acceptanceCriteria?: string[]
   source_refs?: Record<string, unknown>
 }
 

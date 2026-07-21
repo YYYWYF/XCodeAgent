@@ -1,4 +1,11 @@
-import { Button, Checkbox, Input, Progress, Radio, Tag, Typography } from "antd";
+import {
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CloseCircleOutlined,
+  LoadingOutlined,
+  PauseCircleOutlined,
+} from "@ant-design/icons";
+import { Button, Checkbox, Collapse, Input, Progress, Radio, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useState } from "react";
 import type {
@@ -200,41 +207,72 @@ function BuildExecutionSliceProgress({
     summary.failed,
     tasks.filter((task) => task.status === "failed").length,
   );
+  const running = numberValue(summary.running, tasks.filter((task) => task.status === "running").length);
+  const pending = numberValue(summary.pending, tasks.filter((task) => !task.status || task.status === "pending").length);
   const reused = numberValue(summary.reused, executionSlice.reusable_task_ids?.length || 0);
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
   const targetLabel = scope.type === "page" ? "页面" : "数据源";
   const targetId = scope.targetId || executionSlice.target_unit_ids?.[0] || "";
+  const progressStatus = failed > 0 ? "exception" : completed === total && total > 0 ? "success" : "active";
+  const displayTasks = sortBuildTasksForDisplay(tasks);
+  const runningTaskKeys = displayTasks
+    .filter((task) => task.status === "running")
+    .map(taskId);
 
   return (
     <div className={cx("workflow-build-progress")}>
       <div className={cx("workflow-build-progress-header")}>
         <div>
-          <Text strong>{targetLabel}生成进度</Text>
+          <Text strong>执行进度</Text>
           <Text type="secondary">
-            {targetId ? `当前范围：${targetId}` : "当前范围"}
+            {targetId ? `${targetLabel}：${targetId}` : `${targetLabel}执行范围`}
           </Text>
         </div>
-        <Tag color={failed > 0 ? "red" : completed === total && total > 0 ? "green" : "blue"}>
+        <Tag
+          className={cx(
+            "workflow-build-progress-count-tag",
+            failed > 0 ? "failed" : completed === total && total > 0 ? "completed" : "running",
+          )}
+          color={failed > 0 ? "red" : completed === total && total > 0 ? "green" : "purple"}
+        >
           {completed}/{total}
         </Tag>
       </div>
       <Progress
         percent={percent}
         showInfo={false}
-        status={failed > 0 ? "exception" : completed === total && total > 0 ? "success" : "active"}
+        status={progressStatus}
+        strokeColor={failed > 0 ? "var(--wb-danger)" : "var(--wb-accent)"}
+        trailColor="var(--wb-surface-subtle)"
       />
+      <Text className={cx("workflow-build-progress-percent")} type="secondary">
+        {percent}% 完成
+      </Text>
       <div className={cx("workflow-build-progress-stats")}>
-        <BuildProgressStat label="已完成" value={completed} />
-        <BuildProgressStat label="运行中" value={numberValue(summary.running, 0)} />
-        <BuildProgressStat label="待执行" value={numberValue(summary.pending, 0)} />
-        <BuildProgressStat label="已复用" value={reused} />
-        <BuildProgressStat label="失败" tone={failed > 0 ? "danger" : undefined} value={failed} />
+        <BuildProgressStat icon={<PauseCircleOutlined />} label="待执行" tone="pending" value={pending} />
+        <BuildProgressStat icon={<LoadingOutlined />} label="执行中" tone="running" value={running} />
+        <BuildProgressStat icon={<CheckCircleOutlined />} label="已完成" tone="completed" value={completed} />
+        <BuildProgressStat icon={<CloseCircleOutlined />} label="失败" tone="failed" value={failed} />
+        <BuildProgressStat icon={<ClockCircleOutlined />} label="已复用" tone="reused" value={reused} />
       </div>
       {tasks.length > 0 && (
-        <div className={cx("workflow-build-task-list")}>
-          {tasks.map((task) => (
-            <BuildExecutionTaskRow key={taskId(task)} task={task} />
+        <div className={cx("workflow-build-task-section")}>
+          <Text strong>任务详情</Text>
+          <Collapse
+            className={cx("workflow-build-task-list")}
+            defaultActiveKey={runningTaskKeys}
+            expandIconPosition="right"
+          >
+          {displayTasks.map((task) => (
+            <Collapse.Panel
+              className={cx("workflow-build-task-panel", task.status || "pending")}
+              header={<BuildExecutionTaskHeader task={task} />}
+              key={taskId(task)}
+            >
+              <BuildExecutionTaskDetails task={task} />
+            </Collapse.Panel>
           ))}
+          </Collapse>
         </div>
       )}
     </div>
@@ -242,57 +280,207 @@ function BuildExecutionSliceProgress({
 }
 
 function BuildProgressStat({
+  icon,
   label,
   tone,
   value,
 }: {
+  icon: ReactElement;
   label: string;
-  tone?: "danger";
+  tone: "pending" | "running" | "completed" | "failed" | "reused";
   value: number;
 }): ReactElement {
   /** 渲染当前构建范围内的单项计数，避免上升到应用级统计。 */
 
   return (
     <span className={cx("workflow-build-progress-stat", tone)}>
-      <Text type="secondary">{label}</Text>
+      <span className={cx("workflow-build-progress-stat-icon")} aria-hidden="true">
+        {icon}
+      </span>
       <Text strong>{value}</Text>
+      <Text type="secondary">{label}</Text>
     </span>
   );
 }
 
-function BuildExecutionTaskRow({
+function BuildExecutionTaskHeader({
   task,
 }: {
   task: WorkflowBuildExecutionTask;
 }): ReactElement {
-  /** 渲染当前页面生成闭包内的单个任务状态。 */
+  /** 渲染可折叠任务卡片的头部摘要。 */
 
-  const dependencies = Array.isArray(task.dependencies)
+  const status = String(task.status || "pending");
+  const description = task.description || task.unit_id || taskId(task);
+  return (
+    <div className={cx("workflow-build-task-header", status)}>
+      <span className={cx("workflow-build-task-status-icon")} aria-hidden="true">
+        {taskStatusIcon(status)}
+      </span>
+      <div className={cx("workflow-build-task-title")}>
+        <Text strong>{task.title || taskId(task)}</Text>
+        <Text type="secondary">{description}</Text>
+      </div>
+      <Tag className={cx("workflow-build-task-status-tag", status)} color={taskStatusColor(status)}>
+        {taskStatusText(status)}
+      </Tag>
+    </div>
+  );
+}
+
+function BuildExecutionTaskDetails({
+  task,
+}: {
+  task: WorkflowBuildExecutionTask;
+}): ReactElement {
+  /** 展示单个构建任务的依赖、执行归属和文件范围等细节。 */
+
+  const dependencies = taskDependencies(task);
+  const paths = [
+    ...stringList(task.targetFiles),
+    ...stringList(task.target_files),
+    ...stringList(task.allowed_paths),
+    ...stringList(task.allowedPaths),
+  ];
+  const acceptance = stringList(task.acceptanceCriteria);
+  const sourceRefs = objectValue(task.source_refs);
+  return (
+    <div className={cx("workflow-build-task-details")}>
+      <div className={cx("workflow-build-task-detail-grid")}>
+        <BuildTaskDetailItem label="任务 ID" value={taskId(task)} />
+        <BuildTaskDetailItem label="Unit" value={task.unit_id || "application:root"} />
+        <BuildTaskDetailItem label="执行方" value={task.owner || "未指定"} />
+        <BuildTaskDetailItem label="依赖" value={dependencies.length > 0 ? dependencies.join("、") : "无"} />
+      </div>
+      {paths.length > 0 && (
+        <div className={cx("workflow-build-task-detail-block")}>
+          <Text type="secondary">文件范围</Text>
+          <div className={cx("workflow-build-task-tags")}>
+            {dedupeStrings(paths).map((path) => (
+              <Tag key={path}>{path}</Tag>
+            ))}
+          </div>
+        </div>
+      )}
+      {acceptance.length > 0 && (
+        <div className={cx("workflow-build-task-detail-block")}>
+          <Text type="secondary">验收点</Text>
+          <ul className={cx("workflow-build-task-detail-list")}>
+            {acceptance.map((item) => (
+              <li key={item}>
+                <Text>{item}</Text>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {Object.keys(sourceRefs).length > 0 && (
+        <div className={cx("workflow-build-task-detail-block")}>
+          <Text type="secondary">来源引用</Text>
+          <div className={cx("workflow-build-task-detail-list")}>
+            {Object.entries(sourceRefs).map(([key, value]) => (
+              <Text key={key}>
+                {key}: {String(value)}
+              </Text>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BuildTaskDetailItem({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}): ReactElement {
+  /** 渲染任务详情中的单个键值项。 */
+
+  return (
+    <div className={cx("workflow-build-task-detail-item")}>
+      <Text type="secondary">{label}</Text>
+      <Text>{value}</Text>
+    </div>
+  );
+}
+
+function taskDependencies(task: WorkflowBuildExecutionTask): string[] {
+  /** 读取任务依赖，兼容 dependencies 与 dependsOn 字段。 */
+
+  return Array.isArray(task.dependencies)
     ? task.dependencies
     : Array.isArray(task.dependsOn)
       ? task.dependsOn
       : [];
-  return (
-    <div className={cx("workflow-build-task-row", task.status || "pending")}>
-      <div className={cx("workflow-build-task-main")}>
-        <Tag color={taskStatusColor(String(task.status || "pending"))}>
-          {taskStatusText(String(task.status || "pending"))}
-        </Tag>
-        <div>
-          <Text>{task.title || task.description || taskId(task)}</Text>
-          <Text type="secondary">
-            {task.unit_id || "application:root"}
-            {task.owner ? ` · ${task.owner}` : ""}
-          </Text>
-        </div>
-      </div>
-      {dependencies.length > 0 && (
-        <Text className={cx("workflow-build-task-deps")} type="secondary">
-          依赖：{dependencies.join("、")}
-        </Text>
-      )}
-    </div>
-  );
+}
+
+function sortBuildTasksForDisplay(tasks: WorkflowBuildExecutionTask[]): WorkflowBuildExecutionTask[] {
+  /** 按用户阅读进度排序任务，让已完成、运行中、失败和待执行形成稳定的执行轨迹。 */
+
+  const originalIndex = new Map(tasks.map((task, index) => [taskId(task), index]));
+  return [...tasks].sort((left, right) => {
+    const statusDiff = taskStatusRank(left) - taskStatusRank(right);
+    if (statusDiff !== 0) return statusDiff;
+
+    const leftTime = taskSortTime(left);
+    const rightTime = taskSortTime(right);
+    if (leftTime !== rightTime) return leftTime - rightTime;
+
+    return (originalIndex.get(taskId(left)) || 0) - (originalIndex.get(taskId(right)) || 0);
+  });
+}
+
+function taskStatusRank(task: WorkflowBuildExecutionTask): number {
+  /** 返回任务状态展示优先级，完成项沉淀在顶部，未开始项留在底部。 */
+
+  const status = String(task.status || "pending");
+  if (status === "completed") return 0;
+  if (status === "running") return 1;
+  if (status === "failed") return 2;
+  if (status === "pending") return 3;
+  return 4;
+}
+
+function taskSortTime(task: WorkflowBuildExecutionTask): number {
+  /** 优先使用调度时间排序，同一批任务再退回到原始顺序。 */
+
+  const taskRecord = task as WorkflowBuildExecutionTask & {
+    scheduler?: Record<string, unknown>;
+    updated_at?: string;
+  };
+  const candidates = [
+    taskRecord.scheduler?.started_at,
+    taskRecord.updated_at,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const timestamp = Date.parse(candidate);
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function dedupeStrings(values: string[]): string[] {
+  /** 按出现顺序去重字符串，避免文件范围重复展示。 */
+
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+
+function taskStatusIcon(status: string): ReactElement {
+  /** 将任务状态映射为卡片头部图标。 */
+
+  if (status === "completed") return <CheckCircleOutlined />;
+  if (status === "failed") return <CloseCircleOutlined />;
+  if (status === "running") return <LoadingOutlined />;
+  return <PauseCircleOutlined />;
 }
 
 function ClarificationContext({
