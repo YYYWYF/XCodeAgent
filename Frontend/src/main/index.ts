@@ -1181,41 +1181,6 @@ function createMainWindow(): void {
     mainWindow?.show()
   })
 
-  // TEMP DEBUG: 捕获渲染进程 console 与崩溃，定位白屏原因
-  mainWindow.webContents.on('console-message', (_e, ...args: any[]) => {
-    let level: any
-    let msg: any
-    let src: any
-    let line: any
-    if (args.length === 1 && typeof args[0] === 'object' && args[0] !== null) {
-      const d = args[0]
-      level = d.level
-      msg = d.message
-      src = d.sourceUrl ?? d.sourceId
-      line = d.lineNumber
-    } else {
-      // 旧版位置参数: (level, message, line, sourceId)
-      ;[level, msg, line, src] = args
-    }
-    const text = typeof msg === 'string' ? msg : JSON.stringify(msg)
-    require('node:fs').appendFileSync(
-      '/tmp/xca_renderer.log',
-      `[L${level}] ${text} (${src}:${line})\n`
-    )
-  })
-  mainWindow.webContents.on('render-process-gone', (_e, details) => {
-    require('node:fs').appendFileSync(
-      '/tmp/xca_renderer.log',
-      `[GONE] ${JSON.stringify(details)}\n`
-    )
-  })
-  mainWindow.webContents.on('did-fail-load', (_e: any, code: any, desc: any, url: any) => {
-    require('node:fs').appendFileSync(
-      '/tmp/xca_renderer.log',
-      `[FAIL-LOAD] ${code} ${desc} ${url}\n`
-    )
-  })
-
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
