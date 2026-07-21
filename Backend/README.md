@@ -4,8 +4,6 @@
 
 当前后端还内置了：
 
-- `react-antd-v4-codegen` skill：通过 Deep Agents 原生 skill middleware 暴露给 Frontend Agent；用户显式选择的环境级 Skill 会被白名单隔离并完整注入四个 Deep Agent 的 system prompt。
-- `REACT_BEST_PRACTICES_GUIDE.md`：作为 React + TypeScript 代码生成规范入口，随 PyInstaller 后端一起打包并以只读虚拟路径 `/.xcodeagent/builtin-skills/` 访问。
 - `requirement_planner` 工具：分析用户需求，生成选择题式澄清问题，并在信息足够后输出结构化开发计划。
 - `development_orchestrator` 工具：把需求澄清、统一 SDD、功能切片计划、任务 DAG、并行批次和验证计划串成一套开发编排流程。
 - 本地工作区工具：给 Electron 前端和 agent 调用的文件、搜索、命令和 Git 工具，所有路径都限制在 `workspace_root` 内。

@@ -29,6 +29,8 @@ class Settings:
     model_provider: str = "openai"
     model_trust_env: bool = False
     model_output_log_enabled: bool = False
+    model_timeout_seconds: float = 300.0
+    model_max_retries: int = 2
     default_system_prompt: str = (
         "You are a helpful local agent. Answer clearly and concisely."
     )
@@ -65,6 +67,10 @@ class Settings:
             model_output_log_enabled=_env_bool(
                 "MODEL_OUTPUT_LOG_ENABLED", default=False
             ),
+            model_timeout_seconds=float(
+                os.getenv("MODEL_TIMEOUT_SECONDS", "300.0")
+            ),
+            model_max_retries=int(os.getenv("MODEL_MAX_RETRIES", "2")),
             default_system_prompt=os.getenv(
                 "AGENT_SYSTEM_PROMPT",
                 "You are a helpful local agent. Answer clearly and concisely.",

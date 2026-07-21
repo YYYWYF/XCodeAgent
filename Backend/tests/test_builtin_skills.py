@@ -16,18 +16,10 @@ class BuiltinSkillsTests(unittest.TestCase):
         root = builtin_skills.validate_required_builtin_skills()
 
         self.assertIn(
-            builtin_skills.REACT_ANTD_V4_SKILL_NAME,
-            builtin_skills.available_builtin_skills(root),
-        )
-        self.assertIn(
             builtin_skills.REACT_DEV_SPEC_SKILL_NAME,
             builtin_skills.available_builtin_skills(root),
         )
         summaries = builtin_skills.list_builtin_skills(root)
-        self.assertIn(
-            builtin_skills.REACT_ANTD_V4_SKILL_NAME,
-            [skill.name for skill in summaries],
-        )
         self.assertTrue(all(skill.description for skill in summaries))
         self.assertTrue(
             all(not skill.relative_path.startswith(str(root)) for skill in summaries)

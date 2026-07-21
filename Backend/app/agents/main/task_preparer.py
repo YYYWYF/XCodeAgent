@@ -9,6 +9,16 @@ from app.services.build_task_planner import create_build_task_plan
 from app.utils.model_output import extract_json_object
 
 
+def _app_name_from_plan(project_plan: dict[str, Any]) -> str:
+    """Extract the application name from ProjectPlan.app.name (defensive)."""
+    app = project_plan.get("app") or {}
+    if isinstance(app, dict):
+        name = app.get("name") or app.get("appName")
+        if name:
+            return str(name)
+    return ""
+
+
 def _task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
@@ -18,6 +28,8 @@ def _task_preparation_prompt(
         if workspace_snapshot
         else "{}"
     )
+    app_name = _app_name_from_plan(project_plan)
+    frontend_root = f"apps/{app_name}/frontend" if app_name else "apps/<app.name>/frontend"
     return (
         "You are the build-task planning model for an app-generation workflow.\n"
         "This is a planning-only boundary. Do not call tools, do not call subagents, "
@@ -29,6 +41,13 @@ def _task_preparation_prompt(
         "Prepare an executable build task DAG from the confirmed ProjectPlan and "
         "WorkspaceSnapshot. Do not invent generic paths when an existing project "
         "convention is present in the snapshot.\n"
+        f"Frontend path convention: all generated frontend code MUST live under the "
+        f"virtual path `/{frontend_root}/` (resolved from ProjectPlan.app.name). Every "
+        f"`src/...` path in the frontend-template-modification-boundary skill is relative "
+        f"to `/{frontend_root}/`, so `src/pages/<PageKey>/index.tsx` must be planned as "
+        f"`/{frontend_root}/src/pages/<PageKey>/index.tsx` in change_scope paths. Do NOT "
+        f"use `Frontend/src/`, bare `src/`, or `/app/frontend/` — those are wrong for a "
+        f"user-application workspace.\n"
         "Use confirmed page_detail_plans for frontend tasks and related data_sources for backend/data tasks. "
         "For page tasks, preserve and use page_goal, layout_design, operation_interactions, "
         "state_feedback, api_dependencies, response_bindings, page_navigation, permissions, "

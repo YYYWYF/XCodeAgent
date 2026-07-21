@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from app.graph.subgraphs.build import build
+
+
+def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
+    """模拟 agent 向工作区写入文件，使 capture_workspace_changes 能检测到变更。"""
+    if not workspace:
+        return
+    full_path = os.path.join(workspace, rel_path)
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    with open(full_path, "w", encoding="utf-8") as f:
+        f.write(f"// auto-generated: {rel_path}\n")
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
@@ -29,6 +40,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
 
         def data_runner(**kwargs):
             runner_skill_sets.append(kwargs.get("selected_skill_names"))
+            _write_workspace_file(kwargs.get("workspace"), "Backend/app/api.py")
             return [
                 {
                     "task_id": task["id"],
@@ -40,6 +52,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
 
         def frontend_runner(**kwargs):
             runner_skill_sets.append(kwargs.get("selected_skill_names"))
+            _write_workspace_file(kwargs.get("workspace"), "Frontend/src/Page.tsx")
             return [
                 {
                     "task_id": task["id"],
@@ -99,6 +112,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             results = []
             for task in kwargs["tasks"]:
                 if task.get("kind") == "repair":
+                    _write_workspace_file(kwargs.get("workspace"), "Frontend/src/Page.tsx")
                     results.append(
                         {
                             "task_id": task["id"],

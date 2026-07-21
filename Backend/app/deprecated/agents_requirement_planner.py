@@ -376,7 +376,7 @@
 # 
 # 要求：
 # - 面向 XCodeAgent 里的完整应用生成，不是只做前端页面。
-# - 如果计划包含 React + TypeScript + Ant Design 前端代码，前端实现必须遵循 React 最佳实践、Ant Design v4.24.16、内置 `REACT_BEST_PRACTICES_GUIDE.md`、`AGENTS.md` 和 `react-antd-v4-codegen` 引用规则。
+# - 如果计划包含 React + TypeScript + Ant Design 前端代码，前端实现必须遵循 React 最佳实践、Ant Design v4.24.16、内置 `AGENTS.md`。
 # - 不要把页面和 API 分成两套计划。请按业务功能切片输出，每个 feature 同时包含 UI、API、数据模型、验收标准和验证方式。
 # - 页面和接口字段详设可以标记为后续可视化配置，不要展开到字段级穷举。
 # - 必须识别需求类型，并输出 `targetType`，只能是 `frontend`、`backend` 或 `fullstack`。

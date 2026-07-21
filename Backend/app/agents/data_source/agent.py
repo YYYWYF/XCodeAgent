@@ -32,7 +32,12 @@ def create_data_source_agent(
         "a concise structured implementation report with changed files, commands, "
         "status, and any change request. "
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting "
-        "a file, use delete_file(file_path=\"/path\") with a virtual absolute path."
+        "a file, use delete_file(file_path=\"/path\") with a virtual absolute path.\n"
+        "IMPORTANT: If write_file returns an error that a file already exists, "
+        "use edit_file to modify the existing file instead of retrying write_file "
+        "with the same path. If you must create a new file, use a unique filename "
+        "(e.g. append a number or timestamp). Never retry write_file with the same "
+        "path more than once."
     )
     return create_deep_agent(
         name="data-source-generation-agent",

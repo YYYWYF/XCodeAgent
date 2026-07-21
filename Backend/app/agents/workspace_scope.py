@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
+from app.agents.auto_dedup_backend import AutoDedupFilesystemBackend
+from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware.permissions import FilesystemPermission
 
@@ -43,12 +44,12 @@ def create_workspace_backend(
     default_backend = (
         StateBackend()
         if root is None
-        else FilesystemBackend(root_dir=root, virtual_mode=True)
+        else AutoDedupFilesystemBackend(root_dir=root, virtual_mode=True)
     )
     routes: dict[str, BackendProtocol] = {}
     if include_builtin_skills:
         skills_root = validate_required_builtin_skills()
-        routes[BUILTIN_SKILLS_VIRTUAL_ROOT] = FilesystemBackend(
+        routes[BUILTIN_SKILLS_VIRTUAL_ROOT] = AutoDedupFilesystemBackend(
             root_dir=skills_root,
             virtual_mode=True,
         )

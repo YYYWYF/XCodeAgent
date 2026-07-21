@@ -110,8 +110,8 @@ class UserSkillRuntimeTests(unittest.TestCase):
         ):
             root = Path(temporary_root)
             self._write_skill(
-                root / "react-antd-v4-codegen",
-                name="react-antd-v4-codegen",
+                root / "react-develop-specification",
+                name="react-develop-specification",
                 body="user override",
             )
             snapshot = user_skill_runtime.create_user_skill_runtime_snapshot(root=root)
@@ -135,9 +135,9 @@ class UserSkillRuntimeTests(unittest.TestCase):
             }
 
             self.assertEqual(
-                metadata["react-antd-v4-codegen"]["path"],
+                metadata["react-develop-specification"]["path"],
                 f"{user_skill_runtime.USER_SKILLS_VIRTUAL_ROOT}"
-                "react-antd-v4-codegen/SKILL.md",
+                "react-develop-specification/SKILL.md",
             )
 
     def test_snapshot_remains_stable_after_source_changes(self) -> None:

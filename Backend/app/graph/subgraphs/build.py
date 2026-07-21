@@ -20,6 +20,7 @@ from app.services.build_scheduler import (
     normalize_task_results,
     select_ready_build_batch,
     summarize_build_runtime,
+    verify_task_file_changes,
 )
 from app.workspace.code_changes import code_change_state_update, merge_code_change_sets
 from app.workspace.plan_documents import (
@@ -94,12 +95,15 @@ def _execute_ready_tasks(
         )
         if captured.code_change_set:
             code_change_sets.append(captured.code_change_set)
-        all_results.extend(
-            normalize_task_results(
-                dispatched_tasks=owner_tasks,
-                raw_results=captured.value,
-            )
+        normalized_results = normalize_task_results(
+            dispatched_tasks=owner_tasks,
+            raw_results=captured.value,
         )
+        verified_results = verify_task_file_changes(
+            results=normalized_results,
+            code_change_set=captured.code_change_set,
+        )
+        all_results.extend(verified_results)
     return all_results, code_change_sets
 
 

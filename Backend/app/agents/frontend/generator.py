@@ -9,12 +9,24 @@ from app.services.build_result_coordinator import create_agent_task_result
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
+def _app_name_from_plan(project_plan: dict[str, Any]) -> str:
+    """Extract the application name from ProjectPlan.app.name (defensive)."""
+    app = project_plan.get("app") or {}
+    if isinstance(app, dict):
+        name = app.get("name") or app.get("appName")
+        if name:
+            return str(name)
+    return ""
+
+
 def _frontend_generation_prompt(
     *,
     project_plan: dict[str, Any],
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
 ) -> str:
+    app_name = _app_name_from_plan(project_plan)
+    frontend_root = f"apps/{app_name}/frontend" if app_name else "apps/<app.name>/frontend"
     return (
         "You are the Frontend Generation Agent in an app-generation workflow.\n"
         "Execute only the approved frontend tasks below. Modify code only within "
@@ -27,8 +39,43 @@ def _frontend_generation_prompt(
         "the task DAG. If an API contract or page plan cannot be implemented, "
         "return a change_request instead of silently changing it.\n"
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n"
-        "Treat every allowed_paths entry as relative to virtual root '/'. For example, "
-        "app/frontend/** means /app/frontend/** in filesystem tool calls.\n\n"
+        f"Frontend path convention: all frontend code for this application MUST be placed "
+        f"under the virtual path `/{frontend_root}/` (resolved from ProjectPlan.app.name = "
+        f"'{app_name}'). Every `src/...` path described in the "
+        f"frontend-template-modification-boundary skill is relative to `/{frontend_root}/`, "
+        f"so `src/pages/<PageKey>/index.tsx` becomes `/{frontend_root}/src/pages/<PageKey>/"
+        f"index.tsx` in filesystem tool calls. Treat every allowed_paths entry as relative "
+        f"to virtual root '/'. Do NOT write to `Frontend/src/`, bare `src/`, or `/app/"
+        f"frontend/` — those are wrong for this workspace. Before writing, use list_files "
+        f"on `/{frontend_root}/src/pages/` to confirm the scaffolded page directories.\n\n"
+        "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
+        "Before generating or modifying any frontend code, you MUST read the following "
+        "built-in skills with read_file(limit=1000) and follow their instructions strictly. "
+        "These are mandatory constraints, not optional references:\n"
+        "1. `/.xcodeagent/builtin-skills/code-block-template/SKILL.md` — the AUTHORITATIVE "
+        "spec for component selection and page assembly. Read its SKILL.md FIRST, then read "
+        "`references/blocks.md` (ProTable / ProForm / ProList / ProCard usage & decision "
+        "trees) and `references/page-templates.md` (full page templates) under the same "
+        "directory with read_file(limit=1000). HARD RULE: every page MUST be built with "
+        "`@ant-design/pro-components` (ProTable, ProForm, ProFormText, ProFormSelect, "
+        "ProList, ProCard, ModalForm, DrawerForm, StepsForm). It is FORBIDDEN to substitute "
+        "bare `antd` components for the Pro equivalents — a dashboard / overview page MUST "
+        "use ProCard (never antd Card), a list page MUST use ProTable or ProList, a "
+        "create/edit dialog MUST use ModalForm or DrawerForm, a multi-step form MUST use "
+        "StepsForm. Import Pro components from `@ant-design/pro-components`, never from "
+        "`antd`. Pick the page template from references/page-templates.md and assemble "
+        "blocks from references/blocks.md; do not hand-roll layouts with raw antd.\n"
+        "2. `/.xcodeagent/builtin-skills/frontend-template-modification-boundary/SKILL.md` — "
+        "file modification boundary: which files you MUST NOT modify (framework skeleton, "
+        "package.json, tailwind.config.js, vite.config.ts, etc.), which are append-only "
+        "(menus.ts firstLevel.children, src/apis, src/typings, src/constants, src/hooks, "
+        "src/utils, src/components), and where to place page types/constants/hooks/utils/"
+        "components. Violating this destroys the template scaffold.\n"
+        "3. `/.xcodeagent/builtin-skills/react-develop-specification/SKILL.md` — React coding "
+        "conventions (naming, hooks, JSX, security) to apply inside component code.\n"
+        "Read skill 1 (code-block-template) FIRST — it dictates WHICH components to use and "
+        "HOW to assemble pages; skill 2 governs WHERE files may live; skill 3 governs code "
+        "style. Only after reading all three may you start writing code.\n\n"
         f"Approved frontend tasks:\n{json.dumps(tasks, ensure_ascii=False, indent=2)}\n\n"
         f"BuildTaskPlan summary:\n{json.dumps(build_task_plan.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"

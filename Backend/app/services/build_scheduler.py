@@ -21,6 +21,7 @@ REPAIRABLE_FAILURES = {
     "lint_failure",
     "runtime_error",
     "acceptance_failed",
+    "no_file_changes",
 }
 CONFIRMATION_FAILURES = {
     "contract_mismatch",
@@ -170,6 +171,52 @@ def classify_task_result(result: dict[str, Any]) -> dict[str, str]:
     if category in CONFIRMATION_FAILURES:
         return {"action": "requires_confirmation", "reason": category}
     return {"action": "terminal_failure", "reason": category}
+
+
+def verify_task_file_changes(
+    *,
+    results: list[dict[str, Any]],
+    code_change_set: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """验证 agent 是否实际写入了文件。
+
+    如果 code_change_set 为 None 或无文件变更，将 "completed" 结果改为
+    "failed"（failure_category="no_file_changes"），避免幻影完成。
+    否则将实际变更的文件路径填入 changed_files，替换 create_agent_task_result
+    中硬编码的空列表。
+    """
+
+    changed_paths: list[str] = []
+    if code_change_set and isinstance(code_change_set.get("files"), list):
+        changed_paths = [
+            str(f.get("path", ""))
+            for f in code_change_set["files"]
+            if isinstance(f, dict) and f.get("path")
+        ]
+
+    verified: list[dict[str, Any]] = []
+    for result in results:
+        verified_result = dict(result)
+        if verified_result.get("status") != "completed":
+            verified.append(verified_result)
+            continue
+
+        if not changed_paths:
+            verified_result["status"] = "failed"
+            verified_result["failure_category"] = "no_file_changes"
+            original_note = verified_result.get("agent_note", "")
+            suffix = (
+                "VERIFICATION FAILED: Agent reported completion but no files "
+                "were written to the workspace. Expected file changes for this task."
+            )
+            verified_result["agent_note"] = (
+                f"{original_note}\n\n{suffix}" if original_note else suffix
+            )
+            verified_result["scheduler_decision"] = classify_task_result(verified_result)
+        else:
+            verified_result["changed_files"] = changed_paths
+        verified.append(verified_result)
+    return verified
 
 
 def summarize_build_runtime(

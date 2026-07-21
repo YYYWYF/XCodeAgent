@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import re
 from typing import Any
 
+from app.services.api_contract_repair import repair_cross_contract_schema_refs
 from app.services.api_contracts import (
     normalize_api_contracts,
     schema_refs_for_data_source,
@@ -679,7 +680,7 @@ def create_project_plan(
     if isinstance(agent_architecture, dict):
         architecture.update(agent_architecture)
 
-    return {
+    plan: dict[str, Any] = {
         "version": "0.1.0",
         "status": "draft",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -725,3 +726,16 @@ def create_project_plan(
         "agent_plan_used": isinstance(agent_plan, dict),
         "approved": True,
     }
+
+    # 兜底：大模型可能把某个契约的 Schema 错放到另一个契约，导致 Endpoint 跨契约引用。
+    # 在计划落地前自动归位，避免问题延迟到细节确认阶段才以 Workflow failed 暴露。
+    plan, schema_repairs = repair_cross_contract_schema_refs(plan)
+    if schema_repairs:
+        plan.setdefault("plan_feedback_updates", []).append(
+            {
+                "source": "api_contract_repair",
+                "summary": "自动归位跨契约引用的 Schema。",
+                "actions": schema_repairs,
+            }
+        )
+    return plan

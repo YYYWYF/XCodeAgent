@@ -31,16 +31,18 @@ class GenerationWorkspacePathTests(unittest.TestCase):
             result = _invoke_live_frontend_agent(
                 project_plan={"app": {"name": "Manage"}},
                 build_task_plan={"summary": {"frontend": 1}},
-                tasks=[{"allowed_paths": ["app/frontend/**"]}],
+                tasks=[{"allowed_paths": ["apps/Manage/frontend/**"]}],
                 workspace=workspace,
+                selected_skill_names=None,
             )
 
-        create_bundle.assert_called_once_with(workspace)
+        create_bundle.assert_called_once_with(workspace, None)
         self.assertEqual(result, "completed")
         prompt = agent.payloads[0]["messages"][0]["content"]
         self.assertNotIn(workspace, prompt)
         self.assertNotIn("Workspace:\n", prompt)
-        self.assertIn("app/frontend/** means /app/frontend/**", prompt)
+        self.assertIn("apps/Manage/frontend", prompt)
+        self.assertNotIn("app/frontend/** means /app/frontend/**", prompt)
         self.assertIn("Never include, repeat, or reconstruct", prompt)
 
     def test_data_source_agent_receives_scoped_bundle_without_host_path_in_prompt(
@@ -58,9 +60,10 @@ class GenerationWorkspacePathTests(unittest.TestCase):
                 build_task_plan={"summary": {"data_source": 1}},
                 tasks=[{"allowed_paths": ["app/backend/**"]}],
                 workspace=workspace,
+                selected_skill_names=None,
             )
 
-        create_bundle.assert_called_once_with(workspace)
+        create_bundle.assert_called_once_with(workspace, None)
         self.assertEqual(result, "completed")
         prompt = agent.payloads[0]["messages"][0]["content"]
         self.assertNotIn(workspace, prompt)

@@ -79,7 +79,7 @@ class DeleteFileToolTests(unittest.TestCase):
                 Path(workspace)
                 / ".xcodeagent"
                 / "builtin-skills"
-                / "react-antd-v4-codegen"
+                / "react-develop-specification"
                 / "SKILL.md"
             )
             target.parent.mkdir(parents=True)
@@ -87,7 +87,7 @@ class DeleteFileToolTests(unittest.TestCase):
 
             payload = self._invoke_delete(
                 workspace,
-                f"{BUILTIN_SKILLS_VIRTUAL_ROOT}react-antd-v4-codegen/SKILL.md",
+                f"{BUILTIN_SKILLS_VIRTUAL_ROOT}react-develop-specification/SKILL.md",
             )
 
             self.assertEqual(payload["status"], "error")

@@ -77,13 +77,13 @@ class WorkspaceScopeTests(unittest.TestCase):
             self.assertIsInstance(backend, CompositeBackend)
             skill_path = (
                 f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
-                "react-antd-v4-codegen/SKILL.md"
+                "react-develop-specification/SKILL.md"
             )
             result = backend.read(skill_path)
             self.assertIsNone(result.error)
             self.assertIsNotNone(result.file_data)
             self.assertIn(
-                "name: react-antd-v4-codegen",
+                "name: react-develop-specification",
                 result.file_data["content"],
             )
             self.assertEqual(_check_fs_permission(permissions, "read", skill_path), "allow")
@@ -101,7 +101,7 @@ class WorkspaceScopeTests(unittest.TestCase):
             include_builtin_skills=True,
         )
         skill_path = (
-            f"{BUILTIN_SKILLS_VIRTUAL_ROOT}react-antd-v4-codegen/SKILL.md"
+            f"{BUILTIN_SKILLS_VIRTUAL_ROOT}react-develop-specification/SKILL.md"
         )
 
         self.assertIsInstance(backend, CompositeBackend)

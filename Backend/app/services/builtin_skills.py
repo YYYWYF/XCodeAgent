@@ -11,20 +11,8 @@ from app.services.user_skills import ApiModel, parse_skill_frontmatter
 
 BUILTIN_SKILLS_DIR_ENV = "XCODEAGENT_BUILTIN_SKILLS_DIR"
 BUILTIN_SKILLS_VIRTUAL_ROOT = "/.xcodeagent/builtin-skills/"
-REACT_ANTD_V4_SKILL_NAME = "react-antd-v4-codegen"
 REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
 CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
-
-_ANTD_V4_ENTRY_FILES = [
-    "REACT_BEST_PRACTICES_GUIDE.md",
-    "AGENTS.md",
-]
-_ANTD_V4_REFERENCE_FILES = [
-    "references/dependencies-and-antd.md",
-    "references/structure-and-ownership.md",
-    "references/react-rules.md",
-    "references/review-checklist.md",
-]
 
 _REACT_DEV_SPEC_REFERENCE_FILES = [
     "references/00-framework-intro.md",
@@ -44,7 +32,6 @@ _CODE_BLOCK_TEMPLATE_REFERENCE_FILES = [
 ]
 
 REQUIRED_BUILTIN_SKILL_FILES = {
-    REACT_ANTD_V4_SKILL_NAME: ["SKILL.md", *_ANTD_V4_ENTRY_FILES, *_ANTD_V4_REFERENCE_FILES],
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
 }
