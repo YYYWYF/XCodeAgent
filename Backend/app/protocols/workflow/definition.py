@@ -74,6 +74,21 @@ def workflow_capabilities() -> dict[str, Any]:
                 "workflow.run.finished",
                 "workflow.run.failed",
             ],
+            "agentProcess": {
+                "name": PROCESS_EVENT_NAME,
+                "optionalFields": {
+                    "checks": {
+                        "description": "Incremental integration-test check snapshot.",
+                        "item": {
+                            "id": "stable check identifier",
+                            "name": "display name",
+                            "status": "running|passed|skipped|failed",
+                            "required": "boolean",
+                            "evidence": "brief sanitized evidence",
+                        },
+                    }
+                },
+            },
         },
         "phases": [
             {"id": node_id, "label": label}

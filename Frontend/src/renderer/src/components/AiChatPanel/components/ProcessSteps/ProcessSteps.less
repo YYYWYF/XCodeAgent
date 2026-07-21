@@ -150,3 +150,100 @@
   font-size: 11px;
   font-weight: 600;
 }
+
+.@{class-prefix}-integration-test-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+
+  ul {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+  }
+}
+
+.@{class-prefix}-integration-test-checklist-header,
+.@{class-prefix}-integration-test-check {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.@{class-prefix}-integration-test-checklist-header {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  .ant-typography-secondary {
+    font-size: 11px;
+    text-align: right;
+  }
+}
+
+.@{class-prefix}-integration-test-check {
+  padding: 7px 0;
+  border-top: 1px solid var(--wb-border);
+
+  &:first-child {
+    border-top: 0;
+  }
+
+  &.@{class-prefix}-passed .@{class-prefix}-integration-test-check-icon {
+    color: var(--wb-code-add-text);
+  }
+
+  &.@{class-prefix}-failed .@{class-prefix}-integration-test-check-icon,
+  &.@{class-prefix}-failed .@{class-prefix}-integration-test-check-status {
+    color: var(--wb-danger) !important;
+  }
+
+  &.@{class-prefix}-skipped .@{class-prefix}-integration-test-check-icon {
+    color: var(--wb-text-tertiary);
+  }
+
+  &.@{class-prefix}-running .@{class-prefix}-integration-test-check-icon {
+    color: var(--wb-accent);
+  }
+}
+
+.@{class-prefix}-integration-test-check-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding-top: 2px;
+  color: var(--wb-text-secondary);
+  font-size: 13px;
+}
+
+.@{class-prefix}-integration-test-check-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+
+  .ant-typography:first-child {
+    color: var(--wb-text);
+    font-size: 12px;
+  }
+
+  .ant-typography-secondary {
+    font-size: 11px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+}
+
+.@{class-prefix}-integration-test-check-status.ant-typography {
+  flex: 0 0 auto;
+  font-size: 11px;
+  white-space: nowrap;
+}

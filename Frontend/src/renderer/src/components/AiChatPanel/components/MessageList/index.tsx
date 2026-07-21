@@ -13,6 +13,8 @@ import CodeChangeCard from '../CodeChangeCard'
 import ToolCallCard from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
+import { readIntegrationTestChecks } from '../../../../service/agUiAgent'
+import type { ProcessStepRecord } from '../../../../service/agUiAgent'
 import type { AgentChatMessage, ChatCopy } from '../../types'
 import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
 import './MessageList.less'
@@ -65,9 +67,10 @@ export default function MessageList({
             const messageLoading = message.id === activeAssistantMessageId
             const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
             const finalResult = workflowFinalResultPresentation(message.workflow)
-            const nonToolSteps = message.processSteps?.filter(
-              (step) => step.kind !== 'tool' && step.kind !== 'command'
-            )
+            const nonToolSteps = stepsWithIntegrationTestChecks(
+              message.processSteps,
+              message.workflow
+            )?.filter((step) => step.kind !== 'tool' && step.kind !== 'command')
             const requiresClarification =
               message.workflow?.summary.clarification?.status === 'requires_user_input'
             return (
@@ -103,7 +106,7 @@ export default function MessageList({
                       <div className={cx(!messageLoading && codeChanges && 'final-result-content')}>
                         <MarkdownContent content={message.content} />
                       </div>
-                      {message.workflow && (messageLoading || requiresClarification) && (
+                      {message.workflow && requiresClarification && (
                         <WorkflowRunCard
                           disabled={messageLoading}
                           onSubmitClarification={onSubmitClarification}
@@ -151,6 +154,47 @@ export default function MessageList({
       </div>
     </div>
   )
+}
+
+/** 从最终工作流快照回填集成测试清单，确保会话恢复后仍可展示检查项。 */
+function stepsWithIntegrationTestChecks(
+  steps: ProcessStepRecord[] | undefined,
+  workflow: WorkflowRunPayload | undefined
+): ProcessStepRecord[] | undefined {
+  if (!steps?.length) return steps
+  const finalChecks = completedIntegrationTestChecks(workflow)
+  if (!finalChecks?.length) return steps
+
+  return steps.map((step) => {
+    if (step.id !== 'workflow:integration_test') return step
+    return {
+      ...step,
+      checks: mergeIntegrationTestChecks(step.checks, finalChecks)
+    }
+  })
+}
+
+/** 从 integration_test 完成事件或状态快照读取最终检查清单。 */
+function completedIntegrationTestChecks(
+  workflow: WorkflowRunPayload | undefined
+): ReturnType<typeof readIntegrationTestChecks> {
+  if (!workflow) return undefined
+  const event = [...workflow.events]
+    .reverse()
+    .find((item) => item.nodeName === 'integration_test' && item.type === 'workflow.node.completed')
+  const eventChecks = readIntegrationTestChecks(event?.data?.testReport)
+  if (eventChecks?.length) return eventChecks
+  return readIntegrationTestChecks(workflow.state?.testReport)
+}
+
+/** 按稳定检查 id 合并实时与完成态快照，完成态覆盖同名检查的最终结果。 */
+function mergeIntegrationTestChecks(
+  current: ProcessStepRecord['checks'],
+  finalChecks: NonNullable<ReturnType<typeof readIntegrationTestChecks>>
+): NonNullable<ProcessStepRecord['checks']> {
+  const checksById = new Map(current?.map((check) => [check.id, check]) ?? [])
+  for (const check of finalChecks) checksById.set(check.id, check)
+  return [...checksById.values()]
 }
 
 function findLastAssistantMessageId(messages: AgentChatMessage[]): number | undefined {

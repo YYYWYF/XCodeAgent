@@ -63,22 +63,81 @@ def _process_frame(
     detail: str = "",
     result: str = "",
     append_detail: bool = False,
+    checks: list[dict[str, Any]] | None = None,
 ) -> str:
+    value: dict[str, Any] = {
+        "id": id,
+        "kind": kind,
+        "status": status,
+        "title": title,
+        "detail": detail[-PROCESS_DETAIL_LIMIT:],
+        "result": result[-PROCESS_DETAIL_LIMIT:],
+        "appendDetail": append_detail,
+        "sequence": sequence,
+    }
+    if checks is not None:
+        value["checks"] = checks
     return encoder.encode(
         CustomEvent(
             name=PROCESS_EVENT_NAME,
-            value={
-                "id": id,
-                "kind": kind,
-                "status": status,
-                "title": title,
-                "detail": detail[-PROCESS_DETAIL_LIMIT:],
-                "result": result[-PROCESS_DETAIL_LIMIT:],
-                "appendDetail": append_detail,
-                "sequence": sequence,
-            },
+            value=value,
         )
     )
+
+
+def integration_test_checks(value: Any) -> list[dict[str, Any]]:
+    """将测试结果裁剪为前端进度卡可安全展示的小型检查清单。"""
+
+    raw_checks = value.get("checks") if isinstance(value, dict) else value
+    if not isinstance(raw_checks, list):
+        return []
+    checks: list[dict[str, Any]] = []
+    for raw_check in raw_checks:
+        if not isinstance(raw_check, dict):
+            continue
+        check_id = str(raw_check.get("id") or "").strip()
+        if not check_id:
+            continue
+        status = str(raw_check.get("status") or "").strip()
+        if status not in {"running", "passed", "skipped", "failed"}:
+            if raw_check.get("skipped") and raw_check.get("passed"):
+                status = "skipped"
+            elif raw_check.get("passed"):
+                status = "passed"
+            else:
+                status = "failed"
+        checks.append(
+            {
+                "id": check_id,
+                "name": str(raw_check.get("name") or check_id),
+                "status": status,
+                "required": bool(raw_check.get("required")),
+                "evidence": str(raw_check.get("evidence") or "")[:1_000],
+            }
+        )
+    return checks
+
+
+def integration_test_check_summary(checks: list[dict[str, Any]]) -> str:
+    """生成兼容旧版前端的逐项检查详情，确保不会只展示数字汇总。"""
+
+    if not checks:
+        return "正在准备检查项。"
+    labels = {
+        "running": "检查中",
+        "passed": "已通过",
+        "skipped": "已跳过",
+        "failed": "未通过",
+    }
+    lines = ["检查项"]
+    for check in checks:
+        status = str(check.get("status") or "failed")
+        line = f"{check.get('name') or check.get('id')}：{labels.get(status, '未通过')}"
+        evidence = str(check.get("evidence") or "").strip()
+        if status == "failed" and evidence:
+            line = f"{line} — {evidence[:1_000]}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _message_process_frames(

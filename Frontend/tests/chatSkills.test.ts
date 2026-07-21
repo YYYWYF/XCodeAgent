@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
   beginOptimisticSkillSend,
   normalizeChatSkills,
@@ -7,10 +9,8 @@ import {
   selectedSkillNames,
   skillsAfterEmptyBackspace
 } from '../src/renderer/src/components/AiChatPanel/skillSelection'
-import {
-  AgUiChatSession,
-  buildWorkflowForwardedProps
-} from '../src/renderer/src/service/agUiAgent'
+import { AgUiChatSession, buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
+import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
 import { normalizeMessageSkills } from '../src/renderer/src/service/chatSessions'
 import { DEFAULT_DIFF_PANEL_WIDTH } from '../src/renderer/src/components/AiChatPanel/constants'
 import {
@@ -119,11 +119,113 @@ test('AG-UI 连续请求只发送当前用户消息', async () => {
         content
       }))
     ),
-    [
-      [{ role: 'user', content: '第一条' }],
-      [{ role: 'user', content: '第二条' }]
-    ]
+    [[{ role: 'user', content: '第一条' }], [{ role: 'user', content: '第二条' }]]
   )
+})
+
+test('AG-UI 集成测试步骤会合并并保留实时检查清单', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as Record<string, unknown>
+    const threadId = String(request.threadId)
+    const runId = String(request.runId)
+    const messageId = 'assistant-integration-checks'
+    const events = [
+      { type: 'RUN_STARTED', threadId, runId },
+      { type: 'TEXT_MESSAGE_START', messageId, role: 'assistant' },
+      {
+        type: 'CUSTOM',
+        name: 'agent-process',
+        value: {
+          id: 'workflow:integration_test',
+          kind: 'workflow',
+          status: 'running',
+          title: '正在执行 集成测试与质量门禁',
+          detail: '正在执行检查。',
+          sequence: 1,
+          checks: [
+            {
+              id: 'frontend_build',
+              name: '前端构建检查',
+              status: 'running',
+              required: true
+            }
+          ]
+        }
+      },
+      {
+        type: 'CUSTOM',
+        name: 'agent-process',
+        value: {
+          id: 'workflow:integration_test',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 集成测试与质量门禁',
+          detail: '通过=True，检查=1/1',
+          sequence: 1
+        }
+      },
+      { type: 'TEXT_MESSAGE_END', messageId },
+      { type: 'RUN_FINISHED', threadId, runId, result: {} }
+    ]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' },
+      status: 200
+    })
+  }
+
+  try {
+    const session = new AgUiChatSession('thread-integration', 'http://agent.test/workflow/run')
+    const result = await session.sendMessage('执行集成测试', { editorMode: 'frontend' })
+    assert.deepEqual(result.processSteps[0]?.checks, [
+      {
+        id: 'frontend_build',
+        name: '前端构建检查',
+        status: 'running',
+        required: true
+      }
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('集成测试步骤渲染具体检查项而不是数字详情', () => {
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: false,
+      steps: [
+        {
+          id: 'workflow:integration_test',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 集成测试与质量门禁',
+          detail: '已完成 2/2 项，通过 1 项，跳过 1 项',
+          sequence: 1,
+          checks: [
+            {
+              id: 'frontend_build',
+              name: '前端构建检查',
+              status: 'passed',
+              required: true
+            },
+            {
+              id: 'frontend_lint',
+              name: '前端 lint 通过',
+              status: 'skipped',
+              required: false
+            }
+          ]
+        }
+      ]
+    })
+  )
+
+  assert.match(markup, /前端构建检查/)
+  assert.match(markup, /前端 lint 通过/)
+  assert.match(markup, /已通过/)
+  assert.match(markup, /已跳过/)
+  assert.doesNotMatch(markup, /<pre>[^<]*已完成 2\/2 项，通过 1 项，跳过 1 项/)
 })
 
 test('发送清空草稿标签，认证失败可恢复独立快照', () => {
@@ -173,7 +275,10 @@ test('技能页面默认展示用户分类并按当前分类搜索', () => {
 })
 
 test('聊天技能目录隐藏关闭项并清理陈旧选择', () => {
-  assert.deepEqual(enabledUserSkills(skillCatalog.skills).map((skill) => skill.name), ['alpha'])
+  assert.deepEqual(
+    enabledUserSkills(skillCatalog.skills).map((skill) => skill.name),
+    ['alpha']
+  )
   assert.deepEqual(
     reconcileEnabledChatSkills(
       [

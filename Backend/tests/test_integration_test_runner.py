@@ -92,6 +92,45 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 "network timeout",
             )
 
+    def test_reports_running_and_terminal_progress_for_each_check(self) -> None:
+        """验证实时进度先进入运行中，再以通过、跳过或失败状态收敛。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "Frontend"
+            frontend.mkdir()
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"vite build"}}',
+                encoding="utf-8",
+            )
+            progress: list[dict] = []
+
+            def fake_run(argv, **kwargs):
+                """模拟成功命令，避免测试依赖本机工具链。"""
+
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with patch(
+                "app.services.integration_test_runner.subprocess.run",
+                side_effect=fake_run,
+            ):
+                run_integration_checks(
+                    {"workspace": workspace},
+                    on_progress=progress.append,
+                )
+
+        frontend_install_states = [
+            event["status"]
+            for event in progress
+            if event["check"]["id"] == "frontend_install"
+        ]
+        backend_build_states = [
+            event["status"]
+            for event in progress
+            if event["check"]["id"] == "backend_build"
+        ]
+        self.assertEqual(frontend_install_states, ["running", "passed"])
+        self.assertEqual(backend_build_states, ["skipped"])
+
     def test_javascript_tests_directory_does_not_trigger_pytest(self) -> None:
         """验证仅包含 JavaScript 测试的 tests 目录不会被误判为 pytest 项目。"""
 

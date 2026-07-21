@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 
 COMMAND_TIMEOUT_SECONDS = 180
+CheckProgressCallback = Callable[[dict[str, Any]], None]
 
 
 @dataclass(frozen=True)
@@ -23,7 +25,13 @@ class PackageProject:
     package_manager: str
 
 
-def run_integration_checks(state: dict[str, Any]) -> dict[str, Any]:
+def run_integration_checks(
+    state: dict[str, Any],
+    *,
+    on_progress: CheckProgressCallback | None = None,
+) -> dict[str, Any]:
+    """顺序执行集成检查，并在每项检查状态变化时通知调用方。"""
+
     root = workspace_root(state).resolve()
     log_root = workflow_artifact_root(state) / "runtime" / "tests"
     log_root.mkdir(parents=True, exist_ok=True)
@@ -32,23 +40,46 @@ def run_integration_checks(state: dict[str, Any]) -> dict[str, Any]:
 
     results: list[dict[str, Any]] = []
     events: list[str] = []
-    for result in _frontend_checks(root, log_root, frontend):
+    for result in _frontend_checks(root, log_root, frontend, on_progress=on_progress):
         results.append(result)
         events.append(result["id"])
-    for result in _backend_checks(root, log_root):
+    for result in _backend_checks(root, log_root, on_progress=on_progress):
         results.append(result)
         events.append(result["id"])
-    for result in _joint_integration_checks(root, log_root, frontend, workspace_package):
+    for result in _joint_integration_checks(
+        root,
+        log_root,
+        frontend,
+        workspace_package,
+        on_progress=on_progress,
+    ):
         results.append(result)
         events.append(result["id"])
-    print("---------test_results------------", results)
     return {"test_results": results, "test_events": events}
+
+
+def report_check_progress(
+    on_progress: CheckProgressCallback | None,
+    *,
+    check: dict[str, Any],
+    status: str,
+) -> None:
+    """安全地发送单项检查的实时状态，进度展示失败不能影响实际测试。"""
+
+    if on_progress is None:
+        return
+    try:
+        on_progress({"check": check, "status": status})
+    except Exception:
+        return
 
 
 def _frontend_checks(
     root: Path,
     log_root: Path,
     frontend: PackageProject | None,
+    *,
+    on_progress: CheckProgressCallback | None,
 ) -> list[dict[str, Any]]:
     if frontend is None:
         return [
@@ -59,6 +90,7 @@ def _frontend_checks(
                 language="typescript",
                 evidence="未找到前端 package.json，无法执行前端依赖安装和构建检查。",
                 required=True,
+                on_progress=on_progress,
             )
         ]
 
@@ -74,6 +106,7 @@ def _frontend_checks(
             root=root,
             log_root=log_root,
             required=True,
+            on_progress=on_progress,
         ),
         _run_script_result(
             check_id="frontend_build",
@@ -85,6 +118,7 @@ def _frontend_checks(
             root=root,
             log_root=log_root,
             required=True,
+            on_progress=on_progress,
         ),
         _run_script_result(
             check_id="frontend_lint",
@@ -97,6 +131,7 @@ def _frontend_checks(
             log_root=log_root,
             required=False,
             missing_evidence="package.json 未声明 lint script，跳过前端 lint 检查。",
+            on_progress=on_progress,
         ),
         _run_script_result(
             check_id="frontend_typecheck",
@@ -109,6 +144,7 @@ def _frontend_checks(
             log_root=log_root,
             required=False,
             missing_evidence="package.json 未声明 typecheck script，跳过前端类型检查。",
+            on_progress=on_progress,
         ),
         _run_script_result(
             check_id="frontend_unit_tests",
@@ -121,11 +157,17 @@ def _frontend_checks(
             log_root=log_root,
             required=False,
             missing_evidence="package.json 未声明 test 或 test:unit script，跳过前端单元测试。",
+            on_progress=on_progress,
         ),
     ]
 
 
-def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
+def _backend_checks(
+    root: Path,
+    log_root: Path,
+    *,
+    on_progress: CheckProgressCallback | None,
+) -> list[dict[str, Any]]:
     if (root / "mvnw").is_file() or (root / "pom.xml").is_file():
         mvn = "./mvnw" if (root / "mvnw").is_file() else "mvn"
         return [
@@ -139,6 +181,7 @@ def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
                 root=root,
                 log_root=log_root,
                 required=True,
+                on_progress=on_progress,
             ),
             _run_command_result(
                 check_id="backend_static_check",
@@ -150,6 +193,7 @@ def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
                 root=root,
                 log_root=log_root,
                 required=False,
+                on_progress=on_progress,
             ),
             _run_command_result(
                 check_id="backend_unit_tests",
@@ -161,6 +205,7 @@ def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
                 root=root,
                 log_root=log_root,
                 required=True,
+                on_progress=on_progress,
             ),
         ]
 
@@ -173,6 +218,7 @@ def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
                 language="python",
                 evidence="Python 项目没有独立构建步骤，已跳过后端构建检查。",
                 required=False,
+                on_progress=on_progress,
             ),
             _missing_tool_result(
                 check_id="backend_static_check",
@@ -181,6 +227,7 @@ def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
                 language="python",
                 evidence="未发现统一静态检查命令，已跳过后端静态检查。",
                 required=False,
+                on_progress=on_progress,
             ),
             _run_command_result(
                 check_id="backend_unit_tests",
@@ -192,6 +239,7 @@ def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
                 root=root,
                 log_root=log_root,
                 required=True,
+                on_progress=on_progress,
             ),
         ]
 
@@ -203,6 +251,7 @@ def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
             language=None,
             evidence="未发现 Maven、pom.xml 或 pytest 项目配置，跳过后端构建检查。",
             required=False,
+            on_progress=on_progress,
         ),
         _missing_tool_result(
             check_id="backend_static_check",
@@ -211,6 +260,7 @@ def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
             language=None,
             evidence="未发现后端静态检查工具配置，跳过后端静态检查。",
             required=False,
+            on_progress=on_progress,
         ),
         _missing_tool_result(
             check_id="backend_unit_tests",
@@ -219,6 +269,7 @@ def _backend_checks(root: Path, log_root: Path) -> list[dict[str, Any]]:
             language=None,
             evidence="未发现后端单元测试工具配置，跳过后端单元测试。",
             required=False,
+            on_progress=on_progress,
         ),
     ]
 
@@ -228,6 +279,8 @@ def _joint_integration_checks(
     log_root: Path,
     frontend: PackageProject | None,
     workspace_package: PackageProject | None,
+    *,
+    on_progress: CheckProgressCallback | None,
 ) -> list[dict[str, Any]]:
     package = _first_package_with_script(
         (workspace_package, frontend),
@@ -242,6 +295,7 @@ def _joint_integration_checks(
                 language=None,
                 evidence="未发现 test:integration 或 integration script，跳过前后端集成测试。",
                 required=False,
+                on_progress=on_progress,
             )
         ]
     script_name = _first_script(_scripts(package), ("test:integration", "integration"))
@@ -256,6 +310,7 @@ def _joint_integration_checks(
             root=root,
             log_root=log_root,
             required=True,
+            on_progress=on_progress,
         )
     ]
 
@@ -272,6 +327,7 @@ def _run_script_result(
     log_root: Path,
     required: bool,
     missing_evidence: str | None = None,
+    on_progress: CheckProgressCallback | None,
 ) -> dict[str, Any]:
     if not script_name or script_name not in _scripts(package):
         return _missing_tool_result(
@@ -281,6 +337,7 @@ def _run_script_result(
             language=language,
             evidence=missing_evidence or f"package.json 未声明 {script_name or '目标'} script。",
             required=required,
+            on_progress=on_progress,
         )
     return _run_command_result(
         check_id=check_id,
@@ -292,6 +349,7 @@ def _run_script_result(
         root=root,
         log_root=log_root,
         required=required,
+        on_progress=on_progress,
     )
 
 
@@ -306,7 +364,19 @@ def _run_command_result(
     root: Path,
     log_root: Path,
     required: bool,
+    on_progress: CheckProgressCallback | None,
 ) -> dict[str, Any]:
+    report_check_progress(
+        on_progress,
+        status="running",
+        check={
+            "id": check_id,
+            "name": name,
+            "required": required,
+            "skipped": False,
+            "evidence": "正在执行检查。",
+        },
+    )
     started_at = datetime.now(UTC).isoformat()
     stdout = ""
     stderr = ""
@@ -353,7 +423,7 @@ def _run_command_result(
     if returncode not in (0, None):
         evidence = f"{evidence}；退出码：{returncode}。"
 
-    return {
+    result = {
         "id": check_id,
         "name": name,
         "layer": layer,
@@ -377,6 +447,8 @@ def _run_command_result(
             "stderr_log": str(stderr_log),
         },
     }
+    report_check_progress(on_progress, status="passed" if passed else "failed", check=result)
+    return result
 
 
 def _missing_tool_result(
@@ -387,9 +459,10 @@ def _missing_tool_result(
     language: str | None,
     evidence: str,
     required: bool,
+    on_progress: CheckProgressCallback | None,
 ) -> dict[str, Any]:
     passed = not required
-    return {
+    result = {
         "id": check_id,
         "name": name,
         "layer": layer,
@@ -410,6 +483,12 @@ def _missing_tool_result(
             "stderr_log": None,
         },
     }
+    report_check_progress(
+        on_progress,
+        status="skipped" if passed else "failed",
+        check=result,
+    )
+    return result
 
 
 def _find_frontend_package(root: Path) -> PackageProject | None:

@@ -33,6 +33,8 @@ from app.protocols.workflow.run_control import (
     workflow_run_registry,
 )
 from app.protocols.workflow.stream_events import (
+    integration_test_check_summary,
+    integration_test_checks,
     _message_process_frames,
     _pending_tool_frames,
     _process_frame,
@@ -227,7 +229,7 @@ def build_workflow_ag_ui_stream(
             async for stream_mode, chunk in active_graph.astream(
                 initial_state,
                 config=config,
-                stream_mode=["updates", "messages"],
+                stream_mode=["updates", "messages", "custom"],
             ):
                 if stream_mode == "messages":
                     message_chunk, metadata = chunk
@@ -242,6 +244,24 @@ def build_workflow_ag_ui_stream(
                     )
                     for frame in process_frames:
                         yield frame
+                    continue
+
+                if stream_mode == "custom":
+                    if not isinstance(chunk, dict) or chunk.get("type") != "integration_test.checks":
+                        continue
+                    checks = integration_test_checks(chunk)
+                    if not checks:
+                        continue
+                    yield _process_frame(
+                        encoder,
+                        id="workflow:integration_test",
+                        kind="workflow",
+                        status="running",
+                        title=f"正在执行 {_workflow_node_label('integration_test')}",
+                        detail=integration_test_check_summary(checks),
+                        sequence=process_sequence,
+                        checks=checks,
+                    )
                     continue
 
                 for node_name, update in chunk.items():
@@ -283,14 +303,25 @@ def build_workflow_ag_ui_stream(
                     ):
                         yield frame
                     process_sequence += 1
+                    checks = (
+                        integration_test_checks(update.get("test_results", []))
+                        if node_name == "integration_test"
+                        else None
+                    )
+                    process_detail = (
+                        integration_test_check_summary(checks)
+                        if checks
+                        else str(completed_event["message"])
+                    )
                     yield _process_frame(
                         encoder,
                         id=f"workflow:{node_name}",
                         kind="workflow",
                         status="completed",
                         title=f"已完成 {_workflow_node_label(node_name)}",
-                        detail=str(completed_event["message"]),
+                        detail=process_detail,
                         sequence=process_sequence,
+                        checks=checks,
                     )
                     for frame in _tool_result_frames(
                         encoder,

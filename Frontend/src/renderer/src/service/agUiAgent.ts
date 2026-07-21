@@ -71,6 +71,14 @@ export type ToolCallRecord = {
   status: 'running' | 'completed'
 }
 
+export type IntegrationTestCheckRecord = {
+  id: string
+  name: string
+  status: 'running' | 'passed' | 'skipped' | 'failed'
+  required: boolean
+  evidence?: string
+}
+
 export type ProcessStepRecord = {
   id: string
   kind: 'reasoning' | 'tool' | 'command' | 'workflow'
@@ -80,6 +88,7 @@ export type ProcessStepRecord = {
   result?: string
   sequence: number
   appendDetail?: boolean
+  checks?: IntegrationTestCheckRecord[]
 }
 
 function getWorkflowUrl(): string {
@@ -243,6 +252,7 @@ function mergeProcessStep(
   return next.sort((left, right) => left.sequence - right.sequence)
 }
 
+/** 解析后端传来的流程步骤，并忽略不符合协议的扩展字段。 */
 function readProcessStep(value: unknown): ProcessStepRecord | undefined {
   const step = objectValue(value)
   const id = stringValue(step.id)
@@ -250,6 +260,7 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
   const status = stringValue(step.status)
   if (!id || !['reasoning', 'tool', 'command', 'workflow'].includes(kind)) return undefined
   if (!['running', 'completed', 'failed'].includes(status)) return undefined
+  const checks = readIntegrationTestChecks(step.checks)
   return {
     id,
     kind: kind as ProcessStepRecord['kind'],
@@ -258,7 +269,50 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
     detail: stringValue(step.detail),
     result: stringValue(step.result) || undefined,
     sequence: typeof step.sequence === 'number' ? step.sequence : 0,
-    appendDetail: step.appendDetail === true
+    appendDetail: step.appendDetail === true,
+    ...(checks ? { checks } : {})
+  }
+}
+
+/** 解析集成测试的安全检查快照，避免未知事件内容直接进入 UI。 */
+export function readIntegrationTestChecks(
+  value: unknown
+): IntegrationTestCheckRecord[] | undefined {
+  const normalizedValue = parseStructuredValue(value)
+  const checksValue = Array.isArray(normalizedValue)
+    ? normalizedValue
+    : objectValue(normalizedValue).checks
+  if (!Array.isArray(checksValue)) return undefined
+  const seenIds = new Set<string>()
+  const checks: IntegrationTestCheckRecord[] = []
+  for (const item of checksValue) {
+    if (!item || typeof item !== 'object') continue
+    const check = item as Record<string, unknown>
+    const id = stringValue(check.id)
+    const name = stringValue(check.name)
+    const status = stringValue(check.status)
+    if (!id || !name || seenIds.has(id)) continue
+    if (!['running', 'passed', 'skipped', 'failed'].includes(status)) continue
+    seenIds.add(id)
+    const evidence = stringValue(check.evidence).slice(0, 1_000)
+    checks.push({
+      id,
+      name,
+      status: status as IntegrationTestCheckRecord['status'],
+      required: check.required === true,
+      ...(evidence ? { evidence } : {})
+    })
+  }
+  return checks.length > 0 ? checks : undefined
+}
+
+/** 解析 AG-UI 事件中可能被序列化的结构化扩展字段。 */
+function parseStructuredValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
   }
 }
 

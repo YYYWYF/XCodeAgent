@@ -16,6 +16,7 @@ from app.protocols.workflow.projection import (
     _workflow_next_nodes,
     _workflow_progress_summary,
 )
+from app.protocols.workflow.stream_events import integration_test_check_summary
 from app.protocols.workflow_visualization import (
     _workflow_summary,
     _workflow_visual_payload,
@@ -208,6 +209,73 @@ class FakeStreamingToolGraph:
                 "timeline": ["direct_modification", "finalize_project"],
             }
         )
+
+
+class FakeIntegrationProgressGraph:
+    async def astream(self, initial_state, *, config, stream_mode):
+        """模拟集成测试检查项的 custom stream 与最终节点更新。"""
+
+        yield "custom", {
+            "type": "integration_test.checks",
+            "checks": [
+                {
+                    "id": "frontend_build",
+                    "name": "前端构建检查",
+                    "status": "running",
+                    "required": True,
+                    "evidence": "正在执行检查。",
+                }
+            ],
+        }
+        yield "custom", {
+            "type": "integration_test.checks",
+            "checks": [
+                {
+                    "id": "frontend_build",
+                    "name": "前端构建检查",
+                    "status": "passed",
+                    "required": True,
+                    "evidence": "命令执行通过：pnpm run build",
+                }
+            ],
+        }
+        yield "updates", {
+            "integration_test": {
+                "phase": "integration_test",
+                "status": "completed",
+                "quality_gate_passed": True,
+                "integration_next_action": "launch_project",
+                "test_results": [
+                    {
+                        "id": "frontend_build",
+                        "name": "前端构建检查",
+                        "passed": True,
+                        "skipped": False,
+                        "required": True,
+                        "evidence": "命令执行通过：pnpm run build",
+                    }
+                ],
+                "test_report": {"passed": True, "summary": {"passed": 1, "total": 1}},
+                "timeline": ["integration_test"],
+            }
+        }
+
+    def get_state(self, config):
+        """返回集成测试后的最小工作流状态。"""
+
+        return SimpleNamespace(
+            values={
+                "phase": "launch_project",
+                "status": "completed",
+                "quality_gate_passed": True,
+                "timeline": ["integration_test"],
+            }
+        )
+
+    async def aget_state(self, config):
+        """提供异步状态读取兼容接口。"""
+
+        return self.get_state(config)
 
 
 class FakeAskUserToolGraph:
@@ -509,6 +577,53 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("TOOL_CALL_RESULT", payload)
         self.assertIn('\\"README.md\\"', payload)
         self.assertIn("read result", payload)
+
+    def test_stream_emits_incremental_integration_check_snapshots(self) -> None:
+        """验证 custom stream 会更新同一集成测试步骤的检查快照。"""
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeIntegrationProgressGraph(),
+                payload={
+                    "threadId": "thread-integration-progress",
+                    "runId": "run-integration-progress",
+                    "messages": [{"role": "user", "content": "run integration tests"}],
+                },
+            )
+            return [frame async for frame in stream]
+
+        payload = "\n".join(asyncio.run(collect()))
+
+        self.assertIn('"id":"workflow:integration_test"', payload)
+        self.assertIn('"name":"前端构建检查"', payload)
+        self.assertIn('"status":"running"', payload)
+        self.assertIn('"status":"passed"', payload)
+
+    def test_integration_check_detail_lists_each_check_name(self) -> None:
+        """验证兼容详情逐项展示检查名称和状态，而不是只返回数量。"""
+
+        detail = integration_test_check_summary(
+            [
+                {
+                    "id": "frontend_build",
+                    "name": "前端构建检查",
+                    "status": "passed",
+                    "required": True,
+                    "evidence": "命令执行通过。",
+                },
+                {
+                    "id": "frontend_lint",
+                    "name": "前端 lint 通过",
+                    "status": "skipped",
+                    "required": False,
+                    "evidence": "未声明 lint script。",
+                },
+            ]
+        )
+
+        self.assertIn("前端构建检查：已通过", detail)
+        self.assertIn("前端 lint 通过：已跳过", detail)
+        self.assertNotIn("2/2", detail)
 
     def test_stream_emits_ag_ui_frames_for_openai_backed_workflow(self) -> None:
         graph = FakeWorkflowGraph()
