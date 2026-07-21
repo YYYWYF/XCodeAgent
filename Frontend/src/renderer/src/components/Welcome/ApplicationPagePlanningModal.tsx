@@ -339,6 +339,7 @@ export default function ApplicationPagePlanningModal({
                   disabled={running}
                   onSaveRequirementSpec={handleSaveRequirementSpec}
                   onSubmit={handleSubmitClarification}
+                  rootPath={application.schema?.menus?.rootPath || '/'}
                   workflow={workflow}
                 />
               ) : null}

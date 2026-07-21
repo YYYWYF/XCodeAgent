@@ -47,7 +47,7 @@ export function buildApplicationSchema(values: ApplicationDraft): ApplicationSch
     theme: values.theme,
     datasource: values.datasource,
     env: parseEnv(values.envText),
-    menus: { homeMenuKey: '', items: [] },
+    menus: { ...values.menus, homeMenuKey: '', items: [] },
     apis: [],
     auth: values.auth,
     track: values.track,

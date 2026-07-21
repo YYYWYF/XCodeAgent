@@ -39,6 +39,7 @@ type Props = {
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
   ) => void
+  rootPath?: string
   workflow: WorkflowRunPayload
 }
 
@@ -120,6 +121,7 @@ export default function ApplicationPlanningQuestionPanel({
   disabled,
   onSaveRequirementSpec,
   onSubmit,
+  rootPath,
   workflow
 }: Props): ReactElement | null {
   const [form] = Form.useForm<{ answers: WorkflowClarificationAnswers }>()
@@ -299,7 +301,11 @@ export default function ApplicationPlanningQuestionPanel({
           </header>
           <div className={cx('planning-artifact-content')}>
             {editingRequirement && requirementDraft ? (
-              <RequirementSpecEditor onChange={setRequirementDraft} spec={requirementDraft} />
+              <RequirementSpecEditor
+                onChange={setRequirementDraft}
+                rootPath={rootPath || '/'}
+                spec={requirementDraft}
+              />
             ) : canShowSummary && !showArtifactDetail ? (
               <RequirementSpecSummary spec={displayedSpec!} />
             ) : (

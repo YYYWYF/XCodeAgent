@@ -56,6 +56,8 @@ export interface ApplicationSchemaConfig {
   };
   env: string[];
   menus: {
+    enable: boolean;
+    rootPath: string;
     homeMenuKey: string;
     items: ApplicationMenuItem[];
     sharedModules?: ApplicationSharedModule[];
@@ -286,6 +288,10 @@ export interface ApplicationDraft {
   theme: ApplicationSchemaConfig['theme'];
   datasource: ApplicationSchemaConfig['datasource'];
   envText: string;
+  menus: {
+    enable: boolean;
+    rootPath: string;
+  };
   auth: ApplicationSchemaConfig['auth'];
   track: ApplicationSchemaConfig['track'];
   apiTrack: ApplicationSchemaConfig['apiTrack'];

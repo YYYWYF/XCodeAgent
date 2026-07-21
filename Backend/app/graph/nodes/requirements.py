@@ -1,3 +1,5 @@
+import json
+
 from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import analyze_requirements_with_chat_model
 from app.graph.nodes.confirmation import user_confirmed_text
@@ -8,6 +10,7 @@ from app.workspace.spec_documents import (
     edited_requirement_spec_markdown,
     requirement_spec_json_path,
     requirement_spec_markdown_path,
+    workspace_root,
     write_requirement_spec_document,
     write_requirement_spec_json,
 )
@@ -70,6 +73,7 @@ def requirements(state: ProjectState) -> dict:
         existing_spec=existing_spec,
     )
     spec = analysis["requirement_spec"]
+    _apply_menus_root_path_to_pages(spec, state)
     clarification = analysis["clarification"]
     if _should_suppress_repeat_clarification(existing_spec, clarification):
         clarification = clear_clarification(spec)
@@ -171,6 +175,29 @@ def _should_suppress_repeat_clarification(
         return False
 
     return all(_is_optional_additive_question(question) for question in questions)
+
+
+def _apply_menus_root_path_to_pages(spec: dict, state: ProjectState) -> None:
+    """从 application.json 读取 menus.rootPath 并拼接到所有页面路由前。"""
+    try:
+        app_file = workspace_root(state) / ".xcodeagent" / "application.json"
+        if not app_file.is_file():
+            return
+        app_config = json.loads(app_file.read_text(encoding="utf-8"))
+        root_path = str((app_config.get("menus") or {}).get("rootPath", "") or "/").strip()
+    except Exception:
+        return
+
+    if not root_path or root_path == "/":
+        return
+    root_path = root_path.rstrip("/")
+    for page in spec.get("pages", []):
+        if isinstance(page, dict) and page.get("path"):
+            page_path = str(page["path"]).strip()
+            if page_path.startswith("/"):
+                page["path"] = root_path + page_path
+            else:
+                page["path"] = root_path + "/" + page_path
 
 
 def _is_optional_additive_question(question: object) -> bool:

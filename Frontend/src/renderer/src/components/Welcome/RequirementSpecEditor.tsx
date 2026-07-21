@@ -16,6 +16,7 @@ const { TextArea } = Input
 
 type Props = {
   onChange: (spec: Record<string, unknown>) => void
+  rootPath: string
   spec: Record<string, unknown>
 }
 
@@ -103,7 +104,7 @@ function EditorField({ children, label }: { children: ReactNode; label: string }
 }
 
 // 以结构化表单编辑概览中的应用、页面、角色、流程和数据源。
-export default function RequirementSpecEditor({ onChange, spec }: Props): ReactElement {
+export default function RequirementSpecEditor({ onChange, rootPath, spec }: Props): ReactElement {
   const appInfo = asRecord(spec.app_info)
 
   // 只更新应用定位字段，保留内部规划元数据。
@@ -165,7 +166,7 @@ export default function RequirementSpecEditor({ onChange, spec }: Props): ReactE
           addItem('pages', {
             pageId: draftId('page'),
             name: '新页面',
-            path: '/',
+            path: rootPath && rootPath !== '/' ? `${rootPath}/` : '/',
             description: ''
           })
         }
@@ -185,9 +186,22 @@ export default function RequirementSpecEditor({ onChange, spec }: Props): ReactE
             </EditorField>
             <EditorField label="页面路由">
               <Input
-                onChange={(event) => updateItem('pages', index, 'path', event.target.value)}
+                addonBefore={rootPath && rootPath !== '/' ? rootPath : undefined}
+                onChange={(event) => {
+                  const userInput = event.target.value
+                  const fullPath = rootPath && rootPath !== '/'
+                    ? (userInput.startsWith('/') ? `${rootPath}${userInput}` : `${rootPath}/${userInput}`)
+                    : userInput
+                  updateItem('pages', index, 'path', fullPath)
+                }}
                 placeholder="例如 /orders"
-                value={textValue(item.path)}
+                value={
+                  rootPath && rootPath !== '/'
+                    ? (String(item.path || '').startsWith(rootPath)
+                      ? String(item.path).slice(rootPath.length) || '/'
+                      : String(item.path))
+                    : textValue(item.path)
+                }
               />
             </EditorField>
             <EditorField label="页面说明">

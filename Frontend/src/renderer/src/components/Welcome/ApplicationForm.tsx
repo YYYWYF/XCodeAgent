@@ -9,6 +9,7 @@ import {
   FundOutlined,
   LayoutOutlined,
   LockOutlined,
+  MenuOutlined,
   MessageOutlined,
   RadarChartOutlined,
   ShopOutlined,
@@ -68,6 +69,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
   const apiTrackEnabled = Form.useWatch(['apiTrack', 'enable'], form) ?? true
   const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? true
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? false
+  const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
   const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#2c68ff'
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
@@ -248,6 +250,37 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             </Form.Item>
           </div>
         </div>
+      </section>
+
+      <section className={cx('application-form-section', 'application-form-section--full')}>
+        <div className={cx('application-form-section-head')}>
+          <SectionTitle icon={<MenuOutlined />}>菜单</SectionTitle>
+          <Form.Item
+            className={cx('application-form-switch')}
+            name={['menus', 'enable']}
+            valuePropName="checked"
+            noStyle
+          >
+            <Switch checkedChildren="启用" unCheckedChildren="关闭" />
+          </Form.Item>
+        </div>
+        <Form.Item
+          label="页面根路由"
+          name={['menus', 'rootPath']}
+          rules={[
+            { required: true, message: '请输入页面根路由' },
+            {
+              validator: (_rule, value: string) => {
+                if (menusEnabled && value === '/') {
+                  return Promise.reject(new Error('启用默认菜单时，根路由不能为 /'))
+                }
+                return Promise.resolve()
+              }
+            }
+          ]}
+        >
+          <Input placeholder="请输入页面根路由" />
+        </Form.Item>
       </section>
 
       <section className={cx('application-form-section', 'application-form-section--full')}>
