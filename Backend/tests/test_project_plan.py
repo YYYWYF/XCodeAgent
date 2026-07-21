@@ -9,7 +9,7 @@ from app.services.page_detail_plan import (
     create_page_detail_plan,
     extract_page_detail_context,
 )
-from app.services.project_plan import create_project_plan
+from app.services.project_plan import create_project_plan, normalize_project_plan
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import render_project_plan_markdown
 
@@ -403,6 +403,57 @@ class ProjectPlanTests(unittest.TestCase):
             "InventoryList",
         )
         self.assertEqual(validate_api_contract_consistency(plan), [])
+
+    def test_normalize_project_plan_only_normalizes_api_contracts(self) -> None:
+        plan = {
+            "api_contracts": [
+                {
+                    "id": "inventory_api",
+                    "data_source_id": "inventory_source",
+                    "resource": "Inventory",
+                    "base_path": "/api/inventory",
+                    "schemas": {
+                        "Inventory": {
+                            "type": "object",
+                            "properties": {"id": {"type": "string"}},
+                        },
+                        "InventoryList": {
+                            "type": "object",
+                            "properties": {
+                                "items": {
+                                    "type": "array",
+                                    "items": {"$ref": "#/schemas/Inventory"},
+                                }
+                            },
+                        },
+                    },
+                    "endpoints": [
+                        {
+                            "id": "inventory.list",
+                            "method": "get",
+                            "path": "/api/inventory",
+                            "response_schema_ref": "#/schemas/InventoryList",
+                        }
+                    ],
+                }
+            ],
+            "frontend_pages": [{"pageId": "inventory_page"}],
+        }
+
+        normalized = normalize_project_plan(plan)
+
+        contract = normalized["api_contracts"][0]
+        self.assertEqual(
+            contract["schemas"]["InventoryList"]["properties"]["items"]["items"][
+                "$ref"
+            ],
+            "Inventory",
+        )
+        self.assertEqual(
+            contract["endpoints"][0]["response_schema_ref"],
+            "InventoryList",
+        )
+        self.assertEqual(normalized["frontend_pages"], plan["frontend_pages"])
 
     def test_legacy_json_pointer_refs_validate_and_expand_all_of_paths(self) -> None:
         plan = {

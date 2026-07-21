@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 
@@ -10,27 +12,31 @@ def resolve_target_build_context(
     *,
     target_type: str,
     target_id: str,
+    project_plan_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """解析目标详情、直接 API/数据源依赖与编译所需的 Unit 标识。"""
 
     if target_type == "page":
-        return _page_context(project_plan, target_id)
+        return _page_context(project_plan, target_id, project_plan_path)
     if target_type == "data_source":
-        return _data_source_context(project_plan, target_id)
+        return _data_source_context(project_plan, target_id, project_plan_path)
     raise ValueError(f"Unsupported build target type: {target_type}.")
 
 
-def _page_context(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]:
+def _page_context(
+    project_plan: dict[str, Any],
+    page_id: str,
+    project_plan_path: str | Path | None,
+) -> dict[str, Any]:
     """只解析指定页面及其 endpoint 直接关联的数据源详情。"""
 
     page = _required_item(project_plan.get("frontend_pages"), "pageId", page_id, "page")
-    page_detail = _required_detail(
-        project_plan.get("page_detail_plans"),
-        "pageId",
-        page_id,
+    page_detail = _load_external_detail(
+        page.get("detail_design"),
         "PageDetail",
+        page_id,
+        project_plan_path,
     )
-    _require_confirmed_detail(page.get("detail_design"), "PageDetail", page_id)
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _endpoint_ids(page_detail)
     source_ids: list[str] = []
@@ -48,13 +54,12 @@ def _page_context(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]:
     data_source_refs = []
     for source_id in source_ids:
         source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
-        detail = _required_detail(
-            project_plan.get("data_source_detail_plans"),
-            "data_source_id",
-            source_id,
+        detail = _load_external_detail(
+            source.get("detail_design"),
             "DataSourceDetail",
+            source_id,
+            project_plan_path,
         )
-        _require_confirmed_detail(source.get("detail_design"), "DataSourceDetail", source_id)
         data_source_details.append(detail)
         data_source_refs.append(_artifact_ref(source.get("detail_design"), source_id))
 
@@ -81,17 +86,20 @@ def _page_context(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]:
     }
 
 
-def _data_source_context(project_plan: dict[str, Any], source_id: str) -> dict[str, Any]:
+def _data_source_context(
+    project_plan: dict[str, Any],
+    source_id: str,
+    project_plan_path: str | Path | None,
+) -> dict[str, Any]:
     """只解析指定数据源及其确认详情，不反向加载页面详情。"""
 
     source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
-    detail = _required_detail(
-        project_plan.get("data_source_detail_plans"),
-        "data_source_id",
-        source_id,
+    detail = _load_external_detail(
+        source.get("detail_design"),
         "DataSourceDetail",
+        source_id,
+        project_plan_path,
     )
-    _require_confirmed_detail(source.get("detail_design"), "DataSourceDetail", source_id)
     endpoint_ids = [
         endpoint_id
         for endpoint_id, endpoint in _endpoint_index(project_plan.get("api_contracts")).items()
@@ -127,28 +135,64 @@ def _required_item(value: Any, key: str, target_id: str, label: str) -> dict[str
     return item
 
 
-def _required_detail(value: Any, key: str, target_id: str, label: str) -> dict[str, Any]:
-    """读取已水合的详情正文，避免为当前目标加载无关详情。"""
+def _load_external_detail(
+    reference: Any,
+    label: str,
+    target_id: str,
+    project_plan_path: str | Path | None,
+) -> dict[str, Any]:
+    """按 ProjectPlan 中的 detail_design 引用读取外置详情文件。"""
 
-    detail = next(
-        (
-            candidate
-            for candidate in _dict_items(value)
-            if str(candidate.get(key) or "") == target_id
-        ),
-        None,
-    )
-    if detail is None:
-        raise ValueError(f"Confirmed {label} is required for {target_id}.")
+    detail_ref = reference if isinstance(reference, dict) else {}
+    json_path = str(detail_ref.get("json_path") or "").strip()
+    if not json_path:
+        raise ValueError(f"{label} {target_id} is missing detail_design.json_path.")
+    if detail_ref.get("status") != "confirmed":
+        raise ValueError(f"{label} {target_id} detail_design is not confirmed.")
+    detail_path = _resolve_detail_path(json_path, project_plan_path)
+    if detail_path is None or not detail_path.is_file():
+        raise ValueError(f"{label} {target_id} detail file does not exist: {json_path}.")
+    detail = json.loads(detail_path.read_text(encoding="utf-8"))
+    if not isinstance(detail, dict):
+        raise ValueError(f"{label} {target_id} detail file must contain a JSON object.")
+    if detail.get("status") != "confirmed":
+        raise ValueError(f"{label} {target_id} external detail is not confirmed.")
     return detail
 
 
-def _require_confirmed_detail(reference: Any, label: str, target_id: str) -> None:
-    """校验 ProjectPlan 详情引用已确认且可供代码生成使用。"""
+def _resolve_detail_path(
+    json_path: str,
+    project_plan_path: str | Path | None,
+) -> Path | None:
+    """解析 detail_design.json_path，兼容 workspace 根相对和 plans 目录相对引用。"""
 
-    detail_ref = reference if isinstance(reference, dict) else {}
-    if detail_ref.get("status") != "confirmed":
-        raise ValueError(f"{label} {target_id} is not confirmed.")
+    path = Path(json_path).expanduser()
+    if path.is_absolute():
+        return path
+    if project_plan_path is None:
+        return path
+    plan_path = Path(project_plan_path).expanduser()
+    plan_dir = plan_path.parent
+    workspace_root = _workspace_root_from_project_plan_path(plan_path)
+    candidates = []
+    if workspace_root is not None:
+        candidates.append(workspace_root / path)
+    candidates.append(plan_dir / path)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0] if candidates else path
+
+
+def _workspace_root_from_project_plan_path(project_plan_path: Path) -> Path | None:
+    """由 project-plan.json 路径推导 workspace 根目录，用于解析 .xcodeagent 相对引用。"""
+
+    plan_dir = project_plan_path.parent
+    if plan_dir.name == "plans" and plan_dir.parent.name == ".xcodeagent":
+        return plan_dir.parent.parent
+    if plan_dir.name == "plans":
+        return plan_dir.parent
+    return plan_dir
 
 
 def _endpoint_ids(page_detail: dict[str, Any]) -> list[str]:

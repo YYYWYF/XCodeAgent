@@ -37,6 +37,18 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
         self.assertIn("never contract_id or contractId", prompt)
         self.assertIn("data_source_id are required non-empty strings", prompt)
 
+    def test_project_planning_prompt_shows_canonical_api_contract_example(self) -> None:
+        """项目规划提示必须给出 API 契约样例，固定 Schema 引用格式。"""
+
+        prompt = planner._planning_prompt(create_requirement_spec("创建库存管理系统"))
+
+        self.assertIn("Canonical api_contracts example", prompt)
+        self.assertIn('"schemas": {', prompt)
+        self.assertIn('"$ref": "InventoryItem"', prompt)
+        self.assertIn('"response_schema_ref": "InventoryListResponse"', prompt)
+        self.assertIn("Do NOT use #/definitions/...", prompt)
+        self.assertIn("#/components/schemas/...", prompt)
+
     def test_requirements_uses_direct_model_with_only_ask_user(self) -> None:
         message = AIMessage(
             content="",

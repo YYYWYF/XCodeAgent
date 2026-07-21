@@ -18,6 +18,8 @@ from app.services.page_dependencies import validate_project_plan_dependencies
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
     edited_project_plan_markdown,
+    load_project_plan_json,
+    project_plan_json_path,
     project_plan_markdown_path,
     write_project_plan_document,
     write_project_plan_json,
@@ -31,9 +33,23 @@ from app.workspace.task_documents import (
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
+def _latest_compact_project_plan(state: ProjectState) -> dict:
+    """优先从 ProjectPlan JSON 读取最新轻量计划，避免 Build 使用 checkpoint 中的内嵌详情旧对象。"""
+
+    project_plan = state["project_plan"]
+    if project_plan.get("confirmation_status") != "confirmed":
+        return project_plan
+    if not state.get("project_plan_json_path"):
+        return project_plan
+    path = project_plan_json_path(state)
+    if path.is_file():
+        return load_project_plan_json(path)
+    return project_plan
+
+
 def prepare_build_tasks(state: ProjectState) -> dict:
     """按应用、页面或数据源范围编译任务子图并持久化 Build DAG。"""
-    project_plan = state["project_plan"]
+    project_plan = _latest_compact_project_plan(state)
     if project_plan.get("confirmation_status") != "confirmed":
         if _user_confirmed_project_plan(state.get("request", "")):
             edited_markdown = edited_project_plan_markdown(state, project_plan)
@@ -89,7 +105,12 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         existing_build_task_plan,
     )
     try:
-        build_context = _resolve_build_context(project_plan, build_execution_scope, build_task_plan)
+        build_context = _resolve_build_context(
+            state,
+            project_plan,
+            build_execution_scope,
+            build_task_plan,
+        )
     except ValueError as exc:
         return {
             "phase": "prepare_build_tasks",
@@ -243,6 +264,7 @@ def _existing_build_task_plan(state: ProjectState) -> dict:
 
 
 def _resolve_build_context(
+    state: ProjectState,
     project_plan: dict,
     build_execution_scope: dict[str, str],
     build_task_plan: dict,
@@ -256,6 +278,8 @@ def _resolve_build_context(
             project_plan,
             target_type=target_type,
             target_id=target_id,
+            project_plan_path=state.get("project_plan_json_path")
+            or project_plan_json_path(state),
         )
         return _add_reusable_task_context(context, build_task_plan)
     return _add_reusable_task_context({

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from copy import deepcopy
+import json
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.tasks import prepare_build_tasks
@@ -13,6 +16,48 @@ from app.services.build_task_planner import (
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
+
+
+def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
+    """把测试 ProjectPlan 的内嵌详情写成外置文件，并返回 ProjectPlan JSON 路径。"""
+
+    workspace_root = Path(workspace)
+    plan_path = workspace_root / ".xcodeagent/plans/project-plan.json"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    page_details = list(project_plan.get("page_detail_plans", []))
+    source_details = list(project_plan.get("data_source_detail_plans", []))
+    for detail in page_details:
+        page_id = str(detail.get("pageId") or "")
+        if not page_id:
+            continue
+        detail = {"status": "confirmed", **detail}
+        detail_path = workspace_root / f".xcodeagent/plans/pages/page--{page_id}.json"
+        detail_path.parent.mkdir(parents=True, exist_ok=True)
+        detail_path.write_text(json.dumps(detail), encoding="utf-8")
+        for page in project_plan.get("frontend_pages", []):
+            if isinstance(page, dict) and str(page.get("pageId") or "") == page_id:
+                page["detail_design"] = {
+                    "status": "confirmed",
+                    "json_path": f".xcodeagent/plans/pages/page--{page_id}.json",
+                    "sha256": f"sha-page-{page_id}",
+                }
+    for detail in source_details:
+        source_id = str(detail.get("data_source_id") or "")
+        if not source_id:
+            continue
+        detail = {"status": "confirmed", **detail}
+        detail_path = workspace_root / f".xcodeagent/plans/data-source/data-source--{source_id}.json"
+        detail_path.parent.mkdir(parents=True, exist_ok=True)
+        detail_path.write_text(json.dumps(detail), encoding="utf-8")
+        for source in project_plan.get("data_sources", []):
+            if isinstance(source, dict) and str(source.get("id") or "") == source_id:
+                source["detail_design"] = {
+                    "status": "confirmed",
+                    "json_path": f".xcodeagent/plans/data-source/data-source--{source_id}.json",
+                    "sha256": f"sha-source-{source_id}",
+                }
+    plan_path.write_text(json.dumps(project_plan), encoding="utf-8")
+    return str(plan_path)
 
 
 class PrepareBuildTasksGuardTests(unittest.TestCase):
@@ -80,11 +125,14 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=agent_plan,
         ) as preparer:
+            state_project_plan = deepcopy(project_plan)
+            project_plan_path = _externalize_detail_designs(workspace, project_plan)
             result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
                     "workspace": workspace,
-                    "project_plan": project_plan,
+                    "project_plan": state_project_plan,
+                    "project_plan_json_path": project_plan_path,
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -164,11 +212,13 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=customer_agent_plan,
         ) as customer_preparer:
+            project_plan_path = _externalize_detail_designs(workspace, project_plan)
             customer_result = prepare_build_tasks(
                 {
                     "request": "生成客户页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
+                    "project_plan_json_path": project_plan_path,
                     "build_task_plan": first_plan,
                     "build_execution_scope": {"type": "page", "targetId": "customers"},
                     "timeline": [],
@@ -230,11 +280,13 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=agent_plan,
         ):
+            project_plan_path = _externalize_detail_designs(workspace, project_plan)
             result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
+                    "project_plan_json_path": project_plan_path,
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -331,11 +383,13 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=agent_plan,
         ):
+            project_plan_path = _externalize_detail_designs(workspace, project_plan)
             result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
+                    "project_plan_json_path": project_plan_path,
                     "build_task_plan": base_plan,
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
@@ -435,11 +489,13 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=first_agent_plan,
         ):
+            project_plan_path = _externalize_detail_designs(workspace, project_plan)
             first_result = prepare_build_tasks(
                 {
                     "request": "生成订单页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
+                    "project_plan_json_path": project_plan_path,
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -498,11 +554,13 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             return_value=second_agent_plan,
         ):
+            project_plan_path = _externalize_detail_designs(workspace, project_plan)
             second_result = prepare_build_tasks(
                 {
                     "request": "生成订单报表页面",
                     "workspace": workspace,
                     "project_plan": project_plan,
+                    "project_plan_json_path": project_plan_path,
                     "build_task_plan": first_plan,
                     "build_execution_scope": {
                         "type": "page",

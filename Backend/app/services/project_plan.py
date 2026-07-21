@@ -179,6 +179,17 @@ def _normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
     return normalize_api_contracts(items)
 
 
+def normalize_project_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
+    """规范化 ProjectPlan 的内部结构；当前阶段只规范化 API 契约。"""
+
+    normalized = dict(project_plan)
+    if "api_contracts" in normalized:
+        normalized["api_contracts"] = _normalize_api_contracts(
+            _dict_items(normalized.get("api_contracts"))
+        )
+    return normalized
+
+
 def _normalize_frontend_pages(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     used_paths: set[str] = set()
@@ -543,7 +554,7 @@ def apply_project_plan_feedback(
                 "feedback": user_feedback,
             }
         )
-    return updated
+    return normalize_project_plan(updated)
 
 
 def _mentions_database(feedback: str) -> bool:
@@ -696,4 +707,4 @@ def create_project_plan(
                 "actions": schema_repairs,
             }
         )
-    return plan
+    return normalize_project_plan(plan)

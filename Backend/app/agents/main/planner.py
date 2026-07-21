@@ -48,6 +48,36 @@ def _planning_prompt(
         "inside EACH contract that uses it, named to match its owner resource (for example a "
         "duty-records statistics response belongs to the duty-records contract, not the personnel "
         "contract). Do not reuse one contract's schemas from another contract.\n"
+        "Canonical api_contracts example. Follow this exact shape and reference style; adapt names and fields "
+        "to the RequirementSpec:\n"
+        "{\n"
+        '  "id": "inventory_api",\n'
+        '  "data_source_id": "inventory_source",\n'
+        '  "resource": "InventoryItem",\n'
+        '  "base_path": "/api/inventory",\n'
+        '  "authentication": {"required": true, "roles": ["admin", "user"]},\n'
+        '  "schemas": {\n'
+        '    "InventoryItem": {\n'
+        '      "type": "object",\n'
+        '      "properties": {"id": {"type": "string"}, "name": {"type": "string"}},\n'
+        '      "required": ["id", "name"]\n'
+        "    },\n"
+        '    "InventoryListResponse": {\n'
+        '      "type": "object",\n'
+        '      "properties": {"items": {"type": "array", "items": {"$ref": "InventoryItem"}}, "total": {"type": "integer"}},\n'
+        '      "required": ["items", "total"]\n'
+        "    }\n"
+        "  },\n"
+        '  "endpoints": [\n'
+        '    {"id": "inventory.list", "method": "GET", "path": "/api/inventory", "summary": "List inventory items", '
+        '"parameters": [], "request_schema_ref": null, "response_schema_ref": "InventoryListResponse", '
+        '"error_codes": [], "authentication": {"required": true, "roles": ["admin", "user"]}}\n'
+        "  ]\n"
+        "}\n"
+        "Schema reference format rule: inside ProjectPlan api_contracts, schema names are bare strings. "
+        "Use \"$ref\": \"InventoryItem\", request_schema_ref: \"InventoryItem\", and "
+        "response_schema_ref: \"InventoryListResponse\". Do NOT use #/definitions/..., "
+        "#/components/schemas/..., components, definitions, schema_definitions, or OpenAPI document wrappers.\n"
         "- frontend_pages: compact page index with unique non-empty pageId, unique path, module_id, description, and "
         "references {permissions, endpoint_dependencies [{endpoint_id, usage, trigger, required_for_initial_load}], "
         "navigation_targets [{targetPageId, trigger}]}. Do not emit duplicate root permissions, "
