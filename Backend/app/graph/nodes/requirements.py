@@ -132,8 +132,26 @@ def _requirement_spec_confirmed_payload(spec: dict) -> dict:
 def _user_confirmed_requirement_spec(request: str) -> bool:
     return user_confirmed_text(
         request,
-        positive_signals=("正确", "没问题", "继续规划", "可以继续", "无误"),
-        negative_signals=("不正确", "需要修改", "修改", "调整", "补充", "不对"),
+        positive_signals=("正确", "没问题", "继续规划", "可以继续", "无误", "确认"),
+        negative_signals=(
+            "不正确",
+            "需要修改",
+            "要修改",
+            "请修改",
+            "想修改",
+            "修改一下",
+            "去修改",
+            "重新修改",
+            "需要调整",
+            "要调整",
+            "请调整",
+            "调整一下",
+            "需要补充",
+            "要补充",
+            "请补充",
+            "补充一下",
+            "不对",
+        ),
     )
 
 

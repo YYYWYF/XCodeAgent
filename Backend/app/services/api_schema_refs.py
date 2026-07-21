@@ -4,16 +4,24 @@ from typing import Any
 
 
 def normalize_local_schema_ref(value: Any, *, contract_id: str = "") -> str:
-    """把本契约内的 JSON Pointer 或限定引用转换为 Schema 裸名称。"""
+    """把本契约内的 JSON Pointer 或限定引用转换为 Schema 裸名称。
+
+    兼容三种 ref 写法：
+    - OpenAPI 标准 ``#/components/schemas/<Schema>``（大模型常产出）
+    - 本协议 ``#/schemas/<Schema>`` 与 ``<contract_id>#/schemas/<Schema>``
+    - 裸 Schema 名 ``<Schema>``
+    """
 
     ref = str(value or "").strip()
-    marker = "#/schemas/"
-    if marker not in ref:
-        return ref
-    ref_contract_id, schema_id = ref.split(marker, 1)
-    if ref_contract_id and contract_id and ref_contract_id != contract_id:
-        return ref
-    return schema_id or ref
+    # 同时兼容 #/components/schemas/（OpenAPI 标准）与 #/schemas/（本协议）。
+    for marker in ("#/components/schemas/", "#/schemas/"):
+        if marker not in ref:
+            continue
+        ref_contract_id, schema_id = ref.split(marker, 1)
+        if ref_contract_id and contract_id and ref_contract_id != contract_id:
+            return ref
+        return schema_id or ref
+    return ref
 
 
 def normalize_schema_references(value: Any, *, contract_id: str) -> Any:

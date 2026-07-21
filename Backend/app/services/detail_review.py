@@ -192,6 +192,7 @@ def apply_detail_review_submission(
         if isinstance(source, dict) and str(source.get("id")) in confirmed_data_source_ids:
             source["detail_status"] = "confirmed"
     _repair_page_contract_fields(updated)
+    _repair_missing_request_schemas(updated)
     updated["confirmation_status"] = "confirmed"
     updated["detail_review"] = {
         "status": "confirmed",
@@ -203,6 +204,46 @@ def apply_detail_review_submission(
     if errors:
         raise ValueError("Detail review violates API contracts: " + "; ".join(errors))
     return updated
+
+
+def _repair_missing_request_schemas(project_plan: dict[str, Any]) -> None:
+    """为缺少 request_schema_ref 的写操作端点补一个默认请求 Schema。
+
+    大模型生成批量删除等端点时常漏写 request schema，导致契约校验失败。
+    这里按端点语义补一个合理的默认 Schema，避免阻塞 detail_confirmation。
+    """
+
+    for contract in project_plan.get("api_contracts", []):
+        if not isinstance(contract, dict):
+            continue
+        schemas = contract.setdefault("schemas", {})
+        for endpoint in contract.get("endpoints", []) or []:
+            if not isinstance(endpoint, dict):
+                continue
+            method = str(endpoint.get("method") or "").upper()
+            if method not in {"POST", "PUT", "PATCH"}:
+                continue
+            if endpoint.get("request_schema_ref"):
+                continue
+            endpoint_id = str(endpoint.get("id") or "")
+            path = str(endpoint.get("path") or "")
+            # 批量删除类端点：{ ids: string[] }
+            if "batch" in path.lower() or "batch" in endpoint_id.lower():
+                schema_id = "BatchDeleteRequest"
+                schemas[schema_id] = {
+                    "type": "object",
+                    "properties": {
+                        "ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        }
+                    },
+                    "required": ["ids"],
+                }
+            else:
+                schema_id = f"{endpoint_id}Request"
+                schemas[schema_id] = {"type": "object", "properties": {}}
+            endpoint["request_schema_ref"] = schema_id
 
 
 def _repair_page_contract_fields(project_plan: dict[str, Any]) -> None:
