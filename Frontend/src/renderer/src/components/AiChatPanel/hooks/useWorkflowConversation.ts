@@ -38,6 +38,8 @@ type UseWorkflowConversationParams = {
   draft: string
   draftKey: string
   selectedSkills: ChatMessageSkill[]
+  selectedPageId?: string
+  selectedPageLabel?: string
   editorMode: EditorMode
   ensureActiveSession: () => Promise<SessionIdentity>
   ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
@@ -78,6 +80,8 @@ export function useWorkflowConversation({
   draft,
   draftKey,
   selectedSkills,
+  selectedPageId,
+  selectedPageLabel,
   editorMode,
   ensureActiveSession,
   ensurePageSession,
@@ -131,12 +135,18 @@ export function useWorkflowConversation({
     {}
   )
 
+  /** 首次发送页面消息时再创建对应会话，并复用已有页面会话继续 Workflow。 */
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
+    const sessionIdentity = selectedPageId
+      ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
+      : await ensureActiveSession()
     await sendWorkflowMessage(message, {
       clearDraft: true,
       selectedSkills,
+      selectedPageId,
+      sessionIdentity,
       titleFrom: message,
       workflowDebug
     })

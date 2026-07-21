@@ -94,6 +94,10 @@ export default function AiChatPanel({
     setRightPanel,
     splitDragging
   } = useAssistantPreviewLayout()
+  const activePageOption = useMemo(
+    () => developmentPlanningPages.find((page) => page.key === activePageId),
+    [activePageId, developmentPlanningPages]
+  )
 
   /** 接收实时 launch 结果并复用手动预览入口打开右侧面板。 */
   const handlePreviewReady = useCallback(
@@ -121,6 +125,7 @@ export default function AiChatPanel({
     handleCreateSessionFromList,
     handleDeleteSession,
     handleOpenSession,
+    handleSelectPage,
     loadingSessions,
     messages,
     persistSession,
@@ -163,6 +168,8 @@ export default function AiChatPanel({
     publishAiMessage,
     runningSessionsRef,
     selectedSkills,
+    selectedPageId: activePageOption?.pageId || activePageOption?.key,
+    selectedPageLabel: activePageOption?.label,
     setDraftByKey,
     setSelectedSkillsByKey,
     setSessionMessages
@@ -180,17 +187,13 @@ export default function AiChatPanel({
   const copy = chatCopy[editorMode]
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
-  const activePageOption = useMemo(
-    () => developmentPlanningPages.find((page) => page.key === activePageId),
-    [activePageId, developmentPlanningPages]
-  )
   const activePageTitle =
     activePageOption?.label || application.defaultPage || application.pages[0] || '页面'
   const activePage = useMemo(
     () => findPageMenuItem(application.menus.items, activePageTitle),
     [activePageTitle, application.menus.items]
   )
-  const initialPageSelectionRequired = !developmentPlanningReady || !hasPageDesigns
+  const initialPageSelectionRequired = developmentPlanningReady && !hasPageDesigns
   const activePageDesigned = Boolean(activePageOption?.designed)
   const activeSessionUpdatedAt = sessions.find(
     (session) => session.id === activeSessionId
@@ -276,13 +279,13 @@ export default function AiChatPanel({
     await createPageSession(pageId, pageLabel)
   }
 
-  /** 从应用大纲切换页面，并确保页面状态在对话区域呈现。 */
+  /** 从应用大纲切换页面；没有消息历史时仅展示空白上下文，不提前创建会话。 */
   const handlePageSelect = (page: DevelopmentPlanningPageOption): void => {
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
     setActivePageId(page.key)
-    ensurePageSession(page.pageId, page.label).catch(() => undefined)
+    handleSelectPage(page.pageId || page.key).catch(() => undefined)
   }
 
   /** 启动当前页面的详细设计；解锁状态仍以后续持久化目录检查为准。 */

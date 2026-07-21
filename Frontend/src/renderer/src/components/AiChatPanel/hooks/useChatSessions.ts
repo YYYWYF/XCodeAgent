@@ -54,6 +54,7 @@ type UseChatSessionsResult = {
   handleCreateSessionFromList: () => void
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
+  handleSelectPage: (pageId: string) => Promise<void>
   loadingSessions: boolean
   messages: AgentChatMessage[]
   selectedSkills: ChatMessageSkill[]
@@ -213,6 +214,23 @@ export function useChatSessions({
     } finally {
       setSessionLoadingModes((current) => ({ ...current, [editorMode]: false }))
     }
+  }
+
+  /** 切换页面时仅恢复已有且有消息的会话，空白页面等待首次发送后再创建会话。 */
+  const handleSelectPage = async (pageId: string): Promise<void> => {
+    const normalizedPageId = pageId.trim()
+    if (!normalizedPageId || loadingSessions) return
+
+    const existingSession = sessionSummariesRef.current[editorMode].find(
+      (session) => session.pageId === normalizedPageId && session.messageCount > 0
+    )
+    if (existingSession) {
+      await handleOpenSession(existingSession.id)
+      return
+    }
+
+    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    onCloseRightPanel()
   }
 
   /** 创建普通会话或带页面归属的独立设计会话。 */
@@ -404,6 +422,7 @@ export function useChatSessions({
     handleCreateSessionFromList,
     handleDeleteSession,
     handleOpenSession,
+    handleSelectPage,
     loadingSessions,
     messages,
     selectedSkills,
