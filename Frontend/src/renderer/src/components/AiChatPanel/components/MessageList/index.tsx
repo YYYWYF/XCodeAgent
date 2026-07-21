@@ -82,7 +82,7 @@ export default function MessageList({
                 <div className={cx('ai-message-content')}>
                   {message.role === 'assistant' ? (
                     <>
-                      {messageLoading && nonToolSteps && nonToolSteps.length > 0 && (
+                      {nonToolSteps && nonToolSteps.length > 0 && (
                         <ProcessSteps loading={messageLoading} steps={nonToolSteps} />
                       )}
                       {messageLoading &&
