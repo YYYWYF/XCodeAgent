@@ -233,45 +233,63 @@ def build_workflow_ag_ui_stream(
             ):
                 if stream_mode == "custom":
                     progress = chunk if isinstance(chunk, dict) else {}
-                    if progress.get("type") != "workflow.build.progress":
-                        continue
-                    progress_state = (
-                        progress.get("state")
-                        if isinstance(progress.get("state"), dict)
-                        else {}
-                    )
-                    progress_node = str(progress.get("node_name") or "build")
-                    progress_message = str(
-                        progress.get("message") or "构建任务进度已更新。"
-                    )
-                    _workflow_event(
-                        events,
-                        "workflow.node.progress",
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        node_name=progress_node,
-                        status=str(progress.get("status") or "running"),
-                        message=progress_message,
-                        data={
-                            "phase": progress_state.get("phase", progress_node),
-                            "stateDelta": _public_workflow_state(progress_state),
-                            "detail": {
-                                "buildSummary": progress_state.get("build_summary", {}),
-                                "buildExecutionSlice": progress_state.get(
-                                    "build_execution_slice"
-                                ),
-                                "buildEvents": progress_state.get("build_events", []),
+                    event_type = progress.get("type")
+                    if event_type == "workflow.build.progress":
+                        progress_state = (
+                            progress.get("state")
+                            if isinstance(progress.get("state"), dict)
+                            else {}
+                        )
+                        progress_node = str(progress.get("node_name") or "build")
+                        progress_message = str(
+                            progress.get("message") or "构建任务进度已更新。"
+                        )
+                        _workflow_event(
+                            events,
+                            "workflow.node.progress",
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            node_name=progress_node,
+                            status=str(progress.get("status") or "running"),
+                            message=progress_message,
+                            data={
+                                "phase": progress_state.get("phase", progress_node),
+                                "stateDelta": _public_workflow_state(progress_state),
+                                "detail": {
+                                    "buildSummary": progress_state.get("build_summary", {}),
+                                    "buildExecutionSlice": progress_state.get(
+                                        "build_execution_slice"
+                                    ),
+                                    "buildEvents": progress_state.get("build_events", []),
+                                },
                             },
-                        },
-                    )
-                    for frame in _workflow_ag_ui_frames(
-                        encoder,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        events=events,
-                        result=progress_state,
-                    ):
-                        yield frame
+                        )
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=progress_state,
+                        ):
+                            yield frame
+                        continue
+                    if event_type == "integration_test.checks":
+                        checks = integration_test_checks(progress)
+                        if not checks:
+                            continue
+                        process_sequence += 1
+                        yield _process_frame(
+                            encoder,
+                            id="workflow:integration_test",
+                            kind="workflow",
+                            status="running",
+                            title=f"正在执行 {_workflow_node_label('integration_test')}",
+                            detail=integration_test_check_summary(checks),
+                            sequence=process_sequence,
+                            checks=checks,
+                        )
+                        continue
+                    # 其它未知 custom 事件:静默跳过,保持向后兼容。
                     continue
 
                 if stream_mode == "messages":
@@ -287,24 +305,6 @@ def build_workflow_ag_ui_stream(
                     )
                     for frame in process_frames:
                         yield frame
-                    continue
-
-                if stream_mode == "custom":
-                    if not isinstance(chunk, dict) or chunk.get("type") != "integration_test.checks":
-                        continue
-                    checks = integration_test_checks(chunk)
-                    if not checks:
-                        continue
-                    yield _process_frame(
-                        encoder,
-                        id="workflow:integration_test",
-                        kind="workflow",
-                        status="running",
-                        title=f"正在执行 {_workflow_node_label('integration_test')}",
-                        detail=integration_test_check_summary(checks),
-                        sequence=process_sequence,
-                        checks=checks,
-                    )
                     continue
 
                 for node_name, update in chunk.items():

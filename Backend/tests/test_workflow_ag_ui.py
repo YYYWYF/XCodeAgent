@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,34 @@ from app.protocols.workflow_visualization import (
     _workflow_summary,
     _workflow_visual_payload,
 )
+
+
+def _decode_agent_process_frames(frames: list[str]) -> list[dict]:
+    """把 ``build_workflow_ag_ui_stream`` 产出的 SSE 帧解析为 ``agent-process`` 事件列表。
+
+    每个 ``agent-process`` 事件对应一次过程步骤的更新,带有 ``id`` / ``status`` / ``sequence`` /
+    ``checks`` 等字段,供回归测试按时间顺序校验实时进度。
+    """
+
+    decoded: list[dict] = []
+    for frame in frames:
+        for line in frame.splitlines():
+            if not line.startswith("data:"):
+                continue
+            payload = line[len("data:"):].strip()
+            if not payload:
+                continue
+            try:
+                event = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") != "CUSTOM" or event.get("name") != "agent-process":
+                continue
+            value = event.get("value")
+            if isinstance(value, dict):
+                decoded.append(value)
+    return decoded
+
 
 class FakeWorkflowGraph:
     def __init__(self) -> None:
@@ -598,6 +627,89 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn('"name":"前端构建检查"', payload)
         self.assertIn('"status":"running"', payload)
         self.assertIn('"status":"passed"', payload)
+
+    def test_workflow_stream_forwards_integration_test_checks_progressively(self) -> None:
+        """回归保护:runtime 必须把 LangGraph custom 流中的 ``integration_test.checks`` 事件
+        转换成 ``agent-process`` 帧实时推给前端,且每一帧的 ``checks`` 字段反映当时的快照。
+
+        在修复之前,``runtime.py`` 的 ``astream`` 消费循环里有两段并列的
+        ``if stream_mode == "custom":`` 分支:第一段会丢弃非 ``workflow.build.progress``
+        的 custom 事件,第二段处理 ``integration_test.checks`` 但被前一段遮蔽而成为
+        死代码,导致节点执行过程中的检查进度从未推到前端,只在节点完成后才出现一次。
+
+        这个测试显式按时间顺序断言:
+        1. 至少有两帧 ``id=workflow:integration_test`` 且 ``status=running`` 出现在
+           ``updates`` 事件触发的完成帧之前。
+        2. 第一帧 ``running`` 的首个检查状态必须是 ``running``;第二帧必须把同一项
+           检查的快照更新为 ``passed``(验证 ``_check_progress_snapshot_writer``
+           的按 check_id 累积合并语义被正确转发)。
+        3. 节点完成帧 ``status=completed`` 且 ``checks`` 与最终 ``test_results`` 一致,
+           且整个步骤的 sequence 单调递增。
+        """
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeIntegrationProgressGraph(),
+                payload={
+                    "threadId": "thread-integration-progress",
+                    "runId": "run-integration-progress",
+                    "messages": [{"role": "user", "content": "run integration tests"}],
+                },
+                accept="text/event-stream",
+            )
+            return [frame async for frame in stream]
+
+        frames = _decode_agent_process_frames(asyncio.run(collect()))
+
+        integration_frames = [
+            frame for frame in frames if frame.get("id") == "workflow:integration_test"
+        ]
+        running_frames = [
+            frame for frame in integration_frames if frame.get("status") == "running"
+        ]
+        completed_frames = [
+            frame for frame in integration_frames if frame.get("status") == "completed"
+        ]
+
+        # 实时帧必须先于完成帧出现,这是"实时进度"的核心契约。
+        self.assertGreaterEqual(
+            len(running_frames),
+            2,
+            f"期望至少 2 帧实时 running 帧,实际只有 {len(running_frames)} 帧,"
+            f"全部帧为: {integration_frames}",
+        )
+        self.assertEqual(
+            len(completed_frames),
+            1,
+            f"期望恰好 1 帧 completed 完成帧,实际有 {len(completed_frames)} 帧",
+        )
+        self.assertLess(
+            running_frames[-1]["sequence"],
+            completed_frames[0]["sequence"],
+            "实时 running 帧的 sequence 必须小于完成帧,保证前端先看到进度再看到完成态",
+        )
+
+        # 第一帧应该报告检查项为 running 状态,第二帧把同一项更新为 passed。
+        first_checks = running_frames[0].get("checks") or []
+        second_checks = running_frames[1].get("checks") or []
+        self.assertGreaterEqual(len(first_checks), 1)
+        self.assertGreaterEqual(len(second_checks), 1)
+        self.assertEqual(first_checks[0]["id"], "frontend_build")
+        self.assertEqual(second_checks[0]["id"], "frontend_build")
+        self.assertEqual(first_checks[0]["status"], "running")
+        self.assertEqual(second_checks[0]["status"], "passed")
+
+        # 完成帧的 checks 必须反映最终的 test_results,且 sequence 单调递增。
+        completed_checks = completed_frames[0].get("checks") or []
+        self.assertEqual(len(completed_checks), 1)
+        self.assertEqual(completed_checks[0]["id"], "frontend_build")
+        self.assertEqual(completed_checks[0]["status"], "passed")
+        sequences = [frame["sequence"] for frame in integration_frames]
+        self.assertEqual(
+            sequences,
+            sorted(sequences),
+            f"integration_test 步骤的 sequence 必须单调递增,实际: {sequences}",
+        )
 
     def test_integration_check_detail_lists_each_check_name(self) -> None:
         """验证兼容详情逐项展示检查名称和状态，而不是只返回数量。"""
