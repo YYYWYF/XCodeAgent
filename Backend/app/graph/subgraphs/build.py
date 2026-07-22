@@ -23,6 +23,7 @@ from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
 )
+from app.services.build_tool_activity import task_ids_for_tool_activity
 from app.services.build_scheduler import (
     mark_tasks_running,
     normalize_task_results,
@@ -45,6 +46,10 @@ from app.workspace.task_documents import write_repair_task_plan_json
 
 Runner = Callable[..., list[dict[str, Any]]]
 ProgressWriter = Callable[[dict[str, Any]], None]
+BatchToolActivityCallback = Callable[
+    [list[dict[str, Any]], dict[str, Any] | None],
+    None,
+]
 
 
 def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
@@ -65,6 +70,8 @@ def _group_tasks_by_owner(tasks: list[dict[str, Any]]) -> dict[str, list[dict[st
 def _execute_ready_tasks(
     state: ProjectState,
     ready_tasks: list[dict[str, Any]],
+    *,
+    on_batch_tool_activity: BatchToolActivityCallback | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """把同一批就绪任务和所选技能集合分发给对应 Deep Agent。"""
 
@@ -92,17 +99,31 @@ def _execute_ready_tasks(
             continue
 
         source_tool, runner = runner_entry
-        captured = capture_agent_file_changes(
-            workspace=workspace,
-            source_tool=source_tool,
-            action=lambda owner_tasks=owner_tasks, runner=runner: runner(
-                project_plan=state["project_plan"],
-                build_task_plan=state["build_task_plan"],
-                tasks=owner_tasks,
+        try:
+            captured = capture_agent_file_changes(
                 workspace=workspace,
-                selected_skill_names=state.get("selected_skill_names"),
-            ),
-        )
+                source_tool=source_tool,
+                action=lambda owner_tasks=owner_tasks, runner=runner: runner(
+                    project_plan=state["project_plan"],
+                    build_task_plan=state["build_task_plan"],
+                    tasks=owner_tasks,
+                    workspace=workspace,
+                    selected_skill_names=state.get("selected_skill_names"),
+                    on_tool_activity=(
+                        (
+                            lambda activity, owner_tasks=owner_tasks: on_batch_tool_activity(
+                                owner_tasks,
+                                activity,
+                            )
+                        )
+                        if on_batch_tool_activity is not None
+                        else None
+                    ),
+                ),
+            )
+        finally:
+            if on_batch_tool_activity is not None:
+                on_batch_tool_activity(owner_tasks, None)
         if captured.code_change_set:
             code_change_sets.append(captured.code_change_set)
         normalized_results = normalize_task_results(
@@ -198,6 +219,8 @@ def _emit_build_progress(
     build_execution_scope: dict[str, Any] | None,
     build_events: list[str],
     message: str,
+    active_tool_activities: dict[str, dict[str, Any]] | None = None,
+    ephemeral: bool = False,
 ) -> None:
     """向 AG-UI 自定义流发送当前构建切片，供前端实时刷新任务进度。"""
 
@@ -215,6 +238,19 @@ def _emit_build_progress(
             execution_slice["tasks"],
         ),
     )
+    activities = active_tool_activities or {}
+    execution_slice["tasks"] = [
+        {
+            **task,
+            **(
+                {"activeToolActivity": activities[str(task.get("id") or "")]}
+                if task.get("status") == "running"
+                and str(task.get("id") or "") in activities
+                else {}
+            ),
+        }
+        for task in execution_slice["tasks"]
+    ]
     progress_writer(
         {
             "type": "workflow.build.progress",
@@ -222,6 +258,7 @@ def _emit_build_progress(
             "phase": "build",
             "status": "running",
             "message": message,
+            "ephemeral": ephemeral,
             "state": {
                 "phase": "build",
                 "status": "running",
@@ -425,16 +462,43 @@ def run_build_scheduler(
         ready_ids = selection["ready_task_ids"]
         build_events.append(f"scheduler:dispatch:{','.join(ready_ids)}")
         running_tasks = mark_tasks_running(current_state["tasks"], ready_ids)
+        active_tool_activities: dict[str, dict[str, Any]] = {}
+        running_message = f"正在执行构建任务：{', '.join(ready_ids)}"
         _emit_build_progress(
             progress_writer,
             current_state={**current_state, "tasks": running_tasks},
             build_execution_scope=build_execution_scope,
             build_events=build_events,
-            message=f"正在执行构建任务：{', '.join(ready_ids)}",
+            message=running_message,
         )
+
+        def update_batch_tool_activity(
+            owner_tasks: list[dict[str, Any]],
+            activity: dict[str, Any] | None,
+        ) -> None:
+            """让批次内最新工具活动覆盖旧值，并发送不进入历史事件的临时切片。"""
+
+            owner_task_ids = [str(task.get("id") or "") for task in owner_tasks]
+            if activity is None:
+                for task_id in owner_task_ids:
+                    active_tool_activities.pop(task_id, None)
+            else:
+                for task_id in task_ids_for_tool_activity(activity, owner_tasks):
+                    active_tool_activities[task_id] = activity
+            _emit_build_progress(
+                progress_writer,
+                current_state={**current_state, "tasks": running_tasks},
+                build_execution_scope=build_execution_scope,
+                build_events=build_events,
+                message=running_message,
+                active_tool_activities=active_tool_activities,
+                ephemeral=True,
+            )
+
         results, code_change_sets = _execute_ready_tasks(
             {**current_state, "tasks": running_tasks},
             ready_tasks,
+            on_batch_tool_activity=update_batch_tool_activity,
         )
         all_code_change_sets.extend(code_change_sets)
         updated = _apply_scheduler_results(

@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.agents.messages import last_agent_text
+from app.agents.tool_activity_stream import (
+    ToolActivityCallback,
+    invoke_agent_with_tool_activity,
+)
 from app.config import Settings
 from app.services.build_result_coordinator import create_agent_task_result
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
@@ -47,13 +50,15 @@ def _invoke_live_data_source_agent(
     tasks: list[dict[str, Any]],
     workspace: str | None,
     selected_skill_names: list[str] | None,
+    on_tool_activity: ToolActivityCallback | None = None,
 ) -> str:
     """使用本次工作流的技能白名单调用数据源 Deep Agent。"""
 
     # 延迟创建可确保 Agent 的工作区和技能权限只属于本次运行。
     from app.agents import create_agent_bundle
 
-    result = create_agent_bundle(workspace, selected_skill_names).data_source.invoke(
+    return invoke_agent_with_tool_activity(
+        create_agent_bundle(workspace, selected_skill_names).data_source,
         {
             "messages": [
                 {
@@ -65,9 +70,10 @@ def _invoke_live_data_source_agent(
                     ),
                 }
             ]
-        }
+        },
+        workspace=workspace,
+        on_tool_activity=on_tool_activity,
     )
-    return last_agent_text(result)
 
 
 def generate_data_sources_with_deep_agent(
@@ -77,6 +83,7 @@ def generate_data_sources_with_deep_agent(
     tasks: list[dict[str, Any]],
     workspace: str | None = None,
     selected_skill_names: list[str] | None = None,
+    on_tool_activity: ToolActivityCallback | None = None,
 ) -> list[dict[str, Any]]:
     """通过带技能白名单的 Data Source Deep Agent 执行已批准任务。"""
 
@@ -90,6 +97,7 @@ def generate_data_sources_with_deep_agent(
         tasks=tasks,
         workspace=workspace,
         selected_skill_names=selected_skill_names,
+        on_tool_activity=on_tool_activity,
     )
     return [
         create_agent_task_result(

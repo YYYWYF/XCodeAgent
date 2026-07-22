@@ -11,6 +11,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/skillSelection'
 import { AgUiChatSession, buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
+import { buildToolActivityPlacement } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import {
   processStepsForDisplay,
   workflowMessageContentForDisplay
@@ -434,6 +435,51 @@ test('多轮构建测试历史按 attempt 展开并把构建卡挂在对应步�
   )
   assert.equal((markup.match(/Build Run/g) || []).length, 2)
   assert.ok(markup.indexOf('Build Run') < markup.indexOf('集成测试与质量门禁'))
+})
+
+test('运行中任务默认折叠并只显示最新工具活动', () => {
+  const task = {
+    id: 'home-page',
+    title: '实现概览页',
+    description: '生成页面主体',
+    status: 'running' as const,
+    activeToolActivity: {
+      callId: 'edit-home',
+      tool: 'edit_file' as const,
+      category: 'write' as const,
+      status: 'running' as const,
+      message: '正在编辑文件：/apps/demo/frontend/src/pages/Home/index.tsx',
+      path: '/apps/demo/frontend/src/pages/Home/index.tsx'
+    }
+  }
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: true,
+      steps: [
+        {
+          id: 'workflow:build',
+          kind: 'workflow',
+          status: 'running',
+          title: '正在执行 代码生成与构建协调',
+          detail: '正在执行构建任务：home-page',
+          sequence: 1,
+          nodeName: 'build',
+          buildExecutionSlice: {
+            scope: { type: 'page', targetId: 'home' },
+            tasks: [task],
+            summary: { total: 1, running: 1, completed: 0, failed: 0, pending: 0 }
+          }
+        }
+      ]
+    })
+  )
+
+  assert.equal((markup.match(/aria-live="polite"/g) || []).length, 1)
+  assert.ok(markup.includes('正在编辑文件'))
+  assert.ok(markup.includes('workflow-build-tool-activity'))
+  assert.equal(buildToolActivityPlacement(task, false), 'header')
+  assert.equal(buildToolActivityPlacement(task, true), 'details')
+  assert.equal(buildToolActivityPlacement({ ...task, status: 'completed' }, false), undefined)
 })
 
 test('更早的 session 可从 timeline 和 snake_case 测试报告恢复步骤', () => {

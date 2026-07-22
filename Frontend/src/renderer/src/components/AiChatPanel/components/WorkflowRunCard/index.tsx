@@ -190,6 +190,7 @@ function BuildExecutionSliceProgress({
 }): ReactElement | null {
   /** 展示当前页面或数据源范围的构建进度，不做应用级汇总。 */
 
+  const [activeTaskKeys, setActiveTaskKeys] = useState<string[]>([]);
   const scope = executionSlice.scope;
   if (!scope) return null;
   const tasks = Array.isArray(executionSlice.tasks) ? executionSlice.tasks : [];
@@ -211,9 +212,7 @@ function BuildExecutionSliceProgress({
   const targetId = scope.targetId || executionSlice.target_unit_ids?.[0] || "";
   const progressStatus = failed > 0 ? "exception" : completed === total && total > 0 ? "success" : "active";
   const displayTasks = sortBuildTasksForDisplay(tasks);
-  const runningTaskKeys = displayTasks
-    .filter((task) => task.status === "running")
-    .map(taskId);
+  const expandedTaskKeys = new Set(activeTaskKeys);
 
   return (
     <div className={cx("workflow-build-progress")}>
@@ -255,14 +254,23 @@ function BuildExecutionSliceProgress({
         <div className={cx("workflow-build-task-section")}>
           <Text strong>任务详情</Text>
           <Collapse
+            activeKey={activeTaskKeys}
             className={cx("workflow-build-task-list")}
-            defaultActiveKey={runningTaskKeys}
             expandIconPosition="right"
+            onChange={(keys) => {
+              const nextKeys = Array.isArray(keys) ? keys : [keys];
+              setActiveTaskKeys(nextKeys.map(String));
+            }}
           >
           {displayTasks.map((task) => (
             <Collapse.Panel
               className={cx("workflow-build-task-panel", task.status || "pending")}
-              header={<BuildExecutionTaskHeader task={task} />}
+              header={(
+                <BuildExecutionTaskHeader
+                  expanded={expandedTaskKeys.has(taskId(task))}
+                  task={task}
+                />
+              )}
               key={taskId(task)}
             >
               <BuildExecutionTaskDetails task={task} />
@@ -325,8 +333,10 @@ function BuildProgressStat({
 }
 
 function BuildExecutionTaskHeader({
+  expanded,
   task,
 }: {
+  expanded: boolean;
   task: WorkflowBuildExecutionTask;
 }): ReactElement {
   /** 渲染可折叠任务卡片的头部摘要。 */
@@ -334,17 +344,22 @@ function BuildExecutionTaskHeader({
   const status = String(task.status || "pending");
   const description = task.description || task.unit_id || taskId(task);
   return (
-    <div className={cx("workflow-build-task-header", status)}>
-      <span className={cx("workflow-build-task-status-icon")} aria-hidden="true">
-        {taskStatusIcon(status)}
-      </span>
-      <div className={cx("workflow-build-task-title")}>
-        <Text strong>{task.title || taskId(task)}</Text>
-        <Text type="secondary">{description}</Text>
+    <div className={cx("workflow-build-task-header-shell")}>
+      <div className={cx("workflow-build-task-header", status)}>
+        <span className={cx("workflow-build-task-status-icon")} aria-hidden="true">
+          {taskStatusIcon(status)}
+        </span>
+        <div className={cx("workflow-build-task-title")}>
+          <Text strong>{task.title || taskId(task)}</Text>
+          <Text type="secondary">{description}</Text>
+        </div>
+        <Tag className={cx("workflow-build-task-status-tag", status)} color={taskStatusColor(status)}>
+          {taskStatusText(status)}
+        </Tag>
       </div>
-      <Tag className={cx("workflow-build-task-status-tag", status)} color={taskStatusColor(status)}>
-        {taskStatusText(status)}
-      </Tag>
+      {buildToolActivityPlacement(task, expanded) === "header" && (
+        <BuildToolActivity activity={task.activeToolActivity!} />
+      )}
     </div>
   );
 }
@@ -407,6 +422,42 @@ function BuildExecutionTaskDetails({
           </div>
         </div>
       )}
+      {buildToolActivityPlacement(task, true) === "details" && (
+        <BuildToolActivity activity={task.activeToolActivity!} />
+      )}
+    </div>
+  );
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildToolActivityPlacement(
+  task: WorkflowBuildExecutionTask,
+  expanded: boolean,
+): "header" | "details" | undefined {
+  /** 决定实时工具活动的唯一渲染位置，任务终态或无活动时不展示。 */
+
+  if (task.status !== "running" || !task.activeToolActivity) return undefined;
+  return expanded ? "details" : "header";
+}
+
+function BuildToolActivity({
+  activity,
+}: {
+  activity: NonNullable<WorkflowBuildExecutionTask["activeToolActivity"]>;
+}): ReactElement {
+  /** 以单行高亮样式展示当前任务最新工具操作，不展开原始工具参数。 */
+
+  return (
+    <div
+      aria-label={activity.message}
+      aria-live="polite"
+      className={cx("workflow-build-tool-activity", activity.status)}
+      title={activity.message}
+    >
+      <span className={cx("workflow-build-tool-activity-icon")} aria-hidden="true">
+        {activity.status === "running" ? <LoadingOutlined spin /> : <CloseCircleOutlined />}
+      </span>
+      <Text>{activity.message}</Text>
     </div>
   );
 }

@@ -51,6 +51,25 @@ def _decode_agent_process_frames(frames: list[str]) -> list[dict]:
     return decoded
 
 
+def _decode_workflow_run_frames(frames: list[str]) -> list[dict]:
+    """解析 workflow-run 自定义帧，用于确认临时 UI 活动不会进入持久化事件。"""
+
+    decoded: list[dict] = []
+    for frame in frames:
+        for line in frame.splitlines():
+            if not line.startswith("data:"):
+                continue
+            try:
+                event = json.loads(line[len("data:"):].strip())
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "CUSTOM" and event.get("name") == "workflow-run":
+                value = event.get("value")
+                if isinstance(value, dict):
+                    decoded.append(value)
+    return decoded
+
+
 class FakeWorkflowGraph:
     def __init__(self) -> None:
         self.initial_states: list[dict] = []
@@ -359,11 +378,63 @@ class FakeRepairLoopGraph:
             }
         )
 
+
+class FakeEphemeralBuildActivityGraph:
+    """模拟一个带临时工具活动、随后正常完成的构建节点。"""
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        del initial_state, config, stream_mode
+        yield "custom", {
+            "type": "workflow.build.progress",
+            "node_name": "build",
+            "status": "running",
+            "message": "正在执行构建任务：page",
+            "ephemeral": True,
+            "state": {
+                "phase": "build",
+                "build_summary": {"status": "running", "running": 1},
+                "build_execution_slice": {
+                    "scope": {"type": "page", "targetId": "home"},
+                    "tasks": [
+                        {
+                            "id": "page",
+                            "status": "running",
+                            "activeToolActivity": {
+                                "callId": "read-page",
+                                "tool": "read_file",
+                                "category": "read",
+                                "status": "running",
+                                "message": "正在读取文件：/src/Page.tsx",
+                                "path": "/src/Page.tsx",
+                            },
+                        }
+                    ],
+                    "summary": {"total": 1, "running": 1},
+                },
+            },
+        }
+        yield "updates", {
+            "build": {
+                "phase": "build",
+                "status": "completed",
+                "build_summary": {"status": "completed", "completed": 1},
+                "build_execution_slice": {
+                    "scope": {"type": "page", "targetId": "home"},
+                    "tasks": [{"id": "page", "status": "completed"}],
+                    "summary": {"total": 1, "completed": 1},
+                },
+            }
+        }
+
     async def aget_state(self, config):
-        """提供异步状态读取兼容接口。"""
-
-        return self.get_state(config)
-
+        del config
+        return SimpleNamespace(
+            values={
+                "phase": "integration_test",
+                "status": "completed",
+                "timeline": ["build"],
+            }
+        )
 
 class FakeAskUserToolGraph:
     async def astream(self, initial_state, *, config, stream_mode):
@@ -833,6 +904,38 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         )
         self.assertEqual(terminal_frames[1]["status"], "failed")
         self.assertIn("buildExecutionSlice", terminal_frames[2])
+
+    def test_ephemeral_build_activity_updates_step_without_entering_workflow_history(self) -> None:
+        """工具活动应实时更新构建卡，但不能写入 workflow-run 事件历史。"""
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeEphemeralBuildActivityGraph(),
+                payload={
+                    "threadId": "thread-tool-activity",
+                    "runId": "run-tool-activity",
+                    "messages": [{"role": "user", "content": "build page"}],
+                    "forwardedProps": {"resumeFrom": "build"},
+                },
+            )
+            return [frame async for frame in stream]
+
+        frames = asyncio.run(collect())
+        process_frames = _decode_agent_process_frames(frames)
+        workflow_frames = _decode_workflow_run_frames(frames)
+        activity_frame = next(
+            frame
+            for frame in process_frames
+            if frame.get("buildExecutionSlice", {}).get("tasks", [{}])[0].get(
+                "activeToolActivity"
+            )
+        )
+
+        self.assertEqual(
+            activity_frame["buildExecutionSlice"]["tasks"][0]["activeToolActivity"]["callId"],
+            "read-page",
+        )
+        self.assertNotIn("read-page", json.dumps(workflow_frames, ensure_ascii=False))
 
     def test_stream_emits_ag_ui_frames_for_openai_backed_workflow(self) -> None:
         graph = FakeWorkflowGraph()

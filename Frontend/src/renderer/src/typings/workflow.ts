@@ -228,6 +228,15 @@ export type WorkflowBuildExecutionScope = {
   targetId?: string
 }
 
+export type WorkflowBuildToolActivity = {
+  callId: string
+  tool: 'ls' | 'read_file' | 'glob' | 'grep' | 'write_file' | 'edit_file' | 'delete_file'
+  category: 'browse' | 'read' | 'search' | 'write' | 'delete'
+  status: 'running' | 'failed'
+  message: string
+  path?: string
+}
+
 export type WorkflowBuildExecutionTask = {
   id?: string
   task_id?: string
@@ -244,6 +253,7 @@ export type WorkflowBuildExecutionTask = {
   allowed_paths?: string[]
   acceptanceCriteria?: string[]
   source_refs?: Record<string, unknown>
+  activeToolActivity?: WorkflowBuildToolActivity
 }
 
 export type WorkflowBuildExecutionSlice = {

@@ -4,6 +4,7 @@ import type {
   DevelopmentOrchestrationPayload,
   EditorMode,
   ChatMessageSkill,
+  WorkflowBuildExecutionSlice,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet,
 } from '../typings';
@@ -128,13 +129,37 @@ export function normalizeMessageSkills(value: unknown): ChatMessageSkill[] | und
 }
 
 function normalizeProcessSteps(value: unknown): ProcessStepRecord[] | undefined {
+  /** 恢复会话步骤时剥离运行期工具活动，避免把瞬时状态误显示为历史执行。 */
+
   if (!Array.isArray(value)) return undefined;
-  const steps = value.filter((item): item is ProcessStepRecord => {
-    if (!item || typeof item !== 'object') return false;
-    const step = item as Partial<ProcessStepRecord>;
-    return Boolean(step.id && step.title && step.kind && step.status);
-  });
+  const steps = value
+    .filter((item): item is ProcessStepRecord => {
+      if (!item || typeof item !== 'object') return false;
+      const step = item as Partial<ProcessStepRecord>;
+      return Boolean(step.id && step.title && step.kind && step.status);
+    })
+    .map((step) => ({
+      ...step,
+      ...(step.buildExecutionSlice
+        ? { buildExecutionSlice: withoutToolActivity(step.buildExecutionSlice) }
+        : {}),
+    }));
   return steps.length > 0 ? steps : undefined;
+}
+
+function withoutToolActivity(
+  executionSlice: WorkflowBuildExecutionSlice,
+): WorkflowBuildExecutionSlice {
+  /** 复制构建切片并删除任务上的临时工具活动，不修改调用方持有的会话对象。 */
+
+  return {
+    ...executionSlice,
+    tasks: executionSlice.tasks?.map((task) => {
+      const persistedTask = { ...task };
+      delete persistedTask.activeToolActivity;
+      return persistedTask;
+    }),
+  };
 }
 
 function normalizeToolCalls(value: unknown): ToolCallRecord[] | undefined {

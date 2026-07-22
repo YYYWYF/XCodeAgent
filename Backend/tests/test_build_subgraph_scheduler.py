@@ -223,6 +223,107 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             all(task["status"] == "completed" for task in final_slice["tasks"])
         )
 
+    def test_build_scheduler_streams_ephemeral_tool_activity_and_clears_it(self) -> None:
+        """工具活动应只进入运行中任务的临时切片，并在批次结束后清除。"""
+
+        progress_events: list[dict] = []
+        tasks = [
+            {
+                "id": "page-a",
+                "unit_id": "page:home",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": [],
+                "allowed_paths": ["Frontend/src/PageA.tsx"],
+            },
+            {
+                "id": "page-b",
+                "unit_id": "page:home",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": [],
+                "allowed_paths": ["Frontend/src/PageB.tsx"],
+            },
+        ]
+
+        def frontend_runner(**kwargs):
+            active_task = kwargs["tasks"][0]
+            active_path = active_task["allowed_paths"][0]
+            kwargs["on_tool_activity"](
+                {
+                    "callId": f"edit-{active_task['id']}",
+                    "tool": "edit_file",
+                    "category": "write",
+                    "status": "running",
+                    "message": f"正在编辑文件：/{active_path}",
+                    "path": f"/{active_path}",
+                }
+            )
+            for task in kwargs["tasks"]:
+                path = task["allowed_paths"][0]
+                _write_workspace_file(kwargs.get("workspace"), path)
+            return [
+                {"task_id": task["id"], "owner": task["owner"], "status": "completed"}
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                side_effect=frontend_runner,
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v2",
+                                "build_units": {
+                                    "page:home": {"id": "page:home", "kind": "page"},
+                                },
+                                "unit_graph": {"nodes": ["page:home"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "timeline": [],
+                    },
+                    progress_writer=progress_events.append,
+                )
+
+        activity_events = [event for event in progress_events if event.get("ephemeral")]
+        self.assertGreaterEqual(len(activity_events), 4)
+        active_snapshots = [
+            event["state"]["build_execution_slice"]["tasks"]
+            for event in activity_events
+            if any(
+                "activeToolActivity" in task
+                for task in event["state"]["build_execution_slice"]["tasks"]
+            )
+        ]
+        self.assertEqual(
+            {
+                task["activeToolActivity"]["callId"]
+                for tasks_snapshot in active_snapshots
+                for task in tasks_snapshot
+                if "activeToolActivity" in task
+            },
+            {"edit-page-a", "edit-page-b"},
+        )
+        self.assertTrue(
+            all(
+                task["status"] == "running"
+                for tasks_snapshot in active_snapshots
+                for task in tasks_snapshot
+                if "activeToolActivity" in task
+            )
+        )
+        cleared_tasks = activity_events[-1]["state"]["build_execution_slice"]["tasks"]
+        self.assertTrue(all("activeToolActivity" not in task for task in cleared_tasks))
+        self.assertTrue(
+            all("activeToolActivity" not in task for task in result["build_execution_slice"]["tasks"])
+        )
+
     def test_build_scheduler_plans_and_runs_repair_task(self) -> None:
         tasks = [
             {

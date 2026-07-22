@@ -350,6 +350,8 @@ scheduler loop:
 - 任务按 `owner` 派发给对应 CodeRunner：`data_source` 使用 Data Source Generation Agent，`frontend` 使用 Frontend Generation Agent；
 - CodeRunner 只返回结构化 `TaskResult`，不更新 DAG；
 - 同 owner 批次的 workspace diff 必须按每个任务的授权路径重新归属；一个任务只能记录命中自身范围的 `changed_files`，不能把整批变更复制给所有结果；
+- Frontend/Data Source CodeRunner 通过 Deep Agent `messages + values` 主图及子图流捕获 `ls/read_file/glob/grep/write_file/edit_file/delete_file`；内置 `task` 委派后的子代理调用使用流命名空间隔离调用 ID，保证活动持续刷新。系统只把归一化中文文案和虚拟路径作为临时工具活动投影；文件内容、替换参数、工具结果、宿主机路径以及 `write_todos/task/execute` 不进入 UI；
+- 工具活动优先按 `allowed_paths`、`targetFiles`、`change_scope` 归属具体运行任务，无法精确命中时回退当前 owner 批次。它只存在于实时 `buildExecutionSlice.tasks[*].activeToolActivity`，新活动覆盖旧活动，批次结算后清除，不写入 BuildTaskPlan 或 Workflow 历史；
 - 调度器校验缺失或非法结果，并将其转为 `runner_protocol_error`；
 - 失败结果先分类为 `retry`、`repair`、`requires_confirmation` 或 `terminal_failure`。`repair` 会触发 Build Repair Planner 生成受约束 repair task，并 append 到运行时 Build DAG；repair task 成功后调度器关闭原 failed task 并继续释放下游依赖。`requires_confirmation` 和 `terminal_failure` 仍会阻断构建并写入摘要。
 
@@ -467,7 +469,7 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 
 为避免卡死，Graph State 记录 `repair_iteration` 和 `max_repair_iterations`。计数只在 repair task 被 BuildScheduler 真实派发时增加，生成计划、重复测试或继续执行旧任务都不消耗预算。调度开始时先用最新 `state.tasks` 重建 BuildTaskPlan，再追加 integration repair tasks，并只从该计划读取任务；repair task 必须携带当前 `build_execution_scope` 对应的 `unit_id` 和精确路径，确保能命中页面或数据源切片。超过预算后持久化 `terminal_failure` plan 并路由到 `handle_failure`。
 
-AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `nodeName`、`attempt`、`iterationKind` 和 `buildExecutionSlice`。首次节点仍使用 `workflow:build` / `workflow:integration_test`，后续轮次使用 `workflow:build:2` 等唯一 ID，历史事件按 attempt 恢复为“首次构建 → 首次测试未通过 → 修复构建 → 复测”。构建进度卡由对应 build 步骤详情承载，不再在消息列表末尾重复渲染；质量门禁失败显示 `failed`，等待确认显示 `requires_user_input`。
+AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `nodeName`、`attempt`、`iterationKind` 和 `buildExecutionSlice`。首次节点仍使用 `workflow:build` / `workflow:integration_test`，后续轮次使用 `workflow:build:2` 等唯一 ID，历史事件按 attempt 恢复为“首次构建 → 首次测试未通过 → 修复构建 → 复测”。构建进度卡由对应 build 步骤详情承载，不再在消息列表末尾重复渲染；任务卡默认折叠，运行任务的 `activeToolActivity` 在折叠 Header 下方显示，展开时只移动到详情底部。质量门禁失败显示 `failed`，等待确认显示 `requires_user_input`。
 
 该修复闭环沿用以下参考架构边界：learn-coding-agent 的执行—验证—修复紧凑循环覆盖代码、测试和 API 契约错误；OpenCode 风格的可恢复 session 状态持久化修复计数、计划和终止原因；Deep Agents 的 RepairPlanner 只接收结构化失败证据并生成受限任务。为满足 128k 上下文预算，不注入完整仓库、全量日志或会话历史。
 

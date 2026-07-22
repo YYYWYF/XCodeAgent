@@ -321,36 +321,38 @@ def build_workflow_ag_ui_stream(
                         progress_message = str(
                             progress.get("message") or "构建任务进度已更新。"
                         )
-                        _workflow_event(
-                            events,
-                            "workflow.node.progress",
-                            run_id=run_id,
-                            thread_id=thread_id,
-                            node_name=progress_node,
-                            status=str(progress.get("status") or "running"),
-                            message=progress_message,
-                            data={
-                                "phase": progress_state.get("phase", progress_node),
-                                "stateDelta": _public_workflow_state(progress_state),
-                                "detail": {
-                                    "buildSummary": progress_state.get("build_summary", {}),
-                                    "buildExecutionSlice": progress_state.get(
-                                        "build_execution_slice"
-                                    ),
-                                    "buildEvents": progress_state.get("build_events", []),
+                        # 工具活动只更新当前 ProcessStep，不写入 Workflow 历史或状态快照。
+                        if progress.get("ephemeral") is not True:
+                            _workflow_event(
+                                events,
+                                "workflow.node.progress",
+                                run_id=run_id,
+                                thread_id=thread_id,
+                                node_name=progress_node,
+                                status=str(progress.get("status") or "running"),
+                                message=progress_message,
+                                data={
+                                    "phase": progress_state.get("phase", progress_node),
+                                    "stateDelta": _public_workflow_state(progress_state),
+                                    "detail": {
+                                        "buildSummary": progress_state.get("build_summary", {}),
+                                        "buildExecutionSlice": progress_state.get(
+                                            "build_execution_slice"
+                                        ),
+                                        "buildEvents": progress_state.get("build_events", []),
+                                    },
                                 },
-                            },
-                            attempt=progress_attempt,
-                            iteration_kind=progress_iteration_kind,
-                        )
-                        for frame in _workflow_ag_ui_frames(
-                            encoder,
-                            run_id=run_id,
-                            thread_id=thread_id,
-                            events=events,
-                            result=progress_state,
-                        ):
-                            yield frame
+                                attempt=progress_attempt,
+                                iteration_kind=progress_iteration_kind,
+                            )
+                            for frame in _workflow_ag_ui_frames(
+                                encoder,
+                                run_id=run_id,
+                                thread_id=thread_id,
+                                events=events,
+                                result=progress_state,
+                            ):
+                                yield frame
                         yield _process_frame(
                             encoder,
                             id=_process_step_id(progress_node, progress_attempt),

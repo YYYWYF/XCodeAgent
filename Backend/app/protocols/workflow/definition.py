@@ -81,7 +81,10 @@ def workflow_capabilities() -> dict[str, Any]:
                     "nodeName": "Stable workflow node name.",
                     "attempt": "One-based execution attempt; omitted by legacy sessions.",
                     "iterationKind": "initial_build|initial_test|repair_build|retest|initial",
-                    "buildExecutionSlice": "Build-task snapshot attached to the matching build attempt.",
+                    "buildExecutionSlice": (
+                        "Build-task snapshot attached to the matching build attempt; running "
+                        "tasks may carry ephemeral activeToolActivity."
+                    ),
                     "checks": {
                         "description": "Incremental integration-test check snapshot.",
                         "item": {
