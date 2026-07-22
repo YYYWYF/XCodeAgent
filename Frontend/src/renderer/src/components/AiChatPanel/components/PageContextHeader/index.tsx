@@ -125,7 +125,7 @@ export default function PageContextHeader({
           disabled={!previewAvailable}
           icon={isPageOpen ? <CloseOutlined /> : <ExportOutlined />}
           onClick={handleTogglePage}
-          type={isPageOpen ? 'default' : 'primary'}
+          type="primary"
         >
           {isPageOpen ? '关闭页面' : '打开页面'}
         </Button>
