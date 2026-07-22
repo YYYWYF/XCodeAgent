@@ -280,7 +280,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             }
           ]}
         >
-          <TabHintInput placeholder="请输入页面根路由" />
+          <TabHintInput form={form} fieldName={['menus', 'rootPath']} placeholder="请输入页面根路由" />
         </Form.Item>
       </section>
 
@@ -377,6 +377,8 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
         </Form.Item>
         <Form.Item label="请求方式" name={['track', 'method']}>
           <TabHintAutoComplete
+            form={form}
+            fieldName={['track', 'method']}
             allowClear={false}
             defaultActiveFirstOption={false}
             disabled={!trackEnabled}

@@ -7,7 +7,7 @@ import {
   FileTextOutlined
 } from '@ant-design/icons'
 import { Button, Checkbox, Form, Input, Radio, Tag, Typography } from 'antd'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { ReactElement } from 'react'
 import MarkdownContent from '../MarkdownContent/MarkdownContent'
 import DetailReview from '../AiChatPanel/components/WorkflowRunCard/DetailReview'
@@ -352,9 +352,13 @@ export default function ApplicationPlanningQuestionPanel({
               disabled={disabled}
               placeholder={
                 isRequirementConfirmation
-                  ? '意见（可选）：如需调整，请填写具体内容'
-                  : '意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容'
+                  ? '意见（可选）：如需调整，请填写具体内容 (按 Tab 采用)'
+                  : '意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容 (按 Tab 采用)'
               }
+              onKeyDown={(e) => handleTabToFillPlaceholder(e, isRequirementConfirmation
+                ? '意见（可选）：如需调整，请填写具体内容'
+                : '意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容'
+              )}
             />
           </Form.Item>
         ) : (
@@ -471,6 +475,28 @@ function PlanningQuestionControl({
   question: WorkflowClarificationQuestion
   value?: WorkflowClarificationAnswer
 }): ReactElement {
+  // Tab 键填充 placeholder 的处理函数
+  const handleTabToFillPlaceholder = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>, placeholder?: string) => {
+      if (e.key !== 'Tab') return
+
+      const target = e.target as HTMLTextAreaElement
+      const currentValue = typeof value === 'string' ? value : ''
+
+      // 如果输入框已有内容，则不处理
+      if (currentValue) return
+
+      // 阻止默认的 Tab 行为（焦点切换）
+      e.preventDefault()
+
+      // 清理 placeholder 中的提示文本 (按 Tab 采用)
+      const cleanValue = (placeholder || '').replace(/\s*\(按 Tab 采用\)\s*$/, '')
+
+      // 触发 onChange 更新值
+      onChange?.(cleanValue)
+    },
+    [value, onChange]
+  )
   const options =
     question.type === 'yesno'
       ? [
@@ -543,7 +569,14 @@ function PlanningQuestionControl({
             autoSize={{ minRows: 2, maxRows: 5 }}
             disabled={disabled}
             onChange={(event) => emitOther(event.target.value)}
-            placeholder="请补充其他选择或说明"
+            placeholder="请补充其他选择或说明 (按 Tab 采用)"
+            onKeyDown={(e) => {
+              if (e.key !== 'Tab') return
+              const target = e.target as HTMLTextAreaElement
+              if (target.value) return
+              e.preventDefault()
+              emitOther('请补充其他选择或说明')
+            }}
             value={other}
           />
         ) : null}
@@ -556,7 +589,8 @@ function PlanningQuestionControl({
       autoSize={{ minRows: 3, maxRows: 7 }}
       disabled={disabled}
       onChange={(event) => onChange?.(event.target.value)}
-      placeholder={question.placeholder || '请输入你的回答，也可以直接说明希望采用的方案。'}
+      placeholder={question.placeholder ? `${question.placeholder} (按 Tab 采用)` : '请输入你的回答，也可以直接说明希望采用的方案。 (按 Tab 采用)'}
+      onKeyDown={(e) => handleTabToFillPlaceholder(e, question.placeholder || '请输入你的回答，也可以直接说明希望采用的方案。')}
       value={typeof value === 'string' ? value : ''}
     />
   )
