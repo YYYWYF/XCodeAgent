@@ -47,7 +47,6 @@ export default function WorkflowRunCard({
 }: WorkflowRunCardProps): ReactElement {
   const status = String(workflow.summary.status || "unknown");
   const artifacts = workflow.summary.artifacts || {};
-  const buildExecutionSlice = workflowBuildExecutionSlice(workflow);
   const clarification = workflowClarification(workflow);
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification);
   const clarificationQuestions = clarification?.questions || [];
@@ -111,9 +110,6 @@ export default function WorkflowRunCard({
             </div>
           ))}
         </div>
-      )}
-      {buildExecutionSlice && (
-        <BuildExecutionSliceProgress executionSlice={buildExecutionSlice} />
       )}
       {(clarificationQuestions.length > 0 || detailReview) && (
         <div className={cx("workflow-clarification")}>
@@ -195,7 +191,7 @@ function BuildExecutionSliceProgress({
   /** 展示当前页面或数据源范围的构建进度，不做应用级汇总。 */
 
   const scope = executionSlice.scope;
-  if (!scope || scope.type === "application") return null;
+  if (!scope) return null;
   const tasks = Array.isArray(executionSlice.tasks) ? executionSlice.tasks : [];
   const summary = executionSlice.summary || {};
   const total = numberValue(summary.total, tasks.length);
@@ -211,7 +207,7 @@ function BuildExecutionSliceProgress({
   const pending = numberValue(summary.pending, tasks.filter((task) => !task.status || task.status === "pending").length);
   const reused = numberValue(summary.reused, executionSlice.reusable_task_ids?.length || 0);
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
-  const targetLabel = scope.type === "page" ? "页面" : "数据源";
+  const targetLabel = scope.type === "page" ? "页面" : scope.type === "data_source" ? "数据源" : "应用";
   const targetId = scope.targetId || executionSlice.target_unit_ids?.[0] || "";
   const progressStatus = failed > 0 ? "exception" : completed === total && total > 0 ? "success" : "active";
   const displayTasks = sortBuildTasksForDisplay(tasks);
@@ -276,6 +272,31 @@ function BuildExecutionSliceProgress({
         </div>
       )}
     </div>
+  );
+}
+
+export function BuildExecutionRunCard({
+  executionSlice,
+  status,
+}: {
+  executionSlice: WorkflowBuildExecutionSlice;
+  status: "running" | "completed" | "failed" | "requires_user_input";
+}): ReactElement {
+  /** 在对应构建步骤内部渲染独立的构建轮次卡片。 */
+
+  return (
+    <section className={cx("workflow-run-card", "workflow-build-run-card", status)}>
+      <div className={cx("workflow-run-header")}>
+        <div className={cx("workflow-run-title")}>
+          <span className={cx("workflow-run-signal")} aria-hidden="true" />
+          <Text className={cx("workflow-run-name")} strong>Build Run</Text>
+        </div>
+        <Tag className={cx("workflow-run-status")} color={workflowStatusColor(status)}>
+          {status}
+        </Tag>
+      </div>
+      <BuildExecutionSliceProgress executionSlice={executionSlice} />
+    </section>
   );
 }
 
@@ -758,6 +779,7 @@ function stringList(value: unknown): string[] {
     : [];
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function workflowOriginalRequest(workflow: WorkflowRunPayload): string {
   for (const source of [workflow.result, workflow.state]) {
     const requirementSpec = objectValue(source?.requirement_spec);
@@ -781,6 +803,7 @@ export function workflowOriginalRequest(workflow: WorkflowRunPayload): string {
   return typeof eventRequest === "string" ? eventRequest.trim() : "";
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function buildClarificationContinuationMessage(
   workflow: WorkflowRunPayload,
   answers: ClarificationAnswers,
@@ -893,22 +916,6 @@ function workflowConfirmationArtifact(
   }
 
   return artifact;
-}
-
-function workflowBuildExecutionSlice(
-  workflow: WorkflowRunPayload,
-): WorkflowBuildExecutionSlice | undefined {
-  /** 从 AG-UI state/result 中读取当前页面或数据源执行切片。 */
-
-  const candidates = [
-    workflow.state?.buildExecutionSlice,
-    workflow.state?.build_execution_slice,
-    workflow.result?.buildExecutionSlice,
-    workflow.result?.build_execution_slice,
-  ];
-  const slice = candidates.find((candidate) => candidate && typeof candidate === "object");
-  if (!slice || typeof slice !== "object") return undefined;
-  return slice as WorkflowBuildExecutionSlice;
 }
 
 function taskId(task: WorkflowBuildExecutionTask): string {

@@ -64,7 +64,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         bound_model = Mock()
         model.bind.return_value = bound_model
         bound_model.invoke.return_value = SimpleNamespace(
-            content='{"tasks": [{"id": "task", "owner": "frontend", "description": "任务", "change_scope": []}]}',
+            content='{"tasks": [{"id": "task", "owner": "frontend", "description": "任务", "change_scope": [{"operation": "modify", "path": "src/task.ts"}]}]}',
             usage_metadata=None,
             response_metadata={},
         )
@@ -261,6 +261,97 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "d1",
         )
         self.assertTrue(plan["build_units"]["page:orders"]["input_fingerprint"])
+
+    def test_unit_graph_rewrites_reverse_dependencies_and_excludes_verification_tasks(self) -> None:
+        """复现多任务计划，跨 Unit 反向边被改写且纯验证任务不进入注册表。"""
+
+        base_plan = {
+            "schema_version": "build-dag.v2",
+            "build_units": {
+                "app:backend-bootstrap": {"id": "app:backend-bootstrap", "kind": "application"},
+                "data-source:core": {"id": "data-source:core", "kind": "data_source"},
+                "data-source:user": {"id": "data-source:user", "kind": "data_source"},
+                "app:api-client": {"id": "app:api-client", "kind": "application"},
+                "page:core": {"id": "page:core", "kind": "page"},
+            },
+            "unit_graph": {
+                "nodes": [
+                    "app:backend-bootstrap",
+                    "data-source:core",
+                    "data-source:user",
+                    "app:api-client",
+                    "page:core",
+                ],
+                "edges": [
+                    {"from": "app:backend-bootstrap", "to": "data-source:core", "type": "depends_on"},
+                    {"from": "app:backend-bootstrap", "to": "data-source:user", "type": "depends_on"},
+                    {"from": "app:api-client", "to": "page:core", "type": "depends_on"},
+                    {"from": "data-source:core", "to": "page:core", "type": "depends_on"},
+                ],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+        code_tasks = [
+            ("core", "data-source:core", "data_source", "Backend/core.py"),
+            ("user", "data-source:user", "data_source", "Backend/user.py"),
+            ("bootstrap", "app:backend-bootstrap", "data_source", "Backend/main.py"),
+            ("client", "app:api-client", "frontend", "Frontend/api.ts"),
+            ("page", "page:core", "frontend", "Frontend/Core.tsx"),
+        ]
+        agent_tasks = [
+            {
+                "id": task_id,
+                "unit_id": unit_id,
+                "owner": owner,
+                "description": task_id,
+                "dependencies": ["core", "user"] if task_id == "bootstrap" else [],
+                "change_scope": [{"operation": "modify", "path": path}],
+            }
+            for task_id, unit_id, owner, path in code_tasks
+        ]
+        agent_tasks.extend(
+            [
+                {"id": "verify-shell", "unit_id": "app:frontend-shell", "owner": "frontend", "description": "验证壳", "change_scope": []},
+                {"id": "verify-route", "unit_id": "app:route-registry", "owner": "frontend", "description": "验证路由", "change_scope": []},
+            ]
+        )
+
+        plan = create_build_task_plan(
+            {"version": "1.0.0"},
+            agent_plan={"tasks": agent_tasks},
+            base_build_task_plan=base_plan,
+        )
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+
+        self.assertEqual(set(tasks), {"core", "user", "bootstrap", "client", "page"})
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(tasks["bootstrap"]["dependencies"], [])
+        self.assertEqual(
+            {item["dependency"] for item in tasks["bootstrap"]["dependency_rewrites"]},
+            {"core", "user"},
+        )
+        self.assertEqual(tasks["core"]["dependencies"], ["bootstrap"])
+
+    def test_invalid_graph_reader_preserves_every_registry_task(self) -> None:
+        """无效 DAG 使用完整 nodes 读取，不能退化为不完整拓扑序。"""
+
+        plan = {
+            "task_registry": {
+                "a": {"id": "a"},
+                "b": {"id": "b"},
+                "c": {"id": "c"},
+            },
+            "task_graph": {
+                "nodes": ["a", "b", "c"],
+                "topological_order": ["a"],
+                "validation": {"is_valid": False, "errors": ["cycle"]},
+            },
+        }
+
+        self.assertEqual(
+            [task["id"] for task in tasks_from_build_task_plan(plan)],
+            ["a", "b", "c"],
+        )
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 
 COMMAND_TIMEOUT_SECONDS = 180
+COMMAND_OUTPUT_SUMMARY_LIMIT = 4_000
 CheckProgressCallback = Callable[[dict[str, Any]], None]
 
 
@@ -33,7 +34,7 @@ def run_integration_checks(
     """顺序执行集成检查，并在每项检查状态变化时通知调用方。"""
 
     root = workspace_root(state).resolve()
-    log_root = workflow_artifact_root(state) / "runtime" / "tests"
+    log_root = workflow_artifact_root(state).resolve() / "runtime" / "tests"
     log_root.mkdir(parents=True, exist_ok=True)
     frontend = _find_frontend_package(root)
     workspace_package = _read_package_project(root / "package.json")
@@ -445,6 +446,10 @@ def _run_command_result(
             "finished_at": finished_at,
             "stdout_log": str(stdout_log),
             "stderr_log": str(stderr_log),
+            "stdout_log_virtual": f"/{_relative(stdout_log, root)}",
+            "stderr_log_virtual": f"/{_relative(stderr_log, root)}",
+            "stdout_tail": stdout[-COMMAND_OUTPUT_SUMMARY_LIMIT:],
+            "stderr_tail": stderr[-COMMAND_OUTPUT_SUMMARY_LIMIT:],
         },
     }
     report_check_progress(on_progress, status="passed" if passed else "failed", check=result)

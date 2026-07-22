@@ -13,6 +13,8 @@ export type WorkflowEvent = {
   message?: string
   data?: Record<string, unknown>
   timestamp?: string
+  attempt?: number
+  iterationKind?: string
 }
 
 export type WorkflowSummary = {

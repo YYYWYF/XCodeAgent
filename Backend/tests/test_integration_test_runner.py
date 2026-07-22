@@ -91,6 +91,10 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 stderr_log.read_text(encoding="utf-8"),
                 "network timeout",
             )
+            self.assertTrue(install["execution"]["stdout_log_virtual"].startswith("/.xcodeagent/"))
+            self.assertTrue(install["execution"]["stderr_log_virtual"].startswith("/.xcodeagent/"))
+            self.assertEqual(install["execution"]["stdout_tail"], "安装中")
+            self.assertEqual(install["execution"]["stderr_tail"], "network timeout")
 
     def test_reports_running_and_terminal_progress_for_each_check(self) -> None:
         """验证实时进度先进入运行中，再以通过、跳过或失败状态收敛。"""

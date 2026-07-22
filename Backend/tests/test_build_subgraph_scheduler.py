@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from app.graph.subgraphs.build import build, run_build_scheduler
 from app.services.build_task_planner import replace_build_task_plan_tasks
+from app.services.build_scheduler import verify_task_file_changes
 
 
 def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
@@ -20,6 +21,26 @@ def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_file_changes_are_attributed_to_each_task_scope(self) -> None:
+        """同 owner 批次的实际变更只能记到授权路径命中的任务。"""
+
+        results = verify_task_file_changes(
+            results=[
+                {"task_id": "page-a", "status": "completed"},
+                {"task_id": "page-b", "status": "completed"},
+            ],
+            code_change_set={"files": [{"path": "Frontend/src/PageA.tsx"}]},
+            tasks=[
+                {"id": "page-a", "allowed_paths": ["Frontend/src/PageA.tsx"]},
+                {"id": "page-b", "allowed_paths": ["Frontend/src/PageB.tsx"]},
+            ],
+        )
+
+        self.assertEqual(results[0]["changed_files"], ["Frontend/src/PageA.tsx"])
+        self.assertEqual(results[0]["status"], "completed")
+        self.assertEqual(results[1]["status"], "failed")
+        self.assertEqual(results[1]["failure_category"], "no_file_changes")
+
     def test_build_scheduler_runs_dependency_order_until_complete(self) -> None:
         runner_skill_sets: list[list[str] | None] = []
         tasks = [
@@ -128,6 +149,9 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         ]
 
         def complete_runner(**kwargs):
+            for task in kwargs["tasks"]:
+                change = task.get("change_scope", [{}])[0]
+                _write_workspace_file(kwargs.get("workspace"), str(change.get("path") or ""))
             return [
                 {
                     "task_id": task["id"],
@@ -323,6 +347,9 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
 
         def complete_runner(**kwargs):
             dispatched_task_ids.extend(task["id"] for task in kwargs["tasks"])
+            for task in kwargs["tasks"]:
+                change = task.get("change_scope", [{}])[0]
+                _write_workspace_file(kwargs.get("workspace"), str(change.get("path") or ""))
             return [
                 {
                     "task_id": task["id"],
@@ -389,6 +416,74 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual(statuses["orders-page"], "completed")
         self.assertEqual(statuses["customers-page"], "pending")
         self.assertEqual(result["build_execution_slice"]["task_ids"], ["orders-api", "orders-page"])
+        self.assertEqual(result["build_summary"]["status"], "completed")
+
+    def test_incoming_integration_repair_task_enters_page_scope_and_counts_on_dispatch(self) -> None:
+        """测试修复任务必须追加到最新计划、命中页面切片并在真实派发后计数。"""
+
+        dispatched_task_ids: list[str] = []
+        tasks = [
+            {
+                "id": "orders-page",
+                "unit_id": "page:orders",
+                "owner": "frontend",
+                "status": "completed",
+                "dependencies": [],
+                "allowed_paths": ["Frontend/src/Orders.tsx"],
+                "change_scope": [{"path": "Frontend/src/Orders.tsx"}],
+            }
+        ]
+        repair_task = {
+            "id": "repair:plan-1:frontend_build:frontend",
+            "task_id": "repair:plan-1:frontend_build:frontend",
+            "kind": "repair",
+            "unit_id": "page:orders",
+            "owner": "frontend",
+            "status": "pending",
+            "dependencies": [],
+            "allowed_paths": ["Frontend/src/Orders.tsx"],
+            "change_scope": [{"path": "Frontend/src/Orders.tsx"}],
+        }
+
+        def repair_runner(**kwargs):
+            dispatched_task_ids.extend(task["id"] for task in kwargs["tasks"])
+            _write_workspace_file(kwargs.get("workspace"), "Frontend/src/Orders.tsx")
+            return [
+                {"task_id": task["id"], "owner": "frontend", "status": "completed"}
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                side_effect=repair_runner,
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_execution_scope": {"type": "page", "targetId": "orders"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v2",
+                                "build_units": {"page:orders": {"id": "page:orders", "kind": "page"}},
+                                "unit_graph": {"nodes": ["page:orders"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "tasks": tasks,
+                        "repair_task_plan": {
+                            "status": "ready",
+                            "decision": "repair",
+                            "tasks": [repair_task],
+                        },
+                        "repair_iteration": 0,
+                    }
+                )
+
+        self.assertEqual(dispatched_task_ids, [repair_task["id"]])
+        self.assertIn(repair_task["id"], result["build_execution_slice"]["task_ids"])
+        self.assertEqual(result["repair_iteration"], 1)
         self.assertEqual(result["build_summary"]["status"], "completed")
 
 

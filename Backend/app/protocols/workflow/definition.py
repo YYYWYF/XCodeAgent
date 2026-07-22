@@ -78,6 +78,10 @@ def workflow_capabilities() -> dict[str, Any]:
             "agentProcess": {
                 "name": PROCESS_EVENT_NAME,
                 "optionalFields": {
+                    "nodeName": "Stable workflow node name.",
+                    "attempt": "One-based execution attempt; omitted by legacy sessions.",
+                    "iterationKind": "initial_build|initial_test|repair_build|retest|initial",
+                    "buildExecutionSlice": "Build-task snapshot attached to the matching build attempt.",
                     "checks": {
                         "description": "Incremental integration-test check snapshot.",
                         "item": {

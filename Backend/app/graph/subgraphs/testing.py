@@ -10,6 +10,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agents.repair_planner import plan_repairs_with_repair_planner_agent
 from app.agents.test.validator import summarize_tests_with_deep_agent
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
+from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.integration_test_runner import report_check_progress, run_integration_checks
@@ -200,6 +201,52 @@ def repair_planning(state: ProjectState) -> dict:
             "test_events": ["repair_planning:skipped"],
         }
 
+    existing_plan = state.get("repair_task_plan")
+    request = str(state.get("request") or "")
+    if (
+        isinstance(existing_plan, dict)
+        and existing_plan.get("decision") == "requires_user_confirmation"
+    ):
+        answer = extract_confirmation_answer(request).replace(" ", "")
+        if any(signal in answer for signal in ("拒绝", "不同意", "不批准")):
+            rejected_plan = {
+                **existing_plan,
+                "status": "terminal_failure",
+                "decision": "terminal_failure",
+                "tasks": [],
+            }
+            return {
+                "repair_task_plan": rejected_plan,
+                "repair_tasks": [],
+                "integration_next_action": "handle_failure",
+                "clarification": {},
+                "test_events": ["repair_planning:scope_rejected"],
+            }
+        if user_confirmed_text(
+            request,
+            positive_signals=("批准", "同意", "确认"),
+            negative_signals=("拒绝", "不同意", "不批准"),
+        ):
+            approved_tasks = [
+                task
+                for task in existing_plan.get("candidateTasks", [])
+                if isinstance(task, dict)
+            ]
+            approved_plan = {
+                **existing_plan,
+                "status": "ready" if approved_tasks else "terminal_failure",
+                "decision": "repair" if approved_tasks else "terminal_failure",
+                "tasks": approved_tasks,
+                "approvedPlanId": existing_plan.get("planId"),
+            }
+            return {
+                "repair_task_plan": approved_plan,
+                "repair_tasks": approved_tasks,
+                "integration_next_action": "repair_build" if approved_tasks else "handle_failure",
+                "clarification": {},
+                "test_events": ["repair_planning:scope_approved"],
+            }
+
     repair_iteration = int(state.get("repair_iteration", 0) or 0)
     max_repair_iterations = int(state.get("max_repair_iterations", 3) or 3)
     if repair_iteration >= max_repair_iterations:
@@ -229,6 +276,9 @@ def repair_planning(state: ProjectState) -> dict:
             test_report=state.get("test_report", {}),
             revision_requests=state.get("revision_requests", []),
             build_task_plan=state.get("build_task_plan"),
+            build_execution_scope=state.get("build_execution_scope"),
+            scoped_tasks=(state.get("build_execution_slice") or {}).get("tasks", []),
+            repair_attempt=repair_iteration + 1,
             workspace=workspace,
             selected_skill_names=state.get("selected_skill_names"),
         ),
@@ -241,10 +291,45 @@ def repair_planning(state: ProjectState) -> dict:
         "repair_task_plan": repair_task_plan,
         "repair_task_plan_path": repair_task_plan_path,
         "repair_tasks": repair_task_plan.get("tasks", []),
-        "repair_iteration": repair_iteration + 1 if next_action == "repair_build" else repair_iteration,
+        "repair_iteration": repair_iteration,
         "max_repair_iterations": max_repair_iterations,
         "integration_next_action": next_action,
+        "clarification": (
+            _repair_scope_confirmation_payload(repair_task_plan)
+            if next_action == "await_user_input"
+            else {}
+        ),
         "test_events": ["repair_planning"],
+    }
+
+
+def _repair_scope_confirmation_payload(repair_task_plan: dict[str, Any]) -> dict[str, Any]:
+    """构造集成测试修复范围的 AG-UI 确认载荷。"""
+
+    plan_id = str(repair_task_plan.get("planId") or "")
+    requested_paths = [
+        str(path) for path in repair_task_plan.get("requestedPaths", []) if str(path).strip()
+    ]
+    reason = str(repair_task_plan.get("reason") or "修复需要用户批准范围。")
+    return {
+        "mode": "repair_scope_confirmation",
+        "status": "requires_user_input",
+        "message": "测试修复计划请求确认代码修改范围。",
+        "planId": plan_id,
+        "requestedPaths": requested_paths,
+        "reason": reason,
+        "questions": [
+            {
+                "id": "repair_scope_confirmation",
+                "header": "修复范围",
+                "question": (
+                    f"计划 {plan_id} 请求修改：{'、'.join(requested_paths) or '未提供额外路径'}。"
+                    f"原因：{reason}。是否批准？"
+                ),
+                "type": "text",
+                "placeholder": "回复“批准修复范围”或“拒绝修复范围”。",
+            }
+        ],
     }
 
 

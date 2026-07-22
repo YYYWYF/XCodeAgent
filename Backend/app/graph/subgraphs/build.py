@@ -12,10 +12,12 @@ from app.agents.repair_planner import (
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.services.build_repair_planner import (
+    approve_repair_scope_confirmation,
     append_repair_tasks_to_build_plan,
     close_repaired_parent_tasks,
     create_build_failure_repair_plan,
 )
+from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
 from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
@@ -110,6 +112,7 @@ def _execute_ready_tasks(
         verified_results = verify_task_file_changes(
             results=normalized_results,
             code_change_set=captured.code_change_set,
+            tasks=owner_tasks,
         )
         all_results.extend(verified_results)
     return all_results, code_change_sets
@@ -234,6 +237,37 @@ def _emit_build_progress(
     )
 
 
+def _repair_scope_confirmation_payload(repair_task_plan: dict[str, Any]) -> dict[str, Any]:
+    """把修复范围扩大请求映射为稳定的 AG-UI 人工确认载荷。"""
+
+    plan_id = str(repair_task_plan.get("planId") or "")
+    requested_paths = [
+        str(path) for path in repair_task_plan.get("requestedPaths", []) if str(path).strip()
+    ]
+    reasons = [
+        str(item.get("reason") or "")
+        for item in repair_task_plan.get("requires_user_confirmation", [])
+        if isinstance(item, dict) and item.get("reason")
+    ]
+    path_text = "、".join(requested_paths) or "未提供额外路径"
+    reason_text = "；".join(reasons) or "修复需要用户批准范围。"
+    return {
+        "mode": "repair_scope_confirmation",
+        "status": "requires_user_input",
+        "message": "修复计划请求扩大或确认代码修改范围。",
+        "planId": plan_id,
+        "requestedPaths": requested_paths,
+        "reason": reason_text,
+        "questions": [
+            {
+                "id": "repair_scope_confirmation",
+                "header": "修复范围",
+                "question": f"计划 {plan_id} 请求修改：{path_text}。原因：{reason_text}。是否批准？",
+                "type": "text",
+                "placeholder": "回复“批准修复范围”或“拒绝修复范围”。",
+            }
+        ],
+    }
 def run_build_scheduler(
     state: ProjectState,
     *,
@@ -242,21 +276,86 @@ def run_build_scheduler(
     """按 build_execution_scope 裁剪任务图，并持续调度到当前切片完成或阻塞。"""
 
     build_task_plan = dict(state.get("build_task_plan") or {})
+    canonical_tasks = list(
+        state.get("tasks") or tasks_from_build_task_plan(build_task_plan)
+    )
+    build_task_plan = replace_build_task_plan_tasks(build_task_plan, canonical_tasks)
     incoming_repair_task_plan = state.get("repair_task_plan")
+    request = str(state.get("request") or "")
+    scope_confirmation_pending = (
+        isinstance(incoming_repair_task_plan, dict)
+        and incoming_repair_task_plan.get("decision") == "requires_user_confirmation"
+    )
+    scope_confirmation_rejected = scope_confirmation_pending and any(
+        signal in extract_confirmation_answer(request).replace(" ", "")
+        for signal in ("拒绝", "不同意", "不批准")
+    )
+    if (
+        scope_confirmation_pending
+        and user_confirmed_text(
+            request,
+            positive_signals=("批准", "同意", "确认"),
+            negative_signals=("拒绝", "不同意", "不批准"),
+        )
+    ):
+        incoming_repair_task_plan = approve_repair_scope_confirmation(
+            incoming_repair_task_plan
+        )
+        scope_confirmation_pending = False
+    if scope_confirmation_pending:
+        tasks = tasks_from_build_task_plan(build_task_plan)
+        execution_slice = resolve_execution_slice(
+            build_task_plan=build_task_plan,
+            tasks=tasks,
+            build_execution_scope=state.get("build_execution_scope"),
+        )
+        build_summary = {
+            **summarize_build_runtime(
+                execution_slice["tasks"],
+                _results_for_tasks(
+                    state.get("build_results", []), execution_slice["tasks"]
+                ),
+            ),
+            "status": "failed" if scope_confirmation_rejected else "requires_confirmation",
+        }
+        return {
+            "phase": "build",
+            "status": "failed" if scope_confirmation_rejected else "requires_user_input",
+            "tasks": tasks,
+            "build_task_plan": build_task_plan,
+            "build_results": list(state.get("build_results", [])),
+            "build_summary": build_summary,
+            "build_execution_scope": state.get("build_execution_scope"),
+            "build_execution_slice": execution_slice,
+            "repair_task_plan": (
+                {**incoming_repair_task_plan, "decision": "terminal_failure", "status": "terminal_failure"}
+                if scope_confirmation_rejected
+                else incoming_repair_task_plan
+            ),
+            "repair_tasks": [],
+            "clarification": (
+                {}
+                if scope_confirmation_rejected
+                else _repair_scope_confirmation_payload(incoming_repair_task_plan)
+            ),
+            "build_events": [
+                "scheduler:repair_scope_rejected"
+                if scope_confirmation_rejected
+                else "scheduler:repair_requires_confirmation"
+            ],
+            "timeline": ["build"],
+        }
     if (
         isinstance(incoming_repair_task_plan, dict)
         and incoming_repair_task_plan.get("tasks")
         and incoming_repair_task_plan.get("decision", "repair") == "repair"
     ):
         build_task_plan = append_repair_tasks_to_build_plan(
-            build_task_plan=replace_build_task_plan_tasks(
-                build_task_plan,
-                list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan)),
-            ),
+            build_task_plan=build_task_plan,
             repair_task_plan=incoming_repair_task_plan,
         )
 
-    tasks = list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
+    tasks = tasks_from_build_task_plan(build_task_plan)
     if not tasks:
         return {
             "phase": "build",
@@ -270,6 +369,7 @@ def run_build_scheduler(
                 "status": "completed",
             },
             "build_events": ["scheduler:no_tasks"],
+            "status": "completed",
         }
 
     current_state: ProjectState = {
@@ -286,8 +386,13 @@ def run_build_scheduler(
     )
     build_events: list[str] = []
     all_code_change_sets: list[dict[str, Any]] = []
-    repair_task_plan: dict[str, Any] = state.get("repair_task_plan", {})
+    repair_task_plan: dict[str, Any] = (
+        incoming_repair_task_plan
+        if isinstance(incoming_repair_task_plan, dict)
+        else state.get("repair_task_plan", {})
+    )
     repair_task_plan_path = state.get("repair_task_plan_path")
+    repair_dispatched = False
     max_iterations = max(len(tasks) * 2, 1)
     progress_writer = progress_writer if progress_writer is not None else _build_progress_writer()
 
@@ -310,6 +415,9 @@ def run_build_scheduler(
             build_events.append("scheduler:completed")
             break
         ready_tasks = selection["ready_tasks"]
+        repair_dispatched = repair_dispatched or any(
+            task.get("kind") == "repair" for task in ready_tasks
+        )
         if not ready_tasks:
             build_events.append("scheduler:blocked")
             break
@@ -445,6 +553,19 @@ def run_build_scheduler(
         _results_for_tasks(build_results, execution_slice["tasks"]),
     )
     merged_code_changes = merge_code_change_sets(all_code_change_sets)
+    workflow_status = (
+        "completed"
+        if build_summary.get("status") == "completed"
+        else "requires_user_input"
+        if build_summary.get("status") == "requires_confirmation"
+        else "failed"
+    )
+    clarification = (
+        _repair_scope_confirmation_payload(repair_task_plan)
+        if isinstance(repair_task_plan, dict)
+        and repair_task_plan.get("decision") == "requires_user_confirmation"
+        else {}
+    )
 
     return {
         "phase": "build",
@@ -468,12 +589,16 @@ def run_build_scheduler(
         "ready_tasks": [],
         "build_results": build_results,
         "build_summary": build_summary,
+        "status": workflow_status,
+        "clarification": clarification,
         "build_execution_scope": build_execution_scope,
         "build_execution_slice": execution_slice,
         "repair_task_plan": repair_task_plan,
         "repair_task_plan_path": repair_task_plan_path,
         "repair_tasks": repair_task_plan.get("tasks", []) if isinstance(repair_task_plan, dict) else [],
         "build_events": build_events,
+        "repair_iteration": int(state.get("repair_iteration", 0) or 0)
+        + (1 if repair_dispatched else 0),
         **code_change_state_update(merged_code_changes),
         "timeline": ["build"],
     }

@@ -551,7 +551,15 @@ def _merge_prepared_scope_tasks(
     for unit_id, unit in (merged.get("build_units") or {}).items():
         if not isinstance(unit, dict) or unit_id not in replaceable_unit_ids:
             continue
-        unit["status"] = "prepared" if unit.get("task_ids") else "not_prepared"
+        if unit.get("task_ids"):
+            unit["status"] = "prepared"
+            continue
+        reuse_evidence = _existing_application_unit_evidence(unit_id, prepared_plan)
+        if reuse_evidence:
+            unit["status"] = "reused"
+            unit["reuse_evidence"] = reuse_evidence
+        else:
+            unit["status"] = "not_prepared"
     result = {
         **merged,
         "prepared_by": prepared_plan.get("prepared_by", merged.get("prepared_by", {})),
@@ -562,6 +570,45 @@ def _merge_prepared_scope_tasks(
         "build_context": build_context,
     }
     return result
+
+
+def _existing_application_unit_evidence(
+    unit_id: str,
+    prepared_plan: dict,
+) -> dict[str, object] | None:
+    """根据任务规划前的工作区检查证据识别可复用的前端壳与路由 Unit。"""
+
+    if unit_id not in {"app:frontend-shell", "app:route-registry"}:
+        return None
+    analysis = prepared_plan.get("workspace_analysis")
+    if not isinstance(analysis, dict) or analysis.get("inspection_status") != "completed":
+        return None
+    paths = [
+        str(path)
+        for key in ("entry_files", "inspected_directories")
+        for path in analysis.get(key, [])
+        if str(path).strip()
+    ]
+    lowered = [path.lower() for path in paths]
+    if unit_id == "app:frontend-shell":
+        matched = [
+            path
+            for path, normalized in zip(paths, lowered)
+            if any(token in normalized for token in ("package.json", "/main.", "/app."))
+        ]
+    else:
+        matched = [
+            path
+            for path, normalized in zip(paths, lowered)
+            if any(token in normalized for token in ("route", "router"))
+        ]
+    if not matched:
+        return None
+    return {
+        "source": "workspace_snapshot",
+        "paths": matched,
+        "reason": "Existing capability is reused; integration_test owns verification.",
+    }
 
 
 def _tasks_by_unit_id(tasks: list[dict]) -> dict[str, list[dict]]:

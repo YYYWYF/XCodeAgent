@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.services.build_repair_planner import (
+    approve_repair_scope_confirmation,
     append_repair_tasks_to_build_plan,
     close_repaired_parent_tasks,
     create_build_failure_repair_plan,
@@ -90,6 +91,16 @@ class BuildRepairPlannerTests(unittest.TestCase):
         self.assertEqual(plan["status"], "requires_user_confirmation")
         self.assertEqual(plan["tasks"], [])
         self.assertEqual(len(plan["requires_user_confirmation"]), 1)
+        self.assertTrue(plan["planId"])
+        self.assertEqual(plan["requestedPaths"], ["Backend/app/**"])
+
+        approved = approve_repair_scope_confirmation(plan)
+
+        self.assertEqual(approved["decision"], "repair")
+        self.assertEqual(approved["approvedPlanId"], plan["planId"])
+        self.assertEqual(len(approved["tasks"]), 1)
+        self.assertEqual(approved["tasks"][0]["unit_id"], "application:root")
+        self.assertEqual(approved["tasks"][0]["allowed_paths"], ["Backend/app/**"])
 
     def test_appends_repair_tasks_to_build_plan(self) -> None:
         repair_task = {"id": "repair:page:test", "kind": "repair", "status": "pending"}

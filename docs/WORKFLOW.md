@@ -271,6 +271,10 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 初始化任务状态为 `pending`，后续只在 `pending/running/completed/failed` 中流转；
 - 校验循环依赖和缺失依赖。
 
+Unit Graph 是跨 Unit 依赖的唯一权威来源。模型显式依赖只用于同 Unit 内排序；已知的跨 Unit 显式边会被确定性移除，并在任务 `dependency_rewrites` 中保存改写证据，再由 Unit Graph 编译正确的跨 Unit 任务边。未知任务依赖仍保留为 validation error。无效 task graph 必须保留 `task_registry` 的全部任务和错误，读取方不得用部分 `topological_order` 静默缩减任务数；`prepare_build_tasks` 会在校验错误时阻止进入构建。
+
+Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `targetFiles` 的可执行代码变更任务。仅检查已有前端壳、路由或布局的候选任务不会进入任务注册表，统一交给 `integration_test` 验证；`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
+
 该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。模型负责将当前已确认的页面详细设计、相关数据源详情和当前工程结构转换成可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
 
 任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面验收和整体集成验证。内部 DAG 仍保留 API、数据、共享组件、权限、路由和测试等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
@@ -345,6 +349,7 @@ scheduler loop:
 - 文件锁来自 `lock_scope`、`change_scope.path`、`targetFiles` 和 `allowed_paths`，同一批 ready task 之间不能冲突；
 - 任务按 `owner` 派发给对应 CodeRunner：`data_source` 使用 Data Source Generation Agent，`frontend` 使用 Frontend Generation Agent；
 - CodeRunner 只返回结构化 `TaskResult`，不更新 DAG；
+- 同 owner 批次的 workspace diff 必须按每个任务的授权路径重新归属；一个任务只能记录命中自身范围的 `changed_files`，不能把整批变更复制给所有结果；
 - 调度器校验缺失或非法结果，并将其转为 `runner_protocol_error`；
 - 失败结果先分类为 `retry`、`repair`、`requires_confirmation` 或 `terminal_failure`。`repair` 会触发 Build Repair Planner 生成受约束 repair task，并 append 到运行时 Build DAG；repair task 成功后调度器关闭原 failed task 并继续释放下游依赖。`requires_confirmation` 和 `terminal_failure` 仍会阻断构建并写入摘要。
 
@@ -353,6 +358,8 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 - `repair`：包含修复策略、边界说明和一个或多个 repair task；服务层会强制 repair task 继承原任务的 owner、change_scope、allowed_paths、依赖隔离和验收边界；
 - `requires_user_confirmation`：表示需要扩大修改范围、变更已确认需求/API 契约或做用户可见产品决策，调度器停止继续释放后续任务；
 - `terminal_failure`：表示证据不足、修复预算耗尽或失败不可自动处理，调度器停止构建并保留失败证据。
+
+外层 `build` 使用确定性条件路由：仅 `build_summary.status == completed` 可进入 `integration_test`；`requires_confirmation` 以 `repair_scope_confirmation` 暂停并返回稳定 `planId`、精确 `requestedPaths` 和原因；阻塞、仍有 pending/failed、不可修复或终止失败全部进入 `handle_failure`。用户批准时只从原任务授权范围编译 repair task，拒绝则终止，不允许测试节点抢跑。
 
 因此失败处理不是统一“重跑”：可重试的 runner/tool/网络类失败可以由调度策略处理；实现、编译、测试、验收类失败进入 RepairPlanner；契约或计划边界类失败进入用户确认；不可恢复失败终止当前 build。
 
@@ -378,7 +385,7 @@ Chat Composer 通过既有 `/skills/run` AG-UI 目录接口提供搜索和多选
 
 环境级 `~/.xcodeagent[_dev|_st|_uat]/AGENTS.md` 是四个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.xcodeagent/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
 
-外层主 Graph 不关心单个生成任务的执行细节，只根据 Build Subgraph 输出的任务状态和结果继续进入 `integration_test`。
+外层主 Graph 不关心单个生成任务的执行细节，只根据 Build Subgraph 的确定性终态路由；构建完整成功才进入 `integration_test`。
 
 ### `integration_test` / Testing Subgraph
 
@@ -433,7 +440,7 @@ testing.START
 - 后端：优先复用 Maven Wrapper / Maven（`mvnw`、`pom.xml`），也支持 Python 项目的 `python3 -m pytest`；
 - 未声明的可选检查（lint、typecheck、unit/integration 等）会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。
 
-每个真实命令都会写入 `.xcodeagent/runtime/tests/<check_id>/stdout.log` 和 `stderr.log`，`test_results` 只保存日志引用、命令、cwd、returncode、timeout 和失败分类，避免把大日志塞入 Graph State。
+每个真实命令都会写入 `.xcodeagent/runtime/tests/<check_id>/stdout.log` 和 `stderr.log`。`test_results.execution` 同时提供宿主日志引用、Agent 可读取的虚拟工作区日志路径以及有长度上限的 `stdout_tail/stderr_tail`，另保存命令、cwd、returncode、timeout 和失败分类。Test/RepairPlanner 必须以这些证据为依据；摘要和日志都不可读时只能报告证据不足，不得猜测根因。
 
 Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点，避免主流程过碎；但 `test_results` 里必须保留每个具体检查项的结构化证据。
 
@@ -458,7 +465,9 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 - `await_user_input`：修复需要扩大范围、改变契约或做产品决策，本轮结束等待用户确认；
 - `handle_failure`：证据不足、修复预算耗尽或不可恢复失败，进入失败处理。
 
-为避免卡死，Graph State 记录 `repair_iteration` 和 `max_repair_iterations`。超过预算后，Testing Subgraph 会先持久化包含计数和原因的 `terminal_failure` repair plan，再路由到 `handle_failure`；AG-UI 最终摘要和前端结果标题必须显示失败，不能复用旧的预览地址或显示“任务已完成”。用户从节点调试器显式选择 `integration_test` 时代表新的验证循环，因此请求适配器会清空旧 repair plan/tasks 并把预算重置为 `0/3`；正常工作流的自动复测仍沿用同一轮预算。
+为避免卡死，Graph State 记录 `repair_iteration` 和 `max_repair_iterations`。计数只在 repair task 被 BuildScheduler 真实派发时增加，生成计划、重复测试或继续执行旧任务都不消耗预算。调度开始时先用最新 `state.tasks` 重建 BuildTaskPlan，再追加 integration repair tasks，并只从该计划读取任务；repair task 必须携带当前 `build_execution_scope` 对应的 `unit_id` 和精确路径，确保能命中页面或数据源切片。超过预算后持久化 `terminal_failure` plan 并路由到 `handle_failure`。
+
+AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `nodeName`、`attempt`、`iterationKind` 和 `buildExecutionSlice`。首次节点仍使用 `workflow:build` / `workflow:integration_test`，后续轮次使用 `workflow:build:2` 等唯一 ID，历史事件按 attempt 恢复为“首次构建 → 首次测试未通过 → 修复构建 → 复测”。构建进度卡由对应 build 步骤详情承载，不再在消息列表末尾重复渲染；质量门禁失败显示 `failed`，等待确认显示 `requires_user_input`。
 
 该修复闭环沿用以下参考架构边界：learn-coding-agent 的执行—验证—修复紧凑循环覆盖代码、测试和 API 契约错误；OpenCode 风格的可恢复 session 状态持久化修复计数、计划和终止原因；Deep Agents 的 RepairPlanner 只接收结构化失败证据并生成受限任务。为满足 128k 上下文预算，不注入完整仓库、全量日志或会话历史。
 
@@ -678,7 +687,6 @@ Graph State 只保存这些文件的路径和版本。
 - 项目级 Sandbox；
 - 文件锁和任务锁；
 - 真实前后端代码生成；
-- 测试失败后的自动修复循环；
 - 本地进程生命周期管理；
 - AG-UI 状态同步和前端界面；
 - 生产级鉴权、限流、预算和审计。

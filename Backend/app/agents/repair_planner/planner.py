@@ -23,7 +23,9 @@ def _test_repair_planning_prompt(
         "repair is possible for specialist code agents. "
         "Do not mark failed tests as passed. Do not silently change confirmed "
         "requirements, PageDetail, or API contracts. Do not edit files or mutate "
-        "workflow state.\n\n"
+        "workflow state. Base the plan on stdout_tail/stderr_tail or readable virtual "
+        "workspace logs. If evidence is unavailable, choose terminal_failure rather "
+        "than guessing a root cause.\n\n"
         "Return only one JSON object using this contract:\n"
         "{\n"
         '  "decision": "repair" | "requires_user_confirmation" | "terminal_failure",\n'
@@ -136,6 +138,9 @@ def plan_repairs_with_repair_planner_agent(
     test_report: dict[str, Any],
     revision_requests: list[dict[str, Any]],
     build_task_plan: dict[str, Any] | None = None,
+    build_execution_scope: dict[str, Any] | None = None,
+    scoped_tasks: list[dict[str, Any]] | None = None,
+    repair_attempt: int = 1,
     workspace: str | None = None,
     selected_skill_names: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -172,6 +177,13 @@ def plan_repairs_with_repair_planner_agent(
 
     decision = planner_decision.get("decision")
     if decision in {"requires_user_confirmation", "terminal_failure"}:
+        bounded_candidate = create_repair_task_plan(
+            revision_requests=revision_requests,
+            agent_note=agent_note,
+            build_execution_scope=build_execution_scope,
+            scoped_tasks=scoped_tasks,
+            repair_attempt=repair_attempt,
+        )
         return {
             "version": "0.1.0",
             "status": decision,
@@ -179,6 +191,10 @@ def plan_repairs_with_repair_planner_agent(
             "generated_at": test_report.get("generated_at"),
             "source": "integration_test",
             "tasks": [],
+            "candidateTasks": bounded_candidate.get("tasks", []),
+            "planId": bounded_candidate.get("planId"),
+            "requestedPaths": bounded_candidate.get("requestedPaths", []),
+            "repair_scope": bounded_candidate.get("repair_scope", {}),
             "summary": {"total": 0, "frontend": 0, "data_source": 0},
             "agent_note": agent_note,
             "reason": planner_decision.get("reason", ""),
@@ -194,6 +210,9 @@ def plan_repairs_with_repair_planner_agent(
     repair_task_plan = create_repair_task_plan(
         revision_requests=revision_requests,
         agent_note=agent_note,
+        build_execution_scope=build_execution_scope,
+        scoped_tasks=scoped_tasks,
+        repair_attempt=repair_attempt,
     )
     repair_task_plan["prepared_by"]["agent"] = "repair-planner-agent"
     repair_task_plan["prepared_by"]["model"] = settings.model_name

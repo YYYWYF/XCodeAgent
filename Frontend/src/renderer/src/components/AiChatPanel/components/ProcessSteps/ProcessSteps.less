@@ -112,6 +112,18 @@
       color: var(--wb-danger);
     }
   }
+
+  &.@{class-prefix}-requires_user_input {
+    .@{class-prefix}-process-step-icon {
+      color: var(--wb-warning);
+      background: var(--wb-surface-subtle);
+      border-color: var(--wb-warning);
+    }
+  }
+}
+
+.@{class-prefix}-process-step-detail > .@{class-prefix}-workflow-build-run-card {
+  margin: 0;
 }
 
 .@{class-prefix}-process-step-summary {

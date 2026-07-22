@@ -4,6 +4,7 @@ import {
   CodeOutlined,
   LoadingOutlined,
   MinusCircleOutlined,
+  PauseCircleOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
   ToolOutlined
@@ -13,6 +14,7 @@ import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { IntegrationTestCheckRecord, ProcessStepRecord } from '../../../../service/agUiAgent'
 import { cx } from '../../../../utils'
+import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import './ProcessSteps.less'
 
 const { Text } = Typography
@@ -73,11 +75,12 @@ function ProcessStep({
   step: ProcessStepRecord
 }): ReactElement {
   const hasChecks = Boolean(step.checks?.length)
-  const [open, setOpen] = useState(step.status === 'running' || hasChecks)
+  const hasBuildRun = Boolean(step.buildExecutionSlice)
+  const [open, setOpen] = useState(step.status === 'running' || hasChecks || hasBuildRun)
 
   useEffect(() => {
-    if (step.status === 'running' || hasChecks) setOpen(true)
-  }, [hasChecks, step.status])
+    if (step.status === 'running' || hasChecks || hasBuildRun) setOpen(true)
+  }, [hasBuildRun, hasChecks, step.status])
 
   return (
     <details
@@ -86,6 +89,7 @@ function ProcessStep({
         step.kind,
         step.status,
         hasChecks && 'has-checks',
+        hasBuildRun && 'has-build-run',
         isLast && 'last'
       )}
       onToggle={(event) => setOpen(event.currentTarget.open)}
@@ -103,6 +107,12 @@ function ProcessStep({
           />
         )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
+        {step.buildExecutionSlice && (
+          <BuildExecutionRunCard
+            executionSlice={step.buildExecutionSlice}
+            status={step.status}
+          />
+        )}
         {step.result && <DetailBlock label="执行结果" value={step.result} />}
       </div>
     </details>
@@ -254,6 +264,7 @@ function testCheckStatusLabel(status: IntegrationTestCheckRecord['status']): str
 function stepIcon(step: ProcessStepRecord, settled: boolean): ReactElement {
   if (step.status === 'running' && !settled) return <LoadingOutlined spin />
   if (step.status === 'failed') return <CloseCircleOutlined />
+  if (step.status === 'requires_user_input') return <PauseCircleOutlined />
   if (step.kind === 'reasoning') return <RobotOutlined />
   if (step.kind === 'command') return <CodeOutlined />
   if (step.kind === 'tool') return <ToolOutlined />

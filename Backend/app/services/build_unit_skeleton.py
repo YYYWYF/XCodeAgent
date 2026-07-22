@@ -124,6 +124,11 @@ def _unit_graph(
             )
 
     contracts = _dict_items(project_plan.get("api_contracts"))
+    page_details_by_id = {
+        str(detail.get("pageId") or detail.get("id")): detail
+        for detail in _dict_items(project_plan.get("page_detail_plans"))
+        if detail.get("pageId") or detail.get("id")
+    }
     for source_id in _ids(project_plan.get("data_sources"), "id"):
         source_unit_id = f"data-source:{source_id}"
         edges.extend(
@@ -153,7 +158,11 @@ def _unit_graph(
             edges.append(
                 {"from": "app:auth-guard", "to": page_unit_id, "type": "depends_on"}
             )
-        for source_id in page_data_source_ids(page, contracts):
+        dependency_source = _page_dependency_source(
+            page,
+            page_details_by_id.get(page_id),
+        )
+        for source_id in page_data_source_ids(dependency_source, contracts):
             source_unit_id = f"data-source:{source_id}"
             if source_unit_id not in build_units:
                 errors.append(f"Page {page_id} references unknown data source {source_id}.")
@@ -167,6 +176,20 @@ def _unit_graph(
         "edges": _unique_edges(edges),
         "validation": {"is_valid": not errors, "errors": errors},
     }
+
+
+def _page_dependency_source(
+    page: dict[str, Any],
+    page_detail: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """优先用已确认 PageDetail 的 endpoint 引用补齐页面 Unit 依赖来源。"""
+
+    if not isinstance(page_detail, dict):
+        return page
+    detail_references = page_detail.get("references")
+    if not isinstance(detail_references, dict):
+        return page
+    return {**page, "references": detail_references}
 
 
 def _skeleton_fingerprint(

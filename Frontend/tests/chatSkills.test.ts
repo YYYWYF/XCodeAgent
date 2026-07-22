@@ -372,6 +372,70 @@ test('旧 session 可从 Workflow 完成事件重建 Agent 步骤和检查清单
   )
 })
 
+test('多轮构建测试历史按 attempt 展开并把构建卡挂在对应步骤', () => {
+  const buildSlice = {
+    scope: { type: 'page' as const, targetId: 'orders' },
+    tasks: [{ id: 'orders-page', title: '实现订单页', status: 'completed' }],
+    summary: { total: 1, completed: 1, failed: 0, pending: 0 }
+  }
+  const steps = processStepsForDisplay(undefined, {
+    runId: 'run-repair-history',
+    threadId: 'thread-repair-history',
+    summary: { status: 'completed' },
+    events: [
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'build',
+        node: { label: '代码生成与构建协调' },
+        status: 'completed',
+        attempt: 1,
+        iterationKind: 'initial_build',
+        data: { detail: { buildExecutionSlice: buildSlice } }
+      },
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'integration_test',
+        node: { label: '集成测试与质量门禁' },
+        status: 'failed',
+        attempt: 1,
+        iterationKind: 'initial_test'
+      },
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'build',
+        node: { label: '代码生成与构建协调' },
+        status: 'completed',
+        attempt: 2,
+        iterationKind: 'repair_build',
+        data: { detail: { buildExecutionSlice: buildSlice } }
+      },
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'integration_test',
+        node: { label: '集成测试与质量门禁' },
+        status: 'completed',
+        attempt: 2,
+        iterationKind: 'retest'
+      }
+    ]
+  })
+
+  assert.deepEqual(
+    steps?.map((step) => [step.id, step.status, step.iterationKind]),
+    [
+      ['workflow:build', 'completed', 'initial_build'],
+      ['workflow:integration_test', 'failed', 'initial_test'],
+      ['workflow:build:2', 'completed', 'repair_build'],
+      ['workflow:integration_test:2', 'completed', 'retest']
+    ]
+  )
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, { loading: false, steps: steps || [] })
+  )
+  assert.equal((markup.match(/Build Run/g) || []).length, 2)
+  assert.ok(markup.indexOf('Build Run') < markup.indexOf('集成测试与质量门禁'))
+})
+
 test('更早的 session 可从 timeline 和 snake_case 测试报告恢复步骤', () => {
   const steps = processStepsForDisplay(undefined, {
     runId: 'run-legacy',

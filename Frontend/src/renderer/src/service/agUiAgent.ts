@@ -85,13 +85,17 @@ export type IntegrationTestCheckRecord = {
 export type ProcessStepRecord = {
   id: string
   kind: 'reasoning' | 'tool' | 'command' | 'workflow'
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'requires_user_input'
   title: string
   detail: string
   result?: string
   sequence: number
   appendDetail?: boolean
   checks?: IntegrationTestCheckRecord[]
+  nodeName?: string
+  attempt?: number
+  iterationKind?: string
+  buildExecutionSlice?: import('../typings').WorkflowBuildExecutionSlice
 }
 
 function getWorkflowUrl(): string {
@@ -262,7 +266,7 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
   const kind = stringValue(step.kind)
   const status = stringValue(step.status)
   if (!id || !['reasoning', 'tool', 'command', 'workflow'].includes(kind)) return undefined
-  if (!['running', 'completed', 'failed'].includes(status)) return undefined
+  if (!['running', 'completed', 'failed', 'requires_user_input'].includes(status)) return undefined
   const checks = readIntegrationTestChecks(step.checks)
   return {
     id,
@@ -273,6 +277,13 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
     result: stringValue(step.result) || undefined,
     sequence: typeof step.sequence === 'number' ? step.sequence : 0,
     appendDetail: step.appendDetail === true,
+    nodeName: stringValue(step.nodeName) || undefined,
+    attempt: typeof step.attempt === 'number' ? step.attempt : undefined,
+    iterationKind: stringValue(step.iterationKind) || undefined,
+    buildExecutionSlice:
+      step.buildExecutionSlice && typeof step.buildExecutionSlice === 'object'
+        ? (step.buildExecutionSlice as import('../typings').WorkflowBuildExecutionSlice)
+        : undefined,
     ...(checks ? { checks } : {})
   }
 }

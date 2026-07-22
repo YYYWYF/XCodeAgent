@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from fnmatch import fnmatch
 from datetime import UTC, datetime
 from typing import Any
 
@@ -181,6 +182,7 @@ def verify_task_file_changes(
     *,
     results: list[dict[str, Any]],
     code_change_set: dict[str, Any] | None,
+    tasks: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """验证 agent 是否实际写入了文件。
 
@@ -198,6 +200,11 @@ def verify_task_file_changes(
             if isinstance(f, dict) and f.get("path")
         ]
 
+    tasks_by_id = {
+        str(task.get("id") or task.get("task_id")): task
+        for task in tasks or []
+        if task.get("id") or task.get("task_id")
+    }
     verified: list[dict[str, Any]] = []
     for result in results:
         verified_result = dict(result)
@@ -205,7 +212,12 @@ def verify_task_file_changes(
             verified.append(verified_result)
             continue
 
-        if not changed_paths:
+        task = tasks_by_id.get(str(verified_result.get("task_id") or ""), {})
+        authorized_paths = _task_authorized_paths(task)
+        attributed_paths = [
+            path for path in changed_paths if _path_matches_any(path, authorized_paths)
+        ]
+        if not attributed_paths:
             verified_result["status"] = "failed"
             verified_result["failure_category"] = "no_file_changes"
             original_note = verified_result.get("agent_note", "")
@@ -218,9 +230,36 @@ def verify_task_file_changes(
             )
             verified_result["scheduler_decision"] = classify_task_result(verified_result)
         else:
-            verified_result["changed_files"] = changed_paths
+            verified_result["changed_files"] = attributed_paths
         verified.append(verified_result)
     return verified
+
+
+def _task_authorized_paths(task: dict[str, Any]) -> list[str]:
+    """汇总单个任务声明的精确或通配授权路径。"""
+
+    paths = [str(path) for path in task.get("allowed_paths", []) if str(path).strip()]
+    paths.extend(
+        str(change.get("path"))
+        for change in task.get("change_scope", [])
+        if isinstance(change, dict) and change.get("path")
+    )
+    paths.extend(str(path) for path in task.get("targetFiles", []) if str(path).strip())
+    return list(dict.fromkeys(path.lstrip("./") for path in paths if path))
+
+
+def _path_matches_any(path: str, patterns: list[str]) -> bool:
+    """判断实际变更路径是否落在任务授权范围内。"""
+
+    normalized = path.lstrip("./")
+    for pattern in patterns:
+        normalized_pattern = pattern.lstrip("./")
+        if normalized_pattern.endswith("/**"):
+            if normalized.startswith(normalized_pattern[:-3].rstrip("/") + "/"):
+                return True
+        elif fnmatch(normalized, normalized_pattern):
+            return True
+    return False
 
 
 def summarize_build_runtime(

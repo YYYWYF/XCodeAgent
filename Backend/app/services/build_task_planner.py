@@ -17,13 +17,23 @@ TASK_STATUSES = ("pending", "running", "completed", "failed")
 
 
 def tasks_from_build_task_plan(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
-    """按任务图顺序读取 v2 任务注册表中的可调度叶子任务。"""
+    """按任务图读取完整任务注册表，无效图不得通过部分拓扑序静默丢任务。"""
 
     registry = build_task_plan.get("task_registry")
     task_graph = build_task_plan.get("task_graph")
     if not isinstance(registry, dict) or not isinstance(task_graph, dict):
         return []
-    task_ids = _string_list(task_graph.get("topological_order") or task_graph.get("nodes"))
+    nodes = _string_list(task_graph.get("nodes"))
+    topological_order = _string_list(task_graph.get("topological_order"))
+    registry_ids = [str(task_id) for task_id in registry]
+    complete_ids = _dedupe_strings([*nodes, *registry_ids])
+    validation = task_graph.get("validation")
+    is_valid = isinstance(validation, dict) and validation.get("is_valid") is True
+    task_ids = (
+        topological_order
+        if is_valid and set(topological_order) == set(complete_ids)
+        else complete_ids
+    )
     return [
         dict(registry[task_id])
         for task_id in task_ids
@@ -197,6 +207,13 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
             _string_list(item.get("allowed_paths") or item.get("allowedPaths"))
             or target_files
         )
+        if not change_scope and not target_files and not allowed_paths:
+            logger.info(
+                "build_task_plan_excluded_verification_task task_id=%s title=%s",
+                task_id,
+                _text(item.get("title"), description),
+            )
+            continue
         tasks.append(
             {
                 "id": task_id,
@@ -585,10 +602,15 @@ def _apply_unit_task_dependencies(
     units: dict[str, Any],
     unit_graph: Any,
 ) -> list[dict[str, Any]]:
-    """根据 Unit 图自动追加跨 Unit 的任务依赖，避免页面越过 API/公共模块执行。"""
+    """仅保留同 Unit 显式依赖，并以 Unit Graph 编译唯一的跨 Unit 依赖。"""
 
     tasks_by_unit: dict[str, list[str]] = {}
     task_ids = {str(task.get("id") or "") for task in tasks if task.get("id")}
+    task_units = {
+        str(task.get("id")): str(task.get("unit_id") or "application:root")
+        for task in tasks
+        if task.get("id")
+    }
     for task in tasks:
         tasks_by_unit.setdefault(str(task.get("unit_id") or "application:root"), []).append(
             str(task.get("id"))
@@ -603,18 +625,45 @@ def _apply_unit_task_dependencies(
             for dependency_task_id in tasks_by_unit.get(dependency_unit_id, [])
             if dependency_task_id and dependency_task_id != task.get("id")
         ]
-        dependencies = _dedupe_strings(
-            [
-                *_string_list(task.get("dependencies") or task.get("dependsOn")),
-                *inherited_dependencies,
-            ]
+        explicit_dependencies = _string_list(
+            task.get("dependencies") or task.get("dependsOn")
         )
+        removed_cross_unit_dependencies = [
+            dependency
+            for dependency in explicit_dependencies
+            if dependency in task_units and task_units[dependency] != unit_id
+        ]
+        same_unit_or_unknown_dependencies = [
+            dependency
+            for dependency in explicit_dependencies
+            if dependency not in task_units or task_units[dependency] == unit_id
+        ]
+        dependencies = _dedupe_strings(
+            [*same_unit_or_unknown_dependencies, *inherited_dependencies]
+        )
+        existing_rewrites = [
+            rewrite
+            for rewrite in task.get("dependency_rewrites", [])
+            if isinstance(rewrite, dict)
+        ]
         result.append(
             {
                 **task,
                 "dependencies": dependencies,
                 "dependsOn": dependencies,
                 "unit_dependencies": dependency_units.get(unit_id, []),
+                "dependency_rewrites": [
+                    *existing_rewrites,
+                    *[
+                        {
+                            "dependency": dependency,
+                            "reason": "unit_graph_authoritative",
+                            "from_unit_id": task_units.get(dependency),
+                            "to_unit_id": unit_id,
+                        }
+                        for dependency in removed_cross_unit_dependencies
+                    ],
+                ],
                 "missing_unit_dependencies": [
                     dependency_unit_id
                     for dependency_unit_id in dependency_units.get(unit_id, [])

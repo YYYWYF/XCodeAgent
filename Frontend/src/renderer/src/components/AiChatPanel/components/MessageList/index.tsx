@@ -75,7 +75,6 @@ export default function MessageList({
             )?.filter((step) => step.kind !== 'tool' && step.kind !== 'command')
             const requiresClarification =
               message.workflow?.summary.clarification?.status === 'requires_user_input'
-            const hasBuildExecutionSlice = workflowHasBuildExecutionSlice(message.workflow)
             const visibleAssistantContent = workflowMessageContentForDisplay(
               message.content,
               message.workflow,
@@ -118,7 +117,7 @@ export default function MessageList({
                           <MarkdownContent content={visibleAssistantContent} />
                         </div>
                       )}
-                      {message.workflow && (requiresClarification || hasBuildExecutionSlice) && (
+                      {message.workflow && requiresClarification && (
                         <WorkflowRunCard
                           disabled={messageLoading}
                           onSubmitClarification={onSubmitClarification}
@@ -166,21 +165,6 @@ export default function MessageList({
       </div>
     </div>
   )
-}
-
-/** 判断 Workflow 快照是否包含可展示的构建执行切片。 */
-function workflowHasBuildExecutionSlice(workflow: WorkflowRunPayload | undefined): boolean {
-  const candidates = [
-    workflow?.state?.buildExecutionSlice,
-    workflow?.state?.build_execution_slice,
-    workflow?.result?.buildExecutionSlice,
-    workflow?.result?.build_execution_slice
-  ]
-  return candidates.some((candidate) => {
-    if (!candidate || typeof candidate !== 'object') return false
-    const slice = candidate as { scope?: { type?: unknown }; tasks?: unknown[] }
-    return slice.scope?.type !== 'application' && Array.isArray(slice.tasks)
-  })
 }
 
 /** 从消息末尾向前查找当前正在流式更新的 Assistant 消息。 */

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.graph.workflow import (
+    route_build_result,
     route_detail_confirmation,
     route_prepare_build_tasks,
     route_test_validation,
@@ -64,6 +65,32 @@ class WorkflowRoutingTests(unittest.TestCase):
             route_test_validation({"quality_gate_passed": True}),
             "launch_project",
         )
+
+    def test_build_only_enters_testing_after_complete_summary(self) -> None:
+        """构建切片完整成功后才允许进入集成测试。"""
+
+        self.assertEqual(
+            route_build_result({"build_summary": {"status": "completed"}}),
+            "integration_test",
+        )
+
+    def test_build_confirmation_stops_for_user_input(self) -> None:
+        """构建需要扩大范围时必须停留等待用户确认。"""
+
+        self.assertEqual(
+            route_build_result({"build_summary": {"status": "requires_confirmation"}}),
+            "await_user_input",
+        )
+
+    def test_incomplete_build_routes_to_failure_instead_of_testing(self) -> None:
+        """待执行、阻塞或终止失败的构建不得伪装成可测试状态。"""
+
+        for status in ("in_progress", "needs_repair", "failed"):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    route_build_result({"build_summary": {"status": status}}),
+                    "handle_failure",
+                )
 
     def test_integration_test_repair_plan_returns_to_build(self) -> None:
         self.assertEqual(

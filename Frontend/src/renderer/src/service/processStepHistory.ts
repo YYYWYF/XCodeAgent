@@ -24,8 +24,12 @@ export function processStepsForDisplay(
   const finalChecks = completedIntegrationTestChecks(workflow)
   if (!finalChecks?.length) return displaySteps
 
+  const latestTestStepId = [...displaySteps]
+    .reverse()
+    .find((step) => step.nodeName === 'integration_test' || step.id.startsWith('workflow:integration_test'))
+    ?.id
   return displaySteps.map((step) => {
-    if (step.id !== 'workflow:integration_test') return step
+    if (step.id !== latestTestStepId) return step
     return {
       ...step,
       checks: mergeIntegrationTestChecks(step.checks, finalChecks)
@@ -56,17 +60,38 @@ function completedWorkflowProcessSteps(
 ): ProcessStepRecord[] | undefined {
   if (!workflow) return undefined
   const stepsById = new Map<string, ProcessStepRecord>()
+  const attemptsByNode = new Map<string, number>()
   for (const [index, event] of workflow.events.entries()) {
     if (event.type !== 'workflow.node.completed' || !event.nodeName) continue
-    const status = event.status === 'failed' ? 'failed' : 'completed'
+    const inferredAttempt = (attemptsByNode.get(event.nodeName) || 0) + 1
+    const attempt = typeof event.attempt === 'number' ? event.attempt : inferredAttempt
+    attemptsByNode.set(event.nodeName, Math.max(inferredAttempt, attempt))
+    const status = processStepStatus(event.status)
     const label = event.node?.label || event.nodeName
+    const detail = workflowEventDetail(event)
+    const stepId = attempt === 1
+      ? `workflow:${event.nodeName}`
+      : `workflow:${event.nodeName}:${attempt}`
+    const checks = event.nodeName === 'integration_test'
+      ? readIntegrationTestChecks(detail.testReport)
+      : undefined
+    const buildExecutionSlice = event.nodeName === 'build'
+      && detail.buildExecutionSlice
+      && typeof detail.buildExecutionSlice === 'object'
+      ? detail.buildExecutionSlice as ProcessStepRecord['buildExecutionSlice']
+      : undefined
     const step: ProcessStepRecord = {
-      id: `workflow:${event.nodeName}`,
+      id: stepId,
       kind: 'workflow',
       status,
-      title: `${status === 'failed' ? '执行失败' : '已完成'} ${label}`,
+      title: `${processStepTitlePrefix(status)} ${label}`,
       detail: event.message || '',
-      sequence: index + 1
+      sequence: index + 1,
+      nodeName: event.nodeName,
+      attempt,
+      iterationKind: event.iterationKind,
+      ...(checks ? { checks } : {}),
+      ...(buildExecutionSlice ? { buildExecutionSlice } : {})
     }
     stepsById.set(step.id, step)
   }
@@ -81,12 +106,34 @@ function completedWorkflowProcessSteps(
         status: 'completed',
         title: `已完成 ${label}`,
         detail: '',
-        sequence: index + 1
+        sequence: index + 1,
+        nodeName,
+        attempt: 1
       })
     }
   }
   const steps = [...stepsById.values()]
   return steps.length > 0 ? steps : undefined
+}
+
+/** 将历史 Workflow 事件状态规整为前端步骤状态。 */
+function processStepStatus(status: string | undefined): ProcessStepRecord['status'] {
+  if (status === 'failed') return 'failed'
+  if (status === 'requires_user_input') return 'requires_user_input'
+  return 'completed'
+}
+
+/** 返回历史步骤终态对应的标题前缀。 */
+function processStepTitlePrefix(status: ProcessStepRecord['status']): string {
+  if (status === 'failed') return '执行失败'
+  if (status === 'requires_user_input') return '等待确认'
+  return '已完成'
+}
+
+/** 安全读取 Workflow 节点事件中的结构化 detail。 */
+function workflowEventDetail(event: WorkflowRunPayload['events'][number]): Record<string, unknown> {
+  const detail = event.data?.detail
+  return detail && typeof detail === 'object' ? detail as Record<string, unknown> : {}
 }
 
 /** 从新旧 Workflow 快照字段读取节点时间线。 */

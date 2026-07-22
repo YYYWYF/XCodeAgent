@@ -301,6 +301,64 @@ class FakeIntegrationProgressGraph:
             }
         )
 
+
+class FakeRepairLoopGraph:
+    """模拟 build → test failed → repair build → retest 的更新序列。"""
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        build_slice = {
+            "scope": {"type": "page", "targetId": "orders"},
+            "tasks": [{"id": "orders-page", "status": "completed"}],
+            "summary": {"total": 1, "completed": 1, "failed": 0, "pending": 0},
+        }
+        yield "updates", {
+            "build": {
+                "phase": "build",
+                "status": "completed",
+                "build_summary": {"status": "completed", "completed": 1, "failed": 0},
+                "build_execution_slice": build_slice,
+            }
+        }
+        yield "updates", {
+            "integration_test": {
+                "phase": "integration_test",
+                "status": "completed",
+                "quality_gate_passed": False,
+                "integration_next_action": "repair_build",
+                "test_results": [{"id": "frontend_build", "name": "前端构建检查", "passed": False, "required": True}],
+            }
+        }
+        yield "updates", {
+            "build": {
+                "phase": "build",
+                "status": "completed",
+                "build_summary": {"status": "completed", "completed": 2, "failed": 0},
+                "build_execution_slice": {
+                    **build_slice,
+                    "tasks": [{"id": "repair:orders-page", "kind": "repair", "status": "completed"}],
+                },
+            }
+        }
+        yield "updates", {
+            "integration_test": {
+                "phase": "integration_test",
+                "status": "completed",
+                "quality_gate_passed": True,
+                "integration_next_action": "launch_project",
+                "test_results": [{"id": "frontend_build", "name": "前端构建检查", "passed": True, "required": True}],
+            }
+        }
+
+    async def aget_state(self, config):
+        return SimpleNamespace(
+            values={
+                "phase": "launch_project",
+                "status": "completed",
+                "quality_gate_passed": True,
+                "timeline": ["build", "integration_test", "build", "integration_test"],
+            }
+        )
+
     async def aget_state(self, config):
         """提供异步状态读取兼容接口。"""
 
@@ -732,10 +790,49 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                 },
             ]
         )
-
         self.assertIn("前端构建检查：已通过", detail)
         self.assertIn("前端 lint 通过：已跳过", detail)
         self.assertNotIn("2/2", detail)
+
+    def test_repair_loop_emits_unique_attempt_steps_and_semantic_statuses(self) -> None:
+        """多轮构建测试必须保留唯一步骤 ID、attempt 与测试失败终态。"""
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeRepairLoopGraph(),
+                payload={
+                    "threadId": "thread-repair-loop",
+                    "runId": "run-repair-loop",
+                    "messages": [{"role": "user", "content": "repair and retest"}],
+                    "forwardedProps": {"resumeFrom": "build"},
+                },
+            )
+            return [frame async for frame in stream]
+
+        frames = _decode_agent_process_frames(asyncio.run(collect()))
+        terminal_frames = [
+            frame
+            for frame in frames
+            if frame.get("nodeName") in {"build", "integration_test"}
+            and frame.get("status") != "running"
+        ]
+
+        self.assertEqual(
+            [frame["id"] for frame in terminal_frames],
+            [
+                "workflow:build",
+                "workflow:integration_test",
+                "workflow:build:2",
+                "workflow:integration_test:2",
+            ],
+        )
+        self.assertEqual([frame["attempt"] for frame in terminal_frames], [1, 1, 2, 2])
+        self.assertEqual(
+            [frame["iterationKind"] for frame in terminal_frames],
+            ["initial_build", "initial_test", "repair_build", "retest"],
+        )
+        self.assertEqual(terminal_frames[1]["status"], "failed")
+        self.assertIn("buildExecutionSlice", terminal_frames[2])
 
     def test_stream_emits_ag_ui_frames_for_openai_backed_workflow(self) -> None:
         graph = FakeWorkflowGraph()

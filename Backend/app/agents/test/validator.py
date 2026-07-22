@@ -16,7 +16,10 @@ def _test_validation_prompt(
         "You are the Test Agent in an app-generation workflow.\n"
         "Review deterministic test evidence and return a concise validation report. "
         "Do not mark failed checks as passed. If any check fails, explain what should "
-        "be returned to the Main Agent as a revision request.\n\n"
+        "be returned to the Main Agent as a revision request. Use stdout_tail and "
+        "stderr_tail first; virtual log paths are readable from the workspace root. "
+        "If neither summary nor readable log contains the cause, state that evidence "
+        "is insufficient and do not guess a root cause.\n\n"
         f"Deterministic test results:\n{json.dumps(test_results, ensure_ascii=False, indent=2)}\n\n"
         f"Build results:\n{json.dumps(build_results, ensure_ascii=False, indent=2)}"
     )

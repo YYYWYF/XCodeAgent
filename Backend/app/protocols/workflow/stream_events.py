@@ -64,6 +64,10 @@ def _process_frame(
     result: str = "",
     append_detail: bool = False,
     checks: list[dict[str, Any]] | None = None,
+    node_name: str | None = None,
+    attempt: int | None = None,
+    iteration_kind: str | None = None,
+    build_execution_slice: dict[str, Any] | None = None,
 ) -> str:
     value: dict[str, Any] = {
         "id": id,
@@ -77,6 +81,14 @@ def _process_frame(
     }
     if checks is not None:
         value["checks"] = checks
+    if node_name:
+        value["nodeName"] = node_name
+    if attempt is not None:
+        value["attempt"] = attempt
+    if iteration_kind:
+        value["iterationKind"] = iteration_kind
+    if build_execution_slice is not None:
+        value["buildExecutionSlice"] = build_execution_slice
     return encoder.encode(
         CustomEvent(
             name=PROCESS_EVENT_NAME,

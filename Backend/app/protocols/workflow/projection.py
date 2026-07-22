@@ -95,6 +95,18 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("status") == "requires_user_input":
             return []
         return ["build"]
+    if node_name == "build":
+        build_summary = update.get("build_summary")
+        summary_status = (
+            str(build_summary.get("status") or "")
+            if isinstance(build_summary, dict)
+            else ""
+        )
+        if summary_status == "completed":
+            return ["integration_test"]
+        if summary_status == "requires_confirmation" or update.get("status") == "requires_user_input":
+            return []
+        return ["handle_failure"]
     if node_name == "launch_project":
         return []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
@@ -330,6 +342,8 @@ def _workflow_event(
     status: str = "running",
     message: str = "",
     data: dict[str, Any] | None = None,
+    attempt: int | None = None,
+    iteration_kind: str | None = None,
 ) -> dict[str, Any]:
     event = {
         "id": f"workflow-event-{len(events) + 1:04d}",
@@ -348,6 +362,10 @@ def _workflow_event(
         ),
         "data": data or {},
     }
+    if attempt is not None:
+        event["attempt"] = attempt
+    if iteration_kind:
+        event["iterationKind"] = iteration_kind
     events.append(event)
     return event
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from hashlib import sha256
+import json
 from typing import Any
 
 from app.services.build_task_planner import (
@@ -113,12 +115,28 @@ def create_build_failure_repair_plan(
         "requires_user_confirmation": "requires_user_confirmation",
         "terminal_failure": "terminal_failure",
     }.get(decision_text, "not_required")
+    requested_paths = sorted(
+        {
+            path
+            for confirmation in confirmations
+            for path in _string_list(
+                confirmation.get("requestedPaths")
+                or confirmation.get("boundaries", {}).get("allowed_paths")
+            )
+        }
+    )
+    plan_id = _stable_repair_plan_id(
+        [item.get("source_ref", {}) for item in planner_inputs],
+        requested_paths,
+    )
     return {
         "version": "0.1.0",
         "status": status,
         "generated_at": datetime.now(UTC).isoformat(),
         "source": "build_scheduler",
         "decision": decision_text,
+        "planId": plan_id,
+        "requestedPaths": requested_paths,
         "tasks": repair_tasks if decision_text == "repair" else [],
         "repair_tasks": repair_tasks if decision_text == "repair" else [],
         "requires_user_confirmation": confirmations,
@@ -213,6 +231,14 @@ def normalize_repair_plan(
         },
         "tasks": [],
     }
+    normalized["requestedPaths"] = _requested_repair_paths(
+        parent_task,
+        plan.get("boundaries"),
+    )
+    normalized["planId"] = _stable_repair_plan_id(
+        [normalized["repair_input_ref"]],
+        normalized["requestedPaths"],
+    )
     if decision != "repair":
         return normalized
 
@@ -237,6 +263,86 @@ def normalize_repair_plan(
             }
         tasks.append(task)
     return {**normalized, "tasks": tasks}
+
+
+def approve_repair_scope_confirmation(
+    repair_task_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """将已获用户批准的范围确认计划编译为原任务授权内的修复任务。"""
+
+    inputs = [
+        item
+        for item in repair_task_plan.get("planner_inputs", [])
+        if isinstance(item, dict)
+    ]
+    inputs_by_task = {
+        str(item.get("source_ref", {}).get("parent_task_id") or ""): item
+        for item in inputs
+    }
+    tasks: list[dict[str, Any]] = []
+    for confirmation in repair_task_plan.get("requires_user_confirmation", []):
+        if not isinstance(confirmation, dict):
+            continue
+        task_id = str(confirmation.get("repair_input_ref", {}).get("task_id") or "")
+        repair_input = inputs_by_task.get(task_id)
+        if not repair_input:
+            continue
+        parent_task = repair_input.get("original_task")
+        failed_attempt = repair_input.get("failed_attempt")
+        source_ref = repair_input.get("source_ref")
+        if not all(isinstance(item, dict) for item in (parent_task, failed_attempt, source_ref)):
+            continue
+        approved = normalize_repair_plan(
+            repair_input=repair_input,
+            raw_plan={
+                "decision": "repair",
+                "strategy": confirmation.get("strategy") or "Apply the user-approved bounded repair.",
+                "boundaries": confirmation.get("boundaries", {}),
+                "repair_tasks": [{}],
+                "failure_handling": "append_repair_task_and_resume_scheduler",
+            },
+            parent_task=parent_task,
+            result=failed_attempt,
+            source_ref=source_ref,
+        )
+        tasks.extend(approved.get("tasks", []))
+    return {
+        **repair_task_plan,
+        "status": "ready" if tasks else "terminal_failure",
+        "decision": "repair" if tasks else "terminal_failure",
+        "tasks": tasks,
+        "repair_tasks": tasks,
+        "approvedPlanId": repair_task_plan.get("planId"),
+    }
+
+
+def _requested_repair_paths(
+    parent_task: dict[str, Any],
+    raw_boundaries: Any,
+) -> list[str]:
+    """读取 Planner 请求路径；未显式提供时退回原任务精确授权范围。"""
+
+    boundaries = raw_boundaries if isinstance(raw_boundaries, dict) else {}
+    requested = _string_list(
+        boundaries.get("requestedPaths")
+        or boundaries.get("requested_paths")
+        or boundaries.get("allowed_paths")
+    )
+    return requested or _string_list(
+        parent_task.get("allowed_paths") or parent_task.get("allowedPaths")
+    )
+
+
+def _stable_repair_plan_id(parts: Any, requested_paths: list[str]) -> str:
+    """根据失败签名和请求路径生成可跨恢复请求复用的计划 ID。"""
+
+    payload = json.dumps(
+        {"parts": parts, "requestedPaths": requested_paths},
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def append_repair_tasks_to_build_plan(

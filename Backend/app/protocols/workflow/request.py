@@ -522,6 +522,13 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan_path",
         "build_execution_scope",
         "tasks",
+        "build_results",
+        "build_summary",
+        "repair_task_plan",
+        "repair_tasks",
+        "repair_iteration",
+        "max_repair_iterations",
+        "clarification",
         "selected_skill_names",
         "workflow_scope",
     }

@@ -43,6 +43,22 @@ def route_test_validation(state: ProjectState) -> str:
     return "handle_failure"
 
 
+def route_build_result(state: ProjectState) -> str:
+    """仅允许完整成功的构建进入测试，确认与失败走各自终态。"""
+
+    build_summary = state.get("build_summary")
+    summary_status = (
+        str(build_summary.get("status") or "")
+        if isinstance(build_summary, dict)
+        else ""
+    )
+    if summary_status == "completed":
+        return "integration_test"
+    if summary_status == "requires_confirmation" or state.get("status") == "requires_user_input":
+        return "await_user_input"
+    return "handle_failure"
+
+
 def route_detail_confirmation(state: ProjectState) -> str:
     return (
         "await_user_input"
@@ -103,7 +119,15 @@ def build_graph(*, checkpointer):
             "await_user_input": END,
         },
     )
-    builder.add_edge("build", "integration_test")
+    builder.add_conditional_edges(
+        "build",
+        route_build_result,
+        {
+            "integration_test": "integration_test",
+            "await_user_input": END,
+            "handle_failure": "handle_failure",
+        },
+    )
     builder.add_conditional_edges(
         "integration_test",
         route_test_validation,

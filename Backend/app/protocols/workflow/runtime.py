@@ -48,6 +48,66 @@ from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
+def _next_node_attempt(node_attempts: dict[str, int], node_name: str) -> int:
+    """登记节点新一轮执行并返回从一开始的 attempt。"""
+
+    attempt = node_attempts.get(node_name, 0) + 1
+    node_attempts[node_name] = attempt
+    return attempt
+
+
+def _current_node_attempt(node_attempts: dict[str, int], node_name: str) -> int:
+    """读取节点当前轮次，兼容缺失 started 事件的更新流。"""
+
+    return node_attempts.get(node_name) or _next_node_attempt(node_attempts, node_name)
+
+
+def _process_step_id(node_name: str, attempt: int) -> str:
+    """首次执行沿用旧步骤 ID，后续轮次添加唯一 attempt 后缀。"""
+
+    return f"workflow:{node_name}" if attempt == 1 else f"workflow:{node_name}:{attempt}"
+
+
+def _iteration_kind(node_name: str, attempt: int) -> str:
+    """为构建和测试轮次生成稳定的语义标签。"""
+
+    if node_name == "build":
+        return "initial_build" if attempt == 1 else "repair_build"
+    if node_name == "integration_test":
+        return "initial_test" if attempt == 1 else "retest"
+    return "initial"
+
+
+def _terminal_process_status(node_name: str, update: dict[str, Any]) -> str:
+    """按节点真实业务结果计算步骤终态，避免把门禁失败显示为完成。"""
+
+    if update.get("status") == "requires_user_input":
+        return "requires_user_input"
+    if update.get("status") == "failed" or node_name == "handle_failure":
+        return "failed"
+    if node_name == "build":
+        summary = update.get("build_summary")
+        summary_status = summary.get("status") if isinstance(summary, dict) else None
+        if summary_status == "requires_confirmation":
+            return "requires_user_input"
+        if summary_status != "completed":
+            return "failed"
+    if node_name == "integration_test" and update.get("quality_gate_passed") is not True:
+        return "failed"
+    return "completed"
+
+
+def _terminal_process_title(node_name: str, status: str) -> str:
+    """按步骤终态生成一致的中文标题。"""
+
+    prefix = {
+        "completed": "已完成",
+        "failed": "执行失败",
+        "requires_user_input": "等待确认",
+    }.get(status, "已完成")
+    return f"{prefix} {_workflow_node_label(node_name)}"
+
+
 def build_workflow_ag_ui_stream(
     *,
     graph: Any,
@@ -75,6 +135,7 @@ def build_workflow_ag_ui_stream(
         events: list[dict[str, Any]] = []
         result: dict[str, Any] = {}
         workspace_lease: WorkspaceRunLease | None = None
+        node_attempts: dict[str, int] = {}
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")
@@ -200,6 +261,8 @@ def build_workflow_ag_ui_stream(
                 result=result,
             ):
                 yield frame
+            first_node_attempt = _next_node_attempt(node_attempts, first_node_name)
+            first_node_iteration_kind = _iteration_kind(first_node_name, first_node_attempt)
             first_node_event = _workflow_event(
                 events,
                 "workflow.node.started",
@@ -208,6 +271,8 @@ def build_workflow_ag_ui_stream(
                 node_name=first_node_name,
                 status="running",
                 message=f"正在执行：{_workflow_node_label(first_node_name)}",
+                attempt=first_node_attempt,
+                iteration_kind=first_node_iteration_kind,
             )
             for frame in _workflow_ag_ui_frames(
                 encoder,
@@ -220,12 +285,15 @@ def build_workflow_ag_ui_stream(
             process_sequence = 1
             yield _process_frame(
                 encoder,
-                id=f"workflow:{first_node_name}",
+                id=_process_step_id(first_node_name, first_node_attempt),
                 kind="workflow",
                 status="running",
                 title=f"正在执行 {_workflow_node_label(first_node_name)}",
                 detail=str(first_node_event["message"]),
                 sequence=process_sequence,
+                node_name=first_node_name,
+                attempt=first_node_attempt,
+                iteration_kind=first_node_iteration_kind,
             )
             reasoning_steps: dict[str, str] = {}
             tool_steps: dict[str, dict[str, str]] = {}
@@ -246,6 +314,10 @@ def build_workflow_ag_ui_stream(
                             else {}
                         )
                         progress_node = str(progress.get("node_name") or "build")
+                        progress_attempt = _current_node_attempt(node_attempts, progress_node)
+                        progress_iteration_kind = _iteration_kind(
+                            progress_node, progress_attempt
+                        )
                         progress_message = str(
                             progress.get("message") or "构建任务进度已更新。"
                         )
@@ -268,6 +340,8 @@ def build_workflow_ag_ui_stream(
                                     "buildEvents": progress_state.get("build_events", []),
                                 },
                             },
+                            attempt=progress_attempt,
+                            iteration_kind=progress_iteration_kind,
                         )
                         for frame in _workflow_ag_ui_frames(
                             encoder,
@@ -277,21 +351,44 @@ def build_workflow_ag_ui_stream(
                             result=progress_state,
                         ):
                             yield frame
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id(progress_node, progress_attempt),
+                            kind="workflow",
+                            status="running",
+                            title=f"正在执行 {_workflow_node_label(progress_node)}",
+                            detail=progress_message,
+                            sequence=process_sequence,
+                            node_name=progress_node,
+                            attempt=progress_attempt,
+                            iteration_kind=progress_iteration_kind,
+                            build_execution_slice=progress_state.get(
+                                "build_execution_slice"
+                            ),
+                        )
                         continue
                     if event_type == "integration_test.checks":
                         checks = integration_test_checks(progress)
                         if not checks:
                             continue
                         process_sequence += 1
+                        test_attempt = _current_node_attempt(
+                            node_attempts, "integration_test"
+                        )
                         yield _process_frame(
                             encoder,
-                            id="workflow:integration_test",
+                            id=_process_step_id("integration_test", test_attempt),
                             kind="workflow",
                             status="running",
                             title=f"正在执行 {_workflow_node_label('integration_test')}",
                             detail=integration_test_check_summary(checks),
                             sequence=process_sequence,
                             checks=checks,
+                            node_name="integration_test",
+                            attempt=test_attempt,
+                            iteration_kind=_iteration_kind(
+                                "integration_test", test_attempt
+                            ),
                         )
                         continue
                     # 其它未知 custom 事件:静默跳过,保持向后兼容。
@@ -325,6 +422,9 @@ def build_workflow_ag_ui_stream(
                         yield frame
 
                     detail = _workflow_node_detail(node_name, update)
+                    node_attempt = _current_node_attempt(node_attempts, node_name)
+                    node_iteration_kind = _iteration_kind(node_name, node_attempt)
+                    terminal_status = _terminal_process_status(node_name, update)
                     node_payload = {
                         "phase": update.get("phase", node_name),
                         "stateDelta": _public_workflow_state(update),
@@ -337,10 +437,12 @@ def build_workflow_ag_ui_stream(
                         run_id=run_id,
                         thread_id=thread_id,
                         node_name=node_name,
-                        status=str(update.get("status") or "completed"),
+                        status=terminal_status,
                         message=detail.get("message")
                         or f"完成：{_workflow_node_label(node_name)}",
                         data=node_payload,
+                        attempt=node_attempt,
+                        iteration_kind=node_iteration_kind,
                     )
                     for frame in _workflow_ag_ui_frames(
                         encoder,
@@ -363,13 +465,21 @@ def build_workflow_ag_ui_stream(
                     )
                     yield _process_frame(
                         encoder,
-                        id=f"workflow:{node_name}",
+                        id=_process_step_id(node_name, node_attempt),
                         kind="workflow",
-                        status="completed",
-                        title=f"已完成 {_workflow_node_label(node_name)}",
+                        status=terminal_status,
+                        title=_terminal_process_title(node_name, terminal_status),
                         detail=process_detail,
                         sequence=process_sequence,
                         checks=checks,
+                        node_name=node_name,
+                        attempt=node_attempt,
+                        iteration_kind=node_iteration_kind,
+                        build_execution_slice=(
+                            update.get("build_execution_slice")
+                            if node_name == "build"
+                            else None
+                        ),
                     )
                     for frame in _tool_result_frames(
                         encoder,
@@ -380,6 +490,8 @@ def build_workflow_ag_ui_stream(
                         yield frame
 
                     for next_node in _workflow_next_nodes(node_name, update):
+                        next_attempt = _next_node_attempt(node_attempts, next_node)
+                        next_iteration_kind = _iteration_kind(next_node, next_attempt)
                         next_event = _workflow_event(
                             events,
                             "workflow.node.started",
@@ -388,6 +500,8 @@ def build_workflow_ag_ui_stream(
                             node_name=next_node,
                             status="running",
                             message=f"正在执行：{_workflow_node_label(next_node)}",
+                            attempt=next_attempt,
+                            iteration_kind=next_iteration_kind,
                         )
                         for frame in _workflow_ag_ui_frames(
                             encoder,
@@ -400,12 +514,15 @@ def build_workflow_ag_ui_stream(
                         process_sequence += 1
                         yield _process_frame(
                             encoder,
-                            id=f"workflow:{next_node}",
+                            id=_process_step_id(next_node, next_attempt),
                             kind="workflow",
                             status="running",
                             title=f"正在执行 {_workflow_node_label(next_node)}",
                             detail=str(next_event["message"]),
                             sequence=process_sequence,
+                            node_name=next_node,
+                            attempt=next_attempt,
+                            iteration_kind=next_iteration_kind,
                         )
 
             result = dict((await active_graph.aget_state(config)).values)
