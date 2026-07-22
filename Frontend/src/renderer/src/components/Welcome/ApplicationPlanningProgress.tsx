@@ -6,7 +6,8 @@ const { Text } = Typography
 
 const STAGE_LABELS: Record<string, string> = {
   requirements: '需求确认',
-  project_planning: '项目规划'
+  project_planning: '项目规划',
+  application_template: '应用模板'
 }
 
 export type ApplicationPlanningProgressEvent = {
@@ -99,7 +100,10 @@ export default function ApplicationPlanningProgress({
           <Text className={cx('planning-progress-messages-title')}>AG-UI 实时消息</Text>
           <div>
             {streamLines.map((line, index) => (
-              <p key={`${index}-${line}`}><span>›</span>{line}</p>
+              <p key={`${index}-${line}`}>
+                <span>›</span>
+                {line}
+              </p>
             ))}
           </div>
         </div>

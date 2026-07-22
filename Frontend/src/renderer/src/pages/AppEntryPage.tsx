@@ -18,14 +18,10 @@ import {
 } from '../service/applicationStorage'
 import { saveApplication } from '../components/Welcome/applicationService'
 import {
-  generateApplicationTemplateFiles as writeApplicationTemplateFiles, fetchTemplateCode
+  fetchTemplateCode,
+  generateApplicationTemplateFiles as writeApplicationTemplateFiles
 } from '../service/templateApi'
-import type {
-  ApplicationConfig,
-  ApplicationPlanningConfirmation,
-  ApplicationLifecycle,
-  WorkflowRunPayload
-} from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
 import WelcomePage from './WelcomePage'
 import WorkbenchPage from './WorkbenchPage'
 
@@ -35,7 +31,7 @@ function getEntryTheme(): 'dark' | 'light' {
 }
 
 // 在欢迎页、全屏规划页与应用工作台之间维护顶层导航和长时规划会话。
-export default function AppEntryPage() {
+export default function AppEntryPage(): JSX.Element {
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activePlanning, setActivePlanning] = useState<PersistedActivePlanning | undefined>()
   const [planningVisible, setPlanningVisible] = useState(false)
@@ -66,7 +62,7 @@ export default function AppEntryPage() {
   }, [])
 
   // 从工作台返回欢迎页。
-  const handleReturnWelcome = () => {
+  const handleReturnWelcome = (): void => {
     setActiveApplication(null)
   }
 
@@ -131,104 +127,86 @@ export default function AppEntryPage() {
     })
   }, [])
 
-  // 生成应用模板文件并通过 AG-UI 把结果提交给后端生命周期状态机。
-  const generateApplicationTemplateFiles = useCallback(async (
-    planning: PersistedActivePlanning
-  ): Promise<void> => {
-    const runKey = planning.application.id
-    if (templateGenerationRunRef.current === runKey) return
-    templateGenerationRunRef.current = runKey
-    let failureMessage = ''
-    try {
-      const projectPath =
-        planning.application.workspaceRoot || planning.application.projectParentPath || ''
-      await writeApplicationTemplateFiles(
-        planning.application.schema,
-        projectPath,
-        planning.workflow
-      )
-    } catch (reason) {
-      console.error('[应用模板文件生成失败]', reason)
-      failureMessage = reason instanceof Error ? reason.message : String(reason)
-    }
-
-    try {
-      const lifecycle = await completeApplicationTemplateGeneration(
-        planning.application,
-        planning.threadId,
-        !failureMessage,
-        failureMessage || undefined
-      )
-      if (lifecycle.lifecycle.stage === 'ready_for_workbench') {
-        await saveApplication(planning.application)
-        setActivePlanning(undefined)
-        setPlanningVisible(false)
-        setActiveApplication(planning.application)
-        message.success('应用模板生成完成，正在进入工作台')
-        return
+  // 下载并生成应用模板文件，成功后再通过 AG-UI 解锁工作台。
+  const prepareApplicationTemplate = useCallback(
+    async (planning: PersistedActivePlanning): Promise<boolean> => {
+      const runKey = planning.application.id
+      if (templateGenerationRunRef.current === runKey) return false
+      templateGenerationRunRef.current = runKey
+      let failureMessage = ''
+      const confirmedApplication = {
+        ...planning.application,
+        planningConfirmedAt: Date.now()
       }
-      setActivePlanning({
-        ...planning,
-        lifecycle,
-        status: activePlanningStatus(lifecycle)
-      })
-      message.error(lifecycle.error?.message || '应用模板文件生成失败')
-    } finally {
-      templateGenerationRunRef.current = undefined
-    }
-  }, [])
+      const projectPath =
+        confirmedApplication.workspaceRoot || confirmedApplication.projectParentPath || ''
+
+      try {
+        await fetchTemplateCode(confirmedApplication.schema, projectPath)
+        console.log('[模板拉取成功]')
+      } catch (reason) {
+        console.error('[模板拉取失败]', reason)
+        failureMessage = reason instanceof Error ? reason.message : String(reason)
+      }
+
+      if (!failureMessage) {
+        try {
+          await writeApplicationTemplateFiles(
+            confirmedApplication.schema,
+            projectPath,
+            planning.workflow
+          )
+        } catch (reason) {
+          console.error('[应用模板文件生成失败]', reason)
+          failureMessage = reason instanceof Error ? reason.message : String(reason)
+        }
+      }
+
+      try {
+        const lifecycle = await completeApplicationTemplateGeneration(
+          confirmedApplication,
+          planning.threadId,
+          !failureMessage,
+          failureMessage || undefined
+        )
+        if (lifecycle.lifecycle.stage === 'ready_for_workbench') {
+          await saveApplication(confirmedApplication)
+          setActivePlanning(undefined)
+          setPlanningVisible(false)
+          setActiveApplication(confirmedApplication)
+          message.success('应用模板生成完成，正在进入工作台')
+          return true
+        }
+        setActivePlanning({
+          ...planning,
+          application: confirmedApplication,
+          lifecycle,
+          status: activePlanningStatus(lifecycle)
+        })
+        message.error(lifecycle.error?.message || '应用模板准备失败，请重试')
+        return false
+      } finally {
+        templateGenerationRunRef.current = undefined
+      }
+    },
+    []
+  )
 
   // 服务重启后若停在模板文件生成阶段，自动以同一幂等动作继续。
   useEffect(() => {
     if (
       planningVisible ||
       activePlanning?.lifecycle.lifecycle.stage !== 'generating_application_template_files'
-    ) return
-    void generateApplicationTemplateFiles(activePlanning)
-  }, [activePlanning, generateApplicationTemplateFiles, planningVisible])
+    )
+      return
+    void prepareApplicationTemplate(activePlanning)
+  }, [activePlanning, planningVisible, prepareApplicationTemplate])
 
   // 在 RequirementSpec 与 ProjectPlan 均确认后结束规划入口并打开工作台。
   // 进入工作台前，先拉取模板工程代码，再把规划产出的页面追加到 frontend/src/pages/ 下。
-  const handlePlanningConfirmed = async (
-    _confirmation: ApplicationPlanningConfirmation
-  ): Promise<void> => {
-    if (!activePlanning) return
-    await generateApplicationTemplateFiles(activePlanning)
-    const confirmedApplication = {
-      ...activePlanning.application,
-      planningConfirmedAt: Date.now()
-    }
-    await saveApplication(confirmedApplication)
-
-    const projectPath =
-      confirmedApplication.workspaceRoot ||
-      confirmedApplication.projectParentPath ||
-      ''
-
-    // 拉取前端模板工程代码，失败不阻塞进入工作台
-    try {
-      await fetchTemplateCode(confirmedApplication.schema, projectPath)
-      console.log('[模板拉取成功]')
-    } catch (templateError) {
-      console.error('[模板拉取失败]', templateError)
-      message.warning('模板拉取失败，可在工作台中重试')
-    }
-
-    // 生成页面占位文件（hello agent!），失败不阻塞进入工作台
-    try {
-      await writeApplicationTemplateFiles(
-        confirmedApplication.schema,
-        projectPath,
-        activePlanning.workflow
-      )
-    } catch (reason) {
-      console.error('[页面文件生成失败]', reason)
-      message.warning('页面文件生成失败，可在工作台中重试')
-    }
-
-    setActivePlanning(undefined)
-    setPlanningVisible(false)
-    setActiveApplication(confirmedApplication)
+  const handlePlanningConfirmed = async (): Promise<boolean> => {
+    if (!activePlanning) return false
+    return prepareApplicationTemplate(activePlanning)
   }
 
   if (!activeApplication) {
@@ -245,7 +223,7 @@ export default function AppEntryPage() {
                 activePlanning?.lifecycle.lifecycle.stage ===
                 'application_template_generation_failed'
               ) {
-                void generateApplicationTemplateFiles(activePlanning)
+                void prepareApplicationTemplate(activePlanning)
                 return
               }
               setPlanningVisible(true)
@@ -273,10 +251,5 @@ export default function AppEntryPage() {
     )
   }
 
-  return (
-    <WorkbenchPage
-      application={activeApplication}
-      onReturnWelcome={handleReturnWelcome}
-    />
-  )
+  return <WorkbenchPage application={activeApplication} onReturnWelcome={handleReturnWelcome} />
 }

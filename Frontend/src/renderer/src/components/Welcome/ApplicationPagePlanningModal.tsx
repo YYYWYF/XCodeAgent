@@ -51,7 +51,7 @@ type Props = {
   threadId: string
   visible: boolean
   onReturnHome: () => void
-  onConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<void>
+  onConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
   onStatusChange: (status: ActivePlanningStatus) => void
   onWorkflowChange: (workflow: WorkflowRunPayload) => void
 }
@@ -120,11 +120,14 @@ function workflowStep(workflow?: WorkflowRunPayload): number {
 }
 
 // 将独立 Workflow 的当前节点转换为原页面规划进度组件需要的阶段时间线。
-function workflowProgressEvents(workflow?: WorkflowRunPayload): ApplicationPlanningProgressEvent[] {
+function workflowProgressEvents(
+  workflow?: WorkflowRunPayload,
+  preparingTemplate = false
+): ApplicationPlanningProgressEvent[] {
   if (!workflow) return []
   const currentIndex = workflowStep(workflow)
   const finished = workflow.summary.status === 'completed'
-  return phaseOrder.slice(0, currentIndex + 1).map((stage, index) => {
+  const events = phaseOrder.slice(0, currentIndex + 1).map((stage, index) => {
     const meta = phaseProgress[stage]
     const completed = index < currentIndex || (finished && index === currentIndex)
     return {
@@ -137,6 +140,15 @@ function workflowProgressEvents(workflow?: WorkflowRunPayload): ApplicationPlann
           : undefined
     }
   })
+  if (preparingTemplate) {
+    events.push({
+      stage: 'application_template',
+      percent: 92,
+      message: '正在下载模板代码并准备工作区…',
+      detail: undefined
+    })
+  }
+  return events
 }
 
 // 返回当前节点在动态进度卡上的标题与兜底说明。
@@ -166,6 +178,7 @@ export default function ApplicationPagePlanningModal({
   const completedRef = useRef(false)
   const [workflow, setWorkflow] = useState<WorkflowRunPayload | undefined>(initialWorkflow)
   const [running, setRunning] = useState(false)
+  const [preparingTemplate, setPreparingTemplate] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const [error, setError] = useState(
     initialStatus === 'error' ? '上次规划流程中断，请重试或检查当前规划内容。' : ''
@@ -186,6 +199,23 @@ export default function ApplicationPagePlanningModal({
   const handleWorkflowChange = (nextWorkflow: WorkflowRunPayload): void => {
     setWorkflow(nextWorkflow)
     onWorkflowChange(nextWorkflow)
+  }
+
+  // 保持加载界面直到模板准备完成，失败时恢复可重试状态。
+  const completePlanning = async (confirmation: ApplicationPlanningConfirmation): Promise<void> => {
+    completedRef.current = true
+    setPreparingTemplate(true)
+    try {
+      const succeeded = await onConfirmed(confirmation)
+      if (succeeded) return
+      completedRef.current = false
+      setError('应用模板准备失败，请重试；成功后才会进入工作台。')
+    } catch (reason) {
+      completedRef.current = false
+      throw reason
+    } finally {
+      setPreparingTemplate(false)
+    }
   }
 
   // 运行初始或恢复轮次，并在项目规划确认后直接打开工作台。
@@ -234,8 +264,7 @@ export default function ApplicationPagePlanningModal({
       if (result.workflow) handleWorkflowChange(result.workflow)
       const confirmation = workflowConfirmation(result.workflow)
       if (confirmation && !completedRef.current) {
-        completedRef.current = true
-        await onConfirmed(confirmation)
+        await completePlanning(confirmation)
       }
     } catch (reason) {
       if (isAuthenticationFailure(reason)) return
@@ -302,6 +331,26 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
+  // 模板准备失败时直接重试本地准备动作，避免重复提交已确认的项目计划。
+  const retryAfterFailure = async (): Promise<void> => {
+    const confirmation = workflowConfirmation(workflow)
+    if (!confirmation) {
+      await runPlanning(originalRequest)
+      return
+    }
+    setRunning(true)
+    onStatusChange('running')
+    setError('')
+    try {
+      await completePlanning(confirmation)
+    } catch (reason) {
+      if (isAuthenticationFailure(reason)) return
+      setError(formatError(reason, '应用模板准备失败'))
+    } finally {
+      setRunning(false)
+    }
+  }
+
   return (
     <main
       aria-hidden={!visible}
@@ -350,7 +399,7 @@ export default function ApplicationPagePlanningModal({
               extra={
                 <Button
                   icon={<ReloadOutlined />}
-                  onClick={() => void runPlanning(originalRequest)}
+                  onClick={() => void retryAfterFailure()}
                   type="primary"
                 >
                   重试
@@ -365,10 +414,12 @@ export default function ApplicationPagePlanningModal({
               {running || !workflow ? (
                 <div className={cx('page-planning-loading')}>
                   <ApplicationPlanningProgress
-                    events={workflowProgressEvents(workflow)}
-                    fallbackMessage={progressCopy.fallback}
+                    events={workflowProgressEvents(workflow, preparingTemplate)}
+                    fallbackMessage={
+                      preparingTemplate ? '正在下载模板代码并准备工作区…' : progressCopy.fallback
+                    }
                     streamingContent={streamingContent}
-                    title={progressCopy.title}
+                    title={preparingTemplate ? '正在准备应用模板' : progressCopy.title}
                   />
                 </div>
               ) : null}
