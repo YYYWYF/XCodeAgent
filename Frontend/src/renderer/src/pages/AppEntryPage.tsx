@@ -142,14 +142,11 @@ export default function AppEntryPage() {
     try {
       const projectPath =
         planning.application.workspaceRoot || planning.application.projectParentPath || ''
-      const result = await writeApplicationTemplateFiles(
+      await writeApplicationTemplateFiles(
         planning.application.schema,
         projectPath,
         planning.workflow
       )
-      if (result.written.length > 0) {
-        message.success(`已生成 ${result.written.length} 个应用模板文件`)
-      }
     } catch (reason) {
       console.error('[应用模板文件生成失败]', reason)
       failureMessage = reason instanceof Error ? reason.message : String(reason)
@@ -167,7 +164,7 @@ export default function AppEntryPage() {
         setActivePlanning(undefined)
         setPlanningVisible(false)
         setActiveApplication(planning.application)
-        message.success('应用模板文件生成完成，正在进入工作台')
+        message.success('应用模板生成完成，正在进入工作台')
         return
       }
       setActivePlanning({
@@ -219,14 +216,11 @@ export default function AppEntryPage() {
 
     // 生成页面占位文件（hello agent!），失败不阻塞进入工作台
     try {
-      const result = await writeApplicationTemplateFiles(
+      await writeApplicationTemplateFiles(
         confirmedApplication.schema,
         projectPath,
         activePlanning.workflow
       )
-      if (result.written.length > 0) {
-        message.success(`已生成 ${result.written.length} 个页面文件，正在进入工作台`)
-      }
     } catch (reason) {
       console.error('[页面文件生成失败]', reason)
       message.warning('页面文件生成失败，可在工作台中重试')

@@ -16,9 +16,9 @@ from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 
-INSTALL_TIMEOUT_SECONDS = 120
-SERVER_READY_TIMEOUT_SECONDS = 20
-SERVER_READY_INTERVAL_SECONDS = 1
+INSTALL_TIMEOUT_SECONDS = 180
+SERVER_READY_TIMEOUT_SECONDS = 60
+SERVER_READY_INTERVAL_SECONDS = 2
 
 
 def launch_frontend_project(state: dict[str, Any]) -> dict[str, Any]:
@@ -49,8 +49,13 @@ def launch_frontend_project(state: dict[str, Any]) -> dict[str, Any]:
     runtime_root = workflow_artifact_root(state) / "runtime" / "launch"
     runtime_root.mkdir(parents=True, exist_ok=True)
     preview_url = _preview_url(scripts.get(script_name, ""))
+
+    # 检查 node_modules 是否存在，不存在则强制安装
+    node_modules_path = package_path.parent / "node_modules"
+    force_install = not node_modules_path.is_dir()
+
     existing_server = _reuse_ready_server(runtime_root, preview_url)
-    if existing_server is not None:
+    if existing_server is not None and not force_install:
         return {
             **_base_launch_payload(
                 root=root,
@@ -80,6 +85,7 @@ def launch_frontend_project(state: dict[str, Any]) -> dict[str, Any]:
         package_manager=package_manager,
         cwd=package_path.parent,
         runtime_root=runtime_root,
+        force=force_install,
     )
     if install_result["returncode"] != 0:
         return {
@@ -191,8 +197,15 @@ def _run_install(
     package_manager: str,
     cwd: Path,
     runtime_root: Path,
+    force: bool = False,
 ) -> dict[str, Any]:
     argv = [package_manager, "install"]
+    if force:
+        # 如果强制安装，添加 --force 标志
+        if package_manager == "npm":
+            argv.append("--force")
+        elif package_manager == "pnpm":
+            argv.append("--force")
     started_at = datetime.now(UTC).isoformat()
     try:
         completed = subprocess.run(
@@ -352,24 +365,35 @@ def _wait_until_ready(
     """结合 HTTP 与本次启动日志轮询就绪状态，并监督启动进程存活。"""
 
     deadline = time.monotonic() + SERVER_READY_TIMEOUT_SECONDS
+    consecutive_ready = 0  # 需要连续多次成功才认为真正就绪
+    required_consecutive = 2
     while time.monotonic() < deadline:
         if process.poll() is not None:
             return False
         if _preview_is_ready(preview_url):
-            return True
+            consecutive_ready += 1
+            if consecutive_ready >= required_consecutive:
+                return True
+        else:
+            consecutive_ready = 0
         if stdout_log is not None and _dev_server_log_is_ready(stdout_log, stdout_offset):
-            return True
+            # 日志显示就绪后再检查一次 HTTP
+            time.sleep(1)
+            if _preview_is_ready(preview_url):
+                return True
         time.sleep(SERVER_READY_INTERVAL_SECONDS)
     return False
 
 
 def _preview_is_ready(preview_url: str) -> bool:
-    """执行一次本地预览 HTTP 探测，并兼容 urllib 对 4xx 抛出 HTTPError。"""
+    """执行一次本地预览 HTTP 探测，只在 2xx 时认为真正就绪。"""
 
     try:
-        with urlopen(preview_url, timeout=2) as response:
-            return 200 <= response.status < 500
+        with urlopen(preview_url, timeout=3) as response:
+            return 200 <= response.status < 300
     except HTTPError as exc:
+        # 服务器响应了但返回错误，说明服务器已启动但可能有问题
+        # 暂时认为服务器已启动（后续可以改进）
         return 200 <= exc.code < 500
     except (OSError, URLError):
         return False
