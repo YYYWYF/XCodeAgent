@@ -26,7 +26,8 @@ def _frontend_generation_prompt(
     tasks: list[dict[str, Any]],
 ) -> str:
     app_name = _app_name_from_plan(project_plan)
-    frontend_root = f"apps/{app_name}/frontend" if app_name else "apps/<app.name>/frontend"
+    # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
+    frontend_root = "frontend"
     return (
         "You are the Frontend Generation Agent in an app-generation workflow.\n"
         "Execute only the approved frontend tasks below. Modify code only within "

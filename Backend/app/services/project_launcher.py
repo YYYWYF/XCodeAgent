@@ -143,17 +143,13 @@ def launch_frontend_project(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _find_frontend_package_json(root: Path) -> Path | None:
+    # 直接平铺到根目录：frontend/package.json
     candidates = [
-        root / "Frontend" / "package.json",
         root / "frontend" / "package.json",
+        root / "Frontend" / "package.json",
         root / "app" / "frontend" / "package.json",
         root / "package.json",
     ]
-    # 多应用工作区：apps/<应用名>/frontend/package.json（应用名可能为中文）。
-    try:
-        candidates.extend(sorted((root / "apps").glob("*/frontend/package.json")))
-    except OSError:
-        pass
     for path in candidates:
         if path.is_file():
             return path

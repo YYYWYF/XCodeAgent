@@ -14,25 +14,25 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 前端工程根在工作区中的实际位置是：
 
 ```
-/apps/<应用名称>/frontend/
+/frontend/
 ```
 
-其中 `<应用名称>` 来自 ProjectPlan 的 `app.name`（例如 `值班信息管理`）。
+直接平铺在工作区根目录下，与 `.xcodeagent` 同级。
 
-因此本技能里写的每一条 `src/...` 路径，在调用文件系统工具时都要加上前缀 `/apps/<应用名称>/frontend/`：
+因此本技能里写的每一条 `src/...` 路径，在调用文件系统工具时都要加上前缀 `/frontend/`：
 
 | 本技能里的相对路径 | 实际虚拟绝对路径 |
 | --- | --- |
-| `src/pages/<PageKey>/index.tsx` | `/apps/<应用名称>/frontend/src/pages/<PageKey>/index.tsx` |
-| `src/typings/<page>.ts` | `/apps/<应用名称>/frontend/src/typings/<page>.ts` |
-| `src/constants/<page>.ts` | `/apps/<应用名称>/frontend/src/constants/<page>.ts` |
-| `src/hooks/use<Page>.ts` | `/apps/<应用名称>/frontend/src/hooks/use<Page>.ts` |
-| `src/utils/<page>.ts` | `/apps/<应用名称>/frontend/src/utils/<page>.ts` |
-| `src/components/<Module>/index.tsx` | `/apps/<应用名称>/frontend/src/components/<Module>/index.tsx` |
-| `src/apis/<biz>Api.ts` | `/apps/<应用名称>/frontend/src/apis/<biz>Api.ts` |
-| `src/constants/menus.ts` | `/apps/<应用名称>/frontend/src/constants/menus.ts` |
+| `src/pages/<PageKey>/index.tsx` | `/frontend/src/pages/<PageKey>/index.tsx` |
+| `src/typings/<page>.ts` | `/frontend/src/typings/<page>.ts` |
+| `src/constants/<page>.ts` | `/frontend/src/constants/<page>.ts` |
+| `src/hooks/use<Page>.ts` | `/frontend/src/hooks/use<Page>.ts` |
+| `src/utils/<page>.ts` | `/frontend/src/utils/<page>.ts` |
+| `src/components/<Module>/index.tsx` | `/frontend/src/components/<Module>/index.tsx` |
+| `src/apis/<biz>Api.ts` | `/frontend/src/apis/<biz>Api.ts` |
+| `src/constants/menus.ts` | `/frontend/src/constants/menus.ts` |
 
-**生成代码前，务必先用 `list_files` 确认 `/apps/<应用名称>/frontend/src/pages/` 下已存在的页面目录与脚手架占位文件，再按上表前缀写入。** 不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
+**生成代码前，务必先用 `list_files` 确认 `/frontend/src/pages/` 下已存在的页面目录与脚手架占位文件，再按上表前缀写入。** 不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
 
 ## 核心原则
 

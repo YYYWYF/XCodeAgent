@@ -33,7 +33,7 @@ export const DEFAULT_TEMPLATE_REPO_URL = 'https://github.com/ruyue1/frontend-tem
  * 拉取前端模板工程代码。
  *
  * 在 Electron 桌面客户端中，通过主进程执行 `git clone`，把模板工程完整代码
- * 放到 `<projectPath>/apps/<appName>/frontend/` 目录下；非 Electron 环境
+ * 放到 `<projectPath>/frontend/` 目录下；非 Electron 环境
  * （如纯浏览器）下回退为只返回模板元信息。
  *
  * @param schema 应用 schema，用于读取应用名称等元信息
@@ -147,7 +147,7 @@ function extractFrontendPages(
 }
 
 /**
- * 根据规划产出的页面清单，在模板工程 apps/<appName>/frontend/src/pages/ 下
+ * 根据规划产出的页面清单，在模板工程 frontend/src/pages/ 下
  * 追加每个页面的占位文件（<PageKey>/index.tsx，内容为 hello agent!）。
  *
  * @param schema 应用 schema，用于读取应用名称

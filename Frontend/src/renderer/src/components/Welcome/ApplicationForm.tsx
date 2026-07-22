@@ -70,7 +70,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
   const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? true
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? false
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
-  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#2c68ff'
+  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#7c3aed'
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
     const keyword = trackMethodSearch.trim().toLowerCase()
@@ -295,12 +295,12 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             <div className={cx('theme-color-swatch-wrapper')}>
               <div
                 className={cx('theme-color-swatch')}
-                style={{ backgroundColor: themePrimaryColor || '#2c68ff' }}
+                style={{ backgroundColor: themePrimaryColor || '#7c3aed' }}
               />
               <input
                 type="color"
                 className={cx('theme-color-input')}
-                value={themePrimaryColor || '#2c68ff'}
+                value={themePrimaryColor || '#7c3aed'}
                 onChange={(e) => {
                   const color = e.target.value
                   form.setFields([{ name: ['theme', 'primaryColor'], value: color }])
@@ -308,13 +308,13 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
               />
             </div>
             <Input
-              placeholder="#2c68ff"
+              placeholder="#7c3aed"
               style={{ flex: 1 }}
               value={themePrimaryColor || ''}
               onChange={(e) => {
-                  const color = e.target.value
-                  form.setFields([{ name: ['theme', 'primaryColor'], value: color }])
-                }}
+                const color = e.target.value
+                form.setFields([{ name: ['theme', 'primaryColor'], value: color }])
+              }}
             />
           </div>
         </Form.Item>

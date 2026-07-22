@@ -497,19 +497,13 @@ def _missing_tool_result(
 
 
 def _find_frontend_package(root: Path) -> PackageProject | None:
+    # 直接平铺到根目录：frontend/package.json
     candidate_paths: list[Path] = [
-        root / "Frontend" / "package.json",
         root / "frontend" / "package.json",
+        root / "Frontend" / "package.json",
         root / "app" / "frontend" / "package.json",
         root / "package.json",
     ]
-    # 多应用工作区：apps/<应用名>/frontend/package.json（应用名可能为中文）。
-    try:
-        candidate_paths.extend(
-            sorted((root / "apps").glob("*/frontend/package.json"))
-        )
-    except OSError:
-        pass
     for path in candidate_paths:
         package = _read_package_project(path)
         if package is not None:

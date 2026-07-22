@@ -41,11 +41,11 @@ SOURCE_SUFFIXES = {
 }
 
 # Matches frontend source roots for both the XcodeAgent's own Electron frontend
-# (Frontend/src/) and user applications scaffolded under apps/<app>/frontend/src/.
+# (Frontend/src/) and user applications scaffolded under frontend/src/.
 # Exposing user-app frontend files in the WorkspaceSnapshot lets the build-task
 # planner and Frontend Agent see the real place frontend code must live, instead
 # of only the XcodeAgent development workspace.
-FRONTEND_SRC_RE = re.compile(r"^(?:Frontend/src/|apps/[^/]+/frontend/src/)")
+FRONTEND_SRC_RE = re.compile(r"^(?:Frontend/src/|frontend/src/)")
 
 
 class CodeGraphProvider(Protocol):
@@ -251,20 +251,15 @@ def _project_roots(files: Iterable[str]) -> list[dict[str, str]]:
     for prefix, (kind, description) in known.items():
         if any(path.startswith(prefix) for path in files):
             roots.append({"path": prefix.rstrip("/"), "kind": kind, "description": description})
-    # Dynamically recognise user-application frontend roots (apps/<app>/frontend/src/)
+    # Dynamically recognise user-application frontend roots (frontend/src/)
     # so the build-task planner and Frontend Agent see the real directory where
     # generated frontend code must live, not just the XcodeAgent dev workspace.
-    app_frontend_roots: set[str] = set()
-    for path in files:
-        match = re.match(r"^(apps/[^/]+/frontend/src)/", path)
-        if match:
-            app_frontend_roots.add(match.group(1))
-    for src_root in sorted(app_frontend_roots):
-        app_name = src_root.split("/")[1]
+    # 直接平铺到根目录，不再嵌套 apps/<app_name>/
+    if any(path.startswith("frontend/src/") for path in files):
         roots.append({
-            "path": src_root,
+            "path": "frontend/src",
             "kind": "frontend",
-            "description": f"React frontend source for application '{app_name}'",
+            "description": "React frontend source for application",
         })
     return roots
 

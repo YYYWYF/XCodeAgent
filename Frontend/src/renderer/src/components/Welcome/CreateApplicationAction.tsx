@@ -15,7 +15,6 @@ import './WelcomeModal.less'
 import { saveApplication } from './applicationService'
 import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
-import { fetchTemplateCode, type TemplateInitResponse } from '../../service/templateApi'
 
 type Props = {
   disabled?: boolean
@@ -36,7 +35,6 @@ export default function CreateApplicationAction({
   const [form] = Form.useForm<ApplicationDraft>()
   const [modalOpen, setModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [fetchingTemplate, setFetchingTemplate] = useState(false)
   const [selectingParent, setSelectingParent] = useState(false)
 
   // 打开应用基础配置弹窗。
@@ -104,20 +102,6 @@ export default function CreateApplicationAction({
       await saveApplication(application)
       const lifecycle = await createApplicationLifecycle(application, planningThreadId)
 
-      // 调用模板工程拉取接口
-      setFetchingTemplate(true)
-      let templateResult: TemplateInitResponse | undefined
-      try {
-        templateResult = await fetchTemplateCode(schema, projectDirectory.path)
-        console.log('[模板拉取成功]', templateResult)
-      } catch (templateError) {
-        console.error('[模板拉取失败]', templateError)
-        // 模板拉取失败不阻塞流程，继续打开规划页面
-        message.warning('模板拉取失败，请稍后在规划页面重试')
-      } finally {
-        setFetchingTemplate(false)
-      }
-
       setModalOpen(false)
       onStartPlanning(application, planningThreadId, lifecycle)
     } catch (error) {
@@ -149,7 +133,7 @@ export default function CreateApplicationAction({
           form.setFieldsValue(initialApplicationDraft)
         }}
         cancelText="取消"
-        confirmLoading={creating || fetchingTemplate}
+        confirmLoading={creating}
         destroyOnClose
         forceRender
         maskClosable={false}

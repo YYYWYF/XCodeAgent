@@ -31,7 +31,7 @@ class GenerationWorkspacePathTests(unittest.TestCase):
             result = _invoke_live_frontend_agent(
                 project_plan={"app": {"name": "Manage"}},
                 build_task_plan={"summary": {"frontend": 1}},
-                tasks=[{"allowed_paths": ["apps/Manage/frontend/**"]}],
+                tasks=[{"allowed_paths": ["frontend/**"]}],
                 workspace=workspace,
                 selected_skill_names=None,
             )
@@ -41,7 +41,7 @@ class GenerationWorkspacePathTests(unittest.TestCase):
         prompt = agent.payloads[0]["messages"][0]["content"]
         self.assertNotIn(workspace, prompt)
         self.assertNotIn("Workspace:\n", prompt)
-        self.assertIn("apps/Manage/frontend", prompt)
+        self.assertIn("frontend", prompt)
         self.assertNotIn("app/frontend/** means /app/frontend/**", prompt)
         self.assertIn("Never include, repeat, or reconstruct", prompt)
 

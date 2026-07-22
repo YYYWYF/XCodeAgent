@@ -797,7 +797,7 @@ function setupWorkspaceIpc(): void {
     }
   })
 
-  // 从远程模板仓库拉取前端模板工程，放到 <项目位置>/apps/<应用名称>/frontend/ 下。
+  // 从远程模板仓库拉取前端模板工程，放到 <项目位置>/frontend/ 下。
   ipcMain.handle('workspace:clone-template', async (_event, payload = {}) => {
     if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
       throw new Error('projectPath must be a non-empty string')
@@ -811,9 +811,8 @@ function setupWorkspaceIpc(): void {
         : 'https://github.com/ruyue1/frontend-template.git'
 
     const projectPath = path.resolve(payload.projectPath)
-    const appName = payload.appName.trim()
-    // 目标路径：项目位置/apps/应用名称/frontend
-    const frontendDir = path.join(projectPath, 'apps', appName, 'frontend')
+    // 目标路径：项目位置/frontend（直接平铺到根目录）
+    const frontendDir = path.join(projectPath, 'frontend')
 
     // 确保父目录存在；frontend 目录本身不能预先存在（git clone 要求目标为空或不存在）
     await fs.mkdir(path.dirname(frontendDir), { recursive: true })
@@ -878,7 +877,7 @@ function setupWorkspaceIpc(): void {
     }
   })
 
-  // 在模板工程 apps/<应用名>/frontend/src/pages/ 下追加规划出的页面文件。
+  // 在模板工程 frontend/src/pages/ 下追加规划出的页面文件。
   // 每个页面生成一个目录 <PageKey>/index.tsx，内容为临时占位代码。
   ipcMain.handle('workspace:write-template-pages', async (_event, payload = {}) => {
     if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
@@ -892,8 +891,8 @@ function setupWorkspaceIpc(): void {
     }
 
     const projectPath = path.resolve(payload.projectPath)
-    const appName = payload.appName.trim()
-    const pagesDir = path.join(projectPath, 'apps', appName, 'frontend', 'src', 'pages')
+    // 路径：项目位置/frontend/src/pages（直接平铺到根目录）
+    const pagesDir = path.join(projectPath, 'frontend', 'src', 'pages')
 
     await fs.mkdir(pagesDir, { recursive: true })
 
@@ -921,8 +920,6 @@ export default function ${componentName}() {
     // 把新页面注入 menus.ts 的 BIZ_MENUS -> firstLevel -> children
     const menusPath = path.join(
       projectPath,
-      'apps',
-      appName,
       'frontend',
       'src',
       'constants',
