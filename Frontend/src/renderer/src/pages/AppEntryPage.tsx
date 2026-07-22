@@ -18,7 +18,7 @@ import {
 } from '../service/applicationStorage'
 import { saveApplication } from '../components/Welcome/applicationService'
 import {
-  generateApplicationTemplateFiles as writeApplicationTemplateFiles, fetchTemplateCode, generatePageFiles
+  generateApplicationTemplateFiles as writeApplicationTemplateFiles, fetchTemplateCode
 } from '../service/templateApi'
 import type {
   ApplicationConfig,
@@ -219,7 +219,7 @@ export default function AppEntryPage() {
 
     // 生成页面占位文件（hello agent!），失败不阻塞进入工作台
     try {
-      const result = await generatePageFiles(
+      const result = await writeApplicationTemplateFiles(
         confirmedApplication.schema,
         projectPath,
         activePlanning.workflow
