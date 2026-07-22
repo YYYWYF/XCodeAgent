@@ -271,8 +271,8 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             { required: true, message: '请输入页面根路由' },
             {
               validator: (_rule, value: string) => {
-                if (menusEnabled && value === '/') {
-                  return Promise.reject(new Error('启用默认菜单时，根路由不能为 /'))
+                if ((menusEnabled || authEnabled) && value === '/') {
+                  return Promise.reject(new Error('启用默认菜单或认证时，根路由不能为 /'))
                 }
                 return Promise.resolve()
               }
