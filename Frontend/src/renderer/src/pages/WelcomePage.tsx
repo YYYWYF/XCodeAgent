@@ -8,7 +8,7 @@ import {
   WelcomeHero,
   WelcomeRecentProjects
 } from '../components/Welcome'
-import type { ApplicationConfig, WorkflowRunPayload } from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import type { ActivePlanningStatus } from '../service/activeApplicationPlanning'
 import { cx } from '../utils'
 import './WelcomePage.less'
@@ -17,10 +17,14 @@ import './WelcomePageLight.less'
 type Props = {
   activePlanning?: ApplicationConfig
   activePlanningStatus?: ActivePlanningStatus
-  activePlanningWorkflow?: WorkflowRunPayload
+  activePlanningLifecycle?: ApplicationLifecycle
   onOpenApplication: (application: ApplicationConfig) => void
   onOpenPlanning: () => void
-  onStartPlanning: (application: ApplicationConfig, threadId: string) => void
+  onStartPlanning: (
+    application: ApplicationConfig,
+    threadId: string,
+    lifecycle: ApplicationLifecycle
+  ) => void
 }
 
 type WelcomeTheme = 'dark' | 'light'
@@ -37,7 +41,7 @@ function getTheme(): WelcomeTheme {
 export default function WelcomePage({
   activePlanning,
   activePlanningStatus,
-  activePlanningWorkflow,
+  activePlanningLifecycle,
   onOpenApplication,
   onOpenPlanning,
   onStartPlanning
@@ -85,12 +89,12 @@ export default function WelcomePage({
               <OpenWorkspaceAction onOpenApplication={onOpenApplication} theme={theme} />
             </section>
 
-            {activePlanning ? (
+            {activePlanning && activePlanningLifecycle ? (
               <ActivePlanningAction
                 application={activePlanning}
+                lifecycle={activePlanningLifecycle}
                 onOpen={onOpenPlanning}
                 status={activePlanningStatus || 'running'}
-                workflow={activePlanningWorkflow}
               />
             ) : null}
 

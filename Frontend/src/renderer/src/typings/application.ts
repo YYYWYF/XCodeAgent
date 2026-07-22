@@ -273,8 +273,6 @@ export interface ApplicationConfig extends ApplicationSchemaConfig {
   dynamicRouteDescription?: string;
   schema: ApplicationSchemaConfig;
   requirementPlan?: RequirementDevelopmentPlan;
-  planningThreadId?: string;
-  planningConfirmedAt?: number;
   createdAt: number;
 }
 

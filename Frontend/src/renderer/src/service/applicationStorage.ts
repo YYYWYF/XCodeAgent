@@ -1,6 +1,7 @@
 import type {
   ApplicationConfig,
   ApplicationSchemaConfig,
+  ApplicationLifecycle,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningPageOption
 } from '../typings';
@@ -9,9 +10,13 @@ const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
 export const APPLICATIONS_CHANGED_EVENT = 'xcode-agent-applications-changed';
 
-// 判断应用是否已经满足进入工作台的条件；创建流程中的应用必须先完成最终规划确认。
-export function canOpenApplicationWorkbench(application: ApplicationConfig): boolean {
-  return !application.planningThreadId || Boolean(application.planningConfirmedAt);
+// 判断应用是否已完成模板文件生成；新应用必须以权威 lifecycle 放行工作台。
+export function canOpenApplicationWorkbench(
+  application: ApplicationConfig,
+  lifecycle?: ApplicationLifecycle
+): boolean {
+  if (application.source !== 'new') return true;
+  return lifecycle?.lifecycle.stage === 'ready_for_workbench';
 }
 
 function normalizeApplications(value: unknown): ApplicationConfig[] {

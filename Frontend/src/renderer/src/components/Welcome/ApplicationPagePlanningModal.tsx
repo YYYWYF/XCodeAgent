@@ -4,12 +4,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ApplicationConfig,
   ApplicationPlanningConfirmation,
+  ApplicationLifecycle,
   WorkflowClarificationAnswers,
   WorkflowRunPayload
 } from '../../typings'
 import {
   buildApplicationPlanningRequest,
   createApplicationPlanningSession,
+  getApplicationLifecycle,
   saveRequirementSpecDraft
 } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
@@ -43,6 +45,7 @@ function CurvedBackIcon(): JSX.Element {
 type Props = {
   application: ApplicationConfig
   initialStatus: ActivePlanningStatus
+  initialLifecycle: ApplicationLifecycle
   initialWorkflow?: WorkflowRunPayload
   theme: 'dark' | 'light'
   threadId: string
@@ -97,6 +100,18 @@ function withSavedRequirementSpec(
   }
 }
 
+// 用提交前读取的权威 lifecycle 替换旧 Workflow 快照中的交互并发令牌。
+function withAuthoritativeLifecycle(
+  workflow: WorkflowRunPayload,
+  lifecycle: ApplicationLifecycle
+): WorkflowRunPayload {
+  return {
+    ...workflow,
+    state: { ...workflow.state, lifecycle },
+    result: { ...workflow.result, lifecycle }
+  }
+}
+
 // 根据当前阶段计算两步规划条的高亮位置。
 function workflowStep(workflow?: WorkflowRunPayload): number {
   const phase = planningWorkflowPhase(workflow)
@@ -135,6 +150,7 @@ function workflowProgressCopy(workflow?: WorkflowRunPayload): { fallback: string
 export default function ApplicationPagePlanningModal({
   application,
   initialStatus,
+  initialLifecycle,
   initialWorkflow,
   theme,
   threadId,
@@ -182,9 +198,16 @@ export default function ApplicationPagePlanningModal({
   ): Promise<void> => {
     if (!application.workspaceRoot) return
     setRunning(true)
+    onStatusChange('running')
     setError('')
     setStreamingContent('')
     try {
+      let currentResumeState = resumeState
+      if (currentResumeState) {
+        const lifecycle = await getApplicationLifecycle(application, threadId)
+        currentResumeState = withAuthoritativeLifecycle(currentResumeState, lifecycle)
+        handleWorkflowChange(currentResumeState)
+      }
       const result = await session.sendMessage(messageText, {
         application,
         clarificationAnswers: answers,
@@ -192,8 +215,17 @@ export default function ApplicationPagePlanningModal({
         requirementSpecFeedback,
         editorMode: 'frontend',
         originalRequest,
-        resumeState,
-        workflowDebug: resumeState ? undefined : { enabled: true, resumeFrom: 'requirements' },
+        resumeState: currentResumeState,
+        workflowDebug: currentResumeState
+          ? undefined
+          : {
+              enabled: true,
+              resumeFrom:
+                initialLifecycle.lifecycle.stage === 'generating_project_plan' ||
+                initialLifecycle.lifecycle.stage === 'awaiting_project_plan_confirmation'
+                  ? 'project_planning'
+                  : 'requirements'
+            },
         workflowScope: 'application_planning',
         workspaceRoot: application.workspaceRoot,
         onContent: setStreamingContent,
@@ -218,13 +250,20 @@ export default function ApplicationPagePlanningModal({
   useEffect(() => {
     if (startedRef.current) return
     startedRef.current = true
+    if (
+      initialLifecycle.lifecycle.stage === 'generating_application_template_files' ||
+      initialLifecycle.lifecycle.stage === 'application_template_generation_failed' ||
+      initialLifecycle.lifecycle.stage === 'ready_for_workbench'
+    ) {
+      return
+    }
     if (initialWorkflow && initialStatus !== 'running') return
     if (initialWorkflow) {
       void runPlanning('请从上次保存的规划状态继续执行。', undefined, initialWorkflow)
       return
     }
     void runPlanning(originalRequest)
-  }, [originalRequest])
+  }, [initialLifecycle.lifecycle.stage, originalRequest])
 
   // 提交当前确认卡答案，并由后端从公开状态推断恢复节点。
   const handleSubmitClarification = (

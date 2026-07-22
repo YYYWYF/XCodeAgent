@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage
 from app.agents.main import requirements_analyzer
 from app.graph.application_planning_workflow import (
     _project_planning,
+    _requirements,
     _route_requirements,
     _route_start,
 )
@@ -20,6 +21,7 @@ from app.protocols.application_page_planning import (
     build_application_page_planning_ag_ui_stream,
 )
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
+from app.services.application_lifecycle import application_lifecycle_path, load_application_lifecycle
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.spec_documents import write_requirement_spec_document
 
@@ -198,6 +200,104 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             "await_user_input",
         )
 
+    def test_requirement_failure_and_retry_update_lifecycle(self) -> None:
+        """需求生成失败应持久化错误，同一阶段重试后可恢复到待澄清。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = {
+                "workspace": directory,
+                "project_id": "app-1",
+                "application_name": "任务中心",
+                "active_thread_id": "thread-1",
+                "active_run_id": "run-1",
+            }
+            with patch(
+                "app.graph.application_planning_workflow.nodes.requirements",
+                side_effect=RuntimeError("model unavailable"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "model unavailable"):
+                    _requirements(state)
+            failed = load_application_lifecycle(directory)
+            assert failed is not None and failed.error is not None
+            self.assertEqual(failed.lifecycle.status.value, "failed")
+
+            with patch(
+                "app.graph.application_planning_workflow.nodes.requirements",
+                return_value={
+                    "phase": "requirements",
+                    "status": "requires_user_input",
+                    "requirement_spec": {
+                        "confirmation_status": "pending_user_input",
+                    },
+                    "clarification": {
+                        "mode": "ask_user_question",
+                        "status": "requires_user_input",
+                        "questions": [{"id": "role", "header": "角色"}],
+                    },
+                },
+            ):
+                retried = _requirements({**state, "active_run_id": "run-2"})
+
+            self.assertEqual(
+                retried["lifecycle"]["lifecycle"]["stage"],
+                "awaiting_requirement_clarification",
+            )
+            self.assertIsNone(retried["lifecycle"]["error"])
+
+    def test_requirement_confirmation_status_drives_lifecycle_mapping(self) -> None:
+        """只有 RequirementSpec 待确认时才能展示需求文档已生成。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = {
+                "workspace": directory,
+                "project_id": "app-1",
+                "application_name": "任务中心",
+            }
+            with patch(
+                "app.graph.application_planning_workflow.nodes.requirements",
+                return_value={
+                    "phase": "requirements",
+                    "status": "requires_user_input",
+                    "requirement_spec": {
+                        "confirmation_status": "pending_user_confirmation",
+                    },
+                    "clarification": {
+                        "mode": "requirement_spec_confirmation",
+                        "status": "requires_user_input",
+                        "questions": [{"id": "confirmation", "header": "需求确认"}],
+                    },
+                },
+            ):
+                result = _requirements(state)
+
+            self.assertEqual(
+                result["lifecycle"]["lifecycle"]["stage"],
+                "awaiting_requirement_confirmation",
+            )
+            self.assertEqual(
+                result["lifecycle"]["pendingInteraction"]["type"],
+                "requirement_confirmation",
+            )
+
+    def test_requirement_cancellation_is_recoverable(self) -> None:
+        """取消需求生成应保留阶段并写入 cancelled，而不是伪装成完成。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = {
+                "workspace": directory,
+                "project_id": "app-1",
+                "application_name": "任务中心",
+            }
+            with patch(
+                "app.graph.application_planning_workflow.nodes.requirements",
+                side_effect=asyncio.CancelledError,
+            ):
+                with self.assertRaises(asyncio.CancelledError):
+                    _requirements(state)
+            cancelled = load_application_lifecycle(directory)
+            assert cancelled is not None
+            self.assertEqual(cancelled.lifecycle.status.value, "cancelled")
+
     def test_confirmed_plan_only_validates_planning_artifacts(self) -> None:
         """项目规划确认后只应校验 specs/plans 产物，不改写 application.json。"""
 
@@ -278,6 +378,51 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertFalse(capability["writesApplicationJsonAfterConfirmation"])
         self.assertEqual(capability["artifactDirectories"], [".xcodeagent/specs", ".xcodeagent/plans"])
         self.assertEqual(capability["workspaceGate"], "planning-artifacts")
+        self.assertEqual(
+            capability["lifecycle"]["actionField"],
+            "forwardedProps.applicationLifecycle",
+        )
+        self.assertEqual(
+            capability["lifecycle"]["actions"],
+            ["create", "get", "complete_template_generation"],
+        )
+
+    def test_lifecycle_create_action_uses_complete_ag_ui_lifecycle(self) -> None:
+        """新状态创建应通过同一端点返回完整 AG-UI 生命周期和文件快照。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            stream = build_application_page_planning_ag_ui_stream(
+                graph=object(),
+                payload={
+                    "threadId": "planning-thread",
+                    "runId": "planning-run",
+                    "forwardedProps": {
+                        "applicationLifecycle": {
+                            "action": "create",
+                            "workspaceRoot": directory,
+                            "application": {
+                                "id": "app-1",
+                                "appName": "任务中心",
+                            },
+                        }
+                    },
+                },
+            )
+
+            async def collect() -> str:
+                """消费创建事件流并返回全部 SSE 文本。"""
+
+                return "".join([frame async for frame in stream])
+
+            frames = asyncio.run(collect())
+
+            saved = json.loads(application_lifecycle_path(directory).read_text(encoding="utf-8"))
+
+        self.assertIn("application-lifecycle", frames)
+        self.assertIn("RUN_STARTED", frames)
+        self.assertIn("STATE_SNAPSHOT", frames)
+        self.assertIn("RUN_FINISHED", frames)
+        self.assertEqual(saved["lifecycle"]["stage"], "collecting_requirement")
 
     def test_endpoint_forces_application_planning_scope(self) -> None:
         """专用端点不能依赖前端 forwardedProps 才禁用需求澄清。"""

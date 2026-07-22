@@ -47,6 +47,7 @@ def _workflow_progress_summary(
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
+        "lifecycle": result.get("lifecycle"),
     }
 
 
@@ -422,6 +423,7 @@ def _workflow_summary(
         "artifacts": artifacts,
         "clarification": clarification,
         "observability": result.get("observability", {}),
+        "lifecycle": result.get("lifecycle"),
     }
 
 
@@ -485,6 +487,7 @@ def _workflow_visual_payload(
         "selected_data_source_id": result.get("selected_data_source_id"),
         "buildExecutionScope": result.get("build_execution_scope"),
         "selectedSkillNames": result.get("selected_skill_names", []),
+        "lifecycle": result.get("lifecycle"),
     }
     payload = {
         "runId": run_id,

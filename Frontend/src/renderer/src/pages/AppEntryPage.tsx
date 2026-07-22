@@ -1,25 +1,29 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { message } from 'antd'
 import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
 import {
-  clearActiveApplicationPlanning,
-  isActiveApplicationPlanningIndexed,
-  isApplicationPlanningConfirmed,
+  activePlanningStatus,
   loadActiveApplicationPlanning,
-  recoverActiveApplicationPlanning,
-  saveActiveApplicationPlanning,
+  workflowApplicationLifecycle,
   type ActivePlanningStatus,
   type PersistedActivePlanning
 } from '../service/activeApplicationPlanning'
+import {
+  completeApplicationTemplateGeneration,
+  getApplicationLifecycle
+} from '../service/applicationPagePlanning'
 import {
   APPLICATIONS_CHANGED_EVENT,
   canOpenApplicationWorkbench
 } from '../service/applicationStorage'
 import { saveApplication } from '../components/Welcome/applicationService'
-import { generatePageFiles } from '../service/templateApi'
+import {
+  generateApplicationTemplateFiles as writeApplicationTemplateFiles
+} from '../service/templateApi'
 import type {
   ApplicationConfig,
   ApplicationPlanningConfirmation,
+  ApplicationLifecycle,
   WorkflowRunPayload
 } from '../typings'
 import WelcomePage from './WelcomePage'
@@ -33,57 +37,32 @@ function getEntryTheme(): 'dark' | 'light' {
 // 在欢迎页、全屏规划页与应用工作台之间维护顶层导航和长时规划会话。
 export default function AppEntryPage() {
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
-  const [activePlanning, setActivePlanning] = useState<PersistedActivePlanning | undefined>(
-    loadActiveApplicationPlanning
-  )
+  const [activePlanning, setActivePlanning] = useState<PersistedActivePlanning | undefined>()
   const [planningVisible, setPlanningVisible] = useState(false)
+  const templateGenerationRunRef = useRef<string>()
 
-  // 规划状态或快照变化后立即落盘，保证刷新和客户端重启后仍可恢复。
-  useEffect(() => {
-    if (activePlanning) saveActiveApplicationPlanning(activePlanning)
-  }, [activePlanning])
-
-  // 启动及应用索引变化时校验活动规划，避免已删除应用继续显示旧确认文档。
+  // 启动及应用索引变化时读取活动规划，避免已删除应用继续显示确认文档。
   useEffect(() => {
     let disposed = false
     let refreshId = 0
 
-    const reconcileActivePlanning = async (): Promise<void> => {
+    const refreshActivePlanning = async (): Promise<void> => {
       const currentRefreshId = ++refreshId
-      const persisted = loadActiveApplicationPlanning()
-      if (persisted && (await isActiveApplicationPlanningIndexed(persisted))) return
-      if (persisted) clearActiveApplicationPlanning(persisted.threadId)
-
-      const recovered = await recoverActiveApplicationPlanning()
+      const recovered = await loadActiveApplicationPlanning()
       if (disposed || currentRefreshId !== refreshId) return
       setActivePlanning(recovered)
-      if (!recovered) return
-      saveActiveApplicationPlanning(recovered)
-      void saveApplication(recovered.application)
     }
 
     const handleApplicationsChanged = (): void => {
-      void reconcileActivePlanning()
+      void refreshActivePlanning()
     }
 
-    void reconcileActivePlanning()
+    void refreshActivePlanning()
     window.addEventListener(APPLICATIONS_CHANGED_EVENT, handleApplicationsChanged)
     return () => {
       disposed = true
       window.removeEventListener(APPLICATIONS_CHANGED_EVENT, handleApplicationsChanged)
     }
-  }, [])
-
-  // 清理修复前已经确认但仍残留在当前页面状态中的规划入口。
-  useEffect(() => {
-    if (!activePlanning || !isApplicationPlanningConfirmed(activePlanning)) return
-    const confirmedApplication = {
-      ...activePlanning.application,
-      planningConfirmedAt: activePlanning.application.planningConfirmedAt || Date.now()
-    }
-    clearActiveApplicationPlanning(activePlanning.threadId)
-    setActivePlanning(undefined)
-    void saveApplication(confirmedApplication)
   }, [])
 
   // 从工作台返回欢迎页。
@@ -92,21 +71,39 @@ export default function AppEntryPage() {
   }
 
   // 启动新的独立规划会话并展示全屏生成页。
-  const handleStartPlanning = (application: ApplicationConfig, threadId: string): void => {
-    setActivePlanning({ application, status: 'running', threadId })
+  const handleStartPlanning = (
+    application: ApplicationConfig,
+    threadId: string,
+    lifecycle: ApplicationLifecycle
+  ): void => {
+    setActivePlanning({
+      application,
+      lifecycle,
+      status: 'running',
+      threadId
+    })
     setPlanningVisible(true)
   }
 
   // 仅允许最终规划已确认的创建项目进入工作台，未确认项目继续回到原规划会话。
   const handleOpenApplication = useCallback(
-    (application: ApplicationConfig): void => {
+    async (application: ApplicationConfig): Promise<void> => {
       if (activePlanning?.application.id === application.id) {
         setPlanningVisible(true)
         return
       }
-      if (canOpenApplicationWorkbench(application)) {
+      if (application.source !== 'new' && canOpenApplicationWorkbench(application)) {
         setActiveApplication(application)
         return
+      }
+      try {
+        const lifecycle = await getApplicationLifecycle(application)
+        if (canOpenApplicationWorkbench(application, lifecycle)) {
+          setActiveApplication(application)
+          return
+        }
+      } catch (error) {
+        console.warn('读取应用生命周期失败', error)
       }
       message.info('请先完成并确认应用计划')
     },
@@ -123,8 +120,75 @@ export default function AppEntryPage() {
 
   // 保存规划页收到的最新公开 Workflow 快照，供重新进入时恢复确认界面。
   const handlePlanningWorkflowChange = useCallback((workflow: WorkflowRunPayload): void => {
-    setActivePlanning((current) => (current ? { ...current, workflow } : current))
+    setActivePlanning((current) => {
+      if (!current) return current
+      const lifecycle = workflowApplicationLifecycle(workflow) || current.lifecycle
+      return {
+        ...current,
+        lifecycle,
+        workflow
+      }
+    })
   }, [])
+
+  // 生成应用模板文件并通过 AG-UI 把结果提交给后端生命周期状态机。
+  const generateApplicationTemplateFiles = useCallback(async (
+    planning: PersistedActivePlanning
+  ): Promise<void> => {
+    const runKey = planning.application.id
+    if (templateGenerationRunRef.current === runKey) return
+    templateGenerationRunRef.current = runKey
+    let failureMessage = ''
+    try {
+      const projectPath =
+        planning.application.workspaceRoot || planning.application.projectParentPath || ''
+      const result = await writeApplicationTemplateFiles(
+        planning.application.schema,
+        projectPath,
+        planning.workflow
+      )
+      if (result.written.length > 0) {
+        message.success(`已生成 ${result.written.length} 个应用模板文件`)
+      }
+    } catch (reason) {
+      console.error('[应用模板文件生成失败]', reason)
+      failureMessage = reason instanceof Error ? reason.message : String(reason)
+    }
+
+    try {
+      const lifecycle = await completeApplicationTemplateGeneration(
+        planning.application,
+        planning.threadId,
+        !failureMessage,
+        failureMessage || undefined
+      )
+      if (lifecycle.lifecycle.stage === 'ready_for_workbench') {
+        await saveApplication(planning.application)
+        setActivePlanning(undefined)
+        setPlanningVisible(false)
+        setActiveApplication(planning.application)
+        message.success('应用模板文件生成完成，正在进入工作台')
+        return
+      }
+      setActivePlanning({
+        ...planning,
+        lifecycle,
+        status: activePlanningStatus(lifecycle)
+      })
+      message.error(lifecycle.error?.message || '应用模板文件生成失败')
+    } finally {
+      templateGenerationRunRef.current = undefined
+    }
+  }, [])
+
+  // 服务重启后若停在模板文件生成阶段，自动以同一幂等动作继续。
+  useEffect(() => {
+    if (
+      planningVisible ||
+      activePlanning?.lifecycle.lifecycle.stage !== 'generating_application_template_files'
+    ) return
+    void generateApplicationTemplateFiles(activePlanning)
+  }, [activePlanning, generateApplicationTemplateFiles, planningVisible])
 
   // 在 RequirementSpec 与 ProjectPlan 均确认后结束规划入口并打开工作台。
   // 进入工作台前，先把规划产出的页面追加到模板工程 apps/<应用名>/frontend/src/pages/ 下。
@@ -132,35 +196,7 @@ export default function AppEntryPage() {
     _confirmation: ApplicationPlanningConfirmation
   ): Promise<void> => {
     if (!activePlanning) return
-    const confirmedApplication = {
-      ...activePlanning.application,
-      planningConfirmedAt: Date.now()
-    }
-    await saveApplication(confirmedApplication)
-
-    // 生成页面占位文件（hello agent!），失败不阻塞进入工作台
-    try {
-      const projectPath =
-        confirmedApplication.workspaceRoot ||
-        confirmedApplication.projectParentPath ||
-        ''
-      const result = await generatePageFiles(
-        confirmedApplication.schema,
-        projectPath,
-        activePlanning.workflow
-      )
-      if (result.written.length > 0) {
-        message.success(`已生成 ${result.written.length} 个页面文件，正在进入工作台`)
-      }
-    } catch (reason) {
-      console.error('[页面文件生成失败]', reason)
-      message.warning('页面文件生成失败，可在工作台中重试')
-    }
-
-    clearActiveApplicationPlanning(activePlanning.threadId)
-    setActivePlanning(undefined)
-    setPlanningVisible(false)
-    setActiveApplication(confirmedApplication)
+    await generateApplicationTemplateFiles(activePlanning)
   }
 
   if (!activeApplication) {
@@ -170,15 +206,25 @@ export default function AppEntryPage() {
           <WelcomePage
             activePlanning={activePlanning?.application}
             activePlanningStatus={activePlanning?.status}
-            activePlanningWorkflow={activePlanning?.workflow}
+            activePlanningLifecycle={activePlanning?.lifecycle}
             onOpenApplication={handleOpenApplication}
-            onOpenPlanning={() => setPlanningVisible(true)}
+            onOpenPlanning={() => {
+              if (
+                activePlanning?.lifecycle.lifecycle.stage ===
+                'application_template_generation_failed'
+              ) {
+                void generateApplicationTemplateFiles(activePlanning)
+                return
+              }
+              setPlanningVisible(true)
+            }}
             onStartPlanning={handleStartPlanning}
           />
         </div>
         {activePlanning ? (
           <ApplicationPagePlanningModal
             application={activePlanning.application}
+            initialLifecycle={activePlanning.lifecycle}
             initialStatus={activePlanning.status}
             initialWorkflow={activePlanning.workflow}
             key={activePlanning.threadId}

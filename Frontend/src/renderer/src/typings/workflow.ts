@@ -160,6 +160,46 @@ export type WorkflowConfirmationArtifact = {
   content: string
 }
 
+export type ApplicationLifecycleStage =
+  | 'collecting_requirement'
+  | 'analyzing_requirement'
+  | 'awaiting_requirement_clarification'
+  | 'generating_requirement_spec'
+  | 'awaiting_requirement_confirmation'
+  | 'generating_project_plan'
+  | 'awaiting_project_plan_confirmation'
+  | 'generating_application_template_files'
+  | 'application_template_generation_failed'
+  | 'ready_for_workbench'
+
+export type ApplicationLifecycle = {
+  schemaVersion: '1.0.0'
+  application: { id: string; name: string }
+  project?: { id: string }
+  updatedAt: string
+  revision: number
+  lifecycle: {
+    stage: ApplicationLifecycleStage
+    status: 'pending' | 'running' | 'awaiting_user' | 'failed' | 'completed' | 'cancelled'
+    domain: Record<string, unknown>
+    extensions: Record<string, unknown>
+  }
+  activeThreadId?: string
+  activeRunId?: string
+  pendingInteraction?: {
+    id: string
+    type: string
+    basedOnRevision: number
+    payload: Record<string, unknown>
+    artifactRefs: Array<Record<string, unknown>>
+    createdAt: string
+    submittedAt?: string
+  }
+  error?: { code: string; message: string; recoverable: boolean }
+  recovery?: Record<string, unknown>
+  extensions: Record<string, unknown>
+}
+
 export type WorkflowRunPayload = {
   runId: string
   threadId: string

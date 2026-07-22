@@ -1,8 +1,11 @@
 import { PlusOutlined } from '@ant-design/icons'
 import { Form, message, Modal } from 'antd'
 import { useState } from 'react'
-import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
-import type { ApplicationConfig, ApplicationDraft } from '../../typings'
+import {
+  createApplicationLifecycle,
+  createPagePlanningThreadId
+} from '../../service/applicationPagePlanning'
+import type { ApplicationConfig, ApplicationDraft, ApplicationLifecycle } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'
 import WelcomeActionCard from './WelcomeActionCard'
@@ -16,7 +19,11 @@ import { fetchTemplateCode, type TemplateInitResponse } from '../../service/temp
 
 type Props = {
   disabled?: boolean
-  onStartPlanning: (application: ApplicationConfig, threadId: string) => void
+  onStartPlanning: (
+    application: ApplicationConfig,
+    threadId: string,
+    lifecycle: ApplicationLifecycle
+  ) => void
   theme: 'dark' | 'light'
 }
 
@@ -91,11 +98,11 @@ export default function CreateApplicationAction({
         pages: ['默认页面'],
         defaultPage: '默认页面',
         hasDynamicRoutes: false,
-        planningThreadId,
         schema,
         createdAt: Date.now()
       }
       await saveApplication(application)
+      const lifecycle = await createApplicationLifecycle(application, planningThreadId)
 
       // 调用模板工程拉取接口
       setFetchingTemplate(true)
@@ -112,7 +119,7 @@ export default function CreateApplicationAction({
       }
 
       setModalOpen(false)
-      onStartPlanning(application, planningThreadId)
+      onStartPlanning(application, planningThreadId, lifecycle)
     } catch (error) {
       message.error(formatError(error, '创建应用失败'))
     } finally {

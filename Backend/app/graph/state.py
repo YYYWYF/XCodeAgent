@@ -9,6 +9,11 @@ class ProjectState(TypedDict, total=False):
     workspace_path: str
     editor_mode: str
     workflow_scope: str
+    application_name: str
+    active_thread_id: str
+    active_run_id: str
+    lifecycle: dict[str, Any]
+    lifecycle_interaction_submission: dict[str, Any]
     selected_skill_names: list[str]
     phase: str
     resume_from: str

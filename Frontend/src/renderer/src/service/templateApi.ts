@@ -154,7 +154,7 @@ function extractFrontendPages(
  * @param projectPath 当前应用指定的项目位置
  * @param workflow 规划完成后的 workflow 快照，含 ProjectPlan.frontend_pages
  */
-export async function generatePageFiles(
+export async function generateApplicationTemplateFiles(
   schema: ApplicationSchemaConfig,
   projectPath: string,
   workflow: WorkflowRunPayload | undefined
@@ -169,7 +169,7 @@ export async function generatePageFiles(
 
   const pages = extractFrontendPages(workflow)
   console.log(
-    '[templateApi] generatePageFiles 调用: ' +
+    '[templateApi] generateApplicationTemplateFiles 调用: ' +
       JSON.stringify({
         appName,
         projectPath,

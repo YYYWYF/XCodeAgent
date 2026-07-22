@@ -96,6 +96,29 @@ class WorkflowProjectionTests(unittest.TestCase):
 
         self.assertEqual(summary["message"], "项目计划已生成，请确认后继续。")
 
+    def test_summary_projects_authoritative_lifecycle_without_deriving_phase(self) -> None:
+        """AG-UI 摘要应原样投影 lifecycle，供前端直接消费业务阶段。"""
+
+        lifecycle = {
+            "schemaVersion": "1.0.0",
+            "revision": 4,
+            "lifecycle": {
+                "stage": "awaiting_requirement_confirmation",
+                "status": "awaiting_user",
+            },
+        }
+        summary = _workflow_summary(
+            {
+                "phase": "requirements",
+                "status": "requires_user_input",
+                "clarification": {"status": "requires_user_input"},
+                "lifecycle": lifecycle,
+            },
+            [],
+        )
+
+        self.assertIs(summary["lifecycle"], lifecycle)
+
 
 if __name__ == "__main__":
     unittest.main()

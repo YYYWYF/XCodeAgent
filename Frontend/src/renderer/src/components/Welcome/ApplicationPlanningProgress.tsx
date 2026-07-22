@@ -1,6 +1,5 @@
 import { CheckOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
-import { useProgressivePercent } from '../../hooks/useProgressivePercent'
 import { cx } from '../../utils'
 
 const { Text } = Typography
@@ -24,12 +23,6 @@ type Props = {
   title: string
 }
 
-// 真实完成前统一推进到 98% 等待，避免不同阶段出现过早停顿。
-function progressCeiling(target: number): number {
-  if (target >= 100) return 100
-  return 98
-}
-
 // 使用原创建规划页面的动态视觉展示两节点进度、时间线与 AG-UI 实时消息。
 export default function ApplicationPlanningProgress({
   events,
@@ -38,15 +31,7 @@ export default function ApplicationPlanningProgress({
   title
 }: Props): JSX.Element {
   const current = events[events.length - 1]
-  const targetPercent = current?.percent ?? 6
-  const activityKey = (streamingContent || '').length
-  const percent = useProgressivePercent(
-    targetPercent,
-    progressCeiling(targetPercent),
-    activityKey
-  )
-  // 百分比文案与进度条都使用同一个整数，避免出现小数或读数不一致。
-  const percentLabel = percent
+  const percent = current?.percent ?? 6
   const streamLines = (streamingContent || '')
     .split('\n')
     .map((line) => line.trim())
@@ -68,18 +53,20 @@ export default function ApplicationPlanningProgress({
             <Text className={cx('planning-progress-detail')}>{current.detail}</Text>
           ) : null}
         </div>
-        <span className={cx('planning-progress-percent')}>{percentLabel}%</span>
+        <span className={cx('planning-progress-percent')}>{percent}%</span>
       </div>
 
       <div
-        aria-label={`当前进度 ${percentLabel}%`}
+        aria-label={`当前进度 ${percent}%`}
         aria-valuemax={100}
         aria-valuemin={0}
-        aria-valuenow={percentLabel}
+        aria-valuenow={percent}
         className={cx('planning-progress-track')}
         role="progressbar"
       >
-        <span className={cx('planning-progress-bar')} style={{ width: `${percent}%` }} />
+        <span className={cx('planning-progress-bar')} style={{ width: `${percent}%` }}>
+          <span className={cx('planning-progress-glow')} />
+        </span>
       </div>
 
       {events.length ? (

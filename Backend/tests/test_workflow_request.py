@@ -9,6 +9,32 @@ from app.protocols.workflow.request import workflow_run_inputs
 
 
 class WorkflowRequestTests(unittest.TestCase):
+    def test_application_planning_extracts_lifecycle_interaction_token(self) -> None:
+        """恢复请求只能提交 lifecycle 交互令牌，不能覆盖文件中的阶段。"""
+
+        result = workflow_run_inputs({
+            "message": "确认并继续",
+            "workflowScope": "application_planning",
+            "resumeState": {
+                "state": {
+                    "phase": "requirements",
+                    "lifecycle": {
+                        "lifecycle": {"stage": "ready_for_workbench"},
+                        "pendingInteraction": {
+                            "id": "interaction-1",
+                            "basedOnRevision": 7,
+                        },
+                    },
+                }
+            },
+        })
+
+        self.assertEqual(
+            result["resume_values"]["lifecycle_interaction_submission"],
+            {"id": "interaction-1", "basedOnRevision": 7},
+        )
+        self.assertNotIn("lifecycle", result["resume_values"])
+
     def test_application_planning_forwards_edited_requirement_spec(self) -> None:
         inputs = workflow_run_inputs(
             {

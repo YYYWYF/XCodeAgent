@@ -132,6 +132,8 @@ def build_workflow_ag_ui_stream(
                 "selected_skill_names": list(selected_skill_names),
                 "timeline": [],
                 "observability": observability,
+                "active_thread_id": thread_id,
+                "active_run_id": run_id,
             }
             initial_state.update(workflow_inputs.get("resume_values") or {})
             first_node_name = _workflow_start_node(resume_from, workflow_scope)
@@ -141,6 +143,9 @@ def build_workflow_ag_ui_stream(
 
             if project_id:
                 initial_state["project_id"] = project_id
+
+            if workflow_inputs.get("application_name"):
+                initial_state["application_name"] = workflow_inputs["application_name"]
 
             if workspace:
                 initial_state["workspace"] = workspace

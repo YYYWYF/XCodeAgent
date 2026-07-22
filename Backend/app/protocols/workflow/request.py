@@ -159,6 +159,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
         "build_execution_scope": build_execution_scope,
         **(
+            {"lifecycle_interaction_submission": _lifecycle_interaction_submission(resume_state)}
+            if _lifecycle_interaction_submission(resume_state)
+            else {}
+        ),
+        **(
             {"edited_requirement_spec": edited_requirement_spec}
             if edited_requirement_spec and workflow_scope == "application_planning"
             else {}
@@ -187,6 +192,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(state.get("project_id"))
             or _optional_text(state.get("projectId"))
             or _optional_text(application.get("id"))
+        ),
+        "application_name": (
+            _optional_text(application.get("appName"))
+            or _optional_text(application.get("name"))
         ),
         "workspace": workspace,
         "editor_mode": editor_mode,
@@ -239,6 +248,24 @@ def _build_execution_scope(
     if not target_id:
         raise ValueError("页面或数据源构建必须提供 buildExecutionScope.targetId。")
     return {"type": target_type, "targetId": target_id}
+
+
+def _lifecycle_interaction_submission(
+    resume_state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """只从客户端恢复快照提取交互并发令牌，不接受其 lifecycle 阶段。"""
+
+    if not resume_state:
+        return None
+    for source_name in ("state", "result"):
+        source = _optional_dict(resume_state.get(source_name)) or {}
+        lifecycle = _optional_dict(source.get("lifecycle")) or {}
+        pending = _optional_dict(lifecycle.get("pendingInteraction")) or {}
+        interaction_id = _optional_text(pending.get("id"))
+        based_on_revision = pending.get("basedOnRevision")
+        if interaction_id and isinstance(based_on_revision, int) and based_on_revision >= 1:
+            return {"id": interaction_id, "basedOnRevision": based_on_revision}
+    return None
 
 
 def _canonical_selected_page_id(project_plan: Any, selected_page_id: str) -> str:
