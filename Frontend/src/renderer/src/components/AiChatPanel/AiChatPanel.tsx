@@ -14,11 +14,9 @@ import type {
 import { cx, getInitialPreviewUrl, openPreviewWindow, storePreviewUrl } from '../../utils'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
-import ChatHeader from './components/ChatHeader'
 import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import MessageList from './components/MessageList'
 import PageContextHeader from './components/PageContextHeader'
-import PreviewActions from './components/PreviewActions'
 import SessionSidebar from './components/SessionSidebar'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import DetailConfirmationPageSelector from '../DetailConfirmationPageSelector'
@@ -102,7 +100,6 @@ export default function AiChatPanel({
   const { publishAiMessage } = useWorkbench()
   const {
     assistantPanelWidth,
-    embeddedPreviewOpen,
     handlePanelSplitKeyDown,
     handlePanelSplitDragStart,
     panelRef,
@@ -361,6 +358,7 @@ export default function AiChatPanel({
           onShowFiles={handleShowFiles}
           onShowSettings={handleShowSettings}
           onShowSkills={handleShowSkills}
+          onThemeChange={onThemeChange}
           pages={developmentPlanningPages}
           apiContracts={developmentPlanningApiContracts}
           selectedPageId={activePageId}
@@ -370,13 +368,13 @@ export default function AiChatPanel({
           sessions={sessions}
           settingsActive={activeView === 'settings'}
           skillsActive={activeView === 'skills'}
+          theme={theme}
           workspaceRoot={workspaceRoot}
         />
 
         {activeView === 'skills' ? (
           <SkillsPage
             onSkillDisabled={handleSkillDisabled}
-            onThemeChange={onThemeChange}
             theme={theme}
           />
         ) : activeView === 'files' ? (
@@ -396,23 +394,6 @@ export default function AiChatPanel({
           </div>
         ) : (
           <div className={cx('ai-chat-main')}>
-            <ChatHeader
-              actions={
-                showPreviewActions ? (
-                    <PreviewActions
-                      embeddedPreviewOpen={embeddedPreviewOpen}
-                      onOpenFullscreenPreview={handleOpenFullscreenPreview}
-                      onToggleEmbeddedPreview={() =>
-                        setRightPanel(embeddedPreviewOpen ? undefined : { type: 'preview' })
-                      }
-                    />
-                  ) : null
-              }
-              onThemeChange={onThemeChange}
-              pageTitle={activePageTitle}
-              theme={theme}
-            />
-
             <PageContextHeader
               description={
                 activePageOption?.purpose ||

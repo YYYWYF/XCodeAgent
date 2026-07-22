@@ -1,10 +1,8 @@
 import {
   CloudUploadOutlined,
   ImportOutlined,
-  MoonOutlined,
   PlusOutlined,
   ReloadOutlined,
-  SunOutlined,
   ThunderboltOutlined,
   ToolOutlined
 } from '@ant-design/icons'
@@ -35,7 +33,6 @@ const { Text, Title } = Typography
 
 type Props = {
   onSkillDisabled?: (skillName: string) => void
-  onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
 }
 
@@ -52,7 +49,6 @@ const pendingActions: PendingAction[] = [
 /** 渲染支持来源分类、启停、刷新和用户技能维护的技能页面。 */
 export default function SkillsPage({
   onSkillDisabled,
-  onThemeChange,
   theme
 }: Props): ReactElement {
   const [catalog, setCatalog] = useState<UserSkillCatalog>()
@@ -248,13 +244,6 @@ export default function SkillsPage({
               </Button>
             </>
           )}
-          <Button
-            aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
-            icon={theme === 'dark' ? <MoonOutlined /> : <SunOutlined />}
-            onClick={() => onThemeChange(theme === 'dark' ? 'light' : 'dark')}
-            title={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
-            type="text"
-          />
         </div>
       </header>
 

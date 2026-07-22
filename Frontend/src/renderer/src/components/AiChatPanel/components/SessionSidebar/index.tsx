@@ -8,9 +8,11 @@ import {
   FolderOutlined,
   LeftOutlined,
   LockOutlined,
+  MoonOutlined,
   RightOutlined,
   SearchOutlined,
   SettingOutlined,
+  SunOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
 import { Input, Switch, Typography } from 'antd'
@@ -71,6 +73,7 @@ type SessionSidebarProps = {
   onShowFiles: () => void
   onShowSettings: () => void
   onShowSkills: () => void
+  onThemeChange: (theme: 'light' | 'dark') => void
   pages: DevelopmentPlanningPageOption[]
   selectedPageId: string
   sessionError?: string
@@ -78,6 +81,7 @@ type SessionSidebarProps = {
   sessions: ChatSessionSummary[]
   settingsActive: boolean
   skillsActive: boolean
+  theme: 'light' | 'dark'
   workspaceRoot: string
 }
 
@@ -246,6 +250,7 @@ export default function SessionSidebar({
   onShowFiles,
   onShowSettings,
   onShowSkills,
+  onThemeChange,
   outlineLocked,
   pages,
   selectedPageId,
@@ -254,6 +259,7 @@ export default function SessionSidebar({
   sessions,
   settingsActive,
   skillsActive,
+  theme,
   workspaceRoot
 }: SessionSidebarProps): ReactElement {
   const [outlineQuery, setOutlineQuery] = useState('')
@@ -420,6 +426,15 @@ export default function SessionSidebar({
             <i />
           </span>
           <Text className={cx('session-brand')} strong>XCodeAgent</Text>
+        </button>
+        <button
+          aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
+          className={cx('session-theme-toggle')}
+          onClick={() => onThemeChange(theme === 'dark' ? 'light' : 'dark')}
+          title={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
+          type="button"
+        >
+          {theme === 'dark' ? <MoonOutlined /> : <SunOutlined />}
         </button>
       </div>
 

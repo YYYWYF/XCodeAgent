@@ -85,6 +85,7 @@
   height: 34px;
   flex: 0 0 34px;
   align-items: center;
+  justify-content: space-between;
 }
 
 .@{class-prefix}-session-brand-lockup {
@@ -103,6 +104,30 @@
   font-size: 16px;
   font-weight: 650;
   letter-spacing: -0.02em;
+}
+
+.@{class-prefix}-session-theme-toggle {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #69738c;
+  font-size: 16px;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  box-shadow: none;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--outline-accent);
+    background: var(--outline-hover-bg);
+    outline: none;
+  }
 }
 
 .@{class-prefix}-session-brand-mark {
@@ -804,6 +829,7 @@
   }
 
   .@{class-prefix}-session-brand,
+  .@{class-prefix}-session-theme-toggle,
   .@{class-prefix}-session-workspace-copy,
   .@{class-prefix}-session-workspace-arrow,
   .@{class-prefix}-session-section-title,
@@ -877,6 +903,7 @@
   }
 
   .@{class-prefix}-session-workspace-description.ant-typography { color: #9ba2b4; }
+  .@{class-prefix}-session-theme-toggle { color: #aab0bf; }
   .@{class-prefix}-session-collapse-button { color: #aab0bf; }
   .@{class-prefix}-session-workspace-arrow { color: #eef0f7; }
   .@{class-prefix}-session-search.ant-input-affix-wrapper {

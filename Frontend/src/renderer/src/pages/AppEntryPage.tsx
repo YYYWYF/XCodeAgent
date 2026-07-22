@@ -232,7 +232,6 @@ export default function AppEntryPage() {
       message.warning('页面文件生成失败，可在工作台中重试')
     }
 
-    clearActiveApplicationPlanning(activePlanning.threadId)
     setActivePlanning(undefined)
     setPlanningVisible(false)
     setActiveApplication(confirmedApplication)
