@@ -101,7 +101,7 @@ export default function PageDesignProgress({ events = [], pageLabel }: Props): J
       </div>
 
       <Text className={cx('detail-page-progress-hint')} type="secondary">
-        百分比与当前步骤同步推进，最终完成状态以工作流返回结果为准
+        最终完成状态以工作流返回结果为准
       </Text>
     </section>
   )
