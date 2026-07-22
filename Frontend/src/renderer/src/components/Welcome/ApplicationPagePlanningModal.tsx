@@ -236,7 +236,6 @@ export default function ApplicationPagePlanningModal({
       if (confirmation && !completedRef.current) {
         completedRef.current = true
         await onConfirmed(confirmation)
-        message.success('需求与项目计划已确认，正在进入工作台')
       }
     } catch (reason) {
       if (isAuthenticationFailure(reason)) return
