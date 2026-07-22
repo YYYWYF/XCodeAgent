@@ -479,6 +479,18 @@
   background: var(--workflow-task-danger-soft);
 }
 
+.@{class-prefix}-workflow-build-task-failure {
+  padding: 9px;
+  border: 1px solid var(--workflow-task-danger-border);
+  border-radius: 7px;
+  background: var(--workflow-task-danger-soft);
+
+  .ant-tag {
+    width: fit-content;
+    margin-right: 0;
+  }
+}
+
 .@{class-prefix}-workflow-build-task-tags {
   display: flex;
   min-width: 0;

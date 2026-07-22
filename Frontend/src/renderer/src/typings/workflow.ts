@@ -252,7 +252,11 @@ export type WorkflowBuildExecutionTask = {
   allowedPaths?: string[]
   allowed_paths?: string[]
   acceptanceCriteria?: string[]
+  acceptance_criteria?: string[]
   source_refs?: Record<string, unknown>
+  failure_category?: string | null
+  failure_reason?: string | null
+  failure_detail?: Record<string, unknown> | null
   activeToolActivity?: WorkflowBuildToolActivity
 }
 

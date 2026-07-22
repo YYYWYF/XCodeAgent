@@ -12,12 +12,7 @@ def create_agent_task_result(
     agent_note: str,
     executed_by: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Normalize a specialist agent response into a build result record.
-
-    Specialist agents execute only the approved task. They do not mutate the
-    project plan or task DAG directly; the scheduler coordination boundary
-    consumes this structure and performs state updates.
-    """
+    """把专业 Agent 响应规整为构建结果记录。"""
 
     return {
         "task_id": task["id"],
@@ -37,6 +32,8 @@ def create_agent_task_result(
 
 
 def _task_status_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
+    """统计任务状态和执行归属，用于构建阶段摘要。"""
+
     return {
         "total": len(tasks),
         "completed": len([task for task in tasks if task.get("status") == "completed"]),
@@ -49,6 +46,46 @@ def _task_status_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def _failure_reason_from_result(result: dict[str, Any] | None) -> str:
+    """从任务结果中提取用户可读的失败原因。"""
+
+    if not isinstance(result, dict):
+        return ""
+    for key in ("failure_reason", "error_message", "message", "agent_note"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    change_request = result.get("change_request")
+    if isinstance(change_request, dict):
+        for key in ("reason", "message", "summary"):
+            value = change_request.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _failure_summary_from_result(result: dict[str, Any] | None) -> dict[str, Any]:
+    """把失败分类、调度决策和说明同步到任务展示字段。"""
+
+    if not isinstance(result, dict) or result.get("status") != "failed":
+        return {
+            "failure_category": None,
+            "failure_reason": None,
+            "failure_detail": None,
+        }
+    scheduler_decision = result.get("scheduler_decision")
+    return {
+        "failure_category": result.get("failure_category")
+        or result.get("error_category")
+        or result.get("category"),
+        "failure_reason": _failure_reason_from_result(result),
+        "failure_detail": {
+            "scheduler_decision": scheduler_decision if isinstance(scheduler_decision, dict) else {},
+            "changed_files": result.get("changed_files") if isinstance(result.get("changed_files"), list) else [],
+        },
+    }
+
+
 def apply_agent_results_with_scheduler(
     *,
     project_plan: dict[str, Any],
@@ -58,7 +95,7 @@ def apply_agent_results_with_scheduler(
     new_results: list[dict[str, Any]],
     stage: str,
 ) -> dict[str, Any]:
-    """Apply specialist-agent results as the scheduler coordination boundary."""
+    """作为调度协调边界合并专业 Agent 的任务结果。"""
 
     now = datetime.now(UTC).isoformat()
     result_by_task_id = {result["task_id"]: result for result in new_results}
@@ -82,6 +119,7 @@ def apply_agent_results_with_scheduler(
                 **task,
                 "status": status,
                 "last_result_status": result.get("status"),
+                **_failure_summary_from_result(result),
                 "updated_by": "build-scheduler",
                 "updated_at": now,
             }

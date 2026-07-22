@@ -58,6 +58,30 @@ def _dedupe_strings(values: list[str]) -> list[str]:
     return result
 
 
+def _dedupe_normalized_strings(values: list[str]) -> list[str]:
+    """按规范化文本去重模型输出列表，避免同一句验收点或路径重复落库。"""
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = _normalized_text_key(value)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(value)
+    return result
+
+
+def _normalized_text_key(value: str) -> str:
+    """生成文本去重键，忽略大小写、空白和常见中英文标点差异。"""
+
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    punctuation = " \t\r\n。．.，,；;：:、!！?？（）()[]【】{}<>《》\"'`"
+    return "".join(char for char in text if char not in punctuation)
+
+
 def _text(value: Any, default: str = "") -> str:
     text = str(value or "").strip()
     return text or default
@@ -194,9 +218,11 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
         )
         if not target_files:
             target_files = [change["path"] for change in change_scope]
-        dependencies = _string_list(item.get("dependencies") or item.get("dependsOn"))
-        acceptance = _string_list(
-            item.get("acceptance_criteria") or item.get("acceptanceCriteria")
+        dependencies = _dedupe_normalized_strings(
+            _string_list(item.get("dependencies") or item.get("dependsOn"))
+        )
+        acceptance = _dedupe_normalized_strings(
+            _string_list(item.get("acceptance_criteria") or item.get("acceptanceCriteria"))
         )
         if not acceptance:
             acceptance = [f"{description}完成并通过相关构建或测试验证。"]
@@ -204,7 +230,9 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
             item.get("can_run_in_parallel", item.get("canRunInParallel", True))
         )
         allowed_paths = (
-            _string_list(item.get("allowed_paths") or item.get("allowedPaths"))
+            _dedupe_normalized_strings(
+                _string_list(item.get("allowed_paths") or item.get("allowedPaths"))
+            )
             or target_files
         )
         if not change_scope and not target_files and not allowed_paths:
@@ -228,7 +256,7 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
                 "unit_id": _text(item.get("unit_id") or item.get("unitId"), "application:root"),
                 "source_refs": _dict_value(item.get("source_refs") or item.get("sourceRefs")),
                 "allowed_paths": allowed_paths,
-                "targetFiles": target_files,
+                "targetFiles": _dedupe_normalized_strings(target_files),
                 "change_scope": change_scope,
                 "impact_scope": _impact_scope(
                     item.get("impact_scope") or item.get("impactScope"), description
@@ -241,9 +269,11 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
                 ),
                 "acceptance_criteria": acceptance,
                 "acceptanceCriteria": acceptance,
-                "verification_commands": _string_list(
-                    item.get("verification_commands")
-                    or item.get("verificationCommands")
+                "verification_commands": _dedupe_normalized_strings(
+                    _string_list(
+                        item.get("verification_commands")
+                        or item.get("verificationCommands")
+                    )
                 ),
             }
         )

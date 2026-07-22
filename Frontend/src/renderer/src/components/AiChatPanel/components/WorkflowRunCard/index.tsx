@@ -85,11 +85,11 @@ export default function WorkflowRunCard({
         <div className={cx("workflow-run-title")}>
           <span className={cx("workflow-run-signal")} aria-hidden="true" />
           <div>
-            <Text className={cx("workflow-run-name")} strong>Workflow Run</Text>
+            <Text className={cx("workflow-run-name")} strong>工作流执行</Text>
           </div>
         </div>
         <Tag className={cx("workflow-run-status")} color={workflowStatusColor(status)}>
-          {status}
+          {workflowStatusText(status)}
         </Tag>
       </div>
       {workflow.summary.message && (
@@ -297,10 +297,10 @@ export function BuildExecutionRunCard({
       <div className={cx("workflow-run-header")}>
         <div className={cx("workflow-run-title")}>
           <span className={cx("workflow-run-signal")} aria-hidden="true" />
-          <Text className={cx("workflow-run-name")} strong>Build Run</Text>
+          <Text className={cx("workflow-run-name")} strong>构建执行</Text>
         </div>
         <Tag className={cx("workflow-run-status")} color={workflowStatusColor(status)}>
-          {status}
+          {workflowStatusText(status)}
         </Tag>
       </div>
       <BuildExecutionSliceProgress executionSlice={executionSlice} />
@@ -342,7 +342,8 @@ function BuildExecutionTaskHeader({
   /** 渲染可折叠任务卡片的头部摘要。 */
 
   const status = String(task.status || "pending");
-  const description = task.description || task.unit_id || taskId(task);
+  const title = displayTaskTitle(task);
+  const description = displayTaskDescription(task);
   return (
     <div className={cx("workflow-build-task-header-shell")}>
       <div className={cx("workflow-build-task-header", status)}>
@@ -350,7 +351,7 @@ function BuildExecutionTaskHeader({
           {taskStatusIcon(status)}
         </span>
         <div className={cx("workflow-build-task-title")}>
-          <Text strong>{task.title || taskId(task)}</Text>
+          <Text strong>{title}</Text>
           <Text type="secondary">{description}</Text>
         </div>
         <Tag className={cx("workflow-build-task-status-tag", status)} color={taskStatusColor(status)}>
@@ -369,7 +370,7 @@ function BuildExecutionTaskDetails({
 }: {
   task: WorkflowBuildExecutionTask;
 }): ReactElement {
-  /** 展示单个构建任务的依赖、执行归属和文件范围等细节。 */
+  /** 展示单个构建任务的定位、失败原因、文件范围和验收点。 */
 
   const dependencies = taskDependencies(task);
   const paths = [
@@ -378,16 +379,25 @@ function BuildExecutionTaskDetails({
     ...stringList(task.allowed_paths),
     ...stringList(task.allowedPaths),
   ];
-  const acceptance = stringList(task.acceptanceCriteria);
-  const sourceRefs = objectValue(task.source_refs);
+  const acceptance = dedupeLocalizedTaskTexts([
+    ...stringList(task.acceptanceCriteria),
+    ...stringList(task.acceptance_criteria),
+  ], task);
+  const failureReason = taskFailureReason(task);
+  const failureCategory = taskFailureCategoryText(task.failure_category);
   return (
     <div className={cx("workflow-build-task-details")}>
       <div className={cx("workflow-build-task-detail-grid")}>
         <BuildTaskDetailItem label="任务 ID" value={taskId(task)} />
-        <BuildTaskDetailItem label="Unit" value={task.unit_id || "application:root"} />
-        <BuildTaskDetailItem label="执行方" value={task.owner || "未指定"} />
         <BuildTaskDetailItem label="依赖" value={dependencies.length > 0 ? dependencies.join("、") : "无"} />
       </div>
+      {task.status === "failed" && (
+        <div className={cx("workflow-build-task-detail-block", "workflow-build-task-failure")}>
+          <Text type="secondary">失败原因</Text>
+          <Text>{failureReason || "任务执行失败，但后端未返回具体原因。"}</Text>
+          {failureCategory && <Tag color="red">{failureCategory}</Tag>}
+        </div>
+      )}
       {paths.length > 0 && (
         <div className={cx("workflow-build-task-detail-block")}>
           <Text type="secondary">文件范围</Text>
@@ -408,18 +418,6 @@ function BuildExecutionTaskDetails({
               </li>
             ))}
           </ul>
-        </div>
-      )}
-      {Object.keys(sourceRefs).length > 0 && (
-        <div className={cx("workflow-build-task-detail-block")}>
-          <Text type="secondary">来源引用</Text>
-          <div className={cx("workflow-build-task-detail-list")}>
-            {Object.entries(sourceRefs).map(([key, value]) => (
-              <Text key={key}>
-                {key}: {String(value)}
-              </Text>
-            ))}
-          </div>
         </div>
       )}
       {buildToolActivityPlacement(task, true) === "details" && (
@@ -482,11 +480,159 @@ function BuildTaskDetailItem({
 function taskDependencies(task: WorkflowBuildExecutionTask): string[] {
   /** 读取任务依赖，兼容 dependencies 与 dependsOn 字段。 */
 
-  return Array.isArray(task.dependencies)
+  return dedupeStrings(Array.isArray(task.dependencies)
     ? task.dependencies
     : Array.isArray(task.dependsOn)
       ? task.dependsOn
-      : [];
+      : []);
+}
+
+function displayTaskTitle(task: WorkflowBuildExecutionTask): string {
+  /** 返回任务标题的中文展示文本，避免历史英文任务原样出现在 UI 中。 */
+
+  const title = localizeTaskText(task.title || "", task);
+  if (title) return title;
+  return `构建任务 ${taskId(task)}`;
+}
+
+function displayTaskDescription(task: WorkflowBuildExecutionTask): string {
+  /** 返回任务说明的中文展示文本，英文历史数据会被转换为中文摘要。 */
+
+  const description = localizeTaskText(task.description || "", task);
+  if (description) return description;
+  return "暂无任务说明";
+}
+
+function localizeTaskText(value: string, task: WorkflowBuildExecutionTask): string {
+  /** 将任务标题、说明和验收点转换为中文；中文原文直接保留。 */
+
+  const text = value.trim();
+  if (!text) return "";
+  if (containsChinese(text)) return text;
+  const exact = exactTaskTranslation(text);
+  if (exact) return exact;
+  const generated = generatedTaskTranslation(text, task);
+  if (generated) return generated;
+  return `请完成任务 ${taskId(task)} 的实现与验证。`;
+}
+
+function dedupeLocalizedTaskTexts(values: string[], task: WorkflowBuildExecutionTask): string[] {
+  /** 先中文化再去重，避免多条英文兜底翻成同一句后重复展示。 */
+
+  return dedupeStrings(
+    values
+      .map((item) => localizeTaskText(item, task))
+      .filter((item) => item.trim()),
+  );
+}
+
+function containsChinese(value: string): boolean {
+  /** 判断文本是否已经包含中文，避免重复加工中文任务内容。 */
+
+  return /[\u4e00-\u9fa5]/.test(value);
+}
+
+function exactTaskTranslation(value: string): string {
+  /** 翻译已知的任务规划英文模板，覆盖历史会话中常见的任务详情。 */
+
+  const translations: Record<string, string> = {
+    "Create Express backend with employee CRUD API endpoints": "创建 Express 员工 CRUD 后端 API 接口",
+    "Set up a Node.js + Express server with in-memory storage for employees. Implement endpoints: GET /api/employees (list), GET /api/employees/:employeeId (detail), POST /api/employees (create), PUT /api/employees/:employeeId (update), DELETE /api/employees/:employeeId (delete/mark departed). Use the schemas from employee_api contract. Include a /health endpoint. Server listens on port 8000.": "搭建 Node.js + Express 服务，使用内存存储管理员工数据。实现 GET /api/employees（列表）、GET /api/employees/:employeeId（详情）、POST /api/employees（创建）、PUT /api/employees/:employeeId（更新）、DELETE /api/employees/:employeeId（删除或标记离职），并遵循 employee_api 契约中的 schema。服务需要提供 /health 健康检查接口，并监听 8000 端口。",
+    "Server starts and responds to GET /health with 200 OK.": "服务启动后，GET /health 返回 200 OK。",
+    "All five employee endpoints return correct responses as per the API contract.": "五个员工接口均按照 API 契约返回正确响应。",
+    "Create, read, update, delete operations work correctly on in-memory store.": "基于内存存储的创建、读取、更新、删除流程可正常工作。",
+  };
+  return translations[value] || "";
+}
+
+function generatedTaskTranslation(value: string, task: WorkflowBuildExecutionTask): string {
+  /** 按任务文本中的接口、资源和技术栈生成中文说明，兜底处理历史英文任务。 */
+
+  const lowerValue = value.toLowerCase();
+  const entityLabel = taskEntityLabel(value);
+  const endpoints = taskEndpointTexts(value);
+  if (lowerValue.includes("crud") && lowerValue.includes("api")) {
+    return `实现${entityLabel}的 CRUD API 接口${endpoints.length > 0 ? `：${endpoints.join("、")}` : ""}。`;
+  }
+  if (lowerValue.includes("express") && lowerValue.includes("backend")) {
+    return `创建 Express 后端服务，完成${entityLabel}相关接口、内存数据存储和健康检查。`;
+  }
+  if (lowerValue.includes("in-memory")) {
+    return `使用内存存储完成${entityLabel}数据的增删改查逻辑。`;
+  }
+  if (lowerValue.includes("health")) {
+    return "服务需要提供 /health 健康检查接口，并返回成功状态。";
+  }
+  if (endpoints.length > 0) {
+    return `实现并验证接口：${endpoints.join("、")}。`;
+  }
+  if (task.owner === "data_source") {
+    return `完成${entityLabel}后端数据与接口实现，并通过相关验证。`;
+  }
+  if (task.owner === "frontend") {
+    return `完成页面功能实现，并通过相关验证。`;
+  }
+  return "";
+}
+
+function taskEntityLabel(value: string): string {
+  /** 从英文任务内容推导业务对象的中文名称。 */
+
+  const lowerValue = value.toLowerCase();
+  if (lowerValue.includes("employee")) return "员工";
+  if (lowerValue.includes("user")) return "用户";
+  if (lowerValue.includes("order")) return "订单";
+  if (lowerValue.includes("product")) return "商品";
+  if (lowerValue.includes("customer")) return "客户";
+  return "业务数据";
+}
+
+function taskEndpointTexts(value: string): string[] {
+  /** 提取任务说明中的 HTTP 接口，生成中文可读接口列表。 */
+
+  const matches = value.match(/\b(GET|POST|PUT|PATCH|DELETE)\s+\/[A-Za-z0-9_/:.-]+/g) || [];
+  return dedupeStrings(matches.map((endpoint) => endpoint.replace(/\s+/, " ")));
+}
+
+function taskFailureReason(task: WorkflowBuildExecutionTask): string {
+  /** 提取失败原因，兼容后端后续扩展的 failure_detail 文本字段。 */
+
+  if (typeof task.failure_reason === "string" && task.failure_reason.trim()) {
+    return task.failure_reason.trim();
+  }
+  const detail = objectValue(task.failure_detail);
+  for (const key of ["reason", "message", "agent_note"]) {
+    const value = detail[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function taskFailureCategoryText(category: unknown): string {
+  /** 将后端失败分类转成中文标签，帮助用户定位后续修复方向。 */
+
+  const value = typeof category === "string" ? category : "";
+  const labels: Record<string, string> = {
+    runner_crash: "执行器异常",
+    runner_protocol_error: "执行协议异常",
+    timeout: "执行超时",
+    tool_error: "工具调用失败",
+    model_error: "模型调用失败",
+    sandbox_error: "沙箱权限问题",
+    network_error: "网络问题",
+    compile_error: "编译失败",
+    type_error: "类型检查失败",
+    test_failure: "测试失败",
+    lint_failure: "代码检查失败",
+    runtime_error: "运行时错误",
+    acceptance_failed: "验收未通过",
+    no_file_changes: "未产生文件变更",
+    contract_mismatch: "契约不匹配",
+    plan_mismatch: "计划不匹配",
+    workspace_snapshot_stale: "工作区快照过期",
+    implementation_failure: "实现失败",
+  };
+  return labels[value] || value;
 }
 
 function sortBuildTasksForDisplay(tasks: WorkflowBuildExecutionTask[]): WorkflowBuildExecutionTask[] {
@@ -1006,4 +1152,14 @@ function workflowStatusColor(status: string): string {
   if (status === "requires_user_input") return "gold";
   if (status === "running") return "purple";
   return "default";
+}
+
+function workflowStatusText(status: string): string {
+  /** 将工作流状态映射为中文标签。 */
+
+  if (status === "completed" || status === "passed") return "完成";
+  if (status === "failed" || status === "error") return "失败";
+  if (status === "requires_user_input") return "待确认";
+  if (status === "running") return "运行中";
+  return status || "未知";
 }

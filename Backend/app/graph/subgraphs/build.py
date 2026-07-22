@@ -61,10 +61,38 @@ def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
 
 
 def _group_tasks_by_owner(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """按任务 owner 分组，便于分别派发给对应专业 Agent。"""
+
     groups: dict[str, list[dict[str, Any]]] = {}
     for task in tasks:
         groups.setdefault(str(task.get("owner") or ""), []).append(task)
     return groups
+
+
+def _runner_exception_results(
+    *,
+    owner: str,
+    owner_tasks: list[dict[str, Any]],
+    exc: Exception,
+) -> list[dict[str, Any]]:
+    """把专业 Agent 执行异常转换为每个任务可展示的失败结果。"""
+
+    reason = f"{type(exc).__name__}: {exc}"
+    display_reason = f"任务执行器异常退出：{reason}"
+    return [
+        {
+            "task_id": task["id"],
+            "owner": owner or task.get("owner"),
+            "status": "failed",
+            "failure_category": "runner_crash",
+            "failure_reason": display_reason,
+            "agent_note": display_reason,
+            "changed_files": [],
+            "commands": [],
+            "change_request": None,
+        }
+        for task in owner_tasks
+    ]
 
 
 def _execute_ready_tasks(
@@ -121,6 +149,18 @@ def _execute_ready_tasks(
                     ),
                 ),
             )
+        except Exception as exc:
+            all_results.extend(
+                normalize_task_results(
+                    dispatched_tasks=owner_tasks,
+                    raw_results=_runner_exception_results(
+                        owner=owner,
+                        owner_tasks=owner_tasks,
+                        exc=exc,
+                    ),
+                )
+            )
+            continue
         finally:
             if on_batch_tool_activity is not None:
                 on_batch_tool_activity(owner_tasks, None)

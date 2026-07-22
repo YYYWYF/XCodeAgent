@@ -264,6 +264,10 @@ def verify_task_file_changes(
                 # 代理未正确识别，标记为失败
                 verified_result["status"] = "failed"
                 verified_result["failure_category"] = "no_file_changes"
+                verified_result["failure_reason"] = (
+                    "Agent 报告任务已完成，但未在工作区产生文件变更；"
+                    "请检查任务是否已实际实现，或在已满足时明确说明无需修改。"
+                )
                 original_note = verified_result.get("agent_note", "")
                 suffix = (
                     "VERIFICATION FAILED: Agent reported completion but no files "
@@ -494,12 +498,14 @@ def _task_sort_key(task: dict[str, Any]) -> tuple[int, str]:
 def _protocol_failure(task: dict[str, Any], reason: str) -> dict[str, Any]:
     """把 runner 协议异常包装为标准失败结果。"""
 
+    display_reason = f"任务执行器返回结果不符合协议：{reason}"
     result = {
         "task_id": task["id"],
         "owner": task.get("owner"),
         "status": "failed",
         "failure_category": "runner_protocol_error",
-        "agent_note": reason,
+        "failure_reason": display_reason,
+        "agent_note": display_reason,
         "changed_files": [],
         "commands": [],
         "change_request": None,
