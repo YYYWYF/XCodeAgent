@@ -34,6 +34,32 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 
 **生成代码前，务必先用 `list_files` 确认 `/frontend/src/pages/` 下已存在的页面目录与脚手架占位文件，再按上表前缀写入。** 不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
 
+## 🔴 前端工程根目录禁止创建文件
+
+`/frontend/` 根目录下**禁止创建任何新文件**，包括但不限于：
+
+- ❌ 脚本文件：`.py`、`.sh`、`.bash`、`.ps1`、`.bat`
+- ❌ 配置文件：任何 `.json`、`.yaml`、`.yml`、`.toml`、`.env`、`.ini` 文件
+- ❌ 文档文件：`.md`、`.txt`、`.log` 文件
+- ❌ 临时文件：`.tmp`、`.bak`、`.swp` 文件
+- ❌ 任何其他非框架骨架的文件
+
+前端工程根目录下已有的文件（`package.json`、`vite.config.ts`、`tsconfig.json` 等）由模板工程管理，**禁止修改**。新增文件**只能**放在下述允许的子目录中。
+
+**唯一允许创建新文件的位置**：
+
+| 允许的目录 | 可创建的文件类型 |
+| --- | --- |
+| `src/pages/<PageKey>/` | 页面主组件 `index.tsx` |
+| `src/typings/` | 类型定义 `<page>.ts` |
+| `src/constants/` | 常量文件 `<page>.ts` |
+| `src/hooks/` | Hooks 文件 `use<Page>.ts` |
+| `src/utils/` | 工具函数 `<page>.ts` |
+| `src/components/<Module>/` | 可复用组件 `index.tsx` |
+| `src/apis/` | 业务接口 `<biz>Api.ts` |
+
+> 如果任务需要运行脚本（如检查、安装、部署），应由用户在前端工程外部执行，**不要在前端工程内生成脚本文件**。
+
 ## 核心原则
 
 模板工程的路由是**自动生成**的：`src/utils/route.tsx` 用 `import.meta.glob('@/pages/**/index.tsx')` 静态扫描页面，再根据 `src/constants/menus.ts` 里每个菜单项的 `key` 解析到 `src/pages/<key>/index.tsx`。因此：
@@ -252,6 +278,9 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 
 ## 禁止行为清单
 
+- ❌ 在 `/frontend/` 根目录下创建任何新文件（`.py`、`.sh`、`.md`、`.json`、`.env` 等）
+- ❌ 在 `/frontend/` 下生成脚本文件（检查脚本、安装脚本、部署脚本等）
+- ❌ 在 `/frontend/` 下生成非前端代码文件（Python、Shell、Bash 等）
 - ❌ 修改 `src/routes/index.tsx`、`src/utils/route.tsx` 以手动注册路由（路由由菜单自动生成）
 - ❌ 修改 `src/App.tsx`、`src/index.tsx` 入口装配
 - ❌ 修改 `src/layout/**`、`src/providers/**`、`src/hooks/useGuard.ts`
