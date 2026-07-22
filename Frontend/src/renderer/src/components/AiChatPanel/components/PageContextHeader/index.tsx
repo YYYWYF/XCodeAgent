@@ -2,7 +2,8 @@ import {
   EllipsisOutlined,
   ExpandOutlined,
   ExportOutlined,
-  FileTextOutlined
+  FileTextOutlined,
+  CloseOutlined
 } from '@ant-design/icons'
 import { Button, Dropdown, Menu, Popover, Typography } from 'antd'
 import type { ReactElement } from 'react'
@@ -13,8 +14,10 @@ const { Text } = Typography
 
 type PageContextHeaderProps = {
   description: string
+  isPageOpen?: boolean
   keyFeatures: string[]
   lastAnalyzedAt?: number
+  onClosePage?: () => void
   onOpenFullscreenPage: () => void
   onOpenPage: () => void
   pagePath: string
@@ -44,8 +47,10 @@ function normalizePagePath(value: string): string {
 /** 渲染当前页面的名称、路由、用途与预览操作。 */
 export default function PageContextHeader({
   description,
+  isPageOpen = false,
   keyFeatures,
   lastAnalyzedAt,
+  onClosePage,
   onOpenFullscreenPage,
   onOpenPage,
   pagePath,
@@ -53,6 +58,14 @@ export default function PageContextHeader({
   previewAvailable,
   theme
 }: PageContextHeaderProps): ReactElement {
+  /** 处理打开/关闭页面按钮点击。 */
+  const handleTogglePage = (): void => {
+    if (isPageOpen && onClosePage) {
+      onClosePage()
+    } else {
+      onOpenPage()
+    }
+  }
   const detailContent = (
     <div className={cx('page-context-detail')}>
       <Text>{description}</Text>
@@ -110,11 +123,11 @@ export default function PageContextHeader({
         <Button
           className={cx('page-context-open-button')}
           disabled={!previewAvailable}
-          icon={<ExportOutlined />}
-          onClick={onOpenPage}
-          type="primary"
+          icon={isPageOpen ? <CloseOutlined /> : <ExportOutlined />}
+          onClick={handleTogglePage}
+          type={isPageOpen ? 'default' : 'primary'}
         >
-          打开页面
+          {isPageOpen ? '关闭页面' : '打开页面'}
         </Button>
         <Dropdown
           disabled={!previewAvailable}

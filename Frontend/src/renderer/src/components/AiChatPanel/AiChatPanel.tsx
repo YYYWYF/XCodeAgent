@@ -242,6 +242,11 @@ export default function AiChatPanel({
     setRightPanel({ type: 'preview' })
   }
 
+  /** 关闭右侧工作区的页面预览。 */
+  const handleClosePage = (): void => {
+    setRightPanel(undefined)
+  }
+
   /** 使用最近一次成功启动地址打开独立全屏预览窗口。 */
   const handleOpenFullscreenPreview = async (): Promise<void> => {
     setPreviewError('')
@@ -401,8 +406,10 @@ export default function AiChatPanel({
                 application.senario ||
                 '当前应用页面'
               }
+              isPageOpen={rightPanel?.type === 'preview'}
               keyFeatures={activePage?.keyFeatures || []}
               lastAnalyzedAt={activeSessionUpdatedAt}
+              onClosePage={handleClosePage}
               onOpenFullscreenPage={handleOpenFullscreenPreview}
               onOpenPage={handleOpenPage}
               pagePath={activePageOption?.path || activePage?.path || '/'}
