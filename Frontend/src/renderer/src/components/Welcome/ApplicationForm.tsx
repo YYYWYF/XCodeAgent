@@ -18,7 +18,7 @@ import {
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import { AutoComplete, Button, Form, Input, Radio, Switch } from 'antd'
+import { Button, Form, Input, Radio, Switch } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactNode } from 'react'
 import { useMemo, useState } from 'react'
@@ -30,6 +30,7 @@ import {
   terminalLabels,
   trackMethodOptions
 } from './constants'
+import { TabHintInput, TabHintAutoComplete } from './components/TabHintInput'
 
 const { TextArea } = Input
 
@@ -279,7 +280,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             }
           ]}
         >
-          <Input placeholder="请输入页面根路由" />
+          <TabHintInput placeholder="请输入页面根路由" />
         </Form.Item>
       </section>
 
@@ -375,7 +376,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
           <Input disabled={!trackEnabled} />
         </Form.Item>
         <Form.Item label="请求方式" name={['track', 'method']}>
-          <AutoComplete
+          <TabHintAutoComplete
             allowClear={false}
             defaultActiveFirstOption={false}
             disabled={!trackEnabled}

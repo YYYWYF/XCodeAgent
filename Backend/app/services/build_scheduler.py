@@ -5,7 +5,7 @@ from fnmatch import fnmatch
 from datetime import UTC, datetime
 from typing import Any
 
-TERMINAL_STATUSES = {"completed", "failed"}
+TERMINAL_STATUSES = {"completed", "failed", "already_satisfied"}
 RUNNABLE_STATUS = "pending"
 RETRYABLE_FAILURES = {
     "runner_crash",
@@ -162,6 +162,8 @@ def classify_task_result(result: dict[str, Any]) -> dict[str, str]:
 
     if result.get("status") == "completed":
         return {"action": "complete", "reason": "runner_completed"}
+    if result.get("status") == "already_satisfied":
+        return {"action": "complete", "reason": "already_satisfied"}
 
     category = str(
         result.get("failure_category")
@@ -178,6 +180,29 @@ def classify_task_result(result: dict[str, Any]) -> dict[str, str]:
     return {"action": "terminal_failure", "reason": category}
 
 
+def _is_already_satisfied(agent_note: str) -> bool:
+    """检测代理是否已正确识别任务已满足（无需修改文件）。
+
+    当代理报告 "Already satisfied" 或 "no changes required" 时，
+    表示文件已包含所需内容，不应被标记为失败。
+    """
+    if not agent_note:
+        return False
+    note_lower = agent_note.lower()
+    # 检测常见的"已满足"模式
+    satisfied_patterns = [
+        "already satisfied",
+        "no changes required",
+        "already done",
+        "already implemented",
+        "already exists",
+        "already in place",
+        "already correct",
+        "already complete",
+    ]
+    return any(pattern in note_lower for pattern in satisfied_patterns)
+
+
 def verify_task_file_changes(
     *,
     results: list[dict[str, Any]],
@@ -188,6 +213,8 @@ def verify_task_file_changes(
 
     如果 code_change_set 为 None 或无文件变更，将 "completed" 结果改为
     "failed"（failure_category="no_file_changes"），避免幻影完成。
+    例外情况：如果代理正确识别任务已满足（already satisfied），则标记为
+    "already_satisfied" 状态而非失败。
     否则将实际变更的文件路径填入 changed_files，替换 create_agent_task_result
     中硬编码的空列表。
     """
@@ -218,17 +245,34 @@ def verify_task_file_changes(
             path for path in changed_paths if _path_matches_any(path, authorized_paths)
         ]
         if not attributed_paths:
-            verified_result["status"] = "failed"
-            verified_result["failure_category"] = "no_file_changes"
-            original_note = verified_result.get("agent_note", "")
-            suffix = (
-                "VERIFICATION FAILED: Agent reported completion but no files "
-                "were written to the workspace. Expected file changes for this task."
-            )
-            verified_result["agent_note"] = (
-                f"{original_note}\n\n{suffix}" if original_note else suffix
-            )
-            verified_result["scheduler_decision"] = classify_task_result(verified_result)
+            # 检查代理是否已正确识别任务已满足
+            agent_note = verified_result.get("agent_note", "")
+            if _is_already_satisfied(agent_note):
+                # 代理正确识别任务已满足，标记为已满足状态
+                verified_result["status"] = "already_satisfied"
+                verified_result["failure_category"] = None
+                original_note = verified_result.get("agent_note", "")
+                suffix = (
+                    "VERIFICATION PASSED: Agent correctly identified that the task "
+                    "was already satisfied. No file changes were needed."
+                )
+                verified_result["agent_note"] = (
+                    f"{original_note}\n\n{suffix}" if original_note else suffix
+                )
+                verified_result["scheduler_decision"] = classify_task_result(verified_result)
+            else:
+                # 代理未正确识别，标记为失败
+                verified_result["status"] = "failed"
+                verified_result["failure_category"] = "no_file_changes"
+                original_note = verified_result.get("agent_note", "")
+                suffix = (
+                    "VERIFICATION FAILED: Agent reported completion but no files "
+                    "were written to the workspace. Expected file changes for this task."
+                )
+                verified_result["agent_note"] = (
+                    f"{original_note}\n\n{suffix}" if original_note else suffix
+                )
+                verified_result["scheduler_decision"] = classify_task_result(verified_result)
         else:
             verified_result["changed_files"] = attributed_paths
         verified.append(verified_result)
@@ -287,10 +331,11 @@ def summarize_build_runtime(
     ]
     return {
         "total": len(tasks),
-        "completed": counts["completed"],
+        "completed": counts["completed"] + counts.get("already_satisfied", 0),
         "failed": counts["failed"],
         "pending": counts["pending"],
         "running": counts["running"],
+        "already_satisfied": counts.get("already_satisfied", 0),
         "results": len(build_results),
         "repairable_failures": len(repairable),
         "requires_confirmation": len(confirmation),
@@ -351,7 +396,9 @@ def _overall_status(
 ) -> str:
     """根据切片任务和失败分类计算构建总体状态。"""
 
-    if tasks and all(task.get("status") == "completed" for task in tasks):
+    if tasks and all(
+        task.get("status") in {"completed", "already_satisfied"} for task in tasks
+    ):
         return "completed"
     if confirmation:
         return "requires_confirmation"

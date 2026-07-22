@@ -40,6 +40,7 @@ def _task_status_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
     return {
         "total": len(tasks),
         "completed": len([task for task in tasks if task.get("status") == "completed"]),
+        "already_satisfied": len([task for task in tasks if task.get("status") == "already_satisfied"]),
         "failed": len([task for task in tasks if task.get("status") == "failed"]),
         "pending": len([task for task in tasks if task.get("status") == "pending"]),
         "running": len([task for task in tasks if task.get("status") == "running"]),
@@ -69,7 +70,13 @@ def apply_agent_results_with_scheduler(
             updated_tasks.append(task)
             continue
 
-        status = "failed" if result.get("status") == "failed" else "completed"
+        # 处理已满足状态：保留代理报告的状态
+        if result.get("status") == "already_satisfied":
+            status = "already_satisfied"
+        elif result.get("status") == "failed":
+            status = "failed"
+        else:
+            status = "completed"
         updated_tasks.append(
             {
                 **task,
@@ -82,6 +89,8 @@ def apply_agent_results_with_scheduler(
 
     all_results = [*existing_results, *new_results]
     summary = _task_status_counts(updated_tasks)
+    # 将 already_satisfied 计入 completed 用于总体统计
+    summary["completed"] = summary["completed"] + summary.get("already_satisfied", 0)
 
     updated_build_task_plan = replace_build_task_plan_tasks(
         deepcopy(build_task_plan),

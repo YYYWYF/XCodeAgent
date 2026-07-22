@@ -245,6 +245,23 @@
   cursor: pointer;
 }
 
+// Tab 键填充提示样式
+.@{class-prefix}-tab-hint-input {
+  // placeholder 中的 Tab 提示使用较浅的颜色
+  &::placeholder {
+    color: var(--ant-color-text-placeholder, #bfbfbf) !important;
+  }
+}
+
+// 确保 antd Input 的 placeholder 样式正确
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-textarea {
+  &::placeholder {
+    color: var(--ant-color-text-placeholder, #bfbfbf);
+  }
+}
+
 @media (max-width: 720px) {
   .@{class-prefix}-application-form {
     grid-template-columns: 1fr;
