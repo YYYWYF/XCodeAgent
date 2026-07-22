@@ -85,6 +85,10 @@ def workflow_capabilities() -> dict[str, Any]:
                         "Build-task snapshot attached to the matching build attempt; running "
                         "tasks may carry ephemeral activeToolActivity."
                     ),
+                    "dagGeneration": (
+                        "Compact prepare-build-tasks snapshot containing ordered generation "
+                        "stages, topological task summaries, counts, and safe artifact labels."
+                    ),
                     "checks": {
                         "description": "Incremental integration-test check snapshot.",
                         "item": {

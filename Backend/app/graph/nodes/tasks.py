@@ -9,6 +9,10 @@ from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.build_context_resolver import resolve_target_build_context
+from app.services.build_task_progress import (
+    build_task_artifacts,
+    create_build_task_progress_tracker,
+)
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     tasks_from_build_task_plan,
@@ -99,11 +103,31 @@ def prepare_build_tasks(state: ProjectState) -> dict:
     workspace_snapshot = _workspace_snapshot_from_state(state)
     build_execution_scope = _build_execution_scope_from_state(state)
     existing_build_task_plan = _existing_build_task_plan(state)
-    build_task_plan = ensure_build_unit_skeleton(
-        project_plan,
-        workspace_snapshot,
-        existing_build_task_plan,
+    progress = create_build_task_progress_tracker()
+
+    progress.start("unit_skeleton", "正在根据已确认项目计划生成 Unit DAG 骨架。")
+    try:
+        build_task_plan = ensure_build_unit_skeleton(
+            project_plan,
+            workspace_snapshot,
+            existing_build_task_plan,
+        )
+    except Exception as exc:
+        progress.fail("unit_skeleton", f"Unit DAG 骨架生成失败：{exc}")
+        raise
+    build_units = build_task_plan.get("build_units")
+    unit_graph = build_task_plan.get("unit_graph")
+    unit_count = len(build_units) if isinstance(build_units, dict) else 0
+    unit_edge_count = (
+        len(unit_graph.get("edges") or []) if isinstance(unit_graph, dict) else 0
     )
+    progress.complete(
+        "unit_skeleton",
+        f"已生成 {unit_count} 个 Unit、{unit_edge_count} 条 Unit 依赖。",
+        build_task_plan=build_task_plan,
+    )
+
+    progress.start("build_context", "正在解析当前页面或数据源的定向构建上下文。")
     try:
         build_context = _resolve_build_context(
             state,
@@ -112,28 +136,63 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_task_plan,
         )
     except ValueError as exc:
+        progress.fail("build_context", f"构建上下文解析失败：{exc}")
         return {
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
             "project_plan": project_plan,
             "build_task_plan": build_task_plan,
+            "dag_generation_progress": progress.snapshot(),
             "clarification": _build_context_error_payload(str(exc)),
             "timeline": ["prepare_build_tasks"],
         }
-    contract_errors = _scoped_contract_errors(
-        project_plan,
-        build_execution_scope,
-        build_context,
+    except Exception as exc:
+        progress.fail("build_context", f"构建上下文解析异常：{exc}")
+        raise
+    target = build_context.get("target")
+    target = target if isinstance(target, dict) else {}
+    progress.complete(
+        "build_context",
+        (
+            f"已解析 {target.get('type', 'application')}:{target.get('id', 'application')}，"
+            f"涉及 {len(build_context.get('required_unit_ids') or [])} 个 Unit、"
+            f"{len(build_context.get('endpoint_ids') or [])} 个 Endpoint。"
+        ),
+        build_task_plan=build_task_plan,
     )
+
+    progress.start("contract_validation", "正在校验页面依赖和 API 契约一致性。")
+    try:
+        contract_errors = _scoped_contract_errors(
+            project_plan,
+            build_execution_scope,
+            build_context,
+        )
+    except Exception as exc:
+        progress.fail("contract_validation", f"契约校验异常：{exc}")
+        raise
     if contract_errors:
+        progress.fail(
+            "contract_validation",
+            f"契约校验发现 {len(contract_errors)} 个问题：{contract_errors[0]}",
+            build_task_plan=build_task_plan,
+        )
         return {
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
             "project_plan": project_plan,
             "build_task_plan": build_task_plan,
+            "dag_generation_progress": progress.snapshot(),
             "clarification": _api_contract_inconsistency_payload(contract_errors),
             "timeline": ["prepare_build_tasks"],
         }
+    progress.complete(
+        "contract_validation",
+        "页面依赖与 API 契约校验通过。",
+        build_task_plan=build_task_plan,
+    )
+
+    progress.start("model_planning", "正在调用任务规划模型生成候选构建任务。")
     try:
         prepared_plan = prepare_build_tasks_with_main_agent(
             _task_preparation_project_plan(project_plan, build_context),
@@ -143,13 +202,27 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_task_plan=build_task_plan,
         )
     except ValueError as exc:
+        progress.fail("model_planning", f"候选任务生成失败：{exc}")
         return {
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
             "project_plan": project_plan,
+            "build_task_plan": build_task_plan,
+            "dag_generation_progress": progress.snapshot(),
             "clarification": _build_task_plan_generation_error_payload(str(exc)),
             "timeline": ["prepare_build_tasks"],
         }
+    except Exception as exc:
+        progress.fail("model_planning", f"候选任务生成异常：{exc}")
+        raise
+    prepared_tasks = tasks_from_build_task_plan(prepared_plan)
+    progress.complete(
+        "model_planning",
+        f"任务规划模型已生成 {len(prepared_tasks)} 个有效候选任务。",
+        build_task_plan=prepared_plan,
+    )
+
+    progress.start("task_compilation", "正在归一化任务并编译 Unit 与任务依赖。")
     try:
         build_task_plan = _merge_prepared_scope_tasks(
             build_task_plan,
@@ -157,35 +230,92 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_context,
         )
     except ValueError as exc:
+        progress.fail(
+            "task_compilation",
+            f"任务依赖编译失败：{exc}",
+            build_task_plan=build_task_plan,
+        )
         return {
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
             "project_plan": project_plan,
             "build_task_plan": build_task_plan,
+            "dag_generation_progress": progress.snapshot(),
             "clarification": _build_task_plan_generation_error_payload(str(exc)),
             "timeline": ["prepare_build_tasks"],
         }
+    except Exception as exc:
+        progress.fail(
+            "task_compilation",
+            f"任务依赖编译异常：{exc}",
+            build_task_plan=build_task_plan,
+        )
+        raise
+    compiled_tasks = tasks_from_build_task_plan(build_task_plan)
+    task_graph = build_task_plan.get("task_graph")
+    task_graph = task_graph if isinstance(task_graph, dict) else {}
+    progress.complete(
+        "task_compilation",
+        (
+            f"已编译 {len(compiled_tasks)} 个任务、"
+            f"{len(task_graph.get('edges') or [])} 条任务依赖。"
+        ),
+        build_task_plan=build_task_plan,
+    )
+
+    progress.start("dag_validation", "正在校验任务拓扑、循环依赖和执行批次。")
     dag_errors = (
         build_task_plan.get("task_graph", {})
         .get("validation", {})
         .get("errors", [])
     )
     if dag_errors:
+        progress.fail(
+            "dag_validation",
+            f"任务 DAG 校验发现 {len(dag_errors)} 个问题：{dag_errors[0]}",
+            build_task_plan=build_task_plan,
+        )
         return {
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
             "project_plan": project_plan,
             "build_task_plan": build_task_plan,
+            "dag_generation_progress": progress.snapshot(),
             "clarification": _build_task_plan_validation_error_payload(dag_errors),
             "timeline": ["prepare_build_tasks"],
         }
-    build_task_plan_path = write_build_task_plan_json(state, build_task_plan)
-    build_task_dag_path = write_build_task_dag_markdown(state, build_task_plan)
+    execution = build_task_plan.get("execution")
+    execution = execution if isinstance(execution, dict) else {}
+    progress.complete(
+        "dag_validation",
+        f"任务 DAG 校验通过，共 {len(execution.get('batches') or [])} 个执行批次。",
+        build_task_plan=build_task_plan,
+    )
+
+    progress.start("artifact_persistence", "正在保存内部任务计划和 Markdown DAG。")
+    try:
+        build_task_plan_path = write_build_task_plan_json(state, build_task_plan)
+        build_task_dag_path = write_build_task_dag_markdown(state, build_task_plan)
+    except Exception as exc:
+        progress.fail(
+            "artifact_persistence",
+            f"DAG 产物保存失败：{exc}",
+            build_task_plan=build_task_plan,
+        )
+        raise
+    artifacts = build_task_artifacts(build_task_dag_path)
+    progress.complete(
+        "artifact_persistence",
+        "内部 Build Task Plan 与 BUILD_TASK_DAG.md 已保存。",
+        build_task_plan=build_task_plan,
+        artifacts=artifacts,
+    )
     return {
         "phase": "prepare_build_tasks",
         "status": "completed",
         "project_plan": project_plan,
         "build_task_plan": build_task_plan,
+        "dag_generation_progress": progress.snapshot(),
         "build_task_plan_path": build_task_plan_path,
         "build_task_dag_path": build_task_dag_path,
         "build_execution_scope": build_execution_scope,

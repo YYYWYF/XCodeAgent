@@ -321,6 +321,66 @@ class FakeIntegrationProgressGraph:
         )
 
 
+class FakeDagGenerationProgressGraph:
+    """模拟任务 DAG 子阶段实时更新并正常完成。"""
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        """依次发送骨架、模型规划快照和节点完成更新。"""
+
+        del initial_state, config, stream_mode
+        stages = [
+            {"id": "unit_skeleton", "name": "生成 Unit DAG 骨架", "status": "completed", "detail": "已完成"},
+            {"id": "model_planning", "name": "生成候选构建任务", "status": "running", "detail": "模型规划中"},
+        ]
+        yield "custom", {
+            "type": "prepare_build_tasks.progress",
+            "message": "Unit DAG 骨架已生成。",
+            "dag_generation": {
+                "stages": [{**stages[0], "status": "running"}, {**stages[1], "status": "pending"}],
+                "tasks": [],
+                "summary": {"unitCount": 0, "taskCount": 0},
+                "artifacts": [],
+            },
+        }
+        yield "custom", {
+            "type": "prepare_build_tasks.progress",
+            "message": "正在调用任务规划模型。",
+            "dag_generation": {
+                "stages": stages,
+                "tasks": [],
+                "summary": {"unitCount": 2, "taskCount": 0},
+                "artifacts": [],
+            },
+        }
+        final_snapshot = {
+            "stages": [{**stage, "status": "completed"} for stage in stages],
+            "tasks": [{"id": "page", "title": "实现页面", "owner": "frontend", "status": "pending"}],
+            "summary": {"unitCount": 2, "taskCount": 1},
+            "artifacts": [{"id": "dag", "name": "BUILD_TASK_DAG.md", "kind": "markdown", "status": "saved"}],
+        }
+        yield "updates", {
+            "prepare_build_tasks": {
+                "phase": "prepare_build_tasks",
+                "status": "completed",
+                "tasks": [{"id": "page"}],
+                "dag_generation_progress": final_snapshot,
+                "timeline": ["prepare_build_tasks"],
+            }
+        }
+
+    async def aget_state(self, config):
+        """返回任务 DAG 生成后的最小最终状态。"""
+
+        del config
+        return SimpleNamespace(
+            values={
+                "phase": "build",
+                "status": "completed",
+                "timeline": ["prepare_build_tasks"],
+            }
+        )
+
+
 class FakeRepairLoopGraph:
     """模拟 build → test failed → repair build → retest 的更新序列。"""
 
@@ -756,6 +816,37 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn('"name":"前端构建检查"', payload)
         self.assertIn('"status":"running"', payload)
         self.assertIn('"status":"passed"', payload)
+
+    def test_stream_emits_ordered_dag_generation_snapshots(self) -> None:
+        """DAG 子阶段应在节点完成前更新同一个稳定 ProcessStep。"""
+
+        async def collect() -> list[str]:
+            """收集模拟 DAG 生成节点的全部 SSE 帧。"""
+
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeDagGenerationProgressGraph(),
+                payload={
+                    "threadId": "thread-dag-progress",
+                    "runId": "run-dag-progress",
+                    "messages": [{"role": "user", "content": "生成任务 DAG"}],
+                    "forwardedProps": {"resumeFrom": "prepare_build_tasks"},
+                },
+            )
+            return [frame async for frame in stream]
+
+        frames = _decode_agent_process_frames(asyncio.run(collect()))
+        dag_frames = [
+            frame
+            for frame in frames
+            if frame.get("id") == "workflow:prepare_build_tasks"
+            and isinstance(frame.get("dagGeneration"), dict)
+        ]
+
+        self.assertEqual([frame["status"] for frame in dag_frames], ["running", "running", "completed"])
+        self.assertEqual(dag_frames[0]["dagGeneration"]["stages"][0]["status"], "running")
+        self.assertEqual(dag_frames[1]["dagGeneration"]["stages"][1]["status"], "running")
+        self.assertEqual(dag_frames[-1]["dagGeneration"]["tasks"][0]["id"], "page")
+        self.assertLess(dag_frames[-2]["sequence"], dag_frames[-1]["sequence"])
 
     def test_workflow_stream_forwards_integration_test_checks_progressively(self) -> None:
         """回归保护:runtime 必须把 LangGraph custom 流中的 ``integration_test.checks`` 事件

@@ -9,7 +9,11 @@ import {
   selectedSkillNames,
   skillsAfterEmptyBackspace
 } from '../src/renderer/src/components/AiChatPanel/skillSelection'
-import { AgUiChatSession, buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
+import {
+  AgUiChatSession,
+  buildWorkflowForwardedProps,
+  readDagGenerationSnapshot
+} from '../src/renderer/src/service/agUiAgent'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
 import { buildToolActivityPlacement } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import {
@@ -196,6 +200,218 @@ test('AG-UI 集成测试步骤会合并并保留实时检查清单', async () =>
   }
 })
 
+test('AG-UI DAG 生成步骤按稳定 ID 合并最新完整快照', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as Record<string, unknown>
+    const threadId = String(request.threadId)
+    const runId = String(request.runId)
+    const messageId = 'assistant-dag-generation'
+    const baseStep = {
+      id: 'workflow:prepare_build_tasks',
+      kind: 'workflow',
+      status: 'running',
+      title: '正在执行 构建任务 DAG 生成',
+      detail: '生成中',
+      sequence: 3
+    }
+    const events = [
+      { type: 'RUN_STARTED', threadId, runId },
+      { type: 'TEXT_MESSAGE_START', messageId, role: 'assistant' },
+      {
+        type: 'CUSTOM',
+        name: 'agent-process',
+        value: {
+          ...baseStep,
+          dagGeneration: {
+            stages: [
+              {
+                id: 'unit_skeleton',
+                name: '生成 Unit DAG 骨架',
+                status: 'running',
+                detail: '生成中'
+              }
+            ],
+            tasks: [],
+            summary: { unitCount: 0, taskCount: 0 },
+            artifacts: []
+          }
+        }
+      },
+      {
+        type: 'CUSTOM',
+        name: 'agent-process',
+        value: {
+          ...baseStep,
+          status: 'completed',
+          dagGeneration: {
+            stages: [
+              {
+                id: 'unit_skeleton',
+                name: '生成 Unit DAG 骨架',
+                status: 'completed',
+                detail: '完成'
+              }
+            ],
+            tasks: [
+              {
+                id: 'api',
+                title: '实现 API',
+                owner: 'data_source',
+                status: 'pending',
+                dependencies: [],
+                changePaths: ['backend/api.py'],
+                acceptanceCriteria: ['接口可用']
+              },
+              {
+                id: 'page',
+                title: '实现页面',
+                owner: 'frontend',
+                status: 'pending',
+                dependencies: ['api'],
+                changePaths: ['frontend/Page.tsx'],
+                acceptanceCriteria: ['页面可渲染']
+              }
+            ],
+            summary: { unitCount: 2, taskCount: 2, batchCount: 2 },
+            artifacts: []
+          }
+        }
+      },
+      { type: 'TEXT_MESSAGE_END', messageId },
+      { type: 'RUN_FINISHED', threadId, runId, result: {} }
+    ]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' },
+      status: 200
+    })
+  }
+
+  try {
+    const session = new AgUiChatSession('thread-dag', 'http://agent.test/workflow/run')
+    const result = await session.sendMessage('生成 DAG', { editorMode: 'frontend' })
+
+    assert.equal(result.processSteps.length, 1)
+    assert.equal(result.processSteps[0]?.sequence, 3)
+    assert.equal(result.processSteps[0]?.status, 'completed')
+    assert.deepEqual(
+      result.processSteps[0]?.dagGeneration?.tasks.map((task) => task.id),
+      ['api', 'page']
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
+  const snapshot = readDagGenerationSnapshot({
+    agent_note: 'raw-model-output',
+    buildTaskPlanPath: '/workspace/build-task-plan.json',
+    stages: [
+      { id: 'unit_skeleton', name: '生成 Unit DAG 骨架', status: 'completed', detail: '已完成' },
+      { id: 'model_planning', name: '生成候选构建任务', status: 'completed', detail: '已生成 1 项' }
+    ],
+    tasks: [
+      {
+        id: 'page-home',
+        title: '实现首页',
+        owner: 'frontend',
+        status: 'pending',
+        dependencies: [],
+        changePaths: ['frontend/src/pages/Home.tsx'],
+        acceptanceCriteria: ['首页可渲染']
+      }
+    ],
+    summary: {
+      unitCount: 2,
+      taskCount: 1,
+      edgeCount: 0,
+      batchCount: 1,
+      frontendCount: 1,
+      dataSourceCount: 0,
+      isValid: true
+    },
+    artifacts: [
+      { id: 'plan', name: '内部 Build Task Plan', kind: 'internal', status: 'saved' },
+      {
+        id: 'dag',
+        name: 'BUILD_TASK_DAG.md',
+        kind: 'markdown',
+        status: 'saved',
+        path: '/workspace/BUILD_TASK_DAG.md'
+      }
+    ]
+  })
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: false,
+      steps: [
+        {
+          id: 'workflow:prepare_build_tasks',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 构建任务 DAG 生成',
+          detail: '任务数=1',
+          sequence: 1,
+          dagGeneration: snapshot
+        }
+      ]
+    })
+  )
+
+  assert.ok(snapshot)
+  assert.match(markup, /生成 Unit DAG 骨架/)
+  assert.match(markup, /实现首页/)
+  assert.match(markup, /按 DAG 拓扑顺序排列，将在下一阶段执行/)
+  assert.match(markup, /BUILD_TASK_DAG\.md/)
+  assert.doesNotMatch(JSON.stringify(snapshot), /raw-model-output|build-task-plan\.json/)
+})
+
+test('旧会话从节点完成事件恢复 DAG 生成详情', () => {
+  const steps = processStepsForDisplay(undefined, {
+    runId: 'run-dag-history',
+    threadId: 'thread-dag-history',
+    summary: { status: 'completed' },
+    events: [
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'prepare_build_tasks',
+        node: { label: '构建任务 DAG 生成' },
+        status: 'completed',
+        data: {
+          detail: {
+            dagGeneration: {
+              stages: [
+                {
+                  id: 'unit_skeleton',
+                  name: '生成 Unit DAG 骨架',
+                  status: 'completed',
+                  detail: '完成'
+                }
+              ],
+              tasks: [
+                {
+                  id: 'page-home',
+                  title: '实现首页',
+                  owner: 'frontend',
+                  status: 'pending',
+                  dependencies: [],
+                  changePaths: [],
+                  acceptanceCriteria: []
+                }
+              ],
+              summary: { unitCount: 1, taskCount: 1 },
+              artifacts: []
+            }
+          }
+        }
+      }
+    ]
+  })
+
+  assert.equal(steps?.[0].dagGeneration?.tasks[0]?.id, 'page-home')
+})
+
 test('集成测试步骤渲染具体检查项而不是数字详情', () => {
   const markup = renderToStaticMarkup(
     createElement(ProcessSteps, {
@@ -293,7 +509,25 @@ test('Electron 会话持久化保留 Agent 步骤、检查清单和工具调用'
             required: true,
             evidence: '命令执行通过。'
           }
-        ]
+        ],
+        dagGeneration: {
+          stages: [
+            { id: 'unit_skeleton', name: '生成 Unit DAG 骨架', status: 'completed', detail: '完成' }
+          ],
+          tasks: [
+            {
+              id: 'page-home',
+              title: '实现首页',
+              owner: 'frontend',
+              status: 'pending',
+              dependencies: [],
+              changePaths: ['frontend/Home.tsx'],
+              acceptanceCriteria: ['首页可渲染']
+            }
+          ],
+          summary: { unitCount: 1, taskCount: 1 },
+          artifacts: []
+        }
       }
     ],
     toolCalls: [
@@ -310,6 +544,17 @@ test('Electron 会话持久化保留 Agent 步骤、检查清单和工具调用'
   assert.equal((message.processSteps as Array<Record<string, unknown>>).length, 1)
   assert.equal(
     ((message.processSteps as Array<Record<string, unknown>>)[0].checks as unknown[]).length,
+    1
+  )
+  assert.equal(
+    (
+      (
+        (message.processSteps as Array<Record<string, unknown>>)[0].dagGeneration as Record<
+          string,
+          unknown
+        >
+      ).tasks as unknown[]
+    ).length,
     1
   )
   assert.equal((message.toolCalls as Array<Record<string, unknown>>)[0].status, 'completed')
@@ -433,8 +678,8 @@ test('多轮构建测试历史按 attempt 展开并把构建卡挂在对应步�
   const markup = renderToStaticMarkup(
     createElement(ProcessSteps, { loading: false, steps: steps || [] })
   )
-  assert.equal((markup.match(/Build Run/g) || []).length, 2)
-  assert.ok(markup.indexOf('Build Run') < markup.indexOf('集成测试与质量门禁'))
+  assert.equal((markup.match(/构建执行/g) || []).length, 2)
+  assert.ok(markup.indexOf('构建执行') < markup.indexOf('集成测试与质量门禁'))
 })
 
 test('运行中任务默认折叠并只显示最新工具活动', () => {

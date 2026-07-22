@@ -82,6 +82,46 @@ export type IntegrationTestCheckRecord = {
   evidence?: string
 }
 
+export type DagGenerationStageRecord = {
+  id: string
+  name: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  detail: string
+}
+
+export type DagGenerationTaskRecord = {
+  id: string
+  title: string
+  owner: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  dependencies: string[]
+  changePaths: string[]
+  acceptanceCriteria: string[]
+}
+
+export type DagGenerationArtifactRecord = {
+  id: string
+  name: string
+  kind: 'internal' | 'markdown'
+  status: 'saved'
+  path?: string
+}
+
+export type DagGenerationSnapshot = {
+  stages: DagGenerationStageRecord[]
+  tasks: DagGenerationTaskRecord[]
+  summary: {
+    unitCount: number
+    taskCount: number
+    edgeCount: number
+    batchCount: number
+    frontendCount: number
+    dataSourceCount: number
+    isValid: boolean
+  }
+  artifacts: DagGenerationArtifactRecord[]
+}
+
 export type ProcessStepRecord = {
   id: string
   kind: 'reasoning' | 'tool' | 'command' | 'workflow'
@@ -96,6 +136,7 @@ export type ProcessStepRecord = {
   attempt?: number
   iterationKind?: string
   buildExecutionSlice?: import('../typings').WorkflowBuildExecutionSlice
+  dagGeneration?: DagGenerationSnapshot
 }
 
 function getWorkflowUrl(): string {
@@ -268,6 +309,7 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
   if (!id || !['reasoning', 'tool', 'command', 'workflow'].includes(kind)) return undefined
   if (!['running', 'completed', 'failed', 'requires_user_input'].includes(status)) return undefined
   const checks = readIntegrationTestChecks(step.checks)
+  const dagGeneration = readDagGenerationSnapshot(step.dagGeneration)
   return {
     id,
     kind: kind as ProcessStepRecord['kind'],
@@ -284,7 +326,90 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
       step.buildExecutionSlice && typeof step.buildExecutionSlice === 'object'
         ? (step.buildExecutionSlice as import('../typings').WorkflowBuildExecutionSlice)
         : undefined,
-    ...(checks ? { checks } : {})
+    ...(checks ? { checks } : {}),
+    ...(dagGeneration ? { dagGeneration } : {})
+  }
+}
+
+/** 解析 DAG 生成快照，仅保留前端展示所需的受限结构。 */
+export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot | undefined {
+  const snapshot = objectValue(parseStructuredValue(value))
+  if (!Array.isArray(snapshot.stages)) return undefined
+
+  const stages = snapshot.stages.flatMap((item) => {
+    const stage = objectValue(item)
+    const id = boundedString(stage.id, 240)
+    const name = boundedString(stage.name, 500)
+    const status = stringValue(stage.status)
+    if (!id || !name || !['pending', 'running', 'completed', 'failed'].includes(status)) return []
+    return [
+      {
+        id,
+        name,
+        status: status as DagGenerationStageRecord['status'],
+        detail: boundedString(stage.detail, 1_000)
+      }
+    ]
+  })
+  if (stages.length === 0) return undefined
+
+  const tasks = Array.isArray(snapshot.tasks)
+    ? snapshot.tasks.flatMap((item) => {
+        const task = objectValue(item)
+        const id = boundedString(task.id, 240)
+        const title = boundedString(task.title, 500)
+        const status = stringValue(task.status)
+        if (!id || !title || !['pending', 'running', 'completed', 'failed'].includes(status)) {
+          return []
+        }
+        return [
+          {
+            id,
+            title,
+            owner: boundedString(task.owner, 80),
+            status: status as DagGenerationTaskRecord['status'],
+            dependencies: boundedStringList(task.dependencies, 200, 240),
+            changePaths: boundedStringList(task.changePaths, 200, 1_000),
+            acceptanceCriteria: boundedStringList(task.acceptanceCriteria, 100, 1_000)
+          }
+        ]
+      })
+    : []
+  const summary = objectValue(snapshot.summary)
+  const artifacts = Array.isArray(snapshot.artifacts)
+    ? snapshot.artifacts.flatMap((item) => {
+        const artifact = objectValue(item)
+        const id = boundedString(artifact.id, 240)
+        const name = boundedString(artifact.name, 500)
+        const kind = stringValue(artifact.kind)
+        if (!id || !name || !['internal', 'markdown'].includes(kind)) return []
+        return [
+          {
+            id,
+            name,
+            kind: kind as DagGenerationArtifactRecord['kind'],
+            status: 'saved' as const,
+            ...(boundedString(artifact.path, 1_000)
+              ? { path: boundedString(artifact.path, 1_000) }
+              : {})
+          }
+        ]
+      })
+    : []
+
+  return {
+    stages,
+    tasks,
+    summary: {
+      unitCount: nonNegativeInteger(summary.unitCount),
+      taskCount: nonNegativeInteger(summary.taskCount),
+      edgeCount: nonNegativeInteger(summary.edgeCount),
+      batchCount: nonNegativeInteger(summary.batchCount),
+      frontendCount: nonNegativeInteger(summary.frontendCount),
+      dataSourceCount: nonNegativeInteger(summary.dataSourceCount),
+      isValid: summary.isValid === true
+    },
+    artifacts
   }
 }
 
@@ -378,6 +503,25 @@ function objectValue(value: unknown): Record<string, unknown> {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+/** 裁剪单个协议字符串，避免不可信事件撑大持久化消息。 */
+function boundedString(value: unknown, limit: number): string {
+  return stringValue(value).trim().slice(0, limit)
+}
+
+/** 裁剪、去重协议字符串列表，并限制最大条数。 */
+function boundedStringList(value: unknown, itemLimit: number, textLimit: number): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map((item) => boundedString(item, textLimit)).filter(Boolean))].slice(
+    0,
+    itemLimit
+  )
+}
+
+/** 把协议摘要字段安全转换为非负整数。 */
+function nonNegativeInteger(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0
 }
 
 function messageContentToText(content: Message['content'] | undefined): string {

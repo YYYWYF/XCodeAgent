@@ -184,6 +184,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                     "projectPlan": update.get("project_plan"),
                     "clarification": clarification,
                     "requiresUserInput": True,
+                    "dagGeneration": update.get("dag_generation_progress"),
                 },
             }
         return {
@@ -245,6 +246,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "buildTaskPlan": update.get("build_task_plan"),
                 "taskCount": len(tasks),
                 "buildExecutionScope": update.get("build_execution_scope"),
+                "dagGeneration": update.get("dag_generation_progress"),
             },
         }
     if node_name == "build":
@@ -492,6 +494,7 @@ def _workflow_visual_payload(
         "needsRevision": summary.get("needsRevision"),
         "previewUrl": summary.get("previewUrl"),
         "tasks": result.get("tasks", []),
+        "dagGeneration": result.get("dag_generation_progress"),
         "buildSummary": result.get("build_summary", {}),
         "buildExecutionSlice": result.get("build_execution_slice"),
         "testReport": result.get("test_report", {}),

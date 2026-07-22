@@ -307,6 +307,34 @@ def build_workflow_ag_ui_stream(
                 if stream_mode == "custom":
                     progress = chunk if isinstance(chunk, dict) else {}
                     event_type = progress.get("type")
+                    if event_type == "prepare_build_tasks.progress":
+                        dag_generation = (
+                            progress.get("dag_generation")
+                            if isinstance(progress.get("dag_generation"), dict)
+                            else {}
+                        )
+                        process_sequence += 1
+                        task_attempt = _current_node_attempt(
+                            node_attempts, "prepare_build_tasks"
+                        )
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id("prepare_build_tasks", task_attempt),
+                            kind="workflow",
+                            status="running",
+                            title=f"正在执行 {_workflow_node_label('prepare_build_tasks')}",
+                            detail=str(
+                                progress.get("message") or "构建任务 DAG 进度已更新。"
+                            ),
+                            sequence=process_sequence,
+                            node_name="prepare_build_tasks",
+                            attempt=task_attempt,
+                            iteration_kind=_iteration_kind(
+                                "prepare_build_tasks", task_attempt
+                            ),
+                            dag_generation=dag_generation,
+                        )
+                        continue
                     if event_type == "workflow.build.progress":
                         progress_state = (
                             progress.get("state")
@@ -480,6 +508,11 @@ def build_workflow_ag_ui_stream(
                         build_execution_slice=(
                             update.get("build_execution_slice")
                             if node_name == "build"
+                            else None
+                        ),
+                        dag_generation=(
+                            update.get("dag_generation_progress")
+                            if node_name == "prepare_build_tasks"
                             else None
                         ),
                     )

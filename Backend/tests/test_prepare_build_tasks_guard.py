@@ -295,6 +295,14 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["mode"], "build_task_plan_generation_error")
         self.assertIn("page:dashboard", result["clarification"]["error"])
+        self.assertEqual(
+            next(
+                stage
+                for stage in result["dag_generation_progress"]["stages"]
+                if stage["id"] == "task_compilation"
+            )["status"],
+            "failed",
+        )
 
     def test_page_scope_renames_model_task_ids_that_conflict_with_retained_units(self) -> None:
         """页面 scope 模型复用其他 Unit 的任务 ID 时应重命名而不是失败。"""
@@ -662,6 +670,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(result["build_task_plan"]["prepared_by"]["mode"], "direct")
         self.assertTrue(dag_path.endswith(".xcodeagent/plans/BUILD_TASK_DAG.md"))
         self.assertIn("# Build Task DAG", dag_content)
+        self.assertTrue(
+            all(
+                stage["status"] == "completed"
+                for stage in result["dag_generation_progress"]["stages"]
+            )
+        )
 
     def test_prepare_build_tasks_confirmation_ignores_question_text_negative_words(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
@@ -724,6 +738,14 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "api_contract_consistency_error",
         )
         self.assertTrue(result["clarification"]["errors"])
+        self.assertEqual(
+            next(
+                stage
+                for stage in result["dag_generation_progress"]["stages"]
+                if stage["id"] == "contract_validation"
+            )["status"],
+            "failed",
+        )
 
 
 if __name__ == "__main__":

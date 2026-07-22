@@ -47,6 +47,7 @@ class ProjectState(TypedDict, total=False):
     build_execution_slice: dict[str, Any]
     build_context: dict[str, Any]
     build_task_plan: dict[str, Any]
+    dag_generation_progress: dict[str, Any]
     build_task_plan_path: str
     build_task_dag_path: str
     build_units: dict[str, dict[str, Any]]

@@ -1,5 +1,5 @@
 import type { WorkflowRunPayload } from '../typings'
-import { readIntegrationTestChecks } from './agUiAgent'
+import { readDagGenerationSnapshot, readIntegrationTestChecks } from './agUiAgent'
 import type { ProcessStepRecord } from './agUiAgent'
 
 const WORKFLOW_NODE_LABELS: Record<string, string> = {
@@ -26,8 +26,10 @@ export function processStepsForDisplay(
 
   const latestTestStepId = [...displaySteps]
     .reverse()
-    .find((step) => step.nodeName === 'integration_test' || step.id.startsWith('workflow:integration_test'))
-    ?.id
+    .find(
+      (step) =>
+        step.nodeName === 'integration_test' || step.id.startsWith('workflow:integration_test')
+    )?.id
   return displaySteps.map((step) => {
     if (step.id !== latestTestStepId) return step
     return {
@@ -69,17 +71,24 @@ function completedWorkflowProcessSteps(
     const status = processStepStatus(event.status)
     const label = event.node?.label || event.nodeName
     const detail = workflowEventDetail(event)
-    const stepId = attempt === 1
-      ? `workflow:${event.nodeName}`
-      : `workflow:${event.nodeName}:${attempt}`
-    const checks = event.nodeName === 'integration_test'
-      ? readIntegrationTestChecks(detail.testReport)
-      : undefined
-    const buildExecutionSlice = event.nodeName === 'build'
-      && detail.buildExecutionSlice
-      && typeof detail.buildExecutionSlice === 'object'
-      ? detail.buildExecutionSlice as ProcessStepRecord['buildExecutionSlice']
-      : undefined
+    const stepId =
+      attempt === 1 ? `workflow:${event.nodeName}` : `workflow:${event.nodeName}:${attempt}`
+    const checks =
+      event.nodeName === 'integration_test'
+        ? readIntegrationTestChecks(detail.testReport)
+        : undefined
+    const buildExecutionSlice =
+      event.nodeName === 'build' &&
+      detail.buildExecutionSlice &&
+      typeof detail.buildExecutionSlice === 'object'
+        ? (detail.buildExecutionSlice as ProcessStepRecord['buildExecutionSlice'])
+        : undefined
+    const dagGeneration =
+      event.nodeName === 'prepare_build_tasks'
+        ? readDagGenerationSnapshot(
+            detail.dagGeneration ?? workflow.state?.dagGeneration ?? workflow.result?.dagGeneration
+          )
+        : undefined
     const step: ProcessStepRecord = {
       id: stepId,
       kind: 'workflow',
@@ -91,7 +100,8 @@ function completedWorkflowProcessSteps(
       attempt,
       iterationKind: event.iterationKind,
       ...(checks ? { checks } : {}),
-      ...(buildExecutionSlice ? { buildExecutionSlice } : {})
+      ...(buildExecutionSlice ? { buildExecutionSlice } : {}),
+      ...(dagGeneration ? { dagGeneration } : {})
     }
     stepsById.set(step.id, step)
   }
@@ -133,7 +143,7 @@ function processStepTitlePrefix(status: ProcessStepRecord['status']): string {
 /** 安全读取 Workflow 节点事件中的结构化 detail。 */
 function workflowEventDetail(event: WorkflowRunPayload['events'][number]): Record<string, unknown> {
   const detail = event.data?.detail
-  return detail && typeof detail === 'object' ? detail as Record<string, unknown> : {}
+  return detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : {}
 }
 
 /** 从新旧 Workflow 快照字段读取节点时间线。 */

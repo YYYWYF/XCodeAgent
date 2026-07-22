@@ -15,6 +15,7 @@ import type { ReactElement } from 'react'
 import type { IntegrationTestCheckRecord, ProcessStepRecord } from '../../../../service/agUiAgent'
 import { cx } from '../../../../utils'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
+import DagGenerationProgress from './DagGenerationProgress'
 import './ProcessSteps.less'
 
 const { Text } = Typography
@@ -76,11 +77,14 @@ function ProcessStep({
 }): ReactElement {
   const hasChecks = Boolean(step.checks?.length)
   const hasBuildRun = Boolean(step.buildExecutionSlice)
-  const [open, setOpen] = useState(step.status === 'running' || hasChecks || hasBuildRun)
+  const hasDagGeneration = Boolean(step.dagGeneration)
+  const [open, setOpen] = useState(
+    step.status === 'running' || hasChecks || hasBuildRun || hasDagGeneration
+  )
 
   useEffect(() => {
-    if (step.status === 'running' || hasChecks || hasBuildRun) setOpen(true)
-  }, [hasBuildRun, hasChecks, step.status])
+    if (step.status === 'running' || hasChecks || hasBuildRun || hasDagGeneration) setOpen(true)
+  }, [hasBuildRun, hasChecks, hasDagGeneration, step.status])
 
   return (
     <details
@@ -90,6 +94,7 @@ function ProcessStep({
         step.status,
         hasChecks && 'has-checks',
         hasBuildRun && 'has-build-run',
+        hasDagGeneration && 'has-dag-generation',
         isLast && 'last'
       )}
       onToggle={(event) => setOpen(event.currentTarget.open)}
@@ -100,18 +105,16 @@ function ProcessStep({
         <Text>{settled ? settledTitle(step.title) : step.title}</Text>
       </summary>
       <div className={cx('process-step-detail')}>
-        {!hasChecks && step.detail && (
+        {!hasChecks && !hasDagGeneration && step.detail && (
           <DetailBlock
             label={step.kind === 'reasoning' ? '思考内容' : '动作详情'}
             value={step.detail}
           />
         )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
+        {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
         {step.buildExecutionSlice && (
-          <BuildExecutionRunCard
-            executionSlice={step.buildExecutionSlice}
-            status={step.status}
-          />
+          <BuildExecutionRunCard executionSlice={step.buildExecutionSlice} status={step.status} />
         )}
         {step.result && <DetailBlock label="执行结果" value={step.result} />}
       </div>

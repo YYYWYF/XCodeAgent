@@ -7,8 +7,9 @@ const MESSAGE_APPROVAL_STATUSES = new Set([
   'feedback'
 ])
 const PROCESS_STEP_KINDS = new Set(['reasoning', 'tool', 'command', 'workflow'])
-const PROCESS_STEP_STATUSES = new Set(['running', 'completed', 'failed'])
+const PROCESS_STEP_STATUSES = new Set(['running', 'completed', 'failed', 'requires_user_input'])
 const CHECK_STATUSES = new Set(['running', 'passed', 'skipped', 'failed'])
+const DAG_STAGE_STATUSES = new Set(['pending', 'running', 'completed', 'failed'])
 
 /** 规范化单条会话消息，并保留可恢复 Agent 执行界面的扩展字段。 */
 export function normalizePersistentSessionMessage(message: JsonRecord): JsonRecord {
@@ -102,6 +103,7 @@ function normalizeSessionProcessSteps(value: unknown): JsonRecord[] {
     const id = stringValue(valueItem.id)
     if (!id || !PROCESS_STEP_KINDS.has(kind) || !PROCESS_STEP_STATUSES.has(status)) continue
     const checks = normalizeSessionChecks(valueItem.checks)
+    const dagGeneration = normalizeSessionDagGeneration(valueItem.dagGeneration)
     steps.push({
       id,
       kind,
@@ -111,10 +113,90 @@ function normalizeSessionProcessSteps(value: unknown): JsonRecord[] {
       ...(typeof valueItem.result === 'string' ? { result: valueItem.result.slice(-24_000) } : {}),
       sequence: typeof valueItem.sequence === 'number' ? valueItem.sequence : 0,
       appendDetail: valueItem.appendDetail === true,
-      ...(checks.length > 0 ? { checks } : {})
+      ...(checks.length > 0 ? { checks } : {}),
+      ...(dagGeneration ? { dagGeneration } : {})
     })
   }
   return steps
+}
+
+/** 规范化 DAG 生成快照，仅持久化阶段、任务摘要和安全产物标签。 */
+function normalizeSessionDagGeneration(value: unknown): JsonRecord | undefined {
+  if (!isJsonRecord(value) || !Array.isArray(value.stages)) return undefined
+  const stages = value.stages
+    .filter(isJsonRecord)
+    .map((stage) => ({
+      id: stringValue(stage.id).slice(0, 240),
+      name: stringValue(stage.name).slice(0, 500),
+      status: stringValue(stage.status),
+      detail: stringValue(stage.detail).slice(0, 1_000)
+    }))
+    .filter((stage) => stage.id && stage.name && DAG_STAGE_STATUSES.has(stage.status))
+  if (stages.length === 0) return undefined
+
+  const tasks = Array.isArray(value.tasks)
+    ? value.tasks
+        .filter(isJsonRecord)
+        .map((task) => ({
+          id: stringValue(task.id).slice(0, 240),
+          title: stringValue(task.title).slice(0, 500),
+          owner: stringValue(task.owner).slice(0, 80),
+          status: DAG_STAGE_STATUSES.has(stringValue(task.status))
+            ? stringValue(task.status)
+            : 'pending',
+          dependencies: normalizeSessionStringList(task.dependencies, 200, 240),
+          changePaths: normalizeSessionStringList(task.changePaths, 200, 1_000),
+          acceptanceCriteria: normalizeSessionStringList(task.acceptanceCriteria, 100, 1_000)
+        }))
+        .filter((task) => task.id && task.title)
+    : []
+  const summary = isJsonRecord(value.summary) ? value.summary : {}
+  const artifacts = Array.isArray(value.artifacts)
+    ? value.artifacts
+        .filter(isJsonRecord)
+        .map((artifact) => ({
+          id: stringValue(artifact.id).slice(0, 240),
+          name: stringValue(artifact.name).slice(0, 500),
+          kind: artifact.kind === 'markdown' ? 'markdown' : 'internal',
+          status: 'saved',
+          ...(artifact.kind === 'markdown' && typeof artifact.path === 'string'
+            ? { path: artifact.path.slice(0, 1_000) }
+            : {})
+        }))
+        .filter((artifact) => artifact.id && artifact.name)
+    : []
+
+  return {
+    stages,
+    tasks,
+    summary: {
+      unitCount: nonNegativeSessionInteger(summary.unitCount),
+      taskCount: nonNegativeSessionInteger(summary.taskCount),
+      edgeCount: nonNegativeSessionInteger(summary.edgeCount),
+      batchCount: nonNegativeSessionInteger(summary.batchCount),
+      frontendCount: nonNegativeSessionInteger(summary.frontendCount),
+      dataSourceCount: nonNegativeSessionInteger(summary.dataSourceCount),
+      isValid: summary.isValid === true
+    },
+    artifacts
+  }
+}
+
+/** 裁剪并去重 DAG 快照中的字符串列表。 */
+function normalizeSessionStringList(
+  value: unknown,
+  itemLimit: number,
+  textLimit: number
+): string[] {
+  if (!Array.isArray(value)) return []
+  return [
+    ...new Set(value.map((item) => stringValue(item).trim().slice(0, textLimit)).filter(Boolean))
+  ].slice(0, itemLimit)
+}
+
+/** 把 DAG 摘要字段转换为非负整数。 */
+function nonNegativeSessionInteger(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0
 }
 
 /** 规范化集成测试检查项，只持久化安全的可见摘要。 */
