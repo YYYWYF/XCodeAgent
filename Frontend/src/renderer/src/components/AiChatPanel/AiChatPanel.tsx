@@ -9,6 +9,7 @@ import type {
   DevelopmentPlanningPageOption,
   ApplicationMenuItem,
   EditorMode,
+  WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../typings'
 import { cx, getInitialPreviewUrl, openPreviewWindow, storePreviewUrl } from '../../utils'
@@ -18,6 +19,7 @@ import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import MessageList from './components/MessageList'
 import PageContextHeader from './components/PageContextHeader'
 import SessionSidebar from './components/SessionSidebar'
+import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import DetailConfirmationPageSelector from '../DetailConfirmationPageSelector'
 import SettingsPage from '../SettingsPage/SettingsPage'
@@ -39,13 +41,59 @@ type Props = {
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
-  onPlanningArtifactsRefresh: () => void
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
 }
 
 type ActiveView = 'chat' | 'skills' | 'files' | 'settings'
+
+type ActiveApiEndpointTarget = {
+  apiContractId: string
+  endpointId: string
+  endpointKey: string
+  label: string
+}
+
+type ActiveDetailTarget =
+  | { type: 'none' }
+  | { type: 'page'; pageId: string }
+  | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
+
+/** 判断 Workflow 是否已经返回详细设计确认卡片，避免外层选择器遮住待确认内容。 */
+function workflowHasDetailReview(workflow: unknown): boolean {
+  if (!workflow || typeof workflow !== 'object') return false
+  const payload = workflow as {
+    events?: Array<{ data?: Record<string, unknown> }>
+    result?: Record<string, unknown>
+    state?: Record<string, unknown>
+    summary?: Record<string, unknown>
+  }
+  return [
+    payload.summary?.clarification,
+    payload.state?.clarification,
+    payload.result?.clarification,
+    ...((payload.events || []).map((event) => {
+      const detail = event.data?.detail
+      return detail && typeof detail === 'object'
+        ? (detail as Record<string, unknown>).clarification
+        : undefined
+    }))
+  ].some(
+    (clarification) =>
+      clarification &&
+      typeof clarification === 'object' &&
+      (clarification as Record<string, unknown>).mode === 'detail_review'
+  )
+}
+
+/** 从当前消息历史里读取最后一个 Workflow，弥补 activeWorkflow 在运行结束瞬间的状态空窗。 */
+function latestMessageWorkflow(messages: Array<{ workflow?: unknown }>): unknown {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].workflow) return messages[index].workflow
+  }
+  return undefined
+}
 
 /** 按页面名称递归查找对应的菜单配置。 */
 function findPageMenuItem(
@@ -87,13 +135,14 @@ export default function AiChatPanel({
   developmentPlanningApiContracts,
   editorMode,
   onApplicationUpdate,
-  onPlanningArtifactsRefresh,
   onReturnWelcome,
   onThemeChange,
   theme
 }: Props): ReactElement {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
-  const [activePageId, setActivePageId] = useState('')
+  const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
+  const [detailTargetInteractionStarted, setDetailTargetInteractionStarted] = useState(false)
+  const [detailDesignGenerationActive, setDetailDesignGenerationActive] = useState(false)
   const [previewError, setPreviewError] = useState('')
   const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const handledPreviewTargetRef = useRef('')
@@ -109,6 +158,9 @@ export default function AiChatPanel({
     setRightPanel,
     splitDragging
   } = useAssistantPreviewLayout()
+  const activePageId = activeDetailTarget.type === 'page' ? activeDetailTarget.pageId : ''
+  const activeApiEndpoint =
+    activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activePageOption = useMemo(
     () => developmentPlanningPages.find((page) => page.pageId === activePageId),
     [activePageId, developmentPlanningPages]
@@ -130,11 +182,13 @@ export default function AiChatPanel({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    createEndpointSession,
     createPageSession,
     deletingSessionId,
     draft,
     draftKey,
     ensureActiveSession,
+    ensureEndpointSession,
     ensurePageSession,
     getSessionMessages,
     handleCreateSessionFromList,
@@ -161,7 +215,7 @@ export default function AiChatPanel({
     activeWorkflow,
     error,
     handleSend,
-    handleStartDataSourceDetailConfirmation,
+    handleStartEndpointDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,
@@ -177,12 +231,16 @@ export default function AiChatPanel({
     draftKey,
     editorMode,
     ensureActiveSession,
+    ensureEndpointSession,
     ensurePageSession,
     getSessionMessages,
     persistSession,
     onPreviewReady: handlePreviewReady,
     publishAiMessage,
     runningSessionsRef,
+    selectedApiContractId: activeApiEndpoint?.apiContractId,
+    selectedEndpointId: activeApiEndpoint?.endpointId,
+    selectedEndpointLabel: activeApiEndpoint?.label,
     selectedSkills,
     selectedPageId: activePageOption?.pageId || activePageOption?.key,
     selectedPageLabel: activePageOption?.label,
@@ -209,33 +267,140 @@ export default function AiChatPanel({
     () => findPageMenuItem(application.menus.items, activePageTitle),
     [activePageTitle, application.menus.items]
   )
-  const initialPageSelectionRequired = developmentPlanningReady && !hasPageDesigns
-  const activePageDesigned = Boolean(activePageOption?.designed)
+  const activeApiEndpointOption = useMemo(() => {
+    if (!activeApiEndpoint) return undefined
+    for (const contract of developmentPlanningApiContracts) {
+      for (const [endpointIndex, endpoint] of contract.endpoints.entries()) {
+        const endpointId = endpoint.id || String(endpointIndex + 1)
+        const apiContractId = endpoint.apiContractId || contract.id
+        const endpointKey = `${apiContractId}:${endpointId}`
+        if (
+          endpointKey === activeApiEndpoint.endpointKey ||
+          (
+            apiContractId === activeApiEndpoint.apiContractId &&
+            endpointId === activeApiEndpoint.endpointId
+          )
+        ) {
+          return { contract, endpoint, endpointId, endpointKey, apiContractId }
+        }
+      }
+    }
+    return undefined
+  }, [activeApiEndpoint, developmentPlanningApiContracts])
+  const activeHeaderTarget = activeApiEndpoint
+    ? {
+        type: 'api' as const,
+        title: activeApiEndpoint.label,
+        path: activeApiEndpointOption?.endpoint.path || activeApiEndpoint.label.replace(/^[A-Z]+\s+/, ''),
+        description:
+          activeApiEndpointOption?.endpoint.summary ||
+          `接口来自 ${activeApiEndpointOption?.contract.label || activeApiEndpoint.apiContractId}`,
+        detailButtonLabel: 'API 详情',
+        detailTitle: 'API 详情',
+        keyFeatures: [
+          `Method：${activeApiEndpointOption?.endpoint.method || activeApiEndpoint.label.split(' ')[0] || 'API'}`,
+          `Contract：${activeApiEndpointOption?.contract.label || activeApiEndpoint.apiContractId}`,
+          activeApiEndpointOption?.endpoint.designed || activeApiEndpointOption?.endpoint.hasDetailPlan
+            ? '状态：已设计'
+            : '状态：待设计'
+        ]
+      }
+    : {
+        type: 'page' as const,
+        title: activePageTitle,
+        path: activePageOption?.path || activePage?.path || '/',
+        description:
+          activePageOption?.purpose ||
+          activePage?.purpose ||
+          application.senario ||
+          '当前应用页面',
+        detailButtonLabel: '页面详情',
+        detailTitle: '页面详情',
+        keyFeatures: activePage?.keyFeatures || []
+      }
+  const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
+  const activeWorkflowPhase = String(
+    activeWorkflow?.summary?.phase ||
+      activeWorkflow?.result?.phase ||
+      activeWorkflow?.state?.phase ||
+      ''
+  )
+  const detailConfirmationWaitingReview =
+    !loading && detailTargetInteractionStarted && (
+      activeWorkflowPhase === 'detail_confirmation' ||
+      workflowHasDetailReview(latestWorkflowForDisplay)
+    )
+  const detailProgressVisible =
+    loading &&
+    detailTargetInteractionStarted &&
+    detailDesignGenerationActive &&
+    developmentPlanningReady &&
+    Boolean(activeApiEndpoint || activePageOption) &&
+    !detailConfirmationWaitingReview
+  const hasEndpointDesignTargets = developmentPlanningApiContracts.some(
+    (contract) => contract.endpoints.length > 0
+  )
+  const hasUndesignedPageTargets = developmentPlanningPages.some(
+    (page) => !page.designed && !page.hasDetailPlan
+  )
+  const hasDesignSelectionTargets =
+    !hasPageDesigns || hasUndesignedPageTargets || hasEndpointDesignTargets
+  const hasActiveDetailWorkflow =
+    detailTargetInteractionStarted &&
+    Boolean(activeApiEndpoint || activePageOption || activeSession || latestWorkflowForDisplay)
+  const detailTargetSelectionRequired =
+    developmentPlanningReady &&
+    hasDesignSelectionTargets &&
+    !hasActiveDetailWorkflow &&
+    !detailProgressVisible &&
+    !detailConfirmationWaitingReview
   const activeSessionUpdatedAt = sessions.find(
     (session) => session.id === activeSessionId
   )?.updatedAt
 
   // 页面目录刷新时保留当前页面上下文；仅在清单稳定且当前页面失效时回退。
   useEffect(() => {
-    setActivePageId((currentPageId) => {
-      if (developmentPlanningPages.length === 0) return currentPageId
+    if (activeApiEndpoint) return
+    if (detailTargetSelectionRequired) return
+    setActiveDetailTarget((currentTarget) => {
+      if (currentTarget.type === 'endpoint') return currentTarget
+      if (currentTarget.type === 'none') return currentTarget
+      const currentPageId = currentTarget.pageId
+      if (developmentPlanningPages.length === 0) return currentTarget
       if (developmentPlanningPages.some((page) => page.pageId === currentPageId)) {
-        return currentPageId
+        return currentTarget
       }
-      return (
+      const fallbackPageId =
         developmentPlanningPages.find((page) => page.designed)?.pageId ||
         developmentPlanningPages[0]?.pageId ||
         ''
-      )
+      return fallbackPageId ? { type: 'page', pageId: fallbackPageId } : { type: 'none' }
     })
-  }, [developmentPlanningPages])
+  }, [activeApiEndpoint, developmentPlanningPages, detailTargetSelectionRequired])
 
-  // 打开历史页面会话时同步页面上下文，避免标题与消息归属不一致。
+  // 打开历史页面或接口会话时同步目标上下文，避免标题与消息归属不一致。
   useEffect(() => {
-    const sessionPageId = sessions.find((session) => session.id === activeSessionId)?.pageId
-    if (!sessionPageId) return
+    const session = sessions.find((item) => item.id === activeSessionId)
+    if (!session) return
+    if (session?.apiContractId && session.endpointId) {
+      setActiveDetailTarget({
+        type: 'endpoint',
+        apiContractId: session.apiContractId,
+        endpointId: session.endpointId,
+        endpointKey: `${session.apiContractId}:${session.endpointId}`,
+        label: session.endpointLabel || session.title
+      })
+      return
+    }
+    const sessionPageId = session?.pageId
+    if (!sessionPageId) {
+      setActiveDetailTarget({ type: 'none' })
+      return
+    }
     const resolvedPageId = resolvePlanningPageId(developmentPlanningPages, sessionPageId)
-    if (resolvedPageId) setActivePageId(resolvedPageId)
+    if (resolvedPageId) {
+      setActiveDetailTarget({ type: 'page', pageId: resolvedPageId })
+    }
   }, [activeSessionId, developmentPlanningPages, sessions])
 
   /** 在右侧工作区打开当前页面预览。 */
@@ -288,8 +453,12 @@ export default function AiChatPanel({
     setActiveView('settings')
   }
 
+  /** 新建普通对话时退出页面/API 目标上下文，避免后续消息被旧目标接管。 */
   const handleCreateChatSession = (): void => {
     setActiveView('chat')
+    setDetailTargetInteractionStarted(true)
+    setDetailDesignGenerationActive(false)
+    setActiveDetailTarget({ type: 'none' })
     handleCreateSessionFromList()
   }
 
@@ -298,7 +467,9 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
-    setActivePageId(pageId)
+    setDetailTargetInteractionStarted(true)
+    setDetailDesignGenerationActive(false)
+    setActiveDetailTarget({ type: 'page', pageId })
     await createPageSession(pageId, pageLabel)
   }
 
@@ -307,8 +478,48 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
-    setActivePageId(page.pageId)
+    setDetailTargetInteractionStarted(true)
+    setDetailDesignGenerationActive(false)
+    setActiveDetailTarget({ type: 'page', pageId: page.pageId })
     handleSelectPage(page.pageId).catch(() => undefined)
+  }
+
+  /** 从应用大纲切换 API；页面和 API 目标互斥，因此会清空当前页面选中态。 */
+  const handleApiEndpointSelect = (target: ActiveApiEndpointTarget): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    setDetailTargetInteractionStarted(true)
+    setDetailDesignGenerationActive(false)
+    setActiveDetailTarget({ ...target, type: 'endpoint' })
+    const existingSession = sessions.find(
+      (session) =>
+        session.apiContractId === target.apiContractId &&
+        session.endpointId === target.endpointId &&
+        session.messageCount > 0
+    )
+    if (existingSession) handleOpenSession(existingSession.id).catch(() => undefined)
+  }
+
+  /** 为当前 API endpoint 新建一条独立会话历史。 */
+  const handleCreateEndpointSession = async (
+    apiContractId: string,
+    endpointId: string,
+    endpointLabel: string
+  ): Promise<void> => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    setDetailTargetInteractionStarted(true)
+    setDetailDesignGenerationActive(false)
+    setActiveDetailTarget({
+      type: 'endpoint',
+      apiContractId,
+      endpointId,
+      endpointKey: `${apiContractId}:${endpointId}`,
+      label: endpointLabel
+    })
+    await createEndpointSession(apiContractId, endpointId, endpointLabel)
   }
 
   /** 启动当前页面的详细设计；解锁状态仍以后续持久化目录检查为准。 */
@@ -317,34 +528,58 @@ export default function AiChatPanel({
     pageLabel: string,
     hasDetailPlan: boolean
   ): Promise<void> => {
-    setActivePageId(pageId)
+    setDetailTargetInteractionStarted(true)
+    setDetailDesignGenerationActive(!hasDetailPlan)
+    setActiveDetailTarget({ type: 'page', pageId })
     const started = await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan)
-    if (started) onPlanningArtifactsRefresh()
+    if (!started) setDetailDesignGenerationActive(false)
   }
 
-  /** 启动当前数据源的详细设计；解锁状态仍以后续持久化目录检查为准。 */
-  const handleStartDataSourceDesign = async (
-    dataSourceId: string,
-    dataSourceLabel: string,
-    hasDetailPlan: boolean
+  /** 启动当前接口的详细设计；解锁状态仍以后续持久化目录检查为准。 */
+  const handleStartEndpointDesign = async (
+    endpointTargetId: string,
+    endpointLabel: string,
+    hasDetailPlan: boolean,
+    targetContext?: {
+      apiContractId?: string
+      endpointId?: string
+    }
   ): Promise<void> => {
-    const started = await handleStartDataSourceDetailConfirmation(
-      dataSourceId,
-      dataSourceLabel,
+    setDetailTargetInteractionStarted(true)
+    setDetailDesignGenerationActive(!hasDetailPlan)
+    if (targetContext?.apiContractId) {
+      setActiveDetailTarget({
+        type: 'endpoint',
+        apiContractId: targetContext.apiContractId,
+        endpointId: targetContext.endpointId || endpointTargetId,
+        endpointKey: `${targetContext.apiContractId}:${targetContext.endpointId || endpointTargetId}`,
+        label: endpointLabel
+      })
+    } else {
+      setActiveDetailTarget({ type: 'none' })
+    }
+    const started = await handleStartEndpointDetailConfirmation({
+      apiContractId: targetContext?.apiContractId,
+      endpointId: targetContext?.endpointId || endpointTargetId,
+      endpointLabel,
       hasDetailPlan
-    )
-    if (started) onPlanningArtifactsRefresh()
+    })
+    if (!started) setDetailDesignGenerationActive(false)
   }
 
-  /** 根据弹框里选择的目标类型启动页面或数据源详细设计。 */
+  /** 根据弹框里选择的目标类型启动页面或接口详细设计。 */
   const handleStartDetailDesign = async (
-    targetType: 'page' | 'data_source',
+    targetType: 'page' | 'endpoint',
     targetId: string,
     targetLabel: string,
-    hasDetailPlan: boolean
+    hasDetailPlan: boolean,
+    targetContext?: {
+      apiContractId?: string
+      endpointId?: string
+    }
   ): Promise<void> => {
-    if (targetType === 'data_source') {
-      await handleStartDataSourceDesign(targetId, targetLabel, hasDetailPlan)
+    if (targetType === 'endpoint') {
+      await handleStartEndpointDesign(targetId, targetLabel, hasDetailPlan, targetContext)
       return
     }
     await handleStartPageDesign(targetId, targetLabel, hasDetailPlan)
@@ -352,9 +587,32 @@ export default function AiChatPanel({
 
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
     setActiveView('chat')
-    const sessionPageId = sessions.find((session) => session.id === sessionId)?.pageId
-    if (sessionPageId) setActivePageId(sessionPageId)
+    setDetailTargetInteractionStarted(true)
+    setDetailDesignGenerationActive(false)
+    const session = sessions.find((item) => item.id === sessionId)
+    if (session?.apiContractId && session.endpointId) {
+      setActiveDetailTarget({
+        type: 'endpoint',
+        apiContractId: session.apiContractId,
+        endpointId: session.endpointId,
+        endpointKey: `${session.apiContractId}:${session.endpointId}`,
+        label: session.endpointLabel || session.title
+      })
+    } else if (session?.pageId) {
+      setActiveDetailTarget({ type: 'page', pageId: session.pageId })
+    } else {
+      setActiveDetailTarget({ type: 'none' })
+    }
     await handleOpenSession(sessionId)
+  }
+
+  /** 提交详细设计确认后进入 DAG/构建链路，停止使用详细设计生成进度遮罩。 */
+  const handleSubmitWorkflowClarification = async (
+    workflow: WorkflowRunPayload,
+    answers: ClarificationAnswers
+  ): Promise<void> => {
+    setDetailDesignGenerationActive(false)
+    await handleSubmitClarification(workflow, answers)
   }
 
   /** 用户关闭技能后立即清理当前会话草稿中的同名标签。 */
@@ -382,10 +640,12 @@ export default function AiChatPanel({
           application={application}
           deletingSessionId={deletingSessionId}
           loadingSessions={loadingSessions}
-          outlineLocked={initialPageSelectionRequired}
+          outlineLocked={detailTargetSelectionRequired}
           onCreateSession={handleCreateChatSession}
           onCreatePageSession={handleCreatePageSession}
+          onCreateEndpointSession={handleCreateEndpointSession}
           onDeleteSession={handleDeleteSession}
+          onApiEndpointSelect={handleApiEndpointSelect}
           onOpenSession={handleOpenChatSession}
           onPageSelect={handlePageSelect}
           onReturnWelcome={onReturnWelcome}
@@ -395,6 +655,7 @@ export default function AiChatPanel({
           onThemeChange={onThemeChange}
           pages={developmentPlanningPages}
           apiContracts={developmentPlanningApiContracts}
+          selectedApiEndpointKey={activeApiEndpoint?.endpointKey || ''}
           selectedPageId={activePageId}
           filesActive={activeView === 'files'}
           sessionError={sessionError}
@@ -415,7 +676,21 @@ export default function AiChatPanel({
           <AgentFilesPage />
         ) : activeView === 'settings' ? (
           <SettingsPage application={application} onSaved={onApplicationUpdate} />
-        ) : initialPageSelectionRequired ? (
+        ) : detailProgressVisible ? (
+          <div className={cx('ai-chat-main')}>
+            <DetailConfirmationPageSelector
+              apiContracts={developmentPlanningApiContracts}
+              disabled={loading || workspaceBusy}
+              generating
+              loading={false}
+              onStart={handleStartDetailDesign}
+              pages={developmentPlanningPages}
+              selectedEndpoint={activeApiEndpoint}
+              selectedPage={activeApiEndpoint ? undefined : activePageOption}
+              workflowEvents={activeWorkflow?.events}
+            />
+          </div>
+        ) : detailTargetSelectionRequired ? (
           <div className={cx('ai-chat-main')}>
             <DetailConfirmationPageSelector
               apiContracts={developmentPlanningApiContracts}
@@ -424,27 +699,26 @@ export default function AiChatPanel({
               loading={!developmentPlanningReady}
               onStart={handleStartDetailDesign}
               pages={developmentPlanningPages}
+              selectedEndpoint={activeApiEndpoint}
               workflowEvents={activeWorkflow?.events}
             />
           </div>
         ) : (
           <div className={cx('ai-chat-main')}>
             <PageContextHeader
-              description={
-                activePageOption?.purpose ||
-                activePage?.purpose ||
-                application.senario ||
-                '当前应用页面'
-              }
-              isPageOpen={rightPanel?.type === 'preview'}
-              keyFeatures={activePage?.keyFeatures || []}
+              description={activeHeaderTarget.description}
+              detailButtonLabel={activeHeaderTarget.detailButtonLabel}
+              detailTitle={activeHeaderTarget.detailTitle}
+              isPageOpen={activeHeaderTarget.type === 'page' && rightPanel?.type === 'preview'}
+              keyFeatures={activeHeaderTarget.keyFeatures}
               lastAnalyzedAt={activeSessionUpdatedAt}
               onClosePage={handleClosePage}
               onOpenFullscreenPage={handleOpenFullscreenPreview}
               onOpenPage={handleOpenPage}
-              pagePath={activePageOption?.path || activePage?.path || '/'}
-              pageTitle={activePageTitle}
+              pagePath={activeHeaderTarget.path}
+              pageTitle={activeHeaderTarget.title}
               previewAvailable={showPreviewActions}
+              targetType={activeHeaderTarget.type}
               theme={theme}
             />
 
@@ -464,7 +738,7 @@ export default function AiChatPanel({
               messages={messages}
               onOpenCodeChangeFile={handleOpenCodeChangeFile}
               onRevertCodeChanges={requestCodeChangeRevert}
-              onSubmitClarification={handleSubmitClarification}
+              onSubmitClarification={handleSubmitWorkflowClarification}
               revertingCodeChangeIds={revertingCodeChangeIds}
             />
 
@@ -484,18 +758,10 @@ export default function AiChatPanel({
               workspaceRoot={workspaceRoot}
             />
 
-            {activePageOption && !activePageDesigned ? (
-              <DetailConfirmationPageSelector
-                disabled={loading || workspaceBusy}
-                generating={loading}
-                loading={false}
-                mode="locked"
-                onStart={handleStartDetailDesign}
-                pages={developmentPlanningPages}
-                selectedPage={activePageOption}
-                workflowEvents={activeWorkflow?.events}
-              />
-            ) : null}
+            {/*
+              暂停页面详细设计锁定层：定位接口设计进度消失问题期间，
+              不再让页面锁定状态参与主内容区的渲染与遮罩。
+            */}
           </div>
         )}
       </div>

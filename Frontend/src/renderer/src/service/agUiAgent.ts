@@ -23,7 +23,9 @@ export type SendWorkflowMessageOptions = {
   originalRequest?: string
   selectedSkillNames?: string[]
   selectedPageId?: string
-  selectedDataSourceId?: string
+  selectedApiContractId?: string
+  selectedEndpointId?: string
+  detailTargetType?: 'page' | 'endpoint'
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
@@ -47,7 +49,9 @@ export function buildWorkflowForwardedProps(
     originalRequest: options.originalRequest,
     selectedSkillNames: options.selectedSkillNames,
     selectedPageId: options.selectedPageId,
-    selectedDataSourceId: options.selectedDataSourceId,
+    selectedApiContractId: options.selectedApiContractId,
+    selectedEndpointId: options.selectedEndpointId,
+    detailTargetType: options.detailTargetType,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
     buildExecutionScope: options.workflowDebug?.enabled

@@ -755,7 +755,7 @@ def _unit_source_refs(
     unit: dict[str, Any],
     build_context: dict[str, Any],
 ) -> dict[str, Any]:
-    """按 Unit 类型映射到 ProjectPlan、PageDetail 或 DataSourceDetail 来源。"""
+    """按 Unit 类型映射到 ProjectPlan、PageDetail 或 EndpointDetail 来源。"""
 
     existing = _dict_value(unit.get("source_refs"))
     target = _dict_value(build_context.get("target"))
@@ -769,14 +769,13 @@ def _unit_source_refs(
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
         }
     if unit_id.startswith("data-source:"):
-        source_id = unit_id.removeprefix("data-source:")
         return {
             **existing,
-            "type": "data_source_detail",
+            "type": "endpoint_detail",
             "target": target,
-            "data_source_detail": _matching_data_source_ref(
-                refs.get("data_source_details"),
-                source_id,
+            "endpoint_details": _matching_endpoint_refs(
+                refs.get("endpoint_details"),
+                _string_list(build_context.get("endpoint_ids")),
             ),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
         }
@@ -813,13 +812,17 @@ def _unit_fingerprint_payload(
     }
 
 
-def _matching_data_source_ref(value: Any, source_id: str) -> dict[str, Any]:
-    """在当前页面直接数据源引用中查找指定数据源详情。"""
+def _matching_endpoint_refs(value: Any, endpoint_ids: list[str]) -> list[dict[str, Any]]:
+    """在当前构建上下文中查找指定 endpoint 详情引用。"""
 
-    for item in value if isinstance(value, list) else []:
-        if isinstance(item, dict) and str(item.get("id") or "") == source_id:
-            return dict(item)
-    return {}
+    if not isinstance(value, list):
+        return []
+    allowed_ids = set(endpoint_ids)
+    return [
+        dict(item)
+        for item in value
+        if isinstance(item, dict) and str(item.get("id") or "") in allowed_ids
+    ]
 
 
 def _dict_value(value: Any) -> dict[str, Any]:

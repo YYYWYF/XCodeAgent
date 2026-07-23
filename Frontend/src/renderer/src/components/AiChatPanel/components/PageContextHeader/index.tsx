@@ -1,4 +1,5 @@
 import {
+  ApiOutlined,
   EllipsisOutlined,
   ExpandOutlined,
   ExportOutlined,
@@ -13,6 +14,8 @@ import './PageContextHeader.less'
 const { Text } = Typography
 
 type PageContextHeaderProps = {
+  detailButtonLabel?: string
+  detailTitle?: string
   description: string
   isPageOpen?: boolean
   keyFeatures: string[]
@@ -23,6 +26,7 @@ type PageContextHeaderProps = {
   pagePath: string
   pageTitle: string
   previewAvailable: boolean
+  targetType?: 'page' | 'api'
   theme: 'light' | 'dark'
 }
 
@@ -37,15 +41,17 @@ function formatAnalysisAge(value?: number): string {
   return `${Math.floor(elapsedHours / 24)} 天前`
 }
 
-/** 统一页面路由的展示格式，确保以斜杠开头。 */
-function normalizePagePath(value: string): string {
+/** 统一页面路由或 API 路径的展示格式，确保以斜杠开头。 */
+function normalizeDisplayPath(value: string): string {
   const normalizedValue = value.trim()
   if (!normalizedValue) return '/'
   return normalizedValue.startsWith('/') ? normalizedValue : `/${normalizedValue}`
 }
 
-/** 渲染当前页面的名称、路由、用途与预览操作。 */
+/** 渲染当前页面或 API endpoint 的名称、路径、说明与操作。 */
 export default function PageContextHeader({
+  detailButtonLabel,
+  detailTitle,
   description,
   isPageOpen = false,
   keyFeatures,
@@ -56,6 +62,7 @@ export default function PageContextHeader({
   pagePath,
   pageTitle,
   previewAvailable,
+  targetType = 'page',
   theme
 }: PageContextHeaderProps): ReactElement {
   /** 处理打开/关闭页面按钮点击。 */
@@ -88,18 +95,20 @@ export default function PageContextHeader({
       </Menu.Item>
     </Menu>
   )
+  const pathText = normalizeDisplayPath(pagePath)
+  const canPreviewPage = targetType === 'page' && previewAvailable
 
   return (
-    <section className={cx('page-context-header')} aria-label="当前页面信息">
+    <section className={cx('page-context-header')} aria-label={targetType === 'api' ? '当前 API 信息' : '当前页面信息'}>
       <div className={cx('page-context-primary')}>
         <span className={cx('page-context-icon')} aria-hidden="true">
-          <FileTextOutlined />
+          {targetType === 'api' ? <ApiOutlined /> : <FileTextOutlined />}
         </span>
         <div className={cx('page-context-copy')}>
           <div className={cx('page-context-title-row')}>
             <Text className={cx('page-context-title')} strong title={pageTitle}>{pageTitle}</Text>
-            <Text className={cx('page-context-path')} code title={normalizePagePath(pagePath)}>
-              {normalizePagePath(pagePath)}
+            <Text className={cx('page-context-path')} code title={pathText}>
+              {pathText}
             </Text>
           </div>
           <Text className={cx('page-context-description')} title={description}>{description}</Text>
@@ -115,29 +124,33 @@ export default function PageContextHeader({
           content={detailContent}
           overlayClassName={cx('page-context-popover', theme === 'dark' && 'dark')}
           placement="bottomRight"
-          title="页面详情"
+          title={detailTitle || (targetType === 'api' ? 'API 详情' : '页面详情')}
           trigger="click"
         >
-          <Button>页面详情</Button>
+          <Button>{detailButtonLabel || (targetType === 'api' ? 'API 详情' : '页面详情')}</Button>
         </Popover>
-        <Button
-          className={cx('page-context-open-button')}
-          disabled={!previewAvailable}
-          icon={isPageOpen ? <CloseOutlined /> : <ExportOutlined />}
-          onClick={handleTogglePage}
-          type="primary"
-        >
-          {isPageOpen ? '关闭页面' : '打开页面'}
-        </Button>
-        <Dropdown
-          disabled={!previewAvailable}
-          overlay={moreMenu}
-          overlayClassName={cx('page-context-dropdown', theme === 'dark' && 'dark')}
-          placement="bottomRight"
-          trigger={['click']}
-        >
-          <Button aria-label="更多页面操作" className={cx('page-context-more-button')} icon={<EllipsisOutlined />} />
-        </Dropdown>
+        {targetType === 'page' ? (
+          <>
+            <Button
+              className={cx('page-context-open-button')}
+              disabled={!canPreviewPage}
+              icon={isPageOpen ? <CloseOutlined /> : <ExportOutlined />}
+              onClick={handleTogglePage}
+              type="primary"
+            >
+              {isPageOpen ? '关闭页面' : '打开页面'}
+            </Button>
+            <Dropdown
+              disabled={!canPreviewPage}
+              overlay={moreMenu}
+              overlayClassName={cx('page-context-dropdown', theme === 'dark' && 'dark')}
+              placement="bottomRight"
+              trigger={['click']}
+            >
+              <Button aria-label="更多页面操作" className={cx('page-context-more-button')} icon={<EllipsisOutlined />} />
+            </Dropdown>
+          </>
+        ) : null}
       </div>
     </section>
   )

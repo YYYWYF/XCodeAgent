@@ -1,4 +1,4 @@
-"""按页面或数据源定向加载 Build DAG 编译上下文。"""
+"""按页面或后端数据单元定向加载 Build DAG 编译上下文。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ def resolve_target_build_context(
     target_id: str,
     project_plan_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """解析目标详情、直接 API/数据源依赖与编译所需的 Unit 标识。"""
+    """解析目标详情、直接 endpoint/API 依赖与编译所需的 Unit 标识。"""
 
     if target_type == "page":
         return _page_context(project_plan, target_id, project_plan_path)
@@ -28,7 +28,7 @@ def _page_context(
     page_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """只解析指定页面及其 endpoint 直接关联的数据源详情。"""
+    """只解析指定页面及其直接依赖的 endpoint 详情。"""
 
     page = _required_item(project_plan.get("frontend_pages"), "pageId", page_id, "page")
     page_detail = _load_external_detail(
@@ -50,24 +50,26 @@ def _page_context(
         if source_id not in source_ids:
             source_ids.append(source_id)
 
-    data_source_details = []
-    data_source_refs = []
+    endpoint_details = []
+    endpoint_refs = []
     for source_id in source_ids:
-        source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
+        _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
+    for endpoint_id in endpoint_ids:
+        endpoint = endpoint_index[endpoint_id]
         detail = _load_external_detail(
-            source.get("detail_design"),
-            "DataSourceDetail",
-            source_id,
+            endpoint.get("detail_design"),
+            "EndpointDetail",
+            endpoint_id,
             project_plan_path,
         )
-        data_source_details.append(detail)
-        data_source_refs.append(_artifact_ref(source.get("detail_design"), source_id))
+        endpoint_details.append(detail)
+        endpoint_refs.append(_artifact_ref(endpoint.get("detail_design"), endpoint_id))
 
     return {
         "target": {"type": "page", "id": page_id},
         "page_detail": page_detail,
-        "data_source_detail": None,
-        "direct_data_source_details": data_source_details,
+        "endpoint_detail": None,
+        "direct_endpoint_details": endpoint_details,
         "endpoint_ids": endpoint_ids,
         "data_source_ids": source_ids,
         "required_unit_ids": [
@@ -81,7 +83,7 @@ def _page_context(
         ],
         "source_refs": {
             "page_detail": _artifact_ref(page.get("detail_design"), page_id),
-            "data_source_details": data_source_refs,
+            "endpoint_details": endpoint_refs,
         },
     }
 
@@ -91,30 +93,37 @@ def _data_source_context(
     source_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """只解析指定数据源及其确认详情，不反向加载页面详情。"""
+    """解析后端数据单元下的已确认 endpoint 详情，不再依赖 DataSourceDetail。"""
 
     source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
-    detail = _load_external_detail(
-        source.get("detail_design"),
-        "DataSourceDetail",
-        source_id,
-        project_plan_path,
-    )
+    del source
+    endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = [
-        endpoint_id
-        for endpoint_id, endpoint in _endpoint_index(project_plan.get("api_contracts")).items()
+        endpoint_id for endpoint_id, endpoint in endpoint_index.items()
         if endpoint.get("data_source_id") == source_id
+    ]
+    endpoint_details = [
+        _load_external_detail(
+            endpoint_index[endpoint_id].get("detail_design"),
+            "EndpointDetail",
+            endpoint_id,
+            project_plan_path,
+        )
+        for endpoint_id in endpoint_ids
     ]
     return {
         "target": {"type": "data_source", "id": source_id},
         "page_detail": None,
-        "data_source_detail": detail,
-        "direct_data_source_details": [detail],
+        "endpoint_detail": None,
+        "direct_endpoint_details": endpoint_details,
         "endpoint_ids": endpoint_ids,
         "data_source_ids": [source_id],
         "required_unit_ids": ["app:backend-bootstrap", f"data-source:{source_id}"],
         "source_refs": {
-            "data_source_details": [_artifact_ref(source.get("detail_design"), source_id)],
+            "endpoint_details": [
+                _artifact_ref(endpoint_index[endpoint_id].get("detail_design"), endpoint_id)
+                for endpoint_id in endpoint_ids
+            ],
         },
     }
 
@@ -209,17 +218,18 @@ def _endpoint_ids(page_detail: dict[str, Any]) -> list[str]:
 
 
 def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:
-    """建立 endpoint 到数据源和契约的只读反向索引。"""
+    """建立 endpoint 到数据源、契约和详情引用的只读反向索引。"""
 
-    return {
-        str(endpoint.get("id")): {
-            "data_source_id": str(contract.get("data_source_id") or ""),
-            "api_contract_id": str(contract.get("id") or ""),
-        }
-        for contract in _dict_items(value)
-        for endpoint in _dict_items(contract.get("endpoints"))
-        if endpoint.get("id")
-    }
+    index: dict[str, dict[str, Any]] = {}
+    for contract in _dict_items(value):
+        for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
+            endpoint_id = str(endpoint.get("id") or endpoint_index + 1)
+            index[endpoint_id] = {
+                "data_source_id": str(contract.get("data_source_id") or ""),
+                "api_contract_id": str(contract.get("id") or ""),
+                "detail_design": endpoint.get("detail_design"),
+            }
+    return index
 
 
 def _artifact_ref(reference: Any, target_id: str) -> dict[str, Any]:

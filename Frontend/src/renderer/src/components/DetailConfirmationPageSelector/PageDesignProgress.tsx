@@ -16,9 +16,18 @@ const DESIGN_STAGES = [
   { label: '整理验收方案', detail: '汇总设计结果与可确认的验收标准', target: 92 }
 ] as const
 
+const ENDPOINT_DESIGN_STAGES = [
+  { label: '定位接口契约', detail: '读取 API Contract、Method、Path 与 Schema 引用', target: 18 },
+  { label: '分析请求参数', detail: '梳理路径参数、查询参数、请求头和请求体', target: 38 },
+  { label: '确认数据来源', detail: '设计第三方接口、MySQL 表或新增表字段来源', target: 58 },
+  { label: '设计返回格式', detail: '整理响应结构、状态码、错误响应与字段映射', target: 78 },
+  { label: '整理接口验收', detail: '汇总接口详细设计与后续任务拆分依据', target: 92 }
+] as const
+
 type Props = {
   events?: WorkflowEvent[]
   pageLabel: string
+  targetType?: 'page' | 'endpoint'
 }
 
 /** 判断页面细节节点是否已经由后端报告完成。 */
@@ -29,21 +38,50 @@ function detailDesignCompleted(events: WorkflowEvent[]): boolean {
 }
 
 /** 根据唯一的百分比状态定位当前步骤，保证步骤条不会与进度条错位。 */
-function stageIndexForPercent(percent: number): number {
-  const nextStageIndex = DESIGN_STAGES.findIndex((stage) => percent <= stage.target)
-  return nextStageIndex < 0 ? DESIGN_STAGES.length - 1 : nextStageIndex
+function stageIndexForPercent<T extends readonly { target: number }[]>(percent: number, stages: T): number {
+  const nextStageIndex = stages.findIndex((stage) => percent <= stage.target)
+  return nextStageIndex < 0 ? stages.length - 1 : nextStageIndex
+}
+
+/** 读取后端细节设计进度事件，用真实阶段消息覆盖本地模拟文案。 */
+function latestDetailProgressEvent(events: WorkflowEvent[]): WorkflowEvent | undefined {
+  return [...events].reverse().find(
+    (event) =>
+      event.type === 'workflow.node.progress' &&
+      event.nodeName === 'detail_confirmation' &&
+      event.message
+  )
+}
+
+/** 判断当前进度是否来自 endpoint 详细设计，避免接口生成时复用页面文案。 */
+function progressTargetType(events: WorkflowEvent[], fallback?: 'page' | 'endpoint'): 'page' | 'endpoint' {
+  const progress = latestDetailProgressEvent(events)
+  const detail = progress?.data?.detail
+  const targetType =
+    detail && typeof detail === 'object'
+      ? (detail as Record<string, unknown>).target_type
+      : undefined
+  return targetType === 'endpoint' ? 'endpoint' : fallback || 'page'
 }
 
 /** 在后端细粒度阶段不可见时，让百分比与步骤条使用同一个推进状态。 */
-export default function PageDesignProgress({ events = [], pageLabel }: Props): JSX.Element {
+export default function PageDesignProgress({
+  events = [],
+  pageLabel,
+  targetType
+}: Props): JSX.Element {
   const completed = detailDesignCompleted(events)
+  const resolvedTargetType = progressTargetType(events, targetType)
+  const stages = resolvedTargetType === 'endpoint' ? ENDPOINT_DESIGN_STAGES : DESIGN_STAGES
+  const latestProgress = latestDetailProgressEvent(events)
   const activityKey = useMemo(
     () => events.reduce((total, event) => total + (event.message?.length || 1), 0),
     [events]
   )
   const percent = useProgressivePercent(completed ? 100 : 6, completed ? 100 : 98, activityKey)
-  const stageIndex = stageIndexForPercent(percent)
-  const stage = DESIGN_STAGES[stageIndex]
+  const stageIndex = stageIndexForPercent(percent, stages)
+  const stage = stages[stageIndex]
+  const currentLabel = latestProgress?.message || stage.label
 
   return (
     <section aria-live="polite" className={cx('detail-page-progress')}>
@@ -54,9 +92,11 @@ export default function PageDesignProgress({ events = [], pageLabel }: Props): J
         <LoadingOutlined className={cx('detail-page-progress-loading')} />
       </div>
 
-      <Text className={cx('detail-page-selector-eyebrow')}>GENERATING PAGE DESIGN</Text>
+      <Text className={cx('detail-page-selector-eyebrow')}>
+        {resolvedTargetType === 'endpoint' ? 'GENERATING API DESIGN' : 'GENERATING PAGE DESIGN'}
+      </Text>
       <Title level={3}>正在设计「{pageLabel}」</Title>
-      <Text className={cx('detail-page-progress-current')}>{stage.label}</Text>
+      <Text className={cx('detail-page-progress-current')}>{currentLabel}</Text>
       <Text className={cx('detail-page-progress-detail')} type="secondary">
         {stage.detail}
       </Text>
@@ -66,7 +106,7 @@ export default function PageDesignProgress({ events = [], pageLabel }: Props): J
         <Text strong>{percent}%</Text>
       </div>
       <div
-        aria-label={`页面设计进度 ${percent}%`}
+        aria-label={`${resolvedTargetType === 'endpoint' ? '接口' : '页面'}设计进度 ${percent}%`}
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={percent}
@@ -79,7 +119,7 @@ export default function PageDesignProgress({ events = [], pageLabel }: Props): J
       </div>
 
       <div className={cx('detail-page-progress-stages')}>
-        {DESIGN_STAGES.map((item, index) => {
+        {stages.map((item, index) => {
           const isDone = completed || index < stageIndex
           const isActive = !completed && index === stageIndex
           return (

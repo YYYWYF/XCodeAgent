@@ -114,14 +114,30 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("selected_page_id"))
         or _optional_text(resume_values_from_state.get("selectedPageId"))
     )
-    selectedDataSourceId = (
-        _optional_text(payload.get("selectedDataSourceId"))
-        or _optional_text(payload.get("selected_data_source_id"))
-        or _optional_text(forwarded_props.get("selectedDataSourceId"))
-        or _optional_text(forwarded_props.get("selected_data_source_id"))
-        or _optional_text(resume_values_from_state.get("selectedDataSourceId"))
-        or _optional_text(resume_values_from_state.get("selected_data_source_id"))
+    selected_api_contract_id = (
+        _optional_text(payload.get("selectedApiContractId"))
+        or _optional_text(payload.get("selected_api_contract_id"))
+        or _optional_text(forwarded_props.get("selectedApiContractId"))
+        or _optional_text(forwarded_props.get("selected_api_contract_id"))
+        or _optional_text(resume_values_from_state.get("selected_api_contract_id"))
     )
+    selected_endpoint_id = (
+        _optional_text(payload.get("selectedEndpointId"))
+        or _optional_text(payload.get("selected_endpoint_id"))
+        or _optional_text(forwarded_props.get("selectedEndpointId"))
+        or _optional_text(forwarded_props.get("selected_endpoint_id"))
+        or _optional_text(resume_values_from_state.get("selected_endpoint_id"))
+    )
+    detail_target_type = _supported_detail_target_type(
+        _optional_text(payload.get("detailTargetType"))
+        or _optional_text(payload.get("detail_target_type"))
+        or _optional_text(forwarded_props.get("detailTargetType"))
+        or _optional_text(forwarded_props.get("detail_target_type"))
+        or _optional_text(resume_values_from_state.get("detail_target_type"))
+    )
+    # endpoint 详细设计和页面详细设计互斥；本次明确选择接口时，不允许恢复态里的旧页面 ID 回流。
+    if detail_target_type == "endpoint" or selected_endpoint_id:
+        selectedPageId = ""
     workspace = (
         _optional_text(payload.get("workspace"))
         or _optional_text(payload.get("workspaceRoot"))
@@ -165,8 +181,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
-        **({"selectedDataSourceId": selectedDataSourceId} if selectedDataSourceId else {}),
-        **({"selected_data_source_id": selectedDataSourceId} if selectedDataSourceId else {}),
+        **({"selected_api_contract_id": selected_api_contract_id} if selected_api_contract_id else {}),
+        **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
+        **({"detail_target_type": detail_target_type} if detail_target_type else {}),
         "build_execution_scope": build_execution_scope,
         **(
             {"lifecycle_interaction_submission": _lifecycle_interaction_submission(resume_state)}
@@ -434,6 +451,12 @@ def _supported_editor_mode(value: str) -> str:
     return value if value in {"frontend", "backend"} else ""
 
 
+def _supported_detail_target_type(value: str) -> str:
+    """校验详细设计目标类型；批次 A 仅开放页面与 endpoint 两种新语义。"""
+
+    return value if value in {"page", "endpoint"} else ""
+
+
 def _resume_from_state(
     value: dict[str, Any] | None,
     *,
@@ -516,8 +539,9 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "project_plan_json_path",
         "detail_selection",
         "selectedPageId",
-        "selectedDataSourceId",
-        "selected_data_source_id",
+        "selected_api_contract_id",
+        "selected_endpoint_id",
+        "detail_target_type",
         "page_spec_draft",
         "data_source_spec_draft",
         "detail_plans",
@@ -543,11 +567,28 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "selected_skill_names",
         "workflow_scope",
     }
-    return {
+    resumed_values = {
         key: merged[key]
         for key in allowed_keys
         if key in merged and merged[key] is not None
     }
+    # 前端快照使用 camelCase；Graph State 只保留 snake_case，避免同一语义双字段流转。
+    selected_api_contract_id = _optional_text(
+        merged.get("selected_api_contract_id") or merged.get("selectedApiContractId")
+    )
+    selected_endpoint_id = _optional_text(
+        merged.get("selected_endpoint_id") or merged.get("selectedEndpointId")
+    )
+    detail_target_type = _supported_detail_target_type(
+        _optional_text(merged.get("detail_target_type") or merged.get("detailTargetType"))
+    )
+    if selected_api_contract_id:
+        resumed_values["selected_api_contract_id"] = selected_api_contract_id
+    if selected_endpoint_id:
+        resumed_values["selected_endpoint_id"] = selected_endpoint_id
+    if detail_target_type:
+        resumed_values["detail_target_type"] = detail_target_type
+    return resumed_values
 
 
 def _project_plan_start_values(

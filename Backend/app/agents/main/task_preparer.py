@@ -64,7 +64,7 @@ def _task_preparation_prompt(
         "and preserve page_goal, layout_design, operation_interactions, state_feedback, "
         "api_dependencies, response_bindings, page_navigation, permissions, and "
         "acceptance_criteria. For backend/data tasks, use only executable_details."
-        "data_source_detail_plans, executable_details.data_sources, and "
+        "endpoint_detail_plans, executable_details.data_sources, and "
         "executable_details.api_contracts. ProjectPlan/API contracts in executable_details "
         "are the only source of fields; preserve schema_refs, endpoint ids, "
         "request/response schema refs, and page response_bindings in task source references.\n"

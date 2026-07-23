@@ -12,7 +12,16 @@ export type DevelopmentPlanningPageOption = {
   hasDetailPlan?: boolean
   designed: boolean
 }
-export type DevelopmentPlanningApiEndpoint = { id: string; method: string; path: string; summary: string }
+export type DevelopmentPlanningApiEndpoint = {
+  apiContractId?: string
+  id: string
+  method: string
+  path: string
+  summary: string
+  detailPlanStatus?: string
+  hasDetailPlan?: boolean
+  designed?: boolean
+}
 export type DevelopmentPlanningApiContract = {
   id: string
   label: string

@@ -58,7 +58,16 @@ declare global {
         apiContracts: Array<{
           id: string;
           label: string;
-          endpoints: Array<{ id: string; method: string; path: string; summary: string }>;
+          endpoints: Array<{
+            apiContractId?: string;
+            id: string;
+            method: string;
+            path: string;
+            summary: string;
+            detailPlanStatus?: string;
+            hasDetailPlan?: boolean;
+            designed?: boolean;
+          }>;
         }>;
       }>;
     };

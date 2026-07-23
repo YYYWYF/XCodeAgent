@@ -30,7 +30,7 @@ export default function DetailReview({
   review,
 }: DetailReviewProps): ReactElement {
   const targets = useMemo(
-    () => [...(review.pages || []), ...(review.data_sources || [])],
+    () => [...(review.pages || []), ...(review.endpoints || [])],
     [review],
   );
   const [changes, setChanges] = useState<
@@ -39,6 +39,9 @@ export default function DetailReview({
   const [overallNote, setOverallNote] = useState("");
   const missingSelectedPagePlan = Boolean(
     review.summary?.missingSelectedPagePlan,
+  );
+  const missingSelectedEndpointPlan = Boolean(
+    review.summary?.missingSelectedEndpointPlan,
   );
 
   // 记录单个审核对象的字段改动，并保留同对象此前已编辑的内容。
@@ -81,15 +84,15 @@ export default function DetailReview({
         </div>
         <div className={cx("workflow-detail-review-metrics")}>
           <Tag>页面 <strong>{review.summary?.page_count || 0}</strong></Tag>
-          <Tag>数据源 <strong>{review.summary?.data_source_count || 0}</strong></Tag>
+          <Tag>接口 <strong>{review.summary?.endpoint_count || 0}</strong></Tag>
           <Tag>API 契约 <strong>{review.summary?.api_contract_count || 0}</strong></Tag>
         </div>
       </div>
-      {missingSelectedPagePlan || targets.length === 0 ? (
+      {missingSelectedPagePlan || missingSelectedEndpointPlan || targets.length === 0 ? (
         <Alert
           message={
             message ||
-            `页面 ${review.summary?.selectedPageId || ""} 还没有生成细节设计，请先生成该页面的 plan。`
+            `目标 ${review.summary?.selectedEndpointId || review.summary?.selectedPageId || ""} 还没有生成细节设计，请先生成该目标的 plan。`
           }
           showIcon
           type="warning"
@@ -106,7 +109,7 @@ export default function DetailReview({
                     </span>
                   )}
                   <span className={cx("workflow-detail-review-target-kind")}>
-                    {target.target_type === "page" ? "页面" : "数据源"}
+                    {targetKindLabel(target.target_type)}
                   </span>
                   <Text className={cx("workflow-detail-review-target-name")} strong>
                     {target.name || target.target_id}
@@ -123,13 +126,15 @@ export default function DetailReview({
                   onChange={(field, value) => updateField(target, field, value)}
                   target={target}
                 />
-              ) : (
-                <DataSourceReviewEditor
+              ) : target.target_type === "endpoint" ? (
+                <EndpointReviewEditor
                   changes={changes[target.target_id] || {}}
                   disabled={disabled}
                   onChange={(field, value) => updateField(target, field, value)}
                   target={target}
                 />
+              ) : (
+                <></>
               )}
             </Panel>
           ))}
@@ -149,7 +154,12 @@ export default function DetailReview({
           />
         </label>
         <Button
-          disabled={disabled || missingSelectedPagePlan || targets.length === 0}
+          disabled={
+            disabled ||
+            missingSelectedPagePlan ||
+            missingSelectedEndpointPlan ||
+            targets.length === 0
+          }
           icon={<CheckCircleOutlined />}
           onClick={confirm}
           size="large"
@@ -160,6 +170,13 @@ export default function DetailReview({
       </div>
     </div>
   );
+}
+
+// 将后端审核对象类型转换为用户可读标签。
+function targetKindLabel(targetType: WorkflowDetailReviewTarget["target_type"]): string {
+  if (targetType === "page") return "页面";
+  if (targetType === "endpoint") return "接口";
+  return "对象";
 }
 
 function PageReviewEditor({
@@ -296,7 +313,8 @@ function PageReviewEditor({
   );
 }
 
-function DataSourceReviewEditor({
+// 渲染单个 endpoint 详细设计的审核输入项。
+function EndpointReviewEditor({
   changes,
   disabled,
   onChange,
@@ -304,41 +322,27 @@ function DataSourceReviewEditor({
 }: ReviewEditorProps): ReactElement {
   return (
     <div className={cx("workflow-detail-review-fields")}>
-      <ReviewTextField
+      <ReviewSummaryField
         disabled={disabled}
-        label="数据源类型"
-        onChange={(value) => onChange("source_type", value)}
-        value={stringChange(changes.source_type, target.source_type)}
+        label="一、数据用途（数据服务于什么）"
+        onChange={(value) => onChange("data_usage", parseJsonObject(value))}
+        value={jsonSummary(objectChange(changes.data_usage, target.data_usage))}
       />
-      <ReviewListField
+      <ReviewSummaryField
         disabled={disabled}
-        label="实体"
-        onChange={(value) => onChange("entities", value)}
-        value={listChange(changes.entities, target.entities)}
+        label="二、数据来源"
+        onChange={(value) => onChange("data_origin", parseJsonObject(value))}
+        value={jsonSummary(
+          objectChange(changes.data_origin, target.data_origin),
+        )}
       />
-      <ReviewListField
+      <ReviewSummaryField
         disabled={disabled}
-        label="Schema 引用"
-        onChange={(value) => onChange("schema_refs", value)}
-        value={listChange(changes.schema_refs, target.schema_refs)}
-      />
-      <ReviewListField
-        disabled={disabled}
-        label="实体关系"
-        onChange={(value) => onChange("relationships", value)}
-        value={listChange(changes.relationships, target.relationships)}
-      />
-      <ReviewListField
-        disabled={disabled}
-        label="校验规则"
-        onChange={(value) => onChange("validation_rules", value)}
-        value={listChange(changes.validation_rules, target.validation_rules)}
-      />
-      <ReviewTextField
-        disabled={disabled}
-        label="Seed / Mock 策略"
-        onChange={(value) => onChange("seed_strategy", value)}
-        value={stringChange(changes.seed_strategy, target.seed_strategy)}
+        label="三、接口设计"
+        onChange={(value) => onChange("interface_design", parseJsonObject(value))}
+        value={jsonSummary(
+          objectChange(changes.interface_design, target.interface_design),
+        )}
       />
       <ReviewListField
         disabled={disabled}
@@ -347,27 +351,6 @@ function DataSourceReviewEditor({
         value={listChange(
           changes.acceptance_criteria,
           target.acceptance_criteria,
-        )}
-      />
-      <ReviewListField
-        disabled={disabled}
-        label="API 契约"
-        onChange={(value) =>
-          onChange(
-            "api_contracts",
-            value.map((id) => ({ id })),
-          )
-        }
-        value={contractIdChange(changes.api_contracts, target.api_contracts)}
-      />
-      <ReviewSummaryField
-        disabled={disabled}
-        label="依赖页面"
-        onChange={(value) =>
-          onChange("dependent_pages", parseDependentPages(value))
-        }
-        value={dependentPagesSummary(
-          recordListChange(changes.dependent_pages, target.dependent_pages),
         )}
       />
     </div>
@@ -492,6 +475,21 @@ function objectValue(value: unknown): Record<string, unknown> {
   return isRecord(value) ? (value as Record<string, unknown>) : {};
 }
 
+// 把结构化 endpoint 字段转换为便于用户编辑的 JSON 文本。
+function jsonSummary(value: unknown): string {
+  return JSON.stringify(objectValue(value), null, 2);
+}
+
+// 解析用户编辑后的 JSON 对象；解析失败时保留原始文本为说明，避免输入丢失。
+function parseJsonObject(value: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return objectValue(parsed);
+  } catch {
+    return { note: value };
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -524,16 +522,6 @@ function splitPair(value: string, separator: string): [string, string] {
         value.slice(index + separator.length).trim(),
       ]
     : [value.trim(), ""];
-}
-
-function contractIds(value: unknown): string[] {
-  return recordItems(value)
-    .map((item) => String(item.id || ""))
-    .filter(Boolean);
-}
-
-function contractIdChange(changed: unknown, initial: unknown): string[] {
-  return Array.isArray(changed) ? contractIds(changed) : contractIds(initial);
 }
 
 function layoutDesignSummary(value: unknown, fallbackLayout: unknown): string {
@@ -766,25 +754,6 @@ function parseOperationVisibilitySummary(
             .filter(Boolean)
         : [],
       unauthorized_behavior: unauthorized || "隐藏操作入口或展示无权限提示",
-    };
-  });
-}
-
-function dependentPagesSummary(value: unknown): string {
-  const lines = recordItems(value).map((item) => {
-    const id = String(item.pageId || item.id || item.name || "页面");
-    const reason = String(item.reason || item.description || "");
-    return reason ? `${id}：${reason}` : id;
-  });
-  return lines.join("\n") || "无";
-}
-
-function parseDependentPages(value: string): Array<Record<string, unknown>> {
-  return summaryLines(value).map((line) => {
-    const [page, reason] = splitPair(line, "：");
-    return {
-      pageId: page || "页面",
-      ...(reason ? { reason } : {}),
     };
   });
 }

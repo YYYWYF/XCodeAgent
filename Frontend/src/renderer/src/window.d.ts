@@ -61,7 +61,16 @@ declare global {
           id: string;
           label: string;
           dataSourceIds?: string[];
-          endpoints: Array<{ id: string; method: string; path: string; summary: string }>;
+          endpoints: Array<{
+            apiContractId?: string;
+            id: string;
+            method: string;
+            path: string;
+            summary: string;
+            detailPlanStatus?: string;
+            hasDetailPlan?: boolean;
+            designed?: boolean;
+          }>;
         }>;
       }>;
       };

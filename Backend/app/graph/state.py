@@ -34,7 +34,9 @@ class ProjectState(TypedDict, total=False):
     detail_selection: dict[str, Any]
     page_selection: dict[str, Any]
     selectedPageId: str
-    selected_data_source_id: str
+    selected_api_contract_id: str
+    selected_endpoint_id: str
+    detail_target_type: str
     data_source_spec_draft: dict[str, Any]
     detail_plans: list[dict[str, Any]]
     detail_review_submission: dict[str, Any]

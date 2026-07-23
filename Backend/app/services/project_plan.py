@@ -12,6 +12,14 @@ from app.services.api_contracts import (
 from app.services.page_dependencies import normalize_page_dependencies
 
 
+BACKEND_TECH_STACK = {
+    "language": "Java8",
+    "framework": "Springboot",
+    "database": "MySQL8",
+    "cache": "Redis",
+}
+
+
 def _agent_section(agent_plan: dict[str, Any] | None, key: str) -> Any:
     if not isinstance(agent_plan, dict):
         return None
@@ -643,12 +651,17 @@ def create_project_plan(
     agent_architecture = _agent_section(agent_plan, "architecture")
     architecture = {
         "frontend": "基于单页应用生成页面、路由和 API 客户端。",
-        "backend": "本地 API 服务提供资源接口和业务契约实现。",
-        "data": "根据需求文档使用 Mock 或数据库型数据源。",
+        "backend": "后端技术栈固定为 Java8 + Springboot，提供本地 API 服务、资源接口和业务契约实现。",
+        "data": "数据库固定使用 MySQL8，缓存固定使用 Redis。",
+        "backend_tech_stack": dict(BACKEND_TECH_STACK),
         "testing": "交付前执行单元、契约、集成和冒烟检查。",
     }
     if isinstance(agent_architecture, dict):
         architecture.update(agent_architecture)
+    # 后端技术栈属于项目规划阶段的硬性约束，模型输出即使遗漏或写偏也必须回写为固定值。
+    architecture["backend"] = "后端技术栈固定为 Java8 + Springboot，提供本地 API 服务、资源接口和业务契约实现。"
+    architecture["data"] = "数据库固定使用 MySQL8，缓存固定使用 Redis。"
+    architecture["backend_tech_stack"] = dict(BACKEND_TECH_STACK)
 
     plan: dict[str, Any] = {
         "version": "0.1.0",

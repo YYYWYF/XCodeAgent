@@ -108,7 +108,7 @@ function completedWorkflowProcessSteps(
   if (stepsById.size === 0) {
     const timeline = workflowTimeline(workflow)
     for (const [index, nodeName] of timeline.entries()) {
-      const label = WORKFLOW_NODE_LABELS[nodeName]
+      const label = workflowNodeLabel(nodeName, workflow)
       if (!label) continue
       stepsById.set(`workflow:${nodeName}`, {
         id: `workflow:${nodeName}`,
@@ -124,6 +124,21 @@ function completedWorkflowProcessSteps(
   }
   const steps = [...stepsById.values()]
   return steps.length > 0 ? steps : undefined
+}
+
+/** 根据 Workflow 目标类型动态返回节点展示名称，兼容 endpoint 详细设计历史。 */
+function workflowNodeLabel(
+  nodeName: string,
+  workflow: WorkflowRunPayload
+): string | undefined {
+  const detailTargetType =
+    workflow.state?.detailTargetType ||
+    workflow.result?.detailTargetType ||
+    workflow.summary.clarification?.review?.summary?.detailTargetType
+  if (nodeName === 'detail_confirmation' && detailTargetType === 'endpoint') {
+    return '接口细节确认'
+  }
+  return WORKFLOW_NODE_LABELS[nodeName]
 }
 
 /** 将历史 Workflow 事件状态规整为前端步骤状态。 */

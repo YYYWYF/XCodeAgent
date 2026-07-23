@@ -60,6 +60,14 @@ def _joined_items(value: Any, *, empty: str = "无") -> str:
     return "、".join(items) if items else empty
 
 
+def _json_brief(value: Any, *, empty: str = "无") -> str:
+    """把结构化字段压缩成 Markdown 中可读的一行 JSON 摘要。"""
+
+    if value in (None, "", [], {}):
+        return empty
+    return f"`{json.dumps(value, ensure_ascii=False, sort_keys=True)}`"
+
+
 def _status_label(value: Any) -> str:
     labels = {
         "draft": "草稿",
@@ -239,35 +247,91 @@ def render_page_detail_markdown(detail: dict[str, Any]) -> str:
     )
 
 
-def render_data_source_detail_markdown(detail: dict[str, Any]) -> str:
-    """渲染单个数据源详细设计的独立 Markdown 文档。"""
+def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
+    """渲染单个 endpoint 详细设计的独立 Markdown 文档。"""
 
+    data_usage = detail.get("data_usage") if isinstance(detail.get("data_usage"), dict) else {}
+    data_origin = detail.get("data_origin") if isinstance(detail.get("data_origin"), dict) else {}
+    interface_design = (
+        detail.get("interface_design")
+        if isinstance(detail.get("interface_design"), dict)
+        else {}
+    )
+    request = (
+        interface_design.get("request")
+        if isinstance(interface_design.get("request"), dict)
+        else {}
+    )
+    restful_style = (
+        interface_design.get("restful_style")
+        if isinstance(interface_design.get("restful_style"), dict)
+        else {}
+    )
+    response_format = (
+        interface_design.get("response_format")
+        if isinstance(interface_design.get("response_format"), dict)
+        else {}
+    )
     return "\n".join(
         [
-            f"# {detail.get('data_source_name', detail.get('data_source_id', '未命名数据源'))}数据源设计",
+            f"# 接口详细设计：{detail.get('method', 'GET')} {detail.get('path', '')}",
             "",
-            f"- 数据源 ID：`{detail.get('data_source_id', 'unknown')}`",
+            "## 一、数据用途",
+            "",
+            f"- 接口 ID：`{detail.get('endpoint_id', 'unknown')}`",
+            f"- API 契约：`{detail.get('api_contract_id', 'unknown')}`",
+            f"- 数据源上下文：`{detail.get('data_source_id', 'unknown')}`",
+            f"- 用途：{data_usage.get('purpose') or detail.get('summary') or '待补充'}",
+            f"- 服务业务：{data_usage.get('served_business') or '待补充'}",
+            f"- 消费方：{data_usage.get('consumer') or '待补充'}",
+            f"- 依赖页面：{_joined_labels(data_usage.get('served_pages', []))}",
             f"- 确认状态：{_status_label(detail.get('status', 'draft'))}",
-            f"- 实体：{_joined_items(detail.get('entities', []))}",
-            f"- Schema 引用：{_code_items(detail.get('schema_refs', []))}",
             "",
-            "## 关系与校验",
+            "## 二、数据来源",
             "",
-            _bullet_items(detail.get("relationships", [])) or "- 暂无关系定义",
-            _bullet_items(detail.get("validation_rules", [])) or "- 暂无校验规则",
+            f"- 来源类型：{data_origin.get('source_type') or '待确认'}",
+            f"- 第三方接口：{_json_brief(data_origin.get('third_party'))}",
+            f"- MySQL 已有表：{_json_brief(data_origin.get('mysql_existing'))}",
+            f"- MySQL 新表/DDL：{_json_brief(data_origin.get('mysql_new_table'))}",
+            f"- 待确认问题：{_joined_items(data_origin.get('open_questions', []))}",
             "",
-            "## Seed / Mock 策略",
+            "## 三、接口设计",
             "",
-            str(detail.get("seed_strategy") or "待补充"),
+            "### RESTful 风格",
             "",
-            "## 关联 API 与页面",
+            f"- 是否符合：{'是' if restful_style.get('compliant') else '待确认'}",
+            f"- Method：`{restful_style.get('method') or detail.get('method', 'GET')}`",
+            f"- Path：`{restful_style.get('path') or detail.get('path', '')}`",
+            f"- 资源：`{restful_style.get('resource') or '待补充'}`",
+            f"- 说明：{restful_style.get('description') or '待补充'}",
             "",
-            f"- API 契约：{_joined_labels(detail.get('api_contracts', []))}",
-            f"- 依赖页面：{_joined_labels(detail.get('dependent_pages', []))}",
+            "### 请求参数",
             "",
-            "## 验收标准",
+            f"- 路径参数：{_parameter_items(request.get('path_parameters', []))}",
+            f"- 查询参数：{_parameter_items(request.get('query_parameters', []))}",
+            f"- 请求头参数：{_parameter_items(request.get('header_parameters', []))}",
+            f"- 请求体：{_json_brief(request.get('request_body'))}",
+            f"- 文件上传：{_json_brief(request.get('file_upload'))}",
             "",
-            _bullet_items(detail.get("acceptance_criteria", [])) or "- 待补充数据源验收标准",
+            "### 返回格式",
+            "",
+            f"- 状态码：{response_format.get('status_code') or '待补充'}",
+            f"- Content-Type：`{response_format.get('content_type') or 'application/json'}`",
+            f"- Schema：`{response_format.get('schema_ref') or '无'}`",
+            f"- 结构：{_json_brief(response_format.get('structure'))}",
+            f"- 错误响应：{_joined_items(response_format.get('errors', []))}",
+            "",
+            "## 四、处理逻辑",
+            "",
+            _bullet_items(detail.get("processing_logic", [])) or "- 待补充处理逻辑",
+            "",
+            "## 五、验收标准",
+            "",
+            _bullet_items(detail.get("acceptance_criteria", [])) or "- 待补充接口验收标准",
+            "",
+            "## 六、风险与待确认事项",
+            "",
+            _bullet_items(detail.get("risks", [])) or "- 暂无明确风险",
             "",
         ]
     )
@@ -404,12 +468,6 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         for page in _dict_items(plan.get("frontend_pages", []))
         if isinstance(page.get("detail_design"), dict)
     )
-    data_source_details = "\n".join(
-        f"- {source.get('name', source.get('id', '未命名数据源'))}：{source.get('detail_design', {}).get('markdown_path', '尚未生成独立详细设计')}"
-        for source in _dict_items(plan.get("data_sources", []))
-        if isinstance(source.get("detail_design"), dict)
-    )
-
     app = plan.get("app", {})
     architecture = plan.get("architecture", {})
 
@@ -438,6 +496,7 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 - 前端：{architecture.get('frontend', '待补充前端架构')}
 - 后端：{architecture.get('backend', '待补充后端架构')}
+- 后端技术栈：开发语言 Java8；开发框架 Springboot；数据库 MySQL8；缓存 Redis
 - 数据：{architecture.get('data', '待补充数据架构')}
 - 测试：{architecture.get('testing', '待补充测试策略')}
 
@@ -468,10 +527,6 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 ## 页面详细设计
 
 {page_details or "- 尚未确认页面详细设计"}
-
-## 数据源详细设计
-
-{data_source_details or "- 尚未确认数据源详细设计"}
 
 ## 风险与待细化点
 
@@ -506,7 +561,7 @@ def edited_project_plan_markdown(
     path = project_plan_markdown_path(state)
     if not path.is_file():
         return None
-    if plan.get("page_detail_plans") or plan.get("data_source_detail_plans"):
+    if plan.get("page_detail_plans") or plan.get("endpoint_detail_plans"):
         return None
     content = path.read_text(encoding="utf-8")
     return content if content != render_project_plan_markdown(plan) else None
@@ -522,7 +577,7 @@ def project_plan_json_path(state: dict[str, Any]) -> Path:
 
 
 def write_project_plan_json(state: dict[str, Any], plan: dict[str, Any]) -> str:
-    """持久化轻量 ProjectPlan，并把页面和数据源详情拆分为独立文件。"""
+    """持久化轻量 ProjectPlan，并把页面和 endpoint 详情拆分为独立文件。"""
 
     from app.workspace.detail_design_documents import write_compact_project_plan
 

@@ -21,16 +21,14 @@ PAGE_EDITABLE_FIELDS = {
     "operation_visibility",
     "acceptance_criteria",
 }
-DATA_SOURCE_EDITABLE_FIELDS = {
-    "source_type",
-    "entities",
-    "schema_refs",
-    "relationships",
-    "validation_rules",
-    "seed_strategy",
-    "api_contracts",
+ENDPOINT_EDITABLE_FIELDS = {
+    "data_usage",
+    "data_origin",
+    "interface_design",
+    "processing_logic",
     "dependent_pages",
     "acceptance_criteria",
+    "risks",
 }
 
 
@@ -38,18 +36,13 @@ def detail_review_payload(
     project_plan: dict[str, Any],
     *,
     selectedPageId: str | None = None,
-    selectedDataSourceId: str | None = None,
+    selected_api_contract_id: str | None = None,
+    selected_endpoint_id: str | None = None,
+    detail_target_type: str | None = None,
 ) -> dict[str, Any]:
     """构造本轮细节审核载荷；选中目标时只投射该目标相关详情。"""
 
     project_plan = deepcopy(project_plan)
-    selected_page_detail = _selected_page_detail(project_plan, selectedPageId)
-    selected_data_source_ids = _selected_page_data_source_ids(
-        project_plan,
-        selected_page_detail,
-    )
-    if selectedDataSourceId:
-        selected_data_source_ids.add(selectedDataSourceId)
     pages = [
         {
             "target_type": "page",
@@ -71,7 +64,6 @@ def detail_review_payload(
                 "endpoint_dependencies",
                 "api_dependencies",
             ),
-            "data_sources": _list_value(detail.get("data_sources")),
             "response_bindings": _list_value(detail.get("response_bindings")),
             "acceptance_criteria": _list_value(detail.get("acceptance_criteria")),
         }
@@ -80,18 +72,16 @@ def detail_review_payload(
         and detail.get("pageId")
         and (
             not selectedPageId
-            and not selectedDataSourceId
             or str(detail.get("pageId")) == selectedPageId
         )
     ]
-    data_sources = _data_source_review_items(
+    endpoints = _endpoint_review_items(
         project_plan,
-        selectedPageId=selectedPageId,
-        selectedDataSourceId=selectedDataSourceId,
-        selected_data_source_ids=selected_data_source_ids,
+        selected_api_contract_id=selected_api_contract_id,
+        selected_endpoint_id=selected_endpoint_id,
     )
     missingSelectedPagePlan = bool(selectedPageId and not pages)
-    missingSelectedDataSourcePlan = bool(selectedDataSourceId and not data_sources)
+    missingSelectedEndpointPlan = bool(detail_target_type == "endpoint" and selected_endpoint_id and not endpoints)
     return {
         "mode": "detail_review",
         "status": "requires_user_input",
@@ -101,27 +91,29 @@ def detail_review_payload(
             f"页面 `{selectedPageId}` 还没有生成细节设计，请先生成该页面的 plan。"
             if missingSelectedPagePlan
             else
-            f"数据源 `{selectedDataSourceId}` 还没有生成细节设计，请先生成该数据源的 plan。"
-            if missingSelectedDataSourcePlan
+            f"接口 `{selected_endpoint_id}` 还没有生成细节设计，请先生成该接口的 plan。"
+            if missingSelectedEndpointPlan
             else
-            f"请审阅数据源 `{selectedDataSourceId}` 设计；仅展开需要调整的对象。"
-            if selectedDataSourceId
+            f"请审阅接口 `{selected_endpoint_id}` 详细设计；仅展开需要调整的对象。"
+            if detail_target_type == "endpoint" and selected_endpoint_id
             else
-            f"请审阅页面 `{selectedPageId}` 及其直接数据源设计；仅展开需要调整的对象。"
+            f"请审阅页面 `{selectedPageId}` 详细设计；仅展开需要调整的对象。"
             if selectedPageId
-            else "请整体审阅全部页面和数据源初版设计；仅展开需要调整的对象，确认后一次进入任务拆分。"
+            else "请整体审阅页面与接口初版设计；仅展开需要调整的对象，确认后一次进入任务拆分。"
         ),
         "review": {
             "pages": pages,
-            "data_sources": data_sources,
+            "endpoints": endpoints,
             "summary": {
                 "page_count": len(pages),
-                "data_source_count": len(data_sources),
+                "endpoint_count": len(endpoints),
                 "api_contract_count": len(project_plan.get("api_contracts", [])),
                 "missingSelectedPagePlan": missingSelectedPagePlan,
-                "missingSelectedDataSourcePlan": missingSelectedDataSourcePlan,
+                "missingSelectedEndpointPlan": missingSelectedEndpointPlan,
                 "selectedPageId": selectedPageId,
-                "selectedDataSourceId": selectedDataSourceId,
+                "selectedApiContractId": selected_api_contract_id,
+                "selectedEndpointId": selected_endpoint_id,
+                "detailTargetType": detail_target_type,
             },
         },
     }
@@ -132,7 +124,8 @@ def apply_detail_review_submission(
     submission: dict[str, Any],
     *,
     selectedPageId: str | None = None,
-    selectedDataSourceId: str | None = None,
+    selected_api_contract_id: str | None = None,
+    selected_endpoint_id: str | None = None,
 ) -> dict[str, Any]:
     """应用细节审核提交；选中目标审核只确认当前目标相关详情。"""
 
@@ -156,37 +149,30 @@ def apply_detail_review_submission(
                 changes,
                 PAGE_EDITABLE_FIELDS,
             )
-        elif target_type == "data_source":
-            _apply_target_patch(
-                updated.get("data_source_detail_plans", []),
-                "data_source_id",
+        elif target_type == "endpoint":
+            _apply_endpoint_target_patch(
+                updated.get("endpoint_detail_plans", []),
                 target_id,
                 changes,
-                DATA_SOURCE_EDITABLE_FIELDS,
             )
         else:
             raise ValueError(f"unsupported detail review target type: {target_type}")
 
-    selected_page_detail = _selected_page_detail(updated, selectedPageId)
-    selected_data_source_ids = _selected_page_data_source_ids(
-        updated,
-        selected_page_detail,
-    )
-    if selectedDataSourceId:
-        selected_data_source_ids.add(selectedDataSourceId)
     for detail in updated.get("page_detail_plans", []):
         if isinstance(detail, dict) and (
             not selectedPageId
-            and not selectedDataSourceId
             or str(detail.get("pageId")) == selectedPageId
         ):
             detail["status"] = "confirmed"
             detail["approved"] = True
-    for detail in updated.get("data_source_detail_plans", []):
+    for detail in updated.get("endpoint_detail_plans", []):
         if isinstance(detail, dict) and (
             not selectedPageId
-            and not selectedDataSourceId
-            or str(detail.get("data_source_id")) in selected_data_source_ids
+            and not selected_endpoint_id
+            or (
+                str(detail.get("api_contract_id") or "") == str(selected_api_contract_id or "")
+                and str(detail.get("endpoint_id") or "") == str(selected_endpoint_id or "")
+            )
         ):
             detail["status"] = "confirmed"
             detail["approved"] = True
@@ -196,21 +182,26 @@ def apply_detail_review_submission(
         for detail in updated.get("page_detail_plans", [])
         if isinstance(detail, dict)
         and detail.get("pageId")
-        and detail.get("status") == "confirmed"
-    }
-    confirmed_data_source_ids = {
-        str(detail.get("data_source_id"))
-        for detail in updated.get("data_source_detail_plans", [])
-        if isinstance(detail, dict)
-        and detail.get("data_source_id")
-        and detail.get("status") == "confirmed"
+            and detail.get("status") == "confirmed"
     }
     for page in updated.get("frontend_pages", []):
         if isinstance(page, dict) and str(page.get("pageId")) in confirmedPageIds:
             page["detail_status"] = "confirmed"
-    for source in updated.get("data_sources", []):
-        if isinstance(source, dict) and str(source.get("id")) in confirmed_data_source_ids:
-            source["detail_status"] = "confirmed"
+    for contract in updated.get("api_contracts", []):
+        if not isinstance(contract, dict):
+            continue
+        for endpoint_index, endpoint in enumerate(contract.get("endpoints", []) or []):
+            if not isinstance(endpoint, dict):
+                continue
+            if any(
+                isinstance(detail, dict)
+                and detail.get("status") == "confirmed"
+                and str(detail.get("api_contract_id") or "") == str(contract.get("id") or "")
+                and str(detail.get("endpoint_id") or "")
+                == _endpoint_identity(endpoint, endpoint_index)
+                for detail in updated.get("endpoint_detail_plans", [])
+            ):
+                endpoint["detail_status"] = "confirmed"
     _repair_page_contract_fields(updated)
     _repair_missing_request_schemas(updated)
     updated["confirmation_status"] = "confirmed"
@@ -329,104 +320,54 @@ def _list_value(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _selected_page_detail(
-    project_plan: dict[str, Any],
-    selectedPageId: str | None,
-) -> dict[str, Any] | None:
-    """返回当前选中页面的详情；未选页面时保持全量审核语义。"""
+def _endpoint_identity(endpoint: dict[str, Any], index: int) -> str:
+    """返回 endpoint 的确认状态匹配标识；没有显式 id 时使用选择器序号。"""
 
-    if not selectedPageId:
-        return None
-    return next(
-        (
-            detail
-            for detail in project_plan.get("page_detail_plans", [])
-            if isinstance(detail, dict)
-            and str(detail.get("pageId") or "") == selectedPageId
-        ),
-        None,
-    )
+    return str(endpoint.get("id") or index + 1)
 
 
-def _data_source_review_items(
+def _endpoint_review_items(
     project_plan: dict[str, Any],
     *,
-    selectedPageId: str | None,
-    selectedDataSourceId: str | None,
-    selected_data_source_ids: set[str],
+    selected_api_contract_id: str | None,
+    selected_endpoint_id: str | None,
 ) -> list[dict[str, Any]]:
-    """构造数据源审核对象，并按数据源 id 去重。"""
+    """构造 endpoint 审核对象；选中接口时只返回该接口。"""
 
     items: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for detail in project_plan.get("data_source_detail_plans", []):
-        if not isinstance(detail, dict) or not detail.get("data_source_id"):
+    for detail in project_plan.get("endpoint_detail_plans", []):
+        if not isinstance(detail, dict) or not detail.get("endpoint_id"):
             continue
-        source_id = str(detail.get("data_source_id"))
-        if source_id in seen:
+        api_contract_id = str(detail.get("api_contract_id") or "")
+        endpoint_id = str(detail.get("endpoint_id") or "")
+        if selected_api_contract_id and api_contract_id != selected_api_contract_id:
             continue
-        if (selectedPageId or selectedDataSourceId) and source_id not in selected_data_source_ids:
+        if selected_endpoint_id and endpoint_id != selected_endpoint_id:
             continue
-        seen.add(source_id)
         items.append(
             {
-                "target_type": "data_source",
-                "target_id": detail.get("data_source_id"),
-                "name": detail.get("data_source_name") or detail.get("data_source_id"),
-                "source_type": _dict_value(detail.get("source_data_source")).get("type"),
-                "entities": _list_value(detail.get("entities")),
-                "schema_refs": _list_value(detail.get("schema_refs")),
-                "relationships": _list_value(detail.get("relationships")),
-                "validation_rules": _list_value(detail.get("validation_rules")),
-                "seed_strategy": detail.get("seed_strategy"),
-                "api_contracts": _list_value(detail.get("api_contracts")),
-                "dependent_pages": _list_value(detail.get("dependent_pages")),
+                "target_type": "endpoint",
+                "target_id": f"{api_contract_id}:{endpoint_id}",
+                "name": detail.get("name") or f"{detail.get('method')} {detail.get('path')}",
+                "api_contract_id": api_contract_id,
+                "endpoint_id": endpoint_id,
+                "data_source_id": detail.get("data_source_id"),
+                "method": detail.get("method"),
+                "path": detail.get("path"),
+                "summary": detail.get("summary"),
+                "data_usage": _dict_value(detail.get("data_usage")),
+                "data_origin": _dict_value(detail.get("data_origin")),
+                "interface_design": _dict_value(detail.get("interface_design")),
+                "processing_logic": _list_value(detail.get("processing_logic")),
+                "dependent_pages": _list_value(
+                    _dict_value(detail.get("data_usage")).get("served_pages")
+                    or detail.get("dependent_pages")
+                ),
                 "acceptance_criteria": _list_value(detail.get("acceptance_criteria")),
+                "risks": _list_value(detail.get("risks")),
             }
         )
     return items
-
-
-def _selected_page_data_source_ids(
-    project_plan: dict[str, Any],
-    page_detail: dict[str, Any] | None,
-) -> set[str]:
-    """从页面详情已有字段和 ProjectPlan 契约索引中找出直接数据源 id。"""
-
-    if not isinstance(page_detail, dict):
-        return set()
-    result = {
-        str(item.get("id") or item.get("data_source_id") or "")
-        for item in _list_value(page_detail.get("data_sources"))
-        if isinstance(item, dict)
-        and (item.get("id") or item.get("data_source_id"))
-    }
-    result.update(
-        str(item.get("data_source_id") or "")
-        for item in _list_value(page_detail.get("api_dependencies"))
-        if isinstance(item, dict) and item.get("data_source_id")
-    )
-    endpoint_ids = {
-        str(item.get("endpoint_id") or "")
-        for item in _page_reference_items(
-            page_detail,
-            "endpoint_dependencies",
-            "api_dependencies",
-        )
-        if isinstance(item, dict) and item.get("endpoint_id")
-    }
-    result.update(
-        str(contract.get("data_source_id") or "")
-        for contract in project_plan.get("api_contracts", [])
-        if isinstance(contract, dict)
-        and contract.get("data_source_id")
-        and any(
-            isinstance(endpoint, dict)
-            and str(endpoint.get("id") or "") in endpoint_ids
-            for endpoint in _list_value(contract.get("endpoints"))
-        )
-    )
-    return {item for item in result if item}
 
 
 def _apply_target_patch(
@@ -451,6 +392,33 @@ def _apply_target_patch(
     )
     if target is None:
         raise ValueError(f"unknown detail review target: {target_id}")
+    for key, value in changes.items():
+        target[key] = _normalize_editable_value(key, value, target.get(key))
+
+
+def _apply_endpoint_target_patch(
+    details: Any,
+    target_id: str,
+    changes: dict[str, Any],
+) -> None:
+    """按 apiContractId:endpointId 定位 endpoint 详情并应用用户可编辑字段。"""
+
+    unknown_fields = set(changes) - ENDPOINT_EDITABLE_FIELDS
+    if unknown_fields:
+        raise ValueError(
+            f"endpoint detail review cannot change contract-controlled fields: {sorted(unknown_fields)}"
+        )
+    target = next(
+        (
+            detail
+            for detail in details
+            if isinstance(detail, dict)
+            and f"{detail.get('api_contract_id')}:{detail.get('endpoint_id')}" == target_id
+        ),
+        None,
+    )
+    if target is None:
+        raise ValueError(f"unknown endpoint detail review target: {target_id}")
     for key, value in changes.items():
         target[key] = _normalize_editable_value(key, value, target.get(key))
 
@@ -494,6 +462,14 @@ def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
         "dependent_pages",
     }:
         return _dict_list(value)
+    if key in {
+        "data_usage",
+        "data_origin",
+        "interface_design",
+    }:
+        return value if isinstance(value, dict) else {}
+    if key in {"processing_logic", "risks"}:
+        return _string_list(value)
     return str(value).strip() if value is not None else ""
 
 

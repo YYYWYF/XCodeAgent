@@ -1,3 +1,7 @@
+import logging
+
+from langgraph.config import get_stream_writer
+
 from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.planner import (
     plan_project_with_chat_model,
@@ -5,7 +9,7 @@ from app.agents.main.planner import (
 )
 from app.agents.main.page_designer import (
     PageDependencyGapError,
-    design_data_source_with_chat_model,
+    design_endpoint_with_chat_model,
     design_page_with_chat_model,
 )
 from app.graph.nodes.confirmation import user_confirmed_text
@@ -15,11 +19,12 @@ from app.services.detail_review import (
     detail_review_payload,
 )
 from app.services.project_plan import apply_project_plan_feedback
-from app.services.page_dependencies import page_data_source_ids, validate_project_plan_dependencies
+from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_detail_plan import (
-    attach_data_source_detail_plan,
+    attach_endpoint_detail_plan,
     attach_page_detail_plan,
     detail_design_targets,
+    extract_endpoint_detail_context,
     extract_page_detail_context,
 )
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
@@ -30,6 +35,28 @@ from app.workspace.plan_documents import (
     write_project_plan_document,
     write_project_plan_json,
 )
+
+
+logger = logging.getLogger("uvicorn.error")
+
+
+def _detail_progress(message: str, **detail: object) -> None:
+    """向 LangGraph custom stream 和后端日志同步发送细节设计进度。"""
+
+    logger.info("detail_confirmation progress: %s %s", message, detail)
+    try:
+        writer = get_stream_writer()
+    except (KeyError, RuntimeError):
+        writer = None
+    if writer:
+        writer(
+            {
+                "type": "detail_confirmation.progress",
+                "node_name": "detail_confirmation",
+                "message": message,
+                "detail": detail,
+            }
+        )
 
 
 def project_planning(state: ProjectState) -> dict:
@@ -141,11 +168,17 @@ def detail_confirmation(state: ProjectState) -> dict:
     pending_plan = state.get("pending_project_plan")
     submission = state.get("detail_review_submission")
     selectedPageId = str(state.get("selectedPageId") or "")
-    selectedDataSourceId = str(
-        state.get("selectedDataSourceId")
-        or state.get("selected_data_source_id")
-        or ""
+    selected_api_contract_id = str(state.get("selected_api_contract_id") or "")
+    selected_endpoint_id = str(state.get("selected_endpoint_id") or "")
+    detail_target_type = str(
+        state.get("detail_target_type")
+        or ("endpoint" if selected_endpoint_id else "page" if selectedPageId else "")
     )
+    selected_endpoint_state = {
+        **({"selected_api_contract_id": selected_api_contract_id} if selected_api_contract_id else {}),
+        **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
+        **({"detail_target_type": detail_target_type} if detail_target_type else {}),
+    }
     if pending_plan and isinstance(submission, dict):
         edited_markdown = edited_project_plan_markdown(state, pending_plan)
         synchronized_plan = (
@@ -161,7 +194,8 @@ def detail_confirmation(state: ProjectState) -> dict:
             synchronized_plan,
             submission,
             selectedPageId=selectedPageId or None,
-            selectedDataSourceId=selectedDataSourceId or None,
+            selected_api_contract_id=selected_api_contract_id or None,
+            selected_endpoint_id=selected_endpoint_id or None,
         )
         project_plan_path = write_project_plan_document(state, confirmed_plan)
         return {
@@ -178,11 +212,10 @@ def detail_confirmation(state: ProjectState) -> dict:
                 "targets": [],
             },
             "selectedPageId": selectedPageId or None,
-            "selectedDataSourceId": selectedDataSourceId or None,
-            "selected_data_source_id": selectedDataSourceId or None,
+            **selected_endpoint_state,
             "detail_plans": [
                 *confirmed_plan.get("page_detail_plans", []),
-                *confirmed_plan.get("data_source_detail_plans", []),
+                *confirmed_plan.get("endpoint_detail_plans", []),
             ],
             "detail_review_submission": {},
             "timeline": ["detail_confirmation"],
@@ -198,7 +231,7 @@ def detail_confirmation(state: ProjectState) -> dict:
             {**state, "detail_review_submission": legacy_submission}
         )
 
-    if pending_plan and (selectedPageId or selectedDataSourceId):
+    if pending_plan and (selectedPageId or selected_endpoint_id):
         review_plan = pending_plan
         project_plan_path = state.get("project_plan_path")
         if selectedPageId and not _has_selected_page_detail(review_plan, selectedPageId):
@@ -223,23 +256,28 @@ def detail_confirmation(state: ProjectState) -> dict:
                 }
             review_plan["confirmation_status"] = "pending_user_confirmation"
             project_plan_path = write_project_plan_document(state, review_plan)
-        if selectedDataSourceId and not _has_selected_data_source_detail(
+        if selected_endpoint_id and not _has_selected_endpoint_detail(
             review_plan,
-            selectedDataSourceId,
+            selected_api_contract_id,
+            selected_endpoint_id,
         ):
             source_plan = state.get("project_plan")
             if not isinstance(source_plan, dict):
                 source_plan = pending_plan
             review_plan = _generate_all_detail_plans(
                 source_plan,
-                selectedDataSourceId=selectedDataSourceId,
+                selected_api_contract_id=selected_api_contract_id,
+                selected_endpoint_id=selected_endpoint_id,
+                detail_target_type=detail_target_type or "endpoint",
             )
             review_plan["confirmation_status"] = "pending_user_confirmation"
             project_plan_path = write_project_plan_document(state, review_plan)
         clarification = detail_review_payload(
             review_plan,
             selectedPageId=selectedPageId or None,
-            selectedDataSourceId=selectedDataSourceId or None,
+            selected_api_contract_id=selected_api_contract_id or None,
+            selected_endpoint_id=selected_endpoint_id or None,
+            detail_target_type=detail_target_type or None,
         )
         return {
             "phase": "detail_confirmation",
@@ -253,20 +291,21 @@ def detail_confirmation(state: ProjectState) -> dict:
                 "status": "requires_user_input",
                 "mode": "batch_review",
                 "selectedPageId": selectedPageId or None,
-                "selectedDataSourceId": selectedDataSourceId or None,
+                **selected_endpoint_state,
                 "targets": _selected_detail_design_targets(
                     review_plan,
                     selectedPageId,
-                    selectedDataSourceId=selectedDataSourceId or None,
+                    selected_api_contract_id=selected_api_contract_id or None,
+                    selected_endpoint_id=selected_endpoint_id or None,
                 ),
             },
             "selectedPageId": selectedPageId or None,
-            "selectedDataSourceId": selectedDataSourceId or None,
-            "selected_data_source_id": selectedDataSourceId or None,
+            **selected_endpoint_state,
             "detail_plans": _selected_detail_plans(
                 review_plan,
                 selectedPageId,
-                selectedDataSourceId=selectedDataSourceId or None,
+                selected_api_contract_id=selected_api_contract_id or None,
+                selected_endpoint_id=selected_endpoint_id or None,
             ),
             "timeline": ["detail_confirmation"],
         }
@@ -301,8 +340,10 @@ def detail_confirmation(state: ProjectState) -> dict:
             "主 Workflow 需要工作区 .xcodeagent/plans/project-plan.json "
             "（兼容 plans/project-plan.json）作为初始输入。"
         )
-    if not selectedPageId and not selectedDataSourceId:
-        raise ValueError("开始详细设计时必须提供 selectedPageId 或 selectedDataSourceId。")
+    if not selectedPageId and not selected_endpoint_id:
+        raise ValueError(
+            "开始详细设计时必须提供 selectedPageId 或 selectedEndpointId。"
+        )
     if selectedPageId and _has_selected_page_detail(project_plan, selectedPageId):
         return {
             "phase": "detail_confirmation",
@@ -310,6 +351,9 @@ def detail_confirmation(state: ProjectState) -> dict:
             "clarification": detail_review_payload(
                 project_plan,
                 selectedPageId=selectedPageId,
+                selected_api_contract_id=selected_api_contract_id or None,
+                selected_endpoint_id=selected_endpoint_id or None,
+                detail_target_type=detail_target_type or None,
             ),
             "pending_project_plan": project_plan,
             "project_plan": project_plan,
@@ -319,25 +363,30 @@ def detail_confirmation(state: ProjectState) -> dict:
                 "status": "requires_user_input",
                 "mode": "batch_review",
                 "selectedPageId": selectedPageId,
+                **selected_endpoint_state,
                 "targets": _selected_detail_design_targets(
                     project_plan,
                     selectedPageId,
                 ),
             },
             "selectedPageId": selectedPageId,
+            **selected_endpoint_state,
             "detail_plans": _selected_detail_plans(project_plan, selectedPageId),
             "timeline": ["detail_confirmation"],
         }
-    if selectedDataSourceId and _has_selected_data_source_detail(
+    if selected_endpoint_id and _has_selected_endpoint_detail(
         project_plan,
-        selectedDataSourceId,
+        selected_api_contract_id,
+        selected_endpoint_id,
     ):
         return {
             "phase": "detail_confirmation",
             "status": "requires_user_input",
             "clarification": detail_review_payload(
                 project_plan,
-                selectedDataSourceId=selectedDataSourceId,
+                selected_api_contract_id=selected_api_contract_id or None,
+                selected_endpoint_id=selected_endpoint_id,
+                detail_target_type=detail_target_type or "endpoint",
             ),
             "pending_project_plan": project_plan,
             "project_plan": project_plan,
@@ -345,20 +394,21 @@ def detail_confirmation(state: ProjectState) -> dict:
             "project_plan_json_path": _project_plan_json_path_for_state(state),
             "detail_selection": {
                 "status": "requires_user_input",
-                "mode": "batch_review",
-                "selectedDataSourceId": selectedDataSourceId,
+                "mode": "endpoint_review",
+                **selected_endpoint_state,
                 "targets": _selected_detail_design_targets(
                     project_plan,
                     "",
-                    selectedDataSourceId=selectedDataSourceId,
+                    selected_api_contract_id=selected_api_contract_id or None,
+                    selected_endpoint_id=selected_endpoint_id,
                 ),
             },
-            "selectedDataSourceId": selectedDataSourceId,
-            "selected_data_source_id": selectedDataSourceId,
+            **selected_endpoint_state,
             "detail_plans": _selected_detail_plans(
                 project_plan,
                 "",
-                selectedDataSourceId=selectedDataSourceId,
+                selected_api_contract_id=selected_api_contract_id or None,
+                selected_endpoint_id=selected_endpoint_id,
             ),
             "timeline": ["detail_confirmation"],
         }
@@ -367,7 +417,9 @@ def detail_confirmation(state: ProjectState) -> dict:
             project_plan,
             frontend_pages=state.get("frontend_pages"),
             selectedPageId=selectedPageId or None,
-            selectedDataSourceId=selectedDataSourceId or None,
+            selected_api_contract_id=selected_api_contract_id or None,
+            selected_endpoint_id=selected_endpoint_id or None,
+            detail_target_type=detail_target_type or None,
         )
     except PageDependencyGapError as exc:
         return {
@@ -382,7 +434,8 @@ def detail_confirmation(state: ProjectState) -> dict:
     targets = _selected_detail_design_targets(
         pending_plan,
         selectedPageId,
-        selectedDataSourceId=selectedDataSourceId or None,
+        selected_api_contract_id=selected_api_contract_id or None,
+        selected_endpoint_id=selected_endpoint_id or None,
     )
     return {
         "phase": "detail_confirmation",
@@ -390,7 +443,9 @@ def detail_confirmation(state: ProjectState) -> dict:
         "clarification": detail_review_payload(
             pending_plan,
             selectedPageId=selectedPageId or None,
-            selectedDataSourceId=selectedDataSourceId or None,
+            selected_api_contract_id=selected_api_contract_id or None,
+            selected_endpoint_id=selected_endpoint_id or None,
+            detail_target_type=detail_target_type or None,
         ),
         "pending_project_plan": pending_plan,
         "project_plan": project_plan,
@@ -400,16 +455,16 @@ def detail_confirmation(state: ProjectState) -> dict:
             "status": "requires_user_input",
             "mode": "batch_review",
             "selectedPageId": selectedPageId or None,
-            "selectedDataSourceId": selectedDataSourceId or None,
+            **selected_endpoint_state,
             "targets": targets,
         },
         "selectedPageId": selectedPageId or None,
-        "selectedDataSourceId": selectedDataSourceId or None,
-        "selected_data_source_id": selectedDataSourceId or None,
+        **selected_endpoint_state,
         "detail_plans": _selected_detail_plans(
             pending_plan,
             selectedPageId,
-            selectedDataSourceId=selectedDataSourceId or None,
+            selected_api_contract_id=selected_api_contract_id or None,
+            selected_endpoint_id=selected_endpoint_id or None,
         ),
         "timeline": ["detail_confirmation"],
     }
@@ -420,9 +475,11 @@ def _generate_all_detail_plans(
     *,
     frontend_pages: list[dict] | None = None,
     selectedPageId: str | None = None,
-    selectedDataSourceId: str | None = None,
+    selected_api_contract_id: str | None = None,
+    selected_endpoint_id: str | None = None,
+    detail_target_type: str | None = None,
 ) -> dict:
-    """为计划中的数据源及用户选中的目标生成功能详细设计。"""
+    """为用户选中的页面或 endpoint 生成功能详细设计。"""
 
     project_pages = project_plan.get("frontend_pages", [])
     normalized_project_pages = [
@@ -457,60 +514,63 @@ def _generate_all_detail_plans(
         updated_plan = {
             **updated_plan,
             "page_detail_plans": [],
-            "data_source_detail_plans": [],
+            "endpoint_detail_plans": [],
         }
-    if selectedDataSourceId:
-        source_ids = {
-            str(source.get("id"))
-            for source in updated_plan.get("data_sources", [])
-            if isinstance(source, dict) and source.get("id")
-        }
-        if selectedDataSourceId not in source_ids:
-            contract_source = _data_source_from_api_contract(
-                updated_plan,
-                selectedDataSourceId,
-            )
-            if not contract_source:
-                raise ValueError(f"项目计划中不存在数据源：{selectedDataSourceId}")
-            updated_plan = {
-                **updated_plan,
-                "data_sources": [
-                    *[
-                        source
-                        for source in updated_plan.get("data_sources", [])
-                        if isinstance(source, dict)
-                    ],
-                    contract_source,
-                ],
-            }
-        pages = []
+        _drop_legacy_detail_fields(updated_plan)
+    if detail_target_type == "endpoint" or selected_endpoint_id:
+        if not selected_api_contract_id or not selected_endpoint_id:
+            raise ValueError("接口详细设计必须提供 selectedApiContractId 和 selectedEndpointId。")
+        _detail_progress(
+            "开始生成接口详细设计。",
+            target_type="endpoint",
+            api_contract_id=selected_api_contract_id,
+            endpoint_id=selected_endpoint_id,
+        )
+        endpoint_context = extract_endpoint_detail_context(
+            updated_plan,
+            selected_api_contract_id,
+            selected_endpoint_id,
+        )
+        _detail_progress(
+            "已定位接口契约，正在调用模型生成详细设计。",
+            target_type="endpoint",
+            api_contract_id=selected_api_contract_id,
+            endpoint_id=selected_endpoint_id,
+            method=endpoint_context.get("method"),
+            path=endpoint_context.get("path"),
+        )
+        detail = design_endpoint_with_chat_model(updated_plan, endpoint_context, "")
+        _detail_progress(
+            "接口详细设计已生成，正在写入计划产物。",
+            target_type="endpoint",
+            api_contract_id=selected_api_contract_id,
+            endpoint_id=selected_endpoint_id,
+            design_source=detail.get("design_source"),
+        )
+        detail["status"] = "pending_user_confirmation"
+        detail["approved"] = False
         updated_plan = {
             **updated_plan,
             "page_detail_plans": [],
-            "data_source_detail_plans": [],
+            "endpoint_detail_plans": [],
         }
-    selected_source_ids = {
-        str(source_id)
-        for page in pages if isinstance(page, dict)
-        for source_id in page_data_source_ids(
-            page,
-            [contract for contract in project_plan.get("api_contracts", []) if isinstance(contract, dict)],
+        _drop_legacy_detail_fields(updated_plan)
+        updated_plan = attach_endpoint_detail_plan(updated_plan, detail)
+        _detail_progress(
+            "接口详细设计已挂回 ProjectPlan，等待用户确认。",
+            target_type="endpoint",
+            api_contract_id=selected_api_contract_id,
+            endpoint_id=selected_endpoint_id,
+            detail_plan_id=detail.get("id"),
         )
-        if source_id
-    }
-    if selectedDataSourceId:
-        selected_source_ids = {selectedDataSourceId}
-    for source in updated_plan.get("data_sources", []):
-        source_id = source.get("id") if isinstance(source, dict) else None
-        if not source_id or (
-            (selectedPageId or selectedDataSourceId)
-            and str(source_id) not in selected_source_ids
-        ):
-            continue
-        detail = design_data_source_with_chat_model(updated_plan, source_id, "")
-        detail["status"] = "pending_user_confirmation"
-        detail["approved"] = False
-        updated_plan = attach_data_source_detail_plan(updated_plan, detail)
+        updated_plan["detail_confirmation_summary"] = {
+            "confirmed_pages": 0,
+            "confirmed_endpoints": 0,
+            "total_pages": 0,
+            "total_endpoints": 1,
+            "mode": "endpoint_review",
+        }
+        return updated_plan
 
     for page in pages:
         pageId = page.get("pageId") if isinstance(page, dict) else None
@@ -524,13 +584,9 @@ def _generate_all_detail_plans(
 
     updated_plan["detail_confirmation_summary"] = {
         "confirmed_pages": 0,
-        "confirmed_data_sources": 0,
+        "confirmed_endpoints": 0,
         "total_pages": len(pages),
-        "total_data_sources": (
-            len(selected_source_ids)
-            if selectedPageId or selectedDataSourceId
-            else len(updated_plan.get("data_sources", []))
-        ),
+        "total_endpoints": 0,
         "mode": "batch_review",
     }
     selectedPageIds = {
@@ -539,17 +595,10 @@ def _generate_all_detail_plans(
     for page in updated_plan.get("frontend_pages", []):
         if isinstance(page, dict) and (
             not selectedPageId
-            and not selectedDataSourceId
+            and not selected_endpoint_id
             or str(page.get("pageId")) in selectedPageIds
         ):
             page["detail_status"] = "pending_user_confirmation"
-    for source in updated_plan.get("data_sources", []):
-        if isinstance(source, dict) and (
-            not selectedPageId
-            and not selectedDataSourceId
-            or str(source.get("id")) in selected_source_ids
-        ):
-            source["detail_status"] = "pending_user_confirmation"
     return updated_plan
 
 
@@ -562,51 +611,29 @@ def _normalize_detail_page(page: dict) -> dict:
     return {**page, "pageId": pageId}
 
 
-def _data_source_from_api_contract(
-    project_plan: dict,
-    selectedDataSourceId: str,
-) -> dict | None:
-    """从 api_contracts 合成缺失的数据源定义，兼容仅声明 API 契约的计划。"""
+def _drop_legacy_detail_fields(project_plan: dict) -> None:
+    """清理旧版数据源详细设计字段，避免新 endpoint 流程继续透传。"""
 
-    contracts = [
-        contract
-        for contract in project_plan.get("api_contracts", [])
-        if isinstance(contract, dict)
-        and (
-            str(contract.get("data_source_id") or "") == selectedDataSourceId
-            or str(contract.get("id") or "") == selectedDataSourceId
-        )
-    ]
-    if not contracts:
-        return None
-    first_contract = contracts[0]
-    return {
-        "id": selectedDataSourceId,
-        "name": first_contract.get("name")
-        or first_contract.get("label")
-        or selectedDataSourceId,
-        "type": "api_contract",
-        "description": first_contract.get("summary")
-        or f"由 api_contracts 中的 {selectedDataSourceId} 契约生成的数据源设计目标。",
-        "entities": [],
-        "schema_refs": [],
-    }
+    project_plan.pop("data_source_detail_plans", None)
+    project_plan.pop("data_source_detail_confirmation_summary", None)
 
 
 def _selected_detail_plans(
     project_plan: dict,
     selectedPageId: str,
     *,
-    selectedDataSourceId: str | None = None,
+    selected_api_contract_id: str | None = None,
+    selected_endpoint_id: str | None = None,
 ) -> list[dict]:
-    """只返回当前页面或当前数据源的详细设计。"""
+    """只返回当前页面或当前 endpoint 的详细设计。"""
 
-    if selectedDataSourceId:
+    if selected_endpoint_id:
         return [
             detail
-            for detail in project_plan.get("data_source_detail_plans", [])
+            for detail in project_plan.get("endpoint_detail_plans", [])
             if isinstance(detail, dict)
-            and str(detail.get("data_source_id") or "") == selectedDataSourceId
+            and str(detail.get("api_contract_id") or "") == str(selected_api_contract_id or "")
+            and str(detail.get("endpoint_id") or "") == selected_endpoint_id
         ]
 
     selected_page_details = [
@@ -615,25 +642,7 @@ def _selected_detail_plans(
         if isinstance(detail, dict)
         and str(detail.get("pageId") or "") == selectedPageId
     ]
-    selected_source_ids = {
-        str(item.get("id") or item.get("data_source_id") or "")
-        for detail in selected_page_details
-        for item in detail.get("data_sources", [])
-        if isinstance(item, dict) and (item.get("id") or item.get("data_source_id"))
-    }
-    selected_source_ids.update(
-        str(item.get("data_source_id") or "")
-        for detail in selected_page_details
-        for item in detail.get("api_dependencies", [])
-        if isinstance(item, dict) and item.get("data_source_id")
-    )
-    selected_source_details = [
-        detail
-        for detail in project_plan.get("data_source_detail_plans", [])
-        if isinstance(detail, dict)
-        and str(detail.get("data_source_id") or "") in selected_source_ids
-    ]
-    return [*selected_page_details, *selected_source_details]
+    return selected_page_details
 
 
 def _has_selected_page_detail(project_plan: dict, selectedPageId: str) -> bool:
@@ -646,13 +655,28 @@ def _has_selected_page_detail(project_plan: dict, selectedPageId: str) -> bool:
     )
 
 
-def _has_selected_data_source_detail(project_plan: dict, selectedDataSourceId: str) -> bool:
-    """判断计划中是否已经包含当前数据源的详情正文。"""
+def _has_selected_endpoint_detail(
+    project_plan: dict,
+    selected_api_contract_id: str,
+    selected_endpoint_id: str,
+) -> bool:
+    """判断计划中是否已经包含当前 endpoint 的详情正文。"""
 
     return any(
         isinstance(detail, dict)
-        and str(detail.get("data_source_id") or "") == selectedDataSourceId
-        for detail in project_plan.get("data_source_detail_plans", [])
+        and str(detail.get("api_contract_id") or "") == selected_api_contract_id
+        and str(detail.get("endpoint_id") or "") == selected_endpoint_id
+        and _has_formal_endpoint_detail_content(detail)
+        for detail in project_plan.get("endpoint_detail_plans", [])
+    )
+
+
+def _has_formal_endpoint_detail_content(detail: dict) -> bool:
+    """判断 endpoint 详情是否包含可供用户确认的正式三段设计内容。"""
+
+    return all(
+        isinstance(detail.get(field), dict) and bool(detail.get(field))
+        for field in ("data_usage", "data_origin", "interface_design")
     )
 
 
@@ -660,19 +684,32 @@ def _selected_detail_design_targets(
     project_plan: dict,
     selectedPageId: str,
     *,
-    selectedDataSourceId: str | None = None,
+    selected_api_contract_id: str | None = None,
+    selected_endpoint_id: str | None = None,
 ) -> list[dict]:
-    """把全量目标清单收敛到当前页面或当前数据源。"""
+    """把全量目标清单收敛到当前页面或当前 endpoint。"""
 
     selected_plans = _selected_detail_plans(
         project_plan,
         selectedPageId,
-        selectedDataSourceId=selectedDataSourceId,
+        selected_api_contract_id=selected_api_contract_id,
+        selected_endpoint_id=selected_endpoint_id,
     )
+    if selected_endpoint_id:
+        return [
+            {
+                "id": f"{selected_api_contract_id}:{selected_endpoint_id}",
+                "type": "endpoint",
+                "label": f"接口：{plan.get('method')} {plan.get('path')}",
+                "name": plan.get("name") or selected_endpoint_id,
+                "description": plan.get("summary") or "",
+            }
+            for plan in selected_plans
+        ]
     selected_ids = {
-        str(plan.get("pageId") or plan.get("data_source_id") or "")
+        str(plan.get("pageId") or "")
         for plan in selected_plans
-        if isinstance(plan, dict) and (plan.get("pageId") or plan.get("data_source_id"))
+        if isinstance(plan, dict) and plan.get("pageId")
     }
     return [
         target
@@ -701,7 +738,7 @@ def _project_plan_confirmation_payload(project_plan: dict) -> dict:
         ]
     )
     payload["mode"] = "project_plan_confirmation"
-    payload["message"] = "请确认项目计划后再继续页面/数据源细节设计。"
+    payload["message"] = "请确认项目计划后再继续页面/接口细节设计。"
     payload["plan_summary"] = project_plan.get("app", {}).get("name", "未命名应用")
     return payload
 

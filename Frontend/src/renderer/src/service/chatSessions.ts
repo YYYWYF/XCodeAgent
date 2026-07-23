@@ -30,6 +30,9 @@ export type ChatSessionRecord = {
   title: string;
   editorMode: EditorMode;
   threadId: string;
+  apiContractId?: string;
+  endpointId?: string;
+  endpointLabel?: string;
   pageId?: string;
   workspaceRoot: string;
   messages: ChatSessionMessage[];
@@ -42,6 +45,9 @@ export type ChatSessionSummary = {
   title: string;
   editorMode: EditorMode;
   threadId: string;
+  apiContractId?: string;
+  endpointId?: string;
+  endpointLabel?: string;
   pageId?: string;
   createdAt: number;
   updatedAt: number;
@@ -181,11 +187,22 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
   if (!value || typeof value !== 'object') return null;
   const session = value as Partial<ChatSessionRecord>;
   if (!session.id || !session.editorMode || !session.threadId) return null;
+  const endpointContext = inferEndpointContextFromMessages(session.messages);
   return {
     id: String(session.id),
     title: String(session.title || '新对话'),
     editorMode: session.editorMode,
     threadId: String(session.threadId),
+    apiContractId:
+      normalizeEndpointField(session.apiContractId) ||
+      endpointContext?.apiContractId,
+    endpointId:
+      normalizeEndpointField(session.endpointId) ||
+      endpointContext?.endpointId,
+    endpointLabel:
+      normalizeEndpointField(session.endpointLabel) ||
+      endpointContext?.endpointLabel ||
+      inferEndpointLabelFromTitle(session.title),
     pageId: normalizePageId(session.pageId) || inferPageIdFromMessages(session.messages),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
@@ -200,6 +217,9 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     title: session.title,
     editorMode: session.editorMode,
     threadId: session.threadId,
+    apiContractId: session.apiContractId,
+    endpointId: session.endpointId,
+    endpointLabel: session.endpointLabel,
     pageId: session.pageId,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -216,6 +236,9 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       title: String(item.title || '新对话'),
       editorMode: item.editorMode || 'frontend',
       threadId: String(item.threadId || item.id || ''),
+      apiContractId: normalizeEndpointField(item.apiContractId),
+      endpointId: normalizeEndpointField(item.endpointId),
+      endpointLabel: normalizeEndpointField(item.endpointLabel),
       pageId: normalizePageId(item.pageId),
       createdAt: Number(item.createdAt || Date.now()),
       updatedAt: Number(item.updatedAt || Date.now()),
@@ -228,6 +251,12 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
 function normalizePageId(value: unknown): string | undefined {
   const pageId = typeof value === 'string' ? value.trim() : '';
   return pageId || undefined;
+}
+
+/** 规范化 API endpoint 会话字段，空值不写入本地会话契约。 */
+function normalizeEndpointField(value: unknown): string | undefined {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text || undefined;
 }
 
 /** 从旧会话保存的 Workflow 快照中恢复页面归属。 */
@@ -247,6 +276,48 @@ function inferPageIdFromMessages(value: unknown): string | undefined {
     if (pageId) return pageId;
   }
   return undefined;
+}
+
+/** 从旧会话保存的 Workflow 快照中恢复 API endpoint 归属。 */
+function inferEndpointContextFromMessages(value: unknown): {
+  apiContractId?: string;
+  endpointId?: string;
+  endpointLabel?: string;
+} | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    const message = value[index];
+    if (!message || typeof message !== 'object') continue;
+    const workflow = (message as { workflow?: unknown }).workflow;
+    if (!workflow || typeof workflow !== 'object') continue;
+    const payload = workflow as {
+      state?: Record<string, unknown>;
+      result?: Record<string, unknown>;
+      summary?: { clarification?: { review?: { summary?: Record<string, unknown> } } };
+    };
+    const reviewSummary = payload.summary?.clarification?.review?.summary;
+    const apiContractId = normalizeEndpointField(
+      payload.state?.selectedApiContractId ||
+      payload.result?.selectedApiContractId ||
+      reviewSummary?.selectedApiContractId
+    );
+    const endpointId = normalizeEndpointField(
+      payload.state?.selectedEndpointId ||
+      payload.result?.selectedEndpointId ||
+      reviewSummary?.selectedEndpointId
+    );
+    if (apiContractId && endpointId) {
+      return { apiContractId, endpointId };
+    }
+  }
+  return undefined;
+}
+
+/** 从会话标题中恢复接口展示名，兼容旧的“设计接口：METHOD path”标题。 */
+function inferEndpointLabelFromTitle(value: unknown): string | undefined {
+  const title = typeof value === 'string' ? value.trim() : '';
+  const matched = title.match(/(?:设计接口|确认接口|开始设计接口|查看已生成接口计划)：(.+)$/);
+  return matched?.[1]?.trim() || undefined;
 }
 
 function normalizeSessionWorkspaces(value: unknown): SessionWorkspaceSummary[] {

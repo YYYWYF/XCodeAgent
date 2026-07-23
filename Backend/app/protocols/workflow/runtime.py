@@ -108,6 +108,30 @@ def _terminal_process_title(node_name: str, status: str) -> str:
     return f"{prefix} {_workflow_node_label(node_name)}"
 
 
+def _runtime_node_label(node_name: str, state: dict[str, Any]) -> str:
+    """按本次运行目标动态生成节点展示名称，保持内部节点 id 稳定。"""
+
+    detail_target_type = str(state.get("detail_target_type") or "")
+    if node_name == "detail_confirmation" and detail_target_type == "endpoint":
+        return "接口细节确认"
+    return _workflow_node_label(node_name)
+
+
+def _runtime_terminal_process_title(
+    node_name: str,
+    status: str,
+    state: dict[str, Any],
+) -> str:
+    """按步骤终态和动态节点名生成流程标题。"""
+
+    prefix = {
+        "completed": "已完成",
+        "failed": "执行失败",
+        "requires_user_input": "等待确认",
+    }.get(status, "已完成")
+    return f"{prefix} {_runtime_node_label(node_name, state)}"
+
+
 def build_workflow_ag_ui_stream(
     *,
     graph: Any,
@@ -270,7 +294,8 @@ def build_workflow_ag_ui_stream(
                 thread_id=thread_id,
                 node_name=first_node_name,
                 status="running",
-                message=f"正在执行：{_workflow_node_label(first_node_name)}",
+                message=f"正在执行：{_runtime_node_label(first_node_name, initial_state)}",
+                node_label=_runtime_node_label(first_node_name, initial_state),
                 attempt=first_node_attempt,
                 iteration_kind=first_node_iteration_kind,
             )
@@ -288,7 +313,7 @@ def build_workflow_ag_ui_stream(
                 id=_process_step_id(first_node_name, first_node_attempt),
                 kind="workflow",
                 status="running",
-                title=f"正在执行 {_workflow_node_label(first_node_name)}",
+                title=f"正在执行 {_runtime_node_label(first_node_name, initial_state)}",
                 detail=str(first_node_event["message"]),
                 sequence=process_sequence,
                 node_name=first_node_name,
@@ -307,6 +332,62 @@ def build_workflow_ag_ui_stream(
                 if stream_mode == "custom":
                     progress = chunk if isinstance(chunk, dict) else {}
                     event_type = progress.get("type")
+                    if event_type == "detail_confirmation.progress":
+                        progress_node = str(progress.get("node_name") or "detail_confirmation")
+                        progress_attempt = _current_node_attempt(node_attempts, progress_node)
+                        progress_detail = (
+                            progress.get("detail")
+                            if isinstance(progress.get("detail"), dict)
+                            else {}
+                        )
+                        progress_state = {
+                            **initial_state,
+                            **(
+                                {"detail_target_type": progress_detail.get("target_type")}
+                                if progress_detail.get("target_type")
+                                else {}
+                            ),
+                        }
+                        progress_message = str(
+                            progress.get("message") or "细节设计进度已更新。"
+                        )
+                        _workflow_event(
+                            events,
+                            "workflow.node.progress",
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            node_name=progress_node,
+                            status="running",
+                            message=progress_message,
+                            data={
+                                "phase": progress_node,
+                                "detail": progress_detail,
+                            },
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                            node_label=_runtime_node_label(progress_node, progress_state),
+                        )
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=progress_state,
+                        ):
+                            yield frame
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id(progress_node, progress_attempt),
+                            kind="workflow",
+                            status="running",
+                            title=f"正在执行 {_runtime_node_label(progress_node, progress_state)}",
+                            detail=progress_message,
+                            sequence=process_sequence,
+                            node_name=progress_node,
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                        )
+                        continue
                     if event_type == "prepare_build_tasks.progress":
                         dag_generation = (
                             progress.get("dag_generation")
@@ -469,7 +550,8 @@ def build_workflow_ag_ui_stream(
                         node_name=node_name,
                         status=terminal_status,
                         message=detail.get("message")
-                        or f"完成：{_workflow_node_label(node_name)}",
+                        or f"完成：{_runtime_node_label(node_name, update)}",
+                        node_label=_runtime_node_label(node_name, update),
                         data=node_payload,
                         attempt=node_attempt,
                         iteration_kind=node_iteration_kind,
@@ -498,7 +580,11 @@ def build_workflow_ag_ui_stream(
                         id=_process_step_id(node_name, node_attempt),
                         kind="workflow",
                         status=terminal_status,
-                        title=_terminal_process_title(node_name, terminal_status),
+                        title=_runtime_terminal_process_title(
+                            node_name,
+                            terminal_status,
+                            update,
+                        ),
                         detail=process_detail,
                         sequence=process_sequence,
                         checks=checks,
@@ -534,7 +620,8 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             node_name=next_node,
                             status="running",
-                            message=f"正在执行：{_workflow_node_label(next_node)}",
+                            message=f"正在执行：{_runtime_node_label(next_node, update)}",
+                            node_label=_runtime_node_label(next_node, update),
                             attempt=next_attempt,
                             iteration_kind=next_iteration_kind,
                         )
@@ -552,7 +639,7 @@ def build_workflow_ag_ui_stream(
                             id=_process_step_id(next_node, next_attempt),
                             kind="workflow",
                             status="running",
-                            title=f"正在执行 {_workflow_node_label(next_node)}",
+                            title=f"正在执行 {_runtime_node_label(next_node, update)}",
                             detail=str(next_event["message"]),
                             sequence=process_sequence,
                             node_name=next_node,

@@ -1,4 +1,4 @@
-"""页面与数据源详细设计的独立文件持久化。"""
+"""页面与 endpoint 详细设计的独立文件持久化。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,12 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
+def _endpoint_identity(endpoint: dict[str, Any], index: int) -> str:
+    """返回 endpoint 的稳定文件标识；没有显式 id 时使用与选择器一致的 1-based 序号。"""
+
+    return str(endpoint.get("id") or index + 1)
+
+
 def _safe_file_stem(value: Any, *, prefix: str) -> str:
     """把稳定业务 id 转换为可安全写入文件系统的文件名。"""
 
@@ -27,9 +33,9 @@ def _safe_file_stem(value: Any, *, prefix: str) -> str:
 
 
 def _artifact_directory(state: dict[str, Any], *, artifact_type: str) -> Path:
-    """按详细设计类型返回页面或数据源的独立目录。"""
+    """按详细设计类型返回页面或 endpoint 的独立目录。"""
 
-    directory_name = "data-source" if artifact_type == "data_source" else "pages"
+    directory_name = "endpoints" if artifact_type == "endpoint" else "pages"
     return workflow_artifact_root(state) / "plans" / directory_name
 
 
@@ -144,12 +150,12 @@ def hydrate_external_detail_designs(
     project_plan_path: str | Path,
     project_plan: dict[str, Any],
 ) -> dict[str, Any]:
-    """把外置页面/数据源详情按原文件内容读回内存，供 Workflow 展示和确认。"""
+    """把外置页面/endpoint 详情按原文件内容读回内存，供 Workflow 展示和确认。"""
 
     plan_path = Path(project_plan_path).expanduser()
     hydrated = deepcopy(project_plan)
     page_details: list[dict[str, Any]] = []
-    data_source_details: list[dict[str, Any]] = []
+    endpoint_details: list[dict[str, Any]] = []
 
     for page in _dict_items(hydrated.get("frontend_pages")):
         pageId = str(page.get("pageId") or "")
@@ -167,24 +173,29 @@ def hydrate_external_detail_designs(
                 _hydrate_page_detail_runtime_fields(hydrated, page, detail)
             )
 
-    for source in _dict_items(hydrated.get("data_sources")):
-        source_id = str(source.get("id") or "")
-        if not source_id:
+    for contract in _dict_items(hydrated.get("api_contracts")):
+        contract_id = str(contract.get("id") or "")
+        if not contract_id:
             continue
-        detail_path = _resolve_detail_json_path(
-            plan_path,
-            source.get("detail_design") if isinstance(source.get("detail_design"), dict) else {},
-            fallback_directory="data-source",
-            fallback_stem=_safe_file_stem(source_id, prefix="data-source--"),
-        )
-        detail = _read_json_object(detail_path) if detail_path else None
-        if isinstance(detail, dict):
-            data_source_details.append(detail)
+        for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
+            endpoint_id = _endpoint_identity(endpoint, endpoint_index)
+            detail_path = _resolve_detail_json_path(
+                plan_path,
+                endpoint.get("detail_design") if isinstance(endpoint.get("detail_design"), dict) else {},
+                fallback_directory="endpoints",
+                fallback_stem=_safe_file_stem(
+                    f"{contract_id}--{endpoint_id}",
+                    prefix="endpoint--",
+                ),
+            )
+            detail = _read_json_object(detail_path) if detail_path else None
+            if isinstance(detail, dict):
+                endpoint_details.append(detail)
 
     if page_details:
         hydrated["page_detail_plans"] = page_details
-    if data_source_details:
-        hydrated["data_source_detail_plans"] = data_source_details
+    if endpoint_details:
+        hydrated["endpoint_detail_plans"] = endpoint_details
     return hydrated
 
 
@@ -243,22 +254,24 @@ def _persisted_page_detail(detail: dict[str, Any]) -> dict[str, Any]:
     return persisted
 
 
-def _data_source_dependencies(detail: dict[str, Any]) -> dict[str, list[str]]:
-    """从数据源详情中提取它关联的契约和页面，供后续任务装配使用。"""
+def _endpoint_dependencies(detail: dict[str, Any]) -> dict[str, list[str]]:
+    """从 endpoint 详情中提取契约、接口、数据源和页面依赖索引。"""
 
     dependentPageIds = []
-    for item in detail.get("dependent_pages", []):
+    data_usage = detail.get("data_usage") if isinstance(detail.get("data_usage"), dict) else {}
+    for item in data_usage.get("served_pages", []) or detail.get("dependent_pages", []):
         if isinstance(item, dict) and item.get("pageId"):
             dependentPageIds.append(str(item.get("pageId")))
         elif isinstance(item, str) and item.strip():
             dependentPageIds.append(item.strip())
+    api_contract_id = str(detail.get("api_contract_id") or "")
+    endpoint_id = str(detail.get("endpoint_id") or "")
+    data_source_id = str(detail.get("data_source_id") or "")
     return {
-        "api_contract_ids": sorted(
-            str(item.get("id"))
-            for item in _dict_items(detail.get("api_contracts"))
-            if item.get("id")
-        ),
-        "pageIds": sorted(dict.fromkeys(dependentPageIds)),
+        "api_contract_ids": [api_contract_id] if api_contract_id else [],
+        "endpoint_ids": [endpoint_id] if endpoint_id else [],
+        "dataSourceIds": [data_source_id] if data_source_id else [],
+        "pageIds": sorted(dict.fromkeys(item for item in dependentPageIds if item)),
     }
 
 
@@ -286,15 +299,15 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
     """写出详情文件，并返回不再内嵌详情正文的轻量 ProjectPlan。"""
 
     from app.workspace.plan_documents import (
-        render_data_source_detail_markdown,
+        render_endpoint_detail_markdown,
         render_page_detail_markdown,
     )
 
     compact_plan = deepcopy(plan)
     page_directory = _artifact_directory(state, artifact_type="page")
-    data_source_directory = _artifact_directory(state, artifact_type="data_source")
+    endpoint_directory = _artifact_directory(state, artifact_type="endpoint")
     page_directory.mkdir(parents=True, exist_ok=True)
-    data_source_directory.mkdir(parents=True, exist_ok=True)
+    endpoint_directory.mkdir(parents=True, exist_ok=True)
 
     for detail in _dict_items(plan.get("page_detail_plans")):
         pageId = str(detail.get("pageId") or "")
@@ -320,31 +333,36 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
                 page["detail_status"] = reference["status"]
                 break
 
-    for detail in _dict_items(plan.get("data_source_detail_plans")):
-        source_id = str(detail.get("data_source_id") or "")
-        if not source_id:
+    for detail in _dict_items(plan.get("endpoint_detail_plans")):
+        api_contract_id = str(detail.get("api_contract_id") or "")
+        endpoint_id = str(detail.get("endpoint_id") or "")
+        if not api_contract_id or not endpoint_id:
             continue
-        stem = _safe_file_stem(source_id, prefix="data-source--")
-        json_path = data_source_directory / f"{stem}.json"
-        markdown_path = data_source_directory / f"{stem}.md"
+        stem = _safe_file_stem(f"{api_contract_id}--{endpoint_id}", prefix="endpoint--")
+        json_path = endpoint_directory / f"{stem}.json"
+        markdown_path = endpoint_directory / f"{stem}.md"
         sha256 = _write_json_atomically(json_path, detail)
-        _write_markdown_atomically(markdown_path, render_data_source_detail_markdown(detail))
+        _write_markdown_atomically(markdown_path, render_endpoint_detail_markdown(detail))
         reference = _detail_reference(
             state,
             json_path=json_path,
             markdown_path=markdown_path,
             detail=detail,
             sha256=sha256,
-            dependencies=_data_source_dependencies(detail),
+            dependencies=_endpoint_dependencies(detail),
         )
-        for source in _dict_items(compact_plan.get("data_sources")):
-            if str(source.get("id") or "") == source_id:
-                source["detail_design"] = reference
-                source["detail_status"] = reference["status"]
-                break
+        for contract in _dict_items(compact_plan.get("api_contracts")):
+            if str(contract.get("id") or "") != api_contract_id:
+                continue
+            for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
+                if _endpoint_identity(endpoint, endpoint_index) == endpoint_id:
+                    endpoint["detail_design"] = reference
+                    endpoint["detail_status"] = reference["status"]
+                    break
 
     compact_plan.pop("page_detail_plans", None)
     compact_plan.pop("data_source_detail_plans", None)
+    compact_plan.pop("endpoint_detail_plans", None)
     return compact_plan
 
 

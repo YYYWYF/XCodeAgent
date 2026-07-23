@@ -68,7 +68,7 @@ export type WorkflowClarificationChoiceAnswer = {
 }
 
 export type WorkflowDetailReviewTarget = {
-  target_type: 'page' | 'data_source'
+  target_type: 'page' | 'endpoint'
   target_id: string
   name?: string
   path?: string
@@ -83,37 +83,41 @@ export type WorkflowDetailReviewTarget = {
   permissions?: string[]
   states?: string[]
   api_dependencies?: Array<Record<string, unknown>>
-  data_sources?: Array<Record<string, unknown>>
   response_bindings?: Array<Record<string, unknown>>
   acceptance_criteria?: string[]
-  source_type?: string
-  entities?: string[]
-  schema_refs?: string[]
-  relationships?: string[]
-  validation_rules?: string[]
-  seed_strategy?: string
-  api_contracts?: Array<Record<string, unknown>>
   dependent_pages?: Array<Record<string, unknown>>
+  api_contract_id?: string
+  endpoint_id?: string
+  data_source_id?: string
+  method?: string
+  summary?: string
+  data_usage?: Record<string, unknown>
+  data_origin?: Record<string, unknown>
+  interface_design?: Record<string, unknown>
+  processing_logic?: string[]
+  risks?: string[]
 }
 
 export type WorkflowDetailReview = {
   pages?: WorkflowDetailReviewTarget[]
-  data_sources?: WorkflowDetailReviewTarget[]
+  endpoints?: WorkflowDetailReviewTarget[]
   summary?: {
     page_count?: number
-    data_source_count?: number
+    endpoint_count?: number
     api_contract_count?: number
     missingSelectedPagePlan?: boolean
-    missingSelectedDataSourcePlan?: boolean
+    missingSelectedEndpointPlan?: boolean
     selectedPageId?: string
-    selectedDataSourceId?: string
+    selectedApiContractId?: string
+    selectedEndpointId?: string
+    detailTargetType?: 'page' | 'endpoint'
   }
 }
 
 export type WorkflowDetailReviewSubmission = {
   review_status: 'confirmed'
   target_changes: Array<{
-    target_type: 'page' | 'data_source'
+    target_type: 'page' | 'endpoint'
     target_id: string
     changes: Record<string, unknown>
   }>

@@ -109,10 +109,10 @@ def sync_project_plan_from_markdown(
         normalized["app"] = synced["app"]
     for key in (
         "page_detail_plans",
-        "data_source_detail_plans",
+        "endpoint_detail_plans",
         "detail_confirmation_summary",
         "page_detail_confirmation_summary",
-        "data_source_detail_confirmation_summary",
+        "endpoint_detail_confirmation_summary",
     ):
         value = synced.get(key, existing_plan.get(key))
         if value is not None:

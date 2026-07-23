@@ -44,7 +44,6 @@ function WorkbenchPage({ application, onReturnWelcome }: Props): JSX.Element {
   const [developmentPlanningApiContracts, setDevelopmentPlanningApiContracts] = useState<
     DevelopmentPlanningApiContract[]
   >([])
-  const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const entryStartedAtRef = useRef(Date.now())
 
@@ -98,7 +97,7 @@ function WorkbenchPage({ application, onReturnWelcome }: Props): JSX.Element {
       active = false
       window.removeEventListener('focus', syncWorkspaceApplication)
     }
-  }, [application, planningRefreshRevision])
+  }, [application])
 
   useEffect(() => {
     if (!developmentPlanningPagesLoaded || entryStage !== 'loading') return
@@ -125,11 +124,6 @@ function WorkbenchPage({ application, onReturnWelcome }: Props): JSX.Element {
     setWorkspaceApplication(updatedApplication)
   }
 
-  // 页面设计运行结束后重新读取 pages 目录，避免用内存状态推测是否已经持久化。
-  const handlePlanningArtifactsRefresh = (): void => {
-    setPlanningRefreshRevision((current) => current + 1)
-  }
-
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       {developmentPlanningPagesLoaded ? (
@@ -141,7 +135,6 @@ function WorkbenchPage({ application, onReturnWelcome }: Props): JSX.Element {
           developmentPlanningApiContracts={developmentPlanningApiContracts}
           editorMode={editorMode}
           onApplicationUpdate={handleApplicationUpdate}
-          onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
           onReturnWelcome={onReturnWelcome}
           onThemeChange={handleThemeChange}
           theme={theme}

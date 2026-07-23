@@ -1129,9 +1129,9 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             summary = review.get("summary", {}) if isinstance(review, dict) else {}
             return {
                 "message": (
-                    "页面/数据源初版设计待整体确认，"
+                    "页面/接口初版设计待确认，"
                     f"页面={summary.get('page_count', 0)}，"
-                    f"数据源={summary.get('data_source_count', 0)}"
+                    f"接口={summary.get('endpoint_count', 0)}"
                 ),
                 "data": {
                     "clarification": clarification,
@@ -1266,7 +1266,7 @@ def _detail_confirmation_completed_message(update: dict[str, Any]) -> str:
 
     if summary.get("all_detail_targets_completed"):
         return (
-            "页面/数据源详细设计已全部完成，最终项目计划书已更新，" "准备进入任务拆分。"
+            "页面/接口详细设计已全部完成，最终项目计划书已更新，" "准备进入任务拆分。"
         )
     remaining = summary.get("remaining_total")
     if isinstance(remaining, int):
@@ -1413,7 +1413,9 @@ def _workflow_visual_payload(
         "project_plan_path": result.get("project_plan_path"),
         "detail_selection": result.get("detail_selection"),
         "selectedPageId": result.get("selectedPageId"),
-        "selected_data_source_id": result.get("selected_data_source_id"),
+        "selectedApiContractId": result.get("selected_api_contract_id"),
+        "selectedEndpointId": result.get("selected_endpoint_id"),
+        "detailTargetType": result.get("detail_target_type"),
         "buildExecutionScope": result.get("build_execution_scope"),
     }
     payload = {

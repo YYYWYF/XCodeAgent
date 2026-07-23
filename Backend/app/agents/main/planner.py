@@ -12,6 +12,15 @@ from app.services.project_plan import (
 from app.utils.model_output import extract_json_object
 
 
+BACKEND_TECH_STACK_REQUIREMENT = (
+    "Backend technology stack is fixed and non-negotiable: "
+    "development language Java8; framework Springboot; database MySQL8; cache Redis. "
+    "ProjectPlan.architecture.backend and architecture.data must explicitly mention this stack, "
+    "and api/data planning must not choose Node.js, Python, Go, PostgreSQL, SQLite, MongoDB, "
+    "or any alternative backend/database/cache stack."
+)
+
+
 def _planning_prompt(
     requirement_spec: dict[str, Any],
     existing_plan: dict[str, Any] | None = None,
@@ -29,6 +38,7 @@ def _planning_prompt(
         "This is a planning-only boundary. Do not call tools, do not call subagents, "
         "do not delegate tasks, and do not generate or modify code.\n"
         "Create a project-level planning document from the RequirementSpec.\n"
+        f"{BACKEND_TECH_STACK_REQUIREMENT}\n"
         "Return only one JSON object, without markdown fences or commentary.\n"
         "The JSON object must include these top-level keys:\n"
         "- requirements_overview: app goal, roles, modules, flows, acceptance focus\n"

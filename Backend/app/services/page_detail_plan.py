@@ -6,7 +6,6 @@ import json
 from typing import Any
 
 from app.services.api_contracts import (
-    contract_endpoints_for_dependencies,
     normalize_page_api_dependencies,
     normalize_response_bindings,
 )
@@ -14,6 +13,8 @@ from app.services.page_dependencies import page_design_references
 
 
 def detail_design_targets(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """返回详细设计入口可选择的页面目标；接口目标由 api_contracts[].endpoints 单独展开。"""
+
     page_targets = [
         {
             "id": page.get("pageId"),
@@ -28,31 +29,19 @@ def detail_design_targets(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
         for page in project_plan.get("frontend_pages", [])
         if isinstance(page, dict) and page.get("pageId")
     ]
-    data_source_targets = [
-        {
-            "id": source.get("id"),
-            "type": "data_source",
-            "label": f"数据源：{source.get('name') or source.get('id') or '未命名数据源'}",
-            "name": source.get("name") or source.get("id") or "未命名数据源",
-            "description": f"实体 {source.get('entities', [])}，类型 {source.get('type', '')}",
-        }
-        for source in project_plan.get("data_sources", [])
-        if isinstance(source, dict) and source.get("id")
-    ]
-    return page_targets + data_source_targets
+    return page_targets
 
 
 def resolve_detail_design_target(
     project_plan: dict[str, Any],
     request: str,
     selectedPageId: str | None = None,
-    selected_data_source_id: str | None = None,
 ) -> dict[str, Any] | None:
+    """按用户选择或文本请求解析页面详细设计目标。"""
+
     targets = detail_design_targets(project_plan)
     for target in targets:
         if target["type"] == "page" and target["id"] == selectedPageId:
-            return target
-        if target["type"] == "data_source" and target["id"] == selected_data_source_id:
             return target
 
     request_text = request.strip()
@@ -69,15 +58,6 @@ def resolve_detail_design_target(
             return target
 
     return None
-
-
-def _find_by_id(items: list[dict[str, Any]], item_id: str) -> dict[str, Any]:
-    """按通用 id 查找非页面对象。"""
-
-    for item in items:
-        if item.get("id") == item_id:
-            return item
-    raise ValueError(f"Unknown item id: {item_id}")
 
 
 def _find_page_by_pageId(items: list[dict[str, Any]], pageId: str) -> dict[str, Any]:
@@ -119,16 +99,20 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def _endpoint_identity(endpoint: dict[str, Any], index: int) -> str:
+    """返回 endpoint 的稳定选择标识；没有显式 id 时与前端一致使用 1-based 序号。"""
+
+    return str(endpoint.get("id") or index + 1)
+
+
 def _api_endpoints_for_contracts(
     api_contracts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     endpoints: list[dict[str, Any]] = []
     for contract in api_contracts:
         contract_id = str(contract.get("id") or "")
-        for endpoint in _dict_items(contract.get("endpoints")):
-            endpoint_id = str(endpoint.get("id") or "")
-            if not endpoint_id:
-                continue
+        for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
+            endpoint_id = _endpoint_identity(endpoint, endpoint_index)
             endpoints.append(
                 {
                     "api_contract_id": contract_id,
@@ -574,94 +558,314 @@ def extract_page_detail_context(
     }
 
 
-def create_data_source_detail_plan(
+def extract_endpoint_detail_context(
     project_plan: dict[str, Any],
-    data_source_id: str,
+    api_contract_id: str,
+    endpoint_id: str,
+) -> dict[str, Any]:
+    """从 ProjectPlan 中提取单个 endpoint 详细设计所需的最小上下文。"""
+
+    api_contracts = _dict_items(project_plan.get("api_contracts"))
+    contract = next(
+        (
+            item
+            for item in api_contracts
+            if str(item.get("id") or "") == api_contract_id
+        ),
+        None,
+    )
+    if not contract:
+        raise ValueError(f"项目计划中不存在 API 契约：{api_contract_id}")
+    endpoints = _dict_items(contract.get("endpoints"))
+    endpoint = next(
+        (
+            item
+            for endpoint_index, item in enumerate(endpoints)
+            if _endpoint_identity(item, endpoint_index) == endpoint_id
+        ),
+        None,
+    )
+    if not endpoint:
+        raise ValueError(f"API 契约 {api_contract_id} 中不存在接口：{endpoint_id}")
+    data_source_id = str(contract.get("data_source_id") or api_contract_id)
+    dependent_pages = [
+        {
+            "pageId": page.get("pageId") or page.get("id"),
+            "page_name": page.get("name"),
+            "path": page.get("path"),
+            "usage": str(dependency.get("usage") or ""),
+            "trigger": str(dependency.get("trigger") or ""),
+        }
+        for page in _dict_items(project_plan.get("frontend_pages"))
+        for dependency in _dict_items(
+            (page.get("references") if isinstance(page.get("references"), dict) else {}).get(
+                "endpoint_dependencies"
+            )
+        )
+        if str(dependency.get("api_contract_id") or "") == api_contract_id
+        and str(dependency.get("endpoint_id") or "") == endpoint_id
+    ]
+    schemas = contract.get("schemas") if isinstance(contract.get("schemas"), dict) else {}
+    return {
+        "type": "endpoint",
+        "api_contract": contract,
+        "api_contract_id": api_contract_id,
+        "data_source_id": data_source_id,
+        "endpoint": endpoint,
+        "endpoint_id": endpoint_id,
+        "method": str(endpoint.get("method") or "GET").upper(),
+        "path": str(endpoint.get("path") or ""),
+        "summary": str(endpoint.get("summary") or endpoint_id),
+        "request_schema": schemas.get(str(endpoint.get("request_schema_ref") or "")),
+        "response_schema": schemas.get(str(endpoint.get("response_schema_ref") or "")),
+        "dependent_pages": dependent_pages,
+    }
+
+
+def create_endpoint_detail_plan(
+    project_plan: dict[str, Any],
+    endpoint_context: dict[str, Any],
     user_request: str = "",
     agent_detail_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    source = _find_by_id(project_plan["data_sources"], data_source_id)
-    api_contracts = [
-        contract
-        for contract in project_plan.get("api_contracts", [])
-        if contract.get("data_source_id") == data_source_id
+    """创建单个 endpoint 粒度的接口详细设计。"""
+
+    endpoint = endpoint_context["endpoint"]
+    contract = endpoint_context["api_contract"]
+    method = endpoint_context["method"]
+    path = endpoint_context["path"]
+    endpoint_id = endpoint_context["endpoint_id"]
+    request_parameters = _dict_items(endpoint.get("parameters"))
+    path_parameters = [
+        item for item in request_parameters if str(item.get("in") or "") == "path"
     ]
-    dependent_pages = [
-        {
-            "pageId": page.get("pageId"),
-            "page_name": page.get("name"),
-            "path": page.get("path"),
-        }
-        for page in project_plan.get("frontend_pages", [])
-        if isinstance(page, dict)
+    query_parameters = [
+        item for item in request_parameters if str(item.get("in") or "query") == "query"
     ]
+    header_parameters = [
+        item for item in request_parameters if str(item.get("in") or "") == "header"
+    ]
+    request_schema_ref = endpoint.get("request_schema_ref") or ""
+    response_schema_ref = endpoint.get("response_schema_ref") or ""
+    data_source_id = endpoint_context["data_source_id"]
     detail_plan = {
-        "id": f"data_source_detail:{source['id']}",
-        "type": "data_source",
-        "data_source_id": source["id"],
-        "data_source_name": source["name"],
+        "id": f"endpoint_detail:{endpoint_context['api_contract_id']}:{endpoint_id}",
+        "type": "endpoint",
+        "api_contract_id": endpoint_context["api_contract_id"],
+        "endpoint_id": endpoint_id,
+        "data_source_id": data_source_id,
+        "name": f"{method} {path}".strip(),
+        "method": method,
+        "path": path,
+        "summary": endpoint_context["summary"],
         "status": "confirmed",
         "confirmed_at": datetime.now(UTC).isoformat(),
-        "source_data_source": source,
-        "schema_refs": source.get("schema_refs", []),
-        "entities": source.get("entities", []),
-        "api_contracts": api_contracts,
-        "dependent_pages": dependent_pages,
-        "seed_strategy": source.get("seed_strategy"),
-        "user_confirmation_note": user_request.strip(),
-        "acceptance_criteria": [
-            f"数据源 {source['name']} 可以提供已约定实体和字段。",
-            "相关 API 契约与项目计划保持一致。",
-            "依赖该数据源的页面只能通过已声明 API 访问数据。",
+        "source_endpoint": endpoint,
+        "source_api_contract": {
+            "id": contract.get("id"),
+            "label": contract.get("label") or contract.get("name") or contract.get("id"),
+            "base_path": contract.get("base_path"),
+            "data_source_id": data_source_id,
+        },
+        "data_usage": {
+            "served_pages": endpoint_context.get("dependent_pages", []),
+            "purpose": endpoint_context["summary"],
+            "served_business": endpoint_context["summary"],
+            "consumer": "依赖该接口的前端页面或后续服务",
+        },
+        "data_origin": _default_endpoint_data_origin(
+            project_plan,
+            data_source_id,
+        ),
+        "interface_design": {
+            "restful_style": {
+                "compliant": True,
+                "method": method,
+                "path": path,
+                "resource": _rest_resource_name(path),
+                "description": f"使用 {method} {path} 表达接口资源操作。",
+            },
+            "request": {
+                "path_parameters": path_parameters,
+                "query_parameters": query_parameters,
+                "header_parameters": header_parameters,
+                "request_body": {
+                    "required": bool(request_schema_ref),
+                    "schema_ref": request_schema_ref or None,
+                    "schema": endpoint_context.get("request_schema") or {},
+                    "fields": [],
+                    "note": (
+                        "该接口需要请求体。"
+                        if request_schema_ref
+                        else f"{method} 接口不需要请求体。"
+                    ),
+                },
+                "file_upload": {
+                    "required": False,
+                    "format": None,
+                    "note": "当前接口不涉及文件上传。",
+                },
+            },
+            "response_format": {
+                "status_code": 200,
+                "schema_ref": response_schema_ref or None,
+                "content_type": "application/json",
+                "schema": endpoint_context.get("response_schema") or {},
+                "structure": endpoint_context.get("response_schema") or {},
+                "errors": endpoint.get("error_responses") or endpoint.get("error_codes") or [],
+            },
+        },
+        "processing_logic": [
+            "校验路径、查询、请求头和请求体参数。",
+            "按权限、租户或业务范围过滤数据。",
+            "调用数据来源并转换为 API 契约约定的响应结构。",
+            "处理空数据、参数错误、权限不足和数据来源异常。",
         ],
+        "acceptance_criteria": [
+            f"`{method} {path}` 按 API 契约接收请求并返回约定响应。",
+            "参数错误、权限不足、空数据和数据来源异常均有明确响应。",
+            "依赖页面可按 endpoint 返回字段完成展示或交互。",
+        ],
+        "user_confirmation_note": user_request.strip(),
         "approved": True,
     }
     if isinstance(agent_detail_plan, dict):
-        detail_plan.update(agent_detail_plan)
-    for key in ("entities", "api_contracts", "dependent_pages", "acceptance_criteria"):
-        if not isinstance(detail_plan.get(key), list):
-            detail_plan[key] = []
-    detail_plan.pop("schema", None)
+        detail_plan.update(_formal_endpoint_detail_fields(agent_detail_plan))
     detail_plan.update(
         {
-            "id": f"data_source_detail:{source['id']}",
-            "type": "data_source",
-            "data_source_id": source["id"],
-            "data_source_name": source["name"],
+            "id": f"endpoint_detail:{endpoint_context['api_contract_id']}:{endpoint_id}",
+            "type": "endpoint",
+            "api_contract_id": endpoint_context["api_contract_id"],
+            "endpoint_id": endpoint_id,
+            "data_source_id": data_source_id,
+            "method": method,
+            "path": path,
             "status": "confirmed",
             "confirmed_at": datetime.now(UTC).isoformat(),
-            "source_data_source": source,
-            "schema_refs": source.get("schema_refs", []),
-            "api_contracts": api_contracts,
-            "user_confirmation_note": user_request.strip(),
+            "source_endpoint": endpoint,
+            "source_api_contract": detail_plan["source_api_contract"],
             "approved": True,
         }
     )
     return detail_plan
 
 
-def attach_data_source_detail_plan(
+def _formal_endpoint_detail_fields(agent_detail_plan: dict[str, Any]) -> dict[str, Any]:
+    """只接收 endpoint 详细设计正式模板字段，避免模型旧字段混入产物。"""
+
+    allowed_fields = {
+        "data_usage",
+        "data_origin",
+        "interface_design",
+        "processing_logic",
+        "dependent_pages",
+        "acceptance_criteria",
+        "risks",
+    }
+    return {
+        key: deepcopy(value)
+        for key, value in agent_detail_plan.items()
+        if key in allowed_fields
+    }
+
+
+def _default_endpoint_data_origin(
+    project_plan: dict[str, Any],
+    data_source_id: str,
+) -> dict[str, Any]:
+    """按 ProjectPlan 数据源声明生成三分支数据来源模板。"""
+
+    data_source = next(
+        (
+            source
+            for source in _dict_items(project_plan.get("data_sources"))
+            if str(source.get("id") or "") == data_source_id
+        ),
+        {},
+    )
+    source_type = str(data_source.get("type") or data_source.get("source_type") or "")
+    normalized_type = source_type.lower()
+    is_third_party = normalized_type in {"third_party", "http", "api"}
+    is_mysql = (
+        normalized_type in {"mysql", "database", "db"}
+        or data_source_id.lower().startswith("mysql")
+        or not is_third_party
+    )
+    return {
+        "source_type": "third_party" if is_third_party else "mysql_existing" if is_mysql else "needs_user_confirmation",
+        "third_party": {
+            "applicable": is_third_party,
+            "return_format": data_source.get("return_format") if is_third_party else None,
+            "note": (
+                "本接口数据来源于第三方接口。"
+                if is_third_party
+                else "本接口数据来源不是第三方接口。"
+            ),
+        },
+        "mysql_existing": {
+            "applicable": is_mysql,
+            "data_source_id": data_source_id,
+            "tables": _text_items(
+                data_source.get("tables")
+                or data_source.get("entities")
+                or data_source.get("table_names")
+            ),
+            "join_condition": "",
+            "field_mapping": {},
+            "query_description": "基于已声明的 MySQL 数据源读取并组装接口响应。",
+        },
+        "mysql_new_table": {
+            "applicable": False,
+            "required_fields": [],
+            "ddl": "",
+            "note": "当前设计优先使用已声明数据源，暂不设计新增表。",
+        },
+        "open_questions": [
+            "请确认该接口的数据来源类型、表结构和字段映射是否准确。"
+        ],
+    }
+
+
+def _rest_resource_name(path: str) -> str:
+    """从接口路径中提取 RESTful 资源名。"""
+
+    parts = [part for part in path.strip("/").split("/") if part and not part.startswith("{")]
+    return parts[-1] if parts else path or "/"
+
+
+def attach_endpoint_detail_plan(
     project_plan: dict[str, Any],
     detail_plan: dict[str, Any],
 ) -> dict[str, Any]:
+    """把 endpoint 详细设计挂回 ProjectPlan 内存态。"""
+
     updated_plan = deepcopy(project_plan)
+    detail_key = (
+        str(detail_plan.get("api_contract_id") or ""),
+        str(detail_plan.get("endpoint_id") or ""),
+    )
     existing_details = {
-        item["data_source_id"]: item
-        for item in updated_plan.get("data_source_detail_plans", [])
-        if isinstance(item, dict) and item.get("data_source_id")
+        (
+            str(item.get("api_contract_id") or ""),
+            str(item.get("endpoint_id") or ""),
+        ): item
+        for item in updated_plan.get("endpoint_detail_plans", [])
+        if isinstance(item, dict) and item.get("api_contract_id") and item.get("endpoint_id")
     }
-    existing_details[detail_plan["data_source_id"]] = detail_plan
-    updated_plan["data_source_detail_plans"] = list(existing_details.values())
-
-    for source in updated_plan["data_sources"]:
-        if source.get("id") == detail_plan["data_source_id"]:
-            source["detail_status"] = "confirmed"
-            source["detail_plan_id"] = detail_plan["id"]
-
-    updated_plan["data_source_detail_confirmation_summary"] = {
-        "confirmed_data_sources": len(updated_plan["data_source_detail_plans"]),
-        "total_data_sources": len(updated_plan["data_sources"]),
-        "latest_data_source_id": detail_plan["data_source_id"],
+    existing_details[detail_key] = detail_plan
+    updated_plan["endpoint_detail_plans"] = list(existing_details.values())
+    for contract in _dict_items(updated_plan.get("api_contracts")):
+        if str(contract.get("id") or "") != detail_plan.get("api_contract_id"):
+            continue
+        for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
+            if _endpoint_identity(endpoint, endpoint_index) == detail_plan.get("endpoint_id"):
+                endpoint["detail_status"] = detail_plan.get("status") or "confirmed"
+                endpoint["detail_plan_id"] = detail_plan["id"]
+                break
+    updated_plan["endpoint_detail_confirmation_summary"] = {
+        "confirmed_endpoints": len(updated_plan["endpoint_detail_plans"]),
+        "latest_api_contract_id": detail_plan.get("api_contract_id"),
+        "latest_endpoint_id": detail_plan.get("endpoint_id"),
     }
     return updated_plan
 
@@ -694,30 +898,7 @@ def create_page_detail_plan(
         for item in api_dependencies
         if item.get("api_contract_id") and item.get("endpoint_id")
     ]
-    endpoint_ids_by_contract: dict[str, set[str]] = {}
-    for dependency in endpoint_dependencies:
-        if not isinstance(dependency, dict):
-            continue
-        contract_id = dependency.get("api_contract_id")
-        endpoint_id = dependency.get("endpoint_id")
-        if contract_id and endpoint_id:
-            endpoint_ids_by_contract.setdefault(str(contract_id), set()).add(
-                str(endpoint_id)
-            )
     layout = page_context.get("layout", {})
-    contract_data_sources = [
-        {
-            "id": contract.get("data_source_id", ""),
-            "api_contract_id": contract.get("id", ""),
-            "endpoints": contract_endpoints_for_dependencies(
-                contract,
-                endpoint_ids_by_contract.get(str(contract.get("id")), set()),
-            ),
-        }
-        for contract in api_contracts
-        if contract.get("data_source_id")
-        and str(contract.get("id")) in endpoint_ids_by_contract
-    ]
     component_structure = _component_structure(
         page_name,
         page_path,
@@ -792,7 +973,6 @@ def create_page_detail_plan(
         "operation_visibility": operation_visibility,
         "page_navigation": page_navigation,
         "api_dependencies": api_dependencies,
-        "data_sources": contract_data_sources,
         "permissions": page_context.get("references", {}).get("permissions", []),
         "endpoint_dependencies": page_context.get("references", {}).get("endpoint_dependencies", []),
         "navigation_targets": page_context.get("references", {}).get("navigation_targets", []),
@@ -809,7 +989,7 @@ def create_page_detail_plan(
     if not isinstance(detail_plan.get("basic_layout"), dict):
         detail_plan["basic_layout"] = {}
     detail_plan["basic_layout"] = _normalize_basic_layout(detail_plan["basic_layout"])
-    for key in ("interactions", "data_sources", "permissions", "acceptance_criteria"):
+    for key in ("interactions", "permissions", "acceptance_criteria"):
         if not isinstance(detail_plan.get(key), list):
             detail_plan[key] = []
     for key in (
@@ -835,7 +1015,6 @@ def create_page_detail_plan(
             "status": "confirmed",
             "confirmed_at": datetime.now(UTC).isoformat(),
             "source_page_context": page_context,
-            "data_sources": contract_data_sources,
             "api_dependencies": api_dependencies,
             "layout_design": layout_design,
             "component_structure": component_structure,

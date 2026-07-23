@@ -29,8 +29,39 @@ export type PersistSessionInput = {
   messages: ChatSessionMessage[]
   sessionId: string
   threadId: string
+  apiContractId?: string
+  endpointId?: string
+  endpointLabel?: string
   pageId?: string
   titleFrom?: string
+}
+
+/** 从待保存消息中的 Workflow 快照推断 API endpoint 会话归属。 */
+function inferEndpointContextFromMessages(messages: ChatSessionMessage[]): {
+  apiContractId?: string
+  endpointId?: string
+  endpointLabel?: string
+} {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const workflow = messages[index]?.workflow
+    const state = workflow?.state || {}
+    const result = workflow?.result || {}
+    const reviewSummary = workflow?.summary.clarification?.review?.summary || {}
+    const apiContractId = String(
+      state.selectedApiContractId ||
+      result.selectedApiContractId ||
+      reviewSummary.selectedApiContractId ||
+      ''
+    ).trim()
+    const endpointId = String(
+      state.selectedEndpointId ||
+      result.selectedEndpointId ||
+      reviewSummary.selectedEndpointId ||
+      ''
+    ).trim()
+    if (apiContractId && endpointId) return { apiContractId, endpointId }
+  }
+  return {}
 }
 
 type UseChatSessionsParams = {
@@ -47,8 +78,18 @@ type UseChatSessionsResult = {
   deletingSessionId?: string
   draft: string
   draftKey: string
+  createEndpointSession: (
+    apiContractId: string,
+    endpointId: string,
+    endpointLabel: string
+  ) => Promise<SessionIdentity>
   createPageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   ensureActiveSession: () => Promise<SessionIdentity>
+  ensureEndpointSession: (
+    apiContractId: string,
+    endpointId: string,
+    endpointLabel: string
+  ) => Promise<SessionIdentity>
   ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   handleCreateSessionFromList: () => void
@@ -191,6 +232,9 @@ export function useChatSessions({
         editorMode: mode,
         sessionId: session.id,
         threadId: session.threadId,
+        apiContractId: session.apiContractId,
+        endpointId: session.endpointId,
+        endpointLabel: session.endpointLabel,
         pageId: session.pageId
       })
       registerSession(identity, session.messages)
@@ -236,7 +280,12 @@ export function useChatSessions({
   /** 创建普通会话或带页面归属的独立设计会话。 */
   const createNewSession = async (
     pageId?: string,
-    pageLabel?: string
+    pageLabel?: string,
+    endpointContext?: {
+      apiContractId: string
+      endpointId: string
+      endpointLabel: string
+    }
   ): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
       throw new Error('创建会话前需要选择工作目录。')
@@ -250,13 +299,23 @@ export function useChatSessions({
       editorMode,
       sessionId,
       threadId: agUiSession.threadId,
+      apiContractId: endpointContext?.apiContractId,
+      endpointId: endpointContext?.endpointId,
+      endpointLabel: endpointContext?.endpointLabel,
       pageId
     })
     const session: ChatSessionRecord = {
       id: sessionId,
-      title: pageLabel ? `页面新会话：${pageLabel}` : '新对话',
+      title: endpointContext
+        ? `接口新会话：${endpointContext.endpointLabel}`
+        : pageLabel
+          ? `页面新会话：${pageLabel}`
+          : '新对话',
       editorMode,
       threadId: identity.threadId,
+      apiContractId: identity.apiContractId,
+      endpointId: identity.endpointId,
+      endpointLabel: identity.endpointLabel,
       pageId: identity.pageId,
       workspaceRoot: application.workspaceRoot,
       messages: [],
@@ -297,6 +356,29 @@ export function useChatSessions({
     }
   }
 
+  /** 为指定 API endpoint 显式创建一个新的独立会话和 AG-UI thread。 */
+  const createEndpointSession = async (
+    apiContractId: string,
+    endpointId: string,
+    endpointLabel: string
+  ): Promise<SessionIdentity> => {
+    const normalizedApiContractId = apiContractId.trim()
+    const normalizedEndpointId = endpointId.trim()
+    if (!normalizedApiContractId || !normalizedEndpointId) {
+      throw new Error('接口标识不能为空。')
+    }
+    try {
+      return await createNewSession(undefined, undefined, {
+        apiContractId: normalizedApiContractId,
+        endpointId: normalizedEndpointId,
+        endpointLabel
+      })
+    } catch (caughtError) {
+      reportSessionError(caughtError)
+      throw caughtError
+    }
+  }
+
   /** 按页面恢复既有会话，首次进入该页面时创建独立 session 与 thread。 */
   const ensurePageSession = async (
     pageId: string,
@@ -330,6 +412,36 @@ export function useChatSessions({
     } finally {
       delete pageSessionPromisesRef.current[promiseKey]
     }
+  }
+
+  /** 按 API endpoint 恢复既有会话，首次进入该接口时创建独立 session 与 thread。 */
+  const ensureEndpointSession = async (
+    apiContractId: string,
+    endpointId: string,
+    endpointLabel: string
+  ): Promise<SessionIdentity> => {
+    const normalizedApiContractId = apiContractId.trim()
+    const normalizedEndpointId = endpointId.trim()
+    if (!normalizedApiContractId || !normalizedEndpointId) {
+      throw new Error('接口标识不能为空。')
+    }
+    const existingSession = sessionSummariesRef.current[editorMode].find(
+      (session) =>
+        session.apiContractId === normalizedApiContractId &&
+        session.endpointId === normalizedEndpointId
+    )
+    if (existingSession) {
+      await openChatSession(editorMode, existingSession.id)
+      const key = sessionRuntimeKey(workspaceRoot, editorMode, existingSession.id)
+      const identity = getIdentity(key)
+        || sessionIdentityFromSummary(existingSession, editorMode, workspaceRoot)
+      if (identity) return identity
+    }
+    return createEndpointSession(
+      normalizedApiContractId,
+      normalizedEndpointId,
+      endpointLabel
+    )
   }
 
   const handleCreateSessionFromList = (): void => {
@@ -385,6 +497,7 @@ export function useChatSessions({
     const existingSummary = sessionSummariesRef.current[input.editorMode].find(
       (summary) => summary.id === input.sessionId
     )
+    const inferredEndpoint = inferEndpointContextFromMessages(input.messages)
     const now = Date.now()
     const session: ChatSessionRecord = {
       id: input.sessionId,
@@ -393,11 +506,18 @@ export function useChatSessions({
           !existingSummary
           || existingSummary.title === '新对话'
           || existingSummary.title.startsWith('页面新会话：')
+          || existingSummary.title.startsWith('接口新会话：')
         )
           ? createChatSessionTitle(input.titleFrom)
           : existingSummary?.title || '新对话',
       editorMode: input.editorMode,
       threadId: input.threadId,
+      apiContractId:
+        input.apiContractId || existingSummary?.apiContractId || inferredEndpoint.apiContractId,
+      endpointId:
+        input.endpointId || existingSummary?.endpointId || inferredEndpoint.endpointId,
+      endpointLabel:
+        input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint.endpointLabel,
       pageId: input.pageId || existingSummary?.pageId,
       workspaceRoot: application.workspaceRoot,
       messages: input.messages,
@@ -412,11 +532,13 @@ export function useChatSessions({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    createEndpointSession,
     createPageSession,
     deletingSessionId,
     draft,
     draftKey,
     ensureActiveSession,
+    ensureEndpointSession,
     ensurePageSession,
     getSessionMessages,
     handleCreateSessionFromList,

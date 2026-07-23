@@ -54,7 +54,7 @@ export default function WorkflowRunCard({
     ? clarification.review
     : undefined;
   const confirmationItemCount = detailReview
-    ? (detailReview.pages?.length || 0) + (detailReview.data_sources?.length || 0)
+    ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
     : clarificationQuestions.length;
   const requiresConfirmation = clarification?.status === "requires_user_input";
   const [answers, setAnswers] = useState<ClarificationAnswers>({});
@@ -1049,7 +1049,8 @@ function clarificationAnswerText(value: WorkflowClarificationAnswer | undefined)
   return typeof value === "string" ? value : "";
 }
 
-function workflowClarification(
+// 从 Workflow payload 的多个位置读取待确认载荷，兼容流式快照、最终结果和自定义事件。
+export function workflowClarification(
   workflow: WorkflowRunPayload,
 ): WorkflowClarification | undefined {
   const fromSummary = workflow.summary.clarification;

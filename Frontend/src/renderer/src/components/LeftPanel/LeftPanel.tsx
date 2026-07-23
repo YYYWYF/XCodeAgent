@@ -19,7 +19,6 @@ type Props = {
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[];
   editorMode: EditorMode;
   onApplicationUpdate: (application: ApplicationConfig) => void;
-  onPlanningArtifactsRefresh: () => void;
   onReturnWelcome: () => void;
   onThemeChange: (theme: 'light' | 'dark') => void;
   theme: 'light' | 'dark';
@@ -33,7 +32,6 @@ export default function LeftPanel({
   developmentPlanningApiContracts,
   editorMode,
   onApplicationUpdate,
-  onPlanningArtifactsRefresh,
   onReturnWelcome,
   onThemeChange,
   theme,
@@ -50,7 +48,6 @@ export default function LeftPanel({
             developmentPlanningApiContracts={developmentPlanningApiContracts}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}
-            onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}
             onReturnWelcome={onReturnWelcome}
             onThemeChange={onThemeChange}
             theme={theme}

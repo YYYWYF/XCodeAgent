@@ -21,13 +21,15 @@ type PageSessionHistoryProps = {
   onCreateSession: () => Promise<void>
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
-  pageLabel: string
+  deleteTitle?: string
+  emptyDescription?: string
+  targetLabel: string
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
 }
 
-/** 渲染单个页面专属的可展开历史会话入口与内联列表。 */
+/** 渲染单个页面或 API endpoint 专属的可展开历史会话入口与内联列表。 */
 export default function PageSessionHistory({
   activeSessionId,
   deletingSessionId,
@@ -35,7 +37,9 @@ export default function PageSessionHistory({
   onCreateSession,
   onDeleteSession,
   onOpenSession,
-  pageLabel,
+  deleteTitle = '删除这个会话？',
+  emptyDescription = '当前对象暂无历史会话',
+  targetLabel,
   sessionError,
   sessionRunStates,
   sessions
@@ -46,10 +50,10 @@ export default function PageSessionHistory({
     <>
       <button
         aria-expanded={expanded}
-        aria-label={`${pageLabel}的历史会话`}
+        aria-label={`${targetLabel}的历史会话`}
         className={cx('page-session-history-toggle', expanded && 'expanded')}
         onClick={() => setExpanded((current) => !current)}
-        title={`${pageLabel}的历史会话`}
+        title={`${targetLabel}的历史会话`}
         type="button"
       >
         <HistoryOutlined />
@@ -78,7 +82,7 @@ export default function PageSessionHistory({
             </div>
           ) : sessions.length === 0 ? (
             <Empty
-              description="当前页面暂无历史会话"
+              description={emptyDescription}
               image={Empty.PRESENTED_IMAGE_SIMPLE}
             />
           ) : (
@@ -118,7 +122,7 @@ export default function PageSessionHistory({
                       okButtonProps={{ danger: true }}
                       okText="删除"
                       onConfirm={() => onDeleteSession(session.id)}
-                      title="删除这个页面会话？"
+                      title={deleteTitle}
                     >
                       <Button
                         aria-label={`删除会话 ${session.title}`}

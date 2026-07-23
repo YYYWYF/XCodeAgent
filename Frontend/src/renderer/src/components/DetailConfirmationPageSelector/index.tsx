@@ -1,6 +1,5 @@
 import {
   DatabaseOutlined,
-  LockOutlined,
   PlayCircleOutlined,
   RocketOutlined,
 } from "@ant-design/icons";
@@ -17,22 +16,55 @@ import "./DetailConfirmationPageSelector.less";
 
 const { Text, Title } = Typography;
 
+type DetailTargetType = "page" | "endpoint";
+
 type Props = {
   apiContracts?: DevelopmentPlanningApiContract[];
   disabled: boolean;
   generating?: boolean;
   loading: boolean;
-  mode?: "initial" | "locked";
   onStart: (
-    targetType: "page" | "data_source",
+    targetType: "page" | "endpoint",
     targetId: string,
     targetLabel: string,
     hasDetailPlan: boolean,
+    targetContext?: {
+      apiContractId?: string;
+      endpointId?: string;
+    },
   ) => Promise<void>;
   pages: DevelopmentPlanningPageOption[];
+  selectedEndpoint?: {
+    apiContractId: string;
+    endpointId: string;
+    label: string;
+  };
   selectedPage?: DevelopmentPlanningPageOption;
   workflowEvents?: WorkflowEvent[];
 };
+
+type EndpointOption = {
+  apiContractId: string;
+  description: string;
+  endpointKey: string;
+  endpointId: string;
+  hasDetailPlan: boolean;
+  label: string;
+  method: string;
+  path: string;
+  rawEndpointId: string;
+  summary?: string;
+};
+
+/** 生成页面与接口共用的单选值，确保两个栏目只能选中一个对象。 */
+function targetSelectionKey(type: DetailTargetType, id: string): string {
+  return `${type}:${id}`;
+}
+
+/** 从单选值解析当前目标类型。 */
+function targetTypeFromSelection(value: string): DetailTargetType {
+  return value.startsWith("endpoint:") ? "endpoint" : "page";
+}
 
 /** 在首次进入或选择待设计页面时提供唯一的详细设计入口。 */
 export default function DetailConfirmationPageSelector({
@@ -40,171 +72,87 @@ export default function DetailConfirmationPageSelector({
   disabled,
   generating = false,
   loading,
-  mode = "initial",
   onStart,
   pages,
-  selectedPage: lockedPage,
+  selectedEndpoint: progressEndpoint,
+  selectedPage: progressPage,
   workflowEvents,
 }: Props): JSX.Element {
-  const [selectedTargetType, setSelectedTargetType] = useState<
-    "page" | "data_source"
-  >("page");
-  const [selectedPageId, setSelectedPageId] = useState("");
-  const [selectedEndpointId, setSelectedEndpointId] = useState("");
+  const [selectedTargetKey, setSelectedTargetKey] = useState("");
   const endpointOptions = useMemo(() => {
     return apiContracts.flatMap((contract) => {
-      const dataSourceIds = contract.dataSourceIds?.length
-        ? contract.dataSourceIds
-        : [contract.id];
       return contract.endpoints.map((endpoint, endpointIndex) => {
-        const endpointId = `${contract.id}:${endpoint.id || endpointIndex + 1}`;
-        const dataSourceLabel =
-          dataSourceIds.filter(Boolean).join(" / ") || contract.id;
+        const rawEndpointId = endpoint.id || String(endpointIndex + 1);
+        const apiContractId = endpoint.apiContractId || contract.id;
+        const endpointId = `${apiContractId}:${rawEndpointId}`;
+        const label = `${endpoint.method} ${endpoint.path}`.trim();
         return {
+          apiContractId,
           endpointId,
-          dataSourceId: dataSourceIds[0] || contract.id,
-          label: `${endpoint.method} ${endpoint.path}`.trim(),
+          endpointKey: targetSelectionKey("endpoint", endpointId),
+          rawEndpointId,
+          label,
           method: endpoint.method,
           path: endpoint.path,
           summary: endpoint.summary,
-          contractLabel: contract.label || contract.id,
           description:
             endpoint.summary || `来自 ${contract.label || contract.id}`,
-          dataSourceLabel,
-          hasDetailPlan: false,
-        };
+          hasDetailPlan: Boolean(endpoint.hasDetailPlan || endpoint.designed),
+        } satisfies EndpointOption;
       });
     });
   }, [apiContracts]);
   const selectedPage = useMemo(
-    () => lockedPage || pages.find((page) => page.pageId === selectedPageId),
-    [lockedPage, pages, selectedPageId],
+    () =>
+      pages.find(
+        (page) => targetSelectionKey("page", page.pageId) === selectedTargetKey,
+      ),
+    [pages, selectedTargetKey],
   );
   const selectedEndpoint = useMemo(
     () =>
       endpointOptions.find(
-        (source) => source.endpointId === selectedEndpointId,
+        (source) => source.endpointKey === selectedTargetKey,
       ),
-    [endpointOptions, selectedEndpointId],
+    [endpointOptions, selectedTargetKey],
   );
+  const selectedTargetType = selectedTargetKey
+    ? targetTypeFromSelection(selectedTargetKey)
+    : undefined;
   const selectedTarget =
-    selectedTargetType === "data_source" && !lockedPage
-      ? selectedEndpoint
-      : selectedPage;
+    selectedTargetType === "endpoint" ? selectedEndpoint : selectedPage;
   const selectedTargetId =
-    selectedTargetType === "data_source" && !lockedPage
+    selectedTargetType === "endpoint"
       ? selectedEndpoint?.endpointId
       : selectedPage?.pageId;
 
-  // 页面清单刷新后保留有效选择，否则默认选择第一个页面。
+  // 页面/API 清单刷新后只保留用户显式选择；生成过程中不清空当前目标，避免进度页被产物刷新打断。
   useEffect(() => {
-    if (!lockedPage && !pages.some((page) => page.pageId === selectedPageId)) {
-      setSelectedPageId(pages[0]?.pageId || "");
-    }
-  }, [lockedPage, pages, selectedPageId]);
+    if (generating) return;
+    const pageKeys = pages.map((page) => targetSelectionKey("page", page.pageId));
+    const endpointKeys = endpointOptions.map((endpoint) => endpoint.endpointKey);
+    const availableKeys = [...pageKeys, ...endpointKeys];
+    if (!selectedTargetKey || availableKeys.includes(selectedTargetKey)) return;
+    setSelectedTargetKey("");
+  }, [endpointOptions, generating, pages, selectedTargetKey]);
 
-  // 接口清单刷新后保留有效选择，否则默认选择第一个 endpoint。
-  useEffect(() => {
-    if (
-      !endpointOptions.some(
-        (source) => source.endpointId === selectedEndpointId,
-      )
-    ) {
-      setSelectedEndpointId(endpointOptions[0]?.endpointId || "");
-    }
-  }, [endpointOptions, selectedEndpointId]);
+  const progressTarget = progressEndpoint || progressPage;
+  const progressTargetType: DetailTargetType | undefined = progressEndpoint
+    ? "endpoint"
+    : progressPage
+      ? "page"
+      : undefined;
 
-  // 如果当前类型没有可选项，自动切到另一个可选类型。
-  useEffect(() => {
-    if (lockedPage) return;
-    if (
-      selectedTargetType === "page" &&
-      pages.length === 0 &&
-      endpointOptions.length > 0
-    ) {
-      setSelectedTargetType("data_source");
-    }
-    if (
-      selectedTargetType === "data_source" &&
-      endpointOptions.length === 0 &&
-      pages.length > 0
-    ) {
-      setSelectedTargetType("page");
-    }
-  }, [endpointOptions.length, lockedPage, pages.length, selectedTargetType]);
-
-  if (generating && selectedTarget) {
+  if (generating && progressTarget && progressTargetType) {
     return (
-      <section
-        className={cx(
-          "detail-page-selector",
-          mode === "locked" && "locked-mode",
-        )}
-      >
-        {mode === "locked" ? (
-          <div className={cx("detail-page-selector-backdrop")} />
-        ) : (
-          <div className={cx("detail-page-selector-aurora")} />
-        )}
+      <section className={cx("detail-page-selector")}>
+        <div className={cx("detail-page-selector-aurora")} />
         <main className={cx("detail-page-selector-panel", "progress-panel")}>
           <PageDesignProgress
             events={workflowEvents}
-            pageLabel={selectedTarget.label}
+            pageLabel={progressTarget.label}
+            targetType={progressTargetType}
           />
-        </main>
-      </section>
-    );
-  }
-
-  if (mode === "locked" && selectedPage) {
-    return (
-      <section className={cx("detail-page-selector", "locked-mode")}>
-        <div className={cx("detail-page-selector-backdrop")} />
-        <main className={cx("detail-page-selector-panel", "locked-panel")}>
-          <span className={cx("detail-page-selector-lock-icon")}>
-            <LockOutlined />
-          </span>
-          <Text className={cx("detail-page-selector-eyebrow")}>
-            DETAIL DESIGN REQUIRED
-          </Text>
-          <Title level={3}>「{selectedPage.label}」尚未进行详细设计</Title>
-          <Text
-            className={cx("detail-page-selector-locked-copy")}
-            type="secondary"
-          >
-            为避免自由对话跳过页面设计，请先生成该页面的布局、状态、交互与验收标准。
-          </Text>
-          <div className={cx("detail-page-selector-target")}>
-            <div>
-              <Text strong>{selectedPage.label}</Text>
-              <Text code>{selectedPage.path}</Text>
-            </div>
-            <Text type="secondary">{selectedPage.purpose}</Text>
-          </div>
-          <Button
-            className={cx("detail-page-selector-action")}
-            disabled={disabled}
-            icon={<PlayCircleOutlined />}
-            loading={disabled}
-            onClick={() =>
-              void onStart(
-                "page",
-                selectedPage.pageId,
-                selectedPage.label,
-                Boolean(selectedPage.hasDetailPlan),
-              )
-            }
-            size="large"
-            type="primary"
-          >
-            开始详细设计
-          </Button>
-          <Text
-            className={cx("detail-page-selector-lock-hint")}
-            type="secondary"
-          >
-            完成生成后将自动解锁当前对话区
-          </Text>
         </main>
       </section>
     );
@@ -231,93 +179,81 @@ export default function DetailConfirmationPageSelector({
         {loading ? (
           <Skeleton active paragraph={{ rows: 4 }} title={false} />
         ) : pages.length || endpointOptions.length ? (
-          <div className={cx("detail-page-selector-target-grid")}>
-            <section className={cx("detail-page-selector-target-section")}>
-              <Text className={cx("detail-page-selector-section-title")} strong>
-                选择要开始设计的页面
-              </Text>
-              {pages.length ? (
-                <Radio.Group
-                  aria-label="选择要开始设计的页面"
-                  className={cx("detail-page-selector-options")}
-                  onChange={(event) => {
-                    setSelectedTargetType("page");
-                    setSelectedPageId(String(event.target.value));
-                  }}
-                  value={
-                    selectedTargetType === "page" ? selectedPageId : undefined
-                  }
-                >
-                  {pages.map((page) => (
-                    <Radio.Button key={page.pageId} value={page.pageId}>
-                      <span className={cx("detail-page-selector-name")}>
-                        {page.label}
-                      </span>
-                      <span className={cx("detail-page-selector-path")}>
-                        {page.path}
-                      </span>
-                      <span className={cx("detail-page-selector-purpose")}>
-                        {page.purpose}
-                      </span>
-                    </Radio.Button>
-                  ))}
-                </Radio.Group>
-              ) : (
-                <Text
-                  className={cx("detail-page-selector-empty")}
-                  type="secondary"
-                >
-                  项目计划中暂无可设计页面。
+          <Radio.Group
+            aria-label="选择要开始设计的页面或接口"
+            className={cx("detail-page-selector-target-choice")}
+            onChange={(event) => setSelectedTargetKey(String(event.target.value))}
+            value={selectedTargetKey || undefined}
+          >
+            <div className={cx("detail-page-selector-target-grid")}>
+              <section className={cx("detail-page-selector-target-section")}>
+                <Text className={cx("detail-page-selector-section-title")} strong>
+                  选择要开始设计的页面
                 </Text>
-              )}
-            </section>
-
-            <section className={cx("detail-page-selector-target-section")}>
-              <Text className={cx("detail-page-selector-section-title")} strong>
-                选择要开始设计的接口
-              </Text>
-              {endpointOptions.length ? (
-                <Radio.Group
-                  aria-label="选择要开始设计的接口"
-                  className={cx("detail-page-selector-options")}
-                  onChange={(event) => {
-                    setSelectedTargetType("data_source");
-                    setSelectedEndpointId(String(event.target.value));
-                  }}
-                  value={
-                    selectedTargetType === "data_source"
-                      ? selectedEndpointId
-                      : undefined
-                  }
-                >
-                  {endpointOptions.map((source) => (
-                    <Radio.Button
-                      key={source.endpointId}
-                      value={source.endpointId}
-                    >
-                      <span className={cx("detail-page-selector-name")}>
-                        <DatabaseOutlined />
-                        <span className={cx("detail-page-selector-method")}>
-                          {source.method}
+                {pages.length ? (
+                  <div className={cx("detail-page-selector-options")}>
+                    {pages.map((page) => (
+                      <Radio.Button
+                        key={page.pageId}
+                        value={targetSelectionKey("page", page.pageId)}
+                      >
+                        <span className={cx("detail-page-selector-name")}>
+                          {page.label}
                         </span>
-                        {source.path}
-                      </span>
-                      <span className={cx("detail-page-selector-purpose")}>
-                        {source.description}
-                      </span>
-                    </Radio.Button>
-                  ))}
-                </Radio.Group>
-              ) : (
-                <Text
-                  className={cx("detail-page-selector-empty")}
-                  type="secondary"
-                >
-                  项目计划中暂无可设计接口。
+                        <span className={cx("detail-page-selector-path")}>
+                          {page.path}
+                        </span>
+                        <span className={cx("detail-page-selector-purpose")}>
+                          {page.purpose}
+                        </span>
+                      </Radio.Button>
+                    ))}
+                  </div>
+                ) : (
+                  <Text
+                    className={cx("detail-page-selector-empty")}
+                    type="secondary"
+                  >
+                    项目计划中暂无可设计页面。
+                  </Text>
+                )}
+              </section>
+
+              <section className={cx("detail-page-selector-target-section")}>
+                <Text className={cx("detail-page-selector-section-title")} strong>
+                  选择要开始设计的接口
                 </Text>
-              )}
-            </section>
-          </div>
+                {endpointOptions.length ? (
+                  <div className={cx("detail-page-selector-options")}>
+                    {endpointOptions.map((source) => (
+                      <Radio.Button
+                        key={source.endpointId}
+                        value={source.endpointKey}
+                      >
+                        <span className={cx("detail-page-selector-name")}>
+                          <DatabaseOutlined />
+                          <span className={cx("detail-page-selector-method")}>
+                            {source.method}
+                          </span>
+                          {source.path}
+                        </span>
+                        <span className={cx("detail-page-selector-purpose")}>
+                          {source.description}
+                        </span>
+                      </Radio.Button>
+                    ))}
+                  </div>
+                ) : (
+                  <Text
+                    className={cx("detail-page-selector-empty")}
+                    type="secondary"
+                  >
+                    项目计划中暂无可设计接口。
+                  </Text>
+                )}
+              </section>
+            </div>
+          </Radio.Group>
         ) : (
           <Text type="secondary">项目计划中暂无可设计页面或接口。</Text>
         )}
@@ -329,12 +265,19 @@ export default function DetailConfirmationPageSelector({
           loading={disabled}
           onClick={() =>
             selectedTarget &&
+            selectedTargetType &&
             selectedTargetId &&
             void onStart(
               selectedTargetType,
               selectedTargetId,
               selectedTarget.label,
               Boolean(selectedTarget.hasDetailPlan),
+              selectedTargetType === "endpoint" && selectedEndpoint
+                ? {
+                    apiContractId: selectedEndpoint.apiContractId,
+                    endpointId: selectedEndpoint.rawEndpointId,
+                  }
+                : undefined,
             )
           }
           size="large"

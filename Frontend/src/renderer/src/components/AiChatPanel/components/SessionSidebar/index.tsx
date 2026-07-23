@@ -63,11 +63,22 @@ type SessionSidebarProps = {
   deletingSessionId?: string
   filesActive: boolean
   loadingSessions: boolean
+  onCreateEndpointSession: (
+    apiContractId: string,
+    endpointId: string,
+    endpointLabel: string
+  ) => Promise<void>
   onCreateSession: () => void
   onCreatePageSession: (pageId: string, pageLabel: string) => Promise<void>
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
   outlineLocked: boolean
+  onApiEndpointSelect: (target: {
+    apiContractId: string
+    endpointId: string
+    endpointKey: string
+    label: string
+  }) => void
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   onReturnWelcome: () => void
   onShowFiles: () => void
@@ -75,6 +86,7 @@ type SessionSidebarProps = {
   onShowSkills: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   pages: DevelopmentPlanningPageOption[]
+  selectedApiEndpointKey: string
   selectedPageId: string
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
@@ -164,10 +176,12 @@ function OutlineRow({
           onCreateSession={() => onCreatePageSession(item.pageKey || item.key, item.label)}
           onDeleteSession={onDeleteSession}
           onOpenSession={onOpenSession}
-          pageLabel={item.label}
+          deleteTitle="删除这个页面会话？"
+          emptyDescription="当前页面暂无历史会话"
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
           sessions={sessions}
+          targetLabel={item.label}
         />
       ) : null}
       {isFolder && expanded && children.length > 0 ? (
@@ -238,6 +252,11 @@ function containsMenuKey(items: ApplicationMenuItem[], key: string): boolean {
   return items.some((item) => item.key === key || containsMenuKey(item.children || [], key))
 }
 
+/** 生成 API endpoint 在左侧大纲中的稳定选中键。 */
+function apiEndpointSelectionKey(contractId: string, endpointId: string): string {
+  return `${contractId}:${endpointId}`
+}
+
 /** 使用 ProjectPlan 页面清单组织工作台左侧大纲与快捷入口。 */
 export default function SessionSidebar({
   activeSessionId,
@@ -246,9 +265,11 @@ export default function SessionSidebar({
   deletingSessionId,
   filesActive,
   loadingSessions,
+  onCreateEndpointSession,
   onCreateSession,
   onCreatePageSession,
   onDeleteSession,
+  onApiEndpointSelect,
   onOpenSession,
   onPageSelect,
   onReturnWelcome,
@@ -258,6 +279,7 @@ export default function SessionSidebar({
   onThemeChange,
   outlineLocked,
   pages,
+  selectedApiEndpointKey,
   selectedPageId,
   sessionError,
   sessionRunStates,
@@ -276,7 +298,6 @@ export default function SessionSidebar({
   const [apiExpanded, setApiExpanded] = useState(true)
   const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(() => new Set())
   const [onlyRelated, setOnlyRelated] = useState(false)
-  const [selectedApiEndpointId, setSelectedApiEndpointId] = useState('')
   const pageItems = useMemo<ApplicationMenuItem[]>(() => pages.map((page) => ({
     key: page.pageId,
     pageKey: page.pageId,
@@ -296,7 +317,24 @@ export default function SessionSidebar({
     })
     return groupedSessions
   }, [sessions])
-  const selectedKey = containsMenuKey(pageItems, selectedPageId) ? selectedPageId : ''
+  const sessionsByEndpointKey = useMemo(() => {
+    const groupedSessions = new Map<string, ChatSessionSummary[]>()
+    sessions.forEach((session) => {
+      const apiContractId = session.apiContractId
+      const endpointId = session.endpointId
+      if (!apiContractId || !endpointId) return
+      const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
+      const endpointSessions = groupedSessions.get(endpointKey) || []
+      endpointSessions.push(session)
+      groupedSessions.set(endpointKey, endpointSessions)
+    })
+    return groupedSessions
+  }, [sessions])
+  const selectedKey = selectedApiEndpointKey
+    ? ''
+    : containsMenuKey(pageItems, selectedPageId)
+      ? selectedPageId
+      : ''
   const visibleKeys = useMemo(() => {
     const matchingKeys = collectVisibleKeys(pageItems, outlineQuery)
     if (!onlyRelated) return matchingKeys
@@ -551,20 +589,54 @@ export default function SessionSidebar({
                   <code>{contract.label}</code>
                 </button>
                 {contractExpanded ? <div className={cx('api-list')}>
-                  {contract.endpoints.map((endpoint) => {
-                    const endpointKey = `${contract.id}-${endpoint.id}`
+                  {contract.endpoints.map((endpoint, endpointIndex) => {
+                    const endpointId = endpoint.id || String(endpointIndex + 1)
+                    const apiContractId = endpoint.apiContractId || contract.id
+                    const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
+                    const endpointLabel = `${endpoint.method} ${endpoint.path}`.trim()
+                    const endpointDesigned = Boolean(endpoint.designed || endpoint.hasDetailPlan)
+                    const endpointSessions = sessionsByEndpointKey.get(endpointKey) || []
                     return (
-                      <button
-                        aria-current={selectedApiEndpointId === endpointKey ? 'true' : undefined}
-                        className={cx('api-row', selectedApiEndpointId === endpointKey && 'selected')}
-                        key={endpointKey}
-                        onClick={() => setSelectedApiEndpointId(endpointKey)}
-                        title={endpoint.summary}
-                        type="button"
-                      >
-                        <span className={cx('api-method', endpoint.method.toLocaleLowerCase())}>{endpoint.method}</span>
-                        <code>{endpoint.path}</code>
-                      </button>
+                      <div className={cx('api-node')} key={endpointKey}>
+                        <button
+                          aria-current={selectedApiEndpointKey === endpointKey ? 'true' : undefined}
+                          className={cx('api-row', selectedApiEndpointKey === endpointKey && 'selected')}
+                          onClick={() => onApiEndpointSelect({
+                            apiContractId,
+                            endpointId,
+                            endpointKey,
+                            label: endpointLabel
+                          })}
+                          title={endpoint.summary}
+                          type="button"
+                        >
+                          <span className={cx('api-method', endpoint.method.toLocaleLowerCase())}>{endpoint.method}</span>
+                          <code>{endpoint.path}</code>
+                          <span className={cx('outline-design-status', endpointDesigned ? 'designed' : 'undesign')}>
+                            {endpointDesigned ? '已设计' : '待设计'}
+                          </span>
+                        </button>
+                        {selectedApiEndpointKey === endpointKey ? (
+                          <PageSessionHistory
+                            activeSessionId={activeSessionId}
+                            deletingSessionId={deletingSessionId}
+                            deleteTitle="删除这个接口会话？"
+                            emptyDescription="当前接口暂无历史会话"
+                            loadingSessions={loadingSessions}
+                            onCreateSession={() => onCreateEndpointSession(
+                              apiContractId,
+                              endpointId,
+                              endpointLabel
+                            )}
+                            onDeleteSession={onDeleteSession}
+                            onOpenSession={onOpenSession}
+                            sessionError={sessionError}
+                            sessionRunStates={sessionRunStates}
+                            sessions={endpointSessions}
+                            targetLabel={endpointLabel}
+                          />
+                        ) : null}
+                      </div>
                     )
                   })}
                 </div> : null}

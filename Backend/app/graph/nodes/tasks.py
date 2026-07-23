@@ -415,8 +415,8 @@ def _resolve_build_context(
     return _add_reusable_task_context({
         "target": {"type": "application", "id": "application"},
         "page_detail": None,
-        "data_source_detail": None,
-        "direct_data_source_details": [],
+        "endpoint_detail": None,
+        "direct_endpoint_details": [],
         "endpoint_ids": [],
         "data_source_ids": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
@@ -522,7 +522,7 @@ def _skeleton_api_contracts(project_plan: dict) -> list[dict]:
 
 
 def _executable_details(project_plan: dict, build_context: dict) -> dict:
-    """按当前构建目标投射可执行任务所需的页面、数据源和 API 详情。"""
+    """按当前构建目标投射可执行任务所需的页面、endpoint 和 API 详情。"""
 
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
     source_ids = {str(item) for item in build_context.get("data_source_ids") or []}
@@ -530,8 +530,8 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
         "page_detail_plans": (
             [build_context["page_detail"]] if build_context.get("page_detail") else []
         ),
-        "data_source_detail_plans": list(
-            build_context.get("direct_data_source_details") or []
+        "endpoint_detail_plans": list(
+            build_context.get("direct_endpoint_details") or []
         ),
         "data_sources": [
             source
@@ -619,8 +619,8 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
         "page_detail_plans": (
             [build_context["page_detail"]] if build_context.get("page_detail") else []
         ),
-        "data_source_detail_plans": list(
-            build_context.get("direct_data_source_details") or []
+        "endpoint_detail_plans": list(
+            build_context.get("direct_endpoint_details") or []
         ),
     }
 
@@ -926,14 +926,14 @@ def _api_contract_inconsistency_payload(errors: list[str]) -> dict:
 
 
 def _build_context_error_payload(error: str) -> dict:
-    """构造目标页面或数据源详情不足时的 AG-UI 阻止说明。"""
+    """构造目标页面或 endpoint 详情不足时的 AG-UI 阻止说明。"""
 
     payload = build_ask_user_payload(
         [
             AskUserQuestion(
                 header="构建范围",
                 question=(
-                    "当前构建范围缺少已确认的页面/数据源详情或 API 契约依赖，"
+                    "当前构建范围缺少已确认的页面/endpoint 详情或 API 契约依赖，"
                     "暂不能生成可验证代码。请返回页面设计阶段补齐后再继续。"
                 ),
                 type="text",

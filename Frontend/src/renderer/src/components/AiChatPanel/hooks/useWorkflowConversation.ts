@@ -38,10 +38,18 @@ type UseWorkflowConversationParams = {
   draft: string
   draftKey: string
   selectedSkills: ChatMessageSkill[]
+  selectedApiContractId?: string
+  selectedEndpointId?: string
+  selectedEndpointLabel?: string
   selectedPageId?: string
   selectedPageLabel?: string
   editorMode: EditorMode
   ensureActiveSession: () => Promise<SessionIdentity>
+  ensureEndpointSession: (
+    apiContractId: string,
+    endpointId: string,
+    endpointLabel: string
+  ) => Promise<SessionIdentity>
   ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
@@ -62,11 +70,12 @@ type UseWorkflowConversationResult = {
     pageLabel: string,
     hasDetailPlan?: boolean
   ) => Promise<boolean>
-  handleStartDataSourceDetailConfirmation: (
-    selectedDataSourceId: string,
-    dataSourceLabel: string,
+  handleStartEndpointDetailConfirmation: (target: {
+    apiContractId?: string
+    endpointId: string
+    endpointLabel: string
     hasDetailPlan?: boolean
-  ) => Promise<boolean>
+  }) => Promise<boolean>
   handleStopGenerating: () => void
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -98,10 +107,14 @@ export function useWorkflowConversation({
   draft,
   draftKey,
   selectedSkills,
+  selectedApiContractId,
+  selectedEndpointId,
+  selectedEndpointLabel,
   selectedPageId,
   selectedPageLabel,
   editorMode,
   ensureActiveSession,
+  ensureEndpointSession,
   ensurePageSession,
   getSessionMessages,
   persistSession,
@@ -153,17 +166,27 @@ export function useWorkflowConversation({
     {}
   )
 
-  /** 首次发送页面消息时再创建对应会话，并复用已有页面会话继续 Workflow。 */
+  /** 首次发送目标消息时再创建对应会话，并复用已有页面或 API 会话继续 Workflow。 */
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
-    const sessionIdentity = selectedPageId
-      ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
-      : await ensureActiveSession()
+    const sessionIdentity =
+      selectedApiContractId && selectedEndpointId
+        ? await ensureEndpointSession(
+            selectedApiContractId,
+            selectedEndpointId,
+            selectedEndpointLabel || selectedEndpointId
+          )
+        : selectedPageId
+          ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
+          : await ensureActiveSession()
     await sendWorkflowMessage(message, {
       clearDraft: true,
+      detailTargetType: selectedApiContractId && selectedEndpointId ? 'endpoint' : undefined,
+      selectedApiContractId,
+      selectedEndpointId,
       selectedSkills,
-      selectedPageId,
+      selectedPageId: selectedApiContractId && selectedEndpointId ? '' : selectedPageId,
       sessionIdentity,
       titleFrom: message,
       workflowDebug
@@ -182,7 +205,10 @@ export function useWorkflowConversation({
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
       selectedPageId?: string
-      selectedDataSourceId?: string
+      selectedApiContractId?: string
+      selectedEndpointId?: string
+      endpointLabel?: string
+      detailTargetType?: 'page' | 'endpoint'
       sessionIdentity?: SessionIdentity
     }
   ): Promise<boolean> => {
@@ -291,6 +317,9 @@ export function useWorkflowConversation({
         messages: nextMessages,
         sessionId: identity.sessionId,
         threadId: identity.threadId,
+        apiContractId: identity.apiContractId,
+        endpointId: identity.endpointId,
+        endpointLabel: identity.endpointLabel,
         pageId: identity.pageId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
@@ -305,8 +334,13 @@ export function useWorkflowConversation({
         clarificationAnswers: options?.clarificationAnswers,
         originalRequest: options?.originalRequest,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
-        selectedPageId: options?.selectedPageId || identity.pageId,
-        selectedDataSourceId: options?.selectedDataSourceId,
+        selectedPageId:
+          options && 'selectedPageId' in options
+            ? options.selectedPageId
+            : identity.pageId,
+        selectedApiContractId: options?.selectedApiContractId,
+        selectedEndpointId: options?.selectedEndpointId,
+        detailTargetType: options?.detailTargetType,
         workflowDebug: options?.workflowDebug,
         resumeState: options?.resumeState,
         onContent: (content) => {
@@ -351,6 +385,9 @@ export function useWorkflowConversation({
         messages: completedMessages,
         sessionId: identity.sessionId,
         threadId: identity.threadId,
+        apiContractId: identity.apiContractId,
+        endpointId: identity.endpointId,
+        endpointLabel: identity.endpointLabel,
         pageId: identity.pageId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
@@ -371,6 +408,9 @@ export function useWorkflowConversation({
           messages: previousMessages,
           sessionId: identity.sessionId,
           threadId: identity.threadId,
+          apiContractId: identity.apiContractId,
+          endpointId: identity.endpointId,
+          endpointLabel: identity.endpointLabel,
           pageId: identity.pageId
         })
         return false
@@ -388,6 +428,9 @@ export function useWorkflowConversation({
           messages: completedMessages,
           sessionId: identity.sessionId,
           threadId: identity.threadId,
+          apiContractId: identity.apiContractId,
+          endpointId: identity.endpointId,
+          endpointLabel: identity.endpointLabel,
           pageId: identity.pageId,
           titleFrom: message
         })
@@ -434,26 +477,36 @@ export function useWorkflowConversation({
       `${hasDetailPlan ? '查看已生成页面计划' : '开始设计页面'}：${pageLabel}`,
       {
         selectedPageId,
+        detailTargetType: 'page',
         sessionIdentity: identity,
         titleFrom: `${hasDetailPlan ? '确认页面' : '设计页面'}：${pageLabel}`
       }
     )
   }
 
-  /** 以用户选择的数据源作为主 Workflow 细节设计起点。 */
-  const handleStartDataSourceDetailConfirmation = async (
-    selectedDataSourceId: string,
-    dataSourceLabel: string,
+  /** 以用户选择的具体 endpoint 作为主 Workflow 细节设计起点。 */
+  const handleStartEndpointDetailConfirmation = async (target: {
+    apiContractId?: string
+    endpointId: string
+    endpointLabel: string
     hasDetailPlan?: boolean
-  ): Promise<boolean> => {
-    if (!selectedDataSourceId || loading || workspaceBusy) return false
-    const identity = await ensureActiveSession()
+  }): Promise<boolean> => {
+    if (!target.apiContractId || !target.endpointId || loading || workspaceBusy) return false
+    const identity = await ensureEndpointSession(
+      target.apiContractId,
+      target.endpointId,
+      target.endpointLabel
+    )
     return sendWorkflowMessage(
-      `${hasDetailPlan ? '查看已生成数据源计划' : '开始设计数据源'}：${dataSourceLabel}`,
+      `${target.hasDetailPlan ? '查看已生成接口计划' : '开始设计接口'}：${target.endpointLabel}`,
       {
-        selectedDataSourceId,
+        selectedApiContractId: target.apiContractId,
+        selectedEndpointId: target.endpointId,
+        selectedPageId: '',
+        detailTargetType: 'endpoint',
+        endpointLabel: target.endpointLabel,
         sessionIdentity: identity,
-        titleFrom: `${hasDetailPlan ? '确认数据源' : '设计数据源'}：${dataSourceLabel}`
+        titleFrom: `${target.hasDetailPlan ? '确认接口' : '设计接口'}：${target.endpointLabel}`
       }
     )
   }
@@ -475,7 +528,7 @@ export function useWorkflowConversation({
     activeWorkflow,
     error,
     handleSend,
-    handleStartDataSourceDetailConfirmation,
+    handleStartEndpointDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,

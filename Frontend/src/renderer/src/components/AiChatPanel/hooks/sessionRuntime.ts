@@ -5,6 +5,9 @@ export type SessionIdentity = {
   key: string
   sessionId: string
   threadId: string
+  apiContractId?: string
+  endpointId?: string
+  endpointLabel?: string
   pageId?: string
   editorMode: EditorMode
   workspaceRoot: string
@@ -25,6 +28,9 @@ export function createSessionIdentity(input: {
   editorMode: EditorMode
   sessionId: string
   threadId: string
+  apiContractId?: string
+  endpointId?: string
+  endpointLabel?: string
   pageId?: string
 }): SessionIdentity {
   return {
@@ -48,6 +54,9 @@ export function sessionIdentityFromSummary(
     editorMode,
     sessionId: summary.id,
     threadId: summary.threadId,
+    apiContractId: summary.apiContractId,
+    endpointId: summary.endpointId,
+    endpointLabel: summary.endpointLabel,
     pageId: summary.pageId
   })
 }

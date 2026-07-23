@@ -12,7 +12,10 @@ import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import CodeChangeCard from '../CodeChangeCard'
 import ToolCallCard from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
-import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
+import WorkflowRunCard, {
+  type ClarificationAnswers,
+  workflowClarification
+} from '../WorkflowRunCard'
 import {
   processStepsForDisplay,
   workflowMessageContentForDisplay
@@ -74,7 +77,8 @@ export default function MessageList({
               message.workflow
             )?.filter((step) => step.kind !== 'tool' && step.kind !== 'command')
             const requiresClarification =
-              message.workflow?.summary.clarification?.status === 'requires_user_input'
+              message.workflow &&
+              workflowClarification(message.workflow)?.status === 'requires_user_input'
             const visibleAssistantContent = workflowMessageContentForDisplay(
               message.content,
               message.workflow,
