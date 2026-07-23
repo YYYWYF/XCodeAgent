@@ -542,8 +542,10 @@ def _transition_already_applied(
 
 
 def _fsync_directory(directory: Path) -> None:
-    """同步目录项，确保原子替换在进程崩溃后仍可见。"""
+    """同步目录项，确保原子替换在进程崩溃后仍可见。Windows 不支持对目录执行 fsync，直接跳过。"""
 
+    if os.name == "nt":
+        return
     descriptor = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(descriptor)
