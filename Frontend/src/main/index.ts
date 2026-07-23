@@ -49,6 +49,7 @@ type WorkbenchPageOption = {
 type WorkbenchApiContract = {
   id: string
   label: string
+  dataSourceIds: string[]
   endpoints: Array<{ id: string; method: string; path: string; summary: string }>
 }
 
@@ -57,6 +58,19 @@ function normalizeApiPath(value: unknown, fallback = '/api'): string {
   const text = String(value || '').trim()
   if (!text) return fallback
   return `/${text}`.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
+}
+
+/** 把数组或对象字典统一展开成记录数组，兼容不同 ProjectPlan 保存形态。 */
+function recordItems(value: unknown): Array<Record<string, unknown>> {
+  const items = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object'
+      ? Object.values(value as Record<string, unknown>)
+      : []
+  return items.filter(
+    (item): item is Record<string, unknown> =>
+      Boolean(item) && typeof item === 'object' && !Array.isArray(item)
+  )
 }
 
 /** 将页面 id 转成与后端详情文件一致的安全文件名。 */
@@ -86,12 +100,9 @@ async function pageDetailPlanExists(workspaceRoot: string, pageId: string): Prom
 function projectPlanPages(value: unknown): Map<string, Record<string, unknown>> {
   const result = new Map<string, Record<string, unknown>>()
   if (!value || typeof value !== 'object' || Array.isArray(value)) return result
-  const frontendPages = Array.isArray((value as Record<string, unknown>).frontend_pages)
-    ? ((value as Record<string, unknown>).frontend_pages as unknown[])
-    : []
+  const frontendPages = recordItems((value as Record<string, unknown>).frontend_pages)
   frontendPages.forEach((page) => {
-    if (!page || typeof page !== 'object' || Array.isArray(page)) return
-    const record = page as Record<string, unknown>
+    const record = page
     const pageId = String(record.id || record.pageId || '').trim()
     if (pageId) result.set(pageId, record)
   })
@@ -115,25 +126,26 @@ function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
 /** 按 base_path 合并 ProjectPlan contracts，同一目录下展示所有具体 API。 */
 function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return []
-  const contracts = Array.isArray((value as Record<string, unknown>).api_contracts)
-    ? ((value as Record<string, unknown>).api_contracts as unknown[])
-    : []
+  const contracts = recordItems((value as Record<string, unknown>).api_contracts)
   const groupedContracts = new Map<string, WorkbenchApiContract>()
   contracts.forEach((contract, contractIndex) => {
-    if (!contract || typeof contract !== 'object' || Array.isArray(contract)) return
-    const record = contract as Record<string, unknown>
+    const record = contract
     const contractId = String(record.id || `api-contract-${contractIndex + 1}`).trim()
+    const dataSourceId = String(record.data_source_id || contractId).trim()
     const basePath = normalizeApiPath(record.base_path, `/${contractId}`)
-    const endpoints = Array.isArray(record.endpoints) ? record.endpoints : []
+    const endpoints = recordItems(record.endpoints)
     const group = groupedContracts.get(basePath) || {
       id: basePath,
       label: basePath,
+      dataSourceIds: [],
       endpoints: []
+    }
+    if (dataSourceId && !group.dataSourceIds.includes(dataSourceId)) {
+      group.dataSourceIds.push(dataSourceId)
     }
     group.endpoints.push(
       ...endpoints.flatMap((endpoint, endpointIndex) => {
-        if (!endpoint || typeof endpoint !== 'object' || Array.isArray(endpoint)) return []
-        const endpointRecord = endpoint as Record<string, unknown>
+        const endpointRecord = endpoint
         const method = String(endpointRecord.method || 'GET')
           .trim()
           .toUpperCase()

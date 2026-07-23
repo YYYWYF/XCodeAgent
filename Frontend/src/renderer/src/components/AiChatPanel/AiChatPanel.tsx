@@ -161,6 +161,7 @@ export default function AiChatPanel({
     activeWorkflow,
     error,
     handleSend,
+    handleStartDataSourceDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,
@@ -321,6 +322,34 @@ export default function AiChatPanel({
     if (started) onPlanningArtifactsRefresh()
   }
 
+  /** 启动当前数据源的详细设计；解锁状态仍以后续持久化目录检查为准。 */
+  const handleStartDataSourceDesign = async (
+    dataSourceId: string,
+    dataSourceLabel: string,
+    hasDetailPlan: boolean
+  ): Promise<void> => {
+    const started = await handleStartDataSourceDetailConfirmation(
+      dataSourceId,
+      dataSourceLabel,
+      hasDetailPlan
+    )
+    if (started) onPlanningArtifactsRefresh()
+  }
+
+  /** 根据弹框里选择的目标类型启动页面或数据源详细设计。 */
+  const handleStartDetailDesign = async (
+    targetType: 'page' | 'data_source',
+    targetId: string,
+    targetLabel: string,
+    hasDetailPlan: boolean
+  ): Promise<void> => {
+    if (targetType === 'data_source') {
+      await handleStartDataSourceDesign(targetId, targetLabel, hasDetailPlan)
+      return
+    }
+    await handleStartPageDesign(targetId, targetLabel, hasDetailPlan)
+  }
+
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
     setActiveView('chat')
     const sessionPageId = sessions.find((session) => session.id === sessionId)?.pageId
@@ -389,10 +418,11 @@ export default function AiChatPanel({
         ) : initialPageSelectionRequired ? (
           <div className={cx('ai-chat-main')}>
             <DetailConfirmationPageSelector
+              apiContracts={developmentPlanningApiContracts}
               disabled={loading || workspaceBusy}
               generating={loading}
               loading={!developmentPlanningReady}
-              onStart={handleStartPageDesign}
+              onStart={handleStartDetailDesign}
               pages={developmentPlanningPages}
               workflowEvents={activeWorkflow?.events}
             />
@@ -460,7 +490,7 @@ export default function AiChatPanel({
                 generating={loading}
                 loading={false}
                 mode="locked"
-                onStart={handleStartPageDesign}
+                onStart={handleStartDetailDesign}
                 pages={developmentPlanningPages}
                 selectedPage={activePageOption}
                 workflowEvents={activeWorkflow?.events}

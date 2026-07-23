@@ -16,6 +16,7 @@ export type DevelopmentPlanningApiEndpoint = { id: string; method: string; path:
 export type DevelopmentPlanningApiContract = {
   id: string
   label: string
+  dataSourceIds?: string[]
   endpoints: DevelopmentPlanningApiEndpoint[]
 }
 export type MenuDevelopmentPlan = { menuKey: string; menuLabel: string; tasks: ApplicationDevelopmentTask[] }

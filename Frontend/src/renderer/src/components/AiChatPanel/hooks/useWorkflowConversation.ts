@@ -62,6 +62,11 @@ type UseWorkflowConversationResult = {
     pageLabel: string,
     hasDetailPlan?: boolean
   ) => Promise<boolean>
+  handleStartDataSourceDetailConfirmation: (
+    selectedDataSourceId: string,
+    dataSourceLabel: string,
+    hasDetailPlan?: boolean
+  ) => Promise<boolean>
   handleStopGenerating: () => void
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -177,6 +182,7 @@ export function useWorkflowConversation({
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
       selectedPageId?: string
+      selectedDataSourceId?: string
       sessionIdentity?: SessionIdentity
     }
   ): Promise<boolean> => {
@@ -300,6 +306,7 @@ export function useWorkflowConversation({
         originalRequest: options?.originalRequest,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
         selectedPageId: options?.selectedPageId || identity.pageId,
+        selectedDataSourceId: options?.selectedDataSourceId,
         workflowDebug: options?.workflowDebug,
         resumeState: options?.resumeState,
         onContent: (content) => {
@@ -433,6 +440,24 @@ export function useWorkflowConversation({
     )
   }
 
+  /** 以用户选择的数据源作为主 Workflow 细节设计起点。 */
+  const handleStartDataSourceDetailConfirmation = async (
+    selectedDataSourceId: string,
+    dataSourceLabel: string,
+    hasDetailPlan?: boolean
+  ): Promise<boolean> => {
+    if (!selectedDataSourceId || loading || workspaceBusy) return false
+    const identity = await ensureActiveSession()
+    return sendWorkflowMessage(
+      `${hasDetailPlan ? '查看已生成数据源计划' : '开始设计数据源'}：${dataSourceLabel}`,
+      {
+        selectedDataSourceId,
+        sessionIdentity: identity,
+        titleFrom: `${hasDetailPlan ? '确认数据源' : '设计数据源'}：${dataSourceLabel}`
+      }
+    )
+  }
+
   const handleStopGenerating = (): void => {
     if (!activeSession || !loading || stopping) return
     const agUiSession = agUiSessionsRef.current[activeSession.key]
@@ -450,6 +475,7 @@ export function useWorkflowConversation({
     activeWorkflow,
     error,
     handleSend,
+    handleStartDataSourceDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,

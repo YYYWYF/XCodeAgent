@@ -114,6 +114,14 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("selected_page_id"))
         or _optional_text(resume_values_from_state.get("selectedPageId"))
     )
+    selectedDataSourceId = (
+        _optional_text(payload.get("selectedDataSourceId"))
+        or _optional_text(payload.get("selected_data_source_id"))
+        or _optional_text(forwarded_props.get("selectedDataSourceId"))
+        or _optional_text(forwarded_props.get("selected_data_source_id"))
+        or _optional_text(resume_values_from_state.get("selectedDataSourceId"))
+        or _optional_text(resume_values_from_state.get("selected_data_source_id"))
+    )
     workspace = (
         _optional_text(payload.get("workspace"))
         or _optional_text(payload.get("workspaceRoot"))
@@ -157,6 +165,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
+        **({"selectedDataSourceId": selectedDataSourceId} if selectedDataSourceId else {}),
+        **({"selected_data_source_id": selectedDataSourceId} if selectedDataSourceId else {}),
         "build_execution_scope": build_execution_scope,
         **(
             {"lifecycle_interaction_submission": _lifecycle_interaction_submission(resume_state)}
@@ -506,6 +516,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "project_plan_json_path",
         "detail_selection",
         "selectedPageId",
+        "selectedDataSourceId",
         "selected_data_source_id",
         "page_spec_draft",
         "data_source_spec_draft",

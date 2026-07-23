@@ -89,6 +89,7 @@ type OutlineRowProps = {
   activeSessionId?: string
   deletingSessionId?: string
   designed: boolean
+  disabled?: boolean
   item: ApplicationMenuItem
   level: number
   loadingSessions: boolean
@@ -108,6 +109,7 @@ function OutlineRow({
   activeSessionId,
   deletingSessionId,
   designed,
+  disabled = false,
   item,
   level,
   loadingSessions,
@@ -132,8 +134,10 @@ function OutlineRow({
         aria-current={selected ? 'page' : undefined}
         aria-expanded={isFolder ? expanded : undefined}
         className={cx('outline-row', selected && 'selected')}
+        disabled={disabled && !isFolder}
         onClick={() => {
           if (isFolder) setExpanded((current) => !current)
+          else if (disabled) return
           else onSelect(item.key)
         }}
         style={{ '--outline-level': level } as React.CSSProperties}
@@ -152,7 +156,7 @@ function OutlineRow({
           </span>
         ) : null}
       </button>
-      {!isFolder ? (
+      {!isFolder && !disabled ? (
         <PageSessionHistory
           activeSessionId={activeSessionId}
           deletingSessionId={deletingSessionId}
@@ -172,6 +176,7 @@ function OutlineRow({
             <OutlineRow
               activeSessionId={activeSessionId}
               deletingSessionId={deletingSessionId}
+              disabled={disabled}
               designed={designed}
               item={child}
               key={child.key}
@@ -271,6 +276,7 @@ export default function SessionSidebar({
   const [apiExpanded, setApiExpanded] = useState(true)
   const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(() => new Set())
   const [onlyRelated, setOnlyRelated] = useState(false)
+  const [selectedApiEndpointId, setSelectedApiEndpointId] = useState('')
   const pageItems = useMemo<ApplicationMenuItem[]>(() => pages.map((page) => ({
     key: page.pageId,
     pageKey: page.pageId,
@@ -452,9 +458,9 @@ export default function SessionSidebar({
 
       <Text className={cx('session-section-title')} strong>应用大纲</Text>
       <fieldset
-        aria-label={outlineLocked ? '应用大纲暂不可操作' : '应用大纲'}
+        aria-disabled={outlineLocked}
+        aria-label={outlineLocked ? '页面大纲暂不可操作，API 仍可选择' : '应用大纲'}
         className={cx('session-outline-lock-shell')}
-        disabled={outlineLocked}
       >
       <div className={cx('session-outline-content')}>
           <Input
@@ -494,6 +500,7 @@ export default function SessionSidebar({
                 <OutlineRow
                   activeSessionId={activeSessionId}
                   deletingSessionId={deletingSessionId}
+                  disabled={outlineLocked}
                   designed={Boolean(pages.find((page) => page.pageId === item.key)?.designed)}
                   item={item}
                   key={item.key}
@@ -544,12 +551,22 @@ export default function SessionSidebar({
                   <code>{contract.label}</code>
                 </button>
                 {contractExpanded ? <div className={cx('api-list')}>
-                  {contract.endpoints.map((endpoint) => (
-                    <button className={cx('api-row')} key={`${contract.id}-${endpoint.id}`} title={endpoint.summary} type="button">
-                      <span className={cx('api-method', endpoint.method.toLocaleLowerCase())}>{endpoint.method}</span>
-                      <code>{endpoint.path}</code>
-                    </button>
-                  ))}
+                  {contract.endpoints.map((endpoint) => {
+                    const endpointKey = `${contract.id}-${endpoint.id}`
+                    return (
+                      <button
+                        aria-current={selectedApiEndpointId === endpointKey ? 'true' : undefined}
+                        className={cx('api-row', selectedApiEndpointId === endpointKey && 'selected')}
+                        key={endpointKey}
+                        onClick={() => setSelectedApiEndpointId(endpointKey)}
+                        title={endpoint.summary}
+                        type="button"
+                      >
+                        <span className={cx('api-method', endpoint.method.toLocaleLowerCase())}>{endpoint.method}</span>
+                        <code>{endpoint.path}</code>
+                      </button>
+                    )
+                  })}
                 </div> : null}
               </div>
             })}
@@ -564,7 +581,7 @@ export default function SessionSidebar({
       {outlineLocked ? (
         <div className={cx('session-outline-lock')}>
           <LockOutlined />
-          <Text>完成首个页面设计后解锁</Text>
+          <Text>页面大纲将在首个页面设计后解锁，API 可先选择查看</Text>
         </div>
       ) : null}
       </fieldset>

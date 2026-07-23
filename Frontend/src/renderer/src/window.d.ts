@@ -60,6 +60,7 @@ declare global {
         apiContracts: Array<{
           id: string;
           label: string;
+          dataSourceIds?: string[];
           endpoints: Array<{ id: string; method: string; path: string; summary: string }>;
         }>;
       }>;

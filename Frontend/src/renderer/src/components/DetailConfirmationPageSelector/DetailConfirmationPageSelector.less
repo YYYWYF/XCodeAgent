@@ -141,8 +141,40 @@
 .@{class-prefix}-detail-page-selector-options {
   display: grid;
   gap: 9px;
+  grid-template-columns: 1fr;
+}
+
+.@{class-prefix}-detail-page-selector-target-grid {
+  display: grid;
+  gap: 18px;
   margin-bottom: 28px;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.@{class-prefix}-detail-page-selector-target-section {
+  display: flex;
+  min-width: 0;
+  padding: 16px;
+  background: color-mix(in srgb, var(--wb-surface-subtle) 74%, transparent);
+  border: 1px solid var(--wb-border);
+  border-radius: 14px;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.@{class-prefix}-detail-page-selector-section-title {
+  display: block;
+  color: var(--wb-text) !important;
+  font-size: 13px;
+}
+
+.@{class-prefix}-detail-page-selector-empty {
+  display: block;
+  min-height: 112px;
+  padding: 18px;
+  background: var(--wb-surface-subtle);
+  border: 1px dashed var(--wb-border);
+  border-radius: 12px;
 }
 
 .@{class-prefix}-detail-page-selector-options .ant-radio-button-wrapper {
@@ -168,7 +200,24 @@
   box-shadow: 0 0 0 2px var(--wb-accent-soft);
 }
 
-.@{class-prefix}-detail-page-selector-name { font-weight: 700; }
+.@{class-prefix}-detail-page-selector-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.@{class-prefix}-detail-page-selector-method {
+  display: inline-flex;
+  padding: 1px 6px;
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  background: linear-gradient(135deg, #6b3cf0, #35d0ba);
+  border-radius: 999px;
+}
+
 .@{class-prefix}-detail-page-selector-path { color: var(--wb-accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .@{class-prefix}-detail-page-selector-purpose {
   margin-top: 6px;
@@ -225,5 +274,6 @@
 @media (max-width: 760px) {
   .@{class-prefix}-detail-page-selector { padding: 16px; }
   .@{class-prefix}-detail-page-selector-panel { max-height: calc(100vh - 32px); padding: 24px; }
+  .@{class-prefix}-detail-page-selector-target-grid { grid-template-columns: 1fr; }
   .ant-btn.@{class-prefix}-detail-page-selector-action { width: 100%; min-width: 0; }
 }

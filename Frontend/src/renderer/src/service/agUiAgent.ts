@@ -23,6 +23,7 @@ export type SendWorkflowMessageOptions = {
   originalRequest?: string
   selectedSkillNames?: string[]
   selectedPageId?: string
+  selectedDataSourceId?: string
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
@@ -46,6 +47,7 @@ export function buildWorkflowForwardedProps(
     originalRequest: options.originalRequest,
     selectedSkillNames: options.selectedSkillNames,
     selectedPageId: options.selectedPageId,
+    selectedDataSourceId: options.selectedDataSourceId,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
     buildExecutionScope: options.workflowDebug?.enabled

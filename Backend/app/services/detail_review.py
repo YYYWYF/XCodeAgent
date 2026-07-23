@@ -38,8 +38,9 @@ def detail_review_payload(
     project_plan: dict[str, Any],
     *,
     selectedPageId: str | None = None,
+    selectedDataSourceId: str | None = None,
 ) -> dict[str, Any]:
-    """构造本轮细节审核载荷；选中页面时只投射该页面的最新详情。"""
+    """构造本轮细节审核载荷；选中目标时只投射该目标相关详情。"""
 
     project_plan = deepcopy(project_plan)
     selected_page_detail = _selected_page_detail(project_plan, selectedPageId)
@@ -47,6 +48,8 @@ def detail_review_payload(
         project_plan,
         selected_page_detail,
     )
+    if selectedDataSourceId:
+        selected_data_source_ids.add(selectedDataSourceId)
     pages = [
         {
             "target_type": "page",
@@ -77,15 +80,18 @@ def detail_review_payload(
         and detail.get("pageId")
         and (
             not selectedPageId
+            and not selectedDataSourceId
             or str(detail.get("pageId")) == selectedPageId
         )
     ]
     data_sources = _data_source_review_items(
         project_plan,
         selectedPageId=selectedPageId,
+        selectedDataSourceId=selectedDataSourceId,
         selected_data_source_ids=selected_data_source_ids,
     )
     missingSelectedPagePlan = bool(selectedPageId and not pages)
+    missingSelectedDataSourcePlan = bool(selectedDataSourceId and not data_sources)
     return {
         "mode": "detail_review",
         "status": "requires_user_input",
@@ -94,6 +100,12 @@ def detail_review_payload(
         "message": (
             f"页面 `{selectedPageId}` 还没有生成细节设计，请先生成该页面的 plan。"
             if missingSelectedPagePlan
+            else
+            f"数据源 `{selectedDataSourceId}` 还没有生成细节设计，请先生成该数据源的 plan。"
+            if missingSelectedDataSourcePlan
+            else
+            f"请审阅数据源 `{selectedDataSourceId}` 设计；仅展开需要调整的对象。"
+            if selectedDataSourceId
             else
             f"请审阅页面 `{selectedPageId}` 及其直接数据源设计；仅展开需要调整的对象。"
             if selectedPageId
@@ -107,7 +119,9 @@ def detail_review_payload(
                 "data_source_count": len(data_sources),
                 "api_contract_count": len(project_plan.get("api_contracts", [])),
                 "missingSelectedPagePlan": missingSelectedPagePlan,
+                "missingSelectedDataSourcePlan": missingSelectedDataSourcePlan,
                 "selectedPageId": selectedPageId,
+                "selectedDataSourceId": selectedDataSourceId,
             },
         },
     }
@@ -118,8 +132,9 @@ def apply_detail_review_submission(
     submission: dict[str, Any],
     *,
     selectedPageId: str | None = None,
+    selectedDataSourceId: str | None = None,
 ) -> dict[str, Any]:
-    """应用细节审核提交；单页审核只确认当前页及其直接数据源。"""
+    """应用细节审核提交；选中目标审核只确认当前目标相关详情。"""
 
     if submission.get("review_status") != "confirmed":
         raise ValueError("detail review submission must be explicitly confirmed")
@@ -157,15 +172,20 @@ def apply_detail_review_submission(
         updated,
         selected_page_detail,
     )
+    if selectedDataSourceId:
+        selected_data_source_ids.add(selectedDataSourceId)
     for detail in updated.get("page_detail_plans", []):
         if isinstance(detail, dict) and (
-            not selectedPageId or str(detail.get("pageId")) == selectedPageId
+            not selectedPageId
+            and not selectedDataSourceId
+            or str(detail.get("pageId")) == selectedPageId
         ):
             detail["status"] = "confirmed"
             detail["approved"] = True
     for detail in updated.get("data_source_detail_plans", []):
         if isinstance(detail, dict) and (
             not selectedPageId
+            and not selectedDataSourceId
             or str(detail.get("data_source_id")) in selected_data_source_ids
         ):
             detail["status"] = "confirmed"
@@ -332,6 +352,7 @@ def _data_source_review_items(
     project_plan: dict[str, Any],
     *,
     selectedPageId: str | None,
+    selectedDataSourceId: str | None,
     selected_data_source_ids: set[str],
 ) -> list[dict[str, Any]]:
     """构造数据源审核对象，并按数据源 id 去重。"""
@@ -344,7 +365,7 @@ def _data_source_review_items(
         source_id = str(detail.get("data_source_id"))
         if source_id in seen:
             continue
-        if selectedPageId and source_id not in selected_data_source_ids:
+        if (selectedPageId or selectedDataSourceId) and source_id not in selected_data_source_ids:
             continue
         seen.add(source_id)
         items.append(
