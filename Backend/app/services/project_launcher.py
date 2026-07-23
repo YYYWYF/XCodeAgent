@@ -328,7 +328,7 @@ def _reuse_ready_server(runtime_root: Path, preview_url: str) -> dict[str, Any] 
 def _preview_url(script: str) -> str:
     port = _script_port(script)
     if port is None:
-        port = 5173 if "vite" in script else 3000
+        port = 80
     return f"http://127.0.0.1:{port}"
 
 
