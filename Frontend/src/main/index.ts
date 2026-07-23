@@ -870,11 +870,7 @@ function setupWorkspaceIpc(): void {
       // 忽略 .git 删除失败
     }
 
-    return {
-      ok: true,
-      path: frontendDir,
-      templateUrl
-    }
+    return { ok: true }
   })
 
   // 在模板工程 frontend/src/pages/ 下追加规划出的页面文件。

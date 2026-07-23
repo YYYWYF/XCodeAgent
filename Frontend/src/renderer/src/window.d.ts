@@ -31,7 +31,7 @@ declare global {
           projectPath: string;
           appName: string;
           templateUrl?: string;
-        }) => Promise<{ ok?: boolean; path: string; templateUrl: string }>;
+        }) => Promise<{ ok?: boolean }>;
         writeTemplatePages: (payload: {
           projectPath: string;
           appName: string;

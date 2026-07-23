@@ -19,7 +19,6 @@ export interface TemplateInitResponse {
   code: number
   message: string
   data: {
-    projectZipUrl?: string
     templateVersion: string
     generatedAt: number
     fileCount?: number
@@ -66,7 +65,7 @@ export async function fetchTemplateCode(
     }
   }
 
-  const cloneResult = await workspaceApi.cloneTemplate({
+  await workspaceApi.cloneTemplate({
     projectPath,
     appName,
     templateUrl: DEFAULT_TEMPLATE_REPO_URL
@@ -76,7 +75,6 @@ export async function fetchTemplateCode(
     code: 0,
     message: 'success',
     data: {
-      projectZipUrl: cloneResult?.templateUrl || DEFAULT_TEMPLATE_REPO_URL,
       templateVersion: '1.0.0',
       generatedAt: Date.now()
     }
