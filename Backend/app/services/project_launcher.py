@@ -12,19 +12,20 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
+from app.services.backend_project_launcher import (
+    launch_backend_project,
+    stop_backend_project,
+)
 from app.utils.subprocess_output import subprocess_output_text
-from app.workspace.spec_documents import workflow_artifact_root, workspace_root
-
-
 INSTALL_TIMEOUT_SECONDS = 120
 SERVER_READY_TIMEOUT_SECONDS = 20
 SERVER_READY_INTERVAL_SECONDS = 1
 
 
-def launch_frontend_project(state: dict[str, Any]) -> dict[str, Any]:
-    """安装并启动前端项目，仅在服务通过健康检查后返回可验收状态。"""
+def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
+    """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。"""
 
-    root = workspace_root(state).resolve()
+    root = Path(workspace_path).expanduser().resolve()
     package_path = _find_frontend_package_json(root)
     if package_path is None:
         return _failed_launch("未找到前端 package.json。", root=root)
@@ -46,7 +47,7 @@ def launch_frontend_project(state: dict[str, Any]) -> dict[str, Any]:
         )
 
     package_manager = _select_package_manager(package_path.parent)
-    runtime_root = workflow_artifact_root(state) / "runtime" / "launch"
+    runtime_root = root / ".xcodeagent" / "runtime" / "launch"
     runtime_root.mkdir(parents=True, exist_ok=True)
     preview_url = _preview_url(scripts.get(script_name, ""))
     existing_server = _reuse_ready_server(runtime_root, preview_url)
