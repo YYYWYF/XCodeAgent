@@ -12,8 +12,10 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { ApplicationConfig } from '../../typings'
 import {
+  clearPreviewError,
   cx,
   getInitialPreviewUrl,
+  getPreviewError,
   navigatePreviewHistory,
   normalizePreviewUrl,
   openExternalPreviewUrl,
@@ -29,13 +31,15 @@ type Props = {
   application: ApplicationConfig
   requestKey?: string
   requestedUrl?: string
+  errorMessage?: string
 }
 
 /** 展示可由 Workflow 目标地址驱动的内嵌浏览器预览。 */
 export default function BrowserPreviewPanel({
   application,
   requestKey,
-  requestedUrl
+  requestedUrl,
+  errorMessage: externalError
 }: Props): ReactElement {
   const initialUrl = normalizePreviewUrl(requestedUrl || '') || getInitialPreviewUrl(application.id)
   const [navigation, setNavigation] = useState(() => ({ history: [initialUrl], index: 0 }))
@@ -44,6 +48,9 @@ export default function BrowserPreviewPanel({
   const [viewport, setViewport] = useState<PreviewViewport>('desktop')
   const [refreshKey, setRefreshKey] = useState(0)
   const [openError, setOpenError] = useState('')
+  const [launchError, setLaunchError] = useState(
+    () => externalError || getPreviewError(application.id)
+  )
   const previewUrl = navigation.history[navigation.index]
 
   const pageOptions = useMemo(
@@ -54,11 +61,17 @@ export default function BrowserPreviewPanel({
   useEffect(() => {
     setDraftUrl(previewUrl)
     setOpenError('')
+    // 用户手动导航或刷新时，之前的启动错误已无关，一并清除
+    setLaunchError('')
+    clearPreviewError(application.id)
     storePreviewUrl(application.id, previewUrl)
   }, [application.id, previewUrl])
 
   useEffect(() => {
     if (!requestedUrl) return
+    // 从外部收到新的 preview 地址（如 launch 成功返回），清除此前可能的启动错误
+    setLaunchError('')
+    clearPreviewError(application.id)
     setNavigation((current) => navigatePreviewHistory(current, requestedUrl))
   }, [requestKey, requestedUrl])
 
@@ -184,6 +197,12 @@ export default function BrowserPreviewPanel({
       {openError && (
         <Text className={cx('browser-preview-error')} type="danger">
           {openError}
+        </Text>
+      )}
+
+      {launchError && !openError && (
+        <Text className={cx('browser-preview-error')} type="warning">
+          {launchError}
         </Text>
       )}
     </section>

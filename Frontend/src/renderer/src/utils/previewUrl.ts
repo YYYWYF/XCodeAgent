@@ -59,6 +59,33 @@ export function navigatePreviewHistory(
   }
 }
 
+/** 持久化预览启动错误信息，供 BrowserPreviewPanel 在预览区展示。 */
+export function storePreviewError(applicationId: string, message: string): void {
+  try {
+    window.localStorage.setItem(`xcode-agent-preview-error:${applicationId}`, message)
+  } catch {
+    // localStorage may be unavailable in restricted browser contexts.
+  }
+}
+
+/** 读取预览启动错误信息，用于在预览区展示启动失败原因。 */
+export function getPreviewError(applicationId: string): string {
+  try {
+    return window.localStorage.getItem(`xcode-agent-preview-error:${applicationId}`) || ''
+  } catch {
+    return ''
+  }
+}
+
+/** 清除预览启动错误信息，在用户主动导航或关闭预览时调用。 */
+export function clearPreviewError(applicationId: string): void {
+  try {
+    window.localStorage.removeItem(`xcode-agent-preview-error:${applicationId}`)
+  } catch {
+    // localStorage may be unavailable in restricted browser contexts.
+  }
+}
+
 /** 使用系统浏览器打开规范化后的预览地址。 */
 export async function openExternalPreviewUrl(url: string): Promise<void> {
   const targetUrl = normalizePreviewUrl(url)

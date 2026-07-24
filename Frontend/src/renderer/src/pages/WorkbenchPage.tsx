@@ -1,4 +1,5 @@
-import { Layout } from 'antd'
+import { Layout, notification } from 'antd'
+import { LoadingOutlined } from '@ant-design/icons'
 import { useEffect, useRef, useState } from 'react'
 import { LeftPanel } from '../components'
 import {
@@ -13,7 +14,8 @@ import type {
   DevelopmentPlanningPageOption,
   EditorMode
 } from '../typings'
-import { cx } from '../utils'
+import { clearPreviewError, cx, storePreviewError, storePreviewUrl } from '../utils'
+import { startProjectLaunch } from '../service/projectLaunch'
 import './WorkbenchPage.less'
 
 type Props = {
@@ -56,6 +58,56 @@ function WorkbenchPage({
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const entryStartedAtRef = useRef(Date.now())
+  const launchedWorkspaceRef = useRef<string>()
+
+  // 进入工作台时自动异步尝试启动项目预览（首次创建和重新进入均生效）
+  useEffect(() => {
+    const workspacePath =
+      application.workspaceRoot || application.projectParentPath || ''
+    if (!workspacePath) return
+    if (launchedWorkspaceRef.current === workspacePath) return
+    launchedWorkspaceRef.current = workspacePath
+
+    const loadingKey = `project-launch-${application.id}`
+    notification.open({
+      key: loadingKey,
+      message: '项目正在启动中',
+      description: '正在安装依赖并启动开发服务器，请稍候...',
+      placement: 'bottomRight',
+      duration: null,
+      icon: <LoadingOutlined />,
+      className: cx('project-launch-loading'),
+    })
+
+    startProjectLaunch(workspacePath).then(result => {
+      notification.close(loadingKey)
+      if (result.status === 'running' && result.preview_url) {
+        storePreviewUrl(application.id, result.preview_url)
+        clearPreviewError(application.id)
+        notification.success({
+          message: '项目预览已启动',
+          description: '可在预览面板中查看效果',
+          placement: 'bottomRight',
+          duration: null,
+        })
+      } else {
+        const errorMsg = result.message || '未知错误'
+        storePreviewError(application.id, errorMsg)
+        storePreviewUrl(application.id, '')
+        notification.warning({
+          message: '项目预览启动失败',
+          description: `${errorMsg}，可在预览区查看详情`,
+          placement: 'bottomRight',
+          duration: null,
+        })
+      }
+    }).catch(err => {
+      notification.close(loadingKey)
+      const errorMsg = err instanceof Error ? err.message : '网络请求失败'
+      storePreviewError(application.id, errorMsg)
+      storePreviewUrl(application.id, '')
+    })
+  }, [application])
 
   useEffect(() => {
     let active = true
