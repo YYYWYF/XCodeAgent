@@ -406,8 +406,8 @@ export default function ApplicationPagePlanningModal({
                 </Button>
               }
               status="error"
-              subTitle={error}
-              title="规划流程暂时中断"
+              subTitle={`${error} 请检查网络或模型服务后重试。`}
+              title="应用初始化失败"
             />
           ) : (
             <section className={cx('page-planning-review')}>

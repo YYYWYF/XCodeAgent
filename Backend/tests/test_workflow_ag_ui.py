@@ -667,7 +667,9 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         payload = "\n".join(asyncio.run(collect()))
 
         self.assertIn("invalid_selected_skills", payload)
-        self.assertIn("RUN_FINISHED", payload)
+        self.assertIn("RUN_ERROR", payload)
+        self.assertNotIn("RUN_FINISHED", payload)
+        self.assertNotIn("TEXT_MESSAGE_CONTENT", payload)
 
     def test_selected_skills_are_forwarded_to_graph_state_and_metadata(self) -> None:
         graph = FakeWorkflowGraph()

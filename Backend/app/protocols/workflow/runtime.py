@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from ag_ui.core import (
     CustomEvent,
+    RunErrorEvent,
     RunFinishedEvent,
     RunStartedEvent,
     TextMessageEndEvent,
@@ -822,27 +823,11 @@ def build_workflow_ag_ui_stream(
                 visual_payload=failed_payload,
             ):
                 yield frame
-            for frame in _text_delta_frames(
-                encoder,
-                message_id,
-                f"{summary['message']}\n",
-            ):
-                yield frame
             yield encoder.encode(TextMessageEndEvent(messageId=message_id))
             yield encoder.encode(
-                RunFinishedEvent(
-                    threadId=thread_id,
-                    runId=run_id,
-                    result=jsonable_encoder(
-                        {
-                            "messageId": message_id,
-                            "agentMode": "workflow",
-                            "workflow": failed_payload,
-                            "summary": summary,
-                            "events": events,
-                            "result": result,
-                        }
-                    ),
+                RunErrorEvent(
+                    message=summary["message"],
+                    code=str(error_code or "WORKFLOW_RUN_FAILED"),
                 )
             )
         finally:

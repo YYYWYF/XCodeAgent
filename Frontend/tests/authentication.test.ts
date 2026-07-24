@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { requestCloudJson } from '../src/renderer/src/service/cloudApi'
+import { AgUiChatSession } from '../src/renderer/src/service/agUiAgent'
 import {
   createAgUiHttpAgent,
   createHttpError,
@@ -139,6 +140,37 @@ test('AG-UI RUN_ERROR 只交给业务 subscriber', async () => {
   unsubscribe()
   assert.deepEqual(statuses, [])
   assert.deepEqual(runErrors, ['business failure'])
+})
+
+test('Workflow 会话把 RUN_ERROR 提升为可供初始化界面展示的异常', async () => {
+  const originalFetch = globalThis.fetch
+  const streamedContent: string[] = []
+  Object.assign(globalThis, {
+    fetch: async () =>
+      eventStreamResponse([
+        { type: 'RUN_STARTED', threadId: 'thread-init', runId: 'run-init' },
+        { type: 'TEXT_MESSAGE_START', messageId: 'message-init', role: 'assistant' },
+        { type: 'TEXT_MESSAGE_END', messageId: 'message-init' },
+        { type: 'RUN_ERROR', message: '模型请求超时，请稍后重试。', code: 'MODEL_TIMEOUT' }
+      ])
+  })
+
+  try {
+    const session = new AgUiChatSession(
+      'thread-init',
+      'https://example.invalid/application-page-planning/run'
+    )
+    await assert.rejects(
+      session.sendMessage('初始化应用', {
+        editorMode: 'frontend',
+        onContent: (content) => streamedContent.push(content)
+      }),
+      /模型请求超时，请稍后重试/
+    )
+    assert.equal(streamedContent.every((content) => content === ''), true)
+  } finally {
+    Object.assign(globalThis, { fetch: originalFetch })
+  }
 })
 
 test('AG-UI Python 请求不会携带 access_token', async () => {

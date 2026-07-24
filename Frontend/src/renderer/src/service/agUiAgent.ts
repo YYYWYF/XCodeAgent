@@ -202,6 +202,7 @@ export class AgUiChatSession {
     let workflow: WorkflowRunPayload | undefined
     let toolCalls: ToolCallRecord[] = []
     let processSteps: ProcessStepRecord[] = []
+    let runError: Error | undefined
     const emitToolCalls = (nextToolCalls: ToolCallRecord[]): void => {
       toolCalls = nextToolCalls
       options.onToolCalls?.(toolCalls)
@@ -240,6 +241,10 @@ export class AgUiChatSession {
       onTextMessageEndEvent: ({ textMessageBuffer }) => {
         options.onContent?.(textMessageBuffer)
       },
+      onRunErrorEvent: ({ event }) => {
+        // RUN_ERROR 是运行失败终态；HttpAgent 不会自动 reject，需要在会话边界显式抛出。
+        runError = new Error(event.message || 'Workflow 运行失败，请重试。')
+      },
       onToolCallStartEvent: ({ event }) => {
         emitToolCalls(applyToolCallEvent(toolCalls, 'start', event))
       },
@@ -272,6 +277,7 @@ export class AgUiChatSession {
         this.activeRunId = undefined
       }
     }
+    if (runError) throw runError
     const assistantMessage = result.newMessages.find(
       (newMessage) => newMessage.role === 'assistant'
     )
