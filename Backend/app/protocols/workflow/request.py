@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.services.execution_resource_scope import resolve_execution_resource_claims
+
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json
 from app.workspace.task_documents import load_build_task_plan_json
@@ -107,6 +109,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     detail_review_submission = _detail_review_submission(clarification_answers)
+    acceptance_decision = _page_acceptance_decision(clarification_answers)
+    if acceptance_decision:
+        resume_from = "acceptance"
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
         or _optional_text(payload.get("selected_page_id"))
@@ -170,6 +175,20 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         resume_values=resume_values_from_state,
         selected_page_id=selectedPageId,
     )
+    execution_resource_claims = (
+        resolve_execution_resource_claims(
+            project_plan_start_values.get("project_plan"),
+            build_execution_scope,
+        )
+        if workflow_scope != "application_planning"
+        else []
+    )
+    resume_execution_run_id = (
+        _optional_text(payload.get("resumeExecutionRunId"))
+        or _optional_text(payload.get("resume_execution_run_id"))
+        or _optional_text(forwarded_props.get("resumeExecutionRunId"))
+        or _optional_text(forwarded_props.get("resume_execution_run_id"))
+    )
     resume_values = {
         **resume_values_from_state,
         **project_plan_start_values,
@@ -180,11 +199,21 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             if detail_review_submission
             else {}
         ),
+        **({"acceptance_decision": acceptance_decision} if acceptance_decision else {}),
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
         **({"selected_api_contract_id": selected_api_contract_id} if selected_api_contract_id else {}),
         **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
         **({"detail_target_type": detail_target_type} if detail_target_type else {}),
         "build_execution_scope": build_execution_scope,
+        "execution_resource_claims": [
+            claim.model_dump(mode="json", by_alias=True)
+            for claim in execution_resource_claims
+        ],
+        **(
+            {"resume_execution_run_id": resume_execution_run_id}
+            if resume_execution_run_id
+            else {}
+        ),
         **(
             {"lifecycle_interaction_submission": _lifecycle_interaction_submission(resume_state)}
             if _lifecycle_interaction_submission(resume_state)
@@ -202,6 +231,18 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
     }
     return {
+        "plan_control_run_id": (
+            _optional_text(payload.get("planControlRunId"))
+            or _optional_text(payload.get("plan_control_run_id"))
+            or _optional_text(forwarded_props.get("planControlRunId"))
+            or _optional_text(forwarded_props.get("plan_control_run_id"))
+        ),
+        "plan_control_action": (
+            _optional_text(payload.get("planControlAction"))
+            or _optional_text(payload.get("plan_control_action"))
+            or _optional_text(forwarded_props.get("planControlAction"))
+            or _optional_text(forwarded_props.get("plan_control_action"))
+        ),
         "cancel_run_id": (
             _optional_text(payload.get("cancelRunId"))
             or _optional_text(payload.get("cancel_run_id"))
@@ -287,11 +328,22 @@ def _lifecycle_interaction_submission(
     for source_name in ("state", "result"):
         source = _optional_dict(resume_state.get(source_name)) or {}
         lifecycle = _optional_dict(source.get("lifecycle")) or {}
-        pending = _optional_dict(lifecycle.get("pendingInteraction")) or {}
+        active_executions = _optional_dict(lifecycle.get("activeExecutions")) or {}
+        previous_run_id = _optional_text(resume_state.get("runId"))
+        execution = (
+            _optional_dict(active_executions.get(previous_run_id))
+            if previous_run_id
+            else None
+        ) or {}
+        pending = _optional_dict(execution.get("pendingInteraction")) or {}
         interaction_id = _optional_text(pending.get("id"))
         based_on_revision = pending.get("basedOnRevision")
         if interaction_id and isinstance(based_on_revision, int) and based_on_revision >= 1:
-            return {"id": interaction_id, "basedOnRevision": based_on_revision}
+            return {
+                "id": interaction_id,
+                "basedOnRevision": based_on_revision,
+                **({"runId": previous_run_id} if execution and previous_run_id else {}),
+            }
     return None
 
 
@@ -556,6 +608,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan",
         "build_task_plan_path",
         "build_execution_scope",
+        "execution_resource_claims",
         "tasks",
         "build_results",
         "build_summary",
@@ -905,6 +958,15 @@ def _clarification_answers_to_text(value: Any) -> str:
         return "\n".join(lines)
 
     return _answer_to_text(value)
+
+
+def _page_acceptance_decision(value: Any) -> str:
+    """从结构化验收答案中提取允许主 Graph 使用的稳定动作。"""
+
+    if not isinstance(value, dict):
+        return ""
+    decision = _optional_text(value.get("page_acceptance"))
+    return decision if decision in {"accepted", "changes_requested"} else ""
 
 
 def _answer_to_text(value: Any) -> str:

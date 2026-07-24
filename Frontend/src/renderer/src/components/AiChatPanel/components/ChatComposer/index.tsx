@@ -76,7 +76,8 @@ export default function ChatComposer({
   const [debugEnabled, setDebugEnabled] = useState(false)
   const [traceOpen, setTraceOpen] = useState(false)
   const [resumeFrom, setResumeFrom] = useState('requirements')
-  const [buildScopeType, setBuildScopeType] = useState<WorkflowBuildExecutionScope['type']>('application')
+  const [buildScopeType, setBuildScopeType] =
+    useState<WorkflowBuildExecutionScope['type']>('application')
   const [buildScopeTargetId, setBuildScopeTargetId] = useState('')
   const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
   const isBuildTaskDebug = debugEnabled && resumeFrom === 'prepare_build_tasks'
@@ -122,7 +123,6 @@ export default function ChatComposer({
     <div className={cx('ai-chat-composer')}>
       <div className={cx('ai-chat-composer-column')}>
         {error && <Alert message={error} showIcon type="error" />}
-        <Text className={cx('composer-context-label')}>继续完善当前任务</Text>
         <div className={cx('ai-chat-composer-frame')}>
           <div className={cx('composer-inline-input')}>
             {selectedSkills.length > 0 && (
@@ -200,7 +200,11 @@ export default function ChatComposer({
                         <Input
                           aria-label={buildScopeType === 'page' ? '页面 ID' : '数据源 ID'}
                           disabled={loading}
-                          placeholder={buildScopeType === 'page' ? '输入 pageId，例如 orders' : '输入 dataSourceId，例如 orders'}
+                          placeholder={
+                            buildScopeType === 'page'
+                              ? '输入 pageId，例如 orders'
+                              : '输入 dataSourceId，例如 orders'
+                          }
                           value={buildScopeTargetId}
                           onChange={(event) => setBuildScopeTargetId(event.target.value)}
                         />

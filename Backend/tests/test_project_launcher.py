@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 from urllib.error import HTTPError
 
-from app.graph.nodes.lifecycle import launch_project
+from app.graph.nodes.lifecycle import acceptance, launch_project
 from app.services.backend_project_launcher import (
     _backend_logs_are_ready,
     _find_backend_snapshot_jar,
@@ -689,6 +689,17 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertIsNone(result["launch_result"]["frontend"])
         launch_backend.assert_called_once_with(Path("/workspace"))
         launch_frontend.assert_not_called()
+
+    def test_acceptance_rejects_implicit_confirmation(self) -> None:
+        """缺少结构化验收动作时不能完成交付。"""
+
+        waiting = acceptance({})
+        accepted = acceptance({"acceptance_decision": "accepted"})
+
+        self.assertEqual(waiting["status"], "requires_user_input")
+        self.assertFalse(waiting["accepted"])
+        self.assertEqual(accepted["status"], "completed")
+        self.assertTrue(accepted["accepted"])
 
 
 if __name__ == "__main__":

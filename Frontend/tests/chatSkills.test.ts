@@ -91,6 +91,15 @@ test('AG-UI forwardedProps 在约定字段发送技能名称', () => {
   assert.deepEqual(forwardedProps.selectedSkillNames, ['alpha', 'beta'])
 })
 
+test('AG-UI 继续执行只发送旧 runId 作为资源锁转移令牌', () => {
+  const forwardedProps = buildWorkflowForwardedProps({
+    editorMode: 'frontend',
+    resumeExecutionRunId: 'run-stopped'
+  })
+
+  assert.equal(forwardedProps.resumeExecutionRunId, 'run-stopped')
+})
+
 test('AG-UI 连续请求只发送当前用户消息', async () => {
   const originalFetch = globalThis.fetch
   const requestBodies: Array<Record<string, unknown>> = []
@@ -131,6 +140,65 @@ test('AG-UI 连续请求只发送当前用户消息', async () => {
     ),
     [[{ role: 'user', content: '第一条' }], [{ role: 'user', content: '第二条' }]]
   )
+})
+
+test('AG-UI 暂停先等待后端取消接管，不会立即中止活动流', async () => {
+  const originalFetch = globalThis.fetch
+  let activeSignal: AbortSignal | undefined
+  let rejectActiveRequest: ((reason?: unknown) => void) | undefined
+  let cancellationRequested = false
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      forwardedProps?: { cancelRunId?: string }
+      runId?: string
+      threadId?: string
+    }
+    if (request.forwardedProps?.cancelRunId) {
+      cancellationRequested = true
+      const events = [
+        {
+          type: 'RUN_STARTED',
+          threadId: String(request.threadId),
+          runId: String(request.runId)
+        },
+        {
+          type: 'RUN_FINISHED',
+          threadId: String(request.threadId),
+          runId: String(request.runId),
+          result: {
+            workflowRunControl: {
+              status: 'cancel_requested',
+              targetRunId: request.forwardedProps.cancelRunId
+            }
+          }
+        }
+      ]
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+        headers: { 'content-type': 'text/event-stream' },
+        status: 200
+      })
+    }
+    activeSignal = init?.signal || undefined
+    return new Promise<Response>((_resolve, reject) => {
+      rejectActiveRequest = reject
+    })
+  }
+
+  try {
+    const session = new AgUiChatSession('thread-stop', 'http://agent.test/workflow/run')
+    const activeRequest = session.sendMessage('执行计划', { editorMode: 'frontend' })
+    await Promise.resolve()
+    session.stop()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.equal(cancellationRequested, true)
+    assert.equal(activeSignal?.aborted, false)
+
+    rejectActiveRequest?.(new Error('server cancelled'))
+    await assert.rejects(activeRequest, /server cancelled/)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('AG-UI 集成测试步骤会合并并保留实时检查清单', async () => {

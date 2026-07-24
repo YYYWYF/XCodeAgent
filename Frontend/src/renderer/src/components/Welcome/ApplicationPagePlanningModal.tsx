@@ -251,8 +251,8 @@ export default function ApplicationPagePlanningModal({
           : {
               enabled: true,
               resumeFrom:
-                initialLifecycle.lifecycle.stage === 'generating_project_plan' ||
-                initialLifecycle.lifecycle.stage === 'awaiting_project_plan_confirmation'
+                initialLifecycle.initialization.stage === 'generating_project_plan' ||
+                initialLifecycle.initialization.stage === 'awaiting_project_plan_confirmation'
                   ? 'project_planning'
                   : 'requirements'
             },
@@ -279,9 +279,9 @@ export default function ApplicationPagePlanningModal({
     if (startedRef.current) return
     startedRef.current = true
     if (
-      initialLifecycle.lifecycle.stage === 'generating_application_template_files' ||
-      initialLifecycle.lifecycle.stage === 'application_template_generation_failed' ||
-      initialLifecycle.lifecycle.stage === 'ready_for_workbench'
+      initialLifecycle.initialization.stage === 'generating_application_template_files' ||
+      initialLifecycle.initialization.stage === 'application_template_generation_failed' ||
+      initialLifecycle.initialization.stage === 'ready_for_workbench'
     ) {
       return
     }
@@ -291,7 +291,7 @@ export default function ApplicationPagePlanningModal({
       return
     }
     void runPlanning(originalRequest)
-  }, [initialLifecycle.lifecycle.stage, originalRequest])
+  }, [initialLifecycle.initialization.stage, originalRequest])
 
   // 提交当前确认卡答案，并由后端从公开状态推断恢复节点。
   const handleSubmitClarification = (

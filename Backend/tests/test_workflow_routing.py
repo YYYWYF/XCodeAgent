@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.graph.workflow import (
+    route_acceptance,
     route_build_result,
     route_detail_confirmation,
     route_prepare_build_tasks,
@@ -124,6 +125,12 @@ class WorkflowRoutingTests(unittest.TestCase):
             ),
             "handle_failure",
         )
+
+    def test_acceptance_requires_structured_accepted_state(self) -> None:
+        """最终完成节点只能由结构化验收通过状态解锁。"""
+
+        self.assertEqual(route_acceptance({"accepted": True}), "finalize_project")
+        self.assertEqual(route_acceptance({"accepted": False}), "await_user_input")
 
 
 if __name__ == "__main__":

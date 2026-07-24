@@ -70,6 +70,23 @@ def _decode_workflow_run_frames(frames: list[str]) -> list[dict]:
     return decoded
 
 
+def _decode_custom_frames(frames: list[str]) -> list[dict]:
+    """解析全部 AG-UI 自定义事件，用于验证 lifecycle 与 Workflow 的投影顺序。"""
+
+    decoded: list[dict] = []
+    for frame in frames:
+        for line in frame.splitlines():
+            if not line.startswith("data:"):
+                continue
+            try:
+                event = json.loads(line[len("data:"):].strip())
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "CUSTOM":
+                decoded.append(event)
+    return decoded
+
+
 class FakeWorkflowGraph:
     def __init__(self) -> None:
         self.initial_states: list[dict] = []
@@ -678,6 +695,96 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         payload = "\n".join(frames)
         self.assertIn('"selectedSkillNames":["alpha"]', payload)
         self.assertIn("skills-revision", payload)
+
+    def test_application_planning_does_not_enter_workbench_lifecycle(self) -> None:
+        """独立需求规划不能登记、推进或失败收尾工作台计划执行。"""
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeWorkflowGraph(),
+                payload={
+                    "threadId": "thread-application-planning",
+                    "runId": "run-application-planning",
+                    "messages": [{"role": "user", "content": "plan application"}],
+                    "forwardedProps": {
+                        "workflowScope": "application_planning",
+                        "workspaceRoot": "/tmp/application-planning",
+                    },
+                },
+            )
+            return [frame async for frame in stream]
+
+        with (
+            patch("app.protocols.workflow.runtime.begin_workflow_lifecycle") as begin,
+            patch(
+                "app.protocols.workflow.runtime.project_workflow_lifecycle_boundary"
+            ) as project,
+            patch("app.protocols.workflow.runtime.stop_workflow_lifecycle") as stop,
+            patch("app.protocols.workflow.runtime.fail_workflow_lifecycle") as fail,
+        ):
+            frames = asyncio.run(collect())
+
+        self.assertTrue(frames)
+        begin.assert_not_called()
+        project.assert_not_called()
+        stop.assert_not_called()
+        fail.assert_not_called()
+
+    def test_workbench_lifecycle_is_projected_before_first_node_snapshot(self) -> None:
+        """资源锁写入成功后应立即广播，不能等待首个 Graph 节点完成。"""
+
+        initial_lifecycle = {
+            "schemaVersion": "1.2.0",
+            "application": {"id": "app-1", "name": "测试应用"},
+            "updatedAt": "2026-07-23T00:00:00Z",
+            "revision": 2,
+            "initialization": {
+                "stage": "ready_for_workbench",
+                "status": "completed",
+            },
+            "activeExecutions": {},
+            "resourceLocks": {
+                "application": None,
+                "pages": {},
+                "apiContracts": {},
+                "dataSources": {},
+            },
+            "extensions": {},
+        }
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeWorkflowGraph(),
+                payload={
+                    "threadId": "thread-lifecycle",
+                    "runId": "run-lifecycle",
+                    "messages": [{"role": "user", "content": "build orders"}],
+                    "forwardedProps": {"workspaceRoot": "/tmp/lifecycle-projection"},
+                },
+            )
+            return [frame async for frame in stream]
+
+        with (
+            patch(
+                "app.protocols.workflow.runtime.begin_workflow_lifecycle",
+                return_value=initial_lifecycle,
+            ) as begin,
+            patch(
+                "app.protocols.workflow.runtime.project_workflow_lifecycle_boundary",
+                return_value=initial_lifecycle,
+            ),
+        ):
+            frames = asyncio.run(collect())
+
+        begin.assert_called_once()
+        custom_events = _decode_custom_frames(frames)
+        event_names = [event.get("name") for event in custom_events]
+        self.assertEqual(event_names[0], "application-lifecycle", event_names)
+        self.assertIn("workflow-run", event_names)
+        self.assertLess(
+            event_names.index("application-lifecycle"),
+            event_names.index("workflow-run"),
+        )
 
     def test_cancel_run_request_cancels_the_active_workflow_task(self) -> None:
         graph = FakeBlockingGraph()

@@ -2,6 +2,7 @@ import { AppstoreOutlined, CodeOutlined, DeleteOutlined, GlobalOutlined } from '
 import { Button, message, Modal, Radio } from 'antd'
 import { useEffect, useState } from 'react'
 import {
+  subscribeApplicationsChanged,
   deleteStoredProject,
   loadStoredApplications,
   removeStoredApplication
@@ -40,17 +41,31 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
 
   useEffect(() => {
     let active = true
-    void loadStoredApplications()
-      .then((storedApplications) => {
-        if (active) {
+    let refreshId = 0
+
+    // 首次挂载和索引变化时读取最新列表，较慢的旧请求不得覆盖较新的结果。
+    const refreshApplications = async (): Promise<void> => {
+      const currentRefreshId = ++refreshId
+      try {
+        const storedApplications = await loadStoredApplications()
+        if (active && currentRefreshId === refreshId) {
           setApplications(storedApplications)
         }
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
+      } finally {
+        if (active && currentRefreshId === refreshId) setLoading(false)
+      }
+    }
+
+    // 将持久化层的保存/删除通知转换为最近项目列表刷新。
+    const handleApplicationsChanged = (): void => {
+      void refreshApplications()
+    }
+
+    void refreshApplications()
+    const unsubscribe = subscribeApplicationsChanged(handleApplicationsChanged)
     return () => {
       active = false
+      unsubscribe()
     }
   }, [])
 

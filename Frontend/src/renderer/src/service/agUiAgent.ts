@@ -4,6 +4,7 @@ import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
 import type {
   ApplicationConfig,
+  ApplicationLifecycle,
   EditorMode,
   WorkflowClarificationAnswers,
   WorkflowConfirmationArtifact,
@@ -30,12 +31,16 @@ export type SendWorkflowMessageOptions = {
   resumeState?: WorkflowRunPayload
   workflowScope?: string
   onContent?: (content: string) => void
+  onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onToolCalls?: (toolCalls: ToolCallRecord[]) => void
   onProcessSteps?: (steps: ProcessStepRecord[]) => void
+  planControlAction?: 'stop' | 'end'
+  planControlRunId?: string
+  resumeExecutionRunId?: string
 }
 
-/** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能字段位置。 */
+/** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能、控制和恢复字段。 */
 export function buildWorkflowForwardedProps(
   options: SendWorkflowMessageOptions
 ): Record<string, unknown> {
@@ -58,7 +63,10 @@ export function buildWorkflowForwardedProps(
       ? options.workflowDebug.buildExecutionScope
       : undefined,
     resumeState: options.resumeState,
-    workflowScope: options.workflowScope
+    workflowScope: options.workflowScope,
+    planControlAction: options.planControlAction,
+    planControlRunId: options.planControlRunId,
+    resumeExecutionRunId: options.resumeExecutionRunId
   }
 }
 
@@ -165,11 +173,17 @@ export class AgUiChatSession {
     this.url = url
   }
 
-  /** 中止当前请求流，并通知同一 AG-UI 端点取消对应的后端运行。 */
+  /** 请求后端取消当前运行；确认失败时才本地中止，确保暂停 loading 覆盖后端落盘过程。 */
   stop(): void {
     const runId = this.activeRunId
-    this.activeAgent?.abortRun()
-    if (runId) void this.cancelRun(runId)
+    const activeAgent = this.activeAgent
+    if (!runId) {
+      activeAgent?.abortRun()
+      return
+    }
+    void this.cancelRun(runId).then((cancelled) => {
+      if (!cancelled && this.activeRunId === runId) activeAgent?.abortRun()
+    })
   }
 
   /** 使用请求级 HttpAgent 发送当前消息，避免把本地会话历史和旧状态重复传输。 */
@@ -194,6 +208,10 @@ export class AgUiChatSession {
     }
     const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
+        if (event.name === 'application-lifecycle') {
+          const lifecycle = readApplicationLifecycle(event.value)
+          if (lifecycle) options.onApplicationLifecycle?.(lifecycle)
+        }
         if (event.name === 'agent-process') {
           const step = readProcessStep(event.value)
           if (step) {
@@ -203,12 +221,18 @@ export class AgUiChatSession {
         }
         if (event.name === 'workflow-run') {
           workflow = readWorkflowPayload(event.value) ?? workflow
-          if (workflow) options.onWorkflow?.(workflow)
+          if (workflow) {
+            emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
+            options.onWorkflow?.(workflow)
+          }
         }
       },
       onStateSnapshotEvent: ({ event }) => {
         workflow = readWorkflowFromState(event.snapshot) ?? workflow
-        if (workflow) options.onWorkflow?.(workflow)
+        if (workflow) {
+          emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
+          options.onWorkflow?.(workflow)
+        }
       },
       onTextMessageContentEvent: ({ event, textMessageBuffer }) => {
         options.onContent?.(`${textMessageBuffer}${event.delta}`)
@@ -252,6 +276,7 @@ export class AgUiChatSession {
       (newMessage) => newMessage.role === 'assistant'
     )
     workflow = readResultWorkflow(result.result) ?? workflow
+    if (workflow) emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
     const answer =
       messageContentToText(assistantMessage?.content).trim() ||
       workflow?.summary?.message ||
@@ -268,18 +293,20 @@ export class AgUiChatSession {
     }
   }
 
-  /** 通过当前会话的实际端点发送独立取消控制请求。 */
-  private async cancelRun(targetRunId: string): Promise<void> {
+  /** 通过当前会话的实际端点发送独立取消控制请求，并返回后端是否接管取消。 */
+  private async cancelRun(targetRunId: string): Promise<boolean> {
     const cancellationAgent = createAgUiHttpAgent({
       url: this.url,
       threadId: this.threadId
     })
     try {
-      await cancellationAgent.runAgent({
+      const result = await cancellationAgent.runAgent({
         forwardedProps: { cancelRunId: targetRunId }
       })
+      const control = objectValue(objectValue(result.result).workflowRunControl)
+      return stringValue(control.status) === 'cancel_requested'
     } catch {
-      // The aborted client stream remains a fallback if the cancellation acknowledgement is lost.
+      return false
     }
   }
 }
@@ -587,6 +614,37 @@ function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
         ? (payload.result as Record<string, unknown>)
         : undefined
   }
+}
+
+/** 校验独立 lifecycle 事件的最小稳定字段，忽略未知或损坏的实时投影。 */
+export function readApplicationLifecycle(value: unknown): ApplicationLifecycle | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const lifecycle = value as Partial<ApplicationLifecycle>
+  if (
+    lifecycle.schemaVersion !== '1.2.0' ||
+    typeof lifecycle.revision !== 'number' ||
+    !lifecycle.application ||
+    typeof lifecycle.application.id !== 'string' ||
+    !lifecycle.initialization ||
+    typeof lifecycle.initialization.stage !== 'string' ||
+    !lifecycle.activeExecutions ||
+    typeof lifecycle.activeExecutions !== 'object'
+  ) {
+    return undefined
+  }
+  return lifecycle as ApplicationLifecycle
+}
+
+/** 从兼容 Workflow 投影中同步 lifecycle，避免旧后端缺少独立事件时丢失校准。 */
+function emitWorkflowLifecycle(
+  workflow: WorkflowRunPayload,
+  listener?: (lifecycle: ApplicationLifecycle) => void
+): void {
+  const lifecycle =
+    readApplicationLifecycle(workflow.summary.lifecycle) ??
+    readApplicationLifecycle(workflow.state?.lifecycle) ??
+    readApplicationLifecycle(workflow.result?.lifecycle)
+  if (lifecycle) listener?.(lifecycle)
 }
 
 function readConfirmationArtifact(value: unknown): WorkflowConfirmationArtifact | undefined {

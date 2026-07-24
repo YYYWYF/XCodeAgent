@@ -22,7 +22,7 @@ function planningStatusPresentation(
   lifecycle: ApplicationLifecycle,
   status: ActivePlanningStatus
 ): { description: string; icon: JSX.Element; title: string } {
-  const stage = lifecycle.lifecycle.stage
+  const stage = lifecycle.initialization.stage
   if (status === 'error') {
     return {
       description: lifecycle.error?.message || '规划流程需要处理，点击进入查看详情或重试',

@@ -5,8 +5,10 @@ import {
   inspectWorkspacePlanningArtifacts,
   loadWorkspaceApplicationConfig
 } from '../service/applicationStorage'
+import { getApplicationLifecycle } from '../service/applicationPagePlanning'
 import type {
   ApplicationConfig,
+  ApplicationLifecycle,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningPageOption,
   EditorMode
@@ -16,6 +18,8 @@ import './WorkbenchPage.less'
 
 type Props = {
   application: ApplicationConfig
+  applicationLifecycle?: ApplicationLifecycle
+  onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onReturnWelcome: () => void
 }
 
@@ -32,7 +36,12 @@ function getTheme(): Theme {
 }
 
 // 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
-function WorkbenchPage({ application, onReturnWelcome }: Props): JSX.Element {
+function WorkbenchPage({
+  application,
+  applicationLifecycle,
+  onApplicationLifecycleChange,
+  onReturnWelcome
+}: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
   const [theme, setTheme] = useState<Theme>(getTheme)
   const [workspaceApplication, setWorkspaceApplication] = useState(application)
@@ -44,6 +53,7 @@ function WorkbenchPage({ application, onReturnWelcome }: Props): JSX.Element {
   const [developmentPlanningApiContracts, setDevelopmentPlanningApiContracts] = useState<
     DevelopmentPlanningApiContract[]
   >([])
+  const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const entryStartedAtRef = useRef(Date.now())
 
@@ -87,6 +97,12 @@ function WorkbenchPage({ application, onReturnWelcome }: Props): JSX.Element {
       } finally {
         if (active) setDevelopmentPlanningPagesLoaded(true)
       }
+      try {
+        const lifecycle = await getApplicationLifecycle(application)
+        if (active) onApplicationLifecycleChange(lifecycle)
+      } catch (error) {
+        console.warn('读取工作台应用生命周期失败，继续使用 Workflow 实时状态。', error)
+      }
     }
 
     // 首次进入由初始状态承载加载门禁；后续刷新保留当前内容，避免工作台反复清空闪烁。
@@ -97,7 +113,7 @@ function WorkbenchPage({ application, onReturnWelcome }: Props): JSX.Element {
       active = false
       window.removeEventListener('focus', syncWorkspaceApplication)
     }
-  }, [application])
+  }, [application, onApplicationLifecycleChange, planningRefreshRevision])
 
   useEffect(() => {
     if (!developmentPlanningPagesLoaded || entryStage !== 'loading') return
@@ -124,17 +140,25 @@ function WorkbenchPage({ application, onReturnWelcome }: Props): JSX.Element {
     setWorkspaceApplication(updatedApplication)
   }
 
+  // 页面或接口设计运行结束后重新读取规划目录，以持久化结果更新大纲状态。
+  const handlePlanningArtifactsRefresh = (): void => {
+    setPlanningRefreshRevision((current) => current + 1)
+  }
+
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       {developmentPlanningPagesLoaded ? (
         <LeftPanel
           application={workspaceApplication}
+          applicationLifecycle={applicationLifecycle}
           developmentPlanningReady={developmentPlanningPagesLoaded}
           hasPageDesigns={hasPageDesigns}
           developmentPlanningPages={developmentPlanningPages}
           developmentPlanningApiContracts={developmentPlanningApiContracts}
           editorMode={editorMode}
           onApplicationUpdate={handleApplicationUpdate}
+          onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
+          onApplicationLifecycleChange={onApplicationLifecycleChange}
           onReturnWelcome={onReturnWelcome}
           onThemeChange={handleThemeChange}
           theme={theme}

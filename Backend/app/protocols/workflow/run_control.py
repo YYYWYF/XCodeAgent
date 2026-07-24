@@ -7,13 +7,21 @@ from threading import Lock
 from typing import Any, AsyncIterator
 
 from ag_ui.core import (
+    CustomEvent,
     RunFinishedEvent,
     RunStartedEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
+    StateSnapshotEvent,
 )
 from ag_ui.encoder import EventEncoder
+
+from app.services.application_lifecycle import (
+    application_lifecycle_payload,
+    end_workbench_execution,
+    stop_workbench_execution,
+)
 
 
 class WorkflowRunRegistry:
@@ -81,6 +89,67 @@ def build_workflow_cancellation_ag_ui_stream(
                 threadId=thread_id,
                 runId=run_id,
                 result={"workflowRunControl": result},
+            )
+        )
+
+    return stream()
+
+
+def build_workflow_plan_control_ag_ui_stream(
+    *,
+    action: str,
+    workspace: str,
+    target_run_id: str,
+    thread_id: str,
+    run_id: str,
+    accept: str | None = None,
+) -> AsyncIterator[str]:
+    """通过主 AG-UI 端点执行不启动 Graph 的计划控制动作。"""
+
+    encoder = EventEncoder(accept or "text/event-stream")
+    message_id = f"plan-control:{run_id}"
+
+    async def stream() -> AsyncIterator[str]:
+        if action not in {"stop", "end"}:
+            raise ValueError(f"不支持的计划控制动作：{action}")
+        if not target_run_id:
+            raise ValueError("计划控制动作缺少目标 runId。")
+        lifecycle = application_lifecycle_payload(
+            end_workbench_execution(workspace, run_id=target_run_id)
+            if action == "end"
+            else stop_workbench_execution(workspace, run_id=target_run_id)
+        )
+        message = (
+            "计划已结束，工作区已恢复自由输入。"
+            if action == "end"
+            else "计划执行已暂停，可继续执行、调整计划或结束。"
+        )
+        workflow = {
+            "runId": run_id,
+            "threadId": thread_id,
+            "summary": {
+                "status": "cancelled",
+                "phase": "plan_control",
+                "message": message,
+                "lifecycle": lifecycle,
+            },
+            "events": [],
+            "state": {"status": "cancelled", "phase": "plan_control", "lifecycle": lifecycle},
+            "result": {"status": "cancelled", "phase": "plan_control", "lifecycle": lifecycle},
+        }
+        yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
+        yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
+        # 控制动作写入成功后立即广播生命周期，所有工作台区域共享同一 revision。
+        yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle))
+        yield encoder.encode(CustomEvent(name="workflow-run", value=workflow))
+        yield encoder.encode(StateSnapshotEvent(snapshot={"workflow": workflow}))
+        yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=message))
+        yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+        yield encoder.encode(
+            RunFinishedEvent(
+                threadId=thread_id,
+                runId=run_id,
+                result={"workflow": workflow},
             )
         )
 

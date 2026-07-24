@@ -9,8 +9,63 @@ from app.protocols.workflow.request import workflow_run_inputs
 
 
 class WorkflowRequestTests(unittest.TestCase):
-    def test_application_planning_extracts_lifecycle_interaction_token(self) -> None:
-        """恢复请求只能提交 lifecycle 交互令牌，不能覆盖文件中的阶段。"""
+    def test_workbench_extracts_explicit_resume_execution_run_id(self) -> None:
+        """继续执行应只把旧 runId 作为锁转移令牌，不依赖生命周期快照恢复 Graph。"""
+
+        result = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "resumeExecutionRunId": "run-stopped",
+                }
+            }
+        )
+
+        self.assertEqual(
+            result["resume_values"]["resume_execution_run_id"],
+            "run-stopped",
+        )
+
+    def test_workbench_extracts_interaction_from_matching_run(self) -> None:
+        """页面恢复只能提交原运行自身的交互令牌。"""
+
+        result = workflow_run_inputs(
+            {
+                "message": "验收通过",
+                "resumeState": {
+                    "runId": "run-page-a",
+                    "state": {
+                        "lifecycle": {
+                            "activeExecutions": {
+                                "run-page-a": {
+                                    "pendingInteraction": {
+                                        "id": "accept-page-a",
+                                        "basedOnRevision": 12,
+                                    }
+                                },
+                                "run-page-b": {
+                                    "pendingInteraction": {
+                                        "id": "accept-page-b",
+                                        "basedOnRevision": 13,
+                                    }
+                                },
+                            }
+                        }
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            result["resume_values"]["lifecycle_interaction_submission"],
+            {
+                "id": "accept-page-a",
+                "basedOnRevision": 12,
+                "runId": "run-page-a",
+            },
+        )
+
+    def test_application_planning_does_not_extract_root_interaction_token(self) -> None:
+        """初始化恢复不再从 lifecycle 根节点提交交互令牌。"""
 
         result = workflow_run_inputs({
             "message": "确认并继续",
@@ -19,7 +74,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 "state": {
                     "phase": "requirements",
                     "lifecycle": {
-                        "lifecycle": {"stage": "ready_for_workbench"},
+                        "initialization": {"stage": "ready_for_workbench"},
                         "pendingInteraction": {
                             "id": "interaction-1",
                             "basedOnRevision": 7,
@@ -29,10 +84,7 @@ class WorkflowRequestTests(unittest.TestCase):
             },
         })
 
-        self.assertEqual(
-            result["resume_values"]["lifecycle_interaction_submission"],
-            {"id": "interaction-1", "basedOnRevision": 7},
-        )
+        self.assertNotIn("lifecycle_interaction_submission", result["resume_values"])
         self.assertNotIn("lifecycle", result["resume_values"])
 
     def test_application_planning_forwards_edited_requirement_spec(self) -> None:

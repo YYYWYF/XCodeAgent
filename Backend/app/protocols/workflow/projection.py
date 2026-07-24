@@ -406,10 +406,11 @@ def _workflow_summary(
     if status == "requires_user_input":
         message = _workflow_user_input_message(result, clarification)
     else:
-        message = (
-            f"Workflow {status}：完成 {len(completed_nodes)} 个节点，"
-            f"质量门禁={'通过' if result.get('quality_gate_passed') else '未通过'}。"
-        )
+        message = f"Workflow {status}：完成 {len(completed_nodes)} 个节点。"
+        quality_gate_passed = result.get("quality_gate_passed")
+        # 创建规划不执行集成测试质量门；只有明确布尔结果才展示通过或未通过。
+        if isinstance(quality_gate_passed, bool):
+            message += f" 质量门禁={'通过' if quality_gate_passed else '未通过'}。"
         terminal_reason = _repair_terminal_reason(result)
         if terminal_reason:
             repair_iteration = result.get("repair_iteration")

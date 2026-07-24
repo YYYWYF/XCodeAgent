@@ -25,7 +25,7 @@ def create_build_failure_repair_plan(
     targeted_snapshot: dict[str, Any] | None = None,
     repair_planner: RepairPlanner | None = None,
 ) -> dict[str, Any]:
-    """Create scheduler-bounded RepairPlan entries for repairable build task failures."""
+    """为可修复构建失败生成受调度器边界约束的修复计划。"""
 
     tasks_by_id = {str(task.get("id")): task for task in tasks if task.get("id")}
     existing_keys = {
@@ -125,6 +125,14 @@ def create_build_failure_repair_plan(
             )
         }
     )
+    requested_resources = _deduplicated_requested_resources(
+        [
+            resource
+            for confirmation in confirmations
+            for resource in confirmation.get("requestedResources", [])
+            if isinstance(resource, dict)
+        ]
+    )
     plan_id = _stable_repair_plan_id(
         [item.get("source_ref", {}) for item in planner_inputs],
         requested_paths,
@@ -137,6 +145,7 @@ def create_build_failure_repair_plan(
         "decision": decision_text,
         "planId": plan_id,
         "requestedPaths": requested_paths,
+        "requestedResources": requested_resources,
         "tasks": repair_tasks if decision_text == "repair" else [],
         "repair_tasks": repair_tasks if decision_text == "repair" else [],
         "requires_user_confirmation": confirmations,
@@ -211,6 +220,8 @@ def normalize_repair_plan(
     result: dict[str, Any],
     source_ref: dict[str, Any],
 ) -> dict[str, Any]:
+    """校验 RepairPlanner 输出并投射稳定路径及业务资源扩展请求。"""
+
     plan = raw_plan if isinstance(raw_plan, dict) else {}
     decision = str(plan.get("decision") or "").strip()
     if decision not in {"repair", "requires_user_confirmation", "terminal_failure"}:
@@ -234,6 +245,9 @@ def normalize_repair_plan(
     normalized["requestedPaths"] = _requested_repair_paths(
         parent_task,
         plan.get("boundaries"),
+    )
+    normalized["requestedResources"] = _requested_repair_resources(
+        plan.get("boundaries")
     )
     normalized["planId"] = _stable_repair_plan_id(
         [normalized["repair_input_ref"]],
@@ -331,6 +345,34 @@ def _requested_repair_paths(
     return requested or _string_list(
         parent_task.get("allowed_paths") or parent_task.get("allowedPaths")
     )
+
+
+def _requested_repair_resources(raw_boundaries: Any) -> list[dict[str, str]]:
+    """只接受 RepairPlanner 明确列出的稳定业务资源，不从文件路径猜测。"""
+
+    boundaries = raw_boundaries if isinstance(raw_boundaries, dict) else {}
+    value = boundaries.get("requested_resources") or boundaries.get("requestedResources")
+    return _deduplicated_requested_resources(
+        [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+    )
+
+
+def _deduplicated_requested_resources(
+    resources: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """校验并去重修复扩展资源，应用级扩展必须由独立应用计划处理。"""
+
+    result: dict[str, dict[str, str]] = {}
+    for resource in resources:
+        resource_type = str(resource.get("type") or "").strip()
+        target_id = str(resource.get("targetId") or resource.get("target_id") or "").strip()
+        if resource_type not in {"page", "api_contract", "data_source"} or not target_id:
+            continue
+        result.setdefault(
+            f"{resource_type}:{target_id}",
+            {"type": resource_type, "targetId": target_id},
+        )
+    return list(result.values())
 
 
 def _stable_repair_plan_id(parts: Any, requested_paths: list[str]) -> str:

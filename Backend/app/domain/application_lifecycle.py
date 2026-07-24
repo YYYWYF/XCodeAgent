@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
-APPLICATION_LIFECYCLE_SCHEMA_VERSION = "1.0.0"
+APPLICATION_LIFECYCLE_SCHEMA_VERSION = "1.2.0"
 
 
 class ApplicationLifecycleStage(StrEnum):
@@ -36,6 +36,8 @@ class ApplicationLifecycleStatus(StrEnum):
     FAILED = "failed"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
 
 
 class PendingInteractionType(StrEnum):
@@ -49,6 +51,44 @@ class PendingInteractionType(StrEnum):
     IMPACT_CONFIRMATION = "impact_confirmation"
     PAGE_ACCEPTANCE = "page_acceptance"
     APPLICATION_ACCEPTANCE = "application_acceptance"
+    AGENT_APPROVAL = "agent_approval"
+    REPAIR_SCOPE_CONFIRMATION = "repair_scope_confirmation"
+    PLAN_ADJUSTMENT = "plan_adjustment"
+
+
+class WorkbenchExecutionStatus(StrEnum):
+    """定义工作台计划执行控制面的可恢复状态。"""
+
+    RUNNING = "running"
+    STOPPING = "stopping"
+    AWAITING_USER = "awaiting_user"
+    FAILED = "failed"
+    STOPPED = "stopped"
+    COMPLETED = "completed"
+
+
+class ExecutionResourceType(StrEnum):
+    """定义计划执行可独占的稳定业务资源类型。"""
+
+    APPLICATION = "application"
+    PAGE = "page"
+    API_CONTRACT = "api_contract"
+    DATA_SOURCE = "data_source"
+
+
+class ExecutionResourceRole(StrEnum):
+    """区分执行主目标与由计划依赖或修复扩展得到的资源。"""
+
+    PRIMARY = "primary"
+    DEPENDENCY = "dependency"
+
+
+class ExecutionResourceReason(StrEnum):
+    """记录资源进入锁集合的稳定业务原因。"""
+
+    PRIMARY_TARGET = "primary_target"
+    PLAN_DEPENDENCY = "plan_dependency"
+    REPAIR_EXPANSION = "repair_expansion"
 
 
 class ApplicationLifecycleModel(BaseModel):
@@ -62,12 +102,6 @@ class ApplicationIdentity(ApplicationLifecycleModel):
 
     id: str = Field(min_length=1, max_length=256)
     name: str = Field(min_length=1, max_length=512)
-
-
-class ProjectIdentity(ApplicationLifecycleModel):
-    """保存可选的项目级稳定标识。"""
-
-    id: str = Field(min_length=1, max_length=256)
 
 
 class ArtifactReference(ApplicationLifecycleModel):
@@ -91,13 +125,12 @@ class PendingInteraction(ApplicationLifecycleModel):
     submitted_at: datetime | None = Field(default=None, alias="submittedAt")
 
 
-class LifecycleState(ApplicationLifecycleModel):
-    """保存当前业务阶段及未来领域的轻量扩展状态。"""
+class ApplicationInitialization(ApplicationLifecycleModel):
+    """保存应用初始化阶段及其通用执行状态。"""
 
     stage: ApplicationLifecycleStage
     status: ApplicationLifecycleStatus
-    domain: dict[str, Any] = Field(default_factory=dict)
-    extensions: dict[str, Any] = Field(default_factory=dict)
+    thread_id: str | None = Field(default=None, alias="threadId", max_length=512)
 
 
 class ApplicationLifecycleError(ApplicationLifecycleModel):
@@ -111,6 +144,61 @@ class ApplicationLifecycleError(ApplicationLifecycleModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExecutionResourceClaim(ApplicationLifecycleModel):
+    """描述一次执行准备独占的规范化业务资源。"""
+
+    type: ExecutionResourceType
+    target_id: str = Field(alias="targetId", min_length=1, max_length=512)
+    role: ExecutionResourceRole = ExecutionResourceRole.DEPENDENCY
+    reason: ExecutionResourceReason = ExecutionResourceReason.PLAN_DEPENDENCY
+
+
+class ExecutionResourceLock(ApplicationLifecycleModel):
+    """保存一个业务资源的独占锁所有者与获取原因。"""
+
+    run_id: str = Field(alias="runId", min_length=1, max_length=512)
+    owner_page_id: str | None = Field(default=None, alias="ownerPageId", max_length=512)
+    mode: Literal["exclusive"] = "exclusive"
+    role: ExecutionResourceRole
+    reason: ExecutionResourceReason
+    acquired_at: datetime = Field(alias="acquiredAt")
+
+
+class ExecutionResourceLocks(ApplicationLifecycleModel):
+    """按资源类型建立可直接供前端查询的锁索引。"""
+
+    application: ExecutionResourceLock | None = None
+    pages: dict[str, ExecutionResourceLock] = Field(default_factory=dict)
+    api_contracts: dict[str, ExecutionResourceLock] = Field(
+        default_factory=dict,
+        alias="apiContracts",
+    )
+    data_sources: dict[str, ExecutionResourceLock] = Field(
+        default_factory=dict,
+        alias="dataSources",
+    )
+
+
+class WorkbenchExecution(ApplicationLifecycleModel):
+    """保存当前占用工作区的页面或应用级计划执行。"""
+
+    scope: Literal["application", "page", "data_source"]
+    target_id: str = Field(alias="targetId", min_length=1, max_length=512)
+    page_id: str | None = Field(default=None, alias="pageId", max_length=512)
+    thread_id: str = Field(alias="threadId", min_length=1, max_length=512)
+    run_id: str = Field(alias="runId", min_length=1, max_length=512)
+    phase: str = Field(min_length=1, max_length=128)
+    status: WorkbenchExecutionStatus
+    resource_keys: list[str] = Field(default_factory=list, alias="resourceKeys")
+    pending_interaction: PendingInteraction | None = Field(
+        default=None,
+        alias="pendingInteraction",
+    )
+    error: ApplicationLifecycleError | None = None
+    started_at: datetime = Field(alias="startedAt")
+    updated_at: datetime = Field(alias="updatedAt")
+
+
 class ApplicationLifecycle(ApplicationLifecycleModel):
     """表示 application-lifecycle.json 的完整版本化业务快照。"""
 
@@ -119,26 +207,20 @@ class ApplicationLifecycle(ApplicationLifecycleModel):
         alias="schemaVersion",
     )
     application: ApplicationIdentity
-    project: ProjectIdentity | None = None
     updated_at: datetime = Field(alias="updatedAt")
     revision: int = Field(ge=1)
-    lifecycle: LifecycleState
-    active_thread_id: str | None = Field(default=None, alias="activeThreadId", max_length=512)
+    initialization: ApplicationInitialization
     active_run_id: str | None = Field(default=None, alias="activeRunId", max_length=512)
-    pending_interaction: PendingInteraction | None = Field(default=None, alias="pendingInteraction")
+    active_executions: dict[str, WorkbenchExecution] = Field(
+        default_factory=dict,
+        alias="activeExecutions",
+    )
+    resource_locks: ExecutionResourceLocks = Field(
+        default_factory=ExecutionResourceLocks,
+        alias="resourceLocks",
+    )
     error: ApplicationLifecycleError | None = None
     extensions: dict[str, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_pending_interaction_revision(self) -> "ApplicationLifecycle":
-        """确保待交互基于当前快照，避免恢复后误提交旧确认。"""
-
-        if (
-            self.pending_interaction is not None
-            and self.pending_interaction.based_on_revision != self.revision
-        ):
-            raise ValueError("pendingInteraction.basedOnRevision 必须等于当前 revision。")
-        return self
 
 
 def utc_now() -> datetime:

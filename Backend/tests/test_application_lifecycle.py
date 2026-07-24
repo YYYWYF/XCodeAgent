@@ -11,18 +11,22 @@ from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
     PendingInteractionType,
+    WorkbenchExecutionStatus,
 )
 from app.services.application_lifecycle import (
     complete_application_template_generation,
+    complete_workbench_execution,
     ApplicationLifecycleConflictError,
     ApplicationLifecycleCorruptedError,
     UnsupportedApplicationLifecycleVersionError,
     create_application_lifecycle,
+    end_workbench_execution,
     application_lifecycle_path,
     load_application_lifecycle,
-    repair_misclassified_requirement_clarification,
-    submit_pending_interaction,
+    start_workbench_execution,
+    stop_workbench_execution,
     transition_application_lifecycle,
+    update_workbench_execution,
     write_application_lifecycle,
 )
 
@@ -39,196 +43,89 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 "application-lifecycle.json",
             )
 
-    def test_misclassified_ask_user_interaction_is_repaired(self) -> None:
-        """ask_user_question 不能作为需求文档确认交互持久化。"""
-
-        with tempfile.TemporaryDirectory() as directory:
-            state = create_application_lifecycle(
-                application_id="app-1",
-                application_name="任务中心",
-            )
-            state = transition_application_lifecycle(
-                state,
-                stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                status=ApplicationLifecycleStatus.RUNNING,
-            )
-            state = transition_application_lifecycle(
-                state,
-                stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-                status=ApplicationLifecycleStatus.RUNNING,
-            )
-            state = transition_application_lifecycle(
-                state,
-                stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                status=ApplicationLifecycleStatus.AWAITING_USER,
-                pending_type=PendingInteractionType.REQUIREMENT_CONFIRMATION,
-                pending_payload={"mode": "ask_user_question"},
-            )
-            write_application_lifecycle(directory, state)
-
-            repaired = repair_misclassified_requirement_clarification(directory)
-
-            self.assertEqual(
-                repaired.lifecycle.stage,
-                ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-            )
-            self.assertEqual(
-                repaired.pending_interaction.type,
-                PendingInteractionType.REQUIREMENT_CLARIFICATION,
-            )
-            self.assertEqual(repaired.revision, state.revision + 1)
-            self.assertEqual(
-                load_application_lifecycle(directory).lifecycle.stage,
-                ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-            )
-
     def test_full_creation_transition_sequence(self) -> None:
         """全新应用应按已确认顺序进入工作台。"""
 
-        state = create_application_lifecycle(application_id="app-1", application_name="任务中心")
+        state = create_application_lifecycle(
+            application_id="app-1",
+            application_name="任务中心",
+            initialization_thread_id="thread-init",
+        )
         sequence = [
-            (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, ApplicationLifecycleStatus.RUNNING, None),
+            (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, ApplicationLifecycleStatus.RUNNING),
             (
                 ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
                 ApplicationLifecycleStatus.AWAITING_USER,
-                PendingInteractionType.REQUIREMENT_CLARIFICATION,
             ),
-            (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, ApplicationLifecycleStatus.RUNNING, None),
-            (ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC, ApplicationLifecycleStatus.RUNNING, None),
+            (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, ApplicationLifecycleStatus.RUNNING),
+            (ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC, ApplicationLifecycleStatus.RUNNING),
             (
                 ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
                 ApplicationLifecycleStatus.AWAITING_USER,
-                PendingInteractionType.REQUIREMENT_CONFIRMATION,
             ),
-            (ApplicationLifecycleStage.GENERATING_PROJECT_PLAN, ApplicationLifecycleStatus.RUNNING, None),
+            (ApplicationLifecycleStage.GENERATING_PROJECT_PLAN, ApplicationLifecycleStatus.RUNNING),
             (
                 ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
                 ApplicationLifecycleStatus.AWAITING_USER,
-                PendingInteractionType.PROJECT_PLAN_CONFIRMATION,
             ),
             (
                 ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
                 ApplicationLifecycleStatus.RUNNING,
-                None,
             ),
-            (ApplicationLifecycleStage.READY_FOR_WORKBENCH, ApplicationLifecycleStatus.COMPLETED, None),
+            (ApplicationLifecycleStage.READY_FOR_WORKBENCH, ApplicationLifecycleStatus.COMPLETED),
         ]
-        for stage, status, pending_type in sequence:
+        for stage, status in sequence:
             state = transition_application_lifecycle(
                 state,
                 stage=stage,
                 status=status,
-                pending_type=pending_type,
             )
 
-        self.assertEqual(state.lifecycle.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
+        self.assertEqual(state.initialization.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
+        self.assertIsNone(state.initialization.thread_id)
         self.assertEqual(state.revision, 1 + len(sequence))
-        self.assertIsNone(state.pending_interaction)
-
-    def test_pending_submission_is_idempotent_and_rejects_stale_revision(self) -> None:
-        """重复提交同一交互应幂等，过期 revision 应显式失败。"""
-
-        state = create_application_lifecycle(application_id="app-1", application_name="任务中心")
-        state = transition_application_lifecycle(
-            state,
-            stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-            status=ApplicationLifecycleStatus.RUNNING,
-        )
-        state = transition_application_lifecycle(
-            state,
-            stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-            status=ApplicationLifecycleStatus.AWAITING_USER,
-            pending_type=PendingInteractionType.REQUIREMENT_CLARIFICATION,
-        )
-        pending = state.pending_interaction
-        assert pending is not None
-        submitted = submit_pending_interaction(
-            state,
-            interaction_id=pending.id,
-            based_on_revision=pending.based_on_revision,
-        )
-        repeated = submit_pending_interaction(
-            submitted,
-            interaction_id=pending.id,
-            based_on_revision=submitted.revision,
-        )
-
-        self.assertEqual(repeated.revision, submitted.revision)
-        regenerated = transition_application_lifecycle(
-            submitted,
-            stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-            status=ApplicationLifecycleStatus.AWAITING_USER,
-            pending_type=PendingInteractionType.REQUIREMENT_CLARIFICATION,
-        )
-        assert regenerated.pending_interaction is not None
-        self.assertNotEqual(regenerated.pending_interaction.id, pending.id)
-        self.assertIsNone(regenerated.pending_interaction.submitted_at)
-        with self.assertRaises(ApplicationLifecycleConflictError):
-            submit_pending_interaction(
-                submitted,
-                interaction_id="old-interaction",
-                based_on_revision=state.revision,
-            )
 
     def test_three_creation_interruptions_survive_reload(self) -> None:
-        """澄清、需求确认和计划确认都应在重启读取后保持同一交互点。"""
+        """澄清、需求确认和计划确认都应在重启读取后保持初始化阶段。"""
 
         targets = [
-            (
-                ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-                PendingInteractionType.REQUIREMENT_CLARIFICATION,
-            ),
-            (
-                ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                PendingInteractionType.REQUIREMENT_CONFIRMATION,
-            ),
-            (
-                ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
-                PendingInteractionType.PROJECT_PLAN_CONFIRMATION,
-            ),
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+            ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
         ]
-        for target_stage, target_type in targets:
+        for target_stage in targets:
             with self.subTest(stage=target_stage), tempfile.TemporaryDirectory() as directory:
                 state = create_application_lifecycle(
                     application_id="app-1",
                     application_name="任务中心",
+                    initialization_thread_id="thread-init",
                 )
                 route = [
-                    (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, None),
-                    (
-                        ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-                        PendingInteractionType.REQUIREMENT_CLARIFICATION,
-                    ),
-                    (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, None),
-                    (ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC, None),
-                    (
-                        ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                        PendingInteractionType.REQUIREMENT_CONFIRMATION,
-                    ),
-                    (ApplicationLifecycleStage.GENERATING_PROJECT_PLAN, None),
-                    (
-                        ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
-                        PendingInteractionType.PROJECT_PLAN_CONFIRMATION,
-                    ),
+                    ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+                    ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+                    ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+                    ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
                 ]
-                for stage, pending_type in route:
+                for stage in route:
                     state = transition_application_lifecycle(
                         state,
                         stage=stage,
                         status=(
                             ApplicationLifecycleStatus.AWAITING_USER
-                            if pending_type
+                            if stage.value.startswith("awaiting_")
                             else ApplicationLifecycleStatus.RUNNING
                         ),
-                        pending_type=pending_type,
                     )
                     if stage == target_stage:
                         break
                 write_application_lifecycle(directory, state)
                 reloaded = load_application_lifecycle(directory)
-                assert reloaded is not None and reloaded.pending_interaction is not None
-                self.assertEqual(reloaded.lifecycle.stage, target_stage)
-                self.assertEqual(reloaded.pending_interaction.type, target_type)
+                assert reloaded is not None
+                self.assertEqual(reloaded.initialization.stage, target_stage)
+                self.assertEqual(reloaded.initialization.thread_id, "thread-init")
 
     def test_atomic_write_interruption_preserves_previous_file(self) -> None:
         """原子替换前失败时应保留上一版完整状态。"""
@@ -344,17 +241,240 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 error_message="页面文件写入失败",
             )
             self.assertEqual(
-                failed.lifecycle.stage,
+                failed.initialization.stage,
                 ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
             )
             assert failed.error is not None
             self.assertEqual(failed.error.code, "application_template_generation_failed")
 
             ready = complete_application_template_generation(directory, succeeded=True)
-            self.assertEqual(ready.lifecycle.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
+            self.assertEqual(
+                ready.initialization.stage,
+                ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+            )
             loaded = load_application_lifecycle(directory)
             assert loaded is not None
-            self.assertEqual(loaded.lifecycle.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
+            self.assertEqual(
+                loaded.initialization.stage,
+                ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+            )
+
+    def test_current_snapshot_loads_with_workbench_defaults(self) -> None:
+        """当前初始化快照应获得空的工作台字段默认值且不包含 delivery。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+            )
+            payload = state.model_dump(mode="json", by_alias=True)
+            payload.pop("activeExecutions", None)
+            payload.pop("resourceLocks", None)
+            path = application_lifecycle_path(directory)
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            loaded = load_application_lifecycle(directory)
+
+            assert loaded is not None
+            self.assertEqual(loaded.schema_version, "1.2.0")
+            self.assertEqual(loaded.active_executions, {})
+            self.assertEqual(loaded.resource_locks.pages, {})
+            self.assertNotIn("project", payload)
+            self.assertNotIn("delivery", payload)
+
+    def test_workbench_execution_requires_completed_creation_planning(self) -> None:
+        """创建规划完成前不能登记工作台执行或改变生命周期 revision。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+            )
+            write_application_lifecycle(directory, state)
+
+            with self.assertRaisesRegex(
+                ApplicationLifecycleConflictError,
+                "尚未完成创建规划",
+            ):
+                start_workbench_execution(
+                    directory,
+                    scope="application",
+                    target_id="application",
+                    page_id=None,
+                    thread_id="thread-early",
+                    run_id="run-early",
+                    phase="requirements",
+                )
+
+            loaded = load_application_lifecycle(directory)
+            assert loaded is not None
+            self.assertEqual(loaded.revision, state.revision)
+            self.assertEqual(
+                loaded.initialization.stage,
+                ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+            )
+            self.assertEqual(loaded.active_executions, {})
+
+    def test_workbench_execution_stop_end_and_acceptance_are_persisted(self) -> None:
+        """计划执行应持久化停止、释放输入锁和页面验收边界。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            plan_path = workspace / ".xcodeagent/plans/project-plan.json"
+            plan_path.parent.mkdir(parents=True)
+            plan_path.write_text(
+                json.dumps({"frontend_pages": [{"id": "dashboard"}]}),
+                encoding="utf-8",
+            )
+            state = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+            )
+            state = transition_application_lifecycle(
+                state,
+                stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                status=ApplicationLifecycleStatus.RUNNING,
+            )
+            state = transition_application_lifecycle(
+                state,
+                stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                status=ApplicationLifecycleStatus.RUNNING,
+            )
+            state = transition_application_lifecycle(
+                state,
+                stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+                status=ApplicationLifecycleStatus.RUNNING,
+            )
+            state = transition_application_lifecycle(
+                state,
+                stage=ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+                status=ApplicationLifecycleStatus.AWAITING_USER,
+            )
+            state = transition_application_lifecycle(
+                state,
+                stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+                status=ApplicationLifecycleStatus.RUNNING,
+            )
+            state = transition_application_lifecycle(
+                state,
+                stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                status=ApplicationLifecycleStatus.COMPLETED,
+            )
+            write_application_lifecycle(directory, state)
+
+            running = start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="dashboard",
+                page_id="dashboard",
+                thread_id="thread-1",
+                run_id="run-1",
+                phase="build",
+            )
+            self.assertEqual(
+                running.initialization.stage,
+                ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+            )
+            self.assertEqual(
+                running.initialization.status,
+                ApplicationLifecycleStatus.COMPLETED,
+            )
+            self.assertEqual(
+                running.active_executions["run-1"].status,
+                WorkbenchExecutionStatus.RUNNING,
+            )
+
+            stopped = stop_workbench_execution(directory, run_id="run-1")
+            self.assertEqual(
+                stopped.active_executions["run-1"].status,
+                WorkbenchExecutionStatus.STOPPED,
+            )
+            ended = end_workbench_execution(directory, run_id="run-1")
+            self.assertEqual(ended.active_executions, {})
+            self.assertEqual(
+                ended.initialization.stage,
+                ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+            )
+
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="dashboard",
+                page_id="dashboard",
+                thread_id="thread-2",
+                run_id="run-2",
+                phase="launch_project",
+            )
+            update_workbench_execution(
+                directory,
+                run_id="run-2",
+                phase="launch_project",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.PAGE_ACCEPTANCE,
+            )
+            completed = complete_workbench_execution(directory, run_id="run-2")
+            self.assertEqual(
+                completed.initialization.stage,
+                ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+            )
+            self.assertNotIn("delivery", completed.model_dump(mode="json", by_alias=True))
+
+    def test_overlapping_pages_keep_independent_active_executions(self) -> None:
+        """页面执行可并存，同一资源键只投影最近一次运行的登记。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+            )
+            state = state.model_copy(
+                update={
+                    "initialization": state.initialization.model_copy(
+                        update={
+                            "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                            "status": ApplicationLifecycleStatus.COMPLETED,
+                        }
+                    )
+                }
+            )
+            write_application_lifecycle(directory, state)
+
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="dashboard",
+                page_id="dashboard",
+                thread_id="thread-1",
+                run_id="run-1",
+                phase="build",
+            )
+            parallel = start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="settings",
+                page_id="settings",
+                thread_id="thread-2",
+                run_id="run-2",
+                phase="build",
+            )
+
+            self.assertEqual(set(parallel.active_executions), {"run-1", "run-2"})
+            overlapping = start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="dashboard",
+                page_id="dashboard",
+                thread_id="thread-3",
+                run_id="run-3",
+                phase="build",
+            )
+
+            self.assertEqual(
+                set(overlapping.active_executions),
+                {"run-1", "run-2", "run-3"},
+            )
+            self.assertEqual(overlapping.resource_locks.pages["dashboard"].run_id, "run-3")
 
 
 if __name__ == "__main__":

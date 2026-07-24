@@ -26,6 +26,7 @@ export type WorkflowSummary = {
   acceptanceRequest?: WorkflowAcceptanceRequest
   artifacts?: Record<string, string>
   clarification?: WorkflowClarification
+  lifecycle?: ApplicationLifecycle
   [key: string]: unknown
 }
 
@@ -180,30 +181,81 @@ export type ApplicationLifecycleStage =
   | 'application_template_generation_failed'
   | 'ready_for_workbench'
 
+export type WorkbenchExecutionStatus =
+  | 'running'
+  | 'stopping'
+  | 'awaiting_user'
+  | 'failed'
+  | 'stopped'
+  | 'completed'
+
+export type LifecyclePendingInteraction = {
+  id: string
+  type: string
+  basedOnRevision: number
+  payload: Record<string, unknown>
+  artifactRefs: Array<Record<string, unknown>>
+  createdAt: string
+  submittedAt?: string
+}
+
+export type LifecycleError = {
+  code: string
+  message: string
+  recoverable: boolean
+}
+
+export type WorkbenchExecution = {
+  scope: 'application' | 'page' | 'data_source'
+  targetId: string
+  pageId?: string
+  threadId: string
+  runId: string
+  phase: string
+  status: WorkbenchExecutionStatus
+  resourceKeys?: string[]
+  pendingInteraction?: LifecyclePendingInteraction
+  error?: LifecycleError
+  startedAt: string
+  updatedAt: string
+}
+
+export type ExecutionResourceLock = {
+  runId: string
+  ownerPageId?: string
+  mode: 'exclusive'
+  role: 'primary' | 'dependency'
+  reason: 'primary_target' | 'plan_dependency' | 'repair_expansion'
+  acquiredAt: string
+}
+
 export type ApplicationLifecycle = {
-  schemaVersion: '1.0.0'
+  schemaVersion: '1.2.0'
   application: { id: string; name: string }
-  project?: { id: string }
   updatedAt: string
   revision: number
-  lifecycle: {
+  initialization: {
     stage: ApplicationLifecycleStage
-    status: 'pending' | 'running' | 'awaiting_user' | 'failed' | 'completed' | 'cancelled'
-    domain: Record<string, unknown>
-    extensions: Record<string, unknown>
+    threadId?: string
+    status:
+      | 'pending'
+      | 'running'
+      | 'awaiting_user'
+      | 'failed'
+      | 'completed'
+      | 'cancelled'
+      | 'stopping'
+      | 'stopped'
   }
-  activeThreadId?: string
   activeRunId?: string
-  pendingInteraction?: {
-    id: string
-    type: string
-    basedOnRevision: number
-    payload: Record<string, unknown>
-    artifactRefs: Array<Record<string, unknown>>
-    createdAt: string
-    submittedAt?: string
+  activeExecutions: Record<string, WorkbenchExecution>
+  resourceLocks?: {
+    application?: ExecutionResourceLock
+    pages: Record<string, ExecutionResourceLock>
+    apiContracts: Record<string, ExecutionResourceLock>
+    dataSources: Record<string, ExecutionResourceLock>
   }
-  error?: { code: string; message: string; recoverable: boolean }
+  error?: LifecycleError
   recovery?: Record<string, unknown>
   extensions: Record<string, unknown>
 }

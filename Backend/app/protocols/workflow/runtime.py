@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 from ag_ui.core import (
+    CustomEvent,
     RunFinishedEvent,
     RunStartedEvent,
     TextMessageEndEvent,
@@ -28,7 +29,14 @@ from app.protocols.workflow.projection import (
     _workflow_visual_payload,
 )
 from app.protocols.workflow.request import workflow_run_inputs
+from app.protocols.workflow.lifecycle import (
+    begin_workflow_lifecycle,
+    fail_workflow_lifecycle,
+    project_workflow_lifecycle_boundary,
+    stop_workflow_lifecycle,
+)
 from app.protocols.workflow.run_control import (
+    build_workflow_plan_control_ag_ui_stream,
     build_workflow_cancellation_ag_ui_stream,
     workflow_run_registry,
 )
@@ -144,6 +152,16 @@ def build_workflow_ag_ui_stream(
     workflow_inputs = workflow_run_inputs(payload)
     thread_id = workflow_inputs["thread_id"] or str(uuid4())
     run_id = workflow_inputs["run_id"] or f"workflow-{uuid4().hex[:12]}"
+    plan_control_action = workflow_inputs.get("plan_control_action") or ""
+    if plan_control_action:
+        return build_workflow_plan_control_ag_ui_stream(
+            action=plan_control_action,
+            workspace=workflow_inputs["workspace"] or "",
+            target_run_id=workflow_inputs.get("plan_control_run_id") or "",
+            thread_id=thread_id,
+            run_id=run_id,
+            accept=accept,
+        )
     cancel_run_id = workflow_inputs["cancel_run_id"]
     if cancel_run_id:
         # 取消请求复用同一接口，但不会因此启动第二个 Graph 运行。
@@ -159,6 +177,10 @@ def build_workflow_ag_ui_stream(
         events: list[dict[str, Any]] = []
         result: dict[str, Any] = {}
         workspace_lease: WorkspaceRunLease | None = None
+        workspace: str | None = None
+        lifecycle_payload: dict[str, Any] | None = None
+        workflow_scope = workflow_inputs.get("workflow_scope") or None
+        current_phase = "detail_confirmation"
         node_attempts: dict[str, int] = {}
         task = asyncio.current_task()
         if task is None:
@@ -187,7 +209,6 @@ def build_workflow_ag_ui_stream(
             project_id = workflow_inputs["project_id"] or None
             workspace = workflow_inputs["workspace"] or None
             editor_mode = workflow_inputs["editor_mode"] or None
-            workflow_scope = workflow_inputs.get("workflow_scope") or None
             settings = Settings.from_env()
             observability = _workflow_observability(
                 settings=settings,
@@ -208,6 +229,12 @@ def build_workflow_ag_ui_stream(
             workspace_lease = workspace_run_leases.acquire(
                 workspace_root=workspace,
                 project_id=project_id,
+                execution_scope=workflow_inputs.get("resume_values", {}).get(
+                    "build_execution_scope"
+                ),
+                resource_claims=workflow_inputs.get("resume_values", {}).get(
+                    "execution_resource_claims"
+                ),
                 thread_id=thread_id,
                 run_id=run_id,
             )
@@ -222,6 +249,25 @@ def build_workflow_ag_ui_stream(
             }
             initial_state.update(workflow_inputs.get("resume_values") or {})
             first_node_name = _workflow_start_node(resume_from, workflow_scope)
+            current_phase = first_node_name
+            if not workflow_scope:
+                # 独立创建规划 Graph 只维护创建阶段生命周期，不能登记为工作台开发执行。
+                lifecycle_payload = begin_workflow_lifecycle(
+                    workflow_inputs,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    phase=first_node_name,
+                )
+                if lifecycle_payload is not None:
+                    initial_state["lifecycle"] = lifecycle_payload
+                    result["lifecycle"] = lifecycle_payload
+                    # 生命周期写入成功后立即投影，不能等待首个 Graph 节点结束。
+                    yield encoder.encode(
+                        CustomEvent(
+                            name="application-lifecycle",
+                            value=lifecycle_payload,
+                        )
+                    )
 
             if resume_from:
                 initial_state["resume_from"] = resume_from
@@ -523,6 +569,24 @@ def build_workflow_ag_ui_stream(
                 for node_name, update in chunk.items():
                     if not isinstance(update, dict):
                         continue
+                    current_phase = node_name
+                    if not workflow_scope:
+                        # 创建规划节点沿用自身的确认状态，不投射工作台执行边界。
+                        lifecycle_payload = project_workflow_lifecycle_boundary(
+                            workspace,
+                            run_id=run_id,
+                            node_name=node_name,
+                            update=update,
+                        )
+                        if lifecycle_payload is not None:
+                            update["lifecycle"] = lifecycle_payload
+                            # 先广播最新 revision，再继续发送节点投影。
+                            yield encoder.encode(
+                                CustomEvent(
+                                    name="application-lifecycle",
+                                    value=lifecycle_payload,
+                                )
+                            )
 
                     for frame in _pending_tool_frames(
                         encoder,
@@ -648,6 +712,8 @@ def build_workflow_ag_ui_stream(
                         )
 
             result = dict((await active_graph.aget_state(config)).values)
+            if lifecycle_payload is not None:
+                result["lifecycle"] = lifecycle_payload
             summary = _workflow_summary(result, events)
             finished_event = _workflow_event(
                 events,
@@ -697,12 +763,28 @@ def build_workflow_ag_ui_stream(
                     ),
                 )
             )
+        except asyncio.CancelledError:
+            if not workflow_scope:
+                lifecycle_payload = stop_workflow_lifecycle(
+                    workspace,
+                    run_id=run_id,
+                    phase=current_phase,
+                )
+            raise
         except Exception as exc:
+            if not workflow_scope:
+                lifecycle_payload = fail_workflow_lifecycle(
+                    workspace,
+                    run_id=run_id,
+                    phase=current_phase,
+                    error=exc,
+                )
             error_code = getattr(exc, "code", None)
             result = {
                 "status": "failed",
                 "phase": "failed",
                 "error": str(exc),
+                **({"lifecycle": lifecycle_payload} if lifecycle_payload else {}),
                 **({"error_code": error_code} if error_code else {}),
             }
             summary = _workflow_summary(result, events)

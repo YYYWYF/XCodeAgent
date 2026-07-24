@@ -66,6 +66,11 @@ def workflow_capabilities() -> dict[str, Any]:
         },
         "eventProtocol": {
             "version": WORKFLOW_EVENT_PROTOCOL,
+            "lifecycleProjection": {
+                "customEventName": "application-lifecycle",
+                "semantics": "emitted-immediately-after-persisted-revision",
+                "mergeKey": "revision",
+            },
             "eventTypes": [
                 "workflow.run.started",
                 "workflow.node.started",

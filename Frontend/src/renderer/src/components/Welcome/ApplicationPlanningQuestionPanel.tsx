@@ -21,6 +21,7 @@ import type {
   WorkflowRunPayload
 } from '../../typings'
 import { cx } from '../../utils'
+import { useTabToFillPlaceholder } from './hooks/useTabToFillPlaceholder'
 import './ApplicationPlanningQuestionPanel.less'
 
 const { Paragraph, Text, Title } = Typography
@@ -145,6 +146,10 @@ export default function ApplicationPlanningQuestionPanel({
     ['answers', projectPlanAnswerKey],
     form
   ) as WorkflowClarificationAnswer | undefined
+  const handleConfirmationFeedbackTab = useTabToFillPlaceholder(form, [
+    'answers',
+    isRequirementConfirmation ? 'requirement_spec_feedback' : projectPlanAnswerKey
+  ])
   const hasRecoveryAction = clarification?.status === 'requires_user_input' && !questions.length
   const artifact = workflow.confirmationArtifact
   const spec = artifact?.id === 'requirement_spec' ? requirementSpec(workflow) : undefined
@@ -355,10 +360,7 @@ export default function ApplicationPlanningQuestionPanel({
                   ? '意见（可选）：如需调整，请填写具体内容 (按 Tab 采用)'
                   : '意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容 (按 Tab 采用)'
               }
-              onKeyDown={(e) => handleTabToFillPlaceholder(e, isRequirementConfirmation
-                ? '意见（可选）：如需调整，请填写具体内容'
-                : '意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容'
-              )}
+              onKeyDown={handleConfirmationFeedbackTab}
             />
           </Form.Item>
         ) : (
@@ -480,7 +482,6 @@ function PlanningQuestionControl({
     (e: React.KeyboardEvent<HTMLTextAreaElement>, placeholder?: string) => {
       if (e.key !== 'Tab') return
 
-      const target = e.target as HTMLTextAreaElement
       const currentValue = typeof value === 'string' ? value : ''
 
       // 如果输入框已有内容，则不处理

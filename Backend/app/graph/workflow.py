@@ -73,6 +73,12 @@ def route_prepare_build_tasks(state: ProjectState) -> str:
     )
 
 
+def route_acceptance(state: ProjectState) -> str:
+    """只有结构化验收通过动作才能进入最终完成节点。"""
+
+    return "finalize_project" if state.get("accepted") is True else "await_user_input"
+
+
 def build_graph(*, checkpointer):
     """构建从 ProjectPlan 页面细节确认开始的主应用开发图。"""
 
@@ -139,7 +145,14 @@ def build_graph(*, checkpointer):
         },
     )
     builder.add_edge("launch_project", END)
-    builder.add_edge("acceptance", "finalize_project")
+    builder.add_conditional_edges(
+        "acceptance",
+        route_acceptance,
+        {
+            "finalize_project": "finalize_project",
+            "await_user_input": END,
+        },
+    )
     builder.add_edge("finalize_project", END)
     builder.add_edge("handle_failure", END)
 

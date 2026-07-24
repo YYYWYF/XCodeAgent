@@ -10,13 +10,25 @@ const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
 export const APPLICATIONS_CHANGED_EVENT = 'xcode-agent-applications-changed';
 
-// 判断应用是否已完成模板文件生成；新应用必须以权威 lifecycle 放行工作台。
+// 判断创建规划是否已经完成；工作台内部运行状态不得影响该结果。
+export function isApplicationCreationComplete(lifecycle?: ApplicationLifecycle): boolean {
+  return lifecycle?.initialization.stage === 'ready_for_workbench';
+}
+
+// 判断应用是否已永久完成创建规划；持久确认标记优先，当前生命周期也可直接放行。
 export function canOpenApplicationWorkbench(
   application: ApplicationConfig,
   lifecycle?: ApplicationLifecycle
 ): boolean {
   if (application.source !== 'new') return true;
-  return lifecycle?.lifecycle.stage === 'ready_for_workbench';
+  if (
+    typeof application.planningConfirmedAt === 'number' &&
+    Number.isFinite(application.planningConfirmedAt) &&
+    application.planningConfirmedAt > 0
+  ) {
+    return true;
+  }
+  return isApplicationCreationComplete(lifecycle);
 }
 
 function normalizeApplications(value: unknown): ApplicationConfig[] {
@@ -34,6 +46,12 @@ function cacheApplications(applications: ApplicationConfig[]) {
 // 通知当前渲染窗口重新校验依赖应用索引的派生状态。
 function notifyApplicationsChanged() {
   window.dispatchEvent(new Event(APPLICATIONS_CHANGED_EVENT));
+}
+
+// 订阅应用索引变化，并返回用于 React effect 清理的取消函数。
+export function subscribeApplicationsChanged(listener: () => void): () => void {
+  window.addEventListener(APPLICATIONS_CHANGED_EVENT, listener);
+  return () => window.removeEventListener(APPLICATIONS_CHANGED_EVENT, listener);
 }
 
 export function loadCachedApplications() {

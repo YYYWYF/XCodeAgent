@@ -84,6 +84,12 @@ class BuildRepairPlannerTests(unittest.TestCase):
                 "decision": "requires_user_confirmation",
                 "reason": "需要扩大 API contract 才能继续。",
                 "strategy": "暂停并请求用户确认契约变更。",
+                "boundaries": {
+                    "requested_resources": [
+                        {"type": "api_contract", "targetId": "orders-api"},
+                        {"type": "page", "targetId": "order-detail"},
+                    ]
+                },
             },
         )
 
@@ -93,6 +99,13 @@ class BuildRepairPlannerTests(unittest.TestCase):
         self.assertEqual(len(plan["requires_user_confirmation"]), 1)
         self.assertTrue(plan["planId"])
         self.assertEqual(plan["requestedPaths"], ["Backend/app/**"])
+        self.assertEqual(
+            plan["requestedResources"],
+            [
+                {"type": "api_contract", "targetId": "orders-api"},
+                {"type": "page", "targetId": "order-detail"},
+            ],
+        )
 
         approved = approve_repair_scope_confirmation(plan)
 

@@ -58,6 +58,12 @@ def launch_project(state: ProjectState) -> dict:
             "package_json_path": launch.get("package_json_path"),
             "server": launch.get("server"),
         },
+        "clarification": {
+            "mode": "page_acceptance",
+            "status": "requires_user_input",
+            "message": "请预览页面并完成最终验收。",
+            "questions": [],
+        },
         "timeline": ["launch_project"],
     }
 
@@ -83,8 +89,23 @@ def _failed_project_launch(launch: dict) -> dict:
 
 
 def acceptance(state: ProjectState) -> dict:
+    decision = str(state.get("acceptance_decision") or "")
+    if decision != "accepted":
+        return {
+            "phase": "acceptance",
+            "status": "requires_user_input",
+            "accepted": False,
+            "clarification": {
+                "mode": "plan_adjustment",
+                "status": "requires_user_input",
+                "message": "已记录修改请求，请调整计划后重新执行并验收。",
+                "questions": [],
+            },
+            "timeline": ["acceptance"],
+        }
     return {
         "phase": "acceptance",
+        "status": "completed",
         "accepted": True,
         "timeline": ["acceptance"],
     }

@@ -65,6 +65,7 @@ START
 - 用户确认第二步 ProjectPlan 后，独立 Graph 的包装节点校验 `.xcodeagent/specs` 与 `.xcodeagent/plans` 中 RequirementSpec、ProjectPlan 的 Markdown/JSON 正式产物及确认状态，并把 lifecycle 推进到 `generating_application_template_files`；它不读取或改写 `.xcodeagent/application.json`。前端生成应用模板文件后，必须通过同一 `/application-page-planning/run` 的 `applicationLifecycle.action = complete_template_generation` AG-UI 动作提交结果；后端复核正式文档后才写入 `ready_for_workbench`，失败则写入可重试的 `application_template_generation_failed`。
 - 创建弹窗只展示需求确认和项目规划两个文档阶段。需求模型必须先统一审视角色、核心任务、页面边界、数据来源、权限、核心业务流程与验收标准；对无法安全推断且会实质影响产品设计的缺口，一次集中提出 1-4 个问题，对次要细节才采用显式保守假设。两份文档分别确认、目录产物校验和应用模板文件生成都成功后，前端才打开工作台。
 - 主 Workflow 直接以 `detail_confirmation` 为入口，并使用首页流程确认后写入的 ProjectPlan 与页面功能概览。
+- 创建规划不执行构建后的集成测试质量门，也不生成 `quality_gate_passed`；AG-UI 摘要只在主 Workflow 明确产生布尔质量门结果时展示“通过/未通过”，不得把缺失值误报为未通过。
 
 该澄清边界映射到参考架构时，沿用 learn-coding-agent 的 AskUserQuestion 工具循环与可恢复会话记录、OpenCode 的 session/tool-call 问答关联，以及 Deep Agents 的外层确定性门禁：需求模型只生成结构化问题，Graph 在 `requirements` 后结束当前轮次，AG-UI 持久化公开状态与回答，恢复轮次将答案合并回 RequirementSpec。澄清回答只补足需求，不能替代后续 RequirementSpec 的显式确认。每轮仅携带当前请求、紧凑 RequirementSpec 和结构化回答，不加载仓库或完整会话历史，继续满足 128k 上下文预算。
 
@@ -72,16 +73,19 @@ START
 
 ### 工作区应用生命周期
 
-`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话业务阶段、活动 thread/run 引用和待处理交互的唯一权威来源，schema 与完整状态机见 `docs/APPLICATION_LIFECYCLE.md`。它使用版本化 Pydantic schema、单调 revision、同目录临时文件 + fsync + 原子替换，损坏或未来版本不会被当作缺失静默忽略。
+`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台 execution 和资源锁的持久化权威来源，schema 与完整状态机见 `docs/APPLICATION_LIFECYCLE.md`。初始化期间由 `initialization.threadId` 定位同一 checkpoint，成功进入工作台时清空；初始化交互正文和确认令牌不在根节点重复保存。它使用版本化 Pydantic schema、单调 revision、同目录临时文件 + fsync + 原子替换，损坏或不支持的版本不会被当作缺失静默忽略。当前对话的 Graph 运行状态以实时 AG-UI 流和同一 `threadId` 的 LangGraph checkpoint 为准，不会在每个节点运行前从状态文件重建。
 
 职责边界固定如下：
 
-- `application-lifecycle.json`：业务 stage/status、`pendingInteraction`、活动 thread/run 和恢复审计；
+- `application-lifecycle.json`：顶层 `initialization.stage/status/threadId` 只保存进入工作台前的初始化门禁和 checkpoint 定位，完成后固定为 `ready_for_workbench/completed` 并清空 thread；工作台阶段另由按 run 隔离的 `activeExecutions`、页面/API 契约/数据源 `resourceLocks`、execution 交互门禁、活动 run 和恢复审计表示；
+- 已停止或失败的执行继续运行时，客户端显式提交旧 `runId` 作为恢复令牌；服务端只允许同一 `threadId`、scope 和 target 接替，并原子地把该 run 当前可见的资源登记转给新 `runId`，不使用 lifecycle 快照覆盖当前 Graph 状态；
 - `checkpoints.sqlite`：LangGraph 技术执行断点和节点状态，继续保留；
 - RequirementSpec / ProjectPlan Markdown + JSON：正式文档内容和 `confirmation_status`，继续保留；
 - Build DAG / ExecutionRun / TestReport：任务、执行和测试事实，继续由各自产物负责。
 
 创建流程覆盖 `collecting_requirement -> analyzing_requirement -> awaiting_requirement_clarification -> generating_requirement_spec -> awaiting_requirement_confirmation -> generating_project_plan -> awaiting_project_plan_confirmation -> generating_application_template_files -> application_template_generation_failed/ready_for_workbench`。待交互使用稳定 `id + type + basedOnRevision`；恢复请求只提交这组并发令牌，不能用客户端快照覆盖文件阶段。重复提交同一 id 幂等，过期 revision 或串错 id 显式冲突。
+
+进入工作台后的主 Workflow 不再改写应用初始化阶段；运行、等待确认、失败、停止和验收只更新对应 execution。后端从正式 ProjectPlan 为页面执行解析页面、导航关联页、API 契约和数据源资源集合并写入 `resourceLocks`，但当前不以集合交集、同页面、同工作区或应用级范围拒绝新运行；进程内 lease 同样只跟踪活动 run 的释放，不再执行互斥。重叠资源键显示最近一次写入的 owner，完成或明确结束只清理该 run 当前拥有的登记。中央消息、现有进度卡、侧栏与预览布局不改变。停止、结束、结构化确认、重试、计划调整和最终验收均复用 `/workflow/run` 的 AG-UI 完整事件生命周期。停止操作先用本地 Workflow 快照即时显示 `stopping/stopped`，并让该瞬时状态优先于可能 revision 更高但尚未刷新的文件快照；后端 AG-UI 回包随后校准权威 execution，乐观更新不得改写顶层 `initialization`。
 
 新应用在创建目录后立即通过 `applicationLifecycle.action = create` 建立 lifecycle；后续启动只使用 `get` 读取已有文件。实现不读取旧 active-planning localStorage、旧完成线程列表、`planningThreadId/planningConfirmedAt` 或 checkpoint 来推导业务阶段，缺失、损坏和未来版本都会显式失败。
 
@@ -187,7 +191,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 该节点通过 `agents/main/planner.py` 直接调用 `create_chat_model()` 生成结构化 JSON 规划建议，再由确定性 schema 合并和归一化后写入 Graph State。该调用不绑定任何工具，不创建 DeepAgent，也不扫描 workspace；模型输出只用于细化项目级判断，确定性归一化负责保证稳定 id、必需字段和后续任务拆分可读取的结构。
 
-`project_planning` 在输出计划前会内部核对 API 契约、页面清单、数据源清单、依赖、角色、流程和验收标准；普通缺口以明确假设和风险写入同一份计划，而不是拆成后续多轮追问。生成计划书后进入一次 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点才输出 `status = completed`；首页的新建应用规划流程校验 specs/plans 产物后直接打开工作台，由用户从 `frontend_pages` 中选择页面，再启动主 Workflow 的 `detail_confirmation`。如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
+`project_planning` 在输出计划前会内部核对 API 契约、页面清单、数据源清单、依赖、角色、流程和验收标准；确定性门禁同时校验每个 Endpoint 的请求/响应 Schema 引用、契约内 `$ref`、数据源 Schema 引用、页面 Endpoint 引用和响应字段绑定。校验失败时最多把完整错误回灌给规划模型自动修订一次，修订后仍失败则停留在计划阶段；即使自动修订成功，也必须展示新版本并重新等待用户确认。普通缺口以明确假设和风险写入同一份计划，而不是拆成后续多轮追问。生成计划书后进入一次 `project_plan_confirmation` 等待状态。用户确认“正确，继续”等语义后，节点会再次执行同一套一致性校验，只有通过后才输出 `status = completed`；首页的新建应用规划流程校验 specs/plans 产物后直接打开工作台，由用户从 `frontend_pages` 中选择页面，再启动主 Workflow 的 `detail_confirmation`。如果用户提出调整意见，则重新生成/调整 `ProjectPlan` 并再次等待确认。
 
 等待 `project_plan_confirmation` 时，AG-UI workflow payload 的只读 `confirmationArtifact` 只返回当前 `project-plan.md`，不会同时返回 RequirementSpec 正文。用户提交调整意见并重新生成计划后，下一轮确认展示新写入的 Markdown；`detail_confirmation` 不复用该载荷展示 ProjectPlan。
 
@@ -681,15 +685,15 @@ Graph State 只保存这些文件的路径和版本。
 - 每个项目必须有独立工作目录。
 - 所有文件操作必须限制在项目工作目录中。
 - 前端历史会话的消息、草稿、运行状态和停止控制必须按 `workspaceRoot + editorMode + sessionId` 隔离；本地消息记录只负责 UI 展示和持久化，每次执行创建请求级 AG-UI `HttpAgent`，只发送当前用户消息且不复用上一轮客户端 state。`threadId` 只属于对应会话并跨请求稳定复用，每次执行使用独立 `runId`。
-- 同一个 `workspaceRoot` 同时只允许一个 `/workflow/run` 进入 Graph。Backend 使用进程内非阻塞 workspace lease 保护共享代码、固定计划文档和全目录 diff 快照，冲突请求通过现有 AG-UI 失败事件返回 `workspace_busy`。
+- 同一个 `workspaceRoot` 允许多个 `/workflow/run` 进入 Graph。Backend 的进程内 workspace lease 只登记活动 run 并负责结束清理，不再以工作区、页面或资源交集返回 `workspace_busy`。
 - 停止生成必须是端到端取消：前端先中止当前 SSE 消费以停止渲染，再通过同一 `/workflow/run` 发送带 `forwardedProps.cancelRunId` 的独立 AG-UI 控制运行。后端的进程内运行表按 `runId` 调用对应 `asyncio.Task.cancel()`，使 `graph.astream()` 和其正在等待的异步模型 HTTP 流收到取消；控制运行也返回完整 AG-UI 开始、消息、状态快照和结束事件。模型供应商对已在其服务端排队的 token 的最终停止时点仍是 best-effort，不把取消响应误报为模型已计费归零。
 - 该设计对应 learn-coding-agent 的“执行后立刻反馈/停止”紧凑循环，采用 OpenCode 风格的稳定运行标识和显式任务生命周期，并保持 Deep Agents 的人类可控边界。运行表只保存 `runId -> asyncio.Task`，不复制对话或仓库内容，因此不会扩大 128k 上下文预算；当前单 Uvicorn 进程是该进程内表的适用边界，未来多进程部署需要共享取消协调器。
-- 修改相同文件的任务不得并发执行。
+- 当前阶段不由 Workflow 运行登记阻止修改相同文件；文件写入安全仍由具体工具和原子写入边界负责。
 - 共享入口文件、依赖清单、API 契约和路由配置应使用文件锁。
 - 任务锁和文件锁由 `workspace/` 提供，不由 Agent 自行约定。
 - 生成代码和执行命令最终应运行在隔离 Sandbox 中。
 
-会话隔离不等于项目文件隔离：同一 workspace 内不同会话仍然顺序共享代码、Spec、Plan 和 Report。当前桌面端只启动一个 Uvicorn 进程，因此进程内 lease 覆盖所有 Renderer 请求；未来引入多进程 Backend 时必须将 lease 升级为跨进程锁或独立 worktree。
+会话隔离不等于项目文件隔离：同一 workspace 内不同会话会并行共享代码、Spec、Plan 和 Report。当前进程内 lease 仅用于活动运行观测和清理；如果未来恢复业务互斥，应以显式策略或独立 worktree 实现，不能依赖 `resourceLocks` 的存在隐式阻断。
 
 ## 当前不实现的内容
 

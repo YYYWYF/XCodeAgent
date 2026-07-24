@@ -47,6 +47,8 @@ def _test_repair_planning_prompt(
 
 
 def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
+    """构造包含结构化业务资源扩展协议的构建失败修复提示。"""
+
     return (
         "You are the RepairPlanner Agent for a build scheduler.\n"
         "This is a planning-only DeepAgent node. Do not edit files, do not run code, "
@@ -60,7 +62,8 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         '  "boundaries": {\n'
         '    "change_scope_policy": "must stay within input.change_scope",\n'
         '    "allowed_paths_policy": "must stay within input.change_scope.allowed_paths",\n'
-        '    "contract_policy": "do not change confirmed requirements, ProjectPlan, or API contracts"\n'
+        '    "contract_policy": "do not change confirmed requirements, ProjectPlan, or API contracts",\n'
+        '    "requested_resources": [{"type": "page|api_contract|data_source", "targetId": "stable-id"}]\n'
         "  },\n"
         '  "repair_tasks": [\n'
         "    {\n"
@@ -75,6 +78,8 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         "Choose requires_user_confirmation when repair requires expanding "
         "change_scope, changing confirmed product/API contracts, or making a "
         "user-visible product decision. Choose terminal_failure when the failure "
+        "When requesting expansion, list every newly affected stable business resource "
+        "in boundaries.requested_resources; never use file paths as resource IDs. "
         "is not actionable with the provided evidence or the repair budget is "
         "exhausted. Choose repair only when the repair can be delegated as one "
         "or more bounded implementation tasks.\n\n"

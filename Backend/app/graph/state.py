@@ -46,6 +46,7 @@ class ProjectState(TypedDict, total=False):
     workspace_snapshot_hash: str
     workspace_revision: str
     build_execution_scope: dict[str, str]
+    execution_resource_claims: list[dict[str, Any]]
     build_execution_slice: dict[str, Any]
     build_context: dict[str, Any]
     build_task_plan: dict[str, Any]
@@ -82,6 +83,7 @@ class ProjectState(TypedDict, total=False):
     preview_url: str
     launch_result: dict[str, Any]
     acceptance_request: dict[str, Any]
+    acceptance_decision: str
     accepted: bool
     status: str
     timeline: Annotated[list[str], add]

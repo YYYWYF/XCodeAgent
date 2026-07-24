@@ -68,7 +68,6 @@ type UseChatSessionsParams = {
   application: ApplicationConfig
   editorMode: EditorMode
   onCloseRightPanel: () => void
-  runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
 }
 
 type UseChatSessionsResult = {
@@ -100,6 +99,7 @@ type UseChatSessionsResult = {
   messages: AgentChatMessage[]
   selectedSkills: ChatMessageSkill[]
   persistSession: (input: PersistSessionInput) => Promise<void>
+  runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
   sessionError?: string
   sessions: ChatSessionSummary[]
   setDraftByKey: (sessionKey: string, value: string) => void
@@ -110,8 +110,7 @@ type UseChatSessionsResult = {
 export function useChatSessions({
   application,
   editorMode,
-  onCloseRightPanel,
-  runningSessionsRef
+  onCloseRightPanel
 }: UseChatSessionsParams): UseChatSessionsResult {
   const [sessionSummaries, setSessionSummaries] = useState<
     Record<EditorMode, ChatSessionSummary[]>
@@ -135,6 +134,7 @@ export function useChatSessions({
     messagesForKey,
     registerSession,
     removeSession,
+    runningSessionsRef,
     selectedSkillsForKey,
     setDraftByKey,
     setSelectedSkillsByKey,
@@ -208,8 +208,8 @@ export function useChatSessions({
         return
       }
       // 优先恢复最近一条有内容的会话，避免空白“新对话”遮住已经落盘的页面设计记录。
-      const sessionToOpen = nextSessions.find((session) => session.messageCount > 0)
-        || nextSessions[0]
+      const sessionToOpen =
+        nextSessions.find((session) => session.messageCount > 0) || nextSessions[0]
       await openChatSession(mode, sessionToOpen.id)
     } catch (caughtError) {
       setSessionErrors((current) => ({
@@ -342,10 +342,7 @@ export function useChatSessions({
   }
 
   /** 为指定页面显式创建一个新的独立会话和 AG-UI thread。 */
-  const createPageSession = async (
-    pageId: string,
-    pageLabel: string
-  ): Promise<SessionIdentity> => {
+  const createPageSession = async (pageId: string, pageLabel: string): Promise<SessionIdentity> => {
     const normalizedPageId = pageId.trim()
     if (!normalizedPageId) throw new Error('页面标识不能为空。')
     try {
@@ -380,10 +377,7 @@ export function useChatSessions({
   }
 
   /** 按页面恢复既有会话，首次进入该页面时创建独立 session 与 thread。 */
-  const ensurePageSession = async (
-    pageId: string,
-    pageLabel: string
-  ): Promise<SessionIdentity> => {
+  const ensurePageSession = async (pageId: string, pageLabel: string): Promise<SessionIdentity> => {
     const normalizedPageId = pageId.trim()
     if (!normalizedPageId) throw new Error('页面标识不能为空。')
     const promiseKey = `${editorMode}:${normalizedPageId}`
@@ -397,8 +391,8 @@ export function useChatSessions({
       if (existingSession) {
         await openChatSession(editorMode, existingSession.id)
         const key = sessionRuntimeKey(workspaceRoot, editorMode, existingSession.id)
-        const identity = getIdentity(key)
-          || sessionIdentityFromSummary(existingSession, editorMode, workspaceRoot)
+        const identity =
+          getIdentity(key) || sessionIdentityFromSummary(existingSession, editorMode, workspaceRoot)
         if (identity) return identity
       }
       return createNewSession(normalizedPageId, pageLabel)
@@ -502,12 +496,11 @@ export function useChatSessions({
     const session: ChatSessionRecord = {
       id: input.sessionId,
       title:
-        input.titleFrom && (
-          !existingSummary
-          || existingSummary.title === '新对话'
-          || existingSummary.title.startsWith('页面新会话：')
-          || existingSummary.title.startsWith('接口新会话：')
-        )
+        input.titleFrom &&
+        (!existingSummary ||
+          existingSummary.title === '新对话' ||
+          existingSummary.title.startsWith('页面新会话：') ||
+          existingSummary.title.startsWith('接口新会话：'))
           ? createChatSessionTitle(input.titleFrom)
           : existingSummary?.title || '新对话',
       editorMode: input.editorMode,
@@ -549,6 +542,7 @@ export function useChatSessions({
     messages,
     selectedSkills,
     persistSession,
+    runningSessionsRef,
     sessionError,
     sessions,
     setDraftByKey,

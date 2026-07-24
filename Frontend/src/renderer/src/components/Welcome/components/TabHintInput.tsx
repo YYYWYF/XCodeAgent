@@ -11,7 +11,7 @@ function buildTabHintPlaceholder(placeholder?: string): string | undefined {
   return `${placeholder} (按 Tab 采用)`
 }
 
-type TabHintProps = InputProps & {
+type TabHintProps = Omit<InputProps, 'form'> & {
   /** antd Form 实例 */
   form: FormInstance
   /** 表单字段名（支持嵌套，如 ['menus', 'rootPath']） */

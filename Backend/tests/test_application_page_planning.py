@@ -219,7 +219,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                     _requirements(state)
             failed = load_application_lifecycle(directory)
             assert failed is not None and failed.error is not None
-            self.assertEqual(failed.lifecycle.status.value, "failed")
+            self.assertEqual(failed.initialization.status.value, "failed")
 
             with patch(
                 "app.graph.application_planning_workflow.nodes.requirements",
@@ -239,7 +239,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 retried = _requirements({**state, "active_run_id": "run-2"})
 
             self.assertEqual(
-                retried["lifecycle"]["lifecycle"]["stage"],
+                retried["lifecycle"]["initialization"]["stage"],
                 "awaiting_requirement_clarification",
             )
             self.assertIsNone(retried["lifecycle"]["error"])
@@ -271,13 +271,10 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 result = _requirements(state)
 
             self.assertEqual(
-                result["lifecycle"]["lifecycle"]["stage"],
+                result["lifecycle"]["initialization"]["stage"],
                 "awaiting_requirement_confirmation",
             )
-            self.assertEqual(
-                result["lifecycle"]["pendingInteraction"]["type"],
-                "requirement_confirmation",
-            )
+            self.assertNotIn("pendingInteraction", result["lifecycle"])
 
     def test_requirement_cancellation_is_recoverable(self) -> None:
         """取消需求生成应保留阶段并写入 cancelled，而不是伪装成完成。"""
@@ -296,7 +293,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                     _requirements(state)
             cancelled = load_application_lifecycle(directory)
             assert cancelled is not None
-            self.assertEqual(cancelled.lifecycle.status.value, "cancelled")
+            self.assertEqual(cancelled.initialization.status.value, "cancelled")
 
     def test_confirmed_plan_only_validates_planning_artifacts(self) -> None:
         """项目规划确认后只应校验 specs/plans 产物，不改写 application.json。"""
@@ -422,7 +419,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertIn("RUN_STARTED", frames)
         self.assertIn("STATE_SNAPSHOT", frames)
         self.assertIn("RUN_FINISHED", frames)
-        self.assertEqual(saved["lifecycle"]["stage"], "collecting_requirement")
+        self.assertEqual(saved["initialization"]["stage"], "collecting_requirement")
+        self.assertEqual(saved["initialization"]["threadId"], "planning-thread")
 
     def test_endpoint_forces_application_planning_scope(self) -> None:
         """专用端点不能依赖前端 forwardedProps 才禁用需求澄清。"""

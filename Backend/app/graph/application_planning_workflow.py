@@ -7,11 +7,9 @@ from langgraph.graph import END, START, StateGraph
 from app.graph import nodes
 from app.graph.state import ProjectState
 from app.domain.application_lifecycle import (
-    ArtifactReference,
     ApplicationLifecycleError,
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
-    PendingInteractionType,
     utc_now,
 )
 from app.persistence.checkpoints import workflow_checkpoint_db_path, workflow_checkpointer
@@ -20,7 +18,6 @@ from app.services.application_lifecycle import (
     application_lifecycle_payload,
     ensure_application_lifecycle,
     load_application_lifecycle,
-    persist_pending_interaction_submission,
     persist_application_lifecycle_transition,
 )
 
@@ -45,8 +42,7 @@ def _requirements(state: ProjectState) -> dict:
     workspace = _workspace(state)
     lifecycle = _ensure_lifecycle(state)
     try:
-        lifecycle = _submit_interaction_if_present(workspace, lifecycle, state)
-        if lifecycle.lifecycle.stage in {
+        if lifecycle.initialization.stage in {
             ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
             ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         }:
@@ -54,12 +50,11 @@ def _requirements(state: ProjectState) -> dict:
                 workspace,
                 stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
                 status=ApplicationLifecycleStatus.RUNNING,
-                active_thread_id=state.get("active_thread_id"),
                 active_run_id=state.get("active_run_id"),
             )
         elif (
-            lifecycle.lifecycle.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT
-            and lifecycle.lifecycle.status in {
+            lifecycle.initialization.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT
+            and lifecycle.initialization.status in {
                 ApplicationLifecycleStatus.FAILED,
                 ApplicationLifecycleStatus.CANCELLED,
             }
@@ -68,15 +63,16 @@ def _requirements(state: ProjectState) -> dict:
                 workspace,
                 stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
                 status=ApplicationLifecycleStatus.RUNNING,
-                active_thread_id=state.get("active_thread_id"),
                 active_run_id=state.get("active_run_id"),
             )
-        elif lifecycle.lifecycle.stage == ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION:
+        elif (
+            lifecycle.initialization.stage
+            == ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION
+        ):
             lifecycle = persist_application_lifecycle_transition(
                 workspace,
                 stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
                 status=ApplicationLifecycleStatus.RUNNING,
-                active_thread_id=state.get("active_thread_id"),
                 active_run_id=state.get("active_run_id"),
             )
         update = nodes.requirements(state)
@@ -96,11 +92,11 @@ def _project_planning(state: ProjectState) -> dict:
     workspace = _workspace(state)
     try:
         lifecycle = load_application_lifecycle(workspace) or _ensure_lifecycle(state)
-        lifecycle = _submit_interaction_if_present(workspace, lifecycle, state)
         lifecycle = _prepare_project_planning_lifecycle(workspace, lifecycle, state)
         if (
-            lifecycle.lifecycle.stage == ApplicationLifecycleStage.GENERATING_PROJECT_PLAN
-            and lifecycle.lifecycle.status in {
+            lifecycle.initialization.stage
+            == ApplicationLifecycleStage.GENERATING_PROJECT_PLAN
+            and lifecycle.initialization.status in {
                 ApplicationLifecycleStatus.FAILED,
                 ApplicationLifecycleStatus.CANCELLED,
             }
@@ -109,10 +105,9 @@ def _project_planning(state: ProjectState) -> dict:
                 workspace,
                 stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
                 status=ApplicationLifecycleStatus.RUNNING,
-                active_thread_id=state.get("active_thread_id"),
                 active_run_id=state.get("active_run_id"),
             )
-        if lifecycle.lifecycle.stage in {
+        if lifecycle.initialization.stage in {
             ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
             ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
         }:
@@ -120,7 +115,6 @@ def _project_planning(state: ProjectState) -> dict:
                 workspace,
                 stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
                 status=ApplicationLifecycleStatus.RUNNING,
-                active_thread_id=state.get("active_thread_id"),
                 active_run_id=state.get("active_run_id"),
             )
         update = nodes.project_planning(state)
@@ -129,10 +123,6 @@ def _project_planning(state: ProjectState) -> dict:
                 workspace,
                 stage=ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
                 status=ApplicationLifecycleStatus.AWAITING_USER,
-                pending_type=PendingInteractionType.PROJECT_PLAN_CONFIRMATION,
-                pending_payload={"mode": _clarification_mode(update)},
-                artifact_refs=_artifact_refs(update, "project_plan"),
-                active_thread_id=state.get("active_thread_id"),
                 active_run_id=state.get("active_run_id"),
             )
             return {
@@ -146,7 +136,6 @@ def _project_planning(state: ProjectState) -> dict:
             workspace,
             stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
             status=ApplicationLifecycleStatus.RUNNING,
-            active_thread_id=state.get("active_thread_id"),
             active_run_id=state.get("active_run_id"),
         )
         return {
@@ -175,8 +164,7 @@ def _ensure_lifecycle(state: ProjectState):
         _workspace(state),
         application_id=application_id,
         application_name=application_name,
-        project_id=application_id,
-        active_thread_id=state.get("active_thread_id"),
+        initialization_thread_id=state.get("active_thread_id"),
         active_run_id=state.get("active_run_id"),
     )
 
@@ -185,32 +173,36 @@ def _prepare_project_planning_lifecycle(workspace: str, lifecycle, state: Projec
     """为旧 checkpoint 首次落盘补齐进入项目规划前的合法状态路径。"""
 
     common = {
-        "active_thread_id": state.get("active_thread_id"),
         "active_run_id": state.get("active_run_id"),
     }
-    if lifecycle.lifecycle.stage == ApplicationLifecycleStage.COLLECTING_REQUIREMENT:
+    if lifecycle.initialization.stage == ApplicationLifecycleStage.COLLECTING_REQUIREMENT:
         lifecycle = persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
             status=ApplicationLifecycleStatus.RUNNING,
             **common,
         )
-    if lifecycle.lifecycle.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT:
+    if lifecycle.initialization.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT:
         lifecycle = persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
             status=ApplicationLifecycleStatus.RUNNING,
             **common,
         )
-    if lifecycle.lifecycle.stage == ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC:
+    if (
+        lifecycle.initialization.stage
+        == ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC
+    ):
         lifecycle = persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
             status=ApplicationLifecycleStatus.AWAITING_USER,
-            pending_type=PendingInteractionType.REQUIREMENT_CONFIRMATION,
             **common,
         )
-    if lifecycle.lifecycle.stage == ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION:
+    if (
+        lifecycle.initialization.stage
+        == ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION
+    ):
         lifecycle = persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
@@ -219,7 +211,7 @@ def _prepare_project_planning_lifecycle(workspace: str, lifecycle, state: Projec
         )
     project_plan = state.get("project_plan")
     if (
-        lifecycle.lifecycle.stage == ApplicationLifecycleStage.GENERATING_PROJECT_PLAN
+        lifecycle.initialization.stage == ApplicationLifecycleStage.GENERATING_PROJECT_PLAN
         and isinstance(project_plan, dict)
         and project_plan.get("confirmation_status") in {
             "pending_user_confirmation",
@@ -230,7 +222,6 @@ def _prepare_project_planning_lifecycle(workspace: str, lifecycle, state: Projec
             workspace,
             stage=ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
             status=ApplicationLifecycleStatus.AWAITING_USER,
-            pending_type=PendingInteractionType.PROJECT_PLAN_CONFIRMATION,
             **common,
         )
     return lifecycle
@@ -247,7 +238,6 @@ def _persist_requirement_result(workspace: str, update: dict, state: ProjectStat
         else ""
     )
     common = {
-        "active_thread_id": state.get("active_thread_id"),
         "active_run_id": state.get("active_run_id"),
     }
     # 澄清工具的 mode 由协议适配器生成且可能是 ask_user_question，不能用它判断业务阶段。
@@ -256,14 +246,12 @@ def _persist_requirement_result(workspace: str, update: dict, state: ProjectStat
             workspace,
             stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
             status=ApplicationLifecycleStatus.AWAITING_USER,
-            pending_type=PendingInteractionType.REQUIREMENT_CLARIFICATION,
-            pending_payload={"mode": mode, "questions": _question_refs(update)},
             **common,
         )
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ValueError("需求节点完成后生命周期状态丢失。")
-    if current.lifecycle.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT:
+    if current.initialization.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT:
         persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
@@ -286,27 +274,7 @@ def _persist_requirement_result(workspace: str, update: dict, state: ProjectStat
         workspace,
         stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
         status=ApplicationLifecycleStatus.AWAITING_USER,
-        pending_type=PendingInteractionType.REQUIREMENT_CONFIRMATION,
-        pending_payload={"mode": mode},
-        artifact_refs=_artifact_refs(update, "requirement_spec"),
         **common,
-    )
-
-
-def _submit_interaction_if_present(workspace: str, lifecycle, state: ProjectState):
-    """校验 AG-UI 恢复请求携带的 pending interaction 并发令牌。"""
-
-    submission = state.get("lifecycle_interaction_submission")
-    if not isinstance(submission, dict):
-        return lifecycle
-    interaction_id = str(submission.get("id") or "")
-    based_on_revision = submission.get("basedOnRevision")
-    if not interaction_id or not isinstance(based_on_revision, int):
-        raise ValueError("lifecycle interaction submission 格式无效。")
-    return persist_pending_interaction_submission(
-        workspace,
-        interaction_id=interaction_id,
-        based_on_revision=based_on_revision,
     )
 
 
@@ -318,9 +286,8 @@ def _persist_node_error(workspace: str, state: ProjectState, exc: Exception) -> 
         return
     persist_application_lifecycle_transition(
         workspace,
-        stage=current.lifecycle.stage,
+        stage=current.initialization.stage,
         status=ApplicationLifecycleStatus.FAILED,
-        active_thread_id=state.get("active_thread_id"),
         active_run_id=state.get("active_run_id"),
         error=ApplicationLifecycleError(
             code="application_planning_failed",
@@ -339,18 +306,10 @@ def _persist_node_cancelled(workspace: str, state: ProjectState) -> None:
         return
     persist_application_lifecycle_transition(
         workspace,
-        stage=current.lifecycle.stage,
+        stage=current.initialization.stage,
         status=ApplicationLifecycleStatus.CANCELLED,
-        active_thread_id=state.get("active_thread_id"),
         active_run_id=state.get("active_run_id"),
     )
-
-
-def _artifact_refs(update: dict, kind: str) -> list[ArtifactReference]:
-    """从节点结果生成不含正文的正式产物引用。"""
-
-    path = update.get(f"{kind}_path")
-    return [ArtifactReference(kind=kind, path=str(path))] if path else []
 
 
 def _clarification_mode(update: dict) -> str:
@@ -358,18 +317,6 @@ def _clarification_mode(update: dict) -> str:
 
     clarification = update.get("clarification")
     return str(clarification.get("mode") or "") if isinstance(clarification, dict) else ""
-
-
-def _question_refs(update: dict) -> list[dict[str, str]]:
-    """仅保留澄清问题稳定 ID 与标题，不复制完整会话。"""
-
-    clarification = update.get("clarification")
-    questions = clarification.get("questions") if isinstance(clarification, dict) else []
-    return [
-        {"id": str(item.get("id") or index), "header": str(item.get("header") or "")}
-        for index, item in enumerate(questions or [], start=1)
-        if isinstance(item, dict)
-    ]
 
 
 def _workspace(state: ProjectState) -> str:

@@ -310,6 +310,11 @@ def _repair_scope_confirmation_payload(repair_task_plan: dict[str, Any]) -> dict
     requested_paths = [
         str(path) for path in repair_task_plan.get("requestedPaths", []) if str(path).strip()
     ]
+    requested_resources = [
+        dict(item)
+        for item in repair_task_plan.get("requestedResources", [])
+        if isinstance(item, dict)
+    ]
     reason = str(repair_task_plan.get("reason") or "修复需要用户批准范围。")
     return {
         "mode": "repair_scope_confirmation",
@@ -317,6 +322,7 @@ def _repair_scope_confirmation_payload(repair_task_plan: dict[str, Any]) -> dict
         "message": "测试修复计划请求确认代码修改范围。",
         "planId": plan_id,
         "requestedPaths": requested_paths,
+        "requestedResources": requested_resources,
         "reason": reason,
         "questions": [
             {

@@ -14,6 +14,7 @@ from app.agents.main.page_designer import (
 )
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.state import ProjectState
+from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.detail_review import (
     apply_detail_review_submission,
     detail_review_payload,
@@ -83,11 +84,11 @@ def project_planning(state: ProjectState) -> dict:
             ),
             "confirmation_status": "confirmed",
         }
-        dependency_errors = validate_project_plan_dependencies(project_plan)
-        if dependency_errors:
-            repaired_plan, remaining_errors = _repair_project_plan_dependencies(
+        validation_errors = _project_plan_validation_errors(project_plan)
+        if validation_errors:
+            repaired_plan, remaining_errors = _repair_project_plan_validation_errors(
                 project_plan,
-                dependency_errors,
+                validation_errors,
             )
             repaired_path = write_project_plan_document(state, repaired_plan)
             return {
@@ -138,16 +139,16 @@ def project_planning(state: ProjectState) -> dict:
         state.get("request", ""),
     )
     project_plan["confirmation_status"] = "pending_user_confirmation"
-    dependency_errors = validate_project_plan_dependencies(project_plan)
-    if dependency_errors:
-        project_plan, dependency_errors = _repair_project_plan_dependencies(
+    validation_errors = _project_plan_validation_errors(project_plan)
+    if validation_errors:
+        project_plan, validation_errors = _repair_project_plan_validation_errors(
             project_plan,
-            dependency_errors,
+            validation_errors,
         )
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = (
-        _project_plan_dependency_error_payload(dependency_errors)
-        if dependency_errors
+        _project_plan_dependency_error_payload(validation_errors)
+        if validation_errors
         else _project_plan_confirmation_payload(project_plan)
     )
 
@@ -744,15 +745,15 @@ def _project_plan_confirmation_payload(project_plan: dict) -> dict:
 
 
 def _project_plan_dependency_error_payload(errors: list[str]) -> dict:
-    """要求用户回到 ProjectPlan 修订页面依赖、路由或跳转缺口。"""
+    """要求用户修订 ProjectPlan 中无法自动修复的依赖或 API 契约缺口。"""
 
     error_summary = _project_plan_dependency_error_summary(errors)
     payload = build_ask_user_payload(
         [
             AskUserQuestion(
-                header="计划依赖校验",
+                header="计划一致性校验",
                 question=(
-                    "系统已自动尝试修复项目计划中的页面依赖，但仍有无法安全推断的问题。"
+                    "系统已自动尝试修复项目计划中的页面依赖和 API 契约，但仍有无法安全推断的问题。"
                     f"{error_summary}"
                     "请补充业务决策后，我会重新生成项目计划；无需手动编辑 JSON。"
                 ),
@@ -762,13 +763,13 @@ def _project_plan_dependency_error_payload(errors: list[str]) -> dict:
         ]
     )
     payload["mode"] = "project_plan_dependency_validation_error"
-    payload["message"] = "项目计划自动修复后仍未通过依赖校验，页面设计未开始。"
+    payload["message"] = "项目计划自动修复后仍未通过一致性校验，页面设计未开始。"
     payload["errors"] = errors
     return payload
 
 
 def _project_plan_dependency_error_summary(errors: list[str]) -> str:
-    """把依赖校验错误压缩成用户可见的简短问题清单。"""
+    """把计划一致性错误压缩成用户可见的简短问题清单。"""
 
     visible_errors = [
         str(error).strip()
@@ -780,18 +781,27 @@ def _project_plan_dependency_error_summary(errors: list[str]) -> str:
     return "当前剩余问题：" + "；".join(visible_errors) + "。"
 
 
-def _repair_project_plan_dependencies(
+def _project_plan_validation_errors(project_plan: dict) -> list[str]:
+    """汇总 ProjectPlan 页面依赖和 API 契约闭合性错误。"""
+
+    return [
+        *validate_project_plan_dependencies(project_plan),
+        *validate_api_contract_consistency(project_plan),
+    ]
+
+
+def _repair_project_plan_validation_errors(
     project_plan: dict,
     errors: list[str],
 ) -> tuple[dict, list[str]]:
-    """把确定性校验错误回灌给规划模型，最多自动修订一次页面依赖。"""
+    """把确定性校验错误回灌给规划模型，最多自动修订一次完整计划。"""
 
-    feedback = "系统依赖校验失败，请在本次重新生成中完整修复以下问题：\n" + "\n".join(
+    feedback = "系统计划一致性校验失败，请在本次重新生成中完整修复以下问题：\n" + "\n".join(
         f"- {error}" for error in errors
     )
     repaired = revise_project_plan_with_chat_model(project_plan, feedback)
     repaired["confirmation_status"] = "pending_user_confirmation"
-    return repaired, validate_project_plan_dependencies(repaired)
+    return repaired, _project_plan_validation_errors(repaired)
 
 
 def _project_plan_revision_required_payload(reason: str) -> dict:

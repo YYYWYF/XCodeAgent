@@ -13,16 +13,24 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.domain.application_lifecycle import (
+    APPLICATION_LIFECYCLE_SCHEMA_VERSION,
     ApplicationIdentity,
+    ApplicationInitialization,
     ArtifactReference,
     ApplicationLifecycleError,
     ApplicationLifecycleStage,
     ApplicationLifecycle,
     ApplicationLifecycleStatus,
-    LifecycleState,
+    ExecutionResourceClaim,
+    ExecutionResourceLock,
+    ExecutionResourceLocks,
+    ExecutionResourceReason,
+    ExecutionResourceRole,
+    ExecutionResourceType,
     PendingInteraction,
     PendingInteractionType,
-    ProjectIdentity,
+    WorkbenchExecution,
+    WorkbenchExecutionStatus,
     utc_now,
 )
 
@@ -95,22 +103,20 @@ def create_application_lifecycle(
     *,
     application_id: str,
     application_name: str,
-    project_id: str | None = None,
-    active_thread_id: str | None = None,
+    initialization_thread_id: str | None = None,
     active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
     """创建处于收集需求阶段的首个生命周期快照。"""
 
     return ApplicationLifecycle(
         application=ApplicationIdentity(id=application_id, name=application_name),
-        project=ProjectIdentity(id=project_id) if project_id else None,
         updatedAt=utc_now(),
         revision=1,
-        lifecycle=LifecycleState(
+        initialization=ApplicationInitialization(
             stage=ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
             status=ApplicationLifecycleStatus.PENDING,
+            threadId=initialization_thread_id,
         ),
-        activeThreadId=active_thread_id,
         activeRunId=active_run_id,
     )
 
@@ -128,7 +134,7 @@ def load_application_lifecycle(workspace: str | Path) -> ApplicationLifecycle | 
     if not isinstance(raw, dict):
         raise ApplicationLifecycleCorruptedError("生命周期状态文件根节点必须是对象。")
     version = raw.get("schemaVersion")
-    if version != "1.0.0":
+    if version != APPLICATION_LIFECYCLE_SCHEMA_VERSION:
         raise UnsupportedApplicationLifecycleVersionError(
             f"不支持的生命周期 schemaVersion：{version!r}"
         )
@@ -194,56 +200,21 @@ def ensure_application_lifecycle(
     *,
     application_id: str,
     application_name: str,
-    project_id: str | None = None,
-    active_thread_id: str | None = None,
+    initialization_thread_id: str | None = None,
     active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
     """读取现有权威状态，缺失时以 CAS 方式创建首版。"""
 
     current = load_application_lifecycle(workspace)
     if current is not None:
-        return repair_misclassified_requirement_clarification(workspace, current)
+        return current
     created = create_application_lifecycle(
         application_id=application_id,
         application_name=application_name,
-        project_id=project_id,
-        active_thread_id=active_thread_id,
+        initialization_thread_id=initialization_thread_id,
         active_run_id=active_run_id,
     )
     return write_application_lifecycle(workspace, created, expected_revision=0)
-
-
-def repair_misclassified_requirement_clarification(
-    workspace: str | Path,
-    state: ApplicationLifecycle | None = None,
-) -> ApplicationLifecycle:
-    """纠正早期 v1 把 ask_user_question 错写成需求文档确认的状态。"""
-
-    current = state or load_application_lifecycle(workspace)
-    if current is None:
-        raise ApplicationLifecycleConflictError("生命周期状态尚未初始化。")
-    pending = current.pending_interaction
-    if (
-        current.lifecycle.stage != ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION
-        or pending is None
-        or pending.type != PendingInteractionType.REQUIREMENT_CONFIRMATION
-        or pending.payload.get("mode") != "ask_user_question"
-    ):
-        return current
-    repaired = transition_application_lifecycle(
-        current,
-        stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-        status=ApplicationLifecycleStatus.AWAITING_USER,
-        pending_type=PendingInteractionType.REQUIREMENT_CLARIFICATION,
-        pending_payload=dict(pending.payload),
-        active_thread_id=current.active_thread_id,
-        active_run_id=current.active_run_id,
-    )
-    return write_application_lifecycle(
-        workspace,
-        repaired,
-        expected_revision=current.revision,
-    )
 
 
 def persist_application_lifecycle_transition(
@@ -251,10 +222,6 @@ def persist_application_lifecycle_transition(
     *,
     stage: ApplicationLifecycleStage,
     status: ApplicationLifecycleStatus,
-    pending_type: PendingInteractionType | None = None,
-    pending_payload: dict[str, Any] | None = None,
-    artifact_refs: list[ArtifactReference] | None = None,
-    active_thread_id: str | None = None,
     active_run_id: str | None = None,
     error: ApplicationLifecycleError | None = None,
 ) -> ApplicationLifecycle:
@@ -267,8 +234,6 @@ def persist_application_lifecycle_transition(
         current,
         stage=stage,
         status=status,
-        pending_type=pending_type,
-        active_thread_id=active_thread_id,
         active_run_id=active_run_id,
         error=error,
     ):
@@ -277,10 +242,6 @@ def persist_application_lifecycle_transition(
         current,
         stage=stage,
         status=status,
-        pending_type=pending_type,
-        pending_payload=pending_payload,
-        artifact_refs=artifact_refs,
-        active_thread_id=active_thread_id,
         active_run_id=active_run_id,
         error=error,
     )
@@ -288,6 +249,455 @@ def persist_application_lifecycle_transition(
         workspace,
         updated,
         expected_revision=current.revision,
+    )
+
+
+def start_workbench_execution(
+    workspace: str | Path,
+    *,
+    scope: str,
+    target_id: str,
+    page_id: str | None,
+    thread_id: str,
+    run_id: str,
+    phase: str,
+    replaces_run_id: str | None = None,
+    resource_claims: list[ExecutionResourceClaim] | None = None,
+) -> ApplicationLifecycle:
+    """原子登记计划执行及全部资源锁，并保持初始化完成状态不变。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        if current is None:
+            raise ApplicationLifecycleConflictError("进入计划执行模式前必须先创建生命周期状态。")
+        if current.initialization.stage != ApplicationLifecycleStage.READY_FOR_WORKBENCH:
+            raise ApplicationLifecycleConflictError(
+                "应用尚未完成创建规划，当前阶段 "
+                f"{current.initialization.stage.value} 不能启动工作台计划执行。"
+            )
+        resource_locks = current.resource_locks
+        transferred_claims: list[ExecutionResourceClaim] = []
+        if replaces_run_id and replaces_run_id in current.active_executions:
+            transferred_claims = _resource_claims_for_run(resource_locks, replaces_run_id)
+            executions = dict(current.active_executions)
+            executions.pop(replaces_run_id, None)
+            resource_locks = _resource_locks_without_run(resource_locks, replaces_run_id)
+            current = current.model_copy(
+                update={
+                    "active_executions": executions,
+                    "resource_locks": resource_locks,
+                }
+            )
+        claims = _deduplicated_resource_claims(
+            [
+                *(resource_claims or [_primary_resource_claim(scope, target_id)]),
+                *transferred_claims,
+            ]
+        )
+        acquired_at = utc_now()
+        next_locks = _resource_locks_with_claims(
+            resource_locks,
+            claims=claims,
+            run_id=run_id,
+            owner_page_id=page_id,
+            acquired_at=acquired_at,
+        )
+        return _persist_workbench_execution_snapshot(
+            workspace,
+            current=current,
+            execution=WorkbenchExecution(
+                scope=scope,
+                targetId=target_id,
+                pageId=page_id,
+                threadId=thread_id,
+                runId=run_id,
+                phase=phase,
+                status=WorkbenchExecutionStatus.RUNNING,
+                resourceKeys=[_resource_claim_key(claim) for claim in claims],
+                startedAt=acquired_at,
+                updatedAt=acquired_at,
+            ),
+            resource_locks=next_locks,
+        )
+
+
+def expand_workbench_execution_resources(
+    workspace: str | Path,
+    *,
+    run_id: str,
+    resource_claims: list[ExecutionResourceClaim],
+) -> ApplicationLifecycle:
+    """在用户确认修复扩展后记录资源集合，不用既有登记阻断执行。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        execution = current.active_executions.get(run_id) if current else None
+        if current is None or execution is None:
+            raise ApplicationLifecycleConflictError("当前没有可扩展资源范围的工作台计划执行。")
+        additions = [
+            claim.model_copy(
+                update={
+                    "role": ExecutionResourceRole.DEPENDENCY,
+                    "reason": ExecutionResourceReason.REPAIR_EXPANSION,
+                }
+            )
+            for claim in resource_claims
+            if _resource_claim_key(claim) not in execution.resource_keys
+        ]
+        if not additions:
+            return current
+        next_execution = execution.model_copy(
+            update={
+                "resource_keys": [
+                    *execution.resource_keys,
+                    *(_resource_claim_key(claim) for claim in additions),
+                ],
+                "updated_at": utc_now(),
+            }
+        )
+        return _persist_workbench_execution_snapshot(
+            workspace,
+            current=current,
+            execution=next_execution,
+            resource_locks=_resource_locks_with_claims(
+                current.resource_locks,
+                claims=additions,
+                run_id=run_id,
+                owner_page_id=execution.page_id,
+                acquired_at=utc_now(),
+            ),
+        )
+
+
+def update_workbench_execution(
+    workspace: str | Path,
+    *,
+    run_id: str,
+    phase: str,
+    status: WorkbenchExecutionStatus,
+    pending_type: PendingInteractionType | None = None,
+    pending_payload: dict[str, Any] | None = None,
+    error: ApplicationLifecycleError | None = None,
+) -> ApplicationLifecycle:
+    """在节点完成、等待用户、失败或停止边界更新当前计划执行快照。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        active = current.active_executions.get(run_id) if current else None
+        if current is None or active is None:
+            raise ApplicationLifecycleConflictError("当前没有可更新的工作台计划执行。")
+        next_revision = current.revision + 1
+        pending = (
+            _pending_interaction(
+                current,
+                interaction_type=pending_type,
+                revision=next_revision,
+                payload=pending_payload or {},
+                artifact_refs=[],
+            )
+            if pending_type
+            else None
+        )
+        next_execution = active.model_copy(
+            update={
+                "phase": phase,
+                "status": status,
+                "pending_interaction": pending,
+                "error": error,
+                "updated_at": utc_now(),
+            }
+        )
+        return _persist_workbench_execution_snapshot(
+            workspace,
+            current=current,
+            execution=next_execution,
+            resource_locks=current.resource_locks,
+        )
+
+
+def complete_workbench_execution(
+    workspace: str | Path,
+    *,
+    run_id: str,
+    phase: str = "finalize_project",
+) -> ApplicationLifecycle:
+    """完成当前计划执行并释放资源锁，不改变已经完成的应用初始化状态。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        active = current.active_executions.get(run_id) if current else None
+        if current is None or active is None:
+            raise ApplicationLifecycleConflictError("当前没有可完成的工作台计划执行。")
+        remaining = dict(current.active_executions)
+        remaining.pop(run_id, None)
+        return _persist_workbench_execution_removal(
+            workspace,
+            current=current,
+            executions=remaining,
+            resource_locks=_resource_locks_without_run(current.resource_locks, run_id),
+        )
+
+
+def end_workbench_execution(workspace: str | Path, *, run_id: str) -> ApplicationLifecycle:
+    """终止当前计划并释放工作区输入锁，同时保留最后执行快照供审计。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        if current is None or run_id not in current.active_executions:
+            raise ApplicationLifecycleConflictError("当前没有可结束的工作台计划执行。")
+        remaining = dict(current.active_executions)
+        remaining.pop(run_id, None)
+        return _persist_workbench_execution_removal(
+            workspace,
+            current=current,
+            executions=remaining,
+            resource_locks=_resource_locks_without_run(current.resource_locks, run_id),
+        )
+
+
+def stop_workbench_execution(workspace: str | Path, *, run_id: str) -> ApplicationLifecycle:
+    """在没有活动网络 Run 时把等待中的计划显式标记为可恢复停止。"""
+
+    current = load_application_lifecycle(workspace)
+    active = current.active_executions.get(run_id) if current else None
+    if current is None or active is None:
+        raise ApplicationLifecycleConflictError("当前没有可停止的工作台计划执行。")
+    return update_workbench_execution(
+        workspace,
+        run_id=run_id,
+        phase=active.phase,
+        status=WorkbenchExecutionStatus.STOPPED,
+    )
+
+
+def persist_workbench_interaction_submission(
+    workspace: str | Path,
+    *,
+    run_id: str,
+    interaction_id: str,
+    based_on_revision: int,
+) -> ApplicationLifecycle:
+    """按运行隔离地提交工作台交互令牌，不影响其他页面的待确认状态。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        execution = current.active_executions.get(run_id) if current else None
+        pending = execution.pending_interaction if execution else None
+        if current is None or execution is None or pending is None:
+            raise ApplicationLifecycleConflictError("当前运行没有可提交的待处理交互。")
+        if pending.id != interaction_id or pending.based_on_revision != based_on_revision:
+            raise ApplicationLifecycleConflictError("待处理交互已过期或不属于当前页面运行。")
+        if pending.submitted_at is not None:
+            return current
+        next_revision = current.revision + 1
+        submitted = pending.model_copy(
+            update={"submitted_at": utc_now(), "based_on_revision": next_revision}
+        )
+        executions = dict(current.active_executions)
+        executions[run_id] = execution.model_copy(
+            update={"pending_interaction": submitted, "updated_at": utc_now()}
+        )
+        updated = current.model_copy(
+            update={
+                "updated_at": utc_now(),
+                "revision": next_revision,
+                "active_executions": executions,
+            }
+        )
+        return write_application_lifecycle(
+            workspace,
+            updated,
+            expected_revision=current.revision,
+        )
+
+
+def _persist_workbench_execution_snapshot(
+    workspace: str | Path,
+    *,
+    current: ApplicationLifecycle,
+    execution: WorkbenchExecution,
+    resource_locks: ExecutionResourceLocks,
+) -> ApplicationLifecycle:
+    """原子提交工作台执行快照，同时保持创建生命周期已经完成。"""
+
+    executions = dict(current.active_executions)
+    executions[execution.run_id] = execution
+    next_revision = current.revision + 1
+    updated = current.model_copy(
+        update={
+            "updated_at": utc_now(),
+            "revision": next_revision,
+            "initialization": ApplicationInitialization(
+                stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                status=ApplicationLifecycleStatus.COMPLETED,
+            ),
+            "active_run_id": execution.run_id,
+            "active_executions": executions,
+            "resource_locks": resource_locks,
+        }
+    )
+    return write_application_lifecycle(
+        workspace,
+        updated,
+        expected_revision=current.revision,
+    )
+
+
+def _persist_workbench_execution_removal(
+    workspace: str | Path,
+    *,
+    current: ApplicationLifecycle,
+    executions: dict[str, WorkbenchExecution],
+    resource_locks: ExecutionResourceLocks,
+) -> ApplicationLifecycle:
+    """原子移除指定运行，并保持创建生命周期不受工作台状态影响。"""
+
+    next_revision = current.revision + 1
+    latest = max(executions.values(), key=lambda item: item.updated_at) if executions else None
+    updated = current.model_copy(
+        update={
+            "updated_at": utc_now(),
+            "revision": next_revision,
+            "initialization": ApplicationInitialization(
+                stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                status=ApplicationLifecycleStatus.COMPLETED,
+            ),
+            "active_run_id": latest.run_id if latest else None,
+            "active_executions": executions,
+            "resource_locks": resource_locks,
+        }
+    )
+    return write_application_lifecycle(workspace, updated, expected_revision=current.revision)
+
+
+def _primary_resource_claim(scope: str, target_id: str) -> ExecutionResourceClaim:
+    """为未提供依赖集合的旧调用生成安全的主目标声明。"""
+
+    resource_type = {
+        "page": ExecutionResourceType.PAGE,
+        "data_source": ExecutionResourceType.DATA_SOURCE,
+    }.get(scope, ExecutionResourceType.APPLICATION)
+    return ExecutionResourceClaim(
+        type=resource_type,
+        targetId="application" if resource_type == ExecutionResourceType.APPLICATION else target_id,
+        role=ExecutionResourceRole.PRIMARY,
+        reason=ExecutionResourceReason.PRIMARY_TARGET,
+    )
+
+
+def _resource_claim_key(claim: ExecutionResourceClaim) -> str:
+    """生成生命周期和进程内租约共享的稳定资源键。"""
+
+    return f"{claim.type.value}:{claim.target_id}"
+
+
+def _deduplicated_resource_claims(
+    claims: list[ExecutionResourceClaim],
+) -> list[ExecutionResourceClaim]:
+    """按稳定键去重，并优先保留新运行重新解析出的声明信息。"""
+
+    result: dict[str, ExecutionResourceClaim] = {}
+    for claim in claims:
+        result.setdefault(_resource_claim_key(claim), claim)
+    return list(result.values())
+
+
+def _resource_claims_for_run(
+    locks: ExecutionResourceLocks,
+    run_id: str,
+) -> list[ExecutionResourceClaim]:
+    """从旧运行持有的锁重建声明，以便恢复时原子转移完整资源集合。"""
+
+    claims: list[ExecutionResourceClaim] = []
+    groups = (
+        (ExecutionResourceType.PAGE, locks.pages),
+        (ExecutionResourceType.API_CONTRACT, locks.api_contracts),
+        (ExecutionResourceType.DATA_SOURCE, locks.data_sources),
+    )
+    if locks.application is not None and locks.application.run_id == run_id:
+        claims.append(
+            ExecutionResourceClaim(
+                type=ExecutionResourceType.APPLICATION,
+                targetId="application",
+                role=locks.application.role,
+                reason=locks.application.reason,
+            )
+        )
+    for resource_type, group in groups:
+        for target_id, lock in group.items():
+            if lock.run_id == run_id:
+                claims.append(
+                    ExecutionResourceClaim(
+                        type=resource_type,
+                        targetId=target_id,
+                        role=lock.role,
+                        reason=lock.reason,
+                    )
+                )
+    return claims
+
+
+def _resource_locks_with_claims(
+    locks: ExecutionResourceLocks,
+    *,
+    claims: list[ExecutionResourceClaim],
+    run_id: str,
+    owner_page_id: str | None,
+    acquired_at: Any,
+) -> ExecutionResourceLocks:
+    """把资源声明写入登记表；同键以最近一次运行记录为准。"""
+
+    application = locks.application
+    pages = dict(locks.pages)
+    api_contracts = dict(locks.api_contracts)
+    data_sources = dict(locks.data_sources)
+    for claim in claims:
+        lock = ExecutionResourceLock(
+            runId=run_id,
+            ownerPageId=owner_page_id,
+            role=claim.role,
+            reason=claim.reason,
+            acquiredAt=acquired_at,
+        )
+        if claim.type == ExecutionResourceType.APPLICATION:
+            application = lock
+        elif claim.type == ExecutionResourceType.PAGE:
+            pages[claim.target_id] = lock
+        elif claim.type == ExecutionResourceType.API_CONTRACT:
+            api_contracts[claim.target_id] = lock
+        else:
+            data_sources[claim.target_id] = lock
+    return ExecutionResourceLocks(
+        application=application,
+        pages=pages,
+        apiContracts=api_contracts,
+        dataSources=data_sources,
+    )
+
+
+def _resource_locks_without_run(
+    locks: ExecutionResourceLocks,
+    run_id: str,
+) -> ExecutionResourceLocks:
+    """一次性移除某个运行拥有的全部资源锁，不触碰其他并行页面。"""
+
+    return ExecutionResourceLocks(
+        application=(
+            None if locks.application and locks.application.run_id == run_id else locks.application
+        ),
+        pages={key: value for key, value in locks.pages.items() if value.run_id != run_id},
+        apiContracts={
+            key: value for key, value in locks.api_contracts.items() if value.run_id != run_id
+        },
+        dataSources={
+            key: value for key, value in locks.data_sources.items() if value.run_id != run_id
+        },
     )
 
 
@@ -302,114 +712,35 @@ def transition_application_lifecycle(
     *,
     stage: ApplicationLifecycleStage,
     status: ApplicationLifecycleStatus,
-    pending_type: PendingInteractionType | None = None,
-    pending_payload: dict[str, Any] | None = None,
-    artifact_refs: list[ArtifactReference] | None = None,
-    active_thread_id: str | None = None,
     active_run_id: str | None = None,
     error: ApplicationLifecycleError | None = None,
 ) -> ApplicationLifecycle:
     """校验状态机边并生成 revision 递增的新快照。"""
 
-    if stage != state.lifecycle.stage and stage not in ALLOWED_STAGE_TRANSITIONS[state.lifecycle.stage]:
+    if (
+        stage != state.initialization.stage
+        and stage not in ALLOWED_STAGE_TRANSITIONS[state.initialization.stage]
+    ):
         raise ApplicationLifecycleConflictError(
-            f"非法生命周期转换：{state.lifecycle.stage.value} -> {stage.value}"
+            f"非法应用初始化转换：{state.initialization.stage.value} -> {stage.value}"
         )
     next_revision = state.revision + 1
-    pending = (
-        _pending_interaction(
-            state,
-            interaction_type=pending_type,
-            revision=next_revision,
-            payload=pending_payload or {},
-            artifact_refs=artifact_refs or [],
-        )
-        if pending_type
-        else None
-    )
-    domain = dict(state.lifecycle.domain)
-    if state.pending_interaction is not None and state.pending_interaction.submitted_at is not None:
-        domain["lastSubmittedInteraction"] = {
-            "id": state.pending_interaction.id,
-            "basedOnRevision": state.pending_interaction.based_on_revision,
-            "submittedAt": state.pending_interaction.submitted_at.isoformat(),
-        }
     return state.model_copy(
         update={
             "updated_at": utc_now(),
             "revision": next_revision,
-            "lifecycle": LifecycleState(
+            "initialization": ApplicationInitialization(
                 stage=stage,
                 status=status,
-                domain=domain,
-                extensions=state.lifecycle.extensions,
+                threadId=(
+                    None
+                    if stage == ApplicationLifecycleStage.READY_FOR_WORKBENCH
+                    else state.initialization.thread_id
+                ),
             ),
-            "active_thread_id": active_thread_id or state.active_thread_id,
             "active_run_id": active_run_id or state.active_run_id,
-            "pending_interaction": pending,
             "error": error,
         }
-    )
-
-
-def submit_pending_interaction(
-    state: ApplicationLifecycle,
-    *,
-    interaction_id: str,
-    based_on_revision: int,
-) -> ApplicationLifecycle:
-    """以稳定交互 ID 和 revision 幂等记录一次用户提交。"""
-
-    pending = state.pending_interaction
-    if pending is None:
-        raise ApplicationLifecycleConflictError("当前没有可提交的待处理交互。")
-    if pending.id != interaction_id:
-        raise ApplicationLifecycleConflictError("待处理交互已过期或不属于当前生命周期 revision。")
-    if pending.submitted_at is not None:
-        return state
-    if pending.based_on_revision != based_on_revision:
-        raise ApplicationLifecycleConflictError("待处理交互已过期或不属于当前生命周期 revision。")
-    next_revision = state.revision + 1
-    submitted = pending.model_copy(
-        update={"submitted_at": utc_now(), "based_on_revision": next_revision}
-    )
-    return state.model_copy(
-        update={
-            "updated_at": utc_now(),
-            "revision": next_revision,
-            "pending_interaction": submitted,
-        }
-    )
-
-
-def persist_pending_interaction_submission(
-    workspace: str | Path,
-    *,
-    interaction_id: str,
-    based_on_revision: int,
-) -> ApplicationLifecycle:
-    """提交当前交互，并对已经推进阶段的同一重复请求保持幂等。"""
-
-    current = load_application_lifecycle(workspace)
-    if current is None:
-        raise ApplicationLifecycleConflictError("生命周期状态尚未初始化。")
-    last_submitted = current.lifecycle.domain.get("lastSubmittedInteraction")
-    if (
-        isinstance(last_submitted, dict)
-        and last_submitted.get("id") == interaction_id
-    ):
-        return current
-    submitted = submit_pending_interaction(
-        current,
-        interaction_id=interaction_id,
-        based_on_revision=based_on_revision,
-    )
-    if submitted is current:
-        return current
-    return write_application_lifecycle(
-        workspace,
-        submitted,
-        expected_revision=current.revision,
     )
 
 
@@ -418,7 +749,6 @@ def complete_application_template_generation(
     *,
     succeeded: bool,
     error_message: str | None = None,
-    active_thread_id: str | None = None,
     active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
     """校验正式文档后把应用模板文件生成结果落为 ready 或显式失败。"""
@@ -426,10 +756,10 @@ def complete_application_template_generation(
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
-    if current.lifecycle.stage == ApplicationLifecycleStage.READY_FOR_WORKBENCH and succeeded:
+    if current.initialization.stage == ApplicationLifecycleStage.READY_FOR_WORKBENCH and succeeded:
         return current
     if (
-        current.lifecycle.stage
+        current.initialization.stage
         == ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED
         and succeeded
     ):
@@ -437,12 +767,14 @@ def complete_application_template_generation(
             workspace,
             stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
             status=ApplicationLifecycleStatus.RUNNING,
-            active_thread_id=active_thread_id,
             active_run_id=active_run_id,
         )
-    if current.lifecycle.stage != ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES:
+    if (
+        current.initialization.stage
+        != ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES
+    ):
         raise ApplicationLifecycleConflictError(
-            f"当前阶段 {current.lifecycle.stage.value} 不能提交应用模板文件生成结果。"
+            f"当前阶段 {current.initialization.stage.value} 不能提交应用模板文件生成结果。"
         )
     requirement_status = _artifact_confirmation_status(
         Path(workspace) / ".xcodeagent/specs/requirement-spec.json"
@@ -458,14 +790,12 @@ def complete_application_template_generation(
             workspace,
             stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
             status=ApplicationLifecycleStatus.COMPLETED,
-            active_thread_id=active_thread_id,
             active_run_id=active_run_id,
         )
     return persist_application_lifecycle_transition(
         workspace,
         stage=ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
         status=ApplicationLifecycleStatus.FAILED,
-        active_thread_id=active_thread_id,
         active_run_id=active_run_id,
         error=ApplicationLifecycleError(
             code="application_template_generation_failed",
@@ -516,26 +846,14 @@ def _transition_already_applied(
     *,
     stage: ApplicationLifecycleStage,
     status: ApplicationLifecycleStatus,
-    pending_type: PendingInteractionType | None,
-    active_thread_id: str | None,
     active_run_id: str | None,
     error: ApplicationLifecycleError | None,
 ) -> bool:
     """识别节点重放产生的同义更新，避免无意义 revision 增长。"""
 
-    current_pending_type = (
-        state.pending_interaction.type if state.pending_interaction is not None else None
-    )
-    pending_is_open = (
-        state.pending_interaction is not None
-        and state.pending_interaction.submitted_at is None
-    )
     return (
-        state.lifecycle.stage == stage
-        and state.lifecycle.status == status
-        and current_pending_type == pending_type
-        and (pending_type is None or pending_is_open)
-        and (not active_thread_id or state.active_thread_id == active_thread_id)
+        state.initialization.stage == stage
+        and state.initialization.status == status
         and (not active_run_id or state.active_run_id == active_run_id)
         and ((error is None and state.error is None) or (error is not None and state.error == error))
     )

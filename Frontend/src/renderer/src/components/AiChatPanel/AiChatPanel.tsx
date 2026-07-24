@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useWorkbench } from '../../context'
 import type {
   ApplicationConfig,
+  ApplicationLifecycle,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningPageOption,
   ApplicationMenuItem,
@@ -12,12 +13,19 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../typings'
-import { cx, getInitialPreviewUrl, openPreviewWindow, storePreviewUrl } from '../../utils'
+import {
+  CLASS_PREFIX,
+  cx,
+  getInitialPreviewUrl,
+  openPreviewWindow,
+  storePreviewUrl
+} from '../../utils'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
 import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import MessageList from './components/MessageList'
 import PageContextHeader from './components/PageContextHeader'
+import PlanExecutionDock from './components/PlanExecutionDock'
 import SessionSidebar from './components/SessionSidebar'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
@@ -28,19 +36,22 @@ import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
-import type { SessionIdentity } from './hooks/sessionRuntime'
 import { chatCopy } from './constants'
 import type { WorkflowPreviewTarget } from './utils'
+import { deriveDisplayedPlanExecutionMode, planExecutionContextForPage } from './planExecutionMode'
 import './AiChatPanel.less'
 
 type Props = {
   application: ApplicationConfig
+  applicationLifecycle?: ApplicationLifecycle
   developmentPlanningReady: boolean
   hasPageDesigns: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
+  onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
+  onPlanningArtifactsRefresh: () => void
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
@@ -109,10 +120,7 @@ function findPageMenuItem(
 }
 
 /** 在最新 ProjectPlan 页面目录中解析会话保存的页面标识，避免旧 pageId 覆盖当前选择。 */
-function resolvePlanningPageId(
-  pages: DevelopmentPlanningPageOption[],
-  pageId: string
-): string {
+function resolvePlanningPageId(pages: DevelopmentPlanningPageOption[], pageId: string): string {
   const normalizedPageId = pageId.trim()
   if (!normalizedPageId) return ''
   const matched = pages.find((page) => page.pageId === normalizedPageId)
@@ -123,18 +131,25 @@ function resolvePlanningPageId(
 
 /** 生成页面标识的宽松别名，兼容历史会话里的 page- 前缀差异。 */
 function pageIdAlias(value: string): string {
-  return value.trim().toLowerCase().replace(/_/g, '-').replace(/^page-/, '')
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-')
+    .replace(/^page-/, '')
 }
 
 /** 组织应用侧栏、对话区、页面信息与预览面板的主工作台。 */
 export default function AiChatPanel({
   application,
+  applicationLifecycle,
   developmentPlanningReady,
   hasPageDesigns,
   developmentPlanningPages,
   developmentPlanningApiContracts,
   editorMode,
   onApplicationUpdate,
+  onApplicationLifecycleChange,
+  onPlanningArtifactsRefresh,
   onReturnWelcome,
   onThemeChange,
   theme
@@ -144,7 +159,6 @@ export default function AiChatPanel({
   const [detailTargetInteractionStarted, setDetailTargetInteractionStarted] = useState(false)
   const [detailDesignGenerationActive, setDetailDesignGenerationActive] = useState(false)
   const [previewError, setPreviewError] = useState('')
-  const runningSessionsRef = useRef<Map<string, SessionIdentity>>(new Map())
   const handledPreviewTargetRef = useRef('')
   const { publishAiMessage } = useWorkbench()
   const {
@@ -198,6 +212,7 @@ export default function AiChatPanel({
     loadingSessions,
     messages,
     persistSession,
+    runningSessionsRef,
     selectedSkills,
     sessionError,
     sessions,
@@ -207,13 +222,17 @@ export default function AiChatPanel({
   } = useChatSessions({
     application,
     editorMode,
-    onCloseRightPanel: () => setRightPanel(undefined),
-    runningSessionsRef
+    onCloseRightPanel: () => setRightPanel(undefined)
   })
 
   const {
     activeWorkflow,
     error,
+    handleAcceptPreview,
+    handleAdjustPlan,
+    handleEndPlan,
+    handleRetryPlan,
+    handleStopPlan,
     handleSend,
     handleStartEndpointDetailConfirmation,
     handleStartDetailConfirmation,
@@ -235,6 +254,7 @@ export default function AiChatPanel({
     ensurePageSession,
     getSessionMessages,
     persistSession,
+    onApplicationLifecycleChange,
     onPreviewReady: handlePreviewReady,
     publishAiMessage,
     runningSessionsRef,
@@ -259,6 +279,18 @@ export default function AiChatPanel({
   })
 
   const copy = chatCopy[editorMode]
+  const pageExecutionContext = planExecutionContextForPage(
+    applicationLifecycle,
+    activePageOption?.pageId || activePageId,
+    { runId: activeWorkflow?.runId, threadId: activeWorkflow?.threadId }
+  )
+  const scopedExecution = pageExecutionContext.execution
+  const displayedPlanExecutionMode = deriveDisplayedPlanExecutionMode(
+    scopedExecution,
+    stopping ? 'stopping' : activeWorkflow?.summary.status,
+    loading,
+    Boolean(applicationLifecycle)
+  )
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
   const activePageTitle =
@@ -532,7 +564,11 @@ export default function AiChatPanel({
     setDetailDesignGenerationActive(!hasDetailPlan)
     setActiveDetailTarget({ type: 'page', pageId })
     const started = await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan)
-    if (!started) setDetailDesignGenerationActive(false)
+    if (started) {
+      onPlanningArtifactsRefresh()
+    } else {
+      setDetailDesignGenerationActive(false)
+    }
   }
 
   /** 启动当前接口的详细设计；解锁状态仍以后续持久化目录检查为准。 */
@@ -564,7 +600,11 @@ export default function AiChatPanel({
       endpointLabel,
       hasDetailPlan
     })
-    if (!started) setDetailDesignGenerationActive(false)
+    if (started) {
+      onPlanningArtifactsRefresh()
+    } else {
+      setDetailDesignGenerationActive(false)
+    }
   }
 
   /** 根据弹框里选择的目标类型启动页面或接口详细设计。 */
@@ -613,6 +653,26 @@ export default function AiChatPanel({
   ): Promise<void> => {
     setDetailDesignGenerationActive(false)
     await handleSubmitClarification(workflow, answers)
+  }
+
+  /** 滚动到现有 Workflow 进度区域，不改变消息列表和中央内容结构。 */
+  const handleViewPlan = (): void => {
+    document.querySelector(`.${CLASS_PREFIX}-process-steps`)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center'
+    })
+  }
+
+  /** 把底部结构化确认转换为当前 Workflow 已支持的确认答案。 */
+  const handleConfirmPlanInteraction = (decision: 'reject' | 'once' | 'always'): void => {
+    if (!activeWorkflow || !scopedExecution?.pendingInteraction) return
+    const interactionType = scopedExecution.pendingInteraction.type
+    const answerKey =
+      interactionType === 'repair_scope_confirmation'
+        ? 'repair_scope_confirmation'
+        : 'agent_approval'
+    const answer = planInteractionAnswer(interactionType, decision)
+    void handleSubmitClarification(activeWorkflow, { [answerKey]: answer })
   }
 
   /** 用户关闭技能后立即清理当前会话草稿中的同名标签。 */
@@ -668,10 +728,7 @@ export default function AiChatPanel({
         />
 
         {activeView === 'skills' ? (
-          <SkillsPage
-            onSkillDisabled={handleSkillDisabled}
-            theme={theme}
-          />
+          <SkillsPage onSkillDisabled={handleSkillDisabled} theme={theme} />
         ) : activeView === 'files' ? (
           <AgentFilesPage />
         ) : activeView === 'settings' ? (
@@ -742,21 +799,40 @@ export default function AiChatPanel({
               revertingCodeChangeIds={revertingCodeChangeIds}
             />
 
-            <ChatComposer
-              activeWorkflow={activeWorkflow}
-              copy={copy}
-              draft={draft}
-              error={error}
-              loading={loading}
-              onDraftChange={(value) => setDraftByKey(draftKey, value)}
-              onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
-              onSend={handleSend}
-              onStopGenerating={handleStopGenerating}
-              stopping={stopping}
-              selectedSkills={selectedSkills}
-              workspaceBusy={workspaceBusy}
-              workspaceRoot={workspaceRoot}
-            />
+            {displayedPlanExecutionMode !== 'idle' ? (
+              <PlanExecutionDock
+                dependencyLocked={pageExecutionContext.dependencyLocked}
+                error={scopedExecution?.error?.message || error}
+                execution={scopedExecution}
+                mode={displayedPlanExecutionMode}
+                onAccept={() => void handleAcceptPreview()}
+                onAdjust={(feedback) => void handleAdjustPlan(feedback)}
+                onConfirmInteraction={handleConfirmPlanInteraction}
+                onEnd={() => void handleEndPlan(scopedExecution?.runId)}
+                onOpenPreview={() => void handleOpenFullscreenPreview()}
+                onRetry={() => void handleRetryPlan()}
+                onStop={
+                  loading ? handleStopGenerating : () => void handleStopPlan(scopedExecution?.runId)
+                }
+                onViewPlan={handleViewPlan}
+              />
+            ) : (
+              <ChatComposer
+                activeWorkflow={activeWorkflow}
+                copy={copy}
+                draft={draft}
+                error={error}
+                loading={loading}
+                onDraftChange={(value) => setDraftByKey(draftKey, value)}
+                onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
+                onSend={handleSend}
+                onStopGenerating={handleStopGenerating}
+                stopping={stopping}
+                selectedSkills={selectedSkills}
+                workspaceBusy={workspaceBusy}
+                workspaceRoot={workspaceRoot}
+              />
+            )}
 
             {/*
               暂停页面详细设计锁定层：定位接口设计进度消失问题期间，
@@ -803,4 +879,17 @@ export default function AiChatPanel({
       )}
     </section>
   )
+}
+
+/** 把授权或修复范围选择转换为 Workflow 可恢复的结构化答案文本。 */
+function planInteractionAnswer(
+  interactionType: string,
+  decision: 'reject' | 'once' | 'always'
+): string {
+  if (interactionType === 'repair_scope_confirmation') {
+    return decision === 'reject' ? '拒绝修复范围' : '批准修复范围'
+  }
+  if (decision === 'always') return '始终允许'
+  if (decision === 'once') return '仅本次允许'
+  return '拒绝执行'
 }

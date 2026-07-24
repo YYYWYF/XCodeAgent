@@ -15,7 +15,6 @@ from app.services.application_lifecycle import (
     application_lifecycle_payload,
     ensure_application_lifecycle,
     load_application_lifecycle,
-    repair_misclassified_requirement_clarification,
 )
 
 
@@ -66,7 +65,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         },
         "lifecycle": {
             "stateFile": ".xcodeagent/application-lifecycle.json",
-            "stateField": "lifecycle",
+            "stateField": "initialization",
             "actionField": "forwardedProps.applicationLifecycle",
             "actions": ["create", "get", "complete_template_generation"],
             "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
@@ -172,8 +171,7 @@ def _build_application_lifecycle_ag_ui_stream(
                 request.workspace_root,
                 application_id=application.id,
                 application_name=application.app_name,
-                project_id=application.id,
-                active_thread_id=str(payload.get("threadId") or "") or None,
+                initialization_thread_id=str(payload.get("threadId") or "") or None,
                 active_run_id=str(payload.get("runId") or "") or None,
             )
             message = "应用生命周期已创建。"
@@ -181,10 +179,6 @@ def _build_application_lifecycle_ag_ui_stream(
             state = load_application_lifecycle(request.workspace_root)
             if state is None:
                 raise ValueError("application-lifecycle.json 不存在。")
-            state = repair_misclassified_requirement_clarification(
-                request.workspace_root,
-                state,
-            )
             message = "已读取应用生命周期。"
         else:
             if request.succeeded is None:
@@ -193,7 +187,6 @@ def _build_application_lifecycle_ag_ui_stream(
                 request.workspace_root,
                 succeeded=request.succeeded,
                 error_message=request.error_message,
-                active_thread_id=str(payload.get("threadId") or "") or None,
                 active_run_id=str(payload.get("runId") or "") or None,
             )
             message = (

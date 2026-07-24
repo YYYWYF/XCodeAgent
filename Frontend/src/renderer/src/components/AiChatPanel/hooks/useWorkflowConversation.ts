@@ -5,6 +5,7 @@ import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAge
 import { isAuthenticationFailure } from '../../../service/authentication'
 import type {
   ApplicationConfig,
+  ApplicationLifecycle,
   ChatMessageSkill,
   EditorMode,
   WorkflowDebugOptions,
@@ -25,6 +26,7 @@ import { stoppedAnswer, workflowCodeChanges, workflowPreviewTarget } from '../ut
 import type { WorkflowPreviewTarget } from '../utils'
 import type { PersistSessionInput } from './useChatSessions'
 import type { SessionIdentity, SessionRunStatus } from './sessionRuntime'
+import { planExecutionForPage, withWorkflowExecutionStatus } from '../planExecutionMode'
 
 type SessionRunEntry = {
   identity: SessionIdentity
@@ -53,6 +55,7 @@ type UseWorkflowConversationParams = {
   ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
+  onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPreviewReady: (target: WorkflowPreviewTarget) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
@@ -64,6 +67,11 @@ type UseWorkflowConversationParams = {
 type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
   error?: string
+  handleAcceptPreview: () => Promise<void>
+  handleAdjustPlan: (feedback: string) => Promise<void>
+  handleEndPlan: (runId?: string) => Promise<void>
+  handleRetryPlan: () => Promise<void>
+  handleStopPlan: (runId?: string) => Promise<void>
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleStartDetailConfirmation: (
     selectedPageId: string,
@@ -91,12 +99,8 @@ type UseWorkflowConversationResult = {
 function workflowSelectedPageId(workflow: WorkflowRunPayload): string | undefined {
   const stateValue = workflow.state?.selectedPageId
   const resultValue = workflow.result?.selectedPageId
-  const statePageId = typeof stateValue === 'string'
-    ? stateValue.trim()
-    : ''
-  const resultPageId = typeof resultValue === 'string'
-    ? resultValue.trim()
-    : ''
+  const statePageId = typeof stateValue === 'string' ? stateValue.trim() : ''
+  const resultPageId = typeof resultValue === 'string' ? resultValue.trim() : ''
   return statePageId || resultPageId || undefined
 }
 
@@ -118,6 +122,7 @@ export function useWorkflowConversation({
   ensurePageSession,
   getSessionMessages,
   persistSession,
+  onApplicationLifecycleChange,
   onPreviewReady,
   publishAiMessage,
   runningSessionsRef,
@@ -132,13 +137,14 @@ export function useWorkflowConversation({
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
 
   // 首次从页面设计入口创建会话时，React 还未提交 activeSession；先按工作区接住刚启动的运行态，避免进度页闪退。
-  const activeRun = activeSession
-    ? runStates[activeSession.key]
-    : Object.values(runStates).find(
-        (entry) =>
-          entry.identity.workspaceRoot === application.workspaceRoot &&
-          entry.identity.editorMode === editorMode
-      )
+  const activeRun =
+    (activeSession ? runStates[activeSession.key] : undefined) ||
+    Object.values(runStates).find(
+      (entry) =>
+        entry.identity.workspaceRoot === application.workspaceRoot &&
+        entry.identity.editorMode === editorMode &&
+        (!selectedPageId || entry.identity.pageId === selectedPageId)
+    )
   const activeRuntimeKey = activeSession?.key || activeRun?.identity.key
   const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
   const stopping = activeRun?.status === 'stopping'
@@ -146,13 +152,10 @@ export function useWorkflowConversation({
   const activeWorkflow = activeRuntimeKey
     ? activeRun
       ? liveWorkflows[activeRuntimeKey]
-      : liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey))
+      : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
-  const workspaceBusy = Object.values(runStates).some(
-    (entry) =>
-      entry.identity.workspaceRoot === application.workspaceRoot &&
-      entry.identity.key !== activeSession?.key
-  )
+  // 当前阶段允许同工作区与同页面的独立会话并行，busy 只保留为现有组件接口兼容值。
+  const workspaceBusy = false
   const sessionRunStates = Object.values(runStates).reduce<Record<string, SessionRunStatus>>(
     (states, entry) => {
       if (
@@ -204,6 +207,9 @@ export function useWorkflowConversation({
       resumeState?: WorkflowRunPayload
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
+      planControlAction?: 'stop' | 'end'
+      planControlRunId?: string
+      resumeExecutionRunId?: string
       selectedPageId?: string
       selectedApiContractId?: string
       selectedEndpointId?: string
@@ -215,16 +221,11 @@ export function useWorkflowConversation({
     const trimmedMessage = message.trim()
     if (!trimmedMessage) return false
 
-    const identity = options?.sessionIdentity || await ensureActiveSession()
-    const competingSession = findRunningSession(
-      runningSessionsRef.current,
-      identity.workspaceRoot,
-      identity.key
-    )
-    if (competingSession || runningSessionsRef.current.has(identity.key)) {
+    const identity = options?.sessionIdentity || (await ensureActiveSession())
+    if (runningSessionsRef.current.has(identity.key)) {
       setErrors((current) => ({
         ...current,
-        [identity.key]: competingSession ? '工作区中另一个会话正在执行。' : '当前会话正在执行。'
+        [identity.key]: '当前会话正在执行。'
       }))
       return false
     }
@@ -256,7 +257,9 @@ export function useWorkflowConversation({
       [identity.key]: { identity, status: 'running' }
     }))
     setErrors((current) => ({ ...current, [identity.key]: undefined }))
-    setLiveWorkflows((current) => omitKey(current, identity.key))
+    if (!options?.planControlAction) {
+      setLiveWorkflows((current) => omitKey(current, identity.key))
+    }
     stopRequestedRef.current[identity.key] = false
     setSessionMessages(identity.key, nextMessages)
     if (options?.clearDraft) {
@@ -333,6 +336,7 @@ export function useWorkflowConversation({
         application,
         clarificationAnswers: options?.clarificationAnswers,
         originalRequest: options?.originalRequest,
+        onApplicationLifecycle: onApplicationLifecycleChange,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
         selectedPageId:
           options && 'selectedPageId' in options
@@ -342,6 +346,9 @@ export function useWorkflowConversation({
         selectedEndpointId: options?.selectedEndpointId,
         detailTargetType: options?.detailTargetType,
         workflowDebug: options?.workflowDebug,
+        planControlAction: options?.planControlAction,
+        planControlRunId: options?.planControlRunId,
+        resumeExecutionRunId: options?.resumeExecutionRunId,
         resumeState: options?.resumeState,
         onContent: (content) => {
           streamedContent = content
@@ -366,13 +373,15 @@ export function useWorkflowConversation({
       })
       const stopped = Boolean(stopRequestedRef.current[identity.key])
       const answer = stopped ? stoppedAnswer(streamedContent || rawAnswer) : rawAnswer.trim()
+      const finalWorkflow = stopped
+        ? withWorkflowExecutionStatus(workflow ?? streamedWorkflow, 'stopped')
+        : workflow ?? streamedWorkflow
       const completedMessages = updateAssistantMessage(
         answer || 'Workflow 已返回，但内容为空。',
-        workflow ?? streamedWorkflow,
+        finalWorkflow,
         rawToolCalls.length > 0 ? rawToolCalls : streamedToolCalls,
         streamedProcessSteps
       )
-      const finalWorkflow = workflow ?? streamedWorkflow
       if (finalWorkflow) {
         setLiveWorkflows((current) => ({
           ...current,
@@ -398,10 +407,7 @@ export function useWorkflowConversation({
         setSessionMessages(identity.key, previousMessages)
         if (options?.clearDraft) setDraftByKey(identity.key, trimmedMessage)
         if (options?.clearDraft) {
-          setSelectedSkillsByKey(
-            identity.key,
-            rollbackSkillSelection(options.selectedSkills)
-          )
+          setSelectedSkillsByKey(identity.key, rollbackSkillSelection(options.selectedSkills))
         }
         await persistSession({
           editorMode: identity.editorMode,
@@ -417,12 +423,19 @@ export function useWorkflowConversation({
       }
       if (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError)) {
         const answer = stoppedAnswer(streamedContent)
+        const stoppedWorkflow = withWorkflowExecutionStatus(streamedWorkflow, 'stopped')
         const completedMessages = updateAssistantMessage(
           answer,
-          streamedWorkflow,
+          stoppedWorkflow,
           streamedToolCalls,
           streamedProcessSteps
         )
+        if (stoppedWorkflow) {
+          setLiveWorkflows((current) => ({
+            ...current,
+            [identity.key]: stoppedWorkflow
+          }))
+        }
         await persistSession({
           editorMode: identity.editorMode,
           messages: completedMessages,
@@ -512,21 +525,125 @@ export function useWorkflowConversation({
   }
 
   const handleStopGenerating = (): void => {
-    if (!activeSession || !loading || stopping) return
-    const agUiSession = agUiSessionsRef.current[activeSession.key]
+    const runningIdentity = activeRun?.identity
+    if (!runningIdentity || !loading || stopping) return
+    const agUiSession = agUiSessionsRef.current[runningIdentity.key]
     if (!agUiSession) return
 
-    stopRequestedRef.current[activeSession.key] = true
+    stopRequestedRef.current[runningIdentity.key] = true
     setRunStates((current) => ({
       ...current,
-      [activeSession.key]: { identity: activeSession, status: 'stopping' }
+      [runningIdentity.key]: { identity: runningIdentity, status: 'stopping' }
     }))
+    setLiveWorkflows((current) => {
+      const workflow = current[runningIdentity.key]
+      const stoppingWorkflow = withWorkflowExecutionStatus(workflow, 'stopping')
+      return stoppingWorkflow ? { ...current, [runningIdentity.key]: stoppingWorkflow } : current
+    })
     agUiSession.stop()
+  }
+
+  /** 通过结构化验收动作继续 acceptance 节点，禁止普通文本冒充验收通过。 */
+  const handleAcceptPreview = async (): Promise<void> => {
+    if (!activeWorkflow || loading || workspaceBusy) return
+    await handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
+  }
+
+  /** 从当前可恢复节点重新执行失败或已停止的计划切片。 */
+  const handleRetryPlan = async (): Promise<void> => {
+    if (!activeWorkflow || loading || workspaceBusy) return
+    const execution = planExecutionForPage(
+      activeWorkflow.summary.lifecycle,
+      activeSession?.pageId || selectedPageId,
+      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
+    )
+    const resumeFrom = workflowRetryNode(activeWorkflow, execution?.phase)
+    await sendWorkflowMessage('重试当前计划任务。', {
+      resumeState: activeWorkflow,
+      resumeExecutionRunId: execution?.runId,
+      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
+      titleFrom: '重试计划任务',
+      workflowDebug: { enabled: true, resumeFrom }
+    })
+  }
+
+  /** 使用受控反馈重新生成执行任务，输入仅在用户主动调整计划时开放。 */
+  const handleAdjustPlan = async (feedback: string): Promise<void> => {
+    const normalizedFeedback = feedback.trim()
+    if (!activeWorkflow || !normalizedFeedback || loading || workspaceBusy) return
+    const execution = planExecutionForPage(
+      activeWorkflow.summary.lifecycle,
+      activeSession?.pageId || selectedPageId,
+      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
+    )
+    await sendWorkflowMessage(`调整执行计划：${normalizedFeedback}`, {
+      resumeState: activeWorkflow,
+      resumeExecutionRunId: execution?.runId,
+      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
+      titleFrom: '调整执行计划',
+      workflowDebug: { enabled: true, resumeFrom: 'prepare_build_tasks' }
+    })
+  }
+
+  /** 通过同一 AG-UI 端点结束计划并释放生命周期中的工作区锁。 */
+  const handleEndPlan = async (runId?: string): Promise<void> => {
+    if (loading || workspaceBusy) return
+    const execution = planExecutionForPage(
+      activeWorkflow?.summary.lifecycle,
+      activeSession?.pageId || selectedPageId,
+      { runId: activeWorkflow?.runId, threadId: activeWorkflow?.threadId }
+    )
+    const targetRunId = runId || execution?.runId
+    if (!targetRunId) return
+    await sendWorkflowMessage('结束当前计划。', {
+      planControlAction: 'end',
+      planControlRunId: targetRunId,
+      selectedPageId: activeSession?.pageId || selectedPageId,
+      titleFrom: '结束计划'
+    })
+  }
+
+  /** 在当前 Run 已暂停等待时暂停计划，但保留 checkpoint 和恢复入口。 */
+  const handleStopPlan = async (runId?: string): Promise<void> => {
+    if (loading || workspaceBusy) return
+    const execution = planExecutionForPage(
+      activeWorkflow?.summary.lifecycle,
+      activeSession?.pageId || selectedPageId,
+      { runId: activeWorkflow?.runId, threadId: activeWorkflow?.threadId }
+    )
+    const targetRunId = runId || execution?.runId
+    if (!targetRunId) return
+    const resumeWorkflow = activeWorkflow
+    if (activeRuntimeKey && resumeWorkflow) {
+      setLiveWorkflows((current) => ({
+        ...current,
+        [activeRuntimeKey]:
+          withWorkflowExecutionStatus(resumeWorkflow, 'stopping', targetRunId) || resumeWorkflow
+      }))
+    }
+    const stopped = await sendWorkflowMessage('暂停当前计划执行。', {
+      planControlAction: 'stop',
+      planControlRunId: targetRunId,
+      selectedPageId: activeSession?.pageId || selectedPageId,
+      titleFrom: '暂停计划'
+    })
+    if (stopped && activeRuntimeKey && resumeWorkflow) {
+      setLiveWorkflows((current) => ({
+        ...current,
+        [activeRuntimeKey]:
+          withWorkflowExecutionStatus(resumeWorkflow, 'stopped', targetRunId) || resumeWorkflow
+      }))
+    }
   }
 
   return {
     activeWorkflow,
     error,
+    handleAcceptPreview,
+    handleAdjustPlan,
+    handleEndPlan,
+    handleRetryPlan,
+    handleStopPlan,
     handleSend,
     handleStartEndpointDetailConfirmation,
     handleStartDetailConfirmation,
@@ -539,22 +656,32 @@ export function useWorkflowConversation({
   }
 }
 
+/** 从最近失败步骤选择安全的重试入口，避免从 handle_failure 终点恢复。 */
+function workflowRetryNode(workflow: WorkflowRunPayload, executionPhase?: string): string {
+  const supported = new Set([
+    'detail_confirmation',
+    'inspect_workspace',
+    'prepare_build_tasks',
+    'build',
+    'integration_test',
+    'launch_project',
+    'acceptance'
+  ])
+  for (let index = workflow.events.length - 1; index >= 0; index -= 1) {
+    const nodeName = workflow.events[index].nodeName || workflow.events[index].node?.id
+    if (nodeName && supported.has(nodeName)) return nodeName
+  }
+  const phase = String(workflow.summary.phase || '')
+  if (supported.has(phase)) return phase
+  return executionPhase && supported.has(executionPhase) ? executionPhase : 'build'
+}
+
 function latestWorkflow(messages: AgentChatMessage[]): WorkflowRunPayload | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const workflow = messages[index].workflow
     if (workflow) return workflow
   }
   return undefined
-}
-
-function findRunningSession(
-  sessions: Map<string, SessionIdentity>,
-  workspaceRoot: string,
-  excludedKey: string
-): SessionIdentity | undefined {
-  return Array.from(sessions.values()).find(
-    (identity) => identity.workspaceRoot === workspaceRoot && identity.key !== excludedKey
-  )
 }
 
 function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {

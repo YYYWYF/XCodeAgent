@@ -58,6 +58,85 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         self.assertEqual(result["clarification"]["status"], "clear")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
 
+    def test_generated_project_plan_blocks_unknown_response_schema(self) -> None:
+        """首次计划生成后必须拦截 Endpoint 引用的未知响应 Schema。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        invalid_plan = create_project_plan(spec)
+        endpoint = invalid_plan["api_contracts"][0]["endpoints"][0]
+        endpoint["response_schema_ref"] = "MissingListResponse"
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.nodes.planning.plan_project_with_chat_model",
+                    return_value=invalid_plan,
+                ),
+                patch(
+                    "app.graph.nodes.planning.revise_project_plan_with_chat_model",
+                    return_value=invalid_plan,
+                ),
+            ):
+                result = project_planning(
+                    {
+                        "request": "创建一个库存管理系统",
+                        "workspace": workspace,
+                        "requirement_spec": spec,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["clarification"]["mode"],
+            "project_plan_dependency_validation_error",
+        )
+        self.assertIn(
+            f"Endpoint {endpoint['id']} references unknown schema MissingListResponse.",
+            result["clarification"]["errors"],
+        )
+        self.assertEqual(
+            result["project_plan"]["confirmation_status"],
+            "pending_user_confirmation",
+        )
+
+    def test_project_plan_confirmation_revalidates_unknown_response_schema(self) -> None:
+        """用户确认前必须再次校验 API Schema，不能把无效计划标记为已确认。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        invalid_plan = create_project_plan(spec)
+        endpoint = invalid_plan["api_contracts"][0]["endpoints"][0]
+        endpoint["response_schema_ref"] = "MissingListResponse"
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.planning.revise_project_plan_with_chat_model",
+                return_value=invalid_plan,
+            ):
+                result = project_planning(
+                    {
+                        "request": "正确，继续",
+                        "workspace": workspace,
+                        "requirement_spec": spec,
+                        "project_plan": invalid_plan,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["clarification"]["mode"],
+            "project_plan_dependency_validation_error",
+        )
+        self.assertIn(
+            f"Endpoint {endpoint['id']} references unknown schema MissingListResponse.",
+            result["clarification"]["errors"],
+        )
+        self.assertEqual(
+            result["project_plan"]["confirmation_status"],
+            "pending_user_confirmation",
+        )
+
     def test_project_planning_revision_uses_existing_plan_once(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         existing_plan = create_project_plan(spec)
@@ -173,7 +252,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                 "name": "人员数据源",
                 "type": "mock",
                 "entities": ["Personnel"],
-                "schema_refs": ["Personnel"],
+                "schema_refs": ["personnel_source_api#/schemas/Personnel"],
             }
         ]
         existing_plan["api_contracts"] = [
@@ -182,7 +261,10 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                 "data_source_id": "personnel_source",
                 "resource": "Personnel",
                 "base_path": "/api/personnel",
-                "schemas": {"Personnel": {"type": "object"}},
+                "schemas": {
+                    "Personnel": {"type": "object"},
+                    "PersonnelListOutput": {"type": "object"},
+                },
                 "endpoints": [
                     {
                         "id": "personnel_source_api.list",

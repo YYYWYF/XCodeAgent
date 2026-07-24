@@ -1,6 +1,9 @@
 import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
-import { loadStoredApplications } from './applicationStorage'
-import { createPagePlanningThreadId, getApplicationLifecycle } from './applicationPagePlanning'
+import {
+  canOpenApplicationWorkbench,
+  loadStoredApplications
+} from './applicationStorage'
+import { getApplicationLifecycle } from './applicationPagePlanning'
 
 export type ActivePlanningStatus = 'error' | 'ready' | 'running'
 
@@ -14,17 +17,12 @@ export type PersistedActivePlanning = {
 
 // 直接根据权威 lifecycle 状态计算首页展示状态。
 export function activePlanningStatus(lifecycle: ApplicationLifecycle): ActivePlanningStatus {
-  if (lifecycle.lifecycle.status === 'failed') return 'error'
+  if (lifecycle.initialization.status === 'failed') return 'error'
   if (
-    lifecycle.lifecycle.status === 'awaiting_user' ||
-    lifecycle.lifecycle.status === 'cancelled'
+    lifecycle.initialization.status === 'awaiting_user' ||
+    lifecycle.initialization.status === 'cancelled'
   ) return 'ready'
   return 'running'
-}
-
-// 判断生命周期是否已经生成应用模板文件并允许进入工作台。
-export function isApplicationPlanningConfirmed(lifecycle: ApplicationLifecycle): boolean {
-  return lifecycle.lifecycle.stage === 'ready_for_workbench'
 }
 
 // 从应用目录逐一读取生命周期，并返回最近的未完成创建流程。
@@ -37,15 +35,20 @@ export async function loadActiveApplicationPlanning(): Promise<
     .sort((left, right) => right.createdAt - left.createdAt)
 
   for (const application of applications) {
+    if (canOpenApplicationWorkbench(application)) continue
     try {
       const lifecycle = await getApplicationLifecycle(application)
-      if (isApplicationPlanningConfirmed(lifecycle)) continue
+      if (canOpenApplicationWorkbench(application, lifecycle)) continue
       if (!recoveredActive) {
+        const threadId = lifecycle.initialization.threadId
+        if (!threadId) {
+          throw new Error(`应用 ${application.id} 缺少初始化线程标识。`)
+        }
         recoveredActive = {
           application,
           lifecycle,
           status: activePlanningStatus(lifecycle),
-          threadId: lifecycle.activeThreadId || createPagePlanningThreadId()
+          threadId
         }
       }
     } catch (error) {
