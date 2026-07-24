@@ -7,11 +7,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.services.backend_process_registry import (
+    backend_launch_lock,
+    register_backend_process,
+    stop_previous_backend_process,
+    terminate_backend_process,
+)
 from app.utils.subprocess_output import subprocess_output_text
+
+
 BACKEND_BUILD_TIMEOUT_SECONDS = 600
 BACKEND_READY_TIMEOUT_SECONDS = 60
 BACKEND_READY_INTERVAL_SECONDS = 1
-BACKEND_STOP_TIMEOUT_SECONDS = 5
 BACKEND_READY_MARKERS = ("Spring Boot Version", "ZA21 Version")
 
 
@@ -53,6 +60,44 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
         )
 
     runtime_root.mkdir(parents=True, exist_ok=True)
+    with backend_launch_lock(root):
+        return _launch_backend_project_locked(
+            root=root,
+            backend_root=backend_root,
+            pom_path=pom_path,
+            runtime_root=runtime_root,
+            maven_command=maven_command,
+            java_command=java_command,
+        )
+
+
+def _launch_backend_project_locked(
+    *,
+    root: Path,
+    backend_root: Path,
+    pom_path: Path,
+    runtime_root: Path,
+    maven_command: str,
+    java_command: str,
+) -> dict[str, Any]:
+    """在工作区锁内完成旧进程清理、Maven 构建和新 Java 进程启动。"""
+
+    prebuild_cleanup = stop_previous_backend_process(
+        workspace=root,
+        backend_root=backend_root,
+        runtime_root=runtime_root,
+    )
+    if not prebuild_cleanup["success"]:
+        return _failed_backend_launch(
+            "无法安全停止上一次 Java 后端进程，已中止 Maven 构建。",
+            root=root,
+            backend_root=backend_root,
+            pom_path=pom_path,
+            runtime_root=runtime_root,
+            failed_stage="backend_cleanup",
+            prebuild_cleanup=prebuild_cleanup,
+        )
+
     build_result = _run_backend_build(
         maven_command=maven_command,
         cwd=backend_root,
@@ -72,6 +117,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
             runtime_root=runtime_root,
             failed_stage="backend_build",
             build=build_result,
+            prebuild_cleanup=prebuild_cleanup,
         )
 
     target_root = backend_root / "target"
@@ -92,6 +138,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
             build=build_result,
             target_root=target_root,
             jar_candidates=candidates,
+            prebuild_cleanup=prebuild_cleanup,
         )
 
     server_result, process = _start_backend_server(
@@ -99,6 +146,8 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
         jar_path=jar_path,
         runtime_root=runtime_root,
     )
+    if process is not None:
+        register_backend_process(root, process)
     ready = process is not None and _wait_for_backend_ready(
         process,
         stdout_log=Path(str(server_result.get("stdout_log") or "")),
@@ -123,8 +172,9 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
             message = "Java 后端就绪检查超时。"
         if process is not None:
             pid_file_value = server_result.get("pid_file")
-            server["cleanup"] = _terminate_backend_process(
-                process,
+            server["cleanup"] = terminate_backend_process(
+                workspace=root,
+                process=process,
                 pid_file=Path(str(pid_file_value)) if pid_file_value else None,
             )
         return _failed_backend_launch(
@@ -139,6 +189,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
             jar_path=jar_path,
             jar_candidates=candidates,
             server=server,
+            prebuild_cleanup=prebuild_cleanup,
         )
 
     return {
@@ -150,6 +201,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
         ),
         "status": "running",
         "message": "Java 后端项目已启动并就绪。",
+        "prebuild_cleanup": prebuild_cleanup,
         "build": build_result,
         "target_path": str(target_root),
         "jar_path": str(jar_path),
@@ -172,10 +224,26 @@ def stop_backend_project(
         server = {}
         launch_result["server"] = server
     pid_file_value = server.get("pid_file")
-    cleanup = _terminate_backend_process(
-        process,
-        pid_file=Path(str(pid_file_value)) if pid_file_value else None,
+    workspace_value = launch_result.get("workspace")
+    workspace = (
+        Path(str(workspace_value)).expanduser().resolve()
+        if workspace_value
+        else None
     )
+    pid_file = Path(str(pid_file_value)) if pid_file_value else None
+    if workspace is None:
+        cleanup = terminate_backend_process(
+            workspace=None,
+            process=process,
+            pid_file=pid_file,
+        )
+    else:
+        with backend_launch_lock(workspace):
+            cleanup = terminate_backend_process(
+                workspace=workspace,
+                process=process,
+                pid_file=pid_file,
+            )
     server["cleanup"] = cleanup
     launch_result["status"] = "stopped"
     launch_result["message"] = "前端启动失败，已停止本次 Java 后端进程。"
@@ -272,7 +340,7 @@ def _start_backend_server(
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """在 target 目录后台启动 Java JAR，并记录本次日志偏移量。"""
 
-    argv = [java_command, "-jar", jar_path.name]
+    argv = [java_command, "-jar", str(jar_path.resolve())]
     stdout_path = runtime_root / "backend.stdout.log"
     stderr_path = runtime_root / "backend.stderr.log"
     stdout = stdout_path.open("ab")
@@ -375,43 +443,6 @@ def _log_contains_backend_ready_marker(path: Path, offset: int) -> bool:
     return any(marker in content for marker in BACKEND_READY_MARKERS)
 
 
-def _terminate_backend_process(
-    process: subprocess.Popen[bytes] | None,
-    *,
-    pid_file: Path | None,
-) -> dict[str, Any]:
-    """温和终止本次 Java 进程，超时后强制结束并清理 PID 文件。"""
-
-    cleanup: dict[str, Any] = {
-        "attempted": process is not None,
-        "pid": getattr(process, "pid", None),
-        "terminated": False,
-        "forced": False,
-        "error": None,
-    }
-    if process is None:
-        return cleanup
-    try:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=BACKEND_STOP_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
-                cleanup["forced"] = True
-                process.kill()
-                process.wait(timeout=BACKEND_STOP_TIMEOUT_SECONDS)
-        cleanup["terminated"] = process.poll() is not None
-    except OSError as exc:
-        cleanup["error"] = str(exc)
-    if pid_file is not None:
-        try:
-            pid_file.unlink(missing_ok=True)
-        except OSError as exc:
-            cleanup["pid_file_error"] = str(exc)
-    cleanup["finished_at"] = datetime.now(UTC).isoformat()
-    return cleanup
-
-
 def _base_backend_launch_payload(
     *,
     root: Path,
@@ -444,6 +475,7 @@ def _failed_backend_launch(
     jar_path: Path | None = None,
     jar_candidates: list[Path] | None = None,
     server: dict[str, Any] | None = None,
+    prebuild_cleanup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构造包含失败阶段和可审计证据的 Java 后端失败结果。"""
 
@@ -457,6 +489,7 @@ def _failed_backend_launch(
         "status": "failed",
         "message": message,
         "failed_stage": failed_stage,
+        "prebuild_cleanup": prebuild_cleanup,
         "build": build,
         "target_path": str(target_root) if target_root else None,
         "jar_path": str(jar_path) if jar_path else None,

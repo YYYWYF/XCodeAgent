@@ -2,17 +2,26 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 from urllib.error import HTTPError
 
 from app.graph.nodes.lifecycle import acceptance, launch_project
+from app.services import backend_process_registry
 from app.services.backend_project_launcher import (
     _backend_logs_are_ready,
     _find_backend_snapshot_jar,
     _wait_for_backend_ready,
+)
+from app.services.backend_process_registry import (
+    backend_launch_lock,
+    register_backend_process,
+    stop_previous_backend_process,
 )
 from app.services.project_launcher import (
     _dev_server_log_is_ready,
@@ -25,6 +34,12 @@ from app.services.project_launcher import (
 
 
 class ProjectLauncherTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """清空跨用例共享的后端进程登记，避免临时工作区之间相互影响。"""
+
+        backend_process_registry._BACKEND_PROCESSES.clear()
+        backend_process_registry._BACKEND_LAUNCH_LOCKS.clear()
+
     def test_preview_healthcheck_accepts_http_404_as_listening(self) -> None:
         """验证 urllib 将 404 表示为 HTTPError 时仍判定服务已经监听。"""
 
@@ -347,9 +362,291 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(Path(run.call_args.kwargs["cwd"]), backend.resolve())
         self.assertEqual(
             popen.call_args.args[0],
-            [java_command, "-jar", jar_path.name],
+            [java_command, "-jar", str(jar_path.resolve())],
         )
         self.assertEqual(Path(popen.call_args.kwargs["cwd"]), target.resolve())
+        self.assertTrue(result["prebuild_cleanup"]["success"])
+        self.assertEqual(result["prebuild_cleanup"]["source"], "none")
+
+    def test_second_backend_launch_stops_registered_process_before_maven_build(self) -> None:
+        """验证同一工作区再次启动时先停止旧 Java 进程，再执行 Maven 构建。"""
+
+        events: list[str] = []
+        with tempfile.TemporaryDirectory() as workspace:
+            backend = Path(workspace) / "backend"
+            target = backend / "target"
+            target.mkdir(parents=True)
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            (target / "app-1.0-SNAPSHOT.jar").write_bytes(b"jar")
+            first_process = MagicMock(pid=111)
+            first_process.poll.side_effect = [None, None, 0]
+            first_process.terminate.side_effect = lambda: events.append("terminate")
+            second_process = MagicMock(pid=222)
+            second_process.poll.return_value = None
+
+            def run_build(*args: object, **kwargs: object) -> SimpleNamespace:
+                """记录 Maven 调用顺序并返回成功结果。"""
+
+                events.append("build")
+                return SimpleNamespace(returncode=0, stdout="built", stderr="")
+
+            with (
+                patch(
+                    "app.services.backend_project_launcher.shutil.which",
+                    return_value="/usr/bin/tool",
+                ),
+                patch(
+                    "app.services.backend_project_launcher.subprocess.run",
+                    side_effect=run_build,
+                ),
+                patch(
+                    "app.services.backend_project_launcher.subprocess.Popen",
+                    side_effect=[first_process, second_process],
+                ),
+                patch(
+                    "app.services.backend_project_launcher._wait_for_backend_ready",
+                    return_value=True,
+                ),
+            ):
+                first = launch_backend_project(workspace)
+                second = launch_backend_project(workspace)
+
+        self.assertEqual(first["status"], "running")
+        self.assertEqual(second["status"], "running")
+        self.assertEqual(events, ["build", "terminate", "build"])
+        self.assertEqual(second["prebuild_cleanup"]["source"], "memory")
+        self.assertTrue(second["prebuild_cleanup"]["terminated"])
+
+    def test_backend_cleanup_failure_aborts_maven_build(self) -> None:
+        """验证旧进程无法安全停止时返回清理失败且不调用 Maven。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            backend = Path(workspace) / "backend"
+            backend.mkdir()
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            cleanup = {
+                "success": False,
+                "source": "pid_file",
+                "pid": 123,
+                "error": "identity unknown",
+            }
+            with (
+                patch(
+                    "app.services.backend_project_launcher.shutil.which",
+                    return_value="/usr/bin/tool",
+                ),
+                patch(
+                    "app.services.backend_project_launcher.stop_previous_backend_process",
+                    return_value=cleanup,
+                ),
+                patch(
+                    "app.services.backend_project_launcher.subprocess.run"
+                ) as run,
+            ):
+                result = launch_backend_project(workspace)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed_stage"], "backend_cleanup")
+        self.assertEqual(result["prebuild_cleanup"], cleanup)
+        run.assert_not_called()
+
+    def test_pid_file_recovers_and_stops_matching_backend_process(self) -> None:
+        """验证服务重启后可从 PID 文件恢复并停止身份匹配的 Java 后端。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            backend = root / "backend"
+            target = backend / "target"
+            runtime = root / ".xcodeagent" / "runtime" / "launch"
+            target.mkdir(parents=True)
+            runtime.mkdir(parents=True)
+            jar_path = target / "app-1.0-SNAPSHOT.jar"
+            jar_path.write_bytes(b"jar")
+            pid_file = runtime / "backend.pid"
+            pid_file.write_text("24680", encoding="utf-8")
+            with (
+                patch(
+                    "app.services.backend_process_registry._pid_is_running",
+                    side_effect=[True, False],
+                ),
+                patch(
+                    "app.services.backend_process_registry._query_process_command",
+                    return_value=(f"java -jar {jar_path.resolve()}", None),
+                ),
+                patch("app.services.backend_process_registry.os.kill") as kill,
+            ):
+                cleanup = stop_previous_backend_process(
+                    workspace=root,
+                    backend_root=backend,
+                    runtime_root=runtime,
+                )
+            pid_file_removed = not pid_file.exists()
+
+        self.assertTrue(cleanup["success"])
+        self.assertTrue(cleanup["identity_matched"])
+        self.assertEqual(cleanup["source"], "pid_file")
+        self.assertTrue(pid_file_removed)
+        kill.assert_called_once_with(24680, backend_process_registry.signal.SIGTERM)
+
+    def test_invalid_and_stale_pid_files_are_handled_deterministically(self) -> None:
+        """验证损坏 PID 会阻止构建，而已退出 PID 会作为陈旧记录清理。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            backend = root / "backend"
+            runtime = root / ".xcodeagent" / "runtime" / "launch"
+            runtime.mkdir(parents=True)
+            pid_file = runtime / "backend.pid"
+            pid_file.write_text("not-a-pid", encoding="utf-8")
+            invalid = stop_previous_backend_process(
+                workspace=root,
+                backend_root=backend,
+                runtime_root=runtime,
+            )
+            pid_file.write_text("13579", encoding="utf-8")
+            with patch(
+                "app.services.backend_process_registry._pid_is_running",
+                return_value=False,
+            ):
+                stale = stop_previous_backend_process(
+                    workspace=root,
+                    backend_root=backend,
+                    runtime_root=runtime,
+                )
+            stale_pid_removed = not pid_file.exists()
+
+        self.assertFalse(invalid["success"])
+        self.assertIn("PID", invalid["error"])
+        self.assertTrue(stale["success"])
+        self.assertTrue(stale["stale"])
+        self.assertTrue(stale_pid_removed)
+
+    def test_pid_file_refuses_to_stop_unrelated_java_process(self) -> None:
+        """验证 PID 指向其他 Java 命令时拒绝终止并保留诊断文件。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            backend = root / "backend"
+            runtime = root / ".xcodeagent" / "runtime" / "launch"
+            runtime.mkdir(parents=True)
+            pid_file = runtime / "backend.pid"
+            pid_file.write_text("97531", encoding="utf-8")
+            with (
+                patch(
+                    "app.services.backend_process_registry._pid_is_running",
+                    return_value=True,
+                ),
+                patch(
+                    "app.services.backend_process_registry._query_process_command",
+                    return_value=("java -jar other-project.jar", None),
+                ),
+                patch("app.services.backend_process_registry.os.kill") as kill,
+            ):
+                cleanup = stop_previous_backend_process(
+                    workspace=root,
+                    backend_root=backend,
+                    runtime_root=runtime,
+                )
+            pid_file_preserved = pid_file.exists()
+
+        self.assertFalse(cleanup["success"])
+        self.assertFalse(cleanup["identity_matched"])
+        self.assertTrue(pid_file_preserved)
+        kill.assert_not_called()
+
+    def test_recovered_pid_is_forced_and_reports_final_failure(self) -> None:
+        """验证恢复 PID 温和停止超时后会强杀，且无法退出时保留明确错误。"""
+
+        successful = backend_process_registry._cleanup_result(
+            attempted=True,
+            source="pid_file",
+            pid=123,
+        )
+        with (
+            patch("app.services.backend_process_registry.os.kill"),
+            patch(
+                "app.services.backend_process_registry._wait_for_pid_exit",
+                side_effect=[False, True],
+            ),
+            patch("app.services.backend_process_registry._force_kill_pid") as force,
+        ):
+            backend_process_registry._terminate_recovered_pid(123, successful)
+
+        failed = backend_process_registry._cleanup_result(
+            attempted=True,
+            source="pid_file",
+            pid=456,
+        )
+        with (
+            patch("app.services.backend_process_registry.os.kill"),
+            patch(
+                "app.services.backend_process_registry._wait_for_pid_exit",
+                side_effect=[False, False],
+            ),
+            patch("app.services.backend_process_registry._force_kill_pid") as failed_force,
+        ):
+            backend_process_registry._terminate_recovered_pid(456, failed)
+
+        self.assertTrue(successful["success"])
+        self.assertTrue(successful["forced"])
+        force.assert_called_once_with(123)
+        self.assertFalse(failed["success"])
+        self.assertTrue(failed["forced"])
+        self.assertIn("仍无法确认", failed["error"])
+        failed_force.assert_called_once_with(456)
+
+    def test_backend_registry_is_workspace_scoped_and_launch_lock_serializes(self) -> None:
+        """验证不同工作区登记互不影响，并且同一工作区启动锁会串行执行。"""
+
+        with tempfile.TemporaryDirectory() as first_directory, tempfile.TemporaryDirectory() as second_directory:
+            first_root = Path(first_directory)
+            second_root = Path(second_directory)
+            process = MagicMock(pid=12345)
+            register_backend_process(first_root, process)
+            second_cleanup = stop_previous_backend_process(
+                workspace=second_root,
+                backend_root=second_root / "backend",
+                runtime_root=second_root / ".xcodeagent" / "runtime" / "launch",
+            )
+
+            entered: list[str] = []
+            first_acquired = threading.Event()
+            release_first = threading.Event()
+
+            def hold_lock() -> None:
+                """持有工作区启动锁，直到测试允许释放。"""
+
+                with backend_launch_lock(first_root):
+                    entered.append("first")
+                    first_acquired.set()
+                    release_first.wait(timeout=1)
+
+            def wait_for_lock() -> None:
+                """等待同一工作区启动锁并记录进入顺序。"""
+
+                first_acquired.wait(timeout=1)
+                with backend_launch_lock(first_root):
+                    entered.append("second")
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first_future = executor.submit(hold_lock)
+                second_future = executor.submit(wait_for_lock)
+                self.assertTrue(first_acquired.wait(timeout=1))
+                time.sleep(0.02)
+                self.assertEqual(entered, ["first"])
+                release_first.set()
+                first_future.result(timeout=1)
+                second_future.result(timeout=1)
+
+        self.assertTrue(second_cleanup["success"])
+        self.assertEqual(second_cleanup["source"], "none")
+        self.assertIs(
+            backend_process_registry._BACKEND_PROCESSES[
+                backend_process_registry._workspace_key(first_root)
+            ],
+            process,
+        )
+        self.assertEqual(entered, ["first", "second"])
 
     def test_launch_backend_project_requires_maven_project_and_runtime_tools(self) -> None:
         """验证 backend/pom.xml、mvn 和 java 均为启动前置条件。"""
@@ -591,6 +888,26 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(launch_result["status"], "stopped")
         self.assertFalse(pid_file.exists())
         process.terminate.assert_called_once_with()
+
+    def test_process_cleanup_preserves_newer_pid_file(self) -> None:
+        """验证旧进程回滚不会删除并发启动后写入的新进程 PID。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pid_file = root / "backend.pid"
+            pid_file.write_text("222", encoding="utf-8")
+            process = MagicMock(pid=111)
+            process.poll.return_value = 0
+            cleanup = backend_process_registry.terminate_backend_process(
+                workspace=root,
+                process=process,
+                pid_file=pid_file,
+            )
+            preserved_pid = pid_file.read_text(encoding="utf-8")
+
+        self.assertTrue(cleanup["success"])
+        self.assertTrue(cleanup["pid_file_preserved"])
+        self.assertEqual(preserved_pid, "222")
 
     def test_launch_project_returns_acceptance_request_after_successful_launch(self) -> None:
         backend_result = {
