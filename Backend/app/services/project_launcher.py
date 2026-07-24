@@ -189,7 +189,7 @@ def _select_package_manager(cwd: Path) -> str:
         return "pnpm"
     if (cwd / "yarn.lock").is_file():
         return "yarn"
-    return "npm"
+    return "pnpm"
 
 
 def _run_install(

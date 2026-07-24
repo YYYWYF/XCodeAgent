@@ -533,7 +533,7 @@ def _package_manager(cwd: Path) -> str:
         return "pnpm"
     if (cwd / "yarn.lock").is_file():
         return "yarn"
-    return "npm"
+    return "pnpm"
 
 
 def _scripts(package: PackageProject) -> dict[str, Any]:
