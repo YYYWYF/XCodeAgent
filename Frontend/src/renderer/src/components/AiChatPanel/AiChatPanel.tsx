@@ -37,7 +37,7 @@ import { useChatSessions } from './hooks/useChatSessions'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import { chatCopy } from './constants'
-import type { WorkflowPreviewTarget } from './utils'
+import { requiresInitialDetailDesignSelection, type WorkflowPreviewTarget } from './utils'
 import { deriveDisplayedPlanExecutionMode, planExecutionContextForPage } from './planExecutionMode'
 import './AiChatPanel.less'
 
@@ -369,20 +369,14 @@ export default function AiChatPanel({
     developmentPlanningReady &&
     Boolean(activeApiEndpoint || activePageOption) &&
     !detailConfirmationWaitingReview
-  const hasEndpointDesignTargets = developmentPlanningApiContracts.some(
-    (contract) => contract.endpoints.length > 0
-  )
-  const hasUndesignedPageTargets = developmentPlanningPages.some(
-    (page) => !page.designed && !page.hasDetailPlan
-  )
-  const hasDesignSelectionTargets =
-    !hasPageDesigns || hasUndesignedPageTargets || hasEndpointDesignTargets
+  const initialDetailDesignSelectionRequired =
+    requiresInitialDetailDesignSelection(hasPageDesigns)
   const hasActiveDetailWorkflow =
     detailTargetInteractionStarted &&
     Boolean(activeApiEndpoint || activePageOption || activeSession || latestWorkflowForDisplay)
   const detailTargetSelectionRequired =
     developmentPlanningReady &&
-    hasDesignSelectionTargets &&
+    initialDetailDesignSelectionRequired &&
     !hasActiveDetailWorkflow &&
     !detailProgressVisible &&
     !detailConfirmationWaitingReview

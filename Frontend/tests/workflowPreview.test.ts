@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  requiresInitialDetailDesignSelection,
   workflowFinalResultPresentation,
   workflowPreviewTarget
 } from '../src/renderer/src/components/AiChatPanel/utils'
@@ -70,6 +71,11 @@ test('不同运行返回相同 URL 时仍生成不同的一次性目标', () => 
 
   assert.notEqual(first?.key, second?.key)
   assert.equal(first?.url, second?.url)
+})
+
+test('已有任一页面设计的工作区重新进入时不再显示首次设计挡板', () => {
+  assert.equal(requiresInitialDetailDesignSelection(true), false)
+  assert.equal(requiresInitialDetailDesignSelection(false), true)
 })
 
 test('最终结果标题区分成功和失败 Workflow', () => {

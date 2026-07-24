@@ -192,3 +192,8 @@ export function workflowPreviewTarget(
     url
   }
 }
+
+/** 仅在当前工作区还没有任何已落盘页面设计时显示首次详细设计挡板。 */
+export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): boolean {
+  return !hasPageDesigns
+}
