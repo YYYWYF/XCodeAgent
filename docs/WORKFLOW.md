@@ -62,7 +62,7 @@ START
 
 - 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照、`resumeState` 和 `clarificationAnswers`；需求概览的“保存并退出编辑”复用同一端点的 `requirementSpecDraft.action = save` AG-UI 动作，只持久化草稿，不续跑 Graph。
 - RequirementSpec 与 ProjectPlan 继续使用现有 Markdown 产物和显式用户确认门禁；回答澄清问题不能替代产物确认。
-- 用户确认第二步 ProjectPlan 后，独立 Graph 的包装节点校验 `.xcodeagent/specs` 与 `.xcodeagent/plans` 中 RequirementSpec、ProjectPlan 的 Markdown/JSON 正式产物及确认状态，并把 lifecycle 推进到 `generating_application_template_files`；它不读取或改写 `.xcodeagent/application.json`。前端生成应用模板文件后，必须通过同一 `/application-page-planning/run` 的 `applicationLifecycle.action = complete_template_generation` AG-UI 动作提交结果；后端复核正式文档后才写入 `ready_for_workbench`，失败则写入可重试的 `application_template_generation_failed`。
+- 用户确认第二步 ProjectPlan 后，独立 Graph 的包装节点校验 `.xcodeagent/specs` 与 `.xcodeagent/plans` 中 RequirementSpec、ProjectPlan 的 Markdown/JSON 正式产物及确认状态，并把 lifecycle 推进到 `generating_application_template_files`；它不读取或改写 `.xcodeagent/application.json`。前端生成应用模板文件后，必须通过独立 `/application-lifecycle/run` 的 `applicationLifecycle.action = complete_template_generation` AG-UI 动作提交结果；后端复核正式文档后才写入 `ready_for_workbench`，失败则写入可重试的 `application_template_generation_failed`。`/application-page-planning/run` 不接受 lifecycle 动作。
 - 创建弹窗只展示需求确认和项目规划两个文档阶段。需求模型必须先统一审视角色、核心任务、页面边界、数据来源、权限、核心业务流程与验收标准；对无法安全推断且会实质影响产品设计的缺口，一次集中提出 1-4 个问题，对次要细节才采用显式保守假设。两份文档分别确认、目录产物校验和应用模板文件生成都成功后，前端才打开工作台。
 - 主 Workflow 直接以 `detail_confirmation` 为入口，并使用首页流程确认后写入的 ProjectPlan 与页面功能概览。
 - 创建规划不执行构建后的集成测试质量门，也不生成 `quality_gate_passed`；AG-UI 摘要只在主 Workflow 明确产生布尔质量门结果时展示“通过/未通过”，不得把缺失值误报为未通过。

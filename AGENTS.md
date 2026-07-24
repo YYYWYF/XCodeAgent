@@ -16,7 +16,7 @@ These instructions apply to the whole XCodeAgent repository. Every Codex agent s
 
 ## Project Conventions
 
-- Backend code lives under `Backend/app` and is a FastAPI application. Keep API behavior explicit and validate external input with Pydantic at the route boundary or immediately in its protocol adapter. The current public contract includes `/health`; primary AG-UI workflow endpoint `/workflow/run`; independent AG-UI action endpoints `/application-page-planning/run`, `/skills/run`, and `/agent-files/run`; and the controlled infrastructure endpoints under `/tools/*`.
+- Backend code lives under `Backend/app` and is a FastAPI application. Keep API behavior explicit and validate external input with Pydantic at the route boundary or immediately in its protocol adapter. The current public contract includes `/health`; primary AG-UI workflow endpoint `/workflow/run`; independent AG-UI action endpoints `/application-page-planning/run`, `/application-lifecycle/run`, `/skills/run`, and `/agent-files/run`; and the controlled infrastructure endpoints under `/tools/*`.
 - Keep backend interfaces robust and backwards-aware: publish supported protocol metadata through `/health`; preserve stable endpoint, payload, event-name, and state-snapshot contracts; and make every AG-UI action flow emit a complete lifecycle (run start, assistant message, custom result/error event, state snapshot, and run finish), including handled business failures.
 - Frontend code lives under `Frontend/src` and uses React 18, Vite, Electron, TypeScript, LESS, and Ant Design v4.24.16.
 - Every function or method must have a Chinese comment explaining its purpose. Complex logic must also include Chinese comments that explain the key steps, decisions, or non-obvious behavior.

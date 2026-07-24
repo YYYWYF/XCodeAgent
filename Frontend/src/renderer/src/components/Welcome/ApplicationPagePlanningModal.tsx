@@ -11,9 +11,9 @@ import type {
 import {
   buildApplicationPlanningRequest,
   createApplicationPlanningSession,
-  getApplicationLifecycle,
   saveRequirementSpecDraft
 } from '../../service/applicationPagePlanning'
+import { getApplicationLifecycle } from '../../service/applicationLifecycle'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { cx } from '../../utils'
 import { formatError } from './utils'

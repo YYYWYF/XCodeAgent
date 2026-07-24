@@ -1,10 +1,8 @@
 import { PlusOutlined } from '@ant-design/icons'
 import { Form, message, Modal } from 'antd'
 import { useState } from 'react'
-import {
-  createApplicationLifecycle,
-  createPagePlanningThreadId
-} from '../../service/applicationPagePlanning'
+import { createApplicationLifecycle } from '../../service/applicationLifecycle'
+import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
 import type { ApplicationConfig, ApplicationDraft, ApplicationLifecycle } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'

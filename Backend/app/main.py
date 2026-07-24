@@ -21,6 +21,10 @@ from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
 )
+from app.protocols.application_lifecycle import (
+    application_lifecycle_capabilities,
+    build_application_lifecycle_ag_ui_stream,
+)
 from app.protocols.application_development_planning import (
     application_development_planning_capabilities,
     build_application_development_planning_ag_ui_stream,
@@ -97,6 +101,7 @@ async def health() -> dict[str, object]:
         "tools": {
             "workflow_run": workflow_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
+            "application_lifecycle": application_lifecycle_capabilities(),
             "application_development_planning": application_development_planning_capabilities(),
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
@@ -114,6 +119,23 @@ async def run_application_page_planning(
     return StreamingResponse(
         build_application_page_planning_ag_ui_stream(
             graph=application_planning_graph_for_request,
+            payload=input_data,
+            accept=accept,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/application-lifecycle/run")
+async def run_application_lifecycle(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """运行独立应用生命周期 AG-UI 动作。"""
+
+    return StreamingResponse(
+        build_application_lifecycle_ag_ui_stream(
             payload=input_data,
             accept=accept,
         ),

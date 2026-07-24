@@ -13,7 +13,7 @@ import {
 import {
   completeApplicationTemplateGeneration,
   getApplicationLifecycle
-} from '../service/applicationPagePlanning'
+} from '../service/applicationLifecycle'
 import {
   APPLICATIONS_CHANGED_EVENT,
   canOpenApplicationWorkbench

@@ -5,7 +5,7 @@ import {
   inspectWorkspacePlanningArtifacts,
   loadWorkspaceApplicationConfig
 } from '../service/applicationStorage'
-import { getApplicationLifecycle } from '../service/applicationPagePlanning'
+import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -60,8 +60,8 @@ function WorkbenchPage({
   useEffect(() => {
     let active = true
 
-    // 同步可选的应用配置，并独立读取规划产物及其中的页面清单。
-    const syncWorkspaceApplication = async (): Promise<void> => {
+    // 同步可选的应用配置和规划产物；窗口重新聚焦时只校准可能被外部修改的文件。
+    const syncWorkspaceFiles = async (): Promise<void> => {
       if (!application.workspaceRoot) {
         setDevelopmentPlanningPagesLoaded(true)
         return
@@ -97,23 +97,35 @@ function WorkbenchPage({
       } finally {
         if (active) setDevelopmentPlanningPagesLoaded(true)
       }
-      try {
-        const lifecycle = await getApplicationLifecycle(application)
-        if (active) onApplicationLifecycleChange(lifecycle)
-      } catch (error) {
-        console.warn('读取工作台应用生命周期失败，继续使用 Workflow 实时状态。', error)
-      }
     }
 
     // 首次进入由初始状态承载加载门禁；后续刷新保留当前内容，避免工作台反复清空闪烁。
     setWorkspaceApplication(application)
-    void syncWorkspaceApplication()
-    window.addEventListener('focus', syncWorkspaceApplication)
+    void syncWorkspaceFiles()
+    window.addEventListener('focus', syncWorkspaceFiles)
     return () => {
       active = false
-      window.removeEventListener('focus', syncWorkspaceApplication)
+      window.removeEventListener('focus', syncWorkspaceFiles)
     }
-  }, [application, onApplicationLifecycleChange, planningRefreshRevision])
+  }, [application, planningRefreshRevision])
+
+  useEffect(() => {
+    let active = true
+    const workspaceRoot = application.workspaceRoot
+    if (!workspaceRoot) return
+
+    // 每次进入一个工作区只做一次冷启动校准；后续状态由 Workflow AG-UI 事件实时合并。
+    getApplicationLifecycle({ workspaceRoot })
+      .then((lifecycle) => {
+        if (active) onApplicationLifecycleChange(lifecycle)
+      })
+      .catch((error) => {
+        console.warn('读取工作台应用生命周期失败，继续使用 Workflow 实时状态。', error)
+      })
+    return () => {
+      active = false
+    }
+  }, [application.id, application.workspaceRoot, onApplicationLifecycleChange])
 
   useEffect(() => {
     if (!developmentPlanningPagesLoaded || entryStage !== 'loading') return

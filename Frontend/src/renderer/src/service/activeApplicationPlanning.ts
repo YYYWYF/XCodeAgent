@@ -3,7 +3,7 @@ import {
   canOpenApplicationWorkbench,
   loadStoredApplications
 } from './applicationStorage'
-import { getApplicationLifecycle } from './applicationPagePlanning'
+import { getApplicationLifecycle } from './applicationLifecycle'
 
 export type ActivePlanningStatus = 'error' | 'ready' | 'running'
 
