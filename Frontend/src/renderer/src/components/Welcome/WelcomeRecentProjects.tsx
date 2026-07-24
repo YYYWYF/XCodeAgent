@@ -2,6 +2,7 @@ import { AppstoreOutlined, CodeOutlined, DeleteOutlined, GlobalOutlined } from '
 import { Button, message, Modal, Radio } from 'antd'
 import { useEffect, useState } from 'react'
 import {
+  canOpenApplicationWorkbench,
   subscribeApplicationsChanged,
   deleteStoredProject,
   loadStoredApplications,
@@ -49,7 +50,10 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
       try {
         const storedApplications = await loadStoredApplications()
         if (active && currentRefreshId === refreshId) {
-          setApplications(storedApplications)
+          // 未完成初始化的新应用只保留在上方计划入口，最近项目仅展示可进入工作台的应用。
+          setApplications(
+            storedApplications.filter((application) => canOpenApplicationWorkbench(application))
+          )
         }
       } finally {
         if (active && currentRefreshId === refreshId) setLoading(false)
@@ -154,7 +158,7 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
         ) : (
           <div className={cx('welcome-project-empty')}>
             <CodeOutlined />
-            <span>新建应用或打开工作目录后，最近项目会显示在这里。</span>
+            <span>完成应用初始化或打开工作目录后，最近项目会显示在这里。</span>
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 import {
   ArrowRightOutlined,
   CheckCircleFilled,
+  DeleteOutlined,
   ExclamationCircleFilled,
   LoadingOutlined
 } from '@ant-design/icons'
@@ -12,6 +13,8 @@ import { cx } from '../../utils'
 type Props = {
   application: ApplicationConfig
   lifecycle: ApplicationLifecycle
+  deleting: boolean
+  onDelete: () => void
   onOpen: () => void
   status: ActivePlanningStatus
 }
@@ -111,28 +114,39 @@ function planningStatusPresentation(
 // 在首页展示尚未结束的应用规划，并提供返回全屏规划页的入口。
 export default function ActivePlanningAction({
   application,
+  deleting,
   lifecycle,
+  onDelete,
   onOpen,
   status
 }: Props): JSX.Element {
   const presentation = planningStatusPresentation(application, lifecycle, status)
   return (
-    <Button
-      className={cx('active-planning-action', `status-${status}`)}
-      onClick={onOpen}
-      type="text"
-    >
-      <span className={cx('active-planning-action-icon')} aria-hidden="true">
-        {presentation.icon}
-      </span>
-      <span className={cx('active-planning-action-copy')}>
-        <strong>{presentation.title}</strong>
-        <small>{presentation.description}</small>
-      </span>
-      <span className={cx('active-planning-action-open')}>
-        查看计划
-        <ArrowRightOutlined />
-      </span>
-    </Button>
+    <div className={cx('active-planning-action-shell', `status-${status}`)}>
+      <Button className={cx('active-planning-action')} onClick={onOpen} type="text">
+        <span className={cx('active-planning-action-icon')} aria-hidden="true">
+          {presentation.icon}
+        </span>
+        <span className={cx('active-planning-action-copy')}>
+          <strong>{presentation.title}</strong>
+          <small>{presentation.description}</small>
+        </span>
+        <span className={cx('active-planning-action-open')}>
+          查看计划
+          <ArrowRightOutlined />
+        </span>
+      </Button>
+      <Button
+        className={cx('active-planning-action-delete')}
+        danger
+        disabled={deleting}
+        icon={<DeleteOutlined />}
+        loading={deleting}
+        onClick={onDelete}
+        type="text"
+      >
+        删除
+      </Button>
+    </div>
   )
 }

@@ -18,6 +18,8 @@ type Props = {
   activePlanning?: ApplicationConfig
   activePlanningStatus?: ActivePlanningStatus
   activePlanningLifecycle?: ApplicationLifecycle
+  deletingActivePlanning: boolean
+  onDeletePlanning: () => void
   onOpenApplication: (application: ApplicationConfig) => void
   onOpenPlanning: () => void
   onStartPlanning: (
@@ -42,6 +44,8 @@ export default function WelcomePage({
   activePlanning,
   activePlanningStatus,
   activePlanningLifecycle,
+  deletingActivePlanning,
+  onDeletePlanning,
   onOpenApplication,
   onOpenPlanning,
   onStartPlanning
@@ -92,7 +96,9 @@ export default function WelcomePage({
             {activePlanning && activePlanningLifecycle ? (
               <ActivePlanningAction
                 application={activePlanning}
+                deleting={deletingActivePlanning}
                 lifecycle={activePlanningLifecycle}
+                onDelete={onDeletePlanning}
                 onOpen={onOpenPlanning}
                 status={activePlanningStatus || 'running'}
               />

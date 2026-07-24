@@ -20,6 +20,7 @@ declare global {
         load: () => Promise<{ applications?: unknown }>;
         save: (applications: unknown[]) => Promise<{ ok?: boolean }>;
         deleteProject: (payload: { workspaceRoot: string }) => Promise<{ ok?: boolean }>;
+        deleteAgentDirectory: (payload: { workspaceRoot: string }) => Promise<{ ok?: boolean }>;
       };
       workspace?: {
         selectDirectory: (options?: { title?: string }) => Promise<{ canceled: boolean; path?: string }>;

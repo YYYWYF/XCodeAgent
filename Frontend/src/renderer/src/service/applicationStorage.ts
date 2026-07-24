@@ -137,6 +137,15 @@ export async function deleteStoredProject(workspaceRoot: string) {
   await electronApplications.deleteProject({ workspaceRoot });
 }
 
+// 请求桌面主进程仅删除工作区内由初始化计划生成的 .xcodeagent 目录。
+export async function deleteStoredAgentDirectory(workspaceRoot: string) {
+  const electronApplications = window.xcodeAgent?.applications;
+  if (!electronApplications?.deleteAgentDirectory) {
+    throw new Error('当前环境不支持删除初始化计划目录');
+  }
+  await electronApplications.deleteAgentDirectory({ workspaceRoot });
+}
+
 export async function loadWorkspaceApplicationConfig(
   workspaceRoot: string
 ): Promise<ApplicationSchemaConfig> {

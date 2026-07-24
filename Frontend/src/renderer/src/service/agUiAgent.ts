@@ -166,6 +166,8 @@ export class AgUiChatSession {
   private readonly url: string
   private activeAgent?: HttpAgent
   private activeRunId?: string
+  private activeRunCompletion?: Promise<void>
+  private resolveActiveRunCompletion?: () => void
 
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
   constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
@@ -173,17 +175,18 @@ export class AgUiChatSession {
     this.url = url
   }
 
-  /** 请求后端取消当前运行；确认失败时才本地中止，确保暂停 loading 覆盖后端落盘过程。 */
-  stop(): void {
+  /** 请求后端取消当前运行；确认失败时才本地中止，并等待取消请求完成。 */
+  async stop(): Promise<void> {
     const runId = this.activeRunId
     const activeAgent = this.activeAgent
+    const activeRunCompletion = this.activeRunCompletion
     if (!runId) {
       activeAgent?.abortRun()
       return
     }
-    void this.cancelRun(runId).then((cancelled) => {
-      if (!cancelled && this.activeRunId === runId) activeAgent?.abortRun()
-    })
+    const cancelled = await this.cancelRun(runId)
+    if (!cancelled && this.activeRunId === runId) activeAgent?.abortRun()
+    await activeRunCompletion
   }
 
   /** 使用请求级 HttpAgent 发送当前消息，避免把本地会话历史和旧状态重复传输。 */
@@ -262,6 +265,9 @@ export class AgUiChatSession {
     const runId = randomUUID()
     this.activeAgent = requestAgent
     this.activeRunId = runId
+    this.activeRunCompletion = new Promise((resolve) => {
+      this.resolveActiveRunCompletion = resolve
+    })
     let result: Awaited<ReturnType<HttpAgent['runAgent']>>
     try {
       result = await requestAgent.runAgent(
@@ -275,6 +281,9 @@ export class AgUiChatSession {
       if (this.activeAgent === requestAgent) {
         this.activeAgent = undefined
         this.activeRunId = undefined
+        this.resolveActiveRunCompletion?.()
+        this.activeRunCompletion = undefined
+        this.resolveActiveRunCompletion = undefined
       }
     }
     if (runError) throw runError

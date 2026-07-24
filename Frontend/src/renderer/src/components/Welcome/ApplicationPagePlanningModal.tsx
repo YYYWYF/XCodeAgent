@@ -54,6 +54,7 @@ type Props = {
   onConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
   onStatusChange: (status: ActivePlanningStatus) => void
   onWorkflowChange: (workflow: WorkflowRunPayload) => void
+  onStopHandlerChange: (handler?: () => Promise<void>) => void
 }
 
 const phaseOrder = ['requirements', 'project_planning']
@@ -170,7 +171,8 @@ export default function ApplicationPagePlanningModal({
   onReturnHome,
   onConfirmed,
   onStatusChange,
-  onWorkflowChange
+  onWorkflowChange,
+  onStopHandlerChange
 }: Props): JSX.Element {
   const session = useMemo(() => createApplicationPlanningSession(threadId), [threadId])
   const originalRequest = useMemo(() => buildApplicationPlanningRequest(application), [application])
@@ -184,6 +186,12 @@ export default function ApplicationPagePlanningModal({
     initialStatus === 'error' ? '上次规划流程中断，请重试或检查当前规划内容。' : ''
   )
   const progressCopy = workflowProgressCopy(workflow)
+
+  // 向首页注册当前 AG-UI 会话的停止句柄，以便从规划页外安全取消运行。
+  useEffect(() => {
+    onStopHandlerChange(() => session.stop())
+    return () => onStopHandlerChange(undefined)
+  }, [onStopHandlerChange, session])
 
   // 将运行、待查看或异常状态同步给首页的规划入口。
   useEffect(() => {

@@ -432,6 +432,44 @@ async function deleteProjectDirectory(workspaceRoot: unknown): Promise<void> {
   await fs.rm(projectRoot, { force: false, maxRetries: 3, recursive: true, retryDelay: 150 })
 }
 
+/** 仅删除受控工作区内部由 XCodeAgent 生成的规划与运行目录。 */
+async function deleteProjectAgentDirectory(workspaceRoot: unknown): Promise<void> {
+  const projectRoot = resolveWorkspaceRoot(workspaceRoot)
+  const protectedRoots = new Set([
+    path.parse(projectRoot).root,
+    path.resolve(app.getPath('home')),
+    path.resolve(app.getPath('userData')),
+    path.resolve(getXcodeAgentDataDir())
+  ])
+  if (protectedRoots.has(projectRoot)) {
+    throw new Error('不能清理系统、用户或 XCodeAgent 数据目录')
+  }
+
+  const projectStats = await fs.lstat(projectRoot)
+  if (!projectStats.isDirectory() || projectStats.isSymbolicLink()) {
+    throw new Error('只能清理非符号链接的项目目录')
+  }
+
+  const agentDirectory = path.join(projectRoot, '.xcodeagent')
+  let agentStats: Awaited<ReturnType<typeof fs.lstat>>
+  try {
+    agentStats = await fs.lstat(agentDirectory)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  if (!agentStats.isDirectory() || agentStats.isSymbolicLink()) {
+    throw new Error('只能删除工作区内非符号链接的 .xcodeagent 目录')
+  }
+  try {
+    await fs.access(getWorkspaceApplicationFile(projectRoot))
+  } catch {
+    throw new Error('该目录不包含 XCodeAgent 应用标识，不能清理')
+  }
+
+  await fs.rm(agentDirectory, { force: false, maxRetries: 3, recursive: true, retryDelay: 150 })
+}
+
 /** 注册应用列表读取和保存所需的 IPC。 */
 function setupApplicationStorageIpc(): void {
   ipcMain.handle('applications:load', async () => ({
@@ -445,6 +483,11 @@ function setupApplicationStorageIpc(): void {
 
   ipcMain.handle('applications:delete-project', async (_event, payload = {}) => {
     await deleteProjectDirectory(payload.workspaceRoot)
+    return { ok: true }
+  })
+
+  ipcMain.handle('applications:delete-agent-directory', async (_event, payload = {}) => {
+    await deleteProjectAgentDirectory(payload.workspaceRoot)
     return { ok: true }
   })
 }

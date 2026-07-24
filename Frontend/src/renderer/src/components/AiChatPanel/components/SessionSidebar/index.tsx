@@ -203,7 +203,9 @@ function OutlineRow({
               selectedKey={selectedKey}
               sessionError={sessionError}
               sessionRunStates={sessionRunStates}
-              sessions={sessions.filter((session) => session.pageId === (child.pageKey || child.key))}
+              sessions={sessions.filter(
+                (session) => session.pageId === (child.pageKey || child.key)
+              )}
               visibleKeys={visibleKeys}
             />
           ))}
@@ -296,17 +298,23 @@ export default function SessionSidebar({
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apiExpanded, setApiExpanded] = useState(true)
-  const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(() => new Set())
+  const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(
+    () => new Set()
+  )
   const [onlyRelated, setOnlyRelated] = useState(false)
-  const pageItems = useMemo<ApplicationMenuItem[]>(() => pages.map((page) => ({
-    key: page.pageId,
-    pageKey: page.pageId,
-    path: page.path,
-    label: page.label,
-    type: 'page',
-    purpose: page.purpose,
-    keyFeatures: []
-  })), [pages])
+  const pageItems = useMemo<ApplicationMenuItem[]>(
+    () =>
+      pages.map((page) => ({
+        key: page.pageId,
+        pageKey: page.pageId,
+        path: page.path,
+        label: page.label,
+        type: 'page',
+        purpose: page.purpose,
+        keyFeatures: []
+      })),
+    [pages]
+  )
   const sessionsByPageId = useMemo(() => {
     const groupedSessions = new Map<string, ChatSessionSummary[]>()
     sessions.forEach((session) => {
@@ -351,11 +359,12 @@ export default function SessionSidebar({
       const contractMatches = contract.label.toLocaleLowerCase().includes(query)
       const endpoints = contractMatches
         ? contract.endpoints
-        : contract.endpoints.filter((endpoint) => (
-          endpoint.method.toLocaleLowerCase().includes(query)
-          || endpoint.path.toLocaleLowerCase().includes(query)
-          || endpoint.summary.toLocaleLowerCase().includes(query)
-        ))
+        : contract.endpoints.filter(
+            (endpoint) =>
+              endpoint.method.toLocaleLowerCase().includes(query) ||
+              endpoint.path.toLocaleLowerCase().includes(query) ||
+              endpoint.summary.toLocaleLowerCase().includes(query)
+          )
       return endpoints.length > 0 ? [{ ...contract, endpoints }] : []
     })
   }, [apiContracts, outlineQuery])
@@ -415,10 +424,12 @@ export default function SessionSidebar({
       return
     }
     setCollapsed(false)
-    setSidebarWidth((current) => Math.min(
-      MAX_SIDEBAR_WIDTH,
-      Math.max(MIN_SIDEBAR_WIDTH, current + (event.key === 'ArrowLeft' ? -16 : 16))
-    ))
+    setSidebarWidth((current) =>
+      Math.min(
+        MAX_SIDEBAR_WIDTH,
+        Math.max(MIN_SIDEBAR_WIDTH, current + (event.key === 'ArrowLeft' ? -16 : 16))
+      )
+    )
   }
 
   return (
@@ -431,9 +442,11 @@ export default function SessionSidebar({
         resizing && 'resizing'
       )}
       aria-label="应用大纲"
-      style={{
-        '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
-      } as React.CSSProperties}
+      style={
+        {
+          '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
+        } as React.CSSProperties
+      }
     >
       <div
         aria-label="调整左侧菜单宽度"
@@ -469,7 +482,9 @@ export default function SessionSidebar({
             <i />
             <i />
           </span>
-          <Text className={cx('session-brand')} strong>XCodeAgent</Text>
+          <Text className={cx('session-brand')} strong>
+            XCodeAgent
+          </Text>
         </button>
         <button
           aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
@@ -483,9 +498,13 @@ export default function SessionSidebar({
       </div>
 
       <button className={cx('session-workspace')} onClick={onReturnWelcome} type="button">
-        <span className={cx('session-workspace-icon')}><FileTextOutlined /></span>
+        <span className={cx('session-workspace-icon')}>
+          <FileTextOutlined />
+        </span>
         <span className={cx('session-workspace-copy')}>
-          <Text className={cx('session-workspace-name')} strong>{application.name}</Text>
+          <Text className={cx('session-workspace-name')} strong>
+            {application.name}
+          </Text>
           <Text className={cx('session-workspace-description')} title={workspaceRoot}>
             <FolderOutlined />
             <span className={cx('session-workspace-path')}>{workspaceRoot}</span>
@@ -494,13 +513,15 @@ export default function SessionSidebar({
         <CaretDownOutlined className={cx('session-workspace-arrow')} rotate={-90} />
       </button>
 
-      <Text className={cx('session-section-title')} strong>应用大纲</Text>
+      <Text className={cx('session-section-title')} strong>
+        应用大纲
+      </Text>
       <fieldset
         aria-disabled={outlineLocked}
         aria-label={outlineLocked ? '页面大纲暂不可操作，API 仍可选择' : '应用大纲'}
         className={cx('session-outline-lock-shell')}
       >
-      <div className={cx('session-outline-content')}>
+        <div className={cx('session-outline-content')}>
           <Input
             allowClear
             aria-label="搜索页面或 API"
@@ -511,7 +532,10 @@ export default function SessionSidebar({
             value={outlineQuery}
           />
           <div className={cx('session-filter-row')}>
-            <span><FilterOutlined />只显示与当前选中相关</span>
+            <span>
+              <FilterOutlined />
+              只显示与当前选中相关
+            </span>
             <Switch
               aria-label="只显示与当前选中相关"
               checked={onlyRelated}
@@ -521,154 +545,212 @@ export default function SessionSidebar({
           </div>
 
           <div className={cx('session-outline-scroll')}>
-        <section className={cx('outline-section')}>
-          <button
-            aria-expanded={pagesExpanded}
-            className={cx('outline-section-heading')}
-            onClick={() => setPagesExpanded((current) => !current)}
-            type="button"
-          >
-            <CaretDownOutlined className={cx(!pagesExpanded && 'collapsed')} />
-            <span>Pages</span>
-          </button>
-          {pagesExpanded ? <div className={cx('outline-tree')}>
-            {pageItems
-              .filter((item) => visibleKeys.has(item.key))
-              .map((item) => (
-                <OutlineRow
-                  activeSessionId={activeSessionId}
-                  deletingSessionId={deletingSessionId}
-                  disabled={outlineLocked}
-                  designed={Boolean(pages.find((page) => page.pageId === item.key)?.designed)}
-                  item={item}
-                  key={item.key}
-                  level={0}
-                  loadingSessions={loadingSessions}
-                  onCreatePageSession={onCreatePageSession}
-                  onDeleteSession={onDeleteSession}
-                  onOpenSession={onOpenSession}
-                  onSelect={(key) => {
-                    const selectedPage = pages.find((page) => page.key === key)
-                    if (selectedPage) onPageSelect(selectedPage)
-                  }}
-                  selectedKey={selectedKey}
-                  sessionError={selectedKey === item.key ? sessionError : undefined}
-                  sessionRunStates={sessionRunStates}
-                  sessions={sessionsByPageId.get(item.pageKey || item.key) || []}
-                  visibleKeys={visibleKeys}
-                />
-              ))}
-            {pageItems.length === 0 ? (
-              <div className={cx('outline-empty')}>project_plan.json 的 frontend_pages 中暂无页面</div>
-            ) : null}
-          </div> : null}
-        </section>
+            <section className={cx('outline-section')}>
+              <button
+                aria-expanded={pagesExpanded}
+                className={cx('outline-section-heading')}
+                onClick={() => setPagesExpanded((current) => !current)}
+                type="button"
+              >
+                <CaretDownOutlined className={cx(!pagesExpanded && 'collapsed')} />
+                <span>Pages</span>
+              </button>
+              {pagesExpanded ? (
+                <div className={cx('outline-tree')}>
+                  {pageItems
+                    .filter((item) => visibleKeys.has(item.key))
+                    .map((item) => (
+                      <OutlineRow
+                        activeSessionId={activeSessionId}
+                        deletingSessionId={deletingSessionId}
+                        disabled={outlineLocked}
+                        designed={Boolean(pages.find((page) => page.pageId === item.key)?.designed)}
+                        item={item}
+                        key={item.key}
+                        level={0}
+                        loadingSessions={loadingSessions}
+                        onCreatePageSession={onCreatePageSession}
+                        onDeleteSession={onDeleteSession}
+                        onOpenSession={onOpenSession}
+                        onSelect={(key) => {
+                          const selectedPage = pages.find((page) => page.key === key)
+                          if (selectedPage) onPageSelect(selectedPage)
+                        }}
+                        selectedKey={selectedKey}
+                        sessionError={selectedKey === item.key ? sessionError : undefined}
+                        sessionRunStates={sessionRunStates}
+                        sessions={sessionsByPageId.get(item.pageKey || item.key) || []}
+                        visibleKeys={visibleKeys}
+                      />
+                    ))}
+                  {pageItems.length === 0 ? (
+                    <div className={cx('outline-empty')}>
+                      project_plan.json 的 frontend_pages 中暂无页面
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
 
-        <section className={cx('outline-section', 'api-section')}>
-          <button
-            aria-expanded={apiExpanded}
-            className={cx('outline-section-heading')}
-            onClick={() => setApiExpanded((current) => !current)}
-            type="button"
-          >
-            <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
-            <span>API</span>
-          </button>
-          {apiExpanded ? <div className={cx('api-group')}>
-            {visibleApiContracts.map((contract) => {
-              const contractExpanded = !collapsedApiContractIds.has(contract.id)
-              return <div key={contract.id}>
-                <button
-                  aria-expanded={contractExpanded}
-                  className={cx('api-group-title')}
-                  onClick={() => handleApiContractToggle(contract.id)}
-                  type="button"
-                >
-                  <CaretDownOutlined className={cx(!contractExpanded && 'collapsed')} />
-                  <ApiOutlined />
-                  <code>{contract.label}</code>
-                </button>
-                {contractExpanded ? <div className={cx('api-list')}>
-                  {contract.endpoints.map((endpoint, endpointIndex) => {
-                    const endpointId = endpoint.id || String(endpointIndex + 1)
-                    const apiContractId = endpoint.apiContractId || contract.id
-                    const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
-                    const endpointLabel = `${endpoint.method} ${endpoint.path}`.trim()
-                    const endpointDesigned = Boolean(endpoint.designed || endpoint.hasDetailPlan)
-                    const endpointSessions = sessionsByEndpointKey.get(endpointKey) || []
+            <section className={cx('outline-section', 'api-section')}>
+              <button
+                aria-expanded={apiExpanded}
+                className={cx('outline-section-heading')}
+                onClick={() => setApiExpanded((current) => !current)}
+                type="button"
+              >
+                <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
+                <span>API</span>
+              </button>
+              {apiExpanded ? (
+                <div className={cx('api-group')}>
+                  {visibleApiContracts.map((contract) => {
+                    const contractExpanded = !collapsedApiContractIds.has(contract.id)
                     return (
-                      <div className={cx('api-node')} key={endpointKey}>
+                      <div key={contract.id}>
                         <button
-                          aria-current={selectedApiEndpointKey === endpointKey ? 'true' : undefined}
-                          className={cx('api-row', selectedApiEndpointKey === endpointKey && 'selected')}
-                          onClick={() => onApiEndpointSelect({
-                            apiContractId,
-                            endpointId,
-                            endpointKey,
-                            label: endpointLabel
-                          })}
-                          title={endpoint.summary}
+                          aria-expanded={contractExpanded}
+                          className={cx('api-group-title')}
+                          onClick={() => handleApiContractToggle(contract.id)}
                           type="button"
                         >
-                          <span className={cx('api-method', endpoint.method.toLocaleLowerCase())}>{endpoint.method}</span>
-                          <code>{endpoint.path}</code>
-                          <span className={cx('outline-design-status', endpointDesigned ? 'designed' : 'undesign')}>
-                            {endpointDesigned ? '已设计' : '待设计'}
-                          </span>
+                          <CaretDownOutlined className={cx(!contractExpanded && 'collapsed')} />
+                          <ApiOutlined />
+                          <code>{contract.label}</code>
                         </button>
-                        {selectedApiEndpointKey === endpointKey ? (
-                          <PageSessionHistory
-                            activeSessionId={activeSessionId}
-                            deletingSessionId={deletingSessionId}
-                            deleteTitle="删除这个接口会话？"
-                            emptyDescription="当前接口暂无历史会话"
-                            loadingSessions={loadingSessions}
-                            onCreateSession={() => onCreateEndpointSession(
-                              apiContractId,
-                              endpointId,
-                              endpointLabel
-                            )}
-                            onDeleteSession={onDeleteSession}
-                            onOpenSession={onOpenSession}
-                            sessionError={sessionError}
-                            sessionRunStates={sessionRunStates}
-                            sessions={endpointSessions}
-                            targetLabel={endpointLabel}
-                          />
+                        {contractExpanded ? (
+                          <div className={cx('api-list')}>
+                            {contract.endpoints.map((endpoint, endpointIndex) => {
+                              const endpointId = endpoint.id || String(endpointIndex + 1)
+                              const apiContractId = endpoint.apiContractId || contract.id
+                              const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
+                              const endpointLabel = `${endpoint.method} ${endpoint.path}`.trim()
+                              const endpointDesigned = Boolean(
+                                endpoint.designed || endpoint.hasDetailPlan
+                              )
+                              const endpointSessions = sessionsByEndpointKey.get(endpointKey) || []
+                              return (
+                                <div className={cx('api-node')} key={endpointKey}>
+                                  <button
+                                    aria-current={
+                                      selectedApiEndpointKey === endpointKey ? 'true' : undefined
+                                    }
+                                    className={cx(
+                                      'api-row',
+                                      selectedApiEndpointKey === endpointKey && 'selected'
+                                    )}
+                                    onClick={() =>
+                                      onApiEndpointSelect({
+                                        apiContractId,
+                                        endpointId,
+                                        endpointKey,
+                                        label: endpointLabel
+                                      })
+                                    }
+                                    title={endpoint.summary}
+                                    type="button"
+                                  >
+                                    <span
+                                      className={cx(
+                                        'api-method',
+                                        endpoint.method.toLocaleLowerCase()
+                                      )}
+                                    >
+                                      {endpoint.method}
+                                    </span>
+                                    <code>{endpoint.path}</code>
+                                    <span
+                                      className={cx(
+                                        'outline-design-status',
+                                        endpointDesigned ? 'designed' : 'undesign'
+                                      )}
+                                    >
+                                      {endpointDesigned ? '已设计' : '待设计'}
+                                    </span>
+                                  </button>
+                                  {selectedApiEndpointKey === endpointKey ? (
+                                    <PageSessionHistory
+                                      activeSessionId={activeSessionId}
+                                      deletingSessionId={deletingSessionId}
+                                      deleteTitle="删除这个接口会话？"
+                                      emptyDescription="当前接口暂无历史会话"
+                                      loadingSessions={loadingSessions}
+                                      onCreateSession={() =>
+                                        onCreateEndpointSession(
+                                          apiContractId,
+                                          endpointId,
+                                          endpointLabel
+                                        )
+                                      }
+                                      onDeleteSession={onDeleteSession}
+                                      onOpenSession={onOpenSession}
+                                      sessionError={sessionError}
+                                      sessionRunStates={sessionRunStates}
+                                      sessions={endpointSessions}
+                                      targetLabel={endpointLabel}
+                                    />
+                                  ) : null}
+                                </div>
+                              )
+                            })}
+                          </div>
                         ) : null}
                       </div>
                     )
                   })}
-                </div> : null}
-              </div>
-            })}
-            {visibleApiContracts.length === 0 ? (
-              <div className={cx('outline-empty')}>project_plan.json 的 api_contracts 中暂无接口</div>
-            ) : null}
-          </div> : null}
-        </section>
-
+                  {visibleApiContracts.length === 0 ? (
+                    <div className={cx('outline-empty')}>
+                      project_plan.json 的 api_contracts 中暂无接口
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
           </div>
-      </div>
-      {outlineLocked ? (
-        <div className={cx('session-outline-lock')}>
-          <LockOutlined />
-          <Text>页面大纲将在首个页面设计后解锁，API 可先选择查看</Text>
         </div>
-      ) : null}
+        {outlineLocked ? (
+          <div className={cx('session-outline-lock')}>
+            <LockOutlined />
+            <Text>完成首次设计后解锁</Text>
+          </div>
+        ) : null}
       </fieldset>
 
       <nav className={cx('session-footer-nav')} aria-label="快捷入口">
-        <button onClick={onCreateSession} title="推荐任务" type="button"><SidebarAssetIcon source={recommendedTasksIcon} /><span>推荐任务</span></button>
-        <button onClick={onCreateSession} title="自由对话" type="button"><SidebarAssetIcon source={freeChatIcon} /><span>自由对话</span></button>
-        <button className={cx(skillsActive && 'active')} onClick={onShowSkills} title="技能" type="button">
-          <ThunderboltOutlined /><span>技能</span>
+        <button onClick={onCreateSession} title="推荐任务" type="button">
+          <SidebarAssetIcon source={recommendedTasksIcon} />
+          <span>推荐任务</span>
         </button>
-        <button className={cx(filesActive && 'active')} onClick={onShowFiles} title="文件" type="button">
-          <FolderOutlined /><span>文件</span>
+        <button onClick={onCreateSession} title="自由对话" type="button">
+          <SidebarAssetIcon source={freeChatIcon} />
+          <span>自由对话</span>
         </button>
-        <button className={cx(settingsActive && 'active')} onClick={onShowSettings} title="设置" type="button">
-          <SettingOutlined /><span>设置</span>
+        <button
+          className={cx(skillsActive && 'active')}
+          onClick={onShowSkills}
+          title="技能"
+          type="button"
+        >
+          <ThunderboltOutlined />
+          <span>技能</span>
+        </button>
+        <button
+          className={cx(filesActive && 'active')}
+          onClick={onShowFiles}
+          title="文件"
+          type="button"
+        >
+          <FolderOutlined />
+          <span>文件</span>
+        </button>
+        <button
+          className={cx(settingsActive && 'active')}
+          onClick={onShowSettings}
+          title="设置"
+          type="button"
+        >
+          <SettingOutlined />
+          <span>设置</span>
         </button>
       </nav>
 

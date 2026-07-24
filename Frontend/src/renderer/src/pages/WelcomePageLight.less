@@ -82,18 +82,25 @@
     }
   }
 
-  .@{class-prefix}-active-planning-action.ant-btn {
+  .@{class-prefix}-active-planning-action-shell {
     color: #342046;
     border-color: #d5c4eb;
     background: rgba(255, 255, 255, 0.9);
     box-shadow: 0 8px 24px rgba(91, 33, 182, 0.08);
 
     &:hover,
-    &:focus {
+    &:focus-within {
       color: #2c183e;
       border-color: #9f7aea;
       background: #ffffff;
       box-shadow: 0 12px 30px rgba(91, 33, 182, 0.12);
+    }
+  }
+
+  .@{class-prefix}-active-planning-action.ant-btn {
+    &:hover,
+    &:focus {
+      background: transparent;
     }
   }
 
@@ -102,19 +109,19 @@
     background: #f0eaff;
   }
 
-  .@{class-prefix}-active-planning-action.@{class-prefix}-status-ready.ant-btn {
+  .@{class-prefix}-active-planning-action-shell.@{class-prefix}-status-ready {
     border-color: #a7d8b4;
 
-    > .@{class-prefix}-active-planning-action-icon {
+    .@{class-prefix}-active-planning-action-icon {
       color: #16a34a;
       background: #eaf8ee;
     }
   }
 
-  .@{class-prefix}-active-planning-action.@{class-prefix}-status-error.ant-btn {
+  .@{class-prefix}-active-planning-action-shell.@{class-prefix}-status-error {
     border-color: #f3bf91;
 
-    > .@{class-prefix}-active-planning-action-icon {
+    .@{class-prefix}-active-planning-action-icon {
       color: #ea580c;
       background: #fff1e7;
     }
@@ -126,6 +133,16 @@
 
   .@{class-prefix}-active-planning-action.ant-btn > .@{class-prefix}-active-planning-action-open {
     color: #7c3aed;
+  }
+
+  .@{class-prefix}-active-planning-action-delete.ant-btn {
+    color: #dc2626;
+
+    &:hover,
+    &:focus {
+      color: #b91c1c;
+      background: #fef2f2;
+    }
   }
 
   .@{class-prefix}-welcome-section-heading {
