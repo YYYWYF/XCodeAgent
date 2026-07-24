@@ -96,13 +96,14 @@ def _frontend_checks(
         ]
 
     scripts = _scripts(frontend)
+    _pnpm_command = shutil.which(frontend.package_manager)
     return [
         _run_command_result(
             check_id="frontend_install",
             name="前端依赖安装检查",
             layer="frontend",
             language="typescript",
-            argv=[frontend.package_manager, "install"],
+            argv=[_pnpm_command, "install"],
             cwd=frontend.cwd,
             root=root,
             log_root=log_root,
@@ -340,12 +341,13 @@ def _run_script_result(
             required=required,
             on_progress=on_progress,
         )
+    _package_manager_command = shutil.which(package.package_manager)
     return _run_command_result(
         check_id=check_id,
         name=name,
         layer=layer,
         language=language,
-        argv=[package.package_manager, "run", script_name],
+        argv=[_package_manager_command, "run", script_name],
         cwd=package.cwd,
         root=root,
         log_root=log_root,
