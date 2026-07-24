@@ -26,7 +26,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _project_plan(workspace: Path) -> tuple[dict, Path]:
-    """构造只保存外置详情引用的 ProjectPlan。"""
+    """构造以 API 契约为权威、仅页面详情外置的 ProjectPlan。"""
 
     plan_path = workspace / ".xcodeagent/plans/project-plan.json"
     _write_json(
@@ -45,14 +45,6 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
             "references": {"endpoint_dependencies": [{"endpoint_id": "customers.list"}]},
         },
     )
-    _write_json(
-        workspace / ".xcodeagent/plans/data-source/data-source--orders.json",
-        {"data_source_id": "orders", "status": "confirmed", "entities": [{"name": "Order"}]},
-    )
-    _write_json(
-        workspace / ".xcodeagent/plans/data-source/data-source--customers.json",
-        {"data_source_id": "customers", "status": "confirmed", "entities": [{"name": "Customer"}]},
-    )
     plan = {
         "frontend_pages": [
             {
@@ -67,14 +59,8 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
             },
         ],
         "data_sources": [
-            {
-                "id": "orders",
-                "detail_design": _detail_ref(".xcodeagent/plans/data-source/data-source--orders.json"),
-            },
-            {
-                "id": "customers",
-                "detail_design": _detail_ref(".xcodeagent/plans/data-source/data-source--customers.json"),
-            },
+            {"id": "orders"},
+            {"id": "customers"},
         ],
         "api_contracts": [
             {
@@ -94,8 +80,8 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
 
 
 class PageBuildContextResolverTests(unittest.TestCase):
-    def test_page_context_loads_only_direct_external_data_source_details(self) -> None:
-        """页面 scope 只按当前页面外置详情加载直接数据源详情。"""
+    def test_page_context_uses_project_plan_contract_without_endpoint_detail(self) -> None:
+        """页面依赖已在 ProjectPlan 中声明时不要求独立 endpoint 详情文件。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan, plan_path = _project_plan(Path(workspace))
@@ -110,16 +96,47 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
         self.assertEqual(context["data_source_ids"], ["orders"])
         self.assertEqual(context["page_detail"]["pageId"], "orders")
-        self.assertEqual(
-            [detail["data_source_id"] for detail in context["direct_data_source_details"]],
-            ["orders"],
-        )
+        self.assertEqual(context["direct_endpoint_details"], [])
+        self.assertEqual(context["source_refs"]["endpoint_details"], [])
         self.assertIn("data-source:orders", context["required_unit_ids"])
         self.assertNotIn("data-source:customers", context["required_unit_ids"])
         self.assertIn("app:auth-guard", context["required_unit_ids"])
 
-    def test_data_source_context_loads_external_detail_without_page_details(self) -> None:
-        """数据源 scope 只读取目标数据源外置详情，不反向加载页面详情。"""
+    def test_page_context_loads_confirmed_endpoint_detail_as_optional_context(self) -> None:
+        """存在已确认 endpoint 详情时只把当前页面直接依赖的详情作为补充上下文。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            detail_path = ".xcodeagent/plans/endpoints/endpoint--orders-api--orders.list.json"
+            plan["api_contracts"][0]["endpoints"][0]["detail_design"] = _detail_ref(detail_path)
+            _write_json(
+                workspace_path / detail_path,
+                {
+                    "endpoint_id": "orders.list",
+                    "data_source_id": "orders",
+                    "status": "confirmed",
+                },
+            )
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+
+        self.assertEqual(
+            [detail["endpoint_id"] for detail in context["direct_endpoint_details"]],
+            ["orders.list"],
+        )
+        self.assertEqual(
+            [reference["id"] for reference in context["source_refs"]["endpoint_details"]],
+            ["orders.list"],
+        )
+
+    def test_data_source_context_uses_project_plan_contract_without_endpoint_detail(self) -> None:
+        """数据源 scope 直接使用所属 ProjectPlan endpoints，不要求独立详情文件。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan, plan_path = _project_plan(Path(workspace))
@@ -132,7 +149,8 @@ class PageBuildContextResolverTests(unittest.TestCase):
             )
 
         self.assertIsNone(context["page_detail"])
-        self.assertEqual(context["data_source_detail"]["data_source_id"], "orders")
+        self.assertEqual(context["endpoint_ids"], ["orders.list"])
+        self.assertEqual(context["direct_endpoint_details"], [])
         self.assertEqual(context["required_unit_ids"], ["app:backend-bootstrap", "data-source:orders"])
 
     def test_page_context_rejects_unknown_endpoint(self) -> None:
@@ -194,22 +212,24 @@ class PageBuildContextResolverTests(unittest.TestCase):
                     project_plan_path=plan_path,
                 )
 
-    def test_page_context_rejects_missing_data_source_detail_file(self) -> None:
-        """页面依赖的数据源详情文件不存在时返回明确错误。"""
+    def test_page_context_ignores_missing_optional_endpoint_detail_file(self) -> None:
+        """可选 endpoint 详情引用失效时仍以 ProjectPlan API 契约继续构建。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan, plan_path = _project_plan(Path(workspace))
-            plan["data_sources"][0]["detail_design"] = _detail_ref(
-                ".xcodeagent/plans/data-source/missing.json"
+            plan["api_contracts"][0]["endpoints"][0]["detail_design"] = _detail_ref(
+                ".xcodeagent/plans/endpoints/missing.json"
             )
 
-            with self.assertRaisesRegex(ValueError, "DataSourceDetail orders detail file does not exist"):
-                resolve_target_build_context(
-                    plan,
-                    target_type="page",
-                    target_id="orders",
-                    project_plan_path=plan_path,
-                )
+            context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+
+        self.assertEqual(context["endpoint_ids"], ["orders.list"])
+        self.assertEqual(context["direct_endpoint_details"], [])
 
 
 if __name__ == "__main__":

@@ -97,7 +97,7 @@ START
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
-`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。集成测试失败后的修复不回到 `prepare_build_tasks`；包括 API 契约错误在内的失败都由 RepairPlanner 生成受限 repair tasks，然后回到 `build` 由 BuildScheduler 调度执行。
+`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。定向 Build Context 以该已确认 ProjectPlan 的 `api_contracts` 为 endpoint 请求/响应权威来源；页面外置详情仍是页面任务的正式输入，但 endpoint 外置详情只作可选补充，缺失、未确认或失效时不得替代或否定 ProjectPlan 契约。集成测试失败后的修复不回到 `prepare_build_tasks`；包括 API 契约错误在内的失败都由 RepairPlanner 生成受限 repair tasks，然后回到 `build` 由 BuildScheduler 调度执行。
 
 ### `classify_request_complexity`
 

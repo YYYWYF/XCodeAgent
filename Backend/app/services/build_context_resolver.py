@@ -28,7 +28,7 @@ def _page_context(
     page_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """只解析指定页面及其直接依赖的 endpoint 详情。"""
+    """以 ProjectPlan 契约为主解析指定页面，并按需补充已有 endpoint 详情。"""
 
     page = _required_item(project_plan.get("frontend_pages"), "pageId", page_id, "page")
     page_detail = _load_external_detail(
@@ -56,14 +56,13 @@ def _page_context(
         _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
     for endpoint_id in endpoint_ids:
         endpoint = endpoint_index[endpoint_id]
-        detail = _load_external_detail(
+        detail = _load_optional_external_detail(
             endpoint.get("detail_design"),
-            "EndpointDetail",
-            endpoint_id,
             project_plan_path,
         )
-        endpoint_details.append(detail)
-        endpoint_refs.append(_artifact_ref(endpoint.get("detail_design"), endpoint_id))
+        if detail is not None:
+            endpoint_details.append(detail)
+            endpoint_refs.append(_artifact_ref(endpoint.get("detail_design"), endpoint_id))
 
     return {
         "target": {"type": "page", "id": page_id},
@@ -93,7 +92,7 @@ def _data_source_context(
     source_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """解析后端数据单元下的已确认 endpoint 详情，不再依赖 DataSourceDetail。"""
+    """以 ProjectPlan 契约解析数据单元，并按需补充已有 endpoint 详情。"""
 
     source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
     del source
@@ -102,15 +101,14 @@ def _data_source_context(
         endpoint_id for endpoint_id, endpoint in endpoint_index.items()
         if endpoint.get("data_source_id") == source_id
     ]
-    endpoint_details = [
-        _load_external_detail(
-            endpoint_index[endpoint_id].get("detail_design"),
-            "EndpointDetail",
-            endpoint_id,
-            project_plan_path,
-        )
-        for endpoint_id in endpoint_ids
-    ]
+    endpoint_details = []
+    endpoint_refs = []
+    for endpoint_id in endpoint_ids:
+        reference = endpoint_index[endpoint_id].get("detail_design")
+        detail = _load_optional_external_detail(reference, project_plan_path)
+        if detail is not None:
+            endpoint_details.append(detail)
+            endpoint_refs.append(_artifact_ref(reference, endpoint_id))
     return {
         "target": {"type": "data_source", "id": source_id},
         "page_detail": None,
@@ -120,10 +118,7 @@ def _data_source_context(
         "data_source_ids": [source_id],
         "required_unit_ids": ["app:backend-bootstrap", f"data-source:{source_id}"],
         "source_refs": {
-            "endpoint_details": [
-                _artifact_ref(endpoint_index[endpoint_id].get("detail_design"), endpoint_id)
-                for endpoint_id in endpoint_ids
-            ],
+            "endpoint_details": endpoint_refs,
         },
     }
 
@@ -166,6 +161,28 @@ def _load_external_detail(
         raise ValueError(f"{label} {target_id} detail file must contain a JSON object.")
     if detail.get("status") != "confirmed":
         raise ValueError(f"{label} {target_id} external detail is not confirmed.")
+    return detail
+
+
+def _load_optional_external_detail(
+    reference: Any,
+    project_plan_path: str | Path | None,
+) -> dict[str, Any] | None:
+    """仅把可用的已确认 endpoint 详情作为补充上下文，缺失或失效时回退到 ProjectPlan 契约。"""
+
+    detail_ref = reference if isinstance(reference, dict) else {}
+    json_path = str(detail_ref.get("json_path") or "").strip()
+    if not json_path or detail_ref.get("status") != "confirmed":
+        return None
+    try:
+        detail_path = _resolve_detail_path(json_path, project_plan_path)
+        if detail_path is None or not detail_path.is_file():
+            return None
+        detail = json.loads(detail_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(detail, dict) or detail.get("status") != "confirmed":
+        return None
     return detail
 
 
