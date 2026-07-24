@@ -31,7 +31,8 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
             runtime_root=runtime_root,
             failed_stage="backend_validation",
         )
-    if not shutil.which("mvn"):
+    maven_command = shutil.which("mvn")
+    if not maven_command:
         return _failed_backend_launch(
             "未找到 Maven 命令：mvn。",
             root=root,
@@ -40,7 +41,8 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
             runtime_root=runtime_root,
             failed_stage="backend_validation",
         )
-    if not shutil.which("java"):
+    java_command = shutil.which("java")
+    if not java_command:
         return _failed_backend_launch(
             "未找到 Java 命令：java。",
             root=root,
@@ -51,10 +53,19 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
         )
 
     runtime_root.mkdir(parents=True, exist_ok=True)
-    build_result = _run_backend_build(cwd=backend_root, runtime_root=runtime_root)
+    build_result = _run_backend_build(
+        maven_command=maven_command,
+        cwd=backend_root,
+        runtime_root=runtime_root,
+    )
     if build_result["returncode"] != 0:
+        message = (
+            "后端 Maven 构建命令执行失败。"
+            if build_result.get("error")
+            else "后端 Maven 构建失败。"
+        )
         return _failed_backend_launch(
-            "后端 Maven 构建失败。",
+            message,
             root=root,
             backend_root=backend_root,
             pom_path=pom_path,
@@ -84,6 +95,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
         )
 
     server_result, process = _start_backend_server(
+        java_command=java_command,
         jar_path=jar_path,
         runtime_root=runtime_root,
     )
@@ -170,10 +182,15 @@ def stop_backend_project(
     return cleanup
 
 
-def _run_backend_build(*, cwd: Path, runtime_root: Path) -> dict[str, Any]:
+def _run_backend_build(
+    *,
+    maven_command: str,
+    cwd: Path,
+    runtime_root: Path,
+) -> dict[str, Any]:
     """执行 Maven clean install，并把完整输出写入后端构建日志。"""
 
-    argv = ["mvn", "clean", "install"]
+    argv = [maven_command, "clean", "install"]
     started_at = datetime.now(UTC).isoformat()
     try:
         completed = subprocess.run(
@@ -188,12 +205,21 @@ def _run_backend_build(*, cwd: Path, runtime_root: Path) -> dict[str, Any]:
         stderr = subprocess_output_text(completed.stderr)
         returncode = completed.returncode
         timed_out = False
+        error = None
     except subprocess.TimeoutExpired as exc:
         # Maven 超时时仍需保留已产生的输出，便于用户定位下载或构建卡点。
         stdout = subprocess_output_text(exc.stdout)
         stderr = subprocess_output_text(exc.stderr)
         returncode = None
         timed_out = True
+        error = None
+    except OSError as exc:
+        # Windows 上 mvn 通常解析为 mvn.cmd；启动异常必须转换为业务失败而非中断 Workflow。
+        stdout = ""
+        stderr = str(exc)
+        returncode = None
+        timed_out = False
+        error = str(exc)
 
     stdout_path = runtime_root / "backend-build.stdout.log"
     stderr_path = runtime_root / "backend-build.stderr.log"
@@ -204,6 +230,7 @@ def _run_backend_build(*, cwd: Path, runtime_root: Path) -> dict[str, Any]:
         "cwd": str(cwd),
         "returncode": returncode,
         "timed_out": timed_out,
+        "error": error,
         "started_at": started_at,
         "finished_at": datetime.now(UTC).isoformat(),
         "stdout_log": str(stdout_path),
@@ -239,12 +266,13 @@ def _is_auxiliary_snapshot_jar(path: Path) -> bool:
 
 def _start_backend_server(
     *,
+    java_command: str,
     jar_path: Path,
     runtime_root: Path,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """在 target 目录后台启动 Java JAR，并记录本次日志偏移量。"""
 
-    argv = ["java", "-jar", jar_path.name]
+    argv = [java_command, "-jar", jar_path.name]
     stdout_path = runtime_root / "backend.stdout.log"
     stderr_path = runtime_root / "backend.stderr.log"
     stdout = stdout_path.open("ab")

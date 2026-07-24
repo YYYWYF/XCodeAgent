@@ -70,7 +70,8 @@ def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
             "server": existing_server,
         }
 
-    if not shutil.which(package_manager):
+    package_manager_command = shutil.which(package_manager)
+    if not package_manager_command:
         return _failed_launch(
             f"未找到包管理器命令：{package_manager}",
             root=root,
@@ -78,7 +79,7 @@ def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
         )
 
     install_result = _run_install(
-        package_manager=package_manager,
+        package_manager_command=package_manager_command,
         cwd=package_path.parent,
         runtime_root=runtime_root,
     )
@@ -92,12 +93,16 @@ def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
                 runtime_root=runtime_root,
             ),
             "status": "failed",
-            "message": "前端依赖安装失败。",
+            "message": (
+                "前端依赖安装命令执行失败。"
+                if install_result.get("error")
+                else "前端依赖安装失败。"
+            ),
             "install": install_result,
         }
 
     launch_result, process = _start_dev_server(
-        package_manager=package_manager,
+        package_manager_command=package_manager_command,
         script_name=script_name,
         script_command=str(scripts.get(script_name, "")),
         cwd=package_path.parent,
@@ -189,11 +194,11 @@ def _select_package_manager(cwd: Path) -> str:
 
 def _run_install(
     *,
-    package_manager: str,
+    package_manager_command: str,
     cwd: Path,
     runtime_root: Path,
 ) -> dict[str, Any]:
-    argv = [package_manager, "install"]
+    argv = [package_manager_command, "install"]
     started_at = datetime.now(UTC).isoformat()
     try:
         completed = subprocess.run(
@@ -208,12 +213,21 @@ def _run_install(
         stderr = subprocess_output_text(completed.stderr)
         returncode = completed.returncode
         timed_out = False
+        error = None
     except subprocess.TimeoutExpired as exc:
         # TimeoutExpired 的输出可能是 bytes，统一解码后再写入运行日志。
         stdout = subprocess_output_text(exc.stdout)
         stderr = subprocess_output_text(exc.stderr)
         returncode = None
         timed_out = True
+        error = None
+    except OSError as exc:
+        # Windows 上 npm/pnpm/yarn 通常是 .cmd，启动异常需落盘并返回给 Workflow。
+        stdout = ""
+        stderr = str(exc)
+        returncode = None
+        timed_out = False
+        error = str(exc)
 
     stdout_path = runtime_root / "install.stdout.log"
     stderr_path = runtime_root / "install.stderr.log"
@@ -224,6 +238,7 @@ def _run_install(
         "cwd": str(cwd),
         "returncode": returncode,
         "timed_out": timed_out,
+        "error": error,
         "started_at": started_at,
         "finished_at": datetime.now(UTC).isoformat(),
         "stdout_log": str(stdout_path),
@@ -233,7 +248,7 @@ def _run_install(
 
 def _start_dev_server(
     *,
-    package_manager: str,
+    package_manager_command: str,
     script_name: str,
     script_command: str,
     cwd: Path,
@@ -242,7 +257,7 @@ def _start_dev_server(
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """以后台进程启动开发服务器，并保留进程对象供健康检查监督。"""
 
-    argv = [package_manager, "run", script_name]
+    argv = [package_manager_command, "run", script_name]
     stdout_path = runtime_root / "frontend.stdout.log"
     stderr_path = runtime_root / "frontend.stderr.log"
     stdout = stdout_path.open("ab")

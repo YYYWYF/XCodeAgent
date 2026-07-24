@@ -492,13 +492,13 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 当前启动策略：
 
 - 两个公共 launcher 仅接收 `str | Path` 工作目录，自行从 `<workspace>/.xcodeagent/runtime/launch/` 推导日志与 PID 目录，因此可被 LangGraph 之外的调用方直接复用；
-- 强制要求工作区存在 `backend/pom.xml`，并检查 `mvn`、`java` 命令可用；
+- 强制要求工作区存在 `backend/pom.xml`，通过 `shutil.which` 解析 `mvn`、`java` 的完整可执行路径；Windows 上直接使用解析到的 `mvn.cmd` 和 `java.exe`，不依赖 `cwd` 再次搜索 PATH；
 - 在 `backend/` 执行 `mvn clean install`，构建输出写入 `.xcodeagent/runtime/launch/backend-build.stdout.log` 和 `backend-build.stderr.log`；
 - 在 `backend/target/` 查找唯一的 `*-SNAPSHOT.jar` 主包，排除 `original-*`、sources、javadoc 和 tests/test 等附属包；无主包或存在多个主包均启动失败；
 - 在 `backend/target/` 以 `java -jar <完整JAR文件名>` 启动后台进程，将 pid 和 stdout/stderr 写入 `.xcodeagent/runtime/launch/backend.pid`、`backend.stdout.log` 和 `backend.stderr.log`；
 - Java 就绪检查只读取本次启动后追加的 stdout/stderr；进程存活且日志包含精确标志 `Spring Boot Version` 或 `ZA21 Version` 才继续启动前端，普通 `Started ...` 日志不构成就绪证据；
 - 在工作区内优先读取 `Frontend/package.json`，其次尝试 `frontend/package.json`、`app/frontend/package.json` 和根 `package.json`；
-- 根据 lockfile 选择包管理器：`pnpm-lock.yaml → pnpm`，`yarn.lock → yarn`，否则使用 `npm`；
+- 根据 lockfile 选择包管理器：`pnpm-lock.yaml → pnpm`，`yarn.lock → yarn`，否则使用 `npm`；执行安装和开发服务器时使用 `shutil.which` 返回的完整路径，兼容 Windows 的 `npm.cmd`、`pnpm.cmd` 和 `yarn.cmd`；
 - 执行 `<package-manager> install` 安装依赖；
 - 优先执行 `dev` script，其次执行 `start` script；
 - 启动时设置 `BROWSER=none`；对于 `react-scripts` 不强制注入 `HOST=127.0.0.1`，避免带代理配置的 CRA 项目生成非法 `allowedHosts`；其它启动脚本继续使用本地 loopback host；
@@ -506,6 +506,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 调试续跑时，如果 pid 文件对应的预览地址已经可访问，则复用现有服务，不重复启动并争抢同一端口；
 - 根据 script 推断预览地址：若脚本声明 `--port`、`--port=` 或 `PORT=` 则使用声明端口，否则统一使用 `http://127.0.0.1:80`；
 - 健康检查在配置的启动窗口内持续监督启动进程：优先通过 urllib 接收 2xx–4xx HTTP 响应；如果运行沙箱禁止 Python 主动连接本地端口，则只读取本次启动后追加的 stdout，通过 CRA/Vite/Webpack 的 `Compiled successfully`、`ready in`、`Local:` 等标志确认就绪。日志读取记录启动前偏移量，不会被历史成功日志误导；
+- Maven 或前端依赖安装的同步命令若抛出 `OSError` / `FileNotFoundError`，launcher 将错误写入 stderr 日志和结构化结果，由 `launch_project` 正常返回失败原因，而不是让异常冒泡为 AG-UI `Workflow failed`；
 - 将启动结果写入 `launch_result`：保留前端兼容字段，并增加 `backend`、`frontend` 和 `failed_stage`；成功时 `preview_url` 是前端预览地址，失败时顶层、`launch_result` 和 `acceptance_request` 的 `preview_url` 均写入启动失败原因。失败状态不会触发前端自动预览导航。
 
 该边界沿用参考 coding-agent harness 的执行—观察—验证循环：Maven 构建、Java 启动和前端启动均使用显式 argv、cwd、超时与进程退出监督，完整命令输出落盘而不进入 Graph State。`launch_result` 和 AG-UI 只携带状态摘要、PID 与稳定日志路径，不注入完整构建/运行日志，从而保持确定性节点可审计并符合 128k 上下文预算。

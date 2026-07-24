@@ -73,8 +73,12 @@ class ProjectLauncherTests(unittest.TestCase):
             (frontend / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'", encoding="utf-8")
 
             fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
+            package_manager_command = r"C:\Program Files\nodejs\pnpm.cmd"
             with (
-                patch("app.services.project_launcher.shutil.which", return_value="/usr/bin/pnpm"),
+                patch(
+                    "app.services.project_launcher.shutil.which",
+                    return_value=package_manager_command,
+                ),
                 patch(
                     "app.services.project_launcher.subprocess.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
@@ -93,8 +97,11 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["package_manager"], "pnpm")
         self.assertEqual(result["script"], "dev")
         self.assertEqual(result["server"]["pid"], 12345)
-        self.assertEqual(run.call_args.args[0], ["pnpm", "install"])
-        self.assertEqual(popen.call_args.args[0], ["pnpm", "run", "dev"])
+        self.assertEqual(run.call_args.args[0], [package_manager_command, "install"])
+        self.assertEqual(
+            popen.call_args.args[0],
+            [package_manager_command, "run", "dev"],
+        )
         self.assertEqual(popen.call_args.kwargs["env"]["HOST"], "127.0.0.1")
         self.assertEqual(popen.call_args.kwargs["env"]["BROWSER"], "none")
 
@@ -263,6 +270,39 @@ class ProjectLauncherTests(unittest.TestCase):
                 "partial output",
             )
 
+    def test_frontend_install_oserror_is_returned_as_structured_failure(self) -> None:
+        """验证 Windows 包管理器启动异常不会中断 Workflow。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "frontend"
+            frontend.mkdir()
+            (frontend / "package.json").write_text(
+                '{"scripts":{"start":"react-scripts start"}}',
+                encoding="utf-8",
+            )
+            package_manager_command = r"C:\Program Files\nodejs\npm.cmd"
+            error = FileNotFoundError(2, "系统找不到指定的文件", package_manager_command)
+            with (
+                patch(
+                    "app.services.project_launcher.shutil.which",
+                    return_value=package_manager_command,
+                ),
+                patch(
+                    "app.services.project_launcher.subprocess.run",
+                    side_effect=error,
+                ),
+            ):
+                result = launch_frontend_project(workspace)
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["message"], "前端依赖安装命令执行失败。")
+            self.assertEqual(result["install"]["argv"][0], package_manager_command)
+            self.assertEqual(result["install"]["error"], str(error))
+            self.assertEqual(
+                Path(result["install"]["stderr_log"]).read_text(encoding="utf-8"),
+                str(error),
+            )
+
     def test_launch_backend_project_builds_and_starts_unique_snapshot_jar(self) -> None:
         """验证 Java 后端按 Maven 构建、JAR 启动的顺序成功运行。"""
 
@@ -274,10 +314,12 @@ class ProjectLauncherTests(unittest.TestCase):
             jar_path = target / "testApp-1.0.0-SNAPSHOT.jar"
             jar_path.write_bytes(b"jar")
             fake_process = SimpleNamespace(pid=24680, poll=lambda: None)
+            maven_command = r"C:\Program Files\Maven\bin\mvn.cmd"
+            java_command = r"C:\Program Files\Java\bin\java.exe"
             with (
                 patch(
                     "app.services.backend_project_launcher.shutil.which",
-                    side_effect=["/usr/bin/mvn", "/usr/bin/java"],
+                    side_effect=[maven_command, java_command],
                 ) as which,
                 patch(
                     "app.services.backend_project_launcher.subprocess.run",
@@ -298,9 +340,15 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(Path(result["jar_path"]), jar_path.resolve())
         self.assertIs(result["_process"], fake_process)
         self.assertEqual(which.call_args_list, [call("mvn"), call("java")])
-        self.assertEqual(run.call_args.args[0], ["mvn", "clean", "install"])
+        self.assertEqual(
+            run.call_args.args[0],
+            [maven_command, "clean", "install"],
+        )
         self.assertEqual(Path(run.call_args.kwargs["cwd"]), backend.resolve())
-        self.assertEqual(popen.call_args.args[0], ["java", "-jar", jar_path.name])
+        self.assertEqual(
+            popen.call_args.args[0],
+            [java_command, "-jar", jar_path.name],
+        )
         self.assertEqual(Path(popen.call_args.kwargs["cwd"]), target.resolve())
 
     def test_launch_backend_project_requires_maven_project_and_runtime_tools(self) -> None:
@@ -358,6 +406,42 @@ class ProjectLauncherTests(unittest.TestCase):
             self.assertEqual(
                 Path(result["build"]["stderr_log"]).read_text(encoding="utf-8"),
                 "compile error",
+            )
+            popen.assert_not_called()
+
+    def test_backend_build_oserror_is_returned_as_structured_failure(self) -> None:
+        """验证 Windows mvn.cmd 启动异常会记录证据而不是冒泡终止 Workflow。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            backend = Path(workspace) / "backend"
+            backend.mkdir()
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            maven_command = r"C:\Program Files\Maven\bin\mvn.cmd"
+            java_command = r"C:\Program Files\Java\bin\java.exe"
+            error = FileNotFoundError(2, "系统找不到指定的文件", maven_command)
+            with (
+                patch(
+                    "app.services.backend_project_launcher.shutil.which",
+                    side_effect=[maven_command, java_command],
+                ),
+                patch(
+                    "app.services.backend_project_launcher.subprocess.run",
+                    side_effect=error,
+                ),
+                patch(
+                    "app.services.backend_project_launcher.subprocess.Popen"
+                ) as popen,
+            ):
+                result = launch_backend_project(workspace)
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["failed_stage"], "backend_build")
+            self.assertEqual(result["message"], "后端 Maven 构建命令执行失败。")
+            self.assertEqual(result["build"]["argv"][0], maven_command)
+            self.assertEqual(result["build"]["error"], str(error))
+            self.assertEqual(
+                Path(result["build"]["stderr_log"]).read_text(encoding="utf-8"),
+                str(error),
             )
             popen.assert_not_called()
 
