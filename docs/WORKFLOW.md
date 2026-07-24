@@ -89,6 +89,8 @@ START
 
 新应用在创建目录后立即通过 `applicationLifecycle.action = create` 建立 lifecycle；后续启动只使用 `get` 读取已有文件。实现不读取旧 active-planning localStorage、旧完成线程列表、`planningThreadId/planningConfirmedAt` 或 checkpoint 来推导业务阶段，缺失、损坏和未来版本都会显式失败。
 
+首页最多同时挂载三个未完成的新应用初始化计划；每个计划按 application id 和独立 `threadId` 隔离 Workflow 快照、AG-UI 会话、停止句柄、删除状态与模板生成任务。一次只显示用户选中的全屏规划页，其余会话保持挂载并在后台继续运行。后台计划完成时只更新自己的应用索引和 lifecycle，不得抢占当前规划页或切换当前工作台；只有三个名额都被未完成计划占用时，“新建应用”才禁用。
+
 参考架构映射保持克制：learn-coding-agent 当前公开提交只能核验 README 中的 JSONL 会话恢复、HITL、关键消息同步写和上下文压缩，不能声称存在未发布的 `src/*` 原子状态实现；OpenCode 采用稳定 session/message/permission ID 与事件投影，但 busy/run/pending permission 仍是进程内状态，XCodeAgent 刻意把业务确认持久化到工作区；Deep Agents/LangGraph 的 checkpointer 负责 interrupt 技术恢复，不能替代面向首页和跨会话协调的业务 lifecycle。状态文件不复制文档、DAG、日志或会话历史，读取时按引用渐进加载，继续满足 128k 上下文预算。
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。

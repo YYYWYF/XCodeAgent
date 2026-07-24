@@ -3,6 +3,7 @@ import { Form, message, Modal } from 'antd'
 import { useState } from 'react'
 import { createApplicationLifecycle } from '../../service/applicationLifecycle'
 import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
+import { MAX_ACTIVE_APPLICATION_PLANS } from '../../service/activeApplicationPlanning'
 import type { ApplicationConfig, ApplicationDraft, ApplicationLifecycle } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'
@@ -15,6 +16,7 @@ import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
 
 type Props = {
+  activePlanningCount: number
   disabled?: boolean
   onStartPlanning: (
     application: ApplicationConfig,
@@ -26,6 +28,7 @@ type Props = {
 
 // 创建应用基础配置，并把新应用交给独立的全屏规划页。
 export default function CreateApplicationAction({
+  activePlanningCount,
   disabled,
   onStartPlanning,
   theme
@@ -65,6 +68,9 @@ export default function CreateApplicationAction({
   const handleCreateApplication = async (): Promise<void> => {
     setCreating(true)
     try {
+      if (activePlanningCount >= MAX_ACTIVE_APPLICATION_PLANS) {
+        throw new Error('最多同时创建 3 个应用，请先完成或删除一个未完成计划。')
+      }
       const values = await form.validateFields()
       const workspaceApi = window.xcodeAgent?.workspace
       if (!workspaceApi?.createProjectDirectory) {
@@ -117,7 +123,7 @@ export default function CreateApplicationAction({
         disabled={disabled}
         description={
           disabled
-            ? '请先完成当前页面规划，再创建新的应用。'
+            ? `已有 ${activePlanningCount} 个未完成计划，请先完成或删除一个。`
             : '配置应用骨架、页面、主题和内置模块，并指定项目创建位置。'
         }
         icon={<PlusOutlined />}

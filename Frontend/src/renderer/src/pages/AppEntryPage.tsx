@@ -1,32 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { message, Modal } from 'antd'
-import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
+import { useCallback, useState } from 'react'
+import { message } from 'antd'
 import { SessionRuntimeProvider } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
-import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
-import {
-  activePlanningStatus,
-  loadActiveApplicationPlanning,
-  workflowApplicationLifecycle,
-  type ActivePlanningStatus,
-  type PersistedActivePlanning
-} from '../service/activeApplicationPlanning'
-import {
-  completeApplicationTemplateGeneration,
-  getApplicationLifecycle
-} from '../service/applicationLifecycle'
-import {
-  APPLICATIONS_CHANGED_EVENT,
-  canOpenApplicationWorkbench,
-  deleteStoredAgentDirectory,
-  removeStoredApplication
-} from '../service/applicationStorage'
 import { saveApplication } from '../components/Welcome/applicationService'
-import {
-  fetchTemplateCode,
-  generateApplicationTemplateFiles as writeApplicationTemplateFiles
-} from '../service/templateApi'
-import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
-import { cx } from '../utils'
+import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
+import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlannings'
+import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
+import { getApplicationLifecycle } from '../service/applicationLifecycle'
+import { canOpenApplicationWorkbench } from '../service/applicationStorage'
+import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import WelcomePage from './WelcomePage'
 import WorkbenchPage from './WorkbenchPage'
 
@@ -46,73 +27,38 @@ export default function AppEntryPage(): JSX.Element {
   )
 }
 
-// 在欢迎页、全屏规划页与应用工作台之间维护顶层导航和长时规划会话。
+// 在欢迎页、多个全屏规划会话与应用工作台之间维护顶层导航。
 function AppEntryContent(): JSX.Element {
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
-  const [activePlanning, setActivePlanning] = useState<PersistedActivePlanning | undefined>()
-  const [planningVisible, setPlanningVisible] = useState(false)
-  const [deletingActivePlanning, setDeletingActivePlanning] = useState(false)
-  const templateGenerationRunRef = useRef<string>()
-  const templateGenerationTaskRef = useRef<Promise<boolean>>()
-  const planningStopHandlerRef = useRef<() => Promise<void>>()
   const { lifecycle: applicationLifecycle, mergeLifecycle: mergeApplicationLifecycle } =
     useApplicationLifecycleStore(activeApplication?.id || '')
 
-  // 启动及应用索引变化时读取活动规划，避免已删除应用继续显示确认文档。
-  useEffect(() => {
-    let disposed = false
-    let refreshId = 0
+  // 打开指定应用工作台，并校准该应用自己的生命周期。
+  const openWorkbench = useCallback(
+    (application: ApplicationConfig, lifecycle?: ApplicationLifecycle): void => {
+      setActiveApplication(application)
+      if (lifecycle) mergeApplicationLifecycle(lifecycle)
+      setActiveSurface('workbench')
+    },
+    [mergeApplicationLifecycle]
+  )
 
-    const refreshActivePlanning = async (): Promise<void> => {
-      const currentRefreshId = ++refreshId
-      const recovered = await loadActiveApplicationPlanning()
-      if (disposed || currentRefreshId !== refreshId) return
-      setActivePlanning(recovered)
-    }
+  const planningController = useActiveApplicationPlannings({
+    onOpenWorkbench: openWorkbench
+  })
 
-    const handleApplicationsChanged = (): void => {
-      void refreshActivePlanning()
-    }
-
-    void refreshActivePlanning()
-    window.addEventListener(APPLICATIONS_CHANGED_EVENT, handleApplicationsChanged)
-    return () => {
-      disposed = true
-      window.removeEventListener(APPLICATIONS_CHANGED_EVENT, handleApplicationsChanged)
-    }
-  }, [])
-
-  // 从工作台直接返回欢迎页，后台任务由保持挂载的工作台继续运行。
+  // 从工作台直接返回欢迎页，后台任务由保持挂载的工作台和规划页继续运行。
   const handleReturnWelcome = (): void => {
     setActiveSurface('welcome')
   }
 
-  // 启动新的独立规划会话并展示全屏生成页。
-  const handleStartPlanning = (
-    application: ApplicationConfig,
-    threadId: string,
-    lifecycle: ApplicationLifecycle
-  ): void => {
-    setActivePlanning({
-      application,
-      lifecycle,
-      status: 'running',
-      threadId
-    })
-    setPlanningVisible(true)
-  }
-
-  // 应用计划一旦确认便永久放行工作台；否则读取当前 lifecycle 判断初始化是否完成。
+  // 已完成应用直接进入工作台；未完成应用只打开其对应的独立规划会话。
   const handleOpenApplication = useCallback(
     async (application: ApplicationConfig): Promise<void> => {
       if (canOpenApplicationWorkbench(application)) {
-        if (activePlanning?.application.id === application.id) {
-          setActivePlanning(undefined)
-          setPlanningVisible(false)
-        }
-        setActiveApplication(application)
-        setActiveSurface('workbench')
+        planningController.dismissPlanning(application.id)
+        openWorkbench(application)
         return
       }
       try {
@@ -124,188 +70,26 @@ function AppEntryContent(): JSX.Element {
           if (confirmedApplication !== application) {
             await saveApplication(confirmedApplication)
           }
-          if (activePlanning?.application.id === application.id) {
-            setActivePlanning(undefined)
-            setPlanningVisible(false)
-          }
-          setActiveApplication(confirmedApplication)
-          mergeApplicationLifecycle(lifecycle)
-          setActiveSurface('workbench')
+          planningController.dismissPlanning(application.id)
+          openWorkbench(confirmedApplication, lifecycle)
           return
         }
       } catch (error) {
         console.warn('读取应用生命周期失败', error)
       }
-      if (activePlanning?.application.id === application.id) {
-        setPlanningVisible(true)
+      const hasActivePlanning = planningController.activePlannings.some(
+        (planning) => planning.application.id === application.id
+      )
+      if (hasActivePlanning) {
+        planningController.showPlanning(application.id)
         return
       }
       message.info('请先完成并确认应用计划')
     },
-    [activePlanning, mergeApplicationLifecycle]
+    [openWorkbench, planningController]
   )
 
-  // 接收规划页状态，并避免相同状态造成无意义的首页重渲染。
-  const handlePlanningStatusChange = useCallback((status: ActivePlanningStatus): void => {
-    setActivePlanning((current) => {
-      if (!current || current.status === status) return current
-      return { ...current, status }
-    })
-  }, [])
-
-  // 保存规划页收到的最新公开 Workflow 快照，供重新进入时恢复确认界面。
-  const handlePlanningWorkflowChange = useCallback((workflow: WorkflowRunPayload): void => {
-    setActivePlanning((current) => {
-      if (!current) return current
-      const lifecycle = workflowApplicationLifecycle(workflow) || current.lifecycle
-      return {
-        ...current,
-        lifecycle,
-        workflow
-      }
-    })
-  }, [])
-
-  // 保存全屏规划页当前会话的停止句柄，供首页外层控制调用。
-  const handlePlanningStopHandlerChange = useCallback((handler?: () => Promise<void>): void => {
-    planningStopHandlerRef.current = handler
-  }, [])
-
-  // 生成应用模板文件并通过 AG-UI 把结果提交给后端生命周期状态机。
-  const generateApplicationTemplateFiles = useCallback(
-    (planning: PersistedActivePlanning): Promise<boolean> => {
-      const runKey = planning.application.id
-      if (templateGenerationRunRef.current === runKey && templateGenerationTaskRef.current) {
-        return templateGenerationTaskRef.current
-      }
-      templateGenerationRunRef.current = runKey
-      const task = (async (): Promise<boolean> => {
-        let failureMessage = ''
-        const projectPath =
-          planning.application.workspaceRoot || planning.application.projectParentPath || ''
-
-        // 模板拉取失败沿用既有非阻断语义；本地正式文件写入失败才阻止 lifecycle 放行。
-        try {
-          await fetchTemplateCode(planning.application.schema, projectPath)
-        } catch (templateError) {
-          console.error('[模板拉取失败]', templateError)
-          message.warning('模板拉取失败，可在工作台中重试')
-        }
-
-        try {
-          const result = await writeApplicationTemplateFiles(
-            planning.application.schema,
-            projectPath,
-            planning.workflow
-          )
-          if (result.written.length > 0) {
-            message.success(`已生成 ${result.written.length} 个应用模板文件`)
-          }
-        } catch (reason) {
-          console.error('[应用模板文件生成失败]', reason)
-          failureMessage = reason instanceof Error ? reason.message : String(reason)
-        }
-
-        const lifecycle = await completeApplicationTemplateGeneration(
-          planning.application,
-          planning.threadId,
-          !failureMessage,
-          failureMessage || undefined
-        )
-        if (!canOpenApplicationWorkbench(planning.application, lifecycle)) {
-          setActivePlanning({
-            ...planning,
-            lifecycle,
-            status: activePlanningStatus(lifecycle)
-          })
-          message.error(lifecycle.error?.message || '应用模板文件生成失败')
-          return false
-        }
-
-        const confirmedApplication = { ...planning.application, planningConfirmedAt: Date.now() }
-        await saveApplication(confirmedApplication)
-        setActivePlanning(undefined)
-        setPlanningVisible(false)
-        setActiveApplication(confirmedApplication)
-        mergeApplicationLifecycle(lifecycle)
-        setActiveSurface('workbench')
-        message.success('应用模板文件生成完成，正在进入工作台')
-        return true
-      })()
-      templateGenerationTaskRef.current = task
-      void task.then(
-        () => {
-          if (templateGenerationTaskRef.current === task) {
-            templateGenerationTaskRef.current = undefined
-            templateGenerationRunRef.current = undefined
-          }
-        },
-        () => {
-          if (templateGenerationTaskRef.current === task) {
-            templateGenerationTaskRef.current = undefined
-            templateGenerationRunRef.current = undefined
-          }
-        }
-      )
-      return task
-    },
-    [mergeApplicationLifecycle]
-  )
-
-  // 停止初始化运行，等待可能的模板写入退出，再删除应用索引和 .xcodeagent 目录。
-  const deleteActivePlanning = useCallback(async (): Promise<void> => {
-    const planning = activePlanning
-    const workspaceRoot = planning?.application.workspaceRoot
-    if (!planning || !workspaceRoot || deletingActivePlanning) return
-    setDeletingActivePlanning(true)
-    try {
-      await planningStopHandlerRef.current?.()
-      await templateGenerationTaskRef.current?.catch(() => undefined)
-      await deleteStoredAgentDirectory(workspaceRoot)
-      await removeStoredApplication(planning.application.id)
-      setActivePlanning(undefined)
-      setPlanningVisible(false)
-      setActiveApplication(null)
-      setActiveSurface('welcome')
-      message.success('初始化计划和 .xcodeagent 目录已删除')
-    } catch (reason) {
-      const errorMessage = reason instanceof Error ? reason.message : String(reason)
-      message.error(`删除初始化计划失败：${errorMessage}`)
-    } finally {
-      setDeletingActivePlanning(false)
-    }
-  }, [activePlanning, deletingActivePlanning])
-
-  // 二次确认停止与本地目录清理，避免误删尚未确认的规划文档。
-  const confirmDeleteActivePlanning = useCallback((): void => {
-    if (!activePlanning || deletingActivePlanning) return
-    Modal.confirm({
-      title: `停止并删除「${activePlanning.application.appName}」的初始化计划？`,
-      content: '正在执行的规划会被停止，生成的 .xcodeagent 目录及其中的规划文档会被永久删除。',
-      okText: '确认',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: deleteActivePlanning,
-      wrapClassName: cx('welcome-modal', `theme-${getEntryTheme()}`)
-    })
-  }, [activePlanning, deleteActivePlanning, deletingActivePlanning])
-
-  // 服务重启后若停在模板文件生成阶段，自动以同一幂等动作继续。
-  useEffect(() => {
-    if (
-      planningVisible ||
-      activePlanning?.lifecycle.initialization.stage !== 'generating_application_template_files'
-    )
-      return
-    void generateApplicationTemplateFiles(activePlanning)
-  }, [activePlanning, generateApplicationTemplateFiles, planningVisible])
-
-  // 在 RequirementSpec 与 ProjectPlan 均确认后结束规划入口并打开工作台。
-  // 进入工作台前，先拉取模板工程代码，再把规划产出的页面追加到 frontend/src/pages/ 下。
-  const handlePlanningConfirmed = async (): Promise<boolean> => {
-    if (!activePlanning) return false
-    return generateApplicationTemplateFiles(activePlanning)
-  }
+  const planningVisible = Boolean(planningController.visiblePlanningId)
 
   return (
     <>
@@ -314,43 +98,38 @@ function AppEntryContent(): JSX.Element {
         hidden={activeSurface !== 'welcome' || planningVisible}
       >
         <WelcomePage
-          activePlanning={activePlanning?.application}
-          activePlanningStatus={activePlanning?.status}
-          activePlanningLifecycle={activePlanning?.lifecycle}
-          deletingActivePlanning={deletingActivePlanning}
-          onDeletePlanning={confirmDeleteActivePlanning}
+          activePlannings={planningController.activePlannings}
+          deletingPlanningIds={planningController.deletingPlanningIds}
+          onDeletePlanning={planningController.removePlanning}
           onOpenApplication={handleOpenApplication}
-          onOpenPlanning={() => {
-            if (
-              activePlanning?.lifecycle.initialization.stage ===
-              'application_template_generation_failed'
-            ) {
-              void generateApplicationTemplateFiles(activePlanning)
-              return
-            }
-            setPlanningVisible(true)
-          }}
-          onStartPlanning={handleStartPlanning}
+          onOpenPlanning={planningController.showPlanning}
+          onStartPlanning={planningController.startPlanning}
         />
       </div>
 
-      {activePlanning ? (
+      {planningController.activePlannings.map((planning) => (
         <ApplicationPagePlanningModal
-          application={activePlanning.application}
-          initialLifecycle={activePlanning.lifecycle}
-          initialStatus={activePlanning.status}
-          initialWorkflow={activePlanning.workflow}
-          key={activePlanning.threadId}
-          onConfirmed={handlePlanningConfirmed}
-          onReturnHome={() => setPlanningVisible(false)}
-          onStatusChange={handlePlanningStatusChange}
-          onStopHandlerChange={handlePlanningStopHandlerChange}
-          onWorkflowChange={handlePlanningWorkflowChange}
+          application={planning.application}
+          initialLifecycle={planning.lifecycle}
+          initialStatus={planning.status}
+          initialWorkflow={planning.workflow}
+          key={planning.threadId}
+          onConfirmed={() => planningController.onPlanningConfirmed(planning.application.id)}
+          onReturnHome={planningController.returnHome}
+          onStatusChange={(status) =>
+            planningController.updatePlanningStatus(planning.application.id, status)
+          }
+          onStopHandlerChange={(handler) =>
+            planningController.registerStopHandler(planning.application.id, handler)
+          }
+          onWorkflowChange={(workflow) =>
+            planningController.updatePlanningWorkflow(planning.application.id, workflow)
+          }
           theme={getEntryTheme()}
-          threadId={activePlanning.threadId}
-          visible={planningVisible}
+          threadId={planning.threadId}
+          visible={planningController.visiblePlanningId === planning.application.id}
         />
-      ) : null}
+      ))}
 
       {activeApplication ? (
         <div

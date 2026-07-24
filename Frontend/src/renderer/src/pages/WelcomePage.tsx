@@ -9,19 +9,20 @@ import {
   WelcomeRecentProjects
 } from '../components/Welcome'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
-import type { ActivePlanningStatus } from '../service/activeApplicationPlanning'
+import {
+  MAX_ACTIVE_APPLICATION_PLANS,
+  type PersistedActivePlanning
+} from '../service/activeApplicationPlanning'
 import { cx } from '../utils'
 import './WelcomePage.less'
 import './WelcomePageLight.less'
 
 type Props = {
-  activePlanning?: ApplicationConfig
-  activePlanningStatus?: ActivePlanningStatus
-  activePlanningLifecycle?: ApplicationLifecycle
-  deletingActivePlanning: boolean
-  onDeletePlanning: () => void
+  activePlannings: PersistedActivePlanning[]
+  deletingPlanningIds: ReadonlySet<string>
+  onDeletePlanning: (applicationId: string) => void
   onOpenApplication: (application: ApplicationConfig) => void
-  onOpenPlanning: () => void
+  onOpenPlanning: (applicationId: string) => void
   onStartPlanning: (
     application: ApplicationConfig,
     threadId: string,
@@ -39,12 +40,10 @@ function getTheme(): WelcomeTheme {
   return storedPreference === 'light' || storedPreference === 'dark' ? storedPreference : 'light'
 }
 
-// 渲染首页，并在存在未完成规划时显示唯一的恢复入口。
+// 渲染首页，并为每个未完成规划显示相互隔离的恢复入口。
 export default function WelcomePage({
-  activePlanning,
-  activePlanningStatus,
-  activePlanningLifecycle,
-  deletingActivePlanning,
+  activePlannings,
+  deletingPlanningIds,
   onDeletePlanning,
   onOpenApplication,
   onOpenPlanning,
@@ -54,7 +53,7 @@ export default function WelcomePage({
 
   return (
     <main
-      className={cx('welcome-page', activePlanning && 'has-active-planning')}
+      className={cx('welcome-page', activePlannings.length > 0 && 'has-active-planning')}
       data-theme={theme}
     >
       <section className={cx('welcome-shell')}>
@@ -68,7 +67,13 @@ export default function WelcomePage({
           </div>
 
           <nav className={cx('welcome-utilities')} aria-label="欢迎页工具">
-            <Button aria-label="设置" disabled icon={<SettingOutlined />} title="设置" type="text" />
+            <Button
+              aria-label="设置"
+              disabled
+              icon={<SettingOutlined />}
+              title="设置"
+              type="text"
+            />
             <Tooltip title="帮助功能即将推出">
               <Button
                 aria-label="帮助"
@@ -86,22 +91,28 @@ export default function WelcomePage({
 
             <section className={cx('welcome-actions')} aria-label="开始使用 XCodeAgent">
               <CreateApplicationAction
-                disabled={activePlanningStatus === 'running' || activePlanningStatus === 'error'}
+                activePlanningCount={activePlannings.length}
+                disabled={activePlannings.length >= MAX_ACTIVE_APPLICATION_PLANS}
                 onStartPlanning={onStartPlanning}
                 theme={theme}
               />
               <OpenWorkspaceAction onOpenApplication={onOpenApplication} theme={theme} />
             </section>
 
-            {activePlanning && activePlanningLifecycle ? (
-              <ActivePlanningAction
-                application={activePlanning}
-                deleting={deletingActivePlanning}
-                lifecycle={activePlanningLifecycle}
-                onDelete={onDeletePlanning}
-                onOpen={onOpenPlanning}
-                status={activePlanningStatus || 'running'}
-              />
+            {activePlannings.length > 0 ? (
+              <section className={cx('active-planning-list')} aria-label="未完成的应用计划">
+                {activePlannings.map((planning) => (
+                  <ActivePlanningAction
+                    application={planning.application}
+                    deleting={deletingPlanningIds.has(planning.application.id)}
+                    key={planning.application.id}
+                    lifecycle={planning.lifecycle}
+                    onDelete={() => onDeletePlanning(planning.application.id)}
+                    onOpen={() => onOpenPlanning(planning.application.id)}
+                    status={planning.status}
+                  />
+                ))}
+              </section>
             ) : null}
 
             <WelcomeRecentProjects onOpenApplication={onOpenApplication} theme={theme} />
