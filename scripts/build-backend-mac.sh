@@ -4,6 +4,20 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_ROOT="${BACKEND_ROOT:-"$ROOT_DIR/Backend"}"
 FRONTEND_ROOT="${FRONTEND_ROOT:-"$ROOT_DIR/Frontend"}"
+REQUESTED_ARCH="${1:-}"
+MACHINE_ARCH="$(uname -m)"
+case "$MACHINE_ARCH" in
+  x86_64) BUILD_ARCH="x64" ;;
+  arm64) BUILD_ARCH="arm64" ;;
+  *)
+    echo "Unsupported macOS architecture: $MACHINE_ARCH" >&2
+    exit 1
+    ;;
+esac
+if [ -n "$REQUESTED_ARCH" ] && [ "$REQUESTED_ARCH" != "$BUILD_ARCH" ]; then
+  echo "Requested macOS architecture $REQUESTED_ARCH does not match build host $BUILD_ARCH." >&2
+  exit 1
+fi
 if [ -n "${PYTHON:-}" ]; then
   PYTHON_BIN="$PYTHON"
 elif [ -x "$BACKEND_ROOT/.venv/bin/python3.12" ]; then
@@ -21,7 +35,7 @@ fi
 ENV_FILE="$BACKEND_ROOT/.env"
 SPEC_FILE="$BACKEND_ROOT/packaging/xcodeagent-backend.spec"
 DIST_DIR="$BACKEND_ROOT/dist/xcodeagent-backend"
-TARGET_DIR="$FRONTEND_ROOT/resources/backend/darwin"
+TARGET_DIR="$FRONTEND_ROOT/resources/backend/darwin-$BUILD_ARCH"
 TARGET_EXECUTABLE="$TARGET_DIR/xcodeagent-backend"
 
 if [ ! -f "$ENV_FILE" ]; then

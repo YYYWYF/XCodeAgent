@@ -36,7 +36,7 @@ class WorkflowArtifactPathTests(unittest.TestCase):
 
         self.assertEqual(
             workspace_root({"workspace": str(absolute_workspace)}),
-            absolute_workspace,
+            absolute_workspace.resolve(),
         )
 
 

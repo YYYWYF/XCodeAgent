@@ -106,7 +106,11 @@ def save_agents_document(
 
     file_mode = stat.S_IMODE(_regular_file_stat(agents_file).st_mode)
     _atomic_replace(agents_file, encoded_content, file_mode)
-    return _document_from_content(agents_file, content, encoded_content)
+    return _document_from_content(
+        agents_file,
+        _normalize_newlines(content),
+        encoded_content,
+    )
 
 
 def _ensure_environment_root(root: Path | None) -> Path:
@@ -156,7 +160,7 @@ def _create_file(path: Path, content: bytes) -> None:
 def _read_document(agents_file: Path) -> AgentFileDocument:
     content_bytes = _read_content_bytes(agents_file)
     try:
-        content = content_bytes.decode("utf-8")
+        content = _normalize_newlines(content_bytes.decode("utf-8"))
     except UnicodeDecodeError as exc:
         raise AgentFileContentError("AGENTS.md 必须使用 UTF-8 编码。") from exc
     return _document_from_content(agents_file, content, content_bytes)
@@ -191,13 +195,21 @@ def _read_content_bytes(agents_file: Path) -> bytes:
 
 
 def _encode_content(content: str) -> bytes:
+    """把外部文本统一为 LF 后编码，保证 Windows 与 macOS 存储结果一致。"""
+
     try:
-        encoded_content = content.encode("utf-8")
+        encoded_content = _normalize_newlines(content).encode("utf-8")
     except UnicodeEncodeError as exc:
         raise AgentFileContentError("AGENTS.md 必须是有效的 UTF-8 文本。") from exc
     if len(encoded_content) > MAX_AGENTS_CONTENT_BYTES:
         raise AgentFileContentError("AGENTS.md 不能超过 32 KiB。")
     return encoded_content
+
+
+def _normalize_newlines(content: str) -> str:
+    """把 Windows 和旧式 Mac 换行统一为跨平台稳定的 LF。"""
+
+    return content.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _regular_file_stat(path: Path) -> os.stat_result:
@@ -213,7 +225,10 @@ def _regular_file_stat(path: Path) -> os.stat_result:
 
 
 def _content_revision(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
+    """按规范化换行计算版本号，使同一文本在两个系统上版本一致。"""
+
+    canonical_content = content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(canonical_content).hexdigest()
 
 
 def _atomic_replace(path: Path, content: bytes, file_mode: int) -> None:

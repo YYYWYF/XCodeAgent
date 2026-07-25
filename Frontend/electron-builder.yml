@@ -26,11 +26,13 @@ nsis:
   createDesktopShortcut: always
 mac:
   extraResources:
-    - from: resources/backend/darwin
+    - from: resources/backend/darwin-${arch}
       to: backend
       filter:
         - .env
         - '**/*'
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
@@ -39,7 +41,7 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 linux:
   target:
     - AppImage

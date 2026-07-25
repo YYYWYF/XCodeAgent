@@ -271,7 +271,8 @@ def _start_dev_server(
             stdout=stdout,
             stderr=stderr,
             stdin=subprocess.DEVNULL,
-            start_new_session=True,
+            # macOS 预览进程继承 Electron 后端进程组，应用退出时可统一回收。
+            start_new_session=os.name == "nt",
             env=env,
         )
     except OSError as exc:

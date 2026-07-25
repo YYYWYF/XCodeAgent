@@ -223,7 +223,12 @@ def _query_process_command(pid: int) -> tuple[str, str | None]:
 
     try:
         if os.name == "nt":
-            powershell = shutil.which("powershell") or shutil.which("powershell.exe")
+            powershell = (
+                shutil.which("pwsh")
+                or shutil.which("pwsh.exe")
+                or shutil.which("powershell")
+                or shutil.which("powershell.exe")
+            )
             if not powershell:
                 return "", "无法找到 PowerShell，不能安全校验后端进程身份。"
             argv = [
@@ -257,16 +262,23 @@ def _query_process_command(pid: int) -> tuple[str, str | None]:
 def _command_matches_workspace_backend(command: str, backend_root: Path) -> bool:
     """确认命令属于当前工作区 target 下的 Java JAR，而不是其他 Java 进程。"""
 
-    normalized_command = command.replace("\\", "/").lower()
+    normalized_command = _normalize_process_identity(command)
     if "java" not in normalized_command or "-jar" not in normalized_command:
         return False
     target_root = backend_root / "target"
     jar_paths = {
-        str(path.resolve()).replace("\\", "/").lower()
+        _normalize_process_identity(str(path.resolve()))
         for path in target_root.glob("*.jar")
         if path.is_file()
     }
     return any(jar_path in normalized_command for jar_path in jar_paths)
+
+
+def _normalize_process_identity(value: str) -> str:
+    """仅在 Windows 折叠进程路径大小写，POSIX 保留大小写敏感语义。"""
+
+    normalized = value.replace("\\", "/")
+    return normalized.lower() if os.name == "nt" else normalized
 
 
 def _unregister_backend_process(

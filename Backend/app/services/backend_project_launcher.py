@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -26,7 +27,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
     """按普通工作目录构建并启动 Java 后端，不依赖 LangGraph 状态。"""
 
     root = Path(workspace_path).expanduser().resolve()
-    backend_root = root / "backend"
+    backend_root = _find_backend_root(root)
     pom_path = backend_root / "pom.xml"
     runtime_root = root / ".xcodeagent" / "runtime" / "launch"
     if not pom_path.is_file():
@@ -38,7 +39,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
             runtime_root=runtime_root,
             failed_stage="backend_validation",
         )
-    maven_command = shutil.which("mvn")
+    maven_command = _find_maven_command(backend_root)
     if not maven_command:
         return _failed_backend_launch(
             "未找到 Maven 命令：mvn。",
@@ -69,6 +70,31 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
             maven_command=maven_command,
             java_command=java_command,
         )
+
+
+def _find_backend_root(root: Path) -> Path:
+    """显式识别 backend/Backend，避免依赖文件系统大小写折叠行为。"""
+
+    candidates = [
+        candidate
+        for candidate in (root / "backend", root / "Backend")
+        if candidate.is_dir()
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    return root / "backend"
+
+
+def _find_maven_command(backend_root: Path) -> str | None:
+    """优先使用项目 Maven wrapper，再回退到当前 PATH 的全局 Maven。"""
+
+    windows_wrapper = backend_root / "mvnw.cmd"
+    posix_wrapper = backend_root / "mvnw"
+    if os.name == "nt" and windows_wrapper.is_file():
+        return str(windows_wrapper)
+    if os.name != "nt" and posix_wrapper.is_file():
+        return str(posix_wrapper)
+    return shutil.which("mvn")
 
 
 def _launch_backend_project_locked(
@@ -354,7 +380,8 @@ def _start_backend_server(
             stdout=stdout,
             stderr=stderr,
             stdin=subprocess.DEVNULL,
-            start_new_session=True,
+            # macOS Java 服务继承 Electron 后端进程组，应用退出时可统一回收。
+            start_new_session=os.name == "nt",
         )
     except OSError as exc:
         stdout.close()

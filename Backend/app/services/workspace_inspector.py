@@ -195,11 +195,27 @@ def _build_snapshot(
     code_graph_provider: CodeGraphProvider,
 ) -> dict[str, Any]:
     package_json = _read_json(workspace_root / "package.json")
-    frontend_package_json = _read_json(workspace_root / "Frontend" / "package.json")
+    frontend_package_path = next(
+        (
+            candidate
+            for candidate in (
+                workspace_root / "Frontend" / "package.json",
+                workspace_root / "frontend" / "package.json",
+            )
+            if candidate.is_file()
+        ),
+        workspace_root / "Frontend" / "package.json",
+    )
+    frontend_package_json = _read_json(frontend_package_path)
+    frontend_cwd = frontend_package_path.parent.name
     pyproject = _read_text(workspace_root / "pyproject.toml")
     requirements = _read_text(workspace_root / "requirements.txt")
 
-    backend_files = [path for path in files if path.startswith("Backend/app/")]
+    backend_files = [
+        path
+        for path in files
+        if path.startswith(("Backend/app/", "backend/app/"))
+    ]
     frontend_files = [path for path in files if FRONTEND_SRC_RE.match(path)]
     source_files = [
         path
@@ -225,8 +241,16 @@ def _build_snapshot(
             files=files,
         ),
         "entrypoints": _entrypoints(files),
-        "build_commands": _build_commands(package_json, frontend_package_json),
-        "test_commands": _test_commands(package_json, frontend_package_json),
+        "build_commands": _build_commands(
+            package_json,
+            frontend_package_json,
+            frontend_cwd=frontend_cwd,
+        ),
+        "test_commands": _test_commands(
+            package_json,
+            frontend_package_json,
+            frontend_cwd=frontend_cwd,
+        ),
         "backend": _backend_facts(workspace_root, backend_files),
         "frontend": _frontend_facts(workspace_root, frontend_files),
         "shared_contracts": _shared_contracts(files),
@@ -245,6 +269,7 @@ def _project_roots(files: Iterable[str]) -> list[dict[str, str]]:
     roots = []
     known = {
         "Backend/app/": ("backend", "FastAPI backend application"),
+        "backend/app/": ("backend", "FastAPI backend application"),
         "Frontend/src/": ("frontend", "React/Electron renderer and app source"),
         "Frontend/src/main/": ("electron_main", "Electron main process"),
     }
@@ -283,7 +308,10 @@ def _tech_stack(
         stack.add("React")
     if "vite" in dependencies or any("vite.config" in path for path in files):
         stack.add("Vite")
-    if "electron" in dependencies or any(path.startswith("Frontend/src/main/") for path in files):
+    if "electron" in dependencies or any(
+        path.startswith(("Frontend/src/main/", "frontend/src/main/"))
+        for path in files
+    ):
         stack.add("Electron")
     if "antd" in dependencies or "@ant-design/icons" in dependencies:
         stack.add("Ant Design")
@@ -298,6 +326,8 @@ def _entrypoints(files: list[str]) -> list[dict[str, str]]:
     candidates = {
         "Backend/app/main.py": "backend_api",
         "Backend/app/graph/workflow.py": "workflow_graph",
+        "backend/app/main.py": "backend_api",
+        "backend/app/graph/workflow.py": "workflow_graph",
         "Frontend/src/main/index.ts": "electron_main",
         "Frontend/src/renderer/src/main.tsx": "frontend_renderer",
         "Frontend/src/renderer/src/App.tsx": "frontend_app",
@@ -313,10 +343,12 @@ def _entrypoints(files: list[str]) -> list[dict[str, str]]:
 def _build_commands(
     package_json: dict[str, Any],
     frontend_package_json: dict[str, Any],
+    *,
+    frontend_cwd: str,
 ) -> list[dict[str, str]]:
     commands: list[dict[str, str]] = []
     if "build" in _scripts(frontend_package_json):
-        commands.append({"cwd": "Frontend", "command": "pnpm build", "kind": "frontend_build"})
+        commands.append({"cwd": frontend_cwd, "command": "pnpm build", "kind": "frontend_build"})
     if "build" in _scripts(package_json):
         commands.append({"cwd": ".", "command": "pnpm build", "kind": "workspace_build"})
     commands.append({"cwd": ".", "command": "curl -sS http://127.0.0.1:8000/health", "kind": "backend_health"})
@@ -326,9 +358,11 @@ def _build_commands(
 def _test_commands(
     package_json: dict[str, Any],
     frontend_package_json: dict[str, Any],
+    *,
+    frontend_cwd: str,
 ) -> list[dict[str, str]]:
     commands: list[dict[str, str]] = []
-    for cwd, package in ((".", package_json), ("Frontend", frontend_package_json)):
+    for cwd, package in ((".", package_json), (frontend_cwd, frontend_package_json)):
         scripts = _scripts(package)
         for name in ("test", "lint", "typecheck"):
             if name in scripts:

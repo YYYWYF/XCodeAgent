@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import crypto from 'node:crypto'
 import { execFile } from 'node:child_process'
@@ -412,8 +412,8 @@ async function deleteProjectDirectory(workspaceRoot: unknown): Promise<void> {
     path.resolve(app.getPath('home')),
     path.resolve(app.getPath('userData')),
     path.resolve(getXcodeAgentDataDir())
-  ])
-  if (protectedRoots.has(projectRoot)) {
+  ].map(pathComparisonKey))
+  if (protectedRoots.has(pathComparisonKey(projectRoot))) {
     throw new Error('不能删除系统、用户或 XCodeAgent 数据目录')
   }
 
@@ -440,8 +440,8 @@ async function deleteProjectAgentDirectory(workspaceRoot: unknown): Promise<void
     path.resolve(app.getPath('home')),
     path.resolve(app.getPath('userData')),
     path.resolve(getXcodeAgentDataDir())
-  ])
-  if (protectedRoots.has(projectRoot)) {
+  ].map(pathComparisonKey))
+  if (protectedRoots.has(pathComparisonKey(projectRoot))) {
     throw new Error('不能清理系统、用户或 XCodeAgent 数据目录')
   }
 
@@ -565,6 +565,12 @@ function resolveWorkspaceRoot(value: unknown): string {
   return path.resolve(value)
 }
 
+/** 生成符合宿主文件系统大小写语义的绝对路径比较键。 */
+function pathComparisonKey(value: string): string {
+  const resolved = path.normalize(path.resolve(value))
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
 /** 根据工作区名称和绝对路径哈希生成稳定的会话目录键。 */
 function getWorkspaceSessionKey(workspaceRoot: unknown): string {
   const resolvedWorkspaceRoot = resolveWorkspaceRoot(workspaceRoot)
@@ -575,7 +581,7 @@ function getWorkspaceSessionKey(workspaceRoot: unknown): string {
       .slice(0, 80) || 'workspace'
   const workspaceHash = crypto
     .createHash('sha1')
-    .update(resolvedWorkspaceRoot)
+    .update(pathComparisonKey(resolvedWorkspaceRoot))
     .digest('hex')
     .slice(0, 12)
   return `${workspaceName}-${workspaceHash}`
@@ -1405,7 +1411,14 @@ function quitFromTray(): void {
 function setupTray(): void {
   if (tray) return
 
-  tray = new Tray(icon)
+  const trayIcon =
+    process.platform === 'darwin'
+      ? nativeImage.createFromPath(icon).resize({ width: 16, height: 16 })
+      : nativeImage.createFromPath(icon)
+  if (process.platform === 'darwin') {
+    trayIcon.setTemplateImage(true)
+  }
+  tray = new Tray(trayIcon)
   tray.setToolTip('XCode Agent')
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -1456,14 +1469,19 @@ async function initializePrimaryApplication(): Promise<boolean> {
 
   if (!(await clearAuthStateBeforeStartup())) return false
 
-  // Allow F12 to toggle DevTools in development
-  app.on('browser-window-created', (_, window) => {
-    window.webContents.on('before-input-event', (_event, input) => {
-      if (input.key === 'F12') {
-        window.webContents.toggleDevTools()
-      }
+  // 仅非生产环境开放跨平台开发者工具快捷键。
+  if (XCODE_AGENT_ENV.WORKING_DIR !== '.xcodeagent') {
+    app.on('browser-window-created', (_, window) => {
+      window.webContents.on('before-input-event', (_event, input) => {
+        const isDevToolsShortcut =
+          input.key === 'F12' ||
+          ((input.control || input.meta) && input.alt && input.key.toLowerCase() === 'i')
+        if (isDevToolsShortcut) {
+          window.webContents.toggleDevTools()
+        }
+      })
     })
-  })
+  }
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,7 +34,16 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 calls.append(argv)
                 return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
-            with patch("app.services.integration_test_runner.subprocess.run", side_effect=fake_run):
+            with (
+                patch(
+                    "app.services.integration_test_runner.shutil.which",
+                    side_effect=lambda name: name,
+                ),
+                patch(
+                    "app.services.integration_test_runner.subprocess.run",
+                    side_effect=fake_run,
+                ),
+            ):
                 result = run_integration_checks({"workspace": workspace})
 
         ids = [item["id"] for item in result["test_results"]]
@@ -53,6 +64,83 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             agent_note="ok",
         )
         self.assertNotIn("e2e_tests", report["quality_gate"]["required_checks"])
+
+    def test_missing_package_manager_returns_structured_failures(self) -> None:
+        """验证缺少包管理器时返回结构化检查失败而不是把 None 传给 subprocess。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "frontend"
+            frontend.mkdir()
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"vite build"}}',
+                encoding="utf-8",
+            )
+            with (
+                patch(
+                    "app.services.integration_test_runner.shutil.which",
+                    return_value=None,
+                ),
+                patch("app.services.integration_test_runner.subprocess.run") as run,
+            ):
+                result = run_integration_checks({"workspace": workspace})
+
+        install = next(item for item in result["test_results"] if item["id"] == "frontend_install")
+        build = next(item for item in result["test_results"] if item["id"] == "frontend_build")
+        self.assertFalse(install["passed"])
+        self.assertFalse(build["passed"])
+        self.assertIn("未找到包管理器命令", install["evidence"])
+        run.assert_not_called()
+
+    def test_python_tests_use_current_interpreter(self) -> None:
+        """验证 Windows 与 macOS 都通过当前 Python 解释器运行 pytest。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            (Path(workspace) / "pyproject.toml").write_text(
+                "[tool.pytest.ini_options]\n",
+                encoding="utf-8",
+            )
+            calls: list[list[str]] = []
+
+            def fake_run(argv, **kwargs):
+                """记录 pytest 命令并返回成功结果。"""
+
+                calls.append(argv)
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with patch(
+                "app.services.integration_test_runner.subprocess.run",
+                side_effect=fake_run,
+            ):
+                run_integration_checks({"workspace": workspace})
+
+        self.assertIn([sys.executable, "-m", "pytest"], calls)
+
+    def test_maven_wrapper_matches_host_platform(self) -> None:
+        """验证 Maven 工程优先使用当前系统可执行的 wrapper。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            backend = Path(workspace) / "Backend"
+            backend.mkdir()
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            (backend / "mvnw").write_text("#!/bin/sh\n", encoding="utf-8")
+            (backend / "mvnw.cmd").write_text("@echo off\r\n", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def fake_run(argv, **kwargs):
+                """记录 Maven 命令并返回成功结果。"""
+
+                calls.append(argv)
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with patch(
+                "app.services.integration_test_runner.subprocess.run",
+                side_effect=fake_run,
+            ):
+                run_integration_checks({"workspace": workspace})
+
+        wrapper_name = "mvnw.cmd" if os.name == "nt" else "mvnw"
+        self.assertTrue(calls)
+        self.assertTrue(all(Path(argv[0]).name == wrapper_name for argv in calls))
 
     def test_timeout_bytes_are_decoded_and_recorded_as_failed_check(self) -> None:
         """验证超时命令的字节输出会被解码并记录为失败检查。"""

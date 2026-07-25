@@ -108,7 +108,11 @@ class ProjectLauncherTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "running")
         self.assertEqual(result["preview_url"], "http://127.0.0.1:80")
-        self.assertTrue(result["package_json_path"].lower().endswith("frontend/package.json"))
+        self.assertTrue(
+            result["package_json_path"].replace("\\", "/").lower().endswith(
+                "frontend/package.json"
+            )
+        )
         self.assertEqual(result["package_manager"], "pnpm")
         self.assertEqual(result["script"], "dev")
         self.assertEqual(result["server"]["pid"], 12345)
@@ -367,6 +371,40 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(Path(popen.call_args.kwargs["cwd"]), target.resolve())
         self.assertTrue(result["prebuild_cleanup"]["success"])
         self.assertEqual(result["prebuild_cleanup"]["source"], "none")
+
+    def test_launch_backend_project_supports_uppercase_backend_directory(self) -> None:
+        """验证大小写敏感文件系统上的 Backend Maven 工程可正常启动。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            backend = Path(workspace) / "Backend"
+            target = backend / "target"
+            target.mkdir(parents=True)
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            jar_path = target / "sample-1.0-SNAPSHOT.jar"
+            jar_path.write_bytes(b"jar")
+            fake_process = SimpleNamespace(pid=13579, poll=lambda: None)
+            with (
+                patch(
+                    "app.services.backend_project_launcher.shutil.which",
+                    side_effect=["mvn", "java"],
+                ),
+                patch(
+                    "app.services.backend_project_launcher.subprocess.run",
+                    return_value=SimpleNamespace(returncode=0, stdout="built", stderr=""),
+                ) as run,
+                patch(
+                    "app.services.backend_project_launcher.subprocess.Popen",
+                    return_value=fake_process,
+                ),
+                patch(
+                    "app.services.backend_project_launcher._wait_for_backend_ready",
+                    return_value=True,
+                ),
+            ):
+                result = launch_backend_project(workspace)
+
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(Path(run.call_args.kwargs["cwd"]), backend.resolve())
 
     def test_second_backend_launch_stops_registered_process_before_maven_build(self) -> None:
         """验证同一工作区再次启动时先停止旧 Java 进程，再执行 Maven 构建。"""
@@ -946,7 +984,10 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertNotIn("_process", result["launch_result"]["backend"])
         self.assertEqual(
             calls,
-            [("backend", Path("/workspace")), ("frontend", Path("/workspace"))],
+            [
+                ("backend", Path("/workspace").resolve()),
+                ("frontend", Path("/workspace").resolve()),
+            ],
         )
 
     def test_launch_project_reports_startup_failure(self) -> None:
@@ -976,8 +1017,8 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["preview_url"], "未找到前端 package.json。")
         self.assertEqual(result["launch_result"]["preview_url"], result["preview_url"])
         self.assertEqual(result["acceptance_request"]["preview_url"], result["preview_url"])
-        launch_backend.assert_called_once_with(Path("/workspace"))
-        launch_frontend.assert_called_once_with(Path("/workspace"))
+        launch_backend.assert_called_once_with(Path("/workspace").resolve())
+        launch_frontend.assert_called_once_with(Path("/workspace").resolve())
         stop_backend.assert_called_once_with(backend_result, backend_process)
 
     def test_launch_project_does_not_start_frontend_when_backend_fails(self) -> None:
@@ -1004,7 +1045,7 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["preview_url"], "Maven build failed")
         self.assertEqual(result["launch_result"]["preview_url"], result["preview_url"])
         self.assertIsNone(result["launch_result"]["frontend"])
-        launch_backend.assert_called_once_with(Path("/workspace"))
+        launch_backend.assert_called_once_with(Path("/workspace").resolve())
         launch_frontend.assert_not_called()
 
     def test_acceptance_rejects_implicit_confirmation(self) -> None:

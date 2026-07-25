@@ -55,7 +55,8 @@ export async function startBackendService(): Promise<string> {
     cwd: bundledBackend.backendDir,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true
+    windowsHide: true,
+    detached: process.platform !== 'win32'
   })
 
   backendProcess = child
@@ -82,14 +83,18 @@ export async function stopBackendService(): Promise<void> {
     if (child.exitCode !== null || child.killed) return
 
     if (process.platform === 'win32') {
-      await killWindowsProcessTree(child)
+      const killedTree = await killWindowsProcessTree(child)
+      if (!killedTree && child.exitCode === null) {
+        child.kill()
+        await waitForProcessExit(child, SHUTDOWN_TIMEOUT_MS)
+      }
       return
     }
 
-    child.kill('SIGTERM')
+    signalPosixProcessTree(child, 'SIGTERM')
     const exited = await waitForProcessExit(child, SHUTDOWN_TIMEOUT_MS)
     if (!exited && child.exitCode === null) {
-      child.kill('SIGKILL')
+      signalPosixProcessTree(child, 'SIGKILL')
       await waitForProcessExit(child, SHUTDOWN_TIMEOUT_MS)
     }
   } finally {
@@ -221,10 +226,11 @@ function checkHealth(baseUrl: string): Promise<boolean> {
   })
 }
 
-function killWindowsProcessTree(child: ChildProcess): Promise<void> {
+/** 使用 taskkill 终止 Windows 子进程树，并返回命令是否成功。 */
+function killWindowsProcessTree(child: ChildProcess): Promise<boolean> {
   return new Promise((resolve) => {
     if (!child.pid) {
-      resolve()
+      resolve(false)
       return
     }
 
@@ -232,13 +238,25 @@ function killWindowsProcessTree(child: ChildProcess): Promise<void> {
       stdio: 'ignore',
       windowsHide: true
     })
-    killer.once('exit', () => {
-      resolve()
+    killer.once('exit', (code) => {
+      resolve(code === 0)
     })
     killer.once('error', () => {
-      resolve()
+      resolve(false)
     })
   })
+}
+
+/** 向 macOS/POSIX 独立进程组发送信号，组不存在时回退到直接子进程。 */
+function signalPosixProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (!child.pid) return
+  try {
+    process.kill(-child.pid, signal)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+      child.kill(signal)
+    }
+  }
 }
 
 function waitForProcessExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {

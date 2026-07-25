@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from deepagents.backends import FilesystemBackend
+from deepagents.backends.protocol import EditResult, WriteResult
 
 from app.services.agent_file_documents import AGENTS_FILE_NAME, read_agents_document
 
@@ -30,18 +31,40 @@ class _OwnedAgentMemoryBackend(FilesystemBackend):
     """Keep the temporary read-only snapshot alive while the backend is used."""
 
     def __init__(self, owner: tempfile.TemporaryDirectory[str]) -> None:
+        """持有临时目录，并把快照挂载为虚拟文件系统。"""
+
         self._snapshot_owner = owner
         super().__init__(root_dir=owner.name, virtual_mode=True)
 
     def close(self) -> None:
+        """释放当前快照拥有的临时目录。"""
+
         self._snapshot_owner.cleanup()
 
     def __del__(self) -> None:
+        """在对象回收时尽力清理快照，不传播解释器退出期异常。"""
+
         try:
             self.close()
         except Exception:
             # Destructors must not surface cleanup failures during interpreter shutdown.
             pass
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        """拒绝写入不可变内存快照，避免依赖平台 chmod 语义。"""
+
+        return WriteResult(error=f"只读快照不允许写入：{file_path}")
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """拒绝编辑不可变内存快照，确保 Windows 与 macOS 行为一致。"""
+
+        return EditResult(error=f"只读快照不允许编辑：{file_path}")
 
 
 def get_agent_memory_runtime_revision(root: Path | None = None) -> str:
@@ -66,7 +89,7 @@ def create_agent_memory_runtime_snapshot(
     snapshot_root = Path(owner.name)
     try:
         snapshot_file = snapshot_root / AGENTS_FILE_NAME
-        snapshot_file.write_text(document.content, encoding="utf-8")
+        snapshot_file.write_bytes(document.content.encode("utf-8"))
         os.chmod(snapshot_file, 0o444)
         os.chmod(snapshot_root, 0o555)
         backend = _OwnedAgentMemoryBackend(owner)

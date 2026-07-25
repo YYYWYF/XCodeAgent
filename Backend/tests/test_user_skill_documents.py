@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import stat
 import tempfile
 import unittest
@@ -260,7 +261,10 @@ class UserSkillDocumentTests(unittest.TestCase):
             )
 
             self.assertEqual(skill_file.read_text(encoding="utf-8"), updated_content)
-            self.assertEqual(stat.S_IMODE(skill_file.stat().st_mode), 0o640)
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(skill_file.stat().st_mode), 0o640)
+            else:
+                self.assertTrue(skill_file.is_file())
         self.assertEqual(saved.name, "updated-sample")
         self.assertNotEqual(saved.revision, original.revision)
 

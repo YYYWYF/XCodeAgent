@@ -201,7 +201,7 @@ def _assert_no_staged_changes(git_root: Path, repository_paths: list[str]) -> No
 def _normalize_patch(item: CodeChangeRevertFile, repository_path: str) -> str:
     """重写补丁文件头，使新增和删除文件可被 Git 精确反向应用。"""
 
-    lines = item.diff.splitlines(keepends=True)
+    lines = _normalize_patch_text(item.diff).splitlines(keepends=True)
     old_header_index = next(
         (index for index, line in enumerate(lines) if line.startswith("--- ")),
         -1,
@@ -271,12 +271,16 @@ def _diff_sandbox_file(
     before_exists = before_path.is_file()
     after_exists = after_path.is_file()
     before_lines = (
-        before_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        _normalize_patch_text(before_path.read_text(encoding="utf-8")).splitlines(
+            keepends=True
+        )
         if before_exists
         else []
     )
     after_lines = (
-        after_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        _normalize_patch_text(after_path.read_text(encoding="utf-8")).splitlines(
+            keepends=True
+        )
         if after_exists
         else []
     )
@@ -288,6 +292,12 @@ def _diff_sandbox_file(
             tofile=f"b/{repository_path}" if after_exists else "/dev/null",
         )
     )
+
+
+def _normalize_patch_text(content: str) -> str:
+    """把补丁及工作区文本统一为 LF，保证 Git 补丁可跨平台应用。"""
+
+    return content.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _apply_reverse_patch(git_root: Path, patch: str, *, check_only: bool) -> None:

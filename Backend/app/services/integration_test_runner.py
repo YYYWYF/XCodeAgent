@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -96,19 +98,31 @@ def _frontend_checks(
         ]
 
     scripts = _scripts(frontend)
-    _pnpm_command = shutil.which(frontend.package_manager)
+    package_manager_command = shutil.which(frontend.package_manager)
     return [
-        _run_command_result(
-            check_id="frontend_install",
-            name="前端依赖安装检查",
-            layer="frontend",
-            language="typescript",
-            argv=[_pnpm_command, "install"],
-            cwd=frontend.cwd,
-            root=root,
-            log_root=log_root,
-            required=True,
-            on_progress=on_progress,
+        (
+            _run_command_result(
+                check_id="frontend_install",
+                name="前端依赖安装检查",
+                layer="frontend",
+                language="typescript",
+                argv=[package_manager_command, "install"],
+                cwd=frontend.cwd,
+                root=root,
+                log_root=log_root,
+                required=True,
+                on_progress=on_progress,
+            )
+            if package_manager_command
+            else _missing_tool_result(
+                check_id="frontend_install",
+                name="前端依赖安装检查",
+                layer="frontend",
+                language="typescript",
+                evidence=f"未找到包管理器命令：{frontend.package_manager}。",
+                required=True,
+                on_progress=on_progress,
+            )
         ),
         _run_script_result(
             check_id="frontend_build",
@@ -170,16 +184,34 @@ def _backend_checks(
     *,
     on_progress: CheckProgressCallback | None,
 ) -> list[dict[str, Any]]:
-    if (root / "mvnw").is_file() or (root / "pom.xml").is_file():
-        mvn = "./mvnw" if (root / "mvnw").is_file() else "mvn"
+    maven_root = _find_maven_project_root(root)
+    if maven_root is not None:
+        maven_argv = _maven_command(maven_root)
+        if maven_argv is None:
+            return [
+                _missing_tool_result(
+                    check_id=check_id,
+                    name=name,
+                    layer="backend",
+                    language="java",
+                    evidence="发现 Maven 工程，但未找到可用的 Maven wrapper 或全局 mvn。",
+                    required=required,
+                    on_progress=on_progress,
+                )
+                for check_id, name, required in (
+                    ("backend_build", "后端构建检查", True),
+                    ("backend_static_check", "后端静态检查通过", False),
+                    ("backend_unit_tests", "后端单元测试通过", True),
+                )
+            ]
         return [
             _run_command_result(
                 check_id="backend_build",
                 name="后端构建检查",
                 layer="backend",
                 language="java",
-                argv=[mvn, "test", "-DskipTests"],
-                cwd=root,
+                argv=[*maven_argv, "test", "-DskipTests"],
+                cwd=maven_root,
                 root=root,
                 log_root=log_root,
                 required=True,
@@ -190,8 +222,8 @@ def _backend_checks(
                 name="后端静态检查通过",
                 layer="backend",
                 language="java",
-                argv=[mvn, "checkstyle:check"],
-                cwd=root,
+                argv=[*maven_argv, "checkstyle:check"],
+                cwd=maven_root,
                 root=root,
                 log_root=log_root,
                 required=False,
@@ -202,8 +234,8 @@ def _backend_checks(
                 name="后端单元测试通过",
                 layer="backend",
                 language="java",
-                argv=[mvn, "test"],
-                cwd=root,
+                argv=[*maven_argv, "test"],
+                cwd=maven_root,
                 root=root,
                 log_root=log_root,
                 required=True,
@@ -212,6 +244,19 @@ def _backend_checks(
         ]
 
     if _has_pytest_project(root):
+        python_argv = _python_command()
+        if python_argv is None:
+            return [
+                _missing_tool_result(
+                    check_id="backend_unit_tests",
+                    name="后端单元测试通过",
+                    layer="backend",
+                    language="python",
+                    evidence="发现 pytest 项目，但未找到可用的 Python 解释器。",
+                    required=True,
+                    on_progress=on_progress,
+                )
+            ]
         return [
             _missing_tool_result(
                 check_id="backend_build",
@@ -236,7 +281,7 @@ def _backend_checks(
                 name="后端单元测试通过",
                 layer="backend",
                 language="python",
-                argv=["python3", "-m", "pytest"],
+                argv=[*python_argv, "-m", "pytest"],
                 cwd=root,
                 root=root,
                 log_root=log_root,
@@ -341,13 +386,23 @@ def _run_script_result(
             required=required,
             on_progress=on_progress,
         )
-    _package_manager_command = shutil.which(package.package_manager)
+    package_manager_command = shutil.which(package.package_manager)
+    if not package_manager_command:
+        return _missing_tool_result(
+            check_id=check_id,
+            name=name,
+            layer=layer,
+            language=language,
+            evidence=f"未找到包管理器命令：{package.package_manager}。",
+            required=required,
+            on_progress=on_progress,
+        )
     return _run_command_result(
         check_id=check_id,
         name=name,
         layer=layer,
         language=language,
-        argv=[_package_manager_command, "run", script_name],
+        argv=[package_manager_command, "run", script_name],
         cwd=package.cwd,
         root=root,
         log_root=log_root,
@@ -538,6 +593,39 @@ def _package_manager(cwd: Path) -> str:
     return "pnpm"
 
 
+def _find_maven_project_root(root: Path) -> Path | None:
+    """按稳定顺序识别根目录及大小写不同的后端 Maven 工程。"""
+
+    for candidate in (root, root / "backend", root / "Backend"):
+        if (candidate / "pom.xml").is_file():
+            return candidate
+    return None
+
+
+def _maven_command(cwd: Path) -> list[str] | None:
+    """优先选择当前平台的 Maven wrapper，再回退到全局 Maven。"""
+
+    if os.name == "nt" and (cwd / "mvnw.cmd").is_file():
+        return [str(cwd / "mvnw.cmd")]
+    if os.name != "nt" and (cwd / "mvnw").is_file():
+        return [str(cwd / "mvnw")]
+    command = shutil.which("mvn")
+    return [command] if command else None
+
+
+def _python_command() -> list[str] | None:
+    """选择可运行目标项目 pytest 的跨平台 Python 命令。"""
+
+    if not getattr(sys, "frozen", False) and sys.executable:
+        return [sys.executable]
+    for name in ("python3", "python"):
+        command = shutil.which(name)
+        if command:
+            return [command]
+    py_launcher = shutil.which("py")
+    return [py_launcher, "-3"] if py_launcher else None
+
+
 def _scripts(package: PackageProject) -> dict[str, Any]:
     scripts = package.package_json.get("scripts")
     return scripts if isinstance(scripts, dict) else {}
@@ -584,7 +672,9 @@ def _failure_category(check_id: str) -> str:
 
 
 def _relative(path: Path, root: Path) -> str:
+    """返回稳定的 POSIX 风格工作区相对路径，供跨平台事件和虚拟路径使用。"""
+
     try:
-        return str(path.relative_to(root))
+        return path.relative_to(root).as_posix()
     except ValueError:
         return str(path)

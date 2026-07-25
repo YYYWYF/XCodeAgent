@@ -447,7 +447,7 @@ testing.START
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：
 
 - 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm`、`yarn` 或 `npm`，执行 install、build、lint、typecheck、unit test 和 integration scripts；
-- 后端：优先复用 Maven Wrapper / Maven（`mvnw`、`pom.xml`），也支持 Python 项目的 `python3 -m pytest`；
+- 后端：优先复用当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`），也支持通过当前 Python 解释器执行 `-m pytest`；
 - 未声明的可选检查（lint、typecheck、unit/integration 等）会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。
 
 每个真实命令都会写入 `.xcodeagent/runtime/tests/<check_id>/stdout.log` 和 `stderr.log`。`test_results.execution` 同时提供宿主日志引用、Agent 可读取的虚拟工作区日志路径以及有长度上限的 `stdout_tail/stderr_tail`，另保存命令、cwd、returncode、timeout 和失败分类。Test/RepairPlanner 必须以这些证据为依据；摘要和日志都不可读时只能报告证据不足，不得猜测根因。

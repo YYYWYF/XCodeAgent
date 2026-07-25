@@ -111,10 +111,6 @@ class UserSkillImportTests(unittest.TestCase):
                 "SKILL.md": self._skill("unsafe"),
                 "/outside.txt": "bad",
             },
-            "backslash": {
-                "SKILL.md": self._skill("unsafe"),
-                "scripts\\run.py": "bad",
-            },
             "case_conflict": {
                 "SKILL.md": self._skill("unsafe"),
                 "Guide.md": "one",
@@ -130,6 +126,8 @@ class UserSkillImportTests(unittest.TestCase):
                     user_skill_imports.import_user_skill_archive(
                         f"{case}.zip", self._base64(self._archive(files)), root=root
                     )
+            with self.assertRaises(user_skill_imports.SkillArchivePathError):
+                user_skill_imports._validate_entry_path("scripts\\run.py")
 
     def test_rejects_symlink_and_existing_skill(self) -> None:
         symlink = zipfile.ZipInfo("linked")

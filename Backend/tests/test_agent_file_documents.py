@@ -69,7 +69,10 @@ class AgentFileDocumentTests(unittest.TestCase):
             )
 
             self.assertEqual(agents_file.read_text(encoding="utf-8"), content)
-            self.assertEqual(agents_file.stat().st_mode & 0o777, 0o640)
+            if os.name != "nt":
+                self.assertEqual(agents_file.stat().st_mode & 0o777, 0o640)
+            else:
+                self.assertTrue(agents_file.is_file())
             self.assertNotEqual(saved.revision, original.revision)
             self.assertEqual(saved.size_bytes, len(content.encode("utf-8")))
             self.assertIn("+00:00", saved.updated_at)

@@ -79,10 +79,20 @@ def snapshot_workspace(workspace_root: str | None) -> WorkspaceSnapshot | None:
                 path=rel,
                 sha256=hashlib.sha256(raw).hexdigest(),
                 binary=binary,
-                content=None if binary else raw.decode("utf-8", errors="replace"),
+                content=(
+                    None
+                    if binary
+                    else _normalize_snapshot_text(raw.decode("utf-8", errors="replace"))
+                ),
             )
 
     return WorkspaceSnapshot(root=root, files=files)
+
+
+def _normalize_snapshot_text(content: str) -> str:
+    """统一工作区文本换行，使代码差异不受宿主系统影响。"""
+
+    return content.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def diff_workspace_snapshots(

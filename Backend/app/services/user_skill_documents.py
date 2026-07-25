@@ -89,7 +89,7 @@ def read_user_skill_document(
     skill_file = _resolve_user_skill_file(relative_path, root=root)
     raw_content = _read_skill_content_bytes(skill_file)
     try:
-        content = raw_content.decode("utf-8")
+        content = _normalize_newlines(raw_content.decode("utf-8"))
     except UnicodeDecodeError as exc:
         raise SkillFrontmatterError("SKILL.md 必须使用 UTF-8 编码。") from exc
     metadata = parse_skill_frontmatter(content)
@@ -108,8 +108,9 @@ def create_user_skill_document(
 ) -> UserSkillDocument:
     """创建直属用户技能，并清理同路径遗留的关闭状态。"""
 
-    encoded_content = _encode_skill_content(content)
-    metadata = _parse_create_skill_frontmatter(content)
+    normalized_content = _normalize_newlines(content)
+    encoded_content = _encode_skill_content(normalized_content)
+    metadata = _parse_create_skill_frontmatter(normalized_content)
     name = metadata["name"]
     skills_root = _ensure_user_skills_root(root)
 
@@ -142,7 +143,7 @@ def create_user_skill_document(
     return UserSkillDocument(
         name=name,
         relative_path=relative_path,
-        content=content,
+        content=normalized_content,
         revision=_content_revision(encoded_content),
     )
 
@@ -155,9 +156,10 @@ def save_user_skill_document(
     root: Path | None = None,
 ) -> UserSkillDocument:
     skill_file = _resolve_user_skill_file(relative_path, root=root)
-    encoded_content = _encode_skill_content(content)
+    normalized_content = _normalize_newlines(content)
+    encoded_content = _encode_skill_content(normalized_content)
 
-    metadata = parse_skill_frontmatter(content)
+    metadata = parse_skill_frontmatter(normalized_content)
     current_content = _read_skill_content_bytes(skill_file)
     current_revision = _content_revision(current_content)
     if not hmac.compare_digest(current_revision, expected_revision):
@@ -170,7 +172,7 @@ def save_user_skill_document(
     return UserSkillDocument(
         name=metadata["name"],
         relative_path=relative_path,
-        content=content,
+        content=normalized_content,
         revision=_content_revision(encoded_content),
     )
 
@@ -186,7 +188,7 @@ def delete_user_skill(
     skill_file = _resolve_user_skill_file(relative_path, root=skills_root)
     raw_content = _read_skill_content_bytes(skill_file)
     try:
-        content = raw_content.decode("utf-8")
+        content = _normalize_newlines(raw_content.decode("utf-8"))
     except UnicodeDecodeError as exc:
         raise SkillFrontmatterError("SKILL.md 必须使用 UTF-8 编码。") from exc
     metadata = parse_skill_frontmatter(content)
@@ -200,13 +202,21 @@ def delete_user_skill(
 
 
 def _encode_skill_content(content: str) -> bytes:
+    """把技能正文统一为 LF 后编码，避免系统默认换行污染版本号。"""
+
     try:
-        encoded_content = content.encode("utf-8")
+        encoded_content = _normalize_newlines(content).encode("utf-8")
     except UnicodeEncodeError as exc:
         raise SkillFrontmatterError("SKILL.md 必须是有效的 UTF-8 文本。") from exc
     if len(encoded_content) > MAX_SKILL_CONTENT_BYTES:
         raise SkillContentTooLargeError("SKILL.md 不能超过 512 KiB。")
     return encoded_content
+
+
+def _normalize_newlines(content: str) -> str:
+    """把 CRLF、CR 统一为用户技能文档的标准 LF。"""
+
+    return content.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _parse_create_skill_frontmatter(content: str) -> dict[str, str]:
@@ -311,7 +321,10 @@ def _read_skill_content_bytes(skill_file: Path) -> bytes:
 
 
 def _content_revision(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
+    """按规范化换行计算版本号，使同一技能在两个系统上版本一致。"""
+
+    canonical_content = content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(canonical_content).hexdigest()
 
 
 def _atomic_replace(skill_file: Path, content: bytes, file_mode: int) -> None:

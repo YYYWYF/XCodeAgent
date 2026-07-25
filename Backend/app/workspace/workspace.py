@@ -60,6 +60,9 @@ HIGH_RISK_COMMANDS = {
     "kill",
     "killall",
     "pkill",
+    "cmd",
+    "powershell",
+    "pwsh",
 }
 
 HIGH_RISK_GIT_SUBCOMMANDS = {
@@ -1355,9 +1358,13 @@ def _search_text_response(
 
 
 def _command_argv(request: TerminalExecRequest) -> List[str]:
+    """优先使用结构化 argv，并按宿主系统规则兼容解析旧 command 字段。"""
+
     argv = request.argv or []
     if request.command:
-        argv = shlex.split(request.command)
+        argv = shlex.split(request.command, posix=os.name != "nt")
+        if os.name == "nt":
+            argv = [_strip_windows_argument_quotes(part) for part in argv]
     argv = [part for part in argv if part]
     if not argv:
         _fail(400, "terminal.exec requires argv or command.")
@@ -1366,8 +1373,18 @@ def _command_argv(request: TerminalExecRequest) -> List[str]:
     return argv
 
 
+def _strip_windows_argument_quotes(value: str) -> str:
+    """移除 Windows shlex 保留的成对外层引号，同时保留参数内部内容。"""
+
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+
 def _classify_command(argv: List[str]) -> Dict[str, Any]:
-    executable = Path(argv[0]).name
+    executable = Path(argv[0]).name.lower()
+    if os.name == "nt":
+        executable = Path(executable).stem
     reasons: List[str] = []
     level = "low"
 
@@ -1375,14 +1392,15 @@ def _classify_command(argv: List[str]) -> Dict[str, Any]:
         level = "high"
         reasons.append(f"{executable} can modify or control the host system.")
 
-    if executable == "git" and len(argv) > 1 and argv[1] in HIGH_RISK_GIT_SUBCOMMANDS:
+    subcommand = argv[1].lower() if len(argv) > 1 else ""
+    if executable == "git" and subcommand in HIGH_RISK_GIT_SUBCOMMANDS:
         level = "high"
-        reasons.append(f"git {argv[1]} can discard or rewrite workspace changes.")
+        reasons.append(f"git {subcommand} can discard or rewrite workspace changes.")
 
-    if executable in {"npm", "pnpm", "yarn"} and len(argv) > 1 and argv[1] in MEDIUM_RISK_PACKAGE_SUBCOMMANDS:
+    if executable in {"npm", "pnpm", "yarn"} and subcommand in MEDIUM_RISK_PACKAGE_SUBCOMMANDS:
         if level != "high":
             level = "medium"
-        reasons.append(f"{executable} {argv[1]} changes dependencies or may access the network.")
+        reasons.append(f"{executable} {subcommand} changes dependencies or may access the network.")
 
     return {
         "level": level,

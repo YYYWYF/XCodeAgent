@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from deepagents.backends import FilesystemBackend
+from deepagents.backends.protocol import EditResult, WriteResult
 
 from app.services.user_skill_documents import (
     MAX_SKILL_CONTENT_BYTES,
@@ -84,18 +85,40 @@ class _OwnedSnapshotBackend(FilesystemBackend):
     """Keep the temporary snapshot alive for as long as the backend is referenced."""
 
     def __init__(self, owner: tempfile.TemporaryDirectory[str]) -> None:
+        """持有临时目录，并把用户技能快照挂载为虚拟文件系统。"""
+
         self._snapshot_owner = owner
         super().__init__(root_dir=owner.name, virtual_mode=True)
 
     def close(self) -> None:
+        """释放当前用户技能快照的临时目录。"""
+
         self._snapshot_owner.cleanup()
 
     def __del__(self) -> None:
+        """在对象回收时尽力清理快照，不传播解释器退出期异常。"""
+
         try:
             self.close()
         except Exception:
             # Destructors must not surface cleanup failures during interpreter shutdown.
             pass
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        """拒绝写入不可变技能快照，避免依赖平台 chmod 语义。"""
+
+        return WriteResult(error=f"只读快照不允许写入：{file_path}")
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """拒绝编辑不可变技能快照，确保 Windows 与 macOS 行为一致。"""
+
+        return EditResult(error=f"只读快照不允许编辑：{file_path}")
 
 
 @dataclass(frozen=True)
@@ -162,9 +185,15 @@ def create_user_skill_runtime_snapshot(
                 _assert_runtime_file_unchanged(skill, source_file)
                 target_file = target_root / source_file.relative_path
                 target_file.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source_file.source, target_file)
+                if source_file.relative_path == "SKILL.md":
+                    target_file.write_bytes(skill.document_content.encode("utf-8"))
+                else:
+                    shutil.copyfile(source_file.source, target_file)
                 _assert_runtime_file_unchanged(skill, source_file)
-                if target_file.stat().st_size != source_file.size:
+                if (
+                    source_file.relative_path != "SKILL.md"
+                    and target_file.stat().st_size != source_file.size
+                ):
                     raise UserSkillSnapshotChangedError(
                         f"{skill.directory_name}/{source_file.relative_path} 未能稳定复制。"
                     )

@@ -28,7 +28,7 @@
     "verify:backend-resource:mac": "node scripts/verify-backend-resource.mjs --platform=darwin",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm build && electron-builder --dir",
-    "build:win:dev": "pnpm verify:backend-resource:win && pnpm build:dev && electron-builder --win --x64",
+    "build:win:dev": "pnpm verify:backend-resource:win && pnpm build:dev && electron-builder --win --x64 -c.win.signAndEditExecutable=false",
     "build:win:st": "pnpm verify:backend-resource:win && pnpm build:st && electron-builder --win --x64",
     "build:win:uat": "pnpm verify:backend-resource:win && pnpm build:uat && electron-builder --win --x64",
     "build:win:prd": "pnpm verify:backend-resource:win && pnpm build:prd && electron-builder --win --x64",
@@ -36,6 +36,11 @@
     "build:mac:dev": "pnpm verify:backend-resource:mac && pnpm build:dev && electron-builder --mac",
     "build:mac:st": "pnpm verify:backend-resource:mac && pnpm build:st && electron-builder --mac",
     "build:mac:uat": "pnpm verify:backend-resource:mac && pnpm build:uat && electron-builder --mac",
+    "build:mac:prd": "pnpm verify:backend-resource:mac && pnpm build:prd && electron-builder --mac -c.mac.notarize=true",
+    "build:mac:x64:dev": "node scripts/verify-backend-resource.mjs --platform=darwin --arch=x64 && pnpm build:dev && electron-builder --mac --x64",
+    "build:mac:x64:prd": "node scripts/verify-backend-resource.mjs --platform=darwin --arch=x64 && pnpm build:prd && electron-builder --mac --x64 -c.mac.notarize=true",
+    "build:mac:arm64:dev": "node scripts/verify-backend-resource.mjs --platform=darwin --arch=arm64 && pnpm build:dev && electron-builder --mac --arm64",
+    "build:mac:arm64:prd": "node scripts/verify-backend-resource.mjs --platform=darwin --arch=arm64 && pnpm build:prd && electron-builder --mac --arm64 -c.mac.notarize=true",
     "build:linux": "pnpm build && electron-builder --linux"
   },
   "dependencies": {
@@ -44,7 +49,6 @@
     "@ant-design/icons": "^5.0.1",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
-    "@rollup/rollup-win32-x64-msvc": "4.61.0",
     "antd": "^4.24.8",
     "axios": "1.17.0",
     "clsx": "^2.1.1",
