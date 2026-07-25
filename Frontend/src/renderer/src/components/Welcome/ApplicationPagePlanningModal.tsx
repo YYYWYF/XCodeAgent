@@ -21,7 +21,10 @@ import ApplicationPlanningProgress, {
   type ApplicationPlanningProgressEvent
 } from './ApplicationPlanningProgress'
 import ApplicationPlanningQuestionPanel from './ApplicationPlanningQuestionPanel'
-import { planningWorkflowPhase } from './planningWorkflowState'
+import {
+  planningWorkflowPhase,
+  planningWorkflowRequiresUserInput
+} from './planningWorkflowState'
 import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
 import './ApplicationPagePlanningModal.less'
 
@@ -186,6 +189,8 @@ export default function ApplicationPagePlanningModal({
     initialStatus === 'error' ? '上次规划流程中断，请重试或检查当前规划内容。' : ''
   )
   const progressCopy = workflowProgressCopy(workflow)
+  const awaitingUserInput = planningWorkflowRequiresUserInput(workflow)
+  const showingProgress = !workflow || (running && !awaitingUserInput)
 
   // 向首页注册当前 AG-UI 会话的停止句柄，以便从规划页外安全取消运行。
   useEffect(() => {
@@ -197,14 +202,16 @@ export default function ApplicationPagePlanningModal({
   useEffect(() => {
     const status: ActivePlanningStatus = error
       ? 'error'
-      : running || !workflow
+      : (running && !awaitingUserInput) || !workflow
         ? 'running'
         : 'ready'
     onStatusChange(status)
-  }, [error, onStatusChange, running, workflow])
+  }, [awaitingUserInput, error, onStatusChange, running, workflow])
 
   // 同步组件内 Workflow 展示状态与可跨重启恢复的外部快照。
   const handleWorkflowChange = (nextWorkflow: WorkflowRunPayload): void => {
+    // 每个全屏规划实例只接收自己的线程事件，避免并行应用互相覆盖问题卡片。
+    if (nextWorkflow.threadId !== threadId) return
     setWorkflow(nextWorkflow)
     onWorkflowChange(nextWorkflow)
   }
@@ -419,7 +426,7 @@ export default function ApplicationPagePlanningModal({
             />
           ) : (
             <section className={cx('page-planning-review')}>
-              {running || !workflow ? (
+              {showingProgress ? (
                 <div className={cx('page-planning-loading')}>
                   <ApplicationPlanningProgress
                     events={workflowProgressEvents(workflow, preparingTemplate)}
@@ -431,7 +438,7 @@ export default function ApplicationPagePlanningModal({
                   />
                 </div>
               ) : null}
-              {!running && workflow ? (
+              {!showingProgress && workflow ? (
                 <ApplicationPlanningQuestionPanel
                   disabled={running}
                   onSaveRequirementSpec={handleSaveRequirementSpec}

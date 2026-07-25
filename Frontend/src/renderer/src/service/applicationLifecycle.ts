@@ -15,6 +15,22 @@ type ApplicationLifecyclePayload = {
 
 const lifecycleReadRequests = new Map<string, Promise<ApplicationLifecycle>>()
 
+// 校验生命周期快照只属于当前应用及初始化线程，禁止同目录或异步回包造成跨应用串态。
+function assertApplicationLifecycleOwnership(
+  lifecycle: ApplicationLifecycle,
+  applicationId?: string,
+  threadId?: string
+): ApplicationLifecycle {
+  if (applicationId && lifecycle.application.id !== applicationId) {
+    throw new Error('当前工作区已属于另一个应用，请为新应用选择独立的项目目录。')
+  }
+  const lifecycleThreadId = lifecycle.initialization.threadId
+  if (threadId && lifecycleThreadId && lifecycleThreadId !== threadId) {
+    throw new Error('当前工作区已有另一个应用规划线程，请为每个应用使用独立的项目目录。')
+  }
+  return lifecycle
+}
+
 // 读取独立应用生命周期 AG-UI 地址。
 function getApplicationLifecycleUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
@@ -84,22 +100,28 @@ export async function createApplicationLifecycle(
   threadId: string
 ): Promise<ApplicationLifecycle> {
   if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return runApplicationLifecycleAction(threadId, {
-    action: 'create',
-    workspaceRoot: application.workspaceRoot,
-    application: { id: application.id, appName: application.appName }
-  })
+  return assertApplicationLifecycleOwnership(
+    await runApplicationLifecycleAction(threadId, {
+      action: 'create',
+      workspaceRoot: application.workspaceRoot,
+      application: { id: application.id, appName: application.appName }
+    }),
+    application.id,
+    threadId
+  )
 }
 
 // 读取权威生命周期，并合并 React StrictMode 等场景产生的同工作区并发请求。
 export async function getApplicationLifecycle(
-  application: Pick<ApplicationConfig, 'workspaceRoot'>,
+  application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
   threadId = randomUUID()
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot
   if (!workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
   const currentRequest = lifecycleReadRequests.get(workspaceRoot)
-  if (currentRequest) return currentRequest
+  if (currentRequest) {
+    return assertApplicationLifecycleOwnership(await currentRequest, application.id)
+  }
 
   const request = runApplicationLifecycleAction(threadId, {
     action: 'get',
@@ -107,7 +129,7 @@ export async function getApplicationLifecycle(
   })
   lifecycleReadRequests.set(workspaceRoot, request)
   try {
-    return await request
+    return assertApplicationLifecycleOwnership(await request, application.id)
   } finally {
     if (lifecycleReadRequests.get(workspaceRoot) === request) {
       lifecycleReadRequests.delete(workspaceRoot)

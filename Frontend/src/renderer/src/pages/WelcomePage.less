@@ -373,6 +373,34 @@
   }
 }
 
+html[data-platform='windows'] {
+  .@{class-prefix}-welcome-brand {
+    line-height: 28px;
+  }
+
+  .@{class-prefix}-welcome-hero {
+    h1 {
+      font-weight: 600;
+      letter-spacing: -0.035em;
+      line-height: 1.125;
+    }
+
+    p {
+      letter-spacing: 0;
+      line-height: 32px;
+    }
+  }
+
+  .@{class-prefix}-welcome-action-button.ant-btn {
+    line-height: 28px;
+  }
+
+  .@{class-prefix}-welcome-section-heading h2,
+  .@{class-prefix}-agent-track-title h2 {
+    line-height: 26px;
+  }
+}
+
 @media (max-width: 1180px) {
   .@{class-prefix}-welcome-content {
     gap: 34px;

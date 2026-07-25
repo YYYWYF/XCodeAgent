@@ -200,7 +200,7 @@
   padding: 14px 18px;
   overflow: hidden;
   color: #cbbddd;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-family: var(--ui-font-mono);
   font-size: clamp(10px, 0.78vw, 12px);
   line-height: 1.35;
   background: #1a1027;
@@ -235,7 +235,7 @@
   padding: 0 16px 12px;
   overflow: hidden;
   color: #d2c5dc;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-family: var(--ui-font-mono);
   font-size: 11px;
   border-top: 1px solid #402c53;
   background: #150c20;
@@ -263,6 +263,21 @@
   }
   .@{class-prefix}-success {
     color: #63df88;
+  }
+}
+
+html[data-platform='windows'] {
+  .@{class-prefix}-agent-tabs,
+  .@{class-prefix}-agent-terminal {
+    font-size: 12px;
+  }
+
+  .@{class-prefix}-agent-code {
+    line-height: 1.5;
+  }
+
+  .@{class-prefix}-agent-terminal {
+    line-height: 18px;
   }
 }
 
