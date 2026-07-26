@@ -779,6 +779,19 @@ def _unit_source_refs(
             ),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
         }
+    if unit_id.startswith("endpoint:"):
+        return {
+            **existing,
+            "type": "endpoint_detail",
+            "target": target,
+            "endpoint_detail": _dict_value(refs.get("endpoint_detail")),
+            "endpoint_details": _matching_endpoint_refs(
+                refs.get("endpoint_details"),
+                _string_list(build_context.get("endpoint_ids")),
+            ),
+            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
+            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+        }
     return {
         **existing,
         "type": "application_unit",
@@ -804,6 +817,13 @@ def _unit_fingerprint_payload(
         return {
             "unit_id": unit_id,
             "source_refs": source_refs,
+            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+        }
+    if unit_id.startswith("endpoint:"):
+        return {
+            "unit_id": unit_id,
+            "source_refs": source_refs,
+            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
         }
     return {

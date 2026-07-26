@@ -9,6 +9,30 @@ from app.protocols.workflow.request import workflow_run_inputs
 
 
 class WorkflowRequestTests(unittest.TestCase):
+    def test_endpoint_selection_derives_endpoint_build_scope(self) -> None:
+        """选择单个 endpoint 时，执行计划范围应锁定到该 endpoint 而非整应用。"""
+
+        result = workflow_run_inputs(
+            {
+                "request": "确认接口详情，继续生成执行计划",
+                "forwardedProps": {
+                    "selectedApiContractId": "orders-api",
+                    "selectedEndpointId": "orders.list",
+                    "detailTargetType": "endpoint",
+                },
+            }
+        )
+
+        self.assertEqual(
+            result["resume_values"]["build_execution_scope"],
+            {
+                "type": "endpoint",
+                "targetId": "orders.list",
+                "apiContractId": "orders-api",
+            },
+        )
+        self.assertNotIn("selectedPageId", result["resume_values"])
+
     def test_workbench_extracts_explicit_resume_execution_run_id(self) -> None:
         """继续执行应只把旧 runId 作为锁转移令牌，不依赖生命周期快照恢复 Graph。"""
 

@@ -52,7 +52,7 @@ def _latest_compact_project_plan(state: ProjectState) -> dict:
 
 
 def prepare_build_tasks(state: ProjectState) -> dict:
-    """按应用、页面或数据源范围编译任务子图并持久化 Build DAG。"""
+    """按应用、页面、数据源或 endpoint 范围编译任务子图并持久化 Build DAG。"""
     project_plan = _latest_compact_project_plan(state)
     if project_plan.get("confirmation_status") != "confirmed":
         if _user_confirmed_project_plan(state.get("request", "")):
@@ -367,10 +367,16 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
     if isinstance(scope, dict):
         target_type = str(scope.get("type") or "").strip()
         target_id = str(scope.get("targetId") or scope.get("target_id") or "").strip()
-        if target_type in {"application", "page", "data_source"}:
+        if target_type in {"application", "page", "data_source", "endpoint"}:
             return {
                 "type": target_type,
                 "targetId": target_id or "application",
+                **(
+                    {"apiContractId": str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()}
+                    if target_type == "endpoint"
+                    and str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
+                    else {}
+                ),
             }
     selected_page_id = str(state.get("selectedPageId") or "").strip()
     return (
@@ -408,6 +414,11 @@ def _resolve_build_context(
             project_plan,
             target_type=target_type,
             target_id=target_id,
+            api_contract_id=str(
+                build_execution_scope.get("apiContractId")
+                or build_execution_scope.get("api_contract_id")
+                or ""
+            ).strip() or None,
             project_plan_path=state.get("project_plan_json_path")
             or project_plan_json_path(state),
         )
@@ -418,6 +429,7 @@ def _resolve_build_context(
         "endpoint_detail": None,
         "direct_endpoint_details": [],
         "endpoint_ids": [],
+        "api_contract_ids": [],
         "data_source_ids": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
@@ -525,6 +537,7 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
     """按当前构建目标投射可执行任务所需的页面、endpoint 和 API 详情。"""
 
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
+    contract_ids = {str(item) for item in build_context.get("api_contract_ids") or []}
     source_ids = {str(item) for item in build_context.get("data_source_ids") or []}
     return {
         "page_detail_plans": (
@@ -543,6 +556,10 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
             for contract in project_plan.get("api_contracts", [])
             if isinstance(contract, dict)
             and str(contract.get("data_source_id") or "") in source_ids
+            and (
+                not contract_ids
+                or str(contract.get("id") or "") in contract_ids
+            )
         ],
     }
 
@@ -583,6 +600,8 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
     """投射目标详情、直接数据源和其 API 契约，供局部构建执行独立校验。"""
 
     source_ids = {str(item) for item in build_context.get("data_source_ids") or []}
+    endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
+    contract_ids = {str(item) for item in build_context.get("api_contract_ids") or []}
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     target_page_id = str(target.get("id") or "") if target.get("type") == "page" else ""
     pages = []
@@ -611,10 +630,14 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
             if isinstance(source, dict) and str(source.get("id") or "") in source_ids
         ],
         "api_contracts": [
-            contract
+            _scoped_api_contract(contract, endpoint_ids)
             for contract in project_plan.get("api_contracts", [])
             if isinstance(contract, dict)
             and str(contract.get("data_source_id") or "") in source_ids
+            and (
+                not contract_ids
+                or str(contract.get("id") or "") in contract_ids
+            )
         ],
         "page_detail_plans": (
             [build_context["page_detail"]] if build_context.get("page_detail") else []
@@ -902,6 +925,9 @@ def _target_unit_id(target: dict) -> str:
         return f"page:{target_id}"
     if target_type == "data_source" and target_id:
         return f"data-source:{target_id}"
+    if target_type == "endpoint" and target_id:
+        api_contract_id = str(target.get("api_contract_id") or "").strip()
+        return f"endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
     return ""
 
 

@@ -39,7 +39,8 @@ const resumeNodeOptions = [
 const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; label: string }> = [
   { value: 'application', label: '整个应用' },
   { value: 'page', label: '单个页面' },
-  { value: 'data_source', label: '单个数据源' }
+  { value: 'data_source', label: '单个数据源' },
+  { value: 'endpoint', label: '单个接口' }
 ]
 
 type ChatComposerProps = {

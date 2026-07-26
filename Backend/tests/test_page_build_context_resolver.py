@@ -153,6 +153,44 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertEqual(context["direct_endpoint_details"], [])
         self.assertEqual(context["required_unit_ids"], ["app:backend-bootstrap", "data-source:orders"])
 
+    def test_endpoint_context_requires_current_confirmed_endpoint_detail(self) -> None:
+        """endpoint scope 只暴露当前接口详情和它对应的 endpoint Unit。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            detail_path = ".xcodeagent/plans/endpoints/endpoint--orders-api--orders.list.json"
+            plan["api_contracts"][0]["endpoints"][0]["detail_design"] = _detail_ref(detail_path)
+            _write_json(
+                workspace_path / detail_path,
+                {
+                    "api_contract_id": "orders-api",
+                    "endpoint_id": "orders.list",
+                    "data_source_id": "orders",
+                    "status": "confirmed",
+                    "interface_design": {"route": "GET /orders"},
+                },
+            )
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="endpoint",
+                target_id="orders.list",
+                api_contract_id="orders-api",
+                project_plan_path=plan_path,
+            )
+
+        self.assertIsNone(context["page_detail"])
+        self.assertEqual(context["target"]["type"], "endpoint")
+        self.assertEqual(context["target"]["api_contract_id"], "orders-api")
+        self.assertEqual(context["endpoint_ids"], ["orders.list"])
+        self.assertEqual(context["api_contract_ids"], ["orders-api"])
+        self.assertEqual(context["direct_endpoint_details"][0]["endpoint_id"], "orders.list")
+        self.assertEqual(
+            context["required_unit_ids"],
+            ["app:backend-bootstrap", "data-source:orders", "endpoint:orders-api:orders.list"],
+        )
+
     def test_page_context_rejects_unknown_endpoint(self) -> None:
         """页面外置详情引用未知 endpoint 时返回明确错误。"""
 

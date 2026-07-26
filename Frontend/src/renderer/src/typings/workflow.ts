@@ -206,7 +206,7 @@ export type LifecycleError = {
 }
 
 export type WorkbenchExecution = {
-  scope: 'application' | 'page' | 'data_source'
+  scope: 'application' | 'page' | 'data_source' | 'endpoint'
   targetId: string
   pageId?: string
   threadId: string
@@ -252,6 +252,7 @@ export type ApplicationLifecycle = {
   resourceLocks?: {
     application?: ExecutionResourceLock
     pages: Record<string, ExecutionResourceLock>
+    endpoints?: Record<string, ExecutionResourceLock>
     apiContracts: Record<string, ExecutionResourceLock>
     dataSources: Record<string, ExecutionResourceLock>
   }
@@ -282,8 +283,9 @@ export type WorkflowDebugOptions = {
 }
 
 export type WorkflowBuildExecutionScope = {
-  type: 'application' | 'page' | 'data_source'
+  type: 'application' | 'page' | 'data_source' | 'endpoint'
   targetId?: string
+  apiContractId?: string
 }
 
 export type WorkflowBuildToolActivity = {

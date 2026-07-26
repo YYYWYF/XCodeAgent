@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 
 TaskStatus = Literal["pending", "running", "completed", "failed"]
-BuildUnitKind = Literal["application", "page", "data_source"]
+BuildUnitKind = Literal["application", "page", "data_source", "endpoint"]
 
 
 @dataclass

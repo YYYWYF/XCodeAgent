@@ -55,7 +55,20 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         self.assertIn("page:orders", plan["build_units"])
         self.assertIn("page:customers", plan["build_units"])
         self.assertIn("data-source:orders", plan["build_units"])
+        self.assertIn("endpoint:orders-api:orders.list", plan["build_units"])
         self.assertIn("app:api-client", plan["build_units"])
+        self.assertEqual(
+            plan["build_units"]["endpoint:orders-api:orders.list"]["kind"],
+            "endpoint",
+        )
+        self.assertIn(
+            {"from": "data-source:orders", "to": "endpoint:orders-api:orders.list", "type": "depends_on"},
+            plan["unit_graph"]["edges"],
+        )
+        self.assertIn(
+            {"from": "endpoint:orders-api:orders.list", "to": "page:orders", "type": "depends_on"},
+            plan["unit_graph"]["edges"],
+        )
         self.assertIn(
             {"from": "data-source:orders", "to": "page:orders", "type": "depends_on"},
             plan["unit_graph"]["edges"],

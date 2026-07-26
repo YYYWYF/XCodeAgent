@@ -66,7 +66,7 @@ def _build_units(
     project_plan: dict[str, Any],
     existing_units: Any,
 ) -> dict[str, dict[str, Any]]:
-    """从确认计划构造公共、数据源和页面 Unit，并尽量保留已有状态。"""
+    """从确认计划构造公共、数据源、endpoint 和页面 Unit，并尽量保留已有状态。"""
 
     existing = existing_units if isinstance(existing_units, dict) else {}
     unit_ids = ["application:root", *PUBLIC_UNIT_IDS]
@@ -74,6 +74,7 @@ def _build_units(
         f"data-source:{source_id}"
         for source_id in _ids(project_plan.get("data_sources"), "id")
     )
+    unit_ids.extend(_endpoint_unit_ids(project_plan.get("api_contracts")))
     unit_ids.extend(
         f"page:{page_id}"
         for page_id in _ids(project_plan.get("frontend_pages"), "pageId")
@@ -97,6 +98,14 @@ def _unit_definition(unit_id: str, existing_unit: Any) -> dict[str, Any]:
         "kind": kind,
         **({"page_id": target_id} if kind == "page" else {}),
         **({"data_source_id": target_id} if kind == "data_source" else {}),
+        **(
+            {
+                "api_contract_id": target_id.split(":", 1)[0],
+                "endpoint_id": target_id.split(":", 1)[1],
+            }
+            if kind == "endpoint" and ":" in target_id
+            else {}
+        ),
         "status": existing.get("status", "not_prepared"),
         "task_ids": list(existing.get("task_ids") or []),
         "depends_on_unit_ids": list(existing.get("depends_on_unit_ids") or []),
@@ -142,6 +151,25 @@ def _unit_graph(
             ]
         )
 
+    for contract in contracts:
+        contract_id = str(contract.get("id") or "")
+        source_id = str(contract.get("data_source_id") or "")
+        source_unit_id = f"data-source:{source_id}"
+        for endpoint in _dict_items(contract.get("endpoints")):
+            endpoint_id = str(endpoint.get("id") or "")
+            if not contract_id or not endpoint_id:
+                continue
+            endpoint_unit_id = _endpoint_unit_id(contract_id, endpoint_id)
+            if endpoint_unit_id not in build_units:
+                errors.append(f"API contract {contract_id} endpoint {endpoint_id} has no Unit.")
+                continue
+            edges.append({"from": "application:root", "to": endpoint_unit_id, "type": "contains"})
+            if source_unit_id in build_units:
+                edges.append({"from": source_unit_id, "to": endpoint_unit_id, "type": "depends_on"})
+            else:
+                errors.append(f"Endpoint {endpoint_id} references unknown data source {source_id}.")
+            edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
+
     for page in _dict_items(project_plan.get("frontend_pages")):
         page_id = str(page.get("pageId") or "")
         if not page_id:
@@ -168,6 +196,11 @@ def _unit_graph(
                 errors.append(f"Page {page_id} references unknown data source {source_id}.")
                 continue
             edges.append({"from": source_unit_id, "to": page_unit_id, "type": "depends_on"})
+        for endpoint_unit_id in _page_endpoint_unit_ids(dependency_source, contracts):
+            if endpoint_unit_id not in build_units:
+                errors.append(f"Page {page_id} references unknown endpoint Unit {endpoint_unit_id}.")
+                continue
+            edges.append({"from": endpoint_unit_id, "to": page_unit_id, "type": "depends_on"})
         edges.append({"from": page_unit_id, "to": "app:integration", "type": "depends_on"})
 
     return {
@@ -225,6 +258,27 @@ def _ids(value: Any, key: str) -> list[str]:
     )
 
 
+def _endpoint_unit_ids(value: Any) -> list[str]:
+    """从 API 契约清单中生成 endpoint Unit ID 列表。"""
+
+    result: list[str] = []
+    for contract in _dict_items(value):
+        contract_id = str(contract.get("id") or "")
+        if not contract_id:
+            continue
+        for endpoint in _dict_items(contract.get("endpoints")):
+            endpoint_id = str(endpoint.get("id") or "")
+            if endpoint_id:
+                result.append(_endpoint_unit_id(contract_id, endpoint_id))
+    return list(dict.fromkeys(result))
+
+
+def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:
+    """生成 endpoint Unit 的稳定复合标识。"""
+
+    return f"endpoint:{api_contract_id}:{endpoint_id}"
+
+
 def _unit_identity(unit_id: str) -> tuple[str, str]:
     """根据稳定 Unit ID 返回 Unit 类型及其业务目标标识。"""
 
@@ -232,7 +286,38 @@ def _unit_identity(unit_id: str) -> tuple[str, str]:
         return "page", unit_id.removeprefix("page:")
     if unit_id.startswith("data-source:"):
         return "data_source", unit_id.removeprefix("data-source:")
+    if unit_id.startswith("endpoint:"):
+        return "endpoint", unit_id.removeprefix("endpoint:")
     return "application", ""
+
+
+def _page_endpoint_unit_ids(
+    page: dict[str, Any],
+    api_contracts: list[dict[str, Any]],
+) -> list[str]:
+    """根据页面 endpoint 依赖生成精确 endpoint Unit 引用。"""
+
+    references = page.get("references") if isinstance(page.get("references"), dict) else {}
+    dependencies = references.get("endpoint_dependencies") or page.get("endpoint_dependencies") or []
+    endpoint_ids = [
+        str(item.get("endpoint_id") or "")
+        for item in _dict_items(dependencies)
+        if item.get("endpoint_id")
+    ]
+    if not endpoint_ids:
+        return []
+    endpoint_to_contract: dict[str, str] = {}
+    for contract in api_contracts:
+        contract_id = str(contract.get("id") or "")
+        for endpoint in _dict_items(contract.get("endpoints")):
+            endpoint_id = str(endpoint.get("id") or "")
+            if contract_id and endpoint_id:
+                endpoint_to_contract.setdefault(endpoint_id, contract_id)
+    return [
+        _endpoint_unit_id(endpoint_to_contract[endpoint_id], endpoint_id)
+        for endpoint_id in dict.fromkeys(endpoint_ids)
+        if endpoint_id in endpoint_to_contract
+    ]
 
 
 def _page_requires_auth(page: dict[str, Any]) -> bool:

@@ -520,7 +520,7 @@ def _normalized_scope(scope: dict[str, Any] | None) -> dict[str, str]:
     value = scope if isinstance(scope, dict) else {}
     target_type = str(value.get("type") or "application").strip()
     target_id = str(value.get("targetId") or value.get("target_id") or "").strip()
-    if target_type not in {"application", "page", "data_source"}:
+    if target_type not in {"application", "page", "data_source", "endpoint"}:
         target_type = "application"
     if target_type == "application":
         target_id = target_id or "application"
@@ -534,6 +534,9 @@ def _target_unit_ids(scope: dict[str, str]) -> list[str]:
         return [f"page:{scope['targetId']}"]
     if scope["type"] == "data_source" and scope.get("targetId"):
         return [f"data-source:{scope['targetId']}"]
+    if scope["type"] == "endpoint" and scope.get("targetId"):
+        api_contract_id = str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
+        return [f"endpoint:{api_contract_id}:{scope['targetId']}"] if api_contract_id else []
     return ["application:root"]
 
 

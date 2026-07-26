@@ -63,7 +63,7 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         '    "change_scope_policy": "must stay within input.change_scope",\n'
         '    "allowed_paths_policy": "must stay within input.change_scope.allowed_paths",\n'
         '    "contract_policy": "do not change confirmed requirements, ProjectPlan, or API contracts",\n'
-        '    "requested_resources": [{"type": "page|api_contract|data_source", "targetId": "stable-id"}]\n'
+        '    "requested_resources": [{"type": "page|endpoint|api_contract|data_source", "targetId": "stable-id"}]\n'
         "  },\n"
         '  "repair_tasks": [\n'
         "    {\n"

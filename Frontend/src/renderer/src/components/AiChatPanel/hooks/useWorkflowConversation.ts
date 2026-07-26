@@ -8,6 +8,7 @@ import type {
   ApplicationLifecycle,
   ChatMessageSkill,
   EditorMode,
+  WorkflowBuildExecutionScope,
   WorkflowDebugOptions,
   WorkflowRunPayload
 } from '../../../typings'
@@ -104,6 +105,21 @@ function workflowSelectedPageId(workflow: WorkflowRunPayload): string | undefine
   return statePageId || resultPageId || undefined
 }
 
+/** 从 Workflow 快照中恢复 endpoint 构建范围，供详情确认后的继续执行使用。 */
+function workflowEndpointExecutionScope(
+  workflow: WorkflowRunPayload
+): WorkflowBuildExecutionScope | undefined {
+  const stateApiContractId = workflow.state?.selected_api_contract_id || workflow.state?.selectedApiContractId
+  const resultApiContractId = workflow.result?.selected_api_contract_id || workflow.result?.selectedApiContractId
+  const stateEndpointId = workflow.state?.selected_endpoint_id || workflow.state?.selectedEndpointId
+  const resultEndpointId = workflow.result?.selected_endpoint_id || workflow.result?.selectedEndpointId
+  const apiContractId = String(stateApiContractId || resultApiContractId || '').trim()
+  const endpointId = String(stateEndpointId || resultEndpointId || '').trim()
+  return apiContractId && endpointId
+    ? { type: 'endpoint', targetId: endpointId, apiContractId }
+    : undefined
+}
+
 export function useWorkflowConversation({
   activeSession,
   agUiSessionsRef,
@@ -188,6 +204,14 @@ export function useWorkflowConversation({
       detailTargetType: selectedApiContractId && selectedEndpointId ? 'endpoint' : undefined,
       selectedApiContractId,
       selectedEndpointId,
+      buildExecutionScope:
+        selectedApiContractId && selectedEndpointId
+          ? {
+              type: 'endpoint',
+              targetId: selectedEndpointId,
+              apiContractId: selectedApiContractId
+            }
+          : undefined,
       selectedSkills,
       selectedPageId: selectedApiContractId && selectedEndpointId ? '' : selectedPageId,
       sessionIdentity,
@@ -207,6 +231,7 @@ export function useWorkflowConversation({
       resumeState?: WorkflowRunPayload
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
+      buildExecutionScope?: WorkflowBuildExecutionScope
       planControlAction?: 'stop' | 'end'
       planControlRunId?: string
       resumeExecutionRunId?: string
@@ -345,6 +370,7 @@ export function useWorkflowConversation({
         selectedApiContractId: options?.selectedApiContractId,
         selectedEndpointId: options?.selectedEndpointId,
         detailTargetType: options?.detailTargetType,
+        buildExecutionScope: options?.buildExecutionScope,
         workflowDebug: options?.workflowDebug,
         planControlAction: options?.planControlAction,
         planControlRunId: options?.planControlRunId,
@@ -474,6 +500,7 @@ export function useWorkflowConversation({
       originalRequest,
       resumeState: workflow,
       selectedPageId: workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId,
+      buildExecutionScope: workflowEndpointExecutionScope(workflow),
       titleFrom: originalRequest || '补充需求确认'
     })
   }
@@ -517,6 +544,11 @@ export function useWorkflowConversation({
         selectedEndpointId: target.endpointId,
         selectedPageId: '',
         detailTargetType: 'endpoint',
+        buildExecutionScope: {
+          type: 'endpoint',
+          targetId: target.endpointId,
+          apiContractId: target.apiContractId
+        },
         endpointLabel: target.endpointLabel,
         sessionIdentity: identity,
         titleFrom: `${target.hasDetailPlan ? '确认接口' : '设计接口'}：${target.endpointLabel}`

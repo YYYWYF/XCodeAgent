@@ -208,7 +208,14 @@ function BuildExecutionSliceProgress({
   const pending = numberValue(summary.pending, tasks.filter((task) => !task.status || task.status === "pending").length);
   const reused = numberValue(summary.reused, executionSlice.reusable_task_ids?.length || 0);
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
-  const targetLabel = scope.type === "page" ? "页面" : scope.type === "data_source" ? "数据源" : "应用";
+  const targetLabel =
+    scope.type === "page"
+      ? "页面"
+      : scope.type === "data_source"
+        ? "数据源"
+        : scope.type === "endpoint"
+          ? "接口"
+          : "应用";
   const targetId = scope.targetId || executionSlice.target_unit_ids?.[0] || "";
   const progressStatus = failed > 0 ? "exception" : completed === total && total > 0 ? "success" : "active";
   const displayTasks = sortBuildTasksForDisplay(tasks);

@@ -12,6 +12,7 @@ def resolve_target_build_context(
     *,
     target_type: str,
     target_id: str,
+    api_contract_id: str | None = None,
     project_plan_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """解析目标详情、直接 endpoint/API 依赖与编译所需的 Unit 标识。"""
@@ -20,6 +21,8 @@ def resolve_target_build_context(
         return _page_context(project_plan, target_id, project_plan_path)
     if target_type == "data_source":
         return _data_source_context(project_plan, target_id, project_plan_path)
+    if target_type == "endpoint":
+        return _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
     raise ValueError(f"Unsupported build target type: {target_type}.")
 
 
@@ -40,6 +43,7 @@ def _page_context(
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _endpoint_ids(page_detail)
     source_ids: list[str] = []
+    endpoint_unit_ids: list[str] = []
     for endpoint_id in endpoint_ids:
         endpoint = endpoint_index.get(endpoint_id)
         if endpoint is None:
@@ -49,6 +53,9 @@ def _page_context(
             raise ValueError(f"Endpoint {endpoint_id} does not declare a data source.")
         if source_id not in source_ids:
             source_ids.append(source_id)
+        contract_id = str(endpoint.get("api_contract_id") or "")
+        if contract_id:
+            endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))
 
     endpoint_details = []
     endpoint_refs = []
@@ -78,6 +85,7 @@ def _page_context(
             *( ["app:auth-guard"] if _page_requires_auth(page) else [] ),
             *( ["app:backend-bootstrap"] if source_ids else [] ),
             *(f"data-source:{source_id}" for source_id in source_ids),
+            *list(dict.fromkeys(endpoint_unit_ids)),
             f"page:{page_id}",
         ],
         "source_refs": {
@@ -100,6 +108,7 @@ def _data_source_context(
     endpoint_ids = [
         endpoint_id for endpoint_id, endpoint in endpoint_index.items()
         if endpoint.get("data_source_id") == source_id
+        and "\0" not in endpoint_id
     ]
     endpoint_details = []
     endpoint_refs = []
@@ -119,6 +128,71 @@ def _data_source_context(
         "required_unit_ids": ["app:backend-bootstrap", f"data-source:{source_id}"],
         "source_refs": {
             "endpoint_details": endpoint_refs,
+        },
+    }
+
+
+def _endpoint_context(
+    project_plan: dict[str, Any],
+    endpoint_id: str,
+    api_contract_id: str | None,
+    project_plan_path: str | Path | None,
+) -> dict[str, Any]:
+    """解析单个 endpoint 的已确认详情，并只暴露该接口的后端构建范围。"""
+
+    endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
+    contract_id = str(api_contract_id or "").strip()
+    endpoint = (
+        endpoint_index.get(f"{contract_id}\0{endpoint_id}")
+        if contract_id
+        else endpoint_index.get(endpoint_id)
+    )
+    if endpoint is None:
+        target_label = f"{contract_id}/{endpoint_id}" if contract_id else endpoint_id
+        raise ValueError(f"ProjectPlan does not contain endpoint {target_label}.")
+    source_id = str(endpoint.get("data_source_id") or "")
+    contract_id = str(endpoint.get("api_contract_id") or "")
+    if not source_id:
+        raise ValueError(f"Endpoint {endpoint_id} does not declare a data source.")
+    if not contract_id:
+        raise ValueError(f"Endpoint {endpoint_id} does not declare an API contract.")
+    _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
+    detail = _load_external_detail(
+        endpoint.get("detail_design"),
+        "EndpointDetail",
+        endpoint_id,
+        project_plan_path,
+    )
+    detail_endpoint_id = str(detail.get("endpoint_id") or "")
+    detail_contract_id = str(detail.get("api_contract_id") or "")
+    if detail_endpoint_id and detail_endpoint_id != endpoint_id:
+        raise ValueError(
+            f"EndpointDetail {endpoint_id} file contains endpoint {detail_endpoint_id}."
+        )
+    if detail_contract_id and detail_contract_id != contract_id:
+        raise ValueError(
+            f"EndpointDetail {endpoint_id} file contains API contract {detail_contract_id}."
+        )
+    return {
+        "target": {
+            "type": "endpoint",
+            "id": endpoint_id,
+            "api_contract_id": contract_id,
+        },
+        "page_detail": None,
+        "endpoint_detail": detail,
+        "direct_endpoint_details": [detail],
+        "endpoint_ids": [endpoint_id],
+        "api_contract_ids": [contract_id],
+        "data_source_ids": [source_id],
+        "required_unit_ids": [
+            "app:backend-bootstrap",
+            f"data-source:{source_id}",
+            _endpoint_unit_id(contract_id, endpoint_id),
+        ],
+        "source_refs": {
+            "endpoint_detail": _artifact_ref(endpoint.get("detail_design"), endpoint_id),
+            "endpoint_details": [_artifact_ref(endpoint.get("detail_design"), endpoint_id)],
         },
     }
 
@@ -239,14 +313,24 @@ def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:
 
     index: dict[str, dict[str, Any]] = {}
     for contract in _dict_items(value):
+        contract_id = str(contract.get("id") or "")
         for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
             endpoint_id = str(endpoint.get("id") or endpoint_index + 1)
-            index[endpoint_id] = {
+            indexed_endpoint = {
                 "data_source_id": str(contract.get("data_source_id") or ""),
-                "api_contract_id": str(contract.get("id") or ""),
+                "api_contract_id": contract_id,
                 "detail_design": endpoint.get("detail_design"),
             }
+            index.setdefault(endpoint_id, indexed_endpoint)
+            if contract_id:
+                index[f"{contract_id}\0{endpoint_id}"] = indexed_endpoint
     return index
+
+
+def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:
+    """生成 endpoint Unit 的稳定复合标识，避免不同契约下接口 ID 冲突。"""
+
+    return f"endpoint:{api_contract_id}:{endpoint_id}"
 
 
 def _artifact_ref(reference: Any, target_id: str) -> dict[str, Any]:

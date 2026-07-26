@@ -582,6 +582,7 @@ def _primary_resource_claim(scope: str, target_id: str) -> ExecutionResourceClai
     resource_type = {
         "page": ExecutionResourceType.PAGE,
         "data_source": ExecutionResourceType.DATA_SOURCE,
+        "endpoint": ExecutionResourceType.ENDPOINT,
     }.get(scope, ExecutionResourceType.APPLICATION)
     return ExecutionResourceClaim(
         type=resource_type,
@@ -617,6 +618,7 @@ def _resource_claims_for_run(
     claims: list[ExecutionResourceClaim] = []
     groups = (
         (ExecutionResourceType.PAGE, locks.pages),
+        (ExecutionResourceType.ENDPOINT, locks.endpoints),
         (ExecutionResourceType.API_CONTRACT, locks.api_contracts),
         (ExecutionResourceType.DATA_SOURCE, locks.data_sources),
     )
@@ -655,6 +657,7 @@ def _resource_locks_with_claims(
 
     application = locks.application
     pages = dict(locks.pages)
+    endpoints = dict(locks.endpoints)
     api_contracts = dict(locks.api_contracts)
     data_sources = dict(locks.data_sources)
     for claim in claims:
@@ -669,6 +672,8 @@ def _resource_locks_with_claims(
             application = lock
         elif claim.type == ExecutionResourceType.PAGE:
             pages[claim.target_id] = lock
+        elif claim.type == ExecutionResourceType.ENDPOINT:
+            endpoints[claim.target_id] = lock
         elif claim.type == ExecutionResourceType.API_CONTRACT:
             api_contracts[claim.target_id] = lock
         else:
@@ -676,6 +681,7 @@ def _resource_locks_with_claims(
     return ExecutionResourceLocks(
         application=application,
         pages=pages,
+        endpoints=endpoints,
         apiContracts=api_contracts,
         dataSources=data_sources,
     )
@@ -692,6 +698,9 @@ def _resource_locks_without_run(
             None if locks.application and locks.application.run_id == run_id else locks.application
         ),
         pages={key: value for key, value in locks.pages.items() if value.run_id != run_id},
+        endpoints={
+            key: value for key, value in locks.endpoints.items() if value.run_id != run_id
+        },
         apiContracts={
             key: value for key, value in locks.api_contracts.items() if value.run_id != run_id
         },

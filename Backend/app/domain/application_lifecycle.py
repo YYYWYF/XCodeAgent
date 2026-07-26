@@ -72,6 +72,7 @@ class ExecutionResourceType(StrEnum):
 
     APPLICATION = "application"
     PAGE = "page"
+    ENDPOINT = "endpoint"
     API_CONTRACT = "api_contract"
     DATA_SOURCE = "data_source"
 
@@ -173,6 +174,7 @@ class ExecutionResourceLocks(ApplicationLifecycleModel):
         default_factory=dict,
         alias="apiContracts",
     )
+    endpoints: dict[str, ExecutionResourceLock] = Field(default_factory=dict)
     data_sources: dict[str, ExecutionResourceLock] = Field(
         default_factory=dict,
         alias="dataSources",
@@ -182,7 +184,7 @@ class ExecutionResourceLocks(ApplicationLifecycleModel):
 class WorkbenchExecution(ApplicationLifecycleModel):
     """保存当前占用工作区的页面或应用级计划执行。"""
 
-    scope: Literal["application", "page", "data_source"]
+    scope: Literal["application", "page", "data_source", "endpoint"]
     target_id: str = Field(alias="targetId", min_length=1, max_length=512)
     page_id: str | None = Field(default=None, alias="pageId", max_length=512)
     thread_id: str = Field(alias="threadId", min_length=1, max_length=512)

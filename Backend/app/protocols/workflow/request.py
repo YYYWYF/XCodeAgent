@@ -174,6 +174,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         forwarded_props=forwarded_props,
         resume_values=resume_values_from_state,
         selected_page_id=selectedPageId,
+        selected_api_contract_id=selected_api_contract_id,
+        selected_endpoint_id=selected_endpoint_id,
     )
     execution_resource_claims = (
         resolve_execution_resource_claims(
@@ -285,8 +287,10 @@ def _build_execution_scope(
     forwarded_props: dict[str, Any],
     resume_values: dict[str, Any],
     selected_page_id: str,
+    selected_api_contract_id: str,
+    selected_endpoint_id: str,
 ) -> dict[str, str]:
-    """标准化 AG-UI 构建范围，并为既有单页入口推导 page scope。"""
+    """标准化 AG-UI 构建范围，并为页面或 endpoint 详情入口推导局部 scope。"""
 
     explicit_scope = (
         _optional_dict(payload.get("buildExecutionScope"))
@@ -294,6 +298,14 @@ def _build_execution_scope(
         or _optional_dict(forwarded_props.get("buildExecutionScope"))
         or _optional_dict(forwarded_props.get("build_execution_scope"))
     )
+    if selected_endpoint_id and not explicit_scope:
+        if not selected_api_contract_id:
+            raise ValueError("endpoint 构建必须提供 selectedApiContractId。")
+        return {
+            "type": "endpoint",
+            "targetId": selected_endpoint_id,
+            "apiContractId": selected_api_contract_id,
+        }
     if selected_page_id and not explicit_scope:
         return {"type": "page", "targetId": selected_page_id}
     raw_scope = explicit_scope or _optional_dict(
@@ -307,14 +319,22 @@ def _build_execution_scope(
         )
     target_type = _optional_text(raw_scope.get("type"))
     target_id = _optional_text(raw_scope.get("targetId") or raw_scope.get("target_id"))
-    if target_type not in {"application", "page", "data_source"}:
-        raise ValueError("buildExecutionScope.type 必须是 application、page 或 data_source。")
+    api_contract_id = _optional_text(
+        raw_scope.get("apiContractId") or raw_scope.get("api_contract_id")
+    )
+    if target_type not in {"application", "page", "data_source", "endpoint"}:
+        raise ValueError("buildExecutionScope.type 必须是 application、page、data_source 或 endpoint。")
     if target_type == "application":
         if selected_page_id and not explicit_scope:
             return {"type": "page", "targetId": selected_page_id}
         return {"type": "application", "targetId": "application"}
     if not target_id:
-        raise ValueError("页面或数据源构建必须提供 buildExecutionScope.targetId。")
+        raise ValueError("页面、数据源或 endpoint 构建必须提供 buildExecutionScope.targetId。")
+    if target_type == "endpoint":
+        api_contract_id = api_contract_id or selected_api_contract_id
+        if not api_contract_id:
+            raise ValueError("endpoint 构建必须提供 buildExecutionScope.apiContractId。")
+        return {"type": "endpoint", "targetId": target_id, "apiContractId": api_contract_id}
     return {"type": target_type, "targetId": target_id}
 
 

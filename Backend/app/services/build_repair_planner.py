@@ -366,7 +366,7 @@ def _deduplicated_requested_resources(
     for resource in resources:
         resource_type = str(resource.get("type") or "").strip()
         target_id = str(resource.get("targetId") or resource.get("target_id") or "").strip()
-        if resource_type not in {"page", "api_contract", "data_source"} or not target_id:
+        if resource_type not in {"page", "endpoint", "api_contract", "data_source"} or not target_id:
             continue
         result.setdefault(
             f"{resource_type}:{target_id}",

@@ -29,6 +29,12 @@ def resolve_execution_resource_claims(
         return _page_claims(plan, target_id)
     if target_type == "data_source":
         return _data_source_claims(plan, target_id)
+    if target_type == "endpoint":
+        return _endpoint_claims(
+            plan,
+            target_id,
+            str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip(),
+        )
     raise ValueError(f"不支持的计划执行资源范围：{target_type}。")
 
 
@@ -148,6 +154,47 @@ def _data_source_claims(
             references.get("endpoint_dependencies") or page.get("endpoint_dependencies")
         )
         if any(str(item.get("endpoint_id") or "") in endpoint_ids for item in dependencies):
+            page_id = str(page.get("pageId") or page.get("id") or "").strip()
+            if page_id:
+                claims.append(_claim(ExecutionResourceType.PAGE, page_id))
+    return _deduplicated_claims(claims)
+
+
+def _endpoint_claims(
+    project_plan: dict[str, Any],
+    endpoint_id: str,
+    api_contract_id: str,
+) -> list[ExecutionResourceClaim]:
+    """解析 endpoint 本身、所属 API 契约、数据源和直接引用页面。"""
+
+    endpoint_key = (
+        f"{api_contract_id}:{endpoint_id}" if api_contract_id else endpoint_id
+    )
+    claims = [_claim(ExecutionResourceType.ENDPOINT, endpoint_key, primary=True)]
+    source_id = ""
+    contract_id = api_contract_id
+    for contract in _dict_items(project_plan.get("api_contracts")):
+        current_contract_id = str(contract.get("id") or "").strip()
+        if api_contract_id and current_contract_id != api_contract_id:
+            continue
+        if not any(
+            str(endpoint.get("id") or "").strip() == endpoint_id
+            for endpoint in _dict_items(contract.get("endpoints"))
+        ):
+            continue
+        contract_id = current_contract_id
+        source_id = str(contract.get("data_source_id") or "").strip()
+        break
+    if contract_id:
+        claims.append(_claim(ExecutionResourceType.API_CONTRACT, contract_id))
+    if source_id:
+        claims.append(_claim(ExecutionResourceType.DATA_SOURCE, source_id))
+    for page in _dict_items(project_plan.get("frontend_pages")):
+        references = page.get("references") if isinstance(page.get("references"), dict) else {}
+        dependencies = _dict_items(
+            references.get("endpoint_dependencies") or page.get("endpoint_dependencies")
+        )
+        if any(str(item.get("endpoint_id") or "").strip() == endpoint_id for item in dependencies):
             page_id = str(page.get("pageId") or page.get("id") or "").strip()
             if page_id:
                 claims.append(_claim(ExecutionResourceType.PAGE, page_id))

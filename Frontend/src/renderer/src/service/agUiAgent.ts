@@ -8,6 +8,7 @@ import type {
   EditorMode,
   WorkflowClarificationAnswers,
   WorkflowConfirmationArtifact,
+  WorkflowBuildExecutionScope,
   WorkflowDebugOptions,
   WorkflowEvent,
   WorkflowRunPayload,
@@ -27,6 +28,7 @@ export type SendWorkflowMessageOptions = {
   selectedApiContractId?: string
   selectedEndpointId?: string
   detailTargetType?: 'page' | 'endpoint'
+  buildExecutionScope?: WorkflowBuildExecutionScope
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
@@ -59,9 +61,11 @@ export function buildWorkflowForwardedProps(
     detailTargetType: options.detailTargetType,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
-    buildExecutionScope: options.workflowDebug?.enabled
-      ? options.workflowDebug.buildExecutionScope
-      : undefined,
+    buildExecutionScope: options.buildExecutionScope || (
+      options.workflowDebug?.enabled
+        ? options.workflowDebug.buildExecutionScope
+        : undefined
+    ),
     resumeState: options.resumeState,
     workflowScope: options.workflowScope,
     planControlAction: options.planControlAction,

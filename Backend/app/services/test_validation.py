@@ -266,7 +266,7 @@ def _repair_allowed_paths(owner: str, scoped_tasks: list[dict[str, Any]]) -> lis
 
 
 def _repair_scope(build_execution_scope: dict[str, Any] | None) -> dict[str, str]:
-    """把页面、数据源或应用执行范围映射为稳定 Unit ID。"""
+    """把页面、数据源、endpoint 或应用执行范围映射为稳定 Unit ID。"""
 
     scope = build_execution_scope if isinstance(build_execution_scope, dict) else {}
     scope_type = str(scope.get("type") or "application")
@@ -275,6 +275,14 @@ def _repair_scope(build_execution_scope: dict[str, Any] | None) -> dict[str, str
         unit_id = f"page:{target_id}"
     elif scope_type == "data_source" and target_id:
         unit_id = f"data-source:{target_id}"
+    elif scope_type == "endpoint" and target_id:
+        api_contract_id = str(
+            scope.get("apiContractId") or scope.get("api_contract_id") or ""
+        ).strip()
+        unit_id = f"endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
+        if not unit_id:
+            scope_type = "application"
+            unit_id = "application:root"
     else:
         scope_type = "application"
         unit_id = "application:root"
@@ -294,6 +302,12 @@ def _repair_task_unit_id(
         if task.get("owner") == owner and task.get("unit_id")
     ]
     if owner == "data_source":
+        endpoint_unit = next(
+            (unit_id for unit_id in owner_unit_ids if unit_id.startswith("endpoint:")),
+            "",
+        )
+        if endpoint_unit:
+            return endpoint_unit
         data_source_unit = next(
             (unit_id for unit_id in owner_unit_ids if unit_id.startswith("data-source:")),
             "",
