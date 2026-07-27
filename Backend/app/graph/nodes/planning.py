@@ -41,6 +41,16 @@ from app.workspace.plan_documents import (
 logger = logging.getLogger("uvicorn.error")
 
 
+def _planning_token_callback(token: str) -> None:
+    """将规划模型流式 token 转发到 LangGraph custom stream。"""
+
+    try:
+        writer = get_stream_writer()
+    except (KeyError, RuntimeError):
+        return
+    writer({"type": "llm.token", "token": token, "node": "project_planning"})
+
+
 def _detail_progress(message: str, **detail: object) -> None:
     """向 LangGraph custom stream 和后端日志同步发送细节设计进度。"""
 
@@ -133,6 +143,7 @@ def project_planning(state: ProjectState) -> dict:
             if state.get("project_plan")
             else {}
         ),
+        on_token=_planning_token_callback,
     )
     project_plan = apply_project_plan_feedback(
         project_plan,
@@ -315,6 +326,7 @@ def detail_confirmation(state: ProjectState) -> dict:
         revised_plan = revise_project_plan_with_chat_model(
             pending_plan,
             state.get("request", ""),
+            on_token=_planning_token_callback,
         )
         revised_plan = _generate_all_detail_plans(revised_plan)
         revised_plan["confirmation_status"] = "pending_user_confirmation"
@@ -799,7 +811,10 @@ def _repair_project_plan_validation_errors(
     feedback = "系统计划一致性校验失败，请在本次重新生成中完整修复以下问题：\n" + "\n".join(
         f"- {error}" for error in errors
     )
-    repaired = revise_project_plan_with_chat_model(project_plan, feedback)
+    repaired = revise_project_plan_with_chat_model(
+        project_plan, feedback,
+        on_token=_planning_token_callback,
+    )
     repaired["confirmation_status"] = "pending_user_confirmation"
     return repaired, _project_plan_validation_errors(repaired)
 

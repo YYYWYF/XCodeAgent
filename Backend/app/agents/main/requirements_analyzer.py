@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
+
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -80,18 +82,42 @@ def _invoke_live_chat_model(
     *,
     existing_spec: dict[str, Any] | None = None,
     settings: Settings | None = None,
+    on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """调用绑定澄清工具的需求模型。"""
+    """调用绑定澄清工具的需求模型，可选流式吐词。"""
 
     active_settings = settings or Settings.from_env()
     runnable = create_chat_model(active_settings).bind_tools([ask_user])
-    result = runnable.invoke(_requirements_prompt(request, existing_spec))
-    return {"messages": [result]}
+    if on_token is None:
+        result = runnable.invoke(_requirements_prompt(request, existing_spec))
+        return {"messages": [result]}
+
+    accumulated_text = ""
+    last_msg: AIMessage | None = None
+    for chunk in runnable.stream(_requirements_prompt(request, existing_spec)):
+        if isinstance(chunk, AIMessageChunk):
+            token = chunk.content
+            if isinstance(token, str) and token:
+                accumulated_text += token
+                on_token(token)
+            last_msg = chunk
+    if last_msg is None:
+        return {"messages": []}
+    final = AIMessage(
+        content=accumulated_text,
+        tool_calls=last_msg.tool_calls
+        if hasattr(last_msg, "tool_calls")
+        else None,
+        id=last_msg.id if hasattr(last_msg, "id") else None,
+    )
+    return {"messages": [final]}
 
 
 def analyze_requirements_with_chat_model(
     request: str,
     existing_spec: dict[str, Any] | None = None,
+    *,
+    on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """直接调用需求模型生成 RequirementSpec，并在关键需求不足时请求澄清。"""
 
@@ -100,6 +126,7 @@ def analyze_requirements_with_chat_model(
         request,
         existing_spec=existing_spec,
         settings=settings,
+        on_token=on_token,
     )
     messages = agent_result.get("messages", [])
     content = getattr(messages[-1], "content", "") if messages else ""

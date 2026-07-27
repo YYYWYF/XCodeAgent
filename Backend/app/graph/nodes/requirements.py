@@ -1,4 +1,7 @@
 import json
+import logging
+
+from langgraph.config import get_stream_writer
 
 from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import analyze_requirements_with_chat_model
@@ -14,6 +17,19 @@ from app.workspace.spec_documents import (
     write_requirement_spec_document,
     write_requirement_spec_json,
 )
+
+
+logger = logging.getLogger("uvicorn.error")
+
+
+def _llm_token_callback(token: str) -> None:
+    """将 LLM 流式 token 转发到 LangGraph custom stream。"""
+
+    try:
+        writer = get_stream_writer()
+    except (KeyError, RuntimeError):
+        return
+    writer({"type": "llm.token", "token": token, "node": "requirements"})
 
 
 def requirements(state: ProjectState) -> dict:
@@ -71,6 +87,7 @@ def requirements(state: ProjectState) -> dict:
     analysis = analyze_requirements_with_chat_model(
         state["request"],
         existing_spec=existing_spec,
+        on_token=_llm_token_callback,
     )
     spec = analysis["requirement_spec"]
     _apply_menus_root_path_to_pages(spec, state)

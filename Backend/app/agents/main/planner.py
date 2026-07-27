@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
+
+from langchain_core.messages import AIMessageChunk
 
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -130,19 +132,32 @@ def _invoke_live_chat_model(
     *,
     existing_plan: dict[str, Any] | None = None,
     settings: Settings | None = None,
+    on_token: Callable[[str], None] | None = None,
 ) -> str:
     active_settings = settings or Settings.from_env()
-    result = create_chat_model(active_settings).invoke(
-        _planning_prompt(requirement_spec, existing_plan)
-    )
-    content = getattr(result, "content", "")
-    return content if isinstance(content, str) else str(content)
+    model = create_chat_model(active_settings)
+    if on_token is None:
+        result = model.invoke(
+            _planning_prompt(requirement_spec, existing_plan)
+        )
+        content = getattr(result, "content", "")
+        return content if isinstance(content, str) else str(content)
+
+    accumulated_text = ""
+    for chunk in model.stream(_planning_prompt(requirement_spec, existing_plan)):
+        if isinstance(chunk, AIMessageChunk):
+            token = chunk.content
+            if isinstance(token, str) and token:
+                accumulated_text += token
+                on_token(token)
+    return accumulated_text
 
 
 def plan_project_with_chat_model(
     requirement_spec: dict[str, Any],
     *,
     existing_plan: dict[str, Any] | None = None,
+    on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Use a direct chat-model call to produce a ProjectPlan."""
 
@@ -151,6 +166,7 @@ def plan_project_with_chat_model(
         requirement_spec,
         existing_plan=existing_plan,
         settings=settings,
+        on_token=on_token,
     )
     planning_source = "direct_chat_model"
 
@@ -167,6 +183,8 @@ def plan_project_with_chat_model(
 def revise_project_plan_with_chat_model(
     existing_plan: dict[str, Any],
     user_feedback: str,
+    *,
+    on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     requirement_spec = {
         "version": existing_plan.get("requirement_spec_version", "0.1.0"),
@@ -194,6 +212,7 @@ def revise_project_plan_with_chat_model(
     revised = plan_project_with_chat_model(
         requirement_spec,
         existing_plan=existing_plan,
+        on_token=on_token,
     )
     revised = apply_project_plan_feedback(revised, user_feedback)
     revised["planning_source"] = "direct_chat_model_revision"
