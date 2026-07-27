@@ -15,10 +15,10 @@ import type {
 } from '../../typings'
 import {
   CLASS_PREFIX,
+  composePreviewUrl,
   cx,
-  getInitialPreviewUrl,
   openPreviewWindow,
-  storePreviewUrl
+  previewOrigin
 } from '../../utils'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
@@ -67,6 +67,8 @@ type Props = {
   onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPlanningArtifactsRefresh: () => void
+  previewBaseUrl: string
+  previewLaunchError: string
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
@@ -174,6 +176,8 @@ export default function AiChatPanel({
   onApplicationUpdate,
   onApplicationLifecycleChange,
   onPlanningArtifactsRefresh,
+  previewBaseUrl,
+  previewLaunchError,
   onReturnWelcome,
   onThemeChange,
   theme
@@ -183,6 +187,10 @@ export default function AiChatPanel({
   const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
   const [generatingDetailTargetKey, setGeneratingDetailTargetKey] = useState('')
   const [previewError, setPreviewError] = useState('')
+  const [runtimePreviewBaseUrl, setRuntimePreviewBaseUrl] = useState(() =>
+    previewOrigin(previewBaseUrl)
+  )
+  const [runtimePreviewLaunchError, setRuntimePreviewLaunchError] = useState(previewLaunchError)
   const handledPreviewTargetRef = useRef('')
   const { publishAiMessage } = useWorkbench()
   const {
@@ -204,18 +212,29 @@ export default function AiChatPanel({
     () => developmentPlanningPages.find((page) => page.pageId === activePageId),
     [activePageId, developmentPlanningPages]
   )
+  const activePreviewPath = activePageOption?.path || '/'
 
   /** 接收实时 launch 结果并复用手动预览入口打开右侧面板。 */
   const handlePreviewReady = useCallback(
     (target: WorkflowPreviewTarget) => {
       if (handledPreviewTargetRef.current === target.key) return
       handledPreviewTargetRef.current = target.key
+      const nextBaseUrl = previewOrigin(target.url)
+      const nextPreviewUrl = composePreviewUrl(nextBaseUrl, activePreviewPath)
+      if (!nextPreviewUrl) return
       setPreviewError('')
-      storePreviewUrl(application.id, target.url)
-      setRightPanel({ type: 'preview', requestKey: target.key, url: target.url })
+      setRuntimePreviewBaseUrl(nextBaseUrl)
+      setRuntimePreviewLaunchError('')
+      setRightPanel({ type: 'preview', requestKey: target.key, url: nextPreviewUrl })
     },
-    [application.id, setRightPanel]
+    [activePreviewPath, setRightPanel]
   )
+
+  // 同步工作台自动启动返回的最新前端端口和错误，不进行任何浏览器持久化。
+  useEffect(() => {
+    setRuntimePreviewBaseUrl(previewOrigin(previewBaseUrl))
+    setRuntimePreviewLaunchError(previewLaunchError)
+  }, [previewBaseUrl, previewLaunchError])
 
   const {
     activeSession,
@@ -494,7 +513,17 @@ export default function AiChatPanel({
 
   /** 在右侧工作区打开当前页面预览。 */
   const handleOpenPage = (): void => {
-    setRightPanel({ type: 'preview' })
+    const targetUrl = composePreviewUrl(runtimePreviewBaseUrl, activeHeaderTarget.path)
+    if (!targetUrl) {
+      setPreviewError(runtimePreviewLaunchError || '前端服务尚未启动完成，暂时无法预览页面')
+      return
+    }
+    setPreviewError('')
+    setRightPanel({
+      type: 'preview',
+      requestKey: `${runtimePreviewBaseUrl}:${activeHeaderTarget.path}`,
+      url: targetUrl
+    })
   }
 
   /** 关闭右侧工作区的页面预览。 */
@@ -502,15 +531,15 @@ export default function AiChatPanel({
     setRightPanel(undefined)
   }
 
-  /** 使用最近一次成功启动地址打开独立全屏预览窗口。 */
+  /** 使用当前前端端口和所选页面路由打开独立全屏预览窗口。 */
   const handleOpenFullscreenPreview = async (): Promise<void> => {
     setPreviewError('')
 
     try {
-      const targetUrl =
-        rightPanel?.type === 'preview' && rightPanel.url
-          ? rightPanel.url
-          : getInitialPreviewUrl(application.id)
+      const targetUrl = composePreviewUrl(runtimePreviewBaseUrl, activeHeaderTarget.path)
+      if (!targetUrl) {
+        throw new Error(runtimePreviewLaunchError || '前端服务尚未启动完成，暂时无法预览页面')
+      }
       await openPreviewWindow(targetUrl)
     } catch (caughtError) {
       setPreviewError(caughtError instanceof Error ? caughtError.message : '无法打开网页预览')
@@ -840,7 +869,7 @@ export default function AiChatPanel({
               onOpenPage={handleOpenPage}
               pagePath={activeHeaderTarget.path}
               pageTitle={activeHeaderTarget.title}
-              previewAvailable={showPreviewActions}
+              previewAvailable={showPreviewActions && Boolean(runtimePreviewBaseUrl)}
               targetType={activeHeaderTarget.type}
               theme={theme}
             />
@@ -966,8 +995,12 @@ export default function AiChatPanel({
         <div className={cx('embedded-preview-pane')}>
           <BrowserPreviewPanel
             application={application}
+            pages={developmentPlanningPages}
             requestKey={rightPanel.requestKey}
             requestedUrl={rightPanel.url}
+            previewBaseUrl={runtimePreviewBaseUrl}
+            selectedPagePath={activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/'}
+            errorMessage={runtimePreviewLaunchError}
           />
         </div>
       )}

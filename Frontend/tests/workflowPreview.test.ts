@@ -33,7 +33,11 @@ import {
   hasNonTerminalApplicationExecution,
   latestApplicationLifecycle
 } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
-import { navigatePreviewHistory } from '../src/renderer/src/utils/previewUrl'
+import {
+  composePreviewUrl,
+  navigatePreviewHistory,
+  previewOrigin
+} from '../src/renderer/src/utils/previewUrl'
 import type {
   ApplicationLifecycle,
   WorkbenchExecution,
@@ -81,6 +85,23 @@ test('不同运行返回相同 URL 时仍生成不同的一次性目标', () => 
 
   assert.notEqual(first?.key, second?.key)
   assert.equal(first?.url, second?.url)
+})
+
+test('页面预览使用当前启动端口和所选页面路由拼接真实地址', () => {
+  assert.equal(previewOrigin('http://127.0.0.1:5178/old-path'), 'http://127.0.0.1:5178')
+  assert.equal(
+    composePreviewUrl('http://127.0.0.1:5178/old-path', '/orders/list'),
+    'http://127.0.0.1:5178/orders/list'
+  )
+  assert.equal(
+    composePreviewUrl('localhost:3000', 'dashboard'),
+    'http://localhost:3000/dashboard'
+  )
+})
+
+test('缺少有效前端启动地址时不生成页面预览 URL', () => {
+  assert.equal(composePreviewUrl('', '/orders'), '')
+  assert.equal(composePreviewUrl('not a url', '/orders'), '')
 })
 
 test('已有任一页面设计的工作区重新进入时不再显示首次设计挡板', () => {

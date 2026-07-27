@@ -1,5 +1,3 @@
-const DEFAULT_PREVIEW_URL = 'https://example.com'
-
 export type PreviewNavigationState = {
   history: string[]
   index: number
@@ -21,27 +19,29 @@ export function normalizePreviewUrl(value: string): string {
   return `https://${trimmedValue}`
 }
 
-/** 读取指定应用最近一次成功使用的预览地址。 */
-export function getStoredPreviewUrl(applicationId: string): string {
+/** 从前端启动地址中提取当前真正可访问的协议、主机和端口。 */
+export function previewOrigin(value: string): string {
+  const normalizedValue = normalizePreviewUrl(value)
+  if (!normalizedValue) return ''
   try {
-    return window.localStorage.getItem(`xcode-agent-preview-url:${applicationId}`) || ''
+    return new URL(normalizedValue).origin
   } catch {
     return ''
   }
 }
 
-/** 持久化指定应用当前使用的预览地址。 */
-export function storePreviewUrl(applicationId: string, url: string): void {
+/** 使用当前前端 origin 和所选页面路由拼出真实预览地址。 */
+export function composePreviewUrl(frontendUrl: string, pagePath: string): string {
+  const origin = previewOrigin(frontendUrl)
+  if (!origin) return ''
+  const normalizedPath = pagePath.trim()
+  if (!normalizedPath) return `${origin}/`
+  const route = normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`
   try {
-    window.localStorage.setItem(`xcode-agent-preview-url:${applicationId}`, url)
+    return new URL(route, `${origin}/`).toString()
   } catch {
-    // localStorage may be unavailable in restricted browser contexts.
+    return ''
   }
-}
-
-/** 返回应用预览初始地址，缺少历史记录时使用安全默认页。 */
-export function getInitialPreviewUrl(applicationId: string): string {
-  return normalizePreviewUrl(getStoredPreviewUrl(applicationId)) || DEFAULT_PREVIEW_URL
 }
 
 /** 将新地址追加到预览历史，并在回退后导航时丢弃旧的前进记录。 */
@@ -56,33 +56,6 @@ export function navigatePreviewHistory(
   return {
     history: [...state.history.slice(0, state.index + 1), nextUrl],
     index: state.index + 1
-  }
-}
-
-/** 持久化预览启动错误信息，供 BrowserPreviewPanel 在预览区展示。 */
-export function storePreviewError(applicationId: string, message: string): void {
-  try {
-    window.localStorage.setItem(`xcode-agent-preview-error:${applicationId}`, message)
-  } catch {
-    // localStorage may be unavailable in restricted browser contexts.
-  }
-}
-
-/** 读取预览启动错误信息，用于在预览区展示启动失败原因。 */
-export function getPreviewError(applicationId: string): string {
-  try {
-    return window.localStorage.getItem(`xcode-agent-preview-error:${applicationId}`) || ''
-  } catch {
-    return ''
-  }
-}
-
-/** 清除预览启动错误信息，在用户主动导航或关闭预览时调用。 */
-export function clearPreviewError(applicationId: string): void {
-  try {
-    window.localStorage.removeItem(`xcode-agent-preview-error:${applicationId}`)
-  } catch {
-    // localStorage may be unavailable in restricted browser contexts.
   }
 }
 

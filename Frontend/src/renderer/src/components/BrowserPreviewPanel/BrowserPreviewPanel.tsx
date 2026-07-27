@@ -10,16 +10,17 @@ import {
 import { Button, Input, Segmented, Select, Tooltip, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { ApplicationConfig } from '../../typings'
+import type {
+  ApplicationConfig,
+  ApplicationMenuItem,
+  DevelopmentPlanningPageOption
+} from '../../typings'
 import {
-  clearPreviewError,
+  composePreviewUrl,
   cx,
-  getInitialPreviewUrl,
-  getPreviewError,
   navigatePreviewHistory,
   normalizePreviewUrl,
-  openExternalPreviewUrl,
-  storePreviewUrl
+  openExternalPreviewUrl
 } from '../../utils'
 import './BrowserPreviewPanel.less'
 
@@ -32,6 +33,22 @@ type Props = {
   requestKey?: string
   requestedUrl?: string
   errorMessage?: string
+  pages?: DevelopmentPlanningPageOption[]
+  previewBaseUrl?: string
+  selectedPagePath?: string
+}
+
+type PreviewPageOption = {
+  label: string
+  value: string
+}
+
+/** 递归提取应用菜单中的页面名称和路由，用于没有 ProjectPlan 页面清单的预览入口。 */
+function menuPreviewPages(items: ApplicationMenuItem[]): PreviewPageOption[] {
+  return items.flatMap((item) => [
+    ...(item.type === 'page' ? [{ label: item.label, value: item.path }] : []),
+    ...menuPreviewPages(item.children || [])
+  ])
 }
 
 /** 展示可由 Workflow 目标地址驱动的内嵌浏览器预览。 */
@@ -39,41 +56,55 @@ export default function BrowserPreviewPanel({
   application,
   requestKey,
   requestedUrl,
-  errorMessage: externalError
+  errorMessage: externalError,
+  pages = [],
+  previewBaseUrl = '',
+  selectedPagePath = ''
 }: Props): ReactElement {
-  const initialUrl = normalizePreviewUrl(requestedUrl || '') || getInitialPreviewUrl(application.id)
+  const pageOptions = useMemo<PreviewPageOption[]>(() => {
+    if (pages.length > 0) {
+      return pages.map((page) => ({ label: page.label, value: page.path }))
+    }
+    const menuPages = menuPreviewPages(application.menus.items)
+    if (menuPages.length > 0) return menuPages
+    return application.pages.map((page) => ({ label: page, value: '/' }))
+  }, [application.menus.items, application.pages, pages])
+  const initialPagePath = selectedPagePath || pageOptions[0]?.value || '/'
+  const initialUrl =
+    normalizePreviewUrl(requestedUrl || '') ||
+    composePreviewUrl(previewBaseUrl, initialPagePath) ||
+    'about:blank'
   const [navigation, setNavigation] = useState(() => ({ history: [initialUrl], index: 0 }))
   const [draftUrl, setDraftUrl] = useState(initialUrl)
-  const [selectedPage, setSelectedPage] = useState(application.defaultPage || application.pages[0])
+  const [selectedPage, setSelectedPage] = useState(initialPagePath)
   const [viewport, setViewport] = useState<PreviewViewport>('desktop')
   const [refreshKey, setRefreshKey] = useState(0)
   const [openError, setOpenError] = useState('')
-  const [launchError, setLaunchError] = useState(
-    () => externalError || getPreviewError(application.id)
-  )
+  const [launchError, setLaunchError] = useState(externalError || '')
   const previewUrl = navigation.history[navigation.index]
-
-  const pageOptions = useMemo(
-    () => application.pages.map((page) => ({ label: page, value: page })),
-    [application.pages]
-  )
 
   useEffect(() => {
     setDraftUrl(previewUrl)
     setOpenError('')
     // 用户手动导航或刷新时，之前的启动错误已无关，一并清除
     setLaunchError('')
-    clearPreviewError(application.id)
-    storePreviewUrl(application.id, previewUrl)
-  }, [application.id, previewUrl])
+  }, [previewUrl])
 
   useEffect(() => {
     if (!requestedUrl) return
     // 从外部收到新的 preview 地址（如 launch 成功返回），清除此前可能的启动错误
     setLaunchError('')
-    clearPreviewError(application.id)
     setNavigation((current) => navigatePreviewHistory(current, requestedUrl))
   }, [requestKey, requestedUrl])
+
+  useEffect(() => {
+    setLaunchError(externalError || '')
+  }, [externalError])
+
+  useEffect(() => {
+    if (!selectedPagePath) return
+    setSelectedPage(selectedPagePath)
+  }, [selectedPagePath])
 
   /** 将手动输入的地址加入预览导航历史。 */
   const navigateTo = (rawUrl: string): void => {
@@ -84,6 +115,18 @@ export default function BrowserPreviewPanel({
     }
 
     setNavigation((current) => navigatePreviewHistory(current, nextUrl))
+  }
+
+  /** 使用当前前端端口和用户选择的页面路由切换内嵌预览。 */
+  const handlePageChange = (pagePath: string): void => {
+    setSelectedPage(pagePath)
+    const targetUrl = composePreviewUrl(previewBaseUrl, pagePath)
+    if (!targetUrl) {
+      setLaunchError(externalError || '前端服务尚未启动完成，暂时无法预览页面')
+      return
+    }
+    setLaunchError('')
+    setNavigation((current) => navigatePreviewHistory(current, targetUrl))
   }
 
   /** 在系统浏览器中打开当前地址栏指向的预览页面。 */
@@ -159,7 +202,7 @@ export default function BrowserPreviewPanel({
           className={cx('browser-page-select')}
           options={pageOptions}
           value={selectedPage}
-          onChange={setSelectedPage}
+          onChange={handlePageChange}
         />
         <Segmented
           aria-label="视口"
