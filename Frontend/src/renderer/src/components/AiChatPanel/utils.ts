@@ -1,5 +1,7 @@
 import { MIN_ASSISTANT_PANEL_WIDTH, MIN_RIGHT_PANEL_WIDTH, SPLIT_HANDLE_WIDTH } from './constants'
 import type {
+  DevelopmentPlanningApiEndpoint,
+  DevelopmentPlanningPageOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeFile,
   WorkspaceCodeChangeSet
@@ -33,6 +35,79 @@ export type WorkspaceCodeChangeSummary = {
 export type WorkspacePathParts = {
   directory: string
   fileName: string
+}
+
+type DetailSessionIdentity = {
+  apiContractId?: string
+  endpointId?: string
+  pageId?: string
+}
+
+/** 生成页面详情目标键，供临时运行状态按页面隔离。 */
+export function pageDetailTargetKey(pageId: string): string {
+  return pageId ? `page:${pageId}` : ''
+}
+
+/** 生成接口详情目标键，供临时运行状态按接口隔离。 */
+export function endpointDetailTargetKey(apiContractId: string, endpointId: string): string {
+  return apiContractId && endpointId ? `endpoint:${apiContractId}:${endpointId}` : ''
+}
+
+/** 生成 API 大纲的相对展示路径，仅移除完整匹配的 base path 前缀。 */
+export function apiEndpointDisplayPath(endpointPath: string, basePath: string): string {
+  const normalizedEndpointPath = endpointPath.trim() || '/'
+  const normalizedBasePath = basePath.trim().replace(/\/+$/, '') || '/'
+  if (normalizedBasePath === '/' || normalizedEndpointPath === normalizedBasePath) {
+    return normalizedEndpointPath === normalizedBasePath ? '/' : normalizedEndpointPath
+  }
+  if (!normalizedEndpointPath.startsWith(`${normalizedBasePath}/`)) {
+    return normalizedEndpointPath
+  }
+  return normalizedEndpointPath.slice(normalizedBasePath.length) || '/'
+}
+
+/** 从持久化会话归属生成详情目标键。 */
+export function sessionDetailTargetKey(session: DetailSessionIdentity | undefined): string {
+  if (session?.apiContractId && session.endpointId) {
+    return endpointDetailTargetKey(session.apiContractId, session.endpointId)
+  }
+  return pageDetailTargetKey(session?.pageId || '')
+}
+
+/** 从 Workflow 快照读取详情目标键，避免历史运行状态串到当前页面。 */
+export function workflowDetailTargetKey(workflow: unknown): string {
+  if (!workflow || typeof workflow !== 'object') return ''
+  const payload = workflow as {
+    state?: Record<string, unknown>
+    result?: Record<string, unknown>
+  }
+  const state = payload.state || {}
+  const result = payload.result || {}
+  const apiContractId = String(
+    state.selectedApiContractId ||
+      state.selected_api_contract_id ||
+      result.selectedApiContractId ||
+      result.selected_api_contract_id ||
+      ''
+  ).trim()
+  const endpointId = String(
+    state.selectedEndpointId ||
+      state.selected_endpoint_id ||
+      result.selectedEndpointId ||
+      result.selected_endpoint_id ||
+      ''
+  ).trim()
+  if (apiContractId && endpointId) {
+    return endpointDetailTargetKey(apiContractId, endpointId)
+  }
+  const pageId = String(
+    state.selectedPageId ||
+      state.selected_page_id ||
+      result.selectedPageId ||
+      result.selected_page_id ||
+      ''
+  ).trim()
+  return pageDetailTargetKey(pageId)
 }
 
 /** 将工作区相对路径拆分为目录和文件名，供窄面板优先展示文件名。 */
@@ -196,4 +271,18 @@ export function workflowPreviewTarget(
 /** 仅在当前工作区还没有任何已落盘页面设计时显示首次详细设计挡板。 */
 export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): boolean {
   return !hasPageDesigns
+}
+
+/** 以当前页面的落盘详情状态判断是否需要锁定对话区。 */
+export function requiresPageDetailDesign(
+  page: DevelopmentPlanningPageOption | undefined
+): boolean {
+  return Boolean(page && !page.designed && !page.hasDetailPlan)
+}
+
+/** 以当前接口的落盘详情状态判断是否需要锁定对话区。 */
+export function requiresEndpointDetailDesign(
+  endpoint: DevelopmentPlanningApiEndpoint | undefined
+): boolean {
+  return Boolean(endpoint && !endpoint.designed && !endpoint.hasDetailPlan)
 }

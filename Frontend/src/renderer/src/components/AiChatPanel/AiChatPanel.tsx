@@ -37,10 +37,20 @@ import { useChatSessions } from './hooks/useChatSessions'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import { chatCopy } from './constants'
-import { requiresInitialDetailDesignSelection, type WorkflowPreviewTarget } from './utils'
+import {
+  endpointDetailTargetKey,
+  pageDetailTargetKey,
+  requiresEndpointDetailDesign,
+  requiresInitialDetailDesignSelection,
+  requiresPageDetailDesign,
+  sessionDetailTargetKey,
+  workflowDetailTargetKey,
+  type WorkflowPreviewTarget
+} from './utils'
 import {
   deriveDisplayedPlanExecutionMode,
   planExecutionShowsDebugResume,
+  planExecutionContextForEndpoint,
   planExecutionContextForPage,
   workflowResumeNode
 } from './planExecutionMode'
@@ -75,6 +85,15 @@ type ActiveDetailTarget =
   | { type: 'none' }
   | { type: 'page'; pageId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
+
+/** 为页面或接口生成稳定的前端目标键，隔离各目标的临时交互状态。 */
+function detailTargetKey(target: ActiveDetailTarget): string {
+  if (target.type === 'page') return pageDetailTargetKey(target.pageId)
+  if (target.type === 'endpoint') {
+    return endpointDetailTargetKey(target.apiContractId, target.endpointId)
+  }
+  return ''
+}
 
 /** 判断 Workflow 是否已经返回详细设计确认卡片，避免外层选择器遮住待确认内容。 */
 function workflowHasDetailReview(workflow: unknown): boolean {
@@ -161,8 +180,8 @@ export default function AiChatPanel({
 }: Props): ReactElement {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
-  const [detailTargetInteractionStarted, setDetailTargetInteractionStarted] = useState(false)
-  const [detailDesignGenerationActive, setDetailDesignGenerationActive] = useState(false)
+  const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
+  const [generatingDetailTargetKey, setGeneratingDetailTargetKey] = useState('')
   const [previewError, setPreviewError] = useState('')
   const handledPreviewTargetRef = useRef('')
   const { publishAiMessage } = useWorkbench()
@@ -180,6 +199,7 @@ export default function AiChatPanel({
   const activePageId = activeDetailTarget.type === 'page' ? activeDetailTarget.pageId : ''
   const activeApiEndpoint =
     activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
+  const activeTargetKey = detailTargetKey(activeDetailTarget)
   const activePageOption = useMemo(
     () => developmentPlanningPages.find((page) => page.pageId === activePageId),
     [activePageId, developmentPlanningPages]
@@ -285,12 +305,23 @@ export default function AiChatPanel({
   })
 
   const copy = chatCopy[editorMode]
-  const pageExecutionContext = planExecutionContextForPage(
-    applicationLifecycle,
-    activePageOption?.pageId || activePageId,
-    { runId: activeWorkflow?.runId, threadId: activeWorkflow?.threadId }
-  )
-  const scopedExecution = pageExecutionContext.execution
+  const workflowIdentity = {
+    runId: activeWorkflow?.runId,
+    threadId: activeWorkflow?.threadId || activeSession?.threadId
+  }
+  const targetExecutionContext = activeApiEndpoint
+    ? planExecutionContextForEndpoint(
+        applicationLifecycle,
+        activeApiEndpoint.apiContractId,
+        activeApiEndpoint.endpointId,
+        workflowIdentity
+      )
+    : planExecutionContextForPage(
+        applicationLifecycle,
+        activePageOption?.pageId || activePageId,
+        workflowIdentity
+      )
+  const scopedExecution = targetExecutionContext.execution
   const displayedPlanExecutionMode = deriveDisplayedPlanExecutionMode(
     scopedExecution,
     stopping ? 'stopping' : activeWorkflow?.summary.status,
@@ -325,6 +356,17 @@ export default function AiChatPanel({
     }
     return undefined
   }, [activeApiEndpoint, developmentPlanningApiContracts])
+  const activeEndpointSelectorTarget = activeApiEndpoint
+    ? {
+        ...activeApiEndpoint,
+        hasDetailPlan: Boolean(
+          activeApiEndpointOption?.endpoint.designed ||
+          activeApiEndpointOption?.endpoint.hasDetailPlan
+        ),
+        path: activeApiEndpointOption?.endpoint.path,
+        purpose: activeApiEndpointOption?.endpoint.summary
+      }
+    : undefined
   const activeHeaderTarget = activeApiEndpoint
     ? {
         type: 'api' as const,
@@ -363,22 +405,37 @@ export default function AiChatPanel({
       activeWorkflow?.state?.phase ||
       ''
   )
+  const activeSessionTargetKey = sessionDetailTargetKey(activeSession)
+  const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
+  const activeWorkflowMatchesTarget = Boolean(
+    activeTargetKey &&
+      (
+        activeWorkflowTargetKey
+          ? activeWorkflowTargetKey === activeTargetKey
+          : activeSessionTargetKey
+            ? activeSessionTargetKey === activeTargetKey
+            : interactingDetailTargetKey === activeTargetKey
+      )
+  )
   const detailConfirmationWaitingReview =
-    !loading && detailTargetInteractionStarted && (
+    !loading && activeWorkflowMatchesTarget && (
       activeWorkflowPhase === 'detail_confirmation' ||
       workflowHasDetailReview(latestWorkflowForDisplay)
     )
   const detailProgressVisible =
     loading &&
-    detailTargetInteractionStarted &&
-    detailDesignGenerationActive &&
+    activeWorkflowMatchesTarget &&
+    (
+      generatingDetailTargetKey === activeTargetKey ||
+      activeWorkflowPhase === 'detail_confirmation'
+    ) &&
     developmentPlanningReady &&
     Boolean(activeApiEndpoint || activePageOption) &&
     !detailConfirmationWaitingReview
   const initialDetailDesignSelectionRequired =
     requiresInitialDetailDesignSelection(hasPageDesigns)
   const hasActiveDetailWorkflow =
-    detailTargetInteractionStarted &&
+    interactingDetailTargetKey === activeTargetKey &&
     Boolean(activeApiEndpoint || activePageOption || activeSession || latestWorkflowForDisplay)
   const detailTargetSelectionRequired =
     developmentPlanningReady &&
@@ -488,8 +545,8 @@ export default function AiChatPanel({
   /** 新建普通对话时退出页面/API 目标上下文，避免后续消息被旧目标接管。 */
   const handleCreateChatSession = (): void => {
     setActiveView('chat')
-    setDetailTargetInteractionStarted(true)
-    setDetailDesignGenerationActive(false)
+    setInteractingDetailTargetKey('')
+    setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ type: 'none' })
     handleCreateSessionFromList()
   }
@@ -499,8 +556,8 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
-    setDetailTargetInteractionStarted(true)
-    setDetailDesignGenerationActive(false)
+    setInteractingDetailTargetKey(pageDetailTargetKey(pageId))
+    setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ type: 'page', pageId })
     await createPageSession(pageId, pageLabel)
   }
@@ -510,8 +567,8 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
-    setDetailTargetInteractionStarted(true)
-    setDetailDesignGenerationActive(false)
+    setInteractingDetailTargetKey(pageDetailTargetKey(page.pageId))
+    setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ type: 'page', pageId: page.pageId })
     handleSelectPage(page.pageId).catch(() => undefined)
   }
@@ -521,8 +578,10 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
-    setDetailTargetInteractionStarted(true)
-    setDetailDesignGenerationActive(false)
+    setInteractingDetailTargetKey(
+      endpointDetailTargetKey(target.apiContractId, target.endpointId)
+    )
+    setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ ...target, type: 'endpoint' })
     const existingSession = sessions.find(
       (session) =>
@@ -542,8 +601,8 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
-    setDetailTargetInteractionStarted(true)
-    setDetailDesignGenerationActive(false)
+    setInteractingDetailTargetKey(endpointDetailTargetKey(apiContractId, endpointId))
+    setGeneratingDetailTargetKey('')
     setActiveDetailTarget({
       type: 'endpoint',
       apiContractId,
@@ -560,14 +619,15 @@ export default function AiChatPanel({
     pageLabel: string,
     hasDetailPlan: boolean
   ): Promise<void> => {
-    setDetailTargetInteractionStarted(true)
-    setDetailDesignGenerationActive(!hasDetailPlan)
+    const targetKey = pageDetailTargetKey(pageId)
+    setInteractingDetailTargetKey(targetKey)
+    setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
     setActiveDetailTarget({ type: 'page', pageId })
     const started = await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan)
     if (started) {
       onPlanningArtifactsRefresh()
     } else {
-      setDetailDesignGenerationActive(false)
+      setGeneratingDetailTargetKey((current) => current === targetKey ? '' : current)
     }
   }
 
@@ -581,8 +641,14 @@ export default function AiChatPanel({
       endpointId?: string
     }
   ): Promise<void> => {
-    setDetailTargetInteractionStarted(true)
-    setDetailDesignGenerationActive(!hasDetailPlan)
+    const targetKey = targetContext?.apiContractId
+      ? endpointDetailTargetKey(
+          targetContext.apiContractId,
+          targetContext.endpointId || endpointTargetId
+        )
+      : ''
+    setInteractingDetailTargetKey(targetKey)
+    setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
     if (targetContext?.apiContractId) {
       setActiveDetailTarget({
         type: 'endpoint',
@@ -603,7 +669,7 @@ export default function AiChatPanel({
     if (started) {
       onPlanningArtifactsRefresh()
     } else {
-      setDetailDesignGenerationActive(false)
+      setGeneratingDetailTargetKey((current) => current === targetKey ? '' : current)
     }
   }
 
@@ -627,9 +693,9 @@ export default function AiChatPanel({
 
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
     setActiveView('chat')
-    setDetailTargetInteractionStarted(true)
-    setDetailDesignGenerationActive(false)
     const session = sessions.find((item) => item.id === sessionId)
+    setInteractingDetailTargetKey(sessionDetailTargetKey(session))
+    setGeneratingDetailTargetKey('')
     if (session?.apiContractId && session.endpointId) {
       setActiveDetailTarget({
         type: 'endpoint',
@@ -651,7 +717,7 @@ export default function AiChatPanel({
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
   ): Promise<void> => {
-    setDetailDesignGenerationActive(false)
+    setGeneratingDetailTargetKey('')
     await handleSubmitClarification(workflow, answers)
   }
 
@@ -742,7 +808,7 @@ export default function AiChatPanel({
               loading={false}
               onStart={handleStartDetailDesign}
               pages={developmentPlanningPages}
-              selectedEndpoint={activeApiEndpoint}
+              selectedEndpoint={activeEndpointSelectorTarget}
               selectedPage={activeApiEndpoint ? undefined : activePageOption}
               workflowEvents={activeWorkflow?.events}
             />
@@ -802,7 +868,7 @@ export default function AiChatPanel({
             {displayedPlanExecutionMode !== 'idle' ? (
               <>
                 {planExecutionShowsDebugResume(displayedPlanExecutionMode) &&
-                  !pageExecutionContext.dependencyLocked && (
+                  !targetExecutionContext.dependencyLocked && (
                     <ChatComposer
                       activeWorkflow={activeWorkflow}
                       copy={copy}
@@ -823,7 +889,7 @@ export default function AiChatPanel({
                     />
                   )}
                 <PlanExecutionDock
-                  dependencyLocked={pageExecutionContext.dependencyLocked}
+                  dependencyLocked={targetExecutionContext.dependencyLocked}
                   error={scopedExecution?.error?.message || error}
                   execution={scopedExecution}
                   mode={displayedPlanExecutionMode}
@@ -859,10 +925,22 @@ export default function AiChatPanel({
               />
             )}
 
-            {/*
-              暂停页面详细设计锁定层：定位接口设计进度消失问题期间，
-              不再让页面锁定状态参与主内容区的渲染与遮罩。
-            */}
+            {(requiresPageDetailDesign(activePageOption) ||
+              requiresEndpointDetailDesign(activeApiEndpointOption?.endpoint)) &&
+            displayedPlanExecutionMode === 'idle' &&
+            !detailConfirmationWaitingReview ? (
+              <DetailConfirmationPageSelector
+                disabled={loading || workspaceBusy}
+                generating={false}
+                loading={false}
+                mode="locked"
+                onStart={handleStartDetailDesign}
+                pages={developmentPlanningPages}
+                selectedEndpoint={activeEndpointSelectorTarget}
+                selectedPage={activePageOption}
+                workflowEvents={activeWorkflow?.events}
+              />
+            ) : null}
           </div>
         )}
       </div>

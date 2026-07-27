@@ -105,6 +105,27 @@ async function pageDetailPlanExists(workspaceRoot: string, pageId: string): Prom
   }
 }
 
+/** 检查选中接口是否已经存在外置详情 JSON。 */
+async function endpointDetailPlanExists(
+  workspaceRoot: string,
+  apiContractId: string,
+  endpointId: string
+): Promise<boolean> {
+  const detailPath = path.join(
+    workspaceRoot,
+    '.xcodeagent',
+    'plans',
+    'endpoints',
+    `${detailFileStem(`${apiContractId}--${endpointId}`, 'endpoint--')}.json`
+  )
+  try {
+    const content = await fs.readFile(detailPath, 'utf8')
+    return Boolean(content.trim())
+  } catch {
+    return false
+  }
+}
+
 /** 从 ProjectPlan 中按页面标识收集应用大纲页面。 */
 function projectPlanPages(value: unknown): Map<string, Record<string, unknown>> {
   const result = new Map<string, Record<string, unknown>>()
@@ -212,6 +233,32 @@ async function mergeWorkbenchPageStatus(
   )
 }
 
+/** 只根据外置接口详情文件补充每个 endpoint 的设计状态。 */
+async function mergeWorkbenchApiStatus(
+  workspaceRoot: string,
+  contracts: WorkbenchApiContract[]
+): Promise<WorkbenchApiContract[]> {
+  return Promise.all(
+    contracts.map(async (contract) => ({
+      ...contract,
+      endpoints: await Promise.all(
+        contract.endpoints.map(async (endpoint) => {
+          const hasDetailPlan = await endpointDetailPlanExists(
+            workspaceRoot,
+            endpoint.apiContractId,
+            endpoint.id
+          )
+          return {
+            ...endpoint,
+            designed: hasDetailPlan,
+            hasDetailPlan
+          }
+        })
+      )
+    }))
+  )
+}
+
 /** 判断页面设计目录是否包含任意持久化产物。 */
 async function pageDesignDirectoryHasEntries(workspaceRoot: string): Promise<boolean> {
   try {
@@ -303,6 +350,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     projectPlanPageOptions({ frontend_pages: [...plannedPages.values()] }),
     plannedPages
   )
+  apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
   const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
 
   return {

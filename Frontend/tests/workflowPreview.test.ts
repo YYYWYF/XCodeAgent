@@ -1,13 +1,21 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  apiEndpointDisplayPath,
+  endpointDetailTargetKey,
+  pageDetailTargetKey,
+  requiresEndpointDetailDesign,
   requiresInitialDetailDesignSelection,
+  requiresPageDetailDesign,
+  sessionDetailTargetKey,
+  workflowDetailTargetKey,
   workflowFinalResultPresentation,
   workflowPreviewTarget
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
+  planExecutionContextForEndpoint,
   planExecutionContextForPage,
   planExecutionForPage,
   planExecutionShowsDebugResume,
@@ -78,6 +86,74 @@ test('不同运行返回相同 URL 时仍生成不同的一次性目标', () => 
 test('已有任一页面设计的工作区重新进入时不再显示首次设计挡板', () => {
   assert.equal(requiresInitialDetailDesignSelection(true), false)
   assert.equal(requiresInitialDetailDesignSelection(false), true)
+})
+
+test('页面设计挡板只由当前页面自己的落盘详情状态决定', () => {
+  const page = {
+    pageId: 'page-orders',
+    key: 'page-orders',
+    label: '订单页',
+    path: '/orders',
+    purpose: '管理订单',
+    designed: false,
+    hasDetailPlan: false
+  }
+
+  assert.equal(requiresPageDetailDesign(page), true)
+  assert.equal(requiresPageDetailDesign({ ...page, designed: true }), false)
+  assert.equal(requiresPageDetailDesign({ ...page, hasDetailPlan: true }), false)
+  assert.equal(requiresPageDetailDesign(undefined), false)
+})
+
+test('接口设计挡板只由当前 endpoint 自己的落盘详情状态决定', () => {
+  const endpoint = {
+    apiContractId: 'orders-api',
+    id: 'list-orders',
+    method: 'GET',
+    path: '/orders',
+    summary: '查询订单',
+    designed: false,
+    hasDetailPlan: false
+  }
+
+  assert.equal(requiresEndpointDetailDesign(endpoint), true)
+  assert.equal(requiresEndpointDetailDesign({ ...endpoint, designed: true }), false)
+  assert.equal(requiresEndpointDetailDesign({ ...endpoint, hasDetailPlan: true }), false)
+  assert.equal(requiresEndpointDetailDesign(undefined), false)
+})
+
+test('页面、接口、会话和 Workflow 使用一致的详情目标键', () => {
+  assert.equal(pageDetailTargetKey('page-orders'), 'page:page-orders')
+  assert.equal(
+    endpointDetailTargetKey('orders-api', 'list-orders'),
+    'endpoint:orders-api:list-orders'
+  )
+  assert.equal(
+    sessionDetailTargetKey({ pageId: 'page-orders' }),
+    'page:page-orders'
+  )
+  assert.equal(
+    workflowDetailTargetKey({
+      state: { selectedPageId: 'page-orders' }
+    }),
+    'page:page-orders'
+  )
+  assert.equal(
+    workflowDetailTargetKey({
+      result: {
+        selected_api_contract_id: 'orders-api',
+        selected_endpoint_id: 'list-orders'
+      }
+    }),
+    'endpoint:orders-api:list-orders'
+  )
+})
+
+test('API 大纲只移除路径边界完整匹配的 base path', () => {
+  assert.equal(apiEndpointDisplayPath('/api/orders/list', '/api/orders'), '/list')
+  assert.equal(apiEndpointDisplayPath('/api/orders', '/api/orders/'), '/')
+  assert.equal(apiEndpointDisplayPath('/api/orders-v2/list', '/api/orders'), '/api/orders-v2/list')
+  assert.equal(apiEndpointDisplayPath('/health', '/'), '/health')
 })
 
 test('最终结果标题区分成功和失败 Workflow', () => {
@@ -306,6 +382,32 @@ test('恢复运行按 Workflow 身份兜底且不会匹配另一个页面', () =
   assert.equal(
     planExecutionForPage(lifecycle, 'orders', { threadId: 'thread-orders' })?.runId,
     'run-orders'
+  )
+})
+
+test('接口执行按复合资源键恢复且不会串到同名 endpoint', () => {
+  const execution = pageExecution({
+    scope: 'endpoint',
+    targetId: 'list-orders',
+    resourceKeys: ['endpoint:orders-api:list-orders']
+  })
+  const lifecycle = planLifecycle(execution)
+
+  assert.equal(
+    planExecutionContextForEndpoint(
+      lifecycle,
+      'orders-api',
+      'list-orders'
+    ).execution?.runId,
+    execution.runId
+  )
+  assert.equal(
+    planExecutionContextForEndpoint(
+      lifecycle,
+      'customers-api',
+      'list-orders'
+    ).execution,
+    undefined
   )
 })
 

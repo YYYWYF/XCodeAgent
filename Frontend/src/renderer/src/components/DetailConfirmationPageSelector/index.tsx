@@ -1,5 +1,6 @@
 import {
   DatabaseOutlined,
+  LockOutlined,
   PlayCircleOutlined,
   RocketOutlined,
 } from "@ant-design/icons";
@@ -23,6 +24,7 @@ type Props = {
   disabled: boolean;
   generating?: boolean;
   loading: boolean;
+  mode?: "initial" | "locked";
   onStart: (
     targetType: "page" | "endpoint",
     targetId: string,
@@ -37,7 +39,10 @@ type Props = {
   selectedEndpoint?: {
     apiContractId: string;
     endpointId: string;
+    hasDetailPlan?: boolean;
     label: string;
+    path?: string;
+    purpose?: string;
   };
   selectedPage?: DevelopmentPlanningPageOption;
   workflowEvents?: WorkflowEvent[];
@@ -72,6 +77,7 @@ export default function DetailConfirmationPageSelector({
   disabled,
   generating = false,
   loading,
+  mode = "initial",
   onStart,
   pages,
   selectedEndpoint: progressEndpoint,
@@ -145,14 +151,98 @@ export default function DetailConfirmationPageSelector({
 
   if (generating && progressTarget && progressTargetType) {
     return (
-      <section className={cx("detail-page-selector")}>
-        <div className={cx("detail-page-selector-aurora")} />
+      <section
+        className={cx(
+          "detail-page-selector",
+          mode === "locked" && "locked-mode",
+        )}
+      >
+        {mode === "locked" ? (
+          <div className={cx("detail-page-selector-backdrop")} />
+        ) : (
+          <div className={cx("detail-page-selector-aurora")} />
+        )}
         <main className={cx("detail-page-selector-panel", "progress-panel")}>
           <PageDesignProgress
             events={workflowEvents}
             pageLabel={progressTarget.label}
             targetType={progressTargetType}
           />
+        </main>
+      </section>
+    );
+  }
+
+  if (mode === "locked" && progressTarget && progressTargetType) {
+    const lockedTargetId =
+      progressTargetType === "endpoint"
+        ? progressEndpoint?.endpointId
+        : progressPage?.pageId;
+    const lockedTargetPath =
+      progressTargetType === "endpoint"
+        ? progressEndpoint?.path || progressEndpoint?.label
+        : progressPage?.path;
+    const lockedTargetPurpose =
+      progressTargetType === "endpoint"
+        ? progressEndpoint?.purpose || "补充接口用途、处理逻辑和数据来源设计。"
+        : progressPage?.purpose;
+    return (
+      <section className={cx("detail-page-selector", "locked-mode")}>
+        <div className={cx("detail-page-selector-backdrop")} />
+        <main className={cx("detail-page-selector-panel", "locked-panel")}>
+          <span className={cx("detail-page-selector-lock-icon")}>
+            <LockOutlined />
+          </span>
+          <Text className={cx("detail-page-selector-eyebrow")}>
+            DETAIL DESIGN REQUIRED
+          </Text>
+          <Title level={3}>「{progressTarget.label}」尚未进行详细设计</Title>
+          <Text
+            className={cx("detail-page-selector-locked-copy")}
+            type="secondary"
+          >
+            {progressTargetType === "endpoint"
+              ? "为避免接口实现跳过契约细化，请先生成该接口的用途、处理逻辑与数据来源设计。"
+              : "为避免自由对话跳过页面设计，请先生成该页面的布局、状态、交互与验收标准。"}
+          </Text>
+          <div className={cx("detail-page-selector-target")}>
+            <div>
+              <Text strong>{progressTarget.label}</Text>
+              <Text code>{lockedTargetPath}</Text>
+            </div>
+            <Text type="secondary">{lockedTargetPurpose}</Text>
+          </div>
+          <Button
+            className={cx("detail-page-selector-action")}
+            disabled={disabled}
+            icon={<PlayCircleOutlined />}
+            loading={disabled}
+            onClick={() =>
+              lockedTargetId &&
+              void onStart(
+                progressTargetType,
+                lockedTargetId,
+                progressTarget.label,
+                Boolean(progressTarget.hasDetailPlan),
+                progressTargetType === "endpoint" && progressEndpoint
+                  ? {
+                      apiContractId: progressEndpoint.apiContractId,
+                      endpointId: progressEndpoint.endpointId,
+                    }
+                  : undefined,
+              )
+            }
+            size="large"
+            type="primary"
+          >
+            开始详细设计
+          </Button>
+          <Text
+            className={cx("detail-page-selector-lock-hint")}
+            type="secondary"
+          >
+            完成生成并确认后将自动解锁当前对话区
+          </Text>
         </main>
       </section>
     );
