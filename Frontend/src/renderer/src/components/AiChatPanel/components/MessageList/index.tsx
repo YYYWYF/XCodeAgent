@@ -24,7 +24,7 @@ import {
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage, ChatCopy } from '../../types'
 import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
-import { shouldShowScrollToBottom } from './scrollState'
+import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import './MessageList.less'
 
 const { Text } = Typography
@@ -56,26 +56,62 @@ export default function MessageList({
 }: MessageListProps): ReactElement {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
+  const followLatestContentRef = useRef(true)
+  const restoringFollowRef = useRef(false)
+  const scrollUpdateFrameRef = useRef<number>()
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const hasStreamingProcess = messages.some(
     (message) => message.id === activeAssistantMessageId && Boolean(message.processSteps?.length)
   )
 
-  /** 根据当前滚动尺寸同步悬浮按钮是否可见。 */
-  const updateScrollToBottomVisibility = useCallback((): void => {
+  /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
+  const handleScroll = useCallback((): void => {
     const container = scrollContainerRef.current
     if (!container) {
       setShowScrollToBottom(false)
       return
     }
+
+    const isNearBottom = isMessageListNearBottom(container)
+    if (restoringFollowRef.current) {
+      followLatestContentRef.current = true
+      if (isNearBottom) restoringFollowRef.current = false
+      setShowScrollToBottom(false)
+      return
+    }
+    followLatestContentRef.current = isNearBottom
     setShowScrollToBottom(shouldShowScrollToBottom(container))
   }, [])
 
-  /** 平滑滚动到消息列表底部。 */
+  /** 在下一动画帧跟随最新内容，或在暂停跟随时仅刷新按钮状态。 */
+  const scheduleScrollUpdate = useCallback((): void => {
+    if (scrollUpdateFrameRef.current !== undefined) {
+      window.cancelAnimationFrame(scrollUpdateFrameRef.current)
+    }
+    scrollUpdateFrameRef.current = window.requestAnimationFrame(() => {
+      scrollUpdateFrameRef.current = undefined
+      const container = scrollContainerRef.current
+      if (!container) {
+        setShowScrollToBottom(false)
+        return
+      }
+      if (followLatestContentRef.current) {
+        container.scrollTo({ top: container.scrollHeight, behavior: 'auto' })
+        setShowScrollToBottom(false)
+        return
+      }
+      setShowScrollToBottom(shouldShowScrollToBottom(container))
+    })
+  }, [])
+
+  /** 平滑滚动到底部并恢复对后续新内容的自动跟随。 */
   const handleScrollToBottom = (): void => {
     const container = scrollContainerRef.current
     if (!container) return
+    followLatestContentRef.current = true
+    restoringFollowRef.current = true
+    setShowScrollToBottom(false)
     container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
   }
 
@@ -85,24 +121,29 @@ export default function MessageList({
     const messageColumn = messageColumnRef.current
     if (!container || !messageColumn || typeof ResizeObserver === 'undefined') return
 
-    const observer = new ResizeObserver(updateScrollToBottomVisibility)
+    const observer = new ResizeObserver(scheduleScrollUpdate)
     observer.observe(container)
     observer.observe(messageColumn)
-    return () => observer.disconnect()
-  }, [updateScrollToBottomVisibility])
+    return () => {
+      observer.disconnect()
+      if (scrollUpdateFrameRef.current !== undefined) {
+        window.cancelAnimationFrame(scrollUpdateFrameRef.current)
+        scrollUpdateFrameRef.current = undefined
+      }
+    }
+  }, [scheduleScrollUpdate])
 
-  // 会话或加载状态切换后在浏览器完成布局时重新计算，避免复用旧会话状态。
+  // 消息或加载状态切换后主动安排一次跟随，ResizeObserver 不可用时仍可工作。
   useEffect(() => {
-    const animationFrame = window.requestAnimationFrame(updateScrollToBottomVisibility)
-    return () => window.cancelAnimationFrame(animationFrame)
-  }, [loading, messages, updateScrollToBottomVisibility])
+    scheduleScrollUpdate()
+  }, [loading, messages, scheduleScrollUpdate])
 
   return (
     <div className={cx('ai-message-list-shell')}>
       <div
         className={cx('ai-message-list')}
         aria-live="polite"
-        onScroll={updateScrollToBottomVisibility}
+        onScroll={handleScroll}
         ref={scrollContainerRef}
       >
         <div className={cx('ai-message-column')} ref={messageColumnRef}>

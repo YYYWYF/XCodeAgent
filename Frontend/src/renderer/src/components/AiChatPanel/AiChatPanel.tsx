@@ -857,6 +857,7 @@ export default function AiChatPanel({
             <MessageList
               codeChangeActionsDisabled={loading || workspaceBusy}
               copy={copy}
+              key={activeSession?.key || draftKey}
               loading={loading}
               messages={messages}
               onOpenCodeChangeFile={handleOpenCodeChangeFile}
