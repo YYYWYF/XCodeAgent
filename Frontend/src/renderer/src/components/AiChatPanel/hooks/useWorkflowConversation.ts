@@ -27,7 +27,11 @@ import { stoppedAnswer, workflowCodeChanges, workflowPreviewTarget } from '../ut
 import type { WorkflowPreviewTarget } from '../utils'
 import type { PersistSessionInput } from './useChatSessions'
 import type { SessionIdentity, SessionRunStatus } from './sessionRuntime'
-import { planExecutionForPage, withWorkflowExecutionStatus } from '../planExecutionMode'
+import {
+  planExecutionForPage,
+  withWorkflowExecutionStatus,
+  workflowResumeNode
+} from '../planExecutionMode'
 
 type SessionRunEntry = {
   identity: SessionIdentity
@@ -71,6 +75,7 @@ type UseWorkflowConversationResult = {
   handleAcceptPreview: () => Promise<void>
   handleAdjustPlan: (feedback: string) => Promise<void>
   handleEndPlan: (runId?: string) => Promise<void>
+  handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleRetryPlan: () => Promise<void>
   handleStopPlan: (runId?: string) => Promise<void>
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
@@ -589,13 +594,30 @@ export function useWorkflowConversation({
       activeSession?.pageId || selectedPageId,
       { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
     )
-    const resumeFrom = workflowRetryNode(activeWorkflow, execution?.phase)
+    const resumeFrom = workflowResumeNode(activeWorkflow, execution?.phase)
     await sendWorkflowMessage('重试当前计划任务。', {
       resumeState: activeWorkflow,
       resumeExecutionRunId: execution?.runId,
       selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
       titleFrom: '重试计划任务',
       workflowDebug: { enabled: true, resumeFrom }
+    })
+  }
+
+  /** 按暂停态调试面板选择的节点恢复当前计划，并保留原执行身份与状态快照。 */
+  const handleResumePlan = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
+    if (!activeWorkflow || !workflowDebug?.resumeFrom || loading || workspaceBusy) return
+    const execution = planExecutionForPage(
+      activeWorkflow.summary.lifecycle,
+      activeSession?.pageId || selectedPageId,
+      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
+    )
+    await sendWorkflowMessage(`从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`, {
+      resumeState: activeWorkflow,
+      resumeExecutionRunId: execution?.runId,
+      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
+      titleFrom: '从指定节点继续执行',
+      workflowDebug
     })
   }
 
@@ -674,6 +696,7 @@ export function useWorkflowConversation({
     handleAcceptPreview,
     handleAdjustPlan,
     handleEndPlan,
+    handleResumePlan,
     handleRetryPlan,
     handleStopPlan,
     handleSend,
@@ -686,26 +709,6 @@ export function useWorkflowConversation({
     stopping,
     workspaceBusy
   }
-}
-
-/** 从最近失败步骤选择安全的重试入口，避免从 handle_failure 终点恢复。 */
-function workflowRetryNode(workflow: WorkflowRunPayload, executionPhase?: string): string {
-  const supported = new Set([
-    'detail_confirmation',
-    'inspect_workspace',
-    'prepare_build_tasks',
-    'build',
-    'integration_test',
-    'launch_project',
-    'acceptance'
-  ])
-  for (let index = workflow.events.length - 1; index >= 0; index -= 1) {
-    const nodeName = workflow.events[index].nodeName || workflow.events[index].node?.id
-    if (nodeName && supported.has(nodeName)) return nodeName
-  }
-  const phase = String(workflow.summary.phase || '')
-  if (supported.has(phase)) return phase
-  return executionPhase && supported.has(executionPhase) ? executionPhase : 'build'
 }
 
 function latestWorkflow(messages: AgentChatMessage[]): WorkflowRunPayload | undefined {

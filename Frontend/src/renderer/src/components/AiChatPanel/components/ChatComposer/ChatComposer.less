@@ -34,6 +34,82 @@
   box-shadow: 0 8px 26px rgba(107, 60, 240, 0.07);
 }
 
+.@{class-prefix}-ai-chat-composer.@{class-prefix}-debug-only {
+  padding: 14px 30px 0;
+
+  .@{class-prefix}-ai-chat-composer-frame {
+    min-width: 0;
+    min-height: 0;
+    flex-direction: row;
+    align-items: center;
+    padding: 10px 14px;
+    border-radius: 12px;
+  }
+
+  .@{class-prefix}-composer-inline-input {
+    display: none;
+  }
+
+  .@{class-prefix}-workflow-debug-box {
+    min-width: 0;
+    flex: 1 1 auto;
+    padding: 0;
+    border: 0;
+  }
+
+  .@{class-prefix}-workflow-debug-fields {
+    display: flex;
+    min-width: 0;
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  .@{class-prefix}-workflow-debug-node-select {
+    width: 210px;
+    flex: 0 0 210px;
+  }
+
+  .@{class-prefix}-workflow-debug-auto-paths {
+    display: none;
+  }
+
+  .@{class-prefix}-workflow-debug-build-scope {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    gap: 8px;
+  }
+
+  .@{class-prefix}-workflow-debug-scope-select {
+    width: 150px;
+    flex: 0 0 150px;
+  }
+
+  .@{class-prefix}-workflow-debug-scope-hint {
+    overflow: hidden;
+    flex: 1 1 auto;
+    line-height: 24px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .@{class-prefix}-ai-chat-composer-footer {
+    width: auto;
+    flex: 0 0 auto;
+    gap: 8px;
+    padding: 0;
+  }
+
+  .@{class-prefix}-workflow-debug-resume-label {
+    display: none;
+  }
+}
+
+.@{class-prefix}-ai-chat-composer.@{class-prefix}-debug-only
+  + .@{class-prefix}-plan-execution-dock {
+  margin-top: 8px;
+}
+
 .@{class-prefix}-composer-inline-input {
   display: flex;
   min-width: 0;
@@ -419,6 +495,11 @@
   min-width: 0;
   color: var(--wb-text-tertiary);
   font-size: 11px;
+}
+
+.@{class-prefix}-workflow-debug-resume-label.ant-typography {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
 }
 
 .@{class-prefix}-workflow-trace-log {

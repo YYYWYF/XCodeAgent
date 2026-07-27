@@ -10,7 +10,9 @@ import {
   derivePlanExecutionMode,
   planExecutionContextForPage,
   planExecutionForPage,
-  withWorkflowExecutionStatus
+  planExecutionShowsDebugResume,
+  withWorkflowExecutionStatus,
+  workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
   APPLICATIONS_CHANGED_EVENT,
@@ -251,6 +253,25 @@ test('本地停止状态优先于尚未刷新的运行中生命周期快照', ()
 
   assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopping', true), 'stopping')
   assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopped', false), 'stopped')
+})
+
+test('暂停后的调试窗口默认选中最近完成的可恢复节点', () => {
+  const workflow = previewWorkflow()
+  workflow.events = [
+    { type: 'workflow.node.completed', timestamp: '', nodeName: 'prepare_build_tasks' },
+    { type: 'workflow.run.finished', timestamp: '', nodeName: 'handle_failure' }
+  ]
+
+  assert.equal(workflowResumeNode(workflow, 'build'), 'prepare_build_tasks')
+  assert.equal(workflowResumeNode(undefined, 'integration_test'), 'integration_test')
+})
+
+test('节点调试恢复入口覆盖两种可恢复暂停态但不绕过结构化确认', () => {
+  assert.equal(planExecutionShowsDebugResume('stopped'), true)
+  assert.equal(planExecutionShowsDebugResume('awaiting_plan_adjustment'), true)
+  assert.equal(planExecutionShowsDebugResume('awaiting_authorization'), false)
+  assert.equal(planExecutionShowsDebugResume('awaiting_repair_confirmation'), false)
+  assert.equal(planExecutionShowsDebugResume('awaiting_acceptance'), false)
 })
 
 test('乐观停止只更新目标 execution，不覆盖创建生命周期', () => {

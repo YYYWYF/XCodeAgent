@@ -38,7 +38,12 @@ import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import { chatCopy } from './constants'
 import { requiresInitialDetailDesignSelection, type WorkflowPreviewTarget } from './utils'
-import { deriveDisplayedPlanExecutionMode, planExecutionContextForPage } from './planExecutionMode'
+import {
+  deriveDisplayedPlanExecutionMode,
+  planExecutionShowsDebugResume,
+  planExecutionContextForPage,
+  workflowResumeNode
+} from './planExecutionMode'
 import './AiChatPanel.less'
 
 type Props = {
@@ -231,6 +236,7 @@ export default function AiChatPanel({
     handleAcceptPreview,
     handleAdjustPlan,
     handleEndPlan,
+    handleResumePlan,
     handleRetryPlan,
     handleStopPlan,
     handleSend,
@@ -794,22 +800,47 @@ export default function AiChatPanel({
             />
 
             {displayedPlanExecutionMode !== 'idle' ? (
-              <PlanExecutionDock
-                dependencyLocked={pageExecutionContext.dependencyLocked}
-                error={scopedExecution?.error?.message || error}
-                execution={scopedExecution}
-                mode={displayedPlanExecutionMode}
-                onAccept={() => void handleAcceptPreview()}
-                onAdjust={(feedback) => void handleAdjustPlan(feedback)}
-                onConfirmInteraction={handleConfirmPlanInteraction}
-                onEnd={() => void handleEndPlan(scopedExecution?.runId)}
-                onOpenPreview={() => void handleOpenFullscreenPreview()}
-                onRetry={() => void handleRetryPlan()}
-                onStop={
-                  loading ? handleStopGenerating : () => void handleStopPlan(scopedExecution?.runId)
-                }
-                onViewPlan={handleViewPlan}
-              />
+              <>
+                {planExecutionShowsDebugResume(displayedPlanExecutionMode) &&
+                  !pageExecutionContext.dependencyLocked && (
+                    <ChatComposer
+                      activeWorkflow={activeWorkflow}
+                      copy={copy}
+                      debugOnly
+                      draft=""
+                      error={error}
+                      initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
+                      key={`paused-debug-${activeWorkflow?.runId || ''}-${scopedExecution?.phase || ''}`}
+                      loading={loading}
+                      onDraftChange={() => undefined}
+                      onSelectedSkillsChange={() => undefined}
+                      onSend={handleResumePlan}
+                      onStopGenerating={handleStopGenerating}
+                      stopping={stopping}
+                      selectedSkills={[]}
+                      workspaceBusy={workspaceBusy}
+                      workspaceRoot={workspaceRoot}
+                    />
+                  )}
+                <PlanExecutionDock
+                  dependencyLocked={pageExecutionContext.dependencyLocked}
+                  error={scopedExecution?.error?.message || error}
+                  execution={scopedExecution}
+                  mode={displayedPlanExecutionMode}
+                  onAccept={() => void handleAcceptPreview()}
+                  onAdjust={(feedback) => void handleAdjustPlan(feedback)}
+                  onConfirmInteraction={handleConfirmPlanInteraction}
+                  onEnd={() => void handleEndPlan(scopedExecution?.runId)}
+                  onOpenPreview={() => void handleOpenFullscreenPreview()}
+                  onRetry={() => void handleRetryPlan()}
+                  onStop={
+                    loading
+                      ? handleStopGenerating
+                      : () => void handleStopPlan(scopedExecution?.runId)
+                  }
+                  onViewPlan={handleViewPlan}
+                />
+              </>
             ) : (
               <ChatComposer
                 activeWorkflow={activeWorkflow}

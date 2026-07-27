@@ -165,3 +165,32 @@ export function planExecutionPhaseLabel(phase?: string): string {
     }[phase || ''] || '执行页面计划'
   )
 }
+
+/** 判断当前计划模式是否允许显示节点级调试恢复入口。 */
+export function planExecutionShowsDebugResume(mode: PlanExecutionMode): boolean {
+  return mode === 'stopped' || mode === 'awaiting_plan_adjustment'
+}
+
+/** 从最近执行事件和生命周期阶段推断最安全的 Workflow 恢复节点。 */
+export function workflowResumeNode(
+  workflow: WorkflowRunPayload | undefined,
+  executionPhase?: string
+): string {
+  const supported = new Set([
+    'detail_confirmation',
+    'inspect_workspace',
+    'prepare_build_tasks',
+    'build',
+    'integration_test',
+    'launch_project',
+    'acceptance'
+  ])
+  const events = workflow?.events || []
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const nodeName = events[index].nodeName || events[index].node?.id
+    if (nodeName && supported.has(nodeName)) return nodeName
+  }
+  const phase = String(workflow?.summary.phase || '')
+  if (supported.has(phase)) return phase
+  return executionPhase && supported.has(executionPhase) ? executionPhase : 'build'
+}
