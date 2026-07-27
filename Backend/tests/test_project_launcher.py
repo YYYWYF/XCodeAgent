@@ -27,6 +27,7 @@ from app.services.project_launcher import (
     _dev_server_log_is_ready,
     _preview_is_ready,
     _wait_until_ready,
+    find_backend_project_root,
     launch_backend_project,
     launch_frontend_project,
     stop_backend_project,
@@ -710,6 +711,20 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertIn("mvn", missing_maven["message"])
         self.assertIn("java", missing_java["message"])
 
+    def test_find_backend_project_root_requires_maven_project(self) -> None:
+        """验证探测器只识别直属 backend/Backend 下包含 pom.xml 的工程。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            backend = root / "backend"
+            backend.mkdir()
+            missing_pom = find_backend_project_root(root)
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            detected = find_backend_project_root(root)
+
+        self.assertIsNone(missing_pom)
+        self.assertEqual(detected, backend.resolve())
+
     def test_launch_backend_project_reports_maven_failure_without_starting_java(self) -> None:
         """验证 Maven 构建失败时保存日志且不会启动 Java。"""
 
@@ -964,6 +979,10 @@ class ProjectLauncherTests(unittest.TestCase):
         calls: list[tuple[str, Path]] = []
         with (
             patch(
+                "app.graph.nodes.lifecycle.find_backend_project_root",
+                return_value=Path("/workspace/backend"),
+            ),
+            patch(
                 "app.graph.nodes.lifecycle.launch_backend_project",
                 side_effect=lambda workspace: calls.append(("backend", workspace))
                 or backend_result,
@@ -1000,6 +1019,10 @@ class ProjectLauncherTests(unittest.TestCase):
         }
         with (
             patch(
+                "app.graph.nodes.lifecycle.find_backend_project_root",
+                return_value=Path("/workspace/backend"),
+            ),
+            patch(
                 "app.graph.nodes.lifecycle.launch_backend_project",
                 return_value=backend_result,
             ) as launch_backend,
@@ -1031,6 +1054,10 @@ class ProjectLauncherTests(unittest.TestCase):
         }
         with (
             patch(
+                "app.graph.nodes.lifecycle.find_backend_project_root",
+                return_value=Path("/workspace/backend"),
+            ),
+            patch(
                 "app.graph.nodes.lifecycle.launch_backend_project",
                 return_value=backend_result,
             ) as launch_backend,
@@ -1047,6 +1074,66 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertIsNone(result["launch_result"]["frontend"])
         launch_backend.assert_called_once_with(Path("/workspace").resolve())
         launch_frontend.assert_not_called()
+
+    def test_launch_project_starts_frontend_when_backend_is_missing(self) -> None:
+        """验证纯前端工作区跳过后端并正常进入预览验收。"""
+
+        frontend_result = {
+            "status": "running",
+            "message": "frontend ok",
+            "preview_url": "http://127.0.0.1:80",
+            "package_json_path": "/workspace/Frontend/package.json",
+            "server": {"pid": 123},
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace).resolve()
+            with (
+                patch(
+                    "app.graph.nodes.lifecycle.launch_backend_project"
+                ) as launch_backend,
+                patch(
+                    "app.graph.nodes.lifecycle.launch_frontend_project",
+                    return_value=frontend_result,
+                ) as launch_frontend,
+            ):
+                result = launch_project({"workspace": workspace})
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["preview_url"], "http://127.0.0.1:80")
+        self.assertEqual(result["launch_result"]["backend"]["status"], "skipped")
+        self.assertEqual(result["launch_result"]["frontend"], frontend_result)
+        self.assertIn("前端项目已启动", result["launch_result"]["message"])
+        self.assertNotIn("Java 后端与前端", result["launch_result"]["message"])
+        launch_backend.assert_not_called()
+        launch_frontend.assert_called_once_with(root)
+
+    def test_launch_project_does_not_stop_backend_for_frontend_only_failure(self) -> None:
+        """验证纯前端启动失败时不会执行不存在的后端进程回滚。"""
+
+        frontend_result = {"status": "failed", "message": "frontend failed"}
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace).resolve()
+            with (
+                patch(
+                    "app.graph.nodes.lifecycle.launch_backend_project"
+                ) as launch_backend,
+                patch(
+                    "app.graph.nodes.lifecycle.launch_frontend_project",
+                    return_value=frontend_result,
+                ) as launch_frontend,
+                patch(
+                    "app.graph.nodes.lifecycle.stop_backend_project"
+                ) as stop_backend,
+            ):
+                result = launch_project({"workspace": workspace})
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["launch_result"]["failed_stage"], "frontend_start")
+        self.assertEqual(result["launch_result"]["backend"]["status"], "skipped")
+        self.assertEqual(result["launch_result"]["frontend"], frontend_result)
+        launch_backend.assert_not_called()
+        launch_frontend.assert_called_once_with(root)
+        stop_backend.assert_not_called()
 
     def test_acceptance_rejects_implicit_confirmation(self) -> None:
         """缺少结构化验收动作时不能完成交付。"""

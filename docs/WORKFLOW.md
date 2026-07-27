@@ -493,12 +493,13 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 写入 `acceptance_request` 并提示用户验收；
 - 保存和清理进程信息。
 
-`launch_project` 是质量门禁通过后的本轮终点。LangGraph 节点只负责通过 `workspace_root(state)` 解析普通工作目录，再依次调用与 Graph State 解耦的 `launch_backend_project(workspace_path)` 和 `launch_frontend_project(workspace_path)` 公共服务。后端 launcher 在每个工作区的串行锁内，先停止内存登记或 `backend.pid` 恢复出的上一轮 Java 进程，确认退出后才执行 Maven；PID 恢复必须校验命令确实是当前工作区 `target` 下的 `java -jar`，清理失败则以 `backend_cleanup` 中止构建。只有新 Java 进程仍存活且本次日志出现约定的版本标志后才启动前端。前端启动进程仍存活且预览地址通过 HTTP 或本次启动日志检查后，节点才返回 `preview_url` 和 `acceptance_request`，并将状态设为 `requires_user_input`；任一进程提前退出或就绪检查超时都会返回启动失败，不进入验收。若 Java 已启动但前端失败，节点停止本次 Java 进程并记录清理结果。前端收到实时 Workflow 的成功 `summary.previewUrl` 后，会自动打开右侧预览面板并导航到该地址；重复状态快照不会重复导航，历史会话也不会自动弹出预览。工作流不会自动进入 `acceptance`；用户确认验收后，下一轮从 `acceptance` 续跑。
+`launch_project` 是质量门禁通过后的本轮终点。LangGraph 节点先通过 `workspace_root(state)` 解析普通工作目录，再使用确定性的 `find_backend_project_root(workspace_path)` 探测直属 `backend/Backend/pom.xml`。识别到 Maven 后端时，节点依次调用与 Graph State 解耦的 `launch_backend_project(workspace_path)` 和 `launch_frontend_project(workspace_path)` 公共服务；未识别到后端时，将 `launch_result.backend.status` 记为 `skipped` 并直接启动前端。后端 launcher 在每个工作区的串行锁内，先停止内存登记或 `backend.pid` 恢复出的上一轮 Java 进程，确认退出后才执行 Maven；PID 恢复必须校验命令确实是当前工作区 `target` 下的 `java -jar`，清理失败则以 `backend_cleanup` 中止构建。只有新 Java 进程仍存活且本次日志出现约定的版本标志后才启动前端。前端启动进程仍存活且预览地址通过 HTTP 或本次启动日志检查后，节点才返回 `preview_url` 和 `acceptance_request`，并将状态设为 `requires_user_input`；任一实际启动的进程提前退出或就绪检查超时都会返回启动失败，不进入验收。若 Java 已启动但前端失败，节点停止本次 Java 进程并记录清理结果；纯前端启动失败时不执行后端清理。前端收到实时 Workflow 的成功 `summary.previewUrl` 后，会自动打开右侧预览面板并导航到该地址；重复状态快照不会重复导航，历史会话也不会自动弹出预览。工作流不会自动进入 `acceptance`；用户确认验收后，下一轮从 `acceptance` 续跑。
 
 当前启动策略：
 
 - 两个公共 launcher 仅接收 `str | Path` 工作目录，自行从 `<workspace>/.xcodeagent/runtime/launch/` 推导日志与 PID 目录，因此可被 LangGraph 之外的调用方直接复用；
-- 强制要求工作区存在 `backend/pom.xml`，通过 `shutil.which` 解析 `mvn`、`java` 的完整可执行路径；Windows 上直接使用解析到的 `mvn.cmd` 和 `java.exe`，不依赖 `cwd` 再次搜索 PATH；
+- 后端探测器枚举工作区直属目录并识别 `backend/pom.xml` 或 `Backend/pom.xml`，保留磁盘上的真实目录大小写；缺少 `pom.xml` 表示工作流没有可启动的 Maven 后端，节点跳过后端，但直接调用后端 launcher 仍返回 `backend_validation`；
+- 识别到 Maven 后端后，通过 `shutil.which` 解析 `mvn`、`java` 的完整可执行路径；Windows 上直接使用解析到的 `mvn.cmd` 和 `java.exe`，不依赖 `cwd` 再次搜索 PATH；
 - 后端 Java 进程按规范化工作区路径保存在内存注册表中；同一工作区的停止、构建、启动和登记由可重入锁串行化，不同工作区互不阻塞；
 - 每次 Maven 构建前优先停止内存登记的进程；Backend 服务重启导致内存记录丢失时，从 `.xcodeagent/runtime/launch/backend.pid` 恢复 PID，通过完整进程命令行确认 `java`、`-jar` 和当前 `backend/target` JAR 绝对路径均匹配后才终止，拒绝按 Java 进程名批量清理；
 - 进程先温和终止并等待 5 秒，超时后强制结束；只有确认退出才删除 PID 和内存登记。无法读取 PID、无法确认身份或强杀后仍存活时返回 `failed_stage=backend_cleanup`，不执行 Maven；`prebuild_cleanup` 保存来源、PID、身份校验、强杀和错误摘要；
@@ -516,7 +517,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 根据 script 推断预览地址：若脚本声明 `--port`、`--port=` 或 `PORT=` 则使用声明端口，否则统一使用 `http://127.0.0.1:80`；
 - 健康检查在配置的启动窗口内持续监督启动进程：优先通过 urllib 接收 2xx–4xx HTTP 响应；如果运行沙箱禁止 Python 主动连接本地端口，则只读取本次启动后追加的 stdout，通过 CRA/Vite/Webpack 的 `Compiled successfully`、`ready in`、`Local:` 等标志确认就绪。日志读取记录启动前偏移量，不会被历史成功日志误导；
 - Maven 或前端依赖安装的同步命令若抛出 `OSError` / `FileNotFoundError`，launcher 将错误写入 stderr 日志和结构化结果，由 `launch_project` 正常返回失败原因，而不是让异常冒泡为 AG-UI `Workflow failed`；
-- 将启动结果写入 `launch_result`：保留前端兼容字段，并增加 `backend`、`frontend` 和 `failed_stage`；成功时 `preview_url` 是前端预览地址，失败时顶层、`launch_result` 和 `acceptance_request` 的 `preview_url` 均写入启动失败原因。失败状态不会触发前端自动预览导航。
+- 将启动结果写入 `launch_result`：保留前端兼容字段，并增加 `backend`、`frontend` 和 `failed_stage`；纯前端工程使用 `backend.status=skipped`，成功时 `preview_url` 是前端预览地址，失败时顶层、`launch_result` 和 `acceptance_request` 的 `preview_url` 均写入启动失败原因。失败状态不会触发前端自动预览导航。
 
 该边界沿用参考 coding-agent harness 的执行—观察—验证循环：Maven 构建、Java 启动和前端启动均使用显式 argv、cwd、超时与进程退出监督，完整命令输出落盘而不进入 Graph State。`launch_result` 和 AG-UI 只携带状态摘要、PID 与稳定日志路径，不注入完整构建/运行日志，从而保持确定性节点可审计并符合 128k 上下文预算。
 
