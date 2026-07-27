@@ -1,10 +1,64 @@
+.@{class-prefix}-ai-message-list-shell {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--wb-canvas);
+}
+
 .@{class-prefix}-ai-message-list {
   display: flex;
   flex: 1;
+  width: 100%;
   min-height: 0;
   overflow: auto;
   background: var(--wb-canvas);
   scrollbar-width: thin;
+}
+
+.@{class-prefix}-scroll-to-bottom-button {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  z-index: 4;
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-canvas) 92%, var(--wb-accent-soft));
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 50%;
+  box-shadow: var(--wb-shadow);
+  cursor: pointer;
+  font-size: 15px;
+  transform: translateX(-50%);
+  transition:
+    color 0.16s ease,
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+
+  &:hover {
+    color: var(--wb-accent-hover);
+    background: color-mix(in srgb, var(--wb-canvas) 82%, var(--wb-accent-soft));
+    border-color: var(--wb-accent);
+    transform: translate(-50%, -2px);
+  }
+
+  &:active {
+    color: var(--wb-accent-active);
+    transform: translateX(-50%);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 3px;
+  }
 }
 
 .@{class-prefix}-ai-message-column {
