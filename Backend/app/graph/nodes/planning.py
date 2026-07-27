@@ -19,6 +19,10 @@ from app.services.detail_review import (
     apply_detail_review_submission,
     detail_review_payload,
 )
+from app.services.frontend_page_tree import (
+    flatten_frontend_pages,
+    update_frontend_page_leaves,
+)
 from app.services.project_plan import apply_project_plan_feedback
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_detail_plan import (
@@ -485,7 +489,7 @@ def _generate_all_detail_plans(
     project_pages = project_plan.get("frontend_pages", [])
     normalized_project_pages = [
         _normalize_detail_page(page)
-        for page in project_pages
+        for page in flatten_frontend_pages(project_pages)
         if isinstance(page, dict)
     ]
     updated_plan = (
@@ -593,13 +597,13 @@ def _generate_all_detail_plans(
     selectedPageIds = {
         str(page.get("pageId")) for page in pages if isinstance(page, dict) and page.get("pageId")
     }
-    for page in updated_plan.get("frontend_pages", []):
-        if isinstance(page, dict) and (
-            not selectedPageId
-            and not selected_endpoint_id
-            or str(page.get("pageId")) in selectedPageIds
-        ):
-            page["detail_status"] = "pending_user_confirmation"
+    updated_plan["frontend_pages"] = update_frontend_page_leaves(
+        updated_plan.get("frontend_pages"),
+        {
+            page_id: {"detail_status": "pending_user_confirmation"}
+            for page_id in selectedPageIds
+        },
+    )
     return updated_plan
 
 

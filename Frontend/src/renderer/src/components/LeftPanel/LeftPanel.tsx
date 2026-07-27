@@ -4,6 +4,7 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode
 } from '../../typings'
@@ -19,6 +20,7 @@ type Props = {
   developmentPlanningReady: boolean
   hasPageDesigns: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
+  developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
@@ -36,6 +38,7 @@ export default function LeftPanel({
   developmentPlanningReady,
   hasPageDesigns,
   developmentPlanningPages,
+  developmentPlanningPageTree,
   developmentPlanningApiContracts,
   editorMode,
   onApplicationUpdate,
@@ -55,6 +58,7 @@ export default function LeftPanel({
             developmentPlanningReady={developmentPlanningReady}
             hasPageDesigns={hasPageDesigns}
             developmentPlanningPages={developmentPlanningPages}
+            developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}

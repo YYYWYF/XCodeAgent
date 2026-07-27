@@ -7,6 +7,7 @@ from hashlib import sha256
 import json
 from typing import Any
 
+from app.services.frontend_page_tree import flatten_frontend_pages
 from app.services.page_dependencies import page_data_source_ids
 
 
@@ -77,7 +78,7 @@ def _build_units(
     unit_ids.extend(_endpoint_unit_ids(project_plan.get("api_contracts")))
     unit_ids.extend(
         f"page:{page_id}"
-        for page_id in _ids(project_plan.get("frontend_pages"), "pageId")
+        for page_id in _ids(flatten_frontend_pages(project_plan.get("frontend_pages")), "pageId")
     )
     return {
         unit_id: _unit_definition(
@@ -170,7 +171,7 @@ def _unit_graph(
                 errors.append(f"Endpoint {endpoint_id} references unknown data source {source_id}.")
             edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
 
-    for page in _dict_items(project_plan.get("frontend_pages")):
+    for page in flatten_frontend_pages(project_plan.get("frontend_pages")):
         page_id = str(page.get("pageId") or "")
         if not page_id:
             continue

@@ -47,14 +47,14 @@ START
                          → END
 ```
 
-需求确认和项目级规划由首页独立的 `application_planning_workflow` 完成，不再作为主 Graph 节点注册。主 `/workflow/run` 根据 `workspace` 自动读取 `.xcodeagent/plans/project-plan.json`（兼容 `plans/project-plan.json`），把完整 `project_plan` 与其中的 `frontend_pages` 页面功能概览同时放入初始 Graph State，并直接从 `detail_confirmation` 开始。项目初始化仍不属于本 Graph 的职责；进入主 Graph 前，外部系统必须已经完成计划确认和工作目录准备。
+需求确认和项目级规划由首页独立的 `application_planning_workflow` 完成，不再作为主 Graph 节点注册。主 `/workflow/run` 根据 `workspace` 自动读取 `.xcodeagent/plans/project-plan.json`（兼容 `plans/project-plan.json`），把完整 `project_plan` 与其中的 `frontend_pages` 同时放入初始 Graph State，并直接从 `detail_confirmation` 开始。这里的正式 `project_plan.frontend_pages` 保留菜单树语义：菜单节点至少包含 `name`、`unique_path`、`children`，业务页面作为叶子节点保留 `pageId/name/path/description/module_id/references/...`。运行态 `resume_values["frontend_pages"]` 只携带拍平后的页面叶子概览，供 `detail_confirmation`、任务拆分和执行范围解析使用。项目初始化仍不属于本 Graph 的职责；进入主 Graph 前，外部系统必须已经完成计划确认和工作目录准备。
 
 ### 主 Graph 起点的参考架构映射与上下文预算
 
 - learn-coding-agent：沿用“先从文件获取任务上下文，再执行、验证”的紧凑循环；主 Graph 不重复生成已经持久化的 RequirementSpec 和 ProjectPlan。
 - OpenCode：沿用 session/run 从可序列化文件状态恢复的边界；正式 ProjectPlan 是跨阶段事实来源，后续节点只恢复所需的小型结构化状态。
 - Deep Agents：外层确定性 Graph 负责阶段门禁，页面设计和后续专业 Agent 只接收已确认计划及相关文件引用。
-- 128k 上下文：`frontend_pages` 作为紧凑页面功能概览显式传入，完整计划作为结构化初始状态传入；仓库源码、历史消息和大型工具输出仍不注入主 Graph 上下文。
+- 128k 上下文：正式 `project_plan.frontend_pages` 以菜单树保留用户确认过的目录关系，运行态只把拍平后的页面叶子概览显式传入需要执行的节点；完整计划作为结构化初始状态传入，仓库源码、历史消息和大型工具输出仍不注入主 Graph 上下文。
 
 ### 新建应用两阶段规划 Graph
 
@@ -207,7 +207,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - `project_acceptance_criteria`：整个需求在项目完成时必须满足的验收标准；
 - `architecture`：前端、后端、数据和测试策略；
 - `api_contracts`：唯一的业务字段 Schema、资源 endpoint 和输入输出 Schema 引用；
-- `frontend_pages`：页面路径、模块归属、状态和权限；
+- `frontend_pages`：菜单树与页面叶子混合结构；菜单节点至少包含 `name`、`unique_path`、`children`，页面叶子保留 `pageId`、名称、路由、描述、模块归属、状态、权限及 `references`；
 - `data_sources`：数据源类型、实体、`schema_refs` 和 Seed 策略，不重复保存字段；
 - `permission_model`：角色、页面访问规则、操作权限和默认权限策略；
 - `risks`：后续细节确认阶段需要消化的风险和待细化点。
@@ -216,7 +216,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 基于用户在工作台选择的页面生成并审阅详细设计，负责：
 
-- 读取 `ProjectPlan.frontend_pages` 和 `ProjectPlan.data_sources`；
+- 读取正式 `ProjectPlan.frontend_pages` 菜单树和 `ProjectPlan.data_sources`；
 - 将工作台通过 AG-UI 提交的 `selectedPageId` 写入 `ProjectState.selectedPageId`；
 - 为所选页面和计划内数据源生成初版详细设计；未提供选择时按全量页面审阅；
 - 在同一审阅界面按页面和数据源分组展示，默认折叠；
@@ -227,13 +227,13 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 该阶段由只读规划逻辑和 page-design 专用 ChatModel 负责，不由代码生成 Agent 负责。
 
-当前实现使用 `xcodeagent.detail_review.v1` 审阅 payload。首次进入该节点时，节点从 `ProjectPlan` 读取用户选择的页面和数据源，生成对应 `page_detail_plans` 和 `data_source_detail_plans`，写入 `pending_project_plan`，然后一次性暂停。前端提交 `detail_review` 结构化结果并携带 `resumeState`，后端只合并白名单模板字段、执行契约一致性校验并确认当前计划，不再逐个选择对象或产生多轮中断。
+当前实现使用 `xcodeagent.detail_review.v1` 审阅 payload。首次进入该节点时，节点从 `ProjectPlan` 读取用户选择的页面和数据源；如果正式计划中的 `frontend_pages` 是菜单树，则先递归拍平业务页面叶子，再生成对应 `page_detail_plans` 和 `data_source_detail_plans`，写入 `pending_project_plan`，然后一次性暂停。前端提交 `detail_review` 结构化结果并携带 `resumeState`，后端只合并白名单模板字段、执行契约一致性校验并确认当前计划，不再逐个选择对象或产生多轮中断。
 
 页面初版设计结合 `frontend_pages`、`api_contracts`、`data_sources`、`permission_model` 和业务流程，覆盖页面目标、页面布局设计、页面交互设计、API 依赖、响应字段绑定、页面跳转与依赖、权限与操作可见性、页面验收标准。`detail_confirmation` 对每个页面调用 `page_designer`，`page_designer` 从 ProjectPlan 中提取当前页面上下文，并直接基于 `ProjectPlan.api_contracts` 分析当前页面实际依赖的 API；`PageDetail.api_dependencies` 是页面详细设计确认后的实际 API 依赖。页面详细设计面向页面实现视角，页面数据访问必须直接引用具体 API/Endpoint，而不是把底层数据源作为主要确认对象。布局设计只描述信息组织、区域职责、主要内容呈现、操作入口位置和响应式/信息密度策略；loading、empty、error、success、confirm、validation 等反馈属于交互设计，不作为布局区域。数据源初版设计覆盖实体引用、关系、校验、API 契约、依赖页面、Seed/Mock 策略和验收标准。页面的 endpoint、Schema 和 `response_bindings`，以及数据源的实体、Schema 和 API 契约在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
 
 批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`；详细设计文件和轻量 ProjectPlan 索引一起持久化，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
-正式 `project-plan.json` 不内嵌 `page_detail_plans` 或 `data_source_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面的 `pageId` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`；页面设计模型不得新增、删除或替换这些引用。选择单个页面时，后端只生成该页面经 endpoint 反查得到的数据源设计，并在该页面 `detail_design.generation_dependencies` 中记录 `endpoint_ids` 与 `navigationTargetPageIds`。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与数据源详情，不得重新加载全部页面详情；模型发现缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
+正式 `project-plan.json` 不内嵌 `page_detail_plans` 或 `data_source_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面叶子的 `pageId` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；菜单节点本身不参与页面唯一性或任务执行校验。后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`；页面设计模型不得新增、删除或替换这些引用。选择单个页面时，后端只生成该页面经 endpoint 反查得到的数据源设计，并在该页面 `detail_design.generation_dependencies` 中记录 `endpoint_ids` 与 `navigationTargetPageIds`。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与数据源详情，不得重新加载全部页面详情；模型发现缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
 
 当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。SQLite checkpointer 负责持久化每个 `thread_id` 的主 Graph 状态；后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan 和 detail review 小型结构化状态，不把完整会话历史重新塞回上下文。
 

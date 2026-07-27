@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.services.frontend_page_tree import find_frontend_page
+
 
 def resolve_target_build_context(
     project_plan: dict[str, Any],
@@ -33,7 +35,9 @@ def _page_context(
 ) -> dict[str, Any]:
     """以 ProjectPlan 契约为主解析指定页面，并按需补充已有 endpoint 详情。"""
 
-    page = _required_item(project_plan.get("frontend_pages"), "pageId", page_id, "page")
+    page = find_frontend_page(project_plan.get("frontend_pages"), page_id)
+    if page is None:
+        raise ValueError(f"ProjectPlan does not contain page {page_id}.")
     page_detail = _load_external_detail(
         page.get("detail_design"),
         "PageDetail",

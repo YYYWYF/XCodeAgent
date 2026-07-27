@@ -1,0 +1,75 @@
+.@{class-prefix}-project-plan-tree-preview {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--wb-border, var(--modal-border));
+  border-radius: 12px;
+  background: var(--wb-surface, var(--modal-surface));
+}
+
+.@{class-prefix}-project-plan-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.@{class-prefix}-project-plan-tree-list {
+  display: grid;
+  gap: 8px;
+}
+
+.@{class-prefix}-project-plan-tree-node {
+  display: grid;
+  gap: 6px;
+}
+
+.@{class-prefix}-project-plan-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: calc(var(--tree-level, 0) * 18px);
+  min-width: 0;
+
+  .ant-tag {
+    margin-right: 0;
+  }
+}
+
+.@{class-prefix}-project-plan-tree-path.ant-typography {
+  margin-left: auto;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-project-plan-tree-purpose.ant-typography {
+  display: block;
+  padding-left: calc((var(--tree-level, 0) * 18px) + 54px);
+  line-height: 1.5;
+}
+
+.@{class-prefix}-project-plan-tree-children {
+  display: grid;
+  gap: 8px;
+}
+
+.@{class-prefix}-project-plan-tree-empty {
+  padding: 16px;
+  color: var(--wb-text-secondary, var(--modal-text-secondary));
+  background: var(--wb-canvas, var(--modal-bg));
+  border: 1px dashed var(--wb-border, var(--modal-border));
+  border-radius: 10px;
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-project-plan-tree-row {
+    flex-wrap: wrap;
+  }
+
+  .@{class-prefix}-project-plan-tree-path.ant-typography {
+    max-width: 100%;
+    margin-left: 0;
+  }
+}

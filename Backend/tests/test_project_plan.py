@@ -4,6 +4,7 @@ import unittest
 
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.api_contracts import response_field_paths
+from app.services.frontend_page_tree import apply_frontend_page_route_hierarchy
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_detail_plan import (
     create_page_detail_plan,
@@ -131,6 +132,60 @@ class ProjectPlanTests(unittest.TestCase):
             [page["path"] for page in plan["frontend_pages"]],
             ["/", "/employees-list", "/offboarding-form"],
         )
+
+    def test_menu_routes_extend_from_root_and_page_routes_extend_from_menu(self) -> None:
+        routed = apply_frontend_page_route_hierarchy(
+            [
+                {
+                    "name": "管理中心",
+                    "unique_path": "/management",
+                    "children": [
+                        {
+                            "pageId": "role_page",
+                            "name": "角色管理",
+                            "path": "/role",
+                            "module_id": "access_control",
+                            "description": "角色管理页面",
+                        },
+                        {
+                            "pageId": "resource_page",
+                            "name": "资源管理",
+                            "path": "/resource",
+                            "module_id": "access_control",
+                            "description": "资源管理页面",
+                        },
+                    ],
+                }
+            ],
+            root_route_prefix="/root",
+        )
+
+        self.assertEqual(routed[0]["unique_path"], "/root/management")
+        self.assertEqual(routed[0]["children"][0]["path"], "/root/management/role")
+        self.assertEqual(routed[0]["children"][1]["path"], "/root/management/resource")
+
+    def test_empty_menu_route_keeps_pages_directly_under_root_prefix(self) -> None:
+        routed = apply_frontend_page_route_hierarchy(
+            [
+                {
+                    "name": "管理中心",
+                    "unique_path": "",
+                    "children": [
+                        {
+                            "pageId": "role_page",
+                            "name": "角色管理",
+                            "path": "/role",
+                            "module_id": "access_control",
+                            "description": "角色管理页面",
+                        }
+                    ],
+                }
+            ],
+            root_route_prefix="/root",
+        )
+
+        self.assertEqual(routed[0]["unique_path"], "")
+        self.assertEqual(routed[0]["children"][0]["path"], "/root/role")
 
     def test_requirement_spec_does_not_emit_duplicate_root_page_paths(self) -> None:
         spec = create_requirement_spec(

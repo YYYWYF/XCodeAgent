@@ -46,6 +46,20 @@ type WorkbenchPageOption = {
   hasDetailPlan: boolean
 }
 
+type WorkbenchPageTreeNode = {
+  key: string
+  type: 'menu' | 'page'
+  label: string
+  uniquePath?: string
+  path?: string
+  pageId?: string
+  purpose?: string
+  designed?: boolean
+  detailPlanStatus?: string
+  hasDetailPlan?: boolean
+  children?: WorkbenchPageTreeNode[]
+}
+
 type WorkbenchApiContract = {
   id: string
   label: string
@@ -82,6 +96,25 @@ function recordItems(value: unknown): Array<Record<string, unknown>> {
   )
 }
 
+/** 判断 ProjectPlan.frontend_pages 当前节点是否为菜单目录节点。 */
+function isFrontendMenuNode(record: Record<string, unknown>): boolean {
+  const pageId = String(record.pageId || record.id || '').trim()
+  return Array.isArray(record.children) && !pageId
+}
+
+/** 递归拍平 frontend_pages，仅保留真正的业务页面叶子。 */
+function flattenFrontendPageRecords(value: unknown): Array<Record<string, unknown>> {
+  const flattened: Array<Record<string, unknown>> = []
+  recordItems(value).forEach((record) => {
+    const pageId = String(record.pageId || record.id || '').trim()
+    if (pageId) flattened.push(record)
+    if (Array.isArray(record.children)) {
+      flattened.push(...flattenFrontendPageRecords(record.children))
+    }
+  })
+  return flattened
+}
+
 /** 将页面 id 转成与后端详情文件一致的安全文件名。 */
 function detailFileStem(value: string, prefix: string): string {
   const normalized = value.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '')
@@ -109,7 +142,7 @@ async function pageDetailPlanExists(workspaceRoot: string, pageId: string): Prom
 function projectPlanPages(value: unknown): Map<string, Record<string, unknown>> {
   const result = new Map<string, Record<string, unknown>>()
   if (!value || typeof value !== 'object' || Array.isArray(value)) return result
-  const frontendPages = recordItems((value as Record<string, unknown>).frontend_pages)
+  const frontendPages = flattenFrontendPageRecords((value as Record<string, unknown>).frontend_pages)
   frontendPages.forEach((page) => {
     const record = page
     const pageId = String(record.id || record.pageId || '').trim()
@@ -130,6 +163,47 @@ function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
     detailPlanStatus: '',
     hasDetailPlan: false
   }))
+}
+
+/** 把 ProjectPlan.frontend_pages 递归转换为工作台可展示的页面目录树。 */
+function projectPlanPageTree(value: unknown): WorkbenchPageTreeNode[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return buildWorkbenchPageTree((value as Record<string, unknown>).frontend_pages)
+}
+
+/** 递归构造工作台侧栏使用的页面树节点。 */
+function buildWorkbenchPageTree(value: unknown): WorkbenchPageTreeNode[] {
+  const nodes: WorkbenchPageTreeNode[] = []
+  recordItems(value).forEach((record, index) => {
+    if (isFrontendMenuNode(record)) {
+      const uniquePath = String(record.unique_path || '').trim()
+      const key = uniquePath || `menu-${index + 1}`
+      const children = buildWorkbenchPageTree(record.children)
+      if (children.length === 0) return
+      nodes.push({
+        key,
+        type: 'menu',
+        label: String(record.name || `菜单 ${index + 1}`),
+        uniquePath,
+        children
+      })
+      return
+    }
+    const pageId = String(record.pageId || record.id || '').trim()
+    if (!pageId) return
+    nodes.push({
+      key: pageId,
+      type: 'page',
+      label: String(record.name || pageId),
+      pageId,
+      path: String(record.path || '/'),
+      purpose: String(record.description || record.name || `页面 ${index + 1}`),
+      designed: false,
+      detailPlanStatus: '',
+      hasDetailPlan: false
+    })
+  })
+  return nodes
 }
 
 /** 按 base_path 合并 ProjectPlan contracts，同一目录下展示所有具体 API。 */
@@ -212,6 +286,34 @@ async function mergeWorkbenchPageStatus(
   )
 }
 
+/** 把页面叶子的详细设计状态回写到页面目录树，保留菜单层级不变。 */
+function mergeWorkbenchPageTreeStatus(
+  pageTree: WorkbenchPageTreeNode[],
+  pagesById: Map<string, WorkbenchPageOption>
+): WorkbenchPageTreeNode[] {
+  return pageTree.map((node) => {
+    if (node.type === 'menu') {
+      return {
+        ...node,
+        children: mergeWorkbenchPageTreeStatus(node.children || [], pagesById)
+      }
+    }
+    const pageId = String(node.pageId || node.key || '').trim()
+    const page = pagesById.get(pageId)
+    return page
+      ? {
+          ...node,
+          label: page.label,
+          path: page.path,
+          purpose: page.purpose,
+          designed: page.designed,
+          detailPlanStatus: page.detailPlanStatus,
+          hasDetailPlan: page.hasDetailPlan
+        }
+      : node
+  })
+}
+
 /** 判断页面设计目录是否包含任意持久化产物。 */
 async function pageDesignDirectoryHasEntries(workspaceRoot: string): Promise<boolean> {
   try {
@@ -231,6 +333,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   missing: string[]
   invalid: string[]
   pages: WorkbenchPageOption[]
+  pageTree: WorkbenchPageTreeNode[]
   apiContracts: WorkbenchApiContract[]
 }> {
   const artifactRoot = path.join(workspaceRoot, '.xcodeagent')
@@ -242,6 +345,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   const missing: string[] = []
   const invalid: string[] = []
   let plannedPages = new Map<string, Record<string, unknown>>()
+  let pageTree: WorkbenchPageTreeNode[] = []
   let apiContracts: WorkbenchApiContract[] = []
   let projectPlanLoaded = false
 
@@ -285,6 +389,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
         invalid.push(relativePath)
       }
       plannedPages = projectPlanPages(projectPlan)
+      pageTree = projectPlanPageTree(projectPlan)
       apiContracts = projectPlanApiContracts(projectPlan)
       projectPlanLoaded = true
       break
@@ -303,6 +408,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     projectPlanPageOptions({ frontend_pages: [...plannedPages.values()] }),
     plannedPages
   )
+  const pagesById = new Map(pages.map((page) => [page.pageId, page]))
   const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
 
   return {
@@ -311,6 +417,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     missing,
     invalid,
     pages,
+    pageTree: mergeWorkbenchPageTreeStatus(pageTree, pagesById),
     apiContracts
   }
 }

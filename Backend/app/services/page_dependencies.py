@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.api_contracts import dict_items, endpoint_dependencies_for_contracts
+from app.services.frontend_page_tree import (
+    find_frontend_page,
+    flatten_frontend_pages,
+    frontend_page_menu_paths,
+)
 
 
 def normalize_page_dependencies(
@@ -47,7 +52,7 @@ def normalize_page_dependencies(
 def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str]:
     """校验页面 id、路由、endpoint 与跳转均可由 ProjectPlan 独立解析。"""
 
-    pages = dict_items(project_plan.get("frontend_pages"))
+    pages = flatten_frontend_pages(project_plan.get("frontend_pages"))
     contracts = dict_items(project_plan.get("api_contracts"))
     data_sources = dict_items(project_plan.get("data_sources"))
     endpoint_index = _endpoint_index(contracts)
@@ -56,6 +61,12 @@ def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str
         errors.append("ProjectPlan defines data sources but api_contracts is empty.")
     _validate_unique_values(pages, "pageId", "pageId", errors)
     _validate_unique_values(pages, "path", "page path", errors)
+    menu_paths = frontend_page_menu_paths(project_plan.get("frontend_pages"))
+    duplicates = sorted(
+        {value for value in menu_paths if value and menu_paths.count(value) > 1}
+    )
+    for value in duplicates:
+        errors.append(f"Duplicate menu unique_path: {value}.")
     pageIds = {str(page.get("pageId") or "") for page in pages}
     for page in pages:
         pageId = str(page.get("pageId") or "")
@@ -84,14 +95,7 @@ def page_design_references(
 ) -> dict[str, Any]:
     """从 ProjectPlan 原样复制页面设计允许使用的全部引用型依赖。"""
 
-    page = next(
-        (
-            item
-            for item in dict_items(project_plan.get("frontend_pages"))
-            if item.get("pageId") == pageId
-        ),
-        None,
-    )
+    page = find_frontend_page(project_plan.get("frontend_pages"), pageId)
     if page is None:
         raise ValueError(f"项目计划中不存在页面：{pageId}")
     references = (

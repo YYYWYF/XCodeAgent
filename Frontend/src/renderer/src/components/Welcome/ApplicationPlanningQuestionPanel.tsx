@@ -11,6 +11,9 @@ import { useCallback, useState } from 'react'
 import type { ReactElement } from 'react'
 import MarkdownContent from '../MarkdownContent/MarkdownContent'
 import DetailReview from '../AiChatPanel/components/WorkflowRunCard/DetailReview'
+import ProjectPlanPageTreePreview, {
+  projectPlanPageTreeNodes
+} from '../ProjectPlanPageTreePreview'
 import RequirementSpecSummary from './RequirementSpecSummary'
 import RequirementSpecEditor from './RequirementSpecEditor'
 import type {
@@ -117,6 +120,17 @@ function requirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> 
   return undefined
 }
 
+// 从公开 Workflow 状态中提取 ProjectPlan 菜单树，供确认页显示目录层级。
+function projectPlanPageTree(workflow: WorkflowRunPayload) {
+  for (const source of [workflow.result, workflow.state]) {
+    const value = source?.project_plan
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return projectPlanPageTreeNodes((value as Record<string, unknown>).frontend_pages)
+    }
+  }
+  return []
+}
+
 // 使用创建规划页面自己的表单视觉展示问题和正式产物，不渲染通用 Workflow 卡片。
 export default function ApplicationPlanningQuestionPanel({
   disabled,
@@ -153,6 +167,7 @@ export default function ApplicationPlanningQuestionPanel({
   const hasRecoveryAction = clarification?.status === 'requires_user_input' && !questions.length
   const artifact = workflow.confirmationArtifact
   const spec = artifact?.id === 'requirement_spec' ? requirementSpec(workflow) : undefined
+  const planPageTree = artifact?.id === 'project_plan' ? projectPlanPageTree(workflow) : []
   const displayedSpec = requirementDraft || spec
   const canShowSummary = Boolean(spec)
   // 意见非空时切换提交语义，避免按钮继续暗示需求文档完全正确。
@@ -314,7 +329,12 @@ export default function ApplicationPlanningQuestionPanel({
             ) : canShowSummary && !showArtifactDetail ? (
               <RequirementSpecSummary spec={displayedSpec!} />
             ) : (
-              <MarkdownContent content={artifact.content} />
+              <>
+                <MarkdownContent content={artifact.content} />
+                {artifact.id === 'project_plan' ? (
+                  <ProjectPlanPageTreePreview nodes={planPageTree} />
+                ) : null}
+              </>
             )}
           </div>
         </section>

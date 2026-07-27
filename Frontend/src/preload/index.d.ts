@@ -1,4 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import type { DevelopmentPlanningPageTreeNode } from '../renderer/src/typings'
 
 declare global {
   interface Window {
@@ -56,6 +57,7 @@ declare global {
           hasDetailPlan: boolean;
           designed: boolean;
         }>;
+        pageTree: DevelopmentPlanningPageTreeNode[];
         apiContracts: Array<{
           id: string;
           label: string;

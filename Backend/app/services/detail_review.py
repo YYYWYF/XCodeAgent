@@ -9,6 +9,7 @@ from app.services.api_contracts import (
     normalize_page_api_dependencies,
     normalize_response_bindings,
 )
+from app.services.frontend_page_tree import update_frontend_page_leaves
 
 
 PAGE_EDITABLE_FIELDS = {
@@ -184,9 +185,14 @@ def apply_detail_review_submission(
         and detail.get("pageId")
             and detail.get("status") == "confirmed"
     }
-    for page in updated.get("frontend_pages", []):
-        if isinstance(page, dict) and str(page.get("pageId")) in confirmedPageIds:
-            page["detail_status"] = "confirmed"
+    updated["frontend_pages"] = update_frontend_page_leaves(
+        updated.get("frontend_pages"),
+        {
+            page_id: {"detail_status": "confirmed"}
+            for page_id in confirmedPageIds
+            if page_id
+        },
+    )
     for contract in updated.get("api_contracts", []):
         if not isinstance(contract, dict):
             continue

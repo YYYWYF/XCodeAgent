@@ -9,6 +9,11 @@ from app.services.api_contracts import (
     normalize_page_api_dependencies,
     normalize_response_bindings,
 )
+from app.services.frontend_page_tree import (
+    find_frontend_page,
+    flatten_frontend_pages,
+    update_frontend_page_leaves,
+)
 from app.services.page_dependencies import page_design_references
 
 
@@ -26,7 +31,7 @@ def detail_design_targets(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
                 f"{page.get('description') or page.get('name') or '待补充页面目标'}"
             ),
         }
-        for page in project_plan.get("frontend_pages", [])
+        for page in flatten_frontend_pages(project_plan.get("frontend_pages"))
         if isinstance(page, dict) and page.get("pageId")
     ]
     return page_targets
@@ -63,9 +68,9 @@ def resolve_detail_design_target(
 def _find_page_by_pageId(items: list[dict[str, Any]], pageId: str) -> dict[str, Any]:
     """按页面唯一标识 pageId 查找页面对象。"""
 
-    for item in items:
-        if item.get("pageId") == pageId:
-            return item
+    page = find_frontend_page(items, pageId)
+    if page is not None:
+        return page
     raise ValueError(f"项目计划中不存在页面：{pageId}")
 
 
@@ -501,6 +506,8 @@ def extract_page_detail_context(
     project_plan: dict[str, Any],
     pageId: str,
 ) -> dict[str, Any]:
+    """提取单个叶子页面详细设计所需的最小上下文。"""
+
     page = _find_page_by_pageId(project_plan["frontend_pages"], pageId)
     page_name = str(page.get("name") or pageId)
     page_path = str(page.get("path") or "/")
@@ -530,7 +537,7 @@ def extract_page_detail_context(
             "name": candidate.get("name"),
             "path": candidate.get("path"),
         }
-        for candidate in _dict_items(project_plan.get("frontend_pages"))
+        for candidate in flatten_frontend_pages(project_plan.get("frontend_pages"))
         if str(candidate.get("pageId"))
         in {str(item.get("targetPageId")) for item in references["navigation_targets"]}
     ]
@@ -596,14 +603,13 @@ def extract_endpoint_detail_context(
             "usage": str(dependency.get("usage") or ""),
             "trigger": str(dependency.get("trigger") or ""),
         }
-        for page in _dict_items(project_plan.get("frontend_pages"))
+        for page in flatten_frontend_pages(project_plan.get("frontend_pages"))
         for dependency in _dict_items(
             (page.get("references") if isinstance(page.get("references"), dict) else {}).get(
                 "endpoint_dependencies"
             )
         )
-        if str(dependency.get("api_contract_id") or "") == api_contract_id
-        and str(dependency.get("endpoint_id") or "") == endpoint_id
+        if str(dependency.get("endpoint_id") or "") == endpoint_id
     ]
     schemas = contract.get("schemas") if isinstance(contract.get("schemas"), dict) else {}
     return {
@@ -1034,6 +1040,8 @@ def attach_page_detail_plan(
     project_plan: dict[str, Any],
     detail_plan: dict[str, Any],
 ) -> dict[str, Any]:
+    """把页面详细设计回挂到菜单树中的目标页面叶子。"""
+
     updated_plan = deepcopy(project_plan)
     existing_details = {
         item["pageId"]: item
@@ -1042,15 +1050,19 @@ def attach_page_detail_plan(
     }
     existing_details[detail_plan["pageId"]] = detail_plan
     updated_plan["page_detail_plans"] = list(existing_details.values())
-
-    for page in updated_plan["frontend_pages"]:
-        if page.get("pageId") == detail_plan["pageId"]:
-            page["detail_status"] = "confirmed"
-            page["detail_plan_id"] = detail_plan["id"]
+    updated_plan["frontend_pages"] = update_frontend_page_leaves(
+        updated_plan.get("frontend_pages"),
+        {
+            detail_plan["pageId"]: {
+                "detail_status": "confirmed",
+                "detail_plan_id": detail_plan["id"],
+            }
+        },
+    )
 
     updated_plan["detail_confirmation_summary"] = {
         "confirmed_pages": len(updated_plan["page_detail_plans"]),
-        "total_pages": len(updated_plan["frontend_pages"]),
+        "total_pages": len(flatten_frontend_pages(updated_plan.get("frontend_pages"))),
         "latestPageId": detail_plan["pageId"],
     }
     return updated_plan

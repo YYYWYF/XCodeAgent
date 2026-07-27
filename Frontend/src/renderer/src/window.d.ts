@@ -1,7 +1,7 @@
 export {};
 
 import type { ElectronAPI } from '@electron-toolkit/preload';
-import type { ApplicationSchemaConfig } from './typings';
+import type { ApplicationSchemaConfig, DevelopmentPlanningPageTreeNode } from './typings';
 
 declare global {
   interface Window {
@@ -58,6 +58,7 @@ declare global {
           hasDetailPlan: boolean;
           designed: boolean;
         }>;
+        pageTree: DevelopmentPlanningPageTreeNode[];
         apiContracts: Array<{
           id: string;
           label: string;

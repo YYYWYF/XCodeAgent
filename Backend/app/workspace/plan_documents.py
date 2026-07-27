@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
 from app.workspace.spec_documents import workflow_artifact_root
 
 
@@ -431,6 +432,33 @@ def _page_references_markdown(page: dict[str, Any]) -> str:
     )
 
 
+def _frontend_page_tree_markdown(nodes: Any, *, level: int = 0) -> list[str]:
+    """递归渲染 frontend_pages 的菜单层级，便于用户确认目录关系。"""
+
+    lines: list[str] = []
+    indent = "  " * level
+    for node in _dict_items(nodes):
+        if is_menu_node(node):
+            name = str(node.get("name") or "未命名菜单").strip() or "未命名菜单"
+            unique_path = str(node.get("unique_path") or "").strip()
+            if unique_path:
+                lines.append(f"{indent}- 菜单 `{name}` `{unique_path}`")
+            else:
+                lines.append(f"{indent}- 菜单 `{name}`（仅分组，无独立路由）")
+            child_lines = _frontend_page_tree_markdown(node.get("children"), level=level + 1)
+            lines.extend(child_lines or [f"{indent}  - 暂无子页面"])
+            continue
+        page_name = str(node.get("name") or node.get("pageId") or "未命名页面")
+        page_id = str(node.get("pageId") or node.get("id") or "unknown")
+        page_path = str(node.get("path") or "/")
+        page_desc = str(node.get("description") or "").strip()
+        description_suffix = f"：{page_desc}" if page_desc else ""
+        lines.append(
+            f"{indent}- 页面 `{page_name}` (`{page_id}` · `{page_path}`){description_suffix}"
+        )
+    return lines
+
+
 def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     overview = plan.get("requirements_overview", {})
     acceptance_criteria = plan.get("project_acceptance_criteria") or plan.get(
@@ -441,9 +469,10 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         _api_contract_markdown(contract)
         for contract in _dict_items(plan.get("api_contracts", []))
     )
+    page_tree = "\n".join(_frontend_page_tree_markdown(plan.get("frontend_pages", [])))
     pages = "\n\n".join(
         _page_references_markdown(page)
-        for page in _dict_items(plan.get("frontend_pages", []))
+        for page in flatten_frontend_pages(plan.get("frontend_pages", []))
     )
     data_sources = "\n".join(
         f"- `{source.get('id', 'unknown')}` {source.get('name', '未命名数据源')}："
@@ -465,7 +494,7 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     )
     page_details = "\n".join(
         f"- {page.get('name', page.get('pageId', '未命名页面'))}：{page.get('detail_design', {}).get('markdown_path', '尚未生成独立详细设计')}"
-        for page in _dict_items(plan.get("frontend_pages", []))
+        for page in flatten_frontend_pages(plan.get("frontend_pages", []))
         if isinstance(page.get("detail_design"), dict)
     )
     app = plan.get("app", {})
@@ -505,6 +534,12 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 {api_contracts or "- 暂无 API 契约"}
 
 ## 前端页面清单
+
+### 菜单结构
+
+{page_tree or "- 暂无菜单结构"}
+
+### 页面详情
 
 {pages or "- 暂无前端页面"}
 

@@ -12,6 +12,19 @@ export type DevelopmentPlanningPageOption = {
   hasDetailPlan?: boolean
   designed: boolean
 }
+export type DevelopmentPlanningPageTreeNode = {
+  key: string
+  type: 'menu' | 'page'
+  label: string
+  uniquePath?: string
+  pageId?: string
+  path?: string
+  purpose?: string
+  detailPlanStatus?: string
+  hasDetailPlan?: boolean
+  designed?: boolean
+  children?: DevelopmentPlanningPageTreeNode[]
+}
 export type DevelopmentPlanningApiEndpoint = {
   apiContractId?: string
   id: string

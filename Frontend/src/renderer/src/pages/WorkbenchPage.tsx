@@ -11,6 +11,7 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode
 } from '../typings'
@@ -51,6 +52,9 @@ function WorkbenchPage({
   const [hasPageDesigns, setHasPageDesigns] = useState(false)
   const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<
     DevelopmentPlanningPageOption[]
+  >([])
+  const [developmentPlanningPageTree, setDevelopmentPlanningPageTree] = useState<
+    DevelopmentPlanningPageTreeNode[]
   >([])
   const [developmentPlanningApiContracts, setDevelopmentPlanningApiContracts] = useState<
     DevelopmentPlanningApiContract[]
@@ -133,6 +137,7 @@ function WorkbenchPage({
         const inspection = await inspectWorkspacePlanningArtifacts(application.workspaceRoot)
         if (!active) return
         setDevelopmentPlanningPages(inspection.pages)
+        setDevelopmentPlanningPageTree(Array.isArray(inspection.pageTree) ? inspection.pageTree : [])
         setDevelopmentPlanningApiContracts(
           Array.isArray(inspection.apiContracts) ? inspection.apiContracts : []
         )
@@ -143,6 +148,7 @@ function WorkbenchPage({
       } catch (error) {
         if (!active) return
         setDevelopmentPlanningPages([])
+        setDevelopmentPlanningPageTree([])
         setDevelopmentPlanningApiContracts([])
         setHasPageDesigns(false)
         console.warn('检查 specs/plans 规划产物失败。', error)
@@ -218,6 +224,7 @@ function WorkbenchPage({
           developmentPlanningReady={developmentPlanningPagesLoaded}
           hasPageDesigns={hasPageDesigns}
           developmentPlanningPages={developmentPlanningPages}
+          developmentPlanningPageTree={developmentPlanningPageTree}
           developmentPlanningApiContracts={developmentPlanningApiContracts}
           editorMode={editorMode}
           onApplicationUpdate={handleApplicationUpdate}

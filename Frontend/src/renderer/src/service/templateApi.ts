@@ -99,6 +99,23 @@ function pageKeyFromPath(rawPath: unknown, fallbackIndex: number): string {
   return `Page${fallbackIndex + 1}`
 }
 
+/** 递归拍平 ProjectPlan.frontend_pages，仅保留真正的页面叶子。 */
+function flattenFrontendPages(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    const record = item as Record<string, unknown>
+    const pageId = typeof record.pageId === 'string'
+      ? record.pageId.trim()
+      : typeof record.id === 'string'
+        ? record.id.trim()
+        : ''
+    const self = pageId ? [record] : []
+    const children = Array.isArray(record.children) ? flattenFrontendPages(record.children) : []
+    return [...self, ...children]
+  })
+}
+
 /** 从 workflow 中提取规划出的前端页面清单（ProjectPlan.frontend_pages）。 */
 function extractFrontendPages(
   workflow: WorkflowRunPayload | undefined
@@ -109,11 +126,11 @@ function extractFrontendPages(
     const projectPlan = source?.project_plan
     if (projectPlan && typeof projectPlan === 'object') {
       const plan = projectPlan as Record<string, unknown>
-      const frontendPages = plan.frontend_pages
-      if (!Array.isArray(frontendPages)) continue
+      const frontendPages = flattenFrontendPages(plan.frontend_pages)
+      if (!frontendPages.length) continue
       const seen = new Set<string>()
       const result: Array<{ pageKey: string; name?: string; menuPath: string }> = []
-      frontendPages.forEach((page: Record<string, unknown>, index: number) => {
+      frontendPages.forEach((page, index: number) => {
         // 优先用 pageId（后端生成的英文标识），否则从 path 推导
         const pageId = typeof page?.pageId === 'string' ? page.pageId.trim() : ''
         let pageKey = ''

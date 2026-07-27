@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from app.services.api_contracts import normalize_page_api_dependencies
+from app.services.frontend_page_tree import (
+    find_frontend_page,
+    flatten_frontend_pages,
+    update_frontend_page_leaves,
+)
 from app.workspace.spec_documents import workflow_artifact_root
 
 
@@ -157,7 +162,7 @@ def hydrate_external_detail_designs(
     page_details: list[dict[str, Any]] = []
     endpoint_details: list[dict[str, Any]] = []
 
-    for page in _dict_items(hydrated.get("frontend_pages")):
+    for page in flatten_frontend_pages(hydrated.get("frontend_pages")):
         pageId = str(page.get("pageId") or "")
         if not pageId:
             continue
@@ -327,11 +332,15 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
             sha256=sha256,
             dependencies=_page_dependencies(plan, detail),
         )
-        for page in _dict_items(compact_plan.get("frontend_pages")):
-            if str(page.get("pageId") or "") == pageId:
-                page["detail_design"] = reference
-                page["detail_status"] = reference["status"]
-                break
+        compact_plan["frontend_pages"] = update_frontend_page_leaves(
+            compact_plan.get("frontend_pages"),
+            {
+                pageId: {
+                    "detail_design": reference,
+                    "detail_status": reference["status"],
+                }
+            },
+        )
 
     for detail in _dict_items(plan.get("endpoint_detail_plans")):
         api_contract_id = str(detail.get("api_contract_id") or "")

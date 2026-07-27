@@ -9,6 +9,13 @@ from app.services.api_contracts import (
     normalize_api_contracts,
     schema_refs_for_data_source,
 )
+from app.services.frontend_page_tree import (
+    apply_frontend_page_route_hierarchy,
+    _module_display_name,
+    flatten_frontend_pages,
+    group_pages_into_menu_tree,
+    rebuild_frontend_page_tree,
+)
 from app.services.page_dependencies import normalize_page_dependencies
 
 
@@ -36,6 +43,8 @@ def _merge_agent_items(
     """按业务主键合并模型补充项；页面统一使用 pageId。"""
 
     agent_items = _agent_section(agent_plan, key)
+    if key == "frontend_pages" and agent_items is not None:
+        agent_items = flatten_frontend_pages(agent_items)
     if not isinstance(agent_items, list):
         return default_items
 
@@ -188,17 +197,41 @@ def _normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def normalize_project_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
-    """规范化 ProjectPlan 的内部结构；当前阶段只规范化 API 契约。"""
+    """规范化 ProjectPlan 的内部结构，并保持 frontend_pages 的菜单树兼容。"""
 
     normalized = dict(project_plan)
+    route_root_path = _route_root_path_from_plan(normalized)
     if "api_contracts" in normalized:
         normalized["api_contracts"] = _normalize_api_contracts(
             _dict_items(normalized.get("api_contracts"))
         )
+    if "frontend_pages" in normalized:
+        flat_pages = _normalize_frontend_pages(
+            flatten_frontend_pages(normalized.get("frontend_pages"))
+        )
+        if "api_contracts" in normalized:
+            flat_pages = normalize_page_dependencies(
+                flat_pages,
+                _dict_items(normalized.get("api_contracts")),
+            )
+        normalized["frontend_pages"] = rebuild_frontend_page_tree(
+            normalized.get("frontend_pages"),
+            flat_pages,
+            root_route_prefix=route_root_path,
+        )
     return normalized
 
 
+def _route_root_path_from_plan(project_plan: dict[str, Any]) -> str:
+    """优先从正式计划 app 信息中读取页面根路由。"""
+
+    app = project_plan.get("app") if isinstance(project_plan.get("app"), dict) else {}
+    return str(app.get("route_root_path") or "").strip()
+
+
 def _normalize_frontend_pages(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """规范化页面叶子字段，并为后续菜单树回挂提供稳定页面对象。"""
+
     normalized = []
     used_paths: set[str] = set()
     for item in items:
@@ -412,6 +445,8 @@ def _write_schema(entity_schema: dict[str, Any], *, partial: bool) -> dict[str, 
 
 
 def _frontend_pages(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """根据 RequirementSpec 构造平铺页面叶子，供后续生成菜单树。"""
+
     data_source_ids = [source["id"] for source in spec["data_sources"]]
     pages = []
     used_paths: set[str] = set()
@@ -451,6 +486,21 @@ def _frontend_pages(spec: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return pages
+
+
+def _module_name_map(spec: dict[str, Any]) -> dict[str, str]:
+    """从需求模块中提取模块名，供菜单目录缺省命名使用。"""
+
+    result: dict[str, str] = {}
+    for module in _dict_items(spec.get("feature_modules")):
+        module_id = str(module.get("id") or "").strip()
+        if not module_id:
+            continue
+        result[module_id] = (
+            str(module.get("name") or module.get("title") or "").strip()
+            or _module_display_name(module_id)
+        )
+    return result
 
 
 def _planned_data_sources(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -527,9 +577,7 @@ def apply_project_plan_feedback(
 
     updated = {
         **plan,
-        "frontend_pages": [
-            dict(page) for page in _dict_items(plan.get("frontend_pages"))
-        ],
+        "frontend_pages": normalize_project_plan(plan).get("frontend_pages", []),
         "data_sources": [
             dict(source) for source in _dict_items(plan.get("data_sources"))
         ],
@@ -575,6 +623,8 @@ def _permission_model(
     plan_pages: list[dict[str, Any]],
     agent_plan: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    """基于页面叶子构造权限模型，避免菜单目录节点进入访问控制表。"""
+
     role_ids = [role["id"] for role in spec["user_roles"]]
     model = {
         "roles": spec["user_roles"],
@@ -612,6 +662,16 @@ def create_project_plan(
     agent_plan: dict[str, Any] | None = None,
     authoritative_agent_plan: bool = False,
 ) -> dict[str, Any]:
+    """生成 ProjectPlan，并把页面叶子组织成带菜单层级的 frontend_pages 树。"""
+
+    route_root_path = str(
+        (
+            spec.get("app_info")
+            if isinstance(spec.get("app_info"), dict)
+            else {}
+        ).get("route_root_path")
+        or ""
+    ).strip()
     data_sources = _normalize_data_sources(
         _merge_agent_items(
             _planned_data_sources(spec),
@@ -638,7 +698,7 @@ def create_project_plan(
         }
         for source in data_sources
     ]
-    frontend_pages = _normalize_frontend_pages(
+    frontend_page_leaves = _normalize_frontend_pages(
         _merge_agent_items(
             _frontend_pages(spec),
             agent_plan,
@@ -646,7 +706,13 @@ def create_project_plan(
             authoritative=authoritative_agent_plan,
         )
     )
-    frontend_pages = normalize_page_dependencies(frontend_pages, api_contracts)
+    frontend_page_leaves = normalize_page_dependencies(frontend_page_leaves, api_contracts)
+    frontend_pages = rebuild_frontend_page_tree(
+        _agent_section(agent_plan, "frontend_pages"),
+        frontend_page_leaves,
+        module_names=_module_name_map(spec),
+        root_route_prefix=route_root_path,
+    )
 
     agent_architecture = _agent_section(agent_plan, "architecture")
     architecture = {
@@ -671,6 +737,7 @@ def create_project_plan(
         "app": {
             "name": spec["app_info"]["name"],
             "summary": spec["app_info"]["summary"],
+            **({"route_root_path": route_root_path} if route_root_path else {}),
         },
         "requirements_overview": _requirements_overview(spec, agent_plan),
         "project_acceptance_criteria": _project_acceptance_criteria(
@@ -681,7 +748,11 @@ def create_project_plan(
         "api_contracts": api_contracts,
         "frontend_pages": frontend_pages,
         "data_sources": data_sources,
-        "permission_model": _permission_model(spec, frontend_pages, agent_plan),
+        "permission_model": _permission_model(
+            spec,
+            frontend_page_leaves,
+            agent_plan,
+        ),
         "business_flows": (
             _dict_items(_agent_section(agent_plan, "business_flows"))
             if authoritative_agent_plan

@@ -18,6 +18,7 @@ from app.services.build_task_planner import (
     tasks_from_build_task_plan,
 )
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.frontend_page_tree import flatten_frontend_pages
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
@@ -487,7 +488,7 @@ def _skeleton_pages(project_plan: dict) -> list[dict]:
                 else None
             ),
         }
-        for page in project_plan.get("frontend_pages", [])
+        for page in flatten_frontend_pages(project_plan.get("frontend_pages"))
         if isinstance(page, dict)
     ]
 
@@ -605,7 +606,7 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     target_page_id = str(target.get("id") or "") if target.get("type") == "page" else ""
     pages = []
-    for page in project_plan.get("frontend_pages", []):
+    for page in flatten_frontend_pages(project_plan.get("frontend_pages")):
         if not isinstance(page, dict):
             continue
         if str(page.get("pageId") or "") == target_page_id:

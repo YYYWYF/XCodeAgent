@@ -7,6 +7,7 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   ApplicationMenuItem,
   EditorMode,
@@ -47,6 +48,7 @@ type Props = {
   developmentPlanningReady: boolean
   hasPageDesigns: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
+  developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
@@ -145,6 +147,7 @@ export default function AiChatPanel({
   developmentPlanningReady,
   hasPageDesigns,
   developmentPlanningPages,
+  developmentPlanningPageTree,
   developmentPlanningApiContracts,
   editorMode,
   onApplicationUpdate,
@@ -708,6 +711,7 @@ export default function AiChatPanel({
           onShowSkills={handleShowSkills}
           onThemeChange={onThemeChange}
           pages={developmentPlanningPages}
+          pageTree={developmentPlanningPageTree}
           apiContracts={developmentPlanningApiContracts}
           selectedApiEndpointKey={activeApiEndpoint?.endpointKey || ''}
           selectedPageId={activePageId}
@@ -736,6 +740,7 @@ export default function AiChatPanel({
               loading={false}
               onStart={handleStartDetailDesign}
               pages={developmentPlanningPages}
+              pageTree={developmentPlanningPageTree}
               selectedEndpoint={activeApiEndpoint}
               selectedPage={activeApiEndpoint ? undefined : activePageOption}
               workflowEvents={activeWorkflow?.events}
@@ -750,6 +755,7 @@ export default function AiChatPanel({
               loading={!developmentPlanningReady}
               onStart={handleStartDetailDesign}
               pages={developmentPlanningPages}
+              pageTree={developmentPlanningPageTree}
               selectedEndpoint={activeApiEndpoint}
               workflowEvents={activeWorkflow?.events}
             />

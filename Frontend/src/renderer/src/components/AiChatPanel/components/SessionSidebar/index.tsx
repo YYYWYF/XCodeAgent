@@ -25,6 +25,7 @@ import type {
   ApplicationConfig,
   ApplicationMenuItem,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption
 } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -86,6 +87,7 @@ type SessionSidebarProps = {
   onShowSkills: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   pages: DevelopmentPlanningPageOption[]
+  pageTree: DevelopmentPlanningPageTreeNode[]
   selectedApiEndpointKey: string
   selectedPageId: string
   sessionError?: string
@@ -100,7 +102,6 @@ type SessionSidebarProps = {
 type OutlineRowProps = {
   activeSessionId?: string
   deletingSessionId?: string
-  designed: boolean
   disabled?: boolean
   item: ApplicationMenuItem
   level: number
@@ -120,7 +121,6 @@ type OutlineRowProps = {
 function OutlineRow({
   activeSessionId,
   deletingSessionId,
-  designed,
   disabled = false,
   item,
   level,
@@ -139,6 +139,7 @@ function OutlineRow({
   const children = item.children?.filter((child) => visibleKeys.has(child.key)) || []
   const isFolder = item.type === 'menu' || children.length > 0
   const selected = selectedKey === item.key
+  const designed = Boolean(item.designed)
 
   return (
     <div className={cx('outline-node')}>
@@ -191,7 +192,6 @@ function OutlineRow({
               activeSessionId={activeSessionId}
               deletingSessionId={deletingSessionId}
               disabled={disabled}
-              designed={designed}
               item={child}
               key={child.key}
               level={level + 1}
@@ -213,6 +213,40 @@ function OutlineRow({
       ) : null}
     </div>
   )
+}
+
+/** 把页面树节点递归转换为侧栏复用的菜单项结构。 */
+function pageTreeItems(nodes: DevelopmentPlanningPageTreeNode[]): ApplicationMenuItem[] {
+  const items: ApplicationMenuItem[] = []
+  nodes.forEach((node) => {
+    if (node.type === 'menu') {
+      const children = pageTreeItems(node.children || [])
+      if (children.length === 0) return
+      items.push({
+        key: node.key,
+        path: node.uniquePath || node.path || node.key,
+        label: node.label,
+        type: 'menu',
+        children
+      })
+      return
+    }
+    const pageKey = node.pageId || node.key
+    if (!pageKey) return
+    items.push({
+      key: pageKey,
+      pageKey,
+      path: node.path,
+      label: node.label,
+      type: 'page',
+      purpose: node.purpose,
+      keyFeatures: [],
+      designed: Boolean(node.designed),
+      detailPlanStatus: node.detailPlanStatus,
+      hasDetailPlan: node.hasDetailPlan
+    })
+  })
+  return items
 }
 
 function collectVisibleKeys(items: ApplicationMenuItem[], query: string): Set<string> {
@@ -281,6 +315,7 @@ export default function SessionSidebar({
   onThemeChange,
   outlineLocked,
   pages,
+  pageTree,
   selectedApiEndpointKey,
   selectedPageId,
   sessionError,
@@ -302,18 +337,28 @@ export default function SessionSidebar({
     () => new Set()
   )
   const [onlyRelated, setOnlyRelated] = useState(false)
-  const pageItems = useMemo<ApplicationMenuItem[]>(
-    () =>
-      pages.map((page) => ({
-        key: page.pageId,
-        pageKey: page.pageId,
-        path: page.path,
-        label: page.label,
-        type: 'page',
-        purpose: page.purpose,
-        keyFeatures: []
-      })),
+  const pagesById = useMemo(
+    () => new Map(pages.map((page) => [page.pageId, page])),
     [pages]
+  )
+  const pageItems = useMemo<ApplicationMenuItem[]>(
+    () => (
+      pageTree.length > 0
+        ? pageTreeItems(pageTree)
+        : pages.map((page) => ({
+            key: page.pageId,
+            pageKey: page.pageId,
+            path: page.path,
+            label: page.label,
+            type: 'page',
+            purpose: page.purpose,
+            keyFeatures: [],
+            designed: page.designed,
+            detailPlanStatus: page.detailPlanStatus,
+            hasDetailPlan: page.hasDetailPlan
+          }))
+    ),
+    [pageTree, pages]
   )
   const sessionsByPageId = useMemo(() => {
     const groupedSessions = new Map<string, ChatSessionSummary[]>()
@@ -564,7 +609,6 @@ export default function SessionSidebar({
                         activeSessionId={activeSessionId}
                         deletingSessionId={deletingSessionId}
                         disabled={outlineLocked}
-                        designed={Boolean(pages.find((page) => page.pageId === item.key)?.designed)}
                         item={item}
                         key={item.key}
                         level={0}
@@ -573,7 +617,7 @@ export default function SessionSidebar({
                         onDeleteSession={onDeleteSession}
                         onOpenSession={onOpenSession}
                         onSelect={(key) => {
-                          const selectedPage = pages.find((page) => page.key === key)
+                          const selectedPage = pagesById.get(key)
                           if (selectedPage) onPageSelect(selectedPage)
                         }}
                         selectedKey={selectedKey}

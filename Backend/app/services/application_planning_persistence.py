@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
+
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:
     """只保留列表中的对象项。"""
@@ -155,32 +157,84 @@ def _page_design(page: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _page_menu_item(
+    page: dict[str, Any],
+    details: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """把单个页面叶子投射为 application.json 可消费的页面菜单节点。"""
+
+    pageId = str(page.get("pageId") or page.get("id") or "").strip()
+    detail = details.get(pageId, {})
+    features = [
+        str(item.get("action"))
+        for item in _dict_items(detail.get("operation_interactions"))
+        if item.get("action")
+    ]
+    return {
+        "key": pageId or _safe_id(page.get("path") or page.get("name"), "page"),
+        "path": str(page.get("path") or "/"),
+        "label": str(page.get("name") or pageId or "未命名页面"),
+        "type": "page",
+        "purpose": str(
+            page.get("description")
+            or detail.get("page_goal")
+            or page.get("name")
+            or "业务页面"
+        ),
+        "keyFeatures": features
+        or [str(page.get("description") or page.get("name") or "页面核心功能")],
+        "pageKey": pageId or _safe_id(page.get("path") or page.get("name"), "page"),
+        "design": _page_design(page, detail),
+    }
+
+
+def _menu_tree_items(
+    nodes: Any,
+    details: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """递归把 ProjectPlan.frontend_pages 菜单树投射为 application.json 菜单结构。"""
+
+    items: list[dict[str, Any]] = []
+    for node in _dict_items(nodes):
+        if is_menu_node(node):
+            children = _menu_tree_items(node.get("children"), details)
+            if not children:
+                continue
+            unique_path = str(node.get("unique_path") or "").strip()
+            key = unique_path or _safe_id(node.get("name"), "menu")
+            items.append(
+                {
+                    "key": key,
+                    "path": unique_path,
+                    "label": str(node.get("name") or "未命名菜单").strip() or "未命名菜单",
+                    "type": "menu",
+                    "uniquePath": unique_path,
+                    "children": children,
+                }
+            )
+            continue
+        items.append(_page_menu_item(node, details))
+    return items
+
+
+def _home_menu_key(project_plan: dict[str, Any]) -> str:
+    """优先选择树中的首个页面叶子作为 homeMenuKey。"""
+
+    pages = flatten_frontend_pages(project_plan.get("frontend_pages"))
+    if not pages:
+        return ""
+    first_page = pages[0]
+    return str(first_page.get("pageId") or first_page.get("id") or "").strip()
+
+
 def _menus(project_plan: dict[str, Any]) -> dict[str, Any]:
     """把 ProjectPlan 页面清单和详细设计投射为菜单。"""
 
     details = _page_detail_map(project_plan)
-    items = []
-    for page in _dict_items(project_plan.get("frontend_pages")):
-        pageId = str(page.get("pageId") or f"page-{len(items) + 1}")
-        detail = details.get(pageId, {})
-        features = [
-            str(item.get("action"))
-            for item in _dict_items(detail.get("operation_interactions"))
-            if item.get("action")
-        ]
-        items.append({
-            "key": pageId,
-            "path": str(page.get("path") or "/"),
-            "label": str(page.get("name") or pageId),
-            "type": "page",
-            "purpose": str(page.get("description") or detail.get("page_goal") or page.get("name") or "业务页面"),
-            "keyFeatures": features or [str(page.get("description") or page.get("name") or "页面核心功能")],
-            "pageKey": pageId,
-            "design": _page_design(page, detail),
-        })
+    items = _menu_tree_items(project_plan.get("frontend_pages"), details)
     if not items:
         raise ValueError("已确认的项目计划中没有可写入的页面清单。")
-    return {"homeMenuKey": items[0]["key"], "items": items}
+    return {"homeMenuKey": _home_menu_key(project_plan) or items[0]["key"], "items": items}
 
 
 def _api_payload(project_plan: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:

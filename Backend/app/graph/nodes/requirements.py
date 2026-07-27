@@ -191,6 +191,9 @@ def _apply_menus_root_path_to_pages(spec: dict, state: ProjectState) -> None:
     if not root_path or root_path == "/":
         return
     root_path = root_path.rstrip("/")
+    app_info = spec.get("app_info") if isinstance(spec.get("app_info"), dict) else {}
+    app_info["route_root_path"] = root_path
+    spec["app_info"] = app_info
     for page in spec.get("pages", []):
         if isinstance(page, dict) and page.get("path"):
             page_path = str(page["path"]).strip()

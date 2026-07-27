@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.execution_resource_scope import resolve_execution_resource_claims
+from app.services.frontend_page_tree import flatten_frontend_pages, frontend_page_ids
 
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json
@@ -387,12 +388,7 @@ def _project_plan_page_ids(project_plan: Any) -> list[str]:
     """从 ProjectPlan 页面目录中提取去重后的正式 pageId。"""
 
     plan = project_plan if isinstance(project_plan, dict) else {}
-    result: list[str] = []
-    for page in _dict_items(plan.get("frontend_pages")):
-        page_id = _optional_text(page.get("pageId") or page.get("id"))
-        if page_id and page_id not in result:
-            result.append(page_id)
-    return result
+    return frontend_page_ids(plan.get("frontend_pages"))
 
 
 def _page_id_alias(value: str) -> str:
@@ -687,22 +683,21 @@ def _project_plan_start_values(
         )
         if not isinstance(project_plan, dict):
             raise ValueError("project-plan.json 的根结构必须是 JSON 对象。")
-        frontend_pages = project_plan.get("frontend_pages", [])
-        normalized_pages = (
-            [dict(page) for page in frontend_pages if isinstance(page, dict)]
-            if isinstance(frontend_pages, list)
-            else []
-        )
+        frontend_pages_tree = project_plan.get("frontend_pages", [])
+        normalized_pages = [
+            dict(page)
+            for page in flatten_frontend_pages(frontend_pages_tree)
+            if isinstance(page, dict)
+        ]
         selected_page = _selected_requirement_page(
             workspace_root,
             selected_page_id,
         )
         if selected_page and not any(
-            str(page.get("id") or "") == selected_page_id
+            str(page.get("pageId") or page.get("id") or "") == selected_page_id
             for page in normalized_pages
         ):
             normalized_pages.append(selected_page)
-            project_plan = {**project_plan, "frontend_pages": normalized_pages}
         return {
             "project_plan": project_plan,
             "frontend_pages": normalized_pages,
