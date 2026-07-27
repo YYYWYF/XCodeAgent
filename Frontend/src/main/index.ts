@@ -8,6 +8,7 @@ import icon from '../../resources/icon.png?asset'
 import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
+import { setupApplicationSettingsIpc } from './applicationSettings'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -1536,6 +1537,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   const backendBaseUrl = await startBackendService()
   console.log(`XCode Agent backend URL: ${backendBaseUrl}`)
   setupApplicationStorageIpc()
+  setupApplicationSettingsIpc()
   setupAuthIpc()
   setupBrowserIpc()
   setupWorkspaceIpc()

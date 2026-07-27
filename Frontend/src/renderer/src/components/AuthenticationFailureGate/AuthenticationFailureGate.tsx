@@ -7,44 +7,27 @@ import {
   subscribeAuthenticationFailure,
   type AuthenticationFailure
 } from '../../service/authentication'
+import { useApplicationTheme } from '../../hooks/useApplicationTheme'
 import { cx } from '../../utils'
 import './AuthenticationFailureGate.less'
 
 const { Text, Title } = Typography
 
-type Theme = 'light' | 'dark'
-
-type FailureState = AuthenticationFailure & {
-  theme: Theme
-}
-
 type Props = {
   children: ReactNode
 }
 
-/** 读取当前界面主题，未设置时跟随系统偏好。 */
-function getCurrentTheme(): Theme {
-  const storedPreference = window.localStorage.getItem('xcode-agent-theme-preference')
-  if (storedPreference === 'light' || storedPreference === 'dark') return storedPreference
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
 /** 在任意产品页面上阻断认证失败，并将用户带回登录窗口。 */
 export function AuthenticationFailureGate({ children }: Props): JSX.Element {
-  const [failure, setFailure] = useState<FailureState>()
+  const { theme } = useApplicationTheme()
+  const [failure, setFailure] = useState<AuthenticationFailure>()
   const [redirecting, setRedirecting] = useState(false)
   const [redirectError, setRedirectError] = useState('')
 
   useEffect(
     () =>
       subscribeAuthenticationFailure((nextFailure) => {
-        setFailure(
-          (currentFailure) =>
-            currentFailure ?? {
-              ...nextFailure,
-              theme: getCurrentTheme()
-            }
-        )
+        setFailure((currentFailure) => currentFailure ?? nextFailure)
       }),
     []
   )
@@ -83,7 +66,7 @@ export function AuthenticationFailureGate({ children }: Props): JSX.Element {
         open={Boolean(failure)}
         transitionName=""
         width={420}
-        wrapClassName={cx('authentication-failure-modal', `theme-${failure?.theme || 'light'}`)}
+        wrapClassName={cx('authentication-failure-modal', `theme-${theme}`)}
         zIndex={10000}
       >
         <div className={cx('authentication-failure-content')}>

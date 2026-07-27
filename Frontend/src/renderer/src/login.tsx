@@ -11,24 +11,17 @@ import { Button, Typography, message } from 'antd'
 import 'antd/dist/antd.less'
 import './styles/global.less'
 import { cx } from './utils'
+import { ApplicationThemeProvider, useApplicationTheme } from './hooks/useApplicationTheme'
+import { loadApplicationTheme } from './service/applicationSettings'
 import './login.less'
 
 const { Paragraph, Text, Title } = Typography
-
-type LoginTheme = 'light' | 'dark'
 
 const CAPABILITIES = [
   'Workflow 智能编排',
   '本地工作区安全访问',
   '多 Agent 协同开发'
 ]
-
-/** 读取登录窗口使用的主题，未设置时跟随系统偏好。 */
-function getLoginTheme(): LoginTheme {
-  const storedPreference = window.localStorage.getItem('xcode-agent-theme-preference')
-  if (storedPreference === 'light' || storedPreference === 'dark') return storedPreference
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
 
 /** 将未知异常转换为登录界面可展示的消息。 */
 function formatError(error: unknown, fallback: string): string {
@@ -38,7 +31,7 @@ function formatError(error: unknown, fallback: string): string {
 /** 渲染带有自定义关闭控件和设备流入口的无边框登录窗口。 */
 export function LoginApp(): JSX.Element {
   const [loggingIn, setLoggingIn] = useState(false)
-  const theme = getLoginTheme()
+  const { theme } = useApplicationTheme()
 
   /** 请求关闭当前登录窗口，主进程会按既有逻辑隐藏窗口并保留应用后台运行。 */
   const handleClose = (): void => {
@@ -151,8 +144,16 @@ export function LoginApp(): JSX.Element {
   )
 }
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <React.StrictMode>
-    <LoginApp />
-  </React.StrictMode>
-)
+/** 在登录窗口首次渲染前读取应用级主题。 */
+async function bootstrapLogin(): Promise<void> {
+  await loadApplicationTheme()
+  ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+    <React.StrictMode>
+      <ApplicationThemeProvider>
+        <LoginApp />
+      </ApplicationThemeProvider>
+    </React.StrictMode>
+  )
+}
+
+void bootstrapLogin()

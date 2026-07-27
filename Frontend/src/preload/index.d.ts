@@ -14,6 +14,15 @@ declare global {
       getAccessToken: () => Promise<{ accessToken: string | null }>;
       reauthenticate: () => Promise<{ ok: true }>;
     };
+    settings: {
+      load: () => Promise<{
+        settings?: { version?: number; appearance?: { theme?: unknown } };
+      }>;
+      saveTheme: (payload: { theme: 'dark' | 'light' }) => Promise<{ ok?: boolean }>;
+      onThemeChanged: (
+        listener: (payload: { theme?: unknown }) => void
+      ) => () => void;
+    };
     applications: {
       load: () => Promise<{ applications?: unknown }>;
       save: (applications: unknown[]) => Promise<{ ok?: boolean }>;

@@ -17,6 +17,7 @@ import { useApplicationTemplateGeneration } from './useApplicationTemplateGenera
 
 type UseActiveApplicationPlanningsOptions = {
   onOpenWorkbench: (application: ApplicationConfig, lifecycle: ApplicationLifecycle) => void
+  theme: 'dark' | 'light'
 }
 
 type ActiveApplicationPlanningsController = {
@@ -38,14 +39,10 @@ type ActiveApplicationPlanningsController = {
   visiblePlanningId?: string
 }
 
-// 读取规划页需要沿用的欢迎页主题。
-function getEntryTheme(): 'dark' | 'light' {
-  return window.localStorage.getItem('xcode-agent-theme-preference') === 'dark' ? 'dark' : 'light'
-}
-
 // 维护最多三个相互隔离的应用初始化会话及其后台模板生成任务。
 export function useActiveApplicationPlannings({
-  onOpenWorkbench
+  onOpenWorkbench,
+  theme
 }: UseActiveApplicationPlanningsOptions): ActiveApplicationPlanningsController {
   const [activePlannings, setActivePlannings] = useState<PersistedActivePlanning[]>([])
   const [visiblePlanningId, setVisiblePlanningId] = useState<string>()
@@ -242,10 +239,10 @@ export function useActiveApplicationPlannings({
         okButtonProps: { danger: true },
         cancelText: '取消',
         onOk: () => deletePlanning(planning),
-        wrapClassName: cx('welcome-modal', `theme-${getEntryTheme()}`)
+        wrapClassName: cx('welcome-modal', `theme-${theme}`)
       })
     },
-    [deletePlanning, deletingPlanningIds]
+    [deletePlanning, deletingPlanningIds, theme]
   )
 
   // 后台恢复到模板生成阶段的每个应用都独立续跑，不抢占当前可见页面。

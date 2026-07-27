@@ -23,29 +23,26 @@ type Props = {
   applicationLifecycle?: ApplicationLifecycle
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onReturnWelcome: () => void
+  onThemeChange: (theme: Theme) => void
+  theme: Theme
 }
 
 type Theme = 'light' | 'dark'
 type WorkbenchEntryStage = 'loading' | 'leaving' | 'ready'
 
-const THEME_PREFERENCE_KEY = 'xcode-agent-theme-preference'
 const WORKBENCH_ENTRY_MIN_VISIBLE_MS = 520
 const WORKBENCH_ENTRY_FADE_MS = 280
-
-function getTheme(): Theme {
-  const storedPreference = window.localStorage.getItem(THEME_PREFERENCE_KEY)
-  return storedPreference === 'light' || storedPreference === 'dark' ? storedPreference : 'light'
-}
 
 // 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
 function WorkbenchPage({
   application,
   applicationLifecycle,
   onApplicationLifecycleChange,
-  onReturnWelcome
+  onReturnWelcome,
+  onThemeChange,
+  theme
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
-  const [theme, setTheme] = useState<Theme>(getTheme)
   const [workspaceApplication, setWorkspaceApplication] = useState(application)
   const [developmentPlanningPagesLoaded, setDevelopmentPlanningPagesLoaded] = useState(false)
   const [hasPageDesigns, setHasPageDesigns] = useState(false)
@@ -196,8 +193,7 @@ function WorkbenchPage({
   }, [entryStage])
 
   const handleThemeChange = (nextTheme: Theme): void => {
-    setTheme(nextTheme)
-    window.localStorage.setItem(THEME_PREFERENCE_KEY, nextTheme)
+    onThemeChange(nextTheme)
   }
 
   const handleApplicationUpdate = (updatedApplication: ApplicationConfig): void => {
