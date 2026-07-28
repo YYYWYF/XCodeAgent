@@ -4,12 +4,33 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from app.agents.main.task_preparer import _model_usage, prepare_build_tasks_with_main_agent
+from app.agents.main.task_preparer import (
+    _model_usage,
+    _task_preparation_prompt,
+    prepare_build_tasks_with_main_agent,
+)
 from app.services.build_task_planner import create_build_task_plan, tasks_from_build_task_plan
 from app.workspace.task_documents import render_build_task_dag_markdown
 
 
 class BuildTaskPlannerTests(unittest.TestCase):
+    def test_task_prompt_reserves_cross_unit_dependencies_for_unit_graph(self) -> None:
+        """任务模型不得手写跨 Unit 或 reusable task 依赖。"""
+
+        prompt = _task_preparation_prompt(
+            {"version": "1.0.0"},
+            {},
+            {
+                "target": {"type": "page", "id": "dashboard"},
+                "reusable_tasks_by_unit": {
+                    "app:api-client": ["shared-api-task"]
+                },
+            },
+        )
+
+        self.assertIn("same Unit only", prompt)
+        self.assertIn("do not copy its task ids into dependencies", prompt)
+
     def test_model_usage_accepts_null_provider_token_usage(self) -> None:
         """Provider 将 token_usage 返回为 null 时，诊断日志不得中断任务规划。"""
 
@@ -257,8 +278,13 @@ class BuildTaskPlannerTests(unittest.TestCase):
         )
         self.assertEqual(tasks["task:orders-page"]["source_refs"]["type"], "page_detail")
         self.assertEqual(
-            plan["build_units"]["data-source:orders"]["source_refs"]["data_source_detail"]["sha256"],
-            "d1",
+            plan["build_units"]["data-source:orders"]["source_refs"],
+            {
+                "type": "endpoint_detail",
+                "target": {"type": "page", "id": "orders"},
+                "endpoint_details": [],
+                "endpoint_ids": ["orders_api.list"],
+            },
         )
         self.assertTrue(plan["build_units"]["page:orders"]["input_fingerprint"])
 
