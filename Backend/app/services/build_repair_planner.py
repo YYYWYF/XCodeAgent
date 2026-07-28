@@ -429,26 +429,27 @@ def close_repaired_parent_tasks(
     tasks: list[dict[str, Any]],
     results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    completed_repair_by_parent = {
-        _parent_task_id(task)
+    successful_repair_status_by_parent = {
+        _parent_task_id(task): str(task.get("status"))
         for task in tasks
         if _is_repair_task(task)
-        and task.get("status") == "completed"
-        and _has_completed_result(task, results)
+        and task.get("status") in {"completed", "already_satisfied"}
+        and _has_successful_result(task, results)
         and _parent_task_id(task)
     }
-    if not completed_repair_by_parent:
+    if not successful_repair_status_by_parent:
         return tasks
 
     now = datetime.now(UTC).isoformat()
     return [
         {
             **task,
-            "status": "completed",
+            "status": successful_repair_status_by_parent[str(task.get("id"))],
             "completed_by_repair": True,
             "repair_closed_at": now,
         }
-        if task.get("id") in completed_repair_by_parent and task.get("status") == "failed"
+        if str(task.get("id")) in successful_repair_status_by_parent
+        and task.get("status") == "failed"
         else task
         for task in tasks
     ]
@@ -476,11 +477,8 @@ def _repair_task(
     acceptance = _string_list(parent_task.get("acceptance_criteria"))
     if not acceptance:
         acceptance = [f"原任务 {parent_id} 的验收条件重新满足。"]
-    raw_acceptance = _string_list(
-        raw_task.get("acceptance_criteria") or raw_task.get("acceptanceCriteria")
-    )
-    if raw_acceptance:
-        acceptance = raw_acceptance
+    # 修复计划不得把“必须产生写入”等实现动作提升为新验收条件；
+    # 修复任务始终复用原任务的用户可验证结果，避免已满足任务被迫制造重复变更。
     return {
         "id": repair_id,
         "task_id": repair_id,
@@ -594,10 +592,13 @@ def _parent_task_id(task: dict[str, Any]) -> str:
     return str(repairs.get("task_id") or source_ref.get("parent_task_id") or "")
 
 
-def _has_completed_result(task: dict[str, Any], results: list[dict[str, Any]]) -> bool:
+def _has_successful_result(task: dict[str, Any], results: list[dict[str, Any]]) -> bool:
+    """确认修复任务存在 completed 或 already_satisfied 的成功结果。"""
+
     task_id = str(task.get("id") or "")
     return any(
-        result.get("task_id") == task_id and result.get("status") == "completed"
+        result.get("task_id") == task_id
+        and result.get("status") in {"completed", "already_satisfied"}
         for result in results
     )
 

@@ -91,8 +91,8 @@ class BuildSchedulerTests(unittest.TestCase):
         evidence = {
             "target_files": ["frontend/src/pages/Dashboard/index.tsx"],
             "acceptance_criteria": [
-                {"criterion": "页面可编译", "status": "passed", "evidence": "pnpm build"},
-                {"criterion": "标题可见", "status": "passed", "evidence": "组件包含标题"},
+                {"criterion_index": 0, "status": "passed", "evidence": "pnpm build"},
+                {"criterion_index": 1, "status": "passed", "evidence": "组件包含标题"},
             ],
         }
         with tempfile.TemporaryDirectory() as workspace:

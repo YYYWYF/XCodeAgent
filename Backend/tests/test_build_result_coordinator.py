@@ -48,6 +48,43 @@ class BuildResultCoordinatorTests(unittest.TestCase):
         self.assertEqual(results[0]["status"], "failed")
         self.assertEqual(results[0]["failure_category"], "runner_protocol_error")
 
+    def test_malformed_task_results_cannot_fall_back_to_nested_evidence(self) -> None:
+        """损坏的顶层报告即使含合法内部对象，也必须成为协议失败。"""
+
+        note = """{
+          "task_results": [{
+            "task_id": "menu",
+            "status": "already_satisfied",
+            "satisfaction_evidence": {
+              "acceptance_criteria": [
+                {"criterion": "label 为中文"概览页"。", "status": "passed", "evidence": "line 17"},
+                {"criterion_index": 1, "status": "passed", "evidence": "line 18"}
+              ]
+            }
+          }]
+        }"""
+
+        results = create_agent_task_results(
+            [{"id": "menu", "owner": "frontend"}],
+            note,
+            require_structured=True,
+        )
+
+        self.assertEqual(results[0]["status"], "failed")
+        self.assertEqual(results[0]["failure_category"], "runner_protocol_error")
+
+    def test_required_structured_report_rejects_empty_agent_text(self) -> None:
+        """要求结构化协议时，无最终文本不得兼容成 completed。"""
+
+        results = create_agent_task_results(
+            [{"id": "menu", "owner": "frontend"}],
+            "Agent completed without a text message.",
+            require_structured=True,
+        )
+
+        self.assertEqual(results[0]["status"], "failed")
+        self.assertEqual(results[0]["failure_category"], "runner_protocol_error")
+
 
 if __name__ == "__main__":
     unittest.main()

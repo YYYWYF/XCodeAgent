@@ -110,7 +110,9 @@ def _frontend_generation_prompt(
         "`already_satisfied` only when every exact target file and acceptance criterion was "
         "verified without writing. Then include `satisfaction_evidence.target_files` with every "
         "exact target path and `satisfaction_evidence.acceptance_criteria` with one object per "
-        "criterion: `{criterion, status: \"passed\", evidence}`. A semantically similar file at "
+        "criterion: `{criterion_index: 0, status: \"passed\", evidence}`. Use the zero-based "
+        "criterion index from the approved task instead of copying the criterion text. A "
+        "semantically similar file at "
         "another path never satisfies a task. Use `failed` plus `failure_category` and "
         "`failure_reason` when implementation could not be completed. Do not use free-form text "
         "outside the final JSON object.\n\n"
@@ -195,4 +197,5 @@ def generate_frontend_with_deep_agent(
             "source": "frontend_deep_agent",
             "requiredSkillsLoaded": list(selected_skill_names or []),
         },
+        require_structured=True,
     )

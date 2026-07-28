@@ -36,17 +36,20 @@ def create_agent_task_results(
     tasks: list[dict[str, Any]],
     agent_note: str,
     executed_by: dict[str, Any] | None = None,
+    *,
+    require_structured: bool = False,
 ) -> list[dict[str, Any]]:
-    """解析 Agent 的结构化逐任务报告，并兼容旧版纯文本完成说明。"""
+    """解析 Agent 的逐任务报告；严格模式拒绝缺失或损坏的结构化终态。"""
 
     reports, is_structured = _structured_task_reports(agent_note)
+    structured_contract = is_structured or require_structured
     return [
         _task_result_from_report(
             task,
             reports.get(str(task.get("id") or "")),
             agent_note=agent_note,
             executed_by=executed_by,
-            missing_structured_report=is_structured
+            missing_structured_report=structured_contract
             and str(task.get("id") or "") not in reports,
         )
         for task in tasks
@@ -57,8 +60,15 @@ def _structured_task_reports(agent_note: str) -> tuple[dict[str, dict[str, Any]]
     """从最终 JSON 中提取以任务 ID 索引的结构化报告。"""
 
     payload = extract_json_object(agent_note)
+    contract_marker_present = (
+        '"task_results"' in agent_note or '"task_id"' in agent_note
+    )
     if not isinstance(payload, dict):
-        return {}, False
+        return {}, contract_marker_present
+    if contract_marker_present and "task_results" not in payload and not payload.get("task_id"):
+        # 顶层报告损坏时 extract_json_object 可能回退到内部 evidence 对象；
+        # 此时必须保留“结构化协议已尝试但无效”的事实，禁止降级成旧版 completed。
+        return {}, True
     raw_reports = payload.get("task_results")
     if not isinstance(raw_reports, list):
         raw_reports = [payload] if payload.get("task_id") else []

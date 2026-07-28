@@ -131,6 +131,44 @@ class MessageOnlyFinalAgent:
         yield "values", {"todos": []}
 
 
+class NamespacedFinalAgent:
+    """模拟 Deep Agent 最终文本仅出现在嵌套 namespace 的流形态。"""
+
+    def stream(self, payload, *, stream_mode, subgraphs):
+        """返回仅在模型子图中携带最终消息的测试流。"""
+
+        del payload, stream_mode, subgraphs
+        yield (), "values", {"todos": []}
+        yield ("model:terminal",), "messages", (
+            SimpleNamespace(
+                content='{"task_results":[]}',
+                tool_calls=[],
+                tool_call_chunks=[],
+            ),
+            {},
+        )
+        yield ("model:terminal",), "values", {
+            "messages": [SimpleNamespace(content='{"task_results":[]}')]
+        }
+
+
+class RootMessageAndChildStateAgent:
+    """模拟根消息与子图 values 同时存在，根终态必须优先。"""
+
+    def stream(self, payload, *, stream_mode, subgraphs):
+        """返回根消息先于子图状态结束的测试流。"""
+
+        del payload, stream_mode, subgraphs
+        yield "messages", (
+            SimpleNamespace(content="root result", tool_calls=[], tool_call_chunks=[]),
+            {},
+        )
+        yield "values", {"todos": []}
+        yield ("child",), "values", {
+            "messages": [SimpleNamespace(content="child result")]
+        }
+
+
 class BuildToolActivityTests(unittest.TestCase):
     def test_visible_workspace_tools_have_safe_chinese_messages(self) -> None:
         """七类工作区工具都应生成稳定、安全的一行中文状态。"""
@@ -247,6 +285,30 @@ class BuildToolActivityTests(unittest.TestCase):
         )
 
         self.assertEqual(result, '{"task_results":[]}')
+
+    def test_namespaced_final_message_is_preserved_when_root_values_have_no_messages(self) -> None:
+        """根 values 为空时必须从最浅层 Agent namespace 恢复最终报告。"""
+
+        result = invoke_agent_with_tool_activity(
+            NamespacedFinalAgent(),
+            {"messages": []},
+            workspace="/tmp/workspace",
+            on_tool_activity=lambda activity: None,
+        )
+
+        self.assertEqual(result, '{"task_results":[]}')
+
+    def test_root_message_wins_over_nested_state_text(self) -> None:
+        """子图晚到的文本不得覆盖主 Agent 已形成的最终报告。"""
+
+        result = invoke_agent_with_tool_activity(
+            RootMessageAndChildStateAgent(),
+            {"messages": []},
+            workspace="/tmp/workspace",
+            on_tool_activity=lambda activity: None,
+        )
+
+        self.assertEqual(result, "root result")
 
     def test_activity_matches_authorized_task_paths_or_falls_back_to_batch(self) -> None:
         """具体文件只归属命中任务，技能等范围外读取回退当前批次。"""

@@ -35,30 +35,33 @@ def invoke_agent_with_tool_activity(
     if on_tool_activity is None:
         return last_agent_text(agent.invoke(payload))
 
-    final_state: dict[str, Any] = {}
-    root_text_chunks: list[str] = []
+    streamed_states: dict[StreamNamespace, tuple[int, dict[str, Any]]] = {}
+    text_chunks: dict[StreamNamespace, list[str]] = {}
+    text_orders: dict[StreamNamespace, int] = {}
     calls: dict[str, ToolActivity] = {}
     chunk_args: dict[str, str] = {}
     chunk_ids: dict[tuple[StreamNamespace, int], str] = {}
-    for streamed in agent.stream(
-        payload,
-        stream_mode=["messages", "values"],
-        subgraphs=True,
+    for order, streamed in enumerate(
+        agent.stream(
+            payload,
+            stream_mode=["messages", "values"],
+            subgraphs=True,
+        )
     ):
         stream_part = _parse_stream_part(streamed)
         if stream_part is None:
             continue
         namespace, stream_mode, chunk = stream_part
-        if stream_mode == "values" and not namespace and isinstance(chunk, dict):
-            final_state = chunk
+        if stream_mode == "values" and isinstance(chunk, dict):
+            streamed_states[namespace] = (order, chunk)
             continue
         if stream_mode != "messages":
             continue
         message = chunk[0] if isinstance(chunk, tuple) and chunk else chunk
-        if not namespace:
-            root_text = _root_agent_text_chunk(message)
-            if root_text:
-                root_text_chunks.append(root_text)
+        agent_text = _agent_text_chunk(message)
+        if agent_text:
+            text_chunks.setdefault(namespace, []).append(agent_text)
+            text_orders[namespace] = order
         _consume_tool_message(
             message,
             namespace=namespace,
@@ -68,20 +71,57 @@ def invoke_agent_with_tool_activity(
             chunk_ids=chunk_ids,
             on_tool_activity=on_tool_activity,
         )
-    return (
-        optional_last_agent_text(final_state)
-        or "".join(root_text_chunks).strip()
-        or last_agent_text({})
-    )
+    return _streamed_agent_text(
+        streamed_states=streamed_states,
+        text_chunks=text_chunks,
+        text_orders=text_orders,
+    ) or last_agent_text({})
 
 
-def _root_agent_text_chunk(message: Any) -> str:
-    """提取根 Agent 的文本分片，排除工具结果以免把内部输出当作最终报告。"""
+def _agent_text_chunk(message: Any) -> str:
+    """提取 Agent 文本分片，并排除用户消息和工具结果。"""
 
     if getattr(message, "tool_call_id", None):
         return ""
+    message_type = str(getattr(message, "type", "") or "").lower()
+    class_name = type(message).__name__.lower()
+    if message_type in {"human", "tool"} or class_name.startswith(("human", "tool")):
+        return ""
     content = getattr(message, "content", "")
     return content if isinstance(content, str) else ""
+
+
+def _streamed_agent_text(
+    *,
+    streamed_states: dict[StreamNamespace, tuple[int, dict[str, Any]]],
+    text_chunks: dict[StreamNamespace, list[str]],
+    text_orders: dict[StreamNamespace, int],
+) -> str | None:
+    """按主图优先、浅层优先、最新优先选择流式 Agent 的最终文本。"""
+
+    root_state = streamed_states.get(())
+    if root_state and (text := optional_last_agent_text(root_state[1])):
+        return text
+    if root_chunks := text_chunks.get(()):
+        if text := "".join(root_chunks).strip():
+            return text
+
+    ranked_states = sorted(
+        (item for item in streamed_states.items() if item[0]),
+        key=lambda item: (len(item[0]), -item[1][0]),
+    )
+    for _, (_, state) in ranked_states:
+        if text := optional_last_agent_text(state):
+            return text
+
+    ranked_namespaces = sorted(
+        (namespace for namespace in text_chunks if namespace),
+        key=lambda namespace: (len(namespace), -text_orders.get(namespace, -1)),
+    )
+    for namespace in ranked_namespaces:
+        if text := "".join(text_chunks[namespace]).strip():
+            return text
+    return None
 
 
 def _parse_stream_part(streamed: Any) -> tuple[StreamNamespace, str, Any] | None:

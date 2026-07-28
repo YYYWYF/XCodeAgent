@@ -307,7 +307,7 @@ def _already_satisfied_evidence_error(
         if str(item).strip()
     ]
     raw_criteria = evidence.get("acceptance_criteria")
-    reports = (
+    reports_by_text = (
         {
             str(item.get("criterion")): item
             for item in raw_criteria
@@ -316,8 +316,19 @@ def _already_satisfied_evidence_error(
         if isinstance(raw_criteria, list)
         else {}
     )
-    for criterion in criteria:
-        report = reports.get(criterion)
+    reports_by_index = (
+        {
+            item["criterion_index"]: item
+            for item in raw_criteria
+            if isinstance(item, dict)
+            and isinstance(item.get("criterion_index"), int)
+            and not isinstance(item.get("criterion_index"), bool)
+        }
+        if isinstance(raw_criteria, list)
+        else {}
+    )
+    for index, criterion in enumerate(criteria):
+        report = reports_by_index.get(index) or reports_by_text.get(criterion)
         if (
             not report
             or report.get("status") != "passed"

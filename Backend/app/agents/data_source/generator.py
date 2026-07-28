@@ -36,7 +36,9 @@ def _data_source_generation_prompt(
         "approved task. Each result must include `task_id`, `status` (`completed`, "
         "`already_satisfied`, or `failed`), and `summary`. `already_satisfied` requires "
         "`satisfaction_evidence.target_files` for every exact target and one passed evidence "
-        "object for every exact acceptance criterion. A similar file at another path is not "
+        "object for every exact acceptance criterion. Each evidence object must use the "
+        "zero-based `criterion_index` from the approved task instead of copying criterion text. "
+        "A similar file at another path is not "
         "valid evidence. Failed work must include `failure_category` and `failure_reason`.\n\n"
         f"Approved data-source tasks:\n{json.dumps(tasks, ensure_ascii=False, indent=2)}\n\n"
         f"BuildTaskPlan summary:\n{json.dumps(build_task_plan.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
@@ -115,4 +117,5 @@ def generate_data_sources_with_deep_agent(
             "source": "data_source_deep_agent",
             "requiredSkillsLoaded": list(selected_skill_names or []),
         },
+        require_structured=True,
     )

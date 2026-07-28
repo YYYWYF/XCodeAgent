@@ -270,6 +270,165 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(route_task["targetFiles"], ["frontend/src/constants/menus.ts"])
         self.assertEqual(route_task["dependencies"], ["page-layout"])
         self.assertIn("key: 'Dashboard'", route_task["description"])
+        self.assertIn("path: 'page'", route_task["description"])
+
+    def test_scaffolded_menu_entry_marks_model_task_already_satisfied(self) -> None:
+        """脚手架已注册精确菜单项时，模型菜单任务不得再次进入写执行器。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "dashboard_page",
+                        "name": "概览页",
+                        "path": "/page/",
+                        "module_id": "dashboard",
+                    }
+                ]
+            },
+        }
+        build_context = {
+            "target": {"type": "page", "id": "dashboard_page"},
+            "page_detail": {"page_name": "概览页", "path": "/page/"},
+            "required_unit_ids": ["app:route-registry", "page:dashboard_page"],
+        }
+        base_plan = {
+            "schema_version": "build-dag.v2",
+            "build_units": {
+                "app:route-registry": {"id": "app:route-registry", "kind": "application"},
+                "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
+            },
+            "unit_graph": {
+                "nodes": ["app:route-registry", "page:dashboard_page"],
+                "edges": [
+                    {
+                        "from": "app:route-registry",
+                        "to": "page:dashboard_page",
+                        "type": "depends_on",
+                    }
+                ],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            page_file = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
+            page_file.parent.mkdir(parents=True)
+            page_file.write_text("export default function DashboardPage() {}", encoding="utf-8")
+            menus = Path(workspace) / "frontend/src/constants/menus.ts"
+            menus.parent.mkdir(parents=True)
+            menus.write_text(
+                """export const BIZ_MENUS = [{
+  path: 'firstLevel',
+  children: [{ path: 'page', name: '概览页', key: 'DashboardPage' }]
+}];""",
+                encoding="utf-8",
+            )
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "task-menu-register-dashboard",
+                            "unit_id": "app:route-registry",
+                            "owner": "frontend",
+                            "description": "追加 DashboardPage 概览页菜单项",
+                            "change_scope": [
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/constants/menus.ts",
+                                }
+                            ],
+                            "acceptance_criteria": ["DashboardPage 菜单项存在"],
+                        },
+                        {
+                            "id": "page-layout",
+                            "unit_id": "page:dashboard_page",
+                            "owner": "frontend",
+                            "description": "实现概览页",
+                            "dependencies": ["task-menu-register-dashboard"],
+                            "change_scope": [
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/pages/DashboardPage/index.tsx",
+                                }
+                            ],
+                        },
+                    ]
+                },
+                base_build_task_plan=base_plan,
+                build_context=build_context,
+                workspace_root=workspace,
+            )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        menu_task = tasks["task-menu-register-dashboard"]
+        self.assertEqual(menu_task["status"], "already_satisfied")
+        self.assertEqual(menu_task["satisfied_by"], "frontend-template-page-scaffold")
+        self.assertEqual(
+            menu_task["satisfaction_evidence"]["target_files"],
+            ["frontend/src/constants/menus.ts"],
+        )
+        self.assertEqual(tasks["page-layout"]["dependencies"], ["task-menu-register-dashboard"])
+        self.assertEqual(plan["summary"]["already_satisfied"], 1)
+        self.assertEqual(plan["summary"]["completed"], 1)
+
+    def test_scaffolded_menu_entry_prevents_deterministic_duplicate_task(self) -> None:
+        """模型未生成菜单任务时，已存在的脚手架菜单也不得被确定性重复补齐。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "dashboard_page",
+                        "name": "概览页",
+                        "path": "/page/",
+                    }
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            page_file = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
+            page_file.parent.mkdir(parents=True)
+            page_file.write_text("export default function DashboardPage() {}", encoding="utf-8")
+            menus = Path(workspace) / "frontend/src/constants/menus.ts"
+            menus.parent.mkdir(parents=True)
+            menus.write_text(
+                "export const BIZ_MENUS = [{ children: "
+                "[{ path: 'page', name: '概览页', key: 'DashboardPage' }] }];",
+                encoding="utf-8",
+            )
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "page-layout",
+                            "unit_id": "page:dashboard_page",
+                            "owner": "frontend",
+                            "description": "实现概览页",
+                            "change_scope": [
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/pages/DashboardPage/index.tsx",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                build_context={
+                    "target": {"type": "page", "id": "dashboard_page"},
+                    "page_detail": {"page_name": "概览页", "path": "/page/"},
+                    "required_unit_ids": ["page:dashboard_page"],
+                },
+                workspace_root=workspace,
+            )
+
+        self.assertEqual(
+            [task["id"] for task in tasks_from_build_task_plan(plan)],
+            ["page-layout"],
+        )
 
     def test_v2_markdown_renders_units_and_task_graph(self) -> None:
         plan = create_build_task_plan(

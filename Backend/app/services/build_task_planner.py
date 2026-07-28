@@ -19,7 +19,7 @@ FRONTEND_PAGE_ENTRY_PREFIX = "frontend/src/pages/"
 FRONTEND_MENU_PATH = "frontend/src/constants/menus.ts"
 
 
-TASK_STATUSES = ("pending", "running", "completed", "failed")
+TASK_STATUSES = ("pending", "running", "completed", "failed", "already_satisfied")
 
 
 def tasks_from_build_task_plan(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -416,9 +416,8 @@ def _ensure_page_route_registration_task(
     page_id = str(target.get("id") or "")
     if target.get("type") != "page" or not page_id or not workspace_root:
         return tasks
-    if not (Path(workspace_root).expanduser() / FRONTEND_MENU_PATH).is_file():
-        return tasks
-    if any(FRONTEND_MENU_PATH in task.get("targetFiles", []) for task in tasks):
+    menu_file = Path(workspace_root).expanduser() / FRONTEND_MENU_PATH
+    if not menu_file.is_file():
         return tasks
 
     page_unit_id = f"page:{page_id}"
@@ -443,6 +442,25 @@ def _ensure_page_route_registration_task(
     page_name = str(page.get("name") or build_context.get("page_detail", {}).get("page_name") or page_id)
     confirmed_path = str(page.get("path") or build_context.get("page_detail", {}).get("path") or "")
     menu_path = _menu_route_path(confirmed_path, page.get("module_id"), page_key)
+    menu_tasks = [
+        task for task in tasks if FRONTEND_MENU_PATH in task.get("targetFiles", [])
+    ]
+    if _menu_entry_exists(
+        menu_file,
+        page_key=page_key,
+        page_name=page_name,
+        menu_path=menu_path,
+    ):
+        return _mark_existing_menu_tasks_satisfied(
+            tasks,
+            menu_tasks=menu_tasks,
+            page_key=page_key,
+            page_name=page_name,
+            menu_path=menu_path,
+        )
+    if menu_tasks:
+        return tasks
+
     task_id = _unique_task_id(f"page:{page_id}:route-menu-registration", tasks)
     acceptance = [
         f"{FRONTEND_MENU_PATH} 的 BIZ_MENUS.firstLevel.children 包含页面“{page_name}”。",
@@ -490,6 +508,87 @@ def _ensure_page_route_registration_task(
     return [*tasks, route_task]
 
 
+def _menu_entry_exists(
+    menu_file: Path,
+    *,
+    page_key: str,
+    page_name: str,
+    menu_path: str,
+) -> bool:
+    """检查模板菜单中是否已存在与页面 key、名称和路径完全一致的条目。"""
+
+    try:
+        content = menu_file.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    for match in re.finditer(r"\{(?P<body>[^{}]*)\}", content, flags=re.DOTALL):
+        body = match.group("body")
+        properties = {
+            name: _typescript_string_property(body, name)
+            for name in ("path", "name", "key")
+        }
+        if properties == {"path": menu_path, "name": page_name, "key": page_key}:
+            return True
+    return False
+
+
+def _typescript_string_property(body: str, name: str) -> str:
+    """从简单 TypeScript 对象文本中读取一个字符串属性。"""
+
+    match = re.search(
+        rf"\b{re.escape(name)}\s*:\s*(['\"])(?P<value>[^'\"]*)\1",
+        body,
+    )
+    return match.group("value") if match else ""
+
+
+def _mark_existing_menu_tasks_satisfied(
+    tasks: list[dict[str, Any]],
+    *,
+    menu_tasks: list[dict[str, Any]],
+    page_key: str,
+    page_name: str,
+    menu_path: str,
+) -> list[dict[str, Any]]:
+    """把脚手架已完成的当前页面菜单任务标记为确定性已满足。"""
+
+    if not menu_tasks:
+        return tasks
+    matching_ids = {
+        str(task.get("id") or "")
+        for task in menu_tasks
+        if page_key in json.dumps(task, ensure_ascii=False)
+    }
+    if not matching_ids and len(menu_tasks) == 1:
+        matching_ids = {str(menu_tasks[0].get("id") or "")}
+    evidence_text = (
+        f"脚手架已在 {FRONTEND_MENU_PATH} 注册 "
+        f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}' }}。"
+    )
+    return [
+        {
+            **task,
+            "status": "already_satisfied",
+            "last_result_status": "already_satisfied",
+            "satisfaction_evidence": {
+                "target_files": [FRONTEND_MENU_PATH],
+                "acceptance_criteria": [
+                    {
+                        "criterion_index": index,
+                        "status": "passed",
+                        "evidence": evidence_text,
+                    }
+                    for index, _ in enumerate(task.get("acceptance_criteria", []))
+                ],
+            },
+            "satisfied_by": "frontend-template-page-scaffold",
+        }
+        if str(task.get("id") or "") in matching_ids
+        else task
+        for task in tasks
+    ]
+
+
 def _page_skeleton(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]:
     """从任务准备视图读取当前页面的名称、路径和模块标识。"""
 
@@ -506,17 +605,13 @@ def _page_skeleton(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]
 
 
 def _menu_route_path(confirmed_path: str, module_id: Any, page_key: str) -> str:
-    """把确认页面路径转换为模板 firstLevel.children 使用的无前导斜杠菜单路径。"""
+    """按前端脚手架规则把确认路径转换为菜单末级 path。"""
 
+    del module_id
     segments = [segment for segment in confirmed_path.strip().strip("/").split("/") if segment]
-    if segments and segments[0] == "page":
-        segments = segments[1:]
     if segments:
-        return "/".join(segments)
-    module_path = str(module_id or "").strip().strip("/")
-    if module_path:
-        return module_path.replace("_", "-")
-    return re.sub(r"(?<!^)(?=[A-Z])", "-", page_key).lower()
+        return segments[-1]
+    return page_key[:1].lower() + page_key[1:]
 
 
 def _unique_task_id(base_id: str, tasks: list[dict[str, Any]]) -> str:
@@ -660,7 +755,16 @@ def _task_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
         "data_source": len([task for task in tasks if task.get("owner") == "data_source"]),
         "pending": len([task for task in tasks if task.get("status") == "pending"]),
         "running": len([task for task in tasks if task.get("status") == "running"]),
-        "completed": len([task for task in tasks if task.get("status") == "completed"]),
+        "completed": len(
+            [
+                task
+                for task in tasks
+                if task.get("status") in {"completed", "already_satisfied"}
+            ]
+        ),
+        "already_satisfied": len(
+            [task for task in tasks if task.get("status") == "already_satisfied"]
+        ),
         "failed": len([task for task in tasks if task.get("status") == "failed"]),
     }
 
