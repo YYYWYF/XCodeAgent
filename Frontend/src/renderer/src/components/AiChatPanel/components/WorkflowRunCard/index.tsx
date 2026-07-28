@@ -20,6 +20,7 @@ import type {
   WorkflowRunPayload,
 } from "../../../../typings";
 import { cx } from "../../../../utils";
+import { pageAcceptanceContinuationMessage } from '../../workflowContinuation';
 import ConfirmationArtifact from './ConfirmationArtifact';
 import DetailReview from './DetailReview';
 import './WorkflowRunCard.less';
@@ -1007,12 +1008,15 @@ export function workflowOriginalRequest(workflow: WorkflowRunPayload): string {
   return typeof eventRequest === "string" ? eventRequest.trim() : "";
 }
 
+/** 根据当前结构化交互生成恢复 Workflow 所需的用户可见消息。 */
 // eslint-disable-next-line react-refresh/only-export-components
 export function buildClarificationContinuationMessage(
   workflow: WorkflowRunPayload,
   answers: ClarificationAnswers,
 ): string {
   const clarification = workflowClarification(workflow);
+  const acceptanceMessage = pageAcceptanceContinuationMessage(clarification, answers);
+  if (acceptanceMessage) return acceptanceMessage;
   if (clarification?.mode === 'detail_review' && answers.detail_review) {
     const submission = answers.detail_review;
     if (

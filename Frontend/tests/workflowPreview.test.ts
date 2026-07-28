@@ -22,6 +22,7 @@ import {
   withWorkflowExecutionStatus,
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
+import { pageAcceptanceContinuationMessage } from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
 import {
   createSessionIdentity,
   selectableEndpointSessionId,
@@ -72,6 +73,23 @@ test('实时成功 launch 会生成可去重的预览目标', () => {
 
   assert.equal(target?.url, 'http://127.0.0.1:3000')
   assert.equal(target?.key, 'thread-1:run-1:http://127.0.0.1:3000')
+})
+
+test('页面验收在问题列表为空时仍生成结构化继续消息', () => {
+  const workflow = previewWorkflow({
+    clarification: {
+      mode: 'page_acceptance',
+      status: 'requires_user_input',
+      questions: []
+    }
+  })
+
+  assert.equal(
+    pageAcceptanceContinuationMessage(workflow.summary.clarification, {
+      page_acceptance: 'accepted'
+    }),
+    '已完成页面预览，确认验收通过并完成计划。'
+  )
 })
 
 test('历史、失败、非启动阶段和缺少地址的 Workflow 不触发预览', () => {

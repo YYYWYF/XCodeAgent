@@ -241,24 +241,6 @@ def _backend_checks(
             required=False,
             on_progress=on_progress,
         ),
-        _missing_tool_result(
-            check_id="backend_static_check",
-            name="后端静态检查通过",
-            layer="backend",
-            language=None,
-            evidence="未发现后端静态检查工具配置，跳过后端静态检查。",
-            required=False,
-            on_progress=on_progress,
-        ),
-        _missing_tool_result(
-            check_id="backend_unit_tests",
-            name="后端单元测试通过",
-            layer="backend",
-            language=None,
-            evidence="未发现后端单元测试工具配置，跳过后端单元测试。",
-            required=False,
-            on_progress=on_progress,
-        ),
     ]
 
 

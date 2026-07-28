@@ -76,7 +76,7 @@ type UseWorkflowConversationParams = {
 type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
   error?: string
-  handleAcceptPreview: () => Promise<void>
+  handleAcceptPreview: () => Promise<boolean>
   handleAdjustPlan: (feedback: string) => Promise<void>
   handleEndPlan: (runId?: string) => Promise<void>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
@@ -103,7 +103,7 @@ type UseWorkflowConversationResult = {
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
-  ) => Promise<void>
+  ) => Promise<boolean>
   loading: boolean
   sessionRunStates: Record<string, SessionRunStatus>
   stopping: boolean
@@ -517,14 +517,15 @@ export function useWorkflowConversation({
     }
   }
 
+  /** 将结构化确认转换为可追踪的用户消息，并通过当前 AG-UI 会话恢复 Workflow。 */
   const handleSubmitClarification = async (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
-    if (!continuationMessage || loading || workspaceBusy) return
+    if (!continuationMessage || loading || workspaceBusy) return false
     const originalRequest = workflowOriginalRequest(workflow)
-    await sendWorkflowMessage(continuationMessage, {
+    return sendWorkflowMessage(continuationMessage, {
       clarificationAnswers: answers,
       originalRequest,
       resumeState: workflow,
@@ -619,9 +620,9 @@ export function useWorkflowConversation({
   }
 
   /** 通过结构化验收动作继续 acceptance 节点，禁止普通文本冒充验收通过。 */
-  const handleAcceptPreview = async (): Promise<void> => {
-    if (!activeWorkflow || loading || workspaceBusy) return
-    await handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
+  const handleAcceptPreview = async (): Promise<boolean> => {
+    if (!activeWorkflow || loading || workspaceBusy) return false
+    return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
   }
 
   /** 从当前可恢复节点重新执行失败或已停止的计划切片。 */

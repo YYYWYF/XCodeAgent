@@ -975,7 +975,7 @@ export default function AiChatPanel({
                   error={scopedExecution?.error?.message || error}
                   execution={scopedExecution}
                   mode={displayedPlanExecutionMode}
-                  onAccept={() => void handleAcceptPreview()}
+                  onAccept={handleAcceptPreview}
                   onAdjust={(feedback) => void handleAdjustPlan(feedback)}
                   onConfirmInteraction={handleConfirmPlanInteraction}
                   onEnd={() => void handleEndPlan(scopedExecution?.runId)}
