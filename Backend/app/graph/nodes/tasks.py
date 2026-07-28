@@ -557,7 +557,7 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
             build_context.get("direct_endpoint_details") or []
         ),
         "data_sources": [
-            source
+            _scoped_data_source(source, contract_ids)
             for source in project_plan.get("data_sources", [])
             if isinstance(source, dict) and str(source.get("id") or "") in source_ids
         ],
@@ -583,6 +583,21 @@ def _scoped_api_contract(contract: dict, endpoint_ids: set[str]) -> dict:
             endpoint
             for endpoint in contract.get("endpoints", [])
             if isinstance(endpoint, dict) and str(endpoint.get("id") or "") in endpoint_ids
+        ],
+    }
+
+
+def _scoped_data_source(source: dict, contract_ids: set[str]) -> dict:
+    """局部构建仅保留直接契约的 Schema 引用，避免产生范围外的悬空引用。"""
+
+    if not contract_ids:
+        return source
+    return {
+        **source,
+        "schema_refs": [
+            reference
+            for reference in source.get("schema_refs") or []
+            if str(reference).split("#", 1)[0] in contract_ids
         ],
     }
 
@@ -635,7 +650,7 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
         **project_plan,
         "frontend_pages": pages,
         "data_sources": [
-            source
+            _scoped_data_source(source, contract_ids)
             for source in project_plan.get("data_sources", [])
             if isinstance(source, dict) and str(source.get("id") or "") in source_ids
         ],

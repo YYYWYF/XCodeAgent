@@ -43,6 +43,7 @@ def _page_context(
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _endpoint_ids(page_detail)
     source_ids: list[str] = []
+    contract_ids: list[str] = []
     endpoint_unit_ids: list[str] = []
     for endpoint_id in endpoint_ids:
         endpoint = endpoint_index.get(endpoint_id)
@@ -55,6 +56,8 @@ def _page_context(
             source_ids.append(source_id)
         contract_id = str(endpoint.get("api_contract_id") or "")
         if contract_id:
+            if contract_id not in contract_ids:
+                contract_ids.append(contract_id)
             endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))
 
     endpoint_details = []
@@ -77,6 +80,7 @@ def _page_context(
         "endpoint_detail": None,
         "direct_endpoint_details": endpoint_details,
         "endpoint_ids": endpoint_ids,
+        "api_contract_ids": contract_ids,
         "data_source_ids": source_ids,
         "required_unit_ids": [
             "app:frontend-shell",

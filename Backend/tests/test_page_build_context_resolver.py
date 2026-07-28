@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.graph.nodes.tasks import _scoped_contract_validation_plan
+from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.build_context_resolver import resolve_target_build_context
 
 
@@ -94,6 +96,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
             )
 
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
+        self.assertEqual(context["api_contract_ids"], ["orders-api"])
         self.assertEqual(context["data_source_ids"], ["orders"])
         self.assertEqual(context["page_detail"]["pageId"], "orders")
         self.assertEqual(context["direct_endpoint_details"], [])
@@ -101,6 +104,55 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertIn("data-source:orders", context["required_unit_ids"])
         self.assertNotIn("data-source:customers", context["required_unit_ids"])
         self.assertIn("app:auth-guard", context["required_unit_ids"])
+
+    def test_page_context_limits_shared_data_source_to_direct_contract(self) -> None:
+        """同一数据源对应多个契约时，页面 scope 只投射直接依赖的契约。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan, plan_path = _project_plan(Path(workspace))
+            plan["api_contracts"][1]["data_source_id"] = "orders"
+            plan["api_contracts"][0]["schemas"] = {
+                "Order": {"type": "object", "properties": {}}
+            }
+            plan["api_contracts"][0]["endpoints"][0].update(
+                {
+                    "method": "GET",
+                    "path": "/orders",
+                    "response_schema_ref": "Order",
+                }
+            )
+            plan["data_sources"][0]["schema_refs"] = [
+                "orders-api#/schemas/Order",
+                "customers-api#/schemas/Customer",
+            ]
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+            validation_plan = _scoped_contract_validation_plan(plan, context)
+
+        self.assertEqual(context["data_source_ids"], ["orders"])
+        self.assertEqual(context["api_contract_ids"], ["orders-api"])
+        self.assertEqual(
+            [contract["id"] for contract in validation_plan["api_contracts"]],
+            ["orders-api"],
+        )
+        self.assertEqual(
+            validation_plan["data_sources"][0]["schema_refs"],
+            ["orders-api#/schemas/Order"],
+        )
+        self.assertEqual(
+            [
+                endpoint["id"]
+                for contract in validation_plan["api_contracts"]
+                for endpoint in contract["endpoints"]
+            ],
+            ["orders.list"],
+        )
+        self.assertEqual(validate_api_contract_consistency(validation_plan), [])
 
     def test_page_context_loads_confirmed_endpoint_detail_as_optional_context(self) -> None:
         """存在已确认 endpoint 详情时只把当前页面直接依赖的详情作为补充上下文。"""
