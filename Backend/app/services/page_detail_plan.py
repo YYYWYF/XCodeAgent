@@ -768,18 +768,21 @@ def _formal_endpoint_detail_fields(agent_detail_plan: dict[str, Any]) -> dict[st
         "acceptance_criteria",
         "risks",
     }
-    return {
+    result = {
         key: deepcopy(value)
         for key, value in agent_detail_plan.items()
         if key in allowed_fields
     }
+    if "data_origin" in result:
+        result["data_origin"] = normalize_endpoint_data_origin(result["data_origin"])
+    return result
 
 
 def _default_endpoint_data_origin(
     project_plan: dict[str, Any],
     data_source_id: str,
 ) -> dict[str, Any]:
-    """按 ProjectPlan 数据源声明生成三分支数据来源模板。"""
+    """按 ProjectPlan 数据源声明生成唯一有效来源的数据来源摘要。"""
 
     data_source = next(
         (
@@ -799,37 +802,224 @@ def _default_endpoint_data_origin(
     )
     return {
         "source_type": "third_party" if is_third_party else "mysql_existing" if is_mysql else "needs_user_confirmation",
-        "third_party": {
-            "applicable": is_third_party,
-            "return_format": data_source.get("return_format") if is_third_party else None,
-            "note": (
-                "本接口数据来源于第三方接口。"
-                if is_third_party
-                else "本接口数据来源不是第三方接口。"
-            ),
-        },
-        "mysql_existing": {
-            "applicable": is_mysql,
+        "effective_source": {
+            "kind": "third_party" if is_third_party else "mysql_existing" if is_mysql else "needs_user_confirmation",
             "data_source_id": data_source_id,
-            "tables": _text_items(
+            "database": "MySQL8" if is_mysql else None,
+            "tables": _normalize_origin_tables(
                 data_source.get("tables")
                 or data_source.get("entities")
                 or data_source.get("table_names")
             ),
-            "join_condition": "",
-            "field_mapping": {},
-            "query_description": "基于已声明的 MySQL 数据源读取并组装接口响应。",
+            "provider": data_source.get("provider") if is_third_party else None,
+            "endpoint": data_source.get("endpoint") if is_third_party else None,
+            "method": data_source.get("method") if is_third_party else None,
+            "description": (
+                "本接口数据来源于第三方接口。"
+                if is_third_party
+                else "基于已声明的 MySQL 数据源读取并组装接口响应。"
+                if is_mysql
+                else "数据来源需要用户确认。"
+            ),
         },
-        "mysql_new_table": {
-            "applicable": False,
-            "required_fields": [],
-            "ddl": "",
-            "note": "当前设计优先使用已声明数据源，暂不设计新增表。",
-        },
-        "open_questions": [
-            "请确认该接口的数据来源类型、表结构和字段映射是否准确。"
+        "field_mappings": [],
+        "differences": [
+            {
+                "field": "数据来源字段映射",
+                "expected": "API 契约响应字段均有明确来源",
+                "actual": "当前仅识别到 ProjectPlan 声明的数据源摘要",
+                "resolution": "在详细设计确认时补充或调整字段映射",
+            }
         ],
+        "notes": ["仅展示当前有效来源；无关来源分支已省略。"],
     }
+
+
+def normalize_endpoint_data_origin(value: Any) -> dict[str, Any]:
+    """把新旧数据来源结构统一折叠为唯一有效来源与差异项。"""
+
+    origin = value if isinstance(value, dict) else {}
+    source_type = str(origin.get("source_type") or "needs_user_confirmation")
+    effective_source = origin.get("effective_source")
+    if not isinstance(effective_source, dict):
+        effective_source = _effective_source_from_legacy_origin(origin, source_type)
+    normalized_source_type = str(
+        effective_source.get("kind") or source_type or "needs_user_confirmation"
+    )
+    return {
+        "source_type": normalized_source_type,
+        "effective_source": {
+            key: value
+            for key, value in {
+                "kind": normalized_source_type,
+                "data_source_id": effective_source.get("data_source_id"),
+                "database": effective_source.get("database"),
+                "tables": _normalize_origin_tables(effective_source.get("tables")),
+                "provider": effective_source.get("provider"),
+                "endpoint": effective_source.get("endpoint"),
+                "method": effective_source.get("method"),
+                "description": effective_source.get("description")
+                or effective_source.get("query_description")
+                or effective_source.get("note")
+                or "",
+            }.items()
+            if value not in (None, "", [])
+        },
+        "field_mappings": _normalize_field_mappings(
+            origin.get("field_mappings")
+            or effective_source.get("field_mapping")
+            or effective_source.get("mapping")
+            or []
+        ),
+        "differences": _normalize_origin_differences(
+            origin.get("differences"),
+            origin.get("open_questions"),
+        ),
+        "notes": _text_items(origin.get("notes")),
+    }
+
+
+def _effective_source_from_legacy_origin(
+    origin: dict[str, Any],
+    source_type: str,
+) -> dict[str, Any]:
+    """从旧版三分支数据来源中提取唯一有效分支。"""
+
+    candidate_types = [
+        source_type,
+        "third_party",
+        "mysql_existing",
+        "mysql_new_table",
+    ]
+    for candidate_type in candidate_types:
+        branch = origin.get(candidate_type)
+        if not isinstance(branch, dict):
+            continue
+        if branch.get("applicable") is False and candidate_type != source_type:
+            continue
+        return {
+            **branch,
+            "kind": candidate_type,
+            "description": branch.get("purpose")
+            or branch.get("query_description")
+            or branch.get("note")
+            or "",
+        }
+    return {
+        "kind": source_type or "needs_user_confirmation",
+        "description": "数据来源需要用户确认。",
+    }
+
+
+def _normalize_field_mappings(value: Any) -> list[dict[str, Any]]:
+    """把字段映射压缩为 target_field/source/rule 三列。"""
+
+    if isinstance(value, dict):
+        return [
+            {
+                "target_field": str(target),
+                "source": str(source),
+                "rule": "直接映射",
+            }
+            for target, source in value.items()
+            if str(target).strip() or str(source).strip()
+        ]
+    if not isinstance(value, list):
+        return []
+    mappings: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            mappings.append(
+                {
+                    "target_field": str(
+                        item.get("target_field") or item.get("field") or ""
+                    ),
+                    "source": str(item.get("source") or item.get("source_field") or ""),
+                    "rule": str(item.get("rule") or item.get("description") or ""),
+                }
+            )
+        elif str(item).strip():
+            mappings.append(
+                {
+                    "target_field": "",
+                    "source": str(item).strip(),
+                    "rule": "",
+                }
+            )
+    return [
+        mapping
+        for mapping in mappings
+        if mapping.get("target_field") or mapping.get("source") or mapping.get("rule")
+    ]
+
+
+def _normalize_origin_tables(value: Any) -> list[str]:
+    """把表结构摘要压缩为表名列表，避免把整段字段说明带进来源展示。"""
+
+    if not isinstance(value, list):
+        return []
+    tables: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            table_name = str(
+                item.get("table_name")
+                or item.get("name")
+                or item.get("id")
+                or ""
+            ).strip()
+            if table_name:
+                tables.append(table_name)
+        elif str(item).strip():
+            tables.append(str(item).strip())
+    return tables
+
+
+def _normalize_origin_differences(
+    differences: Any,
+    open_questions: Any,
+) -> list[dict[str, Any]]:
+    """把差异项和旧版问题列表统一成可展示的差异记录。"""
+
+    normalized: list[dict[str, Any]] = []
+    if isinstance(differences, list):
+        for item in differences:
+            if isinstance(item, dict):
+                normalized.append(
+                    {
+                        "field": str(item.get("field") or item.get("name") or "待确认项"),
+                        "expected": str(item.get("expected") or ""),
+                        "actual": str(item.get("actual") or ""),
+                        "resolution": str(
+                            item.get("resolution")
+                            or item.get("suggestion")
+                            or item.get("question")
+                            or ""
+                        ),
+                    }
+                )
+            elif str(item).strip():
+                normalized.append(
+                    {
+                        "field": "待确认项",
+                        "expected": "",
+                        "actual": "",
+                        "resolution": str(item).strip(),
+                    }
+                )
+    for question in _text_items(open_questions):
+        normalized.append(
+            {
+                "field": "待确认项",
+                "expected": "生成完整接口详细设计",
+                "actual": "数据库或字段映射存在缺口",
+                "resolution": question,
+            }
+        )
+    return [
+        item
+        for item in normalized
+        if item.get("field") or item.get("expected") or item.get("actual") or item.get("resolution")
+    ]
 
 
 def _rest_resource_name(path: str) -> str:

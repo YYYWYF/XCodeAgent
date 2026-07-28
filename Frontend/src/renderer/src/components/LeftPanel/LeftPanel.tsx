@@ -26,6 +26,8 @@ type Props = {
   onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPlanningArtifactsRefresh: () => void
+  previewBaseUrl: string
+  previewLaunchError: string
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
@@ -44,6 +46,8 @@ export default function LeftPanel({
   onApplicationUpdate,
   onApplicationLifecycleChange,
   onPlanningArtifactsRefresh,
+  previewBaseUrl,
+  previewLaunchError,
   onReturnWelcome,
   onThemeChange,
   theme
@@ -64,6 +68,8 @@ export default function LeftPanel({
             onApplicationUpdate={onApplicationUpdate}
             onApplicationLifecycleChange={onApplicationLifecycleChange}
             onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}
+            previewBaseUrl={previewBaseUrl}
+            previewLaunchError={previewLaunchError}
             onReturnWelcome={onReturnWelcome}
             onThemeChange={onThemeChange}
             theme={theme}

@@ -313,6 +313,207 @@
 .ant-btn.@{class-prefix}-detail-page-selector-action:focus { color: #fff !important; filter: brightness(1.06); }
 .ant-btn.@{class-prefix}-detail-page-selector-action:focus-visible { box-shadow: 0 0 0 3px var(--wb-accent-soft); }
 
+/* ---------- 页面模板选择 ---------- */
+.@{class-prefix}-detail-page-selector-template-section {
+  margin-bottom: 0;
+  border-color: color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border));
+}
+
+.@{class-prefix}-detail-page-selector-template-cards {
+  display: grid;
+  gap: 14px;
+  max-height: 440px;
+  overflow-y: auto;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+
+  &::-webkit-scrollbar { width: 5px; }
+  &::-webkit-scrollbar-thumb {
+    background: var(--wb-border);
+    border-radius: 8px;
+  }
+}
+
+.@{class-prefix}-detail-page-selector-template-card {
+  position: relative;
+  display: flex;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 12px;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+  flex-direction: column;
+
+  &:hover {
+    border-color: var(--wb-accent-border);
+    box-shadow: 0 6px 20px rgba(107, 60, 240, 0.16);
+    transform: translateY(-2px);
+  }
+
+  /* 选中态：主题色边框 + 柔和阴影 */
+  &.@{class-prefix}-selected {
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent);
+    box-shadow: 0 6px 20px rgba(107, 60, 240, 0.18);
+  }
+
+  &.@{class-prefix}-selected:hover {
+    border-color: var(--wb-accent);
+    box-shadow: 0 8px 26px rgba(107, 60, 240, 0.24);
+  }
+}
+
+/* 预览图区域 */
+.@{class-prefix}-detail-page-selector-template-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 150px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--wb-border) 30%, transparent);
+
+  > img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top center;
+    transition: transform 0.3s ease;
+  }
+
+  &:hover > img {
+    transform: scale(1.05);
+  }
+}
+
+/* ---------- 悬停遮罩 + 预览按钮 ---------- */
+.@{class-prefix}-detail-page-selector-template-thumb-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #fff;
+  font-size: 15px;
+  background: rgba(15, 8, 30, 0.52);
+  border-radius: 0;
+  cursor: zoom-in;
+  flex-direction: column;
+  backdrop-filter: blur(3px);
+  animation: xcodeagent-overlay-fade-in 0.15s ease;
+
+  span {
+    font-size: 13px;
+    letter-spacing: 0.04em;
+  }
+}
+
+@keyframes xcodeagent-overlay-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 移除旧的悬停放大提示 */
+.@{class-prefix}-detail-page-selector-template-thumb-zoom-hint {
+  display: none;
+}
+
+.@{class-prefix}-detail-page-selector-template-thumb-empty {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  color: var(--wb-text-secondary);
+  font-size: 28px;
+  place-items: center;
+  gap: 6px;
+}
+
+/* 卡片文字区 */
+.@{class-prefix}-detail-page-selector-template-card-body {
+  display: flex;
+  padding: 12px 14px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.@{class-prefix}-detail-page-selector-template-card-name {
+  display: block;
+  font-size: 14px;
+}
+
+/* 描述文字：两行省略 + 原生的title tooltip */
+.@{class-prefix}-detail-page-selector-template-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  cursor: default;
+}
+
+/* ---------- 接口区（有模板时移至下方整行） ---------- */
+.@{class-prefix}-detail-page-selector-endpoint-row {
+  margin-top: 18px;
+}
+
+.@{class-prefix}-detail-page-selector-endpoint-options {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+/* ---------- 模板预览图全屏放大浮层 ---------- */
+.@{class-prefix}-detail-page-selector-template-zoom-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 8, 30, 0.78);
+  backdrop-filter: blur(6px);
+  cursor: zoom-out;
+  animation: xcodeagent-zoom-fade-in 0.18s ease;
+}
+
+.@{class-prefix}-detail-page-selector-template-zoom-box {
+  display: flex;
+  max-width: 90vw;
+  max-height: 90vh;
+  padding: 16px;
+  background: color-mix(in srgb, var(--wb-canvas) 94%, transparent);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 16px;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5);
+  flex-direction: column;
+  gap: 12px;
+  cursor: default;
+
+  img {
+    display: block;
+    max-width: min(880px, 86vw);
+    max-height: 70vh;
+    border-radius: 10px;
+    object-fit: contain;
+  }
+}
+
+.@{class-prefix}-detail-page-selector-template-zoom-caption {
+  display: flex;
+  padding: 0 4px 4px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@keyframes xcodeagent-zoom-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @media (max-width: 760px) {
   .@{class-prefix}-detail-page-selector { padding: 16px; }
   .@{class-prefix}-detail-page-selector-panel { max-height: calc(100vh - 32px); padding: 24px; }

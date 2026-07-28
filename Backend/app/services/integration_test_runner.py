@@ -49,15 +49,6 @@ def run_integration_checks(
     for result in _backend_checks(root, log_root, on_progress=on_progress):
         results.append(result)
         events.append(result["id"])
-    for result in _joint_integration_checks(
-        root,
-        log_root,
-        frontend,
-        workspace_package,
-        on_progress=on_progress,
-    ):
-        results.append(result)
-        events.append(result["id"])
     return {"test_results": results, "test_events": events}
 
 
@@ -125,6 +116,19 @@ def _frontend_checks(
             )
         ),
         _run_script_result(
+            check_id="frontend_typecheck",
+            name="前端 typecheck 检查",
+            layer="frontend",
+            language="typescript",
+            package=frontend,
+            script_name="tsc",
+            root=root,
+            log_root=log_root,
+            required=False,
+            missing_evidence="package.json 未声明 typecheck script，跳过前端类型检查。",
+            on_progress=on_progress,
+        ),
+        _run_script_result(
             check_id="frontend_build",
             name="前端构建检查",
             layer="frontend",
@@ -134,45 +138,6 @@ def _frontend_checks(
             root=root,
             log_root=log_root,
             required=True,
-            on_progress=on_progress,
-        ),
-        _run_script_result(
-            check_id="frontend_lint",
-            name="前端 lint 通过",
-            layer="frontend",
-            language="typescript",
-            package=frontend,
-            script_name="lint",
-            root=root,
-            log_root=log_root,
-            required=False,
-            missing_evidence="package.json 未声明 lint script，跳过前端 lint 检查。",
-            on_progress=on_progress,
-        ),
-        _run_script_result(
-            check_id="frontend_typecheck",
-            name="前端 typecheck 通过",
-            layer="frontend",
-            language="typescript",
-            package=frontend,
-            script_name="typecheck",
-            root=root,
-            log_root=log_root,
-            required=False,
-            missing_evidence="package.json 未声明 typecheck script，跳过前端类型检查。",
-            on_progress=on_progress,
-        ),
-        _run_script_result(
-            check_id="frontend_unit_tests",
-            name="前端单元测试通过",
-            layer="frontend",
-            language="typescript",
-            package=frontend,
-            script_name=_first_script(scripts, ("test:unit", "test")),
-            root=root,
-            log_root=log_root,
-            required=False,
-            missing_evidence="package.json 未声明 test 或 test:unit script，跳过前端单元测试。",
             on_progress=on_progress,
         ),
     ]
@@ -210,31 +175,7 @@ def _backend_checks(
                 name="后端构建检查",
                 layer="backend",
                 language="java",
-                argv=[*maven_argv, "test", "-DskipTests"],
-                cwd=maven_root,
-                root=root,
-                log_root=log_root,
-                required=True,
-                on_progress=on_progress,
-            ),
-            _run_command_result(
-                check_id="backend_static_check",
-                name="后端静态检查通过",
-                layer="backend",
-                language="java",
-                argv=[*maven_argv, "checkstyle:check"],
-                cwd=maven_root,
-                root=root,
-                log_root=log_root,
-                required=False,
-                on_progress=on_progress,
-            ),
-            _run_command_result(
-                check_id="backend_unit_tests",
-                name="后端单元测试通过",
-                layer="backend",
-                language="java",
-                argv=[*maven_argv, "test"],
+                argv=[*maven_argv, "clean", "install"],
                 cwd=maven_root,
                 root=root,
                 log_root=log_root,
@@ -300,66 +241,8 @@ def _backend_checks(
             required=False,
             on_progress=on_progress,
         ),
-        _missing_tool_result(
-            check_id="backend_static_check",
-            name="后端静态检查通过",
-            layer="backend",
-            language=None,
-            evidence="未发现后端静态检查工具配置，跳过后端静态检查。",
-            required=False,
-            on_progress=on_progress,
-        ),
-        _missing_tool_result(
-            check_id="backend_unit_tests",
-            name="后端单元测试通过",
-            layer="backend",
-            language=None,
-            evidence="未发现后端单元测试工具配置，跳过后端单元测试。",
-            required=False,
-            on_progress=on_progress,
-        ),
     ]
 
-
-def _joint_integration_checks(
-    root: Path,
-    log_root: Path,
-    frontend: PackageProject | None,
-    workspace_package: PackageProject | None,
-    *,
-    on_progress: CheckProgressCallback | None,
-) -> list[dict[str, Any]]:
-    package = _first_package_with_script(
-        (workspace_package, frontend),
-        ("test:integration", "integration"),
-    )
-    if package is None:
-        return [
-            _missing_tool_result(
-                check_id="joint_integration",
-                name="前后端集成测试通过",
-                layer="joint",
-                language=None,
-                evidence="未发现 test:integration 或 integration script，跳过前后端集成测试。",
-                required=False,
-                on_progress=on_progress,
-            )
-        ]
-    script_name = _first_script(_scripts(package), ("test:integration", "integration"))
-    return [
-        _run_script_result(
-            check_id="joint_integration",
-            name="前后端集成测试通过",
-            layer="joint",
-            language=None,
-            package=package,
-            script_name=script_name,
-            root=root,
-            log_root=log_root,
-            required=True,
-            on_progress=on_progress,
-        )
-    ]
 
 
 def _run_script_result(

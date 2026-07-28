@@ -6,7 +6,7 @@ import {
   PauseCircleOutlined,
   RedoOutlined
 } from '@ant-design/icons'
-import { Button, Input, Popconfirm, Typography } from 'antd'
+import { Button, Input, Modal, Popconfirm, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { WorkbenchExecution } from '../../../../typings'
@@ -24,7 +24,7 @@ type Props = {
   execution?: WorkbenchExecution
   mode: Exclude<PlanExecutionMode, 'idle'>
   ownerPageId?: string
-  onAccept: () => void
+  onAccept: () => Promise<boolean>
   onAdjust: (feedback: string) => void
   onConfirmInteraction: (decision: 'reject' | 'once' | 'always') => void
   onEnd: () => void
@@ -51,11 +51,15 @@ export default function PlanExecutionDock({
   onViewPlan
 }: Props): ReactElement {
   const [adjusting, setAdjusting] = useState(false)
+  const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
+  const [accepting, setAccepting] = useState(false)
   const [feedback, setFeedback] = useState('')
   const pending = execution?.pendingInteraction
 
   useEffect(() => {
     setAdjusting(false)
+    setAcceptanceConfirmOpen(false)
+    setAccepting(false)
     setFeedback('')
   }, [mode, pending?.id])
 
@@ -64,6 +68,18 @@ export default function PlanExecutionDock({
     const normalized = feedback.trim()
     if (!normalized) return
     onAdjust(normalized)
+  }
+
+  /** 确认最终验收并等待 AG-UI 成功接收，失败时保留对话框供用户重试。 */
+  const confirmAcceptance = async (): Promise<void> => {
+    if (accepting) return
+    setAccepting(true)
+    try {
+      const succeeded = await onAccept()
+      if (succeeded) setAcceptanceConfirmOpen(false)
+    } finally {
+      setAccepting(false)
+    }
   }
 
   return (
@@ -132,7 +148,11 @@ export default function PlanExecutionDock({
               <>
                 <Button onClick={onOpenPreview}>全屏预览</Button>
                 <Button onClick={() => setAdjusting(true)}>提出修改</Button>
-                <Button icon={<CheckCircleOutlined />} onClick={onAccept} type="primary">
+                <Button
+                  icon={<CheckCircleOutlined />}
+                  onClick={() => setAcceptanceConfirmOpen(true)}
+                  type="primary"
+                >
                   验收通过并完成
                 </Button>
               </>
@@ -201,6 +221,23 @@ export default function PlanExecutionDock({
           </div>
         </div>
       ) : null}
+
+      <Modal
+        cancelButtonProps={{ disabled: accepting }}
+        cancelText="取消"
+        centered
+        closable={!accepting}
+        confirmLoading={accepting}
+        keyboard={!accepting}
+        maskClosable={!accepting}
+        okText="确认验收并完成"
+        onCancel={() => setAcceptanceConfirmOpen(false)}
+        onOk={() => void confirmAcceptance()}
+        open={acceptanceConfirmOpen}
+        title="确认验收并完成？"
+      >
+        <Text>确认后当前计划将完成并恢复自由输入，请确保已经检查页面预览。</Text>
+      </Modal>
     </section>
   )
 }

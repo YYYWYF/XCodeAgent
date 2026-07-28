@@ -149,6 +149,64 @@ class BuildRepairPlannerTests(unittest.TestCase):
         self.assertEqual(closed[0]["status"], "completed")
         self.assertTrue(closed[0]["completed_by_repair"])
 
+    def test_closes_parent_as_already_satisfied_when_repair_verifies_noop(self) -> None:
+        """修复任务确认目标已存在时，应关闭父任务而不是再次要求写入。"""
+
+        tasks = [
+            {"id": "menu", "status": "failed"},
+            {
+                "id": "repair:menu:test",
+                "kind": "repair",
+                "status": "already_satisfied",
+                "repairs": {"task_id": "menu"},
+            },
+        ]
+        closed = close_repaired_parent_tasks(
+            tasks=tasks,
+            results=[{"task_id": "repair:menu:test", "status": "already_satisfied"}],
+        )
+
+        self.assertEqual(closed[0]["status"], "already_satisfied")
+        self.assertTrue(closed[0]["completed_by_repair"])
+
+    def test_repair_task_keeps_parent_acceptance_and_rejects_forced_write_criterion(self) -> None:
+        """RepairPlanner 不得把“必须产生变更”扩展成新的验收条件。"""
+
+        task = {
+            "id": "menu",
+            "owner": "frontend",
+            "status": "failed",
+            "change_scope": [{"path": "frontend/src/constants/menus.ts"}],
+            "allowed_paths": ["frontend/src/constants/menus.ts"],
+            "acceptance_criteria": ["DashboardPage 菜单项存在"],
+        }
+        result = {
+            "task_id": "menu",
+            "status": "failed",
+            "failure_category": "no_file_changes",
+            "scheduler_decision": {"action": "repair", "reason": "no_file_changes"},
+        }
+
+        plan = create_build_failure_repair_plan(
+            failed_results=[result],
+            tasks=[task],
+            repair_planner=lambda repair_input: {
+                "decision": "repair",
+                "strategy": "检查并修复菜单",
+                "repair_tasks": [
+                    {
+                        "title": "修复菜单",
+                        "description": "确保菜单项存在",
+                        "acceptance_criteria": ["文件必须产生实际变更（非空写入）"],
+                    }
+                ],
+            },
+        )
+
+        acceptance = plan["tasks"][0]["acceptance_criteria"]
+        self.assertIn("DashboardPage 菜单项存在", acceptance)
+        self.assertNotIn("文件必须产生实际变更（非空写入）", acceptance)
+
 
 if __name__ == "__main__":
     unittest.main()

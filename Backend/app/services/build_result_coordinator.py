@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.services.build_task_planner import replace_build_task_plan_tasks
+from app.utils.model_output import extract_json_object
 
 
 def create_agent_task_result(
@@ -28,6 +29,104 @@ def create_agent_task_result(
             "source": "specialist_agent",
         },
         "change_request": None,
+    }
+
+
+def create_agent_task_results(
+    tasks: list[dict[str, Any]],
+    agent_note: str,
+    executed_by: dict[str, Any] | None = None,
+    *,
+    require_structured: bool = False,
+) -> list[dict[str, Any]]:
+    """解析 Agent 的逐任务报告；严格模式拒绝缺失或损坏的结构化终态。"""
+
+    reports, is_structured = _structured_task_reports(agent_note)
+    structured_contract = is_structured or require_structured
+    return [
+        _task_result_from_report(
+            task,
+            reports.get(str(task.get("id") or "")),
+            agent_note=agent_note,
+            executed_by=executed_by,
+            missing_structured_report=structured_contract
+            and str(task.get("id") or "") not in reports,
+        )
+        for task in tasks
+    ]
+
+
+def _structured_task_reports(agent_note: str) -> tuple[dict[str, dict[str, Any]], bool]:
+    """从最终 JSON 中提取以任务 ID 索引的结构化报告。"""
+
+    payload = extract_json_object(agent_note)
+    contract_marker_present = (
+        '"task_results"' in agent_note or '"task_id"' in agent_note
+    )
+    if not isinstance(payload, dict):
+        return {}, contract_marker_present
+    if contract_marker_present and "task_results" not in payload and not payload.get("task_id"):
+        # 顶层报告损坏时 extract_json_object 可能回退到内部 evidence 对象；
+        # 此时必须保留“结构化协议已尝试但无效”的事实，禁止降级成旧版 completed。
+        return {}, True
+    raw_reports = payload.get("task_results")
+    if not isinstance(raw_reports, list):
+        raw_reports = [payload] if payload.get("task_id") else []
+    return (
+        {
+            str(report.get("task_id")): report
+            for report in raw_reports
+            if isinstance(report, dict) and report.get("task_id")
+        },
+        "task_results" in payload or bool(payload.get("task_id")),
+    )
+
+
+def _task_result_from_report(
+    task: dict[str, Any],
+    report: dict[str, Any] | None,
+    *,
+    agent_note: str,
+    executed_by: dict[str, Any] | None,
+    missing_structured_report: bool = False,
+) -> dict[str, Any]:
+    """把单个结构化报告规整为调度器结果，未提供报告时保持旧版兼容。"""
+
+    if missing_structured_report:
+        report = {
+            "status": "failed",
+            "summary": "Agent structured response omitted this dispatched task.",
+            "failure_category": "runner_protocol_error",
+            "failure_reason": "Agent structured response omitted this dispatched task.",
+        }
+    if not isinstance(report, dict):
+        return create_agent_task_result(task, agent_note, executed_by)
+    status = str(report.get("status") or "").strip()
+    if status not in {"completed", "already_satisfied", "failed"}:
+        status = "failed"
+        failure_category = "runner_protocol_error"
+        failure_reason = f"Agent returned invalid task status: {report.get('status')!r}."
+    else:
+        failure_category = report.get("failure_category")
+        failure_reason = report.get("failure_reason")
+    summary = str(report.get("summary") or report.get("agent_note") or "").strip()
+    return {
+        "task_id": task["id"],
+        "owner": task["owner"],
+        "status": status,
+        "changed_files": [],
+        "commands": [],
+        "agent_note": summary or agent_note,
+        "satisfaction_evidence": report.get("satisfaction_evidence"),
+        "failure_category": failure_category,
+        "failure_reason": failure_reason,
+        "executed_by": executed_by
+        or {
+            "agent": task["owner"],
+            "mode": "live",
+            "source": "specialist_agent",
+        },
+        "change_request": report.get("change_request"),
     }
 
 

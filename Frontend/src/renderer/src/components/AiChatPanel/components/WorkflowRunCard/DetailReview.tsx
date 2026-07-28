@@ -331,8 +331,13 @@ function EndpointReviewEditor({
       <ReviewSummaryField
         disabled={disabled}
         label="二、数据来源"
-        onChange={(value) => onChange("data_origin", parseJsonObject(value))}
-        value={jsonSummary(
+        onChange={(value) =>
+          onChange(
+            "data_origin",
+            parseDataOriginSummary(value, target.data_origin),
+          )
+        }
+        value={dataOriginSummary(
           objectChange(changes.data_origin, target.data_origin),
         )}
       />
@@ -488,6 +493,125 @@ function parseJsonObject(value: string): Record<string, unknown> {
   } catch {
     return { note: value };
   }
+}
+
+// 把 endpoint 数据来源压缩为用户可读摘要，只展示唯一有效来源与差异项。
+function dataOriginSummary(value: unknown): string {
+  const origin = objectValue(value);
+  const effectiveSource = objectValue(origin.effective_source);
+  const fieldMappings = recordItems(origin.field_mappings);
+  const differences = recordItems(origin.differences);
+  const notes = stringItems(origin.notes);
+  return [
+    `来源类型：${String(origin.source_type || effectiveSource.kind || "待确认")}`,
+    `有效来源：${compactRecordSummary(effectiveSource) || "待确认"}`,
+    `字段映射：${fieldMappings.length > 0 ? fieldMappings.map(fieldMappingLine).join("；") : "无"}`,
+    `差异项：${differences.length > 0 ? differences.map(differenceLine).join("；") : "无"}`,
+    `备注：${notes.length > 0 ? notes.join("；") : "无"}`,
+  ].join("\n");
+}
+
+// 将用户编辑的数据来源摘要还原为后端可接收的精简结构。
+function parseDataOriginSummary(
+  value: string,
+  current: unknown,
+): Record<string, unknown> {
+  const origin = objectValue(current);
+  const next: Record<string, unknown> = {
+    ...origin,
+    effective_source: objectValue(origin.effective_source),
+  };
+  summaryLines(value).forEach((line) => {
+    if (line.startsWith("来源类型：")) {
+      next.source_type = line.replace("来源类型：", "").trim();
+      next.effective_source = {
+        ...objectValue(next.effective_source),
+        kind: next.source_type,
+      };
+      return;
+    }
+    if (line.startsWith("有效来源：")) {
+      next.effective_source = {
+        ...objectValue(next.effective_source),
+        description: line.replace("有效来源：", "").trim(),
+      };
+      return;
+    }
+    if (line.startsWith("字段映射：")) {
+      next.field_mappings = parseFieldMappingLines(line.replace("字段映射：", ""));
+      return;
+    }
+    if (line.startsWith("差异项：")) {
+      next.differences = parseDifferenceLines(line.replace("差异项：", ""));
+      return;
+    }
+    if (line.startsWith("备注：")) {
+      next.notes = splitInlineItems(line.replace("备注：", ""));
+    }
+  });
+  return next;
+}
+
+// 生成紧凑对象摘要，过滤空值避免展示无关字段。
+function compactRecordSummary(value: Record<string, unknown>): string {
+  return Object.entries(value)
+    .filter(([, item]) => {
+      if (Array.isArray(item)) return item.length > 0;
+      return item !== undefined && item !== null && String(item).trim() !== "";
+    })
+    .map(([key, item]) => {
+      const rendered = Array.isArray(item) ? item.join(", ") : String(item);
+      return `${key}=${rendered}`;
+    })
+    .join("，");
+}
+
+// 渲染单条字段映射，保持 target/source/rule 三列信息。
+function fieldMappingLine(value: Record<string, unknown>): string {
+  const target = String(value.target_field || value.field || "目标字段");
+  const source = String(value.source || value.source_field || "来源待确认");
+  const rule = String(value.rule || value.description || "");
+  return rule ? `${target} <- ${source}（${rule}）` : `${target} <- ${source}`;
+}
+
+// 渲染单条差异项，突出实际缺口与处理建议。
+function differenceLine(value: Record<string, unknown>): string {
+  const field = String(value.field || value.name || "待确认项");
+  const expected = value.expected ? `期望 ${String(value.expected)}` : "";
+  const actual = value.actual ? `实际 ${String(value.actual)}` : "";
+  const resolution = value.resolution ? `处理 ${String(value.resolution)}` : "";
+  return [field, expected, actual, resolution].filter(Boolean).join("，");
+}
+
+// 解析一行内用分号分隔的字段映射摘要。
+function parseFieldMappingLines(value: string): Array<Record<string, unknown>> {
+  return splitInlineItems(value).map((item) => {
+    const [target, sourceWithRule] = splitPair(item, "<-");
+    const [source, rule] = splitPair(sourceWithRule.replace(/[（）]/g, ""), "，");
+    return {
+      target_field: target,
+      source,
+      rule,
+    };
+  });
+}
+
+// 解析一行内用分号分隔的差异摘要。
+function parseDifferenceLines(value: string): Array<Record<string, unknown>> {
+  return splitInlineItems(value).map((item) => ({
+    field: item,
+    expected: "",
+    actual: "",
+    resolution: "",
+  }));
+}
+
+// 按中文或英文分号切分单行摘要，并忽略“无”。
+function splitInlineItems(value: string): string[] {
+  return value
+    .split(/；|;/)
+    .map((item) => item.trim())
+    .filter((item) => item && item !== "无");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

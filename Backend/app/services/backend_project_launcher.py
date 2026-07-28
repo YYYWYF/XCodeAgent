@@ -27,7 +27,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
     """按普通工作目录构建并启动 Java 后端，不依赖 LangGraph 状态。"""
 
     root = Path(workspace_path).expanduser().resolve()
-    backend_root = _find_backend_root(root)
+    backend_root = find_backend_project_root(root) or root / "backend"
     pom_path = backend_root / "pom.xml"
     runtime_root = root / ".xcodeagent" / "runtime" / "launch"
     if not pom_path.is_file():
@@ -72,17 +72,27 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
         )
 
 
-def _find_backend_root(root: Path) -> Path:
-    """显式识别 backend/Backend，避免依赖文件系统大小写折叠行为。"""
+def find_backend_project_root(workspace_path: str | Path) -> Path | None:
+    """识别工作区直属的 backend/Backend Maven 工程并保留真实目录大小写。"""
 
-    candidates = [
-        candidate
-        for candidate in (root / "backend", root / "Backend")
-        if candidate.is_dir()
-    ]
-    if len(candidates) == 1:
-        return candidates[0]
-    return root / "backend"
+    root = Path(workspace_path).expanduser().resolve()
+    try:
+        candidates = [
+            child
+            for child in root.iterdir()
+            if child.name in {"backend", "Backend"}
+            and child.is_dir()
+            and (child / "pom.xml").is_file()
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    # 大小写敏感文件系统可能同时存在两个目录，沿用 lowercase backend 优先级。
+    return next(
+        (candidate for candidate in candidates if candidate.name == "backend"),
+        candidates[0],
+    )
 
 
 def _find_maven_command(backend_root: Path) -> str | None:

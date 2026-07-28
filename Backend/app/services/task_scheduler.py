@@ -15,6 +15,7 @@ SHARED_FILE_MARKERS = (
     "Frontend/src/main/index.ts",
     "Frontend/src/preload/",
     "Frontend/src/renderer/src/typings/",
+    "frontend/src/constants/menus.ts",
 )
 
 PUBLIC_CONTRACT_MARKERS = (
@@ -79,10 +80,10 @@ def scheduler_capabilities() -> Dict[str, Any]:
         "executionModes": ["main-integrated", "subagent-plan-only", "subagent-direct-write"],
         "rules": [
             "inspect tasks run through a read-only scout.",
-            "shared, verify, public API, Electron IPC, AG-UI payload, and storage-format tasks stay main-integrated.",
+            "verify tasks stay main-integrated.",
             "Tasks without explicit targetFiles are plan-only.",
-            "Tasks with mutually exclusive targetFiles can run as subagent-direct-write.",
-            "Tasks touching the same targetFiles are serialized.",
+            "Every executable task with explicit targetFiles is dispatched to its bounded owner runner.",
+            "Shared, public-contract, and overlapping targetFiles are direct-write but serialized.",
         ],
     }
 
@@ -105,20 +106,20 @@ def _annotate_task(task: Dict[str, Any], *, target_counts: Dict[str, int]) -> Di
         agent = "verifier"
         reason = "最终验证必须在所有实现任务之后由主 Agent 统一判断。"
         can_parallel = False
-    elif task_type == "shared" or shared or public_contract:
-        mode = "main-integrated"
-        agent = "main-agent"
-        reason = "任务涉及共享文件或公共契约，保留主 Agent 集成所有权。"
-        can_parallel = False
     elif not target_files:
         mode = "subagent-plan-only"
         agent = _builder_for(task_type)
-        reason = "任务缺少明确 targetFiles，subagent 只返回方案。"
+        reason = "任务缺少明确 targetFiles，不能进入代码执行器。"
+        can_parallel = False
+    elif task_type == "shared" or shared or public_contract:
+        mode = "subagent-direct-write"
+        agent = _builder_for(task_type)
+        reason = "任务涉及共享文件或公共契约，由对应受限执行器串行写入。"
         can_parallel = False
     elif has_conflict:
-        mode = "subagent-plan-only"
+        mode = "subagent-direct-write"
         agent = _builder_for(task_type)
-        reason = "任务 targetFiles 与其他任务重叠，先返回方案再由主 Agent 集成。"
+        reason = "任务 targetFiles 与其他任务重叠，由同一受限执行器按依赖顺序串行写入。"
         can_parallel = False
     else:
         mode = "subagent-direct-write"

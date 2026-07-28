@@ -5,6 +5,7 @@ import { saveApplication } from '../components/Welcome/applicationService'
 import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
 import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlannings'
 import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
+import { useApplicationTheme } from '../hooks/useApplicationTheme'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { canOpenApplicationWorkbench } from '../service/applicationStorage'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
@@ -12,11 +13,6 @@ import WelcomePage from './WelcomePage'
 import WorkbenchPage from './WorkbenchPage'
 
 type ActiveSurface = 'welcome' | 'workbench'
-
-// 读取规划页需要沿用的欢迎页主题。
-function getEntryTheme(): 'dark' | 'light' {
-  return window.localStorage.getItem('xcode-agent-theme-preference') === 'dark' ? 'dark' : 'light'
-}
 
 /** 在应用根部持有不会随工作台显隐而销毁的会话运行管理器。 */
 export default function AppEntryPage(): JSX.Element {
@@ -29,6 +25,7 @@ export default function AppEntryPage(): JSX.Element {
 
 // 在欢迎页、多个全屏规划会话与应用工作台之间维护顶层导航。
 function AppEntryContent(): JSX.Element {
+  const { theme, setTheme } = useApplicationTheme()
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
   const { lifecycle: applicationLifecycle, mergeLifecycle: mergeApplicationLifecycle } =
@@ -45,7 +42,8 @@ function AppEntryContent(): JSX.Element {
   )
 
   const planningController = useActiveApplicationPlannings({
-    onOpenWorkbench: openWorkbench
+    onOpenWorkbench: openWorkbench,
+    theme
   })
 
   // 从工作台直接返回欢迎页，后台任务由保持挂载的工作台和规划页继续运行。
@@ -104,6 +102,7 @@ function AppEntryContent(): JSX.Element {
           onOpenApplication={handleOpenApplication}
           onOpenPlanning={planningController.showPlanning}
           onStartPlanning={planningController.startPlanning}
+          theme={theme}
         />
       </div>
 
@@ -125,7 +124,7 @@ function AppEntryContent(): JSX.Element {
           onWorkflowChange={(workflow) =>
             planningController.updatePlanningWorkflow(planning.application.id, workflow)
           }
-          theme={getEntryTheme()}
+          theme={theme}
           threadId={planning.threadId}
           visible={planningController.visiblePlanningId === planning.application.id}
         />
@@ -142,6 +141,8 @@ function AppEntryContent(): JSX.Element {
             applicationLifecycle={applicationLifecycle}
             onApplicationLifecycleChange={mergeApplicationLifecycle}
             onReturnWelcome={handleReturnWelcome}
+            onThemeChange={setTheme}
+            theme={theme}
           />
         </div>
       ) : null}

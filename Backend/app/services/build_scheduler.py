@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from fnmatch import fnmatch
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 TERMINAL_STATUSES = {"completed", "failed", "already_satisfied"}
@@ -38,7 +39,7 @@ def select_ready_build_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     completed = {
         task_id
         for task_id, task in tasks_by_id.items()
-        if task.get("status", RUNNABLE_STATUS) == "completed"
+        if task.get("status", RUNNABLE_STATUS) in {"completed", "already_satisfied"}
     }
     failed = {
         task_id
@@ -82,7 +83,10 @@ def select_ready_build_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         "errors": missing_dependency_errors,
         "is_idle": not selected,
         "is_complete": bool(tasks_by_id)
-        and all(task.get("status") == "completed" for task in tasks_by_id.values()),
+        and all(
+            task.get("status") in {"completed", "already_satisfied"}
+            for task in tasks_by_id.values()
+        ),
     }
 
 
@@ -139,7 +143,7 @@ def normalize_task_results(
             )
             continue
         status = str(result.get("status") or "").strip()
-        if status not in {"completed", "failed"}:
+        if status not in {"completed", "already_satisfied", "failed"}:
             normalized.append(
                 _protocol_failure(
                     task, f"Runner returned invalid status: {status or '<empty>'}."
@@ -180,41 +184,19 @@ def classify_task_result(result: dict[str, Any]) -> dict[str, str]:
     return {"action": "terminal_failure", "reason": category}
 
 
-def _is_already_satisfied(agent_note: str) -> bool:
-    """检测代理是否已正确识别任务已满足（无需修改文件）。
-
-    当代理报告 "Already satisfied" 或 "no changes required" 时，
-    表示文件已包含所需内容，不应被标记为失败。
-    """
-    if not agent_note:
-        return False
-    note_lower = agent_note.lower()
-    # 检测常见的"已满足"模式
-    satisfied_patterns = [
-        "already satisfied",
-        "no changes required",
-        "already done",
-        "already implemented",
-        "already exists",
-        "already in place",
-        "already correct",
-        "already complete",
-    ]
-    return any(pattern in note_lower for pattern in satisfied_patterns)
-
-
 def verify_task_file_changes(
     *,
     results: list[dict[str, Any]],
     code_change_set: dict[str, Any] | None,
     tasks: list[dict[str, Any]] | None = None,
+    workspace_root: str | None = None,
 ) -> list[dict[str, Any]]:
     """验证 agent 是否实际写入了文件。
 
     如果 code_change_set 为 None 或无文件变更，将 "completed" 结果改为
     "failed"（failure_category="no_file_changes"），避免幻影完成。
-    例外情况：如果代理正确识别任务已满足（already satisfied），则标记为
-    "already_satisfied" 状态而非失败。
+    例外情况：结构化 already_satisfied 结果必须同时通过精确目标路径、文件状态和
+    全量验收证据校验，不能依赖自然语言短语。
     否则将实际变更的文件路径填入 changed_files，替换 create_agent_task_result
     中硬编码的空列表。
     """
@@ -235,7 +217,8 @@ def verify_task_file_changes(
     verified: list[dict[str, Any]] = []
     for result in results:
         verified_result = dict(result)
-        if verified_result.get("status") != "completed":
+        status = verified_result.get("status")
+        if status not in {"completed", "already_satisfied"}:
             verified.append(verified_result)
             continue
 
@@ -244,43 +227,145 @@ def verify_task_file_changes(
         attributed_paths = [
             path for path in changed_paths if _path_matches_any(path, authorized_paths)
         ]
-        if not attributed_paths:
-            # 检查代理是否已正确识别任务已满足
-            agent_note = verified_result.get("agent_note", "")
-            if _is_already_satisfied(agent_note):
-                # 代理正确识别任务已满足，标记为已满足状态
-                verified_result["status"] = "already_satisfied"
+        if not attributed_paths and status == "already_satisfied":
+            evidence_error = _already_satisfied_evidence_error(
+                task,
+                verified_result.get("satisfaction_evidence"),
+                workspace_root=workspace_root,
+            )
+            if evidence_error is None:
                 verified_result["failure_category"] = None
-                original_note = verified_result.get("agent_note", "")
-                suffix = (
-                    "VERIFICATION PASSED: Agent correctly identified that the task "
-                    "was already satisfied. No file changes were needed."
-                )
-                verified_result["agent_note"] = (
-                    f"{original_note}\n\n{suffix}" if original_note else suffix
-                )
                 verified_result["scheduler_decision"] = classify_task_result(verified_result)
             else:
-                # 代理未正确识别，标记为失败
-                verified_result["status"] = "failed"
-                verified_result["failure_category"] = "no_file_changes"
-                verified_result["failure_reason"] = (
-                    "Agent 报告任务已完成，但未在工作区产生文件变更；"
-                    "请检查任务是否已实际实现，或在已满足时明确说明无需修改。"
+                _mark_no_file_changes_failure(
+                    verified_result,
+                    detail=f"already_satisfied evidence rejected: {evidence_error}",
                 )
-                original_note = verified_result.get("agent_note", "")
-                suffix = (
-                    "VERIFICATION FAILED: Agent reported completion but no files "
-                    "were written to the workspace. Expected file changes for this task."
-                )
-                verified_result["agent_note"] = (
-                    f"{original_note}\n\n{suffix}" if original_note else suffix
-                )
-                verified_result["scheduler_decision"] = classify_task_result(verified_result)
+        elif not attributed_paths:
+            _mark_no_file_changes_failure(verified_result)
         else:
+            verified_result["status"] = "completed"
             verified_result["changed_files"] = attributed_paths
+            verified_result["scheduler_decision"] = classify_task_result(verified_result)
         verified.append(verified_result)
     return verified
+
+
+def _mark_no_file_changes_failure(
+    result: dict[str, Any],
+    *,
+    detail: str | None = None,
+) -> None:
+    """把缺少实际文件变化或无效满足证据的结果原地转换为可修复失败。"""
+
+    result["status"] = "failed"
+    result["failure_category"] = "no_file_changes"
+    result["failure_reason"] = (
+        "Agent 报告任务已完成，但未在工作区产生文件变更；"
+        "已满足声明必须提供精确目标文件与全部验收点证据。"
+    )
+    original_note = str(result.get("agent_note") or "")
+    suffix = "VERIFICATION FAILED: Agent reported completion but no authorized files changed."
+    if detail:
+        suffix = f"{suffix} {detail}"
+    result["agent_note"] = f"{original_note}\n\n{suffix}" if original_note else suffix
+    result["scheduler_decision"] = classify_task_result(result)
+
+
+def _already_satisfied_evidence_error(
+    task: dict[str, Any],
+    evidence: Any,
+    *,
+    workspace_root: str | None,
+) -> str | None:
+    """确定性校验已满足声明中的精确目标、磁盘状态和逐条验收证据。"""
+
+    if not isinstance(evidence, dict):
+        return "missing satisfaction_evidence"
+    target_files = [
+        str(path).lstrip("./")
+        for path in task.get("targetFiles", [])
+        if str(path).strip()
+    ]
+    raw_reported_files = evidence.get("target_files")
+    if not isinstance(raw_reported_files, list):
+        return "satisfaction_evidence.target_files must be a list"
+    reported_files = {
+        str(path).lstrip("./")
+        for path in raw_reported_files
+        if str(path).strip()
+    }
+    if not target_files or any(path not in reported_files for path in target_files):
+        return "target_files do not cover every exact task target"
+    path_error = _target_state_error(task, target_files, workspace_root=workspace_root)
+    if path_error:
+        return path_error
+
+    criteria = [
+        str(item)
+        for item in task.get("acceptance_criteria") or task.get("acceptanceCriteria") or []
+        if str(item).strip()
+    ]
+    raw_criteria = evidence.get("acceptance_criteria")
+    reports_by_text = (
+        {
+            str(item.get("criterion")): item
+            for item in raw_criteria
+            if isinstance(item, dict) and item.get("criterion")
+        }
+        if isinstance(raw_criteria, list)
+        else {}
+    )
+    reports_by_index = (
+        {
+            item["criterion_index"]: item
+            for item in raw_criteria
+            if isinstance(item, dict)
+            and isinstance(item.get("criterion_index"), int)
+            and not isinstance(item.get("criterion_index"), bool)
+        }
+        if isinstance(raw_criteria, list)
+        else {}
+    )
+    for index, criterion in enumerate(criteria):
+        report = reports_by_index.get(index) or reports_by_text.get(criterion)
+        if (
+            not report
+            or report.get("status") != "passed"
+            or not str(report.get("evidence") or "").strip()
+        ):
+            return f"missing passed evidence for acceptance criterion: {criterion}"
+    return None
+
+
+def _target_state_error(
+    task: dict[str, Any],
+    target_files: list[str],
+    *,
+    workspace_root: str | None,
+) -> str | None:
+    """核对目标文件当前状态是否符合 add、modify 或 delete 操作。"""
+
+    if not workspace_root:
+        return "workspace root is unavailable"
+    root = Path(workspace_root).expanduser().resolve()
+    operations = {
+        str(change.get("path") or "").lstrip("./"): str(change.get("operation") or "modify")
+        for change in task.get("change_scope", [])
+        if isinstance(change, dict) and change.get("path")
+    }
+    for target in target_files:
+        if any(token in target for token in ("*", "?", "[")):
+            return f"target path is not exact: {target}"
+        resolved = (root / target).resolve()
+        if resolved != root and root not in resolved.parents:
+            return f"target escapes workspace: {target}"
+        operation = operations.get(target, "modify")
+        if operation == "delete" and resolved.exists():
+            return f"deleted target still exists: {target}"
+        if operation != "delete" and not resolved.is_file():
+            return f"required target file does not exist: {target}"
+    return None
 
 
 def _task_authorized_paths(task: dict[str, Any]) -> list[str]:
@@ -367,7 +452,7 @@ def resolve_execution_slice(
     reusable_task_ids = [
         str(task.get("id"))
         for task in sliced_tasks
-        if task.get("status") == "completed"
+        if task.get("status") in {"completed", "already_satisfied"}
     ]
     pending_task_ids = [
         str(task.get("id"))
@@ -387,7 +472,13 @@ def resolve_execution_slice(
             "pending": len(pending_task_ids),
             "running": len([task for task in sliced_tasks if task.get("status") == "running"]),
             "reused": len(reusable_task_ids),
-            "completed": len([task for task in sliced_tasks if task.get("status") == "completed"]),
+            "completed": len(
+                [
+                    task
+                    for task in sliced_tasks
+                    if task.get("status") in {"completed", "already_satisfied"}
+                ]
+            ),
             "failed": len([task for task in sliced_tasks if task.get("status") == "failed"]),
         },
     }

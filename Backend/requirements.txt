@@ -13,3 +13,4 @@ urllib3<2
 uvicorn[standard]>=0.30.0
 cryptography==46.0.3
 deepagents>=0.5.3
+pymysql>=1.1.0

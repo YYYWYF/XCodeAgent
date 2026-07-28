@@ -131,12 +131,13 @@ def _execute_ready_tasks(
             captured = capture_agent_file_changes(
                 workspace=workspace,
                 source_tool=source_tool,
-                action=lambda owner_tasks=owner_tasks, runner=runner: runner(
+                action=lambda owner_tasks=owner_tasks, runner=runner, owner=owner: runner(
                     project_plan=state["project_plan"],
                     build_task_plan=state["build_task_plan"],
                     tasks=owner_tasks,
                     workspace=workspace,
                     selected_skill_names=state.get("selected_skill_names"),
+                    **({"page_template": state.get("page_template")} if owner == "frontend" else {}),
                     on_tool_activity=(
                         (
                             lambda activity, owner_tasks=owner_tasks: on_batch_tool_activity(
@@ -174,6 +175,7 @@ def _execute_ready_tasks(
             results=normalized_results,
             code_change_set=captured.code_change_set,
             tasks=owner_tasks,
+            workspace_root=workspace,
         )
         all_results.extend(verified_results)
     return all_results, code_change_sets

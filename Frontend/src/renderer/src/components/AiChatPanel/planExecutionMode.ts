@@ -20,6 +20,42 @@ export type PagePlanExecutionContext = {
   dependencyLocked: boolean
 }
 
+export type WorkflowInteractionAvailability = 'active' | 'stale' | 'unavailable'
+
+/** 根据后端权威生命周期判断历史 Workflow 确认是否仍可提交。 */
+export function workflowInteractionAvailability(
+  workflow: WorkflowRunPayload,
+  lifecycle?: ApplicationLifecycle
+): WorkflowInteractionAvailability {
+  if (!lifecycle) return 'unavailable'
+
+  const snapshotExecution =
+    workflowLifecycleSnapshot(workflow)?.activeExecutions?.[workflow.runId]
+  const snapshotPending = snapshotExecution?.pendingInteraction
+  const activeExecution = lifecycle.activeExecutions[workflow.runId]
+  const activePending = activeExecution?.pendingInteraction
+  if (!snapshotPending || !activePending) return 'stale'
+
+  return activeExecution.status === 'awaiting_user' &&
+    activeExecution.threadId === workflow.threadId &&
+    !activePending.submittedAt &&
+    activePending.id === snapshotPending.id &&
+    activePending.basedOnRevision === snapshotPending.basedOnRevision
+    ? 'active'
+    : 'stale'
+}
+
+/** 从 Workflow 的兼容投影位置读取提交交互所依据的生命周期快照。 */
+function workflowLifecycleSnapshot(
+  workflow: WorkflowRunPayload
+): ApplicationLifecycle | undefined {
+  const candidates = [workflow.state?.lifecycle, workflow.result?.lifecycle]
+  return candidates.find(
+    (candidate): candidate is ApplicationLifecycle =>
+      Boolean(candidate && typeof candidate === 'object')
+  )
+}
+
 /** 从后端权威 execution 派生持久模式，停止中的短暂反馈由 Workflow 状态覆盖。 */
 export function derivePlanExecutionMode(execution?: WorkbenchExecution): PlanExecutionMode {
   if (!execution || execution.status === 'completed') return 'idle'
@@ -141,6 +177,43 @@ export function planExecutionContextForPage(
   return { execution: identityExecution, dependencyLocked: false }
 }
 
+/** 返回当前 endpoint 或当前 Workflow 自己的持久化执行状态。 */
+export function planExecutionContextForEndpoint(
+  lifecycle: ApplicationLifecycle | undefined,
+  apiContractId: string | undefined,
+  endpointId: string | undefined,
+  workflowIdentity?: { runId?: string; threadId?: string }
+): PagePlanExecutionContext {
+  const executions = Object.values(lifecycle?.activeExecutions || {})
+  const normalizedContractId = String(apiContractId || '').trim()
+  const normalizedEndpointId = String(endpointId || '').trim()
+  const resourceKey =
+    normalizedContractId && normalizedEndpointId
+      ? `endpoint:${normalizedContractId}:${normalizedEndpointId}`
+      : ''
+  const endpointExecution = executions.find(
+    (execution) => {
+      if (execution.scope !== 'endpoint') return false
+      const endpointResourceKeys = (execution.resourceKeys || []).filter((key) =>
+        key.startsWith('endpoint:')
+      )
+      if (resourceKey && endpointResourceKeys.length) {
+        return endpointResourceKeys.includes(resourceKey)
+      }
+      return execution.targetId === normalizedEndpointId
+    }
+  )
+  if (endpointExecution) {
+    return { execution: endpointExecution, dependencyLocked: false }
+  }
+  const identityExecution = executions.find(
+    (execution) =>
+      (Boolean(workflowIdentity?.runId) && execution.runId === workflowIdentity?.runId) ||
+      (Boolean(workflowIdentity?.threadId) && execution.threadId === workflowIdentity?.threadId)
+  )
+  return { execution: identityExecution, dependencyLocked: false }
+}
+
 /** 统一页面标识的历史前缀与分隔符，避免同一页面被误判为空闲。 */
 function normalizePageId(value?: string): string {
   return (value || '')
@@ -164,4 +237,33 @@ export function planExecutionPhaseLabel(phase?: string): string {
       finalize_project: '完成交付'
     }[phase || ''] || '执行页面计划'
   )
+}
+
+/** 判断当前计划模式是否允许显示节点级调试恢复入口。 */
+export function planExecutionShowsDebugResume(mode: PlanExecutionMode): boolean {
+  return mode === 'stopped' || mode === 'awaiting_plan_adjustment'
+}
+
+/** 从最近执行事件和生命周期阶段推断最安全的 Workflow 恢复节点。 */
+export function workflowResumeNode(
+  workflow: WorkflowRunPayload | undefined,
+  executionPhase?: string
+): string {
+  const supported = new Set([
+    'detail_confirmation',
+    'inspect_workspace',
+    'prepare_build_tasks',
+    'build',
+    'integration_test',
+    'launch_project',
+    'acceptance'
+  ])
+  const events = workflow?.events || []
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const nodeName = events[index].nodeName || events[index].node?.id
+    if (nodeName && supported.has(nodeName)) return nodeName
+  }
+  const phase = String(workflow?.summary.phase || '')
+  if (supported.has(phase)) return phase
+  return executionPhase && supported.has(executionPhase) ? executionPhase : 'build'
 }

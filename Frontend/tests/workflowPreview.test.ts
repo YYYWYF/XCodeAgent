@@ -1,17 +1,34 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  apiEndpointDisplayPath,
+  endpointDetailTargetKey,
+  pageDetailTargetKey,
+  requiresEndpointDetailDesign,
   requiresInitialDetailDesignSelection,
+  requiresPageDetailDesign,
+  sessionDetailTargetKey,
+  workflowDetailTargetKey,
   workflowFinalResultPresentation,
   workflowPreviewTarget
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
+  planExecutionContextForEndpoint,
   planExecutionContextForPage,
   planExecutionForPage,
-  withWorkflowExecutionStatus
+  planExecutionShowsDebugResume,
+  withWorkflowExecutionStatus,
+  workflowInteractionAvailability,
+  workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
+import { pageAcceptanceContinuationMessage } from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
+import {
+  createSessionIdentity,
+  selectableEndpointSessionId,
+  sessionIdentityMatchesTarget
+} from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import {
   APPLICATIONS_CHANGED_EVENT,
   canOpenApplicationWorkbench,
@@ -23,7 +40,11 @@ import {
   hasNonTerminalApplicationExecution,
   latestApplicationLifecycle
 } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
-import { navigatePreviewHistory } from '../src/renderer/src/utils/previewUrl'
+import {
+  composePreviewUrl,
+  navigatePreviewHistory,
+  previewOrigin
+} from '../src/renderer/src/utils/previewUrl'
 import type {
   ApplicationLifecycle,
   WorkbenchExecution,
@@ -55,6 +76,23 @@ test('实时成功 launch 会生成可去重的预览目标', () => {
   assert.equal(target?.key, 'thread-1:run-1:http://127.0.0.1:3000')
 })
 
+test('页面验收在问题列表为空时仍生成结构化继续消息', () => {
+  const workflow = previewWorkflow({
+    clarification: {
+      mode: 'page_acceptance',
+      status: 'requires_user_input',
+      questions: []
+    }
+  })
+
+  assert.equal(
+    pageAcceptanceContinuationMessage(workflow.summary.clarification, {
+      page_acceptance: 'accepted'
+    }),
+    '已完成页面预览，确认验收通过并完成计划。'
+  )
+})
+
 test('历史、失败、非启动阶段和缺少地址的 Workflow 不触发预览', () => {
   assert.equal(workflowPreviewTarget(previewWorkflow(), false), undefined)
   assert.equal(workflowPreviewTarget(previewWorkflow({ status: 'failed' }), true), undefined)
@@ -73,9 +111,167 @@ test('不同运行返回相同 URL 时仍生成不同的一次性目标', () => 
   assert.equal(first?.url, second?.url)
 })
 
+test('页面预览使用当前启动端口和所选页面路由拼接真实地址', () => {
+  assert.equal(previewOrigin('http://127.0.0.1:5178/old-path'), 'http://127.0.0.1:5178')
+  assert.equal(
+    composePreviewUrl('http://127.0.0.1:5178/old-path', '/orders/list'),
+    'http://127.0.0.1:5178/orders/list'
+  )
+  assert.equal(
+    composePreviewUrl('localhost:3000', 'dashboard'),
+    'http://localhost:3000/dashboard'
+  )
+})
+
+test('缺少有效前端启动地址时不生成页面预览 URL', () => {
+  assert.equal(composePreviewUrl('', '/orders'), '')
+  assert.equal(composePreviewUrl('not a url', '/orders'), '')
+})
+
 test('已有任一页面设计的工作区重新进入时不再显示首次设计挡板', () => {
   assert.equal(requiresInitialDetailDesignSelection(true), false)
   assert.equal(requiresInitialDetailDesignSelection(false), true)
+})
+
+test('页面设计挡板只由当前页面自己的落盘详情状态决定', () => {
+  const page = {
+    pageId: 'page-orders',
+    key: 'page-orders',
+    label: '订单页',
+    path: '/orders',
+    purpose: '管理订单',
+    designed: false,
+    hasDetailPlan: false
+  }
+
+  assert.equal(requiresPageDetailDesign(page), true)
+  assert.equal(requiresPageDetailDesign({ ...page, designed: true }), false)
+  assert.equal(requiresPageDetailDesign({ ...page, hasDetailPlan: true }), false)
+  assert.equal(requiresPageDetailDesign(undefined), false)
+})
+
+test('接口设计挡板只由当前 endpoint 自己的落盘详情状态决定', () => {
+  const endpoint = {
+    apiContractId: 'orders-api',
+    id: 'list-orders',
+    method: 'GET',
+    path: '/orders',
+    summary: '查询订单',
+    designed: false,
+    hasDetailPlan: false
+  }
+
+  assert.equal(requiresEndpointDetailDesign(endpoint), true)
+  assert.equal(requiresEndpointDetailDesign({ ...endpoint, designed: true }), false)
+  assert.equal(requiresEndpointDetailDesign({ ...endpoint, hasDetailPlan: true }), false)
+  assert.equal(requiresEndpointDetailDesign(undefined), false)
+})
+
+test('切换 API 时只恢复有消息的同接口会话', () => {
+  const sessions = [
+    {
+      id: 'page-running',
+      title: '概览页',
+      editorMode: 'frontend',
+      threadId: 'thread-page',
+      pageId: 'overview',
+      workspaceRoot: '/workspace',
+      messageCount: 2,
+      createdAt: 1,
+      updatedAt: 3
+    },
+    {
+      id: 'endpoint-empty',
+      title: 'GET /stats',
+      editorMode: 'frontend',
+      threadId: 'thread-endpoint-empty',
+      apiContractId: 'core-api',
+      endpointId: 'stats',
+      workspaceRoot: '/workspace',
+      messageCount: 0,
+      createdAt: 1,
+      updatedAt: 2
+    }
+  ]
+
+  assert.equal(selectableEndpointSessionId(sessions, 'core-api', 'stats'), undefined)
+  assert.equal(
+    selectableEndpointSessionId(
+      [...sessions, { ...sessions[1], id: 'endpoint-ready', messageCount: 1 }],
+      ' core-api ',
+      ' stats '
+    ),
+    'endpoint-ready'
+  )
+})
+
+test('页面运行态不会在切换到 API 后被复用为接口设计进度', () => {
+  const pageIdentity = createSessionIdentity({
+    workspaceRoot: '/workspace',
+    editorMode: 'frontend',
+    sessionId: 'page-session',
+    threadId: 'page-thread',
+    pageId: 'overview'
+  })
+  const endpointIdentity = createSessionIdentity({
+    workspaceRoot: '/workspace',
+    editorMode: 'frontend',
+    sessionId: 'endpoint-session',
+    threadId: 'endpoint-thread',
+    apiContractId: 'core-api',
+    endpointId: 'stats'
+  })
+
+  assert.equal(
+    sessionIdentityMatchesTarget(pageIdentity, {
+      apiContractId: 'core-api',
+      endpointId: 'stats'
+    }),
+    false
+  )
+  assert.equal(
+    sessionIdentityMatchesTarget(endpointIdentity, {
+      apiContractId: 'core-api',
+      endpointId: 'stats'
+    }),
+    true
+  )
+  assert.equal(sessionIdentityMatchesTarget(pageIdentity, { pageId: 'overview' }), true)
+  assert.equal(sessionIdentityMatchesTarget(endpointIdentity, { pageId: 'overview' }), false)
+})
+
+test('页面、接口、会话和 Workflow 使用一致的详情目标键', () => {
+  assert.equal(pageDetailTargetKey('page-orders'), 'page:page-orders')
+  assert.equal(
+    endpointDetailTargetKey('orders-api', 'list-orders'),
+    'endpoint:orders-api:list-orders'
+  )
+  assert.equal(
+    sessionDetailTargetKey({ pageId: 'page-orders' }),
+    'page:page-orders'
+  )
+  assert.equal(
+    workflowDetailTargetKey({
+      state: { selectedPageId: 'page-orders' }
+    }),
+    'page:page-orders'
+  )
+  assert.equal(
+    workflowDetailTargetKey({
+      result: {
+        selected_api_contract_id: 'orders-api',
+        selected_endpoint_id: 'list-orders'
+      }
+    }),
+    'endpoint:orders-api:list-orders'
+  )
+})
+
+test('API 大纲只移除路径边界完整匹配的 base path', () => {
+  assert.equal(apiEndpointDisplayPath('/api/orders/list', '/api/orders'), '/list')
+  assert.equal(apiEndpointDisplayPath('/api/orders', '/api/orders/'), '/')
+  assert.equal(apiEndpointDisplayPath('/api/orders-v2/list', '/api/orders'), '/api/orders-v2/list')
+  assert.equal(apiEndpointDisplayPath('/health', '/'), '/health')
 })
 
 test('最终结果标题区分成功和失败 Workflow', () => {
@@ -220,6 +416,81 @@ function pageExecution(overrides: Partial<WorkbenchExecution> = {}): WorkbenchEx
   }
 }
 
+/** 构造等待页面设计确认的运行及其 Workflow 快照。 */
+function pendingInteractionWorkflow(): {
+  execution: WorkbenchExecution
+  lifecycle: ApplicationLifecycle
+  workflow: WorkflowRunPayload
+} {
+  const execution = pageExecution({
+    phase: 'detail_confirmation',
+    status: 'awaiting_user',
+    pendingInteraction: {
+      id: 'interaction-design-1',
+      type: 'page_design_confirmation',
+      basedOnRevision: 3,
+      payload: {},
+      artifactRefs: [],
+      createdAt: '2026-07-23T00:00:00Z',
+      submittedAt: null
+    }
+  })
+  const lifecycle = planLifecycle(execution)
+  lifecycle.revision = 3
+  const workflow = previewWorkflow(
+    {
+      phase: 'detail_confirmation',
+      status: 'requires_user_input',
+      lifecycle
+    },
+    execution.runId
+  )
+  workflow.threadId = execution.threadId
+  workflow.state = { lifecycle }
+  return { execution, lifecycle, workflow }
+}
+
+test('只有匹配权威生命周期的待确认交互保持可提交', () => {
+  const { lifecycle, workflow } = pendingInteractionWorkflow()
+
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
+  assert.equal(workflowInteractionAvailability(workflow, undefined), 'unavailable')
+})
+
+test('确认运行被构建运行替换后历史确认卡片失效', () => {
+  const { workflow } = pendingInteractionWorkflow()
+  const stoppedBuild = planLifecycle(
+    pageExecution({
+      runId: 'run-build',
+      phase: 'build',
+      status: 'stopped',
+      pendingInteraction: undefined
+    })
+  )
+
+  assert.equal(workflowInteractionAvailability(workflow, stoppedBuild), 'stale')
+})
+
+test('已提交或 revision 不匹配的待处理交互不可重复提交', () => {
+  const { execution, lifecycle, workflow } = pendingInteractionWorkflow()
+  const submitted = planLifecycle({
+    ...execution,
+    pendingInteraction: execution.pendingInteraction
+      ? { ...execution.pendingInteraction, submittedAt: '2026-07-23T00:01:00Z' }
+      : undefined
+  })
+  const revised = planLifecycle({
+    ...execution,
+    pendingInteraction: execution.pendingInteraction
+      ? { ...execution.pendingInteraction, basedOnRevision: 4 }
+      : undefined
+  })
+
+  assert.equal(workflowInteractionAvailability(workflow, submitted), 'stale')
+  assert.equal(workflowInteractionAvailability(workflow, revised), 'stale')
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
+})
+
 test('代码生成和集成测试阶段始终保持计划控制模式', () => {
   assert.equal(derivePlanExecutionMode(pageExecution({ phase: 'build' })), 'running')
   assert.equal(derivePlanExecutionMode(pageExecution({ phase: 'integration_test' })), 'running')
@@ -251,6 +522,25 @@ test('本地停止状态优先于尚未刷新的运行中生命周期快照', ()
 
   assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopping', true), 'stopping')
   assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopped', false), 'stopped')
+})
+
+test('暂停后的调试窗口默认选中最近完成的可恢复节点', () => {
+  const workflow = previewWorkflow()
+  workflow.events = [
+    { type: 'workflow.node.completed', timestamp: '', nodeName: 'prepare_build_tasks' },
+    { type: 'workflow.run.finished', timestamp: '', nodeName: 'handle_failure' }
+  ]
+
+  assert.equal(workflowResumeNode(workflow, 'build'), 'prepare_build_tasks')
+  assert.equal(workflowResumeNode(undefined, 'integration_test'), 'integration_test')
+})
+
+test('节点调试恢复入口覆盖两种可恢复暂停态但不绕过结构化确认', () => {
+  assert.equal(planExecutionShowsDebugResume('stopped'), true)
+  assert.equal(planExecutionShowsDebugResume('awaiting_plan_adjustment'), true)
+  assert.equal(planExecutionShowsDebugResume('awaiting_authorization'), false)
+  assert.equal(planExecutionShowsDebugResume('awaiting_repair_confirmation'), false)
+  assert.equal(planExecutionShowsDebugResume('awaiting_acceptance'), false)
 })
 
 test('乐观停止只更新目标 execution，不覆盖创建生命周期', () => {
@@ -285,6 +575,32 @@ test('恢复运行按 Workflow 身份兜底且不会匹配另一个页面', () =
   assert.equal(
     planExecutionForPage(lifecycle, 'orders', { threadId: 'thread-orders' })?.runId,
     'run-orders'
+  )
+})
+
+test('接口执行按复合资源键恢复且不会串到同名 endpoint', () => {
+  const execution = pageExecution({
+    scope: 'endpoint',
+    targetId: 'list-orders',
+    resourceKeys: ['endpoint:orders-api:list-orders']
+  })
+  const lifecycle = planLifecycle(execution)
+
+  assert.equal(
+    planExecutionContextForEndpoint(
+      lifecycle,
+      'orders-api',
+      'list-orders'
+    ).execution?.runId,
+    execution.runId
+  )
+  assert.equal(
+    planExecutionContextForEndpoint(
+      lifecycle,
+      'customers-api',
+      'list-orders'
+    ).execution,
+    undefined
   )
 })
 

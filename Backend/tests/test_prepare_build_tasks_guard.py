@@ -154,10 +154,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         )
         executable_details = prepared_project_plan["executable_details"]
         self.assertEqual([detail["pageId"] for detail in executable_details["page_detail_plans"]], ["orders"])
-        self.assertEqual(
-            [detail["data_source_id"] for detail in executable_details["data_source_detail_plans"]],
-            ["orders"],
-        )
+        self.assertEqual(executable_details["endpoint_detail_plans"], [])
         self.assertEqual(
             [source["id"] for source in executable_details["data_sources"]],
             ["orders"],
@@ -346,20 +343,19 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "data_source_detail_plans": [{"data_source_id": "orders"}],
         }
         base_plan = ensure_build_unit_skeleton(project_plan, {}, {})
-        base_plan["task_registry"] = {}
-        base_plan["task_graph"] = {"topological_order": []}
-        base_plan["build_units"]["app:api-client"]["task_ids"] = [
-            "shared-api-client-task"
-        ]
-        base_plan["task_registry"]["shared-api-client-task"] = {
-            "id": "shared-api-client-task",
-            "unit_id": "app:api-client",
-            "owner": "frontend",
-            "status": "completed",
-            "dependencies": [],
-            "change_scope": [],
-        }
-        base_plan["task_graph"]["topological_order"].append("shared-api-client-task")
+        base_plan = replace_build_task_plan_tasks(
+            base_plan,
+            [
+                {
+                    "id": "shared-api-client-task",
+                    "unit_id": "app:api-client",
+                    "owner": "frontend",
+                    "status": "completed",
+                    "dependencies": [],
+                    "change_scope": [],
+                }
+            ],
+        )
         agent_plan = create_build_task_plan(
             project_plan,
             agent_plan={

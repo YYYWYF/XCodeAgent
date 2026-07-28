@@ -40,6 +40,11 @@ export type SendWorkflowMessageOptions = {
   planControlAction?: 'stop' | 'end'
   planControlRunId?: string
   resumeExecutionRunId?: string
+  pageTemplate?: {
+    id?: string
+    name?: string
+    sourcePath?: string
+  }
 }
 
 /** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能、控制和恢复字段。 */
@@ -70,7 +75,8 @@ export function buildWorkflowForwardedProps(
     workflowScope: options.workflowScope,
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
-    resumeExecutionRunId: options.resumeExecutionRunId
+    resumeExecutionRunId: options.resumeExecutionRunId,
+    pageTemplate: options.pageTemplate
   }
 }
 

@@ -29,6 +29,7 @@ import type {
   DevelopmentPlanningPageOption
 } from '../../../../typings'
 import { cx } from '../../../../utils'
+import { apiEndpointDisplayPath } from '../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
 import PageSessionHistory from './PageSessionHistory'
@@ -695,7 +696,11 @@ export default function SessionSidebar({
                               const endpointId = endpoint.id || String(endpointIndex + 1)
                               const apiContractId = endpoint.apiContractId || contract.id
                               const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
-                              const endpointLabel = `${endpoint.method} ${endpoint.path}`.trim()
+                              const displayPath = apiEndpointDisplayPath(
+                                endpoint.path,
+                                contract.label
+                              )
+                              const endpointLabel = `${endpoint.method} ${displayPath}`.trim()
                               const endpointDesigned = Boolean(
                                 endpoint.designed || endpoint.hasDetailPlan
                               )
@@ -729,7 +734,7 @@ export default function SessionSidebar({
                                     >
                                       {endpoint.method}
                                     </span>
-                                    <code>{endpoint.path}</code>
+                                    <code>{displayPath}</code>
                                     <span
                                       className={cx(
                                         'outline-design-status',
@@ -739,28 +744,30 @@ export default function SessionSidebar({
                                       {endpointDesigned ? '已设计' : '待设计'}
                                     </span>
                                   </button>
-                                  {selectedApiEndpointKey === endpointKey ? (
-                                    <PageSessionHistory
-                                      activeSessionId={activeSessionId}
-                                      deletingSessionId={deletingSessionId}
-                                      deleteTitle="删除这个接口会话？"
-                                      emptyDescription="当前接口暂无历史会话"
-                                      loadingSessions={loadingSessions}
-                                      onCreateSession={() =>
-                                        onCreateEndpointSession(
-                                          apiContractId,
-                                          endpointId,
-                                          endpointLabel
-                                        )
-                                      }
-                                      onDeleteSession={onDeleteSession}
-                                      onOpenSession={onOpenSession}
-                                      sessionError={sessionError}
-                                      sessionRunStates={sessionRunStates}
-                                      sessions={endpointSessions}
-                                      targetLabel={endpointLabel}
-                                    />
-                                  ) : null}
+                                  <PageSessionHistory
+                                    activeSessionId={activeSessionId}
+                                    deletingSessionId={deletingSessionId}
+                                    deleteTitle="删除这个接口会话？"
+                                    emptyDescription="当前接口暂无历史会话"
+                                    loadingSessions={loadingSessions}
+                                    onCreateSession={() =>
+                                      onCreateEndpointSession(
+                                        apiContractId,
+                                        endpointId,
+                                        endpointLabel
+                                      )
+                                    }
+                                    onDeleteSession={onDeleteSession}
+                                    onOpenSession={onOpenSession}
+                                    sessionError={
+                                      selectedApiEndpointKey === endpointKey
+                                        ? sessionError
+                                        : undefined
+                                    }
+                                    sessionRunStates={sessionRunStates}
+                                    sessions={endpointSessions}
+                                    targetLabel={endpointLabel}
+                                  />
                                 </div>
                               )
                             })}

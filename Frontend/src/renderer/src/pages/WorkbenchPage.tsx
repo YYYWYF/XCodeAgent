@@ -15,7 +15,7 @@ import type {
   DevelopmentPlanningPageOption,
   EditorMode
 } from '../typings'
-import { clearPreviewError, cx, storePreviewError, storePreviewUrl } from '../utils'
+import { cx, previewOrigin } from '../utils'
 import { startProjectLaunch } from '../service/projectLaunch'
 import './WorkbenchPage.less'
 
@@ -24,29 +24,26 @@ type Props = {
   applicationLifecycle?: ApplicationLifecycle
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onReturnWelcome: () => void
+  onThemeChange: (theme: Theme) => void
+  theme: Theme
 }
 
 type Theme = 'light' | 'dark'
 type WorkbenchEntryStage = 'loading' | 'leaving' | 'ready'
 
-const THEME_PREFERENCE_KEY = 'xcode-agent-theme-preference'
 const WORKBENCH_ENTRY_MIN_VISIBLE_MS = 520
 const WORKBENCH_ENTRY_FADE_MS = 280
-
-function getTheme(): Theme {
-  const storedPreference = window.localStorage.getItem(THEME_PREFERENCE_KEY)
-  return storedPreference === 'light' || storedPreference === 'dark' ? storedPreference : 'light'
-}
 
 // 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
 function WorkbenchPage({
   application,
   applicationLifecycle,
   onApplicationLifecycleChange,
-  onReturnWelcome
+  onReturnWelcome,
+  onThemeChange,
+  theme
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
-  const [theme, setTheme] = useState<Theme>(getTheme)
   const [workspaceApplication, setWorkspaceApplication] = useState(application)
   const [developmentPlanningPagesLoaded, setDevelopmentPlanningPagesLoaded] = useState(false)
   const [hasPageDesigns, setHasPageDesigns] = useState(false)
@@ -60,6 +57,8 @@ function WorkbenchPage({
     DevelopmentPlanningApiContract[]
   >([])
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
+  const [previewBaseUrl, setPreviewBaseUrl] = useState('')
+  const [previewLaunchError, setPreviewLaunchError] = useState('')
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const entryStartedAtRef = useRef(Date.now())
   const launchedWorkspaceRef = useRef<string>()
@@ -86,8 +85,8 @@ function WorkbenchPage({
     startProjectLaunch(workspacePath).then(result => {
       notification.close(loadingKey)
       if (result.status === 'running' && result.preview_url) {
-        storePreviewUrl(application.id, result.preview_url)
-        clearPreviewError(application.id)
+        setPreviewBaseUrl(previewOrigin(result.preview_url))
+        setPreviewLaunchError('')
         notification.success({
           message: '项目预览已启动',
           description: '可在预览面板中查看效果',
@@ -96,8 +95,8 @@ function WorkbenchPage({
         })
       } else {
         const errorMsg = result.message || '未知错误'
-        storePreviewError(application.id, errorMsg)
-        storePreviewUrl(application.id, '')
+        setPreviewBaseUrl('')
+        setPreviewLaunchError(errorMsg)
         notification.warning({
           message: '项目预览启动失败',
           description: `${errorMsg}，可在预览区查看详情`,
@@ -108,8 +107,8 @@ function WorkbenchPage({
     }).catch(err => {
       notification.close(loadingKey)
       const errorMsg = err instanceof Error ? err.message : '网络请求失败'
-      storePreviewError(application.id, errorMsg)
-      storePreviewUrl(application.id, '')
+      setPreviewBaseUrl('')
+      setPreviewLaunchError(errorMsg)
     })
   }, [application])
 
@@ -202,8 +201,7 @@ function WorkbenchPage({
   }, [entryStage])
 
   const handleThemeChange = (nextTheme: Theme): void => {
-    setTheme(nextTheme)
-    window.localStorage.setItem(THEME_PREFERENCE_KEY, nextTheme)
+    onThemeChange(nextTheme)
   }
 
   const handleApplicationUpdate = (updatedApplication: ApplicationConfig): void => {
@@ -229,6 +227,8 @@ function WorkbenchPage({
           editorMode={editorMode}
           onApplicationUpdate={handleApplicationUpdate}
           onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
+          previewBaseUrl={previewBaseUrl}
+          previewLaunchError={previewLaunchError}
           onApplicationLifecycleChange={onApplicationLifecycleChange}
           onReturnWelcome={onReturnWelcome}
           onThemeChange={handleThemeChange}

@@ -388,16 +388,26 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
 
 
 def _existing_build_task_plan(state: ProjectState) -> dict:
-    """优先读取 checkpoint 计划，必要时从工作区持久化 DAG 恢复全局 Unit 骨架。"""
+    """优先读取有效 checkpoint 计划，否则从工作区恢复最后一个有效 DAG。"""
 
     in_state = state.get("build_task_plan")
-    if isinstance(in_state, dict) and in_state.get("schema_version") == "build-dag.v2":
+    if _is_valid_build_task_plan(in_state):
         return in_state
     plan_path = build_task_plan_json_path(state)
     if not plan_path.is_file():
         return {}
     persisted = load_build_task_plan_json(plan_path)
-    return persisted if persisted.get("schema_version") == "build-dag.v2" else {}
+    return persisted if _is_valid_build_task_plan(persisted) else {}
+
+
+def _is_valid_build_task_plan(value: object) -> bool:
+    """仅接受通过任务图校验的 v2 DAG，避免失败 checkpoint 污染后续重试。"""
+
+    if not isinstance(value, dict) or value.get("schema_version") != "build-dag.v2":
+        return False
+    task_graph = value.get("task_graph")
+    validation = task_graph.get("validation") if isinstance(task_graph, dict) else None
+    return isinstance(validation, dict) and validation.get("is_valid") is True
 
 
 def _resolve_build_context(
@@ -438,14 +448,14 @@ def _resolve_build_context(
 
 
 def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> dict:
-    """向模型公开已完成准备的公共任务，避免后续页面重复生成公共模块。"""
+    """向模型公开已完成的公共任务，避免后续范围重复生成稳定能力。"""
 
     reusable_tasks = {
         unit_id: list(unit.get("task_ids") or [])
         for unit_id, unit in (build_task_plan.get("build_units") or {}).items()
         if isinstance(unit, dict)
         and unit_id.startswith("app:")
-        and unit.get("task_ids")
+        and _unit_tasks_are_reusable(build_task_plan, unit_id)
     }
     return {**build_context, "reusable_tasks_by_unit": reusable_tasks}
 
@@ -548,7 +558,7 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
             build_context.get("direct_endpoint_details") or []
         ),
         "data_sources": [
-            source
+            _scoped_data_source(source, contract_ids)
             for source in project_plan.get("data_sources", [])
             if isinstance(source, dict) and str(source.get("id") or "") in source_ids
         ],
@@ -574,6 +584,21 @@ def _scoped_api_contract(contract: dict, endpoint_ids: set[str]) -> dict:
             endpoint
             for endpoint in contract.get("endpoints", [])
             if isinstance(endpoint, dict) and str(endpoint.get("id") or "") in endpoint_ids
+        ],
+    }
+
+
+def _scoped_data_source(source: dict, contract_ids: set[str]) -> dict:
+    """局部构建仅保留直接契约的 Schema 引用，避免产生范围外的悬空引用。"""
+
+    if not contract_ids:
+        return source
+    return {
+        **source,
+        "schema_refs": [
+            reference
+            for reference in source.get("schema_refs") or []
+            if str(reference).split("#", 1)[0] in contract_ids
         ],
     }
 
@@ -626,7 +651,7 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
         **project_plan,
         "frontend_pages": pages,
         "data_sources": [
-            source
+            _scoped_data_source(source, contract_ids)
             for source in project_plan.get("data_sources", [])
             if isinstance(source, dict) and str(source.get("id") or "") in source_ids
         ],
@@ -696,6 +721,19 @@ def _merge_prepared_scope_tasks(
     generated_tasks = _rename_generated_task_id_conflicts(
         generated_tasks,
         reserved_ids=retained_ids,
+    )
+    replacement_dependency_map = _replacement_dependency_map(
+        skeleton_plan,
+        generated_tasks,
+        replaceable_unit_ids,
+    )
+    retained_tasks = _rewrite_replaced_unit_dependencies(
+        retained_tasks,
+        replacement_dependency_map,
+    )
+    generated_tasks = _rewrite_replaced_unit_dependencies(
+        generated_tasks,
+        replacement_dependency_map,
     )
     merged = compile_build_task_plan_scope(
         skeleton_plan,
@@ -814,6 +852,56 @@ def _rewrite_generated_task_dependencies(
     ]
 
 
+def _replacement_dependency_map(
+    build_task_plan: dict,
+    generated_tasks: list[dict],
+    replaceable_unit_ids: set[str],
+) -> dict[str, list[str]]:
+    """按被替换 Unit 建立旧任务到新任务的映射，供全局依赖同步改写。"""
+
+    old_tasks_by_unit = _tasks_by_unit_id(tasks_from_build_task_plan(build_task_plan))
+    new_tasks_by_unit = _tasks_by_unit_id(generated_tasks)
+    dependency_map: dict[str, list[str]] = {}
+    for unit_id in replaceable_unit_ids:
+        replacement_ids = [
+            str(task.get("id") or "")
+            for task in new_tasks_by_unit.get(unit_id, [])
+            if task.get("id")
+        ]
+        for old_task in old_tasks_by_unit.get(unit_id, []):
+            old_task_id = str(old_task.get("id") or "").strip()
+            if old_task_id:
+                dependency_map[old_task_id] = replacement_ids
+    return dependency_map
+
+
+def _rewrite_replaced_unit_dependencies(
+    tasks: list[dict],
+    dependency_map: dict[str, list[str]],
+) -> list[dict]:
+    """改写任务中的旧 Unit 任务依赖，并过滤替换映射产生的自依赖。"""
+
+    if not dependency_map:
+        return tasks
+    rewritten_tasks: list[dict] = []
+    for task in tasks:
+        rewritten = _rewrite_task_dependencies(task, dependency_map)
+        task_id = str(rewritten.get("id") or rewritten.get("task_id") or "")
+        dependencies = [
+            dependency
+            for dependency in _task_dependency_list(rewritten)
+            if dependency != task_id
+        ]
+        rewritten_tasks.append(
+            {
+                **rewritten,
+                "dependencies": dependencies,
+                "dependsOn": dependencies,
+            }
+        )
+    return rewritten_tasks
+
+
 def _rename_generated_task_id_conflicts(
     generated_tasks: list[dict],
     *,
@@ -905,7 +993,14 @@ def _replaceable_unit_ids(
 
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     if target.get("type") == "application":
-        return required_unit_ids
+        return {
+            unit_id
+            for unit_id in required_unit_ids
+            if not (
+                unit_id.startswith("app:")
+                and _unit_tasks_are_reusable(build_task_plan, unit_id)
+            )
+        }
     target_unit_id = _target_unit_id(target)
     units = build_task_plan.get("build_units") or {}
     replaceable: set[str] = set()
@@ -915,6 +1010,22 @@ def _replaceable_unit_ids(
         if unit_id == target_unit_id or not has_tasks:
             replaceable.add(unit_id)
     return replaceable
+
+
+def _unit_tasks_are_reusable(build_task_plan: dict, unit_id: str) -> bool:
+    """仅当 Unit 的全部登记任务均已完成时，才允许后续规划复用该 Unit。"""
+
+    units = build_task_plan.get("build_units")
+    unit = units.get(unit_id) if isinstance(units, dict) else None
+    task_ids = list(unit.get("task_ids") or []) if isinstance(unit, dict) else []
+    registry = build_task_plan.get("task_registry")
+    if not task_ids or not isinstance(registry, dict):
+        return False
+    return all(
+        isinstance(registry.get(task_id), dict)
+        and registry[task_id].get("status") in {"completed", "already_satisfied"}
+        for task_id in task_ids
+    )
 
 
 def _target_unit_id(target: dict) -> str:

@@ -46,8 +46,10 @@ const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; lab
 type ChatComposerProps = {
   activeWorkflow?: WorkflowRunPayload
   copy: ChatCopy[EditorMode]
+  debugOnly?: boolean
   draft: string
   error?: string
+  initialResumeFrom?: string
   loading: boolean
   onDraftChange: (value: string) => void
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
@@ -62,8 +64,10 @@ type ChatComposerProps = {
 export default function ChatComposer({
   activeWorkflow,
   copy,
+  debugOnly = false,
   draft,
   error,
+  initialResumeFrom = 'detail_confirmation',
   loading,
   onDraftChange,
   onSelectedSkillsChange,
@@ -74,9 +78,9 @@ export default function ChatComposer({
   workspaceBusy,
   workspaceRoot
 }: ChatComposerProps): ReactElement {
-  const [debugEnabled, setDebugEnabled] = useState(false)
+  const [debugEnabled, setDebugEnabled] = useState(debugOnly)
   const [traceOpen, setTraceOpen] = useState(false)
-  const [resumeFrom, setResumeFrom] = useState('requirements')
+  const [resumeFrom, setResumeFrom] = useState(initialResumeFrom)
   const [buildScopeType, setBuildScopeType] =
     useState<WorkflowBuildExecutionScope['type']>('application')
   const [buildScopeTargetId, setBuildScopeTargetId] = useState('')
@@ -121,12 +125,12 @@ export default function ChatComposer({
   }
 
   return (
-    <div className={cx('ai-chat-composer')}>
+    <div className={cx('ai-chat-composer', debugOnly && 'debug-only')}>
       <div className={cx('ai-chat-composer-column')}>
         {error && <Alert message={error} showIcon type="error" />}
         <div className={cx('ai-chat-composer-frame')}>
           <div className={cx('composer-inline-input')}>
-            {selectedSkills.length > 0 && (
+            {!debugOnly && selectedSkills.length > 0 && (
               <div className={cx('composer-selected-skills')}>
                 {selectedSkills.map((skill) => (
                   <Tag
@@ -145,21 +149,23 @@ export default function ChatComposer({
                 ))}
               </div>
             )}
-            <TextArea
-              aria-label={`${copy.title}输出内容`}
-              autoSize={{ minRows: 1, maxRows: 6 }}
-              bordered={false}
-              placeholder={copy.placeholder}
-              value={draft}
-              onChange={(event) => onDraftChange(event.target.value)}
-              onKeyDown={handleInputKeyDown}
-              onPressEnter={(event) => {
-                if (!event.shiftKey) {
-                  event.preventDefault()
-                  handleSend()
-                }
-              }}
-            />
+            {!debugOnly && (
+              <TextArea
+                aria-label={`${copy.title}输出内容`}
+                autoSize={{ minRows: 1, maxRows: 6 }}
+                bordered={false}
+                placeholder={copy.placeholder}
+                value={draft}
+                onChange={(event) => onDraftChange(event.target.value)}
+                onKeyDown={handleInputKeyDown}
+                onPressEnter={(event) => {
+                  if (!event.shiftKey) {
+                    event.preventDefault()
+                    handleSend()
+                  }
+                }}
+              />
+            )}
           </div>
           {(debugEnabled || traceOpen) && (
             <div className={cx('workflow-debug-box', debugEnabled && 'enabled')}>
@@ -223,43 +229,47 @@ export default function ChatComposer({
             </div>
           )}
           <div className={cx('ai-chat-composer-footer')}>
-            <div className={cx('composer-toolbar')}>
-              <ResourceSkillMenu
-                disabled={loading || workspaceBusy}
-                onSelectedSkillsChange={onSelectedSkillsChange}
-                selectedSkills={selectedSkills}
-              />
-              <Tooltip
-                overlayClassName={cx('composer-tool-tooltip')}
-                title={debugEnabled ? '关闭 Workflow 调试' : 'Workflow 调试'}
-              >
-                <Button
-                  aria-label="Workflow 调试"
-                  aria-pressed={debugEnabled}
-                  className={cx('composer-tool-button', debugEnabled && 'active')}
-                  disabled={loading}
-                  icon={<BugOutlined />}
-                  onClick={() => setDebugEnabled((current) => !current)}
-                  shape="circle"
-                  type="text"
+            {debugOnly ? (
+              <Text className={cx('workflow-debug-resume-label')}>选择要重新开始执行的节点</Text>
+            ) : (
+              <div className={cx('composer-toolbar')}>
+                <ResourceSkillMenu
+                  disabled={loading || workspaceBusy}
+                  onSelectedSkillsChange={onSelectedSkillsChange}
+                  selectedSkills={selectedSkills}
                 />
-              </Tooltip>
-              <Tooltip
-                overlayClassName={cx('composer-tool-tooltip')}
-                title={traceOpen ? '收起 Trace 日志' : 'Trace 日志'}
-              >
-                <Button
-                  aria-expanded={traceOpen}
-                  aria-label="Trace 日志"
-                  className={cx('composer-tool-button', traceOpen && 'active')}
-                  disabled={!activeWorkflow}
-                  icon={<FileSearchOutlined />}
-                  onClick={() => setTraceOpen((current) => !current)}
-                  shape="circle"
-                  type="text"
-                />
-              </Tooltip>
-            </div>
+                <Tooltip
+                  overlayClassName={cx('composer-tool-tooltip')}
+                  title={debugEnabled ? '关闭 Workflow 调试' : 'Workflow 调试'}
+                >
+                  <Button
+                    aria-label="Workflow 调试"
+                    aria-pressed={debugEnabled}
+                    className={cx('composer-tool-button', debugEnabled && 'active')}
+                    disabled={loading}
+                    icon={<BugOutlined />}
+                    onClick={() => setDebugEnabled((current) => !current)}
+                    shape="circle"
+                    type="text"
+                  />
+                </Tooltip>
+                <Tooltip
+                  overlayClassName={cx('composer-tool-tooltip')}
+                  title={traceOpen ? '收起 Trace 日志' : 'Trace 日志'}
+                >
+                  <Button
+                    aria-expanded={traceOpen}
+                    aria-label="Trace 日志"
+                    className={cx('composer-tool-button', traceOpen && 'active')}
+                    disabled={!activeWorkflow}
+                    icon={<FileSearchOutlined />}
+                    onClick={() => setTraceOpen((current) => !current)}
+                    shape="circle"
+                    type="text"
+                  />
+                </Tooltip>
+              </div>
+            )}
             {workspaceBusy && (
               <Text className={cx('workspace-busy-label')} type="warning">
                 其他会话正在执行

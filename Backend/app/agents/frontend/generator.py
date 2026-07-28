@@ -8,7 +8,7 @@ from app.agents.tool_activity_stream import (
     invoke_agent_with_tool_activity,
 )
 from app.config import Settings
-from app.services.build_result_coordinator import create_agent_task_result
+from app.services.build_result_coordinator import create_agent_task_results
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
@@ -22,11 +22,35 @@ def _app_name_from_plan(project_plan: dict[str, Any]) -> str:
     return ""
 
 
+def _page_template_instruction(page_template: dict[str, Any] | None) -> str:
+    """Page template selected by user — have the agent read and use it as reference."""
+    if not page_template:
+        return ""
+    template_id = str(page_template.get("id") or "")
+    template_name = str(page_template.get("name") or "")
+    template_path = str(page_template.get("sourcePath") or "")
+    if not template_path:
+        return ""
+    return (
+        f"## User-Selected Page Template: {template_name} ({template_id})\n"
+        f"The user selected a page template for this design target. Before writing any code, "
+        f"use read_file on the virtual path `/{template_path}/index.tsx` and optionally "
+        f"`/{template_path}/types.ts` and `/{template_path}/api.ts` to study the template's "
+        f"component structure, ProTable / ProForm configuration patterns, data types, and "
+        f"API integration style. Use these patterns as the primary reference when generating "
+        f"the page for this task. Adapt the template structure to match the page's specific "
+        f"requirements as described in the task and ProjectPlan, but keep the overall "
+        f"component selection, layout conventions, and data-fetching pattern consistent with "
+        f"the template.\n\n"
+    )
+
+
 def _frontend_generation_prompt(
     *,
     project_plan: dict[str, Any],
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
+    page_template: dict[str, Any] | None = None,
 ) -> str:
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
@@ -52,7 +76,8 @@ def _frontend_generation_prompt(
         f"to virtual root '/'. Do NOT write to `Frontend/src/`, bare `src/`, or `/app/"
         f"frontend/` — those are wrong for this workspace. Before writing, use list_files "
         f"on `/{frontend_root}/src/pages/` to confirm the scaffolded page directories.\n\n"
-        "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
+        + _page_template_instruction(page_template)
+        + "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
         "Before generating or modifying any frontend code, you MUST read the following "
         "two built-in skills with read_file(limit=400) and follow their instructions. "
         "These are mandatory constraints:\n"
@@ -78,6 +103,19 @@ def _frontend_generation_prompt(
         "`react-develop-specification/SKILL.md` (React coding conventions) for style rules "
         "when unsure. Reading these on demand keeps the context small.\n"
         "Only after reading the two required skills above may you start writing code.\n\n"
+        "## Required final report\n"
+        "Return one JSON object with `task_results`, containing exactly one result for each "
+        "approved task. Each result must contain `task_id`, `status` "
+        "(`completed`, `already_satisfied`, or `failed`), and `summary`. Use "
+        "`already_satisfied` only when every exact target file and acceptance criterion was "
+        "verified without writing. Then include `satisfaction_evidence.target_files` with every "
+        "exact target path and `satisfaction_evidence.acceptance_criteria` with one object per "
+        "criterion: `{criterion_index: 0, status: \"passed\", evidence}`. Use the zero-based "
+        "criterion index from the approved task instead of copying the criterion text. A "
+        "semantically similar file at "
+        "another path never satisfies a task. Use `failed` plus `failure_category` and "
+        "`failure_reason` when implementation could not be completed. Do not use free-form text "
+        "outside the final JSON object.\n\n"
         "## CRITICAL: Do NOT create temporary script files\n"
         "Do NOT create shell scripts (.sh), Python scripts (.py), JavaScript files (.js/.mjs), "
         "or any other temporary script files to run build commands. Instead, use the "
@@ -96,6 +134,7 @@ def _invoke_live_frontend_agent(
     tasks: list[dict[str, Any]],
     workspace: str | None,
     selected_skill_names: list[str] | None,
+    page_template: dict[str, Any] | None = None,
     on_tool_activity: ToolActivityCallback | None = None,
 ) -> str:
     """使用本次工作流的技能白名单调用前端 Deep Agent。"""
@@ -113,6 +152,7 @@ def _invoke_live_frontend_agent(
                         project_plan=project_plan,
                         build_task_plan=build_task_plan,
                         tasks=tasks,
+                        page_template=page_template,
                     ),
                 }
             ]
@@ -129,6 +169,7 @@ def generate_frontend_with_deep_agent(
     tasks: list[dict[str, Any]],
     workspace: str | None = None,
     selected_skill_names: list[str] | None = None,
+    page_template: dict[str, Any] | None = None,
     on_tool_activity: ToolActivityCallback | None = None,
 ) -> list[dict[str, Any]]:
     """通过带技能白名单的 Frontend Deep Agent 执行已批准任务。"""
@@ -143,19 +184,18 @@ def generate_frontend_with_deep_agent(
         tasks=tasks,
         workspace=workspace,
         selected_skill_names=selected_skill_names,
+        page_template=page_template,
         on_tool_activity=on_tool_activity,
     )
-    return [
-        create_agent_task_result(
-            task,
-            agent_note,
-            executed_by={
-                "agent": "frontend-generation-agent",
-                "mode": "live",
-                "model": settings.model_name,
-                "source": "frontend_deep_agent",
-                "requiredSkillsLoaded": list(selected_skill_names or []),
-            },
-        )
-        for task in tasks
-    ]
+    return create_agent_task_results(
+        tasks,
+        agent_note,
+        executed_by={
+            "agent": "frontend-generation-agent",
+            "mode": "live",
+            "model": settings.model_name,
+            "source": "frontend_deep_agent",
+            "requiredSkillsLoaded": list(selected_skill_names or []),
+        },
+        require_structured=True,
+    )

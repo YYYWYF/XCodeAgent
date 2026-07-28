@@ -549,6 +549,17 @@ def build_workflow_ag_ui_stream(
                             ),
                         )
                         continue
+                    if event_type == "llm.token":
+                        yield encoder.encode(
+                            CustomEvent(
+                                name="llm.token",
+                                value={
+                                    "token": progress.get("token", ""),
+                                    "node": progress.get("node", ""),
+                                },
+                            )
+                        )
+                        continue
                     # 其它未知 custom 事件:静默跳过,保持向后兼容。
                     continue
 

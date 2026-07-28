@@ -8,7 +8,7 @@ from app.agents.tool_activity_stream import (
     invoke_agent_with_tool_activity,
 )
 from app.config import Settings
-from app.services.build_result_coordinator import create_agent_task_result
+from app.services.build_result_coordinator import create_agent_task_results
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
@@ -32,6 +32,14 @@ def _data_source_generation_prompt(
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n"
         "Treat every allowed_paths entry as relative to virtual root '/'. For example, "
         "app/backend/** means /app/backend/** in filesystem tool calls.\n\n"
+        "Return one final JSON object with `task_results`, containing exactly one result per "
+        "approved task. Each result must include `task_id`, `status` (`completed`, "
+        "`already_satisfied`, or `failed`), and `summary`. `already_satisfied` requires "
+        "`satisfaction_evidence.target_files` for every exact target and one passed evidence "
+        "object for every exact acceptance criterion. Each evidence object must use the "
+        "zero-based `criterion_index` from the approved task instead of copying criterion text. "
+        "A similar file at another path is not "
+        "valid evidence. Failed work must include `failure_category` and `failure_reason`.\n\n"
         f"Approved data-source tasks:\n{json.dumps(tasks, ensure_ascii=False, indent=2)}\n\n"
         f"BuildTaskPlan summary:\n{json.dumps(build_task_plan.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}\n\n"
@@ -99,17 +107,15 @@ def generate_data_sources_with_deep_agent(
         selected_skill_names=selected_skill_names,
         on_tool_activity=on_tool_activity,
     )
-    return [
-        create_agent_task_result(
-            task,
-            agent_note,
-            executed_by={
-                "agent": "data-source-generation-agent",
-                "mode": "live",
-                "model": settings.model_name,
-                "source": "data_source_deep_agent",
-                "requiredSkillsLoaded": list(selected_skill_names or []),
-            },
-        )
-        for task in tasks
-    ]
+    return create_agent_task_results(
+        tasks,
+        agent_note,
+        executed_by={
+            "agent": "data-source-generation-agent",
+            "mode": "live",
+            "model": settings.model_name,
+            "source": "data_source_deep_agent",
+            "requiredSkillsLoaded": list(selected_skill_names or []),
+        },
+        require_structured=True,
+    )

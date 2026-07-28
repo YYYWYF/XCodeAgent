@@ -231,6 +231,8 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 页面初版设计结合 `frontend_pages`、`api_contracts`、`data_sources`、`permission_model` 和业务流程，覆盖页面目标、页面布局设计、页面交互设计、API 依赖、响应字段绑定、页面跳转与依赖、权限与操作可见性、页面验收标准。`detail_confirmation` 对每个页面调用 `page_designer`，`page_designer` 从 ProjectPlan 中提取当前页面上下文，并直接基于 `ProjectPlan.api_contracts` 分析当前页面实际依赖的 API；`PageDetail.api_dependencies` 是页面详细设计确认后的实际 API 依赖。页面详细设计面向页面实现视角，页面数据访问必须直接引用具体 API/Endpoint，而不是把底层数据源作为主要确认对象。布局设计只描述信息组织、区域职责、主要内容呈现、操作入口位置和响应式/信息密度策略；loading、empty、error、success、confirm、validation 等反馈属于交互设计，不作为布局区域。数据源初版设计覆盖实体引用、关系、校验、API 契约、依赖页面、Seed/Mock 策略和验收标准。页面的 endpoint、Schema 和 `response_bindings`，以及数据源的实体、Schema 和 API 契约在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
 
+接口详细设计是 `detail_confirmation` 的 endpoint 内部分支，不新增独立主 Graph 节点。该分支先定位接口契约、分析请求参数、确认数据来源，再设计返回格式、处理逻辑和接口验收标准。确认数据来源时，如果当前 endpoint 关联的数据源是 MySQL/数据库，且 `XCODEAGENT_ENDPOINT_DATABASE_CONTEXT_ENABLED` 显式开启，后端会调用 `get_mysql_table_info` 获取库表信息，并将结果提取概括为 `endpoint_context.database_context` 后输入 endpoint 详细设计模型；模型只能使用该摘要作为现有数据库参考，不接收原始全量工具输出。当前数据库连接信息只从工程 `.env` 暴露到后端进程的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PWD`、`MYSQL_DATABASE` 读取，暂不在 workflow 中向用户收集；后续待办是补充 AG-UI 配置/确认入口，让未配置 `.env` 的用户可以安全填写或选择连接。若开关关闭、数据源不是数据库、数据库工具缺失、连接变量缺失或执行失败，详细设计继续基于 API 契约生成，并把具体数据库疑问写入 `data_origin.open_questions`。
+
 批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`；详细设计文件和轻量 ProjectPlan 索引一起持久化，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
 正式 `project-plan.json` 不内嵌 `page_detail_plans` 或 `data_source_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面叶子的 `pageId` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；菜单节点本身不参与页面唯一性或任务执行校验。后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`；页面设计模型不得新增、删除或替换这些引用。选择单个页面时，后端只生成该页面经 endpoint 反查得到的数据源设计，并在该页面 `detail_design.generation_dependencies` 中记录 `endpoint_ids` 与 `navigationTargetPageIds`。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与数据源详情，不得重新加载全部页面详情；模型发现缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
@@ -450,6 +452,17 @@ testing.START
 - 后端：优先复用当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`），也支持通过当前 Python 解释器执行 `-m pytest`；
 - 未声明的可选检查（lint、typecheck、unit/integration 等）会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。
 
+任务编译和执行还必须遵守以下确定性边界：
+
+- 页面任务进入 DAG 前，以实时工作区校对模型计划路径。只有当计划入口不存在，且实时 `frontend/src/pages` 中存在唯一的同义目录（忽略大小写、分隔符和 `Page` 后缀）时，才把目标路径改写到该既有入口并把 `add` 改成 `modify`；多候选时不得猜测。这样可修复 WorkspaceSnapshot 在长流程中变旧造成的 `DashboardPage`/`Dashboard` 重复入口，同时保留可审计的 `path_reconciliation`。
+- 模板页面必须具备页面范围内的菜单与自动路由登记结果。任务编译器先读取实时 `frontend/src/constants/menus.ts`：脚手架已写入完全一致的 `{ path, name, key }` 时，不再补充重复任务，并将模型已有菜单任务标记为 `already_satisfied`；仅在条目缺失时生成只能追加 `BIZ_MENUS.firstLevel.children` 的受限任务。PageKey 必须与规范页面目录完全一致，不得修改路由生成器或既有菜单项。
+- 任何具有精确 `targetFiles` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
+- 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`。`already_satisfied` 只有在报告覆盖全部精确目标文件、磁盘状态符合 `add/modify/delete`、并按零基 `criterion_index` 为每条原始验收标准提供 passed evidence 时才成立；旧版完整 criterion 文本仍可读取，但自然语言中的“已满足”或相似路径不能改变调度状态。代码生成 runner 强制使用该结构化协议，缺失或损坏的顶层报告统一成为 `runner_protocol_error`，不得兼容成 `completed`。
+- Deep Agent 工具活动继续使用根图和子图流；执行器按“根图优先、浅层 namespace 优先、同层最新优先”恢复最终 `values/messages`。根 `values` 快照不含 `messages` 时先使用根消息分片，再回退到最浅层 Agent namespace，且不得把工具结果或更深子 Agent 文本误作主 Agent 报告。
+- RepairPlanner 只能复用父任务的原始验收标准，不能把“必须产生文件变更”等执行动作扩展成新验收点；修复任务以 `already_satisfied` 验证目标状态时，与真实写入成功一样关闭失败父任务，避免制造重复菜单或其他非幂等改动。
+
+该边界继续对应 learn-coding-agent 的“收集实时事实—执行—立即验证”循环；对应 OpenCode 的稳定任务 ID、显式任务状态和权限受限执行；对应 Deep Agents 的根/子图消息分流与结构化 subagent 结果。任务状态、文件归属和验收仍由外层确定性调度器裁决，Agent 输出视为不可信输入；Graph State 只保存紧凑报告和证据引用，不复制完整消息流或工具日志，保持在 128k 上下文预算内。
+
 每个真实命令都会写入 `.xcodeagent/runtime/tests/<check_id>/stdout.log` 和 `stderr.log`。`test_results.execution` 同时提供宿主日志引用、Agent 可读取的虚拟工作区日志路径以及有长度上限的 `stdout_tail/stderr_tail`，另保存命令、cwd、returncode、timeout 和失败分类。Test/RepairPlanner 必须以这些证据为依据；摘要和日志都不可读时只能报告证据不足，不得猜测根因。
 
 Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点，避免主流程过碎；但 `test_results` 里必须保留每个具体检查项的结构化证据。
@@ -493,12 +506,13 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 写入 `acceptance_request` 并提示用户验收；
 - 保存和清理进程信息。
 
-`launch_project` 是质量门禁通过后的本轮终点。LangGraph 节点只负责通过 `workspace_root(state)` 解析普通工作目录，再依次调用与 Graph State 解耦的 `launch_backend_project(workspace_path)` 和 `launch_frontend_project(workspace_path)` 公共服务。后端 launcher 在每个工作区的串行锁内，先停止内存登记或 `backend.pid` 恢复出的上一轮 Java 进程，确认退出后才执行 Maven；PID 恢复必须校验命令确实是当前工作区 `target` 下的 `java -jar`，清理失败则以 `backend_cleanup` 中止构建。只有新 Java 进程仍存活且本次日志出现约定的版本标志后才启动前端。前端启动进程仍存活且预览地址通过 HTTP 或本次启动日志检查后，节点才返回 `preview_url` 和 `acceptance_request`，并将状态设为 `requires_user_input`；任一进程提前退出或就绪检查超时都会返回启动失败，不进入验收。若 Java 已启动但前端失败，节点停止本次 Java 进程并记录清理结果。前端收到实时 Workflow 的成功 `summary.previewUrl` 后，会自动打开右侧预览面板并导航到该地址；重复状态快照不会重复导航，历史会话也不会自动弹出预览。工作流不会自动进入 `acceptance`；用户确认验收后，下一轮从 `acceptance` 续跑。
+`launch_project` 是质量门禁通过后的本轮终点。LangGraph 节点先通过 `workspace_root(state)` 解析普通工作目录，再使用确定性的 `find_backend_project_root(workspace_path)` 探测直属 `backend/Backend/pom.xml`。识别到 Maven 后端时，节点依次调用与 Graph State 解耦的 `launch_backend_project(workspace_path)` 和 `launch_frontend_project(workspace_path)` 公共服务；未识别到后端时，将 `launch_result.backend.status` 记为 `skipped` 并直接启动前端。后端 launcher 在每个工作区的串行锁内，先停止内存登记或 `backend.pid` 恢复出的上一轮 Java 进程，确认退出后才执行 Maven；PID 恢复必须校验命令确实是当前工作区 `target` 下的 `java -jar`，清理失败则以 `backend_cleanup` 中止构建。只有新 Java 进程仍存活且本次日志出现约定的版本标志后才启动前端。前端启动进程仍存活且预览地址通过 HTTP 或本次启动日志检查后，节点才返回 `preview_url` 和 `acceptance_request`，并将状态设为 `requires_user_input`；任一实际启动的进程提前退出或就绪检查超时都会返回启动失败，不进入验收。若 Java 已启动但前端失败，节点停止本次 Java 进程并记录清理结果；纯前端启动失败时不执行后端清理。前端收到实时 Workflow 的成功 `summary.previewUrl` 后，会自动打开右侧预览面板并导航到该地址；重复状态快照不会重复导航，历史会话也不会自动弹出预览。工作流不会自动进入 `acceptance`；用户确认验收后，下一轮从 `acceptance` 续跑。
 
 当前启动策略：
 
 - 两个公共 launcher 仅接收 `str | Path` 工作目录，自行从 `<workspace>/.xcodeagent/runtime/launch/` 推导日志与 PID 目录，因此可被 LangGraph 之外的调用方直接复用；
-- 强制要求工作区存在 `backend/pom.xml`，通过 `shutil.which` 解析 `mvn`、`java` 的完整可执行路径；Windows 上直接使用解析到的 `mvn.cmd` 和 `java.exe`，不依赖 `cwd` 再次搜索 PATH；
+- 后端探测器枚举工作区直属目录并识别 `backend/pom.xml` 或 `Backend/pom.xml`，保留磁盘上的真实目录大小写；缺少 `pom.xml` 表示工作流没有可启动的 Maven 后端，节点跳过后端，但直接调用后端 launcher 仍返回 `backend_validation`；
+- 识别到 Maven 后端后，通过 `shutil.which` 解析 `mvn`、`java` 的完整可执行路径；Windows 上直接使用解析到的 `mvn.cmd` 和 `java.exe`，不依赖 `cwd` 再次搜索 PATH；
 - 后端 Java 进程按规范化工作区路径保存在内存注册表中；同一工作区的停止、构建、启动和登记由可重入锁串行化，不同工作区互不阻塞；
 - 每次 Maven 构建前优先停止内存登记的进程；Backend 服务重启导致内存记录丢失时，从 `.xcodeagent/runtime/launch/backend.pid` 恢复 PID，通过完整进程命令行确认 `java`、`-jar` 和当前 `backend/target` JAR 绝对路径均匹配后才终止，拒绝按 Java 进程名批量清理；
 - 进程先温和终止并等待 5 秒，超时后强制结束；只有确认退出才删除 PID 和内存登记。无法读取 PID、无法确认身份或强杀后仍存活时返回 `failed_stage=backend_cleanup`，不执行 Maven；`prebuild_cleanup` 保存来源、PID、身份校验、强杀和错误摘要；
@@ -516,7 +530,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 根据 script 推断预览地址：若脚本声明 `--port`、`--port=` 或 `PORT=` 则使用声明端口，否则统一使用 `http://127.0.0.1:80`；
 - 健康检查在配置的启动窗口内持续监督启动进程：优先通过 urllib 接收 2xx–4xx HTTP 响应；如果运行沙箱禁止 Python 主动连接本地端口，则只读取本次启动后追加的 stdout，通过 CRA/Vite/Webpack 的 `Compiled successfully`、`ready in`、`Local:` 等标志确认就绪。日志读取记录启动前偏移量，不会被历史成功日志误导；
 - Maven 或前端依赖安装的同步命令若抛出 `OSError` / `FileNotFoundError`，launcher 将错误写入 stderr 日志和结构化结果，由 `launch_project` 正常返回失败原因，而不是让异常冒泡为 AG-UI `Workflow failed`；
-- 将启动结果写入 `launch_result`：保留前端兼容字段，并增加 `backend`、`frontend` 和 `failed_stage`；成功时 `preview_url` 是前端预览地址，失败时顶层、`launch_result` 和 `acceptance_request` 的 `preview_url` 均写入启动失败原因。失败状态不会触发前端自动预览导航。
+- 将启动结果写入 `launch_result`：保留前端兼容字段，并增加 `backend`、`frontend` 和 `failed_stage`；纯前端工程使用 `backend.status=skipped`，成功时 `preview_url` 是前端预览地址，失败时顶层、`launch_result` 和 `acceptance_request` 的 `preview_url` 均写入启动失败原因。失败状态不会触发前端自动预览导航。
 
 该边界沿用参考 coding-agent harness 的执行—观察—验证循环：Maven 构建、Java 启动和前端启动均使用显式 argv、cwd、超时与进程退出监督，完整命令输出落盘而不进入 Graph State。`launch_result` 和 AG-UI 只携带状态摘要、PID 与稳定日志路径，不注入完整构建/运行日志，从而保持确定性节点可审计并符合 128k 上下文预算。
 

@@ -18,6 +18,15 @@ const xcodeAgentApi = {
     getAccessToken: () => ipcRenderer.invoke('auth:get-access-token'),
     reauthenticate: () => ipcRenderer.invoke('auth:reauthenticate'),
   },
+  settings: {
+    load: () => ipcRenderer.invoke('settings:load'),
+    saveTheme: (payload) => ipcRenderer.invoke('settings:save-theme', payload),
+    onThemeChanged: (listener) => {
+      const handler = (_event, payload) => listener(payload);
+      ipcRenderer.on('settings:theme-changed', handler);
+      return () => ipcRenderer.removeListener('settings:theme-changed', handler);
+    },
+  },
   applications: {
     load: () => ipcRenderer.invoke('applications:load'),
     save: (applications) => {

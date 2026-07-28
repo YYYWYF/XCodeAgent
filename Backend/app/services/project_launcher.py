@@ -13,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from app.services.backend_project_launcher import (
+    find_backend_project_root,
     launch_backend_project,
     stop_backend_project,
 )

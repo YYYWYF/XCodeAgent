@@ -28,17 +28,10 @@ type Props = {
     threadId: string,
     lifecycle: ApplicationLifecycle
   ) => void
+  theme: WelcomeTheme
 }
 
 type WelcomeTheme = 'dark' | 'light'
-
-const THEME_PREFERENCE_KEY = 'xcode-agent-theme-preference'
-
-// 读取欢迎页主题偏好，缺省使用浅色主题。
-function getTheme(): WelcomeTheme {
-  const storedPreference = window.localStorage.getItem(THEME_PREFERENCE_KEY)
-  return storedPreference === 'light' || storedPreference === 'dark' ? storedPreference : 'light'
-}
 
 // 渲染首页，并为每个未完成规划显示相互隔离的恢复入口。
 export default function WelcomePage({
@@ -47,10 +40,9 @@ export default function WelcomePage({
   onDeletePlanning,
   onOpenApplication,
   onOpenPlanning,
-  onStartPlanning
+  onStartPlanning,
+  theme
 }: Props): JSX.Element {
-  const theme = getTheme()
-
   return (
     <main
       className={cx('welcome-page', activePlannings.length > 0 && 'has-active-planning')}

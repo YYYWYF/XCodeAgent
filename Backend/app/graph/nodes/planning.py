@@ -23,6 +23,7 @@ from app.services.frontend_page_tree import (
     flatten_frontend_pages,
     update_frontend_page_leaves,
 )
+from app.services.database_context import prepare_endpoint_database_context
 from app.services.project_plan import apply_project_plan_feedback
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_detail_plan import (
@@ -43,6 +44,16 @@ from app.workspace.plan_documents import (
 
 
 logger = logging.getLogger("uvicorn.error")
+
+
+def _planning_token_callback(token: str) -> None:
+    """将规划模型流式 token 转发到 LangGraph custom stream。"""
+
+    try:
+        writer = get_stream_writer()
+    except (KeyError, RuntimeError):
+        return
+    writer({"type": "llm.token", "token": token, "node": "project_planning"})
 
 
 def _detail_progress(message: str, **detail: object) -> None:
@@ -137,6 +148,7 @@ def project_planning(state: ProjectState) -> dict:
             if state.get("project_plan")
             else {}
         ),
+        on_token=_planning_token_callback,
     )
     project_plan = apply_project_plan_feedback(
         project_plan,
@@ -319,6 +331,7 @@ def detail_confirmation(state: ProjectState) -> dict:
         revised_plan = revise_project_plan_with_chat_model(
             pending_plan,
             state.get("request", ""),
+            on_token=_planning_token_callback,
         )
         revised_plan = _generate_all_detail_plans(revised_plan)
         revised_plan["confirmation_status"] = "pending_user_confirmation"
@@ -543,6 +556,30 @@ def _generate_all_detail_plans(
             updated_plan,
             selected_api_contract_id,
             selected_endpoint_id,
+        )
+        _detail_progress(
+            "正在确认接口数据来源。",
+            target_type="endpoint",
+            api_contract_id=selected_api_contract_id,
+            endpoint_id=selected_endpoint_id,
+            data_source_id=endpoint_context.get("data_source_id"),
+        )
+        database_context = prepare_endpoint_database_context(
+            updated_plan,
+            endpoint_context,
+        )
+        endpoint_context = {
+            **endpoint_context,
+            "database_context": database_context,
+        }
+        _detail_progress(
+            database_context.get("message") or "数据库上下文准备完成。",
+            target_type="endpoint",
+            api_contract_id=selected_api_contract_id,
+            endpoint_id=selected_endpoint_id,
+            database_context_status=database_context.get("status"),
+            reason=database_context.get("reason"),
+            enabled=database_context.get("enabled"),
         )
         _detail_progress(
             "已定位接口契约，正在调用模型生成详细设计。",
@@ -811,7 +848,10 @@ def _repair_project_plan_validation_errors(
     feedback = "系统计划一致性校验失败，请在本次重新生成中完整修复以下问题：\n" + "\n".join(
         f"- {error}" for error in errors
     )
-    repaired = revise_project_plan_with_chat_model(project_plan, feedback)
+    repaired = revise_project_plan_with_chat_model(
+        project_plan, feedback,
+        on_token=_planning_token_callback,
+    )
     repaired["confirmation_status"] = "pending_user_confirmation"
     return repaired, _project_plan_validation_errors(repaired)
 

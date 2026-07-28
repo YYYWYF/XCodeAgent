@@ -26,8 +26,17 @@ import {
 import { stoppedAnswer, workflowCodeChanges, workflowPreviewTarget } from '../utils'
 import type { WorkflowPreviewTarget } from '../utils'
 import type { PersistSessionInput } from './useChatSessions'
-import type { SessionIdentity, SessionRunStatus } from './sessionRuntime'
-import { planExecutionForPage, withWorkflowExecutionStatus } from '../planExecutionMode'
+import {
+  sessionIdentityMatchesTarget,
+  type SessionIdentity,
+  type SessionRunStatus
+} from './sessionRuntime'
+import {
+  planExecutionForPage,
+  withWorkflowExecutionStatus,
+  workflowInteractionAvailability,
+  workflowResumeNode
+} from '../planExecutionMode'
 
 type SessionRunEntry = {
   identity: SessionIdentity
@@ -38,6 +47,7 @@ type UseWorkflowConversationParams = {
   activeSession?: SessionIdentity
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   application: ApplicationConfig
+  applicationLifecycle?: ApplicationLifecycle
   draft: string
   draftKey: string
   selectedSkills: ChatMessageSkill[]
@@ -68,16 +78,22 @@ type UseWorkflowConversationParams = {
 type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
   error?: string
-  handleAcceptPreview: () => Promise<void>
+  handleAcceptPreview: () => Promise<boolean>
   handleAdjustPlan: (feedback: string) => Promise<void>
   handleEndPlan: (runId?: string) => Promise<void>
+  handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleRetryPlan: () => Promise<void>
   handleStopPlan: (runId?: string) => Promise<void>
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleStartDetailConfirmation: (
     selectedPageId: string,
     pageLabel: string,
-    hasDetailPlan?: boolean
+    hasDetailPlan?: boolean,
+    templateParams?: {
+      templateId?: string
+      templateName?: string
+      templateSourcePath?: string
+    },
   ) => Promise<boolean>
   handleStartEndpointDetailConfirmation: (target: {
     apiContractId?: string
@@ -89,7 +105,7 @@ type UseWorkflowConversationResult = {
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
-  ) => Promise<void>
+  ) => Promise<boolean>
   loading: boolean
   sessionRunStates: Record<string, SessionRunStatus>
   stopping: boolean
@@ -124,6 +140,7 @@ export function useWorkflowConversation({
   activeSession,
   agUiSessionsRef,
   application,
+  applicationLifecycle,
   draft,
   draftKey,
   selectedSkills,
@@ -152,16 +169,25 @@ export function useWorkflowConversation({
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
 
-  // 首次从页面设计入口创建会话时，React 还未提交 activeSession；先按工作区接住刚启动的运行态，避免进度页闪退。
+  const selectedTarget = {
+    apiContractId: selectedApiContractId,
+    endpointId: selectedEndpointId,
+    pageId: selectedPageId
+  }
+  const matchingActiveSession =
+    activeSession && sessionIdentityMatchesTarget(activeSession, selectedTarget)
+      ? activeSession
+      : undefined
+  // 首次创建目标会话时 React 还未提交 activeSession；只接住同一页面、接口或自由对话的运行态，避免进度跨目标串线。
   const activeRun =
-    (activeSession ? runStates[activeSession.key] : undefined) ||
+    (matchingActiveSession ? runStates[matchingActiveSession.key] : undefined) ||
     Object.values(runStates).find(
       (entry) =>
         entry.identity.workspaceRoot === application.workspaceRoot &&
         entry.identity.editorMode === editorMode &&
-        (!selectedPageId || entry.identity.pageId === selectedPageId)
+        sessionIdentityMatchesTarget(entry.identity, selectedTarget)
     )
-  const activeRuntimeKey = activeSession?.key || activeRun?.identity.key
+  const activeRuntimeKey = matchingActiveSession?.key || activeRun?.identity.key
   const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
   const stopping = activeRun?.status === 'stopping'
   const error = activeRuntimeKey ? errors[activeRuntimeKey] : undefined
@@ -241,6 +267,11 @@ export function useWorkflowConversation({
       endpointLabel?: string
       detailTargetType?: 'page' | 'endpoint'
       sessionIdentity?: SessionIdentity
+      pageTemplate?: {
+        id?: string
+        name?: string
+        sourcePath?: string
+      }
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
@@ -376,6 +407,7 @@ export function useWorkflowConversation({
         planControlRunId: options?.planControlRunId,
         resumeExecutionRunId: options?.resumeExecutionRunId,
         resumeState: options?.resumeState,
+        pageTemplate: options?.pageTemplate,
         onContent: (content) => {
           streamedContent = content
           updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
@@ -488,14 +520,16 @@ export function useWorkflowConversation({
     }
   }
 
+  /** 将结构化确认转换为可追踪的用户消息，并通过当前 AG-UI 会话恢复 Workflow。 */
   const handleSubmitClarification = async (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
-  ): Promise<void> => {
+  ): Promise<boolean> => {
+    if (workflowInteractionAvailability(workflow, applicationLifecycle) !== 'active') return false
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
-    if (!continuationMessage || loading || workspaceBusy) return
+    if (!continuationMessage || loading || workspaceBusy) return false
     const originalRequest = workflowOriginalRequest(workflow)
-    await sendWorkflowMessage(continuationMessage, {
+    return sendWorkflowMessage(continuationMessage, {
       clarificationAnswers: answers,
       originalRequest,
       resumeState: workflow,
@@ -509,7 +543,12 @@ export function useWorkflowConversation({
   const handleStartDetailConfirmation = async (
     selectedPageId: string,
     pageLabel: string,
-    hasDetailPlan?: boolean
+    hasDetailPlan?: boolean,
+    templateParams?: {
+      templateId?: string
+      templateName?: string
+      templateSourcePath?: string
+    },
   ): Promise<boolean> => {
     if (!selectedPageId || loading || workspaceBusy) return false
     const identity = await ensurePageSession(selectedPageId, pageLabel)
@@ -519,8 +558,17 @@ export function useWorkflowConversation({
         selectedPageId,
         detailTargetType: 'page',
         sessionIdentity: identity,
-        titleFrom: `${hasDetailPlan ? '确认页面' : '设计页面'}：${pageLabel}`
-      }
+        titleFrom: `${hasDetailPlan ? '确认页面' : '设计页面'}：${pageLabel}`,
+        ...(templateParams?.templateSourcePath
+          ? {
+              pageTemplate: {
+                id: templateParams.templateId,
+                name: templateParams.templateName,
+                sourcePath: templateParams.templateSourcePath,
+              },
+            }
+          : {}),
+      },
     )
   }
 
@@ -576,9 +624,9 @@ export function useWorkflowConversation({
   }
 
   /** 通过结构化验收动作继续 acceptance 节点，禁止普通文本冒充验收通过。 */
-  const handleAcceptPreview = async (): Promise<void> => {
-    if (!activeWorkflow || loading || workspaceBusy) return
-    await handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
+  const handleAcceptPreview = async (): Promise<boolean> => {
+    if (!activeWorkflow || loading || workspaceBusy) return false
+    return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
   }
 
   /** 从当前可恢复节点重新执行失败或已停止的计划切片。 */
@@ -589,13 +637,30 @@ export function useWorkflowConversation({
       activeSession?.pageId || selectedPageId,
       { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
     )
-    const resumeFrom = workflowRetryNode(activeWorkflow, execution?.phase)
+    const resumeFrom = workflowResumeNode(activeWorkflow, execution?.phase)
     await sendWorkflowMessage('重试当前计划任务。', {
       resumeState: activeWorkflow,
       resumeExecutionRunId: execution?.runId,
       selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
       titleFrom: '重试计划任务',
       workflowDebug: { enabled: true, resumeFrom }
+    })
+  }
+
+  /** 按暂停态调试面板选择的节点恢复当前计划，并保留原执行身份与状态快照。 */
+  const handleResumePlan = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
+    if (!activeWorkflow || !workflowDebug?.resumeFrom || loading || workspaceBusy) return
+    const execution = planExecutionForPage(
+      activeWorkflow.summary.lifecycle,
+      activeSession?.pageId || selectedPageId,
+      { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
+    )
+    await sendWorkflowMessage(`从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`, {
+      resumeState: activeWorkflow,
+      resumeExecutionRunId: execution?.runId,
+      selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
+      titleFrom: '从指定节点继续执行',
+      workflowDebug
     })
   }
 
@@ -674,6 +739,7 @@ export function useWorkflowConversation({
     handleAcceptPreview,
     handleAdjustPlan,
     handleEndPlan,
+    handleResumePlan,
     handleRetryPlan,
     handleStopPlan,
     handleSend,
@@ -686,26 +752,6 @@ export function useWorkflowConversation({
     stopping,
     workspaceBusy
   }
-}
-
-/** 从最近失败步骤选择安全的重试入口，避免从 handle_failure 终点恢复。 */
-function workflowRetryNode(workflow: WorkflowRunPayload, executionPhase?: string): string {
-  const supported = new Set([
-    'detail_confirmation',
-    'inspect_workspace',
-    'prepare_build_tasks',
-    'build',
-    'integration_test',
-    'launch_project',
-    'acceptance'
-  ])
-  for (let index = workflow.events.length - 1; index >= 0; index -= 1) {
-    const nodeName = workflow.events[index].nodeName || workflow.events[index].node?.id
-    if (nodeName && supported.has(nodeName)) return nodeName
-  }
-  const phase = String(workflow.summary.phase || '')
-  if (supported.has(phase)) return phase
-  return executionPhase && supported.has(executionPhase) ? executionPhase : 'build'
 }
 
 function latestWorkflow(messages: AgentChatMessage[]): WorkflowRunPayload | undefined {
