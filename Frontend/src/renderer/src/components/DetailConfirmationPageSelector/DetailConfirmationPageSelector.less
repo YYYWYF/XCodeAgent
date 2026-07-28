@@ -285,7 +285,15 @@
 .@{class-prefix}-detail-page-selector-template-cards {
   display: grid;
   gap: 14px;
+  max-height: 440px;
+  overflow-y: auto;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+
+  &::-webkit-scrollbar { width: 5px; }
+  &::-webkit-scrollbar-thumb {
+    background: var(--wb-border);
+    border-radius: 8px;
+  }
 }
 
 .@{class-prefix}-detail-page-selector-template-card {
