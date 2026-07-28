@@ -330,6 +330,7 @@ export default function AiChatPanel({
     activeSession,
     agUiSessionsRef,
     application,
+    applicationLifecycle,
     draft,
     draftKey,
     editorMode,
@@ -936,6 +937,7 @@ export default function AiChatPanel({
             )}
 
             <MessageList
+              applicationLifecycle={applicationLifecycle}
               codeChangeActionsDisabled={loading || workspaceBusy}
               copy={copy}
               key={activeSession?.key || draftKey}

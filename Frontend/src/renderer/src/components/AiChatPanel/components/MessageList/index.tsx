@@ -8,7 +8,12 @@ import {
 import { Spin, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { EditorMode, WorkflowRunPayload, WorkspaceCodeChangeSet } from '../../../../typings'
+import type {
+  ApplicationLifecycle,
+  EditorMode,
+  WorkflowRunPayload,
+  WorkspaceCodeChangeSet
+} from '../../../../typings'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import CodeChangeCard from '../CodeChangeCard'
@@ -24,12 +29,14 @@ import {
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage, ChatCopy } from '../../types'
 import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
+import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import './MessageList.less'
 
 const { Text } = Typography
 
 type MessageListProps = {
+  applicationLifecycle?: ApplicationLifecycle
   codeChangeActionsDisabled: boolean
   copy: ChatCopy[EditorMode]
   loading: boolean
@@ -45,6 +52,7 @@ type MessageListProps = {
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
+  applicationLifecycle,
   codeChangeActionsDisabled,
   copy,
   loading,
@@ -167,6 +175,10 @@ export default function MessageList({
               const requiresClarification =
                 message.workflow &&
                 workflowClarification(message.workflow)?.status === 'requires_user_input'
+              const interactionAvailability =
+                message.workflow && requiresClarification
+                  ? workflowInteractionAvailability(message.workflow, applicationLifecycle)
+                  : 'stale'
               const visibleAssistantContent = workflowMessageContentForDisplay(
                 message.content,
                 message.workflow,
@@ -217,7 +229,8 @@ export default function MessageList({
                         )}
                         {message.workflow && requiresClarification && (
                           <WorkflowRunCard
-                            disabled={messageLoading}
+                            disabled={loading || interactionAvailability !== 'active'}
+                            interactionAvailability={interactionAvailability}
                             onSubmitClarification={onSubmitClarification}
                             workflow={message.workflow}
                           />

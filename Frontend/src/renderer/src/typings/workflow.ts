@@ -196,7 +196,7 @@ export type LifecyclePendingInteraction = {
   payload: Record<string, unknown>
   artifactRefs: Array<Record<string, unknown>>
   createdAt: string
-  submittedAt?: string
+  submittedAt?: string | null
 }
 
 export type LifecycleError = {

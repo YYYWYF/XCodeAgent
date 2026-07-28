@@ -20,6 +20,42 @@ export type PagePlanExecutionContext = {
   dependencyLocked: boolean
 }
 
+export type WorkflowInteractionAvailability = 'active' | 'stale' | 'unavailable'
+
+/** 根据后端权威生命周期判断历史 Workflow 确认是否仍可提交。 */
+export function workflowInteractionAvailability(
+  workflow: WorkflowRunPayload,
+  lifecycle?: ApplicationLifecycle
+): WorkflowInteractionAvailability {
+  if (!lifecycle) return 'unavailable'
+
+  const snapshotExecution =
+    workflowLifecycleSnapshot(workflow)?.activeExecutions?.[workflow.runId]
+  const snapshotPending = snapshotExecution?.pendingInteraction
+  const activeExecution = lifecycle.activeExecutions[workflow.runId]
+  const activePending = activeExecution?.pendingInteraction
+  if (!snapshotPending || !activePending) return 'stale'
+
+  return activeExecution.status === 'awaiting_user' &&
+    activeExecution.threadId === workflow.threadId &&
+    !activePending.submittedAt &&
+    activePending.id === snapshotPending.id &&
+    activePending.basedOnRevision === snapshotPending.basedOnRevision
+    ? 'active'
+    : 'stale'
+}
+
+/** 从 Workflow 的兼容投影位置读取提交交互所依据的生命周期快照。 */
+function workflowLifecycleSnapshot(
+  workflow: WorkflowRunPayload
+): ApplicationLifecycle | undefined {
+  const candidates = [workflow.state?.lifecycle, workflow.result?.lifecycle]
+  return candidates.find(
+    (candidate): candidate is ApplicationLifecycle =>
+      Boolean(candidate && typeof candidate === 'object')
+  )
+}
+
 /** 从后端权威 execution 派生持久模式，停止中的短暂反馈由 Workflow 状态覆盖。 */
 export function derivePlanExecutionMode(execution?: WorkbenchExecution): PlanExecutionMode {
   if (!execution || execution.status === 'completed') return 'idle'

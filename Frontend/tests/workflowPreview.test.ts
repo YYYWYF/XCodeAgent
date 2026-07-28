@@ -20,6 +20,7 @@ import {
   planExecutionForPage,
   planExecutionShowsDebugResume,
   withWorkflowExecutionStatus,
+  workflowInteractionAvailability,
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import { pageAcceptanceContinuationMessage } from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
@@ -414,6 +415,81 @@ function pageExecution(overrides: Partial<WorkbenchExecution> = {}): WorkbenchEx
     ...overrides
   }
 }
+
+/** 构造等待页面设计确认的运行及其 Workflow 快照。 */
+function pendingInteractionWorkflow(): {
+  execution: WorkbenchExecution
+  lifecycle: ApplicationLifecycle
+  workflow: WorkflowRunPayload
+} {
+  const execution = pageExecution({
+    phase: 'detail_confirmation',
+    status: 'awaiting_user',
+    pendingInteraction: {
+      id: 'interaction-design-1',
+      type: 'page_design_confirmation',
+      basedOnRevision: 3,
+      payload: {},
+      artifactRefs: [],
+      createdAt: '2026-07-23T00:00:00Z',
+      submittedAt: null
+    }
+  })
+  const lifecycle = planLifecycle(execution)
+  lifecycle.revision = 3
+  const workflow = previewWorkflow(
+    {
+      phase: 'detail_confirmation',
+      status: 'requires_user_input',
+      lifecycle
+    },
+    execution.runId
+  )
+  workflow.threadId = execution.threadId
+  workflow.state = { lifecycle }
+  return { execution, lifecycle, workflow }
+}
+
+test('只有匹配权威生命周期的待确认交互保持可提交', () => {
+  const { lifecycle, workflow } = pendingInteractionWorkflow()
+
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
+  assert.equal(workflowInteractionAvailability(workflow, undefined), 'unavailable')
+})
+
+test('确认运行被构建运行替换后历史确认卡片失效', () => {
+  const { workflow } = pendingInteractionWorkflow()
+  const stoppedBuild = planLifecycle(
+    pageExecution({
+      runId: 'run-build',
+      phase: 'build',
+      status: 'stopped',
+      pendingInteraction: undefined
+    })
+  )
+
+  assert.equal(workflowInteractionAvailability(workflow, stoppedBuild), 'stale')
+})
+
+test('已提交或 revision 不匹配的待处理交互不可重复提交', () => {
+  const { execution, lifecycle, workflow } = pendingInteractionWorkflow()
+  const submitted = planLifecycle({
+    ...execution,
+    pendingInteraction: execution.pendingInteraction
+      ? { ...execution.pendingInteraction, submittedAt: '2026-07-23T00:01:00Z' }
+      : undefined
+  })
+  const revised = planLifecycle({
+    ...execution,
+    pendingInteraction: execution.pendingInteraction
+      ? { ...execution.pendingInteraction, basedOnRevision: 4 }
+      : undefined
+  })
+
+  assert.equal(workflowInteractionAvailability(workflow, submitted), 'stale')
+  assert.equal(workflowInteractionAvailability(workflow, revised), 'stale')
+  assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
+})
 
 test('代码生成和集成测试阶段始终保持计划控制模式', () => {
   assert.equal(derivePlanExecutionMode(pageExecution({ phase: 'build' })), 'running')

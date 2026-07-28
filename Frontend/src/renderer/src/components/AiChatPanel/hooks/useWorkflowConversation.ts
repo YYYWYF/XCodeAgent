@@ -34,6 +34,7 @@ import {
 import {
   planExecutionForPage,
   withWorkflowExecutionStatus,
+  workflowInteractionAvailability,
   workflowResumeNode
 } from '../planExecutionMode'
 
@@ -46,6 +47,7 @@ type UseWorkflowConversationParams = {
   activeSession?: SessionIdentity
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   application: ApplicationConfig
+  applicationLifecycle?: ApplicationLifecycle
   draft: string
   draftKey: string
   selectedSkills: ChatMessageSkill[]
@@ -138,6 +140,7 @@ export function useWorkflowConversation({
   activeSession,
   agUiSessionsRef,
   application,
+  applicationLifecycle,
   draft,
   draftKey,
   selectedSkills,
@@ -522,6 +525,7 @@ export function useWorkflowConversation({
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
   ): Promise<boolean> => {
+    if (workflowInteractionAvailability(workflow, applicationLifecycle) !== 'active') return false
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
     if (!continuationMessage || loading || workspaceBusy) return false
     const originalRequest = workflowOriginalRequest(workflow)

@@ -5,7 +5,7 @@ import {
   LoadingOutlined,
   PauseCircleOutlined,
 } from "@ant-design/icons";
-import { Button, Checkbox, Collapse, Input, Progress, Radio, Tag, Typography } from "antd";
+import { Alert, Button, Checkbox, Collapse, Input, Progress, Radio, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useState } from "react";
 import type {
@@ -21,6 +21,7 @@ import type {
 } from "../../../../typings";
 import { cx } from "../../../../utils";
 import { pageAcceptanceContinuationMessage } from '../../workflowContinuation';
+import type { WorkflowInteractionAvailability } from '../../planExecutionMode';
 import ConfirmationArtifact from './ConfirmationArtifact';
 import DetailReview from './DetailReview';
 import './WorkflowRunCard.less';
@@ -34,6 +35,7 @@ export type ClarificationAnswers = WorkflowClarificationAnswers;
 
 type WorkflowRunCardProps = {
   disabled?: boolean;
+  interactionAvailability: WorkflowInteractionAvailability;
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
@@ -43,6 +45,7 @@ type WorkflowRunCardProps = {
 
 export default function WorkflowRunCard({
   disabled,
+  interactionAvailability,
   onSubmitClarification,
   workflow,
 }: WorkflowRunCardProps): ReactElement {
@@ -129,6 +132,17 @@ export default function WorkflowRunCard({
               {confirmationItemCount}
             </Tag>
           </div>
+          {requiresConfirmation && interactionAvailability !== 'active' && (
+            <Alert
+              message={
+                interactionAvailability === 'unavailable'
+                  ? '正在校准确认状态，请稍候。'
+                  : '该确认已提交或已失效，请使用当前计划操作继续。'
+              }
+              showIcon
+              type="info"
+            />
+          )}
           {detailReview ? (
             <DetailReview
               disabled={disabled}
