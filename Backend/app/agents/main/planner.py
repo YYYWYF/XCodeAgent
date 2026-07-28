@@ -41,6 +41,10 @@ def _planning_prompt(
         f"{BACKEND_TECH_STACK_REQUIREMENT}\n"
         "If RequirementSpec.app_info.route_root_path is present and non-empty, treat it as the fixed page root route prefix. "
         "All emitted page paths and all non-empty menu unique_path values must stay under that root prefix.\n"
+        "If RequirementSpec.app_info.menu_enabled is true, the application uses menus. In that case, no business page may use the bare root route "
+        "or the bare route_root_path as its final page path. Even the home/dashboard page must use an extra leaf segment such as '/home', "
+        "'/dashboard', or another concrete business segment under the nearest menu route or under route_root_path.\n"
+        "If RequirementSpec.app_info.menu_enabled is false or absent, pages may follow the existing non-menu routing pattern.\n"
         "Route generation is strict. Always emit final absolute routes that start with '/'. "
         "Do not emit relative route fragments such as 'role', 'management/role', or './role'. "
         "Do not emit placeholder routes such as '/menu', '/group', '/temp', or '/page' unless they are real business routes.\n"
@@ -50,6 +54,18 @@ def _planning_prompt(
         "C. If a menu is only a visual grouping node and should not own a route, emit unique_path as an empty string ''. In that case child pages must stay directly under the nearest non-empty ancestor route, for example '/root/role'.\n"
         "D. Never duplicate prefixes. If route_root_path is '/root', do not emit '/root/root/management' or '/root/root/role'.\n"
         "E. Child page paths must represent the final user-facing route, not just the leaf segment.\n"
+        "F. If menu_enabled is true, the home/dashboard page path cannot be '/root' or '/'. It must be something like '/root/home' or '/root/dashboard'.\n"
+        "Route examples to follow strictly:\n"
+        "- Valid: route_root_path='/root', menu unique_path='/root/management', page path='/root/management/role'.\n"
+        "- Valid: route_root_path='/root', menu unique_path='', page path='/root/role'. The empty-route menu is only a grouping node and does not add '/management' or any other segment.\n"
+        "- Valid: menu_enabled=true, route_root_path='/root', home page path='/root/home'.\n"
+        "- Invalid: route_root_path='/root', menu unique_path='/management'. The root prefix is missing.\n"
+        "- Invalid: route_root_path='/root', menu unique_path='/root/management', page path='role', 'management/role', or '/root/role' for a page that belongs under that routed menu.\n"
+        "- Invalid: route_root_path='/root', menu unique_path='', page path='/root/management/role' when 'management' is only the menu name and the menu itself has no route.\n"
+        "- Invalid: menu_enabled=true, route_root_path='/root', home page path='/root'.\n"
+        "- Invalid: menu_enabled=true, home page path='/'.\n"
+        "- Invalid: route_root_path='/root', menu unique_path='/root/root/management', page path='/root/root/management/role', or placeholder menu routes like '/menu'.\n"
+        "If you are unsure, prefer fewer menu route levels and emit the page's final absolute path directly, but never omit the required root prefix and never emit relative fragments.\n"
         "Return only one JSON object, without markdown fences or commentary.\n"
         "The JSON object must include these top-level keys:\n"
         "- requirements_overview: app goal, roles, modules, flows, acceptance focus\n"
@@ -124,6 +140,7 @@ def _planning_prompt(
         "2.2 If a menu unique_path is non-empty, every descendant page path must equal that menu unique_path or start with menu unique_path + '/'.\n"
         "2.3 If route_root_path is present, every non-empty menu unique_path and every page path must equal route_root_path or start with route_root_path + '/'.\n"
         "2.4 If a menu unique_path is empty, descendant page paths must start from the nearest non-empty ancestor route or directly from route_root_path.\n"
+        "2.5 If menu_enabled is true, no page path may equal '/' or route_root_path itself; every page path must contain at least one business leaf segment beyond the nearest menu route or route_root_path.\n"
         "3. Every data-backed page declares endpoint_dependencies using only endpoint_id values declared in "
         "api_contracts. Do not leave API selection to page design.\n"
         "4. Every navigation_targets[].targetPageId names another declared frontend pageId.\n"
@@ -201,6 +218,7 @@ def revise_project_plan_with_chat_model(
                 "生成一个可在本地运行的前后端应用工程。",
             ),
             "route_root_path": existing_plan.get("app", {}).get("route_root_path", ""),
+            "menu_enabled": existing_plan.get("app", {}).get("menu_enabled", False),
         },
         "requirements_overview": existing_plan.get("requirements_overview", {}),
         "user_roles": existing_plan.get("permission_model", {}).get("roles")

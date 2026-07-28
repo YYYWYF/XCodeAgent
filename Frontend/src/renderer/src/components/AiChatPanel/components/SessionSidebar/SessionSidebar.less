@@ -423,15 +423,15 @@
 .@{class-prefix}-outline-row {
   display: flex;
   width: 100%;
-  height: 26px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 8px 0 calc(3px + var(--outline-level) * 23px);
+  min-height: 38px;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 8px 7px calc(3px + var(--outline-level) * 23px);
   color: #34405d;
   text-align: left;
   background: transparent;
   border: 0;
-  border-radius: 5px;
+  border-radius: 8px;
   cursor: pointer;
 
   &:hover,
@@ -465,8 +465,23 @@
 .@{class-prefix}-outline-icon {
   display: inline-flex;
   width: 15px;
+  min-height: 18px;
   justify-content: center;
   font-size: 13px;
+}
+
+.@{class-prefix}-outline-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.@{class-prefix}-outline-label-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
 }
 
 .@{class-prefix}-outline-label {
@@ -474,9 +489,26 @@
   flex: 1;
   overflow: hidden;
   font-size: 12px;
-  line-height: 20px;
+  line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.@{class-prefix}-outline-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: #8b91a3;
+  font-size: 10px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-outline-menu-count {
+  flex: 0 0 auto;
+  color: #8b91a3;
+  font-size: 10px;
+  line-height: 14px;
 }
 
 .@{class-prefix}-outline-design-status {
@@ -954,6 +986,8 @@
   .@{class-prefix}-outline-children::before,
   .@{class-prefix}-api-list::before { background: #303646; }
   .@{class-prefix}-outline-empty { color: #858c9d; }
+  .@{class-prefix}-outline-meta,
+  .@{class-prefix}-outline-menu-count { color: #8f96a8; }
   .@{class-prefix}-outline-design-status {
     color: #c3adff;
     background: rgba(167, 130, 255, 0.13);

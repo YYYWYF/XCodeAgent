@@ -1,7 +1,7 @@
 export {};
 
 import type { ElectronAPI } from '@electron-toolkit/preload';
-import type { ApplicationSchemaConfig, DevelopmentPlanningPageTreeNode } from './typings';
+import type { ApplicationMenuItem, ApplicationSchemaConfig, DevelopmentPlanningPageTreeNode } from './typings';
 
 declare global {
   interface Window {
@@ -36,7 +36,8 @@ declare global {
         writeTemplatePages: (payload: {
           projectPath: string;
           appName: string;
-          pages: Array<{ pageKey: string; name?: string; menuPath: string }>;
+          pages: Array<{ pageKey: string; name?: string }>;
+          menuItems: ApplicationMenuItem[];
         }) => Promise<{ ok?: boolean; pagesDir: string; written: Array<{ pageKey: string; path: string }> }>;
         readApplication: (payload: {
           workspaceRoot: string;

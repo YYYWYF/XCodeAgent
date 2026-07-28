@@ -56,6 +56,9 @@ def _merge_agent_items(
     ]
     agent_items = [item for item in agent_items if item.get(identity_key)]
     if authoritative:
+        # ProjectPlan.frontend_pages 不能为空；若模型遗漏页面或只输出空目录壳，回退到需求文档派生的默认页面。
+        if key == "frontend_pages" and not agent_items and default_items:
+            return default_items
         # 模型显式返回空契约时保留由数据源确定性生成的契约，避免业务计划静默退化为空数组。
         if key == "api_contracts" and not agent_items and default_items:
             return default_items
@@ -176,6 +179,18 @@ def _path_from_pageId(pageId: str) -> str:
     return "/" if route in {"dashboard", "dashboard-page", "home", "index"} else f"/{route}"
 
 
+def _menu_leaf_path_from_pageId(pageId: str) -> str:
+    """在启用菜单时，为首页类页面生成非根节点的稳定叶子路由。"""
+
+    route = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(pageId or "home")).strip("-_")
+    route = route.replace("_", "-").lower() or "home"
+    if route.endswith("-page") and route != "dashboard-page":
+        route = route[: -len("-page")] or route
+    if route in {"dashboard", "dashboard-page", "home", "index"}:
+        route = "home"
+    return f"/{route}"
+
+
 def _normalize_data_sources(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for item in items:
@@ -201,6 +216,7 @@ def normalize_project_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
 
     normalized = dict(project_plan)
     route_root_path = _route_root_path_from_plan(normalized)
+    menu_enabled = _menu_enabled_from_plan(normalized)
     if "api_contracts" in normalized:
         normalized["api_contracts"] = _normalize_api_contracts(
             _dict_items(normalized.get("api_contracts"))
@@ -208,6 +224,11 @@ def normalize_project_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
     if "frontend_pages" in normalized:
         flat_pages = _normalize_frontend_pages(
             flatten_frontend_pages(normalized.get("frontend_pages"))
+        )
+        flat_pages = _apply_menu_home_route_rule(
+            flat_pages,
+            menu_enabled=menu_enabled,
+            route_root_path=route_root_path,
         )
         if "api_contracts" in normalized:
             flat_pages = normalize_page_dependencies(
@@ -218,6 +239,7 @@ def normalize_project_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
             normalized.get("frontend_pages"),
             flat_pages,
             root_route_prefix=route_root_path,
+            menu_enabled=menu_enabled,
         )
     return normalized
 
@@ -227,6 +249,13 @@ def _route_root_path_from_plan(project_plan: dict[str, Any]) -> str:
 
     app = project_plan.get("app") if isinstance(project_plan.get("app"), dict) else {}
     return str(app.get("route_root_path") or "").strip()
+
+
+def _menu_enabled_from_plan(project_plan: dict[str, Any]) -> bool:
+    """读取当前计划是否启用了菜单模式。"""
+
+    app = project_plan.get("app") if isinstance(project_plan.get("app"), dict) else {}
+    return bool(app.get("menu_enabled"))
 
 
 def _normalize_frontend_pages(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -256,6 +285,32 @@ def _normalize_frontend_pages(items: list[dict[str, Any]]) -> list[dict[str, Any
             }
         )
     return normalized
+
+
+def _apply_menu_home_route_rule(
+    pages: list[dict[str, Any]],
+    *,
+    menu_enabled: bool,
+    route_root_path: str,
+) -> list[dict[str, Any]]:
+    """启用菜单时，避免首页类页面继续占用根路由。"""
+
+    if not menu_enabled:
+        return [dict(page) for page in pages]
+    normalized_root = route_root_path.rstrip("/") if route_root_path and route_root_path != "/" else ""
+    adjusted: list[dict[str, Any]] = []
+    for page in pages:
+        current = dict(page)
+        page_id = str(current.get("pageId") or current.get("id") or "").strip()
+        path = str(current.get("path") or "").strip()
+        if path == "/" or (normalized_root and path == normalized_root):
+            current["path"] = (
+                f"{normalized_root}{_menu_leaf_path_from_pageId(page_id)}"
+                if normalized_root
+                else _menu_leaf_path_from_pageId(page_id)
+            )
+        adjusted.append(current)
+    return adjusted
 
 
 def _unique_page_path(path: str, pageId: str, used_paths: set[str]) -> str:
@@ -672,6 +727,13 @@ def create_project_plan(
         ).get("route_root_path")
         or ""
     ).strip()
+    menu_enabled = bool(
+        (
+            spec.get("app_info")
+            if isinstance(spec.get("app_info"), dict)
+            else {}
+        ).get("menu_enabled")
+    )
     data_sources = _normalize_data_sources(
         _merge_agent_items(
             _planned_data_sources(spec),
@@ -706,12 +768,18 @@ def create_project_plan(
             authoritative=authoritative_agent_plan,
         )
     )
+    frontend_page_leaves = _apply_menu_home_route_rule(
+        frontend_page_leaves,
+        menu_enabled=menu_enabled,
+        route_root_path=route_root_path,
+    )
     frontend_page_leaves = normalize_page_dependencies(frontend_page_leaves, api_contracts)
     frontend_pages = rebuild_frontend_page_tree(
         _agent_section(agent_plan, "frontend_pages"),
         frontend_page_leaves,
         module_names=_module_name_map(spec),
         root_route_prefix=route_root_path,
+        menu_enabled=menu_enabled,
     )
 
     agent_architecture = _agent_section(agent_plan, "architecture")
@@ -738,6 +806,7 @@ def create_project_plan(
             "name": spec["app_info"]["name"],
             "summary": spec["app_info"]["summary"],
             **({"route_root_path": route_root_path} if route_root_path else {}),
+            "menu_enabled": menu_enabled,
         },
         "requirements_overview": _requirements_overview(spec, agent_plan),
         "project_acceptance_criteria": _project_acceptance_criteria(

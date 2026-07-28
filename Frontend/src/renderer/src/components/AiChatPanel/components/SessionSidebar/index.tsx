@@ -117,6 +117,12 @@ type OutlineRowProps = {
   visibleKeys: Set<string>
 }
 
+/** 递归统计当前目录节点下的页面数量，用于目录标签展示。 */
+function outlineLeafCount(item: ApplicationMenuItem): number {
+  if (item.type !== 'menu') return 1
+  return (item.children || []).reduce((total, child) => total + outlineLeafCount(child), 0)
+}
+
 /** 渲染单个页面目录节点，并展示其详细设计状态。 */
 function OutlineRow({
   activeSessionId,
@@ -140,6 +146,7 @@ function OutlineRow({
   const isFolder = item.type === 'menu' || children.length > 0
   const selected = selectedKey === item.key
   const designed = Boolean(item.designed)
+  const childPageCount = isFolder ? outlineLeafCount(item) : 0
 
   return (
     <div className={cx('outline-node')}>
@@ -160,14 +167,31 @@ function OutlineRow({
           {isFolder ? <CaretDownOutlined className={cx(!expanded && 'collapsed')} /> : null}
         </span>
         <span className={cx('outline-icon')}>
-          {isFolder ? <FolderOpenOutlined /> : <FileTextOutlined />}
+          {isFolder
+            ? expanded
+              ? <FolderOpenOutlined />
+              : <FolderOutlined />
+            : <FileTextOutlined />}
         </span>
-        <span className={cx('outline-label')}>{item.label}</span>
-        {!isFolder ? (
-          <span className={cx('outline-design-status', designed ? 'designed' : 'undesign')}>
-            {designed ? '已设计' : '待设计'}
+        <span className={cx('outline-copy')}>
+          <span className={cx('outline-label-row')}>
+            <span className={cx('outline-label')}>{item.label}</span>
+            {isFolder ? (
+              <span className={cx('outline-menu-count')}>
+                {childPageCount} 个页面
+              </span>
+            ) : (
+              <span className={cx('outline-design-status', designed ? 'designed' : 'undesign')}>
+                {designed ? '已设计' : '待设计'}
+              </span>
+            )}
           </span>
-        ) : null}
+          {item.path ? (
+            <span className={cx('outline-meta')}>
+              {item.path}
+            </span>
+          ) : null}
+        </span>
       </button>
       {!isFolder && !disabled ? (
         <PageSessionHistory
@@ -254,7 +278,10 @@ function collectVisibleKeys(items: ApplicationMenuItem[], query: string): Set<st
   const normalizedQuery = query.trim().toLocaleLowerCase()
 
   const visit = (item: ApplicationMenuItem): boolean => {
-    const childMatches = item.children?.some(visit) || false
+    let childMatches = false
+    item.children?.forEach((child) => {
+      if (visit(child)) childMatches = true
+    })
     const selfMatches = !normalizedQuery || item.label.toLocaleLowerCase().includes(normalizedQuery)
     if (selfMatches || childMatches) visible.add(item.key)
     return selfMatches || childMatches

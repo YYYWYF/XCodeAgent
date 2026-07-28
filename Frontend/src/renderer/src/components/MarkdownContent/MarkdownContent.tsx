@@ -5,11 +5,16 @@ import './MarkdownContent.less';
 type MarkdownBlock =
   | { type: 'heading'; depth: number; text: string }
   | { type: 'paragraph'; text: string }
-  | { type: 'list'; ordered: boolean; items: string[] }
+  | { type: 'list'; ordered: boolean; items: MarkdownListItem[] }
   | { type: 'code'; code: string; language: string }
   | { type: 'quote'; text: string }
   | { type: 'table'; rows: string[][] }
   | { type: 'rule' };
+
+type MarkdownListItem = {
+  text: string;
+  children: MarkdownBlock[];
+};
 
 type MarkdownContentProps = {
   content: string;
@@ -114,26 +119,9 @@ function parseMarkdown(content: string) {
 
     const listItem = getListItem(line);
     if (listItem) {
-      const items: string[] = [];
-
-      while (index < lines.length) {
-        const nextItem = getListItem(lines[index]);
-        if (nextItem?.ordered === listItem.ordered) {
-          items.push(nextItem.text);
-          index += 1;
-          continue;
-        }
-
-        if (items.length && /^\s{2,}\S/.test(lines[index])) {
-          items[items.length - 1] = `${items[items.length - 1]} ${lines[index].trim()}`;
-          index += 1;
-          continue;
-        }
-
-        break;
-      }
-
-      blocks.push({ type: 'list', ordered: listItem.ordered, items });
+      const parsedList = parseList(lines, index);
+      blocks.push(parsedList.block);
+      index = parsedList.nextIndex;
       continue;
     }
 
@@ -167,13 +155,78 @@ function isBlockStart(lines: string[], index: number) {
 }
 
 function getListItem(line: string) {
+  const indent = line.match(/^\s*/)?.[0].length ?? 0;
   const ordered = line.match(ORDERED_LIST_RE);
-  if (ordered) return { ordered: true, text: ordered[1] };
+  if (ordered) return { indent, ordered: true, text: ordered[1] };
 
   const unordered = line.match(UNORDERED_LIST_RE);
-  if (unordered) return { ordered: false, text: unordered[1] };
+  if (unordered) return { indent, ordered: false, text: unordered[1] };
 
   return null;
+}
+
+/** 递归解析 Markdown 列表缩进层级，保留菜单树需要的父子结构。 */
+function parseList(lines: string[], startIndex: number): {
+  block: MarkdownBlock;
+  nextIndex: number;
+} {
+  const firstItem = getListItem(lines[startIndex]);
+  if (!firstItem) {
+    return {
+      block: { type: 'list', ordered: false, items: [] },
+      nextIndex: startIndex,
+    };
+  }
+
+  const baseIndent = firstItem.indent;
+  const ordered = firstItem.ordered;
+  const items: MarkdownListItem[] = [];
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const currentItem = getListItem(lines[index]);
+    if (!currentItem) break;
+    if (currentItem.indent < baseIndent || currentItem.ordered !== ordered) break;
+
+    if (currentItem.indent > baseIndent) {
+      if (!items.length) break;
+      const nestedList = parseList(lines, index);
+      items[items.length - 1].children.push(nestedList.block);
+      index = nestedList.nextIndex;
+      continue;
+    }
+
+    const item: MarkdownListItem = { text: currentItem.text, children: [] };
+    items.push(item);
+    index += 1;
+
+    while (index < lines.length) {
+      const nextLine = lines[index];
+      const nextItem = getListItem(nextLine);
+      if (nextItem) {
+        if (nextItem.indent > baseIndent) {
+          const nestedList = parseList(lines, index);
+          item.children.push(nestedList.block);
+          index = nestedList.nextIndex;
+          continue;
+        }
+        break;
+      }
+
+      if (!nextLine.trim()) break;
+      if (/^\s+/.test(nextLine) && !isBlockStart(lines, index)) {
+        item.text = `${item.text} ${nextLine.trim()}`;
+        index += 1;
+        continue;
+      }
+      break;
+    }
+  }
+
+  return {
+    block: { type: 'list', ordered, items },
+    nextIndex: index,
+  };
 }
 
 function isTableStart(lines: string[], index: number) {
@@ -196,8 +249,8 @@ function splitTableRow(line: string) {
   return row.split('|').map((cell) => cell.trim());
 }
 
-function renderBlock(block: MarkdownBlock, index: number) {
-  const key = `markdown-block-${index}`;
+function renderBlock(block: MarkdownBlock, index: number | string) {
+  const key = `markdown-block-${String(index)}`;
 
   if (block.type === 'heading') {
     return renderHeading(block.depth, block.text, key);
@@ -212,7 +265,12 @@ function renderBlock(block: MarkdownBlock, index: number) {
     return (
       <ListTag key={key}>
         {block.items.map((item, itemIndex) => (
-          <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`)}</li>
+          <li key={`${key}-${itemIndex}`}>
+            {renderInline(item.text, `${key}-${itemIndex}`)}
+            {item.children.map((child, childIndex) =>
+              renderBlock(child, `${key}-${itemIndex}-${childIndex}`),
+            )}
+          </li>
         ))}
       </ListTag>
     );

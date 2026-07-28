@@ -20,25 +20,71 @@
 }
 
 .@{class-prefix}-project-plan-tree-node {
+  position: relative;
   display: grid;
   gap: 6px;
 }
 
 .@{class-prefix}-project-plan-tree-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: calc(var(--tree-level, 0) * 18px);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px 10px calc((var(--tree-level, 0) * 20px) + 12px);
   min-width: 0;
+  border: 1px solid var(--wb-border, var(--modal-border));
+  border-radius: 12px;
+  background: var(--wb-canvas, var(--modal-bg));
 
   .ant-tag {
     margin-right: 0;
   }
 }
 
+.@{class-prefix}-project-plan-tree-node.@{class-prefix}-menu-node > .@{class-prefix}-project-plan-tree-row {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(139, 92, 246, 0.04));
+}
+
+.@{class-prefix}-project-plan-tree-node.@{class-prefix}-page-node > .@{class-prefix}-project-plan-tree-row {
+  background: var(--wb-canvas, var(--modal-bg));
+}
+
+.@{class-prefix}-project-plan-tree-icon {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent, var(--modal-accent));
+  background: rgba(139, 92, 246, 0.1);
+  border-radius: 9px;
+  font-size: 14px;
+}
+
+.@{class-prefix}-project-plan-tree-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 6px;
+}
+
+.@{class-prefix}-project-plan-tree-headline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.@{class-prefix}-project-plan-tree-count.ant-typography,
+.@{class-prefix}-project-plan-tree-page-id.ant-typography {
+  font-size: 12px;
+}
+
 .@{class-prefix}-project-plan-tree-path.ant-typography {
-  margin-left: auto;
-  max-width: 50%;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -46,13 +92,25 @@
 
 .@{class-prefix}-project-plan-tree-purpose.ant-typography {
   display: block;
-  padding-left: calc((var(--tree-level, 0) * 18px) + 54px);
+  padding-left: calc((var(--tree-level, 0) * 20px) + 62px);
   line-height: 1.5;
 }
 
 .@{class-prefix}-project-plan-tree-children {
+  position: relative;
   display: grid;
   gap: 8px;
+  padding-left: 12px;
+
+  &::before {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc((var(--tree-level, 0) * 20px) + 26px);
+    width: 1px;
+    content: '';
+    background: var(--wb-border, var(--modal-border));
+  }
 }
 
 .@{class-prefix}-project-plan-tree-empty {
@@ -65,11 +123,10 @@
 
 @media (max-width: 760px) {
   .@{class-prefix}-project-plan-tree-row {
-    flex-wrap: wrap;
+    padding-right: 10px;
   }
 
   .@{class-prefix}-project-plan-tree-path.ant-typography {
     max-width: 100%;
-    margin-left: 0;
   }
 }

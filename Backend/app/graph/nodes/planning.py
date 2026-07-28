@@ -487,11 +487,19 @@ def _generate_all_detail_plans(
     """为用户选中的页面或 endpoint 生成功能详细设计。"""
 
     project_pages = project_plan.get("frontend_pages", [])
-    normalized_project_pages = [
+    normalized_project_page_leaves = [
         _normalize_detail_page(page)
         for page in flatten_frontend_pages(project_pages)
         if isinstance(page, dict)
     ]
+    normalized_project_pages = update_frontend_page_leaves(
+        project_pages,
+        {
+            str(page.get("pageId") or page.get("id") or "").strip(): page
+            for page in normalized_project_page_leaves
+            if str(page.get("pageId") or page.get("id") or "").strip()
+        },
+    )
     updated_plan = (
         project_plan
         if normalized_project_pages == project_pages
@@ -500,7 +508,7 @@ def _generate_all_detail_plans(
     source_pages = (
         frontend_pages
         if isinstance(frontend_pages, list)
-        else normalized_project_pages
+        else normalized_project_page_leaves
     )
     pages = [
         _normalize_detail_page(page)

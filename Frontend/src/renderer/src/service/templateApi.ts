@@ -1,4 +1,4 @@
-import type { ApplicationSchemaConfig, WorkflowRunPayload } from '../typings'
+import type { ApplicationMenuItem, ApplicationSchemaConfig, WorkflowRunPayload } from '../typings'
 
 export interface TemplateInitRequest {
   appName: string
@@ -23,6 +23,11 @@ export interface TemplateInitResponse {
     generatedAt: number
     fileCount?: number
   }
+}
+
+type TemplatePageWriteItem = {
+  pageKey: string
+  name?: string
 }
 
 /** 默认前端模板仓库地址。 */
@@ -99,6 +104,118 @@ function pageKeyFromPath(rawPath: unknown, fallbackIndex: number): string {
   return `Page${fallbackIndex + 1}`
 }
 
+/** 从页面标识推导模板工程目录名，优先复用 pageId 的业务语义。 */
+function pageKeyFromPageId(rawPageId: unknown, fallbackPath: unknown, fallbackIndex: number): string {
+  const pageId = String(rawPageId ?? '').trim()
+  if (!pageId) return pageKeyFromPath(fallbackPath, fallbackIndex)
+  const pascal = pageId
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join('')
+    .replace(/[^A-Za-z0-9]/g, '')
+  if (/^[A-Za-z]/.test(pascal)) return pascal
+  return pageKeyFromPath(fallbackPath, fallbackIndex)
+}
+
+/** 读取 workflow 中最新的 ProjectPlan，供模板文件和菜单初始化使用。 */
+function projectPlanFromWorkflow(
+  workflow: WorkflowRunPayload | undefined
+): Record<string, unknown> | undefined {
+  if (!workflow) return undefined
+  for (const source of [workflow.result, workflow.state]) {
+    const projectPlan = source?.project_plan
+    if (projectPlan && typeof projectPlan === 'object' && !Array.isArray(projectPlan)) {
+      return projectPlan as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
+/** 读取 ProjectPlan.app.route_root_path，供模板菜单生成相对路由段时剥离根前缀。 */
+function projectPlanRouteRootPath(projectPlan: Record<string, unknown> | undefined): string {
+  const app = projectPlan?.app
+  if (!app || typeof app !== 'object' || Array.isArray(app)) return ''
+  return normalizeAbsoluteRoute((app as Record<string, unknown>).route_root_path)
+}
+
+/** 为 ProjectPlan 页面叶子生成稳定标识，供页面目录和菜单叶子复用同一 key。 */
+function frontendPageIdentity(page: Record<string, unknown>, fallbackIndex: number): string {
+  const pageId = String(page.pageId ?? page.id ?? '').trim()
+  if (pageId) return pageId
+  const path = String(page.path ?? '').trim()
+  if (path) return path
+  return `page-${fallbackIndex + 1}`
+}
+
+/** 把任意路由规范成以 / 开头、无尾随 / 的绝对路径文本。 */
+function normalizeAbsoluteRoute(rawPath: unknown): string {
+  const value = String(rawPath ?? '').trim()
+  if (!value) return ''
+  const normalized = value.startsWith('/') ? value : `/${value}`
+  return normalized.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
+}
+
+/** 把子节点绝对路由转换成相对父节点的菜单 path，避免重复拼接父级路径。 */
+function relativeMenuPath(currentAbsolutePath: string, parentAbsolutePath: string): string {
+  if (!currentAbsolutePath) return ''
+  if (!parentAbsolutePath) return currentAbsolutePath.replace(/^\/+/, '')
+  if (currentAbsolutePath === parentAbsolutePath) return ''
+  if (
+    currentAbsolutePath !== parentAbsolutePath &&
+    currentAbsolutePath.startsWith(`${parentAbsolutePath}/`)
+  ) {
+    return currentAbsolutePath.slice(parentAbsolutePath.length + 1)
+  }
+  return currentAbsolutePath.replace(/^\/+/, '')
+}
+
+/** 递归把 ProjectPlan.frontend_pages 转成可写入模板 menus.ts 的 ApplicationMenuItem[]。 */
+function buildTemplateMenuItems(
+  value: unknown,
+  pageKeysByIdentity: Map<string, string>,
+  parentAbsolutePath = '',
+  counters = { menu: 0, page: 0 }
+): ApplicationMenuItem[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap<ApplicationMenuItem>((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    const record = item as Record<string, unknown>
+    const pageId = String(record.pageId ?? record.id ?? '').trim()
+    if (!pageId && Array.isArray(record.children)) {
+      counters.menu += 1
+      const absolutePath = normalizeAbsoluteRoute(record.unique_path)
+      const currentPath = relativeMenuPath(absolutePath, parentAbsolutePath)
+      const children = buildTemplateMenuItems(
+        record.children,
+        pageKeysByIdentity,
+        absolutePath || parentAbsolutePath,
+        counters
+      )
+      if (!children.length) return []
+      return [{
+        name: String(record.name || `菜单 ${counters.menu}`),
+        ...(currentPath ? { path: currentPath } : {}),
+        children
+      }]
+    }
+
+    counters.page += 1
+    const identity = frontendPageIdentity(record, counters.page - 1)
+    const pageKey = pageKeysByIdentity.get(identity)
+    if (!pageKey) return []
+    const absolutePath = normalizeAbsoluteRoute(record.path)
+    const pagePath = relativeMenuPath(absolutePath, parentAbsolutePath)
+    const resolvedPath =
+      pagePath || (absolutePath === parentAbsolutePath ? '' : absolutePath.replace(/^\/+/, '') || pageKey)
+    return [{
+      key: pageKey,
+      name: typeof record.name === 'string' ? record.name : pageKey,
+      path: resolvedPath
+    }]
+  })
+}
+
 /** 递归拍平 ProjectPlan.frontend_pages，仅保留真正的页面叶子。 */
 function flattenFrontendPages(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) return []
@@ -116,49 +233,44 @@ function flattenFrontendPages(value: unknown): Array<Record<string, unknown>> {
   })
 }
 
-/** 从 workflow 中提取规划出的前端页面清单（ProjectPlan.frontend_pages）。 */
-function extractFrontendPages(
+/** 从 workflow 中提取模板初始化所需的页面文件清单与菜单树。 */
+function extractFrontendTemplateArtifacts(
   workflow: WorkflowRunPayload | undefined
-): Array<{ pageKey: string; name?: string; menuPath: string }> {
-  if (!workflow) return []
-  const sources = [workflow.result, workflow.state]
-  for (const source of sources) {
-    const projectPlan = source?.project_plan
-    if (projectPlan && typeof projectPlan === 'object') {
-      const plan = projectPlan as Record<string, unknown>
-      const frontendPages = flattenFrontendPages(plan.frontend_pages)
-      if (!frontendPages.length) continue
-      const seen = new Set<string>()
-      const result: Array<{ pageKey: string; name?: string; menuPath: string }> = []
-      frontendPages.forEach((page, index: number) => {
-        // 优先用 pageId（后端生成的英文标识），否则从 path 推导
-        const pageId = typeof page?.pageId === 'string' ? page.pageId.trim() : ''
-        let pageKey = ''
-        if (pageId && /^[A-Za-z][A-Za-z0-9_-]*$/.test(pageId)) {
-          // pageId 转成 PascalCase 作为目录名
-          pageKey = pageId
-            .split(/[-_\s]+/)
-            .filter(Boolean)
-            .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-            .join('')
-        } else {
-          pageKey = pageKeyFromPath(page?.path, index)
-        }
-        if (!pageKey || seen.has(pageKey)) return
-        seen.add(pageKey)
-        // 菜单 path：取路由最后一段，去掉前导/尾随斜杠（/duty-list -> duty-list，/ -> home）
-        const rawPath = String(page?.path ?? '').trim()
-        const menuPath = rawPath.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean).pop() || pageKey.charAt(0).toLowerCase() + pageKey.slice(1)
-        result.push({
-          pageKey,
-          name: typeof page?.name === 'string' ? page.name : undefined,
-          menuPath
-        })
-      })
-      return result
+): { menuItems: ApplicationMenuItem[]; pages: TemplatePageWriteItem[] } {
+  const projectPlan = projectPlanFromWorkflow(workflow)
+  if (!projectPlan) return { menuItems: [], pages: [] }
+
+  const frontendPages = flattenFrontendPages(projectPlan.frontend_pages)
+  if (!frontendPages.length) return { menuItems: [], pages: [] }
+
+  const pageKeysByIdentity = new Map<string, string>()
+  const seenPageKeys = new Set<string>()
+  const pages: TemplatePageWriteItem[] = []
+  frontendPages.forEach((page, index) => {
+    const identity = frontendPageIdentity(page, index)
+    let pageKey = pageKeyFromPageId(page.pageId ?? page.id, page.path, index)
+    if (!pageKey) return
+    if (seenPageKeys.has(pageKey)) {
+      let suffix = 2
+      while (seenPageKeys.has(`${pageKey}${suffix}`)) suffix += 1
+      pageKey = `${pageKey}${suffix}`
     }
+    seenPageKeys.add(pageKey)
+    pageKeysByIdentity.set(identity, pageKey)
+    pages.push({
+      pageKey,
+      name: typeof page.name === 'string' ? page.name : undefined
+    })
+  })
+
+  return {
+    pages,
+    menuItems: buildTemplateMenuItems(
+      projectPlan.frontend_pages,
+      pageKeysByIdentity,
+      projectPlanRouteRootPath(projectPlan)
+    )
   }
-  return []
 }
 
 /**
@@ -182,14 +294,15 @@ export async function generateApplicationTemplateFiles(
     throw new Error('项目位置不能为空，无法生成页面文件。')
   }
 
-  const pages = extractFrontendPages(workflow)
+  const artifacts = extractFrontendTemplateArtifacts(workflow)
   console.log(
     '[templateApi] generateApplicationTemplateFiles 调用: ' +
       JSON.stringify({
         appName,
         projectPath,
-        pagesCount: pages.length,
-        pages,
+        pagesCount: artifacts.pages.length,
+        pages: artifacts.pages,
+        menuItems: artifacts.menuItems,
         hasWorkflow: Boolean(workflow),
         resultKeys: workflow?.result ? Object.keys(workflow.result) : [],
         stateKeys: workflow?.state ? Object.keys(workflow.state) : [],
@@ -201,7 +314,7 @@ export async function generateApplicationTemplateFiles(
         )
       })
   )
-  if (pages.length === 0) {
+  if (artifacts.pages.length === 0) {
     console.warn('[templateApi] 未从规划结果中提取到页面清单，跳过页面文件生成。')
     return { written: [] }
   }
@@ -213,11 +326,12 @@ export async function generateApplicationTemplateFiles(
     return { written: [] }
   }
 
-  console.log('[templateApi] 调用 writeTemplatePages IPC, pages=' + JSON.stringify(pages))
+  console.log('[templateApi] 调用 writeTemplatePages IPC, payload=' + JSON.stringify(artifacts))
   const result = await workspaceApi.writeTemplatePages({
     projectPath,
     appName,
-    pages
+    pages: artifacts.pages,
+    menuItems: artifacts.menuItems
   })
   console.log('[templateApi] writeTemplatePages 返回: ' + JSON.stringify(result))
 

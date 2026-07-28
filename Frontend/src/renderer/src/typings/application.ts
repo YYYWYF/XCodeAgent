@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { DevelopmentContract } from './developmentContract';
 
 export type ApplicationTerminal = 'PC' | 'Mobile';
@@ -122,7 +123,7 @@ export type MenuDataItem = {
   /** @name 在菜单中隐藏自己和子节点 */
   hideInMenu?: boolean;
   /** @name 菜单的icon */
-  icon?: React.ReactNode;
+  icon?: ReactNode;
   /** @name 自定义菜单的国际化 key */
   locale?: string | false;
   /** @name 菜单的名字 */

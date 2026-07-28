@@ -1,3 +1,7 @@
+import {
+  FileTextOutlined,
+  FolderOpenOutlined
+} from '@ant-design/icons'
 import { Tag, Typography } from 'antd'
 import type { CSSProperties, ReactElement } from 'react'
 import type { DevelopmentPlanningPageTreeNode } from '../../typings'
@@ -10,6 +14,12 @@ type Props = {
   nodes: DevelopmentPlanningPageTreeNode[]
   title?: string
   emptyText?: string
+}
+
+/** 递归统计当前菜单节点下的页面叶子数量，便于展示目录规模。 */
+function leafPageCount(node: DevelopmentPlanningPageTreeNode): number {
+  if (node.type === 'page') return 1
+  return (node.children || []).reduce((total, child) => total + leafPageCount(child), 0)
 }
 
 /** 仅保留对象数组项，避免菜单树解析被脏数据打断。 */
@@ -68,19 +78,30 @@ function TreeNodeItem({
   node: DevelopmentPlanningPageTreeNode
 }): ReactElement {
   if (node.type === 'menu') {
+    const childPageCount = leafPageCount(node)
     return (
       <div
         className={cx('project-plan-tree-node', 'menu-node')}
         style={{ '--tree-level': level } as CSSProperties}
       >
         <div className={cx('project-plan-tree-row')}>
-          <Tag color="purple">菜单</Tag>
-          <Text strong>{node.label}</Text>
-          {node.uniquePath ? (
-            <Text className={cx('project-plan-tree-path')} code>
-              {node.uniquePath}
-            </Text>
-          ) : null}
+          <span className={cx('project-plan-tree-icon')} aria-hidden="true">
+            <FolderOpenOutlined />
+          </span>
+          <div className={cx('project-plan-tree-copy')}>
+            <div className={cx('project-plan-tree-headline')}>
+              <Tag color="purple">菜单</Tag>
+              <Text strong>{node.label}</Text>
+              <Text className={cx('project-plan-tree-count')} type="secondary">
+                {childPageCount} 个页面
+              </Text>
+            </div>
+            {node.uniquePath ? (
+              <Text className={cx('project-plan-tree-path')} code>
+                {node.uniquePath}
+              </Text>
+            ) : null}
+          </div>
         </div>
         <div className={cx('project-plan-tree-children')}>
           {(node.children || []).map((child) => (
@@ -96,13 +117,25 @@ function TreeNodeItem({
       style={{ '--tree-level': level } as CSSProperties}
     >
       <div className={cx('project-plan-tree-row')}>
-        <Tag>页面</Tag>
-        <Text strong>{node.label}</Text>
-        {node.path ? (
-          <Text className={cx('project-plan-tree-path')} code>
-            {node.path}
-          </Text>
-        ) : null}
+        <span className={cx('project-plan-tree-icon')} aria-hidden="true">
+          <FileTextOutlined />
+        </span>
+        <div className={cx('project-plan-tree-copy')}>
+          <div className={cx('project-plan-tree-headline')}>
+            <Tag>页面</Tag>
+            <Text strong>{node.label}</Text>
+            {node.pageId ? (
+              <Text className={cx('project-plan-tree-page-id')} type="secondary">
+                {node.pageId}
+              </Text>
+            ) : null}
+          </div>
+          {node.path ? (
+            <Text className={cx('project-plan-tree-path')} code>
+              {node.path}
+            </Text>
+          ) : null}
+        </div>
       </div>
       {node.purpose ? (
         <Text className={cx('project-plan-tree-purpose')} type="secondary">

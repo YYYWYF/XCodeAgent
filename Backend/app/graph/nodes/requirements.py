@@ -1,4 +1,5 @@
 import json
+import re
 
 from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import analyze_requirements_with_chat_model
@@ -185,22 +186,40 @@ def _apply_menus_root_path_to_pages(spec: dict, state: ProjectState) -> None:
             return
         app_config = json.loads(app_file.read_text(encoding="utf-8"))
         root_path = str((app_config.get("menus") or {}).get("rootPath", "") or "/").strip()
+        menus_enabled = bool((app_config.get("menus") or {}).get("enable"))
     except Exception:
         return
 
+    app_info = spec.get("app_info") if isinstance(spec.get("app_info"), dict) else {}
+    app_info["menu_enabled"] = menus_enabled
     if not root_path or root_path == "/":
+        spec["app_info"] = app_info
         return
     root_path = root_path.rstrip("/")
-    app_info = spec.get("app_info") if isinstance(spec.get("app_info"), dict) else {}
     app_info["route_root_path"] = root_path
     spec["app_info"] = app_info
     for page in spec.get("pages", []):
         if isinstance(page, dict) and page.get("path"):
             page_path = str(page["path"]).strip()
-            if page_path.startswith("/"):
+            if menus_enabled and page_path == "/":
+                page["path"] = root_path + _menu_home_leaf_path(page)
+            elif page_path.startswith("/"):
                 page["path"] = root_path + page_path
             else:
                 page["path"] = root_path + "/" + page_path
+
+
+def _menu_home_leaf_path(page: dict) -> str:
+    """为启用菜单时的首页类页面生成非根路径的叶子路由。"""
+
+    page_id = str(page.get("pageId") or page.get("id") or "").strip()
+    route = re.sub(r"[^a-zA-Z0-9_-]+", "-", page_id or "home").strip("-_")
+    route = route.replace("_", "-").lower() or "home"
+    if route.endswith("-page") and route != "dashboard-page":
+        route = route[: -len("-page")] or route
+    if route in {"dashboard", "dashboard-page", "home", "index"}:
+        route = "home"
+    return f"/{route}"
 
 
 def _is_optional_additive_question(question: object) -> bool:

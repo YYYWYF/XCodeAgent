@@ -441,10 +441,13 @@ def _frontend_page_tree_markdown(nodes: Any, *, level: int = 0) -> list[str]:
         if is_menu_node(node):
             name = str(node.get("name") or "未命名菜单").strip() or "未命名菜单"
             unique_path = str(node.get("unique_path") or "").strip()
+            child_pages = len(flatten_frontend_pages(node.get("children")))
             if unique_path:
-                lines.append(f"{indent}- 菜单 `{name}` `{unique_path}`")
+                lines.append(
+                    f"{indent}- 菜单 `{name}` · {child_pages} 个页面 · 路由 `{unique_path}`"
+                )
             else:
-                lines.append(f"{indent}- 菜单 `{name}`（仅分组，无独立路由）")
+                lines.append(f"{indent}- 菜单 `{name}` · {child_pages} 个页面")
             child_lines = _frontend_page_tree_markdown(node.get("children"), level=level + 1)
             lines.extend(child_lines or [f"{indent}  - 暂无子页面"])
             continue

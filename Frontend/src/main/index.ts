@@ -8,6 +8,7 @@ import icon from '../../resources/icon.png?asset'
 import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
+import type { ApplicationMenuItem } from '../renderer/src/typings'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -1148,6 +1149,9 @@ function setupWorkspaceIpc(): void {
     if (!Array.isArray(payload.pages)) {
       throw new Error('pages must be an array')
     }
+    if (!Array.isArray(payload.menuItems)) {
+      throw new Error('menuItems must be an array')
+    }
 
     const projectPath = path.resolve(payload.projectPath)
     // 路径：项目位置/frontend/src/pages（直接平铺到根目录）
@@ -1176,7 +1180,7 @@ export default function ${componentName}() {
       written.push({ pageKey, path: filePath })
     }
 
-    // 把新页面注入 menus.ts 的 BIZ_MENUS -> firstLevel -> children
+    // 按 ProjectPlan.frontend_pages 的树形结构整体覆盖 menus.ts 中的 BIZ_MENUS。
     const menusPath = path.join(
       projectPath,
       'frontend',
@@ -1185,7 +1189,7 @@ export default function ${componentName}() {
       'menus.ts'
     )
     try {
-      await injectPagesIntoMenus(menusPath, payload.pages)
+      await replaceBizMenusInTemplate(menusPath, payload.menuItems)
     } catch (error) {
       // menus.ts 注入失败不阻塞页面生成，仅记录
       console.error('[write-template-pages] 注入 menus.ts 失败:', error)
@@ -1199,11 +1203,61 @@ export default function ${componentName}() {
   })
 }
 
-// 把新页面追加到 menus.ts 中 BIZ_MENUS 第一个 path:'firstLevel' 项的 children 数组里。
-// 用括号匹配定位 children:[ ... ] 的闭合位置，在 ] 前插入新菜单项。
-async function injectPagesIntoMenus(
+/** 校验模板菜单树节点，避免把非法结构写入模板工程。 */
+function normalizeTemplateMenuItems(value: unknown): ApplicationMenuItem[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap<ApplicationMenuItem>((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    const record = item as Record<string, unknown>
+    const children = normalizeTemplateMenuItems(record.children)
+    const pathValue = typeof record.path === 'string' ? record.path.trim() : ''
+    const nameValue = typeof record.name === 'string' ? record.name.trim() : ''
+    const keyValue = typeof record.key === 'string' ? record.key.trim() : ''
+    const targetValue = typeof record.target === 'string' ? record.target.trim() : ''
+    if (!children.length && !keyValue) return []
+    const normalized: ApplicationMenuItem = {}
+    if (pathValue) normalized.path = pathValue
+    if (nameValue) normalized.name = nameValue
+    if (keyValue) normalized.key = keyValue
+    if ('icon' in record) normalized.icon = record.icon
+    if (targetValue) normalized.target = targetValue
+    if (children.length) normalized.children = children
+    return [normalized]
+  })
+}
+
+/** 将模板菜单树序列化为 TypeScript 对象字面量片段。 */
+function serializeTemplateMenuItems(
+  items: ApplicationMenuItem[],
+  indent = '      '
+): string {
+  if (items.length === 0) return `${indent.slice(0, -2)}[]`
+  const childIndent = `${indent}  `
+  const entryIndent = `${indent.slice(0, -2)}`
+  return `[\n${items
+    .map((item) => {
+      const fields: string[] = []
+      if (item.path) fields.push(`${childIndent}path: ${JSON.stringify(item.path)},`)
+      if (item.name) fields.push(`${childIndent}name: ${JSON.stringify(item.name)},`)
+      if (item.key) fields.push(`${childIndent}key: ${JSON.stringify(item.key)},`)
+      if (typeof item.icon === 'string') {
+        fields.push(`${childIndent}icon: ${JSON.stringify(item.icon)},`)
+      }
+      if (item.target) fields.push(`${childIndent}target: ${JSON.stringify(item.target)},`)
+      if (item.children?.length) {
+        fields.push(
+          `${childIndent}children: ${serializeTemplateMenuItems(item.children, `${childIndent}  `)},`
+        )
+      }
+      return `${entryIndent}{\n${fields.join('\n')}\n${entryIndent}}`
+    })
+    .join(',\n')}\n${entryIndent}]`
+}
+
+/** 整体替换 menus.ts 中的 BIZ_MENUS，直接写入规划生成的菜单树。 */
+async function replaceBizMenusInTemplate(
   menusPath: string,
-  pages: Array<{ pageKey?: string; name?: string; menuPath?: string }>
+  menuItemsPayload: unknown
 ): Promise<void> {
   let content: string
   try {
@@ -1213,20 +1267,16 @@ async function injectPagesIntoMenus(
     return
   }
 
-  // 定位 path: 'firstLevel'（允许单双引号、空格）
-  const firstLevelMatch = content.match(/path:\s*['"]firstLevel['"]/)
-  if (!firstLevelMatch || firstLevelMatch.index === undefined) return
+  const bizMenusMatch = content.match(/export\s+const\s+BIZ_MENUS\b/)
+  if (!bizMenusMatch || bizMenusMatch.index === undefined) return
 
-  // 从 firstLevel 之后找 children: [
-  const afterFirstLevel = firstLevelMatch.index + firstLevelMatch[0].length
-  const childrenMatch = content.slice(afterFirstLevel).match(/children:\s*\[/)
-  if (!childrenMatch || childrenMatch.index === undefined) return
-
-  const childrenOpen = afterFirstLevel + childrenMatch.index + childrenMatch[0].length
-  // 从 children:[ 之后做括号匹配，找到对应的闭合 ]。
-  // 需要跳过字符串和 // 注释，避免注释里的引号/括号干扰匹配。
+  const declarationStart = bizMenusMatch.index + bizMenusMatch[0].length
+  const assignIndex = content.indexOf('=', declarationStart)
+  if (assignIndex === -1) return
+  const menusOpen = content.indexOf('[', assignIndex)
+  if (menusOpen === -1) return
   let depth = 1
-  let i = childrenOpen
+  let i = menusOpen + 1
   let inString: string | null = null
   while (i < content.length && depth > 0) {
     const ch = content[i]
@@ -1257,44 +1307,12 @@ async function injectPagesIntoMenus(
   }
   if (depth !== 0) return // 没找到匹配的闭合括号
 
-  const childrenClose = i // 指向 children 的闭合 ]
+  const menusClose = i // 指向 BIZ_MENUS 的闭合 ]
 
-  // 收集已存在的 key，避免重复注入
-  const childrenBlock = content.slice(childrenOpen, childrenClose)
-  const existingKeys = new Set<string>()
-  const keyRegex = /key:\s*['"]([A-Za-z0-9_-]+)['"]/g
-  let km: RegExpExecArray | null
-  while ((km = keyRegex.exec(childrenBlock)) !== null) {
-    existingKeys.add(km[1])
-  }
-
-  // 构造新菜单项字符串
-  const newItems: string[] = []
-  for (const page of pages) {
-    const pageKey = typeof page?.pageKey === 'string' ? page.pageKey.trim() : ''
-    if (!pageKey || existingKeys.has(pageKey)) continue
-    const name = typeof page?.name === 'string' && page.name.trim() ? page.name : pageKey
-    const menuPath =
-      typeof page?.menuPath === 'string' && page.menuPath.trim()
-        ? page.menuPath
-        : pageKey.charAt(0).toLowerCase() + pageKey.slice(1)
-    newItems.push(
-      `      {\n        path: '${menuPath}',\n        name: '${name}',\n        key: '${pageKey}'\n      }`
-    )
-  }
-  if (newItems.length === 0) return
-
-  // 插入点：children 块内最后一个非空白字符之后（这样逗号紧跟在最后一项的 } 后面）
-  let lastNonWs = childrenClose - 1
-  while (lastNonWs >= childrenOpen && /\s/.test(content[lastNonWs])) {
-    lastNonWs -= 1
-  }
-  const hasContent = lastNonWs >= childrenOpen
-  const separator = hasContent ? ',\n' : '\n'
-  const insertText = separator + newItems.join(',\n') + '\n    '
-
-  const insertPos = lastNonWs + 1
-  const newContent = content.slice(0, insertPos) + insertText + content.slice(insertPos)
+  const normalizedMenuItems = normalizeTemplateMenuItems(menuItemsPayload)
+  const serializedChildren = serializeTemplateMenuItems(normalizedMenuItems)
+  const newContent =
+    content.slice(0, menusOpen) + serializedChildren + content.slice(menusClose + 1)
   await fs.writeFile(menusPath, newContent, 'utf8')
 }
 

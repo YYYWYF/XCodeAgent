@@ -100,6 +100,7 @@ def rebuild_frontend_page_tree(
     *,
     module_names: dict[str, str] | None = None,
     root_route_prefix: str | None = None,
+    menu_enabled: bool = False,
 ) -> list[dict[str, Any]]:
     """优先复用模型给出的目录层级；无目录时按模块为页面生成菜单树。"""
 
@@ -128,10 +129,12 @@ def rebuild_frontend_page_tree(
         return apply_frontend_page_route_hierarchy(
             preserved,
             root_route_prefix=effective_root_route_prefix,
+            menu_enabled=menu_enabled,
         )
     return apply_frontend_page_route_hierarchy(
         group_pages_into_menu_tree(normalized_pages, module_names=module_names),
         root_route_prefix=effective_root_route_prefix,
+        menu_enabled=menu_enabled,
     )
 
 
@@ -203,6 +206,7 @@ def apply_frontend_page_route_hierarchy(
     value: Any,
     *,
     root_route_prefix: str = "",
+    menu_enabled: bool = False,
 ) -> list[dict[str, Any]]:
     """按页面根路由和菜单层级重写菜单与页面路由。"""
 
@@ -210,6 +214,7 @@ def apply_frontend_page_route_hierarchy(
     return _apply_frontend_page_route_hierarchy(
         value,
         root_route_prefix=normalized_root,
+        menu_enabled=menu_enabled,
         inherited_menu_path="",
         used_menu_paths=set(),
         used_page_paths=set(),
@@ -285,6 +290,18 @@ def _path_from_pageId(page_id: str) -> str:
     return "/" if route in {"dashboard", "dashboard-page", "home", "index"} else f"/{route}"
 
 
+def _menu_leaf_path_from_pageId(page_id: str) -> str:
+    """启用菜单时，为首页类页面生成带叶子段的稳定路由。"""
+
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(page_id or "home")).strip("-_")
+    route = normalized.replace("_", "-").lower() or "home"
+    if route.endswith("-page") and route != "dashboard-page":
+        route = route[: -len("-page")] or route
+    if route in {"dashboard", "dashboard-page", "home", "index"}:
+        route = "home"
+    return f"/{route}"
+
+
 def _menu_path_from_module(module_id: str) -> str:
     """根据模块标识生成稳定菜单 unique_path。"""
 
@@ -324,6 +341,7 @@ def _apply_frontend_page_route_hierarchy(
     value: Any,
     *,
     root_route_prefix: str,
+    menu_enabled: bool,
     inherited_menu_path: str,
     used_menu_paths: set[str],
     used_page_paths: set[str],
@@ -344,6 +362,7 @@ def _apply_frontend_page_route_hierarchy(
             children = _apply_frontend_page_route_hierarchy(
                 node.get("children"),
                 root_route_prefix=root_route_prefix,
+                menu_enabled=menu_enabled,
                 inherited_menu_path=effective_menu_path,
                 used_menu_paths=used_menu_paths,
                 used_page_paths=used_page_paths,
@@ -362,6 +381,7 @@ def _apply_frontend_page_route_hierarchy(
             _normalize_page_leaf_route(
                 node,
                 root_route_prefix=root_route_prefix,
+                menu_enabled=menu_enabled,
                 inherited_menu_path=inherited_menu_path,
                 used_page_paths=used_page_paths,
             )
@@ -394,6 +414,7 @@ def _normalize_page_leaf_route(
     node: dict[str, Any],
     *,
     root_route_prefix: str,
+    menu_enabled: bool,
     inherited_menu_path: str,
     used_page_paths: set[str],
 ) -> dict[str, Any]:
@@ -402,6 +423,8 @@ def _normalize_page_leaf_route(
     normalized = dict(node)
     page_id = str(normalized.get("pageId") or normalized.get("id") or "").strip() or "page"
     current_path = _normalize_route_text(normalized.get("path") or _path_from_pageId(page_id))
+    if menu_enabled and root_route_prefix and current_path == root_route_prefix:
+        current_path = _join_route_paths(root_route_prefix, _menu_leaf_path_from_pageId(page_id))
     if inherited_menu_path:
         if current_path != inherited_menu_path and not current_path.startswith(f"{inherited_menu_path}/"):
             leaf_segment = _page_leaf_segment(
