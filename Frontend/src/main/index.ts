@@ -45,6 +45,15 @@ type WorkbenchPageOption = {
   designed: boolean
   detailPlanStatus?: string
   hasDetailPlan: boolean
+  taskSummary?: WorkbenchTaskSummary
+}
+
+type WorkbenchTaskSummary = {
+  total: number
+  pending: number
+  running: number
+  completed: number
+  failed: number
 }
 
 type WorkbenchApiContract = {
@@ -186,7 +195,7 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
           endpointRecord.detail_design &&
           typeof endpointRecord.detail_design === 'object' &&
           !Array.isArray(endpointRecord.detail_design)
-            ? endpointRecord.detail_design as Record<string, unknown>
+            ? (endpointRecord.detail_design as Record<string, unknown>)
             : {}
         const hasDetailPlan = Boolean(detailDesign.json_path || endpointRecord.detail_plan_id)
         return [
@@ -212,7 +221,8 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
 async function mergeWorkbenchPageStatus(
   workspaceRoot: string,
   pages: WorkbenchPageOption[],
-  plannedPages: Map<string, Record<string, unknown>>
+  plannedPages: Map<string, Record<string, unknown>>,
+  buildTaskPlan?: Record<string, unknown>
 ): Promise<WorkbenchPageOption[]> {
   return Promise.all(
     pages.map(async (page) => {
@@ -228,10 +238,79 @@ async function mergeWorkbenchPageStatus(
         ...page,
         designed: hasDetailPlan,
         detailPlanStatus: String(detailDesign.status || ''),
-        hasDetailPlan
+        hasDetailPlan,
+        taskSummary: pageBuildTaskSummary(buildTaskPlan, page.pageId)
       }
     })
   )
+}
+
+/** 读取正式 Build Task Plan；Markdown DAG 仅用于展示，不作为状态解析源。 */
+async function readBuildTaskPlan(
+  workspaceRoot: string
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const content = await fs.readFile(
+      path.join(workspaceRoot, '.xcodeagent', 'plans', 'build-task-plan.json'),
+      'utf8'
+    )
+    const value = JSON.parse(content)
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 按页面 Unit 及其前置 Unit 汇总正式 Build DAG 中的任务执行状态。 */
+function pageBuildTaskSummary(
+  buildTaskPlan: Record<string, unknown> | undefined,
+  pageId: string
+): WorkbenchTaskSummary | undefined {
+  if (!buildTaskPlan) return undefined
+  const registry =
+    buildTaskPlan.task_registry &&
+    typeof buildTaskPlan.task_registry === 'object' &&
+    !Array.isArray(buildTaskPlan.task_registry)
+      ? (buildTaskPlan.task_registry as Record<string, unknown>)
+      : {}
+  const graph =
+    buildTaskPlan.unit_graph &&
+    typeof buildTaskPlan.unit_graph === 'object' &&
+    !Array.isArray(buildTaskPlan.unit_graph)
+      ? (buildTaskPlan.unit_graph as Record<string, unknown>)
+      : {}
+  const dependencies = new Map<string, string[]>()
+  recordItems(graph.edges).forEach((edge) => {
+    if (edge.type !== 'depends_on') return
+    const source = String(edge.from || '').trim()
+    const target = String(edge.to || '').trim()
+    if (source && target) dependencies.set(target, [...(dependencies.get(target) || []), source])
+  })
+
+  const selectedUnits = new Set<string>()
+  const pendingUnits = [`page:${pageId}`]
+  while (pendingUnits.length > 0) {
+    const unitId = pendingUnits.shift()
+    if (!unitId || selectedUnits.has(unitId)) continue
+    selectedUnits.add(unitId)
+    pendingUnits.push(...(dependencies.get(unitId) || []))
+  }
+
+  const tasks = recordItems(registry).filter((task) =>
+    selectedUnits.has(String(task.unit_id || task.unitId || 'application:root'))
+  )
+  if (tasks.length === 0) return undefined
+  const statuses = tasks.map((task) => String(task.status || 'pending'))
+  return {
+    total: tasks.length,
+    pending: statuses.filter((status) => status === 'pending').length,
+    running: statuses.filter((status) => status === 'running').length,
+    completed: statuses.filter((status) => status === 'completed' || status === 'already_satisfied')
+      .length,
+    failed: statuses.filter((status) => status === 'failed').length
+  }
 }
 
 /** 只根据外置接口详情文件补充每个 endpoint 的设计状态。 */
@@ -346,10 +425,12 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   }
   if (!projectPlanLoaded) missing.push('plans/project_plan.json')
 
+  const buildTaskPlan = await readBuildTaskPlan(workspaceRoot)
   const pages = await mergeWorkbenchPageStatus(
     workspaceRoot,
     projectPlanPageOptions({ frontend_pages: [...plannedPages.values()] }),
-    plannedPages
+    plannedPages,
+    buildTaskPlan
   )
   apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
   const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
@@ -456,12 +537,14 @@ async function writeApplications(applications: unknown): Promise<void> {
 /** 仅删除带有 XCodeAgent 项目标识的安全工作区目录。 */
 async function deleteProjectDirectory(workspaceRoot: unknown): Promise<void> {
   const projectRoot = resolveWorkspaceRoot(workspaceRoot)
-  const protectedRoots = new Set([
-    path.parse(projectRoot).root,
-    path.resolve(app.getPath('home')),
-    path.resolve(app.getPath('userData')),
-    path.resolve(getXcodeAgentDataDir())
-  ].map(pathComparisonKey))
+  const protectedRoots = new Set(
+    [
+      path.parse(projectRoot).root,
+      path.resolve(app.getPath('home')),
+      path.resolve(app.getPath('userData')),
+      path.resolve(getXcodeAgentDataDir())
+    ].map(pathComparisonKey)
+  )
   if (protectedRoots.has(pathComparisonKey(projectRoot))) {
     throw new Error('不能删除系统、用户或 XCodeAgent 数据目录')
   }
@@ -484,12 +567,14 @@ async function deleteProjectDirectory(workspaceRoot: unknown): Promise<void> {
 /** 仅删除受控工作区内部由 XCodeAgent 生成的规划与运行目录。 */
 async function deleteProjectAgentDirectory(workspaceRoot: unknown): Promise<void> {
   const projectRoot = resolveWorkspaceRoot(workspaceRoot)
-  const protectedRoots = new Set([
-    path.parse(projectRoot).root,
-    path.resolve(app.getPath('home')),
-    path.resolve(app.getPath('userData')),
-    path.resolve(getXcodeAgentDataDir())
-  ].map(pathComparisonKey))
+  const protectedRoots = new Set(
+    [
+      path.parse(projectRoot).root,
+      path.resolve(app.getPath('home')),
+      path.resolve(app.getPath('userData')),
+      path.resolve(getXcodeAgentDataDir())
+    ].map(pathComparisonKey)
+  )
   if (protectedRoots.has(pathComparisonKey(projectRoot))) {
     throw new Error('不能清理系统、用户或 XCodeAgent 数据目录')
   }
@@ -796,7 +881,8 @@ function normalizeSessionEndpointContext(
   return {
     apiContractId: explicit.apiContractId || inferred.apiContractId,
     endpointId: explicit.endpointId || inferred.endpointId,
-    endpointLabel: explicit.endpointLabel || inferred.endpointLabel || inferEndpointLabelFromTitle(session.title)
+    endpointLabel:
+      explicit.endpointLabel || inferred.endpointLabel || inferEndpointLabelFromTitle(session.title)
   }
 }
 
@@ -816,9 +902,11 @@ function inferSessionPageId(messages: JsonRecord[]): string | undefined {
 }
 
 /** 从旧版消息中的 Workflow 状态快照推断 API endpoint 会话归属。 */
-function inferSessionEndpointContext(
-  messages: JsonRecord[]
-): { apiContractId?: string; endpointId?: string; endpointLabel?: string } {
+function inferSessionEndpointContext(messages: JsonRecord[]): {
+  apiContractId?: string
+  endpointId?: string
+  endpointLabel?: string
+} {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const workflow = messages[index].workflow
     if (!isJsonRecord(workflow)) continue
@@ -1119,13 +1207,7 @@ export default function ${componentName}() {
     }
 
     // 把新页面注入 menus.ts 的 BIZ_MENUS -> firstLevel -> children
-    const menusPath = path.join(
-      projectPath,
-      'frontend',
-      'src',
-      'constants',
-      'menus.ts'
-    )
+    const menusPath = path.join(projectPath, 'frontend', 'src', 'constants', 'menus.ts')
     try {
       await injectPagesIntoMenus(menusPath, payload.pages)
     } catch (error) {

@@ -1,21 +1,27 @@
 import {
   ApiOutlined,
+  CheckOutlined,
+  ClockCircleOutlined,
   EllipsisOutlined,
   ExpandOutlined,
   ExportOutlined,
   FileTextOutlined,
   CloseOutlined
 } from '@ant-design/icons'
-import { Button, Dropdown, Menu, Popover, Typography } from 'antd'
+import { Button, Dropdown, Popover, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import './PageContextHeader.less'
 
 const { Text } = Typography
 
+export type PageContextStatus = {
+  details: string[]
+  label: string
+  tone: 'neutral' | 'active' | 'warning' | 'success' | 'error'
+}
+
 type PageContextHeaderProps = {
-  detailButtonLabel?: string
-  detailTitle?: string
   description: string
   isPageOpen?: boolean
   keyFeatures: string[]
@@ -26,6 +32,7 @@ type PageContextHeaderProps = {
   pagePath: string
   pageTitle: string
   previewAvailable: boolean
+  status: PageContextStatus
   targetType?: 'page' | 'api'
   theme: 'light' | 'dark'
 }
@@ -48,10 +55,22 @@ function normalizeDisplayPath(value: string): string {
   return normalizedValue.startsWith('/') ? normalizedValue : `/${normalizedValue}`
 }
 
+/** 将完整状态句拆成适合紧凑元数据布局的标签和值。 */
+function splitStatusDetail(detail: string): { label: string; value: string } {
+  const designMatch = detail.match(/^(页面设计|API 设计)(已完成|尚未完成)$/)
+  if (designMatch) return { label: designMatch[1], value: designMatch[2] }
+
+  const taskMatch = detail.match(/^(开发任务)\s+(.+)$/)
+  if (taskMatch) return { label: taskMatch[1], value: taskMatch[2] }
+
+  const planMatch = detail.match(/^(开发计划)(暂未拆分)$/)
+  if (planMatch) return { label: planMatch[1], value: planMatch[2] }
+
+  return { label: '当前进度', value: detail }
+}
+
 /** 渲染当前页面或 API endpoint 的名称、路径、说明与操作。 */
 export default function PageContextHeader({
-  detailButtonLabel,
-  detailTitle,
   description,
   isPageOpen = false,
   keyFeatures,
@@ -62,6 +81,7 @@ export default function PageContextHeader({
   pagePath,
   pageTitle,
   previewAvailable,
+  status,
   targetType = 'page',
   theme
 }: PageContextHeaderProps): ReactElement {
@@ -75,60 +95,109 @@ export default function PageContextHeader({
   }
   const detailContent = (
     <div className={cx('page-context-detail')}>
-      <Text>{description}</Text>
-      {keyFeatures.length > 0 ? (
-        <ul>
-          {keyFeatures.map((feature) => <li key={feature}>{feature}</li>)}
-        </ul>
-      ) : null}
+      <header className={cx('page-context-detail-hero')}>
+        <span className={cx('page-context-detail-icon')} aria-hidden="true">
+          {targetType === 'api' ? <ApiOutlined /> : <FileTextOutlined />}
+        </span>
+        <div className={cx('page-context-detail-heading')}>
+          <Text className={cx('page-context-detail-title')} strong title={pageTitle}>
+            {pageTitle}
+          </Text>
+          <Text className={cx('page-context-detail-path')} title={normalizeDisplayPath(pagePath)}>
+            {normalizeDisplayPath(pagePath)}
+          </Text>
+        </div>
+        <span className={cx('page-context-detail-badge', `is-${status.tone}`)}>
+          <i aria-hidden="true" />
+          {status.label}
+        </span>
+      </header>
+
+      <div className={cx('page-context-detail-body')}>
+        <section className={cx('page-context-detail-summary')}>
+          <Text>{description}</Text>
+        </section>
+
+        <dl className={cx('page-context-detail-metadata')}>
+          {status.details.map((detail) => {
+            const item = splitStatusDetail(detail)
+            return (
+              <div key={detail}>
+                <dt>{item.label}</dt>
+                <dd>{item.value}</dd>
+              </div>
+            )
+          })}
+        </dl>
+
+        {keyFeatures.length > 0 ? (
+          <section className={cx('page-context-detail-section')}>
+            <Text className={cx('page-context-detail-label')}>主要功能</Text>
+            <ul className={cx('page-context-detail-features')}>
+              {keyFeatures.map((feature) => (
+                <li key={feature}>
+                  <CheckOutlined aria-hidden="true" />
+                  <span>{feature}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+      </div>
+
+      <footer>
+        <ClockCircleOutlined aria-hidden="true" />
+        <Text>{lastAnalyzedAt ? `${formatAnalysisAge(lastAnalyzedAt)}分析` : '尚未分析'}</Text>
+      </footer>
     </div>
   )
-  const moreMenu = (
-    <Menu className={cx('page-context-more-menu')}>
-      <Menu.Item
-        disabled={!previewAvailable}
-        icon={<ExpandOutlined />}
-        key="fullscreen"
-        onClick={onOpenFullscreenPage}
-      >
-        全屏打开页面
-      </Menu.Item>
-    </Menu>
-  )
+  const moreMenuItems = [
+    {
+      disabled: !previewAvailable,
+      icon: <ExpandOutlined />,
+      key: 'fullscreen',
+      label: '全屏打开页面',
+      onClick: onOpenFullscreenPage
+    }
+  ]
   const pathText = normalizeDisplayPath(pagePath)
   const canPreviewPage = targetType === 'page' && previewAvailable
 
   return (
-    <section className={cx('page-context-header')} aria-label={targetType === 'api' ? '当前 API 信息' : '当前页面信息'}>
-      <div className={cx('page-context-primary')}>
-        <span className={cx('page-context-icon')} aria-hidden="true">
-          {targetType === 'api' ? <ApiOutlined /> : <FileTextOutlined />}
-        </span>
-        <div className={cx('page-context-copy')}>
-          <div className={cx('page-context-title-row')}>
-            <Text className={cx('page-context-title')} strong title={pageTitle}>{pageTitle}</Text>
-            <Text className={cx('page-context-path')} code title={pathText}>
+    <section
+      className={cx('page-context-header')}
+      aria-label={targetType === 'api' ? '当前 API 信息' : '当前页面信息'}
+    >
+      <Popover
+        content={detailContent}
+        overlayClassName={cx('page-context-popover', theme === 'dark' && 'dark')}
+        placement="bottomLeft"
+        trigger="click"
+      >
+        <button
+          aria-label={`查看${targetType === 'api' ? ' API' : '页面'}详情：${pageTitle}`}
+          className={cx('page-context-primary')}
+          type="button"
+        >
+          <span className={cx('page-context-icon')} aria-hidden="true">
+            {targetType === 'api' ? <ApiOutlined /> : <FileTextOutlined />}
+          </span>
+          <span className={cx('page-context-identity')}>
+            <Text className={cx('page-context-title')} strong title={pageTitle}>
+              {pageTitle}
+            </Text>
+            <Text className={cx('page-context-path')} title={pathText}>
               {pathText}
             </Text>
-          </div>
-          <Text className={cx('page-context-description')} title={description}>{description}</Text>
-        </div>
-      </div>
+          </span>
+          <span className={cx('page-context-status', `is-${status.tone}`)}>
+            <i aria-hidden="true" />
+            <Text>{status.label}</Text>
+          </span>
+        </button>
+      </Popover>
 
       <div className={cx('page-context-actions')}>
-        <span className={cx('page-context-analysis')}>
-          <i aria-hidden="true" />
-          <Text>最近分析：{formatAnalysisAge(lastAnalyzedAt)}</Text>
-        </span>
-        <Popover
-          content={detailContent}
-          overlayClassName={cx('page-context-popover', theme === 'dark' && 'dark')}
-          placement="bottomRight"
-          title={detailTitle || (targetType === 'api' ? 'API 详情' : '页面详情')}
-          trigger="click"
-        >
-          <Button>{detailButtonLabel || (targetType === 'api' ? 'API 详情' : '页面详情')}</Button>
-        </Popover>
         {targetType === 'page' ? (
           <>
             <Button
@@ -138,16 +207,20 @@ export default function PageContextHeader({
               onClick={handleTogglePage}
               type="primary"
             >
-              {isPageOpen ? '关闭页面' : '打开页面'}
+              {isPageOpen ? '关闭预览' : '预览页面'}
             </Button>
             <Dropdown
               disabled={!canPreviewPage}
-              overlay={moreMenu}
+              menu={{ items: moreMenuItems }}
               overlayClassName={cx('page-context-dropdown', theme === 'dark' && 'dark')}
               placement="bottomRight"
               trigger={['click']}
             >
-              <Button aria-label="更多页面操作" className={cx('page-context-more-button')} icon={<EllipsisOutlined />} />
+              <Button
+                aria-label="更多页面操作"
+                className={cx('page-context-more-button')}
+                icon={<EllipsisOutlined />}
+              />
             </Dropdown>
           </>
         ) : null}
