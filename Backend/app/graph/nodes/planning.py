@@ -19,6 +19,7 @@ from app.services.detail_review import (
     apply_detail_review_submission,
     detail_review_payload,
 )
+from app.services.database_context import prepare_endpoint_database_context
 from app.services.project_plan import apply_project_plan_feedback
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_detail_plan import (
@@ -543,6 +544,30 @@ def _generate_all_detail_plans(
             updated_plan,
             selected_api_contract_id,
             selected_endpoint_id,
+        )
+        _detail_progress(
+            "正在确认接口数据来源。",
+            target_type="endpoint",
+            api_contract_id=selected_api_contract_id,
+            endpoint_id=selected_endpoint_id,
+            data_source_id=endpoint_context.get("data_source_id"),
+        )
+        database_context = prepare_endpoint_database_context(
+            updated_plan,
+            endpoint_context,
+        )
+        endpoint_context = {
+            **endpoint_context,
+            "database_context": database_context,
+        }
+        _detail_progress(
+            database_context.get("message") or "数据库上下文准备完成。",
+            target_type="endpoint",
+            api_contract_id=selected_api_contract_id,
+            endpoint_id=selected_endpoint_id,
+            database_context_status=database_context.get("status"),
+            reason=database_context.get("reason"),
+            enabled=database_context.get("enabled"),
         )
         _detail_progress(
             "已定位接口契约，正在调用模型生成详细设计。",
