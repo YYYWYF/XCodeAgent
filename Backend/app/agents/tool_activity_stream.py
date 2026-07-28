@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from app.agents.messages import last_agent_text
+from app.agents.messages import last_agent_text, optional_last_agent_text
 from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
 
@@ -36,6 +36,7 @@ def invoke_agent_with_tool_activity(
         return last_agent_text(agent.invoke(payload))
 
     final_state: dict[str, Any] = {}
+    root_text_chunks: list[str] = []
     calls: dict[str, ToolActivity] = {}
     chunk_args: dict[str, str] = {}
     chunk_ids: dict[tuple[StreamNamespace, int], str] = {}
@@ -54,6 +55,10 @@ def invoke_agent_with_tool_activity(
         if stream_mode != "messages":
             continue
         message = chunk[0] if isinstance(chunk, tuple) and chunk else chunk
+        if not namespace:
+            root_text = _root_agent_text_chunk(message)
+            if root_text:
+                root_text_chunks.append(root_text)
         _consume_tool_message(
             message,
             namespace=namespace,
@@ -63,7 +68,20 @@ def invoke_agent_with_tool_activity(
             chunk_ids=chunk_ids,
             on_tool_activity=on_tool_activity,
         )
-    return last_agent_text(final_state)
+    return (
+        optional_last_agent_text(final_state)
+        or "".join(root_text_chunks).strip()
+        or last_agent_text({})
+    )
+
+
+def _root_agent_text_chunk(message: Any) -> str:
+    """提取根 Agent 的文本分片，排除工具结果以免把内部输出当作最终报告。"""
+
+    if getattr(message, "tool_call_id", None):
+        return ""
+    content = getattr(message, "content", "")
+    return content if isinstance(content, str) else ""
 
 
 def _parse_stream_part(streamed: Any) -> tuple[StreamNamespace, str, Any] | None:

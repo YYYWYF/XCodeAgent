@@ -88,6 +88,12 @@ def _task_preparation_prompt(
         "When TargetBuildContext.reusable_tasks_by_unit lists an application Unit, do not "
         "create another task for that Unit and do not copy its task ids into dependencies; "
         "the deterministic Unit Graph will connect that reusable capability.\n"
+        "For a page target, the page must also be registered in the template menu so its "
+        "automatic route can resolve. Use one consistent PageKey for the page directory and "
+        "menu key. A deterministic compiler step will add the bounded menus.ts task when the "
+        "model omits it and will reconcile a planned PageKey with one unique semantically "
+        "equivalent live page directory. Never create a second page merely because a stale "
+        "WorkspaceSnapshot omitted the live directory.\n"
         "When TargetBuildContext.target.type is `endpoint`, every new task MUST use the exact "
         "`endpoint:<apiContractId>:<endpointId>` Unit from TargetBuildContext.required_unit_ids "
         "or an unprepared prerequisite Unit listed there. Do not create page tasks, do not create "
@@ -107,8 +113,10 @@ def _task_preparation_prompt(
         "src/hooks/useGuard.ts, src/apis/service.ts, src/constants/index.ts, "
         "src/constants/routes.ts, src/constants/menus.ts, src/typings/**, src/styles/**. "
         "These are the template skeleton; recreating them wastes effort and breaks the build.\n"
-        "- NEVER plan `operation: modify` on the skeleton files above either — they are "
-        "read-only framework files.\n"
+        "- NEVER plan `operation: modify` on the skeleton files above either, except the "
+        "single permitted append-only change to `src/constants/menus.ts`: add the current "
+        "page under `BIZ_MENUS.firstLevel.children` without changing existing entries or the "
+        "file structure. All other skeleton files remain read-only.\n"
         "- Only plan `operation: add` for NEW business files that do NOT exist in the "
         "snapshot: business page components under src/pages/<PageKey>/index.tsx (replace "
         "the scaffold placeholder content), business API files under src/apis/<biz>Api.ts, "
@@ -187,6 +195,7 @@ def prepare_build_tasks_with_main_agent(
             workspace_snapshot=workspace_snapshot,
             base_build_task_plan=build_task_plan,
             build_context=build_context,
+            workspace_root=workspace,
         )
     except ValueError as exc:
         logger.warning(

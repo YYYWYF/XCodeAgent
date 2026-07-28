@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -185,6 +187,89 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["batches"][0]["mode"], "parallel")
         self.assertEqual(tasks[0]["parallel_with"], ["page-task-2"])
         self.assertEqual(tasks[1]["parallel_with"], ["page-task"])
+
+    def test_live_page_path_is_reconciled_and_menu_route_task_is_added(self) -> None:
+        """实时唯一同义页面目录应成为规范目标，并补齐菜单自动路由登记任务。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "dashboard_page",
+                        "name": "概览页",
+                        "path": "/page/",
+                        "module_id": "dashboard",
+                    }
+                ]
+            },
+        }
+        build_context = {
+            "target": {"type": "page", "id": "dashboard_page"},
+            "page_detail": {"page_name": "概览页", "path": "/page/"},
+            "required_unit_ids": ["app:route-registry", "page:dashboard_page"],
+            "source_refs": {"type": "page_detail"},
+        }
+        base_plan = {
+            "schema_version": "build-dag.v2",
+            "build_units": {
+                "app:route-registry": {"id": "app:route-registry", "kind": "application"},
+                "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
+            },
+            "unit_graph": {
+                "nodes": ["app:route-registry", "page:dashboard_page"],
+                "edges": [
+                    {
+                        "from": "app:route-registry",
+                        "to": "page:dashboard_page",
+                        "type": "depends_on",
+                    }
+                ],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            dashboard = Path(workspace) / "frontend/src/pages/Dashboard/index.tsx"
+            dashboard.parent.mkdir(parents=True)
+            dashboard.write_text("export default function Dashboard() {}", encoding="utf-8")
+            menus = Path(workspace) / "frontend/src/constants/menus.ts"
+            menus.parent.mkdir(parents=True)
+            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "page-layout",
+                            "unit_id": "page:dashboard_page",
+                            "owner": "frontend",
+                            "description": "创建概览页",
+                            "change_scope": [
+                                {
+                                    "operation": "add",
+                                    "path": "frontend/src/pages/DashboardPage/index.tsx",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                base_build_task_plan=base_plan,
+                build_context=build_context,
+                workspace_root=workspace,
+            )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        page_task = tasks["page-layout"]
+        route_task = tasks["page:dashboard_page:route-menu-registration"]
+        self.assertEqual(page_task["targetFiles"], ["frontend/src/pages/Dashboard/index.tsx"])
+        self.assertEqual(page_task["change_scope"][0]["operation"], "modify")
+        self.assertEqual(
+            page_task["path_reconciliation"]["canonical_path"],
+            "frontend/src/pages/Dashboard/index.tsx",
+        )
+        self.assertEqual(route_task["targetFiles"], ["frontend/src/constants/menus.ts"])
+        self.assertEqual(route_task["dependencies"], ["page-layout"])
+        self.assertIn("key: 'Dashboard'", route_task["description"])
 
     def test_v2_markdown_renders_units_and_task_graph(self) -> None:
         plan = create_build_task_plan(

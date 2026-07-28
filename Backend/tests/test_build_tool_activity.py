@@ -107,6 +107,30 @@ class SubgraphStreamingAgent:
         }
 
 
+class MessageOnlyFinalAgent:
+    """模拟最终 values 不含 messages、正文仅存在根 messages 流的真实情况。"""
+
+    def stream(self, payload, *, stream_mode, subgraphs):
+        del payload, stream_mode, subgraphs
+        yield "messages", (
+            SimpleNamespace(
+                content='{"task_results":[',
+                tool_calls=[],
+                tool_call_chunks=[],
+            ),
+            {},
+        )
+        yield "messages", (
+            SimpleNamespace(
+                content="]}",
+                tool_calls=[],
+                tool_call_chunks=[],
+            ),
+            {},
+        )
+        yield "values", {"todos": []}
+
+
 class BuildToolActivityTests(unittest.TestCase):
     def test_visible_workspace_tools_have_safe_chinese_messages(self) -> None:
         """七类工作区工具都应生成稳定、安全的一行中文状态。"""
@@ -211,6 +235,18 @@ class BuildToolActivityTests(unittest.TestCase):
         self.assertNotEqual(activities[0]["callId"], activities[1]["callId"])
         self.assertEqual(activities[0]["message"], "正在读取文件：/src/first.ts")
         self.assertEqual(activities[1]["message"], "正在编辑文件：/src/second.ts")
+
+    def test_root_message_stream_is_final_text_fallback_when_values_omit_messages(self) -> None:
+        """根 values 缺少 messages 时仍应拼接保留最终 Agent 结构化报告。"""
+
+        result = invoke_agent_with_tool_activity(
+            MessageOnlyFinalAgent(),
+            {"messages": []},
+            workspace="/tmp/workspace",
+            on_tool_activity=lambda activity: None,
+        )
+
+        self.assertEqual(result, '{"task_results":[]}')
 
     def test_activity_matches_authorized_task_paths_or_falls_back_to_batch(self) -> None:
         """具体文件只归属命中任务，技能等范围外读取回退当前批次。"""

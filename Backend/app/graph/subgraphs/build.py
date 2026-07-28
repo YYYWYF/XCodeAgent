@@ -175,6 +175,7 @@ def _execute_ready_tasks(
             results=normalized_results,
             code_change_set=captured.code_change_set,
             tasks=owner_tasks,
+            workspace_root=workspace,
         )
         all_results.extend(verified_results)
     return all_results, code_change_sets

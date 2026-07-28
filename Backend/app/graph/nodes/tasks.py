@@ -1022,7 +1022,7 @@ def _unit_tasks_are_reusable(build_task_plan: dict, unit_id: str) -> bool:
         return False
     return all(
         isinstance(registry.get(task_id), dict)
-        and registry[task_id].get("status") == "completed"
+        and registry[task_id].get("status") in {"completed", "already_satisfied"}
         for task_id in task_ids
     )
 

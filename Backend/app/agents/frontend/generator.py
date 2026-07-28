@@ -8,7 +8,7 @@ from app.agents.tool_activity_stream import (
     invoke_agent_with_tool_activity,
 )
 from app.config import Settings
-from app.services.build_result_coordinator import create_agent_task_result
+from app.services.build_result_coordinator import create_agent_task_results
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
@@ -103,6 +103,17 @@ def _frontend_generation_prompt(
         "`react-develop-specification/SKILL.md` (React coding conventions) for style rules "
         "when unsure. Reading these on demand keeps the context small.\n"
         "Only after reading the two required skills above may you start writing code.\n\n"
+        "## Required final report\n"
+        "Return one JSON object with `task_results`, containing exactly one result for each "
+        "approved task. Each result must contain `task_id`, `status` "
+        "(`completed`, `already_satisfied`, or `failed`), and `summary`. Use "
+        "`already_satisfied` only when every exact target file and acceptance criterion was "
+        "verified without writing. Then include `satisfaction_evidence.target_files` with every "
+        "exact target path and `satisfaction_evidence.acceptance_criteria` with one object per "
+        "criterion: `{criterion, status: \"passed\", evidence}`. A semantically similar file at "
+        "another path never satisfies a task. Use `failed` plus `failure_category` and "
+        "`failure_reason` when implementation could not be completed. Do not use free-form text "
+        "outside the final JSON object.\n\n"
         "## CRITICAL: Do NOT create temporary script files\n"
         "Do NOT create shell scripts (.sh), Python scripts (.py), JavaScript files (.js/.mjs), "
         "or any other temporary script files to run build commands. Instead, use the "
@@ -174,17 +185,14 @@ def generate_frontend_with_deep_agent(
         page_template=page_template,
         on_tool_activity=on_tool_activity,
     )
-    return [
-        create_agent_task_result(
-            task,
-            agent_note,
-            executed_by={
-                "agent": "frontend-generation-agent",
-                "mode": "live",
-                "model": settings.model_name,
-                "source": "frontend_deep_agent",
-                "requiredSkillsLoaded": list(selected_skill_names or []),
-            },
-        )
-        for task in tasks
-    ]
+    return create_agent_task_results(
+        tasks,
+        agent_note,
+        executed_by={
+            "agent": "frontend-generation-agent",
+            "mode": "live",
+            "model": settings.model_name,
+            "source": "frontend_deep_agent",
+            "requiredSkillsLoaded": list(selected_skill_names or []),
+        },
+    )
