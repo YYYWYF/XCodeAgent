@@ -22,11 +22,35 @@ def _app_name_from_plan(project_plan: dict[str, Any]) -> str:
     return ""
 
 
+def _page_template_instruction(page_template: dict[str, Any] | None) -> str:
+    """Page template selected by user — have the agent read and use it as reference."""
+    if not page_template:
+        return ""
+    template_id = str(page_template.get("id") or "")
+    template_name = str(page_template.get("name") or "")
+    template_path = str(page_template.get("sourcePath") or "")
+    if not template_path:
+        return ""
+    return (
+        f"## User-Selected Page Template: {template_name} ({template_id})\n"
+        f"The user selected a page template for this design target. Before writing any code, "
+        f"use read_file on the virtual path `/{template_path}/index.tsx` and optionally "
+        f"`/{template_path}/types.ts` and `/{template_path}/api.ts` to study the template's "
+        f"component structure, ProTable / ProForm configuration patterns, data types, and "
+        f"API integration style. Use these patterns as the primary reference when generating "
+        f"the page for this task. Adapt the template structure to match the page's specific "
+        f"requirements as described in the task and ProjectPlan, but keep the overall "
+        f"component selection, layout conventions, and data-fetching pattern consistent with "
+        f"the template.\n\n"
+    )
+
+
 def _frontend_generation_prompt(
     *,
     project_plan: dict[str, Any],
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
+    page_template: dict[str, Any] | None = None,
 ) -> str:
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
@@ -52,7 +76,8 @@ def _frontend_generation_prompt(
         f"to virtual root '/'. Do NOT write to `Frontend/src/`, bare `src/`, or `/app/"
         f"frontend/` — those are wrong for this workspace. Before writing, use list_files "
         f"on `/{frontend_root}/src/pages/` to confirm the scaffolded page directories.\n\n"
-        "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
+        + _page_template_instruction(page_template)
+        + "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
         "Before generating or modifying any frontend code, you MUST read the following "
         "two built-in skills with read_file(limit=400) and follow their instructions. "
         "These are mandatory constraints:\n"
@@ -96,6 +121,7 @@ def _invoke_live_frontend_agent(
     tasks: list[dict[str, Any]],
     workspace: str | None,
     selected_skill_names: list[str] | None,
+    page_template: dict[str, Any] | None = None,
     on_tool_activity: ToolActivityCallback | None = None,
 ) -> str:
     """使用本次工作流的技能白名单调用前端 Deep Agent。"""
@@ -113,6 +139,7 @@ def _invoke_live_frontend_agent(
                         project_plan=project_plan,
                         build_task_plan=build_task_plan,
                         tasks=tasks,
+                        page_template=page_template,
                     ),
                 }
             ]
@@ -129,6 +156,7 @@ def generate_frontend_with_deep_agent(
     tasks: list[dict[str, Any]],
     workspace: str | None = None,
     selected_skill_names: list[str] | None = None,
+    page_template: dict[str, Any] | None = None,
     on_tool_activity: ToolActivityCallback | None = None,
 ) -> list[dict[str, Any]]:
     """通过带技能白名单的 Frontend Deep Agent 执行已批准任务。"""
@@ -143,6 +171,7 @@ def generate_frontend_with_deep_agent(
         tasks=tasks,
         workspace=workspace,
         selected_skill_names=selected_skill_names,
+        page_template=page_template,
         on_tool_activity=on_tool_activity,
     )
     return [

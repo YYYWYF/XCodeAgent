@@ -133,6 +133,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("selected_endpoint_id"))
         or _optional_text(resume_values_from_state.get("selected_endpoint_id"))
     )
+    page_template = _optional_dict(
+        payload.get("pageTemplate")
+        or forwarded_props.get("pageTemplate")
+    )
     detail_target_type = _supported_detail_target_type(
         _optional_text(payload.get("detailTargetType"))
         or _optional_text(payload.get("detail_target_type"))
@@ -206,6 +210,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **({"selected_api_contract_id": selected_api_contract_id} if selected_api_contract_id else {}),
         **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
         **({"detail_target_type": detail_target_type} if detail_target_type else {}),
+        **({"page_template": page_template} if page_template else {}),
         "build_execution_scope": build_execution_scope,
         "execution_resource_claims": [
             claim.model_dump(mode="json", by_alias=True)

@@ -86,7 +86,12 @@ type UseWorkflowConversationResult = {
   handleStartDetailConfirmation: (
     selectedPageId: string,
     pageLabel: string,
-    hasDetailPlan?: boolean
+    hasDetailPlan?: boolean,
+    templateParams?: {
+      templateId?: string
+      templateName?: string
+      templateSourcePath?: string
+    },
   ) => Promise<boolean>
   handleStartEndpointDetailConfirmation: (target: {
     apiContractId?: string
@@ -259,6 +264,11 @@ export function useWorkflowConversation({
       endpointLabel?: string
       detailTargetType?: 'page' | 'endpoint'
       sessionIdentity?: SessionIdentity
+      pageTemplate?: {
+        id?: string
+        name?: string
+        sourcePath?: string
+      }
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
@@ -394,6 +404,7 @@ export function useWorkflowConversation({
         planControlRunId: options?.planControlRunId,
         resumeExecutionRunId: options?.resumeExecutionRunId,
         resumeState: options?.resumeState,
+        pageTemplate: options?.pageTemplate,
         onContent: (content) => {
           streamedContent = content
           updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
@@ -527,7 +538,12 @@ export function useWorkflowConversation({
   const handleStartDetailConfirmation = async (
     selectedPageId: string,
     pageLabel: string,
-    hasDetailPlan?: boolean
+    hasDetailPlan?: boolean,
+    templateParams?: {
+      templateId?: string
+      templateName?: string
+      templateSourcePath?: string
+    },
   ): Promise<boolean> => {
     if (!selectedPageId || loading || workspaceBusy) return false
     const identity = await ensurePageSession(selectedPageId, pageLabel)
@@ -537,8 +553,17 @@ export function useWorkflowConversation({
         selectedPageId,
         detailTargetType: 'page',
         sessionIdentity: identity,
-        titleFrom: `${hasDetailPlan ? '确认页面' : '设计页面'}：${pageLabel}`
-      }
+        titleFrom: `${hasDetailPlan ? '确认页面' : '设计页面'}：${pageLabel}`,
+        ...(templateParams?.templateSourcePath
+          ? {
+              pageTemplate: {
+                id: templateParams.templateId,
+                name: templateParams.templateName,
+                sourcePath: templateParams.templateSourcePath,
+              },
+            }
+          : {}),
+      },
     )
   }
 

@@ -64,7 +64,9 @@
     "react-diff-view": "3.3.2",
     "react-dom": "18.2.0",
     "react-router": "^6.8.2",
-    "react-router-dom": "^6.8.2"
+    "react-router-dom": "^6.8.2",
+    "@ant-design/pro-components": "^2.8.10",
+    "dayjs": "^1.11.21"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

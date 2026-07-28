@@ -639,13 +639,18 @@ export default function AiChatPanel({
   const handleStartPageDesign = async (
     pageId: string,
     pageLabel: string,
-    hasDetailPlan: boolean
+    hasDetailPlan: boolean,
+    templateParams?: {
+      templateId?: string
+      templateName?: string
+      templateSourcePath?: string
+    },
   ): Promise<void> => {
     const targetKey = pageDetailTargetKey(pageId)
     setInteractingDetailTargetKey(targetKey)
     setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
     setActiveDetailTarget({ type: 'page', pageId })
-    const started = await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan)
+    const started = await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan, templateParams)
     if (started) {
       onPlanningArtifactsRefresh()
     } else {
@@ -704,13 +709,27 @@ export default function AiChatPanel({
     targetContext?: {
       apiContractId?: string
       endpointId?: string
+      templateId?: string
+      templateName?: string
+      templateSourcePath?: string
     }
   ): Promise<void> => {
     if (targetType === 'endpoint') {
       await handleStartEndpointDesign(targetId, targetLabel, hasDetailPlan, targetContext)
       return
     }
-    await handleStartPageDesign(targetId, targetLabel, hasDetailPlan)
+    await handleStartPageDesign(
+      targetId,
+      targetLabel,
+      hasDetailPlan,
+      targetContext && (targetContext.templateId || targetContext.templateSourcePath)
+        ? {
+            templateId: targetContext.templateId,
+            templateName: targetContext.templateName,
+            templateSourcePath: targetContext.templateSourcePath,
+          }
+        : undefined,
+    )
   }
 
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
