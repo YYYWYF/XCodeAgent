@@ -23,6 +23,11 @@ import {
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
+  createSessionIdentity,
+  selectableEndpointSessionId,
+  sessionIdentityMatchesTarget
+} from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
+import {
   APPLICATIONS_CHANGED_EVENT,
   canOpenApplicationWorkbench,
   isApplicationCreationComplete,
@@ -141,6 +146,79 @@ test('接口设计挡板只由当前 endpoint 自己的落盘详情状态决定'
   assert.equal(requiresEndpointDetailDesign({ ...endpoint, designed: true }), false)
   assert.equal(requiresEndpointDetailDesign({ ...endpoint, hasDetailPlan: true }), false)
   assert.equal(requiresEndpointDetailDesign(undefined), false)
+})
+
+test('切换 API 时只恢复有消息的同接口会话', () => {
+  const sessions = [
+    {
+      id: 'page-running',
+      title: '概览页',
+      editorMode: 'frontend',
+      threadId: 'thread-page',
+      pageId: 'overview',
+      workspaceRoot: '/workspace',
+      messageCount: 2,
+      createdAt: 1,
+      updatedAt: 3
+    },
+    {
+      id: 'endpoint-empty',
+      title: 'GET /stats',
+      editorMode: 'frontend',
+      threadId: 'thread-endpoint-empty',
+      apiContractId: 'core-api',
+      endpointId: 'stats',
+      workspaceRoot: '/workspace',
+      messageCount: 0,
+      createdAt: 1,
+      updatedAt: 2
+    }
+  ]
+
+  assert.equal(selectableEndpointSessionId(sessions, 'core-api', 'stats'), undefined)
+  assert.equal(
+    selectableEndpointSessionId(
+      [...sessions, { ...sessions[1], id: 'endpoint-ready', messageCount: 1 }],
+      ' core-api ',
+      ' stats '
+    ),
+    'endpoint-ready'
+  )
+})
+
+test('页面运行态不会在切换到 API 后被复用为接口设计进度', () => {
+  const pageIdentity = createSessionIdentity({
+    workspaceRoot: '/workspace',
+    editorMode: 'frontend',
+    sessionId: 'page-session',
+    threadId: 'page-thread',
+    pageId: 'overview'
+  })
+  const endpointIdentity = createSessionIdentity({
+    workspaceRoot: '/workspace',
+    editorMode: 'frontend',
+    sessionId: 'endpoint-session',
+    threadId: 'endpoint-thread',
+    apiContractId: 'core-api',
+    endpointId: 'stats'
+  })
+
+  assert.equal(
+    sessionIdentityMatchesTarget(pageIdentity, {
+      apiContractId: 'core-api',
+      endpointId: 'stats'
+    }),
+    false
+  )
+  assert.equal(
+    sessionIdentityMatchesTarget(endpointIdentity, {
+      apiContractId: 'core-api',
+      endpointId: 'stats'
+    }),
+    true
+  )
+  assert.equal(sessionIdentityMatchesTarget(pageIdentity, { pageId: 'overview' }), true)
+  assert.equal(sessionIdentityMatchesTarget(endpointIdentity, { pageId: 'overview' }), false)
 })
 
 test('页面、接口、会话和 Workflow 使用一致的详情目标键', () => {

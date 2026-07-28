@@ -252,6 +252,7 @@ export default function AiChatPanel({
     handleCreateSessionFromList,
     handleDeleteSession,
     handleOpenSession,
+    handleSelectEndpoint,
     handleSelectPage,
     loadingSessions,
     messages,
@@ -607,18 +608,10 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
-    setInteractingDetailTargetKey(
-      endpointDetailTargetKey(target.apiContractId, target.endpointId)
-    )
+    setInteractingDetailTargetKey(endpointDetailTargetKey(target.apiContractId, target.endpointId))
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ ...target, type: 'endpoint' })
-    const existingSession = sessions.find(
-      (session) =>
-        session.apiContractId === target.apiContractId &&
-        session.endpointId === target.endpointId &&
-        session.messageCount > 0
-    )
-    if (existingSession) handleOpenSession(existingSession.id).catch(() => undefined)
+    handleSelectEndpoint(target.apiContractId, target.endpointId).catch(() => undefined)
   }
 
   /** 为当前 API endpoint 新建一条独立会话历史。 */

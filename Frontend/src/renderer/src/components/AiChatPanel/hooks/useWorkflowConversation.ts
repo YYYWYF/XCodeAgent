@@ -26,7 +26,11 @@ import {
 import { stoppedAnswer, workflowCodeChanges, workflowPreviewTarget } from '../utils'
 import type { WorkflowPreviewTarget } from '../utils'
 import type { PersistSessionInput } from './useChatSessions'
-import type { SessionIdentity, SessionRunStatus } from './sessionRuntime'
+import {
+  sessionIdentityMatchesTarget,
+  type SessionIdentity,
+  type SessionRunStatus
+} from './sessionRuntime'
 import {
   planExecutionForPage,
   withWorkflowExecutionStatus,
@@ -157,16 +161,25 @@ export function useWorkflowConversation({
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
 
-  // 首次从页面设计入口创建会话时，React 还未提交 activeSession；先按工作区接住刚启动的运行态，避免进度页闪退。
+  const selectedTarget = {
+    apiContractId: selectedApiContractId,
+    endpointId: selectedEndpointId,
+    pageId: selectedPageId
+  }
+  const matchingActiveSession =
+    activeSession && sessionIdentityMatchesTarget(activeSession, selectedTarget)
+      ? activeSession
+      : undefined
+  // 首次创建目标会话时 React 还未提交 activeSession；只接住同一页面、接口或自由对话的运行态，避免进度跨目标串线。
   const activeRun =
-    (activeSession ? runStates[activeSession.key] : undefined) ||
+    (matchingActiveSession ? runStates[matchingActiveSession.key] : undefined) ||
     Object.values(runStates).find(
       (entry) =>
         entry.identity.workspaceRoot === application.workspaceRoot &&
         entry.identity.editorMode === editorMode &&
-        (!selectedPageId || entry.identity.pageId === selectedPageId)
+        sessionIdentityMatchesTarget(entry.identity, selectedTarget)
     )
-  const activeRuntimeKey = activeSession?.key || activeRun?.identity.key
+  const activeRuntimeKey = matchingActiveSession?.key || activeRun?.identity.key
   const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
   const stopping = activeRun?.status === 'stopping'
   const error = activeRuntimeKey ? errors[activeRuntimeKey] : undefined

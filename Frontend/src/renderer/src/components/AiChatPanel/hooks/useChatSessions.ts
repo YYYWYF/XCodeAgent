@@ -18,6 +18,7 @@ import type { AgentChatMessage } from '../types'
 import {
   createSessionIdentity,
   pendingDraftKey,
+  selectableEndpointSessionId,
   sessionIdentityFromSummary,
   sessionRuntimeKey,
   type SessionIdentity
@@ -94,6 +95,7 @@ type UseChatSessionsResult = {
   handleCreateSessionFromList: () => void
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
+  handleSelectEndpoint: (apiContractId: string, endpointId: string) => Promise<void>
   handleSelectPage: (pageId: string) => Promise<void>
   loadingSessions: boolean
   messages: AgentChatMessage[]
@@ -270,6 +272,23 @@ export function useChatSessions({
     )
     if (existingSession) {
       await handleOpenSession(existingSession.id)
+      return
+    }
+
+    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    onCloseRightPanel()
+  }
+
+  /** 切换接口时仅恢复已有且有消息的会话，否则清空旧页面会话以显示当前接口挡板。 */
+  const handleSelectEndpoint = async (apiContractId: string, endpointId: string): Promise<void> => {
+    if (loadingSessions) return
+    const existingSessionId = selectableEndpointSessionId(
+      sessionSummariesRef.current[editorMode],
+      apiContractId,
+      endpointId
+    )
+    if (existingSessionId) {
+      await handleOpenSession(existingSessionId)
       return
     }
 
@@ -537,6 +556,7 @@ export function useChatSessions({
     handleCreateSessionFromList,
     handleDeleteSession,
     handleOpenSession,
+    handleSelectEndpoint,
     handleSelectPage,
     loadingSessions,
     messages,
