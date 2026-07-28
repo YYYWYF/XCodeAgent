@@ -9,6 +9,7 @@ from app.services.api_contracts import (
     normalize_page_api_dependencies,
     normalize_response_bindings,
 )
+from app.services.page_detail_plan import normalize_endpoint_data_origin
 
 
 PAGE_EDITABLE_FIELDS = {
@@ -356,7 +357,7 @@ def _endpoint_review_items(
                 "path": detail.get("path"),
                 "summary": detail.get("summary"),
                 "data_usage": _dict_value(detail.get("data_usage")),
-                "data_origin": _dict_value(detail.get("data_origin")),
+                "data_origin": normalize_endpoint_data_origin(detail.get("data_origin")),
                 "interface_design": _dict_value(detail.get("interface_design")),
                 "processing_logic": _list_value(detail.get("processing_logic")),
                 "dependent_pages": _list_value(
@@ -464,10 +465,11 @@ def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
         return _dict_list(value)
     if key in {
         "data_usage",
-        "data_origin",
         "interface_design",
     }:
         return value if isinstance(value, dict) else {}
+    if key == "data_origin":
+        return normalize_endpoint_data_origin(value)
     if key in {"processing_logic", "risks"}:
         return _string_list(value)
     return str(value).strip() if value is not None else ""

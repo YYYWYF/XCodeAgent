@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.services.page_detail_plan import normalize_endpoint_data_origin
 from app.workspace.spec_documents import workflow_artifact_root
 
 
@@ -251,7 +252,12 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
     """渲染单个 endpoint 详细设计的独立 Markdown 文档。"""
 
     data_usage = detail.get("data_usage") if isinstance(detail.get("data_usage"), dict) else {}
-    data_origin = detail.get("data_origin") if isinstance(detail.get("data_origin"), dict) else {}
+    data_origin = normalize_endpoint_data_origin(detail.get("data_origin"))
+    effective_source = (
+        data_origin.get("effective_source")
+        if isinstance(data_origin.get("effective_source"), dict)
+        else {}
+    )
     interface_design = (
         detail.get("interface_design")
         if isinstance(detail.get("interface_design"), dict)
@@ -290,10 +296,10 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
             "## 二、数据来源",
             "",
             f"- 来源类型：{data_origin.get('source_type') or '待确认'}",
-            f"- 第三方接口：{_json_brief(data_origin.get('third_party'))}",
-            f"- MySQL 已有表：{_json_brief(data_origin.get('mysql_existing'))}",
-            f"- MySQL 新表/DDL：{_json_brief(data_origin.get('mysql_new_table'))}",
-            f"- 待确认问题：{_joined_items(data_origin.get('open_questions', []))}",
+            f"- 有效来源：{_json_brief(effective_source)}",
+            f"- 字段映射：{_json_brief(data_origin.get('field_mappings'))}",
+            f"- 差异项：{_json_brief(data_origin.get('differences'))}",
+            f"- 备注：{_joined_items(data_origin.get('notes', []))}",
             "",
             "## 三、接口设计",
             "",

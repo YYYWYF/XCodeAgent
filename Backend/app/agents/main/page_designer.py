@@ -10,6 +10,7 @@ from app.config import Settings
 from app.services.page_detail_plan import (
     create_endpoint_detail_plan,
     create_page_detail_plan,
+    normalize_endpoint_data_origin,
 )
 from app.utils.model_output import extract_json_object
 
@@ -29,41 +30,32 @@ ENDPOINT_DETAIL_OUTPUT_SCHEMA: dict[str, Any] = {
     },
     "data_origin": {
         "source_type": "third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
-        "third_party": {
-            "applicable": "boolean",
+        "effective_source": {
+            "kind": "third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
+            "data_source_id": "string|null",
+            "database": "string|null",
+            "tables": ["string"],
             "provider": "string|null",
             "endpoint": "string|null",
             "method": "string|null",
-            "request": "object",
-            "response": "object",
-            "mapping": ["string"],
+            "description": "string",
         },
-        "mysql_existing": {
-            "applicable": "boolean",
-            "database": "MySQL8",
-            "tables": [
-                {
-                    "table_name": "string",
-                    "purpose": "string",
-                    "fields_used": ["string"],
-                }
-            ],
-        },
-        "mysql_new_table": {
-            "applicable": "boolean",
-            "database": "MySQL8",
-            "table_name": "string|null",
-            "fields": [
-                {
-                    "name": "string",
-                    "type": "string",
-                    "nullable": "boolean",
-                    "description": "string",
-                }
-            ],
-            "ddl": "string|null",
-        },
-        "open_questions": ["string"],
+        "field_mappings": [
+            {
+                "target_field": "string",
+                "source": "string",
+                "rule": "string",
+            }
+        ],
+        "differences": [
+            {
+                "field": "string",
+                "expected": "string",
+                "actual": "string",
+                "resolution": "string",
+            }
+        ],
+        "notes": ["string"],
     },
     "interface_design": {
         "restful_style": {
@@ -251,17 +243,20 @@ def _endpoint_design_prompt(
         "replace the sample type strings with concrete design content and keep every key present:\n"
         f"{formal_schema}\n"
         "data_usage must be an object and explain what the data serves. "
-        "data_origin must be an object and explicitly describe third_party, mysql_existing, "
-        "and mysql_new_table branches; mark non-applicable branches with applicable=false instead "
-        "of omitting them. interface_design must be an object and include restful_style, "
+        "data_origin must be compact: include exactly one effective_source object for the "
+        "actual source, field_mappings for known target-to-source mappings, differences for "
+        "schema/field gaps, and notes for concise assumptions. Do not output parallel "
+        "third_party/mysql_existing/mysql_new_table branches, do not output applicable=false "
+        "objects, and do not store user-facing questions inside data_origin. "
+        "interface_design must be an object and include restful_style, "
         "request.path_parameters, request.query_parameters, request.header_parameters, "
         "request.request_body, request.file_upload, and response_format. "
         "When endpoint_context.database_context.status is completed, use its summarized tables "
         "and columns as the existing MySQL reference for mysql_existing field mapping. "
         "When database_context is skipped or failed, do not invent inspected tables; continue from "
-        "the API contract and list concrete database questions in data_origin.open_questions. "
+        "the API contract and record concrete unresolved schema gaps in data_origin.differences. "
         "If data source origin is unclear, set data_origin.source_type to needs_user_confirmation "
-        "and list concrete questions in data_origin.open_questions.\n\n"
+        "and put the unresolved decision in data_origin.differences.\n\n"
         f"Latest user feedback:\n{user_request}\n\n"
         f"Endpoint context:\n{json.dumps(endpoint_context, ensure_ascii=False)}\n\n"
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False)}"
@@ -292,6 +287,10 @@ def design_endpoint_with_chat_model(
         ) from exc
     if not agent_detail_plan:
         raise ValueError("接口详细设计模型未返回可解析的 JSON 设计内容。")
+    if isinstance(agent_detail_plan.get("data_origin"), dict):
+        agent_detail_plan["data_origin"] = normalize_endpoint_data_origin(
+            agent_detail_plan["data_origin"]
+        )
     _validate_endpoint_detail_plan(agent_detail_plan)
     detail_plan = create_endpoint_detail_plan(
         project_plan,
@@ -319,11 +318,11 @@ def _validate_endpoint_detail_plan(agent_detail_plan: dict[str, Any]) -> None:
             raise ValueError(f"接口详细设计缺少有效字段：{required_field}")
 
     data_origin = agent_detail_plan["data_origin"]
-    for branch in ("third_party", "mysql_existing", "mysql_new_table"):
-        if not isinstance(data_origin.get(branch), dict):
-            raise ValueError(f"接口详细设计缺少数据来源分支：data_origin.{branch}")
-    if not isinstance(data_origin.get("open_questions"), list):
-        raise ValueError("接口详细设计字段类型错误：data_origin.open_questions 必须是数组")
+    if not isinstance(data_origin.get("effective_source"), dict):
+        raise ValueError("接口详细设计缺少有效来源：data_origin.effective_source")
+    for list_field in ("field_mappings", "differences", "notes"):
+        if not isinstance(data_origin.get(list_field), list):
+            raise ValueError(f"接口详细设计字段类型错误：data_origin.{list_field} 必须是数组")
 
     interface_design = agent_detail_plan["interface_design"]
     request = interface_design.get("request")
