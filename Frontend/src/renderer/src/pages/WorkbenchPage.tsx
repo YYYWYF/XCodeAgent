@@ -71,6 +71,7 @@ function WorkbenchPage({
     if (launchedWorkspaceRef.current === workspacePath) return
     launchedWorkspaceRef.current = workspacePath
 
+    let aborted = false
     const loadingKey = `project-launch-${application.id}`
     notification.open({
       key: loadingKey,
@@ -83,6 +84,7 @@ function WorkbenchPage({
     })
 
     startProjectLaunch(workspacePath).then(result => {
+      if (aborted) return
       notification.close(loadingKey)
       if (result.status === 'running' && result.preview_url) {
         setPreviewBaseUrl(previewOrigin(result.preview_url))
@@ -105,11 +107,17 @@ function WorkbenchPage({
         })
       }
     }).catch(err => {
+      if (aborted) return
       notification.close(loadingKey)
       const errorMsg = err instanceof Error ? err.message : '网络请求失败'
       setPreviewBaseUrl('')
       setPreviewLaunchError(errorMsg)
     })
+
+    return () => {
+      aborted = true
+      notification.close(loadingKey)
+    }
   }, [application])
 
   useEffect(() => {
