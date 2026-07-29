@@ -91,7 +91,7 @@ function WorkbenchPage({
           message: '项目预览已启动',
           description: '可在预览面板中查看效果',
           placement: 'bottomRight',
-          duration: null,
+          duration: 3,
         })
       } else {
         const errorMsg = result.message || '未知错误'
