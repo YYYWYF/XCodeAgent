@@ -84,64 +84,51 @@ function targetTypeFromSelection(value: string): DetailTargetType {
   return value.startsWith("endpoint:") ? "endpoint" : "page";
 }
 
-/** 将菜单树扁平化为 Radio.Button 列表，保证所有 Radio.Button 都是 Radio.Group 的直接子元素。
- *  菜单节点输出为分组标题，子页面输出为带缩进的 Radio.Button。 */
-function flattenPageTree(
+/** 递归渲染菜单树中的页面选项，保留项目计划中的目录层级。 */
+function renderPageTreeOptions(
   nodes: DevelopmentPlanningPageTreeNode[],
   selectedTargetKey: string,
-  depth = 0,
-): ReactNode[] {
-  const result: ReactNode[] = [];
-  for (const node of nodes) {
+): ReactNode {
+  return nodes.map((node) => {
     if (node.type === "menu") {
-      // 分组标题（非 Radio.Button，仅视觉分隔）
-      result.push(
-        <div
-          key={node.key}
-          className={cx("detail-page-selector-menu-header")}
-          style={{ paddingLeft: depth * 14 }}
-        >
-          <span className={cx("detail-page-selector-menu-name")}>
-            {node.label}
-          </span>
-          {node.uniquePath ? (
-            <span className={cx("detail-page-selector-menu-path")}>
-              {node.uniquePath}
+      return (
+        <div className={cx("detail-page-selector-menu-group")} key={node.key}>
+          <div className={cx("detail-page-selector-menu-header")}>
+            <span className={cx("detail-page-selector-menu-name")}>
+              {node.label}
             </span>
-          ) : null}
-        </div>,
+            {node.uniquePath ? (
+              <span className={cx("detail-page-selector-menu-path")}>
+                {node.uniquePath}
+              </span>
+            ) : null}
+          </div>
+          <div className={cx("detail-page-selector-menu-children")}>
+            {renderPageTreeOptions(node.children || [], selectedTargetKey)}
+          </div>
+        </div>
       );
-      // 递归子节点，深度 +1
-      result.push(
-        ...flattenPageTree(node.children || [], selectedTargetKey, depth + 1),
-      );
-      continue;
     }
     const pageId = node.pageId || node.key;
-    if (!pageId) continue;
+    if (!pageId) return null;
     const nextTargetKey = targetSelectionKey("page", pageId);
-    result.push(
+    return (
       <Radio.Button
         key={pageId}
         value={nextTargetKey}
         className={cx(
           "detail-page-selector-page-option",
-          depth > 0 && "is-nested",
           selectedTargetKey === nextTargetKey && "is-selected",
         )}
-        style={{ marginLeft: depth > 0 ? 14 : 0 }}
       >
         <span className={cx("detail-page-selector-name")}>{node.label}</span>
-        <span className={cx("detail-page-selector-path")}>
-          {node.path || "/"}
-        </span>
+        <span className={cx("detail-page-selector-path")}>{node.path || "/"}</span>
         <span className={cx("detail-page-selector-purpose")}>
           {node.purpose || "业务页面"}
         </span>
-      </Radio.Button>,
+      </Radio.Button>
     );
-  }
-  return result;
+  });
 }
 
 /** 在首次进入或选择待设计页面时提供唯一的详细设计入口。 */
@@ -360,22 +347,24 @@ export default function DetailConfirmationPageSelector({
                 </Text>
                 {pages.length ? (
                   <div className={cx("detail-page-selector-options")}>
-                    {pages.map((page) => (
-                      <Radio.Button
-                        key={page.pageId}
-                        value={targetSelectionKey("page", page.pageId)}
-                      >
-                        <span className={cx("detail-page-selector-name")}>
-                          {page.label}
-                        </span>
-                        <span className={cx("detail-page-selector-path")}>
-                          {page.path}
-                        </span>
-                        <span className={cx("detail-page-selector-purpose")}>
-                          {page.purpose}
-                        </span>
-                      </Radio.Button>
-                    ))}
+                    {pageTree.length
+                      ? renderPageTreeOptions(pageTree, selectedTargetKey)
+                      : pages.map((page) => (
+                          <Radio.Button
+                            key={page.pageId}
+                            value={targetSelectionKey("page", page.pageId)}
+                          >
+                            <span className={cx("detail-page-selector-name")}>
+                              {page.label}
+                            </span>
+                            <span className={cx("detail-page-selector-path")}>
+                              {page.path}
+                            </span>
+                            <span className={cx("detail-page-selector-purpose")}>
+                              {page.purpose}
+                            </span>
+                          </Radio.Button>
+                        ))}
                   </div>
                 ) : (
                   <Text
