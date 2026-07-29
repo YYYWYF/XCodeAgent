@@ -455,7 +455,7 @@ testing.START
 任务编译和执行还必须遵守以下确定性边界：
 
 - 页面任务进入 DAG 前，以实时工作区校对模型计划路径。只有当计划入口不存在，且实时 `frontend/src/pages` 中存在唯一的同义目录（忽略大小写、分隔符和 `Page` 后缀）时，才把目标路径改写到该既有入口并把 `add` 改成 `modify`；多候选时不得猜测。这样可修复 WorkspaceSnapshot 在长流程中变旧造成的 `DashboardPage`/`Dashboard` 重复入口，同时保留可审计的 `path_reconciliation`。
-- 模板页面必须具备页面范围内的菜单与自动路由登记结果。任务编译器先读取实时 `frontend/src/constants/menus.ts`：脚手架已写入完全一致的 `{ path, name, key }` 时，不再补充重复任务，并将模型已有菜单任务标记为 `already_satisfied`；仅在条目缺失时生成只能追加 `BIZ_MENUS.firstLevel.children` 的受限任务。PageKey 必须与规范页面目录完全一致，不得修改路由生成器或既有菜单项。
+- 模板页面必须具备页面范围内的菜单与自动路由登记结果。任务编译器先读取实时 `frontend/src/constants/menus.ts`：脚手架已写入完全一致的 `{ path, name, key }` 时，不再补充重复任务，并将模型已有菜单任务标记为 `already_satisfied`；条目缺失时生成或规范化为只能追加 `BIZ_MENUS` 顶层数组的受限任务。PageKey 必须与规范页面目录完全一致，不得修改路由生成器或既有菜单项。
 - 任何具有精确 `targetFiles` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
 - 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`。`already_satisfied` 只有在报告覆盖全部精确目标文件、磁盘状态符合 `add/modify/delete`、并按零基 `criterion_index` 为每条原始验收标准提供 passed evidence 时才成立；旧版完整 criterion 文本仍可读取，但自然语言中的“已满足”或相似路径不能改变调度状态。代码生成 runner 强制使用该结构化协议，缺失或损坏的顶层报告统一成为 `runner_protocol_error`，不得兼容成 `completed`。
 - Deep Agent 工具活动继续使用根图和子图流；执行器按“根图优先、浅层 namespace 优先、同层最新优先”恢复最终 `values/messages`。根 `values` 快照不含 `messages` 时先使用根消息分片，再回退到最浅层 Agent namespace，且不得把工具结果或更深子 Agent 文本误作主 Agent 报告。

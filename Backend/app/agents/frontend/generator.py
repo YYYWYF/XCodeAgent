@@ -84,7 +84,7 @@ def _frontend_generation_prompt(
         "1. `/.xcodeagent/builtin-skills/frontend-template-modification-boundary/SKILL.md` — "
         "file modification boundary: which files you MUST NOT modify (framework skeleton, "
         "package.json, tailwind.config.js, vite.config.ts, etc.), which are append-only "
-        "(menus.ts firstLevel.children, src/apis, src/typings, src/constants, src/hooks, "
+        "(menus.ts top-level BIZ_MENUS array, src/apis, src/typings, src/constants, src/hooks, "
         "src/utils, src/components), and where to place page types/constants/hooks/utils/"
         "components. Violating this destroys the template scaffold. READ THIS FIRST.\n"
         "2. `/.xcodeagent/builtin-skills/code-block-template/SKILL.md` — the AUTHORITATIVE "

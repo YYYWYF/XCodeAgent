@@ -271,6 +271,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(route_task["dependencies"], ["page-layout"])
         self.assertIn("key: 'Dashboard'", route_task["description"])
         self.assertIn("path: 'page'", route_task["description"])
+        self.assertIn("BIZ_MENUS 顶层数组", route_task["description"])
+        self.assertNotIn("firstLevel.children", route_task["description"])
 
     def test_scaffolded_menu_entry_marks_model_task_already_satisfied(self) -> None:
         """脚手架已注册精确菜单项时，模型菜单任务不得再次进入写执行器。"""
@@ -429,6 +431,78 @@ class BuildTaskPlannerTests(unittest.TestCase):
             [task["id"] for task in tasks_from_build_task_plan(plan)],
             ["page-layout"],
         )
+
+    def test_existing_model_menu_task_is_normalized_to_top_level_biz_menus(self) -> None:
+        """模型已有菜单任务时，任务编译器仍要统一追加位置和菜单 path。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "dashboard_page",
+                        "name": "概览页",
+                        "path": "/page/dashboard",
+                    }
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            page_file = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
+            page_file.parent.mkdir(parents=True)
+            page_file.write_text("export default function DashboardPage() {}", encoding="utf-8")
+            menus = Path(workspace) / "frontend/src/constants/menus.ts"
+            menus.parent.mkdir(parents=True)
+            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "task-menu-register-dashboard",
+                            "unit_id": "page:dashboard_page",
+                            "owner": "frontend",
+                            "description": "追加 { path: '/page/dashboard', name: '概览页', key: 'DashboardPage' }",
+                            "change_scope": [
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/constants/menus.ts",
+                                    "description": "追加到 BIZ_MENUS.firstLevel.children",
+                                }
+                            ],
+                            "acceptance_criteria": ["path 为 /page/dashboard"],
+                        },
+                        {
+                            "id": "page-layout",
+                            "unit_id": "page:dashboard_page",
+                            "owner": "frontend",
+                            "description": "实现概览页",
+                            "change_scope": [
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/pages/DashboardPage/index.tsx",
+                                }
+                            ],
+                        },
+                    ]
+                },
+                build_context={
+                    "target": {"type": "page", "id": "dashboard_page"},
+                    "page_detail": {"page_name": "概览页", "path": "/page/dashboard"},
+                    "required_unit_ids": ["page:dashboard_page"],
+                },
+                workspace_root=workspace,
+            )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        menu_task = tasks["task-menu-register-dashboard"]
+        self.assertEqual(menu_task["targetFiles"], ["frontend/src/constants/menus.ts"])
+        self.assertEqual(menu_task["change_scope"][0]["description"], "仅向 BIZ_MENUS 顶层数组追加当前页面菜单项。")
+        self.assertIn("BIZ_MENUS 顶层数组", menu_task["description"])
+        self.assertIn("path: 'dashboard'", menu_task["description"])
+        self.assertNotIn("/page/dashboard", menu_task["description"])
+        self.assertNotIn("firstLevel.children", menu_task["description"])
+        self.assertIn("新增菜单项 path 为 dashboard", menu_task["acceptance_criteria"][2])
 
     def test_v2_markdown_renders_units_and_task_graph(self) -> None:
         plan = create_build_task_plan(

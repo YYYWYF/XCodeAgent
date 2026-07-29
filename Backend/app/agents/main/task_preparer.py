@@ -116,7 +116,7 @@ def _task_preparation_prompt(
         "These are the template skeleton; recreating them wastes effort and breaks the build.\n"
         "- NEVER plan `operation: modify` on the skeleton files above either, except the "
         "single permitted append-only change to `src/constants/menus.ts`: add the current "
-        "page as `{ path, name, key }` under `BIZ_MENUS.firstLevel.children` without changing "
+        "page as `{ path, name, key }` to the top-level `BIZ_MENUS` array without changing "
         "existing entries or the "
         "file structure. All other skeleton files remain read-only.\n"
         "- Only plan `operation: add` for NEW business files that do NOT exist in the "

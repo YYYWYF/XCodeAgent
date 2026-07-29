@@ -459,53 +459,126 @@ def _ensure_page_route_registration_task(
             menu_path=menu_path,
         )
     if menu_tasks:
-        return tasks
+        return _normalize_existing_menu_tasks(
+            tasks,
+            menu_tasks=menu_tasks,
+            page_task_ids=page_task_ids,
+            page_unit_id=page_unit_id,
+            page_key=page_key,
+            page_name=page_name,
+            menu_path=menu_path,
+        )
 
     task_id = _unique_task_id(f"page:{page_id}:route-menu-registration", tasks)
-    acceptance = [
-        f"{FRONTEND_MENU_PATH} 的 BIZ_MENUS.firstLevel.children 包含页面“{page_name}”。",
-        f"新增菜单项 key 为 {page_key}，与 {FRONTEND_PAGE_ENTRY_PREFIX}{page_key}/index.tsx 完全一致。",
-        f"新增菜单项 path 为 {menu_path}，且不删除或修改任何已有菜单项。",
-    ]
+    route_payload = _menu_registration_task_payload(
+        page_task_ids=page_task_ids,
+        page_unit_id=page_unit_id,
+        page_key=page_key,
+        page_name=page_name,
+        menu_path=menu_path,
+    )
     route_task = {
         "id": task_id,
         "task_id": task_id,
         "owner": "frontend",
         "type": "frontend",
         "title": f"登记{page_name}菜单与自动路由",
-        "description": (
-            f"仅向 BIZ_MENUS 的 firstLevel.children 追加 "
-            f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}' }}，"
-            "由模板自动路由加载对应页面入口；不得修改现有菜单项或路由骨架。"
-        ),
-        "dependencies": page_task_ids,
-        "dependsOn": page_task_ids,
+        **route_payload,
         "status": "pending",
-        "unit_id": page_unit_id,
         "source_refs": dict(build_context.get("source_refs") or {}),
-        "allowed_paths": [FRONTEND_MENU_PATH],
-        "targetFiles": [FRONTEND_MENU_PATH],
-        "change_scope": [
-            {
-                "operation": "modify",
-                "path": FRONTEND_MENU_PATH,
-                "description": "仅向 BIZ_MENUS.firstLevel.children 追加当前页面菜单项。",
-            }
-        ],
         "impact_scope": {
             "summary": f"使{page_name}进入模板菜单和自动路由。",
             "affected_modules": [FRONTEND_MENU_PATH],
             "public_contracts": [],
             "risks": ["菜单 key 必须与页面目录 PageKey 完全一致。"],
         },
+        "verification_commands": ["cd frontend && pnpm build"],
+    }
+    return [*tasks, route_task]
+
+
+def _menu_registration_task_payload(
+    *,
+    page_task_ids: list[str],
+    page_unit_id: str,
+    page_key: str,
+    page_name: str,
+    menu_path: str,
+) -> dict[str, Any]:
+    """生成确定性的模板菜单登记任务字段，避免模型决定菜单 path 形态。"""
+
+    acceptance = [
+        f"{FRONTEND_MENU_PATH} 的 BIZ_MENUS 顶层数组包含页面“{page_name}”。",
+        f"新增菜单项 key 为 {page_key}，与 {FRONTEND_PAGE_ENTRY_PREFIX}{page_key}/index.tsx 完全一致。",
+        f"新增菜单项 path 为 {menu_path}，且不删除或修改任何已有菜单项。",
+    ]
+    return {
+        "description": (
+            f"仅向 BIZ_MENUS 顶层数组追加 "
+            f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}' }}，"
+            "由模板自动路由加载对应页面入口；不得修改现有菜单项或路由骨架。"
+        ),
+        "dependencies": page_task_ids,
+        "dependsOn": page_task_ids,
+        "unit_id": page_unit_id,
+        "allowed_paths": [FRONTEND_MENU_PATH],
+        "targetFiles": [FRONTEND_MENU_PATH],
+        "change_scope": [
+            {
+                "operation": "modify",
+                "path": FRONTEND_MENU_PATH,
+                "description": "仅向 BIZ_MENUS 顶层数组追加当前页面菜单项。",
+            }
+        ],
         "canRunInParallel": False,
         "can_run_in_parallel": False,
         "parallel_reason": "菜单是共享的增量文件，必须在页面入口完成后串行追加。",
         "acceptance_criteria": acceptance,
         "acceptanceCriteria": acceptance,
-        "verification_commands": ["cd frontend && pnpm build"],
     }
-    return [*tasks, route_task]
+
+
+def _normalize_existing_menu_tasks(
+    tasks: list[dict[str, Any]],
+    *,
+    menu_tasks: list[dict[str, Any]],
+    page_task_ids: list[str],
+    page_unit_id: str,
+    page_key: str,
+    page_name: str,
+    menu_path: str,
+) -> list[dict[str, Any]]:
+    """把模型已生成的菜单任务改写为确定性的顶层 BIZ_MENUS 追加任务。"""
+
+    menu_task_ids = {str(task.get("id") or "") for task in menu_tasks}
+    payload = _menu_registration_task_payload(
+        page_task_ids=page_task_ids,
+        page_unit_id=page_unit_id,
+        page_key=page_key,
+        page_name=page_name,
+        menu_path=menu_path,
+    )
+    return [
+        {
+            **task,
+            **payload,
+            "title": str(task.get("title") or f"登记{page_name}菜单与自动路由"),
+            "impact_scope": {
+                **_impact_scope(task.get("impact_scope") or task.get("impactScope"), payload["description"]),
+                "affected_modules": [FRONTEND_MENU_PATH],
+            },
+            "verification_commands": _dedupe_normalized_strings(
+                [
+                    *_string_list(task.get("verification_commands")),
+                    *_string_list(task.get("verificationCommands")),
+                    "cd frontend && pnpm build",
+                ]
+            ),
+        }
+        if str(task.get("id") or "") in menu_task_ids
+        else task
+        for task in tasks
+    ]
 
 
 def _menu_entry_exists(

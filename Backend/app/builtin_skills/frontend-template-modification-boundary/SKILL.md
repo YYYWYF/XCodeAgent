@@ -65,7 +65,7 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 模板工程的路由是**自动生成**的：`src/utils/route.tsx` 用 `import.meta.glob('@/pages/**/index.tsx')` 静态扫描页面，再根据 `src/constants/menus.ts` 里每个菜单项的 `key` 解析到 `src/pages/<key>/index.tsx`。因此：
 
 - 页面文件路径**必须**是 `src/pages/<PageKey>/index.tsx`，`<PageKey>` 即菜单项的 `key`，二者必须完全一致。
-- 页面要能被访问，**必须**同时在 `menus.ts` 的 `BIZ_MENUS` → `firstLevel` → `children` 里登记 `{ path, name, key }`。
+- 页面要能被访问，`menus.ts` 的 `BIZ_MENUS` 任意层级中必须存在合法的 `{ path, name, key }` 菜单项；如果当前页面尚未注册，把新菜单项追加到 `BIZ_MENUS` 顶层数组末尾。
 - 框架骨架文件（入口、路由生成器、布局、Provider、守卫、配置）**禁止修改**。
 - 页面的类型、常量、hooks、工具函数**统一放公共目录**（`src/typings`、`src/constants`、`src/hooks`、`src/utils`），不放在页面目录内；可复用组件放 `src/components`。
 
@@ -74,7 +74,7 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | 分类 | 含义 | 涉及文件 |
 | --- | --- | --- |
 | 🔴 禁止修改 | 前端框架骨架与配置，改了会破坏整个工程 | 入口、路由、布局、Provider、守卫、常量、类型、配置、请求封装、全局样式 |
-| 🟡 只能增量 | 只能追加新文件/新内容，不能删改现有项 | `menus.ts` 的 `firstLevel.children`、`src/apis/`、`src/typings/`、`src/constants/`、`src/hooks/`、`src/utils/`、`src/components/`、`src/pages/` |
+| 🟡 只能增量 | 只能追加新文件/新内容，不能删改现有项 | `menus.ts` 的BIZ_MENUS数组顶层、`src/apis/`、`src/typings/`、`src/constants/`、`src/hooks/`、`src/utils/`、`src/components/`、`src/pages/` |
 | 🟢 自由编写 | 业务代码生成目标，可任意编写 | `src/pages/<PageKey>/index.tsx`（页面主组件） |
 
 ## 🔴 禁止修改的文件（前端框架骨架）
@@ -131,9 +131,9 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 
 ### `src/constants/menus.ts` — 菜单登记
 
-**只能**在 `BIZ_MENUS` 第一个 `path: 'firstLevel'` 项的 `children` 数组里**追加**新菜单项，**不得**：
+若当前页面尚未在 `BIZ_MENUS` 任意层级注册，**只能**在 `BIZ_MENUS` 顶层数组末尾**追加**新菜单项；若已存在合法菜单项，无论位于顶层还是深层 `children`，都视为已注册，**不得**：
 - 删除或修改已有的 `DefaultPage` 等菜单项
-- 修改 `firstLevel` 项本身的 `path`/`name`/`icon`
+- 移动、提升、拍平、重排或重写已有深层合法菜单项
 - 修改 `SYSTEM_MENUS`（系统菜单由框架维护）
 - 改动文件中的 `import`、`export`、类型注解
 
@@ -274,7 +274,7 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 5. **新增 hooks/工具函数（如需）**：分别在 `src/hooks/`、`src/utils/` 下新建文件。
 6. **编写页面主组件**：替换 `src/pages/<PageKey>/index.tsx` 的占位内容为真实业务代码，从公共目录 import 类型/常量/hooks/API。
 7. **拆分可复用组件（如需）**：页面太长且有可复用模块时，拆到 `src/components/<Module>/`。
-8. **不要碰菜单**：菜单登记由脚手架在创建页面时已完成，生成代码阶段不需要再改 `menus.ts`（除非用户明确要求新增菜单项，此时只追加到 `firstLevel.children`）。
+8. **不要碰菜单**：菜单登记由脚手架在创建页面时已完成，生成代码阶段不需要再改 `menus.ts`（除非用户明确要求新增菜单项，且当前页面未在 `BIZ_MENUS` 任意层级注册，此时追加到 `BIZ_MENUS` 顶层数组末尾）。
 
 ## 禁止行为清单
 
