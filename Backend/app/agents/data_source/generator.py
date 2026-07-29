@@ -45,8 +45,8 @@ def _data_source_generation_prompt(
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}\n\n"
         "## CRITICAL: Do NOT create temporary script files\n"
         "Do NOT create shell scripts (.sh), Python scripts (.py), JavaScript files (.js/.mjs), "
-        "or any other temporary script files to run build commands. Instead, use the "
-        "`terminal.exec` tool directly to execute commands like `pnpm run build`, `pnpm run dev`, "
+        "or any other temporary script files to run build or test commands. Instead, use the "
+        "`execute` tool directly to execute commands like `pnpm run build`, `pnpm run dev`, "
         "`npm test`, etc. Creating temporary scripts pollutes the workspace with unnecessary files.\n"
     )
 
