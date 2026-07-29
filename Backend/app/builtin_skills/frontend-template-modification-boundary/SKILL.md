@@ -58,7 +58,33 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | `src/components/<Module>/` | 可复用组件 `index.tsx` |
 | `src/apis/` | 业务接口 `<biz>Api.ts` |
 
-> 如果任务需要运行脚本（如检查、安装、部署），应由用户在前端工程外部执行，**不要在前端工程内生成脚本文件**。
+> 如果任务需要运行命令（如类型检查、构建、安装），**直接用 `execute` 工具跑命令**，**绝对不要**创建任何 `.sh`/`.py`/`.js`/`.mjs` 脚本文件（无论放在 `/frontend/`、`/tmp/` 还是工作区任何位置都不允许）。详见下方「🔴 验证代码：直接用 execute 工具，禁止创建脚本」一节。
+
+## 🔴 验证代码：直接用 execute 工具，禁止创建脚本
+
+写完页面代码后，如果需要做类型检查或构建验证，**必须直接调用 `execute` 工具运行命令**，命令本身就是一条 shell 字符串，由 `execute` 在工作区根目录执行。**严禁**先用 `write_file` 写出 `.sh`/`.py`/`.js` 脚本再去执行它——这会污染工作区，且违反本技能的文件边界规范。
+
+### 正确做法（直接 execute）
+
+| 目的 | 直接传给 `execute` 的命令 |
+| --- | --- |
+| TypeScript 类型检查 | `cd frontend && npx tsc --noEmit` |
+| 生产构建 | `cd frontend && pnpm run build` |
+| 启动开发服务器（仅按需） | `cd frontend && pnpm run dev` |
+
+注意命令里用的是 **`cd frontend`（相对路径，无前导斜杠）**，因为 `execute` 的工作目录就是工作区根目录，前端工程位于其下的 `frontend/`。
+
+### ❌ 错误做法（严禁）
+
+- ❌ 创建 `run_build.sh`、`run_tsc.sh`、`run_check.sh`、`run_check.py` 等任何脚本文件，再想办法执行它。
+- ❌ 在命令里写 `cd /frontend`（带前导斜杠的绝对路径）——这是不存在的路径。`/frontend/` 仅在 `write_file`/`read_file` 等**文件系统工具**里作为虚拟路径前缀使用，**不能**用在 `execute` 的 shell 命令里。两者不要混淆：
+  - 文件系统工具（`write_file`/`read_file`/`list_files`）：用虚拟绝对路径 `/frontend/src/pages/...`
+  - `execute` 工具（跑命令）：用相对路径 `cd frontend && ...`
+- ❌ 把脚本写到 `/tmp/`、工作区根目录或 `/frontend/` 根目录来"绕过"限制——任何位置都不允许生成临时脚本。
+
+### 读取命令输出
+
+`execute` 会返回 JSON：`{ exit_code, stdout, stderr }`。直接从返回值里读输出和退出码即可，**不要**用 `echo "EXIT_CODE=$?"` 之类的方式自己包装，更不要为此创建脚本。退出码 `0` 即成功，非 `0` 时看 `stderr`/`stdout` 排错。
 
 ## 核心原则
 
@@ -160,6 +186,69 @@ export function fetchDutyList(params: DutyListQuery) {
   return service.get('/duty/list', { params });
 }
 ```
+
+### 🔴 数据源类型决定 API 写法（mock vs 真实接口）
+
+页面详细设计里的 `data_origin.source_type` / ProjectPlan 的 `data_sources[].type` 决定 `src/apis/<biz>Api.ts` 用哪种写法，**必须严格匹配，不能混用**：
+
+#### 情况 A：数据源是 mock / static（前端内存模拟数据）
+
+当数据源类型是 `mock`/`static` 时，页面**不调用任何真实后端接口**，`src/apis/<biz>Api.ts` 里写**内存 mock 函数**：模块级维护一个假数据数组，用 `delay(ms)` 模拟网络延迟，导出的 async 函数对数组做筛选/分页/增删改后返回。**不要** `import service`、**不要** `service.get('/api/...')`、**不要**改 `vite.config.ts` 加 mock 插件——内存函数本身就是 mock。
+
+```ts
+// src/apis/dutyApi.ts —— mock 数据源写法
+import type { DutyListItem, DutyListQuery, PaginatedResult } from '@/typings/duty';
+
+// 内存假数据
+const mockDutyList: DutyListItem[] = Array.from({ length: 46 }, (_, i) => ({
+  id: String(i + 1),
+  dutyNo: `DUTY-2026-${String(i + 1).padStart(4, '0')}`,
+  name: ['差旅费', '办公费', '招待费'][i % 3],
+  amount: parseFloat((Math.random() * 5000 + 100).toFixed(2)),
+  status: ['active', 'disabled', 'pending'][i % 3],
+}));
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export async function fetchDutyList(params: DutyListQuery): Promise<PaginatedResult<DutyListItem>> {
+  await delay(300); // 模拟网络延迟，保证 loading 动画可见
+  const { page = 1, pageSize = 10, ...rest } = params;
+  let filtered = [...mockDutyList];
+  Object.entries(rest).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    filtered = filtered.filter((item) =>
+      String((item as Record<string, unknown>)[key] ?? '').toLowerCase().includes(String(value).toLowerCase()),
+    );
+  });
+  const total = filtered.length;
+  const data = filtered.slice((page - 1) * pageSize, page * pageSize);
+  return { data, success: true, total };
+}
+
+export async function updateDuty(payload: Partial<DutyListItem> & { id: string }) {
+  await delay(300);
+  const idx = mockDutyList.findIndex((item) => item.id === payload.id);
+  if (idx === -1) return { success: false };
+  mockDutyList[idx] = { ...mockDutyList[idx], ...payload };
+  return { success: true };
+}
+
+export async function deleteDuty(id: string) {
+  await delay(300);
+  const idx = mockDutyList.findIndex((item) => item.id === id);
+  if (idx === -1) return { success: false };
+  mockDutyList.splice(idx, 1);
+  return { success: true };
+}
+```
+
+页面组件里 `import { fetchDutyList } from '@/apis/dutyApi'`，在 ProTable 的 `request` 里 `const res = await fetchDutyList({...}); return { data: res.data, success: res.success, total: res.total }`。这与所选页面模板（`commonTable`/`tabsTable`）的 `api.ts` 写法完全一致，直接参照模板。
+
+#### 情况 B：数据源是真实接口（mysql / external_api / third_party）
+
+当数据源类型是 `mysql`/`external_api`/`third_party` 等真实后端时，才用上面的 `service.get('/api/...')` 写法，复用 `service.ts` 的 axios 实例调用真实接口。
+
+> 判断依据：以本次任务的 ProjectPlan `data_sources[].type` 和页面详细设计 `data_origin.source_type` 为准。生成代码前先用 `read_file` 读页面详细设计确认数据源类型，再选 A 或 B。**mock 场景误用 service.get 会导致页面请求不存在的后端接口、表格一直 loading。**
 
 ## 🟢 自由编写与公共目录放置规则
 
@@ -279,7 +368,7 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 ## 禁止行为清单
 
 - ❌ 在 `/frontend/` 根目录下创建任何新文件（`.py`、`.sh`、`.md`、`.json`、`.env` 等）
-- ❌ 在 `/frontend/` 下生成脚本文件（检查脚本、安装脚本、部署脚本等）
+- ❌ 在工作区**任何位置**（`/frontend/`、`/tmp/`、工作区根等）生成脚本文件（`.sh`/`.py`/`.js`/`.mjs` 等检查脚本、安装脚本、部署脚本）——验证代码请直接用 `execute` 工具跑 `cd frontend && npx tsc --noEmit` / `cd frontend && pnpm run build`，详见「🔴 验证代码」一节
 - ❌ 在 `/frontend/` 下生成非前端代码文件（Python、Shell、Bash 等）
 - ❌ 修改 `src/routes/index.tsx`、`src/utils/route.tsx` 以手动注册路由（路由由菜单自动生成）
 - ❌ 修改 `src/App.tsx`、`src/index.tsx` 入口装配

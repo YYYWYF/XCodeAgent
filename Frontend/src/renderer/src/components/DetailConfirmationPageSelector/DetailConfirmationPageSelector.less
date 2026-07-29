@@ -62,6 +62,23 @@
   }
 }
 
+/* 选择了页面模板后，锁定面板加宽以容纳模板卡片网格，但整体仍保持居中对齐 */
+.@{class-prefix}-detail-page-selector-panel.@{class-prefix}-locked-panel.@{class-prefix}-with-template {
+  width: min(1040px, 100%);
+}
+
+.@{class-prefix}-detail-page-selector-locked-template {
+  display: flex;
+  margin: 8px 0 4px;
+  padding: 16px;
+  text-align: left;
+  background: color-mix(in srgb, var(--wb-surface-subtle) 74%, transparent);
+  border: 1px solid var(--wb-border);
+  border-radius: 14px;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .@{class-prefix}-detail-page-selector-lock-icon {
   display: grid;
   width: 62px;

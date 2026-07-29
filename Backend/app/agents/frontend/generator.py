@@ -55,6 +55,32 @@ def _frontend_generation_prompt(
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
     frontend_root = "frontend"
+    # 判断本次任务的数据源是否含 mock/static：若是，前端用内存 mock 函数提供数据，
+    # 不调用真实后端接口，也不在 vite.config.ts 里加 mock 插件。
+    mock_source_types = {"mock", "static", "none", ""}
+    raw_data_sources = project_plan.get("data_sources")
+    data_source_list = raw_data_sources if isinstance(raw_data_sources, list) else []
+    has_mock_data_source = any(
+        isinstance(source, dict)
+        and str(source.get("type") or source.get("source_type") or "").lower() in mock_source_types
+        for source in data_source_list
+    )
+    data_source_instruction = (
+        "## CRITICAL: Data source is MOCK — use in-memory mock functions, NOT real API calls\n"
+        "The ProjectPlan data_sources for this page declare type=mock/static. This page MUST "
+        "use **in-memory mock functions** for all data — do NOT call real backend APIs, do NOT "
+        "use `service.get('/api/...')`, and do NOT configure a real backend proxy in vite.config.ts. "
+        "Instead, write the mock data layer in `src/apis/<biz>Api.ts` following the page template's "
+        "`api.ts` pattern: a module-level in-memory array of fake records, a `delay(ms)` helper to "
+        "simulate network latency, and async functions (fetchList/update/delete/...) that filter/"
+        "paginate/mutate the in-memory array and return `{ data, success, total }` (list) or "
+        "`{ success }` (mutation). The page component imports these functions and calls them from "
+        "ProTable's `request` / button handlers, exactly like the template. Keep `service.ts` "
+        "untouched (it is not used under mock mode). Do NOT modify vite.config.ts to add a mock "
+        "plugin — the in-memory functions are the mock.\n\n"
+        if has_mock_data_source
+        else ""
+    )
     return (
         "You are the Frontend Generation Agent in an app-generation workflow.\n"
         "Execute only the approved frontend tasks below. Modify code only within "
@@ -77,6 +103,7 @@ def _frontend_generation_prompt(
         f"frontend/` — those are wrong for this workspace. Before writing, use list_files "
         f"on `/{frontend_root}/src/pages/` to confirm the scaffolded page directories.\n\n"
         + _page_template_instruction(page_template)
+        + data_source_instruction
         + "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
         "Before generating or modifying any frontend code, you MUST read the following "
         "two built-in skills with read_file(limit=400) and follow their instructions. "

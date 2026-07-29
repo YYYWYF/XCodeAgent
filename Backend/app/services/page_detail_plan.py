@@ -794,16 +794,37 @@ def _default_endpoint_data_origin(
     )
     source_type = str(data_source.get("type") or data_source.get("source_type") or "")
     normalized_type = source_type.lower()
-    is_third_party = normalized_type in {"third_party", "http", "api"}
+    is_third_party = normalized_type in {"third_party", "http", "api", "external_api"}
+    # mock / static 数据源：前端用内存 mock 函数模拟，不连任何后端，不应被当成 MySQL。
+    is_mock = normalized_type in {"mock", "static", "none", ""}
     is_mysql = (
-        normalized_type in {"mysql", "database", "db"}
-        or data_source_id.lower().startswith("mysql")
-        or not is_third_party
+        not is_mock
+        and not is_third_party
+        and (
+            normalized_type in {"mysql", "database", "db"}
+            or data_source_id.lower().startswith("mysql")
+        )
     )
+    if is_mock:
+        kind = "mock"
+        source_type_label = "mock"
+        description = "本页面数据来源为模拟数据，前端用内存 mock 函数提供数据，不调用真实后端接口。"
+    elif is_third_party:
+        kind = "third_party"
+        source_type_label = "third_party"
+        description = "本接口数据来源于第三方接口。"
+    elif is_mysql:
+        kind = "mysql_existing"
+        source_type_label = "mysql_existing"
+        description = "基于已声明的 MySQL 数据源读取并组装接口响应。"
+    else:
+        kind = "needs_user_confirmation"
+        source_type_label = "needs_user_confirmation"
+        description = "数据来源需要用户确认。"
     return {
-        "source_type": "third_party" if is_third_party else "mysql_existing" if is_mysql else "needs_user_confirmation",
+        "source_type": source_type_label,
         "effective_source": {
-            "kind": "third_party" if is_third_party else "mysql_existing" if is_mysql else "needs_user_confirmation",
+            "kind": kind,
             "data_source_id": data_source_id,
             "database": "MySQL8" if is_mysql else None,
             "tables": _normalize_origin_tables(
@@ -814,13 +835,7 @@ def _default_endpoint_data_origin(
             "provider": data_source.get("provider") if is_third_party else None,
             "endpoint": data_source.get("endpoint") if is_third_party else None,
             "method": data_source.get("method") if is_third_party else None,
-            "description": (
-                "本接口数据来源于第三方接口。"
-                if is_third_party
-                else "基于已声明的 MySQL 数据源读取并组装接口响应。"
-                if is_mysql
-                else "数据来源需要用户确认。"
-            ),
+            "description": description,
         },
         "field_mappings": [],
         "differences": [

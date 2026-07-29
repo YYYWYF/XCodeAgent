@@ -29,9 +29,9 @@ ENDPOINT_DETAIL_OUTPUT_SCHEMA: dict[str, Any] = {
         "consumer": "string",
     },
     "data_origin": {
-        "source_type": "third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
+        "source_type": "mock|third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
         "effective_source": {
-            "kind": "third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
+            "kind": "mock|third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
             "data_source_id": "string|null",
             "database": "string|null",
             "tables": ["string"],
@@ -256,7 +256,10 @@ def _endpoint_design_prompt(
         "When database_context is skipped or failed, do not invent inspected tables; continue from "
         "the API contract and record concrete unresolved schema gaps in data_origin.differences. "
         "If data source origin is unclear, set data_origin.source_type to needs_user_confirmation "
-        "and put the unresolved decision in data_origin.differences.\n\n"
+        "and put the unresolved decision in data_origin.differences. "
+        "If the page's data source type is mock or static (frontend in-memory mock, no real backend), "
+        "set data_origin.source_type and effective_source.kind to \"mock\" with a description noting "
+        "the page uses in-memory mock data and does not call any real API.\n\n"
         f"Latest user feedback:\n{user_request}\n\n"
         f"Endpoint context:\n{json.dumps(endpoint_context, ensure_ascii=False)}\n\n"
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False)}"
