@@ -179,6 +179,33 @@ class WorkspaceCodeChangeTests(unittest.TestCase):
         self.assertEqual(no_changes.value, "done")
         self.assertIsNone(no_changes.code_change_set)
 
+    def test_capture_workspace_changes_can_preserve_diff_when_action_fails(self) -> None:
+        """受控异常模式必须返回错误和异常发生前的文件差异。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            target = Path(workspace) / "frontend" / "Page.tsx"
+
+            def failing_action() -> None:
+                """写入文件后模拟 Agent 预算耗尽。"""
+
+                target.parent.mkdir(parents=True)
+                target.write_text("export default null\n", encoding="utf-8")
+                raise RuntimeError("budget exhausted")
+
+            captured = capture_workspace_changes(
+                workspace=workspace,
+                source_tool="direct.frontend",
+                action=failing_action,
+                capture_exceptions=True,
+            )
+
+        self.assertIsInstance(captured.error, RuntimeError)
+        self.assertIsNotNone(captured.code_change_set)
+        self.assertEqual(
+            captured.code_change_set["files"][0]["path"],
+            "frontend/Page.tsx",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

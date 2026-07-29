@@ -171,7 +171,7 @@ class RootMessageAndChildStateAgent:
 
 class BuildToolActivityTests(unittest.TestCase):
     def test_visible_workspace_tools_have_safe_chinese_messages(self) -> None:
-        """七类工作区工具都应生成稳定、安全的一行中文状态。"""
+        """工作区文件工具都应生成稳定、安全的一行中文状态。"""
 
         cases = [
             ("ls", {"path": "/src"}, "正在浏览目录：/src"),
@@ -195,18 +195,19 @@ class BuildToolActivityTests(unittest.TestCase):
                 self.assertEqual(activity["message"], expected)
                 self.assertNotIn("secret", str(activity))
 
-    def test_internal_tools_and_host_paths_are_not_exposed(self) -> None:
-        """内部编排工具不展示，工作区外宿主机路径必须被替换。"""
+    def test_process_tools_are_visible_without_arguments_and_host_paths_are_hidden(self) -> None:
+        """执行和委派应显示安全状态，但不得泄露命令、Prompt 或宿主机路径。"""
 
         for tool_name in ("write_todos", "task", "execute"):
-            self.assertIsNone(
-                normalized_tool_activity(
-                    call_id="internal",
-                    tool_name=tool_name,
-                    args={"command": "cat /etc/passwd"},
-                    workspace="/tmp/workspace",
-                )
+            activity = normalized_tool_activity(
+                call_id="internal",
+                tool_name=tool_name,
+                args={"command": "cat /etc/passwd", "prompt": "private prompt"},
+                workspace="/tmp/workspace",
             )
+            self.assertIsNotNone(activity)
+            self.assertNotIn("passwd", str(activity))
+            self.assertNotIn("private prompt", str(activity))
         activity = normalized_tool_activity(
             call_id="host-path",
             tool_name="read_file",

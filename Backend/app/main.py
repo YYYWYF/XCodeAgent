@@ -14,6 +14,7 @@ from app.graph.application_planning_workflow import (
     application_planning_graph_for_request,
     clear_application_planning_graph_cache,
 )
+from app.graph.direct_modification_workflow import clear_direct_modification_graph_cache
 from app.protocols.workflow import (
     build_workflow_ag_ui_stream,
     workflow_capabilities,
@@ -42,6 +43,10 @@ from app.protocols.code_changes import (
     build_code_changes_ag_ui_stream,
     code_changes_capabilities,
 )
+from app.protocols.direct_modification import (
+    build_direct_modification_ag_ui_stream,
+    direct_modification_capabilities,
+)
 from app.config import Settings
 from app.services.agent_file_documents import ensure_agents_document
 from app.services.builtin_skills import available_builtin_skills
@@ -65,6 +70,7 @@ async def lifespan(_app: FastAPI):
     finally:
         clear_workflow_graph_cache()
         clear_application_planning_graph_cache()
+        clear_direct_modification_graph_cache()
         await close_workflow_checkpointer()
 
 
@@ -112,6 +118,7 @@ async def health() -> dict[str, object]:
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
             "code_changes": code_changes_capabilities(),
+            "direct_modification": direct_modification_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -200,6 +207,20 @@ async def run_code_changes(
 
     return StreamingResponse(
         build_code_changes_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/direct-modification/run")
+async def run_direct_modification(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """运行独立于正式规划工作流的快速代码修改 Graph。"""
+
+    return StreamingResponse(
+        build_direct_modification_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -8,6 +8,7 @@ from app.agents.workspace_scope import (
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
+from app.middleware.direct_modification import DirectModificationMiddleware
 from app.tools.delete_file import create_delete_file_tool
 from app.tools.execute import create_execute_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
@@ -30,12 +31,11 @@ def create_frontend_agent(
         agent_memory_backend=agent_memory_backend,
     )
     base_system_prompt = (
-        "You are the Frontend Generation Agent. Execute only approved frontend "
-        "build tasks from the task DAG. Generate or modify frontend code for "
+        "You are the Frontend Coding Agent. Follow the execution contract in the current "
+        "user message. Generate or modify frontend code for "
         "layouts, components, interactions, permissions, API integration, loading, "
         "empty, and error states. Add page tests and run frontend lint, typecheck, "
-        "and unit tests when available. Do not confirm requirements, do not modify "
-        "PageDetail, and do not silently change API contracts. Return a concise "
+        "and unit tests when available. Do not silently change API contracts. Return a concise "
         "structured implementation report with changed files, commands, status, "
         "and any change request. "
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting a file, "
@@ -55,6 +55,7 @@ def create_frontend_agent(
         skills=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
         tools=[create_delete_file_tool(workspace_root), create_execute_tool(workspace_root)],
+        middleware=[DirectModificationMiddleware()],
         backend=backend,
         permissions=create_workspace_permissions(
             workspace_root,

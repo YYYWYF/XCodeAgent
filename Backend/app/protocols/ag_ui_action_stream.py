@@ -70,6 +70,7 @@ def build_ag_ui_action_stream(
     error_message_prefix: str,
     error_data: ErrorDataFactory | None = None,
     accept: str | None = None,
+    emit_progress_text: bool = True,
 ) -> AsyncIterator[str]:
     """
     业务异常会被编码为失败结果，并正常发送 RUN_FINISHED，使 HttpAgent可以用与成功响应相同的流结构消费失败信息。
@@ -161,7 +162,7 @@ def build_ag_ui_action_stream(
                     yield encoder.encode(
                         StateSnapshotEvent(snapshot={state_key: safe_progress})
                     )
-                    if not streaming_operation:
+                    if not streaming_operation and emit_progress_text:
                         yield encoder.encode(
                             TextMessageContentEvent(
                                 messageId=message_id,

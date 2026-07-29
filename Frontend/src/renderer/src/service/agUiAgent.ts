@@ -45,6 +45,7 @@ export type SendWorkflowMessageOptions = {
     name?: string
     sourcePath?: string
   }
+  directModification?: boolean
 }
 
 /** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能、控制和恢复字段。 */
@@ -76,7 +77,13 @@ export function buildWorkflowForwardedProps(
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
     resumeExecutionRunId: options.resumeExecutionRunId,
-    pageTemplate: options.pageTemplate
+    pageTemplate: options.pageTemplate,
+    directModification: options.directModification
+      ? {
+          workspaceRoot: options.workspaceRoot,
+          selectedSkillNames: options.selectedSkillNames
+        }
+      : undefined
   }
 }
 
@@ -163,17 +170,27 @@ export type ProcessStepRecord = {
   dagGeneration?: DagGenerationSnapshot
 }
 
-function getWorkflowUrl(): string {
+/** 返回主工作流的 AG-UI 地址。 */
+export function getWorkflowUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/workflow/run`
     : '/api/agent/workflow/run'
 }
 
+/** 返回独立快速修改 Graph 的 AG-UI 地址。 */
+export function getDirectModificationUrl(): string {
+  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  return agentBaseUrl
+    ? `${agentBaseUrl.replace(/\/$/, '')}/direct-modification/run`
+    : '/api/agent/direct-modification/run'
+}
+
 export class AgUiChatSession {
   readonly threadId: string
 
-  private readonly url: string
+  readonly endpointUrl: string
+
   private activeAgent?: HttpAgent
   private activeRunId?: string
   private activeRunCompletion?: Promise<void>
@@ -182,7 +199,7 @@ export class AgUiChatSession {
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
   constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
     this.threadId = threadId
-    this.url = url
+    this.endpointUrl = url
   }
 
   /** 请求后端取消当前运行；确认失败时才本地中止，并等待取消请求完成。 */
@@ -202,7 +219,7 @@ export class AgUiChatSession {
   /** 使用请求级 HttpAgent 发送当前消息，避免把本地会话历史和旧状态重复传输。 */
   async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
     const requestAgent = createAgUiHttpAgent({
-      url: this.url,
+      url: this.endpointUrl,
       threadId: this.threadId
     })
     const userMessageId = randomUUID()
@@ -239,6 +256,15 @@ export class AgUiChatSession {
             emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
             options.onWorkflow?.(workflow)
           }
+        }
+        if (event.name === 'direct-modification') {
+          workflow = readWorkflowPayload(event.value) ?? workflow
+          const step = readProcessStep(objectValue(event.value).processStep)
+          if (step) {
+            processSteps = mergeProcessStep(processSteps, step)
+            options.onProcessSteps?.(processSteps)
+          }
+          if (workflow) options.onWorkflow?.(workflow)
         }
       },
       onStateSnapshotEvent: ({ event }) => {
@@ -321,7 +347,7 @@ export class AgUiChatSession {
   /** 通过当前会话的实际端点发送独立取消控制请求，并返回后端是否接管取消。 */
   private async cancelRun(targetRunId: string): Promise<boolean> {
     const cancellationAgent = createAgUiHttpAgent({
-      url: this.url,
+      url: this.endpointUrl,
       threadId: this.threadId
     })
     try {
@@ -599,12 +625,14 @@ function messageContentToText(content: Message['content'] | undefined): string {
 
 function readWorkflowFromState(snapshot: unknown): WorkflowRunPayload | undefined {
   if (!snapshot || typeof snapshot !== 'object') return undefined
-  return readWorkflowPayload((snapshot as { workflow?: unknown }).workflow)
+  const value = snapshot as { workflow?: unknown; directModification?: unknown }
+  return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.directModification)
 }
 
 function readResultWorkflow(result: unknown): WorkflowRunPayload | undefined {
   if (!result || typeof result !== 'object') return undefined
-  return readWorkflowPayload((result as { workflow?: unknown }).workflow)
+  const value = result as { workflow?: unknown; directModification?: unknown }
+  return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.directModification)
 }
 
 function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {

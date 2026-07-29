@@ -254,6 +254,19 @@ export default function AiChatPanel({
     [activePageId, developmentPlanningPages]
   )
   const activePreviewPath = activePageOption?.path || '/'
+  const directModificationEnabled = activeApiEndpoint
+    ? developmentPlanningApiContracts.some((contract) =>
+        contract.endpoints.some((endpoint, endpointIndex) => {
+          const endpointId = endpoint.id || String(endpointIndex + 1)
+          const apiContractId = endpoint.apiContractId || contract.id
+          return (
+            apiContractId === activeApiEndpoint.apiContractId &&
+            endpointId === activeApiEndpoint.endpointId &&
+            Boolean(endpoint.designed || endpoint.hasDetailPlan)
+          )
+        })
+      )
+    : Boolean(activePageOption?.designed || activePageOption?.hasDetailPlan)
 
   /** 接收实时 launch 结果并复用手动预览入口打开右侧面板。 */
   const handlePreviewReady = useCallback(
@@ -352,6 +365,7 @@ export default function AiChatPanel({
     selectedSkills,
     selectedPageId: activePageOption?.pageId || activePageOption?.key,
     selectedPageLabel: activePageOption?.label,
+    directModificationEnabled,
     setDraftByKey,
     setSelectedSkillsByKey,
     setSessionMessages

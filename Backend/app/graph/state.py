@@ -20,6 +20,17 @@ class ProjectState(TypedDict, total=False):
     request_complexity: str
     complexity_reason: str
     complexity_decision: dict[str, Any]
+    direct_modification_owner: str
+    direct_modification_scope: str
+    direct_modification_confidence: float
+    direct_modification_reason: str
+    direct_modification_summary: str
+    direct_modification_result: dict[str, Any]
+    direct_stage_results: dict[str, dict[str, Any]]
+    direct_code_change_sets: list[dict[str, Any]]
+    backend_handoff: dict[str, Any]
+    integration_contract_check_enabled: bool
+    integration_repair_enabled: bool
     requirement_spec: dict[str, Any]
     edited_requirement_spec: dict[str, Any]
     requirement_spec_feedback: str

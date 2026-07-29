@@ -44,6 +44,7 @@ class WorkspaceSnapshot:
 class CapturedWorkspaceChanges:
     value: Any
     code_change_set: dict[str, Any] | None
+    error: Exception | None = None
 
 
 def snapshot_workspace(workspace_root: str | None) -> WorkspaceSnapshot | None:
@@ -170,9 +171,19 @@ def capture_workspace_changes(
     workspace: str | None,
     source_tool: str,
     action: Callable[[], T],
+    capture_exceptions: bool = False,
 ) -> CapturedWorkspaceChanges:
+    """执行动作并捕获前后差异；快速模式可选择把异常作为结果返回。"""
+
     before = snapshot_workspace(workspace)
-    value = action()
+    value: Any = None
+    error: Exception | None = None
+    try:
+        value = action()
+    except Exception as exc:
+        if not capture_exceptions:
+            raise
+        error = exc
     after = snapshot_workspace(workspace)
     files = diff_workspace_snapshots(before, after, source_tool=source_tool)
     code_change_set = (
@@ -184,7 +195,11 @@ def capture_workspace_changes(
         if files and after is not None
         else None
     )
-    return CapturedWorkspaceChanges(value=value, code_change_set=code_change_set)
+    return CapturedWorkspaceChanges(
+        value=value,
+        code_change_set=code_change_set,
+        error=error,
+    )
 
 
 def code_change_state_update(

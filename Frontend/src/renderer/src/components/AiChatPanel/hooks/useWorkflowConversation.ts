@@ -1,6 +1,10 @@
 import { useRef, useState } from 'react'
 import type { MutableRefObject, SetStateAction } from 'react'
-import { AgUiChatSession } from '../../../service/agUiAgent'
+import {
+  AgUiChatSession,
+  getDirectModificationUrl,
+  getWorkflowUrl
+} from '../../../service/agUiAgent'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
 import type {
@@ -56,6 +60,7 @@ type UseWorkflowConversationParams = {
   selectedEndpointLabel?: string
   selectedPageId?: string
   selectedPageLabel?: string
+  directModificationEnabled: boolean
   editorMode: EditorMode
   ensureActiveSession: () => Promise<SessionIdentity>
   ensureEndpointSession: (
@@ -149,6 +154,7 @@ export function useWorkflowConversation({
   selectedEndpointLabel,
   selectedPageId,
   selectedPageLabel,
+  directModificationEnabled,
   editorMode,
   ensureActiveSession,
   ensureEndpointSession,
@@ -242,7 +248,12 @@ export function useWorkflowConversation({
       selectedPageId: selectedApiContractId && selectedEndpointId ? '' : selectedPageId,
       sessionIdentity,
       titleFrom: message,
-      workflowDebug
+      workflowDebug,
+      directModification: shouldUseDirectModification(
+        directModificationEnabled,
+        activeWorkflow,
+        workflowDebug
+      )
     })
   }
 
@@ -272,6 +283,7 @@ export function useWorkflowConversation({
         name?: string
         sourcePath?: string
       }
+      directModification?: boolean
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
@@ -286,9 +298,15 @@ export function useWorkflowConversation({
       return false
     }
 
+    const endpointUrl = options?.directModification ? getDirectModificationUrl() : getWorkflowUrl()
+    const currentAgUiSession = agUiSessionsRef.current[identity.key]
     const agUiSession =
-      agUiSessionsRef.current[identity.key] ||
-      (agUiSessionsRef.current[identity.key] = new AgUiChatSession(identity.threadId))
+      currentAgUiSession && currentAgUiSession.endpointUrl === endpointUrl
+        ? currentAgUiSession
+        : (agUiSessionsRef.current[identity.key] = new AgUiChatSession(
+            identity.threadId,
+            endpointUrl
+          ))
     const optimisticSkills = beginOptimisticSkillSend(options?.selectedSkills || [])
     const userMessage: AgentChatMessage = {
       id: Date.now(),
@@ -408,6 +426,7 @@ export function useWorkflowConversation({
         resumeExecutionRunId: options?.resumeExecutionRunId,
         resumeState: options?.resumeState,
         pageTemplate: options?.pageTemplate,
+        directModification: options?.directModification,
         onContent: (content) => {
           streamedContent = content
           updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
@@ -525,7 +544,11 @@ export function useWorkflowConversation({
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
   ): Promise<boolean> => {
-    if (workflowInteractionAvailability(workflow, applicationLifecycle) !== 'active') return false
+    const directModification = isDirectModificationWorkflow(workflow)
+    if (
+      !directModification &&
+      workflowInteractionAvailability(workflow, applicationLifecycle) !== 'active'
+    ) return false
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
     if (!continuationMessage || loading || workspaceBusy) return false
     const originalRequest = workflowOriginalRequest(workflow)
@@ -535,7 +558,8 @@ export function useWorkflowConversation({
       resumeState: workflow,
       selectedPageId: workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId,
       buildExecutionScope: workflowEndpointExecutionScope(workflow),
-      titleFrom: originalRequest || '补充需求确认'
+      titleFrom: originalRequest || '补充需求确认',
+      directModification
     })
   }
 
@@ -752,6 +776,23 @@ export function useWorkflowConversation({
     stopping,
     workspaceBusy
   }
+}
+
+/** 仅让已设计目标的普通消息进入快速通道，调试和正式流程续跑仍使用主 Graph。 */
+function shouldUseDirectModification(
+  enabled: boolean,
+  workflow: WorkflowRunPayload | undefined,
+  workflowDebug: WorkflowDebugOptions | undefined
+): boolean {
+  if (!enabled || workflowDebug?.enabled) return false
+  if (isDirectModificationWorkflow(workflow)) return true
+  const status = String(workflow?.summary?.status || '')
+  return !['running', 'in_progress', 'requires_user_input', 'paused', 'stopping'].includes(status)
+}
+
+/** 通过独立协议公开的 owner 字段识别快速修改运行。 */
+function isDirectModificationWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
+  return ['frontend', 'backend', 'fullstack', 'unknown'].includes(String(workflow?.summary?.owner))
 }
 
 function latestWorkflow(messages: AgentChatMessage[]): WorkflowRunPayload | undefined {

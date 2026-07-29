@@ -91,6 +91,94 @@ test('AG-UI forwardedProps 在约定字段发送技能名称', () => {
   assert.deepEqual(forwardedProps.selectedSkillNames, ['alpha', 'beta'])
 })
 
+test('快速修改只在独立字段发送工作区和技能且不包含 target', () => {
+  const forwardedProps = buildWorkflowForwardedProps({
+    editorMode: 'frontend',
+    workspaceRoot: '/workspace',
+    selectedSkillNames: ['alpha'],
+    directModification: true
+  })
+
+  assert.deepEqual(forwardedProps.directModification, {
+    workspaceRoot: '/workspace',
+    selectedSkillNames: ['alpha']
+  })
+  assert.equal(
+    Object.hasOwn(forwardedProps.directModification as Record<string, unknown>, 'target'),
+    false
+  )
+})
+
+test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', async () => {
+  const originalFetch = globalThis.fetch
+  let workflowStatus = ''
+  let processStepCount = 0
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as Record<string, unknown>
+    const threadId = String(request.threadId)
+    const runId = String(request.runId)
+    const messageId = 'assistant-direct'
+    const value = {
+      runId,
+      threadId,
+      status: 'completed',
+      summary: {
+        status: 'completed',
+        phase: 'direct_modification',
+        message: '快速修改完成',
+        owner: 'frontend'
+      },
+      events: [],
+      state: { status: 'completed' },
+      result: { status: 'completed' },
+      processStep: {
+        id: 'direct:execute_frontend',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成 执行前端修改',
+        detail: '完成页面修改',
+        sequence: 60
+      }
+    }
+    const events = [
+      { type: 'RUN_STARTED', threadId, runId },
+      { type: 'TEXT_MESSAGE_START', messageId, role: 'assistant' },
+      { type: 'CUSTOM', name: 'direct-modification', value },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId, delta: '快速修改完成' },
+      { type: 'TEXT_MESSAGE_END', messageId },
+      { type: 'RUN_FINISHED', threadId, runId, result: { directModification: value } }
+    ]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' },
+      status: 200
+    })
+  }
+
+  try {
+    const session = new AgUiChatSession(
+      'thread-direct',
+      'http://agent.test/direct-modification/run'
+    )
+    const result = await session.sendMessage('修改页面样式', {
+      editorMode: 'frontend',
+      workspaceRoot: '/workspace',
+      directModification: true,
+      onWorkflow: (workflow) => {
+        workflowStatus = String(workflow.summary.status)
+      },
+      onProcessSteps: (steps) => {
+        processStepCount = steps.length
+      }
+    })
+    assert.equal(result.workflow?.summary.phase, 'direct_modification')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert.equal(workflowStatus, 'completed')
+  assert.equal(processStepCount, 1)
+})
+
 test('AG-UI 继续执行只发送旧 runId 作为资源锁转移令牌', () => {
   const forwardedProps = buildWorkflowForwardedProps({
     editorMode: 'frontend',

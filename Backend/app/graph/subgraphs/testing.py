@@ -100,6 +100,33 @@ def api_contract_check(
     """校验正式 ProjectPlan 契约，并区分计划错误与未完成构建。"""
 
     reporter = _progress_reporter(config)
+    if state.get("integration_contract_check_enabled") is False:
+        check = {
+            "id": "api_contract",
+            "name": "API 契约有效",
+            "layer": "contract",
+            "language": None,
+            "passed": True,
+            "skipped": True,
+            "required": False,
+            "command": "project-plan-contract-validation",
+            "evidence": "快速修改模式未依赖 ProjectPlan，已跳过正式 API 契约校验。",
+            "failure_category": None,
+            "execution": {
+                "tool": "deterministic_validator",
+                "argv": ["project-plan-contract-validation"],
+                "cwd": ".",
+                "returncode": 0,
+                "timed_out": False,
+                "stdout_log": None,
+                "stderr_log": None,
+            },
+        }
+        report_check_progress(reporter, status="skipped", check=check)
+        return {
+            "test_results": _append_check(state, check),
+            "test_events": ["api_contract:skipped"],
+        }
     report_check_progress(
         reporter,
         status="running",
@@ -199,6 +226,14 @@ def repair_planning(state: ProjectState) -> dict:
             "repair_tasks": [],
             "integration_next_action": "launch_project",
             "test_events": ["repair_planning:skipped"],
+        }
+
+    if state.get("integration_repair_enabled") is False:
+        return {
+            "repair_task_plan": {},
+            "repair_tasks": [],
+            "integration_next_action": "handle_failure",
+            "test_events": ["repair_planning:disabled"],
         }
 
     existing_plan = state.get("repair_task_plan")

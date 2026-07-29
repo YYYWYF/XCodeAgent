@@ -632,6 +632,22 @@ observability/  日志、Tracing、Metrics 和 Agent 运行诊断
 
 不得将确定性业务规则写进 Agent Prompt。可以用普通代码完成的校验、路由和状态转换应放在 `services/` 或 `graph/`。
 
+## 已设计目标的快速修改 Graph
+
+`POST /direct-modification/run` 是独立于 `/workflow/run` 的 AG-UI LangGraph。工作台仅在当前页面或 endpoint 已设计且正式计划不占用输入区时切换到该端点；请求不发送页面/API target，后端只接收当前用户消息、`workspaceRoot` 和 `selectedSkillNames`。公开事件名为 `direct-modification`，状态快照键为 `directModification`，thread checkpoint 使用 `direct-modification:<threadId>` 与主图隔离。
+
+流程为 `classify_intent -> execute_frontend|execute_backend -> integration_test -> launch_project -> finalize_direct_modification`。分类输出 `frontend | backend | fullstack | unknown`；`fullstack` 固定先执行 Data Source Agent，再把接口路径、方法、请求/响应、真实改动文件和注意事项作为内存态 `backend_handoff` 交给 Frontend Agent。模糊输入停止并要求补充，只有大范围架构替换、数据迁移或无法安全局部决定的产品范围才返回 `requires_planning`，不能仅因为需求跨前后端而拒绝。
+
+快速执行复用 `AgentBundle.frontend` 和 `AgentBundle.data_source`，但不复用正式生成 Prompt。`_frontend_direct_modification_prompt` 和 `_data_source_direct_modification_prompt` 不注入 RequirementSpec、ProjectPlan、BuildTaskPlan、approved tasks 或任务 DAG。前端写代码前必须完整读取 `/.xcodeagent/builtin-skills/code-block-template/SKILL.md` 和 `/.xcodeagent/builtin-skills/react-develop-specification/SKILL.md`；后端当前没有必读内置 Skill。Agent 的结构化文件清单不作为事实，最终 diff 来自工作区执行前后快照；无实际差异且未明确 `alreadySatisfied` 时按失败处理。
+
+同一 Agent bundle 通过快速 Prompt 的稳定执行模式标记启用动态工具策略：主工作流仍保留 Deep Agents 的 `task` 和 `write_todos`，快速模式则只从模型工具列表移除这两个复杂编排工具，并禁止把定位或验证委派给默认 general-purpose 子 Agent。快速模式不再额外设置模型轮次、只读探索次数、LangGraph recursion、模型请求超时/重试、命令超时或总运行时长限制，而是继承共用 Agent、Provider 和工具的正常运行时配置。验证由当前 Agent 直接调用与实际改动范围相符的 `execute` 命令；命令不可用或失败时如实报告，不得改为遍历整个工程手工模拟 lint/typecheck。样式等局部需求仍应保持渐进读取和与范围相称的验证。
+
+快速 Agent 即使在模型或工具异常后退出，也会执行工作区 after-snapshot，把异常发生前已落盘的差异写入失败结果，继续支持审核和撤销。工具和命令活动只通过结构化 `direct-modification` 进度与 `directModification` 快照展示，不追加到 assistant 正文；正文只保留最终结果，避免大量文件读取文案淹没状态。
+
+快速模式复用既有 `integration_test` 节点，但以状态开关跳过正式 ProjectPlan API 契约校验并禁用 RepairPlanner。验证失败直接返回检查项和 `.xcodeagent/runtime/tests/` 日志引用；成功后复用 `launch_project`，包括现有 Maven 二次构建，再由快速 finalizer 清除正式验收/澄清字段并直接完成。代码 diff、撤销、流程步骤和预览继续使用现有消息组件。
+
+架构映射：learn-coding-agent 的“读取相关上下文—修改—验证”紧凑循环对应单轮快速执行；OpenCode 的会话与角色 Agent 模式对应稳定 thread、明确 frontend/data_source 边界和结构化跨端交接；Deep Agents 对应复用工具/文件系统/权限/Skill/AGENTS 记忆、渐进读取 Skill 和持久 checkpoint。XCodeAgent 有意采用后端优先的串行 fullstack 分支而非并行 subagent，因为前端需要消费本轮后端产生的真实契约。Graph State 只保留不超过 4000 字符的滚动摘要、结构化交接、diff 元数据和日志路径，不保存完整历史、源码或工具输出，符合 128k 上下文预算。
+
 ## 上下文管理
 
 上下文分为四层：

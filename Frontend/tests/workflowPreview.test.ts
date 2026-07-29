@@ -76,6 +76,15 @@ test('实时成功 launch 会生成可去重的预览目标', () => {
   assert.equal(target?.key, 'thread-1:run-1:http://127.0.0.1:3000')
 })
 
+test('快速修改完成并启动后直接生成预览目标', () => {
+  const target = workflowPreviewTarget(
+    previewWorkflow({ phase: 'direct_modification', status: 'completed' }),
+    true
+  )
+
+  assert.equal(target?.url, 'http://127.0.0.1:3000')
+})
+
 test('页面验收在问题列表为空时仍生成结构化继续消息', () => {
   const workflow = previewWorkflow({
     clarification: {
