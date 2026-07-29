@@ -16,8 +16,8 @@ class IntegrationRepairFlowTests(unittest.TestCase):
 
         revision_request = {
             "id": "revision:api_contract",
-            "owner": "data_source",
-            "owners": ["data_source"],
+            "owner": "backend",
+            "owners": ["backend"],
             "reason": "API 契约有效",
             "evidence": "API contract api does not define data_source_id.",
             "failed_check": {
@@ -40,8 +40,8 @@ class IntegrationRepairFlowTests(unittest.TestCase):
                 scoped_tasks=[
                     {
                         "id": "orders-api",
-                        "owner": "data_source",
-                        "unit_id": "data-source:orders",
+                        "owner": "backend",
+                        "unit_id": "database:orders",
                         "allowed_paths": ["apps/demo/backend/orders.py"],
                     }
                 ],
@@ -50,8 +50,8 @@ class IntegrationRepairFlowTests(unittest.TestCase):
         self.assertEqual(result["decision"], "repair")
         self.assertEqual(result["status"], "ready")
         self.assertEqual(len(result["tasks"]), 1)
-        self.assertEqual(result["tasks"][0]["owner"], "data_source")
-        self.assertEqual(result["tasks"][0]["unit_id"], "data-source:orders")
+        self.assertEqual(result["tasks"][0]["owner"], "backend")
+        self.assertEqual(result["tasks"][0]["unit_id"], "database:orders")
         self.assertEqual(
             result["tasks"][0]["allowed_paths"],
             ["apps/demo/backend/orders.py"],
@@ -111,7 +111,7 @@ class IntegrationRepairFlowTests(unittest.TestCase):
         }
         repair_task = {
             "id": "repair:api_contract:data_source",
-            "owner": "data_source",
+            "owner": "backend",
             "status": "pending",
         }
         repair_plan = {

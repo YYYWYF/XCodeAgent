@@ -51,34 +51,34 @@ class BuildUnitSkeletonTests(unittest.TestCase):
             {"workspace_revision": "workspace-v1", "tech_stack": ["React"]},
         )
 
-        self.assertEqual(plan["schema_version"], "build-dag.v2")
+        self.assertEqual(plan["schema_version"], "build-dag.v3")
         self.assertIn("page:orders", plan["build_units"])
         self.assertIn("page:customers", plan["build_units"])
-        self.assertIn("data-source:orders", plan["build_units"])
-        self.assertIn("endpoint:orders-api:orders.list", plan["build_units"])
-        self.assertIn("app:api-client", plan["build_units"])
+        self.assertIn("database:orders", plan["build_units"])
+        self.assertIn("backend:endpoint:orders-api:orders.list", plan["build_units"])
+        self.assertIn("frontend:api-client", plan["build_units"])
         self.assertEqual(
-            plan["build_units"]["endpoint:orders-api:orders.list"]["kind"],
-            "endpoint",
+            plan["build_units"]["backend:endpoint:orders-api:orders.list"]["kind"],
+            "backend",
         )
         self.assertIn(
-            {"from": "data-source:orders", "to": "endpoint:orders-api:orders.list", "type": "depends_on"},
+            {"from": "database:orders", "to": "backend:endpoint:orders-api:orders.list", "type": "depends_on"},
             plan["unit_graph"]["edges"],
         )
         self.assertIn(
-            {"from": "endpoint:orders-api:orders.list", "to": "page:orders", "type": "depends_on"},
+            {"from": "backend:endpoint:orders-api:orders.list", "to": "page:orders", "type": "depends_on"},
             plan["unit_graph"]["edges"],
         )
         self.assertIn(
-            {"from": "data-source:orders", "to": "page:orders", "type": "depends_on"},
+            {"from": "database:orders", "to": "page:orders", "type": "depends_on"},
             plan["unit_graph"]["edges"],
         )
         self.assertIn(
-            {"from": "app:auth-guard", "to": "page:orders", "type": "depends_on"},
+            {"from": "frontend:auth-guard", "to": "page:orders", "type": "depends_on"},
             plan["unit_graph"]["edges"],
         )
         self.assertNotIn(
-            {"from": "app:auth-guard", "to": "page:customers", "type": "depends_on"},
+            {"from": "frontend:auth-guard", "to": "page:customers", "type": "depends_on"},
             plan["unit_graph"]["edges"],
         )
         self.assertEqual(plan["build_units"]["page:orders"]["status"], "not_prepared")

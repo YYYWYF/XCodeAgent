@@ -200,7 +200,7 @@ def plan_repairs_with_repair_planner_agent(
             "planId": bounded_candidate.get("planId"),
             "requestedPaths": bounded_candidate.get("requestedPaths", []),
             "repair_scope": bounded_candidate.get("repair_scope", {}),
-            "summary": {"total": 0, "frontend": 0, "data_source": 0},
+            "summary": {"total": 0, "frontend": 0, "backend": 0, "database": 0},
             "agent_note": agent_note,
             "reason": planner_decision.get("reason", ""),
             "failure_handling": planner_decision.get("failure_handling", ""),

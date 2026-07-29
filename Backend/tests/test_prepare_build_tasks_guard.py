@@ -100,8 +100,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "orders-api-task",
-                        "unit_id": "data-source:orders",
-                        "owner": "data_source",
+                        "unit_id": "database:orders",
+                        "owner": "backend",
                         "description": "实现订单接口",
                         "change_scope": [{"path": "api/orders.py"}],
                     },
@@ -174,8 +174,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "customers-api-task",
-                        "unit_id": "data-source:customers",
-                        "owner": "data_source",
+                        "unit_id": "database:customers",
+                        "owner": "backend",
                         "description": "实现客户接口",
                         "change_scope": [{"path": "api/customers.py"}],
                     },
@@ -191,16 +191,16 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             },
         )
         first_plan = result["build_task_plan"]
-        first_plan["build_units"]["app:api-client"]["task_ids"] = ["shared-api-client-task"]
-        first_plan["task_registry"]["shared-api-client-task"] = {
-            "id": "shared-api-client-task",
-            "unit_id": "app:api-client",
+        first_plan["build_units"]["frontend:shell"]["task_ids"] = ["shared-shell-task"]
+        first_plan["task_registry"]["shared-shell-task"] = {
+            "id": "shared-shell-task",
+            "unit_id": "frontend:shell",
             "owner": "frontend",
             "status": "completed",
             "dependencies": [],
             "change_scope": [],
         }
-        first_plan["task_graph"]["topological_order"].append("shared-api-client-task")
+        first_plan["task_graph"]["topological_order"].append("shared-shell-task")
         with tempfile.TemporaryDirectory() as workspace, patch(
             "app.graph.nodes.tasks.validate_project_plan_dependencies", return_value=[]
         ), patch(
@@ -222,10 +222,10 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 }
             )
 
-        self.assertIn("shared-api-client-task", customer_result["build_task_plan"]["task_registry"])
+        self.assertIn("shared-shell-task", customer_result["build_task_plan"]["task_registry"])
         self.assertIn("orders-page-task", customer_result["build_task_plan"]["task_registry"])
         customer_context = customer_preparer.call_args.kwargs["build_context"]
-        self.assertEqual(customer_context["reusable_tasks_by_unit"]["app:api-client"], ["shared-api-client-task"])
+        self.assertEqual(customer_context["reusable_tasks_by_unit"]["frontend:shell"], ["shared-shell-task"])
 
     def test_page_scope_rejects_out_of_scope_unit_tasks(self) -> None:
         """页面 scope 模型若返回其他页面 Unit，必须阻止而不是扩展当前 DAG。"""
@@ -348,7 +348,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             [
                 {
                     "id": "shared-api-client-task",
-                    "unit_id": "app:api-client",
+                    "unit_id": "frontend:api-client",
                     "owner": "frontend",
                     "status": "completed",
                     "dependencies": [],
@@ -362,8 +362,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "shared-api-client-task",
-                        "unit_id": "data-source:orders",
-                        "owner": "data_source",
+                        "unit_id": "database:orders",
+                        "owner": "backend",
                         "description": "实现订单接口",
                         "change_scope": [{"path": "api/orders.py"}],
                     },
@@ -403,9 +403,9 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         task_registry = result["build_task_plan"]["task_registry"]
         self.assertEqual(result["status"], "completed")
         self.assertIn("shared-api-client-task", task_registry)
-        self.assertIn("data-source-orders--shared-api-client-task", task_registry)
+        self.assertIn("database-orders--shared-api-client-task", task_registry)
         self.assertIn(
-            "data-source-orders--shared-api-client-task",
+            "database-orders--shared-api-client-task",
             task_registry["orders-page-task"]["dependencies"],
         )
 
@@ -469,8 +469,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "orders-api-task",
-                        "unit_id": "data-source:orders",
-                        "owner": "data_source",
+                        "unit_id": "database:orders",
+                        "owner": "backend",
                         "description": "实现订单接口",
                         "change_scope": [{"path": "api/orders.py"}],
                     },
@@ -507,7 +507,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         first_plan = first_result["build_task_plan"]
         shared_api_client_task = {
             "id": "shared-api-client-task",
-            "unit_id": "app:api-client",
+            "unit_id": "frontend:api-client",
             "owner": "frontend",
             "status": "completed",
             "dependencies": [],
@@ -523,15 +523,15 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "duplicate-api-client-task",
-                        "unit_id": "app:api-client",
+                        "unit_id": "frontend:api-client",
                         "owner": "frontend",
                         "description": "重复生成公共 API client",
                         "change_scope": [{"path": "src/api/client.ts"}],
                     },
                     {
                         "id": "duplicate-orders-api-task",
-                        "unit_id": "data-source:orders",
-                        "owner": "data_source",
+                        "unit_id": "database:orders",
+                        "owner": "backend",
                         "description": "重复生成订单接口",
                         "change_scope": [{"path": "api/orders.py"}],
                     },

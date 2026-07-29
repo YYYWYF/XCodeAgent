@@ -197,7 +197,7 @@ def _workspace_analysis_from_snapshot(snapshot: dict[str, Any] | None) -> dict[s
 
 
 def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
-    """把模型返回的候选任务规整为 v2 叶子任务。"""
+    """把模型返回的候选任务规整为 v3 叶子任务。"""
 
     if not isinstance(raw_tasks, list):
         return []
@@ -215,8 +215,21 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
         used_ids.add(task_id)
 
         owner = _text(item.get("owner"), "frontend")
-        if owner not in {"frontend", "data_source"}:
-            owner = "data_source" if owner in {"backend", "data-source", "data"} else "frontend"
+        if owner not in {"frontend", "backend", "database"}:
+            owner = (
+                "database"
+                if owner in {"data_source", "data-source", "data", "db"}
+                else "backend"
+                if owner in {"api", "server"}
+                else "frontend"
+            )
+        default_task_type = (
+            "database.change"
+            if owner == "database"
+            else "backend.code"
+            if owner == "backend"
+            else "frontend.code"
+        )
         description = _text(item.get("description"), _text(item.get("title"), task_id))
         target_files = _string_list(item.get("targetFiles") or item.get("target_files"))
         change_scope = _change_scope(
@@ -253,7 +266,8 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
                 "id": task_id,
                 "task_id": task_id,
                 "owner": owner,
-                "type": "backend" if owner == "data_source" else "frontend",
+                "type": owner,
+                "task_type": _text(item.get("task_type") or item.get("taskType"), default_task_type),
                 "title": _text(item.get("title"), description),
                 "description": description,
                 "dependencies": dependencies,
@@ -261,6 +275,15 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
                 "status": "pending",
                 "unit_id": _text(item.get("unit_id") or item.get("unitId"), "application:root"),
                 "source_refs": _dict_value(item.get("source_refs") or item.get("sourceRefs")),
+                "requires_capabilities": _string_list(
+                    item.get("requires_capabilities") or item.get("requiresCapabilities")
+                ),
+                "provides_capabilities": _string_list(
+                    item.get("provides_capabilities") or item.get("providesCapabilities")
+                ),
+                "database_scope": _dict_value(item.get("database_scope") or item.get("databaseScope")),
+                "risk": _text(item.get("risk"), "low"),
+                "approval": _dict_value(item.get("approval")),
                 "allowed_paths": allowed_paths,
                 "targetFiles": _dedupe_normalized_strings(target_files),
                 "change_scope": change_scope,
@@ -824,7 +847,7 @@ def _build_task_graph(
     ]
     all_errors = _dedupe_strings([*missing_dependency_errors, *validation_errors])
     return {
-        "schema_version": "build-task-graph.v2",
+        "schema_version": "build-task-graph.v3",
         "nodes": task_ids,
         "edges": edges,
         "roots": [task_id for task_id in task_ids if incoming[task_id] == 0],
@@ -839,12 +862,13 @@ def _build_task_graph(
 
 
 def _task_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
-    """按叶子任务状态和执行所有者计算 v2 计划摘要。"""
+    """按叶子任务状态和执行所有者计算 v3 计划摘要。"""
 
     return {
         "total": len(tasks),
         "frontend": len([task for task in tasks if task.get("owner") == "frontend"]),
-        "data_source": len([task for task in tasks if task.get("owner") == "data_source"]),
+        "backend": len([task for task in tasks if task.get("owner") == "backend"]),
+        "database": len([task for task in tasks if task.get("owner") == "database"]),
         "pending": len([task for task in tasks if task.get("status") == "pending"]),
         "running": len([task for task in tasks if task.get("status") == "running"]),
         "completed": len(
@@ -989,8 +1013,8 @@ def create_build_task_plan(
 
     plan = {
         **base_plan,
-        "version": "2.0.0",
-        "schema_version": "build-dag.v2",
+        "version": "3.0.0",
+        "schema_version": "build-dag.v3",
         "status": (
             "ready"
             if task_graph["validation"]["is_valid"] and not blocked_batches
@@ -1010,7 +1034,7 @@ def create_build_task_plan(
             }
         },
         "unit_graph": base_plan.get("unit_graph") or {
-            "schema_version": "build-unit-graph.v2",
+            "schema_version": "build-unit-graph.v3",
             "nodes": ["application:root"],
             "edges": [],
             "validation": {"is_valid": True, "errors": []},
@@ -1028,7 +1052,7 @@ def create_build_task_plan(
         "summary": _task_summary(tasks),
         "execution": {
             "owner": "main-agent",
-            "strategy": "Dispatch data-source tasks first, then frontend tasks whose dependencies are completed.",
+            "strategy": "Dispatch database tasks before backend tasks, then frontend tasks whose dependencies are completed.",
             "batches": execution_batches,
             "blocked_batches": blocked_batches,
         },
@@ -1228,18 +1252,22 @@ def _unit_source_refs(
             "page_detail": _dict_value(refs.get("page_detail")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
         }
-    if unit_id.startswith("data-source:"):
+    if unit_id.startswith("database:"):
         return {
             **existing,
-            "type": "endpoint_detail",
+            "type": "database_context",
             "target": target,
+            "database_planning_context": _dict_value(
+                build_context.get("database_planning_context")
+            ),
             "endpoint_details": _matching_endpoint_refs(
                 refs.get("endpoint_details"),
                 _string_list(build_context.get("endpoint_ids")),
             ),
+            "data_source_ids": _string_list(build_context.get("data_source_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
         }
-    if unit_id.startswith("endpoint:"):
+    if unit_id.startswith("backend:endpoint:"):
         return {
             **existing,
             "type": "endpoint_detail",
@@ -1273,13 +1301,17 @@ def _unit_fingerprint_payload(
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
             "data_source_ids": _string_list(build_context.get("data_source_ids")),
         }
-    if unit_id.startswith("data-source:"):
+    if unit_id.startswith("database:"):
         return {
             "unit_id": unit_id,
             "source_refs": source_refs,
+            "data_source_ids": _string_list(build_context.get("data_source_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "database_planning_context": _dict_value(
+                build_context.get("database_planning_context")
+            ),
         }
-    if unit_id.startswith("endpoint:"):
+    if unit_id.startswith("backend:endpoint:"):
         return {
             "unit_id": unit_id,
             "source_refs": source_refs,

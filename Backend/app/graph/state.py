@@ -61,6 +61,9 @@ class ProjectState(TypedDict, total=False):
     execution_resource_claims: list[dict[str, Any]]
     build_execution_slice: dict[str, Any]
     build_context: dict[str, Any]
+    database_planning_context: dict[str, Any]
+    database_change_plan: dict[str, Any]
+    database_approval_requests: list[dict[str, Any]]
     build_task_plan: dict[str, Any]
     dag_generation_progress: dict[str, Any]
     build_task_plan_path: str

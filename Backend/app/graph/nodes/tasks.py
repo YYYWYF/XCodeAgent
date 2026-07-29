@@ -18,6 +18,7 @@ from app.services.build_task_planner import (
     tasks_from_build_task_plan,
 )
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.database_planning_context import prepare_database_planning_context
 from app.services.frontend_page_tree import flatten_frontend_pages
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
@@ -136,6 +137,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_execution_scope,
             build_task_plan,
         )
+        build_context = _with_database_planning_context(project_plan, build_context)
     except ValueError as exc:
         progress.fail("build_context", f"构建上下文解析失败：{exc}")
         return {
@@ -157,7 +159,8 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         (
             f"已解析 {target.get('type', 'application')}:{target.get('id', 'application')}，"
             f"涉及 {len(build_context.get('required_unit_ids') or [])} 个 Unit、"
-            f"{len(build_context.get('endpoint_ids') or [])} 个 Endpoint。"
+            f"{len(build_context.get('endpoint_ids') or [])} 个 Endpoint；"
+            f"数据库摘要状态：{_database_planning_status(build_context)}。"
         ),
         build_task_plan=build_task_plan,
     )
@@ -321,6 +324,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "build_task_dag_path": build_task_dag_path,
         "build_execution_scope": build_execution_scope,
         "build_context": build_context,
+        "database_planning_context": build_context.get("database_planning_context", {}),
         "build_units": build_task_plan.get("build_units", {}),
         "unit_graph": build_task_plan.get("unit_graph", {}),
         "task_registry": build_task_plan.get("task_registry", {}),
@@ -401,9 +405,9 @@ def _existing_build_task_plan(state: ProjectState) -> dict:
 
 
 def _is_valid_build_task_plan(value: object) -> bool:
-    """仅接受通过任务图校验的 v2 DAG，避免失败 checkpoint 污染后续重试。"""
+    """仅接受通过任务图校验的 v3 DAG，避免失败 checkpoint 污染后续重试。"""
 
-    if not isinstance(value, dict) or value.get("schema_version") != "build-dag.v2":
+    if not isinstance(value, dict) or value.get("schema_version") != "build-dag.v3":
         return False
     task_graph = value.get("task_graph")
     validation = task_graph.get("validation") if isinstance(task_graph, dict) else None
@@ -454,10 +458,29 @@ def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> di
         unit_id: list(unit.get("task_ids") or [])
         for unit_id, unit in (build_task_plan.get("build_units") or {}).items()
         if isinstance(unit, dict)
-        and unit_id.startswith("app:")
+        and _is_reusable_public_unit(unit_id)
         and _unit_tasks_are_reusable(build_task_plan, unit_id)
     }
     return {**build_context, "reusable_tasks_by_unit": reusable_tasks}
+
+
+def _with_database_planning_context(project_plan: dict, build_context: dict) -> dict:
+    """在任务规划上下文中追加真实数据库摘要，避免模型从 ProjectPlan 臆测库表。"""
+
+    database_context = prepare_database_planning_context(project_plan, build_context)
+    return {
+        **build_context,
+        "database_planning_context": database_context,
+    }
+
+
+def _database_planning_status(build_context: dict) -> str:
+    """读取数据库规划摘要状态，供进度事件展示。"""
+
+    context = build_context.get("database_planning_context")
+    if not isinstance(context, dict):
+        return "missing"
+    return str(context.get("status") or "unknown")
 
 
 def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> dict:
@@ -572,6 +595,7 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
                 or str(contract.get("id") or "") in contract_ids
             )
         ],
+        "database_planning_context": build_context.get("database_planning_context", {}),
     }
 
 
@@ -770,7 +794,7 @@ def _existing_application_unit_evidence(
 ) -> dict[str, object] | None:
     """根据任务规划前的工作区检查证据识别可复用的前端壳与路由 Unit。"""
 
-    if unit_id not in {"app:frontend-shell", "app:route-registry"}:
+    if unit_id not in {"frontend:shell", "frontend:route-registry"}:
         return None
     analysis = prepared_plan.get("workspace_analysis")
     if not isinstance(analysis, dict) or analysis.get("inspection_status") != "completed":
@@ -782,7 +806,7 @@ def _existing_application_unit_evidence(
         if str(path).strip()
     ]
     lowered = [path.lower() for path in paths]
-    if unit_id == "app:frontend-shell":
+    if unit_id == "frontend:shell":
         matched = [
             path
             for path, normalized in zip(paths, lowered)
@@ -997,7 +1021,7 @@ def _replaceable_unit_ids(
             unit_id
             for unit_id in required_unit_ids
             if not (
-                unit_id.startswith("app:")
+                _is_reusable_public_unit(unit_id)
                 and _unit_tasks_are_reusable(build_task_plan, unit_id)
             )
         }
@@ -1010,6 +1034,12 @@ def _replaceable_unit_ids(
         if unit_id == target_unit_id or not has_tasks:
             replaceable.add(unit_id)
     return replaceable
+
+
+def _is_reusable_public_unit(unit_id: str) -> bool:
+    """判断 Unit 是否属于可复用的前端公共能力。"""
+
+    return unit_id in {"frontend:shell", "frontend:route-registry"}
 
 
 def _unit_tasks_are_reusable(build_task_plan: dict, unit_id: str) -> bool:
@@ -1036,10 +1066,10 @@ def _target_unit_id(target: dict) -> str:
     if target_type == "page" and target_id:
         return f"page:{target_id}"
     if target_type == "data_source" and target_id:
-        return f"data-source:{target_id}"
+        return f"database:{target_id}"
     if target_type == "endpoint" and target_id:
         api_contract_id = str(target.get("api_contract_id") or "").strip()
-        return f"endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
+        return f"backend:endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
     return ""
 
 

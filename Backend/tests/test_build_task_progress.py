@@ -48,7 +48,7 @@ class BuildTaskProgressTests(unittest.TestCase):
                 "api": {
                     "id": "api",
                     "title": "实现首页 API",
-                    "owner": "data_source",
+                    "owner": "backend",
                     "status": "pending",
                     "dependencies": [],
                     "change_scope": [{"path": "backend/app/api.py"}],

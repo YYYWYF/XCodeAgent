@@ -62,7 +62,7 @@ class BuildRepairPlannerTests(unittest.TestCase):
     def test_requires_user_confirmation_does_not_create_repair_tasks(self) -> None:
         task = {
             "id": "api",
-            "owner": "data_source",
+            "owner": "backend",
             "title": "实现 API",
             "status": "failed",
             "change_scope": [{"path": "Backend/app/api.py"}],
@@ -119,7 +119,7 @@ class BuildRepairPlannerTests(unittest.TestCase):
         repair_task = {"id": "repair:page:test", "kind": "repair", "status": "pending"}
         updated = append_repair_tasks_to_build_plan(
             build_task_plan=replace_build_task_plan_tasks(
-                {"schema_version": "build-dag.v2", "build_units": {}, "unit_graph": {}},
+                {"schema_version": "build-dag.v3", "build_units": {}, "unit_graph": {}},
                 [{"id": "page", "owner": "frontend", "status": "failed", "dependencies": []}],
             ),
             repair_task_plan={"tasks": [repair_task]},

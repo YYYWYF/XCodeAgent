@@ -12,11 +12,11 @@ from app.services.page_dependencies import page_data_source_ids
 
 
 PUBLIC_UNIT_IDS = (
-    "app:frontend-shell",
-    "app:route-registry",
-    "app:api-client",
-    "app:auth-guard",
-    "app:backend-bootstrap",
+    "frontend:shell",
+    "frontend:route-registry",
+    "frontend:api-client",
+    "frontend:auth-guard",
+    "backend:bootstrap",
     "app:integration",
 )
 
@@ -47,7 +47,7 @@ def ensure_build_unit_skeleton(
     unit_graph = _unit_graph(project_plan, build_units)
     return {
         **current_plan,
-        "schema_version": "build-dag.v2",
+        "schema_version": "build-dag.v3",
         "application": {
             "unit_id": "application:root",
             "status": "prepared",
@@ -72,7 +72,7 @@ def _build_units(
     existing = existing_units if isinstance(existing_units, dict) else {}
     unit_ids = ["application:root", *PUBLIC_UNIT_IDS]
     unit_ids.extend(
-        f"data-source:{source_id}"
+        f"database:{source_id}"
         for source_id in _ids(project_plan.get("data_sources"), "id")
     )
     unit_ids.extend(_endpoint_unit_ids(project_plan.get("api_contracts")))
@@ -98,13 +98,13 @@ def _unit_definition(unit_id: str, existing_unit: Any) -> dict[str, Any]:
         "id": unit_id,
         "kind": kind,
         **({"page_id": target_id} if kind == "page" else {}),
-        **({"data_source_id": target_id} if kind == "data_source" else {}),
+        **({"data_source_id": target_id} if kind == "database" else {}),
         **(
             {
                 "api_contract_id": target_id.split(":", 1)[0],
                 "endpoint_id": target_id.split(":", 1)[1],
             }
-            if kind == "endpoint" and ":" in target_id
+            if kind == "backend" and ":" in target_id
             else {}
         ),
         "status": existing.get("status", "not_prepared"),
@@ -140,22 +140,17 @@ def _unit_graph(
         if detail.get("pageId") or detail.get("id")
     }
     for source_id in _ids(project_plan.get("data_sources"), "id"):
-        source_unit_id = f"data-source:{source_id}"
+        source_unit_id = f"database:{source_id}"
         edges.extend(
             [
                 {"from": "application:root", "to": source_unit_id, "type": "contains"},
-                {
-                    "from": "app:backend-bootstrap",
-                    "to": source_unit_id,
-                    "type": "depends_on",
-                },
             ]
         )
 
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
         source_id = str(contract.get("data_source_id") or "")
-        source_unit_id = f"data-source:{source_id}"
+        source_unit_id = f"database:{source_id}"
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "")
             if not contract_id or not endpoint_id:
@@ -165,6 +160,7 @@ def _unit_graph(
                 errors.append(f"API contract {contract_id} endpoint {endpoint_id} has no Unit.")
                 continue
             edges.append({"from": "application:root", "to": endpoint_unit_id, "type": "contains"})
+            edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
             if source_unit_id in build_units:
                 edges.append({"from": source_unit_id, "to": endpoint_unit_id, "type": "depends_on"})
             else:
@@ -178,21 +174,21 @@ def _unit_graph(
         page_unit_id = f"page:{page_id}"
         edges.append({"from": "application:root", "to": page_unit_id, "type": "contains"})
         for public_unit_id in (
-            "app:frontend-shell",
-            "app:route-registry",
-            "app:api-client",
+            "frontend:shell",
+            "frontend:route-registry",
+            "frontend:api-client",
         ):
             edges.append({"from": public_unit_id, "to": page_unit_id, "type": "depends_on"})
         if _page_requires_auth(page):
             edges.append(
-                {"from": "app:auth-guard", "to": page_unit_id, "type": "depends_on"}
+                {"from": "frontend:auth-guard", "to": page_unit_id, "type": "depends_on"}
             )
         dependency_source = _page_dependency_source(
             page,
             page_details_by_id.get(page_id),
         )
         for source_id in page_data_source_ids(dependency_source, contracts):
-            source_unit_id = f"data-source:{source_id}"
+            source_unit_id = f"database:{source_id}"
             if source_unit_id not in build_units:
                 errors.append(f"Page {page_id} references unknown data source {source_id}.")
                 continue
@@ -205,7 +201,7 @@ def _unit_graph(
         edges.append({"from": page_unit_id, "to": "app:integration", "type": "depends_on"})
 
     return {
-        "schema_version": "build-unit-graph.v2",
+        "schema_version": "build-unit-graph.v3",
         "nodes": nodes,
         "edges": _unique_edges(edges),
         "validation": {"is_valid": not errors, "errors": errors},
@@ -260,7 +256,7 @@ def _ids(value: Any, key: str) -> list[str]:
 
 
 def _endpoint_unit_ids(value: Any) -> list[str]:
-    """从 API 契约清单中生成 endpoint Unit ID 列表。"""
+    """从 API 契约清单中生成 backend endpoint Unit ID 列表。"""
 
     result: list[str] = []
     for contract in _dict_items(value):
@@ -275,9 +271,9 @@ def _endpoint_unit_ids(value: Any) -> list[str]:
 
 
 def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:
-    """生成 endpoint Unit 的稳定复合标识。"""
+    """生成 backend endpoint Unit 的稳定复合标识。"""
 
-    return f"endpoint:{api_contract_id}:{endpoint_id}"
+    return f"backend:endpoint:{api_contract_id}:{endpoint_id}"
 
 
 def _unit_identity(unit_id: str) -> tuple[str, str]:
@@ -285,10 +281,14 @@ def _unit_identity(unit_id: str) -> tuple[str, str]:
 
     if unit_id.startswith("page:"):
         return "page", unit_id.removeprefix("page:")
-    if unit_id.startswith("data-source:"):
-        return "data_source", unit_id.removeprefix("data-source:")
-    if unit_id.startswith("endpoint:"):
-        return "endpoint", unit_id.removeprefix("endpoint:")
+    if unit_id.startswith("database:"):
+        return "database", unit_id.removeprefix("database:")
+    if unit_id.startswith("backend:endpoint:"):
+        return "backend", unit_id.removeprefix("backend:endpoint:")
+    if unit_id.startswith("backend:"):
+        return "backend", unit_id.removeprefix("backend:")
+    if unit_id.startswith("frontend:"):
+        return "frontend", unit_id.removeprefix("frontend:")
     return "application", ""
 
 

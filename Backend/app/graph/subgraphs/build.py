@@ -53,8 +53,10 @@ BatchToolActivityCallback = Callable[
 
 
 def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
-    if owner == "data_source":
-        return "data_source.deep_agent", generate_data_sources_with_deep_agent
+    """根据 v3 任务 owner 选择当前可用的代码执行器。"""
+
+    if owner == "backend":
+        return "backend.deep_agent", generate_data_sources_with_deep_agent
     if owner == "frontend":
         return "frontend.deep_agent", generate_frontend_with_deep_agent
     return None

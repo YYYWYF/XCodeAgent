@@ -156,9 +156,8 @@ def create_build_failure_repair_plan(
         "summary": {
             "total": len(repair_tasks) if decision_text == "repair" else 0,
             "frontend": len([task for task in repair_tasks if task["owner"] == "frontend"]),
-            "data_source": len(
-                [task for task in repair_tasks if task["owner"] == "data_source"]
-            ),
+            "backend": len([task for task in repair_tasks if task["owner"] == "backend"]),
+            "database": len([task for task in repair_tasks if task["owner"] == "database"]),
             "requires_user_confirmation": len(confirmations),
             "terminal_failure": len(terminal_failures),
         },

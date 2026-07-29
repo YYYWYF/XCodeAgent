@@ -25,7 +25,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             {
                 "target": {"type": "page", "id": "dashboard"},
                 "reusable_tasks_by_unit": {
-                    "app:api-client": ["shared-api-task"]
+                    "frontend:api-client": ["shared-api-task"]
                 },
             },
         )
@@ -143,8 +143,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         plan = create_build_task_plan(project_plan, agent_plan=agent_plan)
         task = tasks_from_build_task_plan(plan)[0]
 
-        self.assertEqual(plan["version"], "2.0.0")
-        self.assertEqual(plan["schema_version"], "build-dag.v2")
+        self.assertEqual(plan["version"], "3.0.0")
+        self.assertEqual(plan["schema_version"], "build-dag.v3")
         self.assertEqual(plan["task_graph"]["nodes"], ["page-login"])
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
         self.assertEqual(plan["workspace_analysis"]["entry_files"], ["src/router/index.ts"])
@@ -211,7 +211,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "source_refs": {"type": "page_detail"},
         }
         base_plan = {
-            "schema_version": "build-dag.v2",
+            "schema_version": "build-dag.v3",
             "build_units": {
                 "app:route-registry": {"id": "app:route-registry", "kind": "application"},
                 "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
@@ -296,7 +296,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "required_unit_ids": ["app:route-registry", "page:dashboard_page"],
         }
         base_plan = {
-            "schema_version": "build-dag.v2",
+            "schema_version": "build-dag.v3",
             "build_units": {
                 "app:route-registry": {"id": "app:route-registry", "kind": "application"},
                 "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
@@ -529,25 +529,25 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """页面任务会继承直接数据源和公共 API Unit 的任务依赖。"""
 
         base_plan = {
-            "schema_version": "build-dag.v2",
+            "schema_version": "build-dag.v3",
             "build_units": {
-                "app:api-client": {"id": "app:api-client", "kind": "application"},
-                "data-source:orders": {"id": "data-source:orders", "kind": "data_source"},
+                "frontend:api-client": {"id": "frontend:api-client", "kind": "frontend"},
+                "database:orders": {"id": "database:orders", "kind": "database"},
                 "page:orders": {"id": "page:orders", "kind": "page"},
             },
             "unit_graph": {
-                "schema_version": "build-unit-graph.v2",
-                "nodes": ["app:api-client", "data-source:orders", "page:orders"],
+                "schema_version": "build-unit-graph.v3",
+                "nodes": ["frontend:api-client", "database:orders", "page:orders"],
                 "edges": [
-                    {"from": "app:api-client", "to": "page:orders", "type": "depends_on"},
-                    {"from": "data-source:orders", "to": "page:orders", "type": "depends_on"},
+                    {"from": "frontend:api-client", "to": "page:orders", "type": "depends_on"},
+                    {"from": "database:orders", "to": "page:orders", "type": "depends_on"},
                 ],
                 "validation": {"is_valid": True, "errors": []},
             },
         }
         build_context = {
             "target": {"type": "page", "id": "orders"},
-            "required_unit_ids": ["app:api-client", "data-source:orders", "page:orders"],
+            "required_unit_ids": ["frontend:api-client", "database:orders", "page:orders"],
             "endpoint_ids": ["orders_api.list"],
             "data_source_ids": ["orders"],
             "source_refs": {
@@ -564,15 +564,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "task:api-client",
-                        "unit_id": "app:api-client",
+                        "unit_id": "frontend:api-client",
                         "owner": "frontend",
                         "description": "实现 API client",
                         "change_scope": [{"operation": "modify", "path": "src/api/orders.ts"}],
                     },
                     {
                         "id": "task:orders-api",
-                        "unit_id": "data-source:orders",
-                        "owner": "data_source",
+                        "unit_id": "database:orders",
+                        "owner": "database",
                         "description": "实现订单 API",
                         "change_scope": [{"operation": "modify", "path": "Backend/app/orders.py"}],
                     },
@@ -596,11 +596,13 @@ class BuildTaskPlannerTests(unittest.TestCase):
         )
         self.assertEqual(tasks["task:orders-page"]["source_refs"]["type"], "page_detail")
         self.assertEqual(
-            plan["build_units"]["data-source:orders"]["source_refs"],
+            plan["build_units"]["database:orders"]["source_refs"],
             {
-                "type": "endpoint_detail",
+                "type": "database_context",
                 "target": {"type": "page", "id": "orders"},
+                "database_planning_context": {},
                 "endpoint_details": [],
+                "data_source_ids": ["orders"],
                 "endpoint_ids": ["orders_api.list"],
             },
         )
@@ -610,36 +612,36 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """复现多任务计划，跨 Unit 反向边被改写且纯验证任务不进入注册表。"""
 
         base_plan = {
-            "schema_version": "build-dag.v2",
+            "schema_version": "build-dag.v3",
             "build_units": {
-                "app:backend-bootstrap": {"id": "app:backend-bootstrap", "kind": "application"},
-                "data-source:core": {"id": "data-source:core", "kind": "data_source"},
-                "data-source:user": {"id": "data-source:user", "kind": "data_source"},
-                "app:api-client": {"id": "app:api-client", "kind": "application"},
+                "backend:bootstrap": {"id": "backend:bootstrap", "kind": "application"},
+                "database:core": {"id": "database:core", "kind": "data_source"},
+                "database:user": {"id": "database:user", "kind": "data_source"},
+                "frontend:api-client": {"id": "frontend:api-client", "kind": "application"},
                 "page:core": {"id": "page:core", "kind": "page"},
             },
             "unit_graph": {
                 "nodes": [
-                    "app:backend-bootstrap",
-                    "data-source:core",
-                    "data-source:user",
-                    "app:api-client",
+                    "backend:bootstrap",
+                    "database:core",
+                    "database:user",
+                    "frontend:api-client",
                     "page:core",
                 ],
                 "edges": [
-                    {"from": "app:backend-bootstrap", "to": "data-source:core", "type": "depends_on"},
-                    {"from": "app:backend-bootstrap", "to": "data-source:user", "type": "depends_on"},
-                    {"from": "app:api-client", "to": "page:core", "type": "depends_on"},
-                    {"from": "data-source:core", "to": "page:core", "type": "depends_on"},
+                    {"from": "backend:bootstrap", "to": "database:core", "type": "depends_on"},
+                    {"from": "backend:bootstrap", "to": "database:user", "type": "depends_on"},
+                    {"from": "frontend:api-client", "to": "page:core", "type": "depends_on"},
+                    {"from": "database:core", "to": "page:core", "type": "depends_on"},
                 ],
                 "validation": {"is_valid": True, "errors": []},
             },
         }
         code_tasks = [
-            ("core", "data-source:core", "data_source", "Backend/core.py"),
-            ("user", "data-source:user", "data_source", "Backend/user.py"),
-            ("bootstrap", "app:backend-bootstrap", "data_source", "Backend/main.py"),
-            ("client", "app:api-client", "frontend", "Frontend/api.ts"),
+            ("core", "database:core", "data_source", "Backend/core.py"),
+            ("user", "database:user", "data_source", "Backend/user.py"),
+            ("bootstrap", "backend:bootstrap", "data_source", "Backend/main.py"),
+            ("client", "frontend:api-client", "frontend", "Frontend/api.ts"),
             ("page", "page:core", "frontend", "Frontend/Core.tsx"),
         ]
         agent_tasks = [
@@ -655,7 +657,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         ]
         agent_tasks.extend(
             [
-                {"id": "verify-shell", "unit_id": "app:frontend-shell", "owner": "frontend", "description": "验证壳", "change_scope": []},
+                {"id": "verify-shell", "unit_id": "frontend:shell", "owner": "frontend", "description": "验证壳", "change_scope": []},
                 {"id": "verify-route", "unit_id": "app:route-registry", "owner": "frontend", "description": "验证路由", "change_scope": []},
             ]
         )

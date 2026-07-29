@@ -17,14 +17,14 @@ class BuildSchedulerTests(unittest.TestCase):
         tasks = [
             {
                 "id": "api",
-                "owner": "data_source",
+                "owner": "backend",
                 "status": "pending",
                 "dependencies": [],
                 "change_scope": [{"path": "Backend/app/api.py"}],
             },
             {
                 "id": "api-test",
-                "owner": "data_source",
+                "owner": "backend",
                 "status": "pending",
                 "dependencies": [],
                 "change_scope": [{"path": "Backend/app/api.py"}],

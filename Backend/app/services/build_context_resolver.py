@@ -87,12 +87,12 @@ def _page_context(
         "api_contract_ids": contract_ids,
         "data_source_ids": source_ids,
         "required_unit_ids": [
-            "app:frontend-shell",
-            "app:route-registry",
-            "app:api-client",
-            *( ["app:auth-guard"] if _page_requires_auth(page) else [] ),
-            *( ["app:backend-bootstrap"] if source_ids else [] ),
-            *(f"data-source:{source_id}" for source_id in source_ids),
+            "frontend:shell",
+            "frontend:route-registry",
+            "frontend:api-client",
+            *( ["frontend:auth-guard"] if _page_requires_auth(page) else [] ),
+            *( ["backend:bootstrap"] if source_ids else [] ),
+            *(f"database:{source_id}" for source_id in source_ids),
             *list(dict.fromkeys(endpoint_unit_ids)),
             f"page:{page_id}",
         ],
@@ -133,7 +133,7 @@ def _data_source_context(
         "direct_endpoint_details": endpoint_details,
         "endpoint_ids": endpoint_ids,
         "data_source_ids": [source_id],
-        "required_unit_ids": ["app:backend-bootstrap", f"data-source:{source_id}"],
+        "required_unit_ids": [f"database:{source_id}"],
         "source_refs": {
             "endpoint_details": endpoint_refs,
         },
@@ -194,8 +194,8 @@ def _endpoint_context(
         "api_contract_ids": [contract_id],
         "data_source_ids": [source_id],
         "required_unit_ids": [
-            "app:backend-bootstrap",
-            f"data-source:{source_id}",
+            "backend:bootstrap",
+            f"database:{source_id}",
             _endpoint_unit_id(contract_id, endpoint_id),
         ],
         "source_refs": {
@@ -338,7 +338,7 @@ def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:
 def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:
     """生成 endpoint Unit 的稳定复合标识，避免不同契约下接口 ID 冲突。"""
 
-    return f"endpoint:{api_contract_id}:{endpoint_id}"
+    return f"backend:endpoint:{api_contract_id}:{endpoint_id}"
 
 
 def _artifact_ref(reference: Any, target_id: str) -> dict[str, Any]:

@@ -206,7 +206,8 @@ def _project_summary(
         "edgeCount": len(task_graph.get("edges") or []),
         "batchCount": len(execution.get("batches") or task_graph.get("execution_layers") or []),
         "frontendCount": _integer(summary.get("frontend")),
-        "dataSourceCount": _integer(summary.get("data_source")),
+        "backendCount": _integer(summary.get("backend")),
+        "databaseCount": _integer(summary.get("database")),
         "isValid": validation.get("is_valid") is True,
     }
 

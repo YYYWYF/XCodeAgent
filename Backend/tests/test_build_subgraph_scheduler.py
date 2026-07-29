@@ -46,7 +46,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         tasks = [
             {
                 "id": "api",
-                "owner": "data_source",
+                "owner": "backend",
                 "status": "pending",
                 "dependencies": [],
                 "change_scope": [{"path": "Backend/app/api.py"}],
@@ -101,7 +101,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v2",
+                                "schema_version": "build-dag.v3",
                                 "build_units": {
                                     "application:root": {
                                         "id": "application:root",
@@ -132,8 +132,8 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         tasks = [
             {
                 "id": "api",
-                "unit_id": "data-source:orders",
-                "owner": "data_source",
+                "unit_id": "database:orders",
+                "owner": "backend",
                 "status": "pending",
                 "dependencies": [],
                 "change_scope": [{"path": "Backend/app/orders.py"}],
@@ -182,19 +182,19 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         },
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v2",
+                                "schema_version": "build-dag.v3",
                                 "build_units": {
-                                    "data-source:orders": {
-                                        "id": "data-source:orders",
+                                    "database:orders": {
+                                        "id": "database:orders",
                                         "kind": "data_source",
                                     },
                                     "page:orders": {"id": "page:orders", "kind": "page"},
                                 },
                                 "unit_graph": {
-                                    "nodes": ["data-source:orders", "page:orders"],
+                                    "nodes": ["database:orders", "page:orders"],
                                     "edges": [
                                         {
-                                            "from": "data-source:orders",
+                                            "from": "database:orders",
                                             "to": "page:orders",
                                             "type": "depends_on",
                                         }
@@ -278,7 +278,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v2",
+                                "schema_version": "build-dag.v3",
                                 "build_units": {
                                     "page:home": {"id": "page:home", "kind": "page"},
                                 },
@@ -388,7 +388,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v2",
+                                "schema_version": "build-dag.v3",
                                 "build_units": {
                                     "application:root": {
                                         "id": "application:root",
@@ -422,8 +422,8 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         tasks = [
             {
                 "id": "orders-api",
-                "unit_id": "data-source:orders",
-                "owner": "data_source",
+                "unit_id": "database:orders",
+                "owner": "backend",
                 "status": "pending",
                 "dependencies": [],
                 "change_scope": [{"path": "Backend/app/orders.py"}],
@@ -478,10 +478,10 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "build_execution_scope": {"type": "page", "targetId": "orders"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v2",
+                                "schema_version": "build-dag.v3",
                                 "build_units": {
-                                    "data-source:orders": {
-                                        "id": "data-source:orders",
+                                    "database:orders": {
+                                        "id": "database:orders",
                                         "kind": "data_source",
                                     },
                                     "page:orders": {"id": "page:orders", "kind": "page"},
@@ -492,13 +492,13 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                                 },
                                 "unit_graph": {
                                     "nodes": [
-                                        "data-source:orders",
+                                        "database:orders",
                                         "page:orders",
                                         "page:customers",
                                     ],
                                     "edges": [
                                         {
-                                            "from": "data-source:orders",
+                                            "from": "database:orders",
                                             "to": "page:orders",
                                             "type": "depends_on",
                                         }
@@ -566,7 +566,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "build_execution_scope": {"type": "page", "targetId": "orders"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v2",
+                                "schema_version": "build-dag.v3",
                                 "build_units": {"page:orders": {"id": "page:orders", "kind": "page"}},
                                 "unit_graph": {"nodes": ["page:orders"], "edges": []},
                             },

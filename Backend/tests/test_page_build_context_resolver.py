@@ -101,9 +101,9 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertEqual(context["page_detail"]["pageId"], "orders")
         self.assertEqual(context["direct_endpoint_details"], [])
         self.assertEqual(context["source_refs"]["endpoint_details"], [])
-        self.assertIn("data-source:orders", context["required_unit_ids"])
-        self.assertNotIn("data-source:customers", context["required_unit_ids"])
-        self.assertIn("app:auth-guard", context["required_unit_ids"])
+        self.assertIn("database:orders", context["required_unit_ids"])
+        self.assertNotIn("database:customers", context["required_unit_ids"])
+        self.assertIn("frontend:auth-guard", context["required_unit_ids"])
 
     def test_page_context_limits_shared_data_source_to_direct_contract(self) -> None:
         """同一数据源对应多个契约时，页面 scope 只投射直接依赖的契约。"""
@@ -203,7 +203,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertIsNone(context["page_detail"])
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
         self.assertEqual(context["direct_endpoint_details"], [])
-        self.assertEqual(context["required_unit_ids"], ["app:backend-bootstrap", "data-source:orders"])
+        self.assertEqual(context["required_unit_ids"], ["database:orders"])
 
     def test_endpoint_context_requires_current_confirmed_endpoint_detail(self) -> None:
         """endpoint scope 只暴露当前接口详情和它对应的 endpoint Unit。"""
@@ -240,7 +240,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertEqual(context["direct_endpoint_details"][0]["endpoint_id"], "orders.list")
         self.assertEqual(
             context["required_unit_ids"],
-            ["app:backend-bootstrap", "data-source:orders", "endpoint:orders-api:orders.list"],
+            ["backend:bootstrap", "database:orders", "backend:endpoint:orders-api:orders.list"],
         )
 
     def test_page_context_rejects_unknown_endpoint(self) -> None:

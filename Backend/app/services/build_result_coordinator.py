@@ -141,7 +141,8 @@ def _task_status_counts(tasks: list[dict[str, Any]]) -> dict[str, int]:
         "pending": len([task for task in tasks if task.get("status") == "pending"]),
         "running": len([task for task in tasks if task.get("status") == "running"]),
         "frontend": len([task for task in tasks if task.get("owner") == "frontend"]),
-        "data_source": len([task for task in tasks if task.get("owner") == "data_source"]),
+        "backend": len([task for task in tasks if task.get("owner") == "backend"]),
+        "database": len([task for task in tasks if task.get("owner") == "database"]),
     }
 
 

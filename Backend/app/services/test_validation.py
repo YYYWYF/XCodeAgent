@@ -141,7 +141,7 @@ def create_repair_task_plan(
     repair_scope = _repair_scope(build_execution_scope)
     requested_paths_by_owner = {
         owner: _repair_allowed_paths(owner, scoped_tasks or [])
-        for owner in ("frontend", "data_source")
+        for owner in ("frontend", "backend", "database")
     }
     plan_id = _repair_plan_id(
         revision_requests,
@@ -231,7 +231,8 @@ def create_repair_task_plan(
         "summary": {
             "total": len(tasks),
             "frontend": len([task for task in tasks if task["owner"] == "frontend"]),
-            "data_source": len([task for task in tasks if task["owner"] == "data_source"]),
+            "backend": len([task for task in tasks if task["owner"] == "backend"]),
+            "database": len([task for task in tasks if task["owner"] == "database"]),
         },
         "agent_note": agent_note,
         "prepared_by": {
@@ -274,12 +275,12 @@ def _repair_scope(build_execution_scope: dict[str, Any] | None) -> dict[str, str
     if scope_type == "page" and target_id:
         unit_id = f"page:{target_id}"
     elif scope_type == "data_source" and target_id:
-        unit_id = f"data-source:{target_id}"
+        unit_id = f"database:{target_id}"
     elif scope_type == "endpoint" and target_id:
         api_contract_id = str(
             scope.get("apiContractId") or scope.get("api_contract_id") or ""
         ).strip()
-        unit_id = f"endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
+        unit_id = f"backend:endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
         if not unit_id:
             scope_type = "application"
             unit_id = "application:root"
@@ -301,19 +302,20 @@ def _repair_task_unit_id(
         for task in scoped_tasks
         if task.get("owner") == owner and task.get("unit_id")
     ]
-    if owner == "data_source":
+    if owner == "database":
+        database_unit = next(
+            (unit_id for unit_id in owner_unit_ids if unit_id.startswith("database:")),
+            "",
+        )
+        if database_unit:
+            return database_unit
+    if owner == "backend":
         endpoint_unit = next(
-            (unit_id for unit_id in owner_unit_ids if unit_id.startswith("endpoint:")),
+            (unit_id for unit_id in owner_unit_ids if unit_id.startswith("backend:endpoint:")),
             "",
         )
         if endpoint_unit:
             return endpoint_unit
-        data_source_unit = next(
-            (unit_id for unit_id in owner_unit_ids if unit_id.startswith("data-source:")),
-            "",
-        )
-        if data_source_unit:
-            return data_source_unit
     if owner == "frontend" and repair_scope.get("type") == "page":
         return repair_scope["unit_id"]
     return owner_unit_ids[0] if owner_unit_ids else repair_scope["unit_id"]

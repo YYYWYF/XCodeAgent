@@ -21,7 +21,7 @@ def _base_unit_plan(*unit_ids: str, edges: list[dict] | None = None) -> dict:
     """构造带有效空任务图的最小 Unit 计划，供增量合并回归测试复用。"""
 
     return {
-        "schema_version": "build-dag.v2",
+        "schema_version": "build-dag.v3",
         "build_units": {
             unit_id: {
                 "id": unit_id,
@@ -34,14 +34,14 @@ def _base_unit_plan(*unit_ids: str, edges: list[dict] | None = None) -> dict:
             for unit_id in unit_ids
         },
         "unit_graph": {
-            "schema_version": "build-unit-graph.v2",
+            "schema_version": "build-unit-graph.v3",
             "nodes": list(unit_ids),
             "edges": list(edges or []),
             "validation": {"is_valid": True, "errors": []},
         },
         "task_registry": {},
         "task_graph": {
-            "schema_version": "build-task-graph.v2",
+            "schema_version": "build-task-graph.v3",
             "nodes": [],
             "edges": [],
             "topological_order": [],
@@ -83,8 +83,8 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
         """无效 checkpoint 不得覆盖工作区中最后一次通过校验的 DAG。"""
 
         valid_plan = replace_build_task_plan_tasks(
-            _base_unit_plan("app:api-client"),
-            [_task("persisted-api-task", "app:api-client", status="completed")],
+            _base_unit_plan("frontend:api-client"),
+            [_task("persisted-api-task", "frontend:api-client", status="completed")],
         )
         invalid_plan = deepcopy(valid_plan)
         invalid_plan["task_graph"]["validation"] = {
@@ -92,7 +92,7 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
             "errors": ["Task page depends on missing task stale-api-task."],
         }
         invalid_plan["task_registry"] = {
-            "poisoned-task": _task("poisoned-task", "app:api-client")
+            "poisoned-task": _task("poisoned-task", "frontend:api-client")
         }
 
         with tempfile.TemporaryDirectory() as workspace:
@@ -111,24 +111,24 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
 
         base_plan = replace_build_task_plan_tasks(
             _base_unit_plan(
-                "app:api-client",
-                "app:auth-guard",
+                "frontend:shell",
+                "frontend:auth-guard",
                 "page:dashboard",
                 edges=[
                     {
-                        "from": "app:api-client",
+                        "from": "frontend:shell",
                         "to": "page:dashboard",
                         "type": "depends_on",
                     }
                 ],
             ),
             [
-                _task("shared-api-task", "app:api-client", status="completed"),
-                _task("pending-auth-task", "app:auth-guard"),
+                _task("shared-shell-task", "frontend:shell", status="completed"),
+                _task("pending-auth-task", "frontend:auth-guard"),
                 _task(
                     "old-dashboard-task",
                     "page:dashboard",
-                    dependencies=["shared-api-task"],
+                    dependencies=["shared-shell-task"],
                 ),
             ],
         )
@@ -156,11 +156,11 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
 
         self.assertEqual(
             build_context["reusable_tasks_by_unit"],
-            {"app:api-client": ["shared-api-task"]},
+            {"frontend:shell": ["shared-shell-task"]},
         )
         self.assertEqual(
             set(merged["task_registry"]),
-            {"shared-api-task", "new-dashboard-task"},
+            {"shared-shell-task", "new-dashboard-task"},
         )
         self.assertTrue(merged["task_graph"]["validation"]["is_valid"])
 

@@ -817,7 +817,7 @@ class WorkflowRequestTests(unittest.TestCase):
             (plans_dir / "build-task-plan.json").write_text(
                 json.dumps(
                     {
-                        "schema_version": "build-dag.v2",
+                        "schema_version": "build-dag.v3",
                         "task_registry": {"task-1": {"id": "task-1"}},
                         "task_graph": {"nodes": ["task-1"], "edges": []},
                     }

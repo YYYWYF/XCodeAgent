@@ -266,11 +266,14 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 ### `prepare_build_tasks`
 
-先由确定性服务根据已经确认并写回的 `ProjectPlan` 生成完整 Unit DAG 骨架，再由 planning-only ChatModel 只根据当前范围的 `PageDetail`/`DataSourceDetail` 和 `WorkspaceSnapshot` 生成可执行静态 task DAG：
+先由确定性服务根据已经确认并写回的 `ProjectPlan` 生成完整 `build-dag.v3` Unit DAG 骨架，再由 planning-only ChatModel 只根据当前范围的 `PageDetail`、EndpointDetail、真实数据库摘要和 `WorkspaceSnapshot` 生成可执行静态 task DAG：
 
 - 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为唯一工作区事实来源，不读取、创建、修改或删除代码文件；
 - 生成稳定的 `task_id`；
-- 指定任务执行 Agent；
+- 指定任务 owner，只允许 `database`、`backend`、`frontend`；
+- 指定任务类型，例如 `database.change`、`database.seed`、`database.verify`、`backend.code`、`backend.verify`、`frontend.code`、`frontend.verify`；
+- 数据库相关任务必须写入 `database_scope`，并通过 `requires_capabilities` / `provides_capabilities` 表达“数据库已准备好”等能力边界；
+- 删除字段、删除表、删除数据、不可逆迁移等高危数据库任务必须标记 `risk = high` 并写入 `approval`，后续调度不得在未获用户同意时执行；
 - 计算任务依赖；
 - 标记可并行任务；
 - 以 `change_scope` 记录新增、修改、删除文件及每项改动目的，并据此设置允许修改的文件范围；
@@ -281,9 +284,22 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 Unit Graph 是跨 Unit 依赖的唯一权威来源。模型显式依赖只用于同 Unit 内排序；已知的跨 Unit 显式边会被确定性移除，并在任务 `dependency_rewrites` 中保存改写证据，再由 Unit Graph 编译正确的跨 Unit 任务边。未知任务依赖仍保留为 validation error。无效 task graph 必须保留 `task_registry` 的全部任务和错误，读取方不得用部分 `topological_order` 静默缩减任务数；`prepare_build_tasks` 会在校验错误时阻止进入构建。
 
+`build-dag.v3` 的 Unit ID 采用新的层次：
+
+- `application:root` 表示整应用根；
+- `database:<dataSourceId>` 聚合同一数据源下所有建表、迁移、Seed 和数据库校验任务；
+- `backend:bootstrap` 表示后端工程基础能力；
+- `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
+- `frontend:shell`、`frontend:route-registry`、`frontend:api-client`、`frontend:auth-guard` 表示前端公共能力；
+- `page:<pageId>` 表示页面实现范围。
+
+数据库 Unit 必须先于依赖它的 backend endpoint Unit；页面 Unit 依赖它使用的 backend endpoint Unit。阶段一只落规划合同、骨架和解析规则，不实现新的 database/backend 执行 agent；后续 BuildScheduler 和执行 runner 必须按该合同确保 database Unit 完成并处理高危审批后，才进入 backend/frontend 代码修改。
+
+阶段二在 `prepare_build_tasks` 的 build context 解析后追加 `database_planning_context`：当当前 endpoint scope 或页面/API scope 内存在可能修改数据库的接口（优先按 `POST/PUT/PATCH/DELETE` 判断，并结合 EndpointDetail 中的写入、建表、迁移、删除等线索）且数据源是 MySQL/数据库时，后端会先调用 `get_mysql_table_info` 读取真实库表摘要，生成 `DatabasePlanningContext`，再把该摘要与 EndpointDetail、API Contract 一起放入 `TaskPreparationContext.executable_details` 传给任务规划模型。模型必须把该摘要作为唯一真实数据库结构来源，不得从 `ProjectPlan.data_sources` 臆测表或字段。当前数据库连接信息仍从 `.env` 暴露给后端进程的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PWD`、`MYSQL_DATABASE` 读取；TODO：后续改为 AG-UI 页面让用户输入或选择数据库连接，并在扫描/执行前确认。
+
 Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `targetFiles` 的可执行代码变更任务。仅检查已有前端壳、路由或布局的候选任务不会进入任务注册表，统一交给 `integration_test` 验证；`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
 
-该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。模型负责将当前已确认的页面详细设计、相关数据源详情和当前工程结构转换成可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
+该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。数据库摘要在任务规划阶段直接通过受控工具获取并压缩为 `database_planning_context`，不从 `ProjectPlan.data_sources` 臆测真实库表。模型负责将当前已确认的页面详细设计、相关 endpoint 详情、API Contract、数据库摘要和当前工程结构转换成可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
 
 任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面验收和整体集成验证。内部 DAG 仍保留 API、数据、共享组件、权限、路由和测试等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
 

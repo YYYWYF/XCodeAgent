@@ -580,9 +580,9 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, str]:
-    """为调度选择提供稳定排序，数据源任务优先于前端任务。"""
+    """为调度选择提供稳定排序，数据库、后端、前端任务依次执行。"""
 
-    owner_priority = {"data_source": 0, "frontend": 1}
+    owner_priority = {"database": 0, "backend": 1, "frontend": 2}
     return (owner_priority.get(str(task.get("owner")), 9), str(task.get("id")))
 
 
@@ -624,10 +624,10 @@ def _target_unit_ids(scope: dict[str, str]) -> list[str]:
     if scope["type"] == "page" and scope.get("targetId"):
         return [f"page:{scope['targetId']}"]
     if scope["type"] == "data_source" and scope.get("targetId"):
-        return [f"data-source:{scope['targetId']}"]
+        return [f"database:{scope['targetId']}"]
     if scope["type"] == "endpoint" and scope.get("targetId"):
         api_contract_id = str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
-        return [f"endpoint:{api_contract_id}:{scope['targetId']}"] if api_contract_id else []
+        return [f"backend:endpoint:{api_contract_id}:{scope['targetId']}"] if api_contract_id else []
     return ["application:root"]
 
 
