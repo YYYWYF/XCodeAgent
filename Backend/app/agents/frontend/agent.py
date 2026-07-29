@@ -9,6 +9,7 @@ from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.tools.delete_file import create_delete_file_tool
+from app.tools.execute import create_execute_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
@@ -53,7 +54,7 @@ def create_frontend_agent(
         ),
         skills=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
-        tools=[create_delete_file_tool(workspace_root)],
+        tools=[create_delete_file_tool(workspace_root), create_execute_tool(workspace_root)],
         backend=backend,
         permissions=create_workspace_permissions(
             workspace_root,
