@@ -84,6 +84,12 @@ function targetTypeFromSelection(value: string): DetailTargetType {
   return value.startsWith("endpoint:") ? "endpoint" : "page";
 }
 
+/** 规范化弹窗中的菜单或页面名称，避免空白名称只渲染出占位块。 */
+function normalizeTargetLabel(value: unknown, fallback: string): string {
+  const label = String(value || "").trim();
+  return label || fallback;
+}
+
 /** 递归渲染菜单树中的页面选项，保留项目计划中的目录层级。 */
 function renderPageTreeOptions(
   nodes: DevelopmentPlanningPageTreeNode[],
@@ -91,11 +97,12 @@ function renderPageTreeOptions(
 ): ReactNode {
   return nodes.map((node) => {
     if (node.type === "menu") {
+      const menuLabel = normalizeTargetLabel(node.label, "未命名菜单");
       return (
         <div className={cx("detail-page-selector-menu-group")} key={node.key}>
           <div className={cx("detail-page-selector-menu-header")}>
             <span className={cx("detail-page-selector-menu-name")}>
-              {node.label}
+              {menuLabel}
             </span>
             {node.uniquePath ? (
               <span className={cx("detail-page-selector-menu-path")}>
@@ -112,6 +119,7 @@ function renderPageTreeOptions(
     const pageId = node.pageId || node.key;
     if (!pageId) return null;
     const nextTargetKey = targetSelectionKey("page", pageId);
+    const pageLabel = normalizeTargetLabel(node.label, pageId);
     return (
       <Radio.Button
         key={pageId}
@@ -121,7 +129,7 @@ function renderPageTreeOptions(
           selectedTargetKey === nextTargetKey && "is-selected",
         )}
       >
-        <span className={cx("detail-page-selector-name")}>{node.label}</span>
+        <span className={cx("detail-page-selector-name")}>{pageLabel}</span>
         <span className={cx("detail-page-selector-path")}>{node.path || "/"}</span>
         <span className={cx("detail-page-selector-purpose")}>
           {node.purpose || "业务页面"}

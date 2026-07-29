@@ -16,6 +16,12 @@ type Props = {
   emptyText?: string
 }
 
+/** 规范化菜单或页面名称，避免空白字符串显示成空标题。 */
+function normalizeTreeNodeLabel(value: unknown, fallback: string): string {
+  const label = String(value || '').trim()
+  return label || fallback
+}
+
 /** 递归统计当前菜单节点下的页面叶子数量，便于展示目录规模。 */
 function leafPageCount(node: DevelopmentPlanningPageTreeNode): number {
   if (node.type === 'page') return 1
@@ -49,7 +55,7 @@ export function projectPlanPageTreeNodes(value: unknown): DevelopmentPlanningPag
       nodes.push({
         key: uniquePath || `menu-${index + 1}`,
         type: 'menu',
-        label: String(record.name || `菜单 ${index + 1}`),
+        label: normalizeTreeNodeLabel(record.name, `菜单 ${index + 1}`),
         uniquePath,
         children
       })
@@ -61,9 +67,9 @@ export function projectPlanPageTreeNodes(value: unknown): DevelopmentPlanningPag
       key: pageId,
       type: 'page',
       pageId,
-      label: String(record.name || pageId),
+      label: normalizeTreeNodeLabel(record.name, pageId),
       path: String(record.path || '/'),
-      purpose: String(record.description || record.name || '业务页面')
+      purpose: normalizeTreeNodeLabel(record.description || record.name, '业务页面')
     })
   })
   return nodes

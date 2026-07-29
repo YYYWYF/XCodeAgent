@@ -71,6 +71,12 @@ type WorkbenchPageTreeNode = {
   children?: WorkbenchPageTreeNode[]
 }
 
+/** 规范化页面树节点名称，避免空白字符串在界面上显示为空占位。 */
+function normalizeWorkbenchNodeLabel(value: unknown, fallback: string): string {
+  const label = String(value || '').trim()
+  return label || fallback
+}
+
 type WorkbenchApiContract = {
   id: string
   label: string
@@ -188,9 +194,9 @@ function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
   return [...projectPlanPages(value).entries()].map(([pageId, record], index) => ({
     key: pageId,
     pageId,
-    label: String(record.name || pageId),
+    label: normalizeWorkbenchNodeLabel(record.name, pageId),
     path: String(record.path || '/'),
-    purpose: String(record.description || record.name || `页面 ${index + 1}`),
+    purpose: normalizeWorkbenchNodeLabel(record.description || record.name, `页面 ${index + 1}`),
     designed: false,
     detailPlanStatus: '',
     hasDetailPlan: false
@@ -215,7 +221,7 @@ function buildWorkbenchPageTree(value: unknown): WorkbenchPageTreeNode[] {
       nodes.push({
         key,
         type: 'menu',
-        label: String(record.name || `菜单 ${index + 1}`),
+        label: normalizeWorkbenchNodeLabel(record.name, `菜单 ${index + 1}`),
         uniquePath,
         children
       })
@@ -226,10 +232,10 @@ function buildWorkbenchPageTree(value: unknown): WorkbenchPageTreeNode[] {
     nodes.push({
       key: pageId,
       type: 'page',
-      label: String(record.name || pageId),
+      label: normalizeWorkbenchNodeLabel(record.name, pageId),
       pageId,
       path: String(record.path || '/'),
-      purpose: String(record.description || record.name || `页面 ${index + 1}`),
+      purpose: normalizeWorkbenchNodeLabel(record.description || record.name, `页面 ${index + 1}`),
       designed: false,
       detailPlanStatus: '',
       hasDetailPlan: false
