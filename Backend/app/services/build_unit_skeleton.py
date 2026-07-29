@@ -144,6 +144,7 @@ def _unit_graph(
         edges.extend(
             [
                 {"from": "application:root", "to": source_unit_id, "type": "contains"},
+                {"from": source_unit_id, "to": "backend:bootstrap", "type": "depends_on"},
             ]
         )
 

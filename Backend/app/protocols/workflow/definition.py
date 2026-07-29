@@ -54,7 +54,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "semantics": "selected-user-skills-are-force-loaded",
             "emptyBehavior": "all-enabled-user-skills-available-on-demand",
             "frontendBuiltinSkillsRetained": True,
-            "forcedAgents": ["frontend", "data_source", "test", "repair_planner"],
+            "forcedAgents": ["frontend", "data_source", "database", "test", "repair_planner"],
             "directChatModelNodesLoadSkills": False,
             "maxPromptBytes": 65536,
             "errors": [

@@ -29,6 +29,7 @@ CONFIRMATION_FAILURES = {
     "contract_mismatch",
     "plan_mismatch",
     "workspace_snapshot_stale",
+    "database_approval_required",
 }
 
 

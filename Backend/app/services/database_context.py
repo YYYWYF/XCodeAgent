@@ -10,7 +10,6 @@ from app.services.database_schema_summary import (
     target_summary,
 )
 
-
 ENDPOINT_DATABASE_CONTEXT_ENV = "XCODEAGENT_ENDPOINT_DATABASE_CONTEXT_ENABLED"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
@@ -30,7 +29,9 @@ def prepare_endpoint_database_context(
     if not target.get("api_contract_id") or not target.get("endpoint_id"):
         return _skipped("missing_endpoint_selection", "缺少接口选择信息。")
     if not is_database_data_source(target.get("data_source")):
-        return _skipped("not_database_source", "当前接口的数据源不是数据库。", target=target)
+        return _skipped(
+            "not_database_source", "当前接口的数据源不是数据库。", target=target
+        )
 
     return inspect_mysql_schema(target)
 

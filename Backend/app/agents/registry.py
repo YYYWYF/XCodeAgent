@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
+from app.agents.database import create_database_agent
 from app.agents.data_source import create_data_source_agent
 from app.agents.frontend import create_frontend_agent
 from app.agents.model_factory import create_chat_model
@@ -32,6 +33,7 @@ _MAX_SNAPSHOT_ATTEMPTS = 3
 class AgentBundle:
     frontend: Any
     data_source: Any
+    database: Any
     test: Any
     repair_planner: Any
     selected_skill_names: tuple[str, ...] = ()
@@ -114,6 +116,13 @@ def _create_agent_bundle_for_workspace(
         agent_memory_backend=agent_memory.backend,
         required_user_skills_prompt=required_user_skills_prompt,
     )
+    database = create_database_agent(
+        chat_model,
+        workspace_root=workspace_root,
+        user_skills_backend=user_skills.backend,
+        agent_memory_backend=agent_memory.backend,
+        required_user_skills_prompt=required_user_skills_prompt,
+    )
     test = create_test_agent(
         chat_model,
         workspace_root=workspace_root,
@@ -131,6 +140,7 @@ def _create_agent_bundle_for_workspace(
     return AgentBundle(
         frontend=frontend,
         data_source=data_source,
+        database=database,
         test=test,
         repair_planner=repair_planner,
         selected_skill_names=selected_skill_names,

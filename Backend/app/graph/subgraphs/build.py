@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from langgraph.config import get_stream_writer
 
+from app.agents.database.generator import generate_database_with_deep_agent
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
 from app.agents.frontend.generator import generate_frontend_with_deep_agent
 from app.agents.repair_planner import (
@@ -55,6 +56,8 @@ BatchToolActivityCallback = Callable[
 def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
     """根据 v3 任务 owner 选择当前可用的代码执行器。"""
 
+    if owner == "database":
+        return "database.deep_agent", generate_database_with_deep_agent
     if owner == "backend":
         return "backend.deep_agent", generate_data_sources_with_deep_agent
     if owner == "frontend":
@@ -95,6 +98,84 @@ def _runner_exception_results(
         }
         for task in owner_tasks
     ]
+
+
+def _database_approval_result(results: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """从数据库 Agent 结果中找出需要用户审批的高危操作。"""
+
+    return next(
+        (
+            result
+            for result in results
+            if result.get("failure_category") == "database_approval_required"
+            and isinstance(result.get("database_approval"), dict)
+        ),
+        None,
+    )
+
+
+def _reset_running_tasks_to_pending(
+    tasks: list[dict[str, Any]],
+    ready_task_ids: list[str],
+) -> list[dict[str, Any]]:
+    """数据库审批暂停时撤销本轮 running 标记，方便用户批准后继续调度。"""
+
+    ready = set(ready_task_ids)
+    return [
+        (
+            {
+                **task,
+                "status": "pending",
+                "scheduler": {
+                    **(
+                        task.get("scheduler")
+                        if isinstance(task.get("scheduler"), dict)
+                        else {}
+                    ),
+                    "paused_for": "database_approval",
+                },
+            }
+            if task.get("id") in ready and task.get("status") == "running"
+            else task
+        )
+        for task in tasks
+    ]
+
+
+def _database_approval_payload(result: dict[str, Any]) -> dict[str, Any]:
+    """把数据库高危审批结果转换为 Workflow clarification。"""
+
+    approval = result.get("database_approval") if isinstance(result.get("database_approval"), dict) else {}
+    risk = result.get("database_risk") if isinstance(result.get("database_risk"), dict) else {}
+    plan = result.get("database_change_plan") if isinstance(result.get("database_change_plan"), dict) else {}
+    statements = plan.get("statements") if isinstance(plan.get("statements"), list) else []
+    return {
+        "mode": "agent_approval",
+        "status": "requires_user_input",
+        "message": "数据库高危操作需要审批后才能执行。",
+        "approval": approval,
+        "tool": approval.get("tool") or "database.execute",
+        "risk": risk,
+        "database_change_plan": plan,
+        "questions": [
+            {
+                "id": "database_approval",
+                "header": "数据库审批",
+                "question": str(
+                    approval.get("description")
+                    or "是否批准执行该高危数据库变更计划？"
+                ),
+                "type": "text",
+                "placeholder": "在审批卡片中批准或拒绝；批准后继续当前工作流。",
+            }
+        ],
+        "context": {
+            "taskId": result.get("task_id"),
+            "subject": approval.get("subject"),
+            "details": approval.get("details"),
+            "statementCount": len(statements),
+        },
+    }
 
 
 def _execute_ready_tasks(
@@ -173,11 +254,15 @@ def _execute_ready_tasks(
             dispatched_tasks=owner_tasks,
             raw_results=captured.value,
         )
-        verified_results = verify_task_file_changes(
-            results=normalized_results,
-            code_change_set=captured.code_change_set,
-            tasks=owner_tasks,
-            workspace_root=workspace,
+        verified_results = (
+            normalized_results
+            if owner == "database"
+            else verify_task_file_changes(
+                results=normalized_results,
+                code_change_set=captured.code_change_set,
+                tasks=owner_tasks,
+                workspace_root=workspace,
+            )
         )
         all_results.extend(verified_results)
     return all_results, code_change_sets
@@ -550,6 +635,50 @@ def run_build_scheduler(
             ready_tasks,
             on_batch_tool_activity=update_batch_tool_activity,
         )
+        database_approval = _database_approval_result(results)
+        if database_approval is not None:
+            paused_tasks = _reset_running_tasks_to_pending(running_tasks, ready_ids)
+            current_state = {
+                **current_state,
+                "tasks": paused_tasks,
+                "build_task_plan": replace_build_task_plan_tasks(
+                    current_state["build_task_plan"],
+                    paused_tasks,
+                ),
+                "database_change_plan": database_approval.get("database_change_plan") or {},
+                "database_approval_requests": [
+                    *(
+                        current_state.get("database_approval_requests")
+                        if isinstance(current_state.get("database_approval_requests"), list)
+                        else []
+                    ),
+                    database_approval.get("database_approval") or {},
+                ],
+            }
+            build_events.append("scheduler:database_requires_approval")
+            execution_slice = resolve_execution_slice(
+                build_task_plan=current_state["build_task_plan"],
+                tasks=current_state["tasks"],
+                build_execution_scope=build_execution_scope,
+            )
+            build_summary = {
+                **summarize_build_runtime(
+                    execution_slice["tasks"],
+                    _results_for_tasks(current_state.get("build_results", []), execution_slice["tasks"]),
+                ),
+                "status": "requires_confirmation",
+            }
+            return {
+                **current_state,
+                "phase": "build",
+                "status": "requires_user_input",
+                "build_summary": build_summary,
+                "build_execution_scope": build_execution_scope,
+                "build_execution_slice": execution_slice,
+                "clarification": _database_approval_payload(database_approval),
+                "build_events": build_events,
+                "timeline": ["build"],
+            }
         all_code_change_sets.extend(code_change_sets)
         updated = _apply_scheduler_results(
             {**current_state, "tasks": running_tasks},

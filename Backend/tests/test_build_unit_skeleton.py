@@ -66,6 +66,10 @@ class BuildUnitSkeletonTests(unittest.TestCase):
             plan["unit_graph"]["edges"],
         )
         self.assertIn(
+            {"from": "database:orders", "to": "backend:bootstrap", "type": "depends_on"},
+            plan["unit_graph"]["edges"],
+        )
+        self.assertIn(
             {"from": "backend:endpoint:orders-api:orders.list", "to": "page:orders", "type": "depends_on"},
             plan["unit_graph"]["edges"],
         )

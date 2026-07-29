@@ -125,6 +125,133 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertIn("scheduler:dispatch:page", result["build_events"])
         self.assertEqual(runner_skill_sets, [["workflow-skill"], ["workflow-skill"]])
 
+    def test_database_owner_uses_database_runner_without_file_change_verification(self) -> None:
+        """数据库任务由 database.deep_agent 执行，成功结果不要求工作区文件变更。"""
+
+        tasks = [
+            {
+                "id": "orders-db",
+                "unit_id": "database:orders",
+                "owner": "database",
+                "status": "pending",
+                "dependencies": [],
+                "task_type": "database.change",
+            }
+        ]
+
+        def database_runner(**kwargs):
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": "database",
+                    "status": "completed",
+                    "database_execution": {"status": "completed"},
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.subgraphs.build.generate_database_with_deep_agent",
+                side_effect=database_runner,
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v3",
+                                "build_units": {
+                                    "database:orders": {
+                                        "id": "database:orders",
+                                        "kind": "database",
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["database:orders"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(result["build_summary"]["status"], "completed")
+        self.assertEqual(result["tasks"][0]["status"], "completed")
+        self.assertEqual(result["build_results"][0]["owner"], "database")
+
+    def test_database_high_risk_result_pauses_for_user_approval(self) -> None:
+        """高危数据库计划必须先返回审批交互，任务保持 pending 以便批准后重试。"""
+
+        tasks = [
+            {
+                "id": "orders-db",
+                "unit_id": "database:orders",
+                "owner": "database",
+                "status": "pending",
+                "dependencies": [],
+                "task_type": "database.change",
+            }
+        ]
+
+        def database_runner(**kwargs):
+            return [
+                {
+                    "task_id": "orders-db",
+                    "owner": "database",
+                    "status": "failed",
+                    "failure_category": "database_approval_required",
+                    "failure_reason": "需要审批。",
+                    "database_change_plan": {"statements": ["ALTER TABLE orders DROP COLUMN old_col"]},
+                    "database_risk": {
+                        "level": "high",
+                        "reasons": ["删除字段"],
+                    },
+                    "database_approval": {
+                        "id": "approval-1",
+                        "tool": "database.execute",
+                        "title": "高危数据库操作审批",
+                        "description": "需要审批。",
+                        "subject": "sales / abc123",
+                        "risk": {"level": "high", "reasons": ["删除字段"]},
+                        "status": "pending",
+                    },
+                }
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.subgraphs.build.generate_database_with_deep_agent",
+                side_effect=database_runner,
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v3",
+                                "build_units": {
+                                    "database:orders": {
+                                        "id": "database:orders",
+                                        "kind": "database",
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["database:orders"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["build_summary"]["status"], "requires_confirmation")
+        self.assertEqual(result["tasks"][0]["status"], "pending")
+        self.assertEqual(result["clarification"]["mode"], "agent_approval")
+        self.assertEqual(result["clarification"]["approval"]["tool"], "database.execute")
+        self.assertIn("scheduler:database_requires_approval", result["build_events"])
+
     def test_build_scheduler_streams_task_progress_snapshots(self) -> None:
         """调度器应在任务运行和结果应用时输出当前执行切片。"""
 

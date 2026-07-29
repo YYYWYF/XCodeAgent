@@ -293,7 +293,7 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。模型显式依赖只用于
 - `frontend:shell`、`frontend:route-registry`、`frontend:api-client`、`frontend:auth-guard` 表示前端公共能力；
 - `page:<pageId>` 表示页面实现范围。
 
-数据库 Unit 必须先于依赖它的 backend endpoint Unit；页面 Unit 依赖它使用的 backend endpoint Unit。阶段一只落规划合同、骨架和解析规则，不实现新的 database/backend 执行 agent；后续 BuildScheduler 和执行 runner 必须按该合同确保 database Unit 完成并处理高危审批后，才进入 backend/frontend 代码修改。
+数据库 Unit 必须先于 `backend:bootstrap` 和依赖它的 backend endpoint Unit；页面 Unit 依赖它使用的 backend endpoint Unit。阶段一只落规划合同、骨架和解析规则，不实现新的 database/backend 执行 agent；后续 BuildScheduler 和执行 runner 必须按该合同确保 database Unit 完成并处理高危审批后，才进入 backend/frontend 代码修改。
 
 阶段二在 `prepare_build_tasks` 的 build context 解析后追加 `database_planning_context`：当当前 endpoint scope 或页面/API scope 内存在可能修改数据库的接口（优先按 `POST/PUT/PATCH/DELETE` 判断，并结合 EndpointDetail 中的写入、建表、迁移、删除等线索）且数据源是 MySQL/数据库时，后端会先调用 `get_mysql_table_info` 读取真实库表摘要，生成 `DatabasePlanningContext`，再把该摘要与 EndpointDetail、API Contract 一起放入 `TaskPreparationContext.executable_details` 传给任务规划模型。模型必须把该摘要作为唯一真实数据库结构来源，不得从 `ProjectPlan.data_sources` 臆测表或字段。当前数据库连接信息仍从 `.env` 暴露给后端进程的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PWD`、`MYSQL_DATABASE` 读取；TODO：后续改为 AG-UI 页面让用户输入或选择数据库连接，并在扫描/执行前确认。
 
@@ -373,13 +373,18 @@ scheduler loop:
 
 - `select_ready_build_batch`：只选择 `pending` 且依赖全部 `completed` 的任务；依赖 `failed` 的下游任务保持阻塞；
 - 文件锁来自 `lock_scope`、`change_scope.path`、`targetFiles` 和 `allowed_paths`，同一批 ready task 之间不能冲突；
-- 任务按 `owner` 派发给对应 CodeRunner：`data_source` 使用 Data Source Generation Agent，`frontend` 使用 Frontend Generation Agent；
+- 任务按 `owner` 派发给对应 CodeRunner：`database` 使用 Database Change Agent，`backend` 使用 Data Source Generation Agent，`frontend` 使用 Frontend Generation Agent；
 - CodeRunner 只返回结构化 `TaskResult`，不更新 DAG；
 - 同 owner 批次的 workspace diff 必须按每个任务的授权路径重新归属；一个任务只能记录命中自身范围的 `changed_files`，不能把整批变更复制给所有结果；
+- `database` owner 不参与 workspace diff 归属；它必须在执行前重新获取当前真实数据库摘要，由只读 Database Change Agent 生成 SQL 计划，再由确定性数据库执行服务完成风险分类、审批和执行证据记录；
 - Frontend/Data Source CodeRunner 通过 Deep Agent `messages + values` 主图及子图流捕获 `ls/read_file/glob/grep/write_file/edit_file/delete_file`；内置 `task` 委派后的子代理调用使用流命名空间隔离调用 ID，保证活动持续刷新。系统只把归一化中文文案和虚拟路径作为临时工具活动投影；文件内容、替换参数、工具结果、宿主机路径以及 `write_todos/task/execute` 不进入 UI；
 - 工具活动优先按 `allowed_paths`、`targetFiles`、`change_scope` 归属具体运行任务，无法精确命中时回退当前 owner 批次。它只存在于实时 `buildExecutionSlice.tasks[*].activeToolActivity`，新活动覆盖旧活动，批次结算后清除，不写入 BuildTaskPlan 或 Workflow 历史；
 - 调度器校验缺失或非法结果，并将其转为 `runner_protocol_error`；
 - 失败结果先分类为 `retry`、`repair`、`requires_confirmation` 或 `terminal_failure`。`repair` 会触发 Build Repair Planner 生成受约束 repair task，并 append 到运行时 Build DAG；repair task 成功后调度器关闭原 failed task 并继续释放下游依赖。`requires_confirmation` 和 `terminal_failure` 仍会阻断构建并写入摘要。
+
+数据库任务的审批点在 SQL 计划生成之后、任何数据库写入之前。`database.execute` 审批绑定 `task_ids + database + latest schema_hash + plan_hash + statements` 指纹；用户批准后同一操作可在下一次调度中被一次性消费。如果 SQL、目标库、结构摘要或计划指纹变化，旧审批不再匹配，必须重新审批。高危规则包括删除字段、删除/批量修改数据、`DROP`、`TRUNCATE`、无 `WHERE` 的 `DELETE/UPDATE`、破坏性 `ALTER` 等。审批待定时调度器返回 `requires_user_input` / `agent_approval`，把本轮 running 数据库任务恢复为 `pending`，因此下游 Backend/Frontend Unit 不会释放。
+
+这一路径的参考架构映射如下：learn-coding-agent 的“读取实时事实—计划—行动—验证”循环体现在执行前重新扫描数据库并记录执行证据；OpenCode 的权限模型体现在审批由工具/调度层按操作指纹拦截，而不是只写进 prompt；Deep Agents 只负责数据库计划推理，工作区权限为只读，实际 SQL 执行、人类审批和状态推进都在外层确定性 harness 中。为满足 128k 上下文预算，Database Agent 只接收当前批次任务、最新压缩 schema summary、API Contract 摘要和计划要求，不加载完整数据库、完整仓库或历史消息。
 
 Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 Main Agent。它由 `BuildScheduler` 严格约束输入和输出，只在调度器已将失败分类为 `repair` 后被调用，不直接操作 DAG、任务状态或调度循环。调度器传入的 `RepairPlannerInput` 包含原 task、失败 attempt result、允许修改范围 `change_scope/allowed_paths`、当前 `WorkspaceSnapshot` 或 targeted snapshot、失败日志引用和原验收标准。Planner 返回 `RepairPlan`，只能是三种决策之一：
 
@@ -397,7 +402,7 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 ### Skill 与上下文预算
 
-当前一等 Deep Agent 是 Frontend Generation、Data Source Generation、Test、RepairPlanner，不再声明或创建 Main DeepAgent。Frontend Generation Agent 通过 Deep Agents 原生 `skills` 参数按“内置、用户”顺序加载 Skill，用户同名 Skill 后加载并覆盖内置 Skill；Data Source、Test、RepairPlanner Agent 只加载用户 Skill。requirements、project_planning、detail_confirmation、prepare_build_tasks 等 direct ChatModel 节点不加载 Skill，也不绑定 workspace backend 或文件工具。
+当前一等 Deep Agent 是 Frontend Generation、Data Source Generation、Database Change、Test、RepairPlanner，不再声明或创建 Main DeepAgent。Frontend Generation Agent 通过 Deep Agents 原生 `skills` 参数按“内置、用户”顺序加载 Skill，用户同名 Skill 后加载并覆盖内置 Skill；Data Source、Database、Test、RepairPlanner Agent 只加载用户 Skill。Database Agent 的 workspace filesystem 权限为只读，不能编辑后端代码或任务文档；数据库写操作只能通过外层 `database.execute` 审批与执行服务完成。requirements、project_planning、detail_confirmation、prepare_build_tasks 等 direct ChatModel 节点不加载 Skill，也不绑定 workspace backend 或文件工具。
 
 内置 skill 的宿主目录在源码模式为 `Backend/app/builtin_skills/`，在 PyInstaller onedir 模式为后端资源目录 `_internal/app/builtin_skills/`。Agent 不接触宿主绝对路径，而是通过只读 CompositeBackend 路由 `/.xcodeagent/builtin-skills/` 发现和读取 skill；文件权限与 `delete_file` 都拒绝写入或删除该命名空间。Backend Python 是必需 skill 名称和文件的唯一事实来源：PyInstaller staging 和 Backend 启动执行完整性校验并在缺失时 fail fast；Electron 打包前和启动前只检查通用 `builtin_skills` 资源目录，不复制具体 skill 清单。
 
@@ -575,7 +580,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 
 ## 一等 Deep Agent
 
-本项目只保留四个一等 Deep Agent：Frontend Generation、Data Source Generation、Test、RepairPlanner。`agents/main/` 只作为历史命名下的 direct ChatModel 边界目录，用于需求、规划、页面设计、任务准备和 Markdown 同步；它不再声明或创建 Main DeepAgent。
+本项目只保留五个一等 Deep Agent：Frontend Generation、Data Source Generation、Database Change、Test、RepairPlanner。`agents/main/` 只作为历史命名下的 direct ChatModel 边界目录，用于需求、规划、页面设计、任务准备和 Markdown 同步；它不再声明或创建 Main DeepAgent。
 
 ### Frontend Generation Agent
 
@@ -604,6 +609,18 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 遵守已经确认的 API 契约。
 
 如果契约不可实现，应返回变更申请，不得静默修改契约。
+
+### Database Change Agent
+
+目录：`agents/database/`
+
+职责：
+
+- 负责数据库 owner 任务的最新结构扫描、SQL 计划生成和执行前风险分析；
+- 工作区文件系统只读，不修改后端、前端、ProjectPlan、PageDetail 或任务 DAG；
+- 真实数据库摘要来自 `get_mysql_table_info`，当前连接信息临时读取 `.env` `MYSQL_*` 变量，后续应迁移为 AG-UI 页面输入或选择；
+- 高危 SQL 计划必须先创建 `database.execute` 审批，请求批准的是计划指纹而不是自然语言任务；
+- 只有低风险或已审批的同指纹计划才交给确定性执行服务事务执行，并以数据库执行证据完成任务。
 
 ### Test Agent
 

@@ -614,10 +614,10 @@ class BuildTaskPlannerTests(unittest.TestCase):
         base_plan = {
             "schema_version": "build-dag.v3",
             "build_units": {
-                "backend:bootstrap": {"id": "backend:bootstrap", "kind": "application"},
-                "database:core": {"id": "database:core", "kind": "data_source"},
-                "database:user": {"id": "database:user", "kind": "data_source"},
-                "frontend:api-client": {"id": "frontend:api-client", "kind": "application"},
+                "backend:bootstrap": {"id": "backend:bootstrap", "kind": "backend"},
+                "database:core": {"id": "database:core", "kind": "database"},
+                "database:user": {"id": "database:user", "kind": "database"},
+                "frontend:api-client": {"id": "frontend:api-client", "kind": "frontend"},
                 "page:core": {"id": "page:core", "kind": "page"},
             },
             "unit_graph": {
@@ -629,8 +629,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     "page:core",
                 ],
                 "edges": [
-                    {"from": "backend:bootstrap", "to": "database:core", "type": "depends_on"},
-                    {"from": "backend:bootstrap", "to": "database:user", "type": "depends_on"},
+                    {"from": "database:core", "to": "backend:bootstrap", "type": "depends_on"},
+                    {"from": "database:user", "to": "backend:bootstrap", "type": "depends_on"},
                     {"from": "frontend:api-client", "to": "page:core", "type": "depends_on"},
                     {"from": "database:core", "to": "page:core", "type": "depends_on"},
                 ],
@@ -638,9 +638,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
         }
         code_tasks = [
-            ("core", "database:core", "data_source", "Backend/core.py"),
-            ("user", "database:user", "data_source", "Backend/user.py"),
-            ("bootstrap", "backend:bootstrap", "data_source", "Backend/main.py"),
+            ("core", "database:core", "database", "Backend/core.py"),
+            ("user", "database:user", "database", "Backend/user.py"),
+            ("bootstrap", "backend:bootstrap", "backend", "Backend/main.py"),
             ("client", "frontend:api-client", "frontend", "Frontend/api.ts"),
             ("page", "page:core", "frontend", "Frontend/Core.tsx"),
         ]
@@ -671,12 +671,12 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         self.assertEqual(set(tasks), {"core", "user", "bootstrap", "client", "page"})
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
-        self.assertEqual(tasks["bootstrap"]["dependencies"], [])
+        self.assertEqual(tasks["bootstrap"]["dependencies"], ["core", "user"])
         self.assertEqual(
             {item["dependency"] for item in tasks["bootstrap"]["dependency_rewrites"]},
             {"core", "user"},
         )
-        self.assertEqual(tasks["core"]["dependencies"], ["bootstrap"])
+        self.assertEqual(tasks["core"]["dependencies"], [])
 
     def test_invalid_graph_reader_preserves_every_registry_task(self) -> None:
         """无效 DAG 使用完整 nodes 读取，不能退化为不完整拓扑序。"""
