@@ -1204,37 +1204,21 @@ function setupWorkspaceIpc(): void {
     }
   })
 
-  // 从远程模板仓库拉取前端模板工程，放到 <项目位置>/frontend/ 下。
-  ipcMain.handle('workspace:clone-template', async (_event, payload = {}) => {
-    if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
-      throw new Error('projectPath must be a non-empty string')
-    }
-    if (typeof payload.appName !== 'string' || !payload.appName.trim()) {
-      throw new Error('appName must be a non-empty string')
-    }
-    const templateUrl =
-      typeof payload.templateUrl === 'string' && payload.templateUrl.trim()
-        ? payload.templateUrl.trim()
-        : 'https://github.com/ruyue1/frontend-template.git'
-
-    const projectPath = path.resolve(payload.projectPath)
-    // 目标路径：项目位置/frontend（直接平铺到根目录）
-    const frontendDir = path.join(projectPath, 'frontend')
-
-    // 确保父目录存在；frontend 目录本身不能预先存在（git clone 要求目标为空或不存在）
-    await fs.mkdir(path.dirname(frontendDir), { recursive: true })
-
-    // 若 frontend 已存在且非空，先清空，避免 git clone 报错
+  /** 抽取的 git clone 函数，用于 clone 单个仓库到指定子目录中。 */
+  async function cloneGitRepo(templateUrl: string, projectPath: string, targetDirName: string): Promise<void> {
+    const targetDir = path.join(projectPath, targetDirName)
+    // 确保父目录存在；targetDir 本身不能预先存在（git clone 要求目标为空或不存在）
+    await fs.mkdir(path.dirname(targetDir), { recursive: true })
+    // 若 targetDir 已存在且非空，先清空，避免 git clone 报错
     try {
-      const entries = await fs.readdir(frontendDir)
+      const entries = await fs.readdir(targetDir)
       if (entries.length > 0) {
-        await fs.rm(frontendDir, { recursive: true, force: true })
+        await fs.rm(targetDir, { recursive: true, force: true })
       }
     } catch (error: unknown) {
       const errnoException = error as NodeJS.ErrnoException
       if (errnoException?.code !== 'ENOENT') throw error
     }
-
     // 执行 git clone，用 execFile 避免 shell 注入；超时 120s。
     // GitHub 网络不稳定时 clone 可能中途断开（curl 18 transfer closed），
     // 失败后清理半成品并重试，最多 3 次。
@@ -1242,7 +1226,7 @@ function setupWorkspaceIpc(): void {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       // 每次重试前清理可能存在的半成品目录
       try {
-        await fs.rm(frontendDir, { recursive: true, force: true })
+        await fs.rm(targetDir, { recursive: true, force: true })
       } catch {
         // 忽略清理失败
       }
@@ -1250,7 +1234,7 @@ function setupWorkspaceIpc(): void {
         await new Promise<void>((resolve, reject) => {
           execFile(
             'git',
-            ['clone', '--depth', '1', templateUrl, frontendDir],
+            ['clone', '--depth', '1', templateUrl, targetDir],
             { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
             (error, _stdout, stderr) => {
               if (error) {
@@ -1269,13 +1253,37 @@ function setupWorkspaceIpc(): void {
       }
     }
     if (cloneError) throw cloneError
-
     // 删除 clone 下来的 .git 目录，模板工程不需要保留版本历史
     try {
-      await fs.rm(path.join(frontendDir, '.git'), { recursive: true, force: true })
+      await fs.rm(path.join(targetDir, '.git'), { recursive: true, force: true })
     } catch {
       // 忽略 .git 删除失败
     }
+  }
+
+  // 从远程模板仓库拉取前后端模板工程，放到 <项目位置>/frontend/ 和 <项目位置>/backend/ 下。
+  ipcMain.handle('workspace:clone-template', async (_event, payload = {}) => {
+    if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
+      throw new Error('projectPath must be a non-empty string')
+    }
+    if (typeof payload.appName !== 'string' || !payload.appName.trim()) {
+      throw new Error('appName must be a non-empty string')
+    }
+    const frontendUrl =
+      typeof payload.frontendTemplateUrl === 'string' && payload.frontendTemplateUrl.trim()
+        ? payload.frontendTemplateUrl.trim()
+        : 'https://github.com/ruyue1/frontend-template.git'
+    const backendUrl =
+      typeof payload.backendTemplateUrl === 'string' && payload.backendTemplateUrl.trim()
+        ? payload.backendTemplateUrl.trim()
+        : 'https://github.com/Hupy2118/springboot-template.git'
+
+    const projectPath = path.resolve(payload.projectPath)
+
+    // 克隆前端模板
+    await cloneGitRepo(frontendUrl, projectPath, 'frontend')
+    // 克隆后端模板
+    await cloneGitRepo(backendUrl, projectPath, 'backend')
 
     return { ok: true }
   })

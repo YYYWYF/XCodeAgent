@@ -31,14 +31,20 @@ type TemplatePageWriteItem = {
 }
 
 /** 默认前端模板仓库地址。 */
-export const DEFAULT_TEMPLATE_REPO_URL = 'https://github.com/ruyue1/frontend-template.git'
+export const DEFAULT_FRONTEND_TEMPLATE_REPO_URL = 'https://github.com/ruyue1/frontend-template.git'
+
+/** 默认后端模板仓库地址。 */
+export const DEFAULT_BACKEND_TEMPLATE_REPO_URL = 'https://github.com/Hupy2118/springboot-template.git'
 
 /**
- * 拉取前端模板工程代码。
+ * 拉取前后端模板工程代码。
  *
- * 在 Electron 桌面客户端中，通过主进程执行 `git clone`，把模板工程完整代码
- * 放到 `<projectPath>/frontend/` 目录下；非 Electron 环境
- * （如纯浏览器）下回退为只返回模板元信息。
+ * 在 Electron 桌面客户端中，通过主进程执行 `git clone`，把前端模板工程代码
+ * 放到 `<projectPath>/frontend/` 目录下，后端模板工程代码放到
+ * `<projectPath>/backend/` 目录下；非 Electron 环境（如纯浏览器）下
+ * 回退为只返回模板元信息。
+ *
+ * 任一方向的 clone 失败仅打印警告，不会阻断整体流程。
  *
  * @param schema 应用 schema，用于读取应用名称等元信息
  * @param projectPath 当前应用指定的项目位置（workspaceRoot）
@@ -56,25 +62,21 @@ export async function fetchTemplateCode(
   }
 
   const workspaceApi = window.xcodeAgent?.workspace
-  if (!workspaceApi?.cloneTemplate) {
-    // 非 Electron 环境：回退为仅返回元信息
-    console.warn('[templateApi] 当前环境不支持拉取模板工程，跳过 git clone。')
-    return {
-      code: 0,
-      message: 'success',
-      data: {
-        templateVersion: '1.0.0',
-        generatedAt: Date.now(),
-        fileCount: 0
-      }
-    }
-  }
 
-  await workspaceApi.cloneTemplate({
-    projectPath,
-    appName,
-    templateUrl: DEFAULT_TEMPLATE_REPO_URL
-  })
+  if (workspaceApi?.cloneTemplate) {
+    try {
+      await workspaceApi.cloneTemplate({
+        projectPath,
+        appName,
+        frontendTemplateUrl: DEFAULT_FRONTEND_TEMPLATE_REPO_URL,
+        backendTemplateUrl: DEFAULT_BACKEND_TEMPLATE_REPO_URL
+      })
+    } catch (error) {
+      console.error('[模板拉取失败]', error)
+    }
+  } else {
+    console.warn('[templateApi] 当前环境不支持拉取模板工程，跳过 git clone。')
+  }
 
   return {
     code: 0,

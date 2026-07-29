@@ -41,8 +41,9 @@ declare global {
         cloneTemplate: (payload: {
           projectPath: string
           appName: string
-          templateUrl?: string
-        }) => Promise<{ ok?: boolean; path?: string; templateUrl?: string }>
+          frontendTemplateUrl?: string
+          backendTemplateUrl?: string
+        }) => Promise<{ ok?: boolean }>
         writeTemplatePages: (payload: {
           projectPath: string
           appName: string
