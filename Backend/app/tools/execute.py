@@ -29,8 +29,11 @@ class ExecuteInput(BaseModel):
         description=(
             "Shell command to execute in the workspace root directory. "
             "Use absolute paths or prefix frontend commands with 'cd frontend &&'. "
-            "Examples: 'npx tsc --noEmit' (from root), "
-            "'cd frontend && pnpm run build', 'pnpm run dev'."
+            "Prefer the repository's declared package manager, local dependencies, and package scripts. "
+            "Run checks directly without output-truncating or success-forcing constructs such as "
+            "'| head', '| tail', '|| true', or '; true', because they can hide the real exit code. "
+            "Examples: 'cd frontend && pnpm typecheck', "
+            "'cd frontend && pnpm build', 'pnpm test'."
         )
     )
     timeout: int | None = Field(
@@ -50,7 +53,8 @@ def create_execute_tool(workspace_root: str | None):
 
         Use this tool to run build, typecheck, lint, test, and dev-server
         commands.  Do NOT create temporary .sh/.js/.py scripts — call this
-        tool directly instead.
+        tool directly instead. Use the returned exit_code, stdout, and stderr
+        to diagnose failures, fix relevant code, and rerun the failed check.
 
         Commands execute in the workspace's frontend/ directory by default.
         Long-running commands like dev servers may time out; use timeout=0

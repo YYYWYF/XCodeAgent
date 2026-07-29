@@ -32,6 +32,7 @@ from app.protocols.direct_modification import (
     direct_modification_capabilities,
     direct_modification_input,
 )
+from app.tools.execute import ExecuteInput
 
 
 class DirectModificationPromptTests(unittest.TestCase):
@@ -58,6 +59,11 @@ class DirectModificationPromptTests(unittest.TestCase):
         self.assertIn("task and write_todos are unavailable", prompt)
         self.assertIn("appropriate to the actual change scope", prompt)
         self.assertIn("avoid unrelated repository-wide scans", prompt)
+        self.assertIn("Internal verification and self-repair", prompt)
+        self.assertIn("repair the implementation", prompt)
+        self.assertIn("rerun the relevant check", prompt)
+        self.assertIn("Return status=completed only after", prompt)
+        self.assertIn("`| head`", prompt)
         self.assertNotIn("timeout=120", prompt)
         self.assertNotIn("at most one focused", prompt)
         self.assertNotIn("Approved frontend tasks", prompt)
@@ -74,8 +80,21 @@ class DirectModificationPromptTests(unittest.TestCase):
 
         self.assertIn("no mandatory built-in skills", prompt)
         self.assertIn("backendHandoff", prompt)
+        self.assertIn("Internal verification and self-repair", prompt)
+        self.assertIn("repair the implementation", prompt)
+        self.assertIn("rerun the relevant check", prompt)
         self.assertNotIn("/.xcodeagent/builtin-skills/", prompt)
         self.assertNotIn("Approved data-source tasks", prompt)
+
+    def test_execute_tool_guidance_preserves_real_check_exit_code(self) -> None:
+        """执行工具说明应阻止 Agent 用管道掩盖检查命令的退出码。"""
+
+        description = ExecuteInput.model_fields["command"].description or ""
+
+        self.assertIn("| head", description)
+        self.assertIn("hide the real exit code", description)
+        self.assertIn("pnpm typecheck", description)
+        self.assertNotIn("npx tsc", description)
 
     def test_agent_result_requires_valid_json(self) -> None:
         """无效 Agent 文本必须被归一化为失败，而不是误报完成。"""

@@ -640,7 +640,7 @@ observability/  日志、Tracing、Metrics 和 Agent 运行诊断
 
 快速执行复用 `AgentBundle.frontend` 和 `AgentBundle.data_source`，但不复用正式生成 Prompt。`_frontend_direct_modification_prompt` 和 `_data_source_direct_modification_prompt` 不注入 RequirementSpec、ProjectPlan、BuildTaskPlan、approved tasks 或任务 DAG。前端写代码前必须完整读取 `/.xcodeagent/builtin-skills/code-block-template/SKILL.md` 和 `/.xcodeagent/builtin-skills/react-develop-specification/SKILL.md`；后端当前没有必读内置 Skill。Agent 的结构化文件清单不作为事实，最终 diff 来自工作区执行前后快照；无实际差异且未明确 `alreadySatisfied` 时按失败处理。
 
-同一 Agent bundle 通过快速 Prompt 的稳定执行模式标记启用动态工具策略：主工作流仍保留 Deep Agents 的 `task` 和 `write_todos`，快速模式则只从模型工具列表移除这两个复杂编排工具，并禁止把定位或验证委派给默认 general-purpose 子 Agent。快速模式不再额外设置模型轮次、只读探索次数、LangGraph recursion、模型请求超时/重试、命令超时或总运行时长限制，而是继承共用 Agent、Provider 和工具的正常运行时配置。验证由当前 Agent 直接调用与实际改动范围相符的 `execute` 命令；命令不可用或失败时如实报告，不得改为遍历整个工程手工模拟 lint/typecheck。样式等局部需求仍应保持渐进读取和与范围相称的验证。
+同一 Agent bundle 通过快速 Prompt 的稳定执行模式标记启用动态工具策略：主工作流仍保留 Deep Agents 的 `task` 和 `write_todos`，快速模式则只从模型工具列表移除这两个复杂编排工具，并禁止把定位或验证委派给默认 general-purpose 子 Agent。快速模式不再额外设置模型轮次、只读探索次数、LangGraph recursion、模型请求超时/重试、命令超时或总运行时长限制，而是继承共用 Agent、Provider 和工具的正常运行时配置。验证由当前 Agent 直接调用与实际改动范围相符的 `execute` 命令，并优先使用仓库声明的包管理器和脚本；不得使用 `| head`、`| tail`、`|| true`、`; true` 等会掩盖真实退出码的包装。只要所选检查的非零退出码或错误与本轮改动相关，Agent 就必须检查错误、修复实现并重新运行相关命令，持续执行“修改—检查—修复—复查”直到通过或确认真实阻塞；不能安全处理的既有/无关失败按 `failed` 返回准确证据。样式或纯文案改动如果没有相称的 Agent 层命令，可以在 `verification` 中记录原因，仍由后续独立 `integration_test` 执行最终质量门禁。
 
 快速 Agent 即使在模型或工具异常后退出，也会执行工作区 after-snapshot，把异常发生前已落盘的差异写入失败结果，继续支持审核和撤销。工具和命令活动只通过结构化 `direct-modification` 进度与 `directModification` 快照展示，不追加到 assistant 正文；正文只保留最终结果，避免大量文件读取文案淹没状态。
 

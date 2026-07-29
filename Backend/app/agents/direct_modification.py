@@ -26,6 +26,24 @@ _FRONTEND_REQUIRED_SKILLS = (
     "/.xcodeagent/builtin-skills/code-block-template/SKILL.md",
     "/.xcodeagent/builtin-skills/react-develop-specification/SKILL.md",
 )
+_DIRECT_VERIFICATION_REPAIR_INSTRUCTIONS = (
+    "## Internal verification and self-repair\n"
+    "Internal verification is part of implementation and is separate from the later integration_test "
+    "quality gate. After writing code, choose the narrowest relevant existing verification commands "
+    "from package metadata or build files. Prefer the repository's declared package manager and scripts; "
+    "do not use npx when the command is already available through pnpm, yarn, npm scripts, or local "
+    "dependencies. Run verification commands directly. Never append output-truncating or success-forcing "
+    "shell constructs such as `| head`, `| tail`, `|| true`, or `; true`, because they can hide the real "
+    "exit code. Read the execute result's exit_code, stdout, and stderr.\n"
+    "If a selected check has a non-zero exit_code or reports an error related to the files or behavior "
+    "you changed, do not finish: inspect the error, repair the implementation, and rerun the relevant "
+    "check. Continue this edit-check-repair loop until the selected checks pass or a genuine blocker is "
+    "identified. Do not broaden the change to repair demonstrably pre-existing or unrelated failures; "
+    "return status=failed with the exact command and evidence for those blockers. Return status=completed "
+    "only after all selected internal checks pass. For a style- or content-only change where no Agent-layer "
+    "command is proportionate, record that decision in verification and let the independent integration_test "
+    "perform the final repository gate.\n"
+)
 
 
 @dataclass(frozen=True)
@@ -176,8 +194,8 @@ def _frontend_direct_modification_prompt(
         "or verification. Inspect relevant code progressively and avoid unrelated repository-wide "
         "scans. After editing, call execute yourself for the focused existing typechecks, tests, or "
         "build commands appropriate to the actual change scope. Keep verification proportional for "
-        "style-only changes. If command execution is unavailable or fails, report that verification "
-        "result; never replace command execution with a manual repository-wide review.\n"
+        "style-only changes. Never replace command execution with a manual repository-wide review.\n\n"
+        f"{_DIRECT_VERIFICATION_REPAIR_INSTRUCTIONS}\n"
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n\n"
         "## Mandatory built-in skills\n"
         "Before writing any code, use read_file(limit=400) to read each file below completely and "
@@ -216,8 +234,9 @@ def _data_source_direct_modification_prompt(
         "This is a direct-edit run: task and write_todos are unavailable. Do not delegate discovery "
         "or verification. Inspect relevant files progressively and avoid unrelated repository-wide "
         "scans. After editing, call execute yourself for the focused existing backend tests, checks, "
-        "or build commands appropriate to the actual change scope. If command execution is unavailable "
-        "or fails, report that result; never replace it with a manual repository-wide review.\n"
+        "or build commands appropriate to the actual change scope. Never replace command execution "
+        "with a manual repository-wide review.\n\n"
+        f"{_DIRECT_VERIFICATION_REPAIR_INSTRUCTIONS}\n"
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n\n"
         "Return exactly one JSON object with: status (completed or failed), summary, changedFiles, "
         "verification, alreadySatisfied, failureReason, and backendHandoff. backendHandoff must "
