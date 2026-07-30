@@ -100,6 +100,14 @@ export function deriveDisplayedPlanExecutionMode(
   return 'idle'
 }
 
+/** 简单模式运行时保留原对话框，仅让正式计划执行占用底部控制栏。 */
+export function shouldRenderPlanExecutionDock(
+  mode: PlanExecutionMode,
+  directModificationRunning: boolean
+): mode is Exclude<PlanExecutionMode, 'idle'> {
+  return mode !== 'idle' && !directModificationRunning
+}
+
 /** 乐观更新指定计划执行的控制状态，不覆盖独立的创建生命周期状态。 */
 export function withWorkflowExecutionStatus(
   workflow: WorkflowRunPayload | undefined,

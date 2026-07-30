@@ -19,6 +19,7 @@ import {
   planExecutionContextForPage,
   planExecutionForPage,
   planExecutionShowsDebugResume,
+  shouldRenderPlanExecutionDock,
   withWorkflowExecutionStatus,
   workflowInteractionAvailability,
   workflowResumeNode
@@ -520,6 +521,13 @@ test('权威生命周期已移除 execution 时忽略历史取消快照并恢复
 
 test('当前请求仍在运行时即使生命周期暂为空也保持输入锁', () => {
   assert.equal(deriveDisplayedPlanExecutionMode(undefined, 'running', true, true), 'running')
+})
+
+test('简单模式运行时保留对话框，正式计划运行时显示计划控制栏', () => {
+  assert.equal(shouldRenderPlanExecutionDock('running', true), false)
+  assert.equal(shouldRenderPlanExecutionDock('stopping', true), false)
+  assert.equal(shouldRenderPlanExecutionDock('running', false), true)
+  assert.equal(shouldRenderPlanExecutionDock('idle', false), false)
 })
 
 test('本地停止请求在 Workflow 快照到达前立即进入停止 loading', () => {

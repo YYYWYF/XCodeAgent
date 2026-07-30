@@ -49,6 +49,7 @@ import {
   planExecutionShowsDebugResume,
   planExecutionContextForEndpoint,
   planExecutionContextForPage,
+  shouldRenderPlanExecutionDock,
   workflowResumeNode,
   type PlanExecutionMode
 } from './planExecutionMode'
@@ -326,6 +327,7 @@ export default function AiChatPanel({
 
   const {
     activeWorkflow,
+    directModificationRunning,
     error,
     handleAcceptPreview,
     handleAdjustPlan,
@@ -969,7 +971,10 @@ export default function AiChatPanel({
               revertingCodeChangeIds={revertingCodeChangeIds}
             />
 
-            {displayedPlanExecutionMode !== 'idle' ? (
+            {shouldRenderPlanExecutionDock(
+              displayedPlanExecutionMode,
+              directModificationRunning
+            ) ? (
               <>
                 {planExecutionShowsDebugResume(displayedPlanExecutionMode) &&
                   !targetExecutionContext.dependencyLocked && (

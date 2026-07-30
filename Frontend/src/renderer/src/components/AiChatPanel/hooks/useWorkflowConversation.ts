@@ -45,6 +45,7 @@ import {
 type SessionRunEntry = {
   identity: SessionIdentity
   status: SessionRunStatus
+  directModification: boolean
 }
 
 type UseWorkflowConversationParams = {
@@ -82,6 +83,7 @@ type UseWorkflowConversationParams = {
 
 type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
+  directModificationRunning: boolean
   error?: string
   handleAcceptPreview: () => Promise<boolean>
   handleAdjustPlan: (feedback: string) => Promise<void>
@@ -196,6 +198,7 @@ export function useWorkflowConversation({
   const activeRuntimeKey = matchingActiveSession?.key || activeRun?.identity.key
   const loading = activeRun?.status === 'running' || activeRun?.status === 'stopping'
   const stopping = activeRun?.status === 'stopping'
+  const directModificationRunning = Boolean(activeRun?.directModification)
   const error = activeRuntimeKey ? errors[activeRuntimeKey] : undefined
   const activeWorkflow = activeRuntimeKey
     ? activeRun
@@ -328,7 +331,11 @@ export function useWorkflowConversation({
     runningSessionsRef.current.set(identity.key, identity)
     setRunStates((current) => ({
       ...current,
-      [identity.key]: { identity, status: 'running' }
+      [identity.key]: {
+        identity,
+        status: 'running',
+        directModification: Boolean(options?.directModification)
+      }
     }))
     setErrors((current) => ({ ...current, [identity.key]: undefined }))
     if (!options?.planControlAction) {
@@ -637,7 +644,11 @@ export function useWorkflowConversation({
     stopRequestedRef.current[runningIdentity.key] = true
     setRunStates((current) => ({
       ...current,
-      [runningIdentity.key]: { identity: runningIdentity, status: 'stopping' }
+      [runningIdentity.key]: {
+        identity: runningIdentity,
+        status: 'stopping',
+        directModification: Boolean(current[runningIdentity.key]?.directModification)
+      }
     }))
     setLiveWorkflows((current) => {
       const workflow = current[runningIdentity.key]
@@ -759,6 +770,7 @@ export function useWorkflowConversation({
 
   return {
     activeWorkflow,
+    directModificationRunning,
     error,
     handleAcceptPreview,
     handleAdjustPlan,
