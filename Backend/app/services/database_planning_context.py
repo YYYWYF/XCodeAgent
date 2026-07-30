@@ -30,6 +30,21 @@ _EXTERNAL_ORIGIN_KINDS = {
     "api",
     "rest_api",
 }
+# mock / static 数据源：前端用内存 mock 函数提供数据，不连任何后端。
+# 这类接口既不需要数据库扫描，也不算"未明确来源"——它是已明确声明用 mock 的。
+_MOCK_ORIGIN_KINDS = {
+    "mock",
+    "static",
+    "none",
+}
+_UNKNOWN_ORIGIN_KINDS = {
+    "",
+    "unknown",
+    "needs_user_confirmation",
+    "missing",
+}
+
+
 def prepare_database_planning_context(
     project_plan: dict[str, Any],
     build_context: dict[str, Any],
@@ -141,6 +156,33 @@ def endpoint_detail_origin_kind(endpoint_detail: Any) -> str:
     source_type = str(data_origin.get("source_type") or "")
     kind = (effective_kind or source_type).strip().lower()
     return kind if kind not in _EXTERNAL_ORIGIN_KINDS else "external_api"
+
+
+def _unresolved_origin_targets(
+    project_plan: dict[str, Any],
+    build_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """找出已确认详情中数据来源缺失或待用户确认的接口。
+
+    mock / static 数据源已明确声明用前端内存 mock，不算"未明确来源"，
+    不应阻断任务规划。判断依据优先看 endpoint 详细设计的 data_origin.kind，
+    其次看 ProjectPlan 数据源类型（接口详细设计尚未生成时回退到此）。
+    """
+
+    unresolved: list[dict[str, Any]] = []
+    for target in _endpoint_targets(project_plan, build_context):
+        kind = _data_origin_kind(target.get("endpoint_detail"))
+        if kind in _MOCK_ORIGIN_KINDS:
+            continue
+        # 接口详细设计尚未生成时，回退到 ProjectPlan 数据源类型判断：
+        # mock/static 数据源的接口不需要数据库，也不算"未明确来源"。
+        data_source = target.get("data_source") or {}
+        source_type = str(data_source.get("type") or "").lower()
+        if source_type in _MOCK_ORIGIN_KINDS:
+            continue
+        if kind in _UNKNOWN_ORIGIN_KINDS:
+            unresolved.append(target)
+    return unresolved
 
 
 def _endpoint_targets(
