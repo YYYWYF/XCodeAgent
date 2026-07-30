@@ -491,60 +491,12 @@ export default function DetailConfirmationPageSelector({
                 )}
               </section>
 
-              {templates.length > 0 ? (
-                <section className={cx("detail-page-selector-target-section", "detail-page-selector-template-section")}>
-                  <Text className={cx("detail-page-selector-section-title")} strong>
-                    <FileTextOutlined style={{ marginRight: 6 }} />
-                    选择页面模板（可选）
-                  </Text>
-                  {renderTemplateCards()}
-                </section>
-              ) : (
-                <section className={cx("detail-page-selector-target-section")}>
-                  <Text className={cx("detail-page-selector-section-title")} strong>
-                    选择要开始设计的接口
-                  </Text>
-                  {endpointOptions.length ? (
-                    <div className={cx("detail-page-selector-options")}>
-                      {endpointOptions.map((source) => (
-                        <Radio.Button
-                          key={source.endpointId}
-                          value={source.endpointKey}
-                        >
-                          <span className={cx("detail-page-selector-name")}>
-                            <DatabaseOutlined />
-                            <span className={cx("detail-page-selector-method")}>
-                              {source.method}
-                            </span>
-                            {source.path}
-                          </span>
-                          <span className={cx("detail-page-selector-purpose")}>
-                            {source.description}
-                          </span>
-                        </Radio.Button>
-                      ))}
-                    </div>
-                  ) : (
-                    <Text
-                      className={cx("detail-page-selector-empty")}
-                      type="secondary"
-                    >
-                      项目计划中暂无可设计接口。
-                    </Text>
-                  )}
-                </section>
-              )}
-            </div>
-
-            {/* ---------- 选择要开始设计的接口（有模板时移至下方整行） ---------- */}
-            {templates.length > 0 && (
-              <section className={cx("detail-page-selector-target-section", "detail-page-selector-endpoint-row")}>
+              <section className={cx("detail-page-selector-target-section")}>
                 <Text className={cx("detail-page-selector-section-title")} strong>
-                  <DatabaseOutlined style={{ marginRight: 6 }} />
                   选择要开始设计的接口
                 </Text>
                 {endpointOptions.length ? (
-                  <div className={cx("detail-page-selector-options", "detail-page-selector-endpoint-options")}>
+                  <div className={cx("detail-page-selector-options")}>
                     {endpointOptions.map((source) => (
                       <Radio.Button
                         key={source.endpointId}
@@ -572,7 +524,7 @@ export default function DetailConfirmationPageSelector({
                   </Text>
                 )}
               </section>
-            )}
+            </div>
           </Radio.Group>
         ) : (
           <Text type="secondary">项目计划中暂无可设计页面或接口。</Text>
@@ -614,9 +566,6 @@ export default function DetailConfirmationPageSelector({
           icon={<PlayCircleOutlined />}
           loading={disabled}
           onClick={() => {
-            const templateContext =
-              selectedTargetType === "page" ? buildTemplateContext() : undefined;
-
             selectedTarget &&
               selectedTargetType &&
               selectedTargetId &&
@@ -630,7 +579,7 @@ export default function DetailConfirmationPageSelector({
                     apiContractId: selectedEndpoint.apiContractId,
                     endpointId: selectedEndpoint.rawEndpointId,
                   }
-                  : templateContext || undefined,
+                  : undefined,
               );
           }}
           size="large"

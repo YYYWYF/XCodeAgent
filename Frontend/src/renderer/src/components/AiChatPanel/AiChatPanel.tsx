@@ -761,6 +761,42 @@ export default function AiChatPanel({
     }
   }
 
+  /** 从 initial 模式选择目标后仅定位目标，不启动 workfllow，让 locked mode 弹出模板选择。 */
+  const handleInitialDetailTargetSelect = async (
+    targetType: 'page' | 'endpoint',
+    targetId: string,
+    targetLabel: string,
+    _hasDetailPlan: boolean,
+    targetContext?: {
+      apiContractId?: string
+      endpointId?: string
+    }
+  ): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    if (targetType === 'endpoint' && targetContext?.apiContractId) {
+      setActiveDetailTarget({
+        type: 'endpoint',
+        apiContractId: targetContext.apiContractId,
+        endpointId: targetContext.endpointId || targetId,
+        endpointKey: `${targetContext.apiContractId}:${targetContext.endpointId || targetId}`,
+        label: targetLabel
+      })
+      setInteractingDetailTargetKey(
+        endpointDetailTargetKey(targetContext.apiContractId, targetContext.endpointId || targetId)
+      )
+      setGeneratingDetailTargetKey('')
+      handleSelectEndpoint(targetContext.apiContractId, targetContext.endpointId || targetId)
+        .catch(() => undefined)
+    } else {
+      setActiveDetailTarget({ type: 'page', pageId: targetId })
+      setInteractingDetailTargetKey(pageDetailTargetKey(targetId))
+      setGeneratingDetailTargetKey('')
+      handleSelectPage(targetId).catch(() => undefined)
+    }
+  }
+
   /** 根据弹框里选择的目标类型启动页面或接口详细设计。 */
   const handleStartDetailDesign = async (
     targetType: 'page' | 'endpoint',
@@ -924,7 +960,7 @@ export default function AiChatPanel({
               disabled={loading || workspaceBusy}
               generating={loading}
               loading={!developmentPlanningReady}
-              onStart={handleStartDetailDesign}
+              onStart={handleInitialDetailTargetSelect}
               pages={developmentPlanningPages}
               pageTree={developmentPlanningPageTree}
               selectedEndpoint={activeApiEndpoint}
