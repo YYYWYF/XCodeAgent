@@ -18,6 +18,7 @@ from app.graph.subgraphs.testing import integration_test
 from app.services.direct_modification import (
     append_direct_conversation_summary,
     direct_final_message,
+    direct_state_message,
     direct_test_log_paths,
     validated_direct_stage_result,
 )
@@ -60,11 +61,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
             **base,
             "status": "requires_planning",
             "message": message,
-            "direct_modification_summary": append_direct_conversation_summary(
-                str(state.get("direct_modification_summary") or ""),
-                request=request,
-                outcome=message,
-            ),
         }
     if decision.scope == "needs_clarification" or decision.owner == "unknown":
         question = decision.clarification_question
@@ -86,11 +82,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
                     }
                 ],
             },
-            "direct_modification_summary": append_direct_conversation_summary(
-                str(state.get("direct_modification_summary") or ""),
-                request=request,
-                outcome=question,
-            ),
         }
     return {
         **base,
@@ -227,7 +218,7 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
     ]
     message = direct_final_message(
         status=status,
-        current_message=str(state.get("message") or ""),
+        current_message=direct_state_message(state),
         stage_summaries=stage_summaries,
     )
     code_changes = merge_code_change_sets(state.get("direct_code_change_sets", []))

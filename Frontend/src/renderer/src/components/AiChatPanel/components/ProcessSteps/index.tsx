@@ -23,31 +23,52 @@ const { Text } = Typography
 type Props = {
   loading: boolean
   steps: ProcessStepRecord[]
+  waitingPrompt?: string
+  waitingForInput?: boolean
 }
 
 /** 渲染一条可折叠的 Agent 执行轨迹，并在测试步骤中保留结构化检查结果。 */
-export default function ProcessSteps({ loading, steps }: Props): ReactElement {
-  const [open, setOpen] = useState(loading)
+export default function ProcessSteps({
+  loading,
+  steps,
+  waitingPrompt = '',
+  waitingForInput = false
+}: Props): ReactElement {
+  const [open, setOpen] = useState(loading || waitingForInput)
   const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
 
   useEffect(() => {
-    if (loading || hasTestChecklist) setOpen(true)
-  }, [hasTestChecklist, loading])
+    if (loading || waitingForInput || hasTestChecklist) setOpen(true)
+  }, [hasTestChecklist, loading, waitingForInput])
+
+  const statusClassName = loading ? 'running' : waitingForInput ? 'waiting' : 'completed'
 
   return (
     <details
-      className={cx('process-steps', loading ? 'running' : 'completed')}
+      className={cx('process-steps', statusClassName)}
       onToggle={(event) => setOpen(event.currentTarget.open)}
       open={open}
     >
       <summary className={cx('process-steps-summary')}>
         <span className={cx('process-steps-status')}>
-          {loading ? <LoadingOutlined spin /> : <CheckCircleOutlined />}
+          {loading ? (
+            <LoadingOutlined spin />
+          ) : waitingForInput ? (
+            <PauseCircleOutlined />
+          ) : (
+            <CheckCircleOutlined />
+          )}
         </span>
         <span className={cx('process-steps-heading')}>
-          <Text strong>{loading ? 'Agent 正在执行' : 'Agent 执行完成'}</Text>
+          <Text strong>
+            {loading ? 'Agent 正在执行' : waitingForInput ? 'Agent 等待补充' : 'Agent 执行完成'}
+          </Text>
           <Text type="secondary">
-            {loading ? currentStepLabel(steps) : `已归档 ${steps.length} 个步骤`}
+            {loading
+              ? currentStepLabel(steps)
+              : waitingForInput
+                ? '请根据下方提示补充修改需求'
+                : `已归档 ${steps.length} 个步骤`}
           </Text>
         </span>
       </summary>
@@ -58,6 +79,8 @@ export default function ProcessSteps({ loading, steps }: Props): ReactElement {
             key={step.id}
             settled={!loading}
             step={step}
+            waitingForInput={waitingForInput}
+            waitingPrompt={waitingPrompt}
           />
         ))}
       </div>
@@ -69,11 +92,15 @@ export default function ProcessSteps({ loading, steps }: Props): ReactElement {
 function ProcessStep({
   isLast,
   settled,
-  step
+  step,
+  waitingForInput,
+  waitingPrompt
 }: {
   isLast: boolean
   settled: boolean
   step: ProcessStepRecord
+  waitingForInput: boolean
+  waitingPrompt: string
 }): ReactElement {
   const hasChecks = Boolean(step.checks?.length)
   const hasBuildRun = Boolean(step.buildExecutionSlice)
@@ -81,15 +108,20 @@ function ProcessStep({
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
   const expandable = hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration
+  const awaitingInput = waitingForInput && step.status === 'requires_user_input'
   const [open, setOpen] = useState(
-    expandable && (step.status === 'running' || hasChecks || hasBuildRun || hasDagGeneration)
+    expandable &&
+      (step.status === 'running' || awaitingInput || hasChecks || hasBuildRun || hasDagGeneration)
   )
 
   useEffect(() => {
-    if (expandable && (step.status === 'running' || hasChecks || hasBuildRun || hasDagGeneration)) {
+    if (
+      expandable &&
+      (step.status === 'running' || awaitingInput || hasChecks || hasBuildRun || hasDagGeneration)
+    ) {
       setOpen(true)
     }
-  }, [expandable, hasBuildRun, hasChecks, hasDagGeneration, step.status])
+  }, [awaitingInput, expandable, hasBuildRun, hasChecks, hasDagGeneration, step.status])
 
   const className = cx(
     'process-step',
@@ -107,6 +139,20 @@ function ProcessStep({
       <Text>{settled ? settledTitle(step.title) : step.title}</Text>
     </>
   )
+
+  if (awaitingInput) {
+    const clarificationText =
+      step.detail.trim() ||
+      waitingPrompt.trim() ||
+      '请说明您想修改的具体内容，并补充修改位置和预期效果。'
+    return (
+      <div className={cx('process-step-clarification')}>
+        <div className={cx('process-step-detail')}>
+          <DetailBlock label="请补充输入" value={clarificationText} />
+        </div>
+      </div>
+    )
+  }
 
   if (!expandable) {
     return (

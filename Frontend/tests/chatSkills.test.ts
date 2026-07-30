@@ -15,6 +15,10 @@ import {
   readDagGenerationSnapshot
 } from '../src/renderer/src/service/agUiAgent'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
+import {
+  isDirectModificationWaitingForInput,
+  shouldUseDirectModification
+} from '../src/renderer/src/components/AiChatPanel/directModificationMode'
 import { buildToolActivityPlacement } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import {
   processStepsForDisplay,
@@ -77,6 +81,107 @@ test('简单模式输入框引导用户进行页面或 API 微调', () => {
 
   assert.equal(chatCopy.frontend.placeholder, expected)
   assert.equal(chatCopy.backend.placeholder, expected)
+})
+
+test('简单模式等待补充时直接展示问题并隐藏步骤标题和图标', () => {
+  const workflow = {
+    runId: 'direct-wait-run',
+    threadId: 'direct-thread',
+    summary: {
+      status: 'requires_user_input',
+      phase: 'direct_modification',
+      owner: 'unknown',
+      message: '请说明要修改哪个页面或接口，以及期望结果。'
+    },
+    events: []
+  }
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: false,
+      waitingForInput: isDirectModificationWaitingForInput(workflow),
+      waitingPrompt: workflow.summary.message,
+      steps: [
+        {
+          id: 'direct:classify_intent',
+          kind: 'workflow',
+          status: 'requires_user_input',
+          title: '等待输入 识别修改意图',
+          detail: '',
+          sequence: 10
+        }
+      ]
+    })
+  )
+
+  assert.equal(isDirectModificationWaitingForInput(workflow), true)
+  assert.equal((markup.match(/ open=""/g) || []).length, 1)
+  assert.match(markup, /Agent 等待补充/)
+  assert.match(markup, /请根据下方提示补充修改需求/)
+  assert.match(markup, /请补充输入/)
+  assert.match(markup, /请说明要修改哪个页面或接口，以及期望结果。/)
+  assert.doesNotMatch(markup, /等待输入 识别修改意图/)
+  assert.doesNotMatch(markup, /process-step-icon/)
+})
+
+test('简单模式 requires_planning 不显示为等待补充', () => {
+  const workflow = {
+    runId: 'direct-planning-run',
+    threadId: 'direct-thread',
+    summary: {
+      status: 'requires_planning',
+      phase: 'direct_modification',
+      owner: 'unknown'
+    },
+    events: []
+  }
+  const waitingForInput = isDirectModificationWaitingForInput(workflow)
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: false,
+      waitingForInput,
+      steps: [
+        {
+          id: 'direct:classify_intent',
+          kind: 'workflow',
+          status: 'requires_user_input',
+          title: '等待输入 识别修改意图',
+          detail: '该需求需要正式设计工作流。',
+          sequence: 10
+        }
+      ]
+    })
+  )
+
+  assert.equal(waitingForInput, false)
+  assert.match(markup, /Agent 执行完成/)
+  assert.doesNotMatch(markup, /Agent 等待补充|请补充输入/)
+})
+
+test('简单模式等待补充后仍复用独立端点', () => {
+  const workflow = {
+    runId: 'direct-wait-run',
+    threadId: 'direct-thread',
+    summary: {
+      status: 'requires_user_input',
+      phase: 'direct_modification',
+      owner: 'unknown'
+    },
+    events: []
+  }
+
+  assert.equal(shouldUseDirectModification(false, workflow, undefined), true)
+  assert.equal(
+    shouldUseDirectModification(
+      true,
+      {
+        ...workflow,
+        summary: { status: 'requires_user_input', phase: 'requirement_clarification' }
+      },
+      undefined
+    ),
+    false
+  )
+  assert.equal(shouldUseDirectModification(true, workflow, { enabled: true }), false)
 })
 
 test('技能选择按名称去空白去重并保留首次顺序', () => {
@@ -347,6 +452,11 @@ test('AG-UI 连续请求只发送当前用户消息', async () => {
   }
 
   assert.equal(requestBodies.length, 2)
+  assert.deepEqual(
+    requestBodies.map((body) => body.threadId),
+    ['thread-1', 'thread-1']
+  )
+  assert.notEqual(requestBodies[0].runId, requestBodies[1].runId)
   assert.deepEqual(
     requestBodies.map((body) =>
       (body.messages as Array<{ role: string; content: string }>).map(({ role, content }) => ({

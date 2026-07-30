@@ -78,6 +78,8 @@ def _direct_modification_classifier_prompt(
         "- needs_clarification: the requested behavior or modification location is too ambiguous.\n"
         "- requires_planning: only broad architecture replacement, large data migration, new application, "
         "or a change whose product decisions cannot be made safely as a localized edit.\n\n"
+        "Write reason and clarificationQuestion in Simplified Chinese. The clarification question "
+        "must state what concrete information the user should add.\n\n"
         "Return this shape:\n"
         '{"owner":"frontend|backend|fullstack|unknown",'
         '"scope":"direct|requires_planning|needs_clarification",'
@@ -102,7 +104,10 @@ def classify_direct_modification_intent(
         response = model.invoke(
             [
                 SystemMessage(
-                    content="You are a conservative coding-request router. Output JSON only."
+                    content=(
+                        "You are a conservative coding-request router. Output JSON only. "
+                        "All human-readable fields must use Simplified Chinese."
+                    )
                 ),
                 HumanMessage(
                     content=_direct_modification_classifier_prompt(
@@ -139,11 +144,11 @@ def _normalize_direct_modification_decision(
     except (TypeError, ValueError):
         confidence = 0.0
     reason = str(payload.get("reason") or "模型没有提供有效的分类依据。").strip()
-    clarification_question = str(
+    clarification_question = _chinese_clarification_question(
         payload.get("clarificationQuestion")
         or payload.get("clarification_question")
         or "请补充要修改的功能、页面、组件或接口，以及期望结果。"
-    ).strip()
+    )
     if confidence < 0.65 or owner == "unknown":
         return DirectModificationDecision(
             owner="unknown",
@@ -159,6 +164,15 @@ def _normalize_direct_modification_decision(
         reason=reason,
         clarification_question=clarification_question,
     )
+
+
+def _chinese_clarification_question(value: Any) -> str:
+    """保留模型生成的中文澄清问题，并将非中文结果降级为稳定中文提示。"""
+
+    question = str(value or "").strip()
+    if question and any("\u4e00" <= char <= "\u9fff" for char in question):
+        return question
+    return "请说明您想修改的具体内容，并补充修改位置和预期效果。"
 
 
 def _clarification_fallback(reason: str) -> DirectModificationDecision:

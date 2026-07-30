@@ -28,6 +28,7 @@ import {
   workflowMessageContentForDisplay
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage, ChatCopy } from '../../types'
+import { isDirectModificationWaitingForInput } from '../../directModificationMode'
 import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
@@ -173,6 +174,9 @@ export default function MessageList({
                 message.workflow,
                 messageLoading
               )
+              const waitingForDirectModificationInput = isDirectModificationWaitingForInput(
+                message.workflow
+              )
               const requiresClarification =
                 message.workflow &&
                 workflowClarification(message.workflow)?.status === 'requires_user_input'
@@ -198,7 +202,12 @@ export default function MessageList({
                     {message.role === 'assistant' ? (
                       <>
                         {visibleProcessSteps && visibleProcessSteps.length > 0 && (
-                          <ProcessSteps loading={messageLoading} steps={visibleProcessSteps} />
+                          <ProcessSteps
+                            loading={messageLoading}
+                            steps={visibleProcessSteps}
+                            waitingForInput={waitingForDirectModificationInput}
+                            waitingPrompt={message.workflow?.summary.message}
+                          />
                         )}
                         {messageLoading &&
                           message.toolCalls?.map((toolCall) => (

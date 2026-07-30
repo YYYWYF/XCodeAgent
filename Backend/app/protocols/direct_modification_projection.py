@@ -7,6 +7,7 @@ from app.protocols.workflow.stream_events import (
     integration_test_check_summary,
     integration_test_checks,
 )
+from app.services.direct_modification import direct_state_message
 
 
 DIRECT_NODE_LABELS = {
@@ -72,7 +73,7 @@ def direct_summary(state: dict[str, Any], *, status: str) -> dict[str, Any]:
     return {
         "status": status,
         "phase": str(state.get("phase") or "direct_modification"),
-        "message": str(state.get("message") or result.get("summary") or "快速修改已结束。"),
+        "message": direct_state_message(state) or str(result.get("summary") or "快速修改已结束。"),
         "previewUrl": state.get("preview_url") or result.get("previewUrl"),
         "launchResult": state.get("launch_result") or result.get("launchResult"),
         # 快速澄清继续使用自由输入框，避免历史结构化确认卡在无 lifecycle 时重复提交。
@@ -123,7 +124,7 @@ def direct_node_event(
         "nodeName": node_name,
         "node": {"id": node_name, "label": label},
         "status": status,
-        "message": str(update.get("message") or f"已完成：{label}"),
+        "message": direct_state_message(update) or f"已完成：{label}",
         "timestamp": datetime.now(UTC).isoformat(),
     }
 
@@ -182,11 +183,7 @@ def direct_node_process_step(
         "kind": "workflow",
         "status": status,
         "title": f"{'已完成' if status == 'completed' else '执行失败' if status == 'failed' else '等待输入'} {label}",
-        "detail": (
-            integration_test_check_summary(checks)
-            if checks
-            else str(update.get("message") or "")
-        ),
+        "detail": integration_test_check_summary(checks) if checks else direct_state_message(update),
         "sequence": DIRECT_NODE_PERCENT.get(node_name, 0),
         "nodeName": node_name,
         **({"checks": checks} if checks else {}),

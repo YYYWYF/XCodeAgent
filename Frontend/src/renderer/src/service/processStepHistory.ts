@@ -1,4 +1,5 @@
 import type { WorkflowRunPayload } from '../typings'
+import { isDirectModificationWorkflow } from '../components/AiChatPanel/directModificationMode'
 import { readDagGenerationSnapshot, readIntegrationTestChecks } from './agUiAgent'
 import type { ProcessStepRecord } from './agUiAgent'
 
@@ -161,8 +162,11 @@ function completedWorkflowProcessSteps(
     for (const [index, nodeName] of timeline.entries()) {
       const label = workflowNodeLabel(nodeName, workflow)
       if (!label) continue
-      stepsById.set(`workflow:${nodeName}`, {
-        id: `workflow:${nodeName}`,
+      const stepId = `workflow:${nodeName}`
+      // 旧 timeline 可能重复记录同一节点；保留首次出现位置，避免历史步骤发生跳序。
+      if (stepsById.has(stepId)) continue
+      stepsById.set(stepId, {
+        id: stepId,
         kind: 'workflow',
         status: 'completed',
         title: `已完成 ${label}`,
@@ -187,11 +191,6 @@ function sortProcessStepsForDisplay(
     if (semanticOrder !== 0) return semanticOrder
     return left.sequence - right.sequence
   })
-}
-
-/** 通过快速修改公开 owner 判断当前消息是否来自独立简单模式 Graph。 */
-function isDirectModificationWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
-  return ['frontend', 'backend', 'fullstack', 'unknown'].includes(String(workflow?.summary?.owner))
 }
 
 /** 只修正数据库上下文检查与 DAG 生成的相对顺序，其它轮次保持后端 sequence。 */

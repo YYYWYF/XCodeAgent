@@ -12,6 +12,8 @@ from app.agents.direct_modification import (
     DirectModificationDecision,
     _data_source_direct_modification_prompt,
     _frontend_direct_modification_prompt,
+    _normalize_direct_modification_decision,
+    classify_direct_modification_intent,
     parse_direct_modification_agent_result,
 )
 from app.graph.direct_modification_workflow import (
@@ -111,6 +113,60 @@ class DirectModificationPromptTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertIn("JSON", result["failureReason"])
 
+    def test_classifier_normalizes_unsafe_results_to_clarification(self) -> None:
+        """未知归属、低置信度和无效分类字段都必须安全降级为等待补充。"""
+
+        payloads = [
+            {"owner": "unknown", "scope": "direct", "confidence": 0.95},
+            {"owner": "frontend", "scope": "direct", "confidence": 0.64},
+            {"owner": "invalid", "scope": "direct", "confidence": 0.95},
+            {"owner": "frontend", "scope": "needs_clarification", "confidence": 0.95},
+            {"owner": "frontend", "scope": "invalid", "confidence": 0.95},
+            {},
+        ]
+
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                decision = _normalize_direct_modification_decision(payload)
+                self.assertEqual(decision.scope, "needs_clarification")
+                self.assertTrue(decision.clarification_question)
+
+    def test_classifier_replaces_english_clarification_with_chinese_copy(self) -> None:
+        """模型返回英文澄清问题时必须转换为稳定的中文用户提示。"""
+
+        decision = _normalize_direct_modification_decision(
+            {
+                "owner": "unknown",
+                "scope": "needs_clarification",
+                "confidence": 0.9,
+                "reason": "The request does not describe a change.",
+                "clarificationQuestion": (
+                    "What would you like to modify? Please describe the change, location, "
+                    "and expected behavior."
+                ),
+            }
+        )
+
+        self.assertEqual(
+            decision.clarification_question,
+            "请说明您想修改的具体内容，并补充修改位置和预期效果。",
+        )
+
+    def test_classifier_empty_request_and_model_error_request_clarification(self) -> None:
+        """空输入或分类模型异常时都必须返回可见的兜底澄清问题。"""
+
+        empty_decision = classify_direct_modification_intent(user_request="   ")
+        with patch(
+            "app.agents.direct_modification.create_chat_model",
+            side_effect=RuntimeError("offline"),
+        ):
+            error_decision = classify_direct_modification_intent(user_request="sdf")
+
+        for decision in (empty_decision, error_decision):
+            self.assertEqual(decision.owner, "unknown")
+            self.assertEqual(decision.scope, "needs_clarification")
+            self.assertTrue(decision.clarification_question)
+
 
 class DirectModificationNodeTests(unittest.TestCase):
     """验证分类、Agent 执行、测试和收口节点的快速模式语义。"""
@@ -136,6 +192,69 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(update["launch_result"], {})
         self.assertIs(update["quality_gate_passed"], False)
         self.assertEqual(_route_classification(update), "execute_backend")
+
+    def test_clarification_summary_is_finalized_once_and_reused_on_next_run(self) -> None:
+        """等待轮只在收尾节点记录一次摘要，下一轮分类可读取旧请求和澄清问题。"""
+
+        question = "请说明要修改哪个页面或接口，以及期望结果。"
+        waiting_decision = DirectModificationDecision(
+            owner="unknown",
+            scope="needs_clarification",
+            confidence=0.2,
+            reason="需求信息不足。",
+            clarification_question=question,
+        )
+        with patch(
+            "app.graph.nodes.direct_modification.classify_direct_modification_intent",
+            return_value=waiting_decision,
+        ):
+            classified = classify_direct_modification({"request": "sdf"})
+
+        self.assertNotIn("direct_modification_summary", classified)
+        # LangGraph 会按 ProjectState 过滤未声明的 message；投影必须从 clarification 回退读取。
+        filtered_classified = {key: value for key, value in classified.items() if key != "message"}
+        waiting_step = direct_node_process_step("classify_intent", filtered_classified)
+        self.assertEqual(waiting_step["status"], "requires_user_input")
+        self.assertEqual(waiting_step["detail"], question)
+
+        finalized = finalize_direct_modification({**filtered_classified, "request": "sdf"})
+        self.assertEqual(finalized["message"], question)
+        summary = finalized["direct_modification_summary"]
+        self.assertEqual(summary.count("用户：sdf"), 1)
+        self.assertEqual(summary.count(question), 1)
+
+        captured: dict[str, str] = {}
+
+        def classify_follow_up(**kwargs: str) -> DirectModificationDecision:
+            """记录新一轮分类上下文并返回可直接执行的前端修改。"""
+
+            captured.update(kwargs)
+            return DirectModificationDecision(
+                owner="frontend",
+                scope="direct",
+                confidence=0.96,
+                reason="补充内容已明确页面和修改结果。",
+                clarification_question="",
+            )
+
+        with patch(
+            "app.graph.nodes.direct_modification.classify_direct_modification_intent",
+            side_effect=classify_follow_up,
+        ):
+            continued = classify_direct_modification(
+                {
+                    **classified,
+                    **finalized,
+                    "request": "把首页标题改成欢迎用户",
+                }
+            )
+
+        self.assertEqual(captured["user_request"], "把首页标题改成欢迎用户")
+        self.assertEqual(captured["conversation_summary"], summary)
+        self.assertEqual(captured["conversation_summary"].count("用户：sdf"), 1)
+        self.assertEqual(continued["status"], "in_progress")
+        self.assertEqual(continued["clarification"], {})
+        self.assertEqual(_route_classification(continued), "execute_frontend")
 
     def test_frontend_execution_uses_real_workspace_diff(self) -> None:
         """前端阶段以工作区快照为权威变更清单。"""

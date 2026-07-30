@@ -65,8 +65,27 @@
   animation: process-status-pulse 1.8s ease-out infinite;
 }
 
+.@{class-prefix}-process-steps.@{class-prefix}-waiting .@{class-prefix}-process-steps-status {
+  color: var(--wb-warning);
+  background: var(--wb-surface-subtle);
+  border-color: var(--wb-warning);
+  box-shadow: 0 0 0 4px var(--wb-surface-subtle);
+}
+
 .@{class-prefix}-process-steps-list {
   padding-left: 14px;
+}
+
+.@{class-prefix}-process-steps.@{class-prefix}-waiting .@{class-prefix}-process-steps-list {
+  padding-left: 42px;
+}
+
+.@{class-prefix}-process-step-clarification {
+  padding: 0 0 18px;
+
+  .@{class-prefix}-process-step-detail {
+    padding-top: 0;
+  }
 }
 
 .@{class-prefix}-process-step {

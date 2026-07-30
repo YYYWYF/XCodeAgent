@@ -147,6 +147,30 @@ def append_direct_conversation_summary(
     ]
 
 
+def direct_state_message(state: dict[str, Any]) -> str:
+    """读取快速修改状态消息，并在 LangGraph 过滤 message 时回退到澄清问题。"""
+
+    message = str(state.get("message") or "").strip()
+    if message:
+        return message
+    clarification = state.get("clarification")
+    if not isinstance(clarification, dict):
+        return ""
+    clarification_message = str(clarification.get("message") or "").strip()
+    if clarification_message:
+        return clarification_message
+    questions = clarification.get("questions")
+    if not isinstance(questions, list):
+        return ""
+    for item in questions:
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question") or "").strip()
+        if question:
+            return question
+    return ""
+
+
 def direct_final_message(
     *,
     status: str,

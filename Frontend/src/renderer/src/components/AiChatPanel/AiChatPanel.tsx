@@ -771,7 +771,7 @@ export default function AiChatPanel({
       apiContractId?: string
       endpointId?: string
     }
-  ): void => {
+  ): Promise<void> => {
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')

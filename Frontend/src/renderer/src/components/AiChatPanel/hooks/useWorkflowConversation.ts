@@ -17,6 +17,10 @@ import type {
   WorkflowRunPayload
 } from '../../../typings'
 import {
+  isDirectModificationWorkflow,
+  shouldUseDirectModification
+} from '../directModificationMode'
+import {
   buildClarificationContinuationMessage,
   workflowOriginalRequest,
   type ClarificationAnswers
@@ -220,20 +224,22 @@ export function useWorkflowConversation({
     {}
   )
 
-  /** 首次发送目标消息时再创建对应会话，并复用已有页面或 API 会话继续 Workflow。 */
+  /** 首次发送时创建目标会话；简单模式补充输入优先复用当前会话和 thread。 */
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
     const sessionIdentity =
-      selectedApiContractId && selectedEndpointId
-        ? await ensureEndpointSession(
-            selectedApiContractId,
-            selectedEndpointId,
-            selectedEndpointLabel || selectedEndpointId
-          )
-        : selectedPageId
-          ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
-          : await ensureActiveSession()
+      isDirectModificationWorkflow(activeWorkflow) && matchingActiveSession
+        ? matchingActiveSession
+        : selectedApiContractId && selectedEndpointId
+          ? await ensureEndpointSession(
+              selectedApiContractId,
+              selectedEndpointId,
+              selectedEndpointLabel || selectedEndpointId
+            )
+          : selectedPageId
+            ? await ensurePageSession(selectedPageId, selectedPageLabel || selectedPageId)
+            : await ensureActiveSession()
     await sendWorkflowMessage(message, {
       clearDraft: true,
       detailTargetType: selectedApiContractId && selectedEndpointId ? 'endpoint' : undefined,
@@ -788,23 +794,6 @@ export function useWorkflowConversation({
     stopping,
     workspaceBusy
   }
-}
-
-/** 仅让已设计目标的普通消息进入快速通道，调试和正式流程续跑仍使用主 Graph。 */
-function shouldUseDirectModification(
-  enabled: boolean,
-  workflow: WorkflowRunPayload | undefined,
-  workflowDebug: WorkflowDebugOptions | undefined
-): boolean {
-  if (!enabled || workflowDebug?.enabled) return false
-  if (isDirectModificationWorkflow(workflow)) return true
-  const status = String(workflow?.summary?.status || '')
-  return !['running', 'in_progress', 'requires_user_input', 'paused', 'stopping'].includes(status)
-}
-
-/** 通过独立协议公开的 owner 字段识别快速修改运行。 */
-function isDirectModificationWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
-  return ['frontend', 'backend', 'fullstack', 'unknown'].includes(String(workflow?.summary?.owner))
 }
 
 function latestWorkflow(messages: AgentChatMessage[]): WorkflowRunPayload | undefined {
