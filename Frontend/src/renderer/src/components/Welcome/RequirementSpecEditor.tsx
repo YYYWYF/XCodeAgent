@@ -9,6 +9,7 @@ import {
 import { Button, Input, Select, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { cx } from '../../utils'
+import RequirementSpecFlowEditor from './RequirementSpecFlowSteps'
 import './RequirementSpecEditor.less'
 
 const { Text, Title } = Typography
@@ -189,17 +190,20 @@ export default function RequirementSpecEditor({ onChange, rootPath, spec }: Prop
                 addonBefore={rootPath && rootPath !== '/' ? rootPath : undefined}
                 onChange={(event) => {
                   const userInput = event.target.value
-                  const fullPath = rootPath && rootPath !== '/'
-                    ? (userInput.startsWith('/') ? `${rootPath}${userInput}` : `${rootPath}/${userInput}`)
-                    : userInput
+                  const fullPath =
+                    rootPath && rootPath !== '/'
+                      ? userInput.startsWith('/')
+                        ? `${rootPath}${userInput}`
+                        : `${rootPath}/${userInput}`
+                      : userInput
                   updateItem('pages', index, 'path', fullPath)
                 }}
                 placeholder="例如 /orders"
                 value={
                   rootPath && rootPath !== '/'
-                    ? (String(item.path || '').startsWith(rootPath)
+                    ? String(item.path || '').startsWith(rootPath)
                       ? String(item.path).slice(rootPath.length) || '/'
-                      : String(item.path))
+                      : String(item.path)
                     : textValue(item.path)
                 }
               />
@@ -267,30 +271,15 @@ export default function RequirementSpecEditor({ onChange, rootPath, spec }: Prop
         title="核心业务流程"
       >
         {recordList(spec.business_flows).map((item, index) => (
-          <EditorItem
+          <RequirementSpecFlowEditor
+            flowIndex={index}
+            item={item}
             key={textValue(item.id) || `flow-${index}`}
-            onRemove={() => removeItem('business_flows', index)}
-          >
-            <EditorField label="流程名称">
-              <Input
-                onChange={(event) =>
-                  updateItem('business_flows', index, 'name', event.target.value)
-                }
-                placeholder="请输入流程名称"
-                value={textValue(item.name)}
-              />
-            </EditorField>
-            <EditorField label="流程说明">
-              <TextArea
-                autoSize={{ minRows: 2, maxRows: 4 }}
-                onChange={(event) =>
-                  updateItem('business_flows', index, 'description', event.target.value)
-                }
-                placeholder="请输入流程说明"
-                value={textValue(item.description)}
-              />
-            </EditorField>
-          </EditorItem>
+            onRemove={(itemIndex) => removeItem('business_flows', itemIndex)}
+            onUpdate={(itemIndex, key, value) =>
+              updateItem('business_flows', itemIndex, key, value)
+            }
+          />
         ))}
       </EditorSection>
 

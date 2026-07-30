@@ -614,6 +614,9 @@ def create_requirement_spec(
             if isinstance(steps, list)
             else []
         )
+        # 编辑态允许删空；保存时仍用流程说明兜底，避免后续规划拿到空步骤。
+        if not flow["steps"] and str(flow.get("description") or "").strip():
+            flow["steps"] = [str(flow["description"]).strip()]
     used_page_paths: set[str] = set()
     for page in spec["pages"]:
         pageId = str(page.get("pageId") or "")

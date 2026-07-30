@@ -79,6 +79,56 @@
   }
 }
 
+.@{class-prefix}-requirement-editor-flow-steps {
+  display: grid;
+  gap: 6px;
+}
+
+.@{class-prefix}-requirement-editor-flow-steps-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  > .ant-typography {
+    color: var(--modal-text-secondary);
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  > .ant-btn {
+    margin-left: auto;
+    color: var(--modal-accent);
+  }
+}
+
+.@{class-prefix}-requirement-editor-flow-step-list {
+  display: grid;
+  gap: 6px;
+}
+
+.@{class-prefix}-requirement-editor-flow-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 6px;
+
+  > span {
+    display: inline-grid;
+    place-items: center;
+    height: 22px;
+    border: 1px solid var(--modal-border);
+    border-radius: 999px;
+    color: var(--modal-text-secondary);
+    font-size: 11px;
+    line-height: 1;
+    background: var(--modal-bg);
+  }
+
+  > .ant-btn {
+    color: var(--modal-text-secondary);
+  }
+}
+
 .@{class-prefix}-requirement-editor-remove.ant-btn {
   position: absolute;
   top: 5px;
