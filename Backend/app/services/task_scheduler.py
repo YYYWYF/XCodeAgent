@@ -44,7 +44,7 @@ def build_execution_batches(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         ready = [
             task
             for task in remaining.values()
-            if set(task.get("dependsOn") or []).issubset(completed)
+            if set(_task_dependencies(task)).issubset(completed)
         ]
         if not ready:
             batches.append(
@@ -81,17 +81,17 @@ def scheduler_capabilities() -> Dict[str, Any]:
         "rules": [
             "inspect tasks run through a read-only scout.",
             "verify tasks stay main-integrated.",
-            "Tasks without explicit targetFiles are plan-only.",
-            "Every executable task with explicit targetFiles is dispatched to its bounded owner runner.",
-            "Shared, public-contract, and overlapping targetFiles are direct-write but serialized.",
+            "Tasks without explicit target_files are plan-only.",
+            "Every executable task with explicit target_files is dispatched to its bounded owner runner.",
+            "Shared, public-contract, and overlapping target_files are direct-write but serialized.",
         ],
     }
 
 
 def _annotate_task(task: Dict[str, Any], *, target_counts: Dict[str, int]) -> Dict[str, Any]:
     next_task = dict(task)
-    task_type = str(next_task.get("type") or "feature")
-    target_files = _string_list(next_task.get("targetFiles"))
+    task_type = str(next_task.get("task_type") or "feature")
+    target_files = _task_target_files(next_task)
     has_conflict = any(target_counts.get(target, 0) > 1 for target in target_files)
     shared = _touches_shared_file(target_files)
     public_contract = _touches_public_contract(next_task)
@@ -109,7 +109,7 @@ def _annotate_task(task: Dict[str, Any], *, target_counts: Dict[str, int]) -> Di
     elif not target_files:
         mode = "subagent-plan-only"
         agent = _builder_for(task_type)
-        reason = "任务缺少明确 targetFiles，不能进入代码执行器。"
+        reason = "任务缺少明确 target_files，不能进入代码执行器。"
         can_parallel = False
     elif task_type == "shared" or shared or public_contract:
         mode = "subagent-direct-write"
@@ -119,18 +119,18 @@ def _annotate_task(task: Dict[str, Any], *, target_counts: Dict[str, int]) -> Di
     elif has_conflict:
         mode = "subagent-direct-write"
         agent = _builder_for(task_type)
-        reason = "任务 targetFiles 与其他任务重叠，由同一受限执行器按依赖顺序串行写入。"
+        reason = "任务 target_files 与其他任务重叠，由同一受限执行器按依赖顺序串行写入。"
         can_parallel = False
     else:
         mode = "subagent-direct-write"
         agent = _builder_for(task_type)
-        reason = "任务 targetFiles 明确且互斥，允许受限 subagent 直接写入。"
-        can_parallel = bool(next_task.get("canRunInParallel", True))
+        reason = "任务 target_files 明确且互斥，允许受限 subagent 直接写入。"
+        can_parallel = _task_can_run_in_parallel(next_task)
 
     next_task["executionMode"] = mode
     next_task["assignedAgent"] = agent
     next_task["directWriteReason"] = reason
-    next_task["canRunInParallel"] = can_parallel
+    next_task["can_run_in_parallel"] = can_parallel
     next_task.setdefault("status", "pending")
     return next_task
 
@@ -139,7 +139,8 @@ def _select_ready_batch(ready: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     serial = [
         task
         for task in ready
-        if task.get("executionMode") != "subagent-direct-write" or not task.get("canRunInParallel")
+        if task.get("executionMode") != "subagent-direct-write"
+        or not _task_can_run_in_parallel(task)
     ]
     if serial:
         serial.sort(key=_task_priority)
@@ -148,7 +149,7 @@ def _select_ready_batch(ready: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     batch: List[Dict[str, Any]] = []
     used_targets: Set[str] = set()
     for task in sorted(ready, key=lambda item: str(item.get("id"))):
-        targets = {target for target in _string_list(task.get("targetFiles")) if target}
+        targets = {target for target in _task_target_files(task) if target}
         if targets and used_targets.intersection(targets):
             continue
         batch.append(task)
@@ -158,8 +159,12 @@ def _select_ready_batch(ready: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def _batch_reason(batch: List[Dict[str, Any]], mode: str) -> str:
     if mode == "parallel":
-        return "这些任务依赖已满足，且 targetFiles 互斥，可由受限 subagent 并行推进。"
-    task_type = str(batch[0].get("type") if batch else "task")
+        return "这些任务依赖已满足，且 target_files 互斥，可由受限 subagent 并行推进。"
+    task_type = (
+        str(batch[0].get("task_type") or "task")
+        if batch
+        else "task"
+    )
     if task_type == "inspect":
         return "工程侦察需要先完成，后续任务依赖它的结果。"
     if task_type == "verify":
@@ -169,13 +174,13 @@ def _batch_reason(batch: List[Dict[str, Any]], mode: str) -> str:
 
 def _task_priority(task: Dict[str, Any]) -> int:
     order = {"inspect": 0, "shared": 1, "feature": 2, "frontend": 2, "backend": 2, "fullstack": 2, "test": 3, "verify": 4}
-    return order.get(str(task.get("type")), 9)
+    return order.get(str(task.get("task_type")), 9)
 
 
 def _target_counts(tasks: List[Dict[str, Any]]) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for task in tasks:
-        for target in _string_list(task.get("targetFiles")):
+        for target in _task_target_files(task):
             counts[target] = counts.get(target, 0) + 1
     return counts
 
@@ -188,9 +193,9 @@ def _touches_public_contract(task: Dict[str, Any]) -> bool:
     text = " ".join(
         [
             str(task.get("title") or ""),
-            str(task.get("type") or ""),
-            " ".join(_string_list(task.get("acceptanceCriteria"))),
-            " ".join(_string_list(task.get("targetFiles"))),
+            str(task.get("task_type") or ""),
+            " ".join(_string_list(task.get("acceptance_criteria"))),
+            " ".join(_task_target_files(task)),
         ]
     ).lower()
     return any(marker in text for marker in PUBLIC_CONTRACT_MARKERS)
@@ -212,3 +217,21 @@ def _string_list(value: Any) -> List[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if item is not None and str(item).strip()]
+
+
+def _task_target_files(task: Dict[str, Any]) -> List[str]:
+    """读取当前 DAG v3 任务的目标文件。"""
+
+    return _string_list(task.get("target_files"))
+
+
+def _task_dependencies(task: Dict[str, Any]) -> List[str]:
+    """读取当前 DAG v3 任务的依赖列表。"""
+
+    return _string_list(task.get("dependencies"))
+
+
+def _task_can_run_in_parallel(task: Dict[str, Any]) -> bool:
+    """读取当前 DAG v3 任务的并行标记。"""
+
+    return bool(task.get("can_run_in_parallel", True))

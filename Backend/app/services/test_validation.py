@@ -168,14 +168,12 @@ def create_repair_task_plan(
             tasks.append(
                 {
                     "id": task_id,
-                    "task_id": task_id,
                     "kind": "repair",
                     "repair_attempt": max(repair_attempt, 1),
                     "owner": owner,
                     "unit_id": repair_unit_id,
                     "description": f"修复测试失败：{request['reason']}",
                     "dependencies": [],
-                    "dependsOn": [],
                     "status": "pending",
                     "source_ref": {
                         "type": "revision_request",
@@ -183,7 +181,7 @@ def create_repair_task_plan(
                         "failed_check_id": request["failed_check"]["id"],
                     },
                     "allowed_paths": requested_paths,
-                    "targetFiles": requested_paths,
+                    "target_files": requested_paths,
                     "change_scope": [
                         {
                             "operation": "modify",
@@ -199,7 +197,6 @@ def create_repair_task_plan(
                         "requestedPaths": requested_paths,
                         "reason": request["reason"],
                     },
-                    "canRunInParallel": False,
                     "can_run_in_parallel": False,
                     "parallel_reason": "integration-test repair must run in a bounded follow-up cycle.",
                     "acceptance_criteria": [
@@ -261,7 +258,7 @@ def _repair_allowed_paths(owner: str, scoped_tasks: list[dict[str, Any]]) -> lis
             if isinstance(change, dict) and change.get("path")
         )
         paths.extend(
-            str(path) for path in task.get("targetFiles", []) if str(path).strip()
+            str(path) for path in task.get("target_files", []) if str(path).strip()
         )
     return list(dict.fromkeys(paths))
 

@@ -177,10 +177,7 @@ def create_repair_planner_input(
     targeted_snapshot: dict[str, Any] | None = None,
     source_ref: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    acceptance = _string_list(
-        original_task.get("acceptance_criteria")
-        or original_task.get("acceptanceCriteria")
-    )
+    acceptance = _string_list(original_task.get("acceptance_criteria"))
     change_scope = original_task.get("change_scope", [])
     return {
         "version": "0.1.0",
@@ -188,12 +185,8 @@ def create_repair_planner_input(
         "failed_attempt": failed_attempt,
         "change_scope": {
             "items": change_scope if isinstance(change_scope, list) else [],
-            "allowed_paths": _string_list(
-                original_task.get("allowed_paths") or original_task.get("allowedPaths")
-            ),
-            "target_files": _string_list(
-                original_task.get("targetFiles") or original_task.get("target_files")
-            ),
+            "allowed_paths": _string_list(original_task.get("allowed_paths")),
+            "target_files": _string_list(original_task.get("target_files")),
             "policy": "Repair tasks must not expand the original task change_scope or allowed_paths.",
         },
         "workspace_snapshot": targeted_snapshot or workspace_snapshot or {},
@@ -341,9 +334,7 @@ def _requested_repair_paths(
         or boundaries.get("requested_paths")
         or boundaries.get("allowed_paths")
     )
-    return requested or _string_list(
-        parent_task.get("allowed_paths") or parent_task.get("allowedPaths")
-    )
+    return requested or _string_list(parent_task.get("allowed_paths"))
 
 
 def _requested_repair_resources(raw_boundaries: Any) -> list[dict[str, str]]:
@@ -480,16 +471,14 @@ def _repair_task(
     # 修复任务始终复用原任务的用户可验证结果，避免已满足任务被迫制造重复变更。
     return {
         "id": repair_id,
-        "task_id": repair_id,
         "kind": "repair",
         "owner": parent_task.get("owner"),
-        "type": parent_task.get("type"),
+        "task_type": parent_task.get("task_type"),
         "unit_id": parent_task.get("unit_id", "application:root"),
         "title": str(raw_task.get("title") or "").strip()
         or f"修复 {parent_task.get('title') or parent_id}",
         "description": description,
         "dependencies": [],
-        "dependsOn": [],
         "status": "pending",
         "source_refs": {
             "parent": (
@@ -503,20 +492,15 @@ def _repair_task(
             "task_id": parent_id,
             "result_task_id": result.get("task_id"),
         },
-        "allowed_paths": _string_list(parent_task.get("allowed_paths") or parent_task.get("allowedPaths")),
-        "targetFiles": _string_list(parent_task.get("targetFiles") or parent_task.get("target_files")),
+        "allowed_paths": _string_list(parent_task.get("allowed_paths")),
+        "target_files": _string_list(parent_task.get("target_files")),
         "change_scope": parent_task.get("change_scope", []),
         "impact_scope": parent_task.get("impact_scope", {}),
-        "canRunInParallel": False,
         "can_run_in_parallel": False,
         "parallel_reason": "repair task must serialize with the failed parent scope.",
         "repair_strategy": strategy,
         "repair_boundaries": boundaries or _repair_boundaries(parent_task, {}),
         "acceptance_criteria": [
-            *acceptance,
-            "不得扩大原任务 change_scope、allowed_paths、API 契约或项目计划边界。",
-        ],
-        "acceptanceCriteria": [
             *acceptance,
             "不得扩大原任务 change_scope、allowed_paths、API 契约或项目计划边界。",
         ],
@@ -645,13 +629,9 @@ def _repair_boundaries(
     raw = raw_boundaries if isinstance(raw_boundaries, dict) else {}
     return {
         **raw,
-        "allowed_paths": _string_list(
-            parent_task.get("allowed_paths") or parent_task.get("allowedPaths")
-        ),
+        "allowed_paths": _string_list(parent_task.get("allowed_paths")),
         "change_scope": parent_task.get("change_scope", []),
-        "targetFiles": _string_list(
-            parent_task.get("targetFiles") or parent_task.get("target_files")
-        ),
+        "target_files": _string_list(parent_task.get("target_files")),
         "scope_policy": "must_not_expand_original_task_scope",
         "scheduler_policy": "planner_may_only_return_plan_not_mutate_state",
     }

@@ -61,12 +61,10 @@ def _task(
 
     return {
         "id": task_id,
-        "task_id": task_id,
         "unit_id": unit_id,
         "owner": "frontend",
         "status": status,
         "dependencies": list(dependencies or []),
-        "dependsOn": list(dependencies or []),
         "change_scope": [
             {
                 "operation": "modify",
@@ -74,7 +72,7 @@ def _task(
                 "description": "执行测试任务。",
             }
         ],
-        "targetFiles": [f"frontend/src/{task_id}.ts"],
+        "target_files": [f"frontend/src/{task_id}.ts"],
     }
 
 

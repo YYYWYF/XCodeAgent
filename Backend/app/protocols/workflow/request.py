@@ -584,6 +584,7 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
         else {
             "detail_confirmation",
             "inspect_workspace",
+            "inspect_database_context",
             "prepare_build_tasks",
             "build",
             "integration_test",
@@ -629,6 +630,8 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "build_task_plan",
         "build_task_plan_path",
         "build_execution_scope",
+        "build_context",
+        "database_planning_context",
         "execution_resource_claims",
         "tasks",
         "build_results",

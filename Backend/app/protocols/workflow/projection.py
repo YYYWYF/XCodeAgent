@@ -11,6 +11,8 @@ from app.protocols.workflow.definition import (
     WORKFLOW_NODE_LABELS,
     WORKFLOW_STATIC_NEXT_NODES,
 )
+from app.services.build_context_resolver import resolve_target_build_context
+from app.services.database_planning_context import database_context_requirement
 from app.workspace.code_changes import merge_code_change_sets
 
 
@@ -90,6 +92,12 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             return []
         return ["inspect_workspace"]
     if node_name == "inspect_workspace":
+        if _database_context_next_required(update):
+            return ["inspect_database_context"]
+        return ["prepare_build_tasks"]
+    if node_name == "inspect_database_context":
+        if update.get("status") == "requires_user_input":
+            return []
         return ["prepare_build_tasks"]
     if node_name == "prepare_build_tasks":
         if update.get("status") == "requires_user_input":
@@ -110,6 +118,34 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     if node_name == "launch_project":
         return []
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
+
+
+def _database_context_next_required(update: dict[str, Any]) -> bool:
+    """预测工作区检查后是否需要进入数据库上下文检查节点。"""
+
+    project_plan = update.get("project_plan")
+    if not isinstance(project_plan, dict):
+        return False
+    scope = update.get("build_execution_scope")
+    scope = scope if isinstance(scope, dict) else {}
+    target_type = str(scope.get("type") or "").strip()
+    target_id = str(scope.get("targetId") or scope.get("target_id") or "").strip()
+    if target_type not in {"page", "data_source", "endpoint"} or not target_id:
+        return False
+    try:
+        build_context = resolve_target_build_context(
+            project_plan,
+            target_type=target_type,
+            target_id=target_id,
+            api_contract_id=str(
+                scope.get("apiContractId") or scope.get("api_contract_id") or ""
+            ).strip() or None,
+            project_plan_path=update.get("project_plan_json_path"),
+        )
+        requirement = database_context_requirement(project_plan, build_context)
+    except Exception:
+        return False
+    return bool(requirement.get("required") or requirement.get("status") == "blocked")
 
 
 def _workflow_artifacts(value: dict[str, Any]) -> dict[str, Any]:
@@ -220,6 +256,20 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {
                 "detailSelection": update.get("detail_selection"),
                 "detailPlans": update.get("detail_plans", []),
+            },
+        }
+    if node_name == "inspect_database_context":
+        database_context = update.get("database_planning_context")
+        database_context = database_context if isinstance(database_context, dict) else {}
+        contexts = database_context.get("contexts")
+        contexts = contexts if isinstance(contexts, list) else []
+        return {
+            "message": database_context.get("summary")
+            or database_context.get("message")
+            or f"数据库上下文数量={len(contexts)}",
+            "data": {
+                "databasePlanningContext": database_context,
+                "requiresUserInput": update.get("status") == "requires_user_input",
             },
         }
     if node_name == "prepare_build_tasks":

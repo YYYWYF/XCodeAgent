@@ -147,7 +147,8 @@ export type DagGenerationSnapshot = {
     edgeCount: number
     batchCount: number
     frontendCount: number
-    dataSourceCount: number
+    backendCount: number
+    databaseCount: number
     isValid: boolean
   }
   artifacts: DagGenerationArtifactRecord[]
@@ -490,7 +491,8 @@ export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot
       edgeCount: nonNegativeInteger(summary.edgeCount),
       batchCount: nonNegativeInteger(summary.batchCount),
       frontendCount: nonNegativeInteger(summary.frontendCount),
-      dataSourceCount: nonNegativeInteger(summary.dataSourceCount),
+      backendCount: nonNegativeInteger(summary.backendCount ?? summary.dataSourceCount),
+      databaseCount: nonNegativeInteger(summary.databaseCount),
       isValid: summary.isValid === true
     },
     artifacts

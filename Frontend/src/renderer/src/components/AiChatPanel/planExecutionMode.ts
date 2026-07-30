@@ -229,6 +229,7 @@ export function planExecutionPhaseLabel(phase?: string): string {
     {
       detail_confirmation: '确认页面设计',
       inspect_workspace: '检查工作区',
+      inspect_database_context: '获取数据库信息',
       prepare_build_tasks: '生成执行计划',
       build: '开发实现',
       integration_test: '集成测试',
@@ -252,6 +253,7 @@ export function workflowResumeNode(
   const supported = new Set([
     'detail_confirmation',
     'inspect_workspace',
+    'inspect_database_context',
     'prepare_build_tasks',
     'build',
     'integration_test',

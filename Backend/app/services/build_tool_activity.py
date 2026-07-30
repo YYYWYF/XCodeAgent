@@ -22,10 +22,10 @@ def task_ids_for_tool_activity(
 
 
 def _task_scopes(task: dict[str, Any]) -> list[str]:
-    """汇总任务新旧字段中的目标文件和授权路径。"""
+    """汇总当前 DAG v3 任务中的目标文件和授权路径。"""
 
     values: list[Any] = []
-    for key in ("targetFiles", "target_files", "allowedPaths", "allowed_paths"):
+    for key in ("target_files", "allowed_paths"):
         raw = task.get(key)
         if isinstance(raw, list):
             values.extend(raw)

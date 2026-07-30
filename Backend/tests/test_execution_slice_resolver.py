@@ -78,6 +78,63 @@ class ExecutionSliceResolverTests(unittest.TestCase):
         )
         self.assertEqual(execution_slice["task_ids"], ["orders-db"])
 
+    def test_endpoint_scope_preserves_api_contract_id(self) -> None:
+        """Endpoint 范围必须保留 apiContractId 才能定位复合 Unit。"""
+
+        build_task_plan = {
+            "unit_graph": {
+                "nodes": [
+                    "backend:bootstrap",
+                    "database:users",
+                    "backend:endpoint:user_api:user.list",
+                ],
+                "edges": [
+                    {
+                        "from": "database:users",
+                        "to": "backend:endpoint:user_api:user.list",
+                        "type": "depends_on",
+                    },
+                    {
+                        "from": "backend:bootstrap",
+                        "to": "backend:endpoint:user_api:user.list",
+                        "type": "depends_on",
+                    },
+                ],
+            }
+        }
+        tasks = [
+            {"id": "backend-bootstrap", "unit_id": "backend:bootstrap", "status": "completed"},
+            {"id": "users-db", "unit_id": "database:users", "status": "completed"},
+            {
+                "id": "user-list-api",
+                "unit_id": "backend:endpoint:user_api:user.list",
+                "status": "pending",
+            },
+        ]
+
+        execution_slice = resolve_execution_slice(
+            build_task_plan=build_task_plan,
+            tasks=tasks,
+            build_execution_scope={
+                "type": "endpoint",
+                "targetId": "user.list",
+                "apiContractId": "user_api",
+            },
+        )
+
+        self.assertEqual(
+            execution_slice["unit_ids"],
+            [
+                "backend:endpoint:user_api:user.list",
+                "database:users",
+                "backend:bootstrap",
+            ],
+        )
+        self.assertEqual(
+            execution_slice["task_ids"],
+            ["backend-bootstrap", "users-db", "user-list-api"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

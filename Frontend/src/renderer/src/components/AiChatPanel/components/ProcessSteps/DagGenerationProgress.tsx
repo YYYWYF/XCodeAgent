@@ -89,7 +89,8 @@ export default function DagGenerationProgress({ snapshot }: Props): ReactElement
                 <Text type="secondary">按 DAG 拓扑顺序排列，将在下一阶段执行</Text>
               </span>
               <Text type="secondary">
-                前端 {snapshot.summary.frontendCount} · 数据源 {snapshot.summary.dataSourceCount}
+                前端 {snapshot.summary.frontendCount} · 后端 {snapshot.summary.backendCount} · 数据库{' '}
+                {snapshot.summary.databaseCount}
               </Text>
             </header>
             <ol>
@@ -204,7 +205,8 @@ function stageStatusLabel(status: DagGenerationStageRecord['status']): string {
 /** 返回任务所有者的用户可读名称。 */
 function ownerLabel(owner: string): string {
   if (owner === 'frontend') return '前端生成'
-  if (owner === 'data_source') return '数据源生成'
+  if (owner === 'backend' || owner === 'data_source') return '后端代码生成'
+  if (owner === 'database') return '数据库任务'
   return owner || '未分配'
 }
 

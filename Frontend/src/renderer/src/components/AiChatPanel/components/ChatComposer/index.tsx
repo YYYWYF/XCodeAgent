@@ -28,6 +28,7 @@ const { Option } = Select
 const resumeNodeOptions = [
   { value: 'detail_confirmation', label: 'detail_confirmation' },
   { value: 'inspect_workspace', label: 'inspect_workspace' },
+  { value: 'inspect_database_context', label: 'inspect_database_context' },
   { value: 'prepare_build_tasks', label: 'prepare_build_tasks' },
   { value: 'build', label: 'build' },
   { value: 'integration_test', label: 'integration_test' },

@@ -158,11 +158,11 @@ def _project_tasks(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
 
     projected: list[dict[str, Any]] = []
     for task in tasks_from_build_task_plan(build_task_plan):
-        task_id = _compact_text(task.get("id") or task.get("task_id"), 240)
+        task_id = _compact_text(task.get("id"), 240)
         if not task_id:
             continue
-        dependencies = task.get("dependencies") or task.get("dependsOn") or []
-        acceptance = task.get("acceptance_criteria") or task.get("acceptanceCriteria") or []
+        dependencies = task.get("dependencies") or []
+        acceptance = task.get("acceptance_criteria") or []
         projected.append(
             {
                 "id": task_id,
@@ -213,17 +213,17 @@ def _project_summary(
 
 
 def _change_paths(task: dict[str, Any]) -> list[str]:
-    """从 change_scope 或 targetFiles 提取去重后的安全路径列表。"""
+    """从 change_scope 或 target_files 提取去重后的安全路径列表。"""
 
     values: list[Any] = []
-    change_scope = task.get("change_scope") or task.get("changeScope")
+    change_scope = task.get("change_scope")
     if isinstance(change_scope, list):
         values.extend(
             item.get("path") or item.get("file") if isinstance(item, dict) else item
             for item in change_scope
         )
     if not values:
-        target_files = task.get("targetFiles") or task.get("target_files")
+        target_files = task.get("target_files")
         values = target_files if isinstance(target_files, list) else []
     return _compact_strings(values, item_limit=200, text_limit=1_000)
 

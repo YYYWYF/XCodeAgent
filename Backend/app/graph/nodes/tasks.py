@@ -18,7 +18,7 @@ from app.services.build_task_planner import (
     tasks_from_build_task_plan,
 )
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
-from app.services.database_planning_context import prepare_database_planning_context
+from app.services.database_planning_context import database_context_requirement
 from app.services.frontend_page_tree import flatten_frontend_pages
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
@@ -137,7 +137,11 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_execution_scope,
             build_task_plan,
         )
-        build_context = _with_database_planning_context(project_plan, build_context)
+        build_context = _with_database_planning_context_from_state(
+            state,
+            project_plan,
+            build_context,
+        )
     except ValueError as exc:
         progress.fail("build_context", f"构建上下文解析失败：{exc}")
         return {
@@ -464,10 +468,21 @@ def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> di
     return {**build_context, "reusable_tasks_by_unit": reusable_tasks}
 
 
-def _with_database_planning_context(project_plan: dict, build_context: dict) -> dict:
-    """在任务规划上下文中追加真实数据库摘要，避免模型从 ProjectPlan 臆测库表。"""
+def _with_database_planning_context_from_state(
+    state: ProjectState,
+    project_plan: dict,
+    build_context: dict,
+) -> dict:
+    """只消费前置数据库检查节点写入的真实摘要，不在任务规划内查库。"""
 
-    database_context = prepare_database_planning_context(project_plan, build_context)
+    requirement = database_context_requirement(project_plan, build_context)
+    if requirement.get("status") == "blocked":
+        raise ValueError("当前接口数据来源未明确，必须先完成数据库上下文检查。")
+    if not requirement.get("required"):
+        return {**build_context, "database_planning_context": {}}
+    database_context = state.get("database_planning_context")
+    if not isinstance(database_context, dict) or database_context.get("status") != "completed":
+        raise ValueError("当前接口来源于数据库，但尚未完成数据库上下文检查。")
     return {
         **build_context,
         "database_planning_context": database_context,
@@ -848,7 +863,7 @@ def _drop_non_replaceable_unit_tasks(
     dependency_map: dict[str, list[str]] = {}
     for task in generated_tasks:
         unit_id = str(task.get("unit_id") or "")
-        task_id = str(task.get("id") or task.get("task_id") or "").strip()
+        task_id = str(task.get("id") or "").strip()
         if unit_id in replaceable_unit_ids:
             kept_tasks.append(task)
             continue
@@ -910,7 +925,7 @@ def _rewrite_replaced_unit_dependencies(
     rewritten_tasks: list[dict] = []
     for task in tasks:
         rewritten = _rewrite_task_dependencies(task, dependency_map)
-        task_id = str(rewritten.get("id") or rewritten.get("task_id") or "")
+        task_id = str(rewritten.get("id") or "")
         dependencies = [
             dependency
             for dependency in _task_dependency_list(rewritten)
@@ -920,7 +935,6 @@ def _rewrite_replaced_unit_dependencies(
             {
                 **rewritten,
                 "dependencies": dependencies,
-                "dependsOn": dependencies,
             }
         )
     return rewritten_tasks
@@ -937,7 +951,7 @@ def _rename_generated_task_id_conflicts(
     used_ids = set(reserved_ids)
     renamed_tasks: list[dict] = []
     for task in generated_tasks:
-        task_id = str(task.get("id") or task.get("task_id") or "").strip()
+        task_id = str(task.get("id") or "").strip()
         if not task_id:
             renamed_tasks.append(task)
             continue
@@ -950,7 +964,6 @@ def _rename_generated_task_id_conflicts(
             {
                 **task,
                 "id": next_id,
-                "task_id": next_id,
             }
         )
     if not id_map:
@@ -995,14 +1008,13 @@ def _rewrite_task_dependencies(task: dict, id_map: dict[str, list[str]]) -> dict
     return {
         **task,
         "dependencies": list(dict.fromkeys(dependencies)),
-        "dependsOn": list(dict.fromkeys(dependencies)),
     }
 
 
 def _task_dependency_list(task: dict) -> list[str]:
     """读取任务依赖列表，过滤非字符串形式的空值。"""
 
-    value = task.get("dependencies") or task.get("dependsOn") or []
+    value = task.get("dependencies") or []
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]

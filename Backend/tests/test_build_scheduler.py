@@ -54,6 +54,52 @@ class BuildSchedulerTests(unittest.TestCase):
         self.assertEqual(selection["blocked_tasks"][0]["id"], "page")
         self.assertEqual(selection["blocked_tasks"][0]["failed_dependencies"], ["api"])
 
+    def test_database_tasks_gate_backend_even_without_explicit_dependency(self) -> None:
+        """数据库任务未成功完成前，后端任务不能靠缺失依赖同批执行。"""
+
+        selection = select_ready_build_batch(
+            [
+                {
+                    "id": "db",
+                    "owner": "database",
+                    "status": "pending",
+                    "dependencies": [],
+                    "change_scope": [{"path": "Backend/db/schema.sql"}],
+                },
+                {
+                    "id": "api",
+                    "owner": "backend",
+                    "status": "pending",
+                    "dependencies": [],
+                    "change_scope": [{"path": "Backend/app/api.py"}],
+                },
+            ]
+        )
+
+        self.assertEqual(selection["ready_task_ids"], ["db"])
+
+    def test_completed_database_task_unblocks_backend_without_explicit_dependency(self) -> None:
+        """数据库任务完成后，兼容旧计划中未显式声明依赖的后端任务。"""
+
+        selection = select_ready_build_batch(
+            [
+                {
+                    "id": "db",
+                    "owner": "database",
+                    "status": "completed",
+                    "dependencies": [],
+                },
+                {
+                    "id": "api",
+                    "owner": "backend",
+                    "status": "pending",
+                    "dependencies": [],
+                },
+            ]
+        )
+
+        self.assertEqual(selection["ready_task_ids"], ["api"])
+
     def test_normalizes_missing_runner_result_as_protocol_failure(self) -> None:
         task = {"id": "page", "owner": "frontend"}
 
@@ -79,7 +125,7 @@ class BuildSchedulerTests(unittest.TestCase):
         task = {
             "id": "page",
             "owner": "frontend",
-            "targetFiles": ["frontend/src/pages/Dashboard/index.tsx"],
+            "target_files": ["frontend/src/pages/Dashboard/index.tsx"],
             "change_scope": [
                 {
                     "operation": "modify",
@@ -96,7 +142,7 @@ class BuildSchedulerTests(unittest.TestCase):
             ],
         }
         with tempfile.TemporaryDirectory() as workspace:
-            target = Path(workspace) / task["targetFiles"][0]
+            target = Path(workspace) / task["target_files"][0]
             target.parent.mkdir(parents=True)
             target.write_text("export default function Dashboard() {}", encoding="utf-8")
             results = verify_task_file_changes(
@@ -121,7 +167,7 @@ class BuildSchedulerTests(unittest.TestCase):
         task = {
             "id": "page",
             "owner": "frontend",
-            "targetFiles": ["frontend/src/pages/DashboardPage/index.tsx"],
+            "target_files": ["frontend/src/pages/DashboardPage/index.tsx"],
             "change_scope": [
                 {
                     "operation": "add",
@@ -140,7 +186,7 @@ class BuildSchedulerTests(unittest.TestCase):
                         "task_id": "page",
                         "status": "already_satisfied",
                         "satisfaction_evidence": {
-                            "target_files": task["targetFiles"],
+                            "target_files": task["target_files"],
                             "acceptance_criteria": [
                                 {
                                     "criterion": "目标文件存在",

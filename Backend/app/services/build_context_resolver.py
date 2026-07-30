@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.services.database_planning_context import endpoint_detail_uses_database
 from app.services.frontend_page_tree import find_frontend_page
 
 
@@ -66,6 +67,7 @@ def _page_context(
 
     endpoint_details = []
     endpoint_refs = []
+    database_source_ids: list[str] = []
     for source_id in source_ids:
         _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
     for endpoint_id in endpoint_ids:
@@ -77,6 +79,12 @@ def _page_context(
         if detail is not None:
             endpoint_details.append(detail)
             endpoint_refs.append(_artifact_ref(endpoint.get("detail_design"), endpoint_id))
+            source_id = str(endpoint.get("data_source_id") or "")
+            if (
+                endpoint_detail_uses_database(detail)
+                and source_id not in database_source_ids
+            ):
+                database_source_ids.append(source_id)
 
     return {
         "target": {"type": "page", "id": page_id},
@@ -90,9 +98,9 @@ def _page_context(
             "frontend:shell",
             "frontend:route-registry",
             "frontend:api-client",
-            *( ["frontend:auth-guard"] if _page_requires_auth(page) else [] ),
-            *( ["backend:bootstrap"] if source_ids else [] ),
-            *(f"database:{source_id}" for source_id in source_ids),
+            *(["frontend:auth-guard"] if _page_requires_auth(page) else []),
+            *(["backend:bootstrap"] if source_ids else []),
+            *(f"database:{source_id}" for source_id in database_source_ids),
             *list(dict.fromkeys(endpoint_unit_ids)),
             f"page:{page_id}",
         ],
@@ -195,7 +203,11 @@ def _endpoint_context(
         "data_source_ids": [source_id],
         "required_unit_ids": [
             "backend:bootstrap",
-            f"database:{source_id}",
+            *(
+                [f"database:{source_id}"]
+                if endpoint_detail_uses_database(detail)
+                else []
+            ),
             _endpoint_unit_id(contract_id, endpoint_id),
         ],
         "source_refs": {

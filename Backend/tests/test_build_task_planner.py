@@ -76,7 +76,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         tasks = tasks_from_build_task_plan(plan)
         self.assertEqual(tasks[0]["id"], "task-home")
-        self.assertEqual(tasks[0]["targetFiles"], ["src/pages/Home.tsx"])
+        self.assertEqual(tasks[0]["target_files"], ["src/pages/Home.tsx"])
         self.assertEqual(plan["workspace_analysis"]["inspection_status"], "completed")
         self.assertEqual(plan["prepared_by"]["model"], "test-model")
 
@@ -149,9 +149,13 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
         self.assertEqual(plan["workspace_analysis"]["entry_files"], ["src/router/index.ts"])
         self.assertEqual(task["id"], "page-login")
-        self.assertEqual(task["task_id"], "page-login")
         self.assertEqual(task["status"], "pending")
-        self.assertEqual(task["targetFiles"], ["src/pages/Login.tsx", "src/router/index.ts"])
+        self.assertNotIn("task_id", task)
+        self.assertNotIn("dependsOn", task)
+        self.assertNotIn("targetFiles", task)
+        self.assertNotIn("acceptanceCriteria", task)
+        self.assertNotIn("canRunInParallel", task)
+        self.assertEqual(task["target_files"], ["src/pages/Login.tsx", "src/router/index.ts"])
         self.assertEqual(task["change_scope"][0]["operation"], "add")
         self.assertEqual(task["impact_scope"]["affected_modules"], ["pages", "router"])
         self.assertFalse(task["can_run_in_parallel"])
@@ -261,13 +265,13 @@ class BuildTaskPlannerTests(unittest.TestCase):
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
         page_task = tasks["page-layout"]
         route_task = tasks["page:dashboard_page:route-menu-registration"]
-        self.assertEqual(page_task["targetFiles"], ["frontend/src/pages/Dashboard/index.tsx"])
+        self.assertEqual(page_task["target_files"], ["frontend/src/pages/Dashboard/index.tsx"])
         self.assertEqual(page_task["change_scope"][0]["operation"], "modify")
         self.assertEqual(
             page_task["path_reconciliation"]["canonical_path"],
             "frontend/src/pages/Dashboard/index.tsx",
         )
-        self.assertEqual(route_task["targetFiles"], ["frontend/src/constants/menus.ts"])
+        self.assertEqual(route_task["target_files"], ["frontend/src/constants/menus.ts"])
         self.assertEqual(route_task["dependencies"], ["page-layout"])
         self.assertIn("key: 'Dashboard'", route_task["description"])
         self.assertIn("path: 'page'", route_task["description"])
@@ -496,7 +500,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
         menu_task = tasks["task-menu-register-dashboard"]
-        self.assertEqual(menu_task["targetFiles"], ["frontend/src/constants/menus.ts"])
+        self.assertEqual(menu_task["target_files"], ["frontend/src/constants/menus.ts"])
         self.assertEqual(menu_task["change_scope"][0]["description"], "仅向 BIZ_MENUS 顶层数组追加当前页面菜单项。")
         self.assertIn("BIZ_MENUS 顶层数组", menu_task["description"])
         self.assertIn("path: 'dashboard'", menu_task["description"])
@@ -504,7 +508,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertNotIn("firstLevel.children", menu_task["description"])
         self.assertIn("新增菜单项 path 为 dashboard", menu_task["acceptance_criteria"][2])
 
-    def test_v2_markdown_renders_units_and_task_graph(self) -> None:
+    def test_v3_markdown_renders_units_and_task_graph(self) -> None:
         plan = create_build_task_plan(
             {"version": "1.0.0"},
             agent_plan={
@@ -600,7 +604,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             {
                 "type": "database_context",
                 "target": {"type": "page", "id": "orders"},
-                "database_planning_context": {},
+                "database_context_status": None,
+                "database_context_hashes": [],
                 "endpoint_details": [],
                 "data_source_ids": ["orders"],
                 "endpoint_ids": ["orders_api.list"],
@@ -638,8 +643,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
         }
         code_tasks = [
-            ("core", "database:core", "database", "Backend/core.py"),
-            ("user", "database:user", "database", "Backend/user.py"),
+            ("core", "database:core", "database", "database/migrations/core.sql"),
+            ("user", "database:user", "database", "database/migrations/user.sql"),
             ("bootstrap", "backend:bootstrap", "backend", "Backend/main.py"),
             ("client", "frontend:api-client", "frontend", "Frontend/api.ts"),
             ("page", "page:core", "frontend", "Frontend/Core.tsx"),
@@ -651,6 +656,16 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "owner": owner,
                 "description": task_id,
                 "dependencies": ["core", "user"] if task_id == "bootstrap" else [],
+                **(
+                    {
+                        "database_scope": {
+                            "data_source_id": unit_id.split(":", 1)[1],
+                            "operations": ["create_table"],
+                        }
+                    }
+                    if owner == "database"
+                    else {}
+                ),
                 "change_scope": [{"operation": "modify", "path": path}],
             }
             for task_id, unit_id, owner, path in code_tasks
@@ -666,6 +681,23 @@ class BuildTaskPlannerTests(unittest.TestCase):
             {"version": "1.0.0"},
             agent_plan={"tasks": agent_tasks},
             base_build_task_plan=base_plan,
+            build_context={
+                "direct_endpoint_details": [
+                    {
+                        "endpoint_id": "core.create",
+                        "method": "POST",
+                        "data_origin": {
+                            "source_type": "mysql_new_table",
+                            "effective_source": {"kind": "mysql_new_table"},
+                            "differences": ["需要建表。"],
+                        },
+                    }
+                ],
+                "database_planning_context": {
+                    "status": "completed",
+                    "contexts": [{"data_source_id": "core", "schema_hash": "hash"}],
+                }
+            },
         )
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
 
@@ -677,6 +709,132 @@ class BuildTaskPlannerTests(unittest.TestCase):
             {"core", "user"},
         )
         self.assertEqual(tasks["core"]["dependencies"], [])
+
+    def test_database_task_cannot_modify_backend_code_files(self) -> None:
+        """database owner 任务混入 Java/后端代码文件时必须在 DAG 校验中失败。"""
+
+        plan = create_build_task_plan(
+            {"version": "1.0.0"},
+            agent_plan={
+                "tasks": [
+                    {
+                        "id": "bad-db-task",
+                        "unit_id": "database:users",
+                        "owner": "database",
+                        "task_type": "database.change",
+                        "description": "错误地生成 Entity 代码。",
+                        "database_scope": {
+                            "data_source_id": "users",
+                            "operations": ["create_table"],
+                        },
+                        "change_scope": [
+                            {"operation": "add", "path": "Backend/src/main/java/User.java"}
+                        ],
+                    }
+                ]
+            },
+            base_build_task_plan={
+                "schema_version": "build-dag.v3",
+                "build_units": {
+                    "database:users": {"id": "database:users", "kind": "database"}
+                },
+                "unit_graph": {
+                    "nodes": ["database:users"],
+                    "edges": [],
+                    "validation": {"is_valid": True, "errors": []},
+                },
+            },
+            build_context={
+                "database_planning_context": {
+                    "status": "completed",
+                    "contexts": [{"data_source_id": "users", "schema_hash": "hash"}],
+                }
+            },
+        )
+
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertIn(
+            "must not modify code files",
+            " ".join(plan["task_graph"]["validation"]["errors"]),
+        )
+
+    def test_readonly_existing_database_endpoint_drops_database_change_task(self) -> None:
+        """只读 mysql_existing 接口已有真实摘要时，不保留多余 database.change 任务。"""
+
+        plan = create_build_task_plan(
+            {"version": "1.0.0"},
+            agent_plan={
+                "tasks": [
+                    {
+                        "id": "users-db",
+                        "unit_id": "database:users",
+                        "owner": "database",
+                        "task_type": "database.change",
+                        "description": "为用户列表准备数据库。",
+                        "database_scope": {
+                            "data_source_id": "users",
+                            "operations": ["create_table"],
+                        },
+                        "change_scope": [
+                            {"operation": "add", "path": "database/migrations/users.sql"}
+                        ],
+                    },
+                    {
+                        "id": "users-api",
+                        "unit_id": "backend:endpoint:user_api:user.list",
+                        "owner": "backend",
+                        "description": "实现用户列表接口。",
+                        "change_scope": [{"operation": "modify", "path": "Backend/UserApi.java"}],
+                    },
+                ]
+            },
+            base_build_task_plan={
+                "schema_version": "build-dag.v3",
+                "build_units": {
+                    "database:users": {"id": "database:users", "kind": "database"},
+                    "backend:endpoint:user_api:user.list": {
+                        "id": "backend:endpoint:user_api:user.list",
+                        "kind": "backend",
+                    },
+                },
+                "unit_graph": {
+                    "nodes": [
+                        "database:users",
+                        "backend:endpoint:user_api:user.list",
+                    ],
+                    "edges": [
+                        {
+                            "from": "database:users",
+                            "to": "backend:endpoint:user_api:user.list",
+                            "type": "depends_on",
+                        }
+                    ],
+                    "validation": {"is_valid": True, "errors": []},
+                },
+            },
+            build_context={
+                "direct_endpoint_details": [
+                    {
+                        "endpoint_id": "user.list",
+                        "method": "GET",
+                        "data_origin": {
+                            "source_type": "mysql_existing",
+                            "effective_source": {"kind": "mysql_existing"},
+                            "differences": [],
+                            "notes": [],
+                        },
+                    }
+                ],
+                "database_planning_context": {
+                    "status": "completed",
+                    "contexts": [{"data_source_id": "users", "schema_hash": "hash"}],
+                },
+            },
+        )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        self.assertNotIn("users-db", tasks)
+        self.assertIn("users-api", tasks)
 
     def test_invalid_graph_reader_preserves_every_registry_task(self) -> None:
         """无效 DAG 使用完整 nodes 读取，不能退化为不完整拓扑序。"""

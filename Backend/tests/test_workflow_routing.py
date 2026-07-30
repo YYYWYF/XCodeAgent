@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.graph.workflow import (
     route_acceptance,
     route_build_result,
+    route_database_context_inspection,
     route_detail_confirmation,
     route_prepare_build_tasks,
     route_test_validation,
+    route_workspace_inspection,
     route_workflow_start,
 )
 
@@ -37,6 +40,14 @@ class WorkflowRoutingTests(unittest.TestCase):
             "prepare_build_tasks",
         )
 
+    def test_workflow_start_can_resume_from_database_context(self) -> None:
+        """支持从数据库上下文检查节点恢复调试或用户重试。"""
+
+        self.assertEqual(
+            route_workflow_start({"resume_from": "inspect_database_context"}),
+            "inspect_database_context",
+        )
+
     def test_detail_confirmation_waits_for_user_input(self) -> None:
         self.assertEqual(
             route_detail_confirmation({"status": "requires_user_input"}),
@@ -47,6 +58,44 @@ class WorkflowRoutingTests(unittest.TestCase):
         self.assertEqual(
             route_detail_confirmation({"status": "completed"}),
             "inspect_workspace",
+        )
+
+    def test_workspace_inspection_routes_to_database_context_when_required(self) -> None:
+        """接口 data_origin 来源于数据库时，工作区检查后进入数据库上下文节点。"""
+
+        with patch("app.graph.workflow._latest_compact_project_plan", return_value={}), patch(
+            "app.graph.workflow._workspace_snapshot_from_state",
+            return_value={},
+        ), patch("app.graph.workflow._build_task_plan_for_context", return_value={}), patch(
+            "app.graph.workflow._resolve_build_context",
+            return_value={},
+        ), patch(
+            "app.graph.workflow.database_context_requirement",
+            return_value={"required": True, "status": "required"},
+        ):
+            self.assertEqual(route_workspace_inspection({}), "inspect_database_context")
+
+    def test_workspace_inspection_skips_database_context_for_external_api(self) -> None:
+        """外部 API 来源不展示数据库上下文检查节点。"""
+
+        with patch("app.graph.workflow._latest_compact_project_plan", return_value={}), patch(
+            "app.graph.workflow._workspace_snapshot_from_state",
+            return_value={},
+        ), patch("app.graph.workflow._build_task_plan_for_context", return_value={}), patch(
+            "app.graph.workflow._resolve_build_context",
+            return_value={},
+        ), patch(
+            "app.graph.workflow.database_context_requirement",
+            return_value={"required": False, "status": "not_required"},
+        ):
+            self.assertEqual(route_workspace_inspection({}), "prepare_build_tasks")
+
+    def test_database_context_inspection_waits_for_user_input(self) -> None:
+        """数据库上下文检查阻断时不会进入任务 DAG 生成。"""
+
+        self.assertEqual(
+            route_database_context_inspection({"status": "requires_user_input"}),
+            "await_user_input",
         )
 
     def test_prepare_build_tasks_waits_for_project_plan_confirmation(self) -> None:

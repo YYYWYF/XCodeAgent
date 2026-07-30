@@ -723,7 +723,9 @@ def build_workflow_ag_ui_stream(
                             iteration_kind=next_iteration_kind,
                         )
 
-            result = dict((await active_graph.aget_state(config)).values)
+            # 真实 LangGraph 提供 aget_state；测试或兼容 Graph 可能只通过流更新返回状态。
+            if hasattr(active_graph, "aget_state"):
+                result = dict((await active_graph.aget_state(config)).values)
             if lifecycle_payload is not None:
                 result["lifecycle"] = lifecycle_payload
             summary = _workflow_summary(result, events)

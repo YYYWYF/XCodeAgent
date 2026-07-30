@@ -49,7 +49,7 @@ def build_subagent_input(
     workspace: Dict[str, Any],
 ) -> Dict[str, Any]:
     mode = "direct-write" if task.get("executionMode") == "subagent-direct-write" else "plan-only"
-    target_files = _string_list(task.get("targetFiles"))
+    target_files = _string_list(task.get("target_files"))
     payload = SubagentInput(
         runId=run_id,
         task=task,
@@ -74,7 +74,7 @@ def placeholder_result(*, run_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
         mode=mode,
         summary="Subagent runtime protocol is ready, but autonomous task execution is not enabled in this slice.",
         changedFiles=[],
-        proposedFiles=_string_list(task.get("targetFiles")),
+        proposedFiles=_string_list(task.get("target_files")),
         acceptanceEvidence=[],
         verificationNotes=[],
         risks=["需要后续接入真实 subagent runner 后执行。"],
@@ -84,7 +84,7 @@ def placeholder_result(*, run_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def assert_direct_write_allowed(*, task: Dict[str, Any], path: str) -> None:
-    allowed = set(_string_list(task.get("targetFiles")))
+    allowed = set(_string_list(task.get("target_files")))
     if task.get("executionMode") != "subagent-direct-write" or path not in allowed:
         raise ValueError(f"Subagent is not allowed to write {path}.")
 

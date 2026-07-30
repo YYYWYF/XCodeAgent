@@ -6,20 +6,56 @@ from hashlib import sha256
 import json
 import logging
 from pathlib import Path
-import re
 from typing import Any
 
+from app.services.build_task_menu import (
+    ensure_page_route_registration_task,
+    reconcile_live_page_paths,
+)
+from app.services.build_unit_compiler import (
+    annotate_unit_inputs,
+    apply_unit_compilation,
+)
 from app.services.task_scheduler import annotate_task_execution, build_execution_batches
 
 
 logger = logging.getLogger(__name__)
 
 
-FRONTEND_PAGE_ENTRY_PREFIX = "frontend/src/pages/"
-FRONTEND_MENU_PATH = "frontend/src/constants/menus.ts"
-
-
 TASK_STATUSES = ("pending", "running", "completed", "failed", "already_satisfied")
+_MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_DATABASE_CHANGE_KEYWORDS = (
+    "alter",
+    "create table",
+    "drop",
+    "truncate",
+    "migration",
+    "新增字段",
+    "缺少字段",
+    "建表",
+    "改表",
+    "删除字段",
+)
+_HIGH_RISK_DATABASE_OPERATIONS = {
+    "drop_table",
+    "drop_column",
+    "delete_data",
+    "truncate",
+    "drop",
+    "delete",
+}
+_CODE_PATH_SUFFIXES = (
+    ".java",
+    ".kt",
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".vue",
+    ".less",
+    ".css",
+)
 
 
 def tasks_from_build_task_plan(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -53,6 +89,12 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _dict_items(value: Any) -> list[dict[str, Any]]:
+    """把不可信列表收敛为字典列表。"""
+
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 def _dedupe_strings(values: list[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -76,6 +118,24 @@ def _dedupe_normalized_strings(values: list[str]) -> list[str]:
         seen.add(normalized)
         result.append(value)
     return result
+
+
+def _task_target_files(task: dict[str, Any]) -> list[str]:
+    """读取当前 DAG v3 任务的目标文件。"""
+
+    return _string_list(task.get("target_files"))
+
+
+def _task_dependencies(task: dict[str, Any]) -> list[str]:
+    """读取当前 DAG v3 任务的依赖列表。"""
+
+    return _string_list(task.get("dependencies"))
+
+
+def _task_can_run_in_parallel(task: dict[str, Any]) -> bool:
+    """读取当前 DAG v3 任务的并行标记。"""
+
+    return bool(task.get("can_run_in_parallel", True))
 
 
 def _normalized_text_key(value: str) -> str:
@@ -206,7 +266,7 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
     for index, item in enumerate(raw_tasks, start=1):
         if not isinstance(item, dict):
             continue
-        base_id = _text(item.get("id") or item.get("task_id"), f"task-{index:03d}")
+        base_id = _text(item.get("id"), f"task-{index:03d}")
         task_id = base_id
         suffix = 2
         while task_id in used_ids:
@@ -231,30 +291,27 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
             else "frontend.code"
         )
         description = _text(item.get("description"), _text(item.get("title"), task_id))
-        target_files = _string_list(item.get("targetFiles") or item.get("target_files"))
-        change_scope = _change_scope(
-            item.get("change_scope") or item.get("changeScope"), target_files
-        )
+        target_files = _string_list(item.get("target_files"))
+        change_scope = _change_scope(item.get("change_scope"), target_files)
         if not target_files:
             target_files = [change["path"] for change in change_scope]
         dependencies = _dedupe_normalized_strings(
-            _string_list(item.get("dependencies") or item.get("dependsOn"))
+            _string_list(item.get("dependencies"))
         )
         acceptance = _dedupe_normalized_strings(
-            _string_list(item.get("acceptance_criteria") or item.get("acceptanceCriteria"))
+            _string_list(item.get("acceptance_criteria"))
         )
         if not acceptance:
             acceptance = [f"{description}完成并通过相关构建或测试验证。"]
-        can_parallel = bool(
-            item.get("can_run_in_parallel", item.get("canRunInParallel", True))
-        )
+        can_parallel = bool(item.get("can_run_in_parallel", True))
+        database_scope = _dict_value(item.get("database_scope"))
         allowed_paths = (
             _dedupe_normalized_strings(
-                _string_list(item.get("allowed_paths") or item.get("allowedPaths"))
+                _string_list(item.get("allowed_paths"))
             )
             or target_files
         )
-        if not change_scope and not target_files and not allowed_paths:
+        if not change_scope and not target_files and not allowed_paths and not database_scope:
             logger.info(
                 "build_task_plan_excluded_verification_task task_id=%s title=%s",
                 task_id,
@@ -264,481 +321,44 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
         tasks.append(
             {
                 "id": task_id,
-                "task_id": task_id,
                 "owner": owner,
-                "type": owner,
-                "task_type": _text(item.get("task_type") or item.get("taskType"), default_task_type),
+                "task_type": _text(
+                    item.get("task_type"),
+                    default_task_type,
+                ),
                 "title": _text(item.get("title"), description),
                 "description": description,
                 "dependencies": dependencies,
-                "dependsOn": dependencies,
                 "status": "pending",
-                "unit_id": _text(item.get("unit_id") or item.get("unitId"), "application:root"),
-                "source_refs": _dict_value(item.get("source_refs") or item.get("sourceRefs")),
+                "unit_id": _text(item.get("unit_id"), "application:root"),
+                "source_refs": _dict_value(item.get("source_refs")),
                 "requires_capabilities": _string_list(
-                    item.get("requires_capabilities") or item.get("requiresCapabilities")
+                    item.get("requires_capabilities")
                 ),
                 "provides_capabilities": _string_list(
-                    item.get("provides_capabilities") or item.get("providesCapabilities")
+                    item.get("provides_capabilities")
                 ),
-                "database_scope": _dict_value(item.get("database_scope") or item.get("databaseScope")),
+                "database_scope": database_scope,
                 "risk": _text(item.get("risk"), "low"),
                 "approval": _dict_value(item.get("approval")),
                 "allowed_paths": allowed_paths,
-                "targetFiles": _dedupe_normalized_strings(target_files),
+                "target_files": _dedupe_normalized_strings(target_files),
                 "change_scope": change_scope,
                 "impact_scope": _impact_scope(
-                    item.get("impact_scope") or item.get("impactScope"), description
+                    item.get("impact_scope"), description
                 ),
-                "canRunInParallel": can_parallel,
                 "can_run_in_parallel": can_parallel,
                 "parallel_reason": _text(
-                    item.get("parallel_reason") or item.get("parallelReason"),
+                    item.get("parallel_reason"),
                     "依赖满足且目标文件不冲突时可并行。",
                 ),
                 "acceptance_criteria": acceptance,
-                "acceptanceCriteria": acceptance,
                 "verification_commands": _dedupe_normalized_strings(
-                    _string_list(
-                        item.get("verification_commands")
-                        or item.get("verificationCommands")
-                    )
+                    _string_list(item.get("verification_commands"))
                 ),
             }
         )
     return tasks
-
-
-def _reconcile_live_page_paths(
-    tasks: list[dict[str, Any]],
-    *,
-    workspace_root: str | Path | None,
-    build_context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """用实时页面目录纠正唯一同义目标，避免陈旧快照产生重复页面入口。"""
-
-    target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
-    if target.get("type") != "page" or not workspace_root:
-        return tasks
-    pages_root = Path(workspace_root).expanduser() / "frontend/src/pages"
-    if not pages_root.is_dir():
-        return tasks
-    existing_keys = [
-        path.name
-        for path in pages_root.iterdir()
-        if path.is_dir() and (path / "index.tsx").is_file()
-    ]
-    keys_by_identity: dict[str, list[str]] = {}
-    for key in existing_keys:
-        keys_by_identity.setdefault(_page_key_identity(key), []).append(key)
-
-    replacements: list[tuple[str, str, str, str]] = []
-    for task in tasks:
-        for path in list(task.get("targetFiles") or []):
-            planned_path = str(path).lstrip("./")
-            planned_key = _page_key_from_entry_path(planned_path)
-            if not planned_key or (Path(workspace_root) / planned_path).is_file():
-                continue
-            candidates = keys_by_identity.get(_page_key_identity(planned_key), [])
-            if len(candidates) != 1:
-                continue
-            canonical_key = candidates[0]
-            canonical_path = f"{FRONTEND_PAGE_ENTRY_PREFIX}{canonical_key}/index.tsx"
-            replacement = (planned_path, canonical_path, planned_key, canonical_key)
-            if replacement not in replacements:
-                replacements.append(replacement)
-
-    reconciled: list[dict[str, Any]] = []
-    for task in tasks:
-        next_task = task
-        task_text = json.dumps(task, ensure_ascii=False)
-        for planned_path, canonical_path, planned_key, canonical_key in replacements:
-            if planned_path not in task_text and planned_key not in task_text:
-                continue
-            next_task = _replace_task_page_path(
-                next_task,
-                planned_path=planned_path,
-                canonical_path=canonical_path,
-                planned_key=planned_key,
-                canonical_key=canonical_key,
-            )
-        reconciled.append(next_task)
-    return reconciled
-
-
-def _page_key_identity(value: str) -> str:
-    """生成页面目录语义键，仅忽略大小写、分隔符和常见 Page 后缀。"""
-
-    normalized = "".join(character.lower() for character in value if character.isalnum())
-    return normalized[:-4] if normalized.endswith("page") else normalized
-
-
-def _page_key_from_entry_path(path: str) -> str:
-    """从标准页面入口路径提取 PageKey，非页面入口返回空字符串。"""
-
-    normalized = path.lstrip("/")
-    if not normalized.startswith(FRONTEND_PAGE_ENTRY_PREFIX) or not normalized.endswith("/index.tsx"):
-        return ""
-    return normalized[len(FRONTEND_PAGE_ENTRY_PREFIX) : -len("/index.tsx")]
-
-
-def _replace_task_page_path(
-    task: dict[str, Any],
-    *,
-    planned_path: str,
-    canonical_path: str,
-    planned_key: str,
-    canonical_key: str,
-) -> dict[str, Any]:
-    """同步替换任务内的页面路径与 PageKey，并把已存在入口操作改为 modify。"""
-
-    def replace_value(value: Any) -> Any:
-        """递归替换任务结构中的精确路径和目录键。"""
-
-        if isinstance(value, str):
-            return (
-                value.replace(f"/{planned_path}", canonical_path)
-                .replace(planned_path, canonical_path)
-                .replace(planned_key, canonical_key)
-            )
-        if isinstance(value, list):
-            return [replace_value(item) for item in value]
-        if isinstance(value, dict):
-            return {key: replace_value(item) for key, item in value.items()}
-        return value
-
-    replaced = replace_value(task)
-    change_scope = []
-    for change in replaced.get("change_scope", []):
-        if isinstance(change, dict) and change.get("path") == canonical_path:
-            change_scope.append({**change, "operation": "modify"})
-        else:
-            change_scope.append(change)
-    return {
-        **replaced,
-        "change_scope": change_scope,
-        "path_reconciliation": {
-            "source": "live_workspace",
-            "planned_path": planned_path,
-            "canonical_path": canonical_path,
-            "reason": "unique semantic page directory already exists",
-        },
-    }
-
-
-def _ensure_page_route_registration_task(
-    tasks: list[dict[str, Any]],
-    *,
-    project_plan: dict[str, Any],
-    workspace_root: str | Path | None,
-    build_context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """为模板页面确定性补充菜单登记任务，使自动路由能够解析页面入口。"""
-
-    target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
-    page_id = str(target.get("id") or "")
-    if target.get("type") != "page" or not page_id or not workspace_root:
-        return tasks
-    menu_file = Path(workspace_root).expanduser() / FRONTEND_MENU_PATH
-    if not menu_file.is_file():
-        return tasks
-
-    page_unit_id = f"page:{page_id}"
-    page_task_ids = [
-        str(task.get("id"))
-        for task in tasks
-        if task.get("unit_id") == page_unit_id and task.get("id")
-    ]
-    page_keys = {
-        key
-        for task in tasks
-        if task.get("unit_id") == page_unit_id
-        for path in task.get("targetFiles", [])
-        if (key := _page_key_from_entry_path(str(path)))
-    }
-    if len(page_keys) != 1:
-        raise ValueError(
-            f"Page {page_id} must resolve to exactly one frontend page entry before route registration."
-        )
-    page_key = next(iter(page_keys))
-    page = _page_skeleton(project_plan, page_id)
-    page_name = str(page.get("name") or build_context.get("page_detail", {}).get("page_name") or page_id)
-    confirmed_path = str(page.get("path") or build_context.get("page_detail", {}).get("path") or "")
-    menu_path = _menu_route_path(confirmed_path, page.get("module_id"), page_key)
-    menu_tasks = [
-        task for task in tasks if FRONTEND_MENU_PATH in task.get("targetFiles", [])
-    ]
-    if _menu_entry_exists(
-        menu_file,
-        page_key=page_key,
-        page_name=page_name,
-        menu_path=menu_path,
-    ):
-        return _mark_existing_menu_tasks_satisfied(
-            tasks,
-            menu_tasks=menu_tasks,
-            page_key=page_key,
-            page_name=page_name,
-            menu_path=menu_path,
-        )
-    if menu_tasks:
-        return _normalize_existing_menu_tasks(
-            tasks,
-            menu_tasks=menu_tasks,
-            page_task_ids=page_task_ids,
-            page_unit_id=page_unit_id,
-            page_key=page_key,
-            page_name=page_name,
-            menu_path=menu_path,
-        )
-
-    task_id = _unique_task_id(f"page:{page_id}:route-menu-registration", tasks)
-    route_payload = _menu_registration_task_payload(
-        page_task_ids=page_task_ids,
-        page_unit_id=page_unit_id,
-        page_key=page_key,
-        page_name=page_name,
-        menu_path=menu_path,
-    )
-    route_task = {
-        "id": task_id,
-        "task_id": task_id,
-        "owner": "frontend",
-        "type": "frontend",
-        "title": f"登记{page_name}菜单与自动路由",
-        **route_payload,
-        "status": "pending",
-        "source_refs": dict(build_context.get("source_refs") or {}),
-        "impact_scope": {
-            "summary": f"使{page_name}进入模板菜单和自动路由。",
-            "affected_modules": [FRONTEND_MENU_PATH],
-            "public_contracts": [],
-            "risks": ["菜单 key 必须与页面目录 PageKey 完全一致。"],
-        },
-        "verification_commands": ["cd frontend && pnpm build"],
-    }
-    return [*tasks, route_task]
-
-
-def _menu_registration_task_payload(
-    *,
-    page_task_ids: list[str],
-    page_unit_id: str,
-    page_key: str,
-    page_name: str,
-    menu_path: str,
-) -> dict[str, Any]:
-    """生成确定性的模板菜单登记任务字段，避免模型决定菜单 path 形态。"""
-
-    hide_in_menu = _has_react_router_path_param(menu_path)
-    menu_item = (
-        f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}', hideInMenu: true }}"
-        if hide_in_menu
-        else f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}' }}"
-    )
-    acceptance = [
-        f"{FRONTEND_MENU_PATH} 的 BIZ_MENUS 顶层数组包含页面“{page_name}”。",
-        f"新增菜单项 key 为 {page_key}，与 {FRONTEND_PAGE_ENTRY_PREFIX}{page_key}/index.tsx 完全一致。",
-        f"新增菜单项 path 为 {menu_path}，且不删除或修改任何已有菜单项。",
-    ]
-    if hide_in_menu:
-        acceptance.append(
-            "由于新增菜单项 path 包含 React Router 路径参数，必须设置 hideInMenu: true。"
-        )
-    return {
-        "description": (
-            f"仅向 BIZ_MENUS 顶层数组追加 {menu_item}，"
-            "由模板自动路由加载对应页面入口；不得修改现有菜单项或路由骨架。"
-        ),
-        "dependencies": page_task_ids,
-        "dependsOn": page_task_ids,
-        "unit_id": page_unit_id,
-        "allowed_paths": [FRONTEND_MENU_PATH],
-        "targetFiles": [FRONTEND_MENU_PATH],
-        "change_scope": [
-            {
-                "operation": "modify",
-                "path": FRONTEND_MENU_PATH,
-                "description": "仅向 BIZ_MENUS 顶层数组追加当前页面菜单项。",
-            }
-        ],
-        "canRunInParallel": False,
-        "can_run_in_parallel": False,
-        "parallel_reason": "菜单是共享的增量文件，必须在页面入口完成后串行追加。",
-        "acceptance_criteria": acceptance,
-        "acceptanceCriteria": acceptance,
-    }
-
-
-def _has_react_router_path_param(path: str) -> bool:
-    """判断菜单 path 是否包含 React Router 动态路径参数。"""
-
-    route_part = str(path or "").split("?", 1)[0].split("#", 1)[0]
-    return any(
-        re.fullmatch(r":[A-Za-z0-9_][A-Za-z0-9_-]*", segment)
-        for segment in route_part.split("/")
-    )
-
-
-def _normalize_existing_menu_tasks(
-    tasks: list[dict[str, Any]],
-    *,
-    menu_tasks: list[dict[str, Any]],
-    page_task_ids: list[str],
-    page_unit_id: str,
-    page_key: str,
-    page_name: str,
-    menu_path: str,
-) -> list[dict[str, Any]]:
-    """把模型已生成的菜单任务改写为确定性的顶层 BIZ_MENUS 追加任务。"""
-
-    menu_task_ids = {str(task.get("id") or "") for task in menu_tasks}
-    payload = _menu_registration_task_payload(
-        page_task_ids=page_task_ids,
-        page_unit_id=page_unit_id,
-        page_key=page_key,
-        page_name=page_name,
-        menu_path=menu_path,
-    )
-    return [
-        {
-            **task,
-            **payload,
-            "title": str(task.get("title") or f"登记{page_name}菜单与自动路由"),
-            "impact_scope": {
-                **_impact_scope(task.get("impact_scope") or task.get("impactScope"), payload["description"]),
-                "affected_modules": [FRONTEND_MENU_PATH],
-            },
-            "verification_commands": _dedupe_normalized_strings(
-                [
-                    *_string_list(task.get("verification_commands")),
-                    *_string_list(task.get("verificationCommands")),
-                    "cd frontend && pnpm build",
-                ]
-            ),
-        }
-        if str(task.get("id") or "") in menu_task_ids
-        else task
-        for task in tasks
-    ]
-
-
-def _menu_entry_exists(
-    menu_file: Path,
-    *,
-    page_key: str,
-    page_name: str,
-    menu_path: str,
-) -> bool:
-    """检查模板菜单中是否已存在与页面 key、名称和路径完全一致的条目。"""
-
-    try:
-        content = menu_file.read_text(encoding="utf-8")
-    except OSError:
-        return False
-    for match in re.finditer(r"\{(?P<body>[^{}]*)\}", content, flags=re.DOTALL):
-        body = match.group("body")
-        properties = {
-            name: _typescript_string_property(body, name)
-            for name in ("path", "name", "key")
-        }
-        if properties == {"path": menu_path, "name": page_name, "key": page_key}:
-            return True
-    return False
-
-
-def _typescript_string_property(body: str, name: str) -> str:
-    """从简单 TypeScript 对象文本中读取一个字符串属性。"""
-
-    match = re.search(
-        rf"\b{re.escape(name)}\s*:\s*(['\"])(?P<value>[^'\"]*)\1",
-        body,
-    )
-    return match.group("value") if match else ""
-
-
-def _mark_existing_menu_tasks_satisfied(
-    tasks: list[dict[str, Any]],
-    *,
-    menu_tasks: list[dict[str, Any]],
-    page_key: str,
-    page_name: str,
-    menu_path: str,
-) -> list[dict[str, Any]]:
-    """把脚手架已完成的当前页面菜单任务标记为确定性已满足。"""
-
-    if not menu_tasks:
-        return tasks
-    matching_ids = {
-        str(task.get("id") or "")
-        for task in menu_tasks
-        if page_key in json.dumps(task, ensure_ascii=False)
-    }
-    if not matching_ids and len(menu_tasks) == 1:
-        matching_ids = {str(menu_tasks[0].get("id") or "")}
-    evidence_text = (
-        f"脚手架已在 {FRONTEND_MENU_PATH} 注册 "
-        f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}' }}。"
-    )
-    return [
-        {
-            **task,
-            "status": "already_satisfied",
-            "last_result_status": "already_satisfied",
-            "satisfaction_evidence": {
-                "target_files": [FRONTEND_MENU_PATH],
-                "acceptance_criteria": [
-                    {
-                        "criterion_index": index,
-                        "status": "passed",
-                        "evidence": evidence_text,
-                    }
-                    for index, _ in enumerate(task.get("acceptance_criteria", []))
-                ],
-            },
-            "satisfied_by": "frontend-template-page-scaffold",
-        }
-        if str(task.get("id") or "") in matching_ids
-        else task
-        for task in tasks
-    ]
-
-
-def _page_skeleton(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]:
-    """从任务准备视图读取当前页面的名称、路径和模块标识。"""
-
-    skeleton = project_plan.get("application_skeleton")
-    pages = skeleton.get("pages", []) if isinstance(skeleton, dict) else []
-    return next(
-        (
-            page
-            for page in pages
-            if isinstance(page, dict) and str(page.get("pageId") or "") == page_id
-        ),
-        {},
-    )
-
-
-def _menu_route_path(confirmed_path: str, module_id: Any, page_key: str) -> str:
-    """按前端脚手架规则把确认路径转换为菜单末级 path。"""
-
-    del module_id
-    segments = [segment for segment in confirmed_path.strip().strip("/").split("/") if segment]
-    if segments:
-        return segments[-1]
-    return page_key[:1].lower() + page_key[1:]
-
-
-def _unique_task_id(base_id: str, tasks: list[dict[str, Any]]) -> str:
-    """生成不与模型候选任务冲突的稳定任务 ID。"""
-
-    used = {str(task.get("id") or "") for task in tasks}
-    candidate = base_id
-    suffix = 2
-    while candidate in used:
-        candidate = f"{base_id}-{suffix}"
-        suffix += 1
-    return candidate
 
 
 def _raw_agent_tasks(agent_plan: dict[str, Any] | None) -> Any:
@@ -756,13 +376,69 @@ def _raw_agent_tasks(agent_plan: dict[str, Any] | None) -> Any:
     return None
 
 
+def _drop_unneeded_database_change_tasks(
+    tasks: list[dict[str, Any]],
+    build_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """在真实数据库摘要表明无需改库时移除多余 database.change 候选任务。"""
+
+    database_context = _dict_value(build_context.get("database_planning_context"))
+    if database_context.get("status") != "completed":
+        return tasks
+    if _database_schema_change_required(build_context):
+        return tasks
+    retained: list[dict[str, Any]] = []
+    for task in tasks:
+        if (
+            task.get("owner") == "database"
+            and str(task.get("task_type") or "") == "database.change"
+            and not any(_is_code_path(path) for path in _task_declared_paths(task))
+        ):
+            logger.info(
+                "build_task_plan_dropped_unneeded_database_change task_id=%s",
+                task.get("id"),
+            )
+            continue
+        retained.append(task)
+    return retained
+
+
+def _database_schema_change_required(build_context: dict[str, Any]) -> bool:
+    """从 EndpointDetail 判断本轮是否确实需要数据库结构变化。"""
+
+    for detail in _dict_items(build_context.get("direct_endpoint_details")):
+        method = str(detail.get("method") or "GET").upper()
+        if method in _MUTATION_METHODS:
+            return True
+        data_origin = detail.get("data_origin")
+        data_origin = data_origin if isinstance(data_origin, dict) else {}
+        effective_source = data_origin.get("effective_source")
+        effective_source = effective_source if isinstance(effective_source, dict) else {}
+        origin_kind = str(
+            effective_source.get("kind") or data_origin.get("source_type") or ""
+        ).lower()
+        if origin_kind == "mysql_new_table":
+            return True
+        text = json.dumps(
+            {
+                "differences": data_origin.get("differences"),
+                "notes": data_origin.get("notes"),
+            },
+            ensure_ascii=False,
+            default=str,
+        ).lower()
+        if any(keyword in text for keyword in _DATABASE_CHANGE_KEYWORDS):
+            return True
+    return False
+
+
 def _annotate_parallelism(
     tasks: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """为任务补齐并行元信息和执行批次。"""
 
     requested_parallel = {
-        task["id"]: bool(task.get("canRunInParallel")) for task in tasks
+        task["id"]: _task_can_run_in_parallel(task) for task in tasks
     }
     annotated = annotate_task_execution(tasks)
     batches = build_execution_batches(annotated)
@@ -774,7 +450,7 @@ def _annotate_parallelism(
         for task_id in task_ids:
             parallel_by_task[task_id] = [candidate for candidate in task_ids if candidate != task_id]
     for task in annotated:
-        task["can_run_in_parallel"] = bool(task.get("canRunInParallel"))
+        task["can_run_in_parallel"] = _task_can_run_in_parallel(task)
         task["parallel_with"] = parallel_by_task.get(task["id"], [])
         if not task["can_run_in_parallel"] and requested_parallel.get(task["id"]):
             task["parallel_reason"] = str(
@@ -788,7 +464,7 @@ def _topological_order(tasks: list[dict[str, Any]]) -> tuple[list[str], list[str
 
     by_id = {task["id"]: task for task in tasks}
     incoming = {
-        task_id: set(_string_list(task.get("dependencies") or task.get("dependsOn")))
+        task_id: set(_task_dependencies(task))
         for task_id, task in by_id.items()
     }
     errors = [
@@ -822,6 +498,7 @@ def _topological_order(tasks: list[dict[str, Any]]) -> tuple[list[str], list[str
 def _build_task_graph(
     tasks: list[dict[str, Any]],
     execution_batches: list[dict[str, Any]],
+    build_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """根据叶子任务构造可校验的任务 DAG。"""
 
@@ -829,7 +506,7 @@ def _build_task_graph(
     edges = [
         {"from": dependency, "to": task["id"], "type": "depends_on"}
         for task in tasks
-        for dependency in _string_list(task.get("dependencies") or task.get("dependsOn"))
+        for dependency in _task_dependencies(task)
     ]
     incoming = {task_id: 0 for task_id in task_ids}
     outgoing = {task_id: 0 for task_id in task_ids}
@@ -845,7 +522,10 @@ def _build_task_graph(
         for edge in edges
         if edge["from"] not in incoming
     ]
-    all_errors = _dedupe_strings([*missing_dependency_errors, *validation_errors])
+    semantic_errors = _task_semantic_errors(tasks, build_context or {})
+    all_errors = _dedupe_strings(
+        [*missing_dependency_errors, *validation_errors, *semantic_errors]
+    )
     return {
         "schema_version": "build-task-graph.v3",
         "nodes": task_ids,
@@ -859,6 +539,108 @@ def _build_task_graph(
             "errors": all_errors,
         },
     }
+
+
+def _task_semantic_errors(
+    tasks: list[dict[str, Any]],
+    build_context: dict[str, Any],
+) -> list[str]:
+    """校验 DAG 拓扑之外的 owner、Unit、数据库职责和审批语义。"""
+
+    errors: list[str] = []
+    database_context = _dict_value(build_context.get("database_planning_context"))
+    database_context_completed = database_context.get("status") == "completed"
+    for task in tasks:
+        task_id = str(task.get("id") or "")
+        owner = str(task.get("owner") or "")
+        unit_id = str(task.get("unit_id") or "")
+        task_type = str(task.get("task_type") or "")
+        paths = _task_declared_paths(task)
+        if unit_id.startswith("database:") and owner != "database":
+            errors.append(f"Task {task_id} is in database Unit {unit_id} but owner is {owner}.")
+        if unit_id.startswith("backend:") and owner != "backend":
+            errors.append(f"Task {task_id} is in backend Unit {unit_id} but owner is {owner}.")
+        if unit_id.startswith(("page:", "frontend:")) and owner != "frontend":
+            errors.append(f"Task {task_id} is in frontend/page Unit {unit_id} but owner is {owner}.")
+        if owner == "database":
+            errors.extend(
+                _database_task_semantic_errors(
+                    task,
+                    paths=paths,
+                    database_context_completed=database_context_completed,
+                )
+            )
+        elif task.get("database_scope"):
+            errors.append(f"Task {task_id} is {owner} owner but declares database_scope.")
+        if owner == "backend" and task_type.startswith("database."):
+            errors.append(f"Task {task_id} is backend owner but declares database task_type {task_type}.")
+    return errors
+
+
+def _database_task_semantic_errors(
+    task: dict[str, Any],
+    *,
+    paths: list[str],
+    database_context_completed: bool,
+) -> list[str]:
+    """校验 database task 只能处理数据库，不能混入代码修改。"""
+
+    task_id = str(task.get("id") or "")
+    task_type = str(task.get("task_type") or "")
+    errors: list[str] = []
+    if task_type not in {"database.change", "database.verify"}:
+        errors.append(f"Database task {task_id} has invalid task_type {task_type}.")
+    if not isinstance(task.get("database_scope"), dict) or not task.get("database_scope"):
+        errors.append(f"Database task {task_id} must declare non-empty database_scope.")
+    code_paths = [path for path in paths if _is_code_path(path)]
+    if code_paths:
+        errors.append(
+            f"Database task {task_id} must not modify code files: {', '.join(code_paths)}."
+        )
+    if not database_context_completed:
+        errors.append(f"Database task {task_id} requires completed DatabasePlanningContext.")
+    if _database_task_requires_approval(task) and not _approval_required(task):
+        errors.append(f"High-risk database task {task_id} must require user approval.")
+    return errors
+
+
+def _task_declared_paths(task: dict[str, Any]) -> list[str]:
+    """汇总任务声明的所有文件路径，供职责校验使用。"""
+
+    paths = [*_task_target_files(task)]
+    paths.extend(_string_list(task.get("allowed_paths")))
+    for change in task.get("change_scope") if isinstance(task.get("change_scope"), list) else []:
+        if isinstance(change, dict) and change.get("path"):
+            paths.append(str(change.get("path")))
+    return _dedupe_normalized_strings(paths)
+
+
+def _is_code_path(path: str) -> bool:
+    """判断路径是否属于代码或前端样式文件，database task 不允许修改。"""
+
+    normalized = path.lower()
+    return normalized.endswith(_CODE_PATH_SUFFIXES)
+
+
+def _database_task_requires_approval(task: dict[str, Any]) -> bool:
+    """识别删除、截断等高危数据库操作是否需要人工审批。"""
+
+    scope = _dict_value(task.get("database_scope"))
+    raw_operations = scope.get("operations") or scope.get("operation") or []
+    if isinstance(raw_operations, str):
+        raw_operations = [raw_operations]
+    operations = [str(item).strip().lower() for item in raw_operations if str(item).strip()]
+    text = json.dumps(scope, ensure_ascii=False, default=str).lower()
+    return any(operation in _HIGH_RISK_DATABASE_OPERATIONS for operation in operations) or any(
+        keyword in text for keyword in _HIGH_RISK_DATABASE_OPERATIONS
+    )
+
+
+def _approval_required(task: dict[str, Any]) -> bool:
+    """读取任务审批标记。"""
+
+    approval = task.get("approval")
+    return isinstance(approval, dict) and approval.get("required") is True
 
 
 def _task_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
@@ -888,19 +670,11 @@ def _task_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
 def replace_build_task_plan_tasks(
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
+    build_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """用最新叶子任务重建 v2 注册表、任务图和执行批次。"""
 
-    normalized_tasks = [
-        {
-            **task,
-            "unit_id": _text(task.get("unit_id"), "application:root"),
-            "source_refs": (
-                task.get("source_refs") if isinstance(task.get("source_refs"), dict) else {}
-            ),
-        }
-        for task in tasks
-    ]
+    normalized_tasks = [_canonical_task(task) for task in tasks]
     annotated_tasks, execution_batches = _annotate_parallelism(normalized_tasks)
     build_units = deepcopy(
         build_task_plan.get("build_units")
@@ -916,7 +690,11 @@ def replace_build_task_plan_tasks(
         **build_task_plan,
         "build_units": build_units,
         "task_registry": {task["id"]: task for task in annotated_tasks},
-        "task_graph": _build_task_graph(annotated_tasks, execution_batches),
+        "task_graph": _build_task_graph(
+            annotated_tasks,
+            execution_batches,
+            build_context or {},
+        ),
         "summary": {
             **(
                 build_task_plan.get("summary")
@@ -939,6 +717,38 @@ def replace_build_task_plan_tasks(
     }
 
 
+def _canonical_task(task: dict[str, Any]) -> dict[str, Any]:
+    """把任务对象收敛为 DAG v3 的 snake_case 单一字段形态。"""
+
+    canonical = dict(task)
+    canonical["id"] = _text(task.get("id"), "task")
+    canonical["unit_id"] = _text(task.get("unit_id"), "application:root")
+    canonical["task_type"] = _text(
+        task.get("task_type"),
+        _default_task_type(str(task.get("owner") or "")),
+    )
+    canonical["dependencies"] = _dedupe_strings(_task_dependencies(task))
+    canonical["target_files"] = _dedupe_normalized_strings(_task_target_files(task))
+    canonical["can_run_in_parallel"] = _task_can_run_in_parallel(task)
+    canonical["acceptance_criteria"] = _dedupe_normalized_strings(
+        _string_list(task.get("acceptance_criteria"))
+    )
+    canonical["source_refs"] = (
+        task.get("source_refs") if isinstance(task.get("source_refs"), dict) else {}
+    )
+    return canonical
+
+
+def _default_task_type(owner: str) -> str:
+    """根据 owner 生成默认任务类型。"""
+
+    if owner == "database":
+        return "database.change"
+    if owner == "backend":
+        return "backend.code"
+    return "frontend.code"
+
+
 def compile_build_task_plan_scope(
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
@@ -947,13 +757,13 @@ def compile_build_task_plan_scope(
     """将 Unit 依赖、来源引用和输入指纹编译进任务图。"""
 
     context = build_context if isinstance(build_context, dict) else {}
-    scoped_tasks = _apply_unit_compilation(
+    scoped_tasks = apply_unit_compilation(
         build_task_plan,
         tasks,
         context,
     )
-    compiled = replace_build_task_plan_tasks(build_task_plan, scoped_tasks)
-    compiled["build_units"] = _annotate_unit_inputs(
+    compiled = replace_build_task_plan_tasks(build_task_plan, scoped_tasks, context)
+    compiled["build_units"] = annotate_unit_inputs(
         compiled.get("build_units"),
         context,
         compiled.get("task_registry"),
@@ -975,17 +785,18 @@ def create_build_task_plan(
     raw_tasks = _raw_agent_tasks(agent_plan)
     proposed_tasks = _normalize_agent_tasks(raw_tasks)
     context = build_context or {}
-    proposed_tasks = _reconcile_live_page_paths(
+    proposed_tasks = reconcile_live_page_paths(
         proposed_tasks,
         workspace_root=workspace_root,
         build_context=context,
     )
-    proposed_tasks = _ensure_page_route_registration_task(
+    proposed_tasks = ensure_page_route_registration_task(
         proposed_tasks,
         project_plan=project_plan,
         workspace_root=workspace_root,
         build_context=context,
     )
+    proposed_tasks = _drop_unneeded_database_change_tasks(proposed_tasks, context)
     logger.info(
         "build_task_plan_normalization parsed_keys=%s raw_tasks_type=%s raw_tasks_count=%s "
         "valid_tasks_count=%s valid_task_ids=%s",
@@ -1004,9 +815,9 @@ def create_build_task_plan(
         )
         raise ValueError("Build task model output did not include any valid tasks.")
     base_plan = deepcopy(base_build_task_plan or {})
-    tasks = _apply_unit_compilation(base_plan, proposed_tasks, context)
+    tasks = apply_unit_compilation(base_plan, proposed_tasks, context)
     tasks, execution_batches = _annotate_parallelism(tasks)
-    task_graph = _build_task_graph(tasks, execution_batches)
+    task_graph = _build_task_graph(tasks, execution_batches, context)
     blocked_batches = [
         batch for batch in execution_batches if batch.get("mode") == "blocked"
     ]
@@ -1063,288 +874,20 @@ def create_build_task_plan(
             "source": "confirmed_project_plan_and_workspace_snapshot",
         },
         "preparation_source": "confirmed_project_plan_and_workspace_snapshot",
-        "agent_note": agent_note,
+        "agent_note": _compact_agent_note(agent_note, agent_plan),
     }
     return compile_build_task_plan_scope(plan, tasks, build_context)
 
 
-def _apply_unit_compilation(
-    build_task_plan: dict[str, Any],
-    tasks: list[dict[str, Any]],
-    build_context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """补齐任务 Unit 来源，并把 Unit depends_on 边落成任务依赖边。"""
+def _compact_agent_note(agent_note: str, agent_plan: dict[str, Any] | None) -> str:
+    """保存短模型诊断，不把完整模型 JSON 重复写入 DAG。"""
 
-    units = build_task_plan.get("build_units")
-    units = units if isinstance(units, dict) else {}
-    with_sources = [
-        _with_task_unit_metadata(task, units, build_context)
-        for task in tasks
-    ]
-    return _apply_unit_task_dependencies(with_sources, units, build_task_plan.get("unit_graph"))
-
-
-def _with_task_unit_metadata(
-    task: dict[str, Any],
-    units: dict[str, Any],
-    build_context: dict[str, Any],
-) -> dict[str, Any]:
-    """为单个任务补齐稳定 Unit、source_refs 和 capability 字段。"""
-
-    unit_id = _text(task.get("unit_id"), "application:root")
-    unit = units.get(unit_id) if isinstance(units.get(unit_id), dict) else {}
-    source_refs = _dict_value(task.get("source_refs"))
-    if not source_refs:
-        source_refs = _unit_source_refs(unit_id, unit, build_context)
-    task_with_refs = {
-        **task,
-        "unit_id": unit_id,
-        "source_refs": source_refs,
-        "requires_capabilities": _dedupe_strings(
-            _string_list(task.get("requires_capabilities") or task.get("requiresCapabilities"))
-        ),
-        "provides_capabilities": _dedupe_strings(
-            _string_list(task.get("provides_capabilities") or task.get("providesCapabilities"))
-            or [unit_id]
-        ),
-    }
-    return task_with_refs
-
-
-def _apply_unit_task_dependencies(
-    tasks: list[dict[str, Any]],
-    units: dict[str, Any],
-    unit_graph: Any,
-) -> list[dict[str, Any]]:
-    """仅保留同 Unit 显式依赖，并以 Unit Graph 编译唯一的跨 Unit 依赖。"""
-
-    tasks_by_unit: dict[str, list[str]] = {}
-    task_ids = {str(task.get("id") or "") for task in tasks if task.get("id")}
-    task_units = {
-        str(task.get("id")): str(task.get("unit_id") or "application:root")
-        for task in tasks
-        if task.get("id")
-    }
-    for task in tasks:
-        tasks_by_unit.setdefault(str(task.get("unit_id") or "application:root"), []).append(
-            str(task.get("id"))
-        )
-    dependency_units = _unit_dependency_map(unit_graph)
-    result: list[dict[str, Any]] = []
-    for task in tasks:
-        unit_id = str(task.get("unit_id") or "application:root")
-        inherited_dependencies = [
-            dependency_task_id
-            for dependency_unit_id in dependency_units.get(unit_id, [])
-            for dependency_task_id in tasks_by_unit.get(dependency_unit_id, [])
-            if dependency_task_id and dependency_task_id != task.get("id")
-        ]
-        explicit_dependencies = _string_list(
-            task.get("dependencies") or task.get("dependsOn")
-        )
-        removed_cross_unit_dependencies = [
-            dependency
-            for dependency in explicit_dependencies
-            if dependency in task_units and task_units[dependency] != unit_id
-        ]
-        same_unit_or_unknown_dependencies = [
-            dependency
-            for dependency in explicit_dependencies
-            if dependency not in task_units or task_units[dependency] == unit_id
-        ]
-        dependencies = _dedupe_strings(
-            [*same_unit_or_unknown_dependencies, *inherited_dependencies]
-        )
-        existing_rewrites = [
-            rewrite
-            for rewrite in task.get("dependency_rewrites", [])
-            if isinstance(rewrite, dict)
-        ]
-        result.append(
-            {
-                **task,
-                "dependencies": dependencies,
-                "dependsOn": dependencies,
-                "unit_dependencies": dependency_units.get(unit_id, []),
-                "dependency_rewrites": [
-                    *existing_rewrites,
-                    *[
-                        {
-                            "dependency": dependency,
-                            "reason": "unit_graph_authoritative",
-                            "from_unit_id": task_units.get(dependency),
-                            "to_unit_id": unit_id,
-                        }
-                        for dependency in removed_cross_unit_dependencies
-                    ],
-                ],
-                "missing_unit_dependencies": [
-                    dependency_unit_id
-                    for dependency_unit_id in dependency_units.get(unit_id, [])
-                    if dependency_unit_id in units
-                    and not tasks_by_unit.get(dependency_unit_id)
-                ],
-                "invalid_dependencies": [
-                    dependency for dependency in dependencies if dependency not in task_ids
-                ],
-            }
-        )
-    return result
-
-
-def _unit_dependency_map(unit_graph: Any) -> dict[str, list[str]]:
-    """从 Unit Graph 中提取 depends_on 边的反向依赖表。"""
-
-    graph = unit_graph if isinstance(unit_graph, dict) else {}
-    result: dict[str, list[str]] = {}
-    for edge in graph.get("edges", []) if isinstance(graph.get("edges"), list) else []:
-        if not isinstance(edge, dict) or edge.get("type") != "depends_on":
-            continue
-        source = str(edge.get("from") or "")
-        target = str(edge.get("to") or "")
-        if source and target:
-            result.setdefault(target, []).append(source)
-    return {unit_id: _dedupe_strings(dependencies) for unit_id, dependencies in result.items()}
-
-
-def _annotate_unit_inputs(
-    build_units_value: Any,
-    build_context: dict[str, Any],
-    task_registry_value: Any,
-) -> dict[str, dict[str, Any]]:
-    """为本次范围内的 Unit 记录来源引用、输入指纹和准备状态。"""
-
-    build_units = deepcopy(build_units_value if isinstance(build_units_value, dict) else {})
-    task_registry = task_registry_value if isinstance(task_registry_value, dict) else {}
-    required_unit_ids = set(_string_list(build_context.get("required_unit_ids")))
-    for unit_id, unit in build_units.items():
-        if not isinstance(unit, dict):
-            continue
-        task_ids = _string_list(unit.get("task_ids"))
-        if unit_id in required_unit_ids:
-            source_refs = _unit_source_refs(unit_id, unit, build_context)
-            unit["source_refs"] = source_refs
-            unit["input_fingerprint"] = _stable_fingerprint(
-                _unit_fingerprint_payload(unit_id, source_refs, build_context)
-            )
-            unit["status"] = "prepared" if task_ids else "not_prepared"
-        unit["task_ids"] = [
-            task_id for task_id in task_ids if isinstance(task_registry.get(task_id), dict)
-        ]
-    return build_units
-
-
-def _unit_source_refs(
-    unit_id: str,
-    unit: dict[str, Any],
-    build_context: dict[str, Any],
-) -> dict[str, Any]:
-    """按 Unit 类型映射到 ProjectPlan、PageDetail 或 EndpointDetail 来源。"""
-
-    existing = _dict_value(unit.get("source_refs"))
-    target = _dict_value(build_context.get("target"))
-    refs = _dict_value(build_context.get("source_refs"))
-    if unit_id.startswith("page:"):
-        return {
-            **existing,
-            "type": "page_detail",
-            "target": target,
-            "page_detail": _dict_value(refs.get("page_detail")),
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-        }
-    if unit_id.startswith("database:"):
-        return {
-            **existing,
-            "type": "database_context",
-            "target": target,
-            "database_planning_context": _dict_value(
-                build_context.get("database_planning_context")
-            ),
-            "endpoint_details": _matching_endpoint_refs(
-                refs.get("endpoint_details"),
-                _string_list(build_context.get("endpoint_ids")),
-            ),
-            "data_source_ids": _string_list(build_context.get("data_source_ids")),
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-        }
-    if unit_id.startswith("backend:endpoint:"):
-        return {
-            **existing,
-            "type": "endpoint_detail",
-            "target": target,
-            "endpoint_detail": _dict_value(refs.get("endpoint_detail")),
-            "endpoint_details": _matching_endpoint_refs(
-                refs.get("endpoint_details"),
-                _string_list(build_context.get("endpoint_ids")),
-            ),
-            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-        }
-    return {
-        **existing,
-        "type": "application_unit",
-        "target": {"type": "application", "id": "application"},
-    }
-
-
-def _unit_fingerprint_payload(
-    unit_id: str,
-    source_refs: dict[str, Any],
-    build_context: dict[str, Any],
-) -> dict[str, Any]:
-    """按 Unit 类型选择定向失效所需的最小输入集合。"""
-
-    if unit_id.startswith("page:"):
-        return {
-            "unit_id": unit_id,
-            "source_refs": source_refs,
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "data_source_ids": _string_list(build_context.get("data_source_ids")),
-        }
-    if unit_id.startswith("database:"):
-        return {
-            "unit_id": unit_id,
-            "source_refs": source_refs,
-            "data_source_ids": _string_list(build_context.get("data_source_ids")),
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "database_planning_context": _dict_value(
-                build_context.get("database_planning_context")
-            ),
-        }
-    if unit_id.startswith("backend:endpoint:"):
-        return {
-            "unit_id": unit_id,
-            "source_refs": source_refs,
-            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
-            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-        }
-    return {
-        "unit_id": unit_id,
-        "source_refs": source_refs,
-    }
-
-
-def _matching_endpoint_refs(value: Any, endpoint_ids: list[str]) -> list[dict[str, Any]]:
-    """在当前构建上下文中查找指定 endpoint 详情引用。"""
-
-    if not isinstance(value, list):
-        return []
-    allowed_ids = set(endpoint_ids)
-    return [
-        dict(item)
-        for item in value
-        if isinstance(item, dict) and str(item.get("id") or "") in allowed_ids
-    ]
+    task_count = len(_raw_agent_tasks(agent_plan) or [])
+    fingerprint = sha256(str(agent_note or "").encode("utf-8")).hexdigest()[:16]
+    return f"task_model_response sha256={fingerprint} task_count={task_count}"
 
 
 def _dict_value(value: Any) -> dict[str, Any]:
     """将不可信输入规整为字典，便于后续合并元数据。"""
 
     return dict(value) if isinstance(value, dict) else {}
-
-
-def _stable_fingerprint(value: Any) -> str:
-    """为 Unit 局部输入生成稳定哈希，支持后续定向失效。"""
-
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return sha256(encoded.encode("utf-8")).hexdigest()

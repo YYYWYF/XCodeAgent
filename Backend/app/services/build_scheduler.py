@@ -67,7 +67,7 @@ def select_ready_build_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         )
     ]
 
-    selected = _lock_compatible_batch(ready_candidates)
+    selected = _lock_compatible_batch(_database_first_candidates(ready_candidates, tasks_by_id))
     return {
         "ready_tasks": selected,
         "ready_task_ids": [task["id"] for task in selected],
@@ -211,9 +211,9 @@ def verify_task_file_changes(
         ]
 
     tasks_by_id = {
-        str(task.get("id") or task.get("task_id")): task
+        str(task.get("id")): task
         for task in tasks or []
-        if task.get("id") or task.get("task_id")
+        if task.get("id")
     }
     verified: list[dict[str, Any]] = []
     for result in results:
@@ -285,7 +285,7 @@ def _already_satisfied_evidence_error(
         return "missing satisfaction_evidence"
     target_files = [
         str(path).lstrip("./")
-        for path in task.get("targetFiles", [])
+        for path in task.get("target_files") or []
         if str(path).strip()
     ]
     raw_reported_files = evidence.get("target_files")
@@ -304,7 +304,7 @@ def _already_satisfied_evidence_error(
 
     criteria = [
         str(item)
-        for item in task.get("acceptance_criteria") or task.get("acceptanceCriteria") or []
+        for item in task.get("acceptance_criteria") or []
         if str(item).strip()
     ]
     raw_criteria = evidence.get("acceptance_criteria")
@@ -378,7 +378,11 @@ def _task_authorized_paths(task: dict[str, Any]) -> list[str]:
         for change in task.get("change_scope", [])
         if isinstance(change, dict) and change.get("path")
     )
-    paths.extend(str(path) for path in task.get("targetFiles", []) if str(path).strip())
+    paths.extend(
+        str(path)
+        for path in task.get("target_files") or []
+        if str(path).strip()
+    )
     return list(dict.fromkeys(path.lstrip("./") for path in paths if path))
 
 
@@ -506,9 +510,9 @@ def _overall_status(
 
 
 def _dependencies(task: dict[str, Any]) -> list[str]:
-    """读取任务依赖 ID，兼容 dependencies 与 dependsOn。"""
+    """读取当前 DAG v3 任务的依赖 ID。"""
 
-    value = task.get("dependencies") or task.get("dependsOn") or []
+    value = task.get("dependencies") or []
     return (
         [str(item) for item in value if str(item).strip()]
         if isinstance(value, list)
@@ -538,7 +542,7 @@ def _lock_compatible_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     serial = [
         task
         for task in tasks
-        if not bool(task.get("can_run_in_parallel", task.get("canRunInParallel", True)))
+        if not bool(task.get("can_run_in_parallel", True))
     ]
     if serial:
         return [sorted(serial, key=_task_sort_key)[0]]
@@ -554,8 +558,32 @@ def _lock_compatible_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return selected or [sorted(tasks, key=_task_sort_key)[0]]
 
 
+def _database_first_candidates(
+    ready_candidates: list[dict[str, Any]],
+    tasks_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """只要数据库任务尚未成功完成，就禁止同批派发后端或前端任务。"""
+
+    database_tasks = [
+        task for task in tasks_by_id.values() if str(task.get("owner") or "") == "database"
+    ]
+    if not database_tasks:
+        return ready_candidates
+    database_done = all(
+        task.get("status", RUNNABLE_STATUS) in {"completed", "already_satisfied"}
+        for task in database_tasks
+    )
+    if database_done:
+        return ready_candidates
+    return [
+        task
+        for task in ready_candidates
+        if str(task.get("owner") or "") == "database"
+    ]
+
+
 def _task_locks(task: dict[str, Any]) -> list[str]:
-    """从 lock_scope、change_scope、targetFiles 和 allowed_paths 推导写锁。"""
+    """从 lock_scope、change_scope、target_files 和 allowed_paths 推导写锁。"""
 
     locks = _string_list(task.get("lock_scope"))
     if locks:
@@ -567,8 +595,8 @@ def _task_locks(task: dict[str, Any]) -> list[str]:
             for item in change_scope
             if isinstance(item, dict) and item.get("path")
         ]
-    locks.extend(_string_list(task.get("targetFiles") or task.get("target_files")))
-    locks.extend(_string_list(task.get("allowed_paths") or task.get("allowedPaths")))
+    locks.extend(_string_list(task.get("target_files")))
+    locks.extend(_string_list(task.get("allowed_paths")))
     return sorted({lock for lock in locks if lock})
 
 
@@ -612,11 +640,22 @@ def _normalized_scope(scope: dict[str, Any] | None) -> dict[str, str]:
     value = scope if isinstance(scope, dict) else {}
     target_type = str(value.get("type") or "application").strip()
     target_id = str(value.get("targetId") or value.get("target_id") or "").strip()
+    api_contract_id = str(
+        value.get("apiContractId") or value.get("api_contract_id") or ""
+    ).strip()
     if target_type not in {"application", "page", "data_source", "endpoint"}:
         target_type = "application"
     if target_type == "application":
         target_id = target_id or "application"
-    return {"type": target_type, "targetId": target_id}
+    return {
+        "type": target_type,
+        "targetId": target_id,
+        **(
+            {"apiContractId": api_contract_id}
+            if target_type == "endpoint" and api_contract_id
+            else {}
+        ),
+    }
 
 
 def _target_unit_ids(scope: dict[str, str]) -> list[str]:

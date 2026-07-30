@@ -11,6 +11,7 @@ PROCESS_DETAIL_LIMIT = 24_000
 WORKFLOW_NODE_LABELS = {
     "detail_confirmation": "页面细节确认",
     "inspect_workspace": "工作区快照检查",
+    "inspect_database_context": "数据库上下文检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
     "integration_test": "集成测试与质量门禁",
@@ -23,7 +24,8 @@ WORKFLOW_NODE_LABELS = {
 # 仅用于可视化层的兜底预测；实际节点路由始终以 LangGraph 为准。
 WORKFLOW_STATIC_NEXT_NODES = {
     "detail_confirmation": ["inspect_workspace"],
-    "inspect_workspace": ["prepare_build_tasks"],
+    "inspect_workspace": ["inspect_database_context", "prepare_build_tasks"],
+    "inspect_database_context": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
     "build": ["integration_test"],
     "acceptance": ["finalize_project"],

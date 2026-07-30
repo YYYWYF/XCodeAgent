@@ -31,7 +31,8 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 START
   → detail_confirmation //direct ChatModel负责页面设计
   → inspect_workspace //确定性工作区快照
-  → prepare_build_tasks //direct ChatModel 基于快照生成静态 Build DAG
+  → inspect_database_context //仅当 EndpointDetail.data_origin 明确来源于数据库时执行
+  → prepare_build_tasks //direct ChatModel 基于快照和可选数据库摘要生成静态 Build DAG
   → build //BuildScheduler 派发给 CodeRunner
   → integration_test
       ├─ 测试与质量门禁通过 → launch_project
@@ -95,11 +96,17 @@ START
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
-当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。主 Graph 当前支持从 `detail_confirmation`、`inspect_workspace`、`prepare_build_tasks` 和后续执行节点续跑；首页独立规划 Graph 继续自行处理 `requirements` 与 `project_planning` 的恢复。
+当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。主 Graph 当前支持从 `detail_confirmation`、`inspect_workspace`、`inspect_database_context`、`prepare_build_tasks` 和后续执行节点续跑；首页独立规划 Graph 继续自行处理 `requirements` 与 `project_planning` 的恢复。
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
 `prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。定向 Build Context 以该已确认 ProjectPlan 的 `api_contracts` 为 endpoint 请求/响应权威来源；页面外置详情仍是页面任务的正式输入，但 endpoint 外置详情只作可选补充，缺失、未确认或失效时不得替代或否定 ProjectPlan 契约。集成测试失败后的修复不回到 `prepare_build_tasks`；包括 API 契约错误在内的失败都由 RepairPlanner 生成受限 repair tasks，然后回到 `build` 由 BuildScheduler 调度执行。
+
+`inspect_database_context` 是任务规划前的条件节点，不属于固定主干。`inspect_workspace` 完成后，后端只读取已确认 EndpointDetail 中的 `data_origin.effective_source.kind` 或 `data_origin.source_type` 判断是否进入该节点：`mysql_existing/mysql_new_table/mysql/database/db` 进入数据库上下文检查；`third_party/external_api/http_api/api/rest_api` 直接进入 `prepare_build_tasks`，前端不展示数据库节点；`unknown/needs_user_confirmation/missing` 进入数据库节点并阻断，要求用户先修正接口详细设计。该判断不使用 `ProjectPlan.data_sources` 作为真实库表事实，也不再按 HTTP method 推断，因此 GET 列表接口只要来源于数据库也会检查真实库表。
+
+该节点调用受控 `get_mysql_table_info` 形成压缩 `DatabasePlanningContext` 并写入 Graph State。`prepare_build_tasks` 只消费该前置摘要，不在任务规划内部再次查库；若当前 scope 来自数据库但缺少 `status=completed` 的数据库摘要，必须停止并返回 `requires_user_input`。当前数据库连接信息仍从 `.env` 暴露给后端进程的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PWD`、`MYSQL_DATABASE` 读取；TODO：后续改为 AG-UI 页面让用户输入或选择数据库连接，并在扫描/执行前确认。
+
+这一路由映射到参考架构时，沿用 learn-coding-agent 的“先收集真实上下文、再规划行动”的紧凑循环；采用 OpenCode 风格的显式 session 节点和可恢复状态；符合 Deep Agents 的外层确定性门禁。为满足 128k 上下文预算，节点只保存压缩 schema summary、目标 endpoint/source 标识和摘要哈希，不把原始数据库工具输出、完整 ProjectPlan 或仓库内容塞进模型上下文。
 
 ### `classify_request_complexity`
 
@@ -295,9 +302,13 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。模型显式依赖只用于
 
 数据库 Unit 必须先于 `backend:bootstrap` 和依赖它的 backend endpoint Unit；页面 Unit 依赖它使用的 backend endpoint Unit。阶段一只落规划合同、骨架和解析规则，不实现新的 database/backend 执行 agent；后续 BuildScheduler 和执行 runner 必须按该合同确保 database Unit 完成并处理高危审批后，才进入 backend/frontend 代码修改。
 
-阶段二在 `prepare_build_tasks` 的 build context 解析后追加 `database_planning_context`：当当前 endpoint scope 或页面/API scope 内存在可能修改数据库的接口（优先按 `POST/PUT/PATCH/DELETE` 判断，并结合 EndpointDetail 中的写入、建表、迁移、删除等线索）且数据源是 MySQL/数据库时，后端会先调用 `get_mysql_table_info` 读取真实库表摘要，生成 `DatabasePlanningContext`，再把该摘要与 EndpointDetail、API Contract 一起放入 `TaskPreparationContext.executable_details` 传给任务规划模型。模型必须把该摘要作为唯一真实数据库结构来源，不得从 `ProjectPlan.data_sources` 臆测表或字段。当前数据库连接信息仍从 `.env` 暴露给后端进程的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PWD`、`MYSQL_DATABASE` 读取；TODO：后续改为 AG-UI 页面让用户输入或选择数据库连接，并在扫描/执行前确认。
+任务规划模型输入中的 `database_planning_context` 只来自前置 `inspect_database_context` 节点：当当前 endpoint scope 或页面/API scope 内存在 `EndpointDetail.data_origin` 明确指向数据库的接口时，前置节点已经调用 `get_mysql_table_info` 读取真实库表摘要并生成 `DatabasePlanningContext`；`prepare_build_tasks` 再把该摘要与 EndpointDetail、API Contract 一起放入 `TaskPreparationContext.executable_details`。模型必须把该摘要作为唯一真实数据库结构来源，不得从 `ProjectPlan.data_sources` 臆测表或字段。外部 API scope 不携带数据库摘要，也不得生成 database Unit 或 database task。
 
-Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `targetFiles` 的可执行代码变更任务。仅检查已有前端壳、路由或布局的候选任务不会进入任务注册表，统一交给 `integration_test` 验证；`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
+任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：`owner=database` 的任务必须挂在 `database:*` Unit，`task_type` 只能是 `database.change` 或 `database.verify`，必须声明非空 `database_scope`，不得包含 Java/TypeScript/Python/样式等代码文件路径；高危数据库操作如删表、删字段、删除数据、truncate 必须声明 `approval.required=true`。Backend task 不得声明 `database_scope` 或 `database.*` task_type；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。违反这些规则时 `task_graph.validation.is_valid=false`，`prepare_build_tasks` 不会进入 Build。
+
+数据库变更任务的生成条件也由确定性规则兜底：如果已有 `DatabasePlanningContext.status=completed`，且当前 endpoint 只是 `mysql_existing` 的 GET/只读接口、没有 `mysql_new_table` 或 schema change differences/notes，则模型生成的多余 `database.change` 会被移除；后端实现任务直接基于真实摘要生成查询和映射代码。只有新表、写接口或详情中明确存在 schema 变更需求时，才允许保留 database change task。
+
+Build DAG 只注册具有 `change_scope`、`allowed_paths`、`target_files` 或数据库 `database_scope` 的可执行任务。仅检查已有前端壳、路由或布局的候选任务不会进入任务注册表，统一交给 `integration_test` 验证；`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
 
 该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。数据库摘要在任务规划阶段直接通过受控工具获取并压缩为 `database_planning_context`，不从 `ProjectPlan.data_sources` 臆测真实库表。模型负责将当前已确认的页面详细设计、相关 endpoint 详情、API Contract、数据库摘要和当前工程结构转换成可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
 
@@ -317,7 +328,7 @@ Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `targetFiles` 的
 
 节点成功后必须写入两个任务 DAG 产物：
 
-- `.xcodeagent/plans/build-task-plan.json`：内部结构化状态，供 BuildScheduler、调试续跑和后续节点读取；
+- `.xcodeagent/plans/build-task-plan.json`：内部结构化状态，供 BuildScheduler、调试续跑和后续节点读取；v3 task registry 使用 snake_case 单一字段，不再写入或读取 `task_id/dependsOn/targetFiles/acceptanceCriteria/canRunInParallel` 等旧 DAG 同义字段，`agent_note` 只保留短摘要和响应 hash；
 - `.xcodeagent/plans/BUILD_TASK_DAG.md`：人类可读的任务 DAG 摘要，展示任务、owner、依赖、change scope 和验收标准。该 Markdown 不作为用户编辑入口，修改任务 DAG 仍应通过确认后的 ProjectPlan 或重新执行 `prepare_build_tasks` 完成。
 
 任务准备期间通过 LangGraph custom stream 发送 `prepare_build_tasks.progress` 完整快照，AG-UI 运行层将其投射到同一个 `workflow:prepare_build_tasks` 的 `agent-process.dagGeneration` 字段。快照固定按 Unit 骨架、目标上下文、契约校验、模型规划、任务编译、DAG 校验和产物保存七阶段排列；最终任务按有效拓扑序展示，无效图则保留完整 task registry。公开快照只包含安全摘要、变更路径、验收标准和 Markdown 产物标签，不发送模型原文、WorkspaceSnapshot 正文或内部 JSON 路径。
@@ -344,7 +355,7 @@ app-demo-prepare-build-tasks var/workspaces/demo-project/.xcodeagent/plans/proje
 
 本地调试某个节点时，使用前端 Chat Composer 的“Workflow 调试”面板选择开始节点，并填写已落盘 JSON 产物路径，避免每次从头生成需求文档。调试面板通过 AG-UI `forwardedProps.workflowDebug` 传入 `resumeFrom`、`requirementSpecPath`、`projectPlanPath`、`workspaceSnapshotPath` 和 `buildTaskPlanPath`。
 
-如果要从已经生成的项目计划调试后续节点，可填写 `project-plan.json` 并把开始节点设置为 `detail_confirmation`、`inspect_workspace` 或 `prepare_build_tasks`。从 `prepare_build_tasks` 或后续节点续跑时，也可以填写 `.xcodeagent/cache/workspace-snapshots/<revision>.1.0.0.json` 复用已生成的工作区快照。调试续跑仍会遵守确认闸口；未确认的 `ProjectPlan` 不会进入代码生成。为兼容已有项目，调试目录解析仍能读取旧的 `specs/` 和 `plans/` 路径；新写入统一使用 `.xcodeagent/`。
+如果要从已经生成的项目计划调试后续节点，可填写 `project-plan.json` 并把开始节点设置为 `detail_confirmation`、`inspect_workspace`、`inspect_database_context` 或 `prepare_build_tasks`。从 `prepare_build_tasks` 或后续节点续跑时，也可以填写 `.xcodeagent/cache/workspace-snapshots/<revision>.1.0.0.json` 复用已生成的工作区快照。调试续跑仍会遵守确认闸口；未确认的 `ProjectPlan` 不会进入代码生成。为兼容已有项目，调试目录解析仍能读取旧的 `specs/` 和 `plans/` 路径；新写入统一使用 `.xcodeagent/`。
 
 ### `build`
 
@@ -372,13 +383,13 @@ scheduler loop:
 `BuildScheduler` 只做确定性调度，不作为 DeepAgent：
 
 - `select_ready_build_batch`：只选择 `pending` 且依赖全部 `completed` 的任务；依赖 `failed` 的下游任务保持阻塞；
-- 文件锁来自 `lock_scope`、`change_scope.path`、`targetFiles` 和 `allowed_paths`，同一批 ready task 之间不能冲突；
+- 文件锁来自 `lock_scope`、`change_scope.path`、`target_files` 和 `allowed_paths`，同一批 ready task 之间不能冲突；
 - 任务按 `owner` 派发给对应 CodeRunner：`database` 使用 Database Change Agent，`backend` 使用 Data Source Generation Agent，`frontend` 使用 Frontend Generation Agent；
 - CodeRunner 只返回结构化 `TaskResult`，不更新 DAG；
 - 同 owner 批次的 workspace diff 必须按每个任务的授权路径重新归属；一个任务只能记录命中自身范围的 `changed_files`，不能把整批变更复制给所有结果；
 - `database` owner 不参与 workspace diff 归属；它必须在执行前重新获取当前真实数据库摘要，由只读 Database Change Agent 生成 SQL 计划，再由确定性数据库执行服务完成风险分类、审批和执行证据记录；
 - Frontend/Data Source CodeRunner 通过 Deep Agent `messages + values` 主图及子图流捕获 `ls/read_file/glob/grep/write_file/edit_file/delete_file`；内置 `task` 委派后的子代理调用使用流命名空间隔离调用 ID，保证活动持续刷新。系统只把归一化中文文案和虚拟路径作为临时工具活动投影；文件内容、替换参数、工具结果、宿主机路径以及 `write_todos/task/execute` 不进入 UI；
-- 工具活动优先按 `allowed_paths`、`targetFiles`、`change_scope` 归属具体运行任务，无法精确命中时回退当前 owner 批次。它只存在于实时 `buildExecutionSlice.tasks[*].activeToolActivity`，新活动覆盖旧活动，批次结算后清除，不写入 BuildTaskPlan 或 Workflow 历史；
+- 工具活动优先按 `allowed_paths`、`target_files`、`change_scope` 归属具体运行任务，无法精确命中时回退当前 owner 批次。它只存在于实时 `buildExecutionSlice.tasks[*].activeToolActivity`，新活动覆盖旧活动，批次结算后清除，不写入 BuildTaskPlan 或 Workflow 历史；
 - 调度器校验缺失或非法结果，并将其转为 `runner_protocol_error`；
 - 失败结果先分类为 `retry`、`repair`、`requires_confirmation` 或 `terminal_failure`。`repair` 会触发 Build Repair Planner 生成受约束 repair task，并 append 到运行时 Build DAG；repair task 成功后调度器关闭原 failed task 并继续释放下游依赖。`requires_confirmation` 和 `terminal_failure` 仍会阻断构建并写入摘要。
 
@@ -476,8 +487,8 @@ testing.START
 任务编译和执行还必须遵守以下确定性边界：
 
 - 页面任务进入 DAG 前，以实时工作区校对模型计划路径。只有当计划入口不存在，且实时 `frontend/src/pages` 中存在唯一的同义目录（忽略大小写、分隔符和 `Page` 后缀）时，才把目标路径改写到该既有入口并把 `add` 改成 `modify`；多候选时不得猜测。这样可修复 WorkspaceSnapshot 在长流程中变旧造成的 `DashboardPage`/`Dashboard` 重复入口，同时保留可审计的 `path_reconciliation`。
-- 模板页面必须具备页面范围内的菜单与自动路由登记结果。任务编译器先读取实时 `frontend/src/constants/menus.ts`：脚手架已写入完全一致的 `{ path, name, key }` 时，不再补充重复任务，并将模型已有菜单任务标记为 `already_satisfied`；条目缺失时生成或规范化为只能追加 `BIZ_MENUS` 顶层数组的受限任务。PageKey 必须与规范页面目录完全一致，不得修改路由生成器或既有菜单项。
-- 任何具有精确 `targetFiles` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
+- 模板页面必须具备页面范围内的菜单与自动路由登记结果。任务编译器先读取实时 `frontend/src/constants/menus.ts`：脚手架已写入完全一致的 `{ path, name, key }` 时，不再补充重复任务，并将模型已有菜单任务标记为 `already_satisfied`；仅在条目缺失时生成只能追加 `BIZ_MENUS.firstLevel.children` 的受限任务。PageKey 必须与规范页面目录完全一致，不得修改路由生成器或既有菜单项。
+- 任何具有精确 `target_files` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
 - 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`。`already_satisfied` 只有在报告覆盖全部精确目标文件、磁盘状态符合 `add/modify/delete`、并按零基 `criterion_index` 为每条原始验收标准提供 passed evidence 时才成立；旧版完整 criterion 文本仍可读取，但自然语言中的“已满足”或相似路径不能改变调度状态。代码生成 runner 强制使用该结构化协议，缺失或损坏的顶层报告统一成为 `runner_protocol_error`，不得兼容成 `completed`。
 - Deep Agent 工具活动继续使用根图和子图流；执行器按“根图优先、浅层 namespace 优先、同层最新优先”恢复最终 `values/messages`。根 `values` 快照不含 `messages` 时先使用根消息分片，再回退到最浅层 Agent namespace，且不得把工具结果或更深子 Agent 文本误作主 Agent 报告。
 - RepairPlanner 只能复用父任务的原始验收标准，不能把“必须产生文件变更”等执行动作扩展成新验收点；修复任务以 `already_satisfied` 验证目标状态时，与真实写入成功一样关闭失败父任务，避免制造重复菜单或其他非幂等改动。

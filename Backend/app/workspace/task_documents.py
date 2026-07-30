@@ -115,13 +115,13 @@ def render_build_task_dag_markdown(build_task_plan: dict[str, Any]) -> str:
     if not tasks:
         lines.append("| - | - | - | - | - | - | - |")
     for task in tasks:
-        dependencies = task.get("dependencies") or task.get("dependsOn") or []
-        acceptance = task.get("acceptance_criteria") or task.get("acceptanceCriteria") or []
+        dependencies = task.get("dependencies") or []
+        acceptance = task.get("acceptance_criteria") or []
         lines.append(
             "| "
             + " | ".join(
                 [
-                    _cell(task.get("id") or task.get("task_id") or ""),
+                    _cell(task.get("id") or ""),
                     _cell(task.get("unit_id") or ""),
                     _cell(task.get("owner") or ""),
                     _cell(task.get("status") or "pending"),
@@ -170,7 +170,7 @@ def _count_owner(tasks: list[dict[str, Any]], owner: str) -> int:
 
 
 def _change_scope_text(task: dict[str, Any]) -> str:
-    scope = task.get("change_scope") or task.get("changeScope") or []
+    scope = task.get("change_scope") or []
     if not isinstance(scope, list):
         return "-"
     paths: list[str] = []

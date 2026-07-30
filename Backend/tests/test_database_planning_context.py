@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app.graph.nodes.tasks import (
     _task_preparation_project_plan,
-    _with_database_planning_context,
+    _with_database_planning_context_from_state,
 )
-from app.services.database_planning_context import prepare_database_planning_context
+from app.services.database_planning_context import (
+    database_context_requirement,
+    prepare_database_planning_context,
+)
+from app.services.build_context_resolver import resolve_target_build_context
 
 
 def _project_plan(method: str = "POST") -> dict:
@@ -76,6 +82,18 @@ def _build_context(endpoint_id: str = "orders.create") -> dict:
                 "data_source_id": "orders",
                 "method": "POST",
                 "path": "/orders",
+                "data_origin": {
+                    "source_type": "mysql_existing",
+                    "effective_source": {
+                        "kind": "mysql_existing",
+                        "data_source_id": "orders",
+                        "database": "sales",
+                        "tables": ["orders"],
+                    },
+                    "field_mappings": [],
+                    "differences": [],
+                    "notes": [],
+                },
                 "processing_logic": ["写入 orders 表。"],
             }
         ],
@@ -145,8 +163,8 @@ class DatabasePlanningContextTests(unittest.TestCase):
         self.assertTrue(context["contexts"][0]["schema_hash"])
         self.assertIn("AG-UI", context["todo"])
 
-    def test_readonly_endpoint_skips_database_planning_context(self) -> None:
-        """只读接口不会在任务规划前扫描数据库。"""
+    def test_readonly_database_endpoint_reads_mysql_summary(self) -> None:
+        """只读接口只要 data_origin 来自数据库，也会在任务规划前扫描数据库。"""
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
         with patch(
@@ -161,14 +179,79 @@ class DatabasePlanningContextTests(unittest.TestCase):
                 "summary": "查询订单列表。",
                 "response_schema_ref": "OrderCreate",
             }
+            build_context = _build_context("orders.list")
+            build_context["direct_endpoint_details"][0]["method"] = "GET"
+            build_context["direct_endpoint_details"][0]["processing_logic"] = [
+                "查询 orders 表。"
+            ]
             context = prepare_database_planning_context(
                 plan,
-                {**_build_context("orders.list"), "direct_endpoint_details": []},
+                build_context,
             )
 
-        tool.invoke.assert_not_called()
-        self.assertEqual(context["status"], "skipped")
-        self.assertEqual(context["reason"], "no_database_mutation_endpoint")
+        tool.invoke.assert_called_once_with({"table_name": "orders"})
+        self.assertEqual(context["status"], "completed")
+        self.assertEqual(context["contexts"][0]["data_source_id"], "orders")
+
+    def test_third_party_endpoint_skips_database_context_node(self) -> None:
+        """外部 API 来源不会触发数据库上下文检查节点。"""
+
+        build_context = _build_context()
+        build_context["direct_endpoint_details"][0]["data_origin"] = {
+            "source_type": "third_party",
+            "effective_source": {"kind": "third_party", "name": "remote-api"},
+            "field_mappings": [],
+            "differences": [],
+            "notes": [],
+        }
+        requirement = database_context_requirement(_project_plan(), build_context)
+
+        self.assertFalse(requirement["required"])
+        self.assertEqual(requirement["status"], "not_required")
+
+    def test_third_party_endpoint_scope_excludes_database_unit(self) -> None:
+        """外部 API endpoint 的构建范围不应包含 database Unit。"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            detail_path = Path(tmpdir) / "endpoint.json"
+            detail_path.write_text(
+                json.dumps(
+                    {
+                        **_build_context()["direct_endpoint_details"][0],
+                        "status": "confirmed",
+                        "data_origin": {
+                            "source_type": "third_party",
+                            "effective_source": {
+                                "kind": "third_party",
+                                "name": "remote-api",
+                            },
+                            "field_mappings": [],
+                            "differences": [],
+                            "notes": [],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            plan = _project_plan()
+            plan["api_contracts"][0]["endpoints"][0]["detail_design"] = {
+                "status": "confirmed",
+                "json_path": str(detail_path),
+            }
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="endpoint",
+                target_id="orders.create",
+                api_contract_id="orders-api",
+            )
+
+        self.assertNotIn("database:orders", context["required_unit_ids"])
+        self.assertIn(
+            "backend:endpoint:orders-api:orders.create",
+            context["required_unit_ids"],
+        )
 
     def test_task_preparation_view_includes_database_planning_context(self) -> None:
         """任务规划模型输入同时包含数据库摘要、EndpointDetail 和 API Contract。"""
@@ -178,7 +261,12 @@ class DatabasePlanningContextTests(unittest.TestCase):
             "app.services.database_schema_summary.get_mysql_table_info",
             tool,
         ):
-            build_context = _with_database_planning_context(
+            database_context = prepare_database_planning_context(
+                _project_plan(),
+                _build_context(),
+            )
+            build_context = _with_database_planning_context_from_state(
+                {"database_planning_context": database_context},
                 _project_plan(),
                 _build_context(),
             )

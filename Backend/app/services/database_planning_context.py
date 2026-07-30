@@ -10,30 +10,29 @@ from app.domain.models import DatabasePlanningContext
 from app.services.database_schema_summary import (
     dict_items,
     inspect_mysql_schema,
-    is_database_data_source,
     target_summary,
 )
 
-
-_MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-_MUTATION_KEYWORDS = (
-    "insert",
-    "update",
-    "delete",
-    "create",
-    "drop",
-    "alter",
-    "truncate",
-    "seed",
-    "新增",
-    "创建",
-    "更新",
-    "修改",
-    "删除",
-    "写入",
-    "迁移",
-    "建表",
-)
+_DATABASE_ORIGIN_KINDS = {
+    "mysql",
+    "mysql_existing",
+    "mysql_new_table",
+    "database",
+    "db",
+}
+_EXTERNAL_ORIGIN_KINDS = {
+    "third_party",
+    "external_api",
+    "http_api",
+    "api",
+    "rest_api",
+}
+_UNKNOWN_ORIGIN_KINDS = {
+    "",
+    "unknown",
+    "needs_user_confirmation",
+    "missing",
+}
 
 
 def prepare_database_planning_context(
@@ -42,9 +41,12 @@ def prepare_database_planning_context(
 ) -> dict[str, Any]:
     """为任务规划阶段准备真实数据库摘要，供数据库 Unit 与后端 Unit 拆分使用。"""
 
-    targets = _database_mutation_targets(project_plan, build_context)
+    targets = database_origin_targets(project_plan, build_context)
     if not targets:
-        return _planning_skipped("no_database_mutation_endpoint", "当前构建范围没有需要修改数据库的接口。")
+        return _planning_skipped(
+            "no_database_origin_endpoint",
+            "当前构建范围没有来源于数据库的接口。",
+        )
 
     contexts: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
@@ -78,11 +80,93 @@ def prepare_database_planning_context(
     }
 
 
-def _database_mutation_targets(
+def database_context_requirement(
+    project_plan: dict[str, Any],
+    build_context: dict[str, Any],
+) -> dict[str, Any]:
+    """根据已确认 EndpointDetail.data_origin 判断数据库上下文节点是否应执行。"""
+
+    targets = database_origin_targets(project_plan, build_context)
+    unresolved = _unresolved_origin_targets(project_plan, build_context)
+    if targets:
+        return {
+            "required": True,
+            "status": "required",
+            "reason": "database_data_origin",
+            "targets": [target_summary(target) for target in targets],
+        }
+    if unresolved:
+        return {
+            "required": False,
+            "status": "blocked",
+            "reason": "unresolved_data_origin",
+            "message": "接口详细设计中的 data_origin 未明确数据来源，不能继续任务规划。",
+            "targets": [target_summary(target) for target in unresolved],
+        }
+    return {
+        "required": False,
+        "status": "not_required",
+        "reason": "no_database_data_origin",
+        "targets": [],
+    }
+
+
+def database_origin_targets(
     project_plan: dict[str, Any],
     build_context: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """从当前构建上下文中找出需要真实数据库摘要的写接口。"""
+    """从当前构建上下文中找出 EndpointDetail 明确声明为数据库来源的接口。"""
+
+    return [
+        target
+        for target in _endpoint_targets(project_plan, build_context)
+        if _data_origin_kind(target.get("endpoint_detail")) in _DATABASE_ORIGIN_KINDS
+    ]
+
+
+def endpoint_detail_uses_database(endpoint_detail: Any) -> bool:
+    """判断单个 EndpointDetail 是否明确声明数据来源为数据库。"""
+
+    return endpoint_detail_origin_kind(endpoint_detail) in _DATABASE_ORIGIN_KINDS
+
+
+def endpoint_detail_origin_kind(endpoint_detail: Any) -> str:
+    """读取 EndpointDetail.data_origin 的显式来源类型，供路由和 Unit 过滤复用。"""
+
+    if not isinstance(endpoint_detail, dict):
+        return ""
+    data_origin = endpoint_detail.get("data_origin")
+    if not isinstance(data_origin, dict):
+        return ""
+    effective_source = data_origin.get("effective_source")
+    effective_kind = (
+        str(effective_source.get("kind") or "")
+        if isinstance(effective_source, dict)
+        else ""
+    )
+    source_type = str(data_origin.get("source_type") or "")
+    kind = (effective_kind or source_type).strip().lower()
+    return kind if kind not in _EXTERNAL_ORIGIN_KINDS else "external_api"
+
+
+def _unresolved_origin_targets(
+    project_plan: dict[str, Any],
+    build_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """找出已确认详情中数据来源缺失或待用户确认的接口。"""
+
+    return [
+        target
+        for target in _endpoint_targets(project_plan, build_context)
+        if _data_origin_kind(target.get("endpoint_detail")) in _UNKNOWN_ORIGIN_KINDS
+    ]
+
+
+def _endpoint_targets(
+    project_plan: dict[str, Any],
+    build_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """把当前构建范围中的 endpoint 归一化为数据库扫描候选目标。"""
 
     endpoint_details = {
         str(detail.get("endpoint_id") or ""): detail
@@ -105,8 +189,6 @@ def _database_mutation_targets(
         if api_contract_ids and contract_id not in api_contract_ids:
             continue
         data_source = _data_source_for_contract(project_plan, contract)
-        if not is_database_data_source(data_source):
-            continue
         for endpoint in dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "")
             if endpoint_ids and endpoint_id not in endpoint_ids:
@@ -115,17 +197,43 @@ def _database_mutation_targets(
             target = {
                 "api_contract_id": contract_id,
                 "endpoint_id": endpoint_id,
-                "method": str(endpoint.get("method") or detail.get("method") or "GET").upper(),
+                "method": str(
+                    endpoint.get("method") or detail.get("method") or "GET"
+                ).upper(),
                 "path": str(endpoint.get("path") or detail.get("path") or ""),
                 "summary": str(endpoint.get("summary") or detail.get("summary") or ""),
                 "data_source_id": str(contract.get("data_source_id") or ""),
-                "data_source": data_source,
+                "data_source": _target_data_source(data_source, detail),
                 "api_contract": _contract_summary(contract, endpoint_ids),
                 "endpoint_detail": detail,
             }
-            if _endpoint_requires_database_change(endpoint, detail, target):
-                targets.append(target)
+            targets.append(target)
     return targets
+
+
+def _data_origin_kind(endpoint_detail: Any) -> str:
+    """读取 EndpointDetail.data_origin 的显式来源类型，拒绝用 ProjectPlan 臆测。"""
+
+    return endpoint_detail_origin_kind(endpoint_detail)
+
+
+def _target_data_source(
+    project_plan_source: dict[str, Any],
+    endpoint_detail: dict[str, Any],
+) -> dict[str, Any]:
+    """把详情中的真实来源提示合并为工具扫描目标，ProjectPlan 只作标识补充。"""
+
+    data_origin = endpoint_detail.get("data_origin")
+    data_origin = data_origin if isinstance(data_origin, dict) else {}
+    effective_source = data_origin.get("effective_source")
+    effective_source = effective_source if isinstance(effective_source, dict) else {}
+    return {
+        **project_plan_source,
+        **effective_source,
+        "type": effective_source.get("kind")
+        or data_origin.get("source_type")
+        or project_plan_source.get("type"),
+    }
 
 
 def _data_source_for_contract(
@@ -143,28 +251,6 @@ def _data_source_for_contract(
         ),
         {},
     )
-
-
-def _endpoint_requires_database_change(
-    endpoint: dict[str, Any],
-    endpoint_detail: dict[str, Any],
-    target: dict[str, Any],
-) -> bool:
-    """判断接口是否可能修改数据库，优先使用方法和详情中的写操作线索。"""
-
-    if str(target.get("method") or "").upper() in _MUTATION_METHODS:
-        return True
-    text = json.dumps(
-        {
-            "endpoint_detail": endpoint_detail,
-            "endpoint_id": endpoint.get("id"),
-            "path": target.get("path"),
-            "summary": target.get("summary"),
-        },
-        ensure_ascii=False,
-        default=str,
-    ).lower()
-    return any(keyword in text for keyword in _MUTATION_KEYWORDS)
 
 
 def _contract_summary(contract: dict[str, Any], endpoint_ids: set[str]) -> dict[str, Any]:

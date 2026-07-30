@@ -13,21 +13,21 @@ class TaskSchedulerTests(unittest.TestCase):
             [
                 {
                     "id": "layout",
-                    "type": "frontend",
-                    "targetFiles": ["frontend/src/pages/Dashboard/index.tsx"],
-                    "dependsOn": [],
+                    "task_type": "frontend",
+                    "target_files": ["frontend/src/pages/Dashboard/index.tsx"],
+                    "dependencies": [],
                 },
                 {
                     "id": "data",
-                    "type": "frontend",
-                    "targetFiles": ["frontend/src/pages/Dashboard/index.tsx"],
-                    "dependsOn": ["layout"],
+                    "task_type": "frontend",
+                    "target_files": ["frontend/src/pages/Dashboard/index.tsx"],
+                    "dependencies": ["layout"],
                 },
             ]
         )
 
         self.assertTrue(all(task["executionMode"] == "subagent-direct-write" for task in tasks))
-        self.assertTrue(all(task["canRunInParallel"] is False for task in tasks))
+        self.assertTrue(all(task["can_run_in_parallel"] is False for task in tasks))
         self.assertEqual(
             [batch["tasks"] for batch in build_execution_batches(tasks)],
             [["layout"], ["data"]],
