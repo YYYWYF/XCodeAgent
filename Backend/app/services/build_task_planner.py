@@ -507,15 +507,24 @@ def _menu_registration_task_payload(
 ) -> dict[str, Any]:
     """生成确定性的模板菜单登记任务字段，避免模型决定菜单 path 形态。"""
 
+    hide_in_menu = _has_react_router_path_param(menu_path)
+    menu_item = (
+        f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}', hideInMenu: true }}"
+        if hide_in_menu
+        else f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}' }}"
+    )
     acceptance = [
         f"{FRONTEND_MENU_PATH} 的 BIZ_MENUS 顶层数组包含页面“{page_name}”。",
         f"新增菜单项 key 为 {page_key}，与 {FRONTEND_PAGE_ENTRY_PREFIX}{page_key}/index.tsx 完全一致。",
         f"新增菜单项 path 为 {menu_path}，且不删除或修改任何已有菜单项。",
     ]
+    if hide_in_menu:
+        acceptance.append(
+            "由于新增菜单项 path 包含 React Router 路径参数，必须设置 hideInMenu: true。"
+        )
     return {
         "description": (
-            f"仅向 BIZ_MENUS 顶层数组追加 "
-            f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}' }}，"
+            f"仅向 BIZ_MENUS 顶层数组追加 {menu_item}，"
             "由模板自动路由加载对应页面入口；不得修改现有菜单项或路由骨架。"
         ),
         "dependencies": page_task_ids,
@@ -536,6 +545,16 @@ def _menu_registration_task_payload(
         "acceptance_criteria": acceptance,
         "acceptanceCriteria": acceptance,
     }
+
+
+def _has_react_router_path_param(path: str) -> bool:
+    """判断菜单 path 是否包含 React Router 动态路径参数。"""
+
+    route_part = str(path or "").split("?", 1)[0].split("#", 1)[0]
+    return any(
+        re.fullmatch(r":[A-Za-z0-9_][A-Za-z0-9_-]*", segment)
+        for segment in route_part.split("/")
+    )
 
 
 def _normalize_existing_menu_tasks(

@@ -158,6 +158,16 @@ function normalizeAbsoluteRoute(rawPath: unknown): string {
   return normalized.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
 }
 
+/** 判断路由是否包含 React Router 动态路径段。 */
+function hasReactRouterPathParam(rawPath: unknown): boolean {
+  const value = String(rawPath ?? '').trim()
+  if (!value) return false
+  return value
+    .split(/[?#]/, 1)[0]
+    .split('/')
+    .some((segment) => /^:[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(segment))
+}
+
 /** 把子节点绝对路由转换成相对父节点的菜单 path，避免重复拼接父级路径。 */
 function relativeMenuPath(currentAbsolutePath: string, parentAbsolutePath: string): string {
   if (!currentAbsolutePath) return ''
@@ -213,7 +223,8 @@ function buildTemplateMenuItems(
     return [{
       key: pageKey,
       name: typeof record.name === 'string' ? record.name : pageKey,
-      path: resolvedPath
+      path: resolvedPath,
+      ...(hasReactRouterPathParam(absolutePath) ? { hideInMenu: true } : {})
     }]
   })
 }

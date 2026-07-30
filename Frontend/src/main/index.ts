@@ -1370,11 +1370,24 @@ function normalizeTemplateMenuItems(value: unknown): ApplicationMenuItem[] {
     if (pathValue) normalized.path = pathValue
     if (nameValue) normalized.name = nameValue
     if (keyValue) normalized.key = keyValue
+    if (hasReactRouterPathParam(pathValue) || record.hideInMenu === true) {
+      normalized.hideInMenu = true
+    }
     if ('icon' in record) normalized.icon = record.icon
     if (targetValue) normalized.target = targetValue
     if (children.length) normalized.children = children
     return [normalized]
   })
+}
+
+/** 判断菜单 path 是否包含 React Router 动态路径参数。 */
+function hasReactRouterPathParam(rawPath: unknown): boolean {
+  const value = String(rawPath ?? '').trim()
+  if (!value) return false
+  return value
+    .split(/[?#]/, 1)[0]
+    .split('/')
+    .some((segment) => /^:[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(segment))
 }
 
 /** 将模板菜单树序列化为 TypeScript 对象字面量片段。 */
@@ -1391,6 +1404,7 @@ function serializeTemplateMenuItems(
       if (item.path) fields.push(`${childIndent}path: ${JSON.stringify(item.path)},`)
       if (item.name) fields.push(`${childIndent}name: ${JSON.stringify(item.name)},`)
       if (item.key) fields.push(`${childIndent}key: ${JSON.stringify(item.key)},`)
+      if (item.hideInMenu === true) fields.push(`${childIndent}hideInMenu: true,`)
       if (typeof item.icon === 'string') {
         fields.push(`${childIndent}icon: ${JSON.stringify(item.icon)},`)
       }

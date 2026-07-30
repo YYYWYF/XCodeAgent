@@ -172,6 +172,16 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 }
 ```
 
+若追加菜单项的 `path` 包含 React Router 路径参数片段（如 `:id`、`detail/:id`），必须同时写入 `hideInMenu: true`，表示该不固定路径页面不出现在菜单中：
+```ts
+{
+  path: 'duty/:id',
+  name: '值班详情',
+  key: 'DutyDetail',
+  hideInMenu: true
+}
+```
+
 `key` 命名规则：PascalCase（如 `DutyList`、`PageDashboard`），且与 `src/pages/` 下对应页面目录名一字不差，否则路由无法解析到页面。
 
 ### `src/apis/` — 业务接口
@@ -363,7 +373,7 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 5. **新增 hooks/工具函数（如需）**：分别在 `src/hooks/`、`src/utils/` 下新建文件。
 6. **编写页面主组件**：替换 `src/pages/<PageKey>/index.tsx` 的占位内容为真实业务代码，从公共目录 import 类型/常量/hooks/API。
 7. **拆分可复用组件（如需）**：页面太长且有可复用模块时，拆到 `src/components/<Module>/`。
-8. **不要碰菜单**：菜单登记由脚手架在创建页面时已完成，生成代码阶段不需要再改 `menus.ts`（除非用户明确要求新增菜单项，且当前页面未在 `BIZ_MENUS` 任意层级注册，此时追加到 `BIZ_MENUS` 顶层数组末尾）。
+8. **不要碰菜单**：菜单登记由脚手架在创建页面时已完成，生成代码阶段不需要再改 `menus.ts`（除非用户明确要求新增菜单项，且当前页面未在 `BIZ_MENUS` 任意层级注册，此时追加到 `BIZ_MENUS` 顶层数组末尾；若新增项 `path` 包含 React Router 路径参数，必须同时设置 `hideInMenu: true`）。
 
 ## 禁止行为清单
 
