@@ -160,6 +160,13 @@ def apply_detail_review_submission(
         else:
             raise ValueError(f"unsupported detail review target type: {target_type}")
 
+    _assert_endpoint_data_origins_resolved(
+        updated,
+        selectedPageId=selectedPageId,
+        selected_api_contract_id=selected_api_contract_id,
+        selected_endpoint_id=selected_endpoint_id,
+    )
+
     for detail in updated.get("page_detail_plans", []):
         if isinstance(detail, dict) and (
             not selectedPageId
@@ -428,6 +435,40 @@ def _apply_endpoint_target_patch(
         raise ValueError(f"unknown endpoint detail review target: {target_id}")
     for key, value in changes.items():
         target[key] = _normalize_editable_value(key, value, target.get(key))
+
+
+def _assert_endpoint_data_origins_resolved(
+    project_plan: dict[str, Any],
+    *,
+    selectedPageId: str | None,
+    selected_api_contract_id: str | None,
+    selected_endpoint_id: str | None,
+) -> None:
+    """确认前校验 endpoint 数据来源，避免未决数据库方案绕过用户确认。"""
+
+    if selectedPageId and not selected_endpoint_id:
+        return
+    unresolved: list[str] = []
+    for detail in project_plan.get("endpoint_detail_plans", []):
+        if not isinstance(detail, dict):
+            continue
+        if selected_endpoint_id and (
+            str(detail.get("api_contract_id") or "") != str(selected_api_contract_id or "")
+            or str(detail.get("endpoint_id") or "") != str(selected_endpoint_id or "")
+        ):
+            continue
+        data_origin = normalize_endpoint_data_origin(detail.get("data_origin"))
+        effective_source = data_origin.get("effective_source")
+        source_type = str(data_origin.get("source_type") or "")
+        if isinstance(effective_source, dict):
+            source_type = str(effective_source.get("kind") or source_type)
+        if source_type == "needs_user_confirmation":
+            unresolved.append(str(detail.get("endpoint_id") or detail.get("name") or "endpoint"))
+    if unresolved:
+        raise ValueError(
+            "endpoint data_origin still needs user confirmation: "
+            + ", ".join(unresolved)
+        )
 
 
 def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:

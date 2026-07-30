@@ -71,6 +71,85 @@ class DetailReviewTests(unittest.TestCase):
         self.assertTrue(confirmed_detail["api_dependencies"])
         self.assertTrue(confirmed_detail["response_bindings"])
 
+    def test_confirmation_rejects_unresolved_endpoint_data_origin(self) -> None:
+        """确认 endpoint 详情时必须先解决待确认的数据来源。"""
+
+        plan = {
+            "frontend_pages": [],
+            "page_detail_plans": [],
+            "api_contracts": [],
+            "endpoint_detail_plans": [
+                {
+                    "api_contract_id": "user_api",
+                    "endpoint_id": "user-roles",
+                    "data_origin": {
+                        "source_type": "needs_user_confirmation",
+                        "effective_source": {
+                            "kind": "needs_user_confirmation",
+                            "description": "需确认新建 role 表或从 user 表派生",
+                        },
+                    },
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "still needs user confirmation"):
+            apply_detail_review_submission(
+                plan,
+                {"review_status": "confirmed", "target_changes": []},
+            )
+
+    def test_confirmation_accepts_resolved_endpoint_data_origin(self) -> None:
+        """用户把数据来源改为确定方案后允许确认 endpoint 详情。"""
+
+        plan = {
+            "frontend_pages": [],
+            "page_detail_plans": [],
+            "api_contracts": [],
+            "endpoint_detail_plans": [
+                {
+                    "api_contract_id": "user_api",
+                    "endpoint_id": "user-roles",
+                    "data_origin": {
+                        "source_type": "needs_user_confirmation",
+                        "effective_source": {
+                            "kind": "needs_user_confirmation",
+                            "description": "需确认新建 role 表或从 user 表派生",
+                        },
+                    },
+                }
+            ],
+        }
+
+        result = apply_detail_review_submission(
+            plan,
+            {
+                "review_status": "confirmed",
+                "target_changes": [
+                    {
+                        "target_type": "endpoint",
+                        "target_id": "user_api:user-roles",
+                        "changes": {
+                            "data_origin": {
+                                "source_type": "mysql_new_table",
+                                "effective_source": {
+                                    "kind": "mysql_new_table",
+                                    "database": "xcode",
+                                    "tables": ["role"],
+                                },
+                            }
+                        },
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(
+            result["endpoint_detail_plans"][0]["data_origin"]["source_type"],
+            "mysql_new_table",
+        )
+        self.assertEqual(result["endpoint_detail_plans"][0]["status"], "confirmed")
+
 
 if __name__ == "__main__":
     unittest.main()

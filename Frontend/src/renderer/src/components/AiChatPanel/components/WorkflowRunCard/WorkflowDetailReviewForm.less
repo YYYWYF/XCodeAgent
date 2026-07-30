@@ -62,6 +62,97 @@
   grid-column: span 1;
 }
 
+.@{class-prefix}-workflow-data-origin-decision {
+  grid-column: span 1;
+}
+
+.@{class-prefix}-workflow-detail-review-fields-data-origin-pending {
+  align-items: stretch;
+
+  > .@{class-prefix}-workflow-detail-review-field:first-child {
+    .ant-input {
+      height: auto !important;
+      max-height: none !important;
+      flex: 1;
+    }
+  }
+}
+
+.@{class-prefix}-workflow-data-origin-decision-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 112px;
+  padding: 12px;
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 8px;
+
+  .ant-radio-wrapper {
+    color: var(--wb-text);
+  }
+
+  .ant-radio-checked .ant-radio-inner {
+    border-color: var(--wb-accent);
+  }
+
+  .ant-radio-inner::after {
+    background-color: var(--wb-accent);
+  }
+}
+
+.@{class-prefix}-workflow-data-origin-decision-context {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  .ant-typography {
+    margin: 0;
+    line-height: 1.5;
+  }
+}
+
+.@{class-prefix}-workflow-data-origin-decision-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.@{class-prefix}-workflow-data-origin-decision-input {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+
+  > .ant-typography-secondary {
+    color: var(--wb-text-muted);
+    font-size: 12px;
+  }
+
+  .ant-input {
+    height: 34px !important;
+    min-height: 34px !important;
+    max-height: 34px !important;
+    color: var(--wb-text);
+    background: var(--wb-surface);
+    border-color: var(--wb-border-strong);
+    border-radius: 6px;
+
+    &:hover {
+      border-color: var(--wb-accent-border);
+    }
+
+    &:focus {
+      border-color: var(--wb-accent);
+      box-shadow: 0 0 0 3px var(--wb-accent-soft);
+    }
+  }
+}
+
+.@{class-prefix}-workflow-data-origin-decision-hint {
+  font-size: 12px;
+}
+
 @media (max-width: 720px) {
   .@{class-prefix}-workflow-detail-review-fields {
     grid-template-columns: 1fr;
@@ -71,5 +162,9 @@
   .@{class-prefix}-workflow-detail-review-field-structured,
   .@{class-prefix}-workflow-detail-review-field-expanded {
     grid-column: 1;
+  }
+
+  .@{class-prefix}-workflow-data-origin-decision-grid {
+    grid-template-columns: 1fr;
   }
 }

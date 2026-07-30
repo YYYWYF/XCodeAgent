@@ -11,6 +11,7 @@ import type {
   WorkflowDetailReviewTarget,
 } from "../../../../typings";
 import { cx } from "../../../../utils";
+import DataOriginDecisionField from "./DataOriginDecisionField";
 
 const { Panel } = Collapse;
 const { Text } = Typography;
@@ -42,6 +43,9 @@ export default function DetailReview({
   );
   const missingSelectedEndpointPlan = Boolean(
     review.summary?.missingSelectedEndpointPlan,
+  );
+  const hasPendingDataOriginDecision = targets.some((target) =>
+    requiresDataOriginDecision(target, changes[target.target_id]?.data_origin),
   );
 
   // 记录单个审核对象的字段改动，并保留同对象此前已编辑的内容。
@@ -158,7 +162,8 @@ export default function DetailReview({
             disabled ||
             missingSelectedPagePlan ||
             missingSelectedEndpointPlan ||
-            targets.length === 0
+            targets.length === 0 ||
+            hasPendingDataOriginDecision
           }
           icon={<CheckCircleOutlined />}
           onClick={confirm}
@@ -320,27 +325,43 @@ function EndpointReviewEditor({
   onChange,
   target,
 }: ReviewEditorProps): ReactElement {
+  const dataOrigin = objectChange(changes.data_origin, target.data_origin);
+  const shouldResolveDataOrigin = isNeedsUserConfirmationDataOrigin(
+    target.data_origin,
+  );
   return (
-    <div className={cx("workflow-detail-review-fields")}>
+    <div
+      className={cx(
+        "workflow-detail-review-fields",
+        shouldResolveDataOrigin &&
+          "workflow-detail-review-fields-data-origin-pending",
+      )}
+    >
       <ReviewSummaryField
         disabled={disabled}
         label="一、数据用途（数据服务于什么）"
         onChange={(value) => onChange("data_usage", parseJsonObject(value))}
         value={jsonSummary(objectChange(changes.data_usage, target.data_usage))}
       />
-      <ReviewSummaryField
-        disabled={disabled}
-        label="二、数据来源"
-        onChange={(value) =>
-          onChange(
-            "data_origin",
-            parseDataOriginSummary(value, target.data_origin),
-          )
-        }
-        value={dataOriginSummary(
-          objectChange(changes.data_origin, target.data_origin),
-        )}
-      />
+      {shouldResolveDataOrigin ? (
+        <DataOriginDecisionField
+          disabled={disabled}
+          onChange={(value) => onChange("data_origin", value)}
+          value={dataOrigin}
+        />
+      ) : (
+        <ReviewSummaryField
+          disabled={disabled}
+          label="二、数据来源"
+          onChange={(value) =>
+            onChange(
+              "data_origin",
+              parseDataOriginSummary(value, target.data_origin),
+            )
+          }
+          value={dataOriginSummary(dataOrigin)}
+        />
+      )}
       <ReviewSummaryField
         disabled={disabled}
         label="三、接口设计"
@@ -478,6 +499,42 @@ function recordListChange(
 
 function objectValue(value: unknown): Record<string, unknown> {
   return isRecord(value) ? (value as Record<string, unknown>) : {};
+}
+
+// 判断 endpoint 当前是否仍处于待用户决策的数据来源状态。
+function isNeedsUserConfirmationDataOrigin(value: unknown): boolean {
+  const origin = objectValue(value);
+  const effectiveSource = objectValue(origin.effective_source);
+  const sourceType = String(origin.source_type || effectiveSource.kind || "");
+  return sourceType === "needs_user_confirmation";
+}
+
+// 判断详情确认是否还缺少数据来源决策，防止用户直接跳过未决数据库方案。
+function requiresDataOriginDecision(
+  target: WorkflowDetailReviewTarget,
+  changedDataOrigin: unknown,
+): boolean {
+  if (target.target_type !== "endpoint") return false;
+  if (!isNeedsUserConfirmationDataOrigin(target.data_origin)) return false;
+  return !isResolvedDataOrigin(changedDataOrigin);
+}
+
+// 校验前端提交的数据来源是否已经转为任务规划可识别的确定方案。
+function isResolvedDataOrigin(value: unknown): boolean {
+  const origin = objectValue(value);
+  const effectiveSource = objectValue(origin.effective_source);
+  const sourceType = String(origin.source_type || effectiveSource.kind || "");
+  if (sourceType === "mysql_new_table" || sourceType === "mysql_existing") {
+    return Boolean(
+      effectiveSource.database &&
+        Array.isArray(effectiveSource.tables) &&
+        effectiveSource.tables.length > 0,
+    );
+  }
+  if (sourceType === "third_party") {
+    return Boolean(effectiveSource.provider && effectiveSource.endpoint);
+  }
+  return false;
 }
 
 // 把结构化 endpoint 字段转换为便于用户编辑的 JSON 文本。
