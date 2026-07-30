@@ -24,7 +24,7 @@ import WorkflowRunCard, {
   workflowClarification
 } from '../WorkflowRunCard'
 import {
-  processStepsForDisplay,
+  processStepsForMessageDisplay,
   workflowMessageContentForDisplay
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage, ChatCopy } from '../../types'
@@ -168,10 +168,11 @@ export default function MessageList({
               const messageLoading = message.id === activeAssistantMessageId
               const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
               const finalResult = workflowFinalResultPresentation(message.workflow)
-              const nonToolSteps = processStepsForDisplay(
+              const visibleProcessSteps = processStepsForMessageDisplay(
                 message.processSteps,
-                message.workflow
-              )?.filter((step) => step.kind !== 'tool' && step.kind !== 'command')
+                message.workflow,
+                messageLoading
+              )
               const requiresClarification =
                 message.workflow &&
                 workflowClarification(message.workflow)?.status === 'requires_user_input'
@@ -182,7 +183,7 @@ export default function MessageList({
               const visibleAssistantContent = workflowMessageContentForDisplay(
                 message.content,
                 message.workflow,
-                Boolean(nonToolSteps?.length)
+                Boolean(visibleProcessSteps?.length)
               )
               return (
                 <article
@@ -196,8 +197,8 @@ export default function MessageList({
                   <div className={cx('ai-message-content')}>
                     {message.role === 'assistant' ? (
                       <>
-                        {nonToolSteps && nonToolSteps.length > 0 && (
-                          <ProcessSteps loading={messageLoading} steps={nonToolSteps} />
+                        {visibleProcessSteps && visibleProcessSteps.length > 0 && (
+                          <ProcessSteps loading={messageLoading} steps={visibleProcessSteps} />
                         )}
                         {messageLoading &&
                           message.toolCalls?.map((toolCall) => (

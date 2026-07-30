@@ -42,6 +42,54 @@ export function processStepsForDisplay(
   })
 }
 
+/** 简单模式隐藏内部收尾步骤，并在运行时用最近工具活动替换所属 Workflow 动作详情。 */
+export function processStepsForMessageDisplay(
+  steps: ProcessStepRecord[] | undefined,
+  workflow: WorkflowRunPayload | undefined,
+  loading: boolean
+): ProcessStepRecord[] | undefined {
+  const displaySteps = processStepsForDisplay(steps, workflow)
+  if (!displaySteps?.length) return displaySteps
+
+  const directModification = isDirectModificationWorkflow(workflow)
+  const stableSteps = displaySteps.filter(
+    (step) =>
+      step.kind !== 'tool' &&
+      step.kind !== 'command' &&
+      (!directModification || step.nodeName !== 'finalize_direct_modification')
+  )
+  if (!loading || !directModification) return stableSteps
+
+  const latestToolStep = [...displaySteps]
+    .reverse()
+    .find((step) => step.kind === 'tool' || step.kind === 'command')
+  if (!latestToolStep) return stableSteps
+
+  const matchingWorkflowStep = [...stableSteps]
+    .reverse()
+    .find(
+      (step) =>
+        step.kind === 'workflow' &&
+        Boolean(latestToolStep.nodeName) &&
+        step.nodeName === latestToolStep.nodeName
+    )
+  const activeWorkflowStep = [...stableSteps]
+    .reverse()
+    .find((step) => step.kind === 'workflow' && step.status === 'running')
+  const targetStepId = matchingWorkflowStep?.id || activeWorkflowStep?.id
+  const toolDetail = latestToolStep.detail.trim() || latestToolStep.title.trim()
+  if (!targetStepId || !toolDetail) return stableSteps
+
+  return stableSteps.map((step) =>
+    step.id === targetStepId
+      ? {
+          ...step,
+          detail: toolDetail
+        }
+      : step
+  )
+}
+
 /** 在已有结构化步骤时隐藏后端生成的重复 Workflow 摘要，同时保留真实回复内容。 */
 export function workflowMessageContentForDisplay(
   content: string,
@@ -139,6 +187,11 @@ function sortProcessStepsForDisplay(
     if (semanticOrder !== 0) return semanticOrder
     return left.sequence - right.sequence
   })
+}
+
+/** 通过快速修改公开 owner 判断当前消息是否来自独立简单模式 Graph。 */
+function isDirectModificationWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
+  return ['frontend', 'backend', 'fullstack', 'unknown'].includes(String(workflow?.summary?.owner))
 }
 
 /** 只修正数据库上下文检查与 DAG 生成的相对顺序，其它轮次保持后端 sequence。 */

@@ -65,7 +65,7 @@ export default function ProcessSteps({ loading, steps }: Props): ReactElement {
   )
 }
 
-/** 渲染单个 Agent 步骤，并根据运行状态自动展开当前步骤与检查清单。 */
+/** 渲染单个 Agent 步骤，仅让包含实际详情的步骤具备展开交互。 */
 function ProcessStep({
   isLast,
   settled,
@@ -78,32 +78,51 @@ function ProcessStep({
   const hasChecks = Boolean(step.checks?.length)
   const hasBuildRun = Boolean(step.buildExecutionSlice)
   const hasDagGeneration = Boolean(step.dagGeneration)
+  const hasDetail = Boolean(step.detail.trim())
+  const hasResult = Boolean(step.result?.trim())
+  const expandable = hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration
   const [open, setOpen] = useState(
-    step.status === 'running' || hasChecks || hasBuildRun || hasDagGeneration
+    expandable && (step.status === 'running' || hasChecks || hasBuildRun || hasDagGeneration)
   )
 
   useEffect(() => {
-    if (step.status === 'running' || hasChecks || hasBuildRun || hasDagGeneration) setOpen(true)
-  }, [hasBuildRun, hasChecks, hasDagGeneration, step.status])
+    if (expandable && (step.status === 'running' || hasChecks || hasBuildRun || hasDagGeneration)) {
+      setOpen(true)
+    }
+  }, [expandable, hasBuildRun, hasChecks, hasDagGeneration, step.status])
+
+  const className = cx(
+    'process-step',
+    step.kind,
+    step.status,
+    !expandable && 'static',
+    hasChecks && 'has-checks',
+    hasBuildRun && 'has-build-run',
+    hasDagGeneration && 'has-dag-generation',
+    isLast && 'last'
+  )
+  const summaryContent = (
+    <>
+      <span className={cx('process-step-icon')}>{stepIcon(step, settled)}</span>
+      <Text>{settled ? settledTitle(step.title) : step.title}</Text>
+    </>
+  )
+
+  if (!expandable) {
+    return (
+      <div className={className}>
+        <div className={cx('process-step-summary')}>{summaryContent}</div>
+      </div>
+    )
+  }
 
   return (
     <details
-      className={cx(
-        'process-step',
-        step.kind,
-        step.status,
-        hasChecks && 'has-checks',
-        hasBuildRun && 'has-build-run',
-        hasDagGeneration && 'has-dag-generation',
-        isLast && 'last'
-      )}
+      className={className}
       onToggle={(event) => setOpen(event.currentTarget.open)}
       open={open}
     >
-      <summary className={cx('process-step-summary')}>
-        <span className={cx('process-step-icon')}>{stepIcon(step, settled)}</span>
-        <Text>{settled ? settledTitle(step.title) : step.title}</Text>
-      </summary>
+      <summary className={cx('process-step-summary')}>{summaryContent}</summary>
       <div className={cx('process-step-detail')}>
         {!hasChecks && !hasDagGeneration && step.detail && (
           <DetailBlock

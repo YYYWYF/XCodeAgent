@@ -18,11 +18,15 @@ import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/
 import { buildToolActivityPlacement } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import {
   processStepsForDisplay,
+  processStepsForMessageDisplay,
   workflowMessageContentForDisplay
 } from '../src/renderer/src/service/processStepHistory'
 import { normalizePersistentSessionMessage } from '../src/main/sessionMessageNormalization'
 import { normalizeMessageSkills } from '../src/renderer/src/service/chatSessions'
-import { DEFAULT_DIFF_PANEL_WIDTH } from '../src/renderer/src/components/AiChatPanel/constants'
+import {
+  chatCopy,
+  DEFAULT_DIFF_PANEL_WIDTH
+} from '../src/renderer/src/components/AiChatPanel/constants'
 import {
   splitWorkspacePath,
   workspaceCodeChangeDisplayPath
@@ -67,6 +71,13 @@ const skillCatalog: UserSkillCatalog = {
   skippedCount: 0,
   issues: []
 }
+
+test('简单模式输入框引导用户进行页面或 API 微调', () => {
+  const expected = '描述你想微调的页面或 API，例如修改文案、样式或接口逻辑…'
+
+  assert.equal(chatCopy.frontend.placeholder, expected)
+  assert.equal(chatCopy.backend.placeholder, expected)
+})
 
 test('技能选择按名称去空白去重并保留首次顺序', () => {
   assert.deepEqual(
@@ -193,6 +204,107 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
   assert.equal(workflowStatus, 'completed')
   assert.equal(processStepCount, 1)
   assert.deepEqual(processStepStatuses, ['running', 'completed'])
+})
+
+test('简单模式运行时用最近工具活动替换当前动作详情并在完成后隐藏', () => {
+  const workflow = {
+    runId: 'direct-run',
+    threadId: 'direct-thread',
+    summary: { status: 'in_progress', owner: 'frontend' },
+    events: []
+  }
+  const steps = [
+    {
+      id: 'direct:execute_frontend',
+      kind: 'workflow' as const,
+      status: 'running' as const,
+      title: '正在执行 执行前端修改',
+      detail: '正在执行：执行前端修改',
+      sequence: 60
+    },
+    {
+      id: 'direct-tool:read-old',
+      kind: 'tool' as const,
+      status: 'completed' as const,
+      title: 'grep',
+      detail: '已完成搜索代码：旧调用',
+      sequence: 100
+    },
+    {
+      id: 'direct-tool:read-current',
+      kind: 'tool' as const,
+      status: 'running' as const,
+      title: 'read_file',
+      detail: '正在读取文件：/src/App.tsx',
+      sequence: 101
+    }
+  ]
+
+  const runningSteps = processStepsForMessageDisplay(steps, workflow, true)
+  const completedSteps = processStepsForMessageDisplay(steps, workflow, false)
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, { loading: true, steps: runningSteps || [] })
+  )
+
+  assert.deepEqual(
+    runningSteps?.map((step) => step.id),
+    ['direct:execute_frontend']
+  )
+  assert.deepEqual(
+    completedSteps?.map((step) => step.id),
+    ['direct:execute_frontend']
+  )
+  assert.doesNotMatch(markup, /read_file/)
+  assert.doesNotMatch(markup, /正在执行：执行前端修改/)
+  assert.match(markup, /正在读取文件：\/src\/App\.tsx/)
+})
+
+test('简单模式隐藏内部收尾步骤但主流程仍保留其稳定步骤', () => {
+  const steps = [
+    {
+      id: 'direct:launch_project',
+      kind: 'workflow' as const,
+      status: 'completed' as const,
+      title: '已完成 启动本地预览',
+      detail: '',
+      sequence: 95,
+      nodeName: 'launch_project'
+    },
+    {
+      id: 'direct:finalize_direct_modification',
+      kind: 'workflow' as const,
+      status: 'completed' as const,
+      title: '已完成 整理修改结果',
+      detail: '',
+      sequence: 100,
+      nodeName: 'finalize_direct_modification'
+    }
+  ]
+  const directWorkflow = {
+    runId: 'direct-run',
+    threadId: 'direct-thread',
+    summary: { status: 'completed', owner: 'frontend' },
+    events: []
+  }
+  const mainWorkflow = {
+    runId: 'main-run',
+    threadId: 'main-thread',
+    summary: { status: 'completed' },
+    events: []
+  }
+
+  assert.deepEqual(
+    processStepsForMessageDisplay(steps, directWorkflow, false)?.map((step) => step.id),
+    ['direct:launch_project']
+  )
+  assert.deepEqual(
+    processStepsForMessageDisplay(steps, directWorkflow, true)?.map((step) => step.id),
+    ['direct:launch_project']
+  )
+  assert.deepEqual(
+    processStepsForMessageDisplay(steps, mainWorkflow, false)?.map((step) => step.id),
+    ['direct:launch_project', 'direct:finalize_direct_modification']
+  )
 })
 
 test('AG-UI 继续执行只发送旧 runId 作为资源锁转移令牌', () => {
@@ -623,6 +735,46 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
   assert.match(markup, /已通过/)
   assert.match(markup, /已跳过/)
   assert.doesNotMatch(markup, /<pre>[^<]*已完成 2\/2 项，通过 1 项，跳过 1 项/)
+})
+
+test('没有详情的步骤保持静态且只有验证步骤可以展开', () => {
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: false,
+      steps: [
+        {
+          id: 'direct:classify_intent',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 识别修改意图',
+          detail: '',
+          sequence: 10
+        },
+        {
+          id: 'direct:integration_test',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 验证项目',
+          detail: '',
+          sequence: 80,
+          checks: [
+            {
+              id: 'frontend_build',
+              name: '前端构建检查',
+              status: 'passed',
+              required: true
+            }
+          ]
+        }
+      ]
+    })
+  )
+
+  assert.equal(markup.match(/<details/g)?.length, 2)
+  assert.equal(markup.match(/<summary/g)?.length, 2)
+  assert.match(markup, /class="[^"]*process-step[^"]*static"/)
+  assert.match(markup, /已完成 识别修改意图/)
+  assert.match(markup, /前端构建检查/)
 })
 
 test('结构化步骤存在时隐藏重复 Workflow 摘要并保留真实回复', () => {

@@ -29,6 +29,7 @@ from app.graph.nodes.direct_modification import (
     run_direct_modification_integration_test,
 )
 from app.protocols.direct_modification import (
+    _report_custom_progress,
     build_direct_modification_ag_ui_stream,
     direct_modification_capabilities,
     direct_modification_input,
@@ -380,6 +381,42 @@ class DirectModificationProtocolTests(unittest.TestCase):
 
         self.assertEqual(value["workspaceRoot"], "/workspace")
         self.assertNotIn("target", value)
+
+    def test_tool_activity_projects_realtime_safe_process_step(self) -> None:
+        """Agent 工具活动必须实时投射为前端可消费的安全工具步骤。"""
+
+        reported = []
+
+        async def report(progress) -> None:
+            """收集单次协议进度，供断言结构化工具步骤。"""
+
+            reported.append(progress)
+
+        asyncio.run(
+            _report_custom_progress(
+                report,
+                chunk={
+                    "type": "direct_modification.tool_activity",
+                    "node_name": "execute_frontend",
+                    "activity": {
+                        "callId": "read-app",
+                        "tool": "read_file",
+                        "status": "running",
+                        "message": "正在读取文件：/src/App.tsx",
+                        "path": "/src/App.tsx",
+                    },
+                },
+                state={"status": "in_progress"},
+                events=[],
+            )
+        )
+
+        self.assertEqual(len(reported), 1)
+        process_step = reported[0].data["processStep"]
+        self.assertEqual(process_step["id"], "direct-tool:read-app")
+        self.assertEqual(process_step["status"], "running")
+        self.assertEqual(process_step["title"], "read_file")
+        self.assertEqual(process_step["detail"], "正在读取文件：/src/App.tsx")
 
     def test_stream_emits_complete_ag_ui_lifecycle(self) -> None:
         """独立 Graph 结果必须发送自定义事件、快照和正常完成事件。"""

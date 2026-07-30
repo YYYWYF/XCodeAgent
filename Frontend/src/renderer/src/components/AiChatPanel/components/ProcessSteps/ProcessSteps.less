@@ -127,6 +127,7 @@
 }
 
 .@{class-prefix}-process-step-summary {
+  position: relative;
   min-height: 24px;
   padding: 0;
 
@@ -139,10 +140,15 @@
   }
 }
 
+.@{class-prefix}-process-step.@{class-prefix}-static .@{class-prefix}-process-step-summary {
+  cursor: default;
+  user-select: text;
+}
+
 .@{class-prefix}-process-step-icon {
   position: absolute;
-  top: 1px;
-  left: -2px;
+  top: 50%;
+  left: -30px;
   display: inline-flex;
   width: 15px;
   height: 15px;
@@ -153,6 +159,7 @@
   border: 1px solid var(--wb-accent-border);
   border-radius: 50%;
   font-size: 8px;
+  transform: translateY(-50%);
 }
 
 .@{class-prefix}-process-step-detail {
