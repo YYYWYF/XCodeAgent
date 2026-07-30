@@ -4,64 +4,113 @@ import type { ActionType, ProColumns } from '@ant-design/pro-components'
 import { ProForm, ProFormDateRangePicker, ProFormSelect, ProFormText, ProTable, ModalForm } from '@ant-design/pro-components'
 import { Button, Form, Modal, Row, Col, Space, Tabs, message } from 'antd'
 import { ReloadOutlined, DeleteOutlined } from '@ant-design/icons'
-import type { ManagementItem, InstitutionParam, UserItem } from './types'
-import {
-  fetchManagementList, fetchInstitutionList, fetchUserList,
-  updateManagement, updateInstitution, updateUser,
-  deleteManagement, deleteInstitution, deleteUser,
-} from './api'
 
-type TabKey = 'management' | 'institution' | 'users'
-type ModalType = 'detail' | 'edit' | null
+/*
+ * ╔══════════════════════════════════════════════════════════╗
+ * ║  多标签页表格页面模板（骨架）                            ║
+ * ║                                                        ║
+ * ║  本模板提供带 Tabs 切换的多实体表格 UI 框架。          ║
+ * ║  每个 Tab 下包含独立的搜索筛选 + ProTable + CRUD。      ║
+ * ║                                                        ║
+ * ║  使用时请根据项目计划填充：                              ║
+ * ║  ① Tab 列表 —— 标签页名称与数量                        ║
+ * ║  ② 每个 Tab 的表头列定义 + 搜索字段                     ║
+ * ║  ③ API 调用 —— 增删改查接口                            ║
+ * ║  ④ 行数据类型 —— 根据接口响应 schema 定义              ║
+ * ║  ⑤ 不可编辑字段标记（主键、编号等）                    ║
+ * ║  ⑥ 行标识字段（ID 字段名 + 展示名）                    ║
+ * ╚══════════════════════════════════════════════════════════╝
+ */
 
-/** 三个实体类型的联合，用于操作列和 modal 共享 */
-type DataRecord = ManagementItem | InstitutionParam | UserItem
+// ============================================================
+// ① TODO: 定义 Tab 列表及其列配置
+// ============================================================
+// 每个 Tab 包含：
+//   key         —— Tab 标识
+//   label       —— Tab 显示名称
+//   columns     —— 表头列定义 [{ title: '列标题', dataIndex: '字段名' }]
+//   searchFields —— 搜索字段（与 columns 中的 dataIndex 共用，日期字段需额外标注）
+//   dateFields  —— 日期类型字段名列表（用于日期选择器和格式化）
+//   readonlyFields —— 详情/编辑弹窗中不可编辑的字段
+type RowType = Record<string, unknown>;
 
-/** 清理后的查询参数 */
-type CleanedParams = Record<string, string>
-
-// ==================== 字段元信息（按 tab 独立，不向上转联合） ====================
-type FieldMeta<Row> = {
-  title: string
-  dataIndex: keyof Row & string
-  editable: boolean
-  type: 'text' | 'select'
+interface TabDef {
+  key: string;
+  label: string;
+  columns: { title: string; dataIndex: string }[];
+  dateFields: string[];
+  readonlyFields: string[];
 }
 
-const managementFieldDefs: FieldMeta<ManagementItem>[] = [
-  { title: '事项编号', dataIndex: 'itemNo', editable: false, type: 'text' },
-  { title: '事项名称', dataIndex: 'itemName', editable: true, type: 'text' },
-  { title: '所属部门', dataIndex: 'department', editable: true, type: 'text' },
-  { title: '负责人', dataIndex: 'owner', editable: true, type: 'text' },
-  { title: '状态', dataIndex: 'status', editable: true, type: 'select' },
-]
+const TAB_DEFS: TabDef[] = [
+  // TODO: 在此添加标签页定义，例如：
+  // {
+  //   key: 'management',
+  //   label: '管理事项',
+  //   columns: [
+  //     { title: '编号', dataIndex: 'itemNo' },
+  //     { title: '名称', dataIndex: 'itemName' },
+  //     { title: '部门', dataIndex: 'department' },
+  //     { title: '负责人', dataIndex: 'owner' },
+  //     { title: '状态', dataIndex: 'status' },
+  //   ],
+  //   dateFields: [],
+  //   readonlyFields: ['itemNo'],
+  // },
+];
 
-const institutionFieldDefs: FieldMeta<InstitutionParam>[] = [
-  { title: '参数编码', dataIndex: 'paramCode', editable: false, type: 'text' },
-  { title: '参数名称', dataIndex: 'paramName', editable: true, type: 'text' },
-  { title: '参数值', dataIndex: 'paramValue', editable: true, type: 'text' },
-  { title: '生效日期', dataIndex: 'effectiveDate', editable: true, type: 'text' },
-  { title: '备注', dataIndex: 'remark', editable: true, type: 'text' },
-]
+// ============================================================
+// ② TODO: 根据 api_contracts 实现每个 Tab 的接口调用
+// ============================================================
+// key → API 函数映射。每个 Tab 需要实现：
+//   fetch(key, params) → { data, success, total }
+//   update(key, payload) → { success }
+//   delete(key, id) → { success }
 
-const userFieldDefs: FieldMeta<UserItem>[] = [
-  { title: '用户名', dataIndex: 'username', editable: false, type: 'text' },
-  { title: '姓名', dataIndex: 'realName', editable: true, type: 'text' },
-  { title: '角色', dataIndex: 'role', editable: true, type: 'select' },
-  { title: '邮箱', dataIndex: 'email', editable: true, type: 'text' },
-  { title: '创建时间', dataIndex: 'createdAt', editable: false, type: 'text' },
-]
+const fetchTabList = async (tabKey: string, params: Record<string, unknown>): Promise<{ data: unknown[]; success: boolean; total: number }> => {
+  // TODO: 根据 tabKey 调用对应的列表查询接口
+  throw new Error(`fetchTabList(${tabKey}): 请替换为实际 API 调用`);
+};
 
-// ==================== 通用详情弹窗（泛型保持 dataIndex 精确） ====================
-type DetailModalProps<Row> = {
-  open: boolean
-  record?: Row
-  tab: TabKey
-  onClose: () => void
-}
+const updateTabRecord = async (tabKey: string, payload: Record<string, unknown>): Promise<{ success: boolean }> => {
+  // TODO: 根据 tabKey 调用对应的修改接口
+  throw new Error(`updateTabRecord(${tabKey}): 请替换为实际 API 调用`);
+};
 
-function DetailModal<Row extends DataRecord>({ open, record, tab, onClose }: DetailModalProps<Row>) {
-  const fields = (tab === 'management' ? managementFieldDefs : tab === 'institution' ? institutionFieldDefs : userFieldDefs) as FieldMeta<Row>[]
+const deleteTabRecord = async (tabKey: string, id: string): Promise<{ success: boolean }> => {
+  // TODO: 根据 tabKey 调用对应的删除接口
+  throw new Error(`deleteTabRecord(${tabKey}): 请替换为实际 API 调用`);
+};
+
+// ============================================================
+// 以下为 UI 框架代码，无需修改
+// ============================================================
+
+type ModalType = 'detail' | 'edit' | null;
+
+/** 清洗查询表单值：去掉空值，日期范围拆为 start/end */
+const cleanFormValues = (values: Record<string, unknown>, dateFields: string[]): Record<string, string> => {
+  const cleaned: Record<string, string> = {};
+  for (const [key, val] of Object.entries(values)) {
+    if (val === undefined || val === null || val === '') continue;
+    if (Array.isArray(val) && val.length === 2 && dateFields.includes(key)) {
+      if (val[0] && typeof val[0] === 'object' && val[0] !== null && typeof (val[0] as Record<string, unknown>).format === 'function') {
+        cleaned[key + 'Start'] = (val[0] as { format: (f: string) => string }).format('YYYY-MM-DD');
+      }
+      if (val[1] && typeof val[1] === 'object' && val[1] !== null && typeof (val[1] as Record<string, unknown>).format === 'function') {
+        cleaned[key + 'End'] = (val[1] as { format: (f: string) => string }).format('YYYY-MM-DD 23:59:59');
+      }
+      continue;
+    }
+    cleaned[key] = String(val);
+  }
+  return cleaned;
+};
+
+// ---------- 查看详情弹窗 ----------
+type DetailModalProps = { open: boolean; record?: Record<string, unknown>; tab: TabDef; onClose: () => void };
+
+const DetailModal: React.FC<DetailModalProps> = ({ open, record, tab, onClose }) => {
   return (
     <ModalForm title="查看详情" open={open} onOpenChange={(v) => { if (!v) onClose() }}
       modalProps={{ destroyOnClose: true, width: 640 }}
@@ -69,7 +118,7 @@ function DetailModal<Row extends DataRecord>({ open, record, tab, onClose }: Det
       initialValues={record}
     >
       <Row gutter={[16, 0]}>
-        {fields.map((f) => (
+        {tab.columns.map((f) => (
           <Col span={12} key={f.dataIndex}>
             <ProFormText name={f.dataIndex} label={f.title} disabled fieldProps={{ style: { width: '100%' } }} />
           </Col>
@@ -77,21 +126,13 @@ function DetailModal<Row extends DataRecord>({ open, record, tab, onClose }: Det
       </Row>
       <div style={{ textAlign: 'right', marginTop: 16 }}><Button onClick={onClose}>关闭</Button></div>
     </ModalForm>
-  )
-}
+  );
+};
 
-// ==================== 通用修改弹窗 ====================
-type EditModalProps<Row> = {
-  open: boolean
-  record?: Row
-  tab: TabKey
-  onClose: () => void
-  onSaved: () => void
-}
+// ---------- 修改弹窗 ----------
+type EditModalProps = { open: boolean; record?: Record<string, unknown>; tab: TabDef; onClose: () => void; onSaved: () => void };
 
-function EditModal<Row extends DataRecord>({ open, record, tab, onClose, onSaved }: EditModalProps<Row>) {
-  const fields = (tab === 'management' ? managementFieldDefs : tab === 'institution' ? institutionFieldDefs : userFieldDefs) as FieldMeta<Row>[]
-  const updateFn = tab === 'management' ? updateManagement : tab === 'institution' ? updateInstitution : updateUser
+const EditModal: React.FC<EditModalProps> = ({ open, record, tab, onClose, onSaved }) => {
   return (
     <ModalForm title="修改" open={open} onOpenChange={(v) => { if (!v) onClose() }}
       modalProps={{ destroyOnClose: true, width: 640 }}
@@ -99,276 +140,155 @@ function EditModal<Row extends DataRecord>({ open, record, tab, onClose, onSaved
       submitter={{ searchConfig: { submitText: '确定', resetText: '取消' } }}
       onFinish={async (values) => {
         try {
-          const res = await updateFn({ id: record?.id ?? '', ...values })
-          if (!res.success) { message.error('修改失败，记录不存在'); return false }
-          message.success('修改成功')
-          onSaved()
-          return true
-        } catch { message.error('修改失败，请稍后重试'); return false }
+          const res = await updateTabRecord(tab.key, { id: record?.id as string, ...values });
+          if (!res.success) { message.error('修改失败，记录不存在'); return false; }
+          message.success('修改成功');
+          onSaved();
+          return true;
+        } catch { message.error('修改失败，请稍后重试'); return false; }
       }}
     >
       <Row gutter={[16, 0]}>
-        {fields.map((f) => {
-          const key = f.dataIndex as string
-          if (key === 'status' && tab === 'management') {
-            return (
-              <Col span={12} key={f.dataIndex}>
-                <ProFormSelect name={f.dataIndex} label={f.title} fieldProps={{ style: { width: '100%' } }}
-                  options={[{ label: '待处理', value: 'pending' }, { label: '处理中', value: 'in_progress' }, { label: '已完成', value: 'completed' }]} />
-              </Col>
-            )
-          }
-          if (key === 'role' && tab === 'users') {
-            return (
-              <Col span={12} key={f.dataIndex}>
-                <ProFormSelect name={f.dataIndex} label={f.title} fieldProps={{ style: { width: '100%' } }}
-                  options={[{ label: '管理员', value: '管理员' }, { label: '普通用户', value: '普通用户' }, { label: '审计员', value: '审计员' }]} />
-              </Col>
-            )
-          }
-          return (
-            <Col span={12} key={f.dataIndex}>
-              <ProFormText name={f.dataIndex} label={f.title} placeholder="请输入内容"
-                disabled={!f.editable} fieldProps={{ style: { width: '100%' } }} />
-            </Col>
-          )
-        })}
+        {tab.columns.map((f) => (
+          <Col span={12} key={f.dataIndex}>
+            <ProFormText
+              name={f.dataIndex} label={f.title} placeholder="请输入内容"
+              disabled={tab.readonlyFields.includes(f.dataIndex)}
+              fieldProps={{ style: { width: '100%' } }}
+            />
+          </Col>
+        ))}
       </Row>
     </ModalForm>
-  )
-}
-
-// ==================== 列定义 ====================
-const managementColumns: ProColumns<ManagementItem>[] = [
-  { title: '事项编号', dataIndex: 'itemNo', width: 140 },
-  { title: '事项名称', dataIndex: 'itemName', width: 180, ellipsis: true },
-  { title: '所属部门', dataIndex: 'department', width: 120 },
-  { title: '负责人', dataIndex: 'owner', width: 100 },
-  { title: '状态', dataIndex: 'status', width: 100, valueEnum: { pending: { text: '待处理', status: 'Default' }, in_progress: { text: '处理中', status: 'Processing' }, completed: { text: '已完成', status: 'Success' } } },
-]
-
-const institutionColumns: ProColumns<InstitutionParam>[] = [
-  { title: '参数编码', dataIndex: 'paramCode', width: 140 },
-  { title: '参数名称', dataIndex: 'paramName', width: 180 },
-  { title: '参数值', dataIndex: 'paramValue', width: 120 },
-  { title: '生效日期', dataIndex: 'effectiveDate', width: 130 },
-  { title: '备注', dataIndex: 'remark', width: 200, ellipsis: true },
-]
-
-const userColumns: ProColumns<UserItem>[] = [
-  { title: '用户名', dataIndex: 'username', width: 120 },
-  { title: '姓名', dataIndex: 'realName', width: 100 },
-  { title: '角色', dataIndex: 'role', width: 100, valueEnum: { 管理员: { text: '管理员', status: 'Error' }, 普通用户: { text: '普通用户', status: 'Default' }, 审计员: { text: '审计员', status: 'Processing' } } },
-  { title: '邮箱', dataIndex: 'email', width: 200, ellipsis: true },
-  { title: '创建时间', dataIndex: 'createdAt', width: 160 },
-]
-
-const actionColumn: ProColumns<DataRecord> = {
-  title: '操作', key: 'operation', width: 220, fixed: 'right',
-  render: (_, record) => (
-    <>
-      <a key="detail" onClick={() => modalRef.current?.('detail', record)}>查看详情</a>
-      <a key="edit" style={{ marginLeft: 8 }} onClick={() => modalRef.current?.('edit', record)}>修改</a>
-      <a key="delete" style={{ marginLeft: 8 }} onClick={() => deleteRef.current?.(record)}>删除</a>
-    </>
-  ),
-}
-
-const columnsMap: Record<TabKey, ProColumns<ManagementItem>[] | ProColumns<InstitutionParam>[] | ProColumns<UserItem>[]> = {
-  management: [...managementColumns, actionColumn as ProColumns<ManagementItem>],
-  institution: [...institutionColumns, actionColumn as ProColumns<InstitutionParam>],
-  users: [...userColumns, actionColumn as ProColumns<UserItem>],
-}
-
-// ==================== 请求函数表 ====================
-type FetchFn = (params: Record<string, unknown>) => Promise<{ data: DataRecord[]; success: boolean; total: number }>
-
-const requestFn: Record<TabKey, FetchFn> = {
-  management: fetchManagementList as unknown as FetchFn,
-  institution: fetchInstitutionList as unknown as FetchFn,
-  users: fetchUserList as unknown as FetchFn,
-}
-
-// ==================== 全局 ref ====================
-type ModalOpener = (type: Exclude<ModalType, null>, record?: DataRecord) => void
-type DeleteHandler = (record: DataRecord) => void
-
-const modalRef: { current: ModalOpener | null } = { current: null }
-const deleteRef: { current: DeleteHandler | null } = { current: null }
-
-/** 清洗查询表单值：去掉空值，dayjs 转为字符串，日期范围拆为 start/end */
-const cleanFormValues = (values: Record<string, unknown>): CleanedParams => {
-  const cleaned: CleanedParams = {}
-  for (const [key, val] of Object.entries(values)) {
-    if (val === undefined || val === null || val === '') continue
-    if (Array.isArray(val) && val.length === 2 && val[0] && typeof (val[0] as Record<string, unknown>).format === 'function') {
-      cleaned[key + 'Start'] = (val[0] as { format: (f: string) => string }).format('YYYY-MM-DD')
-      cleaned[key + 'End'] = (val[1] as { format: (f: string) => string }).format('YYYY-MM-DD 23:59:59')
-      continue
-    }
-    if (typeof val === 'object' && val !== null && typeof (val as { format?: unknown }).format === 'function') {
-      cleaned[key] = (val as { format: (f: string) => string }).format('YYYY-MM-DD')
-    } else {
-      cleaned[key] = String(val)
-    }
-  }
-  return cleaned
-}
+  );
+};
 
 // ==================== 主组件 ====================
 const TabsTable: React.FC = () => {
-  const formRef = useRef<FormInstance>(null)
-  const tableRef = useRef<ActionType>(null)
-  const [activeKey, setActiveKey] = useState<TabKey>('management')
-  const [refreshing, setRefreshing] = useState(false)
-  const [selection, setSelection] = useState<{ keys: React.Key[]; rows: DataRecord[] }>({ keys: [], rows: [] })
-  const [modal, setModal] = useState<{ type: ModalType; record?: DataRecord }>({ type: null })
+  const formRef = useRef<FormInstance>(null);
+  const tableRef = useRef<ActionType>(null);
+  const [activeKey, setActiveKey] = useState<string>(TAB_DEFS[0]?.key ?? '');
+  const [refreshing, setRefreshing] = useState(false);
+  const [selection, setSelection] = useState<{ keys: React.Key[]; rows: Record<string, unknown>[] }>({ keys: [], rows: [] });
+  const [modal, setModal] = useState<{ type: ModalType; record?: Record<string, unknown> }>({ type: null });
 
-  const clearSelection = () => setSelection({ keys: [], rows: [] })
-  const closeModal = () => setModal({ type: null })
+  const activeTab = TAB_DEFS.find((t) => t.key === activeKey) ?? TAB_DEFS[0];
 
-  modalRef.current = (type, record) => setModal({ type, record })
+  const clearSelection = () => setSelection({ keys: [], rows: [] });
+  const closeModal = () => setModal({ type: null });
 
-  deleteRef.current = (record: DataRecord) => {
-    const identity: string =
-      'itemName' in record ? (record as ManagementItem).itemName :
-        'paramName' in record ? (record as InstitutionParam).paramName :
-          'realName' in record ? (record as UserItem).realName :
-            (record as { id: string }).id
+  const handleDelete = (record: Record<string, unknown>) => {
+    // ⑥ TODO: 指定每条记录的展示名称来源
+    const recordId = record.id as string;
+    const displayName = record.name ?? recordId;
+
     Modal.confirm({
-      title: '确认删除', content: `确定要删除「${identity}」的记录吗？删除后不可恢复。`,
+      title: '确认删除', content: `确定要删除「${displayName}」的记录吗？删除后不可恢复。`,
       okText: '确认', cancelText: '取消', okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          const fn = activeKey === 'management' ? deleteManagement : activeKey === 'institution' ? deleteInstitution : deleteUser
-          const res = await fn((record as { id: string }).id)
-          if (!res.success) { message.error('删除失败，记录不存在'); return }
-          message.success('删除成功')
-          tableRef.current?.reload()
-        } catch { message.error('删除失败，请稍后重试') }
+          const res = await deleteTabRecord(activeKey, recordId);
+          if (!res.success) { message.error('删除失败，记录不存在'); return; }
+          message.success('删除成功');
+          tableRef.current?.reload();
+        } catch { message.error('删除失败，请稍后重试'); }
       },
-    })
-  }
+    });
+  };
 
   const handleBatchDelete = () => {
-    if (selection.keys.length === 0) return
+    if (selection.keys.length === 0) return;
     Modal.confirm({
       title: '批量删除', content: '确认删除吗？删除后不可恢复。', okText: '确定删除', cancelText: '取消', okButtonProps: { danger: true },
       onOk: async () => {
         try {
-          const fn = activeKey === 'management' ? deleteManagement : activeKey === 'institution' ? deleteInstitution : deleteUser
-          for (const id of selection.keys) await fn(String(id))
-          message.success(`成功删除 ${selection.keys.length} 条记录`)
-          clearSelection()
-          tableRef.current?.reload()
-        } catch { message.error('删除失败，请稍后重试') }
+          for (const id of selection.keys) await deleteTabRecord(activeKey, String(id));
+          message.success(`成功删除 ${selection.keys.length} 条记录`);
+          clearSelection();
+          tableRef.current?.reload();
+        } catch { message.error('删除失败，请稍后重试'); }
       },
-    })
-  }
+    });
+  };
 
   const refresh = async () => {
-    setRefreshing(true)
-    try { await tableRef.current?.reloadAndRest?.() } catch { /* ignore */ }
-    finally { setRefreshing(false) }
-  }
+    setRefreshing(true);
+    try { await tableRef.current?.reloadAndRest?.(); } catch { /* ignore */ }
+    finally { setRefreshing(false); }
+  };
 
   const tabsChange = (key: string) => {
-    setActiveKey(key as TabKey)
-    clearSelection()
-    formRef.current?.resetFields()
-    setTimeout(() => tableRef.current?.reloadAndRest?.(), 0)
-  }
+    setActiveKey(key);
+    clearSelection();
+    formRef.current?.resetFields();
+    setTimeout(() => tableRef.current?.reloadAndRest?.(), 0);
+  };
+
+  // 根据当前 Tab 生成 ProTable 列配置
+  const columns: ProColumns<RowType>[] = [
+    ...activeTab.columns.map((f) => ({
+      title: f.title, dataIndex: f.dataIndex, key: f.dataIndex,
+      width: activeTab.dateFields.includes(f.dataIndex) ? 160 : 120,
+      ellipsis: true,
+    })),
+    {
+      title: '操作', key: 'operation', width: 220, fixed: 'right',
+      render: (_, record) => (
+        <>
+          <a key="detail" onClick={() => setModal({ type: 'detail', record })}>查看详情</a>
+          <a key="edit" style={{ marginLeft: 8 }} onClick={() => setModal({ type: 'edit', record })}>修改</a>
+          <a key="delete" style={{ marginLeft: 8 }} onClick={() => handleDelete(record)}>删除</a>
+        </>
+      ),
+    },
+  ];
 
   return (
     <div style={{ padding: 24, overflow: 'hidden', minWidth: 0 }}>
       <Tabs activeKey={activeKey} onChange={tabsChange}
-        items={[
-          { key: 'management', label: '管理事项' },
-          { key: 'institution', label: '机构参数' },
-          { key: 'users', label: '用户管理' },
-        ]}
+        items={TAB_DEFS.map((t) => ({ key: t.key, label: t.label }))}
       />
 
       <ProForm formRef={formRef} layout="horizontal" submitter={false} style={{ marginBottom: 16 }} key={activeKey}>
         <Row gutter={[16, 16]}>
-          {activeKey === 'management' && (
-            <>
-              <Col span={6}><ProFormText name="itemNo" label="事项编号" placeholder="请输入" /></Col>
-              <Col span={6}><ProFormText name="itemName" label="事项名称" placeholder="请输入" /></Col>
-              <Col span={6}><ProFormText name="department" label="所属部门" placeholder="请输入" /></Col>
-              <Col span={6}><ProFormText name="owner" label="负责人" placeholder="请输入" /></Col>
-              <Col span={6}>
-                <ProFormSelect name="status" label="状态" placeholder="全部" fieldProps={{ allowClear: true }}
-                  options={[{ label: '待处理', value: 'pending' }, { label: '处理中', value: 'in_progress' }, { label: '已完成', value: 'completed' }]} />
-              </Col>
-              <Col flex="none">
-                <Form.Item label=" " colon={false}>
-                  <Space>
-                    <Button type="primary" onClick={async () => { await formRef.current?.validateFields(); tableRef.current?.reload() }}>查询</Button>
-                    <Button onClick={() => { formRef.current?.resetFields(); tableRef.current?.reload() }}>重置</Button>
-                  </Space>
-                </Form.Item>
-              </Col>
-            </>
-          )}
-          {activeKey === 'institution' && (
-            <>
-              <Col span={6}><ProFormText name="paramCode" label="参数编码" placeholder="请输入" /></Col>
-              <Col span={6}><ProFormText name="paramName" label="参数名称" placeholder="请输入" /></Col>
-              <Col span={6}><ProFormText name="paramValue" label="参数值" placeholder="请输入" /></Col>
-              <Col span={6}><ProFormDateRangePicker name="effectiveDateRange" label="生效日期" /></Col>
-              <Col span={6}><ProFormText name="remark" label="备注" placeholder="请输入" /></Col>
-              <Col flex="none">
-                <Form.Item label=" " colon={false}>
-                  <Space>
-                    <Button type="primary" onClick={async () => { await formRef.current?.validateFields(); tableRef.current?.reload() }}>查询</Button>
-                    <Button onClick={() => { formRef.current?.resetFields(); tableRef.current?.reload() }}>重置</Button>
-                  </Space>
-                </Form.Item>
-              </Col>
-            </>
-          )}
-          {activeKey === 'users' && (
-            <>
-              <Col span={6}><ProFormText name="username" label="用户名" placeholder="请输入" /></Col>
-              <Col span={6}><ProFormText name="realName" label="姓名" placeholder="请输入" /></Col>
-              <Col span={6}>
-                <ProFormSelect name="role" label="角色" placeholder="全部" fieldProps={{ allowClear: true }}
-                  options={[{ label: '管理员', value: '管理员' }, { label: '普通用户', value: '普通用户' }, { label: '审计员', value: '审计员' }]} />
-              </Col>
-              <Col span={6}><ProFormText name="email" label="邮箱" placeholder="请输入" /></Col>
-              <Col span={6}><ProFormDateRangePicker name="createdAtRange" label="创建时间" /></Col>
-              <Col flex="none">
-                <Form.Item label=" " colon={false}>
-                  <Space>
-                    <Button type="primary" onClick={async () => { await formRef.current?.validateFields(); tableRef.current?.reload() }}>查询</Button>
-                    <Button onClick={() => { formRef.current?.resetFields(); tableRef.current?.reload() }}>重置</Button>
-                  </Space>
-                </Form.Item>
-              </Col>
-            </>
-          )}
+          {activeTab.columns.map((f) => (
+            <Col span={6} key={f.dataIndex}>
+              {activeTab.dateFields.includes(f.dataIndex) ? (
+                <ProFormDateRangePicker name={f.dataIndex} label={f.title} />
+              ) : (
+                <ProFormText name={f.dataIndex} label={f.title} placeholder="请输入" />
+              )}
+            </Col>
+          ))}
+          <Col flex="none">
+            <Form.Item label=" " colon={false}>
+              <Space>
+                <Button type="primary" onClick={async () => { await formRef.current?.validateFields(); tableRef.current?.reload(); }}>查询</Button>
+                <Button onClick={() => { formRef.current?.resetFields(); tableRef.current?.reload(); }}>重置</Button>
+              </Space>
+            </Form.Item>
+          </Col>
         </Row>
       </ProForm>
 
-      <ProTable<DataRecord>
+      <ProTable<RowType>
         actionRef={tableRef}
-        columns={columnsMap[activeKey] as ProColumns<DataRecord>[]}
+        columns={columns}
         rowKey="id"
         request={async (params) => {
           try {
-            const { current, pageSize } = params
-            const formValues = cleanFormValues(formRef.current?.getFieldsValue() ?? {})
-            return (await requestFn[activeKey]({ current, pageSize, ...formValues }))
+            const { current, pageSize } = params;
+            const formValues = cleanFormValues(formRef.current?.getFieldsValue() ?? {}, activeTab.dateFields);
+            return fetchTabList(activeKey, { current, pageSize, ...formValues });
           } catch {
-            message.error('请求失败，请稍后重试')
-            return { data: [], success: false, total: 0 }
+            message.error('请求失败，请稍后重试');
+            return { data: [], success: false, total: 0 };
           }
         }}
         search={false}
         scroll={{ x: 'max-content', y: 'calc(100vh - 440px)' }}
         pagination={{ defaultPageSize: 10, showSizeChanger: true, showQuickJumper: true, pageSizeOptions: ['10', '20', '50', '100'] }}
-        rowSelection={{ selectedRowKeys: selection.keys, onChange: (keys, rows) => setSelection({ keys, rows }) }}
+        rowSelection={{ selectedRowKeys: selection.keys, onChange: (keys, rows) => setSelection({ keys, rows: rows as Record<string, unknown>[] }) }}
         tableAlertRender={({ selectedRowKeys: selKeys }) =>
           selKeys.length > 0 ? (<Space><span>已选择 {selKeys.length} 项</span><a onClick={clearSelection}>取消选择</a></Space>) : false
         }
@@ -380,11 +300,11 @@ const TabsTable: React.FC = () => {
         ]}
       />
 
-      <DetailModal open={modal.type === 'detail'} record={modal.record} tab={activeKey} onClose={closeModal} />
-      <EditModal open={modal.type === 'edit'} record={modal.record} tab={activeKey} onClose={closeModal}
-        onSaved={() => { closeModal(); tableRef.current?.reload() }} />
+      <DetailModal open={modal.type === 'detail'} record={modal.record} tab={activeTab} onClose={closeModal} />
+      <EditModal open={modal.type === 'edit'} record={modal.record} tab={activeTab} onClose={closeModal}
+        onSaved={() => { closeModal(); tableRef.current?.reload(); }} />
     </div>
-  )
-}
+  );
+};
 
-export default TabsTable
+export default TabsTable;
