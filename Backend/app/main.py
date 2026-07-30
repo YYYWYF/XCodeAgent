@@ -53,6 +53,7 @@ from app.services.builtin_skills import available_builtin_skills
 from app.services.project_launcher import (
     launch_backend_project,
     launch_frontend_project,
+    stop_project_preview,
     stop_backend_project,
 )
 from app.workspace import workspace as workspace_tools
@@ -394,3 +395,10 @@ def api_launch_project(request: ProjectLaunchRequest) -> dict[str, Any]:
         "backend": backend,
         "frontend": frontend,
     }
+
+
+@app.post("/api/projects/stop")
+def api_stop_project(request: ProjectLaunchRequest) -> dict[str, Any]:
+    """停止指定工作区生成应用的前后端预览服务。"""
+
+    return stop_project_preview(request.workspace)

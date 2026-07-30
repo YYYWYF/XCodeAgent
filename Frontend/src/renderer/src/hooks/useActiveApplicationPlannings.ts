@@ -16,7 +16,10 @@ import { cx } from '../utils'
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
 type UseActiveApplicationPlanningsOptions = {
-  onOpenWorkbench: (application: ApplicationConfig, lifecycle: ApplicationLifecycle) => void
+  onOpenWorkbench: (
+    application: ApplicationConfig,
+    lifecycle: ApplicationLifecycle
+  ) => Promise<void> | void
   theme: 'dark' | 'light'
 }
 

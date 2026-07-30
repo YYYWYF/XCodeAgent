@@ -5,6 +5,10 @@ const agentBaseUrl =
   process.argv.find((argument) => argument.startsWith(AGENT_ARG_PREFIX))?.slice(AGENT_ARG_PREFIX.length) ||
   'http://127.0.0.1:8000';
 
+type ProjectPreviewWorkspacePayload = {
+  workspaceRoot: string
+}
+
 // Custom APIs for renderer
 const api = {}
 
@@ -67,6 +71,12 @@ const xcodeAgentApi = {
       }
       return ipcRenderer.invoke('browser:open-preview-window', url);
     },
+  },
+  projectPreview: {
+    registerWorkspace: (payload: ProjectPreviewWorkspacePayload) =>
+      ipcRenderer.invoke('project-preview:register-workspace', payload),
+    unregisterWorkspace: (payload: ProjectPreviewWorkspacePayload) =>
+      ipcRenderer.invoke('project-preview:unregister-workspace', payload),
   },
 }
 

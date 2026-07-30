@@ -16,7 +16,7 @@ import type {
   EditorMode
 } from '../typings'
 import { cx, previewOrigin } from '../utils'
-import { startProjectLaunch } from '../service/projectLaunch'
+import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
 import './WorkbenchPage.less'
 
 type Props = {
@@ -65,10 +65,15 @@ function WorkbenchPage({
 
   // 进入工作台时自动异步尝试启动项目预览（首次创建和重新进入均生效）
   useEffect(() => {
+    let active = true
     const workspacePath =
       application.workspaceRoot || application.projectParentPath || ''
-    if (!workspacePath) return
-    if (launchedWorkspaceRef.current === workspacePath) return
+    if (!workspacePath) return () => {
+      active = false
+    }
+    if (launchedWorkspaceRef.current === workspacePath) return () => {
+      active = false
+    }
     launchedWorkspaceRef.current = workspacePath
 
     const loadingKey = `project-launch-${application.id}`
@@ -83,8 +88,19 @@ function WorkbenchPage({
     })
 
     startProjectLaunch(workspacePath).then(result => {
+      if (!active) {
+        if (result.status === 'running') {
+          void stopProjectPreview(workspacePath).finally(() => {
+            void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
+              workspaceRoot: workspacePath
+            })
+          })
+        }
+        return
+      }
       notification.close(loadingKey)
       if (result.status === 'running' && result.preview_url) {
+        void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot: workspacePath })
         setPreviewBaseUrl(previewOrigin(result.preview_url))
         setPreviewLaunchError('')
         notification.success({
@@ -105,11 +121,15 @@ function WorkbenchPage({
         })
       }
     }).catch(err => {
+      if (!active) return
       notification.close(loadingKey)
       const errorMsg = err instanceof Error ? err.message : '网络请求失败'
       setPreviewBaseUrl('')
       setPreviewLaunchError(errorMsg)
     })
+    return () => {
+      active = false
+    }
   }, [application])
 
   useEffect(() => {

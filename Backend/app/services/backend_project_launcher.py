@@ -286,6 +286,51 @@ def stop_backend_project(
     return cleanup
 
 
+def stop_workspace_backend_project(workspace_path: str | Path) -> dict[str, Any]:
+    """停止指定工作区由预览启动器管理的 Java 后端进程。"""
+
+    root = Path(workspace_path).expanduser().resolve()
+    backend_root = find_backend_project_root(root) or root / "backend"
+    pom_path = backend_root / "pom.xml"
+    runtime_root = root / ".xcodeagent" / "runtime" / "launch"
+    if not pom_path.is_file():
+        return {
+            "status": "skipped",
+            "message": "未识别到后端 Maven 工程，已跳过后端停止。",
+            "workspace": str(root),
+            "backend_root": str(backend_root),
+            "runtime_root": str(runtime_root),
+            "cleanup": {
+                "attempted": False,
+                "success": True,
+                "source": "none",
+                "pid": None,
+            },
+        }
+
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    with backend_launch_lock(root):
+        cleanup = stop_previous_backend_process(
+            workspace=root,
+            backend_root=backend_root,
+            runtime_root=runtime_root,
+        )
+    return {
+        "status": "stopped" if cleanup.get("success") else "failed",
+        "message": (
+            "Java 后端预览进程已停止。"
+            if cleanup.get("success") and cleanup.get("attempted")
+            else "未发现正在运行的 Java 后端预览进程。"
+            if cleanup.get("success")
+            else "Java 后端预览进程停止失败。"
+        ),
+        "workspace": str(root),
+        "backend_root": str(backend_root),
+        "runtime_root": str(runtime_root),
+        "cleanup": cleanup,
+    }
+
+
 def _run_backend_build(
     *,
     maven_command: str,

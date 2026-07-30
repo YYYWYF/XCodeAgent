@@ -5,7 +5,7 @@
  * 后端（如有）和前端开发服务器，不阻塞用户的页面设计与 API 设计。
  */
 
-export type ProjectLaunchStatus = 'running' | 'failed'
+export type ProjectLaunchStatus = 'running' | 'stopped' | 'failed'
 
 export type ProjectLaunchResult = {
   status: ProjectLaunchStatus
@@ -40,6 +40,24 @@ export async function startProjectLaunch(workspace: string): Promise<ProjectLaun
     return {
       status: 'failed',
       message: `启动请求失败（${response.status}）：${errorText}`,
+    }
+  }
+  return response.json() as Promise<ProjectLaunchResult>
+}
+
+/** 停止指定工作区已启动的前后端预览服务。 */
+export async function stopProjectPreview(workspace: string): Promise<ProjectLaunchResult> {
+  const baseUrl = getBackendOrigin()
+  const response = await fetch(`${baseUrl}/api/projects/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace }),
+  })
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '未知错误')
+    return {
+      status: 'failed',
+      message: `停止请求失败（${response.status}）：${errorText}`,
     }
   }
   return response.json() as Promise<ProjectLaunchResult>

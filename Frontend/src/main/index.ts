@@ -24,6 +24,7 @@ let loginWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 const previewWindows = new Set<BrowserWindow>()
+const launchedPreviewWorkspaces = new Map<string, string>()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 let primaryStartupPromise: Promise<boolean> | null = null
 
@@ -787,6 +788,52 @@ function setupBrowserIpc(): void {
     previewWindow.show()
     return { ok: true }
   })
+}
+
+/** 记录本次 Electron 会话中被工作台启动过的项目预览工作区。 */
+function setupProjectPreviewIpc(): void {
+  ipcMain.handle('project-preview:register-workspace', async (_event, payload = {}) => {
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    launchedPreviewWorkspaces.set(pathComparisonKey(workspaceRoot), workspaceRoot)
+    return { ok: true }
+  })
+
+  ipcMain.handle('project-preview:unregister-workspace', async (_event, payload = {}) => {
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    launchedPreviewWorkspaces.delete(pathComparisonKey(workspaceRoot))
+    return { ok: true }
+  })
+}
+
+/** 请求本地后端停止指定工作区的生成项目预览服务。 */
+async function stopGeneratedProjectPreview(workspaceRoot: string): Promise<void> {
+  const response = await fetch(`${getBackendBaseUrl().replace(/\/$/, '')}/api/projects/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace: workspaceRoot })
+  })
+  if (!response.ok) {
+    throw new Error(`Stop project preview failed: ${response.status}`)
+  }
+  const result = (await response.json()) as { status?: unknown; message?: unknown }
+  if (result.status === 'failed') {
+    throw new Error(
+      typeof result.message === 'string' ? result.message : 'Project preview stop failed'
+    )
+  }
+}
+
+/** 显式退出 Electron 前停止本次打开过的所有生成项目预览。 */
+async function stopGeneratedProjectPreviewsBeforeQuit(): Promise<void> {
+  const workspaces = Array.from(launchedPreviewWorkspaces.entries())
+  for (const [workspaceKey, workspaceRoot] of workspaces) {
+    try {
+      await stopGeneratedProjectPreview(workspaceRoot)
+      launchedPreviewWorkspaces.delete(workspaceKey)
+    } catch (error) {
+      console.error(`Failed to stop generated project preview: ${workspaceRoot}`, error)
+    }
+  }
 }
 
 /** 校验并返回支持的编辑器模式。 */
@@ -1781,6 +1828,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   setupApplicationSettingsIpc()
   setupAuthIpc()
   setupBrowserIpc()
+  setupProjectPreviewIpc()
   setupWorkspaceIpc()
   setupSessionStorageIpc()
   setupTray()
@@ -1836,6 +1884,12 @@ async function cleanupBeforeQuit(): Promise<void> {
     await clearAuthState()
   } catch (error) {
     console.error('Failed to clear auth token', error)
+  }
+
+  try {
+    await stopGeneratedProjectPreviewsBeforeQuit()
+  } catch (error) {
+    console.error('Failed to stop generated project previews', error)
   }
 
   try {

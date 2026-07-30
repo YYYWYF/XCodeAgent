@@ -21,7 +21,10 @@ type UseApplicationTemplateGenerationOptions = {
   commitPlannings: PlanningUpdater
   dismissPlanning: (applicationId: string) => void
   getVisiblePlanningId: () => string | undefined
-  onOpenWorkbench: (application: ApplicationConfig, lifecycle: ApplicationLifecycle) => void
+  onOpenWorkbench: (
+    application: ApplicationConfig,
+    lifecycle: ApplicationLifecycle
+  ) => Promise<void> | void
 }
 
 type ApplicationTemplateGenerationController = {
@@ -105,7 +108,7 @@ export function useApplicationTemplateGeneration({
         const shouldOpenWorkbench = getVisiblePlanningId() === applicationId
         dismissPlanning(applicationId)
         if (shouldOpenWorkbench) {
-          onOpenWorkbench(confirmedApplication, lifecycle)
+          await onOpenWorkbench(confirmedApplication, lifecycle)
           message.success('应用模板文件生成完成，正在进入工作台')
         } else {
           message.success(`「${planning.application.appName}」初始化完成，可从最近项目打开`)

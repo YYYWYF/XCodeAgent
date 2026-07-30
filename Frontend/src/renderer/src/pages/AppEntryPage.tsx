@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { message } from 'antd'
 import { SessionRuntimeProvider } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
 import { saveApplication } from '../components/Welcome/applicationService'
@@ -8,11 +8,17 @@ import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleSt
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { canOpenApplicationWorkbench } from '../service/applicationStorage'
+import { stopProjectPreview } from '../service/projectLaunch'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import WelcomePage from './WelcomePage'
 import WorkbenchPage from './WorkbenchPage'
 
 type ActiveSurface = 'welcome' | 'workbench'
+
+/** 读取应用实际绑定的预览工作区，用于区分不同生成项目进程。 */
+function applicationPreviewWorkspace(application: ApplicationConfig): string {
+  return application.workspaceRoot || application.projectParentPath || ''
+}
 
 /** 在应用根部持有不会随工作台显隐而销毁的会话运行管理器。 */
 export default function AppEntryPage(): JSX.Element {
@@ -28,17 +34,40 @@ function AppEntryContent(): JSX.Element {
   const { theme, setTheme } = useApplicationTheme()
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
+  const activePreviewWorkspaceRef = useRef('')
   const { lifecycle: applicationLifecycle, mergeLifecycle: mergeApplicationLifecycle } =
     useApplicationLifecycleStore(activeApplication?.id || '')
 
+  // 切换到另一个应用工作区前停止上一个应用的生成项目预览。
+  const stopPreviousPreviewIfNeeded = useCallback(async (nextApplication: ApplicationConfig) => {
+    const previousWorkspace = activePreviewWorkspaceRef.current
+    const nextWorkspace = applicationPreviewWorkspace(nextApplication)
+    if (!previousWorkspace || previousWorkspace === nextWorkspace) return
+    activePreviewWorkspaceRef.current = ''
+    try {
+      const result = await stopProjectPreview(previousWorkspace)
+      if (result.status === 'failed') {
+        console.warn('停止上一个应用预览失败。', result)
+      } else {
+        void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
+          workspaceRoot: previousWorkspace
+        })
+      }
+    } catch (error) {
+      console.warn('停止上一个应用预览失败。', error)
+    }
+  }, [])
+
   // 打开指定应用工作台，并校准该应用自己的生命周期。
   const openWorkbench = useCallback(
-    (application: ApplicationConfig, lifecycle?: ApplicationLifecycle): void => {
+    async (application: ApplicationConfig, lifecycle?: ApplicationLifecycle): Promise<void> => {
+      await stopPreviousPreviewIfNeeded(application)
       setActiveApplication(application)
+      activePreviewWorkspaceRef.current = applicationPreviewWorkspace(application)
       if (lifecycle) mergeApplicationLifecycle(lifecycle)
       setActiveSurface('workbench')
     },
-    [mergeApplicationLifecycle]
+    [mergeApplicationLifecycle, stopPreviousPreviewIfNeeded]
   )
 
   const planningController = useActiveApplicationPlannings({
@@ -56,7 +85,7 @@ function AppEntryContent(): JSX.Element {
     async (application: ApplicationConfig): Promise<void> => {
       if (canOpenApplicationWorkbench(application)) {
         planningController.dismissPlanning(application.id)
-        openWorkbench(application)
+        await openWorkbench(application)
         return
       }
       try {
@@ -69,7 +98,7 @@ function AppEntryContent(): JSX.Element {
             await saveApplication(confirmedApplication)
           }
           planningController.dismissPlanning(application.id)
-          openWorkbench(confirmedApplication, lifecycle)
+          await openWorkbench(confirmedApplication, lifecycle)
           return
         }
       } catch (error) {
