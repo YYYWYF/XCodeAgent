@@ -62,21 +62,44 @@ function WorkbenchPage({
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const entryStartedAtRef = useRef(Date.now())
   const launchedWorkspaceRef = useRef<string>()
+  const activeLaunchWorkspaceRef = useRef('')
+  const launchRunIdRef = useRef(0)
+  const launchCleanupPendingRef = useRef(false)
+  const launchCleanupTimerRef = useRef<number>()
 
   // 进入工作台时自动异步尝试启动项目预览（首次创建和重新进入均生效）
   useEffect(() => {
-    let active = true
     const workspacePath =
       application.workspaceRoot || application.projectParentPath || ''
-    if (!workspacePath) return () => {
-      active = false
+    if (launchCleanupTimerRef.current !== undefined) {
+      window.clearTimeout(launchCleanupTimerRef.current)
+      launchCleanupTimerRef.current = undefined
     }
-    if (launchedWorkspaceRef.current === workspacePath) return () => {
-      active = false
+    launchCleanupPendingRef.current = false
+    if (!workspacePath) {
+      activeLaunchWorkspaceRef.current = ''
+      return
     }
+    activeLaunchWorkspaceRef.current = workspacePath
+    if (launchedWorkspaceRef.current === workspacePath) {
+      const existingLaunchRunId = launchRunIdRef.current
+      return () => {
+        launchCleanupPendingRef.current = true
+        launchCleanupTimerRef.current = window.setTimeout(() => {
+          if (
+            launchRunIdRef.current === existingLaunchRunId &&
+            activeLaunchWorkspaceRef.current === workspacePath
+          ) {
+            activeLaunchWorkspaceRef.current = ''
+          }
+        }, 0)
+      }
+    }
+    const launchRunId = launchRunIdRef.current + 1
+    launchRunIdRef.current = launchRunId
     launchedWorkspaceRef.current = workspacePath
 
-    const loadingKey = `project-launch-${application.id}`
+    const loadingKey = `project-launch-${application.id}-${launchRunId}`
     notification.open({
       key: loadingKey,
       message: '项目正在启动中',
@@ -88,7 +111,12 @@ function WorkbenchPage({
     })
 
     startProjectLaunch(workspacePath).then(result => {
-      if (!active) {
+      const launchStillCurrent =
+        launchRunIdRef.current === launchRunId &&
+        activeLaunchWorkspaceRef.current === workspacePath &&
+        !launchCleanupPendingRef.current
+      notification.close(loadingKey)
+      if (!launchStillCurrent) {
         if (result.status === 'running') {
           void stopProjectPreview(workspacePath).finally(() => {
             void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
@@ -98,7 +126,6 @@ function WorkbenchPage({
         }
         return
       }
-      notification.close(loadingKey)
       if (result.status === 'running' && result.preview_url) {
         void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot: workspacePath })
         setPreviewBaseUrl(previewOrigin(result.preview_url))
@@ -121,16 +148,28 @@ function WorkbenchPage({
         })
       }
     }).catch(err => {
-      if (!active) return
       notification.close(loadingKey)
+      const launchStillCurrent =
+        launchRunIdRef.current === launchRunId &&
+        activeLaunchWorkspaceRef.current === workspacePath &&
+        !launchCleanupPendingRef.current
+      if (!launchStillCurrent) return
       const errorMsg = err instanceof Error ? err.message : '网络请求失败'
       setPreviewBaseUrl('')
       setPreviewLaunchError(errorMsg)
     })
     return () => {
-      active = false
+      launchCleanupPendingRef.current = true
+      launchCleanupTimerRef.current = window.setTimeout(() => {
+        if (
+          launchRunIdRef.current === launchRunId &&
+          activeLaunchWorkspaceRef.current === workspacePath
+        ) {
+          activeLaunchWorkspaceRef.current = ''
+        }
+      }, 0)
     }
-  }, [application])
+  }, [application.id, application.projectParentPath, application.workspaceRoot])
 
   useEffect(() => {
     let active = true
