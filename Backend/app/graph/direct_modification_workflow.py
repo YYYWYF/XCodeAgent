@@ -61,6 +61,26 @@ def _route_integration_test(
     return "launch_project" if state.get("quality_gate_passed") is True else "finalize"
 
 
+def direct_next_node_name(node_name: str, state: ProjectState) -> str | None:
+    """按快速修改 Graph 的真实路由返回下一节点，供进度投影提前展示运行态。"""
+
+    if node_name == "classify_intent":
+        route = _route_classification(state)
+        return "finalize_direct_modification" if route == "finalize" else route
+    if node_name == "execute_backend":
+        route = _route_backend(state)
+        return "finalize_direct_modification" if route == "finalize" else route
+    if node_name == "execute_frontend":
+        route = _route_frontend(state)
+        return "finalize_direct_modification" if route == "finalize" else route
+    if node_name == "integration_test":
+        route = _route_integration_test(state)
+        return "finalize_direct_modification" if route == "finalize" else route
+    if node_name == "launch_project":
+        return "finalize_direct_modification"
+    return None
+
+
 def build_direct_modification_graph(*, checkpointer: Any) -> Any:
     """构建不依赖正式规划产物的快速修改 LangGraph。"""
 

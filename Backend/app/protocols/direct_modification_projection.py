@@ -128,6 +128,42 @@ def direct_node_event(
     }
 
 
+def direct_node_started_event(
+    node_name: str,
+    *,
+    run_id: str,
+    thread_id: str,
+) -> dict[str, Any]:
+    """记录一个面向前端的快速修改节点开始事件。"""
+
+    label = DIRECT_NODE_LABELS.get(node_name, node_name)
+    return {
+        "type": "direct-modification.node.started",
+        "runId": run_id,
+        "threadId": thread_id,
+        "nodeName": node_name,
+        "node": {"id": node_name, "label": label},
+        "status": "running",
+        "message": f"正在执行：{label}",
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+
+def direct_node_running_process_step(node_name: str) -> dict[str, Any]:
+    """把节点开始事件转换为可被 MessageList 原位更新的运行中步骤。"""
+
+    label = DIRECT_NODE_LABELS.get(node_name, node_name)
+    return {
+        "id": f"direct:{node_name}",
+        "kind": "workflow",
+        "status": "running",
+        "title": f"正在执行 {label}",
+        "detail": f"正在执行：{label}",
+        "sequence": DIRECT_NODE_PERCENT.get(node_name, 0),
+        "nodeName": node_name,
+    }
+
+
 def direct_node_process_step(
     node_name: str,
     update: dict[str, Any],

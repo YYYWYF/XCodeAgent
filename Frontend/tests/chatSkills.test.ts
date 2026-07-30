@@ -113,6 +113,7 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
   const originalFetch = globalThis.fetch
   let workflowStatus = ''
   let processStepCount = 0
+  const processStepStatuses: string[] = []
   globalThis.fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as Record<string, unknown>
     const threadId = String(request.threadId)
@@ -140,9 +141,22 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
         sequence: 60
       }
     }
+    const runningValue = {
+      ...value,
+      status: 'in_progress',
+      summary: { ...value.summary, status: 'in_progress' },
+      state: { status: 'in_progress' },
+      processStep: {
+        ...value.processStep,
+        status: 'running',
+        title: '正在执行 执行前端修改',
+        detail: '正在执行：执行前端修改'
+      }
+    }
     const events = [
       { type: 'RUN_STARTED', threadId, runId },
       { type: 'TEXT_MESSAGE_START', messageId, role: 'assistant' },
+      { type: 'CUSTOM', name: 'direct-modification', value: runningValue },
       { type: 'CUSTOM', name: 'direct-modification', value },
       { type: 'TEXT_MESSAGE_CONTENT', messageId, delta: '快速修改完成' },
       { type: 'TEXT_MESSAGE_END', messageId },
@@ -168,6 +182,7 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
       },
       onProcessSteps: (steps) => {
         processStepCount = steps.length
+        processStepStatuses.push(String(steps[0]?.status))
       }
     })
     assert.equal(result.workflow?.summary.phase, 'direct_modification')
@@ -177,6 +192,7 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
 
   assert.equal(workflowStatus, 'completed')
   assert.equal(processStepCount, 1)
+  assert.deepEqual(processStepStatuses, ['running', 'completed'])
 })
 
 test('AG-UI 继续执行只发送旧 runId 作为资源锁转移令牌', () => {

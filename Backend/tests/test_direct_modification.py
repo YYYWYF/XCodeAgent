@@ -19,6 +19,7 @@ from app.graph.direct_modification_workflow import (
     _route_classification,
     _route_frontend,
     _route_integration_test,
+    direct_next_node_name,
 )
 from app.graph.nodes.direct_modification import (
     classify_direct_modification,
@@ -31,6 +32,11 @@ from app.protocols.direct_modification import (
     build_direct_modification_ag_ui_stream,
     direct_modification_capabilities,
     direct_modification_input,
+)
+from app.protocols.direct_modification_projection import (
+    direct_node_process_step,
+    direct_node_running_process_step,
+    direct_node_started_event,
 )
 from app.tools.execute import ExecuteInput
 
@@ -310,6 +316,36 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(_route_backend(state), "execute_frontend")
         self.assertEqual(_route_frontend(state), "integration_test")
 
+    def test_progress_projection_uses_graph_route_for_next_running_step(self) -> None:
+        """节点完成后必须沿真实路由立即投射下一节点的运行中状态。"""
+
+        state = {"status": "in_progress", "direct_modification_owner": "frontend"}
+        next_node = direct_next_node_name("classify_intent", state)
+        running_step = direct_node_running_process_step(str(next_node))
+        completed_step = direct_node_process_step(
+            "execute_frontend",
+            {"status": "in_progress", "message": "前端修改完成。"},
+        )
+
+        self.assertEqual(next_node, "execute_frontend")
+        self.assertEqual(running_step["id"], completed_step["id"])
+        self.assertEqual(running_step["status"], "running")
+        self.assertEqual(running_step["title"], "正在执行 执行前端修改")
+        self.assertEqual(completed_step["status"], "completed")
+
+    def test_started_event_exposes_running_copy(self) -> None:
+        """快速模式节点开始事件必须包含可见的正在执行文案。"""
+
+        event = direct_node_started_event(
+            "execute_frontend",
+            run_id="direct-run",
+            thread_id="direct-thread",
+        )
+
+        self.assertEqual(event["type"], "direct-modification.node.started")
+        self.assertEqual(event["status"], "running")
+        self.assertEqual(event["message"], "正在执行：执行前端修改")
+
 
 class DirectModificationProtocolTests(unittest.TestCase):
     """验证快速修改公开 AG-UI 契约。"""
@@ -365,8 +401,40 @@ class DirectModificationProtocolTests(unittest.TestCase):
             """提供协议测试所需的最小异步 Graph 接口。"""
 
             async def astream(self, *_args, **_kwargs):
-                """发送一个最终节点更新。"""
+                """发送一条完整前端快速修改路径，验证步骤开始和完成顺序。"""
 
+                yield "updates", {
+                    "classify_intent": {
+                        "phase": "classify_intent",
+                        "status": "in_progress",
+                        "message": "已识别前端修改。",
+                        "direct_modification_owner": "frontend",
+                        "direct_modification_scope": "direct",
+                    }
+                }
+                yield "updates", {
+                    "execute_frontend": {
+                        "phase": "execute_frontend",
+                        "status": "in_progress",
+                        "message": "前端修改完成。",
+                    }
+                }
+                yield "updates", {
+                    "integration_test": {
+                        "phase": "integration_test",
+                        "status": "in_progress",
+                        "message": "快速修改验证通过。",
+                        "quality_gate_passed": True,
+                    }
+                }
+                yield "updates", {
+                    "launch_project": {
+                        "phase": "launch_project",
+                        "status": "requires_user_input",
+                        "message": "本地预览启动完成。",
+                        "launch_result": {"status": "running"},
+                    }
+                }
                 yield "updates", {"finalize_direct_modification": final_state}
 
             async def aget_state(self, _config):
@@ -413,6 +481,11 @@ class DirectModificationProtocolTests(unittest.TestCase):
         self.assertIn("RUN_STARTED", frames)
         self.assertIn("STATE_SNAPSHOT", frames)
         self.assertIn("RUN_FINISHED", frames)
+        self.assertIn("正在执行 识别修改意图", frames)
+        self.assertLess(
+            frames.index("正在执行 执行前端修改"),
+            frames.index("已完成 执行前端修改"),
+        )
         self.assertEqual(frames.count("TEXT_MESSAGE_CONTENT"), 1)
 
 

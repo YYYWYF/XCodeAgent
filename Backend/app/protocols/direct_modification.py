@@ -9,7 +9,10 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.workspace_scope import resolve_workspace_root
-from app.graph.direct_modification_workflow import direct_modification_graph_for_request
+from app.graph.direct_modification_workflow import (
+    direct_modification_graph_for_request,
+    direct_next_node_name,
+)
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.protocols.ag_ui_action_stream import (
     AgUiActionProgress,
@@ -22,6 +25,8 @@ from app.protocols.direct_modification_projection import (
     direct_final_payload,
     direct_node_event,
     direct_node_process_step,
+    direct_node_running_process_step,
+    direct_node_started_event,
     direct_progress_payload,
 )
 from app.protocols.workflow.run_control import (
@@ -166,6 +171,15 @@ def build_direct_modification_ag_ui_stream(
                     "selected_skill_names": list(request.selected_skill_names),
                 },
             }
+            await _report_direct_node_started(
+                report,
+                node_name="classify_intent",
+                state=state_view,
+                events=events,
+                run_id=run_id,
+                thread_id=thread_id,
+                percent=0,
+            )
             async for stream_mode, chunk in active_graph.astream(
                 state_view,
                 config=config,
@@ -205,6 +219,17 @@ def build_direct_modification_ag_ui_stream(
                             ),
                         )
                     )
+                    next_node_name = direct_next_node_name(node_name, state_view)
+                    if next_node_name:
+                        await _report_direct_node_started(
+                            report,
+                            node_name=next_node_name,
+                            state=state_view,
+                            events=events,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            percent=DIRECT_NODE_PERCENT.get(node_name, 0),
+                        )
             final_state = dict((await active_graph.aget_state(config)).values)
             final_payload = direct_final_payload(final_state, events=events)
             return AgUiActionResult(
@@ -235,6 +260,39 @@ def build_direct_modification_ag_ui_stream(
         },
         accept=accept,
         emit_progress_text=False,
+    )
+
+
+async def _report_direct_node_started(
+    report: ProgressReporter,
+    *,
+    node_name: str,
+    state: dict[str, Any],
+    events: list[dict[str, Any]],
+    run_id: str,
+    thread_id: str,
+    percent: int,
+) -> None:
+    """发送节点开始事件和同 ID 的运行中步骤，供完成事件随后原位结算。"""
+
+    event = direct_node_started_event(
+        node_name,
+        run_id=run_id,
+        thread_id=thread_id,
+    )
+    events.append(event)
+    await report(
+        AgUiActionProgress(
+            stage=node_name,
+            message=event["message"],
+            detail=event["message"],
+            percent=percent,
+            data=direct_progress_payload(
+                state,
+                events=events,
+                process_step=direct_node_running_process_step(node_name),
+            ),
+        )
     )
 
 
