@@ -392,6 +392,20 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 - ❌ 修改 `src/styles/**` 全局样式（页面样式用 Tailwind 或在公共目录规范内处理）
 - ❌ 为了加依赖而改 `package.json`（所需依赖应假设已存在；若确实缺失，向用户说明，由用户安装）
 
+## 例外：修复任务中安装缺失依赖
+
+当任务上下文标记为修复任务（`kind === "repair"`）时，允许使用 `execute` 工具安装 `package.json` 中未声明的依赖：
+
+```bash
+cd frontend && pnpm add <包名>
+```
+
+**使用条件**：
+- 仅修复任务允许，页面生成任务仍禁止
+- 安装后必须重新验证：`cd frontend && pnpm run build`
+- 优先安装稳定版本（不指定版本号，让 pnpm 解析最新稳定版）
+- 一次安装所有缺失的依赖（批量 `pnpm add`），减少重复构建
+
 ## 与其他技能的关系
 
 - **react-develop-specification**：提供 React 通用编码规范（命名、hooks、安全等），本技能是前端模板工程特有的文件边界约束。

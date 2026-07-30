@@ -115,6 +115,7 @@ def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
         process,
         stdout_log=Path(str(launch_result.get("stdout_log") or "")),
         stdout_offset=int(launch_result.get("stdout_offset") or 0),
+        stderr_log=Path(str(launch_result.get("stderr_log") or "")),
     )
     returncode = process.poll() if process is not None else None
     process_running = process is not None and returncode is None
@@ -366,12 +367,20 @@ def _wait_until_ready(
     *,
     stdout_log: Path | None = None,
     stdout_offset: int = 0,
+    stderr_log: Path | None = None,
 ) -> bool:
-    """结合 HTTP 与本次启动日志轮询就绪状态，并监督启动进程存活。"""
+    """结合 HTTP 与本次启动日志轮询就绪状态，并监督启动进程存活。
+
+    Vite 在缺失依赖时仍能启动 HTTP 服务并在 stdout 打印 ``Local:``，
+    但 stderr 会输出 ``Cannot find module`` 编译错误。这里新增 stderr
+    致命错误检查，避免将半死的 dev server 误判为就绪。
+    """
 
     deadline = time.monotonic() + SERVER_READY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
+            return False
+        if _dev_server_stderr_is_fatal(stderr_log):
             return False
         if _preview_is_ready(preview_url):
             return True
@@ -411,6 +420,34 @@ def _dev_server_log_is_ready(stdout_log: Path, stdout_offset: int) -> bool:
         "local:",
     )
     return any(marker in content for marker in ready_markers)
+
+
+_FATAL_STDERR_PATTERNS = (
+    "cannot find module",
+    "module not found",
+    "failed to resolve",
+    "could not resolve",
+    "error:  ts",
+    "syntaxerror:",
+    "unexpected token",
+)
+
+
+def _dev_server_stderr_is_fatal(stderr_log: Path | None) -> bool:
+    """检查 dev server stderr 是否包含致命编译错误（如缺失依赖）。
+
+    Vite 在 ``invalidMessage`` / overlay 错误时不会导致进程退出，
+    但 stderr 会输出具体的编译错误。此函数检测是否存在致命错误，
+    避免将无法正常渲染的 dev server 标记为就绪。
+    """
+
+    if stderr_log is None:
+        return False
+    try:
+        content = stderr_log.read_text(encoding="utf-8", errors="replace").lower()
+    except OSError:
+        return False
+    return any(pattern in content for pattern in _FATAL_STDERR_PATTERNS)
 
 
 def _base_launch_payload(

@@ -363,6 +363,16 @@ def _run_command_result(
         evidence = f"{evidence}；超过 {COMMAND_TIMEOUT_SECONDS}s 超时。"
     if returncode not in (0, None):
         evidence = f"{evidence}；退出码：{returncode}。"
+    if not passed:
+        truncated_stdout = stdout[-COMMAND_OUTPUT_SUMMARY_LIMIT:] if stdout else ""
+        truncated_stderr = stderr[-COMMAND_OUTPUT_SUMMARY_LIMIT:] if stderr else ""
+        if truncated_stderr.strip():
+            evidence = f"{evidence}；stderr 末尾:\n{truncated_stderr}"
+        if truncated_stdout.strip():
+            evidence = f"{evidence}；stdout 末尾:\n{truncated_stdout}"
+        total_evidence = len(evidence)
+        if total_evidence > COMMAND_OUTPUT_SUMMARY_LIMIT * 2:
+            evidence = evidence[:COMMAND_OUTPUT_SUMMARY_LIMIT * 2] + "\n…(evidence truncated)"
 
     result = {
         "id": check_id,

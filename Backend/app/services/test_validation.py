@@ -154,8 +154,13 @@ def create_repair_task_plan(
         owners = owners or [request["owner"]]
         for owner in owners:
             requested_paths = requested_paths_by_owner.get(owner, [])
+            # scoped_tasks 可能为空（全部 already_satisfied），或 allowed_paths
+            # 与修复操作无关（如 pnpm add 不涉及文件编辑）。此时回退为
+            # 哨兵路径，让修复 agent 能执行命令级修复。
             if not requested_paths:
-                continue
+                requested_paths = [
+                    "<no file paths — repair is a command-level operation>"
+                ]
             repair_unit_id = _repair_task_unit_id(
                 owner,
                 repair_scope,
