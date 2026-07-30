@@ -9,7 +9,6 @@ import { Alert, Button, Checkbox, Collapse, Input, Progress, Radio, Tag, Typogra
 import type { ReactElement } from "react";
 import { useState } from "react";
 import type {
-  DevelopmentPlanningPageTreeNode,
   WorkflowBuildExecutionSlice,
   WorkflowBuildExecutionTask,
   WorkflowClarification,
@@ -25,7 +24,6 @@ import { pageAcceptanceContinuationMessage } from '../../workflowContinuation';
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode';
 import ConfirmationArtifact from './ConfirmationArtifact';
 import DetailReview from './DetailReview';
-import { projectPlanPageTreeNodes } from "../../../ProjectPlanPageTreePreview";
 import './WorkflowRunCard.less';
 
 const { Text } = Typography;
@@ -55,9 +53,6 @@ export default function WorkflowRunCard({
   const artifacts = workflow.summary.artifacts || {};
   const clarification = workflowClarification(workflow);
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification);
-  const confirmationPageTree = confirmationArtifact?.id === "project_plan"
-    ? workflowProjectPlanPageTree(workflow)
-    : [];
   const clarificationQuestions = clarification?.questions || [];
   const detailReview = clarification?.mode === 'detail_review'
     ? clarification.review
@@ -163,7 +158,6 @@ export default function WorkflowRunCard({
           {confirmationArtifact && (
             <ConfirmationArtifact
               artifact={confirmationArtifact}
-              pageTreeNodes={confirmationPageTree}
             />
           )}
           <ClarificationContext clarification={clarification} />
@@ -204,22 +198,6 @@ export default function WorkflowRunCard({
       )}
     </div>
   );
-}
-
-function workflowProjectPlanPageTree(
-  workflow: WorkflowRunPayload,
-): DevelopmentPlanningPageTreeNode[] {
-  /** 从公开 workflow 状态提取 ProjectPlan 菜单树，供确认卡显示层级结构。 */
-
-  for (const source of [workflow.result, workflow.state]) {
-    const projectPlan = source?.project_plan;
-    if (projectPlan && typeof projectPlan === "object" && !Array.isArray(projectPlan)) {
-      return projectPlanPageTreeNodes(
-        (projectPlan as Record<string, unknown>).frontend_pages,
-      );
-    }
-  }
-  return [];
 }
 
 function BuildExecutionSliceProgress({
