@@ -8,7 +8,7 @@ from langchain_core.tools import tool
 
 
 def _escape(value: Any) -> Any:
-    """Coerce DB-API types to JSON-serializable Python types."""
+    """把 DB-API 类型转换为 JSON 可序列化值。"""
     if value is None:
         return None
     if isinstance(value, int):
@@ -25,6 +25,8 @@ def _escape(value: Any) -> Any:
 
 
 def _row_to_dict(row: Any, cursor: Any) -> dict[str, Any]:
+    """把游标行转换成普通字典，兼容不同 DB-API 行对象。"""
+
     result = {}
     for desc in cursor.description:
         name = desc[0]
@@ -44,11 +46,7 @@ def mysql_table_info(
         database: str = "",
         table_name: str | None = None
 ) -> str:
-    """Connect to a MySQL database and read table schema information.
-
-    Use this tool to inspect database structure for code generation or
-    schema analysis. Returns table list (name + comment) and column
-    definitions (name, type, nullable, default, key, comment) as JSON.
+    """连接 MySQL Server 并读取目标数据库的事实结构。
 
     Args:
         host: MySQL server host address.
@@ -65,23 +63,21 @@ def mysql_table_info(
     import pymysql
 
     def _error_response(message: str) -> str:
-        """统一错误响应格式"""
+        """构造只表示连接或元数据访问失败的错误响应。"""
+
         return json.dumps(
             {"tool": "mysql_table_info", "status": "error", "error": message},
             ensure_ascii=False,
         )
 
-    # 1. 参数校验（提前失败）
     if not database:
         return _error_response("Database name is required.")
-    # 2. 连接数据库
     try:
         connection = pymysql.connect(
             host=host,
             port=port,
             user=user,
             password=password,
-            database=database,
             cursorclass=pymysql.cursors.DictCursor,
             connect_timeout=10,
             read_timeout=30,
@@ -94,7 +90,31 @@ def mysql_table_info(
     try:
         with connection:
             with connection.cursor() as cursor:
-                # 获取所有表
+                cursor.execute(
+                    """
+                    SELECT SCHEMA_NAME AS database_name
+                    FROM information_schema.SCHEMATA
+                    WHERE SCHEMA_NAME = %s
+                    """,
+                    (database,),
+                )
+                database_row = cursor.fetchone()
+                if not database_row:
+                    return json.dumps(
+                        {
+                            "tool": "mysql_table_info",
+                            "status": "ok",
+                            "database": database,
+                            "database_exists": False,
+                            "tables": [],
+                            "schemas": {},
+                            "indexes": {},
+                            "foreign_keys": {},
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    )
+
                 cursor.execute(
                     """
                     SELECT TABLE_NAME AS table_name,
@@ -107,17 +127,13 @@ def mysql_table_info(
                 )
                 tables = cursor.fetchall()  # DictCursor 已返回字典
 
-                # 确定目标表
                 if table_name:
-                    if not any(t["table_name"] == table_name for t in tables):
-                        return _error_response(
-                            f"Table '{table_name}' not found in database '{database}'."
-                        )
-                    target_tables = [table_name]
+                    target_tables = [
+                        table_name
+                    ] if any(t["table_name"] == table_name for t in tables) else []
                 else:
                     target_tables = [t["table_name"] for t in tables]
 
-                # 批量查询列信息（优化：单次查询所有表）
                 if target_tables:
                     placeholders = ",".join(["%s"] * len(target_tables))
                     cursor.execute(
@@ -140,21 +156,93 @@ def mysql_table_info(
                     )
                     columns = cursor.fetchall()
 
-                    # 按表名分组
                     schemas = {}
                     for col in columns:
                         table = col.pop("table_name")
                         schemas.setdefault(table, []).append(col)
+
+                    cursor.execute(
+                        f"""
+                        SELECT
+                            TABLE_NAME AS table_name,
+                            INDEX_NAME AS index_name,
+                            NON_UNIQUE AS non_unique,
+                            COLUMN_NAME AS column_name,
+                            SEQ_IN_INDEX AS seq_in_index
+                        FROM information_schema.STATISTICS
+                        WHERE TABLE_SCHEMA = %s
+                          AND TABLE_NAME IN ({placeholders})
+                        ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX
+                        """,
+                        (database, *target_tables),
+                    )
+                    index_rows = cursor.fetchall()
+                    indexes: dict[str, dict[str, Any]] = {}
+                    for row in index_rows:
+                        table = row.get("table_name")
+                        name = row.get("index_name")
+                        if not table or not name:
+                            continue
+                        index = indexes.setdefault(
+                            table,
+                            {},
+                        ).setdefault(
+                            name,
+                            {
+                                "name": name,
+                                "unique": row.get("non_unique") == 0,
+                                "columns": [],
+                            },
+                        )
+                        index["columns"].append(row.get("column_name"))
+
+                    cursor.execute(
+                        f"""
+                        SELECT
+                            kcu.TABLE_NAME AS table_name,
+                            kcu.CONSTRAINT_NAME AS constraint_name,
+                            kcu.COLUMN_NAME AS column_name,
+                            kcu.REFERENCED_TABLE_NAME AS referenced_table,
+                            kcu.REFERENCED_COLUMN_NAME AS referenced_column
+                        FROM information_schema.KEY_COLUMN_USAGE kcu
+                        WHERE kcu.TABLE_SCHEMA = %s
+                          AND kcu.TABLE_NAME IN ({placeholders})
+                          AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+                        ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
+                        """,
+                        (database, *target_tables),
+                    )
+                    fk_rows = cursor.fetchall()
+                    foreign_keys: dict[str, list[dict[str, Any]]] = {}
+                    for row in fk_rows:
+                        table = row.get("table_name")
+                        if not table:
+                            continue
+                        foreign_keys.setdefault(table, []).append(
+                            {
+                                "name": row.get("constraint_name"),
+                                "column": row.get("column_name"),
+                                "referenced_table": row.get("referenced_table"),
+                                "referenced_column": row.get("referenced_column"),
+                            }
+                        )
+                    indexes = {
+                        table: list(items.values()) for table, items in indexes.items()
+                    }
                 else:
                     schemas = {}
+                    indexes = {}
+                    foreign_keys = {}
 
-                # 4. 构建响应
                 result = {
                     "tool": "mysql_table_info",
                     "status": "ok",
                     "database": database,
+                    "database_exists": True,
                     "tables": tables,
                     "schemas": schemas,
+                    "indexes": indexes,
+                    "foreign_keys": foreign_keys,
                 }
                 return json.dumps(result, ensure_ascii=False, default=str)
 
@@ -167,11 +255,7 @@ def mysql_table_info(
 def get_mysql_table_info(
         table_name: str | None = None
 ) -> str:
-    """Connect to a MySQL database and read table schema information.
-
-    Use this tool to inspect database structure for code generation or
-    schema analysis. Returns table list (name + comment) and column
-    definitions (name, type, nullable, default, key, comment) as JSON.
+    """从 MYSQL_* 环境变量读取连接信息并检查 MySQL 数据库结构。
 
     Args:
         table_name: If provided, returns detail schema for this table only.
@@ -187,7 +271,6 @@ def get_mysql_table_info(
     password = os.getenv("MYSQL_PWD")
     database = os.getenv("MYSQL_DATABASE")
 
-    # 全部参数必填校验
     missing = []
     if not host:
         missing.append("MYSQL_HOST")

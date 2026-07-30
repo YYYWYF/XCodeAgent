@@ -11,22 +11,17 @@ _MAX_COLUMNS_PER_TABLE = 18
 
 
 def inspect_mysql_schema(target: dict[str, Any]) -> dict[str, Any]:
-    """调用受控 MySQL 工具并返回压缩后的数据库结构摘要。"""
+    """调用受控 MySQL 工具并返回真实数据库结构摘要。"""
 
-    table_name = single_table_hint(target)
     try:
-        # TODO: 当前阶段先由 get_mysql_table_info 从 .env 的 MYSQL_* 变量读取连接信息；
-        # 后续改为通过 AG-UI 页面让用户输入或选择数据库连接，并在扫描/执行前确认。
-        tool_result = get_mysql_table_info.invoke(
-            {"table_name": table_name} if table_name else {"table_name": None}
-        )
+        tool_result = get_mysql_table_info.invoke({"table_name": None})
     except Exception as exc:
-        return failed(
+        return connection_failed(
             "tool_exception",
             f"数据库工具执行异常：{type(exc).__name__}: {exc}",
             target=target,
         )
-    return summarize_tool_result(str(tool_result), target=target, table_name=table_name)
+    return summarize_tool_result(str(tool_result), target=target)
 
 
 def is_database_data_source(data_source: Any) -> bool:
@@ -43,76 +38,79 @@ def is_database_data_source(data_source: Any) -> bool:
     )
 
 
-def single_table_hint(target: dict[str, Any]) -> str | None:
-    """当 ProjectPlan 只声明一个目标表时限制工具扫描范围。"""
-
-    data_source = target.get("data_source")
-    if not isinstance(data_source, dict):
-        return None
-    table_names = text_items(
-        data_source.get("tables")
-        or data_source.get("table_names")
-        or data_source.get("entities")
-    )
-    return table_names[0] if len(table_names) == 1 else None
-
-
 def summarize_tool_result(
     raw_result: str,
     *,
     target: dict[str, Any],
-    table_name: str | None,
 ) -> dict[str, Any]:
     """把数据库工具原始 JSON 压缩成模型可消费的安全摘要。"""
 
     try:
         payload = json.loads(raw_result)
     except json.JSONDecodeError as exc:
-        return failed("invalid_tool_json", f"数据库工具返回内容不是合法 JSON：{exc}", target=target)
+        return connection_failed(
+            "invalid_tool_json",
+            f"数据库工具返回内容不是合法 JSON：{exc}",
+            target=target,
+        )
 
     if payload.get("status") != "ok":
-        return failed(
+        return connection_failed(
             "tool_error",
             str(payload.get("error") or "数据库工具执行失败。"),
             target=target,
         )
 
     schemas = payload.get("schemas") if isinstance(payload.get("schemas"), dict) else {}
+    indexes = payload.get("indexes") if isinstance(payload.get("indexes"), dict) else {}
+    foreign_keys = (
+        payload.get("foreign_keys") if isinstance(payload.get("foreign_keys"), dict) else {}
+    )
     table_comments = {
         str(table.get("table_name") or ""): str(table.get("comment") or "")
         for table in dict_items(payload.get("tables"))
     }
     summarized_tables = [
-        _summarize_table(table, columns, table_comments.get(table, ""))
+        _summarize_table(
+            table,
+            columns,
+            table_comments.get(table, ""),
+            indexes.get(table),
+            foreign_keys.get(table),
+        )
         for table, columns in list(schemas.items())[:_MAX_TABLES]
     ]
+    if payload.get("database_exists") is False:
+        summary = f"已连接 MySQL Server，但数据库 {payload.get('database') or ''} 不存在。"
+    else:
+        summary = _human_summary(payload.get("database"), summarized_tables)
     return {
         "status": "completed",
         "enabled": True,
         "source": "get_mysql_table_info",
         "database": payload.get("database"),
+        "database_exists": payload.get("database_exists") is not False,
         "target": target_summary(target),
         "scope": {
-            "table_name": table_name,
             "table_count": len(schemas),
             "returned_table_count": len(summarized_tables),
             "truncated": len(schemas) > len(summarized_tables),
         },
-        "summary": _human_summary(payload.get("database"), summarized_tables),
+        "summary": summary,
         "tables": summarized_tables,
     }
 
 
-def failed(
+def connection_failed(
     reason: str,
     message: str,
     *,
     target: dict[str, Any],
 ) -> dict[str, Any]:
-    """构造扫描失败但不阻塞后续流程的统一状态。"""
+    """构造只代表数据库连接或元数据访问失败的统一状态。"""
 
     return {
-        "status": "failed",
+        "status": "connection_failed",
         "enabled": True,
         "reason": reason,
         "message": message,
@@ -154,11 +152,18 @@ def text_items(value: Any) -> list[str]:
     return result
 
 
-def _summarize_table(table_name: str, columns: Any, comment: str) -> dict[str, Any]:
+def _summarize_table(
+    table_name: str,
+    columns: Any,
+    comment: str,
+    indexes: Any,
+    foreign_keys: Any,
+) -> dict[str, Any]:
     """提取单表字段摘要，并限制字段数量。"""
 
     column_items = dict_items(columns)
     return {
+        "name": table_name,
         "table_name": table_name,
         "comment": comment,
         "column_count": len(column_items),
@@ -174,6 +179,8 @@ def _summarize_table(table_name: str, columns: Any, comment: str) -> dict[str, A
             }
             for column in column_items[:_MAX_COLUMNS_PER_TABLE]
         ],
+        "indexes": dict_items(indexes),
+        "foreign_keys": dict_items(foreign_keys),
         "truncated": len(column_items) > _MAX_COLUMNS_PER_TABLE,
     }
 

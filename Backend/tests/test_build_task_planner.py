@@ -694,8 +694,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     }
                 ],
                 "database_planning_context": {
+                    "schema_version": "database-context.v1",
                     "status": "completed",
-                    "contexts": [{"data_source_id": "core", "schema_hash": "hash"}],
+                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
+                    "required_schema": {"schema_hash": "required-hash", "tables": []},
+                    "gaps": [
+                        {"id": "gap-core", "kind": "missing_table", "table": "core"},
+                        {"id": "gap-user", "kind": "missing_table", "table": "user"},
+                    ],
+                    "task_intents": [],
                 }
             },
         )
@@ -746,8 +753,12 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
             build_context={
                 "database_planning_context": {
+                    "schema_version": "database-context.v1",
                     "status": "completed",
-                    "contexts": [{"data_source_id": "users", "schema_hash": "hash"}],
+                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
+                    "required_schema": {"schema_hash": "required-hash", "tables": []},
+                    "gaps": [],
+                    "task_intents": [],
                 }
             },
         )
@@ -826,8 +837,12 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     }
                 ],
                 "database_planning_context": {
+                    "schema_version": "database-context.v1",
                     "status": "completed",
-                    "contexts": [{"data_source_id": "users", "schema_hash": "hash"}],
+                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
+                    "required_schema": {"schema_hash": "required-hash", "tables": []},
+                    "gaps": [],
+                    "task_intents": [],
                 },
             },
         )
@@ -835,6 +850,198 @@ class BuildTaskPlannerTests(unittest.TestCase):
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
         self.assertNotIn("users-db", tasks)
         self.assertIn("users-api", tasks)
+
+    def test_database_gap_intent_backfills_missing_database_task(self) -> None:
+        """模型漏掉数据库任务时，schema gap 任务意图会确定性补齐。"""
+
+        plan = create_build_task_plan(
+            {"version": "1.0.0"},
+            agent_plan={
+                "tasks": [
+                    {
+                        "id": "users-api",
+                        "unit_id": "backend:endpoint:user_api:user.create",
+                        "owner": "backend",
+                        "description": "实现用户创建接口。",
+                        "change_scope": [
+                            {"operation": "modify", "path": "Backend/UserApi.java"}
+                        ],
+                    }
+                ]
+            },
+            base_build_task_plan={
+                "schema_version": "build-dag.v3",
+                "build_units": {
+                    "database:users": {"id": "database:users", "kind": "database"},
+                    "backend:endpoint:user_api:user.create": {
+                        "id": "backend:endpoint:user_api:user.create",
+                        "kind": "backend",
+                    },
+                },
+                "unit_graph": {
+                    "nodes": [
+                        "database:users",
+                        "backend:endpoint:user_api:user.create",
+                    ],
+                    "edges": [
+                        {
+                            "from": "database:users",
+                            "to": "backend:endpoint:user_api:user.create",
+                            "type": "depends_on",
+                        }
+                    ],
+                    "validation": {"is_valid": True, "errors": []},
+                },
+            },
+            build_context={
+                "data_source_ids": ["users"],
+                "database_planning_context": {
+                    "schema_version": "database-context.v1",
+                    "status": "completed",
+                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
+                    "required_schema": {
+                        "schema_hash": "required-hash",
+                        "tables": [{"name": "users", "columns": []}],
+                    },
+                    "gaps": [
+                        {
+                            "id": "gap-users-table",
+                            "kind": "missing_table",
+                            "database": "xcode",
+                            "table": "users",
+                            "message": "表 users 不存在，需要创建。",
+                        }
+                    ],
+                    "task_intents": [
+                        {
+                            "id": "db-intent-gap-users-table",
+                            "operation": "create_table",
+                            "task_type": "database.change",
+                            "risk": "low",
+                            "gap_ids": ["gap-users-table"],
+                            "database_scope": {
+                                "database": "xcode",
+                                "tables": ["users"],
+                                "operations": ["create_table"],
+                                "gaps": [
+                                    {
+                                        "id": "gap-users-table",
+                                        "kind": "missing_table",
+                                        "database": "xcode",
+                                        "table": "users",
+                                        "message": "表 users 不存在，需要创建。",
+                                    }
+                                ],
+                            },
+                            "description": "表 users 不存在，需要创建。",
+                        }
+                    ],
+                },
+            },
+        )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        self.assertIn("db-intent-gap-users-table", tasks)
+        self.assertEqual(tasks["db-intent-gap-users-table"]["owner"], "database")
+        self.assertIn("db-intent-gap-users-table", tasks["users-api"]["dependencies"])
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+
+    def test_database_task_missing_scope_uses_unique_gap_intent_scope(self) -> None:
+        """模型生成数据库任务但漏 scope 时，可由唯一 gap 意图补齐范围。"""
+
+        plan = create_build_task_plan(
+            {"version": "1.0.0"},
+            agent_plan={
+                "tasks": [
+                    {
+                        "id": "db-add-summary-columns",
+                        "unit_id": "database:core",
+                        "owner": "database",
+                        "task_type": "database.change",
+                        "description": "补充 user 表的 entryDate 字段。",
+                        "change_scope": [],
+                    },
+                    {
+                        "id": "summary-api",
+                        "unit_id": "backend:endpoint:core_api:summary",
+                        "owner": "backend",
+                        "description": "实现概览接口。",
+                        "change_scope": [
+                            {"operation": "modify", "path": "Backend/SummaryApi.java"}
+                        ],
+                    },
+                ]
+            },
+            base_build_task_plan={
+                "schema_version": "build-dag.v3",
+                "build_units": {
+                    "database:core": {"id": "database:core", "kind": "database"},
+                    "backend:endpoint:core_api:summary": {
+                        "id": "backend:endpoint:core_api:summary",
+                        "kind": "backend",
+                    },
+                },
+                "unit_graph": {
+                    "nodes": ["database:core", "backend:endpoint:core_api:summary"],
+                    "edges": [
+                        {
+                            "from": "database:core",
+                            "to": "backend:endpoint:core_api:summary",
+                            "type": "depends_on",
+                        }
+                    ],
+                    "validation": {"is_valid": True, "errors": []},
+                },
+            },
+            build_context={
+                "data_source_ids": ["core"],
+                "database_planning_context": {
+                    "schema_version": "database-context.v1",
+                    "status": "completed",
+                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
+                    "required_schema": {
+                        "schema_hash": "required-hash",
+                        "tables": [{"name": "user", "columns": [{"name": "entryDate"}]}],
+                    },
+                    "gaps": [
+                        {
+                            "id": "gap-entry-date",
+                            "kind": "missing_column",
+                            "resolution_kind": "database_change",
+                            "database": "xcode",
+                            "table": "user",
+                            "column": "entryDate",
+                            "message": "表 user 缺少字段 entryDate。",
+                        }
+                    ],
+                    "task_intents": [
+                        {
+                            "id": "db-intent-gap-entry-date",
+                            "operation": "add_column",
+                            "task_type": "database.change",
+                            "risk": "low",
+                            "gap_ids": ["gap-entry-date"],
+                            "database_scope": {
+                                "database": "xcode",
+                                "tables": ["user"],
+                                "columns": ["entryDate"],
+                                "operations": ["add_column"],
+                                "gap_ids": ["gap-entry-date"],
+                            },
+                            "description": "表 user 缺少字段 entryDate。",
+                        }
+                    ],
+                },
+            },
+        )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        self.assertEqual(
+            tasks["db-add-summary-columns"]["database_scope"]["columns"],
+            ["entryDate"],
+        )
+        self.assertIn("db-add-summary-columns", tasks["summary-api"]["dependencies"])
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
 
     def test_invalid_graph_reader_preserves_every_registry_task(self) -> None:
         """无效 DAG 使用完整 nodes 读取，不能退化为不完整拓扑序。"""

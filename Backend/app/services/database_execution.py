@@ -165,7 +165,6 @@ def execute_database_plan(
             port=connection_config["port"],
             user=connection_config["user"],
             password=connection_config["password"],
-            database=connection_config["database"],
             cursorclass=pymysql.cursors.DictCursor,
             autocommit=False,
             connect_timeout=10,
@@ -174,6 +173,19 @@ def execute_database_plan(
         )
         with connection:
             with connection.cursor() as cursor:
+                database = str(connection_config["database"] or "")
+                if database and execution_context.schema_summary.get("database_exists") is False:
+                    cursor.execute(f"CREATE DATABASE IF NOT EXISTS {_quoted_identifier(database)}")
+                    executed.append(
+                        {
+                            "statement_hash": sha256(
+                                f"CREATE DATABASE IF NOT EXISTS {database}".encode("utf-8")
+                            ).hexdigest(),
+                            "rowcount": cursor.rowcount,
+                        }
+                    )
+                if database:
+                    cursor.execute(f"USE {_quoted_identifier(database)}")
                 for statement in statements:
                     cursor.execute(statement)
                     executed.append(
@@ -194,10 +206,16 @@ def execute_database_plan(
 
     return {
         "status": "completed",
-        "summary": f"已执行 {len(executed)} 条数据库语句。",
+        "summary": f"已执行 {len(executed)} 条数据库语句；MySQL DDL 可能隐式提交。",
         "executed_statements": executed,
         "schema_hash": execution_context.schema_hash,
     }
+
+
+def _quoted_identifier(value: str) -> str:
+    """安全引用 MySQL 标识符，避免库名中的反引号破坏语句。"""
+
+    return "`" + value.replace("`", "``") + "`"
 
 
 def _approval_operation_payload(

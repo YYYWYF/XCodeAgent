@@ -198,15 +198,22 @@ def _unit_source_refs(
         }
     if unit_id.startswith("database:"):
         database_context = _dict_value(build_context.get("database_planning_context"))
-        return {
+        source_refs = {
             **existing,
             "type": "database_context",
             "target": target,
             "database_context_status": database_context.get("status"),
             "database_context_hashes": [
-                str(context.get("schema_hash") or "")
-                for context in _dict_items(database_context.get("contexts"))
-                if context.get("schema_hash")
+                str(hash_value)
+                for hash_value in [
+                    _dict_value(database_context.get("actual_schema")).get(
+                        "schema_hash"
+                    ),
+                    _dict_value(database_context.get("required_schema")).get(
+                        "schema_hash"
+                    ),
+                ]
+                if hash_value
             ],
             "endpoint_details": _matching_endpoint_refs(
                 refs.get("endpoint_details"),
@@ -215,6 +222,14 @@ def _unit_source_refs(
             "data_source_ids": _string_list(build_context.get("data_source_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
         }
+        gap_ids = [
+            str(gap.get("id") or "")
+            for gap in _dict_items(database_context.get("gaps"))
+            if gap.get("id")
+        ]
+        if gap_ids:
+            source_refs["database_gap_ids"] = gap_ids
+        return source_refs
     if unit_id.startswith("backend:endpoint:"):
         return {
             **existing,

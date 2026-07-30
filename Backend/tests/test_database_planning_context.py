@@ -11,11 +11,11 @@ from app.graph.nodes.tasks import (
     _task_preparation_project_plan,
     _with_database_planning_context_from_state,
 )
+from app.services.build_context_resolver import resolve_target_build_context
 from app.services.database_planning_context import (
     database_context_requirement,
     prepare_database_planning_context,
 )
-from app.services.build_context_resolver import resolve_target_build_context
 
 
 def _project_plan(method: str = "POST") -> dict:
@@ -24,15 +24,7 @@ def _project_plan(method: str = "POST") -> dict:
     return {
         "version": "plan-v1",
         "confirmation_status": "confirmed",
-        "data_sources": [
-            {
-                "id": "orders",
-                "name": "订单库",
-                "type": "mysql",
-                "tables": ["orders"],
-                "schema_refs": ["orders-api#OrderCreate"],
-            }
-        ],
+        "data_sources": [{"id": "orders", "name": "订单库", "type": "mysql"}],
         "api_contracts": [
             {
                 "id": "orders-api",
@@ -40,6 +32,7 @@ def _project_plan(method: str = "POST") -> dict:
                 "schemas": {
                     "OrderCreate": {
                         "type": "object",
+                        "required": ["status"],
                         "properties": {"status": {"type": "string"}},
                     }
                 },
@@ -71,7 +64,6 @@ def _build_context(endpoint_id: str = "orders.create") -> dict:
         "api_contract_ids": ["orders-api"],
         "data_source_ids": ["orders"],
         "required_unit_ids": [
-            "backend:bootstrap",
             "database:orders",
             "backend:endpoint:orders-api:orders.create",
         ],
@@ -100,98 +92,268 @@ def _build_context(endpoint_id: str = "orders.create") -> dict:
     }
 
 
-def _tool_payload() -> str:
-    """构造 MySQL 工具返回的真实表结构摘要。"""
+def _tool_payload(*, database_exists: bool = True, tables: dict | None = None) -> str:
+    """构造 MySQL 工具返回的真实结构摘要。"""
 
+    schemas = tables if tables is not None else {
+        "orders": [
+            {
+                "column_name": "id",
+                "column_type": "bigint",
+                "is_nullable": "NO",
+                "column_key": "PRI",
+                "column_default": None,
+                "extra": "auto_increment",
+                "comment": "主键",
+            },
+            {
+                "column_name": "status",
+                "column_type": "varchar(32)",
+                "is_nullable": "NO",
+                "column_key": "",
+                "column_default": None,
+                "extra": "",
+                "comment": "状态",
+            },
+        ]
+    }
     return json.dumps(
         {
             "tool": "mysql_table_info",
             "status": "ok",
             "database": "sales",
-            "tables": [{"table_name": "orders", "comment": "订单表"}],
-            "schemas": {
-                "orders": [
-                    {
-                        "column_name": "id",
-                        "column_type": "bigint",
-                        "is_nullable": "NO",
-                        "column_key": "PRI",
-                        "column_default": None,
-                        "extra": "auto_increment",
-                        "comment": "主键",
-                    },
-                    {
-                        "column_name": "status",
-                        "column_type": "varchar(32)",
-                        "is_nullable": "NO",
-                        "column_key": "",
-                        "column_default": None,
-                        "extra": "",
-                        "comment": "状态",
-                    },
-                ]
-            },
+            "database_exists": database_exists,
+            "tables": [
+                {"table_name": name, "comment": "订单表"}
+                for name in schemas
+            ],
+            "schemas": schemas if database_exists else {},
+            "indexes": {},
+            "foreign_keys": {},
         },
         ensure_ascii=False,
     )
 
 
-class DatabasePlanningContextTests(unittest.TestCase):
-    def test_mutation_endpoint_reads_mysql_summary_for_task_planning(self) -> None:
-        """写接口任务规划前会读取真实数据库摘要并生成 DatabasePlanningContext。"""
+def _summary_project_plan() -> dict:
+    """构造概览聚合接口的 ProjectPlan，响应字段不等同于数据库字段。"""
+
+    return {
+        "version": "plan-v1",
+        "confirmation_status": "confirmed",
+        "data_sources": [{"id": "core_management_source", "type": "database"}],
+        "api_contracts": [
+            {
+                "id": "core_management_api",
+                "data_source_id": "core_management_source",
+                "schemas": {
+                    "CoreManagementSummary": {
+                        "type": "object",
+                        "required": ["totalStaff", "newEntries", "departures"],
+                        "properties": {
+                            "totalStaff": {"type": "integer"},
+                            "newEntries": {"type": "integer"},
+                            "departures": {"type": "integer"},
+                            "recentChanges": {"type": "array"},
+                        },
+                    }
+                },
+                "endpoints": [
+                    {
+                        "id": "core_management.summary",
+                        "method": "GET",
+                        "path": "/api/core-management/summary",
+                        "response_schema_ref": "CoreManagementSummary",
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def _summary_build_context() -> dict:
+    """构造使用已有 user 表聚合生成概览的 BuildContext。"""
+
+    return {
+        "target": {
+            "type": "endpoint",
+            "id": "core_management.summary",
+            "api_contract_id": "core_management_api",
+        },
+        "endpoint_ids": ["core_management.summary"],
+        "api_contract_ids": ["core_management_api"],
+        "data_source_ids": ["core_management_source"],
+        "direct_endpoint_details": [
+            {
+                "api_contract_id": "core_management_api",
+                "endpoint_id": "core_management.summary",
+                "data_source_id": "core_management_source",
+                "method": "GET",
+                "path": "/api/core-management/summary",
+                "data_origin": {
+                    "source_type": "mysql_existing",
+                    "effective_source": {
+                        "kind": "mysql_existing",
+                        "database": "xcode",
+                        "tables": ["user"],
+                    },
+                    "field_mappings": [
+                        {
+                            "target_field": "totalStaff",
+                            "source": "user 表行计数",
+                            "rule": "SELECT COUNT(*) FROM user",
+                        },
+                        {
+                            "target_field": "newEntries",
+                            "source": "无对应列，暂时无法计算",
+                            "rule": "返回 0",
+                        },
+                        {
+                            "target_field": "recentChanges[].id",
+                            "source": "user.id",
+                            "rule": "直接映射，但类型为int → string",
+                        },
+                        {
+                            "target_field": "recentChanges[].department",
+                            "source": "无对应列",
+                            "rule": "返回 null",
+                        },
+                    ],
+                    "differences": [
+                        {
+                            "field": "recentChanges[].department",
+                            "actual": "user 表无 department 列",
+                            "resolution": "返回 null，待业务确认是否需要新增列",
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+
+def _summary_tool_payload() -> str:
+    """构造已有 user 表能支撑概览查询的数据库摘要。"""
+
+    return _tool_payload(
+        tables={
+            "user": [
+                {
+                    "column_name": "id",
+                    "column_type": "int",
+                    "is_nullable": "NO",
+                    "column_key": "PRI",
+                    "column_default": None,
+                    "extra": "",
+                    "comment": "",
+                },
+                {
+                    "column_name": "name",
+                    "column_type": "varchar(64)",
+                    "is_nullable": "YES",
+                    "column_key": "",
+                    "column_default": None,
+                    "extra": "",
+                    "comment": "",
+                },
+                {
+                    "column_name": "status",
+                    "column_type": "varchar(16)",
+                    "is_nullable": "YES",
+                    "column_key": "",
+                    "column_default": None,
+                    "extra": "",
+                    "comment": "",
+                },
+            ]
+        }
+    )
+
+
+class DatabaseContextV1Tests(unittest.TestCase):
+    def test_existing_table_without_gaps_completes_new_context(self) -> None:
+        """数据库满足需求时生成新版 completed 上下文且不含任务意图。"""
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
-        with patch(
-            "app.services.database_schema_summary.get_mysql_table_info",
-            tool,
-        ):
+        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
             context = prepare_database_planning_context(_project_plan(), _build_context())
 
-        tool.invoke.assert_called_once_with({"table_name": "orders"})
+        tool.invoke.assert_called_once_with({"table_name": None})
+        self.assertEqual(context["schema_version"], "database-context.v1")
         self.assertEqual(context["status"], "completed")
-        self.assertEqual(context["contexts"][0]["data_source_id"], "orders")
-        self.assertEqual(context["contexts"][0]["database"], "sales")
-        self.assertEqual(context["contexts"][0]["tables"][0]["table_name"], "orders")
-        self.assertEqual(
-            context["contexts"][0]["api_contract"]["endpoints"][0]["id"],
-            "orders.create",
-        )
-        self.assertEqual(
-            context["contexts"][0]["endpoint_detail"]["processing_logic"],
-            ["写入 orders 表。"],
-        )
-        self.assertTrue(context["contexts"][0]["schema_hash"])
-        self.assertIn("AG-UI", context["todo"])
+        self.assertEqual(context["actual_schema"]["database"], "sales")
+        self.assertEqual(context["actual_schema"]["tables"][0]["name"], "orders")
+        self.assertEqual(context["gaps"], [])
+        self.assertEqual(context["task_intents"], [])
 
-    def test_readonly_database_endpoint_reads_mysql_summary(self) -> None:
-        """只读接口只要 data_origin 来自数据库，也会在任务规划前扫描数据库。"""
+    def test_missing_table_becomes_database_task_intent(self) -> None:
+        """目标表不存在时不报错，而是转成 missing_table gap 和建表意图。"""
 
-        tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
-        with patch(
-            "app.services.database_schema_summary.get_mysql_table_info",
-            tool,
-        ):
-            plan = _project_plan(method="GET")
-            plan["api_contracts"][0]["endpoints"][0] = {
-                "id": "orders.list",
-                "method": "GET",
-                "path": "/orders",
-                "summary": "查询订单列表。",
-                "response_schema_ref": "OrderCreate",
-            }
-            build_context = _build_context("orders.list")
-            build_context["direct_endpoint_details"][0]["method"] = "GET"
-            build_context["direct_endpoint_details"][0]["processing_logic"] = [
-                "查询 orders 表。"
-            ]
+        tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload(tables={})))
+        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
+            context = prepare_database_planning_context(_project_plan(), _build_context())
+
+        self.assertEqual(context["status"], "completed")
+        self.assertEqual(context["gaps"][0]["kind"], "missing_table")
+        self.assertEqual(context["gaps"][0]["table"], "orders")
+        self.assertEqual(context["task_intents"][0]["operation"], "create_table")
+
+    def test_missing_database_becomes_database_gap(self) -> None:
+        """目标数据库不存在时仍完成上下文检查，并把建库转成后续任务。"""
+
+        tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload(database_exists=False)))
+        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
+            context = prepare_database_planning_context(_project_plan(), _build_context())
+
+        self.assertEqual(context["status"], "completed")
+        self.assertFalse(context["actual_schema"]["database_exists"])
+        self.assertEqual(context["gaps"][0]["kind"], "missing_database")
+        self.assertEqual(context["task_intents"][0]["operation"], "create_database")
+
+    def test_summary_backend_adaptation_does_not_create_column_gaps(self) -> None:
+        """聚合响应和返回 null/0 的字段不应被误判为必须补库。"""
+
+        tool = SimpleNamespace(invoke=Mock(return_value=_summary_tool_payload()))
+        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
             context = prepare_database_planning_context(
-                plan,
-                build_context,
+                _summary_project_plan(),
+                _summary_build_context(),
             )
 
-        tool.invoke.assert_called_once_with({"table_name": "orders"})
-        self.assertEqual(context["status"], "completed")
-        self.assertEqual(context["contexts"][0]["data_source_id"], "orders")
+        required_table = context["required_schema"]["tables"][0]
+        self.assertEqual(required_table["name"], "user")
+        self.assertEqual(
+            {column["name"] for column in required_table["columns"]},
+            {"id"},
+        )
+        self.assertEqual(context["gaps"], [])
+        self.assertEqual(context["task_intents"], [])
+        self.assertIn(
+            "needs_confirmation",
+            {item["resolution_kind"] for item in context["resolution_items"]},
+        )
+
+    def test_connection_failure_blocks_database_context_only(self) -> None:
+        """连接失败是唯一阻断状态，会返回 connection_failed。"""
+
+        tool = SimpleNamespace(
+            invoke=Mock(
+                return_value=json.dumps(
+                    {
+                        "tool": "get_mysql_table_info",
+                        "status": "error",
+                        "error": "Connection failed: auth denied",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        )
+        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
+            context = prepare_database_planning_context(_project_plan(), _build_context())
+
+        self.assertEqual(context["status"], "connection_failed")
+        self.assertEqual(context["connection"]["status"], "failed")
+        self.assertEqual(context["gaps"], [])
 
     def test_third_party_endpoint_skips_database_context_node(self) -> None:
         """外部 API 来源不会触发数据库上下文检查节点。"""
@@ -253,14 +415,11 @@ class DatabasePlanningContextTests(unittest.TestCase):
             context["required_unit_ids"],
         )
 
-    def test_task_preparation_view_includes_database_planning_context(self) -> None:
-        """任务规划模型输入同时包含数据库摘要、EndpointDetail 和 API Contract。"""
+    def test_task_preparation_view_includes_new_database_context(self) -> None:
+        """任务规划模型输入包含新版数据库上下文和已确认接口详情。"""
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
-        with patch(
-            "app.services.database_schema_summary.get_mysql_table_info",
-            tool,
-        ):
+        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
             database_context = prepare_database_planning_context(
                 _project_plan(),
                 _build_context(),
@@ -274,8 +433,8 @@ class DatabasePlanningContextTests(unittest.TestCase):
         executable_details = preparation_view["executable_details"]
 
         self.assertEqual(
-            executable_details["database_planning_context"]["contexts"][0]["data_source_id"],
-            "orders",
+            executable_details["database_planning_context"]["schema_version"],
+            "database-context.v1",
         )
         self.assertEqual(
             executable_details["endpoint_detail_plans"][0]["endpoint_id"],

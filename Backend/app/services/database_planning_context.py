@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
 
-from app.domain.models import DatabasePlanningContext
+from app.services.database_requirement_schema import derive_required_database_schema
+from app.services.database_schema_diff import (
+    compile_database_task_intents,
+    diff_database_schema,
+)
 from app.services.database_schema_summary import (
     dict_items,
     inspect_mysql_schema,
@@ -27,19 +30,11 @@ _EXTERNAL_ORIGIN_KINDS = {
     "api",
     "rest_api",
 }
-_UNKNOWN_ORIGIN_KINDS = {
-    "",
-    "unknown",
-    "needs_user_confirmation",
-    "missing",
-}
-
-
 def prepare_database_planning_context(
     project_plan: dict[str, Any],
     build_context: dict[str, Any],
 ) -> dict[str, Any]:
-    """为任务规划阶段准备真实数据库摘要，供数据库 Unit 与后端 Unit 拆分使用。"""
+    """为任务规划阶段准备新版数据库上下文、差异和后续任务意图。"""
 
     targets = database_origin_targets(project_plan, build_context)
     if not targets:
@@ -48,35 +43,43 @@ def prepare_database_planning_context(
             "当前构建范围没有来源于数据库的接口。",
         )
 
-    contexts: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    seen_sources: set[str] = set()
-    for target in targets:
-        data_source_id = str(target.get("data_source_id") or "")
-        if data_source_id in seen_sources:
-            continue
-        seen_sources.add(data_source_id)
-        summary = inspect_mysql_schema(target)
-        if summary.get("status") != "completed":
-            failures.append(summary)
-            continue
-        contexts.append(
-            _planning_context_from_summary(
-                data_source_id=data_source_id,
-                summary=summary,
-                target=target,
-            )
-        )
+    probe_target = _probe_target(targets)
+    summary = inspect_mysql_schema(probe_target)
+    if summary.get("status") == "connection_failed":
+        required_schema = derive_required_database_schema(targets)
+        return {
+            "schema_version": "database-context.v1",
+            "status": "connection_failed",
+            "connection": _connection_summary(summary, connected=False),
+            "actual_schema": {},
+            "required_schema": required_schema,
+            "gaps": [],
+            "resolution_items": required_schema.get("resolution_items") or [],
+            "task_intents": [],
+            "captured_at": datetime.now(UTC).isoformat(),
+            "summary": summary.get("message") or "数据库连接失败。",
+            "targets": [target_summary(target) for target in targets],
+        }
 
-    status = "completed" if contexts else "failed"
+    actual_schema = _actual_schema_from_summary(summary)
+    required_schema = derive_required_database_schema(targets)
+    gaps = diff_database_schema(
+        actual_schema=actual_schema,
+        required_schema=required_schema,
+    )
+    task_intents = compile_database_task_intents(gaps)
     return {
-        "status": status,
-        "source": "get_mysql_table_info",
-        "contexts": contexts,
+        "schema_version": "database-context.v1",
+        "status": "completed",
+        "connection": _connection_summary(summary, connected=True),
+        "actual_schema": actual_schema,
+        "required_schema": required_schema,
+        "gaps": gaps,
+        "resolution_items": required_schema.get("resolution_items") or [],
+        "task_intents": task_intents,
+        "captured_at": datetime.now(UTC).isoformat(),
+        "summary": _planning_human_summary(actual_schema, gaps),
         "targets": [target_summary(target) for target in targets],
-        "failures": failures,
-        "summary": _planning_human_summary(contexts, failures),
-        "todo": "当前数据库连接信息从 .env 的 MYSQL_* 变量读取；后续改为 AG-UI 页面输入或选择。",
     }
 
 
@@ -87,21 +90,12 @@ def database_context_requirement(
     """根据已确认 EndpointDetail.data_origin 判断数据库上下文节点是否应执行。"""
 
     targets = database_origin_targets(project_plan, build_context)
-    unresolved = _unresolved_origin_targets(project_plan, build_context)
     if targets:
         return {
             "required": True,
             "status": "required",
             "reason": "database_data_origin",
             "targets": [target_summary(target) for target in targets],
-        }
-    if unresolved:
-        return {
-            "required": False,
-            "status": "blocked",
-            "reason": "unresolved_data_origin",
-            "message": "接口详细设计中的 data_origin 未明确数据来源，不能继续任务规划。",
-            "targets": [target_summary(target) for target in unresolved],
         }
     return {
         "required": False,
@@ -147,19 +141,6 @@ def endpoint_detail_origin_kind(endpoint_detail: Any) -> str:
     source_type = str(data_origin.get("source_type") or "")
     kind = (effective_kind or source_type).strip().lower()
     return kind if kind not in _EXTERNAL_ORIGIN_KINDS else "external_api"
-
-
-def _unresolved_origin_targets(
-    project_plan: dict[str, Any],
-    build_context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """找出已确认详情中数据来源缺失或待用户确认的接口。"""
-
-    return [
-        target
-        for target in _endpoint_targets(project_plan, build_context)
-        if _data_origin_kind(target.get("endpoint_detail")) in _UNKNOWN_ORIGIN_KINDS
-    ]
 
 
 def _endpoint_targets(
@@ -266,65 +247,77 @@ def _contract_summary(contract: dict[str, Any], endpoint_ids: set[str]) -> dict[
     }
 
 
-def _planning_context_from_summary(
-    *,
-    data_source_id: str,
-    summary: dict[str, Any],
-    target: dict[str, Any],
-) -> dict[str, Any]:
-    """把工具摘要转换为稳定的 DatabasePlanningContext 字典。"""
+def _probe_target(targets: list[dict[str, Any]]) -> dict[str, Any]:
+    """为一次数据库探测选择代表性目标，同时保留全部来源标识。"""
+
+    first = dict(targets[0]) if targets else {}
+    first["all_targets"] = [target_summary(target) for target in targets]
+    return first
+
+
+def _connection_summary(summary: dict[str, Any], *, connected: bool) -> dict[str, Any]:
+    """生成脱敏连接摘要，失败时只暴露错误类别和值为空的配置键。"""
+
+    return {
+        "status": "connected" if connected else "failed",
+        "source": "get_mysql_table_info",
+        "database": summary.get("database"),
+        "reason": summary.get("reason"),
+        "message": summary.get("message"),
+    }
+
+
+def _actual_schema_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """把工具摘要转换成新版 actual_schema，并生成结构哈希。"""
 
     tables = list(summary.get("tables") or [])
-    digest_payload = {
-        "data_source_id": data_source_id,
-        "summary": summary.get("summary"),
+    payload = {
+        "database": summary.get("database"),
+        "database_exists": summary.get("database_exists") is not False,
         "tables": tables,
     }
-    schema_hash = sha256(
-        json.dumps(digest_payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()
-    context = DatabasePlanningContext(
-        data_source_id=data_source_id,
-        summary=str(summary.get("summary") or ""),
-        tables=tables,
-        captured_at=datetime.now(UTC).isoformat(),
-        source="get_mysql_table_info",
-        schema_hash=schema_hash,
-    )
     return {
-        **asdict(context),
-        "database": summary.get("database"),
-        "scope": summary.get("scope", {}),
-        "target": target_summary(target),
-        "api_contract": target.get("api_contract") or {},
-        "endpoint_detail": target.get("endpoint_detail") or {},
+        **payload,
+        "schema_hash": _stable_hash(payload),
     }
 
 
 def _planning_skipped(reason: str, message: str) -> dict[str, Any]:
-    """构造任务规划数据库上下文跳过结果。"""
+    """构造新版数据库上下文跳过结果。"""
 
     return {
+        "schema_version": "database-context.v1",
         "status": "skipped",
-        "source": "get_mysql_table_info",
         "reason": reason,
-        "message": message,
-        "contexts": [],
+        "connection": {},
+        "actual_schema": {},
+        "required_schema": {},
+        "gaps": [],
+        "resolution_items": [],
+        "task_intents": [],
         "targets": [],
-        "failures": [],
+        "captured_at": datetime.now(UTC).isoformat(),
         "summary": message,
     }
 
 
 def _planning_human_summary(
-    contexts: list[dict[str, Any]],
-    failures: list[dict[str, Any]],
+    actual_schema: dict[str, Any],
+    gaps: list[dict[str, Any]],
 ) -> str:
-    """生成任务规划模型可读的数据库摘要总览。"""
+    """生成任务规划模型可读的新版数据库摘要总览。"""
 
-    if contexts:
-        source_ids = ", ".join(str(item.get("data_source_id") or "") for item in contexts)
-        return f"已获取真实数据库摘要，覆盖数据源：{source_ids}。"
-    if failures:
-        return str(failures[0].get("message") or failures[0].get("summary") or "数据库摘要获取失败。")
-    return "未获取数据库摘要。"
+    database = actual_schema.get("database") or ""
+    table_count = len(actual_schema.get("tables") or [])
+    if gaps:
+        return f"已连接数据库 {database}，发现 {len(gaps)} 个结构差异，将转为数据库任务。"
+    return f"已连接数据库 {database}，当前 {table_count} 张表满足本轮接口需求。"
+
+
+def _stable_hash(value: Any) -> str:
+    """为新版数据库上下文中的结构片段生成稳定哈希。"""
+
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
+    return sha256(encoded.encode("utf-8")).hexdigest()

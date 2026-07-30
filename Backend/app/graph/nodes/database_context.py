@@ -19,7 +19,7 @@ from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_j
 
 
 def inspect_database_context(state: ProjectState) -> dict:
-    """在任务规划前按 EndpointDetail.data_origin 获取真实数据库摘要。"""
+    """在任务规划前连接数据库、采集事实结构并编译差异任务意图。"""
 
     project_plan = _latest_compact_project_plan(state)
     workspace_snapshot = _workspace_snapshot_from_state(state)
@@ -32,13 +32,6 @@ def inspect_database_context(state: ProjectState) -> dict:
         build_task_plan,
     )
     requirement = database_context_requirement(project_plan, build_context)
-    if requirement.get("status") == "blocked":
-        return _blocked_result(
-            project_plan,
-            build_execution_scope,
-            build_context,
-            requirement,
-        )
     if not requirement.get("required"):
         return {
             "phase": "inspect_database_context",
@@ -50,7 +43,7 @@ def inspect_database_context(state: ProjectState) -> dict:
             "timeline": ["inspect_database_context"],
         }
     database_context = prepare_database_planning_context(project_plan, build_context)
-    if database_context.get("status") != "completed":
+    if database_context.get("status") == "connection_failed":
         return _blocked_result(
             project_plan,
             build_execution_scope,
@@ -85,7 +78,7 @@ def _blocked_result(
     build_context: dict,
     requirement: dict,
 ) -> dict:
-    """生成数据库上下文阻断结果，避免后续任务规划臆测库表。"""
+    """生成数据库连接失败阻断结果；结构差异不在此处阻断。"""
 
     message = str(requirement.get("message") or "数据库上下文检查未通过。")
     payload = build_ask_user_payload(
@@ -93,8 +86,7 @@ def _blocked_result(
             AskUserQuestion(
                 header="数据库上下文",
                 question=(
-                    f"{message} 请先在接口详细设计中确认 data_origin，"
-                    "或补齐 .env 中的 MYSQL_* 数据库连接信息后重试。"
+                    f"{message} 请补齐或修正 .env 中的 MYSQL_* 数据库连接信息后重试。"
                 ),
                 type="text",
                 placeholder="例如：已补齐数据库连接信息，请重新检查。",
@@ -111,9 +103,15 @@ def _blocked_result(
         "build_execution_scope": build_execution_scope,
         "build_context": build_context,
         "database_planning_context": {
+            "schema_version": "database-context.v1",
             "status": "blocked",
             "reason": requirement.get("reason"),
             "message": message,
+            "connection": {"status": "failed"},
+            "actual_schema": {},
+            "required_schema": {},
+            "gaps": [],
+            "task_intents": [],
             "targets": requirement.get("targets") or [],
         },
         "clarification": payload,

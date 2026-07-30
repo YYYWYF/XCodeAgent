@@ -35,18 +35,6 @@ class BuildTask:
 
 
 @dataclass
-class DatabasePlanningContext:
-    """记录任务规划阶段通过真实数据库工具获取的紧凑数据库摘要。"""
-
-    data_source_id: str
-    summary: str
-    tables: list[dict[str, Any]] = field(default_factory=list)
-    captured_at: str = ""
-    source: str = "database-tool"
-    schema_hash: str = ""
-
-
-@dataclass
 class BuildUnit:
     """表示分层 Build DAG 中可准备、执行和聚合进度的业务单元。"""
 

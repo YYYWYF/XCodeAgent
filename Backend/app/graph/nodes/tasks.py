@@ -473,16 +473,18 @@ def _with_database_planning_context_from_state(
     project_plan: dict,
     build_context: dict,
 ) -> dict:
-    """只消费前置数据库检查节点写入的真实摘要，不在任务规划内查库。"""
+    """只消费前置数据库检查节点写入的新版真实上下文，不在任务规划内查库。"""
 
     requirement = database_context_requirement(project_plan, build_context)
-    if requirement.get("status") == "blocked":
-        raise ValueError("当前接口数据来源未明确，必须先完成数据库上下文检查。")
     if not requirement.get("required"):
         return {**build_context, "database_planning_context": {}}
     database_context = state.get("database_planning_context")
-    if not isinstance(database_context, dict) or database_context.get("status") != "completed":
-        raise ValueError("当前接口来源于数据库，但尚未完成数据库上下文检查。")
+    if (
+        not isinstance(database_context, dict)
+        or database_context.get("schema_version") != "database-context.v1"
+        or database_context.get("status") != "completed"
+    ):
+        raise ValueError("当前接口来源于数据库，但尚未完成新版数据库上下文检查。")
     return {
         **build_context,
         "database_planning_context": database_context,
@@ -1152,14 +1154,29 @@ def _build_task_plan_generation_error_payload(error: str) -> dict:
 
 
 def _build_task_plan_validation_error_payload(errors: list[str]) -> dict:
+    """按 DAG 校验错误类型生成更精确的用户提示。"""
+
+    category = _build_task_validation_error_category(errors)
+    if category == "database_scope":
+        question = (
+            "数据库任务校验失败：任务缺少 database_scope，无法确认要修改哪个库表字段。"
+            "请重试任务拆分，或确认这些字段是否需要补库。"
+        )
+    elif category == "semantic":
+        question = (
+            "Build DAG 语义校验失败：任务 owner、Unit、类型或修改范围不符合约束。"
+            "请重试任务拆分，或返回项目规划阶段调整任务边界。"
+        )
+    else:
+        question = (
+            "Build DAG 校验失败，存在缺失依赖或循环依赖。"
+            "请确认是否重试任务拆分，或返回项目规划阶段调整任务边界。"
+        )
     payload = build_ask_user_payload(
         [
             AskUserQuestion(
                 header="DAG 校验",
-                question=(
-                    "Build DAG 校验失败，存在缺失依赖或循环依赖。"
-                    "请确认是否重试任务拆分，或返回项目规划阶段调整任务边界。"
-                ),
+                question=question,
                 type="text",
                 placeholder="例如：请重试任务拆分 / 返回项目规划阶段补充依赖关系。",
             )
@@ -1169,6 +1186,25 @@ def _build_task_plan_validation_error_payload(errors: list[str]) -> dict:
     payload["message"] = "Build DAG 校验失败，已阻止代码生成。"
     payload["errors"] = errors
     return payload
+
+
+def _build_task_validation_error_category(errors: list[str]) -> str:
+    """把底层 DAG 校验错误粗分为数据库范围、语义和拓扑错误。"""
+
+    text = "\n".join(str(error) for error in errors)
+    if "database_scope" in text:
+        return "database_scope"
+    if any(
+        marker in text
+        for marker in (
+            "invalid task_type",
+            "owner is",
+            "must not modify code files",
+            "requires completed database-context.v1",
+        )
+    ):
+        return "semantic"
+    return "topology"
 
 
 def _user_confirmed_project_plan(request: str) -> bool:

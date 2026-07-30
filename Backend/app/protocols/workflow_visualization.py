@@ -1212,12 +1212,12 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
     if node_name == "inspect_database_context":
         database_context = update.get("database_planning_context")
         database_context = database_context if isinstance(database_context, dict) else {}
-        contexts = database_context.get("contexts")
-        contexts = contexts if isinstance(contexts, list) else []
+        gaps = database_context.get("gaps")
+        gaps = gaps if isinstance(gaps, list) else []
         return {
             "message": database_context.get("summary")
             or database_context.get("message")
-            or f"数据库上下文数量={len(contexts)}",
+            or f"数据库结构差异={len(gaps)}",
             "data": {
                 "databasePlanningContext": database_context,
                 "requiresUserInput": update.get("status") == "requires_user_input",

@@ -15,6 +15,7 @@ from app.services.database_execution import (
     execute_database_plan,
     request_database_approval_if_needed,
 )
+from app.services.database_schema_diff import diff_database_schema
 from app.services.database_schema_summary import inspect_mysql_schema
 from app.utils.model_output import extract_json_object
 
@@ -130,13 +131,27 @@ def generate_database_with_deep_agent(
     database_summary = inspect_mysql_schema(_target_from_tasks(tasks))
     if database_summary.get("status") != "completed":
         return [_database_failure_result(task, database_summary) for task in tasks]
+    required_schema = _required_schema_from_tasks(tasks, database_summary)
+    remaining_gaps = diff_database_schema(
+        actual_schema=_actual_schema_from_summary(database_summary),
+        required_schema=required_schema,
+    )
+    if required_schema.get("tables") and not remaining_gaps:
+        return [
+            _database_already_satisfied_result(task, database_summary)
+            for task in tasks
+        ]
 
     settings = Settings.from_env()
     agent_note = _invoke_live_database_agent(
         project_plan=project_plan,
         build_task_plan=build_task_plan,
         tasks=tasks,
-        database_summary=database_summary,
+        database_summary={
+            **database_summary,
+            "required_schema": required_schema,
+            "remaining_gaps": remaining_gaps,
+        },
         workspace=workspace,
         selected_skill_names=selected_skill_names,
         on_tool_activity=on_tool_activity,
@@ -172,6 +187,17 @@ def generate_database_with_deep_agent(
         ]
 
     execution = execute_database_plan(plan=plan, execution_context=execution_context)
+    verification = _verify_database_gaps(tasks, database_summary)
+    if execution.get("status") == "completed" and verification.get("status") == "failed":
+        execution = {
+            **execution,
+            "status": "failed",
+            "failure_category": "database_post_verify_failed",
+            "failure_reason": verification.get("summary"),
+            "post_verification": verification,
+        }
+    elif execution.get("status") == "completed":
+        execution = {**execution, "post_verification": verification}
     return [
         _database_task_result(
             task=task,
@@ -213,6 +239,31 @@ def _database_failure_result(task: dict[str, Any], database_summary: dict[str, A
         "changed_files": [],
         "commands": [],
         "change_request": None,
+    }
+
+
+def _database_already_satisfied_result(
+    task: dict[str, Any],
+    database_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """构造执行前复查已满足的数据库任务结果。"""
+
+    summary = str(database_summary.get("summary") or "数据库结构已满足任务要求。")
+    return {
+        "task_id": task["id"],
+        "owner": "database",
+        "status": "already_satisfied",
+        "failure_category": None,
+        "failure_reason": None,
+        "agent_note": summary,
+        "changed_files": [],
+        "commands": [],
+        "change_request": None,
+        "database_execution": {
+            "status": "skipped",
+            "summary": summary,
+            "reason": "schema_gaps_already_satisfied",
+        },
     }
 
 
@@ -284,4 +335,75 @@ def _database_task_result(
         "database_risk": risk,
         "database_execution": execution,
         "executed_by": executed_by,
+    }
+
+
+def _verify_database_gaps(
+    tasks: list[dict[str, Any]],
+    before_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """执行后重新扫描数据库并确认任务声明的 gaps 已消除。"""
+
+    required_schema = _required_schema_from_tasks(tasks, before_summary)
+    if not required_schema.get("tables"):
+        return {"status": "skipped", "summary": "任务未声明可复查的目标 schema。"}
+    latest_summary = inspect_mysql_schema(_target_from_tasks(tasks))
+    if latest_summary.get("status") != "completed":
+        return {
+            "status": "failed",
+            "summary": latest_summary.get("message") or "数据库执行后复查失败。",
+            "latest_summary": latest_summary,
+        }
+    remaining_gaps = diff_database_schema(
+        actual_schema=_actual_schema_from_summary(latest_summary),
+        required_schema=required_schema,
+    )
+    if remaining_gaps:
+        return {
+            "status": "failed",
+            "summary": f"数据库执行后仍有 {len(remaining_gaps)} 个结构差异。",
+            "remaining_gaps": remaining_gaps,
+            "latest_summary": latest_summary,
+        }
+    return {
+        "status": "completed",
+        "summary": "数据库执行后复查通过，目标结构差异已消除。",
+        "latest_summary": latest_summary,
+    }
+
+
+def _required_schema_from_tasks(
+    tasks: list[dict[str, Any]],
+    database_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """从数据库任务中的 gap 还原执行前后可复查的目标 schema。"""
+
+    database = str(database_summary.get("database") or "")
+    tables: dict[str, dict[str, Any]] = {}
+    for task in tasks:
+        scope = task.get("database_scope") if isinstance(task.get("database_scope"), dict) else {}
+        database = str(scope.get("database") or database)
+        for gap in scope.get("gaps") if isinstance(scope.get("gaps"), list) else []:
+            if not isinstance(gap, dict):
+                continue
+            table_name = str(gap.get("table") or "")
+            if not table_name:
+                continue
+            required = gap.get("required") if isinstance(gap.get("required"), dict) else {}
+            if gap.get("kind") == "missing_table" and required.get("columns"):
+                tables[table_name] = required
+                continue
+            table = tables.setdefault(table_name, {"name": table_name, "columns": []})
+            if gap.get("column") and required:
+                table.setdefault("columns", []).append(required)
+    return {"database": database, "tables": list(tables.values())}
+
+
+def _actual_schema_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """把数据库摘要投影成 schema diff 使用的 actual_schema。"""
+
+    return {
+        "database": summary.get("database"),
+        "database_exists": summary.get("database_exists") is not False,
+        "tables": list(summary.get("tables") or []),
     }
