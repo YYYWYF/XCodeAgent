@@ -4,7 +4,10 @@ import unittest
 
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.api_contracts import response_field_paths
-from app.services.frontend_page_tree import apply_frontend_page_route_hierarchy
+from app.services.frontend_page_tree import (
+    apply_frontend_page_route_hierarchy,
+    flatten_frontend_pages,
+)
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_detail_plan import (
     create_page_detail_plan,
@@ -459,7 +462,7 @@ class ProjectPlanTests(unittest.TestCase):
         )
         self.assertEqual(validate_api_contract_consistency(plan), [])
 
-    def test_normalize_project_plan_only_normalizes_api_contracts(self) -> None:
+    def test_normalize_project_plan_normalizes_api_contracts_and_page_leaves(self) -> None:
         plan = {
             "api_contracts": [
                 {
@@ -508,7 +511,9 @@ class ProjectPlanTests(unittest.TestCase):
             contract["endpoints"][0]["response_schema_ref"],
             "InventoryList",
         )
-        self.assertEqual(normalized["frontend_pages"], plan["frontend_pages"])
+        normalized_pages = flatten_frontend_pages(normalized["frontend_pages"])
+        self.assertEqual(normalized_pages[0]["pageId"], "inventory_page")
+        self.assertEqual(normalized_pages[0]["path"], "/inventory")
 
     def test_legacy_json_pointer_refs_validate_and_expand_all_of_paths(self) -> None:
         plan = {

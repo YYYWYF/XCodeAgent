@@ -9,6 +9,8 @@ from app.services.frontend_page_tree import (
     find_frontend_page,
     flatten_frontend_pages,
     frontend_page_menu_paths,
+    is_menu_node,
+    is_page_leaf,
 )
 
 
@@ -67,6 +69,7 @@ def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str
     )
     for value in duplicates:
         errors.append(f"Duplicate menu unique_path: {value}.")
+    _validate_menu_page_path_conflicts(project_plan.get("frontend_pages"), errors)
     pageIds = {str(page.get("pageId") or "") for page in pages}
     for page in pages:
         pageId = str(page.get("pageId") or "")
@@ -88,6 +91,26 @@ def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str
                     f"Page {pageId} references unknown navigation target {targetPageId}."
                 )
     return errors
+
+
+def _validate_menu_page_path_conflicts(value: Any, errors: list[str]) -> None:
+    """校验菜单路由没有与直接页面叶子共用同一个最终路由。"""
+
+    for node in dict_items(value):
+        if not is_menu_node(node):
+            continue
+        unique_path = str(node.get("unique_path") or "").strip()
+        if unique_path:
+            for child in dict_items(node.get("children")):
+                if not is_page_leaf(child):
+                    continue
+                page_path = str(child.get("path") or "").strip()
+                if page_path == unique_path:
+                    errors.append(
+                        "Menu unique_path conflicts with direct page path: "
+                        f"{unique_path}."
+                    )
+        _validate_menu_page_path_conflicts(node.get("children"), errors)
 
 
 def page_design_references(

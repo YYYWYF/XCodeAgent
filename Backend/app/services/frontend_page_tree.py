@@ -164,7 +164,7 @@ def group_pages_into_menu_tree(
         children = groups[module_id]
         if not children:
             continue
-        if _should_keep_as_root_page(module_id, children):
+        if _should_keep_without_menu(module_id, children):
             result.extend(children)
             continue
         menu_name = (
@@ -252,6 +252,22 @@ def _rebuild_tree_from_source(
     return rebuilt
 
 
+def _should_keep_without_menu(module_id: str, pages: list[dict[str, Any]]) -> bool:
+    """只在模块存在多个可见页面时才自动生成父级菜单。"""
+
+    normalized_module = module_id.strip().lower()
+    if normalized_module in {"core", "home", "dashboard"}:
+        return True
+    visible_pages = [
+        page
+        for page in pages
+        if not _has_react_router_path_param(str(page.get("path") or ""))
+    ]
+    if len(visible_pages) <= 1:
+        return True
+    return _should_keep_as_root_page(module_id, visible_pages)
+
+
 def _should_keep_as_root_page(module_id: str, pages: list[dict[str, Any]]) -> bool:
     """保留首页/仪表盘类孤立页面为根节点，避免所有页面都被强制包进菜单。"""
 
@@ -300,6 +316,16 @@ def _menu_leaf_path_from_pageId(page_id: str) -> str:
     if route in {"dashboard", "dashboard-page", "home", "index"}:
         route = "home"
     return f"/{route}"
+
+
+def _has_react_router_path_param(path: str) -> bool:
+    """判断页面路由是否包含 React Router 动态路径参数。"""
+
+    route_part = str(path or "").split("?", 1)[0].split("#", 1)[0]
+    return any(
+        re.fullmatch(r":[A-Za-z0-9_][A-Za-z0-9_-]*", segment)
+        for segment in route_part.split("/")
+    )
 
 
 def _menu_path_from_module(module_id: str) -> str:
@@ -358,6 +384,13 @@ def _apply_frontend_page_route_hierarchy(
                 inherited_menu_path=inherited_menu_path,
                 used_menu_paths=used_menu_paths,
             )
+            if _menu_path_matches_direct_page_child(
+                node.get("children"),
+                menu_path=normalized_menu_path,
+                root_route_prefix=root_route_prefix,
+            ):
+                used_menu_paths.discard(normalized_menu_path)
+                normalized_menu_path = ""
             effective_menu_path = normalized_menu_path or inherited_menu_path or root_route_prefix
             children = _apply_frontend_page_route_hierarchy(
                 node.get("children"),
@@ -387,6 +420,29 @@ def _apply_frontend_page_route_hierarchy(
             )
         )
     return normalized_nodes
+
+
+def _menu_path_matches_direct_page_child(
+    value: Any,
+    *,
+    menu_path: str,
+    root_route_prefix: str,
+) -> bool:
+    """识别菜单路由与直接页面叶子共用同一路由的冲突。"""
+
+    normalized_menu_path = _normalize_route_text(menu_path)
+    if not normalized_menu_path:
+        return False
+    for node in dict_items(value):
+        if not is_page_leaf(node):
+            continue
+        page_path = _resolve_child_route(
+            _normalize_route_text(node.get("path")),
+            base_prefix=root_route_prefix,
+        )
+        if page_path == normalized_menu_path:
+            return True
+    return False
 
 
 def _resolve_menu_unique_path(

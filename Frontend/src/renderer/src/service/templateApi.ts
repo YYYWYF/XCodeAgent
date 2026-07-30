@@ -187,6 +187,7 @@ function buildTemplateMenuItems(
   value: unknown,
   pageKeysByIdentity: Map<string, string>,
   parentAbsolutePath = '',
+  rootAbsolutePath = parentAbsolutePath,
   counters = { menu: 0, page: 0 }
 ): ApplicationMenuItem[] {
   if (!Array.isArray(value)) return []
@@ -202,6 +203,7 @@ function buildTemplateMenuItems(
         record.children,
         pageKeysByIdentity,
         absolutePath || parentAbsolutePath,
+        rootAbsolutePath,
         counters
       )
       if (!children.length) return []
@@ -218,8 +220,10 @@ function buildTemplateMenuItems(
     if (!pageKey) return []
     const absolutePath = normalizeAbsoluteRoute(record.path)
     const pagePath = relativeMenuPath(absolutePath, parentAbsolutePath)
+    const rootRelativePagePath = relativeMenuPath(absolutePath, rootAbsolutePath)
+    // 当上游菜单路径与页面路径相同时，避免把可点击页面静默写成空 path。
     const resolvedPath =
-      pagePath || (absolutePath === parentAbsolutePath ? '' : absolutePath.replace(/^\/+/, '') || pageKey)
+      pagePath || rootRelativePagePath || absolutePath.replace(/^\/+/, '') || pageKey
     return [{
       key: pageKey,
       name: typeof record.name === 'string' ? record.name : pageKey,
