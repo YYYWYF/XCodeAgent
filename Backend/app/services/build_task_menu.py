@@ -170,17 +170,28 @@ def _page_key_identity(value: str) -> str:
 
 
 def _task_matches_page_unit(task: dict[str, Any], page_unit_id: str) -> bool:
-    """判断任务是否归属给定页面 Unit，容忍模型输出的 ``frontend:`` 前缀。
+    """判断任务是否归属给定页面 Unit，容忍模型输出的多种 unit_id 格式与大小写。
 
-    标准 Unit ID 为 ``page:<page_id>``，但模型常生成 ``frontend:page:<page_id>``。
-    语义校验（``build_task_planner``）已容忍该前缀，此处菜单登记也需保持一致，
-    否则页面入口无法被收集，触发 "must resolve to exactly one" 误报。
+    标准 Unit ID 为 ``page:<page_id>``，但模型实际输出格式不稳定，常见三种：
+    ``page:<page_id>``、``frontend:page:<page_id>``、以及裸 ``<page_id>``。
+    此外 ``reconcile_live_page_paths`` 会按已存在页面目录把 unit_id 规范化为
+    canonical key（如 ``project_list_page`` → ``ProjectListPage``），大小写与
+    分隔符都会变化。因此这里用 ``_page_key_identity`` 做语义匹配，忽略大小写、
+    分隔符和 Page 后缀差异，否则页面入口无法被收集，触发误报。
     """
 
     unit_id = str(task.get("unit_id") or "")
-    if unit_id == page_unit_id:
+    if not unit_id or not page_unit_id:
+        return False
+    if unit_id == page_unit_id or unit_id == f"frontend:{page_unit_id}":
         return True
-    return unit_id == f"frontend:{page_unit_id}"
+    page_id = page_unit_id.split(":", 1)[1] if ":" in page_unit_id else page_unit_id
+    if unit_id == page_id:
+        return True
+    # 兼容 reconcile 规范化后的 canonical key（大小写/分隔符不同但语义相同）
+    return _page_key_identity(unit_id) == _page_key_identity(page_id) and bool(
+        _page_key_identity(unit_id)
+    )
 
 
 def _page_key_from_entry_path(path: str) -> str:
