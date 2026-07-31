@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.agents.tool_activity_stream import (
     ToolActivityCallback,
@@ -120,7 +121,7 @@ def classify_direct_modification_intent(
             ]
         )
         content = getattr(response, "content", "")
-        text = content if isinstance(content, str) else str(content or "")
+        text = _coerce_content_text(content) or ""
         return _normalize_direct_modification_decision(extract_json_object(text) or {})
     except Exception as exc:
         return _clarification_fallback(

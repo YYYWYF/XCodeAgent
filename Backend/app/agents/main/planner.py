@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessageChunk
 
+from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.project_plan import (
@@ -186,7 +187,7 @@ def _invoke_live_chat_model(
             _planning_prompt(requirement_spec, existing_plan)
         )
         content = getattr(result, "content", "")
-        return content if isinstance(content, str) else str(content)
+        return _coerce_content_text(content) or ""
 
     accumulated_text = ""
     for chunk in model.stream(_planning_prompt(requirement_spec, existing_plan)):

@@ -4,6 +4,7 @@ import json
 import time
 from typing import Any
 
+from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 
 from app.config import Settings
@@ -155,12 +156,7 @@ def _invoke_live_chat_model(
         _page_design_prompt(project_plan, page_context)
     )
     content = getattr(result, "content", result)
-    if isinstance(content, list):
-        return "\n".join(
-            str(item.get("text", item)) if isinstance(item, dict) else str(item)
-            for item in content
-        )
-    return content if isinstance(content, str) else str(content)
+    return _coerce_content_text(content) or ""
 
 
 def _fallback_model_note(error: Exception) -> str:
@@ -283,7 +279,7 @@ def design_endpoint_with_chat_model(
             _endpoint_design_prompt(project_plan, endpoint_context, user_request)
         )
         content = getattr(result, "content", "")
-        model_output = content if isinstance(content, str) else str(content)
+        model_output = _coerce_content_text(content) or ""
         agent_detail_plan = extract_json_object(model_output)
     except Exception as exc:
         raise RuntimeError(

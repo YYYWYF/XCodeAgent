@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any
 
+from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.build_task_planner import create_build_task_plan
@@ -180,7 +181,7 @@ def _invoke_live_main_agent(
         configured_max_tokens=active_settings.default_max_tokens,
     )
     content = getattr(result, "content", "")
-    return content if isinstance(content, str) else str(content)
+    return _coerce_content_text(content) or ""
 
 
 def prepare_build_tasks_with_main_agent(

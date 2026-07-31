@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
+from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.requirement_spec import (
@@ -96,8 +97,12 @@ def _invoke_live_chat_model(
     merged_chunk: AIMessageChunk | None = None
     for chunk in runnable.stream(_requirements_prompt(request, existing_spec)):
         if isinstance(chunk, AIMessageChunk):
-            token = chunk.content
-            if isinstance(token, str) and token:
+            # glm-5.2 流式 chunk.content 是 content block 列表（如
+            # [{"text": "...", "type": "text", "index": 0}]），不是纯字符串。
+            # 用 _coerce_content_text 提取 text block，否则 accumulated_text 永远为空，
+            # 导致最终 agent_note 为空、spec 解析失败、应用名与页面退回固定 fallback。
+            token = _coerce_content_text(chunk.content)
+            if token:
                 accumulated_text += token
                 on_token(token)
             merged_chunk = chunk if merged_chunk is None else merged_chunk + chunk
@@ -131,7 +136,7 @@ def analyze_requirements_with_chat_model(
     )
     messages = agent_result.get("messages", [])
     content = getattr(messages[-1], "content", "") if messages else ""
-    agent_note = content if isinstance(content, str) else str(content)
+    agent_note = _coerce_content_text(content) or ""
     analysis_source = "direct_chat_model"
 
     agent_spec = extract_json_object(agent_note)
