@@ -91,12 +91,12 @@ def ensure_page_route_registration_task(
     page_task_ids = [
         str(task.get("id"))
         for task in tasks
-        if task.get("unit_id") == page_unit_id and task.get("id")
+        if _task_matches_page_unit(task, page_unit_id) and task.get("id")
     ]
     page_keys = {
         key
         for task in tasks
-        if task.get("unit_id") == page_unit_id
+        if _task_matches_page_unit(task, page_unit_id)
         for path in _task_target_files(task)
         if (key := _page_key_from_entry_path(str(path)))
     }
@@ -167,6 +167,20 @@ def _page_key_identity(value: str) -> str:
 
     normalized = "".join(character.lower() for character in value if character.isalnum())
     return normalized[:-4] if normalized.endswith("page") else normalized
+
+
+def _task_matches_page_unit(task: dict[str, Any], page_unit_id: str) -> bool:
+    """判断任务是否归属给定页面 Unit，容忍模型输出的 ``frontend:`` 前缀。
+
+    标准 Unit ID 为 ``page:<page_id>``，但模型常生成 ``frontend:page:<page_id>``。
+    语义校验（``build_task_planner``）已容忍该前缀，此处菜单登记也需保持一致，
+    否则页面入口无法被收集，触发 "must resolve to exactly one" 误报。
+    """
+
+    unit_id = str(task.get("unit_id") or "")
+    if unit_id == page_unit_id:
+        return True
+    return unit_id == f"frontend:{page_unit_id}"
 
 
 def _page_key_from_entry_path(path: str) -> str:
