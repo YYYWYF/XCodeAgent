@@ -6,7 +6,11 @@ from langgraph.config import get_stream_writer
 
 from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import analyze_requirements_with_chat_model
-from app.graph.nodes.confirmation import user_confirmed_text
+from app.graph.nodes.confirmation import (
+    extract_confirmation_answer,
+    user_confirmed_text,
+    user_requested_changes_text,
+)
 from app.graph.state import ProjectState
 from app.services.requirement_spec import apply_requirement_spec_editor_changes
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload, clear_clarification
@@ -35,10 +39,13 @@ def _llm_token_callback(token: str) -> None:
 
 def requirements(state: ProjectState) -> dict:
     existing_spec = state.get("requirement_spec")
+    request = state.get("request", "")
+    revision_requested = _requirement_revision_requested(request, state)
     if (
         existing_spec
         and existing_spec.get("confirmation_status") == "pending_user_confirmation"
-        and _user_confirmed_requirement_spec(state.get("request", ""))
+        and not revision_requested
+        and _user_confirmed_requirement_spec(request)
     ):
         editor_changes = state.get("edited_requirement_spec")
         if isinstance(editor_changes, dict):
@@ -85,8 +92,13 @@ def requirements(state: ProjectState) -> dict:
             "clarification": _requirement_spec_confirmed_payload(spec),
             "timeline": ["requirements"],
         }
+    analysis_request = _requirement_analysis_request(
+        request,
+        existing_spec,
+        state.get("requirement_spec_feedback", ""),
+    )
     analysis = analyze_requirements_with_chat_model(
-        state["request"],
+        analysis_request,
         existing_spec=existing_spec,
         on_token=_llm_token_callback,
     )
@@ -152,9 +164,22 @@ def _requirement_spec_confirmed_payload(spec: dict) -> dict:
 
 
 def _user_confirmed_requirement_spec(request: str) -> bool:
+    if user_requested_changes_text(request):
+        return False
     return user_confirmed_text(
         request,
-        positive_signals=("正确", "没问题", "继续规划", "可以继续", "无误", "确认"),
+        positive_signals=(
+            "正确",
+            "没问题",
+            "继续规划",
+            "可以继续",
+            "无误",
+            "确认",
+            "好的",
+            "好",
+            "OK",
+            "ok",
+        ),
         negative_signals=(
             "不正确",
             "需要修改",
@@ -173,7 +198,55 @@ def _user_confirmed_requirement_spec(request: str) -> bool:
             "请补充",
             "补充一下",
             "不对",
+            "不好",
         ),
+    )
+
+
+def _requirement_revision_requested(request: str, state: ProjectState) -> bool:
+    """同时检查确认答案和兼容反馈字段中的需求修订意图。"""
+
+    feedback = state.get("requirement_spec_feedback")
+    return user_requested_changes_text(request) or (
+        isinstance(feedback, str) and user_requested_changes_text(feedback)
+    )
+
+
+def _requirement_analysis_request(
+    request: str,
+    existing_spec: dict | None,
+    requirement_spec_feedback: object = "",
+) -> str:
+    """把待确认文档上的修改性意见提升为需求修订请求。"""
+
+    feedback_text = (
+        requirement_spec_feedback.strip()
+        if isinstance(requirement_spec_feedback, str)
+        else ""
+    )
+    revision_feedback = (
+        feedback_text
+        if user_requested_changes_text(feedback_text)
+        else extract_confirmation_answer(request).strip() or request
+    )
+    if (
+        not isinstance(existing_spec, dict)
+        or existing_spec.get("confirmation_status") != "pending_user_confirmation"
+        or not (
+            user_requested_changes_text(request)
+            or user_requested_changes_text(feedback_text)
+        )
+    ):
+        return request
+    return "\n".join(
+        [
+            "用户正在审核已生成的需求文档，并提出了以下修改意见。",
+            "请基于现有 RequirementSpec 和这段最新意见重新生成完整需求文档。",
+            "最新修改意见优先覆盖冲突的旧需求；不要把本次意见当作确认通过。",
+            "",
+            "用户修改意见：",
+            revision_feedback,
+        ]
     )
 
 

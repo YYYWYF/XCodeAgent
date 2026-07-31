@@ -163,7 +163,7 @@ export default function ApplicationPlanningQuestionPanel({
 
   if (!clarification) return null
 
-  // 右下角提交始终确认当前文档，可选意见通过独立字段作为内部备注保存。
+  // 需求确认阶段的自然语言意见直接作为确认答案提交，后端据此区分确认或修订。
   const handleSubmit = (values: { answers?: WorkflowClarificationAnswers }): void => {
     if (isProjectPlanConfirmation) {
       const feedback = values.answers?.[projectPlanAnswerKey]
@@ -184,7 +184,7 @@ export default function ApplicationPlanningQuestionPanel({
     onSubmit(
       workflow,
       {
-        requirement_spec_confirmation: '正确，继续规划'
+        requirement_spec_confirmation: feedbackText || '正确，继续规划'
       },
       requirementDraft,
       feedbackText || undefined

@@ -43,5 +43,7 @@ def user_requested_changes_text(request: str) -> bool:
             "只需要",
             "只保留",
             "补充",
+            "不是",
+            "而是",
         )
     )
