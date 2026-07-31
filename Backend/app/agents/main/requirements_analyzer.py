@@ -93,22 +93,23 @@ def _invoke_live_chat_model(
         return {"messages": [result]}
 
     accumulated_text = ""
-    last_msg: AIMessage | None = None
+    merged_chunk: AIMessageChunk | None = None
     for chunk in runnable.stream(_requirements_prompt(request, existing_spec)):
         if isinstance(chunk, AIMessageChunk):
             token = chunk.content
             if isinstance(token, str) and token:
                 accumulated_text += token
                 on_token(token)
-            last_msg = chunk
-    if last_msg is None:
+            merged_chunk = chunk if merged_chunk is None else merged_chunk + chunk
+    if merged_chunk is None:
         return {"messages": []}
+    final_tool_calls = getattr(merged_chunk, "tool_calls", None) or []
     final = AIMessage(
         content=accumulated_text,
-        tool_calls=last_msg.tool_calls
-        if hasattr(last_msg, "tool_calls")
+        tool_calls=final_tool_calls
+        if hasattr(merged_chunk, "tool_calls")
         else None,
-        id=last_msg.id if hasattr(last_msg, "id") else None,
+        id=merged_chunk.id if hasattr(merged_chunk, "id") else None,
     )
     return {"messages": [final]}
 

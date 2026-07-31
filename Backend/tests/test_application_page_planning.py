@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.main import requirements_analyzer
 from app.graph.application_planning_workflow import (
@@ -188,6 +188,53 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertIn("name and a broad scenario alone are not sufficient", model.prompt)
         self.assertEqual(result["clarification"]["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["questions"][0]["header"], "用户角色")
+
+    def test_streaming_requirements_merge_chunked_ask_user_tool_call(self) -> None:
+        """流式模型拆分 ask_user 参数时仍应恢复成可展示的澄清问题。"""
+
+        class FakeStreamingModel:
+            """模拟工具调用参数分块到达的聊天模型。"""
+
+            def bind_tools(self, _tools: list[object]) -> "FakeStreamingModel":
+                """保持与 LangChain ChatModel bind_tools 接口兼容。"""
+
+                return self
+
+            def stream(self, _prompt: str):
+                """返回分块的 ask_user 工具调用。"""
+
+                yield AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[{
+                        "id": "call-stream-1",
+                        "name": "ask_user",
+                        "args": '{"questions":[{"header":"角色",',
+                        "index": 0,
+                    }],
+                )
+                yield AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[{
+                        "id": None,
+                        "name": None,
+                        "args": '"question":"主要使用者是谁？","type":"text"}]}',
+                        "index": 0,
+                    }],
+                )
+
+        settings = type("Settings", (), {"model_name": "test-model"})()
+        with (
+            patch.object(requirements_analyzer.Settings, "from_env", return_value=settings),
+            patch.object(requirements_analyzer, "create_chat_model", return_value=FakeStreamingModel()),
+        ):
+            result = requirements_analyzer.analyze_requirements_with_chat_model(
+                "创建任务中心",
+                on_token=lambda _token: None,
+            )
+
+        self.assertEqual(result["clarification"]["status"], "requires_user_input")
+        self.assertEqual(result["clarification"]["questions"][0]["header"], "角色")
+        self.assertEqual(result["clarification"]["questions"][0]["question"], "主要使用者是谁？")
 
     def test_routes_only_cover_two_planning_nodes(self) -> None:
         """独立创建 Graph 应从 requirements 启动并在确认门禁等待。"""
