@@ -4,7 +4,7 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from app.graph.nodes.requirements import requirements
 from app.services.requirement_spec import (
@@ -93,6 +93,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
         analyzer.assert_called_once_with(
             "创建一个库存管理系统",
             existing_spec=None,
+            on_token=ANY,
         )
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
@@ -130,8 +131,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
             "confirmed",
         )
 
-    def test_confirmation_feedback_is_saved_without_blocking_confirmation(self) -> None:
-        """意见应作为内部确认备注保存，不得被解释为重新修改需求。"""
+    def test_confirmation_feedback_does_not_block_or_persist_confirmation(self) -> None:
+        """兼容反馈字段不得参与本轮确认语义，也不得保存为正式确认意见。"""
 
         spec = create_requirement_spec("创建一个库存管理系统")
         spec["confirmation_status"] = "pending_user_confirmation"
@@ -150,13 +151,35 @@ class RequirementsConfirmationTests(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "completed")
+        self.assertNotIn("confirmation_feedback", result["requirement_spec"])
+        self.assertNotIn("confirmation_feedback", internal_json)
+        self.assertEqual(result["requirement_spec_feedback"], "")
+
+    def test_stale_feedback_does_not_trigger_revision_when_current_answer_confirms(self) -> None:
+        """旧轮次残留的需求意见不能覆盖本轮明确确认。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        spec["confirmation_status"] = "pending_user_confirmation"
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                side_effect=AssertionError("确认通过时不应重新生成需求文档。"),
+            ) as analyzer:
+                result = requirements(
+                    {
+                        "request": "正确，继续规划",
+                        "workspace": workspace,
+                        "requirement_spec": spec,
+                        "requirement_spec_feedback": "请增加移动端页面。",
+                        "timeline": [],
+                    }
+                )
+
+        analyzer.assert_not_called()
+        self.assertEqual(result["status"], "completed")
         self.assertEqual(
-            result["requirement_spec"]["confirmation_feedback"],
-            "建议后续补充移动端说明。",
-        )
-        self.assertEqual(
-            internal_json["confirmation_feedback"],
-            "建议后续补充移动端说明。",
+            result["requirement_spec"]["confirmation_status"],
+            "confirmed",
         )
         self.assertEqual(result["requirement_spec_feedback"], "")
 

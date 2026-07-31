@@ -234,7 +234,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         **(
             {"requirement_spec_feedback": requirement_spec_feedback}
-            if requirement_spec_feedback and workflow_scope == "application_planning"
+            if workflow_scope == "application_planning"
             else {}
         ),
     }

@@ -40,7 +40,7 @@ def _llm_token_callback(token: str) -> None:
 def requirements(state: ProjectState) -> dict:
     existing_spec = state.get("requirement_spec")
     request = state.get("request", "")
-    revision_requested = _requirement_revision_requested(request, state)
+    revision_requested = _requirement_revision_requested(request)
     if (
         existing_spec
         and existing_spec.get("confirmation_status") == "pending_user_confirmation"
@@ -66,12 +66,6 @@ def requirements(state: ProjectState) -> dict:
             "clarification_questions": [],
             "clarification_status": "clear",
             "confirmation_status": "confirmed",
-            **(
-                {"confirmation_feedback": state["requirement_spec_feedback"].strip()}
-                if isinstance(state.get("requirement_spec_feedback"), str)
-                and state["requirement_spec_feedback"].strip()
-                else {}
-            ),
         }
         markdown_path = requirement_spec_markdown_path(state)
         if isinstance(editor_changes, dict):
@@ -95,7 +89,6 @@ def requirements(state: ProjectState) -> dict:
     analysis_request = _requirement_analysis_request(
         request,
         existing_spec,
-        state.get("requirement_spec_feedback", ""),
     )
     analysis = analyze_requirements_with_chat_model(
         analysis_request,
@@ -203,39 +196,23 @@ def _user_confirmed_requirement_spec(request: str) -> bool:
     )
 
 
-def _requirement_revision_requested(request: str, state: ProjectState) -> bool:
-    """同时检查确认答案和兼容反馈字段中的需求修订意图。"""
+def _requirement_revision_requested(request: str) -> bool:
+    """只根据本轮确认答案判断是否需要修订需求。"""
 
-    feedback = state.get("requirement_spec_feedback")
-    return user_requested_changes_text(request) or (
-        isinstance(feedback, str) and user_requested_changes_text(feedback)
-    )
+    return user_requested_changes_text(request)
 
 
 def _requirement_analysis_request(
     request: str,
     existing_spec: dict | None,
-    requirement_spec_feedback: object = "",
 ) -> str:
-    """把待确认文档上的修改性意见提升为需求修订请求。"""
+    """把本轮待确认文档上的修改性意见提升为需求修订请求。"""
 
-    feedback_text = (
-        requirement_spec_feedback.strip()
-        if isinstance(requirement_spec_feedback, str)
-        else ""
-    )
-    revision_feedback = (
-        feedback_text
-        if user_requested_changes_text(feedback_text)
-        else extract_confirmation_answer(request).strip() or request
-    )
+    revision_feedback = extract_confirmation_answer(request).strip() or request
     if (
         not isinstance(existing_spec, dict)
         or existing_spec.get("confirmation_status") != "pending_user_confirmation"
-        or not (
-            user_requested_changes_text(request)
-            or user_requested_changes_text(feedback_text)
-        )
+        or not user_requested_changes_text(request)
     ):
         return request
     return "\n".join(

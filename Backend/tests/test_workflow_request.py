@@ -144,6 +144,17 @@ class WorkflowRequestTests(unittest.TestCase):
             "建议后续关注移动端适配。",
         )
 
+    def test_application_planning_clears_feedback_when_not_submitted(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowScope": "application_planning",
+                }
+            }
+        )
+
+        self.assertEqual(inputs["resume_values"]["requirement_spec_feedback"], "")
+
     def test_main_workflow_ignores_edited_requirement_spec(self) -> None:
         inputs = workflow_run_inputs(
             {
