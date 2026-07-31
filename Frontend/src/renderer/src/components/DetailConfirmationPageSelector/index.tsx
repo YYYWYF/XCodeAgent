@@ -560,6 +560,7 @@ export default function DetailConfirmationPageSelector({
           </div>
         )}
 
+        <div className={cx("detail-page-selector-action-bar")}>
         <Button
           className={cx("detail-page-selector-action")}
           disabled={disabled || !selectedTarget || !selectedTargetId}
@@ -587,6 +588,7 @@ export default function DetailConfirmationPageSelector({
         >
           开始生成「{selectedTarget?.label || "所选对象"}」
         </Button>
+        </div>
       </main>
     </section>
   );
