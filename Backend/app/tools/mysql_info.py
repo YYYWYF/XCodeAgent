@@ -128,6 +128,7 @@ def mysql_table_info(
                 tables = cursor.fetchall()  # DictCursor 已返回字典
 
                 if table_name:
+                    table_name = table_name.lower()
                     target_tables = [
                         table_name
                     ] if any(t["table_name"] == table_name for t in tables) else []

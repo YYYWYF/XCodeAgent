@@ -20,7 +20,7 @@ from app.utils.subprocess_output import subprocess_output_text
 BACKEND_BUILD_TIMEOUT_SECONDS = 600
 BACKEND_READY_TIMEOUT_SECONDS = 60
 BACKEND_READY_INTERVAL_SECONDS = 1
-BACKEND_READY_MARKERS = ("Spring Boot Version", "ZA21 Version")
+BACKEND_READY_MARKERS = ("Spring Boot", "ZA21 Version")
 
 
 def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
