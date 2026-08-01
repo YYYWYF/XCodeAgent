@@ -810,6 +810,210 @@ def create_endpoint_detail_plan(
     return detail_plan
 
 
+def compose_endpoint_detail_from_decision(
+    project_plan: dict[str, Any],
+    endpoint_context: dict[str, Any],
+    endpoint_decision: dict[str, Any],
+    *,
+    user_request: str = "",
+) -> dict[str, Any]:
+    """以 EndpointDecision 为唯一语义来源，确定性组装正式 EndpointDetail。"""
+
+    validate_endpoint_decision(endpoint_decision)
+    detail_plan = create_endpoint_detail_plan(
+        project_plan,
+        endpoint_context,
+        user_request=user_request,
+    )
+    detail_plan["endpoint_decision"] = _normalize_endpoint_decision(endpoint_decision)
+    refresh_endpoint_detail_from_decision(detail_plan)
+    return detail_plan
+
+
+def refresh_endpoint_detail_from_decision(detail_plan: dict[str, Any]) -> None:
+    """在决策或用户选择变化后重建投影字段，避免详情内部出现第二套语义。"""
+
+    raw_decision = detail_plan.get("endpoint_decision")
+    validate_endpoint_decision(raw_decision)
+    decision = _normalize_endpoint_decision(raw_decision)
+    detail_plan["endpoint_decision"] = decision
+    detail_plan["data_origin"] = deepcopy(decision["data_origin"])
+    detail_plan["risks"] = deepcopy(decision["risks"])
+    if _endpoint_decision_needs_confirmation(decision):
+        detail_plan["design_stage"] = "needs_user_confirmation"
+        detail_plan["processing_logic"] = []
+        detail_plan["acceptance_criteria"] = []
+        return
+    detail_plan["design_stage"] = "complete"
+    detail_plan["processing_logic"] = _processing_logic_from_endpoint_decision(
+        detail_plan,
+        decision,
+    )
+    detail_plan["acceptance_criteria"] = _acceptance_criteria_from_endpoint_decision(
+        detail_plan,
+        decision,
+    )
+
+
+def validate_endpoint_decision(value: Any) -> None:
+    """统一校验 EndpointDecision 契约，生成与审核链路不得各自定义结构。"""
+
+    decision = value if isinstance(value, dict) else {}
+    data_origin = decision.get("data_origin")
+    if not isinstance(data_origin, dict) or not data_origin:
+        raise ValueError("接口决策缺少有效字段：data_origin")
+    if not isinstance(data_origin.get("effective_source"), dict):
+        raise ValueError("接口决策缺少有效来源：data_origin.effective_source")
+    for list_field in ("field_mappings", "differences", "database_operations", "notes"):
+        if not isinstance(data_origin.get(list_field), list):
+            raise ValueError(f"接口决策字段类型错误：data_origin.{list_field} 必须是数组")
+
+    semantics = decision.get("operation_semantics")
+    if not isinstance(semantics, dict):
+        raise ValueError("接口决策缺少有效字段：operation_semantics")
+    if semantics.get("operation_kind") not in {"read", "create", "update", "delete", "action"}:
+        raise ValueError("接口决策字段非法：operation_semantics.operation_kind")
+    if semantics.get("target_cardinality") not in {
+        "exactly_one",
+        "zero_or_one",
+        "many",
+        "not_applicable",
+    }:
+        raise ValueError("接口决策字段非法：operation_semantics.target_cardinality")
+    selector = semantics.get("selector")
+    if (
+        not isinstance(selector, dict)
+        or selector.get("source") not in {"path", "query", "request_body", "contract", "none"}
+        or not isinstance(selector.get("fields"), list)
+    ):
+        raise ValueError("接口决策缺少有效选择器：operation_semantics.selector")
+    if not isinstance(semantics.get("transaction_required"), bool):
+        raise ValueError("接口决策字段类型错误：operation_semantics.transaction_required")
+    if not isinstance(semantics.get("success_status_code"), int):
+        raise ValueError("接口决策字段类型错误：operation_semantics.success_status_code")
+    if semantics.get("side_effect") not in {"none", "insert", "update", "delete", "custom"}:
+        raise ValueError("接口决策字段非法：operation_semantics.side_effect")
+    if not isinstance(decision.get("risks"), list):
+        raise ValueError("接口决策字段类型错误：risks 必须是数组")
+
+
+def _normalize_endpoint_decision(value: Any) -> dict[str, Any]:
+    """规范化 EndpointDecision，使后续组装只读取固定结构。"""
+
+    decision = value if isinstance(value, dict) else {}
+    semantics = (
+        decision.get("operation_semantics")
+        if isinstance(decision.get("operation_semantics"), dict)
+        else {}
+    )
+    selector = semantics.get("selector") if isinstance(semantics.get("selector"), dict) else {}
+    return {
+        "data_origin": normalize_endpoint_data_origin(decision.get("data_origin")),
+        "operation_semantics": {
+            "operation_kind": str(semantics.get("operation_kind") or "action"),
+            "target_cardinality": str(
+                semantics.get("target_cardinality") or "not_applicable"
+            ),
+            "selector": {
+                "source": str(selector.get("source") or "none"),
+                "fields": _text_items(selector.get("fields")),
+            },
+            "transaction_required": bool(semantics.get("transaction_required")),
+            "zero_match_behavior": str(semantics.get("zero_match_behavior") or ""),
+            "multiple_match_behavior": str(
+                semantics.get("multiple_match_behavior") or ""
+            ),
+            "success_status_code": semantics.get("success_status_code"),
+            "side_effect": str(semantics.get("side_effect") or "none"),
+        },
+        "risks": _text_items(decision.get("risks")),
+    }
+
+
+def _endpoint_decision_needs_confirmation(decision: dict[str, Any]) -> bool:
+    """只依据结构化决策状态判断是否应停在第一步。"""
+
+    data_origin = decision["data_origin"]
+    effective_source = data_origin.get("effective_source")
+    source_type = str(data_origin.get("source_type") or "")
+    if isinstance(effective_source, dict):
+        source_type = str(effective_source.get("kind") or source_type)
+    return source_type == "needs_user_confirmation" or any(
+        isinstance(item, dict)
+        and item.get("resolution_kind") == "needs_user_confirmation"
+        for item in data_origin.get("differences", [])
+    )
+
+
+def _processing_logic_from_endpoint_decision(
+    detail_plan: dict[str, Any],
+    decision: dict[str, Any],
+) -> list[str]:
+    """把闭合决策映射为处理逻辑，不再次推断字段或数据操作。"""
+
+    semantics = decision["operation_semantics"]
+    selector = semantics["selector"]
+    data_origin = decision["data_origin"]
+    effective_source = data_origin.get("effective_source") or {}
+    selector_fields = "、".join(selector["fields"]) or "无额外选择字段"
+    cardinality_labels = {
+        "exactly_one": "恰好一个目标",
+        "zero_or_one": "零个或一个目标",
+        "many": "多个目标",
+        "not_applicable": "不限定目标数量",
+    }
+    logic = [
+        f"按 API 契约校验 {detail_plan.get('method', 'GET')} {detail_plan.get('path', '')} 的请求。",
+        (
+            f"通过 {selector['source']} 中的 {selector_fields} 定位"
+            f"{cardinality_labels.get(semantics['target_cardinality'], semantics['target_cardinality'])}。"
+        ),
+        (
+            f"从 {effective_source.get('kind') or data_origin.get('source_type')} 来源执行"
+            f" {semantics['operation_kind']}，副作用为 {semantics['side_effect']}。"
+        ),
+    ]
+    operation_ids = [
+        str(item.get("id"))
+        for item in data_origin.get("database_operations", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    if operation_ids:
+        logic.append(f"实现前执行已确认的数据库结构操作：{'、'.join(operation_ids)}。")
+    if semantics["zero_match_behavior"]:
+        logic.append(f"未匹配目标时：{semantics['zero_match_behavior']}")
+    if semantics["multiple_match_behavior"]:
+        logic.append(f"匹配多个目标时：{semantics['multiple_match_behavior']}")
+    if semantics["transaction_required"]:
+        logic.append("数据变更必须在事务中完成，失败时整体回滚。")
+    return logic
+
+
+def _acceptance_criteria_from_endpoint_decision(
+    detail_plan: dict[str, Any],
+    decision: dict[str, Any],
+) -> list[str]:
+    """把同一闭合决策映射为验收标准，避免模型独立生成另一套结果语义。"""
+
+    semantics = decision["operation_semantics"]
+    criteria = [
+        (
+            f"`{detail_plan.get('method', 'GET')} {detail_plan.get('path', '')}` "
+            f"仅按契约执行 {semantics['operation_kind']}，目标数量规则为 "
+            f"{semantics['target_cardinality']}。"
+        ),
+        (
+            f"成功响应状态码为 {semantics['success_status_code']}，"
+            f"数据副作用为 {semantics['side_effect']}。"
+        ),
+    ]
+    if semantics["zero_match_behavior"]:
+        criteria.append(f"零匹配结果符合决策：{semantics['zero_match_behavior']}")
+    if semantics["multiple_match_behavior"]:
+        criteria.append(f"多匹配结果符合决策：{semantics['multiple_match_behavior']}")
+    return criteria
+
+
 def _formal_endpoint_detail_fields(agent_detail_plan: dict[str, Any]) -> dict[str, Any]:
     """只接收 endpoint 详细设计正式模板字段，避免模型旧字段混入产物。"""
 
@@ -821,6 +1025,7 @@ def _formal_endpoint_detail_fields(agent_detail_plan: dict[str, Any]) -> dict[st
         "dependent_pages",
         "acceptance_criteria",
         "risks",
+        "endpoint_decision",
     }
     result = {
         key: deepcopy(value)
@@ -897,9 +1102,14 @@ def _default_endpoint_data_origin(
                 "field": "数据来源字段映射",
                 "expected": "API 契约响应字段均有明确来源",
                 "actual": "当前仅识别到 ProjectPlan 声明的数据源摘要",
-                "resolution": "在详细设计确认时补充或调整字段映射",
+                "resolution_kind": (
+                    "already_supported" if is_mock else "needs_user_confirmation"
+                ),
+                "operation_refs": [],
+                "backend_adaptation": None,
             }
         ],
+        "database_operations": [],
         "notes": ["仅展示当前有效来源；无关来源分支已省略。"],
     }
 
@@ -940,9 +1150,9 @@ def normalize_endpoint_data_origin(value: Any) -> dict[str, Any]:
             or effective_source.get("mapping")
             or []
         ),
-        "differences": _normalize_origin_differences(
-            origin.get("differences"),
-            origin.get("open_questions"),
+        "differences": _normalize_origin_differences(origin.get("differences")),
+        "database_operations": _normalize_database_operations(
+            origin.get("database_operations")
         ),
         "notes": _text_items(origin.get("notes")),
     }
@@ -1043,52 +1253,109 @@ def _normalize_origin_tables(value: Any) -> list[str]:
     return tables
 
 
-def _normalize_origin_differences(
-    differences: Any,
-    open_questions: Any,
-) -> list[dict[str, Any]]:
-    """把差异项和旧版问题列表统一成可展示的差异记录。"""
+def _normalize_origin_differences(differences: Any) -> list[dict[str, Any]]:
+    """规范化结构化差异决策，不从自然语言推断处理方式。"""
 
     normalized: list[dict[str, Any]] = []
     if isinstance(differences, list):
         for item in differences:
             if isinstance(item, dict):
+                backend_adaptation = item.get("backend_adaptation")
                 normalized.append(
                     {
                         "field": str(item.get("field") or item.get("name") or "待确认项"),
                         "expected": str(item.get("expected") or ""),
                         "actual": str(item.get("actual") or ""),
-                        "resolution": str(
-                            item.get("resolution")
-                            or item.get("suggestion")
-                            or item.get("question")
-                            or ""
+                        "resolution_kind": str(
+                            item.get("resolution_kind") or "needs_user_confirmation"
+                        ),
+                        "operation_refs": _text_items(item.get("operation_refs")),
+                        "backend_adaptation": (
+                            _normalize_backend_adaptation(backend_adaptation)
+                            if isinstance(backend_adaptation, dict)
+                            else None
                         ),
                     }
                 )
-            elif str(item).strip():
-                normalized.append(
-                    {
-                        "field": "待确认项",
-                        "expected": "",
-                        "actual": "",
-                        "resolution": str(item).strip(),
-                    }
-                )
-    for question in _text_items(open_questions):
-        normalized.append(
-            {
-                "field": "待确认项",
-                "expected": "生成完整接口详细设计",
-                "actual": "数据库或字段映射存在缺口",
-                "resolution": question,
-            }
-        )
     return [
         item
         for item in normalized
-        if item.get("field") or item.get("expected") or item.get("actual") or item.get("resolution")
+        if item.get("field") or item.get("expected") or item.get("actual")
     ]
+
+
+def _normalize_backend_adaptation(value: dict[str, Any]) -> dict[str, Any]:
+    """保留后端适配的明确策略和值，避免任务阶段重新解释说明文本。"""
+
+    return {
+        "strategy": str(value.get("strategy") or ""),
+        "value": value.get("value"),
+        "temporary": bool(value.get("temporary")),
+        "description": str(value.get("description") or ""),
+    }
+
+
+def _normalize_database_operations(value: Any) -> list[dict[str, Any]]:
+    """规范化 EndpointDetail 中已确认的数据库结构操作。"""
+
+    operations: list[dict[str, Any]] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        table = item.get("table")
+        column = item.get("column")
+        operations.append(
+            {
+                "id": str(item.get("id") or ""),
+                "operation": str(item.get("operation") or ""),
+                "database": str(item.get("database") or ""),
+                "table": _normalize_operation_table(table),
+                "column": str(column) if column is not None else None,
+                "from": (
+                    dict(item.get("from"))
+                    if isinstance(item.get("from"), dict)
+                    else None
+                ),
+                "to": dict(item.get("to")) if isinstance(item.get("to"), dict) else None,
+                "reason": str(item.get("reason") or ""),
+                "source_fields": _text_items(item.get("source_fields")),
+            }
+        )
+    return operations
+
+
+def _normalize_operation_table(value: Any) -> str | dict[str, Any]:
+    """规范化数据库操作中的表名或完整建表定义。"""
+
+    if not isinstance(value, dict):
+        return str(value or "")
+    return {
+        "name": str(value.get("name") or ""),
+        "comment": str(value.get("comment") or ""),
+        "columns": [
+            _normalize_column_definition(column)
+            for column in value.get("columns", [])
+            if isinstance(column, dict)
+        ],
+        "primary_key": _text_items(value.get("primary_key")),
+        "indexes": [item for item in value.get("indexes", []) if isinstance(item, dict)],
+        "foreign_keys": [
+            item for item in value.get("foreign_keys", []) if isinstance(item, dict)
+        ],
+    }
+
+
+def _normalize_column_definition(value: dict[str, Any]) -> dict[str, Any]:
+    """保留数据库字段目标定义中的类型、空值和默认值信息。"""
+
+    return {
+        "name": str(value.get("name") or ""),
+        "type": str(value.get("type") or ""),
+        "nullable": value.get("nullable"),
+        "default": value.get("default"),
+        "comment": str(value.get("comment") or ""),
+        "auto_increment": bool(value.get("auto_increment")),
+    }
 
 
 def _rest_resource_name(path: str) -> str:

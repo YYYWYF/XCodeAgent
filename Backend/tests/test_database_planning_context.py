@@ -223,9 +223,18 @@ def _summary_build_context() -> dict:
                         {
                             "field": "recentChanges[].department",
                             "actual": "user 表无 department 列",
-                            "resolution": "返回 null，待业务确认是否需要新增列",
+                            "expected": "允许为空的部门展示字段",
+                            "resolution_kind": "backend_adaptation",
+                            "operation_refs": [],
+                            "backend_adaptation": {
+                                "strategy": "default_value",
+                                "value": None,
+                                "temporary": True,
+                                "description": "当前接口明确返回 null，不修改数据库。",
+                            },
                         }
                     ],
+                    "database_operations": [],
                 },
             }
         ],
@@ -289,9 +298,53 @@ class DatabaseContextV1Tests(unittest.TestCase):
     def test_missing_table_becomes_database_task_intent(self) -> None:
         """目标表不存在时不报错，而是转成 missing_table gap 和建表意图。"""
 
+        build_context = _build_context()
+        detail = build_context["direct_endpoint_details"][0]
+        detail["data_origin"] = {
+            "source_type": "mysql_new_table",
+            "effective_source": {
+                "kind": "mysql_new_table",
+                "database": "sales",
+                "tables": ["orders"],
+            },
+            "field_mappings": [],
+            "differences": [
+                {
+                    "field": "orders",
+                    "expected": "订单持久化表",
+                    "actual": "数据库不存在 orders 表",
+                    "resolution_kind": "database_change",
+                    "operation_refs": ["create-orders"],
+                    "backend_adaptation": None,
+                }
+            ],
+            "database_operations": [
+                {
+                    "id": "create-orders",
+                    "operation": "create_table",
+                    "database": "sales",
+                    "table": {
+                        "name": "orders",
+                        "comment": "订单表",
+                        "columns": [
+                            {
+                                "name": "status",
+                                "type": "varchar(32)",
+                                "nullable": False,
+                                "default": None,
+                                "comment": "状态",
+                            }
+                        ],
+                        "primary_key": [],
+                        "indexes": [],
+                        "foreign_keys": [],
+                    },
+                }
+            ],
+        }
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload(tables={})))
         with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
-            context = prepare_database_planning_context(_project_plan(), _build_context())
+            context = prepare_database_planning_context(_project_plan(), build_context)
 
         self.assertEqual(context["status"], "completed")
         self.assertEqual(context["gaps"][0]["kind"], "missing_table")
@@ -329,8 +382,108 @@ class DatabaseContextV1Tests(unittest.TestCase):
         self.assertEqual(context["gaps"], [])
         self.assertEqual(context["task_intents"], [])
         self.assertIn(
-            "needs_confirmation",
+            "backend_adaptation",
             {item["resolution_kind"] for item in context["resolution_items"]},
+        )
+
+    def test_existing_table_add_column_operation_becomes_task_intent(self) -> None:
+        """mysql_existing 的结构化 add_column 应生成缺字段 gap 和任务意图。"""
+
+        build_context = _build_context()
+        detail = build_context["direct_endpoint_details"][0]
+        detail["data_origin"]["differences"] = [
+            {
+                "field": "department",
+                "expected": "持久化部门字段",
+                "actual": "orders 表缺少 department",
+                "resolution_kind": "database_change",
+                "operation_refs": ["add-orders-department"],
+                "backend_adaptation": None,
+            }
+        ]
+        detail["data_origin"]["database_operations"] = [
+            {
+                "id": "add-orders-department",
+                "operation": "add_column",
+                "database": "sales",
+                "table": "orders",
+                "column": "department",
+                "from": None,
+                "to": {
+                    "type": "varchar(128)",
+                    "nullable": False,
+                    "default": None,
+                    "comment": "所属部门",
+                },
+                "reason": "订单需要持久化部门字段",
+                "source_fields": ["department"],
+            }
+        ]
+
+        tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
+        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
+            context = prepare_database_planning_context(_project_plan(), build_context)
+
+        self.assertEqual(context["gaps"][0]["kind"], "missing_column")
+        self.assertEqual(context["gaps"][0]["column"], "department")
+        self.assertEqual(context["task_intents"][0]["operation"], "add_column")
+
+    def test_existing_table_backend_default_does_not_create_gap(self) -> None:
+        """结构化 backend_adaptation 默认值不得被转换成数据库字段。"""
+
+        build_context = _build_context()
+        detail = build_context["direct_endpoint_details"][0]
+        detail["data_origin"]["differences"] = [
+            {
+                "field": "remark",
+                "expected": "备注字段",
+                "actual": "orders 表缺少 remark",
+                "resolution_kind": "backend_adaptation",
+                "operation_refs": [],
+                "backend_adaptation": {
+                    "strategy": "default_value",
+                    "value": "",
+                    "temporary": False,
+                    "description": "后端返回空字符串。",
+                },
+            }
+        ]
+        detail["data_origin"]["database_operations"] = []
+
+        tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
+        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
+            context = prepare_database_planning_context(_project_plan(), build_context)
+
+        self.assertEqual(context["gaps"], [])
+        self.assertEqual(context["task_intents"], [])
+
+    def test_existing_table_default_change_becomes_task_intent(self) -> None:
+        """结构化默认值变更应生成 default_mismatch 和对应任务意图。"""
+
+        build_context = _build_context()
+        detail = build_context["direct_endpoint_details"][0]
+        detail["data_origin"]["database_operations"] = [
+            {
+                "id": "default-orders-status",
+                "operation": "alter_column_default",
+                "database": "sales",
+                "table": "orders",
+                "column": "status",
+                "from": {"default": None},
+                "to": {"default": {"kind": "literal", "value": "active"}},
+                "reason": "新订单默认启用",
+                "source_fields": ["status"],
+            }
+        ]
+
+        tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
+        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
+            context = prepare_database_planning_context(_project_plan(), build_context)
+
+        self.assertEqual(context["gaps"][0]["kind"], "default_mismatch")
+        self.assertEqual(
+            context["task_intents"][0]["operation"],
+            "alter_column_default",
         )
 
     def test_connection_failure_blocks_database_context_only(self) -> None:

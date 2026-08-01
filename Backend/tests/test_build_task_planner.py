@@ -11,11 +11,42 @@ from app.agents.main.task_preparer import (
     _task_preparation_prompt,
     prepare_build_tasks_with_main_agent,
 )
-from app.services.build_task_planner import create_build_task_plan, tasks_from_build_task_plan
+from app.services.build_task_planner import (
+    _database_task_requires_approval,
+    create_build_task_plan,
+    tasks_from_build_task_plan,
+)
 from app.workspace.task_documents import render_build_task_dag_markdown
 
 
 class BuildTaskPlannerTests(unittest.TestCase):
+    def test_delete_endpoint_name_does_not_make_create_table_high_risk(self) -> None:
+        """来源 endpoint 名称中的 delete 不得被误判为高危数据库删除操作。"""
+
+        task = {
+            "database_scope": {
+                "operations": ["create_table"],
+                "gaps": [
+                    {
+                        "kind": "missing_table",
+                        "source_evidence": {
+                            "endpoint_id": "core_management.delete",
+                            "operation": "create_table",
+                        },
+                    }
+                ],
+            }
+        }
+
+        self.assertFalse(_database_task_requires_approval(task))
+
+    def test_drop_column_operation_remains_high_risk(self) -> None:
+        """结构化 drop_column 仍必须触发高风险数据库审批。"""
+
+        task = {"database_scope": {"operations": ["drop_column"]}}
+
+        self.assertTrue(_database_task_requires_approval(task))
+
     def test_task_prompt_reserves_cross_unit_dependencies_for_unit_graph(self) -> None:
         """任务模型不得手写跨 Unit 或 reusable task 依赖。"""
 

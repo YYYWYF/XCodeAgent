@@ -9,26 +9,15 @@ from app.agents.model_factory import create_chat_model
 
 from app.config import Settings
 from app.services.page_detail_plan import (
-    create_endpoint_detail_plan,
+    compose_endpoint_detail_from_decision,
     create_page_detail_plan,
     normalize_endpoint_data_origin,
+    validate_endpoint_decision,
 )
 from app.utils.model_output import extract_json_object
 
 
-ENDPOINT_DETAIL_OUTPUT_SCHEMA: dict[str, Any] = {
-    "data_usage": {
-        "served_pages": [
-            {
-                "page_id": "string",
-                "page_label": "string",
-                "usage": "string",
-            }
-        ],
-        "purpose": "string",
-        "served_business": "string",
-        "consumer": "string",
-    },
+ENDPOINT_DECISION_OUTPUT_SCHEMA: dict[str, Any] = {
     "data_origin": {
         "source_type": "mock|third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
         "effective_source": {
@@ -53,46 +42,44 @@ ENDPOINT_DETAIL_OUTPUT_SCHEMA: dict[str, Any] = {
                 "field": "string",
                 "expected": "string",
                 "actual": "string",
-                "resolution": "string",
+                "resolution_kind": "already_supported|database_change|backend_adaptation|needs_user_confirmation",
+                "operation_refs": ["string"],
+                "backend_adaptation": None,
+            }
+        ],
+        "database_operations": [
+            {
+                "id": "string",
+                "operation": "create_table|add_column|alter_column_type|alter_column_nullable|alter_column_default",
+                "database": "string",
+                "table": "string|object",
+                "column": "string|null",
+                "from": "object|null",
+                "to": {
+                    "type": "string|null",
+                    "nullable": "boolean|null",
+                    "default": "any|null",
+                    "comment": "string",
+                },
+                "reason": "string",
+                "source_fields": ["string"],
             }
         ],
         "notes": ["string"],
     },
-    "interface_design": {
-        "restful_style": {
-            "compliant": "boolean",
-            "method": "string",
-            "path": "string",
-            "resource": "string",
-            "description": "string",
+    "operation_semantics": {
+        "operation_kind": "read|create|update|delete|action",
+        "target_cardinality": "exactly_one|zero_or_one|many|not_applicable",
+        "selector": {
+            "source": "path|query|request_body|contract|none",
+            "fields": ["string"],
         },
-        "request": {
-            "path_parameters": ["object"],
-            "query_parameters": ["object"],
-            "header_parameters": ["object"],
-            "request_body": {
-                "required": "boolean",
-                "schema_ref": "string|null",
-                "fields": ["object"],
-                "note": "string",
-            },
-            "file_upload": {
-                "required": "boolean",
-                "format": "string|null",
-                "note": "string",
-            },
-        },
-        "response_format": {
-            "status_code": "number",
-            "content_type": "string",
-            "schema_ref": "string|null",
-            "structure": "object",
-            "errors": ["object|string"],
-        },
+        "transaction_required": "boolean",
+        "zero_match_behavior": "string",
+        "multiple_match_behavior": "string",
+        "success_status_code": "number",
+        "side_effect": "none|insert|update|delete|custom",
     },
-    "processing_logic": ["string"],
-    "dependent_pages": ["object"],
-    "acceptance_criteria": ["string"],
     "risks": ["string"],
 }
 
@@ -221,45 +208,55 @@ def design_page_with_chat_model(
     return detail_plan
 
 
-def _endpoint_design_prompt(
-    project_plan: dict[str, Any],
+def _endpoint_decision_prompt(
     endpoint_context: dict[str, Any],
     user_request: str,
 ) -> str:
-    """构造单个 endpoint 详细设计提示词。"""
+    """构造 EndpointDetail 第一步的唯一语义决策提示词。"""
 
-    formal_schema = json.dumps(ENDPOINT_DETAIL_OUTPUT_SCHEMA, ensure_ascii=False, indent=2)
+    formal_schema = json.dumps(ENDPOINT_DECISION_OUTPUT_SCHEMA, ensure_ascii=False, indent=2)
     return (
-        "You are the endpoint-design model for an app-generation workflow.\n"
+        "You are the endpoint-decision model for an app-generation workflow.\n"
         "This is a design-only boundary. Do not call tools, do not call subagents, "
         "and do not generate or modify code.\n"
-        "Create a detailed design for exactly one API endpoint. The API contract is the "
+        "This is step 1 of EndpointDetail design. Decide the implementation semantics for "
+        "exactly one API endpoint. The API contract is the "
         "source of truth for method, path, parameters, request schema and response schema. "
         "Do not add new endpoints or change the contract. Return only one JSON object without "
-        "markdown fences or commentary. The JSON object must match this formal schema exactly; "
+        "markdown fences or commentary. The object is the only semantic source used to compose "
+        "processing logic and acceptance criteria. It must match this formal schema exactly; "
         "replace the sample type strings with concrete design content and keep every key present:\n"
         f"{formal_schema}\n"
-        "data_usage must be an object and explain what the data serves. "
         "data_origin must be compact: include exactly one effective_source object for the "
-        "actual source, field_mappings for known target-to-source mappings, differences for "
-        "schema/field gaps, and notes for concise assumptions. Do not output parallel "
+        "actual source, field_mappings for known existing target-to-source mappings, structured "
+        "differences for every schema/field gap, database_operations for confirmed schema changes, "
+        "and notes for concise assumptions. Every difference must use resolution_kind; "
+        "database_change must reference complete database_operations by id, backend_adaptation "
+        "must be an object with strategy (type_conversion/computed/default_value/not_persisted), "
+        "value, temporary, and description; all other resolution kinds must set it to null. "
+        "needs_user_confirmation must not contain an executable "
+        "operation. mysql_existing may add or alter columns on an existing table. Never infer a "
+        "database operation from prose and never map a missing column as an existing field_mapping. "
+        "Do not output parallel "
         "third_party/mysql_existing/mysql_new_table branches, do not output applicable=false "
         "objects, and do not store user-facing questions inside data_origin. "
-        "interface_design must be an object and include restful_style, "
-        "request.path_parameters, request.query_parameters, request.header_parameters, "
-        "request.request_body, request.file_upload, and response_format. "
         "When endpoint_context.database_context.status is completed, use its summarized tables "
         "and columns as the existing MySQL reference for mysql_existing field mapping. "
         "When database_context is skipped or failed, do not invent inspected tables; continue from "
         "the API contract and record concrete unresolved schema gaps in data_origin.differences. "
         "If data source origin is unclear, set data_origin.source_type to needs_user_confirmation "
         "and put the unresolved decision in data_origin.differences. "
+        "operation_semantics must express contract behavior once, without implementation prose. "
+        "For a single-resource endpoint, target_cardinality and multiple_match_behavior must make "
+        "the single-resource boundary explicit. selector.fields must only use contract parameters "
+        "or request fields. success_status_code must follow the API contract when declared. "
+        "Even when data_origin needs confirmation, still describe the endpoint's intended contract "
+        "semantics; the workflow will stop before composing executable detail fields. "
         "If the page's data source type is mock or static (frontend in-memory mock, no real backend), "
         "set data_origin.source_type and effective_source.kind to \"mock\" with a description noting "
         "the page uses in-memory mock data and does not call any real API.\n\n"
         f"Latest user feedback:\n{user_request}\n\n"
-        f"Endpoint context:\n{json.dumps(endpoint_context, ensure_ascii=False)}\n\n"
-        f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False)}"
+        f"Endpoint context:\n{json.dumps(endpoint_context, ensure_ascii=False)}"
     )
 
 
@@ -268,7 +265,7 @@ def design_endpoint_with_chat_model(
     endpoint_context: dict[str, Any],
     user_request: str = "",
 ) -> dict[str, Any]:
-    """使用直接模型调用生成单个 endpoint 详细设计；失败时交由 Workflow 向前端报错。"""
+    """先生成唯一 EndpointDecision，再确定性组装单个 EndpointDetail。"""
 
     settings = Settings.from_env()
     design_source = "direct_chat_model"
@@ -276,27 +273,27 @@ def design_endpoint_with_chat_model(
         result = create_chat_model(settings).bind(
             max_tokens=settings.default_max_tokens
         ).invoke(
-            _endpoint_design_prompt(project_plan, endpoint_context, user_request)
+            _endpoint_decision_prompt(endpoint_context, user_request)
         )
         content = getattr(result, "content", "")
         model_output = _coerce_content_text(content) or ""
-        agent_detail_plan = extract_json_object(model_output)
+        endpoint_decision = extract_json_object(model_output)
     except Exception as exc:
         raise RuntimeError(
             f"接口详细设计生成失败：{type(exc).__name__}: {exc}"
         ) from exc
-    if not agent_detail_plan:
-        raise ValueError("接口详细设计模型未返回可解析的 JSON 设计内容。")
-    if isinstance(agent_detail_plan.get("data_origin"), dict):
-        agent_detail_plan["data_origin"] = normalize_endpoint_data_origin(
-            agent_detail_plan["data_origin"]
+    if not endpoint_decision:
+        raise ValueError("接口决策模型未返回可解析的 JSON 设计内容。")
+    if isinstance(endpoint_decision.get("data_origin"), dict):
+        endpoint_decision["data_origin"] = normalize_endpoint_data_origin(
+            endpoint_decision["data_origin"]
         )
-    _validate_endpoint_detail_plan(agent_detail_plan)
-    detail_plan = create_endpoint_detail_plan(
+    validate_endpoint_decision(endpoint_decision)
+    detail_plan = compose_endpoint_detail_from_decision(
         project_plan,
         endpoint_context,
+        endpoint_decision,
         user_request=user_request,
-        agent_detail_plan=agent_detail_plan,
     )
     detail_plan["designed_by"] = {
         "agent": "chat-model",
@@ -306,39 +303,3 @@ def design_endpoint_with_chat_model(
     }
     detail_plan["design_source"] = design_source
     return detail_plan
-
-
-def _validate_endpoint_detail_plan(agent_detail_plan: dict[str, Any]) -> None:
-    """校验模型返回的 endpoint 详细设计正式结构，失败时阻止写入无效产物。"""
-
-    required_objects = ("data_usage", "data_origin", "interface_design")
-    for required_field in required_objects:
-        field_value = agent_detail_plan.get(required_field)
-        if not isinstance(field_value, dict) or not field_value:
-            raise ValueError(f"接口详细设计缺少有效字段：{required_field}")
-
-    data_origin = agent_detail_plan["data_origin"]
-    if not isinstance(data_origin.get("effective_source"), dict):
-        raise ValueError("接口详细设计缺少有效来源：data_origin.effective_source")
-    for list_field in ("field_mappings", "differences", "notes"):
-        if not isinstance(data_origin.get(list_field), list):
-            raise ValueError(f"接口详细设计字段类型错误：data_origin.{list_field} 必须是数组")
-
-    interface_design = agent_detail_plan["interface_design"]
-    request = interface_design.get("request")
-    if not isinstance(interface_design.get("restful_style"), dict):
-        raise ValueError("接口详细设计缺少 RESTful 设计：interface_design.restful_style")
-    if not isinstance(request, dict):
-        raise ValueError("接口详细设计缺少请求设计：interface_design.request")
-    for parameter_field in (
-        "path_parameters",
-        "query_parameters",
-        "header_parameters",
-    ):
-        if not isinstance(request.get(parameter_field), list):
-            raise ValueError(f"接口详细设计字段类型错误：interface_design.request.{parameter_field} 必须是数组")
-    for request_object_field in ("request_body", "file_upload"):
-        if not isinstance(request.get(request_object_field), dict):
-            raise ValueError(f"接口详细设计缺少请求结构：interface_design.request.{request_object_field}")
-    if not isinstance(interface_design.get("response_format"), dict):
-        raise ValueError("接口详细设计缺少返回格式：interface_design.response_format")

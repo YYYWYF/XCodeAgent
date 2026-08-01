@@ -22,22 +22,19 @@ def derive_required_database_schema(targets: list[dict[str, Any]]) -> dict[str, 
         effective_source = (
             effective_source if isinstance(effective_source, dict) else {}
         )
-        origin_kind = str(
-            effective_source.get("kind") or data_origin.get("source_type") or ""
-        )
+        operations = dict_items(data_origin.get("database_operations"))
         database = database or str(effective_source.get("database") or "")
+        database = database or next(
+            (
+                str(item.get("database") or "")
+                for item in operations
+                if item.get("database")
+            ),
+            "",
+        )
         table_names = _target_table_names(target)
         for table_name in table_names:
-            table = tables.setdefault(
-                table_name,
-                {
-                    "name": table_name,
-                    "columns": {},
-                    "indexes": [],
-                    "foreign_keys": [],
-                    "source_refs": [],
-                },
-            )
+            table = _required_table(tables, table_name)
             table["source_refs"].append(
                 {
                     "api_contract_id": target.get("api_contract_id"),
@@ -47,12 +44,9 @@ def derive_required_database_schema(targets: list[dict[str, Any]]) -> dict[str, 
                     "data_source_id": target.get("data_source_id"),
                 }
             )
-            resolution_items.extend(
-                _merge_mapping_columns(table, data_origin, table_name)
-            )
-            if origin_kind == "mysql_new_table":
-                _merge_contract_schema_columns(table, target)
-        resolution_items.extend(_difference_resolution_items(data_origin, target))
+            _merge_mapping_columns(table, data_origin, table_name)
+        _merge_database_operations(tables, operations, target)
+        resolution_items.extend(_structured_resolution_items(data_origin, target))
     normalized_tables = [_normalize_table(table) for table in tables.values()]
     payload = {
         "database": database,
@@ -88,11 +82,10 @@ def _merge_mapping_columns(
     table: dict[str, Any],
     data_origin: dict[str, Any],
     table_name: str,
-) -> list[dict[str, Any]]:
-    """从 field_mappings 中提取明确数据库列，并记录非改库处理建议。"""
+) -> None:
+    """从 field_mappings 中提取明确存在的数据库列。"""
 
     columns = table["columns"]
-    resolution_items: list[dict[str, Any]] = []
     for mapping in dict_items(data_origin.get("field_mappings")):
         mapping_table = str(
             mapping.get("table")
@@ -114,7 +107,6 @@ def _merge_mapping_columns(
         if mapping_table and mapping_table != table_name:
             continue
         if not column_name:
-            resolution_items.append(_mapping_resolution_item(mapping))
             continue
         columns.setdefault(
             column_name,
@@ -128,7 +120,6 @@ def _merge_mapping_columns(
                 "source_evidence": mapping,
             },
         )
-    return resolution_items
 
 
 def _source_table_column(
@@ -151,156 +142,132 @@ def _source_table_column(
     return (table_name, column) if column else None
 
 
-def _mapping_resolution_item(mapping: dict[str, Any]) -> dict[str, Any]:
-    """把没有数据库列来源的字段映射归类为后端适配或待确认。"""
-
-    text = json.dumps(mapping, ensure_ascii=False, default=str)
-    if "待业务确认" in text or "是否需要新增" in text:
-        kind = "needs_confirmation"
-    elif (
-        "无对应列" in text or "返回 null" in text or "返回0" in text or "返回 0" in text
-    ):
-        kind = "backend_adaptation"
-    else:
-        kind = "already_supported"
-    return {
-        "resolution_kind": kind,
-        "target_field": mapping.get("target_field") or mapping.get("field"),
-        "message": str(mapping.get("rule") or mapping.get("source") or ""),
-        "source_evidence": mapping,
-    }
-
-
-def _difference_resolution_items(
+def _structured_resolution_items(
     data_origin: dict[str, Any],
     target: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """从 differences 中提取需要后端适配或业务确认的处理建议。"""
+    """把结构化字段决策投射为数据库上下文的处理建议。"""
 
     items: list[dict[str, Any]] = []
-    database = ""
-    effective_source = data_origin.get("effective_source")
-    if isinstance(effective_source, dict):
-        database = str(effective_source.get("database") or "")
-    table_names = text_items(
-        effective_source.get("tables") if isinstance(effective_source, dict) else []
-    )
-    table = table_names[0] if table_names else ""
     for difference in dict_items(data_origin.get("differences")):
-        text = json.dumps(difference, ensure_ascii=False, default=str)
-        if "待业务确认" in text or "是否需要新增" in text:
-            kind = "needs_confirmation"
-        elif (
-            "返回 null" in text or "返回0" in text or "返回 0" in text or "转换" in text
-        ):
-            kind = "backend_adaptation"
-        elif "新增列" in text or "新增字段" in text or "create" in text.lower():
-            kind = "database_change"
-        else:
-            kind = "backend_adaptation"
         field = str(difference.get("field") or "").strip()
-        item = {
-            "resolution_kind": kind,
-            "database": database,
-            "table": table,
-            "column": field,
-            "target_field": field,
-            "message": str(
-                difference.get("resolution") or difference.get("actual") or ""
-            ),
-            "source_refs": [
-                {
-                    "api_contract_id": target.get("api_contract_id"),
-                    "endpoint_id": target.get("endpoint_id"),
-                    "data_source_id": target.get("data_source_id"),
-                }
-            ],
-            "source_evidence": difference,
-        }
-        if kind == "database_change":
-            item["database_scope"] = {
-                "database": database,
-                "tables": [table] if table else [],
-                "columns": [field] if field else [],
-                "operations": ["add_column"],
+        items.append(
+            {
+                "resolution_kind": str(difference.get("resolution_kind") or ""),
+                "target_field": field,
+                "operation_refs": text_items(difference.get("operation_refs")),
+                "backend_adaptation": difference.get("backend_adaptation"),
+                "message": str(
+                    difference.get("actual") or difference.get("expected") or ""
+                ),
+                "source_refs": [
+                    {
+                        "api_contract_id": target.get("api_contract_id"),
+                        "endpoint_id": target.get("endpoint_id"),
+                        "data_source_id": target.get("data_source_id"),
+                    }
+                ],
+                "source_evidence": difference,
             }
-        items.append(item)
+        )
     return items
 
 
-def _merge_contract_schema_columns(
-    table: dict[str, Any], target: dict[str, Any]
+def _merge_database_operations(
+    tables: dict[str, dict[str, Any]],
+    operations: list[dict[str, Any]],
+    target: dict[str, Any],
 ) -> None:
-    """从 API Contract 请求/响应 schema 中补齐业务字段候选。"""
+    """把已确认数据库操作编译为后续 Schema Diff 使用的目标表结构。"""
 
-    contract = target.get("api_contract")
-    contract = contract if isinstance(contract, dict) else {}
-    endpoint = _target_endpoint(contract, target)
-    schemas = (
-        contract.get("schemas") if isinstance(contract.get("schemas"), dict) else {}
-    )
-    columns = table["columns"]
-    for ref_key in ("request_schema_ref", "response_schema_ref"):
-        schema_name = str(endpoint.get(ref_key) or "").split("#")[-1]
-        schema = schemas.get(schema_name) if schema_name else None
-        schema = schema if isinstance(schema, dict) else {}
-        properties = (
-            schema.get("properties")
-            if isinstance(schema.get("properties"), dict)
-            else {}
-        )
-        required = (
-            schema.get("required") if isinstance(schema.get("required"), list) else []
-        )
-        for name, property_schema in properties.items():
-            column_name = str(name).strip()
-            if not column_name:
+    source_ref = {
+        "api_contract_id": target.get("api_contract_id"),
+        "endpoint_id": target.get("endpoint_id"),
+        "data_source_id": target.get("data_source_id"),
+    }
+    for operation in operations:
+        kind = str(operation.get("operation") or "")
+        raw_table = operation.get("table")
+        if kind == "create_table" and isinstance(raw_table, dict):
+            table_name = str(raw_table.get("name") or "")
+            if not table_name:
                 continue
-            prop = property_schema if isinstance(property_schema, dict) else {}
-            columns.setdefault(
-                column_name,
-                {
-                    "name": column_name,
-                    "type": _mysql_type_from_schema(prop),
-                    "nullable": column_name not in required,
-                    "source": ref_key,
-                },
-            )
+            table = _required_table(tables, table_name)
+            table["source_refs"].append(source_ref)
+            table["comment"] = str(raw_table.get("comment") or "")
+            table["primary_key"] = text_items(raw_table.get("primary_key"))
+            table["indexes"] = dict_items(raw_table.get("indexes"))
+            table["foreign_keys"] = dict_items(raw_table.get("foreign_keys"))
+            for column in dict_items(raw_table.get("columns")):
+                _merge_operation_column(table, column, operation, source_ref)
+            continue
+        table_name = str(raw_table or "")
+        if not table_name:
+            continue
+        table = _required_table(tables, table_name)
+        table["source_refs"].append(source_ref)
+        column = _operation_required_column(operation)
+        if column:
+            _merge_operation_column(table, column, operation, source_ref)
 
 
-def _target_endpoint(
-    contract: dict[str, Any], target: dict[str, Any]
+def _required_table(
+    tables: dict[str, dict[str, Any]],
+    table_name: str,
 ) -> dict[str, Any]:
-    """在当前 API Contract 中找到目标 endpoint 的契约定义。"""
+    """获取或创建规范化前的目标表累积结构。"""
 
-    endpoint_id = str(target.get("endpoint_id") or "")
-    for endpoint in dict_items(contract.get("endpoints")):
-        if str(endpoint.get("id") or "") == endpoint_id:
-            return endpoint
-    return {}
+    return tables.setdefault(
+        table_name,
+        {
+            "name": table_name,
+            "columns": {},
+            "indexes": [],
+            "foreign_keys": [],
+            "source_refs": [],
+        },
+    )
 
 
-def _mysql_type_from_schema(schema: dict[str, Any]) -> str:
-    """把接口 schema 的常见类型映射为保守 MySQL 类型。"""
+def _operation_required_column(operation: dict[str, Any]) -> dict[str, Any]:
+    """把字段级数据库操作转换为目标列定义。"""
 
-    explicit = str(schema.get("mysql_type") or schema.get("column_type") or "").strip()
-    if explicit:
-        return explicit
-    schema_type = str(schema.get("type") or "").lower()
-    fmt = str(schema.get("format") or "").lower()
-    if schema_type == "integer":
-        return "bigint" if fmt == "int64" else "int"
-    if schema_type == "number":
-        return "decimal(18,2)"
-    if schema_type == "boolean":
-        return "tinyint(1)"
-    if schema_type == "string" and fmt in {"date-time", "datetime"}:
-        return "datetime"
-    if schema_type == "string" and fmt == "date":
-        return "date"
-    if schema_type in {"object", "array"}:
-        return "json"
-    return "varchar(255)"
+    kind = str(operation.get("operation") or "")
+    raw_column = operation.get("column")
+    column_name = str(raw_column or "")
+    target = operation.get("to") if isinstance(operation.get("to"), dict) else {}
+    if not column_name:
+        return {}
+    column: dict[str, Any] = {"name": column_name}
+    if kind == "add_column":
+        column.update(target)
+        return column
+    target_key = {
+        "alter_column_type": "type",
+        "alter_column_nullable": "nullable",
+        "alter_column_default": "default",
+    }.get(kind)
+    if target_key and target_key in target:
+        column[target_key] = target.get(target_key)
+    return column
+
+
+def _merge_operation_column(
+    table: dict[str, Any],
+    column: dict[str, Any],
+    operation: dict[str, Any],
+    source_ref: dict[str, Any],
+) -> None:
+    """把单个操作的目标列合并到表结构并保留来源证据。"""
+
+    column_name = str(column.get("name") or "")
+    if not column_name:
+        return
+    existing = table["columns"].setdefault(column_name, {"name": column_name})
+    existing.update({key: value for key, value in column.items() if key != "name"})
+    existing["source"] = "database_operation"
+    existing["source_evidence"] = operation
+    existing["source_refs"] = [source_ref]
 
 
 def _normalize_table(table: dict[str, Any]) -> dict[str, Any]:

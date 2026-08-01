@@ -364,6 +364,14 @@ function EndpointReviewEditor({
       )}
       <ReviewSummaryField
         disabled={disabled}
+        label="接口行为决策（处理逻辑与验收标准的唯一来源）"
+        onChange={(value) => onChange("endpoint_decision", parseJsonObject(value))}
+        value={jsonSummary(
+          objectChange(changes.endpoint_decision, target.endpoint_decision),
+        )}
+      />
+      <ReviewSummaryField
+        disabled={disabled}
         label="三、接口设计"
         onChange={(value) => onChange("interface_design", parseJsonObject(value))}
         value={jsonSummary(
@@ -371,13 +379,10 @@ function EndpointReviewEditor({
         )}
       />
       <ReviewListField
-        disabled={disabled}
-        label="验收标准"
-        onChange={(value) => onChange("acceptance_criteria", value)}
-        value={listChange(
-          changes.acceptance_criteria,
-          target.acceptance_criteria,
-        )}
+        disabled
+        label="验收标准（由接口行为决策自动生成）"
+        onChange={() => undefined}
+        value={target.acceptance_criteria || []}
       />
     </div>
   );
@@ -506,7 +511,13 @@ function isNeedsUserConfirmationDataOrigin(value: unknown): boolean {
   const origin = objectValue(value);
   const effectiveSource = objectValue(origin.effective_source);
   const sourceType = String(origin.source_type || effectiveSource.kind || "");
-  return sourceType === "needs_user_confirmation";
+  const hasPendingDifference = Array.isArray(origin.differences) &&
+    origin.differences.some(
+      (item) =>
+        isRecord(item) &&
+        String(item.resolution_kind || "") === "needs_user_confirmation",
+    );
+  return sourceType === "needs_user_confirmation" || hasPendingDifference;
 }
 
 // 判断详情确认是否还缺少数据来源决策，防止用户直接跳过未决数据库方案。

@@ -738,14 +738,28 @@ def _database_task_requires_approval(task: dict[str, Any]) -> bool:
     """识别删除、截断等高危数据库操作是否需要人工审批。"""
 
     scope = _dict_value(task.get("database_scope"))
-    raw_operations = scope.get("operations") or scope.get("operation") or []
-    if isinstance(raw_operations, str):
-        raw_operations = [raw_operations]
-    operations = [str(item).strip().lower() for item in raw_operations if str(item).strip()]
-    text = json.dumps(scope, ensure_ascii=False, default=str).lower()
-    return any(operation in _HIGH_RISK_DATABASE_OPERATIONS for operation in operations) or any(
-        keyword in text for keyword in _HIGH_RISK_DATABASE_OPERATIONS
-    )
+    operations = _database_operation_names(scope)
+    return any(operation in _HIGH_RISK_DATABASE_OPERATIONS for operation in operations)
+
+
+def _database_operation_names(value: Any) -> set[str]:
+    """只读取结构化 operation 字段，避免 endpoint 名称中的 delete 等词误触发审批。"""
+
+    operations: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"operation", "operations"}:
+                candidates = item if isinstance(item, list) else [item]
+                operations.update(
+                    str(candidate).strip().lower()
+                    for candidate in candidates
+                    if str(candidate).strip()
+                )
+            operations.update(_database_operation_names(item))
+    elif isinstance(value, list):
+        for item in value:
+            operations.update(_database_operation_names(item))
+    return operations
 
 
 def _approval_required(task: dict[str, Any]) -> bool:

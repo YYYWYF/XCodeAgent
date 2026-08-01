@@ -716,7 +716,7 @@ def _generate_endpoint_detail_plan(
         enabled=database_context.get("enabled"),
     )
     _detail_progress(
-        "已定位接口契约，正在调用模型生成详细设计。",
+        "已定位接口契约，正在调用模型生成接口决策。",
         target_type="endpoint",
         api_contract_id=api_contract_id,
         endpoint_id=endpoint_id,
@@ -725,7 +725,11 @@ def _generate_endpoint_detail_plan(
     )
     detail = design_endpoint_with_chat_model(project_plan, endpoint_context, "")
     _detail_progress(
-        "接口详细设计已生成，正在写入计划产物。",
+        (
+            "接口决策仍需用户确认，已暂停处理逻辑与验收标准组装。"
+            if detail.get("design_stage") == "needs_user_confirmation"
+            else "接口决策已闭合，完整接口详情已确定性组装。"
+        ),
         target_type="endpoint",
         api_contract_id=api_contract_id,
         endpoint_id=endpoint_id,

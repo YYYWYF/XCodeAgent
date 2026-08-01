@@ -155,7 +155,7 @@ def _task_preparation_prompt(
         "satisfied — same name (case-insensitive) and a compatible/semantically "
         "equivalent type — needs no database task. Create a database task ONLY for "
         "`database_change` gaps (missing_database/missing_table/missing_column/"
-        "incompatible_column_type/nullable_mismatch); if `gaps` is empty or none is "
+        "incompatible_column_type/nullable_mismatch/default_mismatch); if `gaps` is empty or none is "
         "`database_change`, do NOT create database tasks. `backend_adaptation` belongs in "
         "backend tasks; `needs_confirmation` is never a task. "
         "##Database tasks run BEFORE backend tasks. "

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
+from app.agents.main.page_designer import design_endpoint_with_chat_model
 from app.graph.nodes.planning import detail_confirmation
 from app.services.page_detail_plan import (
+    compose_endpoint_detail_from_decision,
     create_endpoint_detail_plan,
     create_page_detail_plan,
     extract_endpoint_detail_context,
@@ -27,6 +31,161 @@ def _endpoint_context_for_dependency(project_plan: dict, dependency: dict) -> di
 
 
 class DetailConfirmationTests(unittest.TestCase):
+    def test_endpoint_designer_generates_decision_then_composes_detail(self) -> None:
+        """endpoint 模型只生成决策对象，正式详情由确定性第二步完成。"""
+
+        project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
+        page_context = extract_page_detail_context(
+            project_plan,
+            project_plan["frontend_pages"][0]["pageId"],
+        )
+        endpoint_context = _endpoint_context_for_dependency(
+            project_plan,
+            page_context["references"]["endpoint_dependencies"][0],
+        )
+        decision = {
+            "data_origin": {
+                "source_type": "mock",
+                "effective_source": {"kind": "mock", "description": "内存数据"},
+                "field_mappings": [],
+                "differences": [],
+                "database_operations": [],
+                "notes": [],
+            },
+            "operation_semantics": {
+                "operation_kind": "read",
+                "target_cardinality": "many",
+                "selector": {"source": "query", "fields": []},
+                "transaction_required": False,
+                "zero_match_behavior": "返回空集合",
+                "multiple_match_behavior": "返回契约约定的列表",
+                "success_status_code": 200,
+                "side_effect": "none",
+            },
+            "risks": [],
+        }
+        model = MagicMock()
+        model.bind.return_value.invoke.return_value = SimpleNamespace(
+            content=json.dumps(decision, ensure_ascii=False)
+        )
+        settings = SimpleNamespace(model_name="test-model", default_max_tokens=4096)
+
+        with patch(
+            "app.agents.main.page_designer.Settings.from_env",
+            return_value=settings,
+        ), patch(
+            "app.agents.main.page_designer.create_chat_model",
+            return_value=model,
+        ):
+            detail = design_endpoint_with_chat_model(project_plan, endpoint_context)
+
+        prompt = model.bind.return_value.invoke.call_args.args[0]
+        self.assertIn("step 1 of EndpointDetail design", prompt)
+        self.assertNotIn("processing_logic", prompt)
+        self.assertEqual(detail["endpoint_decision"]["operation_semantics"], decision["operation_semantics"])
+        self.assertEqual(detail["design_stage"], "complete")
+        self.assertTrue(detail["processing_logic"])
+
+    def test_endpoint_decision_stops_before_detail_composition_when_unresolved(self) -> None:
+        """第一步仍有未决差异时，不应提前生成处理逻辑和验收承诺。"""
+
+        project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
+        page_context = extract_page_detail_context(
+            project_plan,
+            project_plan["frontend_pages"][0]["pageId"],
+        )
+        endpoint_context = _endpoint_context_for_dependency(
+            project_plan,
+            page_context["references"]["endpoint_dependencies"][0],
+        )
+        detail = compose_endpoint_detail_from_decision(
+            project_plan,
+            endpoint_context,
+            {
+                "data_origin": {
+                    "source_type": "mysql_existing",
+                    "effective_source": {
+                        "kind": "mysql_existing",
+                        "database": "xcode",
+                        "tables": ["user"],
+                    },
+                    "field_mappings": [],
+                    "differences": [
+                        {
+                            "field": "user.id",
+                            "expected": "唯一定位一条记录",
+                            "actual": "唯一性尚未确认",
+                            "resolution_kind": "needs_user_confirmation",
+                            "operation_refs": [],
+                            "backend_adaptation": None,
+                        }
+                    ],
+                    "database_operations": [],
+                    "notes": [],
+                },
+                "operation_semantics": {
+                    "operation_kind": "delete",
+                    "target_cardinality": "exactly_one",
+                    "selector": {"source": "path", "fields": ["id"]},
+                    "transaction_required": True,
+                    "zero_match_behavior": "返回 404",
+                    "multiple_match_behavior": "拒绝执行并返回数据约束错误",
+                    "success_status_code": 204,
+                    "side_effect": "delete",
+                },
+                "risks": ["user.id 唯一性待确认"],
+            },
+        )
+
+        self.assertEqual(detail["design_stage"], "needs_user_confirmation")
+        self.assertEqual(detail["processing_logic"], [])
+        self.assertEqual(detail["acceptance_criteria"], [])
+
+    def test_endpoint_detail_is_composed_from_one_closed_decision(self) -> None:
+        """闭合决策的处理逻辑与验收标准必须由同一基数和结果规则投影。"""
+
+        project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
+        page_context = extract_page_detail_context(
+            project_plan,
+            project_plan["frontend_pages"][0]["pageId"],
+        )
+        endpoint_context = _endpoint_context_for_dependency(
+            project_plan,
+            page_context["references"]["endpoint_dependencies"][0],
+        )
+        decision = {
+            "data_origin": {
+                "source_type": "mock",
+                "effective_source": {"kind": "mock", "description": "内存数据"},
+                "field_mappings": [],
+                "differences": [],
+                "database_operations": [],
+                "notes": [],
+            },
+            "operation_semantics": {
+                "operation_kind": "delete",
+                "target_cardinality": "exactly_one",
+                "selector": {"source": "path", "fields": ["id"]},
+                "transaction_required": True,
+                "zero_match_behavior": "返回 404",
+                "multiple_match_behavior": "拒绝执行",
+                "success_status_code": 204,
+                "side_effect": "delete",
+            },
+            "risks": [],
+        }
+
+        detail = compose_endpoint_detail_from_decision(
+            project_plan,
+            endpoint_context,
+            decision,
+        )
+
+        self.assertEqual(detail["design_stage"], "complete")
+        self.assertTrue(any("恰好一个目标" in item for item in detail["processing_logic"]))
+        self.assertTrue(any("exactly_one" in item for item in detail["acceptance_criteria"]))
+        self.assertTrue(any("拒绝执行" in item for item in detail["processing_logic"]))
+
     def test_model_json_overrides_endpoint_detail_fields(self) -> None:
         """EndpointDetail 应接受模型正式字段覆盖。"""
 

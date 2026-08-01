@@ -94,6 +94,20 @@ def diff_database_schema(
                         actual=actual_column,
                     )
                 )
+            default_gap = _default_gap(required_column, actual_column)
+            if default_gap:
+                gaps.append(
+                    _gap(
+                        kind="default_mismatch",
+                        resolution_kind="database_change",
+                        database=database,
+                        table=table_name,
+                        column=column_name,
+                        message=f"表 {table_name}.{column_name} default 与接口需求不一致。",
+                        required=required_column,
+                        actual=actual_column,
+                    )
+                )
     return gaps
 
 
@@ -110,8 +124,9 @@ def compile_database_task_intents(gaps: list[dict[str, Any]]) -> list[dict[str, 
             "missing_database": "create_database",
             "missing_table": "create_table",
             "missing_column": "add_column",
-            "incompatible_column_type": "alter_column",
+            "incompatible_column_type": "alter_column_type",
             "nullable_mismatch": "alter_column_nullable",
+            "default_mismatch": "alter_column_default",
         }.get(kind, "schema_change")
         risk = "medium" if operation.startswith("alter") else "low"
         intent = {
@@ -169,8 +184,9 @@ def _gap(
                 "missing_database": "create_database",
                 "missing_table": "create_table",
                 "missing_column": "add_column",
-                "incompatible_column_type": "alter_column",
+                "incompatible_column_type": "alter_column_type",
                 "nullable_mismatch": "alter_column_nullable",
+                "default_mismatch": "alter_column_default",
             }.get(kind, "schema_change"),
         ),
         "source_evidence": required.get("source_evidence") or required.get("source_refs") or [],
@@ -235,6 +251,10 @@ def _column_map(value: Any) -> dict[str, dict[str, Any]]:
 def _type_gap(required: dict[str, Any], actual: dict[str, Any]) -> bool:
     """用保守规则判断字段类型是否明显不兼容。"""
 
+    if required.get("source") == "database_operation" and required.get("type"):
+        return _normalized_column_type(required.get("type")) != _normalized_column_type(
+            actual.get("type") or actual.get("column_type")
+        )
     required_type = _type_family(required.get("type"))
     actual_type = _type_family(actual.get("type") or actual.get("column_type"))
     return bool(required_type and actual_type and required_type != actual_type)
@@ -243,9 +263,42 @@ def _type_gap(required: dict[str, Any], actual: dict[str, Any]) -> bool:
 def _nullable_gap(required: dict[str, Any], actual: dict[str, Any]) -> bool:
     """判断字段 nullable 要求是否未被真实结构满足。"""
 
-    if required.get("nullable") is not False:
+    if not isinstance(required.get("nullable"), bool):
         return False
-    return actual.get("nullable") is True
+    return required.get("nullable") != actual.get("nullable")
+
+
+def _default_gap(required: dict[str, Any], actual: dict[str, Any]) -> bool:
+    """只在目标结构明确声明 default 时比较真实字段默认值。"""
+
+    if "default" not in required:
+        return False
+    return _normalized_default(required.get("default")) != _normalized_default(
+        actual.get("default")
+    )
+
+
+def _normalized_default(value: Any) -> Any:
+    """规范化字面量和 SQL 表达式默认值，减少大小写导致的误报。"""
+
+    if isinstance(value, dict):
+        kind = str(value.get("kind") or "literal")
+        raw_value = value.get("value")
+        if kind == "expression":
+            return (kind, str(raw_value or "").strip().lower().replace("()", ""))
+        return (kind, raw_value)
+    if isinstance(value, str):
+        normalized = value.strip().lower().replace("()", "")
+        if normalized in {"current_timestamp", "current_date", "current_time"}:
+            return ("expression", normalized)
+        return ("literal", value)
+    return ("literal", value)
+
+
+def _normalized_column_type(value: Any) -> str:
+    """规范化显式目标字段类型，保留长度等结构约束用于精确比较。"""
+
+    return "".join(str(value or "").lower().split())
 
 
 def _type_family(value: Any) -> str:

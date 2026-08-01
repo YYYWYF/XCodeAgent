@@ -296,6 +296,16 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
         if isinstance(interface_design.get("response_format"), dict)
         else {}
     )
+    endpoint_decision = (
+        detail.get("endpoint_decision")
+        if isinstance(detail.get("endpoint_decision"), dict)
+        else {}
+    )
+    operation_semantics = (
+        endpoint_decision.get("operation_semantics")
+        if isinstance(endpoint_decision.get("operation_semantics"), dict)
+        else {}
+    )
     return "\n".join(
         [
             f"# 接口详细设计：{detail.get('method', 'GET')} {detail.get('path', '')}",
@@ -317,7 +327,10 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
             f"- 有效来源：{_json_brief(effective_source)}",
             f"- 字段映射：{_json_brief(data_origin.get('field_mappings'))}",
             f"- 差异项：{_json_brief(data_origin.get('differences'))}",
+            f"- 数据库操作：{_json_brief(data_origin.get('database_operations'))}",
             f"- 备注：{_joined_items(data_origin.get('notes', []))}",
+            f"- 设计阶段：{detail.get('design_stage') or '待补充'}",
+            f"- 接口行为决策：{_json_brief(operation_semantics)}",
             "",
             "## 三、接口设计",
             "",

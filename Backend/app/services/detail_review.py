@@ -10,7 +10,10 @@ from app.services.api_contracts import (
     normalize_response_bindings,
 )
 from app.services.frontend_page_tree import update_frontend_page_leaves
-from app.services.page_detail_plan import normalize_endpoint_data_origin
+from app.services.page_detail_plan import (
+    normalize_endpoint_data_origin,
+    refresh_endpoint_detail_from_decision,
+)
 
 
 PAGE_EDITABLE_FIELDS = {
@@ -26,11 +29,9 @@ PAGE_EDITABLE_FIELDS = {
 ENDPOINT_EDITABLE_FIELDS = {
     "data_usage",
     "data_origin",
+    "endpoint_decision",
     "interface_design",
-    "processing_logic",
     "dependent_pages",
-    "acceptance_criteria",
-    "risks",
 }
 
 
@@ -374,6 +375,7 @@ def _endpoint_review_items(
                 "summary": detail.get("summary"),
                 "data_usage": _dict_value(detail.get("data_usage")),
                 "data_origin": normalize_endpoint_data_origin(detail.get("data_origin")),
+                "endpoint_decision": _dict_value(detail.get("endpoint_decision")),
                 "interface_design": _dict_value(detail.get("interface_design")),
                 "processing_logic": _list_value(detail.get("processing_logic")),
                 "dependent_pages": _list_value(
@@ -438,6 +440,14 @@ def _apply_endpoint_target_patch(
         raise ValueError(f"unknown endpoint detail review target: {target_id}")
     for key, value in changes.items():
         target[key] = _normalize_editable_value(key, value, target.get(key))
+    decision = target.get("endpoint_decision")
+    if isinstance(decision, dict):
+        # 新结构以 EndpointDecision 为唯一语义来源；用户调整来源后立即重建派生字段。
+        if "data_origin" in changes:
+            decision["data_origin"] = normalize_endpoint_data_origin(
+                target.get("data_origin")
+            )
+        refresh_endpoint_detail_from_decision(target)
 
 
 def _assert_endpoint_data_origins_resolved(
@@ -449,7 +459,7 @@ def _assert_endpoint_data_origins_resolved(
 ) -> None:
     """确认前校验 endpoint 数据来源，避免未决数据库方案绕过用户确认。"""
 
-    unresolved: list[str] = []
+    errors: list[str] = []
     for detail in project_plan.get("endpoint_detail_plans", []):
         if not isinstance(detail, dict):
             continue
@@ -463,13 +473,141 @@ def _assert_endpoint_data_origins_resolved(
         source_type = str(data_origin.get("source_type") or "")
         if isinstance(effective_source, dict):
             source_type = str(effective_source.get("kind") or source_type)
+        endpoint_name = str(
+            detail.get("endpoint_id") or detail.get("name") or "endpoint"
+        )
         if source_type == "needs_user_confirmation":
-            unresolved.append(str(detail.get("endpoint_id") or detail.get("name") or "endpoint"))
-    if unresolved:
+            errors.append(f"{endpoint_name}: data source needs user confirmation")
+            continue
+        errors.extend(
+            f"{endpoint_name}: {message}"
+            for message in _endpoint_database_design_errors(data_origin, source_type)
+        )
+    if errors:
         raise ValueError(
             "endpoint data_origin still needs user confirmation: "
-            + ", ".join(unresolved)
+            + ", ".join(errors)
         )
+
+
+def _endpoint_database_design_errors(
+    data_origin: dict[str, Any],
+    source_type: str,
+) -> list[str]:
+    """校验结构化字段决策和数据库操作之间的引用与必填信息。"""
+
+    errors: list[str] = []
+    operations = [
+        item
+        for item in data_origin.get("database_operations", [])
+        if isinstance(item, dict)
+    ]
+    operation_index: dict[str, dict[str, Any]] = {}
+    referenced_operation_ids: set[str] = set()
+    for operation in operations:
+        operation_id = str(operation.get("id") or "")
+        if not operation_id:
+            errors.append("database operation id is required")
+            continue
+        if operation_id in operation_index:
+            errors.append(f"duplicate database operation id {operation_id}")
+            continue
+        operation_index[operation_id] = operation
+        errors.extend(_database_operation_errors(operation))
+
+    for difference in data_origin.get("differences", []):
+        if not isinstance(difference, dict):
+            continue
+        field = str(difference.get("field") or "unknown field")
+        kind = str(difference.get("resolution_kind") or "")
+        refs = [str(item) for item in difference.get("operation_refs", []) if str(item)]
+        adaptation = difference.get("backend_adaptation")
+        if kind == "needs_user_confirmation":
+            if refs:
+                errors.append(f"{field} needs_user_confirmation cannot reference operations")
+            errors.append(f"{field} needs user confirmation")
+        elif kind == "database_change":
+            if not refs:
+                errors.append(f"{field} database_change requires operation_refs")
+            for ref in refs:
+                if ref not in operation_index:
+                    errors.append(f"{field} references unknown database operation {ref}")
+                else:
+                    referenced_operation_ids.add(ref)
+            if isinstance(adaptation, dict):
+                errors.append(f"{field} database_change cannot declare backend_adaptation")
+        elif kind == "backend_adaptation":
+            if refs:
+                errors.append(f"{field} backend_adaptation cannot reference database operations")
+            if not isinstance(adaptation, dict) or not adaptation.get("strategy"):
+                errors.append(f"{field} backend_adaptation requires strategy")
+        elif kind == "already_supported":
+            if refs or isinstance(adaptation, dict):
+                errors.append(f"{field} already_supported cannot declare a resolution action")
+        else:
+            errors.append(f"{field} has invalid resolution_kind {kind}")
+
+    for operation_id in operation_index:
+        if operation_id not in referenced_operation_ids:
+            errors.append(
+                f"database operation {operation_id} is not referenced by a difference"
+            )
+
+    if source_type in {"mock", "third_party"} and operations:
+        errors.append(f"{source_type} data source cannot declare database operations")
+    if source_type == "mysql_new_table" and not any(
+        operation.get("operation") == "create_table" for operation in operations
+    ):
+        errors.append("mysql_new_table requires create_table operation")
+    return errors
+
+
+def _database_operation_errors(operation: dict[str, Any]) -> list[str]:
+    """校验单个数据库操作具备生成确定性 Schema 需求所需的字段。"""
+
+    operation_id = str(operation.get("id") or "database operation")
+    operation_kind = str(operation.get("operation") or "")
+    supported = {
+        "create_table",
+        "add_column",
+        "alter_column_type",
+        "alter_column_nullable",
+        "alter_column_default",
+    }
+    if operation_kind not in supported:
+        return [f"{operation_id} has unsupported operation {operation_kind}"]
+    if not operation.get("database"):
+        return [f"{operation_id} database is required"]
+    table = operation.get("table")
+    if operation_kind == "create_table":
+        if (
+            not isinstance(table, dict)
+            or not table.get("name")
+            or not table.get("columns")
+        ):
+            return [f"{operation_id} create_table requires table name and columns"]
+        for column in table.get("columns", []):
+            if not isinstance(column, dict) or not column.get("name") or not column.get("type"):
+                return [f"{operation_id} create_table columns require name and type"]
+        return []
+    if not isinstance(table, str) or not table:
+        return [f"{operation_id} table is required"]
+    column = operation.get("column")
+    if not isinstance(column, str) or not column:
+        return [f"{operation_id} column is required"]
+    target = operation.get("to")
+    if operation_kind == "add_column":
+        if not isinstance(target, dict) or not target.get("type"):
+            return [f"{operation_id} add_column requires to.type"]
+        return []
+    required_key = {
+        "alter_column_type": "type",
+        "alter_column_nullable": "nullable",
+        "alter_column_default": "default",
+    }[operation_kind]
+    if not isinstance(target, dict) or required_key not in target:
+        return [f"{operation_id} {operation_kind} requires to.{required_key}"]
+    return []
 
 
 def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
@@ -513,6 +651,7 @@ def _normalize_editable_value(key: str, value: Any, current: Any) -> Any:
         return _dict_list(value)
     if key in {
         "data_usage",
+        "endpoint_decision",
         "interface_design",
     }:
         return value if isinstance(value, dict) else {}

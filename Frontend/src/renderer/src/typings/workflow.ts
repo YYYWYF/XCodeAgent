@@ -94,6 +94,7 @@ export type WorkflowDetailReviewTarget = {
   summary?: string
   data_usage?: Record<string, unknown>
   data_origin?: Record<string, unknown>
+  endpoint_decision?: Record<string, unknown>
   interface_design?: Record<string, unknown>
   processing_logic?: string[]
   risks?: string[]
