@@ -144,7 +144,7 @@ function WorkbenchPage({
           message: '项目预览启动失败',
           description: `${errorMsg}，可在预览区查看详情`,
           placement: 'bottomRight',
-          duration: null,
+          duration: 3,
         })
       }
     }).catch(err => {
