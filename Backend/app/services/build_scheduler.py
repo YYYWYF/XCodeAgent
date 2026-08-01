@@ -535,17 +535,15 @@ def _missing_dependency_errors(
 
 
 def _lock_compatible_batch(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """从就绪任务中选择文件锁不冲突的一批任务。"""
+    """从就绪任务中选择文件锁不冲突的一批任务。
+
+    can_run_in_parallel=False 的任务（共享文件/公共契约/文件冲突）只约束与触碰同
+    文件锁的任务串行，不阻止文件锁互斥的任务并行。这样前后端任务即使一方被标
+    can_parallel=False，只要文件锁不冲突仍可同批并行派发。
+    """
 
     if not tasks:
         return []
-    serial = [
-        task
-        for task in tasks
-        if not bool(task.get("can_run_in_parallel", True))
-    ]
-    if serial:
-        return [sorted(serial, key=_task_sort_key)[0]]
 
     selected: list[dict[str, Any]] = []
     used_locks: set[str] = set()

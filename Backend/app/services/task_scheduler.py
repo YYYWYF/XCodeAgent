@@ -136,16 +136,19 @@ def _annotate_task(task: Dict[str, Any], *, target_counts: Dict[str, int]) -> Di
 
 
 def _select_ready_batch(ready: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    serial = [
+    # 非 direct-write 任务（inspect/verify/plan-only）必须独占一批，优先调度。
+    exclusive = [
         task
         for task in ready
         if task.get("executionMode") != "subagent-direct-write"
-        or not _task_can_run_in_parallel(task)
     ]
-    if serial:
-        serial.sort(key=_task_priority)
-        return [serial[0]]
+    if exclusive:
+        exclusive.sort(key=_task_priority)
+        return [exclusive[0]]
 
+    # direct-write 任务按文件锁兼容分批：can_parallel=False 的任务（共享文件/
+    # 公共契约/文件冲突）只约束与触碰同文件的任务串行，不阻止文件互斥的任务并行。
+    # 这样前后端任务即使一方被标 can_parallel=False，只要文件不冲突仍可同批并行。
     batch: List[Dict[str, Any]] = []
     used_targets: Set[str] = set()
     for task in sorted(ready, key=lambda item: str(item.get("id"))):
