@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from app.services.frontend_page_tree import find_frontend_page
+
 
 logger = logging.getLogger(__name__)
 
@@ -188,9 +190,16 @@ def _task_matches_page_unit(task: dict[str, Any], page_unit_id: str) -> bool:
     page_id = page_unit_id.split(":", 1)[1] if ":" in page_unit_id else page_unit_id
     if unit_id == page_id:
         return True
-    # 兼容 reconcile 规范化后的 canonical key（大小写/分隔符不同但语义相同）
-    return _page_key_identity(unit_id) == _page_key_identity(page_id) and bool(
-        _page_key_identity(unit_id)
+    # 兼容 reconcile 规范化后的 canonical key（大小写/分隔符不同但语义相同）。
+    # 先从 unit_id 去掉可能的 page:/frontend:page: 前缀，再比 _page_key_identity，
+    # 否则 page:DashboardPage 的 identity 会带上 "page" 前缀导致与 dashboard_page 不匹配。
+    unit_key = unit_id
+    for prefix in ("frontend:page:", "page:"):
+        if unit_id.startswith(prefix):
+            unit_key = unit_id[len(prefix):]
+            break
+    return _page_key_identity(unit_key) == _page_key_identity(page_id) and bool(
+        _page_key_identity(unit_key)
     )
 
 
@@ -428,18 +437,26 @@ def _mark_existing_menu_tasks_satisfied(
 
 
 def _page_skeleton(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]:
-    """从任务准备视图读取当前页面的名称、路径和模块标识。"""
+    """从任务准备视图读取当前页面的名称、路径和模块标识。
+
+    优先从 ``application_skeleton.pages`` 读取；当该视图为空（部分工作区未填充
+    application_skeleton）时回退到 ``frontend_pages`` 树，否则页面 name/path 取不到，
+    会导致菜单重复检测失配、生成错误的菜单登记任务。
+    """
 
     skeleton = project_plan.get("application_skeleton")
     pages = skeleton.get("pages", []) if isinstance(skeleton, dict) else []
-    return next(
+    match = next(
         (
             page
             for page in pages
             if isinstance(page, dict) and str(page.get("pageId") or "") == page_id
         ),
-        {},
+        None,
     )
+    if match is None:
+        match = find_frontend_page(project_plan.get("frontend_pages"), page_id)
+    return match if isinstance(match, dict) else {}
 
 
 def _menu_route_path(confirmed_path: str, module_id: Any, page_key: str) -> str:

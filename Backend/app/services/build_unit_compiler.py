@@ -102,9 +102,15 @@ def _apply_unit_task_dependencies(
     result: list[dict[str, Any]] = []
     for task in tasks:
         unit_id = str(task.get("unit_id") or "application:root")
+        # 前端页面 Unit 只继承同 frontend 域的依赖（如 frontend:api-client），
+        # 不继承 backend:endpoint:* / database:* 的任务依赖，使前端页面可与后端
+        # 接口并行生成：前端通过 api-client（已封装 service.get + 契约 schema）
+        # 调接口，无需等后端实现。前后端契约一致性由 app:integration 集成测试兜底。
+        page_frontend_only = unit_id.startswith("page:")
         inherited_dependencies = [
             dependency_task_id
             for dependency_unit_id in dependency_units.get(unit_id, [])
+            if not page_frontend_only or dependency_unit_id.startswith("frontend:")
             for dependency_task_id in tasks_by_unit.get(dependency_unit_id, [])
             if dependency_task_id and dependency_task_id != task.get("id")
         ]
