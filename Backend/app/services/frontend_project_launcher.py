@@ -72,6 +72,10 @@ def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
             "server": existing_server,
         }
 
+    # 复用失败但可能存在僵尸进程占用端口（如上次启动的 Vite 仍在运行），
+    # 这里主动清理，避免新启动必然端口冲突导致 Vite 自动递增端口。
+    _stop_frontend_process_from_pid_file(runtime_root / "frontend.pid")
+
     package_manager_command = shutil.which(package_manager)
     if not package_manager_command:
         return _failed_launch(
@@ -113,13 +117,25 @@ def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
     )
     if process is not None:
         _register_frontend_process(root, process)
+    _stdout_log = Path(str(launch_result.get("stdout_log") or ""))
+    _stdout_offset = int(launch_result.get("stdout_offset") or 0)
+    _stderr_log = Path(str(launch_result.get("stderr_log") or ""))
     ready = process is not None and _wait_until_ready(
         preview_url,
         process,
-        stdout_log=Path(str(launch_result.get("stdout_log") or "")),
-        stdout_offset=int(launch_result.get("stdout_offset") or 0),
-        stderr_log=Path(str(launch_result.get("stderr_log") or "")),
+        stdout_log=_stdout_log,
+        stdout_offset=_stdout_offset,
+        stderr_log=_stderr_log,
     )
+    # Vite / webpack dev server 在端口被占用时会自动递增端口，
+    # 这里从日志中提取实际监听地址并覆写 preview_url。
+    resolved_url = _resolve_actual_preview_url(
+        stdout_log=_stdout_log,
+        stdout_offset=_stdout_offset,
+        fallback_url=preview_url,
+    )
+    if resolved_url != preview_url and _preview_is_ready(resolved_url):
+        preview_url = resolved_url
     returncode = process.poll() if process is not None else None
     process_running = process is not None and returncode is None
     launch_status = "running" if ready and process_running else "failed"
@@ -324,7 +340,6 @@ def _start_dev_server(
     preview_url: str,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """以后台进程启动开发服务器，并保留进程对象供健康检查监督。"""
-
     argv = [package_manager_command, "run", script_name]
     stdout_path = runtime_root / "frontend.stdout.log"
     stderr_path = runtime_root / "frontend.stderr.log"
@@ -385,7 +400,7 @@ def _launch_environment(script_command: str) -> dict[str, str]:
     if "react-scripts" in script_command:
         env.pop("HOST", None)
     else:
-        env["HOST"] = "127.0.0.1"
+        env["HOST"] = "localhost"
     return env
 
 
@@ -414,7 +429,7 @@ def _preview_url(script: str) -> str:
     port = _script_port(script)
     if port is None:
         port = 80
-    return f"http://127.0.0.1:{port}"
+    return f"http://localhost:{port}"
 
 
 def _script_port(script: str) -> int | None:
@@ -425,6 +440,36 @@ def _script_port(script: str) -> int | None:
         return int(match.group(1))
     except ValueError:
         return None
+
+
+_DEV_SERVER_URL_PATTERN = re.compile(
+    r"(?:Local|localhost|127\.0\.0\.1)\s*:\s*(https?://[^\s\n]+)",
+    re.IGNORECASE,
+)
+
+
+def _resolve_actual_preview_url(
+    stdout_log: Path,
+    stdout_offset: int,
+    fallback_url: str,
+) -> str:
+    """从本次启动的 stdout 日志中提取 dev server 实际监听地址。
+
+    Vite 在端口被占用时会自动递增端口（如 3000→3001），
+    ``_preview_url`` 根据启动命令推算的端口可能与实际不符。
+    这里优先从日志中的 ``Local:`` 行解析真实地址。
+    """
+    try:
+        with stdout_log.open("rb") as stream:
+            stream.seek(max(0, stdout_offset))
+            content = stream.read().decode("utf-8", errors="replace")
+    except OSError:
+        return fallback_url
+
+    match = _DEV_SERVER_URL_PATTERN.search(content)
+    if match:
+        return match.group(1).rstrip("/")
+    return fallback_url
 
 
 def _wait_until_ready(
