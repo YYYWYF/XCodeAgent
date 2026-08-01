@@ -26,6 +26,31 @@ def _app_name_from_plan(project_plan: dict[str, Any]) -> str:
 logger = logging.getLogger(__name__)
 
 
+def _springboot_mybatis_skill_document() -> str:
+    """读取内置 springboot-mybatis-generate 技能的 SKILL.md 全文。
+
+    任务规划模型处于 planning-only 边界，无法调用技能工具读取文件，因此需要把
+    SKILL.md 的完整内容直接内联进 prompt 上下文。文件缺失时返回降级提示，
+    避免规划静默失去后端架构约束。
+    """
+
+    try:
+        from app.services.builtin_skills import resolve_builtin_skills_root
+
+        skill_file = (
+            resolve_builtin_skills_root()
+            / "springboot-mybatis-generate"
+            / "SKILL.md"
+        )
+        return skill_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return (
+            "(springboot-mybatis-generate SKILL.md 未找到，请仍按 Spring Boot + "
+            "MyBatis-Plus 标准分层架构规划后端任务：对象类(Entity/PO/DTO/Converter/Assembler) → "
+            "Repository/Mapper → ApplicationService → Controller。)"
+        )
+
+
 def _task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
@@ -40,6 +65,16 @@ def _task_preparation_prompt(
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
     frontend_root = "frontend"
+    backend_root = "backend"
+    # 规划模型处于 planning-only 边界，无法读取技能文件，须把 SKILL.md 内联进 prompt。
+    backend_skill_document = _springboot_mybatis_skill_document()
+    # 从 WorkspaceSnapshot 中提取真实后端目录树，直接注入 prompt。
+    backend_snapshot = workspace_snapshot.get("backend") if workspace_snapshot else None
+    backend_dir_structure = (
+        backend_snapshot.get("dir_structure")
+        if isinstance(backend_snapshot, dict) and backend_snapshot.get("dir_structure")
+        else None
+    )
     return (
         "You are the build-task planning model for an app-generation workflow.\n"
         "This is a planning-only boundary. Do not call tools, do not call subagents, "
@@ -48,6 +83,9 @@ def _task_preparation_prompt(
         "Use the deterministic WorkspaceSnapshot as the primary source for the current "
         "source tree, package/framework conventions, route entry, API/data layer, shared "
         "modules, tests, and relevant existing files.\n"
+        
+        "如果页面有依赖的接口设计，构建接口的任务规划，并生成任务实现"
+        
         f"Frontend path convention: all generated frontend code MUST live under the "
         f"virtual path `/{frontend_root}/` (resolved from ProjectPlan.app.name). Every "
         f"`src/...` path in the frontend-template-modification-boundary skill is relative "
@@ -55,7 +93,43 @@ def _task_preparation_prompt(
         f"`/{frontend_root}/src/pages/<PageKey>/index.tsx` in change_scope paths. Do NOT "
         f"use `Frontend/src/`, bare `src/`, or `/app/frontend/` — those are wrong for a "
         f"user-application workspace.\n"
-        "Prepare executable tasks only from TaskPreparationContext.executable_details "
+        
+        "Backend path convention: this is a Spring Boot + MyBatis-Plus Maven project "
+        f"rooted at `/{backend_root}/` (the directory containing pom.xml). Every backend "
+        "file MUST be planned under `/{backend_root}/src/main/java/...` or "
+        "`/{backend_root}/src/main/resources/...`; never use a bare `src/`, `app/backend/`, "
+        "or any other backend root. Do NOT plan tasks to create pom.xml, the main "
+        "application class, or the framework skeleton — those already exist.\n"
+        "The current real backend directory tree on disk is below. Directories end with "
+        "`/`, files are leaves, and build artifacts (e.g. `target/`) are already excluded "
+        "from the snapshot:\n"
+        "--- CURRENT BACKEND DIRECTORY STRUCTURE (workspace_snapshot.backend.dir_structure) ---\n"
+        f"{backend_dir_structure}\n"
+        "--- END BACKEND DIRECTORY STRUCTURE ---\n"
+        "Plan every backend task against that tree: reuse existing packages and do not "
+        "re-plan files already present. Only add new files under "
+        f"`/{backend_root}/src/main/java/...` or `/{backend_root}/src/main/resources/...`.\n"
+        "The ONLY authoritative reference for backend code organization, file structure, "
+        "naming rules, type mapping, and generation order is the injected "
+        "`springboot-mybatis-generate` SKILL.md below. Plan every backend task strictly "
+        "following its 4-phase generation order (object classes Entity/PO/DTO/Converter/Assembler → "
+        "Repository/Mapper → ApplicationService → Controller), its naming conversions "
+        "(table snake_case → PascalCase class / camelCase module, table → REST path), "
+        "and its MySQL-to-Java type mapping. Use the generated file list and the 4-phase "
+        "generation order as the basis for task split, dependencies, and "
+        "acceptance_criteria.\n"
+        "Backend server port: the Spring Boot backend starts on port 8080. The frontend "
+        "must call the backend API through the corresponding base address "
+        "`http://localhost:8080` (e.g. a backend endpoint `/api/v1/product-category` is "
+        "called by the frontend as `http://localhost:8080/api/v1/product-category`). Do "
+        "not hardcode a different port or host in frontend API calls.\n"
+        "--- INJECTED springboot-mybatis-generate SKILL.md (planning model cannot read "
+        "skills, content inlined) ---\n"
+        + backend_skill_document
+        + "\n"
+        "--- END INJECTED SKILL.md ---\n"
+        
+        "Prepare executable tasks ONLY from TaskPreparationContext.executable_details "
         "and TargetBuildContext. TaskPreparationContext.application_skeleton is a "
         "non-executable Unit skeleton: it describes all pages, data sources, public "
         "application units, and API ranges, but it must never cause tasks for pages or "
@@ -69,19 +143,25 @@ def _task_preparation_prompt(
         "executable_details.api_contracts. ProjectPlan/API contracts in executable_details "
         "are the only source of fields; preserve schema_refs, endpoint ids, "
         "request/response schema refs, and page response_bindings in task source references.\n"
+        
         "When executable_details.database_planning_context.schema_version is "
-        "`database-context.v1` and status is completed, treat actual_schema as the only "
-        "real database structure, required_schema as the confirmed target structure, and "
-        "gaps/task_intents as the structured database analysis. Only gaps whose "
-        "resolution_kind is `database_change` may become database tasks, and each such "
-        "database task MUST copy the matching task_intent.database_scope including gap_ids. "
-        "resolution_items or gaps marked `backend_adaptation` belong in backend tasks, not "
-        "database tasks; `needs_confirmation` must not be converted into a build task. "
-        "Use these together with "
-        "endpoint_detail_plans and api_contracts to split database tasks from backend "
-        "code tasks. Do not infer existing tables or columns from ProjectPlan.data_sources. "
-        "If database_planning_context is missing, the current scope is not database-backed "
-        "and you must not create database tasks.\n"
+        "`database-context.v1` and status is completed, `gaps` is the complete, "
+        "deterministic list of genuine schema differences. A required field already "
+        "satisfied — same name (case-insensitive) and a compatible/semantically "
+        "equivalent type — needs no database task. Create a database task ONLY for "
+        "`database_change` gaps (missing_database/missing_table/missing_column/"
+        "incompatible_column_type/nullable_mismatch); if `gaps` is empty or none is "
+        "`database_change`, do NOT create database tasks. `backend_adaptation` belongs in "
+        "backend tasks; `needs_confirmation` is never a task. "
+        "##Database tasks run BEFORE backend tasks. "
+        "##Merge ALL `database_change` gaps on the same table into ONE database task. "
+        "Every database task MUST carry a `database_scope` with the validated shape "
+        "`{\"gaps\": [full original gap objects]}` and `gap_ids` covering all merged "
+        "gaps — downstream reconstructs the target schema from `database_scope.gaps`, so "
+        "never drop gap fields, leave it empty, or infer it from ProjectPlan.data_sources. "
+        "If database_planning_context is missing or has no `database_change` gap, do not "
+        "create database tasks; backend tasks may still reference the existing schema.\n"
+        
         "Split work into independently verifiable tasks. Every task must include:\n"
         "- id: a stable unique task id\n"
         "- unit_id: one of the required Unit IDs from TargetBuildContext\n"

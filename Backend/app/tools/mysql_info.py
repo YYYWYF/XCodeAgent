@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from hashlib import sha256
 from typing import Any
 
 from langchain_core.tools import tool
@@ -252,6 +253,81 @@ def mysql_table_info(
     except Exception as exc:
         return _error_response(f"Unexpected error: {exc}")
 
+@tool("get_mysql_config")
+def get_mysql_config() -> str:
+    """从 MYSQL_* 环境变量读取数据库连接配置，用于补齐 Spring 数据源配置。
+
+    当后端项目 application.yml 缺少 spring.datasource 配置时，调用本工具获取
+    数据库连接信息（host/port/user/password/database）及其 JDBC URL，据此填充
+    application.yml 的 spring.datasource.url / username / password。
+
+    Returns:
+        A JSON string with the MySQL connection config.
+    """
+
+    host = os.getenv("MYSQL_HOST")
+    port_str = os.getenv("MYSQL_PORT")
+    user = os.getenv("MYSQL_USER")
+    password = os.getenv("MYSQL_PWD")
+    database = os.getenv("MYSQL_DATABASE")
+
+    missing = []
+    if not host:
+        missing.append("MYSQL_HOST")
+    if not port_str:
+        missing.append("MYSQL_PORT")
+    if not user:
+        missing.append("MYSQL_USER")
+    if not password:
+        missing.append("MYSQL_PWD")
+    if not database:
+        missing.append("MYSQL_DATABASE")
+    if missing:
+        return json.dumps(
+            {
+                "tool": "get_mysql_config",
+                "status": "error",
+                "error": (
+                    "Missing required environment variable(s): "
+                    f"{', '.join(missing)}. "
+                    "All of MYSQL_HOST, MYSQL_PORT, MYSQL_USER, "
+                    "MYSQL_PWD, MYSQL_DATABASE must be set."
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    try:
+        port = int(port_str)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return json.dumps(
+            {
+                "tool": "get_mysql_config",
+                "status": "error",
+                "error": f"MYSQL_PORT must be a valid integer, got '{port_str}'.",
+            },
+            ensure_ascii=False,
+        )
+
+    return json.dumps(
+        {
+            "tool": "get_mysql_config",
+            "status": "ok",
+            "host": host,
+            "port": port,
+            "user": user,
+            "password": password,
+            "database": database,
+            "jdbc_url": (
+                f"jdbc:mysql://{host}:{port}/{database}"
+                "?useUnicode=true&characterEncoding=utf-8&useSSL=false"
+                "&serverTimezone=Asia/Shanghai"
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
 @tool("get_mysql_table_info")
 def get_mysql_table_info(
         table_name: str | None = None
@@ -317,4 +393,145 @@ def get_mysql_table_info(
         password=password,
         database=database,
         table_name=table_name,
+    )
+
+
+@tool("execute_mysql_ddl")
+def execute_mysql_ddl(
+        statements: list[str],
+) -> str:
+    """从 MYSQL_* 环境变量读取连接信息并执行 DDL/SQL 语句。
+
+    Args:
+        statements: 需要按顺序执行的 SQL 语句列表。每条语句以字符串传入，
+                    不要带末尾分号。
+
+    Returns:
+        A JSON string with the execution result.
+    """
+
+    host = os.getenv("MYSQL_HOST")
+    port_str = os.getenv("MYSQL_PORT")
+    user = os.getenv("MYSQL_USER")
+    password = os.getenv("MYSQL_PWD")
+    database = os.getenv("MYSQL_DATABASE")
+
+    missing = []
+    if not host:
+        missing.append("MYSQL_HOST")
+    if not port_str:
+        missing.append("MYSQL_PORT")
+    if not user:
+        missing.append("MYSQL_USER")
+    if not password:
+        missing.append("MYSQL_PWD")
+    if missing:
+        return json.dumps(
+            {
+                "tool": "execute_mysql_ddl",
+                "status": "error",
+                "error": (
+                    "Missing required environment variable(s): "
+                    f"{', '.join(missing)}. "
+                    "All of MYSQL_HOST, MYSQL_PORT, MYSQL_USER, "
+                    "MYSQL_PWD, MYSQL_DATABASE must be set."
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    try:
+        port = int(port_str)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return json.dumps(
+            {
+                "tool": "execute_mysql_ddl",
+                "status": "error",
+                "error": f"MYSQL_PORT must be a valid integer, got '{port_str}'.",
+            },
+            ensure_ascii=False,
+        )
+
+    import pymysql
+
+    executed = []
+    try:
+        connection = pymysql.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            cursorclass=pymysql.cursors.DictCursor,
+            autocommit=False,
+            connect_timeout=10,
+            read_timeout=30,
+        )
+    except pymysql.MySQLError as exc:
+        return json.dumps(
+            {
+                "tool": "execute_mysql_ddl",
+                "status": "error",
+                "error": f"Connection failed: {exc}",
+            },
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        return json.dumps(
+            {
+                "tool": "execute_mysql_ddl",
+                "status": "error",
+                "error": f"Unexpected connection error: {exc}",
+            },
+            ensure_ascii=False,
+        )
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "USE `" + database.replace("`", "``") + "`"
+                )
+                for statement in statements:
+                    statement = str(statement).strip().rstrip(";")
+                    if not statement:
+                        continue
+                    cursor.execute(statement)
+                    executed.append(
+                        {
+                            "statement_hash": sha256(
+                                statement.encode("utf-8")
+                            ).hexdigest(),
+                            "rowcount": cursor.rowcount,
+                        }
+                    )
+            connection.commit()
+    except pymysql.MySQLError as exc:
+        return json.dumps(
+            {
+                "tool": "execute_mysql_ddl",
+                "status": "error",
+                "error": f"Execution failed: {exc}",
+                "executed_statements": executed,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        return json.dumps(
+            {
+                "tool": "execute_mysql_ddl",
+                "status": "error",
+                "error": f"Unexpected error: {exc}",
+                "executed_statements": executed,
+            },
+            ensure_ascii=False,
+        )
+
+    return json.dumps(
+        {
+            "tool": "execute_mysql_ddl",
+            "status": "completed",
+            "summary": f"已执行 {len(executed)} 条 SQL 语句。",
+            "executed_statements": executed,
+        },
+        ensure_ascii=False,
     )

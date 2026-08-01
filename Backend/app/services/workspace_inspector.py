@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 from collections.abc import Iterable
@@ -130,7 +131,7 @@ def _run(
 
 
 def _list_workspace_files(workspace_root: Path) -> list[str]:
-    rg_result = _run(["rg", "--files"], cwd=workspace_root)
+    rg_result = _run(["rg", "--files", *_rg_ignore_globs()], cwd=workspace_root)
     if rg_result and rg_result.returncode == 0:
         return sorted(
             path
@@ -139,15 +140,26 @@ def _list_workspace_files(workspace_root: Path) -> list[str]:
         )[:MAX_FILES]
 
     files: list[str] = []
-    for path in workspace_root.rglob("*"):
+    for dirpath, dirnames, filenames in os.walk(workspace_root):
         if len(files) >= MAX_FILES:
             break
-        if not path.is_file():
-            continue
-        relative = path.relative_to(workspace_root).as_posix()
-        if _is_ignored_path(relative):
-            continue
-        files.append(relative)
+        current = Path(dirpath)
+        # 原地剪枝：被忽略的目录不进入，避免先枚举 target/build/node_modules
+        # 等大型构建产物目录里的全部文件再做过滤。
+        dirnames[:] = [
+            name
+            for name in sorted(dirnames)
+            if not _is_ignored_path(
+                Path((current / name).relative_to(workspace_root)).as_posix()
+            )
+        ]
+        for filename in sorted(filenames):
+            if len(files) >= MAX_FILES:
+                break
+            relative = Path((current / filename).relative_to(workspace_root)).as_posix()
+            if _is_ignored_path(relative):
+                continue
+            files.append(relative)
     return sorted(files)
 
 
@@ -214,7 +226,7 @@ def _build_snapshot(
     backend_files = [
         path
         for path in files
-        if path.startswith(("Backend/app/", "backend/app/"))
+        if path.startswith(("Backend/", "backend/"))
     ]
     frontend_files = [path for path in files if FRONTEND_SRC_RE.match(path)]
     source_files = [
@@ -391,7 +403,43 @@ def _backend_facts(workspace_root: Path, files: list[str]) -> dict[str, Any]:
         "models": models,
         "workflow_nodes": workflow_nodes,
         "agent_factories": agent_factories,
+        "dir_structure": _dir_structure(files)
     }
+
+
+def _dir_structure(files: list[str]) -> str:
+    """把一组相对路径渲染成树形目录结构字符串。
+
+    内部节点为目录（以 / 结尾），叶子为文件；用于 backend.dirStructure，
+    让规划模型直观看到后端目录布局。
+    """
+
+    root: dict[str, Any] = {}
+    for rel in sorted(files):
+        if not rel:
+            continue
+        node = root
+        for part in rel.split("/"):
+            node = node.setdefault(part, {})
+    lines: list[str] = []
+    _render_tree_entries(root, "", lines)
+    return "\n".join(lines)
+
+
+def _render_tree_entries(
+    entries: dict[str, Any],
+    prefix: str,
+    lines: list[str],
+) -> None:
+    keys = sorted(entries)
+    for index, key in enumerate(keys):
+        children = entries[key]
+        is_last = index == len(keys) - 1
+        connector = "└── " if is_last else "├── "
+        label = f"{key}/" if children else key
+        lines.append(f"{prefix}{connector}{label}")
+        child_prefix = prefix + ("    " if is_last else "│   ")
+        _render_tree_entries(children, child_prefix, lines)
 
 
 def _frontend_facts(workspace_root: Path, files: list[str]) -> dict[str, Any]:
@@ -542,7 +590,40 @@ def _untracked_files_hash(workspace_root: Path, manifest: str) -> str:
         entries.append(f"{relative}:{_hash_file(workspace_root / relative)}")
     return _hash_text("\n".join(entries))
 
+def _rg_ignore_globs() -> list[str]:
+    """生成传给 ripgrep 的排除 glob，让大型构建产物目录直接在命令层被剪枝。
+
+    这些 glob 与 _is_scoped_ignored_path/_is_ignored_path 的忽略范围保持一致，
+    使 rg 在扫描阶段就跳过 backend/target、frontend/build、frontend/node_modules
+    以及全局构建产物目录，避免先列出全部文件再在 Python 侧过滤。
+    """
+
+    return [
+        "-g", "!backend/target/**",
+        "-g", "!frontend/build/**",
+        "-g", "!frontend/node_modules/**",
+    ]
 
 def _is_ignored_path(path: str) -> bool:
+    if _is_scoped_ignored_path(path):
+        return True
     parts = Path(path).parts
     return any(part in IGNORED_DIRS for part in parts)
+
+
+def _is_scoped_ignored_path(path: str) -> bool:
+    """命中用户应用构建产物的限根忽略规则。
+
+    只忽略 backend/target（Maven 构建输出）、frontend/build 与
+    frontend/node_modules（前端构建产物与依赖），避免工作区扫描枚举这些大目录。
+    """
+
+    parts = Path(path).parts
+    if len(parts) < 2:
+        return False
+    root, child = parts[0], parts[1]
+    if root.lower() == "backend":
+        return child in {"target", ".idea"}
+    if root.lower() == "frontend":
+        return child in {"build", "node_modules"}
+    return False
