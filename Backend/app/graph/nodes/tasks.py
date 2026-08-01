@@ -17,7 +17,10 @@ from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     tasks_from_build_task_plan,
 )
-from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.build_unit_skeleton import (
+    apply_target_unit_dependencies,
+    ensure_build_unit_skeleton,
+)
 from app.services.database_planning_context import database_context_requirement
 from app.services.frontend_page_tree import flatten_frontend_pages
 from app.services.page_dependencies import validate_project_plan_dependencies
@@ -140,6 +143,10 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         build_context = _with_database_planning_context_from_state(
             state,
             project_plan,
+            build_context,
+        )
+        build_task_plan = apply_target_unit_dependencies(
+            build_task_plan,
             build_context,
         )
     except ValueError as exc:

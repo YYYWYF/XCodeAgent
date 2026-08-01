@@ -516,6 +516,11 @@ def extract_page_detail_context(
         str(item.get("endpoint_id"))
         for item in references["endpoint_dependencies"]
     }
+    endpoint_detail_summaries = [
+        _endpoint_detail_summary(detail)
+        for detail in _dict_items(project_plan.get("endpoint_detail_plans"))
+        if str(detail.get("endpoint_id") or "") in endpoint_ids
+    ]
     relevant_contracts = [
         {
             **contract,
@@ -561,7 +566,56 @@ def extract_page_detail_context(
         ),
         "references": references,
         "endpoint_contracts": relevant_contracts,
+        "endpoint_detail_summaries": endpoint_detail_summaries,
         "navigation_pages": navigation_pages,
+    }
+
+
+def _endpoint_detail_summary(detail: dict[str, Any]) -> dict[str, Any]:
+    """把 EndpointDetail 压缩为页面设计可读取的摘要，避免复制完整接口设计。"""
+
+    interface_design = (
+        detail.get("interface_design")
+        if isinstance(detail.get("interface_design"), dict)
+        else {}
+    )
+    request = (
+        interface_design.get("request")
+        if isinstance(interface_design.get("request"), dict)
+        else {}
+    )
+    response = (
+        interface_design.get("response_format")
+        if isinstance(interface_design.get("response_format"), dict)
+        else {}
+    )
+    data_origin = normalize_endpoint_data_origin(detail.get("data_origin"))
+    processing_logic = _text_items(detail.get("processing_logic"))
+    source_endpoint = (
+        detail.get("source_endpoint")
+        if isinstance(detail.get("source_endpoint"), dict)
+        else {}
+    )
+    request_body = (
+        request.get("request_body")
+        if isinstance(request.get("request_body"), dict)
+        else {}
+    )
+    return {
+        "api_contract_id": str(detail.get("api_contract_id") or ""),
+        "endpoint_id": str(detail.get("endpoint_id") or ""),
+        "method": str(detail.get("method") or source_endpoint.get("method") or "GET").upper(),
+        "path": str(detail.get("path") or source_endpoint.get("path") or ""),
+        "summary": str(detail.get("summary") or source_endpoint.get("summary") or ""),
+        "status": str(detail.get("status") or ""),
+        "data_origin_kind": str(data_origin.get("source_type") or "needs_user_confirmation"),
+        "request_schema_ref": request_body.get("schema_ref")
+        or source_endpoint.get("request_schema_ref")
+        or "",
+        "response_schema_ref": response.get("schema_ref")
+        or source_endpoint.get("response_schema_ref")
+        or "",
+        "processing_summary": processing_logic[:3],
     }
 
 

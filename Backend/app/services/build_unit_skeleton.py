@@ -8,7 +8,7 @@ import json
 from typing import Any
 
 from app.services.frontend_page_tree import flatten_frontend_pages
-from app.services.page_dependencies import page_data_source_ids
+from app.services.database_planning_context import endpoint_detail_uses_database
 
 
 PUBLIC_UNIT_IDS = (
@@ -141,17 +141,12 @@ def _unit_graph(
     }
     for source_id in _ids(project_plan.get("data_sources"), "id"):
         source_unit_id = f"database:{source_id}"
-        edges.extend(
-            [
-                {"from": "application:root", "to": source_unit_id, "type": "contains"},
-                {"from": source_unit_id, "to": "backend:bootstrap", "type": "depends_on"},
-            ]
+        edges.append(
+            {"from": "application:root", "to": source_unit_id, "type": "contains"}
         )
 
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
-        source_id = str(contract.get("data_source_id") or "")
-        source_unit_id = f"database:{source_id}"
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "")
             if not contract_id or not endpoint_id:
@@ -162,10 +157,6 @@ def _unit_graph(
                 continue
             edges.append({"from": "application:root", "to": endpoint_unit_id, "type": "contains"})
             edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
-            if source_unit_id in build_units:
-                edges.append({"from": source_unit_id, "to": endpoint_unit_id, "type": "depends_on"})
-            else:
-                errors.append(f"Endpoint {endpoint_id} references unknown data source {source_id}.")
             edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
 
     for page in flatten_frontend_pages(project_plan.get("frontend_pages")):
@@ -188,12 +179,6 @@ def _unit_graph(
             page,
             page_details_by_id.get(page_id),
         )
-        for source_id in page_data_source_ids(dependency_source, contracts):
-            source_unit_id = f"database:{source_id}"
-            if source_unit_id not in build_units:
-                errors.append(f"Page {page_id} references unknown data source {source_id}.")
-                continue
-            edges.append({"from": source_unit_id, "to": page_unit_id, "type": "depends_on"})
         for endpoint_unit_id in _page_endpoint_unit_ids(dependency_source, contracts):
             if endpoint_unit_id not in build_units:
                 errors.append(f"Page {page_id} references unknown endpoint Unit {endpoint_unit_id}.")
@@ -207,6 +192,66 @@ def _unit_graph(
         "edges": _unique_edges(edges),
         "validation": {"is_valid": not errors, "errors": errors},
     }
+
+
+def apply_target_unit_dependencies(
+    build_task_plan: dict[str, Any],
+    build_context: dict[str, Any],
+) -> dict[str, Any]:
+    """按已确认 EndpointDetail 为当前 scope 接入 database→endpoint Unit 依赖。"""
+
+    scoped_plan = deepcopy(build_task_plan)
+    unit_graph = scoped_plan.get("unit_graph")
+    if not isinstance(unit_graph, dict):
+        return scoped_plan
+    build_units = scoped_plan.get("build_units")
+    build_units = build_units if isinstance(build_units, dict) else {}
+    edges = [
+        dict(edge)
+        for edge in unit_graph.get("edges", [])
+        if isinstance(edge, dict)
+    ]
+    errors = list(
+        (unit_graph.get("validation") or {}).get("errors", [])
+        if isinstance(unit_graph.get("validation"), dict)
+        else []
+    )
+    for detail in _dict_items(build_context.get("direct_endpoint_details")):
+        if not endpoint_detail_uses_database(detail):
+            continue
+        api_contract_id = str(detail.get("api_contract_id") or "")
+        endpoint_id = str(detail.get("endpoint_id") or "")
+        data_source_id = str(detail.get("data_source_id") or "")
+        database_unit_id = f"database:{data_source_id}"
+        endpoint_unit_id = _endpoint_unit_id(api_contract_id, endpoint_id)
+        missing_units = [
+            unit_id
+            for unit_id in (database_unit_id, endpoint_unit_id)
+            if unit_id not in build_units
+        ]
+        if missing_units:
+            errors.append(
+                f"EndpointDetail {api_contract_id}:{endpoint_id} references missing Units: "
+                + ", ".join(missing_units)
+            )
+            continue
+        edges.append(
+            {
+                "from": database_unit_id,
+                "to": endpoint_unit_id,
+                "type": "depends_on",
+            }
+        )
+    unique_errors = list(dict.fromkeys(errors))
+    scoped_plan["unit_graph"] = {
+        **unit_graph,
+        "edges": _unique_edges(edges),
+        "validation": {
+            "is_valid": not unique_errors,
+            "errors": unique_errors,
+        },
+    }
+    return scoped_plan
 
 
 def _page_dependency_source(
@@ -230,6 +275,7 @@ def _skeleton_fingerprint(
     """为 Unit 骨架输入生成稳定指纹，供后续页面请求复用。"""
 
     payload = {
+        "skeleton_policy": "endpoint-detail-scoped-database-v1",
         "project_plan_version": project_plan.get("version"),
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),

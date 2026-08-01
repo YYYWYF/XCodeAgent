@@ -851,8 +851,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertNotIn("users-db", tasks)
         self.assertIn("users-api", tasks)
 
-    def test_database_gap_intent_backfills_missing_database_task(self) -> None:
-        """模型漏掉数据库任务时，schema gap 任务意图会确定性补齐。"""
+    def test_database_endpoint_and_page_units_form_ordered_task_chain(self) -> None:
+        """数据库 gap 复用既有逻辑补任务，并按 database→endpoint→page 编排。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -866,6 +866,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "change_scope": [
                             {"operation": "modify", "path": "Backend/UserApi.java"}
                         ],
+                    },
+                    {
+                        "id": "users-page",
+                        "unit_id": "page:users",
+                        "owner": "frontend",
+                        "description": "实现用户页面。",
+                        "change_scope": [
+                            {"operation": "modify", "path": "frontend/src/pages/Users.tsx"}
+                        ],
                     }
                 ]
             },
@@ -877,16 +886,23 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "id": "backend:endpoint:user_api:user.create",
                         "kind": "backend",
                     },
+                    "page:users": {"id": "page:users", "kind": "page"},
                 },
                 "unit_graph": {
                     "nodes": [
                         "database:users",
                         "backend:endpoint:user_api:user.create",
+                        "page:users",
                     ],
                     "edges": [
                         {
                             "from": "database:users",
                             "to": "backend:endpoint:user_api:user.create",
+                            "type": "depends_on",
+                        },
+                        {
+                            "from": "backend:endpoint:user_api:user.create",
+                            "to": "page:users",
                             "type": "depends_on",
                         }
                     ],
@@ -944,6 +960,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("db-intent-gap-users-table", tasks)
         self.assertEqual(tasks["db-intent-gap-users-table"]["owner"], "database")
         self.assertIn("db-intent-gap-users-table", tasks["users-api"]["dependencies"])
+        self.assertIn("users-api", tasks["users-page"]["dependencies"])
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
 
     def test_database_task_missing_scope_uses_unique_gap_intent_scope(self) -> None:

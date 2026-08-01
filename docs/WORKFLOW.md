@@ -230,19 +230,19 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 用户只展开需要调整的对象，按页面目标、布局、交互、权限、关系、校验和 Seed 等模板字段修改；
 - 核对数据模型、关系、校验规则和 API 映射；如需字段变更则返回 ProjectPlan 契约调整；
 - 未修改时允许一键确认全部设计；
-- 将确认后的页面详细设计写入 `.xcodeagent/plans/pages/`，数据源详细设计写入 `.xcodeagent/plans/data-source/`；`ProjectPlan` 只保存每个产物的路径、状态、哈希和生成依赖，作为单页面生成的唯一索引入口。
+- 将确认后的页面详细设计写入 `.xcodeagent/plans/pages/`，EndpointDetail 写入 `.xcodeagent/plans/endpoints/`；`ProjectPlan` 只保存每个产物的路径、状态、哈希和生成依赖，作为单页面生成的唯一索引入口。
 
 该阶段由只读规划逻辑和 page-design 专用 ChatModel 负责，不由代码生成 Agent 负责。
 
 当前实现使用 `xcodeagent.detail_review.v1` 审阅 payload。首次进入该节点时，节点从 `ProjectPlan` 读取用户选择的页面和数据源；如果正式计划中的 `frontend_pages` 是菜单树，则先递归拍平业务页面叶子，再生成对应 `page_detail_plans` 和 `data_source_detail_plans`，写入 `pending_project_plan`，然后一次性暂停。前端提交 `detail_review` 结构化结果并携带 `resumeState`，后端只合并白名单模板字段、执行契约一致性校验并确认当前计划，不再逐个选择对象或产生多轮中断。
 
-页面初版设计结合 `frontend_pages`、`api_contracts`、`data_sources`、`permission_model` 和业务流程，覆盖页面目标、页面布局设计、页面交互设计、API 依赖、响应字段绑定、页面跳转与依赖、权限与操作可见性、页面验收标准。`detail_confirmation` 对每个页面调用 `page_designer`，`page_designer` 从 ProjectPlan 中提取当前页面上下文，并直接基于 `ProjectPlan.api_contracts` 分析当前页面实际依赖的 API；`PageDetail.api_dependencies` 是页面详细设计确认后的实际 API 依赖。页面详细设计面向页面实现视角，页面数据访问必须直接引用具体 API/Endpoint，而不是把底层数据源作为主要确认对象。布局设计只描述信息组织、区域职责、主要内容呈现、操作入口位置和响应式/信息密度策略；loading、empty、error、success、confirm、validation 等反馈属于交互设计，不作为布局区域。数据源初版设计覆盖实体引用、关系、校验、API 契约、依赖页面、Seed/Mock 策略和验收标准。页面的 endpoint、Schema 和 `response_bindings`，以及数据源的实体、Schema 和 API 契约在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
+页面初版设计结合 `frontend_pages`、`api_contracts`、`data_sources`、`permission_model` 和业务流程，覆盖页面目标、页面布局设计、页面交互设计、API 依赖、响应字段绑定、页面跳转与依赖、权限与操作可见性、页面验收标准。`detail_confirmation` 在调用 `page_designer` 前逐项检查当前页面声明的 `endpoint_dependencies`：缺少正式 EndpointDetail 时复用独立 endpoint 设计链路补生成，并把待确认的 EndpointDetail 与 PageDetail 放入同一轮审核；已有正式详情不重复生成。`page_designer` 只读取这些 EndpointDetail 的接口标识、状态、数据来源类型、Schema 引用和处理逻辑摘要，不接收完整 EndpointDetail 正文。`PageDetail.api_dependencies` 是页面详细设计确认后的实际 API 依赖。页面详细设计面向页面实现视角，页面数据访问必须直接引用具体 API/Endpoint，而不是把底层数据源作为主要确认对象。布局设计只描述信息组织、区域职责、主要内容呈现、操作入口位置和响应式/信息密度策略；loading、empty、error、success、confirm、validation 等反馈属于交互设计，不作为布局区域。页面的 endpoint、Schema 和 `response_bindings` 在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
 
 接口详细设计是 `detail_confirmation` 的 endpoint 内部分支，不新增独立主 Graph 节点。该分支先定位接口契约、分析请求参数、确认数据来源，再设计返回格式、处理逻辑和接口验收标准。确认数据来源时，如果当前 endpoint 关联的数据源是 MySQL/数据库，且 `XCODEAGENT_ENDPOINT_DATABASE_CONTEXT_ENABLED` 显式开启，后端会调用 `get_mysql_table_info` 获取库表信息，并将结果提取概括为 `endpoint_context.database_context` 后输入 endpoint 详细设计模型；模型只能使用该摘要作为现有数据库参考，不接收原始全量工具输出。当前数据库连接信息只从工程 `.env` 暴露到后端进程的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PWD`、`MYSQL_DATABASE` 读取，暂不在 workflow 中向用户收集；后续待办是补充 AG-UI 配置/确认入口，让未配置 `.env` 的用户可以安全填写或选择连接。若开关关闭、数据源不是数据库、数据库工具缺失、连接变量缺失或执行失败，详细设计继续基于 API 契约生成，并把具体数据库疑问写入 `data_origin.open_questions`。
 
 批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`；详细设计文件和轻量 ProjectPlan 索引一起持久化，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
-正式 `project-plan.json` 不内嵌 `page_detail_plans` 或 `data_source_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面叶子的 `pageId` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；菜单节点本身不参与页面唯一性或任务执行校验。后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`；页面设计模型不得新增、删除或替换这些引用。选择单个页面时，后端只生成该页面经 endpoint 反查得到的数据源设计，并在该页面 `detail_design.generation_dependencies` 中记录 `endpoint_ids` 与 `navigationTargetPageIds`。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与数据源详情，不得重新加载全部页面详情；模型发现缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
+正式 `project-plan.json` 不内嵌 `page_detail_plans` 或 `endpoint_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面叶子的 `pageId` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；菜单节点本身不参与页面唯一性或任务执行校验。后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`，并为每个依赖记录独立 EndpointDetail 的 JSON/Markdown 路径、状态和哈希；页面文件不复制 EndpointDetail 的 `data_origin`、`interface_design` 或 `processing_logic` 正文。持久化时必须先写 `.xcodeagent/plans/endpoints/`，再写 `.xcodeagent/plans/pages/`，任何页面 endpoint 依赖缺少独立详情索引都应直接失败。页面设计模型不得新增、删除或替换这些引用。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与 EndpointDetail，不得重新加载全部页面详情；模型发现 ProjectPlan 缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
 
 当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。SQLite checkpointer 负责持久化每个 `thread_id` 的主 Graph 状态；后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan 和 detail review 小型结构化状态，不把完整会话历史重新塞回上下文。
 
@@ -289,7 +289,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 初始化任务状态为 `pending`，后续只在 `pending/running/completed/failed` 中流转；
 - 校验循环依赖和缺失依赖。
 
-Unit Graph 是跨 Unit 依赖的唯一权威来源。模型显式依赖只用于同 Unit 内排序；已知的跨 Unit 显式边会被确定性移除，并在任务 `dependency_rewrites` 中保存改写证据，再由 Unit Graph 编译正确的跨 Unit 任务边。未知任务依赖仍保留为 validation error。无效 task graph 必须保留 `task_registry` 的全部任务和错误，读取方不得用部分 `topological_order` 静默缩减任务数；`prepare_build_tasks` 会在校验错误时阻止进入构建。
+Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已确认 PageDetail 的 `endpoint_dependencies` 得到 `required_endpoint_ids`，逐个加载对应独立 EndpointDetail，再把每个接口交给既有 endpoint Unit 任务规划规则；endpoint 任务不嵌入 page Unit。模型显式依赖只用于同 Unit 内排序；已知的跨 Unit 显式边会被确定性移除，并在任务 `dependency_rewrites` 中保存改写证据，再由 Unit Graph 编译正确的跨 Unit 任务边。未知任务依赖仍保留为 validation error。无效 task graph 必须保留 `task_registry` 的全部任务和错误，读取方不得用部分 `topological_order` 静默缩减任务数；`prepare_build_tasks` 会在校验错误时阻止进入构建。
 
 `build-dag.v3` 的 Unit ID 采用新的层次：
 
@@ -300,7 +300,7 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。模型显式依赖只用于
 - `frontend:shell`、`frontend:route-registry`、`frontend:api-client`、`frontend:auth-guard` 表示前端公共能力；
 - `page:<pageId>` 表示页面实现范围。
 
-数据库 Unit 必须先于 `backend:bootstrap` 和依赖它的 backend endpoint Unit；页面 Unit 依赖它使用的 backend endpoint Unit。阶段一只落规划合同、骨架和解析规则，不实现新的 database/backend 执行 agent；后续 BuildScheduler 和执行 runner 必须按该合同确保 database Unit 完成并处理高危审批后，才进入 backend/frontend 代码修改。
+页面 Unit 依赖它使用的 backend endpoint Unit。database Unit 保留在全局 Unit 骨架中，但不会仅因 API Contract 声明了 `data_source_id` 就自动成为依赖；只有当前 scope 的已确认 EndpointDetail 明确指向数据库时，才动态增加 `database:<dataSourceId> → backend:endpoint:<apiContractId>:<endpointId>`，从而形成 `database → endpoint → page`。mock、静态或第三方接口只形成 `endpoint → page`。该实现直接复用既有 `database-context.v1.gaps/task_intents`、database task 归一化和审批逻辑，不新增另一套数据库任务生成器。
 
 任务规划模型输入中的 `database_planning_context` 只来自前置 `inspect_database_context` 节点：当当前 endpoint scope 或页面/API scope 内存在 `EndpointDetail.data_origin` 明确指向数据库的接口时，前置节点已经调用 `get_mysql_table_info` 读取真实库表事实，并生成 `schema_version=database-context.v1` 的上下文；`prepare_build_tasks` 再把该上下文与 EndpointDetail、API Contract 一起放入 `TaskPreparationContext.executable_details`。模型必须把 `actual_schema` 作为唯一真实数据库结构来源，把 `resolution_items/gaps/task_intents` 作为拆分依据：只有 `resolution_kind=database_change` 的 gap 才能生成 database task，且任务必须携带对应 `task_intent.database_scope`；`backend_adaptation` 只能生成 backend task；`needs_confirmation` 不得被转成半截 build task。外部 API scope 不携带数据库上下文，也不得生成 database Unit 或 database task。
 
@@ -311,6 +311,8 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。模型显式依赖只用于
 Build DAG 只注册具有 `change_scope`、`allowed_paths`、`target_files` 或数据库 `database_scope` 的可执行任务。仅检查已有前端壳、路由或布局的候选任务不会进入任务注册表，统一交给 `integration_test` 验证；`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
 
 该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。数据库上下文在前置节点通过受控工具获取并压缩为 `database_planning_context`，不从 `ProjectPlan.data_sources` 臆测真实库表。模型负责将当前已确认的页面详细设计、相关 endpoint 详情、API Contract、新版数据库上下文和当前工程结构转换成可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
+
+该边界与参考架构的映射保持明确：沿用 learn-coding-agent 的紧凑“收集目标上下文→规划动作→验证 DAG”循环；沿用 OpenCode 的 plan/build 分离，由 planning-only 模型产生候选、确定性编译器掌握执行边界；沿用 Deep Agents 的渐进上下文原则，只把当前 PageDetail、required EndpointDetail、相关 API Contract 和压缩数据库事实放入模型上下文，完整详情继续保存在独立文件中。XCodeAgent 的差异是跨 Unit 顺序不交给模型或子 agent 自由决定，而由可恢复、可审计的 Unit Graph 固定编译，以适应页面级重复规划和 128k 上下文预算。
 
 任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面验收和整体集成验证。内部 DAG 仍保留 API、数据、共享组件、权限、路由和测试等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
 

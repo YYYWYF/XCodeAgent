@@ -362,7 +362,11 @@ def detail_confirmation(state: ProjectState) -> dict:
         raise ValueError(
             "开始详细设计时必须提供 selectedPageId 或 selectedEndpointId。"
         )
-    if selectedPageId and _has_selected_page_detail(project_plan, selectedPageId):
+    if (
+        selectedPageId
+        and _has_selected_page_detail(project_plan, selectedPageId)
+        and _page_endpoint_details_complete(project_plan, selectedPageId)
+    ):
         return {
             "phase": "detail_confirmation",
             "status": "requires_user_input",
@@ -536,83 +540,26 @@ def _generate_all_detail_plans(
         ]
         if not pages:
             raise ValueError(f"项目计划中不存在页面：{selectedPageId}")
-        # 单页设计不能混入上一轮或其他页面遗留的内存详情，避免审核界面展示错误对象。
+        # 单页设计只清理页面正文；已有 EndpointDetail 仍需用于判断缺口和生成页面摘要。
         updated_plan = {
             **updated_plan,
             "page_detail_plans": [],
-            "endpoint_detail_plans": [],
         }
         _drop_legacy_detail_fields(updated_plan)
     if detail_target_type == "endpoint" or selected_endpoint_id:
         if not selected_api_contract_id or not selected_endpoint_id:
             raise ValueError("接口详细设计必须提供 selectedApiContractId 和 selectedEndpointId。")
-        _detail_progress(
-            "开始生成接口详细设计。",
-            target_type="endpoint",
-            api_contract_id=selected_api_contract_id,
-            endpoint_id=selected_endpoint_id,
-        )
-        endpoint_context = extract_endpoint_detail_context(
+        updated_plan, detail = _generate_endpoint_detail_plan(
             updated_plan,
             selected_api_contract_id,
             selected_endpoint_id,
         )
-        _detail_progress(
-            "正在确认接口数据来源。",
-            target_type="endpoint",
-            api_contract_id=selected_api_contract_id,
-            endpoint_id=selected_endpoint_id,
-            data_source_id=endpoint_context.get("data_source_id"),
-        )
-        database_context = prepare_endpoint_database_context(
-            updated_plan,
-            endpoint_context,
-        )
-        endpoint_context = {
-            **endpoint_context,
-            "database_context": database_context,
-        }
-        _detail_progress(
-            database_context.get("message") or "数据库上下文准备完成。",
-            target_type="endpoint",
-            api_contract_id=selected_api_contract_id,
-            endpoint_id=selected_endpoint_id,
-            database_context_status=database_context.get("status"),
-            reason=database_context.get("reason"),
-            enabled=database_context.get("enabled"),
-        )
-        _detail_progress(
-            "已定位接口契约，正在调用模型生成详细设计。",
-            target_type="endpoint",
-            api_contract_id=selected_api_contract_id,
-            endpoint_id=selected_endpoint_id,
-            method=endpoint_context.get("method"),
-            path=endpoint_context.get("path"),
-        )
-        detail = design_endpoint_with_chat_model(updated_plan, endpoint_context, "")
-        _detail_progress(
-            "接口详细设计已生成，正在写入计划产物。",
-            target_type="endpoint",
-            api_contract_id=selected_api_contract_id,
-            endpoint_id=selected_endpoint_id,
-            design_source=detail.get("design_source"),
-        )
-        detail["status"] = "pending_user_confirmation"
-        detail["approved"] = False
         updated_plan = {
             **updated_plan,
             "page_detail_plans": [],
-            "endpoint_detail_plans": [],
+            "endpoint_detail_plans": [detail],
         }
         _drop_legacy_detail_fields(updated_plan)
-        updated_plan = attach_endpoint_detail_plan(updated_plan, detail)
-        _detail_progress(
-            "接口详细设计已挂回 ProjectPlan，等待用户确认。",
-            target_type="endpoint",
-            api_contract_id=selected_api_contract_id,
-            endpoint_id=selected_endpoint_id,
-            detail_plan_id=detail.get("id"),
-        )
         updated_plan["detail_confirmation_summary"] = {
             "confirmed_pages": 0,
             "confirmed_endpoints": 0,
@@ -621,6 +568,38 @@ def _generate_all_detail_plans(
             "mode": "endpoint_review",
         }
         return updated_plan
+
+    endpoint_review_details: list[dict] = []
+    endpoint_review_keys: set[tuple[str, str]] = set()
+    for page in pages:
+        pageId = page.get("pageId") if isinstance(page, dict) else None
+        if not pageId:
+            continue
+        references = extract_page_detail_context(updated_plan, pageId).get("references", {})
+        for dependency in references.get("endpoint_dependencies", []):
+            if not isinstance(dependency, dict):
+                continue
+            api_contract_id, endpoint_id = _resolve_endpoint_dependency(
+                updated_plan,
+                dependency,
+            )
+            detail_key = (api_contract_id, endpoint_id)
+            if detail_key in endpoint_review_keys:
+                continue
+            existing_detail = _find_formal_endpoint_detail(
+                updated_plan,
+                api_contract_id,
+                endpoint_id,
+            )
+            if existing_detail is None:
+                updated_plan, existing_detail = _generate_endpoint_detail_plan(
+                    updated_plan,
+                    api_contract_id,
+                    endpoint_id,
+                )
+            if str(existing_detail.get("status") or "") != "confirmed":
+                endpoint_review_details.append(existing_detail)
+                endpoint_review_keys.add(detail_key)
 
     for page in pages:
         pageId = page.get("pageId") if isinstance(page, dict) else None
@@ -632,11 +611,14 @@ def _generate_all_detail_plans(
         detail["approved"] = False
         updated_plan = attach_page_detail_plan(updated_plan, detail)
 
+    # 页面审核只携带本轮需要共同确认的 EndpointDetail；已确认详情仍通过独立文件引用复用。
+    updated_plan["endpoint_detail_plans"] = endpoint_review_details
+
     updated_plan["detail_confirmation_summary"] = {
         "confirmed_pages": 0,
         "confirmed_endpoints": 0,
         "total_pages": len(pages),
-        "total_endpoints": 0,
+        "total_endpoints": len(endpoint_review_details),
         "mode": "batch_review",
     }
     selectedPageIds = {
@@ -650,6 +632,116 @@ def _generate_all_detail_plans(
         },
     )
     return updated_plan
+
+
+def _resolve_endpoint_dependency(
+    project_plan: dict,
+    dependency: dict,
+) -> tuple[str, str]:
+    """把页面 endpoint 引用解析为唯一的契约与接口标识。"""
+
+    endpoint_id = str(dependency.get("endpoint_id") or "").strip()
+    requested_contract_id = str(dependency.get("api_contract_id") or "").strip()
+    matches: list[str] = []
+    for contract in project_plan.get("api_contracts", []):
+        if not isinstance(contract, dict):
+            continue
+        contract_id = str(contract.get("id") or "")
+        if requested_contract_id and contract_id != requested_contract_id:
+            continue
+        if any(
+            isinstance(endpoint, dict) and str(endpoint.get("id") or "") == endpoint_id
+            for endpoint in contract.get("endpoints", []) or []
+        ):
+            matches.append(contract_id)
+    if len(matches) != 1:
+        raise ValueError(f"页面依赖无法唯一定位接口：{requested_contract_id}:{endpoint_id}")
+    return matches[0], endpoint_id
+
+
+def _find_formal_endpoint_detail(
+    project_plan: dict,
+    api_contract_id: str,
+    endpoint_id: str,
+) -> dict | None:
+    """查找已存在且内容完整的 EndpointDetail，避免页面设计重复生成。"""
+
+    return next(
+        (
+            detail
+            for detail in project_plan.get("endpoint_detail_plans", [])
+            if isinstance(detail, dict)
+            and str(detail.get("api_contract_id") or "") == api_contract_id
+            and str(detail.get("endpoint_id") or "") == endpoint_id
+            and _has_formal_endpoint_detail_content(detail)
+        ),
+        None,
+    )
+
+
+def _generate_endpoint_detail_plan(
+    project_plan: dict,
+    api_contract_id: str,
+    endpoint_id: str,
+) -> tuple[dict, dict]:
+    """复用独立 endpoint 设计链路生成详情并挂回 ProjectPlan 内存态。"""
+
+    _detail_progress(
+        "开始生成接口详细设计。",
+        target_type="endpoint",
+        api_contract_id=api_contract_id,
+        endpoint_id=endpoint_id,
+    )
+    endpoint_context = extract_endpoint_detail_context(
+        project_plan,
+        api_contract_id,
+        endpoint_id,
+    )
+    _detail_progress(
+        "正在确认接口数据来源。",
+        target_type="endpoint",
+        api_contract_id=api_contract_id,
+        endpoint_id=endpoint_id,
+        data_source_id=endpoint_context.get("data_source_id"),
+    )
+    database_context = prepare_endpoint_database_context(project_plan, endpoint_context)
+    endpoint_context = {**endpoint_context, "database_context": database_context}
+    _detail_progress(
+        database_context.get("message") or "数据库上下文准备完成。",
+        target_type="endpoint",
+        api_contract_id=api_contract_id,
+        endpoint_id=endpoint_id,
+        database_context_status=database_context.get("status"),
+        reason=database_context.get("reason"),
+        enabled=database_context.get("enabled"),
+    )
+    _detail_progress(
+        "已定位接口契约，正在调用模型生成详细设计。",
+        target_type="endpoint",
+        api_contract_id=api_contract_id,
+        endpoint_id=endpoint_id,
+        method=endpoint_context.get("method"),
+        path=endpoint_context.get("path"),
+    )
+    detail = design_endpoint_with_chat_model(project_plan, endpoint_context, "")
+    _detail_progress(
+        "接口详细设计已生成，正在写入计划产物。",
+        target_type="endpoint",
+        api_contract_id=api_contract_id,
+        endpoint_id=endpoint_id,
+        design_source=detail.get("design_source"),
+    )
+    detail["status"] = "pending_user_confirmation"
+    detail["approved"] = False
+    updated_plan = attach_endpoint_detail_plan(project_plan, detail)
+    _detail_progress(
+        "接口详细设计已挂回 ProjectPlan，等待用户确认。",
+        target_type="endpoint",
+        api_contract_id=api_contract_id,
+        endpoint_id=endpoint_id,
+        detail_plan_id=detail.get("id"),
+    )
+    return updated_plan, detail
 
 
 def _normalize_detail_page(page: dict) -> dict:
@@ -703,6 +795,19 @@ def _has_selected_page_detail(project_plan: dict, selectedPageId: str) -> bool:
         and str(detail.get("pageId") or "") == selectedPageId
         for detail in project_plan.get("page_detail_plans", [])
     )
+
+
+def _page_endpoint_details_complete(project_plan: dict, selectedPageId: str) -> bool:
+    """判断页面声明的全部 endpoint 是否已有可独立复用的正式详情。"""
+
+    references = extract_page_detail_context(project_plan, selectedPageId).get("references", {})
+    for dependency in references.get("endpoint_dependencies", []):
+        if not isinstance(dependency, dict):
+            return False
+        api_contract_id, endpoint_id = _resolve_endpoint_dependency(project_plan, dependency)
+        if _find_formal_endpoint_detail(project_plan, api_contract_id, endpoint_id) is None:
+            return False
+    return True
 
 
 def _has_selected_endpoint_detail(

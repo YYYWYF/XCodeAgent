@@ -19,13 +19,12 @@ from app.services.requirement_spec import create_requirement_spec
 
 
 def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
-    """把测试 ProjectPlan 的内嵌详情写成外置文件，并返回 ProjectPlan JSON 路径。"""
+    """把测试 PageDetail/EndpointDetail 写成独立文件并返回主计划路径。"""
 
     workspace_root = Path(workspace)
     plan_path = workspace_root / ".xcodeagent/plans/project-plan.json"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     page_details = list(project_plan.get("page_detail_plans", []))
-    source_details = list(project_plan.get("data_source_detail_plans", []))
     for detail in page_details:
         page_id = str(detail.get("pageId") or "")
         if not page_id:
@@ -41,21 +40,48 @@ def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
                     "json_path": f".xcodeagent/plans/pages/page--{page_id}.json",
                     "sha256": f"sha-page-{page_id}",
                 }
-    for detail in source_details:
-        source_id = str(detail.get("data_source_id") or "")
-        if not source_id:
+    supplied_endpoint_details = {
+        (
+            str(detail.get("api_contract_id") or ""),
+            str(detail.get("endpoint_id") or ""),
+        ): detail
+        for detail in project_plan.get("endpoint_detail_plans", [])
+        if isinstance(detail, dict)
+    }
+    for contract in project_plan.get("api_contracts", []):
+        if not isinstance(contract, dict):
             continue
-        detail = {"status": "confirmed", **detail}
-        detail_path = workspace_root / f".xcodeagent/plans/data-source/data-source--{source_id}.json"
-        detail_path.parent.mkdir(parents=True, exist_ok=True)
-        detail_path.write_text(json.dumps(detail), encoding="utf-8")
-        for source in project_plan.get("data_sources", []):
-            if isinstance(source, dict) and str(source.get("id") or "") == source_id:
-                source["detail_design"] = {
-                    "status": "confirmed",
-                    "json_path": f".xcodeagent/plans/data-source/data-source--{source_id}.json",
-                    "sha256": f"sha-source-{source_id}",
-                }
+        contract_id = str(contract.get("id") or "")
+        source_id = str(contract.get("data_source_id") or "")
+        for endpoint in contract.get("endpoints", []) or []:
+            if not isinstance(endpoint, dict):
+                continue
+            endpoint_id = str(endpoint.get("id") or "")
+            detail = {
+                "api_contract_id": contract_id,
+                "endpoint_id": endpoint_id,
+                "data_source_id": source_id,
+                "status": "confirmed",
+                "data_origin": {
+                    "source_type": "mock",
+                    "effective_source": {"kind": "mock"},
+                },
+                **supplied_endpoint_details.get((contract_id, endpoint_id), {}),
+            }
+            detail_path = workspace_root / (
+                ".xcodeagent/plans/endpoints/"
+                f"endpoint--{contract_id}--{endpoint_id}.json"
+            )
+            detail_path.parent.mkdir(parents=True, exist_ok=True)
+            detail_path.write_text(json.dumps(detail), encoding="utf-8")
+            endpoint["detail_design"] = {
+                "status": "confirmed",
+                "json_path": (
+                    ".xcodeagent/plans/endpoints/"
+                    f"endpoint--{contract_id}--{endpoint_id}.json"
+                ),
+                "sha256": f"sha-endpoint-{contract_id}-{endpoint_id}",
+            }
     plan_path.write_text(json.dumps(project_plan), encoding="utf-8")
     return str(plan_path)
 
@@ -100,7 +126,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "orders-api-task",
-                        "unit_id": "database:orders",
+                        "unit_id": "backend:endpoint:orders-api:orders.list",
                         "owner": "backend",
                         "description": "实现订单接口",
                         "change_scope": [{"path": "api/orders.py"}],
@@ -154,7 +180,10 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         )
         executable_details = prepared_project_plan["executable_details"]
         self.assertEqual([detail["pageId"] for detail in executable_details["page_detail_plans"]], ["orders"])
-        self.assertEqual(executable_details["endpoint_detail_plans"], [])
+        self.assertEqual(
+            [detail["endpoint_id"] for detail in executable_details["endpoint_detail_plans"]],
+            ["orders.list"],
+        )
         self.assertEqual(
             [source["id"] for source in executable_details["data_sources"]],
             ["orders"],
@@ -174,7 +203,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "customers-api-task",
-                        "unit_id": "database:customers",
+                        "unit_id": "backend:endpoint:customers-api:customers.list",
                         "owner": "backend",
                         "description": "实现客户接口",
                         "change_scope": [{"path": "api/customers.py"}],
@@ -362,7 +391,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "shared-api-client-task",
-                        "unit_id": "database:orders",
+                        "unit_id": "backend:endpoint:orders-api:orders.list",
                         "owner": "backend",
                         "description": "实现订单接口",
                         "change_scope": [{"path": "api/orders.py"}],
@@ -403,14 +432,17 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         task_registry = result["build_task_plan"]["task_registry"]
         self.assertEqual(result["status"], "completed")
         self.assertIn("shared-api-client-task", task_registry)
-        self.assertIn("database-orders--shared-api-client-task", task_registry)
         self.assertIn(
-            "database-orders--shared-api-client-task",
+            "backend-endpoint-orders-api-orders-list--shared-api-client-task",
+            task_registry,
+        )
+        self.assertIn(
+            "backend-endpoint-orders-api-orders-list--shared-api-client-task",
             task_registry["orders-page-task"]["dependencies"],
         )
 
-    def test_page_scope_reuses_prepared_app_and_data_source_units(self) -> None:
-        """页面 scope 不应追加已准备公共 Unit 或数据源 Unit 的模型新任务。"""
+    def test_page_scope_reuses_prepared_app_and_endpoint_units(self) -> None:
+        """页面 scope 不应追加已准备公共 Unit 或 endpoint Unit 的模型新任务。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -469,7 +501,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "tasks": [
                     {
                         "id": "orders-api-task",
-                        "unit_id": "database:orders",
+                        "unit_id": "backend:endpoint:orders-api:orders.list",
                         "owner": "backend",
                         "description": "实现订单接口",
                         "change_scope": [{"path": "api/orders.py"}],
@@ -530,7 +562,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     },
                     {
                         "id": "duplicate-orders-api-task",
-                        "unit_id": "database:orders",
+                        "unit_id": "backend:endpoint:orders-api:orders.list",
                         "owner": "backend",
                         "description": "重复生成订单接口",
                         "change_scope": [{"path": "api/orders.py"}],

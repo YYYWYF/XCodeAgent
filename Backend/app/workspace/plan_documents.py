@@ -197,6 +197,20 @@ def _operation_visibility_markdown(value: Any) -> str:
     return "\n".join(items) if items else "- 待补充操作可见性"
 
 
+def _endpoint_detail_refs_markdown(value: Any) -> str:
+    """渲染 PageDetail 指向独立 EndpointDetail 的文件引用。"""
+
+    items = [
+        (
+            f"- `{item.get('api_contract_id', '')}:{item.get('endpoint_id', '')}`："
+            f"JSON `{item.get('json_path', '')}`；Markdown `{item.get('markdown_path', '')}`；"
+            f"状态 {item.get('status', 'draft')}"
+        )
+        for item in _dict_items(value)
+    ]
+    return "\n".join(items) if items else "- 无"
+
+
 def render_page_detail_markdown(detail: dict[str, Any]) -> str:
     """渲染单个页面详细设计的独立 Markdown 文档。"""
     layout = detail.get("basic_layout", {}) if isinstance(detail.get("basic_layout"), dict) else {}
@@ -228,6 +242,9 @@ def render_page_detail_markdown(detail: dict[str, Any]) -> str:
             "#### API 依赖",
             "",
             _api_dependencies_markdown(endpoint_dependencies),
+            "",
+            "EndpointDetail 独立产物引用：",
+            _endpoint_detail_refs_markdown(references.get("endpoint_detail_refs", [])),
             "",
             "#### 响应字段绑定",
             "",

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.build_unit_skeleton import (
+    apply_target_unit_dependencies,
+    ensure_build_unit_skeleton,
+)
 
 
 def _project_plan() -> dict:
@@ -45,7 +48,7 @@ def _project_plan() -> dict:
 
 
 class BuildUnitSkeletonTests(unittest.TestCase):
-    def test_builds_all_plan_units_and_page_data_source_edges(self) -> None:
+    def test_builds_all_plan_units_and_endpoint_page_edges(self) -> None:
         plan = ensure_build_unit_skeleton(
             _project_plan(),
             {"workspace_revision": "workspace-v1", "tech_stack": ["React"]},
@@ -62,19 +65,11 @@ class BuildUnitSkeletonTests(unittest.TestCase):
             "backend",
         )
         self.assertIn(
-            {"from": "database:orders", "to": "backend:endpoint:orders-api:orders.list", "type": "depends_on"},
-            plan["unit_graph"]["edges"],
-        )
-        self.assertIn(
-            {"from": "database:orders", "to": "backend:bootstrap", "type": "depends_on"},
-            plan["unit_graph"]["edges"],
-        )
-        self.assertIn(
             {"from": "backend:endpoint:orders-api:orders.list", "to": "page:orders", "type": "depends_on"},
             plan["unit_graph"]["edges"],
         )
-        self.assertIn(
-            {"from": "database:orders", "to": "page:orders", "type": "depends_on"},
+        self.assertNotIn(
+            {"from": "database:orders", "to": "backend:endpoint:orders-api:orders.list", "type": "depends_on"},
             plan["unit_graph"]["edges"],
         )
         self.assertIn(
@@ -86,6 +81,45 @@ class BuildUnitSkeletonTests(unittest.TestCase):
             plan["unit_graph"]["edges"],
         )
         self.assertEqual(plan["build_units"]["page:orders"]["status"], "not_prepared")
+
+    def test_adds_database_dependency_only_for_database_endpoint_detail(self) -> None:
+        """database Unit 只通过数据库来源 EndpointDetail 接到 endpoint Unit。"""
+
+        plan = ensure_build_unit_skeleton(_project_plan(), {})
+        scoped = apply_target_unit_dependencies(
+            plan,
+            {
+                "direct_endpoint_details": [
+                    {
+                        "api_contract_id": "orders-api",
+                        "endpoint_id": "orders.list",
+                        "data_source_id": "orders",
+                        "data_origin": {
+                            "source_type": "mysql_existing",
+                            "effective_source": {"kind": "mysql_existing"},
+                        },
+                    },
+                    {
+                        "api_contract_id": "customers-api",
+                        "endpoint_id": "customers.list",
+                        "data_source_id": "customers",
+                        "data_origin": {
+                            "source_type": "mock",
+                            "effective_source": {"kind": "mock"},
+                        },
+                    },
+                ]
+            },
+        )
+
+        self.assertIn(
+            {"from": "database:orders", "to": "backend:endpoint:orders-api:orders.list", "type": "depends_on"},
+            scoped["unit_graph"]["edges"],
+        )
+        self.assertNotIn(
+            {"from": "database:customers", "to": "backend:endpoint:customers-api:customers.list", "type": "depends_on"},
+            scoped["unit_graph"]["edges"],
+        )
 
     def test_reuses_unchanged_skeleton_without_rebuilding_units(self) -> None:
         snapshot = {"workspace_revision": "workspace-v1", "tech_stack": ["React"]}

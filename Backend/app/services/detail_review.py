@@ -176,8 +176,11 @@ def apply_detail_review_submission(
             detail["approved"] = True
     for detail in updated.get("endpoint_detail_plans", []):
         if isinstance(detail, dict) and (
-            not selectedPageId
-            and not selected_endpoint_id
+            bool(selectedPageId)
+            or (
+                not selectedPageId
+                and not selected_endpoint_id
+            )
             or (
                 str(detail.get("api_contract_id") or "") == str(selected_api_contract_id or "")
                 and str(detail.get("endpoint_id") or "") == str(selected_endpoint_id or "")
@@ -446,8 +449,6 @@ def _assert_endpoint_data_origins_resolved(
 ) -> None:
     """确认前校验 endpoint 数据来源，避免未决数据库方案绕过用户确认。"""
 
-    if selectedPageId and not selected_endpoint_id:
-        return
     unresolved: list[str] = []
     for detail in project_plan.get("endpoint_detail_plans", []):
         if not isinstance(detail, dict):

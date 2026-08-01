@@ -141,6 +141,9 @@ def _hydrate_page_detail_runtime_fields(
     hydrated_detail["navigation_targets"] = [
         dict(item) for item in _dict_items(references.get("navigation_targets"))
     ]
+    hydrated_detail["endpoint_detail_refs"] = [
+        dict(item) for item in _dict_items(references.get("endpoint_detail_refs"))
+    ]
     hydrated_detail["api_dependencies"] = normalize_page_api_dependencies(
         _dict_items(project_plan.get("api_contracts")),
         [],
@@ -244,6 +247,9 @@ def _persisted_page_detail(detail: dict[str, Any]) -> dict[str, Any]:
         "navigation_targets": [
             dict(item) for item in _dict_items(detail.get("navigation_targets"))
         ],
+        "endpoint_detail_refs": [
+            dict(item) for item in _dict_items(detail.get("endpoint_detail_refs"))
+        ],
     }
     for key in (
         "source_page_context",
@@ -254,6 +260,7 @@ def _persisted_page_detail(detail: dict[str, Any]) -> dict[str, Any]:
         "permissions",
         "endpoint_dependencies",
         "navigation_targets",
+        "endpoint_detail_refs",
     ):
         persisted.pop(key, None)
     return persisted
@@ -300,6 +307,49 @@ def _detail_reference(
     }
 
 
+def _page_endpoint_detail_refs(
+    compact_plan: dict[str, Any],
+    detail: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """把页面依赖解析为 EndpointDetail 独立产物引用，不复制详情正文。"""
+
+    references: list[dict[str, Any]] = []
+    for dependency in _dict_items(detail.get("endpoint_dependencies")):
+        endpoint_id = str(dependency.get("endpoint_id") or "")
+        requested_contract_id = str(dependency.get("api_contract_id") or "")
+        matches: list[tuple[str, dict[str, Any]]] = []
+        for contract in _dict_items(compact_plan.get("api_contracts")):
+            contract_id = str(contract.get("id") or "")
+            if requested_contract_id and contract_id != requested_contract_id:
+                continue
+            for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
+                if _endpoint_identity(endpoint, endpoint_index) == endpoint_id:
+                    matches.append((contract_id, endpoint))
+        if len(matches) != 1:
+            raise ValueError(
+                f"PageDetail dependency cannot uniquely resolve EndpointDetail: "
+                f"{requested_contract_id}:{endpoint_id}"
+            )
+        api_contract_id, endpoint = matches[0]
+        endpoint_reference = endpoint.get("detail_design")
+        if not isinstance(endpoint_reference, dict) or not endpoint_reference.get("json_path"):
+            raise ValueError(
+                f"PageDetail dependency is missing EndpointDetail artifact: "
+                f"{api_contract_id}:{endpoint_id}"
+            )
+        references.append(
+            {
+                "api_contract_id": api_contract_id,
+                "endpoint_id": endpoint_id,
+                "json_path": endpoint_reference.get("json_path"),
+                "markdown_path": endpoint_reference.get("markdown_path"),
+                "status": endpoint_reference.get("status"),
+                "sha256": endpoint_reference.get("sha256"),
+            }
+        )
+    return references
+
+
 def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
     """写出详情文件，并返回不再内嵌详情正文的轻量 ProjectPlan。"""
 
@@ -314,34 +364,7 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
     page_directory.mkdir(parents=True, exist_ok=True)
     endpoint_directory.mkdir(parents=True, exist_ok=True)
 
-    for detail in _dict_items(plan.get("page_detail_plans")):
-        pageId = str(detail.get("pageId") or "")
-        if not pageId:
-            continue
-        stem = _safe_file_stem(pageId, prefix="page--")
-        json_path = page_directory / f"{stem}.json"
-        markdown_path = page_directory / f"{stem}.md"
-        persisted_detail = _persisted_page_detail(detail)
-        sha256 = _write_json_atomically(json_path, persisted_detail)
-        _write_markdown_atomically(markdown_path, render_page_detail_markdown(persisted_detail))
-        reference = _detail_reference(
-            state,
-            json_path=json_path,
-            markdown_path=markdown_path,
-            detail=detail,
-            sha256=sha256,
-            dependencies=_page_dependencies(plan, detail),
-        )
-        compact_plan["frontend_pages"] = update_frontend_page_leaves(
-            compact_plan.get("frontend_pages"),
-            {
-                pageId: {
-                    "detail_design": reference,
-                    "detail_status": reference["status"],
-                }
-            },
-        )
-
+    # 先写 EndpointDetail 并建立索引，随后 PageDetail 才能记录稳定的独立产物路径。
     for detail in _dict_items(plan.get("endpoint_detail_plans")):
         api_contract_id = str(detail.get("api_contract_id") or "")
         endpoint_id = str(detail.get("endpoint_id") or "")
@@ -368,6 +391,38 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
                     endpoint["detail_design"] = reference
                     endpoint["detail_status"] = reference["status"]
                     break
+
+    for detail in _dict_items(plan.get("page_detail_plans")):
+        pageId = str(detail.get("pageId") or "")
+        if not pageId:
+            continue
+        stem = _safe_file_stem(pageId, prefix="page--")
+        json_path = page_directory / f"{stem}.json"
+        markdown_path = page_directory / f"{stem}.md"
+        detail_with_refs = {
+            **detail,
+            "endpoint_detail_refs": _page_endpoint_detail_refs(compact_plan, detail),
+        }
+        persisted_detail = _persisted_page_detail(detail_with_refs)
+        sha256 = _write_json_atomically(json_path, persisted_detail)
+        _write_markdown_atomically(markdown_path, render_page_detail_markdown(persisted_detail))
+        reference = _detail_reference(
+            state,
+            json_path=json_path,
+            markdown_path=markdown_path,
+            detail=detail,
+            sha256=sha256,
+            dependencies=_page_dependencies(plan, detail),
+        )
+        compact_plan["frontend_pages"] = update_frontend_page_leaves(
+            compact_plan.get("frontend_pages"),
+            {
+                pageId: {
+                    "detail_design": reference,
+                    "detail_status": reference["status"],
+                }
+            },
+        )
 
     compact_plan.pop("page_detail_plans", None)
     compact_plan.pop("data_source_detail_plans", None)

@@ -97,6 +97,7 @@ class DetailReviewTests(unittest.TestCase):
             apply_detail_review_submission(
                 plan,
                 {"review_status": "confirmed", "target_changes": []},
+                selectedPageId="user_page",
             )
 
     def test_confirmation_accepts_resolved_endpoint_data_origin(self) -> None:
@@ -142,6 +143,7 @@ class DetailReviewTests(unittest.TestCase):
                     }
                 ],
             },
+            selectedPageId="user_page",
         )
 
         self.assertEqual(

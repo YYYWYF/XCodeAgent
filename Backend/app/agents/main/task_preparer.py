@@ -84,11 +84,12 @@ def _task_preparation_prompt(
         "source tree, package/framework conventions, route entry, API/data layer, shared "
         "modules, tests, and relevant existing files.\n"
         
-        "如果页面有依赖的接口设计，构建接口的任务规划，并生成任务实现。"
-        "前后端任务并行：前端页面任务只依赖同 Unit 的 api-client 任务（api-client 已封装 "
-        "service.get 调真实接口 + 契约 schema 类型），不依赖后端接口实现任务；后端接口任务"
-        "可与前端页面任务并行生成，无需互相等待。前端页面通过调用 api-client 函数获取数据，"
-        "后端实现完成后前端无需改动（api-client 已对齐契约）。前后端契约一致性由集成测试阶段校验。"
+        "For a page target, treat TargetBuildContext.required_endpoint_ids as mandatory "
+        "endpoint Units. Reuse the normal endpoint task-planning rules for each matching "
+        "confirmed executable_details.endpoint_detail_plans item, and emit backend tasks "
+        "under its `backend:endpoint:<apiContractId>:<endpointId>` Unit. Keep endpoint "
+        "tasks separate from the page Unit; the deterministic Unit Graph orders endpoint "
+        "Units before the page Unit.\n"
         
         f"Frontend path convention: all generated frontend code MUST live under the "
         f"virtual path `/{frontend_root}/` (resolved from ProjectPlan.app.name). Every "

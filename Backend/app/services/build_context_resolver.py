@@ -34,7 +34,7 @@ def _page_context(
     page_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """以 ProjectPlan 契约为主解析指定页面，并按需补充已有 endpoint 详情。"""
+    """解析页面及其全部必需 EndpointDetail，形成三类 Unit 的定向上下文。"""
 
     page = find_frontend_page(project_plan.get("frontend_pages"), page_id)
     if page is None:
@@ -65,26 +65,29 @@ def _page_context(
                 contract_ids.append(contract_id)
             endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))
 
-    endpoint_details = []
-    endpoint_refs = []
+    endpoint_details: list[dict[str, Any]] = []
+    endpoint_refs: list[dict[str, Any]] = []
     database_source_ids: list[str] = []
     for source_id in source_ids:
         _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
     for endpoint_id in endpoint_ids:
         endpoint = endpoint_index[endpoint_id]
-        detail = _load_optional_external_detail(
+        detail = _load_external_detail(
             endpoint.get("detail_design"),
+            "EndpointDetail",
+            endpoint_id,
             project_plan_path,
         )
-        if detail is not None:
-            endpoint_details.append(detail)
-            endpoint_refs.append(_artifact_ref(endpoint.get("detail_design"), endpoint_id))
-            source_id = str(endpoint.get("data_source_id") or "")
-            if (
-                endpoint_detail_uses_database(detail)
-                and source_id not in database_source_ids
-            ):
-                database_source_ids.append(source_id)
+        _assert_endpoint_detail_identity(
+            detail,
+            api_contract_id=str(endpoint.get("api_contract_id") or ""),
+            endpoint_id=endpoint_id,
+        )
+        endpoint_details.append(detail)
+        endpoint_refs.append(_artifact_ref(endpoint.get("detail_design"), endpoint_id))
+        source_id = str(endpoint.get("data_source_id") or "")
+        if endpoint_detail_uses_database(detail) and source_id not in database_source_ids:
+            database_source_ids.append(source_id)
 
     return {
         "target": {"type": "page", "id": page_id},
@@ -92,6 +95,7 @@ def _page_context(
         "endpoint_detail": None,
         "direct_endpoint_details": endpoint_details,
         "endpoint_ids": endpoint_ids,
+        "required_endpoint_ids": endpoint_ids,
         "api_contract_ids": contract_ids,
         "data_source_ids": source_ids,
         "required_unit_ids": [
@@ -179,16 +183,11 @@ def _endpoint_context(
         endpoint_id,
         project_plan_path,
     )
-    detail_endpoint_id = str(detail.get("endpoint_id") or "")
-    detail_contract_id = str(detail.get("api_contract_id") or "")
-    if detail_endpoint_id and detail_endpoint_id != endpoint_id:
-        raise ValueError(
-            f"EndpointDetail {endpoint_id} file contains endpoint {detail_endpoint_id}."
-        )
-    if detail_contract_id and detail_contract_id != contract_id:
-        raise ValueError(
-            f"EndpointDetail {endpoint_id} file contains API contract {detail_contract_id}."
-        )
+    _assert_endpoint_detail_identity(
+        detail,
+        api_contract_id=contract_id,
+        endpoint_id=endpoint_id,
+    )
     return {
         "target": {
             "type": "endpoint",
@@ -199,6 +198,7 @@ def _endpoint_context(
         "endpoint_detail": detail,
         "direct_endpoint_details": [detail],
         "endpoint_ids": [endpoint_id],
+        "required_endpoint_ids": [endpoint_id],
         "api_contract_ids": [contract_id],
         "data_source_ids": [source_id],
         "required_unit_ids": [
@@ -215,6 +215,27 @@ def _endpoint_context(
             "endpoint_details": [_artifact_ref(endpoint.get("detail_design"), endpoint_id)],
         },
     }
+
+
+def _assert_endpoint_detail_identity(
+    detail: dict[str, Any],
+    *,
+    api_contract_id: str,
+    endpoint_id: str,
+) -> None:
+    """校验独立 EndpointDetail 与页面引用的契约、接口标识完全一致。"""
+
+    detail_endpoint_id = str(detail.get("endpoint_id") or "")
+    detail_contract_id = str(detail.get("api_contract_id") or "")
+    if detail_endpoint_id != endpoint_id:
+        raise ValueError(
+            f"EndpointDetail {endpoint_id} file contains endpoint {detail_endpoint_id or 'missing'}."
+        )
+    if detail_contract_id != api_contract_id:
+        raise ValueError(
+            f"EndpointDetail {endpoint_id} file contains API contract "
+            f"{detail_contract_id or 'missing'}."
+        )
 
 
 def _required_item(value: Any, key: str, target_id: str, label: str) -> dict[str, Any]:
