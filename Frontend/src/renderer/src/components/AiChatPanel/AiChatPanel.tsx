@@ -230,6 +230,7 @@ export default function AiChatPanel({
   const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
   const [generatingDetailTargetKey, setGeneratingDetailTargetKey] = useState('')
   const [previewError, setPreviewError] = useState('')
+  const [elementInspectionActive, setElementInspectionActive] = useState(false)
   const [runtimePreviewBaseUrl, setRuntimePreviewBaseUrl] = useState(() =>
     previewOrigin(previewBaseUrl)
   )
@@ -893,6 +894,7 @@ export default function AiChatPanel({
         'ai-chat-panel',
         rightPanelOpen && 'embedded-preview-open',
         rightPanel?.type === 'diff' && 'diff-panel-open',
+        elementInspectionActive && 'element-inspection-active',
         splitDragging && 'split-dragging'
       )}
       ref={panelRef}
@@ -1088,6 +1090,9 @@ export default function AiChatPanel({
             ) : null}
           </div>
         )}
+        {elementInspectionActive && (
+          <div aria-hidden="true" className={cx('element-inspection-interaction-mask')} />
+        )}
       </div>
 
       {rightPanelOpen && (
@@ -1096,10 +1101,11 @@ export default function AiChatPanel({
           aria-orientation="vertical"
           aria-valuenow={assistantPanelWidth}
           className={cx('panel-split-handle', splitDragging && 'dragging')}
-          onKeyDown={handlePanelSplitKeyDown}
-          onMouseDown={handlePanelSplitDragStart}
+          aria-disabled={elementInspectionActive}
+          onKeyDown={elementInspectionActive ? undefined : handlePanelSplitKeyDown}
+          onMouseDown={elementInspectionActive ? undefined : handlePanelSplitDragStart}
           role="separator"
-          tabIndex={0}
+          tabIndex={elementInspectionActive ? -1 : 0}
           title="拖动调整左右面板宽度"
         >
           <HolderOutlined className={cx('panel-split-handle-icon')} />
@@ -1116,6 +1122,7 @@ export default function AiChatPanel({
             previewBaseUrl={runtimePreviewBaseUrl}
             selectedPagePath={activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/'}
             errorMessage={runtimePreviewLaunchError}
+            onInspectingChange={setElementInspectionActive}
           />
         </div>
       )}

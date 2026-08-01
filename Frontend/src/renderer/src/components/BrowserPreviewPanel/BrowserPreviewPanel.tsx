@@ -1,6 +1,7 @@
 import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
+  AimOutlined,
   DesktopOutlined,
   ExpandOutlined,
   MobileOutlined,
@@ -23,6 +24,7 @@ import {
   openExternalPreviewUrl
 } from '../../utils'
 import './BrowserPreviewPanel.less'
+import { useElementInspector } from './useElementInspector'
 
 const { Text } = Typography
 
@@ -36,6 +38,7 @@ type Props = {
   pages?: DevelopmentPlanningPageOption[]
   previewBaseUrl?: string
   selectedPagePath?: string
+  onInspectingChange?: (active: boolean) => void
 }
 
 type PreviewPageOption = {
@@ -59,7 +62,8 @@ export default function BrowserPreviewPanel({
   errorMessage: externalError,
   pages = [],
   previewBaseUrl = '',
-  selectedPagePath = ''
+  selectedPagePath = '',
+  onInspectingChange
 }: Props): ReactElement {
   const pageOptions = useMemo<PreviewPageOption[]>(() => {
     if (pages.length > 0) {
@@ -82,6 +86,12 @@ export default function BrowserPreviewPanel({
   const [openError, setOpenError] = useState('')
   const [launchError, setLaunchError] = useState(externalError || '')
   const previewUrl = navigation.history[navigation.index]
+  const frameKey = `${previewUrl}-${refreshKey}`
+  const elementInspector = useElementInspector({
+    frameKey,
+    onInspectingChange,
+    previewUrl
+  })
 
   useEffect(() => {
     setDraftUrl(previewUrl)
@@ -197,6 +207,29 @@ export default function BrowserPreviewPanel({
           onSearch={navigateTo}
           value={draftUrl}
         />
+        <Tooltip
+          title={
+            elementInspector.active
+              ? '退出元素审查'
+              : elementInspector.ready
+                ? '审查预览页面中的元素'
+                : '当前预览页面尚未准备好元素审查'
+          }
+        >
+          <span className={cx('browser-inspector-button-shell')}>
+            <Button
+              aria-label={elementInspector.active ? '退出审查' : '审查元素'}
+              aria-pressed={elementInspector.active}
+              className={cx('browser-inspector-button')}
+              disabled={!elementInspector.ready && !elementInspector.active}
+              icon={<AimOutlined />}
+              onClick={elementInspector.toggle}
+              type="primary"
+            >
+              {elementInspector.active ? '退出审查' : '审查元素'}
+            </Button>
+          </span>
+        </Tooltip>
         <Select
           aria-label="页面"
           className={cx('browser-page-select')}
@@ -228,7 +261,8 @@ export default function BrowserPreviewPanel({
       <div className={cx('browser-preview-stage')}>
         <div className={cx('browser-preview-viewport', viewport)}>
           <iframe
-            key={`${previewUrl}-${refreshKey}`}
+            key={frameKey}
+            ref={elementInspector.iframeRef}
             className={cx('browser-preview-frame')}
             src={previewUrl}
             title={`${application.name} 网页预览`}

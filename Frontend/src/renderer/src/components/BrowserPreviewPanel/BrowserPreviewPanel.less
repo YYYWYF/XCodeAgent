@@ -4,18 +4,18 @@
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  background: #edf1f6;
+  background: var(--wb-editor);
 }
 
 .@{class-prefix}-browser-preview-toolbar {
   display: grid;
   min-height: 58px;
   align-items: center;
-  grid-template-columns: auto auto minmax(220px, 1fr) minmax(132px, 180px) auto auto;
+  grid-template-columns: auto auto minmax(220px, 1fr) auto minmax(132px, 180px) auto auto;
   gap: 10px;
   padding: 10px 12px;
-  background: #ffffff;
-  border-bottom: 1px solid #dbe3ee;
+  background: var(--wb-canvas);
+  border-bottom: 1px solid var(--wb-border);
 }
 
 .@{class-prefix}-browser-window-controls {
@@ -111,6 +111,34 @@
   }
 }
 
+.@{class-prefix}-browser-inspector-button-shell {
+  display: inline-flex;
+}
+
+.@{class-prefix}-browser-inspector-button.ant-btn {
+  height: 34px;
+  color: #ffffff;
+  background: var(--wb-accent);
+  border-color: var(--wb-accent);
+  border-radius: 8px;
+
+  &:hover,
+  &:focus {
+    color: #ffffff;
+    background: var(--wb-accent-hover);
+    border-color: var(--wb-accent-hover);
+  }
+
+  &[disabled],
+  &[disabled]:hover,
+  &[disabled]:focus {
+    color: rgba(255, 255, 255, 0.78);
+    background: var(--wb-accent);
+    border-color: var(--wb-accent);
+    opacity: 0.58;
+  }
+}
+
 .@{class-prefix}-browser-preview-stage {
   display: flex;
   flex: 1;
@@ -118,7 +146,7 @@
   align-items: stretch;
   justify-content: stretch;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--wb-canvas);
 }
 
 .@{class-prefix}-browser-preview-viewport {
@@ -128,7 +156,7 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--wb-canvas);
   border: 0;
   border-radius: 0;
   box-shadow: none;
@@ -155,7 +183,7 @@
   min-height: 0;
   width: 100%;
   border: 0;
-  background: #ffffff;
+  background: var(--wb-canvas);
 }
 
 .@{class-prefix}-browser-preview-error {
@@ -174,7 +202,7 @@
 
 @media (max-width: 1100px) {
   .@{class-prefix}-browser-preview-toolbar {
-    grid-template-columns: auto auto minmax(180px, 1fr) auto auto;
+    grid-template-columns: auto auto minmax(180px, 1fr) auto auto auto;
   }
 
   .@{class-prefix}-browser-page-select.ant-select {

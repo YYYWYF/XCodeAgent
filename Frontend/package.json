@@ -13,6 +13,7 @@
     "test:auth": "node scripts/run-auth-tests.mjs",
     "test:chat-skills": "node scripts/run-chat-skills-tests.mjs",
     "test:message-list-scroll": "node scripts/run-message-list-scroll-tests.mjs",
+    "test:preview-inspector": "node scripts/run-preview-inspector-tests.mjs",
     "test:workflow-preview": "node scripts/run-workflow-preview-tests.mjs",
     "start": "electron-vite preview",
     "dev": "cross-env APP_ENV=dev electron-vite dev",
