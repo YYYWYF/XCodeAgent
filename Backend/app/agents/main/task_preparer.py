@@ -88,8 +88,9 @@ def _task_preparation_prompt(
         "endpoint Units. Reuse the normal endpoint task-planning rules for each matching "
         "confirmed executable_details.endpoint_detail_plans item, and emit backend tasks "
         "under its `backend:endpoint:<apiContractId>:<endpointId>` Unit. Keep endpoint "
-        "tasks separate from the page Unit; the deterministic Unit Graph orders endpoint "
-        "Units before the page Unit.\n"
+        "tasks separate from the page Unit. Page tasks implement against the confirmed API "
+        "contract and must not declare backend endpoint task dependencies, so frontend and "
+        "backend owners can execute in parallel; integration verifies both sides afterward.\n"
         
         f"Frontend path convention: all generated frontend code MUST live under the "
         f"virtual path `/{frontend_root}/` (resolved from ProjectPlan.app.name). Every "

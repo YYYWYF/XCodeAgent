@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
-from app.graph.subgraphs.build import build, run_build_scheduler
+from app.graph.subgraphs.build import _execute_ready_tasks, build, run_build_scheduler
 from app.services.build_task_planner import replace_build_task_plan_tasks
 from app.services.build_scheduler import verify_task_file_changes
 
@@ -21,6 +22,68 @@ def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_backend_and_page_owners_execute_in_parallel_with_isolated_changes(self) -> None:
+        """同批 backend/page 必须并发执行，并只认领各自授权文件。"""
+
+        barrier = threading.Barrier(2)
+        tasks = [
+            {
+                "id": "api",
+                "owner": "backend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [{"path": "Backend/app/api.py"}],
+            },
+            {
+                "id": "page",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [{"path": "Frontend/src/Page.tsx"}],
+            },
+        ]
+
+        def complete_runner(**kwargs):
+            barrier.wait(timeout=3)
+            for task in kwargs["tasks"]:
+                path = str(task["change_scope"][0]["path"])
+                _write_workspace_file(kwargs.get("workspace"), path)
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": task["owner"],
+                    "status": "completed",
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_data_sources_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+            ):
+                results, change_sets = _execute_ready_tasks(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": {"schema_version": "build-dag.v3"},
+                    },
+                    tasks,
+                )
+
+        results_by_id = {result["task_id"]: result for result in results}
+        self.assertEqual(results_by_id["api"]["status"], "completed")
+        self.assertEqual(results_by_id["page"]["status"], "completed")
+        self.assertEqual(results_by_id["api"]["changed_files"], ["Backend/app/api.py"])
+        self.assertEqual(results_by_id["page"]["changed_files"], ["Frontend/src/Page.tsx"])
+        self.assertEqual(len(change_sets), 2)
+
     def test_file_changes_are_attributed_to_each_task_scope(self) -> None:
         """同 owner 批次的实际变更只能记到授权路径命中的任务。"""
 

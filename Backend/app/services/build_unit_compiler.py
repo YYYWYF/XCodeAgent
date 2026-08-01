@@ -110,7 +110,19 @@ def _apply_unit_task_dependencies(
         inherited_dependencies = [
             dependency_task_id
             for dependency_unit_id in dependency_units.get(unit_id, [])
-            if not page_frontend_only or dependency_unit_id.startswith("frontend:")
+            if (
+                not page_frontend_only
+                or dependency_unit_id.startswith("frontend:")
+                or (
+                    bool(tasks_by_unit.get(dependency_unit_id))
+                    and all(
+                        str(candidate.get("owner") or "") == "frontend"
+                        for candidate in tasks
+                        if str(candidate.get("unit_id") or "application:root")
+                        == dependency_unit_id
+                    )
+                )
+            )
             for dependency_task_id in tasks_by_unit.get(dependency_unit_id, [])
             if dependency_task_id and dependency_task_id != task.get("id")
         ]

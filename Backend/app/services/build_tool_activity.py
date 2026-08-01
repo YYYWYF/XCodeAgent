@@ -21,6 +21,15 @@ def task_ids_for_tool_activity(
     return [str(task.get("id") or "") for task in tasks if task.get("id")]
 
 
+def path_matches_task_scope(path: str, task: dict[str, Any]) -> bool:
+    """判断文件路径是否属于任务声明的目标或授权范围。"""
+
+    normalized_path = _normalized_path(path)
+    return bool(normalized_path) and any(
+        _paths_overlap(normalized_path, scope) for scope in _task_scopes(task)
+    )
+
+
 def _task_scopes(task: dict[str, Any]) -> list[str]:
     """汇总当前 DAG v3 任务中的目标文件和授权路径。"""
 

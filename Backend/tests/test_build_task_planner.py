@@ -561,7 +561,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("page-home", markdown)
 
     def test_compiles_unit_dependencies_and_source_refs(self) -> None:
-        """页面任务会继承直接数据源和公共 API Unit 的任务依赖。"""
+        """页面任务只继承前端公共 Unit，后端和数据库仅保留来源引用。"""
 
         base_plan = {
             "schema_version": "build-dag.v3",
@@ -627,7 +627,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
         self.assertEqual(
             tasks["task:orders-page"]["dependencies"],
-            ["task:api-client", "task:orders-api"],
+            ["task:api-client"],
         )
         self.assertEqual(tasks["task:orders-page"]["source_refs"]["type"], "page_detail")
         self.assertEqual(
@@ -882,8 +882,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertNotIn("users-db", tasks)
         self.assertIn("users-api", tasks)
 
-    def test_database_endpoint_and_page_units_form_ordered_task_chain(self) -> None:
-        """数据库 gap 复用既有逻辑补任务，并按 database→endpoint→page 编排。"""
+    def test_database_endpoint_and_page_units_allow_frontend_backend_parallelism(self) -> None:
+        """数据库 gap 约束 endpoint，但 page 不等待 endpoint 实现。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -991,7 +991,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("db-intent-gap-users-table", tasks)
         self.assertEqual(tasks["db-intent-gap-users-table"]["owner"], "database")
         self.assertIn("db-intent-gap-users-table", tasks["users-api"]["dependencies"])
-        self.assertIn("users-api", tasks["users-page"]["dependencies"])
+        self.assertNotIn("users-api", tasks["users-page"]["dependencies"])
+        self.assertEqual(tasks["users-page"]["dependencies"], [])
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
 
     def test_database_task_missing_scope_uses_unique_gap_intent_scope(self) -> None:

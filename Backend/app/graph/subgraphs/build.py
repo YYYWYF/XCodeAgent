@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from typing import Any, Callable
 
 from langgraph.config import get_stream_writer
@@ -24,7 +26,10 @@ from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
 )
-from app.services.build_tool_activity import task_ids_for_tool_activity
+from app.services.build_tool_activity import (
+    path_matches_task_scope,
+    task_ids_for_tool_activity,
+)
 from app.services.build_scheduler import (
     mark_tasks_running,
     normalize_task_results,
@@ -33,7 +38,11 @@ from app.services.build_scheduler import (
     summarize_build_runtime,
     verify_task_file_changes,
 )
-from app.workspace.code_changes import code_change_state_update, merge_code_change_sets
+from app.workspace.code_changes import (
+    build_code_change_set,
+    code_change_state_update,
+    merge_code_change_sets,
+)
 from app.workspace.plan_documents import (
     project_plan_json_path,
     write_project_plan_document,
@@ -184,88 +193,150 @@ def _execute_ready_tasks(
     *,
     on_batch_tool_activity: BatchToolActivityCallback | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """把同一批就绪任务和所选技能集合分发给对应 Deep Agent。"""
+    """把同一批就绪任务按 owner 并发分发给对应 Deep Agent。"""
 
-    workspace = workspace_from_state(state)
     all_results: list[dict[str, Any]] = []
     code_change_sets: list[dict[str, Any]] = []
-    for owner, owner_tasks in _group_tasks_by_owner(ready_tasks).items():
-        runner_entry = _runner_for_owner(owner)
-        if runner_entry is None:
-            all_results.extend(
-                normalize_task_results(
-                    dispatched_tasks=owner_tasks,
-                    raw_results=[
-                        {
-                            "task_id": task["id"],
-                            "owner": owner,
-                            "status": "failed",
-                            "failure_category": "runner_protocol_error",
-                            "agent_note": f"No CodeRunner is registered for owner: {owner}.",
-                        }
-                        for task in owner_tasks
-                    ],
-                )
+    owner_groups = list(_group_tasks_by_owner(ready_tasks).items())
+    with ThreadPoolExecutor(
+        max_workers=max(1, len(owner_groups)),
+        thread_name_prefix="build-owner",
+    ) as executor:
+        futures = [
+            executor.submit(
+                _execute_owner_tasks,
+                state,
+                owner,
+                owner_tasks,
+                on_batch_tool_activity=on_batch_tool_activity,
             )
-            continue
-
-        source_tool, runner = runner_entry
-        try:
-            captured = capture_agent_file_changes(
-                workspace=workspace,
-                source_tool=source_tool,
-                action=lambda owner_tasks=owner_tasks, runner=runner, owner=owner: runner(
-                    project_plan=state["project_plan"],
-                    build_task_plan=state["build_task_plan"],
-                    tasks=owner_tasks,
-                    workspace=workspace,
-                    selected_skill_names=state.get("selected_skill_names"),
-                    **({"page_template": state.get("page_template")} if owner == "frontend" else {}),
-                    on_tool_activity=(
-                        (
-                            lambda activity, owner_tasks=owner_tasks: on_batch_tool_activity(
-                                owner_tasks,
-                                activity,
-                            )
-                        )
-                        if on_batch_tool_activity is not None
-                        else None
-                    ),
-                ),
-            )
-        except Exception as exc:
-            all_results.extend(
-                normalize_task_results(
-                    dispatched_tasks=owner_tasks,
-                    raw_results=_runner_exception_results(
-                        owner=owner,
-                        owner_tasks=owner_tasks,
-                        exc=exc,
-                    ),
-                )
-            )
-            continue
-        finally:
-            if on_batch_tool_activity is not None:
-                on_batch_tool_activity(owner_tasks, None)
-        if captured.code_change_set:
-            code_change_sets.append(captured.code_change_set)
-        normalized_results = normalize_task_results(
-            dispatched_tasks=owner_tasks,
-            raw_results=captured.value,
-        )
-        verified_results = (
-            normalized_results
-            if owner == "database"
-            else verify_task_file_changes(
-                results=normalized_results,
-                code_change_set=captured.code_change_set,
-                tasks=owner_tasks,
-                workspace_root=workspace,
-            )
-        )
-        all_results.extend(verified_results)
+            for owner, owner_tasks in owner_groups
+        ]
+        # 按提交顺序归并结果，保持任务结果和事件展示稳定。
+        for future in futures:
+            owner_results, owner_change_set = future.result()
+            all_results.extend(owner_results)
+            if owner_change_set:
+                code_change_sets.append(owner_change_set)
     return all_results, code_change_sets
+
+
+def _execute_owner_tasks(
+    state: ProjectState,
+    owner: str,
+    owner_tasks: list[dict[str, Any]],
+    *,
+    on_batch_tool_activity: BatchToolActivityCallback | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """执行一个 owner 的就绪任务，并把并发快照收敛到其授权文件范围。"""
+
+    runner_entry = _runner_for_owner(owner)
+    if runner_entry is None:
+        return (
+            normalize_task_results(
+                dispatched_tasks=owner_tasks,
+                raw_results=[
+                    {
+                        "task_id": task["id"],
+                        "owner": owner,
+                        "status": "failed",
+                        "failure_category": "runner_protocol_error",
+                        "agent_note": f"No CodeRunner is registered for owner: {owner}.",
+                    }
+                    for task in owner_tasks
+                ],
+            ),
+            None,
+        )
+
+    workspace = workspace_from_state(state)
+    source_tool, runner = runner_entry
+    try:
+        captured = capture_agent_file_changes(
+            workspace=workspace,
+            source_tool=source_tool,
+            action=lambda: runner(
+                project_plan=state["project_plan"],
+                build_task_plan=state["build_task_plan"],
+                tasks=owner_tasks,
+                workspace=workspace,
+                selected_skill_names=state.get("selected_skill_names"),
+                **({"page_template": state.get("page_template")} if owner == "frontend" else {}),
+                on_tool_activity=(
+                    (
+                        lambda activity: on_batch_tool_activity(owner_tasks, activity)
+                    )
+                    if on_batch_tool_activity is not None
+                    else None
+                ),
+            ),
+        )
+    except Exception as exc:
+        return (
+            normalize_task_results(
+                dispatched_tasks=owner_tasks,
+                raw_results=_runner_exception_results(
+                    owner=owner,
+                    owner_tasks=owner_tasks,
+                    exc=exc,
+                ),
+            ),
+            None,
+        )
+    finally:
+        if on_batch_tool_activity is not None:
+            on_batch_tool_activity(owner_tasks, None)
+
+    owner_change_set = _filter_change_set_for_tasks(
+        captured.code_change_set,
+        owner_tasks,
+        source_tool=source_tool,
+    )
+    normalized_results = normalize_task_results(
+        dispatched_tasks=owner_tasks,
+        raw_results=captured.value,
+    )
+    verified_results = (
+        normalized_results
+        if owner == "database"
+        else verify_task_file_changes(
+            results=normalized_results,
+            code_change_set=owner_change_set,
+            tasks=owner_tasks,
+            workspace_root=workspace,
+        )
+    )
+    return verified_results, owner_change_set
+
+
+def _filter_change_set_for_tasks(
+    change_set: dict[str, Any] | None,
+    tasks: list[dict[str, Any]],
+    *,
+    source_tool: str,
+) -> dict[str, Any] | None:
+    """过滤并发快照中的其他 owner 文件，保证变更归属仍受任务范围约束。"""
+
+    if not isinstance(change_set, dict):
+        return None
+    files = [
+        file_item
+        for file_item in change_set.get("files", [])
+        if isinstance(file_item, dict)
+        and file_item.get("path")
+        and any(
+            path_matches_task_scope(str(file_item["path"]), task)
+            for task in tasks
+        )
+    ]
+    workspace_root = str(change_set.get("workspaceRoot") or "")
+    if not files or not workspace_root:
+        return None
+    return build_code_change_set(
+        workspace_root=workspace_root,
+        files=files,
+        source_tool=source_tool,
+    )
 
 
 def _plan_build_repair_with_repair_planner(
@@ -598,6 +669,7 @@ def run_build_scheduler(
         build_events.append(f"scheduler:dispatch:{','.join(ready_ids)}")
         running_tasks = mark_tasks_running(current_state["tasks"], ready_ids)
         active_tool_activities: dict[str, dict[str, Any]] = {}
+        tool_activity_lock = Lock()
         running_message = f"正在执行构建任务：{', '.join(ready_ids)}"
         _emit_build_progress(
             progress_writer,
@@ -613,22 +685,23 @@ def run_build_scheduler(
         ) -> None:
             """让批次内最新工具活动覆盖旧值，并发送不进入历史事件的临时切片。"""
 
-            owner_task_ids = [str(task.get("id") or "") for task in owner_tasks]
-            if activity is None:
-                for task_id in owner_task_ids:
-                    active_tool_activities.pop(task_id, None)
-            else:
-                for task_id in task_ids_for_tool_activity(activity, owner_tasks):
-                    active_tool_activities[task_id] = activity
-            _emit_build_progress(
-                progress_writer,
-                current_state={**current_state, "tasks": running_tasks},
-                build_execution_scope=build_execution_scope,
-                build_events=build_events,
-                message=running_message,
-                active_tool_activities=active_tool_activities,
-                ephemeral=True,
-            )
+            with tool_activity_lock:
+                owner_task_ids = [str(task.get("id") or "") for task in owner_tasks]
+                if activity is None:
+                    for task_id in owner_task_ids:
+                        active_tool_activities.pop(task_id, None)
+                else:
+                    for task_id in task_ids_for_tool_activity(activity, owner_tasks):
+                        active_tool_activities[task_id] = activity
+                _emit_build_progress(
+                    progress_writer,
+                    current_state={**current_state, "tasks": running_tasks},
+                    build_execution_scope=build_execution_scope,
+                    build_events=build_events,
+                    message=running_message,
+                    active_tool_activities=active_tool_activities,
+                    ephemeral=True,
+                )
 
         results, code_change_sets = _execute_ready_tasks(
             {**current_state, "tasks": running_tasks},

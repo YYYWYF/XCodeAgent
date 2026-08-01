@@ -991,7 +991,7 @@ def create_build_task_plan(
         "summary": _task_summary(tasks),
         "execution": {
             "owner": "main-agent",
-            "strategy": "Dispatch database tasks before backend tasks, then frontend tasks whose dependencies are completed.",
+            "strategy": "Dispatch database prerequisites first, then run dependency-ready backend and page tasks in parallel when file locks do not overlap.",
             "batches": execution_batches,
             "blocked_batches": blocked_batches,
         },
