@@ -8,6 +8,101 @@ type Props = {
   form: FormInstance<ApplicationDraft>
 }
 
+type ExternalDatabaseFieldsProps = {
+  mode: DatasourceConnectionMode
+}
+
+/** 渲染两种外部数据库方案共用的连接字段，并按方案补充专属凭据。 */
+function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Element {
+  const configKey = mode === 'dbid' ? 'dbidMode' : 'plantMode'
+
+  return (
+    <div className={cx('application-form-grid', 'datasource-config-fields')}>
+      <Form.Item
+        label="数据库地址"
+        name={['datasource', 'db', configKey, 'domain']}
+        preserve={false}
+        rules={[
+          { required: true, message: '请输入数据库地址' },
+          { whitespace: true, message: '数据库地址不能只包含空格' }
+        ]}
+      >
+        <Input placeholder="例如：127.0.0.1" />
+      </Form.Item>
+      <Form.Item
+        label="端口"
+        name={['datasource', 'db', configKey, 'port']}
+        preserve={false}
+        rules={[
+          { required: true, message: '请输入数据库端口' },
+          {
+            type: 'number',
+            min: 1,
+            max: 65535,
+            message: '数据库端口必须是1到65535之间的整数'
+          }
+        ]}
+      >
+        <InputNumber
+          className={cx('datasource-config-port')}
+          max={65535}
+          min={1}
+          placeholder="例如：3306"
+          precision={0}
+        />
+      </Form.Item>
+      {mode === 'dbid' ? (
+        <Form.Item
+          label="DBID"
+          name={['datasource', 'db', 'dbidMode', 'dbid']}
+          preserve={false}
+          rules={[
+            { required: true, message: '请输入DBID' },
+            { whitespace: true, message: 'DBID不能只包含空格' }
+          ]}
+        >
+          <Input placeholder="请输入DBID" />
+        </Form.Item>
+      ) : null}
+      <Form.Item
+        label="用户名"
+        name={['datasource', 'db', configKey, 'userName']}
+        preserve={false}
+        rules={[
+          { required: true, message: '请输入数据库用户名' },
+          { whitespace: true, message: '数据库用户名不能只包含空格' }
+        ]}
+      >
+        <Input placeholder="请输入数据库用户名" />
+      </Form.Item>
+      {mode === 'plant' ? (
+        <Form.Item
+          label="密码"
+          name={['datasource', 'db', 'plantMode', 'pwd']}
+          preserve={false}
+          rules={[
+            { required: true, message: '请输入数据库密码' },
+            { whitespace: true, message: '数据库密码不能只包含空格' }
+          ]}
+        >
+          <Input.Password autoComplete="new-password" placeholder="请输入数据库密码" />
+        </Form.Item>
+      ) : null}
+      <Form.Item
+        label="Schema"
+        name={['datasource', 'db', configKey, 'schema']}
+        preserve={false}
+        rules={[
+          { required: true, message: '请输入数据库Schema' },
+          { whitespace: true, message: '数据库Schema不能只包含空格' }
+        ]}
+      >
+        <Input placeholder="请输入数据库Schema" />
+      </Form.Item>
+    </div>
+  )
+}
+
 /** 渲染新建应用的数据源选择，并确保两种外部数据库配置保持互斥。 */
 export default function DatasourceConfigFields({ form }: Props): JSX.Element {
   const useBuiltin = Form.useWatch(['datasource', 'db', 'useBuiltin'], form) ?? true
@@ -64,103 +159,7 @@ export default function DatasourceConfigFields({ form }: Props): JSX.Element {
             </Radio.Group>
           </Form.Item>
 
-          {connectionMode === 'dbid' ? (
-            <div className={cx('application-form-grid', 'datasource-config-fields')}>
-              <Form.Item
-                label="DBID"
-                name={['datasource', 'db', 'dbidMode', 'dbid']}
-                preserve={false}
-                rules={[
-                  { required: true, message: '请输入DBID' },
-                  { whitespace: true, message: 'DBID不能只包含空格' }
-                ]}
-              >
-                <Input placeholder="请输入DBID" />
-              </Form.Item>
-              <Form.Item
-                label="用户名"
-                name={['datasource', 'db', 'dbidMode', 'userName']}
-                preserve={false}
-                rules={[
-                  { required: true, message: '请输入数据库用户名' },
-                  { whitespace: true, message: '数据库用户名不能只包含空格' }
-                ]}
-              >
-                <Input placeholder="请输入数据库用户名" />
-              </Form.Item>
-            </div>
-          ) : null}
-
-          {connectionMode === 'plant' ? (
-            <div className={cx('application-form-grid', 'datasource-config-fields')}>
-              <Form.Item
-                label="数据库地址"
-                name={['datasource', 'db', 'plantMode', 'domain']}
-                preserve={false}
-                rules={[
-                  { required: true, message: '请输入数据库地址' },
-                  { whitespace: true, message: '数据库地址不能只包含空格' }
-                ]}
-              >
-                <Input placeholder="例如：127.0.0.1" />
-              </Form.Item>
-              <Form.Item
-                label="端口"
-                name={['datasource', 'db', 'plantMode', 'port']}
-                preserve={false}
-                rules={[
-                  { required: true, message: '请输入数据库端口' },
-                  {
-                    type: 'number',
-                    min: 1,
-                    max: 65535,
-                    message: '数据库端口必须是1到65535之间的整数'
-                  }
-                ]}
-              >
-                <InputNumber
-                  className={cx('datasource-config-port')}
-                  max={65535}
-                  min={1}
-                  placeholder="例如：3306"
-                  precision={0}
-                />
-              </Form.Item>
-              <Form.Item
-                label="用户名"
-                name={['datasource', 'db', 'plantMode', 'userName']}
-                preserve={false}
-                rules={[
-                  { required: true, message: '请输入数据库用户名' },
-                  { whitespace: true, message: '数据库用户名不能只包含空格' }
-                ]}
-              >
-                <Input placeholder="请输入数据库用户名" />
-              </Form.Item>
-              <Form.Item
-                label="密码"
-                name={['datasource', 'db', 'plantMode', 'pwd']}
-                preserve={false}
-                rules={[
-                  { required: true, message: '请输入数据库密码' },
-                  { whitespace: true, message: '数据库密码不能只包含空格' }
-                ]}
-              >
-                <Input.Password autoComplete="new-password" placeholder="请输入数据库密码" />
-              </Form.Item>
-              <Form.Item
-                label="Schema"
-                name={['datasource', 'db', 'plantMode', 'schema']}
-                preserve={false}
-                rules={[
-                  { required: true, message: '请输入数据库Schema' },
-                  { whitespace: true, message: '数据库Schema不能只包含空格' }
-                ]}
-              >
-                <Input placeholder="请输入数据库Schema" />
-              </Form.Item>
-            </div>
-          ) : null}
+          {connectionMode ? <ExternalDatabaseFields mode={connectionMode} /> : null}
         </>
       ) : null}
     </section>

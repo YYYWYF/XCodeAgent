@@ -60,7 +60,10 @@ export function buildDatasourceConfig(
         useBuiltin: false,
         dbidMode: {
           dbid: String(dbidMode?.dbid || '').trim(),
-          userName: String(dbidMode?.userName || '').trim()
+          userName: String(dbidMode?.userName || '').trim(),
+          domain: String(dbidMode?.domain || '').trim(),
+          port: Number(dbidMode?.port),
+          schema: String(dbidMode?.schema || '').trim()
         }
       }
     }

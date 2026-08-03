@@ -28,6 +28,9 @@ export interface ApplicationDatasourceConfig {
     dbidMode?: {
       dbid: string;
       userName: string;
+      domain: string;
+      port: number;
+      schema: string;
     };
   };
 }
