@@ -6,7 +6,7 @@ import {
   readProjectPlanUpdate,
   readWorkspaceInspectionSnapshot
 } from './agUiAgent'
-import type { ProcessStepRecord } from './agUiAgent'
+import type { DagGenerationSnapshot, ProcessStepRecord } from './agUiAgent'
 
 const WORKFLOW_NODE_LABELS: Record<string, string> = {
   detail_confirmation: '页面细节确认',
@@ -26,9 +26,8 @@ export function processStepsForDisplay(
   steps: ProcessStepRecord[] | undefined,
   workflow: WorkflowRunPayload | undefined
 ): ProcessStepRecord[] | undefined {
-  let displaySteps = sortProcessStepsForDisplay(
-    steps?.length ? steps : completedWorkflowProcessSteps(workflow)
-  )
+  const recoveredSteps = completedWorkflowProcessSteps(workflow)
+  let displaySteps = sortProcessStepsForDisplay(mergeRecoveredWorkflowSteps(steps, recoveredSteps))
   if (!displaySteps?.length) return displaySteps
   const finalChecks = completedIntegrationTestChecks(workflow)
   if (finalChecks?.length) {
@@ -72,6 +71,67 @@ export function processStepsForDisplay(
   return displaySteps.map((step) =>
     step.id === targetStepId ? { ...step, projectPlanUpdate: planUpdate.snapshot } : step
   )
+}
+
+/** 将已完成 Workflow 的结构化结果回填到持久化步骤，避免旧进度帧遮蔽最终产物。 */
+function mergeRecoveredWorkflowSteps(
+  steps: ProcessStepRecord[] | undefined,
+  recoveredSteps: ProcessStepRecord[] | undefined
+): ProcessStepRecord[] | undefined {
+  if (!steps?.length) return recoveredSteps
+  if (!recoveredSteps?.length) return steps
+
+  const mergedSteps = [...steps]
+  for (const recoveredStep of recoveredSteps) {
+    const existingIndex = findMatchingWorkflowStepIndex(mergedSteps, recoveredStep)
+    if (existingIndex < 0) {
+      mergedSteps.push(recoveredStep)
+      continue
+    }
+
+    const existingStep = mergedSteps[existingIndex]
+    const dagGeneration = mergeDagGenerationSnapshot(
+      existingStep.dagGeneration,
+      recoveredStep.dagGeneration
+    )
+    if (dagGeneration === existingStep.dagGeneration) continue
+    mergedSteps[existingIndex] = { ...existingStep, dagGeneration }
+  }
+  return mergedSteps
+}
+
+/** 按稳定 ID 或节点轮次匹配实时步骤与历史完成步骤。 */
+function findMatchingWorkflowStepIndex(
+  steps: ProcessStepRecord[],
+  recoveredStep: ProcessStepRecord
+): number {
+  const exactIndex = steps.findIndex((step) => step.id === recoveredStep.id)
+  if (exactIndex >= 0) return exactIndex
+
+  const recoveredNodeName = workflowStepNodeName(recoveredStep)
+  if (!recoveredNodeName) return -1
+  const recoveredAttempt = recoveredStep.attempt || 1
+  return steps.findIndex(
+    (step) =>
+      workflowStepNodeName(step) === recoveredNodeName && (step.attempt || 1) === recoveredAttempt
+  )
+}
+
+/** 选择结构化产物更完整的 DAG 快照，完成事件优先覆盖旧的中间快照。 */
+function mergeDagGenerationSnapshot(
+  current: DagGenerationSnapshot | undefined,
+  recovered: DagGenerationSnapshot | undefined
+): DagGenerationSnapshot | undefined {
+  if (!current) return recovered
+  if (!recovered) return current
+  return dagGenerationOutputCount(recovered) >= dagGenerationOutputCount(current)
+    ? recovered
+    : current
+}
+
+/** 统计阶段级结构化产物数量，用于判断哪个历史快照更完整。 */
+function dagGenerationOutputCount(snapshot: DagGenerationSnapshot): number {
+  return snapshot.stages.reduce((count, stage) => count + (stage.output ? 1 : 0), 0)
 }
 
 /** 从完成事件或旧状态快照恢复工作区检查详情，并补齐缓存命中标记。 */
@@ -203,11 +263,13 @@ function completedWorkflowProcessSteps(
       typeof detail.buildExecutionSlice === 'object'
         ? (detail.buildExecutionSlice as ProcessStepRecord['buildExecutionSlice'])
         : undefined
+    const stateDelta =
+      event.data?.stateDelta && typeof event.data.stateDelta === 'object'
+        ? (event.data.stateDelta as Record<string, unknown>)
+        : {}
     const dagGeneration =
       event.nodeName === 'prepare_build_tasks'
-        ? readDagGenerationSnapshot(
-            detail.dagGeneration ?? workflow.state?.dagGeneration ?? workflow.result?.dagGeneration
-          )
+        ? completedDagGenerationSnapshot(detail, stateDelta, workflow)
         : undefined
     const projectPlanUpdate =
       event.nodeName === 'detail_confirmation'
@@ -252,6 +314,31 @@ function completedWorkflowProcessSteps(
   }
   const steps = [...stepsById.values()]
   return steps.length > 0 ? steps : undefined
+}
+
+/** 从完成事件、状态和结果三个兼容来源中恢复最完整的 DAG 产物快照。 */
+function completedDagGenerationSnapshot(
+  detail: Record<string, unknown>,
+  stateDelta: Record<string, unknown>,
+  workflow: WorkflowRunPayload
+): DagGenerationSnapshot | undefined {
+  const candidates = [
+    detail.dagGeneration,
+    detail.dag_generation_progress,
+    stateDelta.dagGeneration,
+    stateDelta.dag_generation_progress,
+    workflow.state?.dagGeneration,
+    workflow.state?.dag_generation_progress,
+    workflow.result?.dagGeneration,
+    workflow.result?.dag_generation_progress
+  ]
+    .map((candidate) => readDagGenerationSnapshot(candidate))
+    .filter((candidate): candidate is DagGenerationSnapshot => Boolean(candidate))
+
+  return candidates.reduce<DagGenerationSnapshot | undefined>(
+    (current, candidate) => mergeDagGenerationSnapshot(current, candidate),
+    undefined
+  )
 }
 
 /** 返回节点轮次对应的稳定步骤 ID。 */

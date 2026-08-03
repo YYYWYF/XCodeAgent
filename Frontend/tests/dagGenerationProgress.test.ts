@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readDagGenerationSnapshot } from '../src/renderer/src/service/agUiAgent'
+import { processStepsForDisplay } from '../src/renderer/src/service/processStepHistory'
 
 /** 构造最小 DAG 阶段事件，减少协议测试样板。 */
 function stage(id: string, output: Record<string, unknown>): Record<string, unknown> {
@@ -136,4 +137,69 @@ test('依赖边保留服务端截断标记', () => {
   assert.ok(snapshot)
   const output = snapshot.stages[0]?.output
   assert.equal(output?.kind === 'unit_graph' ? output.edges.truncated : false, true)
+})
+
+test('重入会话时用完成态 DAG 快照回填持久化步骤产物', () => {
+  const incompleteSnapshot = readDagGenerationSnapshot({
+    stages: [
+      {
+        id: 'unit_skeleton',
+        name: '生成 Unit DAG 骨架',
+        status: 'completed',
+        detail: '已生成 17 个 Unit、50 条 Unit 依赖。'
+      }
+    ],
+    summary: { unitCount: 17, taskCount: 0, edgeCount: 50, batchCount: 0 }
+  })
+  const completedSnapshot = {
+    stages: [
+      stage('unit_skeleton', {
+        kind: 'unit_graph',
+        schemaVersion: 'build-unit-graph.v3',
+        reused: false,
+        units: [{ id: 'frontend:shell', kind: 'frontend', status: 'prepared', taskCount: 0 }],
+        edges: { items: [], truncated: false },
+        validation: { isValid: true, issues: [] }
+      })
+    ],
+    tasks: [],
+    summary: { unitCount: 17, taskCount: 0, edgeCount: 50, batchCount: 0 },
+    artifacts: []
+  }
+
+  const steps = processStepsForDisplay(
+    [
+      {
+        id: 'workflow:prepare_build_tasks',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成 构建任务 DAG 生成',
+        detail: '任务数=10，任务 DAG 已按范围生成',
+        sequence: 2,
+        nodeName: 'prepare_build_tasks',
+        dagGeneration: incompleteSnapshot
+      }
+    ],
+    {
+      runId: 'run-dag-reentry',
+      threadId: 'thread-dag-reentry',
+      summary: { status: 'failed' },
+      events: [
+        {
+          type: 'workflow.node.completed',
+          nodeName: 'prepare_build_tasks',
+          node: { label: '构建任务 DAG 生成' },
+          status: 'completed',
+          message: '任务数=10，任务 DAG 已按范围生成',
+          data: {
+            detail: { dagGeneration: incompleteSnapshot },
+            stateDelta: { dag_generation_progress: completedSnapshot }
+          }
+        }
+      ]
+    }
+  )
+
+  assert.equal(steps?.[0]?.detail, '任务数=10，任务 DAG 已按范围生成')
+  assert.equal(steps?.[0]?.dagGeneration?.stages[0]?.output?.kind, 'unit_graph')
 })

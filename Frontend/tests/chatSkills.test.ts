@@ -870,8 +870,58 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
     agent_note: 'raw-model-output',
     buildTaskPlanPath: '/workspace/build-task-plan.json',
     stages: [
-      { id: 'unit_skeleton', name: '生成 Unit DAG 骨架', status: 'completed', detail: '已完成' },
-      { id: 'model_planning', name: '生成候选构建任务', status: 'completed', detail: '已生成 1 项' }
+      {
+        id: 'unit_skeleton',
+        name: '生成 Unit DAG 骨架',
+        status: 'completed',
+        detail: '已完成'
+      },
+      {
+        id: 'model_planning',
+        name: '生成候选构建任务',
+        status: 'completed',
+        detail: '已生成 1 项'
+      },
+      {
+        id: 'task_compilation',
+        name: '编译任务注册表与依赖',
+        status: 'completed',
+        detail: '已编译 1 个任务、0 条任务依赖。',
+        output: {
+          kind: 'compiled_tasks',
+          tasks: [
+            {
+              id: 'page-home',
+              title: '实现首页',
+              owner: 'frontend',
+              status: 'pending',
+              dependencies: [],
+              changePaths: ['frontend/src/pages/Home.tsx'],
+              acceptanceCriteria: ['首页可渲染']
+            }
+          ],
+          edges: { items: [], truncated: false },
+          summary: { frontend: 1, backend: 0, database: 0 }
+        }
+      },
+      {
+        id: 'artifact_persistence',
+        name: '保存 DAG 产物',
+        status: 'completed',
+        detail: '已保存 DAG 产物。',
+        output: {
+          kind: 'artifacts',
+          artifacts: [
+            {
+              id: 'dag',
+              name: 'BUILD_TASK_DAG.md',
+              kind: 'markdown',
+              status: 'saved'
+            }
+          ],
+          count: 1
+        }
+      }
     ],
     tasks: [
       {
