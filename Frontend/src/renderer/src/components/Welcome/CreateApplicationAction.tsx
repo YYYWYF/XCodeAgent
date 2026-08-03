@@ -12,7 +12,6 @@ import WelcomeModalTitle from './WelcomeModalTitle'
 import './ApplicationFormModal.less'
 import './WelcomeModal.less'
 import { saveApplication } from './applicationService'
-import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
 
 type Props = {
@@ -134,7 +133,7 @@ export default function CreateApplicationAction({
 
       <Modal
         afterClose={() => {
-          form.setFieldsValue(initialApplicationDraft)
+          form.resetFields()
         }}
         cancelText="取消"
         confirmLoading={creating}

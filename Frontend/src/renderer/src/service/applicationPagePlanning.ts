@@ -5,6 +5,7 @@ import type {
   ApplicationConfig,
   WorkflowConfirmationArtifact
 } from '../typings'
+import { DatasourceEnum } from '../typings'
 import { AgUiChatSession } from './agUiAgent'
 import { createAgUiHttpAgent } from './authentication'
 
@@ -118,14 +119,14 @@ export function buildApplicationPlanningRequest(application: ApplicationConfig):
       useHeader: true,
       useFooter: false
     }
-  const datasource = application.datasource?.type || schema.datasource?.type || 'None'
+  const datasource = application.datasource?.type || schema.datasource?.type || DatasourceEnum.DB
   const authEnabled = application.auth?.enable ?? schema.auth?.enable ?? false
   return [
     `请为新应用「${appName}」完成需求确认和项目规划。`,
     `应用场景：${scenario}`,
     `目标终端：${terminal}。`,
     `导航布局：${layout.type || '由规划阶段确定'}，页头=${layout.useHeader ? '启用' : '禁用'}，页脚=${layout.useFooter ? '启用' : '禁用'}。`,
-    `数据源偏好：${datasource}。`,
+    `数据库类型：${datasource}。`,
     `认证：${authEnabled ? '启用' : '不启用'}。`,
     '本轮只完成需求文档和项目计划，不生成页面细节或代码。'
   ].join('\n')

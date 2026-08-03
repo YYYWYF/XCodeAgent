@@ -11,6 +11,7 @@ from app.services.application_development_planning import (
     ConfirmDevelopmentPlanRequest,
     MenuDevelopmentPlan,
     SharedDevelopmentModule,
+    _datasource_type_context,
     confirm_application_development_plan,
 )
 
@@ -88,6 +89,25 @@ def _planning_only_application_payload() -> dict[str, object]:
 
 
 class ApplicationDevelopmentPlanningTests(unittest.TestCase):
+    def test_datasource_context_excludes_connection_details(self) -> None:
+        """规划模型上下文只保留数据库类型，不暴露连接方案与凭据。"""
+
+        context = _datasource_type_context({
+            "type": "DataBase",
+            "db": {
+                "useBuiltin": False,
+                "plantMode": {
+                    "domain": "database.example",
+                    "port": 3306,
+                    "userName": "example-user",
+                    "pwd": "example-password",
+                    "schema": "example-schema",
+                },
+            },
+        })
+
+        self.assertEqual(context, {"type": "DataBase"})
+
     def test_confirm_derives_application_json_from_confirmed_project_plan(self) -> None:
         """开发计划确认时应补齐创建阶段延后的菜单与其他派生 JSON。"""
 

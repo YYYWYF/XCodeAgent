@@ -3,7 +3,43 @@ import type { DevelopmentContract } from './developmentContract';
 
 export type ApplicationTerminal = 'PC' | 'Mobile';
 export type ApplicationLayoutType = '' | 'side' | 'top' | 'mix';
-export type ApplicationDatasourceType = '' | 'DataBase' | 'API' | 'None';
+
+/** 标识应用支持的数据源大类。 */
+export enum DatasourceEnum {
+  DB = 'DataBase',
+  API = 'Api'
+}
+
+/** 标识新建应用表单中的外部数据库连接方案，不写入 application.json。 */
+export type DatasourceConnectionMode = 'dbid' | 'plant';
+
+/** 描述最终写入 application.json 的数据库数据源配置。 */
+export interface ApplicationDatasourceConfig {
+  type: DatasourceEnum;
+  db: {
+    useBuiltin: boolean;
+    plantMode?: {
+      domain: string;
+      port: number;
+      userName: string;
+      pwd: string;
+      schema: string;
+    };
+    dbidMode?: {
+      dbid: string;
+      userName: string;
+    };
+  };
+}
+
+/** 扩展最终数据源配置，保存仅供创建表单控制显隐的连接方案。 */
+export interface ApplicationDatasourceDraft {
+  type: DatasourceEnum;
+  db: ApplicationDatasourceConfig['db'] & {
+    connectionMode?: DatasourceConnectionMode;
+  };
+}
+
 export type ApplicationTrackMethod = string;
 export type DatabaseConnectionMode = 'dbid' | 'connectionString';
 
@@ -43,18 +79,7 @@ export interface ApplicationSchemaConfig {
   theme: {
     primaryColor: string;
   };
-  datasource: {
-    type: ApplicationDatasourceType;
-    db: {
-      plantMode: {
-        domain: string;
-        port: number | string;
-        userName: string;
-        pwd: string;
-        schema: string;
-      };
-    };
-  };
+  datasource: ApplicationDatasourceConfig;
   env: string[];
   menus: {
     enable: boolean;
@@ -317,7 +342,7 @@ export interface ApplicationDraft {
   terminal: ApplicationTerminal;
   layout: ApplicationSchemaConfig['layout'];
   theme: ApplicationSchemaConfig['theme'];
-  datasource: ApplicationSchemaConfig['datasource'];
+  datasource: ApplicationDatasourceDraft;
   envText: string;
   menus: {
     enable: boolean;

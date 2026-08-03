@@ -224,6 +224,13 @@ def _application_payload_for_development(application: dict[str, Any]) -> dict[st
     return project_plan_application_payload(project_plan)
 
 
+def _datasource_type_context(value: Any) -> dict[str, str]:
+    """只向规划模型暴露数据库类型，避免连接方案和凭据进入模型上下文。"""
+
+    datasource_type = value.get("type") if isinstance(value, dict) else None
+    return {"type": str(datasource_type or "DataBase")[:40]}
+
+
 def _normalize_plan(
     plan: ApplicationDevelopmentPlan,
     menu_items: list[dict[str, Any]],
@@ -307,7 +314,7 @@ async def generate_application_development_plan(
         "senario": application.get("senario"),
         "terminal": application.get("terminal"),
         "layout": application.get("layout"),
-        "datasource": application.get("datasource"),
+        "datasource": _datasource_type_context(application.get("datasource")),
         "auth": application.get("auth"),
         "menus": menus,
         "apis": derived_application["apis"],

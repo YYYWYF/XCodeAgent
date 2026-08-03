@@ -31,6 +31,7 @@ import {
   trackMethodOptions
 } from './constants'
 import { TabHintInput, TabHintAutoComplete } from './components/TabHintInput'
+import DatasourceConfigFields from './DatasourceConfigFields'
 
 const { TextArea } = Input
 
@@ -320,6 +321,8 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
           </div>
         </Form.Item>
       </section>
+
+      <DatasourceConfigFields form={form} />
 
       <section
         className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !authEnabled && 'application-form-section--disabled')}

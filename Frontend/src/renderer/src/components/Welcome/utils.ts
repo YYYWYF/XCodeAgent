@@ -1,4 +1,9 @@
-import type { ApplicationDraft, ApplicationSchemaConfig } from '../../typings'
+import { DatasourceEnum } from '../../typings'
+import type {
+  ApplicationDatasourceConfig,
+  ApplicationDraft,
+  ApplicationSchemaConfig
+} from '../../typings'
 
 export function createApplicationId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -36,6 +41,49 @@ function parseEnv(value?: string) {
     .filter(Boolean)
 }
 
+/** 将表单数据源草稿收敛为互斥且可持久化的数据库配置。 */
+export function buildDatasourceConfig(
+  draft: ApplicationDraft['datasource']
+): ApplicationDatasourceConfig {
+  const { connectionMode, useBuiltin } = draft.db
+  if (useBuiltin) {
+    return {
+      type: DatasourceEnum.DB,
+      db: { useBuiltin: true }
+    }
+  }
+  if (connectionMode === 'dbid') {
+    const dbidMode = draft.db.dbidMode
+    return {
+      type: DatasourceEnum.DB,
+      db: {
+        useBuiltin: false,
+        dbidMode: {
+          dbid: String(dbidMode?.dbid || '').trim(),
+          userName: String(dbidMode?.userName || '').trim()
+        }
+      }
+    }
+  }
+  if (connectionMode === 'plant') {
+    const plantMode = draft.db.plantMode
+    return {
+      type: DatasourceEnum.DB,
+      db: {
+        useBuiltin: false,
+        plantMode: {
+          domain: String(plantMode?.domain || '').trim(),
+          port: Number(plantMode?.port),
+          userName: String(plantMode?.userName || '').trim(),
+          pwd: String(plantMode?.pwd || '').trim(),
+          schema: String(plantMode?.schema || '').trim()
+        }
+      }
+    }
+  }
+  throw new Error('外部数据库必须选择连接方案。')
+}
+
 // 把新建应用表单转换为可写入 application.json 的初始配置。
 export function buildApplicationSchema(values: ApplicationDraft): ApplicationSchemaConfig {
   return {
@@ -45,7 +93,7 @@ export function buildApplicationSchema(values: ApplicationDraft): ApplicationSch
     terminal: values.terminal,
     layout: values.layout,
     theme: values.theme,
-    datasource: values.datasource,
+    datasource: buildDatasourceConfig(values.datasource),
     env: parseEnv(values.envText),
     menus: { ...values.menus, homeMenuKey: '', items: [] },
     apis: [],

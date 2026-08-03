@@ -1,3 +1,4 @@
+import { DatasourceEnum } from '../../typings'
 import type { ApplicationDraft, ApplicationTerminal } from '../../typings'
 
 /** 可选应用图标。value 为图标组件名，用于持久化与还原；label 为中文说明。 */
@@ -28,9 +29,10 @@ export const initialApplicationDraft: ApplicationDraft = {
   layout: { type: 'side', useHeader: true, useFooter: false },
   theme: { primaryColor: '#2c68ff' },
   datasource: {
-    type: '',
+    type: DatasourceEnum.DB,
     db: {
-      plantMode: { domain: '', port: '', userName: '', pwd: '', schema: '' }
+      useBuiltin: true,
+      connectionMode: 'dbid'
     }
   },
   envText: '',
