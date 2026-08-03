@@ -1,6 +1,10 @@
 ---  
 name: springboot-mybatis-generate
-description: to generate springboot-mybatis project.
+description: >-
+  生成 Spring Boot + MyBatis-Plus 分层后端代码的内置技能。当需要基于 MySQL 表生成后端模块
+  （Entity/PO/DTO/Converter/Assembler → Repository/Mapper → ApplicationService → Controller）、
+  按表结构推导命名与类型映射、补齐 pom.xml 依赖、application.yml 数据源或 MyBatisPlusConfig
+  分页配置时使用本技能。
 ---  
   
 # springboot-mybatis-generate
@@ -32,11 +36,16 @@ Use this skill when the user needs to generate springboot-mybatis project.
 | `PageResult.java` | `infrastructure/common/page/PageResult.java` | 分页结果泛型封装 |
 | `application.yml` | `src/main/resources/application.yml` | 数据源 + MyBatis-Plus 配置 |
 
+> **Java 版本约束**：项目运行在 Java 8，生成代码必须兼容 Java 8：不使用 `var`、`record`、
+> `List.of()` / `Map.of()`、文本块、`String.isBlank()` / `strip()`、`switch` 表达式等
+> Java 9+ 语法与 API，改用显式类型、`Arrays.asList()` / `Collections.singletonList()`、
+> `Optional.ofNullable()`、循环或 `Collectors.toList()` 流式处理等经典构造。
+
 ---
 
 ## 生成前校验
 
-每次生成前，**先生成一个前置校验任务**（owner: backend），在业务文件生成之前执行。该任务检查并补齐以下 3 项基础设施，不生成业务代码：
+每次生成前，**先生成一个前置校验任务**（owner: backend，可单独生成），在业务文件生成之前执行。该校验只检查并补齐以下 3 项基础设施，不生成业务代码（缺失才补充，已有不动，重复执行是幂等的）：
 
 > **依赖版本号不固定**：pom.xml 中已存在的依赖保持不动（无论版本号）；**仅当依赖缺失时**，默认按下列版本号补充。
 
@@ -59,11 +68,27 @@ Use this skill when the user needs to generate springboot-mybatis project.
     <version>${mysql-connector.version}</version>
 </dependency>
 
-<!-- PageHelper 分页 -->
+<!-- Lombok 注解处理 -->
 <dependency>
-    <groupId>com.github.pagehelper</groupId>
-    <artifactId>pagehelper-spring-boot-starter</artifactId>
-    <version>${pagehelper.version}</version>
+    <groupId>org.projectlombok</groupId>
+    <artifactId>lombok</artifactId>
+    <version>${lombok.version}</version>
+    <scope>provided</scope>
+</dependency>
+
+<!-- MapStruct 对象映射 -->
+<dependency>
+    <groupId>org.mapstruct</groupId>
+    <artifactId>mapstruct</artifactId>
+    <version>${mapstruct.version}</version>
+</dependency>
+
+<!-- MapStruct 注解处理器 -->
+<dependency>
+    <groupId>org.mapstruct</groupId>
+    <artifactId>mapstruct-processor</artifactId>
+    <version>${mapstruct.version}</version>
+    <scope>provided</scope>
 </dependency>
 ```
 
@@ -73,20 +98,24 @@ Use this skill when the user needs to generate springboot-mybatis project.
 <properties>
     <mybatis-plus.version>3.5.2</mybatis-plus.version>
     <mysql-connector.version>8.2.0</mysql-connector.version>
-    <pagehelper.version>1.4.7</pagehelper.version>
+    <lombok.version>1.18.30</lombok.version>
+    <mapstruct.version>1.5.5.Final</mapstruct.version>
 </properties>
 ```
 
 > 版本号统一在 `<properties>` 中管理。
+>
+> 若 `maven-compiler-plugin` 已配置 `annotationProcessorPaths`，需同时加入
+> `lombok-mapstruct-binding`（0.2.0），避免 Lombok 与 MapStruct 注解处理顺序问题。
 
-### 二、检查环境变量（application.yml）
+### 二、检查数据源配置（application.yml）
 
 检查 `src/main/resources/application.yml` 是否配置数据源（`url` / `username` / `password`），**缺失则补充**：
 
 ```yaml
 spring:
   datasource:
-    url: jdbc:mysql://<host>:<port>/<database>?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai
+    url: jdbc:mysql://<host>:<port>/<database>?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
     username: <user>
     password: <password>
 ```
@@ -95,7 +124,7 @@ spring:
 
 ### 三、检查 MyBatis-Plus 配置类
 
-检查是否存在 `MyBatisPlusConfig` 配置类并注册分页拦截器（`selectPage` 等分页查询依赖 `PaginationInnerInterceptor`），**缺失则创建**：
+检查 `{basePackage}/infrastructure/config/MyBatisPlusConfig.java` 是否存在并注册分页拦截器（`selectPage` 等分页查询依赖 `PaginationInnerInterceptor`），**缺失则创建**：
 
 ```java
 import com.baomidou.mybatisplus.annotation.DbType;
@@ -120,11 +149,12 @@ public class MyBatisPlusConfig {
 }
 ```
 
-### 前置校验任务的验收标准
+### 前置校验的验收标准
 
-- `pom.xml` 包含 `mybatis-plus-boot-starter`、`mysql-connector-j`、`pagehelper-spring-boot-starter` 三个依赖（缺失才补充，已有不动）
+- `pom.xml` 包含 `mybatis-plus-boot-starter`、`mysql-connector-j`、`lombok`、`mapstruct`、`mapstruct-processor` 五个依赖（缺失才补充，已有不动）
 - `application.yml` 配置了 `spring.datasource.url` / `username` / `password`（缺失时先调用 `get_mysql_config` 工具获取数据库连接信息再填充）
 - 存在 `MyBatisPlusConfig` 配置类并注册了 `PaginationInnerInterceptor`
+- 前置校验任务的 `acceptance_criteria` 使用以上验收；模块生成任务（阶段一至四整合为一个任务）的 `acceptance_criteria` 覆盖 11 个生成文件编译通过、REST 端点可用
 
 ---
 
@@ -158,7 +188,7 @@ public class MyBatisPlusConfig {
 
 ## 生成文件清单
 
-以表 `product`（字段：`id` bigint, `name` varchar, `price` decimal, `status` tinyint）为例，共 11 个文件。先生成并执行[前置校验任务](#生成前校验)，再按 4 个阶段依次生成：
+以表 `product`（字段：`id` bigint, `name` varchar, `price` decimal, `status` tinyint）为例，共 11 个文件。先生成并执行[前置校验任务](#生成前校验)（可单独生成），再生成**一个模块生成任务**（阶段一至四整合，任务内按 4 个阶段依次生成全部文件）：
 
 ```
 src/main/java/{basePackage}/
@@ -172,7 +202,7 @@ src/main/java/{basePackage}/
 │
 ├── 阶段二：仓储（Repository + Mapper）
 │   ├── infrastructure/mapper/ProductMapper.java          #  6.Mapper 接口
-│   ├── resources/mapper/ProductMapper.xml                #  7.SQL 映射文件（自定义 SQL）
+│   ├── src/main/resources/mapper/ProductMapper.xml      #  7.SQL 映射文件（自定义 SQL）
 │   ├── domain/product/repository/ProductRepository.java  #  8.仓储接口
 │   └── infrastructure/repository/impl/ProductRepositoryImpl.java   #  9.仓储实现
 │
@@ -191,10 +221,10 @@ src/main/java/{basePackage}/
 
 ### 1. Entity — `domain/{module}/entity/{Name}.java`
 
-- 领域实体，**只包含业务字段**
-- 排除：数据库自增 `id`、审计字段（`createdBy`, `createdAt` 等）
+- 领域实体，包含主键 `id`（类型 `{idType}`，作为领域标识）与业务字段
+- 排除：审计字段（`createdBy`, `createdAt`, `updatedBy`, `updatedAt`, `isDeleted`, `deletedBy`, `deletedAt`）
 - 保留：业务标识符（`userId`、`orderNo`、`productCode` 等）
-- 风格：`@Getter @NoArgsConstructor`（只读），如需修改可改为 `@Data`
+- 风格：`@Getter @Setter @NoArgsConstructor`（MapStruct 需要 setter 才能赋值；如需只读可改用 `@Data` 或带参构造器）
 
 ### 2. PO — `infrastructure/po/{Name}PO.java`
 
@@ -202,12 +232,12 @@ src/main/java/{basePackage}/
 - 加 `@TableName("{tableName}")` 指定表名
 - 主键字段加 `@TableId(type = IdType.{ID_TYPE})`
 - 包含所有字段：业务字段 + 审计字段（`createdBy`, `createdAt`, `updatedBy`, `updatedAt`, `isDeleted`, `deletedBy`, `deletedAt`）
-- Lombok：`@Getter @NoArgsConstructor`
+- Lombok：`@Getter @Setter @NoArgsConstructor`（setter 供 MapStruct 转换赋值）
 
-### 3. DTO — `applicaiton/dto/{Name}DTO.java`
+### 3. DTO — `applicaiton/{module}/dto/{Name}DTO.java`
 
-- `@Data @Builder` 风格，字段与 Entity 暴露的业务字段一致
-- 包名 `applicaiton` 是项目原始拼写（`application` 的笔误），使用正确拼写还是保留原拼写请自行决定
+- `@Data @Builder` 风格，字段与 Entity 暴露的业务字段一致（含 `id`）
+- 包名 `applicaiton` 是项目原始拼写（`application` 的笔误），**统一保留该拼写**以保证与现有项目包结构一致
 
 ### 4. Converter — `infrastructure/repository/converter/{Name}Converter.java`
 
@@ -215,7 +245,7 @@ src/main/java/{basePackage}/
 - 定义两个方法：`poToEntity(PO → Entity)`、`entityToPO(Entity → PO)`
 - 编译时自动生成实现
 
-### 5. Assembler — `applicaiton/assembler/{Name}Assembler.java`
+### 5. Assembler — `applicaiton/{module}/assembler/{Name}Assembler.java`
 
 - MapStruct 接口，`@Mapper(componentModel = "spring")`
 - 定义两个方法：`dtoToEntity(DTO → Entity)`、`entityToDTO(Entity → DTO)`
@@ -235,50 +265,53 @@ src/main/java/{basePackage}/
 
 ### 8. Repository 接口 — `domain/{module}/repository/{Name}Repository.java`
 
-- 仓储接口，**5 个标准方法**：
-  - `insert{Name}(entity)` — 新增
-  - `delete{Name}ById(id)` — 按主键删除
-  - `update{Name}(entity)` — 更新
-  - `find{Name}ById(id)` — 按主键查询
-  - `find{Name}s(PageParam)` — 分页查询
+- 仓储接口，**5 个标准方法**（`{idType}` 为主键类型）：
+  - `{Name} insert{Name}({Name} entity)` — 新增
+  - `void delete{Name}ById({idType} id)` — 按主键删除
+  - `{Name} update{Name}({Name} entity)` — 更新（Entity 含 `id`，据此定位记录）
+  - `{Name} find{Name}ById({idType} id)` — 按主键查询
+  - `PageResult<{Name}> find{Name}s(PageParam param)` — 分页查询
 
 ### 9. RepositoryImpl — `infrastructure/repository/impl/{Name}RepositoryImpl.java`
 
 - `@Repository @RequiredArgsConstructor`，注入 Mapper + Converter
 - 实现上述 5 个方法，Mapper 调用 MyBatis-Plus，Converter 做 PO ↔ Entity 转换
-- 分页使用 `Page<PO>` 传入 `mapper.selectPage()`
+- 分页：`new Page<>(param.getCurrent(), param.getPageSize())` 传入 `mapper.selectPage()`，再把 `Page<PO>` 转成 `PageResult<Entity>`
 
-### 10. ApplicationService — `applicaiton/service/{Name}ApplicationService.java`
+### 10. ApplicationService — `applicaiton/{module}/service/{Name}ApplicationService.java`
 
 - `@Service @RequiredArgsConstructor`，注入 Assembler + Repository
 - 协调两者完成业务操作，每个方法结构：DTO → Entity → Repository → Entity → DTO
-- 事务边界
+- 方法对齐 Controller：新增/更新返回 `{Name}DTO`，详情返回 `{Name}DTO`，分页返回 `PageResult<{Name}DTO>`
+- 事务边界：写操作加 `@Transactional`
 
 ### 11. Controller — `adapter/web/{Name}Controller.java`
 
 - `@RestController @RequiredArgsConstructor @RequestMapping("/api/v1/{restPath}")`
-- 5 个 REST 端点：`POST`（新增）、`DELETE /{id}`（删除）、`PUT`（更新）、`GET /{id}`（查单个）、`GET`（分页）
+- 5 个 REST 端点：`POST`（新增，返回 DTO）、`DELETE /{id}`（删除）、`PUT`（更新，返回 DTO）、`GET /{id}`（查单个，返回 DTO）、`GET`（分页，返回 `PageResult<DTO>`）
 
 ---
 
 ## 生成顺序
 
-先生成并执行**前置校验任务**（owner: backend，见[生成前校验](#生成前校验)）：检查并补齐 `pom.xml` 依赖、`application.yml` 数据源、`MyBatisPlusConfig` 配置类，缺什么补什么，依赖缺失时按默认版本号补充。通过后再按**功能分 4 个阶段**生成业务文件：先搭对象类（含转换器/汇编器），再落仓储，然后做业务服务，最后暴露接口。阶段内从底到上、逐层依赖下层，每个阶段产出的文件互相依赖完整，便于分批生成：
+先生成并执行**前置校验任务**（owner: backend，见[生成前校验](#生成前校验)，可单独生成）：检查并补齐 `pom.xml` 依赖、`application.yml` 数据源、`MyBatisPlusConfig` 配置类，缺什么补什么，依赖缺失时按默认版本号补充。通过后每个后端模块再生成**一个模块生成任务**，把**功能分 4 个阶段**的 11 个文件按顺序生成：先搭对象类（含转换器/汇编器），再落仓储，然后做业务服务，最后暴露接口。阶段内从底到上、逐层依赖下层，每个阶段产出的文件互相依赖完整；**4 个阶段整合为一个任务，阶段只是任务内的执行顺序，不再拆成 4 个独立任务**：
 
 | 阶段 | 序号 | 文件 | 关键依赖 |
 |------|------|------|---------|
-| 〇、前置校验 | — | 前置校验任务：检查并补齐 `pom.xml` 依赖、`application.yml` 数据源、`MyBatisPlusConfig` 配置类 | 无 |
+| 〇、前置校验 | — | 前置校验任务（可单独生成）：检查并补齐 `pom.xml` 依赖、`application.yml` 数据源、`MyBatisPlusConfig` 配置类 | 无 |
 | 一、对象类 | 1 | `domain/{module}/entity/{Name}.java` | 无 |
 | | 2 | `infrastructure/po/{Name}PO.java` | 无 |
-| | 3 | `applicaiton/dto/{Name}DTO.java` | 无 |
+| | 3 | `applicaiton/{module}/dto/{Name}DTO.java` | 无 |
 | | 4 | `infrastructure/repository/converter/{Name}Converter.java` | Entity + PO |
-| | 5 | `applicaiton/assembler/{Name}Assembler.java` | DTO + Entity |
+| | 5 | `applicaiton/{module}/assembler/{Name}Assembler.java` | DTO + Entity |
 | 二、仓储 | 6 | `infrastructure/mapper/{Name}Mapper.java` | PO |
-| | 7 | `resources/mapper/{Name}Mapper.xml` | Mapper |
+| | 7 | `src/main/resources/mapper/{Name}Mapper.xml` | Mapper |
 | | 8 | `domain/{module}/repository/{Name}Repository.java` | Entity |
 | | 9 | `infrastructure/repository/impl/{Name}RepositoryImpl.java` | Mapper + Converter + Repository |
-| 三、Service | 10 | `applicaiton/service/{Name}ApplicationService.java` | Assembler + DTO + Repository |
+| 三、Service | 10 | `applicaiton/{module}/service/{Name}ApplicationService.java` | Assembler + DTO + Repository |
 | 四、Controller | 11 | `adapter/web/{Name}Controller.java` | DTO + Service |
+
+> 阶段一至四的 11 个文件都在**同一个模块生成任务**内按顺序生成，不要为每个阶段单独建任务。
 
 ### 基础变量对照表
 
@@ -292,17 +325,17 @@ src/main/java/{basePackage}/
 | `{comment}` | 业务描述 | 商品 |
 | `{ID_TYPE}` | 主键策略 | `AUTO` |
 | `{idType}` | 主键 Java 类型 | `Long` |
-| `{restPath}` | REST 路径 | `product` |
+| `{restPath}` | REST 路径（kebab-case） | `product-category` |
 
 ---
 
 ## 常见问题
 
-### Q: Entity 的 `@Getter @NoArgsConstructor` 导致 MapStruct 生成空对象？
+### Q: 为什么 Entity / PO 默认用 `@Getter @Setter @NoArgsConstructor`？
 
-**原因**：MapStruct 需要 setter 或带参构造器来赋值，只读 Entity 若无 setter 则所有字段为 null。
+**原因**：MapStruct 需要 setter 或带参构造器来赋值，只有 getter 的只读对象会让所有映射字段为 null。
 
-**解决方案**（任选其一）：
+**解决方案**：默认模板已含 `@Setter`；若某类确实需要只读，任选其一：
 | 方式 | 改动 |
 |------|------|
 | 加 `@Setter` | `@Getter @Setter @NoArgsConstructor` |
@@ -311,7 +344,7 @@ src/main/java/{basePackage}/
 
 ### Q: `applicaiton` 拼写问题？
 
-是的，`applicaiton` 是 `application` 的笔误（缺 `i`）。此文档保留原拼写以与项目一致，建议新项目使用正确拼写。
+`applicaiton` 是 `application` 的笔误（缺 `i`）。本项目统一保留该拼写以与现有项目包结构一致，同一仓库内不要混用两种拼写；迁移到正确拼写 `application` 需同步调整全部包引用，属于跨模块重构，不在单次模块生成范围内。
 
 ### Q: XML Mapper 需要写哪些 SQL？
 
