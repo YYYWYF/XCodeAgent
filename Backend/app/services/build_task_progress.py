@@ -12,6 +12,9 @@ from app.services.build_task_planner import tasks_from_build_task_plan
 
 ProgressWriter = Callable[[dict[str, Any]], None]
 
+MAX_STAGE_RECORDS = 200
+MAX_STAGE_EDGES = 500
+
 DAG_GENERATION_STAGES: tuple[tuple[str, str], ...] = (
     ("unit_skeleton", "生成 Unit DAG 骨架"),
     ("build_context", "解析目标构建上下文"),
@@ -36,6 +39,7 @@ class BuildTaskProgressTracker:
         ]
         self._build_task_plan: dict[str, Any] = {}
         self._artifacts: list[dict[str, str]] = []
+        self._stage_outputs: dict[str, dict[str, Any]] = {}
 
     def start(self, stage_id: str, detail: str) -> None:
         """将指定阶段标记为运行中并立即发送完整快照。"""
@@ -50,13 +54,16 @@ class BuildTaskProgressTracker:
         *,
         build_task_plan: dict[str, Any] | None = None,
         artifacts: list[dict[str, str]] | None = None,
+        output: dict[str, Any] | None = None,
     ) -> None:
-        """完成指定阶段，并可同步更新紧凑任务及产物投影。"""
+        """完成指定阶段，并冻结该阶段的结构化产物投影。"""
 
         if isinstance(build_task_plan, dict):
-            self._build_task_plan = build_task_plan
+            self._build_task_plan = deepcopy(build_task_plan)
         if artifacts is not None:
-            self._artifacts = artifacts
+            self._artifacts = deepcopy(artifacts)
+        if isinstance(output, dict):
+            self._stage_outputs[stage_id] = deepcopy(output)
         self._update_stage(stage_id, status="completed", detail=detail)
         self._emit()
 
@@ -66,11 +73,14 @@ class BuildTaskProgressTracker:
         detail: str,
         *,
         build_task_plan: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
     ) -> None:
-        """把当前阶段标记为失败，同时保留之前阶段和完整任务注册表。"""
+        """把当前阶段标记为失败，同时保留阶段产物和完整任务注册表。"""
 
         if isinstance(build_task_plan, dict):
-            self._build_task_plan = build_task_plan
+            self._build_task_plan = deepcopy(build_task_plan)
+        if isinstance(output, dict):
+            self._stage_outputs[stage_id] = deepcopy(output)
         self._update_stage(stage_id, status="failed", detail=detail)
         self._emit()
 
@@ -78,8 +88,15 @@ class BuildTaskProgressTracker:
         """返回可持久化和发送给前端的安全紧凑快照。"""
 
         tasks = _project_tasks(self._build_task_plan)
+        stages = []
+        for stage in self._stages:
+            projected_stage = deepcopy(stage)
+            output = self._stage_outputs.get(str(stage["id"]))
+            if output is not None:
+                projected_stage["output"] = deepcopy(output)
+            stages.append(projected_stage)
         return {
-            "stages": deepcopy(self._stages),
+            "stages": stages,
             "tasks": tasks,
             "summary": _project_summary(self._build_task_plan, tasks),
             "artifacts": deepcopy(self._artifacts),
@@ -157,7 +174,7 @@ def _project_tasks(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
     """按任务图顺序裁剪前端展示所需字段，不暴露模型原文或内部状态。"""
 
     projected: list[dict[str, Any]] = []
-    for task in tasks_from_build_task_plan(build_task_plan):
+    for task in tasks_from_build_task_plan(build_task_plan)[:MAX_STAGE_RECORDS]:
         task_id = _compact_text(task.get("id"), 240)
         if not task_id:
             continue
@@ -182,6 +199,218 @@ def _project_tasks(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return projected
+
+
+def project_unit_skeleton_output(build_task_plan: dict[str, Any]) -> dict[str, Any]:
+    """投射 Unit 骨架、依赖边和校验结果，供步骤详情安全展示。"""
+
+    units = build_task_plan.get("build_units")
+    units = units if isinstance(units, dict) else {}
+    unit_graph = build_task_plan.get("unit_graph")
+    unit_graph = unit_graph if isinstance(unit_graph, dict) else {}
+    unit_records = []
+    for unit_id, unit in list(units.items())[:MAX_STAGE_RECORDS]:
+        unit = unit if isinstance(unit, dict) else {}
+        unit_records.append(
+            {
+                "id": _compact_text(unit_id, 240),
+                "kind": _compact_text(unit.get("kind"), 80) or "unknown",
+                "status": _compact_text(unit.get("status"), 80) or "not_prepared",
+                "taskCount": len(unit.get("task_ids") or [])
+                if isinstance(unit.get("task_ids"), list)
+                else 0,
+            }
+        )
+    validation = unit_graph.get("validation")
+    validation = validation if isinstance(validation, dict) else {}
+    skeleton = build_task_plan.get("unit_skeleton")
+    skeleton = skeleton if isinstance(skeleton, dict) else {}
+    return {
+        "kind": "unit_graph",
+        "schemaVersion": _compact_text(unit_graph.get("schema_version"), 80),
+        "reused": skeleton.get("reused") is True,
+        "units": [item for item in unit_records if item["id"]],
+        "edges": _project_edges(unit_graph.get("edges")),
+        "validation": _project_validation(validation),
+    }
+
+
+def project_build_context_output(
+    build_context: dict[str, Any],
+    build_task_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """投射构建目标及其关联 Unit、Endpoint、契约和数据源标识。"""
+
+    target = build_context.get("target")
+    target = target if isinstance(target, dict) else {}
+    reusable = build_context.get("reusable_tasks_by_unit")
+    reusable_ids = []
+    if isinstance(reusable, dict):
+        for values in reusable.values():
+            if isinstance(values, list):
+                reusable_ids.extend(values)
+    required_units = build_context.get("required_unit_ids")
+    if not isinstance(required_units, list):
+        units = build_task_plan.get("build_units")
+        required_units = list(units.keys()) if isinstance(units, dict) else []
+    return {
+        "kind": "build_context",
+        "target": {
+            "type": _compact_text(target.get("type"), 80) or "application",
+            "id": _compact_text(target.get("id"), 240) or "application",
+        },
+        "requiredUnitIds": _compact_strings(required_units, item_limit=200, text_limit=240),
+        "endpointIds": _compact_strings(build_context.get("endpoint_ids"), item_limit=200, text_limit=240),
+        "apiContractIds": _compact_strings(
+            build_context.get("api_contract_ids"), item_limit=200, text_limit=240
+        ),
+        "dataSourceIds": _compact_strings(
+            build_context.get("data_source_ids"), item_limit=200, text_limit=240
+        ),
+        "databaseStatus": _compact_text(
+            (build_context.get("database_planning_context") or {}).get("status")
+            if isinstance(build_context.get("database_planning_context"), dict)
+            else "missing",
+            80,
+        )
+        or "missing",
+        "reusableTaskIds": _compact_strings(reusable_ids, item_limit=200, text_limit=240),
+    }
+
+
+def project_contract_validation_output(
+    build_context: dict[str, Any],
+    errors: list[str],
+) -> dict[str, Any]:
+    """投射契约校验范围、通过状态和受限错误信息。"""
+
+    return {
+        "kind": "contract_validation",
+        "isValid": not errors,
+        "checkedEndpointIds": _compact_strings(
+            build_context.get("endpoint_ids"), item_limit=200, text_limit=240
+        ),
+        "checkedApiContractIds": _compact_strings(
+            build_context.get("api_contract_ids"), item_limit=200, text_limit=240
+        ),
+        "issues": _compact_strings(errors, item_limit=100, text_limit=1_000),
+    }
+
+
+def project_candidate_tasks_output(build_task_plan: dict[str, Any]) -> dict[str, Any]:
+    """投射模型规划阶段的候选任务列表和负责人汇总。"""
+
+    tasks = _project_tasks(build_task_plan)
+    return {
+        "kind": "candidate_tasks",
+        "tasks": tasks,
+        "summary": _task_owner_summary(tasks),
+    }
+
+
+def project_compiled_tasks_output(build_task_plan: dict[str, Any]) -> dict[str, Any]:
+    """投射编译后的拓扑任务、依赖边和负责人汇总。"""
+
+    tasks = _project_tasks(build_task_plan)
+    task_graph = build_task_plan.get("task_graph")
+    task_graph = task_graph if isinstance(task_graph, dict) else {}
+    return {
+        "kind": "compiled_tasks",
+        "tasks": tasks,
+        "edges": _project_edges(task_graph.get("edges")),
+        "summary": _task_owner_summary(tasks),
+    }
+
+
+def project_dag_validation_output(build_task_plan: dict[str, Any]) -> dict[str, Any]:
+    """投射 DAG 校验结果、拓扑顺序和执行批次。"""
+
+    task_graph = build_task_plan.get("task_graph")
+    task_graph = task_graph if isinstance(task_graph, dict) else {}
+    validation = task_graph.get("validation")
+    validation = validation if isinstance(validation, dict) else {}
+    execution = build_task_plan.get("execution")
+    execution = execution if isinstance(execution, dict) else {}
+    batches = execution.get("batches") or task_graph.get("execution_layers") or []
+    projected_batches = []
+    if isinstance(batches, list):
+        for index, batch in enumerate(batches[:MAX_STAGE_RECORDS]):
+            if not isinstance(batch, dict):
+                continue
+            projected_batches.append(
+                {
+                    "index": index + 1,
+                    "mode": _compact_text(batch.get("mode"), 40) or "serial",
+                    "taskIds": _compact_strings(batch.get("tasks"), item_limit=200, text_limit=240),
+                }
+            )
+    return {
+        "kind": "dag_validation",
+        "isValid": validation.get("is_valid") is True,
+        "roots": _compact_strings(task_graph.get("roots"), item_limit=200, text_limit=240),
+        "leaves": _compact_strings(task_graph.get("leaves"), item_limit=200, text_limit=240),
+        "topologicalOrder": _compact_strings(
+            task_graph.get("topological_order"), item_limit=200, text_limit=240
+        ),
+        "batches": projected_batches,
+        "issues": _compact_strings(validation.get("errors"), item_limit=100, text_limit=1_000),
+    }
+
+
+def project_artifact_output(artifacts: list[dict[str, str]]) -> dict[str, Any]:
+    """投射已保存产物列表，并隐藏内部计划正文。"""
+
+    return {
+        "kind": "artifacts",
+        "artifacts": deepcopy(artifacts),
+        "count": len(artifacts),
+    }
+
+
+def _project_edges(value: Any) -> dict[str, Any]:
+    """裁剪依赖边字段并标记超过上限的部分。"""
+
+    if not isinstance(value, list):
+        return {"items": [], "truncated": False}
+    items = []
+    for edge in value[:MAX_STAGE_EDGES]:
+        if not isinstance(edge, dict):
+            continue
+        source = _compact_text(edge.get("from"), 240)
+        target = _compact_text(edge.get("to"), 240)
+        if source and target:
+            items.append(
+                {
+                    "from": source,
+                    "to": target,
+                    "type": _compact_text(edge.get("type"), 80) or "depends_on",
+                }
+            )
+    return {"items": items, "truncated": len(value) > MAX_STAGE_EDGES}
+
+
+def _project_validation(value: dict[str, Any]) -> dict[str, Any]:
+    """统一投射图校验结果和错误列表。"""
+
+    return {
+        "isValid": value.get("is_valid") is True,
+        "issues": _compact_strings(value.get("errors"), item_limit=100, text_limit=1_000),
+    }
+
+
+def _task_owner_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
+    """按任务负责人汇总候选或编译任务数量。"""
+
+    counts = {"frontend": 0, "backend": 0, "database": 0}
+    for task in tasks:
+        owner = task.get("owner")
+        if owner == "frontend":
+            counts["frontend"] += 1
+        elif owner in {"backend", "data_source"}:
+            counts["backend"] += 1
+        elif owner == "database":
+            counts["database"] += 1
+    return counts
 
 
 def _project_summary(

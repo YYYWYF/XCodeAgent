@@ -341,7 +341,9 @@ Build DAG 只注册具有 `change_scope`、`allowed_paths`、`target_files` 或�
 - `.xcodeagent/plans/build-task-plan.json`：内部结构化状态，供 BuildScheduler、调试续跑和后续节点读取；v3 task registry 使用 snake_case 单一字段，不再写入或读取 `task_id/dependsOn/targetFiles/acceptanceCriteria/canRunInParallel` 等旧 DAG 同义字段，`agent_note` 只保留短摘要和响应 hash；
 - `.xcodeagent/plans/BUILD_TASK_DAG.md`：人类可读的任务 DAG 摘要，展示任务、owner、依赖、change scope 和验收标准。该 Markdown 不作为用户编辑入口，修改任务 DAG 仍应通过确认后的 ProjectPlan 或重新执行 `prepare_build_tasks` 完成。
 
-任务准备期间通过 LangGraph custom stream 发送 `prepare_build_tasks.progress` 完整快照，AG-UI 运行层将其投射到同一个 `workflow:prepare_build_tasks` 的 `agent-process.dagGeneration` 字段。快照固定按 Unit 骨架、目标上下文、契约校验、模型规划、任务编译、DAG 校验和产物保存七阶段排列；最终任务按有效拓扑序展示，无效图则保留完整 task registry。公开快照只包含安全摘要、变更路径、验收标准和 Markdown 产物标签，不发送模型原文、WorkspaceSnapshot 正文或内部 JSON 路径。
+任务准备期间通过 LangGraph custom stream 发送 `prepare_build_tasks.progress` 完整快照，AG-UI 运行层将其投射到同一个 `workflow:prepare_build_tasks` 的 `agent-process.dagGeneration` 字段。快照固定按 Unit 骨架、目标上下文、契约校验、模型规划、任务编译、DAG 校验和产物保存七阶段排列；每个阶段可携带冻结的结构化 `output`，前端将候选任务归入模型规划阶段、最终任务表归入任务编译阶段、产物表归入产物保存阶段。最终任务按有效拓扑序展示，无效图则保留完整 task registry。公开快照只包含安全摘要、变更路径、验收标准和 Markdown 产物标签，不发送模型原文、WorkspaceSnapshot 正文或内部 JSON 路径。
+
+`stages[].output` 是严格的 `kind` 判别联合：`unit_graph` 包含 Unit（id/type/status/taskCount）、Unit 依赖边和骨架校验；`build_context` 包含目标 type/id、关联 Unit/Endpoint/API Contract/数据源及数据库摘要状态；`contract_validation` 包含校验范围、通过状态和问题；`candidate_tasks` 包含候选任务、负责人、依赖和 owner 汇总；`compiled_tasks` 包含最终拓扑任务、变更文件、验收标准、任务依赖边和 owner 汇总；`dag_validation` 包含根/叶任务、拓扑顺序、执行批次（串/并行）和校验错误；`artifacts` 仅包含内部计划状态与 Markdown DAG 的安全标签。列表字段最多 200 条、文本最多 1000 字符，依赖边最多 500 条并带 `truncated` 标记；顶层 `tasks`、`artifacts` 仅作为兼容投影保留。阶段完成或失败后产物冻结，后续阶段更新不得覆盖早期详情。
 
 该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。与 Deep Agents 的默认 harness 映射是：`prepare_build_tasks` 只负责 planning，不挂载文件工具；后续 BuildScheduler 与代码执行 runner 负责 action/verification。为控制 128k 上下文预算，模型只接收已确认计划、快照摘要和精确文件清单，不把完整目录树或文件内容复制进 Graph State。
 
@@ -532,7 +534,7 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 
 为避免卡死，Graph State 记录 `repair_iteration` 和 `max_repair_iterations`。计数只在 repair task 被 BuildScheduler 真实派发时增加，生成计划、重复测试或继续执行旧任务都不消耗预算。调度开始时先用最新 `state.tasks` 重建 BuildTaskPlan，再追加 integration repair tasks，并只从该计划读取任务；repair task 必须携带当前 `build_execution_scope` 对应的 `unit_id` 和精确路径，确保能命中页面或数据源切片。超过预算后持久化 `terminal_failure` plan 并路由到 `handle_failure`。
 
-AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `nodeName`、`attempt`、`iterationKind`、`buildExecutionSlice` 和 `dagGeneration`。`dagGeneration` 使用同一稳定步骤 ID 更新完整七阶段快照，完成事件保留最终任务和安全产物摘要，供历史会话恢复。首次节点仍使用 `workflow:build` / `workflow:integration_test`，后续轮次使用 `workflow:build:2` 等唯一 ID，历史事件按 attempt 恢复为“首次构建 → 首次测试未通过 → 修复构建 → 复测”。构建进度卡由对应 build 步骤详情承载，不再在消息列表末尾重复渲染；任务卡默认折叠，运行任务的 `activeToolActivity` 在折叠 Header 下方显示，展开时只移动到详情底部。质量门禁失败显示 `failed`，等待确认显示 `requires_user_input`。
+AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `nodeName`、`attempt`、`iterationKind`、`buildExecutionSlice` 和 `dagGeneration`。`dagGeneration` 使用同一稳定步骤 ID 更新完整七阶段快照，阶段详情默认折叠且保留用户手动展开状态；完成或失败事件保留各阶段冻结的结构化产物、最终任务和安全产物摘要，供历史会话恢复。首次节点仍使用 `workflow:build` / `workflow:integration_test`，后续轮次使用 `workflow:build:2` 等唯一 ID，历史事件按 attempt 恢复为“首次构建 → 首次测试未通过 → 修复构建 → 复测”。构建进度卡由对应 build 步骤详情承载，不再在消息列表末尾重复渲染；任务卡默认折叠，运行任务的 `activeToolActivity` 在折叠 Header 下方显示，展开时只移动到详情底部。质量门禁失败显示 `failed`，等待确认显示 `requires_user_input`。
 
 该修复闭环沿用以下参考架构边界：learn-coding-agent 的执行—验证—修复紧凑循环覆盖代码、测试和 API 契约错误；OpenCode 风格的可恢复 session 状态持久化修复计数、计划和终止原因；Deep Agents 的 RepairPlanner 只接收结构化失败证据并生成受限任务。为满足 128k 上下文预算，不注入完整仓库、全量日志或会话历史。
 

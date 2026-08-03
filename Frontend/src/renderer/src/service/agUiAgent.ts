@@ -123,6 +123,88 @@ export type DagGenerationStageRecord = {
   name: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   detail: string
+  output?: DagGenerationStageOutput
+}
+
+export type DagGenerationUnitRecord = {
+  id: string
+  kind: string
+  status: string
+  taskCount: number
+}
+
+export type DagGenerationEdgeRecord = {
+  from: string
+  to: string
+  type: string
+}
+
+export type DagGenerationEdgeList = {
+  items: DagGenerationEdgeRecord[]
+  truncated: boolean
+}
+
+export type DagGenerationValidation = {
+  isValid: boolean
+  issues: string[]
+}
+
+export type DagGenerationStageOutput =
+  | {
+      kind: 'unit_graph'
+      schemaVersion: string
+      reused: boolean
+      units: DagGenerationUnitRecord[]
+      edges: DagGenerationEdgeList
+      validation: DagGenerationValidation
+    }
+  | {
+      kind: 'build_context'
+      target: { type: string; id: string }
+      requiredUnitIds: string[]
+      endpointIds: string[]
+      apiContractIds: string[]
+      dataSourceIds: string[]
+      databaseStatus: string
+      reusableTaskIds: string[]
+    }
+  | {
+      kind: 'contract_validation'
+      isValid: boolean
+      checkedEndpointIds: string[]
+      checkedApiContractIds: string[]
+      issues: string[]
+    }
+  | {
+      kind: 'candidate_tasks'
+      tasks: DagGenerationTaskRecord[]
+      summary: { frontend: number; backend: number; database: number }
+    }
+  | {
+      kind: 'compiled_tasks'
+      tasks: DagGenerationTaskRecord[]
+      edges: DagGenerationEdgeList
+      summary: { frontend: number; backend: number; database: number }
+    }
+  | {
+      kind: 'dag_validation'
+      isValid: boolean
+      roots: string[]
+      leaves: string[]
+      topologicalOrder: string[]
+      batches: DagGenerationBatchRecord[]
+      issues: string[]
+    }
+  | {
+      kind: 'artifacts'
+      artifacts: DagGenerationArtifactRecord[]
+      count: number
+    }
+
+export type DagGenerationBatchRecord = {
+  index: number
+  mode: string
+  taskIds: string[]
 }
 
 export type DagGenerationTaskRecord = {
@@ -157,6 +239,16 @@ export type DagGenerationSnapshot = {
     isValid: boolean
   }
   artifacts: DagGenerationArtifactRecord[]
+}
+
+const DAG_GENERATION_STAGE_OUTPUT_KIND: Record<string, DagGenerationStageOutput['kind']> = {
+  unit_skeleton: 'unit_graph',
+  build_context: 'build_context',
+  contract_validation: 'contract_validation',
+  model_planning: 'candidate_tasks',
+  task_compilation: 'compiled_tasks',
+  dag_validation: 'dag_validation',
+  artifact_persistence: 'artifacts'
 }
 
 export type WorkspaceInspectionPathItem = {
@@ -515,61 +607,34 @@ export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot
     const id = boundedString(stage.id, 240)
     const name = boundedString(stage.name, 500)
     const status = stringValue(stage.status)
-    if (!id || !name || !['pending', 'running', 'completed', 'failed'].includes(status)) return []
+    if (
+      !id ||
+      !name ||
+      !DAG_GENERATION_STAGE_OUTPUT_KIND[id] ||
+      !['pending', 'running', 'completed', 'failed'].includes(status)
+    ) {
+      return []
+    }
+    const parsedOutput = readDagGenerationStageOutput(stage.output)
+    const output =
+      parsedOutput && parsedOutput.kind === DAG_GENERATION_STAGE_OUTPUT_KIND[id]
+        ? parsedOutput
+        : undefined
     return [
       {
         id,
         name,
         status: status as DagGenerationStageRecord['status'],
-        detail: boundedString(stage.detail, 1_000)
+        detail: boundedString(stage.detail, 1_000),
+        ...(output ? { output } : {})
       }
     ]
   })
   if (stages.length === 0) return undefined
 
-  const tasks = Array.isArray(snapshot.tasks)
-    ? snapshot.tasks.flatMap((item) => {
-        const task = objectValue(item)
-        const id = boundedString(task.id, 240)
-        const title = boundedString(task.title, 500)
-        const status = stringValue(task.status)
-        if (!id || !title || !['pending', 'running', 'completed', 'failed'].includes(status)) {
-          return []
-        }
-        return [
-          {
-            id,
-            title,
-            owner: boundedString(task.owner, 80),
-            status: status as DagGenerationTaskRecord['status'],
-            dependencies: boundedStringList(task.dependencies, 200, 240),
-            changePaths: boundedStringList(task.changePaths, 200, 1_000),
-            acceptanceCriteria: boundedStringList(task.acceptanceCriteria, 100, 1_000)
-          }
-        ]
-      })
-    : []
+  const tasks = readDagGenerationTasks(snapshot.tasks)
   const summary = objectValue(snapshot.summary)
-  const artifacts = Array.isArray(snapshot.artifacts)
-    ? snapshot.artifacts.flatMap((item) => {
-        const artifact = objectValue(item)
-        const id = boundedString(artifact.id, 240)
-        const name = boundedString(artifact.name, 500)
-        const kind = stringValue(artifact.kind)
-        if (!id || !name || !['internal', 'markdown'].includes(kind)) return []
-        return [
-          {
-            id,
-            name,
-            kind: kind as DagGenerationArtifactRecord['kind'],
-            status: 'saved' as const,
-            ...(boundedString(artifact.path, 1_000)
-              ? { path: boundedString(artifact.path, 1_000) }
-              : {})
-          }
-        ]
-      })
-    : []
+  const artifacts = readDagGenerationArtifacts(snapshot.artifacts)
 
   return {
     stages,
@@ -586,6 +651,228 @@ export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot
     },
     artifacts
   }
+}
+
+/** 解析阶段结构化产物，并拒绝未知类型以保持协议边界。 */
+function readDagGenerationStageOutput(value: unknown): DagGenerationStageOutput | undefined {
+  const output = objectValue(parseStructuredValue(value))
+  const kind = stringValue(output.kind)
+  if (kind === 'unit_graph') {
+    const validation = readDagGenerationValidation(output.validation)
+    return {
+      kind,
+      schemaVersion: boundedString(output.schemaVersion ?? output.schema_version, 80),
+      reused: output.reused === true,
+      units: readDagGenerationUnits(output.units),
+      edges: readDagGenerationEdges(output.edges),
+      validation
+    }
+  }
+  if (kind === 'build_context') {
+    const target = objectValue(output.target)
+    return {
+      kind,
+      target: {
+        type: boundedString(target.type, 80) || 'application',
+        id: boundedString(target.id, 240) || 'application'
+      },
+      requiredUnitIds: boundedStringList(
+        output.requiredUnitIds ?? output.required_unit_ids,
+        200,
+        240
+      ),
+      endpointIds: boundedStringList(output.endpointIds ?? output.endpoint_ids, 200, 240),
+      apiContractIds: boundedStringList(output.apiContractIds ?? output.api_contract_ids, 200, 240),
+      dataSourceIds: boundedStringList(output.dataSourceIds ?? output.data_source_ids, 200, 240),
+      databaseStatus:
+        boundedString(output.databaseStatus ?? output.database_status, 80) || 'missing',
+      reusableTaskIds: boundedStringList(
+        output.reusableTaskIds ?? output.reusable_task_ids,
+        200,
+        240
+      )
+    }
+  }
+  if (kind === 'contract_validation') {
+    return {
+      kind,
+      isValid: output.isValid === true || output.is_valid === true,
+      checkedEndpointIds: boundedStringList(
+        output.checkedEndpointIds ?? output.checked_endpoint_ids,
+        200,
+        240
+      ),
+      checkedApiContractIds: boundedStringList(
+        output.checkedApiContractIds ?? output.checked_api_contract_ids,
+        200,
+        240
+      ),
+      issues: boundedStringList(output.issues, 100, 1_000)
+    }
+  }
+  if (kind === 'candidate_tasks') {
+    const summary = objectValue(output.summary)
+    return {
+      kind,
+      tasks: readDagGenerationTasks(output.tasks),
+      summary: {
+        frontend: nonNegativeInteger(summary.frontend),
+        backend: nonNegativeInteger(summary.backend),
+        database: nonNegativeInteger(summary.database)
+      }
+    }
+  }
+  if (kind === 'compiled_tasks') {
+    const summary = objectValue(output.summary)
+    return {
+      kind,
+      tasks: readDagGenerationTasks(output.tasks),
+      edges: readDagGenerationEdges(output.edges),
+      summary: {
+        frontend: nonNegativeInteger(summary.frontend),
+        backend: nonNegativeInteger(summary.backend),
+        database: nonNegativeInteger(summary.database)
+      }
+    }
+  }
+  if (kind === 'dag_validation') {
+    return {
+      kind,
+      isValid: output.isValid === true || output.is_valid === true,
+      roots: boundedStringList(output.roots, 200, 240),
+      leaves: boundedStringList(output.leaves, 200, 240),
+      topologicalOrder: boundedStringList(
+        output.topologicalOrder ?? output.topological_order,
+        200,
+        240
+      ),
+      batches: readDagGenerationBatches(output.batches),
+      issues: boundedStringList(output.issues, 100, 1_000)
+    }
+  }
+  if (kind === 'artifacts') {
+    const artifacts = readDagGenerationArtifacts(output.artifacts)
+    return { kind, artifacts, count: nonNegativeInteger(output.count) || artifacts.length }
+  }
+  return undefined
+}
+
+/** 解析 DAG 任务列表，统一兼容顶层和阶段内任务投影。 */
+function readDagGenerationTasks(value: unknown): DagGenerationTaskRecord[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 200).flatMap((item) => {
+    const task = objectValue(item)
+    const id = boundedString(task.id, 240)
+    const title = boundedString(task.title, 500)
+    const status = stringValue(task.status)
+    if (!id || !title || !['pending', 'running', 'completed', 'failed'].includes(status)) {
+      return []
+    }
+    return [
+      {
+        id,
+        title,
+        owner: boundedString(task.owner, 80),
+        status: status as DagGenerationTaskRecord['status'],
+        dependencies: boundedStringList(task.dependencies, 200, 240),
+        changePaths: boundedStringList(task.changePaths, 200, 1_000),
+        acceptanceCriteria: boundedStringList(task.acceptanceCriteria, 100, 1_000)
+      }
+    ]
+  })
+}
+
+/** 解析并裁剪 Unit 列表。 */
+function readDagGenerationUnits(value: unknown): DagGenerationUnitRecord[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 200).flatMap((item) => {
+    const unit = objectValue(item)
+    const id = boundedString(unit.id, 240)
+    if (!id) return []
+    return [
+      {
+        id,
+        kind: boundedString(unit.kind, 80) || 'unknown',
+        status: boundedString(unit.status, 80) || 'not_prepared',
+        taskCount: nonNegativeInteger(unit.taskCount ?? unit.task_count)
+      }
+    ]
+  })
+}
+
+/** 解析依赖边列表并保留服务端截断标记。 */
+function readDagGenerationEdges(value: unknown): DagGenerationEdgeList {
+  const edgeContainer = objectValue(value)
+  const rawItems = Array.isArray(value) ? value : edgeContainer.items
+  const items = Array.isArray(rawItems)
+    ? rawItems.slice(0, 500).flatMap((item) => {
+        const edge = objectValue(item)
+        const from = boundedString(edge.from, 240)
+        const to = boundedString(edge.to, 240)
+        if (!from || !to) return []
+        return [
+          {
+            from,
+            to,
+            type: boundedString(edge.type, 80) || 'depends_on'
+          }
+        ]
+      })
+    : []
+  return {
+    items,
+    truncated:
+      edgeContainer.truncated === true || (Array.isArray(rawItems) && rawItems.length > 500)
+  }
+}
+
+/** 解析统一校验结果。 */
+function readDagGenerationValidation(value: unknown): DagGenerationValidation {
+  const validation = objectValue(value)
+  return {
+    isValid: validation.isValid === true || validation.is_valid === true,
+    issues: boundedStringList(validation.issues ?? validation.errors, 100, 1_000)
+  }
+}
+
+/** 解析执行批次及其串并行模式。 */
+function readDagGenerationBatches(value: unknown): DagGenerationBatchRecord[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 200).flatMap((item) => {
+    const batch = objectValue(item)
+    const taskIds = boundedStringList(batch.taskIds ?? batch.task_ids ?? batch.tasks, 200, 240)
+    if (taskIds.length === 0 && typeof batch.index !== 'number') return []
+    return [
+      {
+        index: nonNegativeInteger(batch.index),
+        mode: boundedString(batch.mode, 40) || 'serial',
+        taskIds
+      }
+    ]
+  })
+}
+
+/** 解析并裁剪已保存产物列表。 */
+function readDagGenerationArtifacts(value: unknown): DagGenerationArtifactRecord[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 200).flatMap((item) => {
+    const artifact = objectValue(item)
+    const id = boundedString(artifact.id, 240)
+    const name = boundedString(artifact.name, 500)
+    const kind = stringValue(artifact.kind)
+    if (!id || !name || !['internal', 'markdown'].includes(kind)) return []
+    return [
+      {
+        id,
+        name,
+        kind: kind as DagGenerationArtifactRecord['kind'],
+        status: 'saved' as const,
+        ...(boundedString(artifact.path, 1_000)
+          ? { path: boundedString(artifact.path, 1_000) }
+          : {})
+      }
+    ]
+  })
 }
 
 /** 校验并裁剪页面细节确认产生的只读项目计划更新快照。 */

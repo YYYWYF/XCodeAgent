@@ -8,6 +8,7 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet,
 } from '../typings';
+import { readDagGenerationSnapshot } from './agUiAgent';
 import type { ProcessStepRecord, ToolCallRecord } from './agUiAgent';
 
 export type ChatSessionMessage = {
@@ -66,7 +67,7 @@ export type SessionWorkspaceSummary = {
 
 type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>;
 
-function storageKey(workspaceRoot: string, editorMode: EditorMode) {
+function storageKey(workspaceRoot: string, editorMode: EditorMode): string {
   return `xcode-agent-sessions:${workspaceRoot}:${editorMode}`;
 }
 
@@ -144,12 +145,20 @@ function normalizeProcessSteps(value: unknown): ProcessStepRecord[] | undefined 
       const step = item as Partial<ProcessStepRecord>;
       return Boolean(step.id && step.title && step.kind && step.status);
     })
-    .map((step) => ({
-      ...step,
-      ...(step.buildExecutionSlice
-        ? { buildExecutionSlice: withoutToolActivity(step.buildExecutionSlice) }
-        : {}),
-    }));
+    .map((step) => {
+      const normalizedStep = {
+        ...step,
+        ...(step.buildExecutionSlice
+          ? { buildExecutionSlice: withoutToolActivity(step.buildExecutionSlice) }
+          : {}),
+      };
+      if (step.dagGeneration !== undefined) {
+        const dagGeneration = readDagGenerationSnapshot(step.dagGeneration);
+        if (dagGeneration) normalizedStep.dagGeneration = dagGeneration;
+        else delete normalizedStep.dagGeneration;
+      }
+      return normalizedStep;
+    });
   return steps.length > 0 ? steps : undefined;
 }
 
@@ -337,7 +346,10 @@ function normalizeSessionWorkspaces(value: unknown): SessionWorkspaceSummary[] {
     .sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt);
 }
 
-function readFallbackSessions(workspaceRoot: string, editorMode: EditorMode) {
+function readFallbackSessions(
+  workspaceRoot: string,
+  editorMode: EditorMode,
+): ChatSessionRecord[] {
   try {
     const rawValue = window.localStorage.getItem(storageKey(workspaceRoot, editorMode));
     if (!rawValue) return [];
@@ -354,22 +366,22 @@ function writeFallbackSessions(
   workspaceRoot: string,
   editorMode: EditorMode,
   sessions: ChatSessionRecord[],
-) {
+): void {
   window.localStorage.setItem(storageKey(workspaceRoot, editorMode), JSON.stringify(sessions));
 }
 
-export function createChatSessionId() {
+export function createChatSessionId(): string {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function createChatSessionTitle(content: string) {
+export function createChatSessionTitle(content: string): string {
   const title = content.trim().replace(/\s+/g, ' ');
   if (!title) return '新对话';
   return title.length > 28 ? `${title.slice(0, 28)}...` : title;
 }
 
-export function chatSessionToSummary(session: ChatSessionRecord) {
+export function chatSessionToSummary(session: ChatSessionRecord): ChatSessionSummary {
   return toSummary(session);
 }
 
@@ -397,7 +409,10 @@ export async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]
   }
 }
 
-export async function listChatSessions(workspaceRoot: string, editorMode: EditorMode) {
+export async function listChatSessions(
+  workspaceRoot: string,
+  editorMode: EditorMode,
+): Promise<ChatSessionSummary[]> {
   const sessionApi = window.xcodeAgent?.sessions;
   if (sessionApi) {
     try {
@@ -417,7 +432,7 @@ export async function readChatSession(
   workspaceRoot: string,
   editorMode: EditorMode,
   sessionId: string,
-) {
+): Promise<ChatSessionRecord> {
   const sessionApi = window.xcodeAgent?.sessions;
   if (sessionApi) {
     try {
@@ -435,7 +450,7 @@ export async function readChatSession(
   return session;
 }
 
-export async function saveChatSession(session: ChatSessionRecord) {
+export async function saveChatSession(session: ChatSessionRecord): Promise<ChatSessionSummary> {
   const sessionApi = window.xcodeAgent?.sessions;
   if (sessionApi) {
     try {
@@ -462,7 +477,7 @@ export async function deleteChatSession(
   workspaceRoot: string,
   editorMode: EditorMode,
   sessionId: string,
-) {
+): Promise<void> {
   const sessionApi = window.xcodeAgent?.sessions;
   if (sessionApi) {
     await sessionApi.delete({ workspaceRoot, editorMode, sessionId });

@@ -100,7 +100,8 @@ def workflow_capabilities() -> dict[str, Any]:
                     ),
                     "dagGeneration": (
                         "Compact prepare-build-tasks snapshot containing ordered generation "
-                        "stages, topological task summaries, counts, and safe artifact labels."
+                        "stages, bounded discriminated stage outputs, compatibility task/artifact "
+                        "aliases, counts, and safe artifact labels."
                     ),
                     "workspaceInspection": (
                         "Safe inspect-workspace summary containing bounded counts, detected "

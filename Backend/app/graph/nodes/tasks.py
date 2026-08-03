@@ -12,6 +12,13 @@ from app.services.build_context_resolver import resolve_target_build_context
 from app.services.build_task_progress import (
     build_task_artifacts,
     create_build_task_progress_tracker,
+    project_artifact_output,
+    project_build_context_output,
+    project_candidate_tasks_output,
+    project_compiled_tasks_output,
+    project_contract_validation_output,
+    project_dag_validation_output,
+    project_unit_skeleton_output,
 )
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
@@ -118,7 +125,18 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             existing_build_task_plan,
         )
     except Exception as exc:
-        progress.fail("unit_skeleton", f"Unit DAG 骨架生成失败：{exc}")
+        progress.fail(
+            "unit_skeleton",
+            f"Unit DAG 骨架生成失败：{exc}",
+            output={
+                "kind": "unit_graph",
+                "schemaVersion": "build-unit-graph.v3",
+                "reused": False,
+                "units": [],
+                "edges": {"items": [], "truncated": False},
+                "validation": {"isValid": False, "issues": [str(exc)[:1_000]]},
+            },
+        )
         raise
     build_units = build_task_plan.get("build_units")
     unit_graph = build_task_plan.get("unit_graph")
@@ -130,6 +148,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "unit_skeleton",
         f"已生成 {unit_count} 个 Unit、{unit_edge_count} 条 Unit 依赖。",
         build_task_plan=build_task_plan,
+        output=project_unit_skeleton_output(build_task_plan),
     )
 
     progress.start("build_context", "正在解析当前页面或数据源的定向构建上下文。")
@@ -150,7 +169,12 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_context,
         )
     except ValueError as exc:
-        progress.fail("build_context", f"构建上下文解析失败：{exc}")
+        progress.fail(
+            "build_context",
+            f"构建上下文解析失败：{exc}",
+            build_task_plan=build_task_plan,
+            output=project_build_context_output({}, build_task_plan),
+        )
         return {
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
@@ -161,7 +185,12 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "timeline": ["prepare_build_tasks"],
         }
     except Exception as exc:
-        progress.fail("build_context", f"构建上下文解析异常：{exc}")
+        progress.fail(
+            "build_context",
+            f"构建上下文解析异常：{exc}",
+            build_task_plan=build_task_plan,
+            output=project_build_context_output({}, build_task_plan),
+        )
         raise
     target = build_context.get("target")
     target = target if isinstance(target, dict) else {}
@@ -174,6 +203,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             f"数据库摘要状态：{_database_planning_status(build_context)}。"
         ),
         build_task_plan=build_task_plan,
+        output=project_build_context_output(build_context, build_task_plan),
     )
 
     progress.start("contract_validation", "正在校验页面依赖和 API 契约一致性。")
@@ -184,13 +214,19 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_context,
         )
     except Exception as exc:
-        progress.fail("contract_validation", f"契约校验异常：{exc}")
+        progress.fail(
+            "contract_validation",
+            f"契约校验异常：{exc}",
+            build_task_plan=build_task_plan,
+            output=project_contract_validation_output(build_context, [str(exc)]),
+        )
         raise
     if contract_errors:
         progress.fail(
             "contract_validation",
             f"契约校验发现 {len(contract_errors)} 个问题：{contract_errors[0]}",
             build_task_plan=build_task_plan,
+            output=project_contract_validation_output(build_context, contract_errors),
         )
         return {
             "phase": "prepare_build_tasks",
@@ -205,6 +241,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "contract_validation",
         "页面依赖与 API 契约校验通过。",
         build_task_plan=build_task_plan,
+        output=project_contract_validation_output(build_context, []),
     )
 
     progress.start("model_planning", "正在调用任务规划模型生成候选构建任务。")
@@ -217,7 +254,12 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             build_task_plan=build_task_plan,
         )
     except ValueError as exc:
-        progress.fail("model_planning", f"候选任务生成失败：{exc}")
+        progress.fail(
+            "model_planning",
+            f"候选任务生成失败：{exc}",
+            build_task_plan=build_task_plan,
+            output=project_candidate_tasks_output(build_task_plan),
+        )
         return {
             "phase": "prepare_build_tasks",
             "status": "requires_user_input",
@@ -228,13 +270,19 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "timeline": ["prepare_build_tasks"],
         }
     except Exception as exc:
-        progress.fail("model_planning", f"候选任务生成异常：{exc}")
+        progress.fail(
+            "model_planning",
+            f"候选任务生成异常：{exc}",
+            build_task_plan=build_task_plan,
+            output=project_candidate_tasks_output(build_task_plan),
+        )
         raise
     prepared_tasks = tasks_from_build_task_plan(prepared_plan)
     progress.complete(
         "model_planning",
         f"任务规划模型已生成 {len(prepared_tasks)} 个有效候选任务。",
         build_task_plan=prepared_plan,
+        output=project_candidate_tasks_output(prepared_plan),
     )
 
     progress.start("task_compilation", "正在归一化任务并编译 Unit 与任务依赖。")
@@ -249,6 +297,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "task_compilation",
             f"任务依赖编译失败：{exc}",
             build_task_plan=build_task_plan,
+            output=project_compiled_tasks_output(build_task_plan),
         )
         return {
             "phase": "prepare_build_tasks",
@@ -264,6 +313,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "task_compilation",
             f"任务依赖编译异常：{exc}",
             build_task_plan=build_task_plan,
+            output=project_compiled_tasks_output(build_task_plan),
         )
         raise
     compiled_tasks = tasks_from_build_task_plan(build_task_plan)
@@ -276,6 +326,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             f"{len(task_graph.get('edges') or [])} 条任务依赖。"
         ),
         build_task_plan=build_task_plan,
+        output=project_compiled_tasks_output(build_task_plan),
     )
 
     progress.start("dag_validation", "正在校验任务拓扑、循环依赖和执行批次。")
@@ -289,6 +340,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "dag_validation",
             f"任务 DAG 校验发现 {len(dag_errors)} 个问题：{dag_errors[0]}",
             build_task_plan=build_task_plan,
+            output=project_dag_validation_output(build_task_plan),
         )
         return {
             "phase": "prepare_build_tasks",
@@ -305,6 +357,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "dag_validation",
         f"任务 DAG 校验通过，共 {len(execution.get('batches') or [])} 个执行批次。",
         build_task_plan=build_task_plan,
+        output=project_dag_validation_output(build_task_plan),
     )
 
     progress.start("artifact_persistence", "正在保存内部任务计划和 Markdown DAG。")
@@ -316,6 +369,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             "artifact_persistence",
             f"DAG 产物保存失败：{exc}",
             build_task_plan=build_task_plan,
+            output=project_artifact_output([]),
         )
         raise
     artifacts = build_task_artifacts(build_task_dag_path)
@@ -324,6 +378,7 @@ def prepare_build_tasks(state: ProjectState) -> dict:
         "内部 Build Task Plan 与 BUILD_TASK_DAG.md 已保存。",
         build_task_plan=build_task_plan,
         artifacts=artifacts,
+        output=project_artifact_output(artifacts),
     )
     return {
         "phase": "prepare_build_tasks",
