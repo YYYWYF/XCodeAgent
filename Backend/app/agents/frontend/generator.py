@@ -85,7 +85,7 @@ def _frontend_generation_prompt(
         "You are the Frontend Generation Agent in an app-generation workflow.\n"
         "Execute only the approved frontend tasks below. Modify code only within "
         "each task's allowed_paths. Implement layout, components, interactions, "
-        "permissions, API integration, loading/empty/error states, and page tests. "
+        "permissions, API integration, loading/empty/error states. "
         "ProjectPlan.api_contracts is the only source of API fields. Render and submit only "
         "fields declared by the task's endpoint_ids, schema refs, and response_bindings; "
         "do not infer or add frontend-only API fields.\n"

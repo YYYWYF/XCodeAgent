@@ -22,7 +22,7 @@ def _data_source_generation_prompt(
         "You are the Data Source Generation Agent in an app-generation workflow.\n"
         "Execute only the approved data-source tasks below. Modify code only within "
         "each task's allowed_paths. Generate data models, migrations, seed or mock "
-        "data, APIs, validation, permissions, and backend tests. Obey the confirmed "
+        "data, APIs, validation, and permissions. Obey the confirmed "
         "API contract exactly. ProjectPlan.api_contracts is the only source of model fields; "
         "data_sources.schema_refs select those schemas and must not be expanded with new fields. "
         "If the contract cannot be implemented, return a "
