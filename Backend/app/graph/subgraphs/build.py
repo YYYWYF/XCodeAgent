@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextvars
+
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Any, Callable
@@ -202,8 +204,11 @@ def _execute_ready_tasks(
         max_workers=max(1, len(owner_groups)),
         thread_name_prefix="build-owner",
     ) as executor:
+        # 把节点线程的 LangGraph 运行上下文复制进每个 owner 工作线程；
+        # 否则 custom 模式 stream writer 在回调中调用 get_config() 时缺少上下文，会抛 RuntimeError。
         futures = [
             executor.submit(
+                contextvars.copy_context().run,
                 _execute_owner_tasks,
                 state,
                 owner,
