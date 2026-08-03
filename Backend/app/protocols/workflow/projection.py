@@ -775,6 +775,7 @@ def _workflow_visual_payload(
         "buildExecutionScope": result.get("build_execution_scope"),
         "selectedSkillNames": result.get("selected_skill_names", []),
         "lifecycle": result.get("lifecycle"),
+        "ui_designs": result.get("ui_designs"),
     }
     payload = {
         "runId": run_id,

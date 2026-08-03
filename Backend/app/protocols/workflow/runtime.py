@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, AsyncIterator
 from urllib.parse import urlencode
 from uuid import uuid4
@@ -55,6 +56,8 @@ from app.config import Settings
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
+
+logger = logging.getLogger(__name__)
 
 
 def _next_node_attempt(node_attempts: dict[str, int], node_name: str) -> int:
@@ -412,6 +415,93 @@ def build_workflow_ag_ui_stream(
                             data={
                                 "phase": progress_node,
                                 "detail": progress_detail,
+                            },
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                            node_label=_runtime_node_label(progress_node, progress_state),
+                        )
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=progress_state,
+                        ):
+                            yield frame
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id(progress_node, progress_attempt),
+                            kind="workflow",
+                            status="running",
+                            title=f"正在执行 {_runtime_node_label(progress_node, progress_state)}",
+                            detail=progress_message,
+                            sequence=process_sequence,
+                            node_name=progress_node,
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                        )
+                        continue
+                    if event_type == "ui_confirmation.progress":
+                        logger.warning(
+                            "ui_confirmation.progress received: message=%s ready=%s total=%s pages=%d",
+                            progress.get("message"),
+                            (progress.get("detail") or {}).get("ready") if isinstance(progress.get("detail"), dict) else None,
+                            (progress.get("detail") or {}).get("total") if isinstance(progress.get("detail"), dict) else None,
+                            len((progress.get("detail") or {}).get("pages", [])) if isinstance(progress.get("detail"), dict) else 0,
+                        )
+                        progress_node = str(progress.get("node_name") or "ui_confirmation")
+                        progress_attempt = _current_node_attempt(
+                            node_attempts, progress_node
+                        )
+                        progress_detail = (
+                            progress.get("detail")
+                            if isinstance(progress.get("detail"), dict)
+                            else {}
+                        )
+                        ready_pages = progress_detail.get("pages")
+                        ready_pages = (
+                            ready_pages
+                            if isinstance(ready_pages, list)
+                            else []
+                        )
+                        progress_message = str(
+                            progress.get("message") or "UI设计稿生成进度已更新。"
+                        )
+                        # 把当前已生成的页面快照写进 ui_designs，前端在 loading 态
+                        # 即可从 workflow state 边收边渲染已就绪的设计稿。
+                        progress_state = {
+                            **initial_state,
+                            "phase": progress_node,
+                            "status": "running",
+                            "ui_designs": {
+                                "confirmation_status": "generating",
+                                "pages": ready_pages,
+                            },
+                            # 生成期间清空 clarification，避免前端误判为 requires_user_input
+                            # 而跳过流式预览、显示空白。
+                            "clarification": {},
+                        }
+                        logger.warning(
+                            "ui_confirmation.progress state: has_clarification=%s clar_status=%s initial_has_clar=%s",
+                            "clarification" in progress_state,
+                            (progress_state.get("clarification") or {}).get("status") if isinstance(progress_state.get("clarification"), dict) else None,
+                            "clarification" in initial_state,
+                        )
+                        _workflow_event(
+                            events,
+                            "workflow.node.progress",
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            node_name=progress_node,
+                            status="running",
+                            message=progress_message,
+                            data={
+                                "phase": progress_node,
+                                "detail": {
+                                    "ready": progress_detail.get("ready", len(ready_pages)),
+                                    "total": progress_detail.get("total", 0),
+                                    "pageId": progress_detail.get("pageId"),
+                                },
                             },
                             attempt=progress_attempt,
                             iteration_kind=_iteration_kind(progress_node, progress_attempt),

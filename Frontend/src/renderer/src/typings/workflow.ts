@@ -198,6 +198,8 @@ export type ApplicationLifecycleStage =
   | 'awaiting_requirement_clarification'
   | 'generating_requirement_spec'
   | 'awaiting_requirement_confirmation'
+  | 'generating_ui_designs'
+  | 'awaiting_ui_design_confirmation'
   | 'generating_project_plan'
   | 'awaiting_project_plan_confirmation'
   | 'generating_application_template_files'

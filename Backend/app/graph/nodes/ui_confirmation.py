@@ -153,8 +153,10 @@ async def _generate_one_wireframe(
     page: dict[str, Any],
     workspace: str,
     semaphore: asyncio.Semaphore,
+    ready_pages: list[dict[str, Any]],
+    total: int,
 ) -> dict[str, Any]:
-    """生成单个页面的线框图并落盘，返回该页的 ui_designs 条目。"""
+    """生成单个页面的线框图并落盘，完成后追加到共享列表并推送流式进度。"""
 
     page_id = _page_id(page)
     entry = {
@@ -163,6 +165,7 @@ async def _generate_one_wireframe(
         "path": str(page.get("path") or "/"),
         "description": str(page.get("description") or ""),
         "html_path": "",
+        "html": "",
         "status": "pending",
     }
     if not page_id or not workspace:
@@ -171,17 +174,47 @@ async def _generate_one_wireframe(
     existing = load_wireframe(workspace, page_id)
     if existing:
         entry["html_path"] = persist_wireframe(workspace, page_id, existing)
-        _emit_progress(f"已加载现有设计稿：{entry['name']}", pageId=page_id)
+        entry["html"] = existing
+        ready_pages.append(entry)
+        _emit_progress(
+            f"已加载现有设计稿：{entry['name']}（{len(ready_pages)}/{total}）",
+            pageId=page_id,
+            ready=len(ready_pages),
+            total=total,
+            pages=list(ready_pages),
+        )
         return entry
     async with semaphore:
-        _emit_progress(f"正在生成设计稿：{entry['name']}", pageId=page_id)
+        _emit_progress(
+            f"正在生成设计稿：{entry['name']}",
+            pageId=page_id,
+            ready=len(ready_pages),
+            total=total,
+            pages=list(ready_pages),
+        )
         try:
             html = await asyncio.to_thread(generate_page_wireframe, page)
             entry["html_path"] = persist_wireframe(workspace, page_id, html)
-            _emit_progress(f"设计稿已生成：{entry['name']}", pageId=page_id)
+            entry["html"] = html
+            ready_pages.append(entry)
+            _emit_progress(
+                f"设计稿已生成：{entry['name']}（{len(ready_pages)}/{total}）",
+                pageId=page_id,
+                ready=len(ready_pages),
+                total=total,
+                pages=list(ready_pages),
+            )
         except Exception:
             logger.exception("ui_wireframe_generation_failed page_id=%s", page_id)
-            _emit_progress(f"设计稿生成失败：{entry['name']}", pageId=page_id)
+            entry["html"] = ""
+            ready_pages.append(entry)
+            _emit_progress(
+                f"设计稿生成失败：{entry['name']}（{len(ready_pages)}/{total}）",
+                pageId=page_id,
+                ready=len(ready_pages),
+                total=total,
+                pages=list(ready_pages),
+            )
     return entry
 
 
@@ -189,24 +222,28 @@ async def _build_initial_ui_designs(state: ProjectState) -> dict[str, Any]:
     """并发为每个页面生成线框图并落盘，返回初始 ui_designs 状态。
 
     用有限并发生成（默认 3 路），避免模型服务或隧道并发限流；每生成完一页
-    即通过 LangGraph stream 推送进度，前端可流式展示已就绪的设计稿。
+    即通过 LangGraph stream 推送带当前已生成页面的进度，前端可流式展示。
     """
 
     workspace = str(state.get("workspace") or "").strip()
     pages = _page_list(state)
     valid_pages = [page for page in pages if _page_id(page)]
     total = len(valid_pages)
-    _emit_progress(f"开始为 {total} 个页面生成线框图设计稿", total=total)
+    _emit_progress(f"开始为 {total} 个页面生成线框图设计稿", ready=0, total=total, pages=[])
     semaphore = asyncio.Semaphore(_WIREFRAME_CONCURRENCY)
+    # 共享已就绪页面列表：每个 task 完成后追加并推送，供前端流式渲染。
+    ready_pages: list[dict[str, Any]] = []
     tasks = [
-        _generate_one_wireframe(page, workspace, semaphore) for page in valid_pages
+        _generate_one_wireframe(page, workspace, semaphore, ready_pages, total)
+        for page in valid_pages
     ]
     page_entries = await asyncio.gather(*tasks)
-    _emit_progress("全部页面设计稿已生成，等待逐页确认", total=total)
-    return {
-        "confirmation_status": "pending_user_confirmation",
-        "pages": page_entries,
-    }
+    _emit_progress(
+        "全部页面设计稿已生成，等待逐页确认",
+        ready=total,
+        total=total,
+        pages=list(page_entries),
+    )
     return {
         "confirmation_status": "pending_user_confirmation",
         "pages": page_entries,
