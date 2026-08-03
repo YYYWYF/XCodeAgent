@@ -242,6 +242,9 @@ def build_workflow_ag_ui_stream(
             resume_from = workflow_inputs.get("resume_from") or None
             initial_state: dict[str, Any] = {
                 "request": request,
+                "user_interaction_submission": bool(
+                    workflow_inputs.get("user_interaction_submission")
+                ),
                 "selected_skill_names": list(selected_skill_names),
                 "timeline": [],
                 "observability": observability,

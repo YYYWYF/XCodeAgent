@@ -22,6 +22,11 @@ export type SendWorkflowMessageOptions = {
   clarificationAnswers?: WorkflowClarificationAnswers
   editedRequirementSpec?: Record<string, unknown>
   requirementSpecFeedback?: string
+  applicationPlanningRecovery?: {
+    action: 'get'
+    workspaceRoot: string
+    applicationId?: string
+  }
   originalRequest?: string
   selectedSkillNames?: string[]
   selectedPageId?: string
@@ -59,6 +64,7 @@ export function buildWorkflowForwardedProps(
     clarificationAnswers: options.clarificationAnswers,
     editedRequirementSpec: options.editedRequirementSpec,
     requirementSpecFeedback: options.requirementSpecFeedback,
+    applicationPlanningRecovery: options.applicationPlanningRecovery,
     originalRequest: options.originalRequest,
     selectedSkillNames: options.selectedSkillNames,
     selectedPageId: options.selectedPageId,

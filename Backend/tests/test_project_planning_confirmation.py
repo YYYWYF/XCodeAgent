@@ -48,6 +48,8 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                 {
                     "request": "正确，继续",
                     "workspace": workspace,
+                    "workflow_scope": "application_planning",
+                    "user_interaction_submission": True,
                     "requirement_spec": spec,
                     "project_plan": plan,
                     "timeline": [],
@@ -57,6 +59,36 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["clarification"]["status"], "clear")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
+
+    def test_application_planning_recovery_text_cannot_confirm_plan(self) -> None:
+        """创建规划的继续文案没有结构化提交时不得确认 ProjectPlan。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        plan = create_project_plan(spec)
+        plan["confirmation_status"] = "pending_user_confirmation"
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                side_effect=AssertionError("只读恢复不应重新生成计划。"),
+            ) as planner:
+                result = project_planning(
+                    {
+                        "request": "请从上次保存的规划状态继续执行。",
+                        "workspace": workspace,
+                        "workflow_scope": "application_planning",
+                        "user_interaction_submission": False,
+                        "requirement_spec": spec,
+                        "project_plan": plan,
+                        "timeline": [],
+                    }
+                )
+
+        planner.assert_not_called()
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["project_plan"]["confirmation_status"],
+            "pending_user_confirmation",
+        )
 
     def test_generated_project_plan_blocks_unknown_response_schema(self) -> None:
         """首次计划生成后必须拦截 Endpoint 引用的未知响应 Schema。"""

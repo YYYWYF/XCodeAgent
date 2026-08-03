@@ -119,6 +119,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 {
                     "request": "正确，继续规划",
                     "workspace": workspace,
+                    "workflow_scope": "application_planning",
+                    "user_interaction_submission": True,
                     "requirement_spec": spec,
                     "timeline": [],
                 }
@@ -129,6 +131,34 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual(
             result["requirement_spec"]["confirmation_status"],
             "confirmed",
+        )
+
+    def test_application_planning_recovery_text_cannot_confirm_requirement(self) -> None:
+        """创建规划的恢复文案即使含确认关键词，也必须继续停在需求门禁。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        spec["confirmation_status"] = "pending_user_confirmation"
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                side_effect=AssertionError("只读恢复不应重新分析需求。"),
+            ) as analyzer:
+                result = requirements(
+                    {
+                        "request": "完成需求确认和项目规划",
+                        "workspace": workspace,
+                        "workflow_scope": "application_planning",
+                        "user_interaction_submission": False,
+                        "requirement_spec": spec,
+                        "timeline": [],
+                    }
+                )
+
+        analyzer.assert_not_called()
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["requirement_spec"]["confirmation_status"],
+            "pending_user_confirmation",
         )
 
     def test_confirmation_feedback_does_not_block_or_persist_confirmation(self) -> None:

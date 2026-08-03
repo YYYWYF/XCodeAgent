@@ -12,6 +12,7 @@ class ProjectState(TypedDict, total=False):
     application_name: str
     active_thread_id: str
     active_run_id: str
+    user_interaction_submission: bool
     lifecycle: dict[str, Any]
     lifecycle_interaction_submission: dict[str, Any]
     selected_skill_names: list[str]

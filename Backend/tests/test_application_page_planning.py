@@ -88,6 +88,75 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
 
 
 class ApplicationPagePlanningTests(unittest.TestCase):
+    def test_checkpoint_recovery_projects_confirmation_without_running_graph(self) -> None:
+        """冷启动恢复只读取 checkpoint，并重新投影需求确认卡。"""
+
+        class RecoveryGraph:
+            """提供只读 checkpoint 接口，并在错误调用执行方法时失败。"""
+
+            async def aget_state(self, config: dict[str, object]):
+                """返回同一 thread 的待确认需求状态。"""
+
+                self.config = config
+                return type("Snapshot", (), {"values": self.values})()
+
+            async def astream(self, *_args, **_kwargs):
+                """禁止恢复动作执行 Graph。"""
+
+                raise AssertionError("恢复动作不应执行 Graph。")
+
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "requirement-spec.md"
+            artifact.write_text("# RequirementSpec\n\n待确认需求。\n", encoding="utf-8")
+            graph = RecoveryGraph()
+            graph.values = {
+                "active_run_id": "original-run",
+                "phase": "requirements",
+                "status": "requires_user_input",
+                "timeline": ["requirements"],
+                "requirement_spec": {
+                    "confirmation_status": "pending_user_confirmation",
+                    "app_info": {"name": "任务中心"},
+                },
+                "requirement_spec_path": str(artifact),
+                "clarification": {
+                    "mode": "requirement_spec_confirmation",
+                    "status": "requires_user_input",
+                    "questions": [],
+                },
+            }
+            stream = build_application_page_planning_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "planning-thread",
+                    "runId": "recovery-run",
+                    "forwardedProps": {
+                        "applicationPlanningRecovery": {
+                            "action": "get",
+                            "workspaceRoot": directory,
+                            "applicationId": "app-1",
+                        }
+                    },
+                },
+            )
+
+            async def collect() -> str:
+                """消费只读恢复事件流。"""
+
+                return "".join([frame async for frame in stream])
+
+            frames = asyncio.run(collect())
+
+        self.assertEqual(
+            graph.config,
+            {"configurable": {"thread_id": "planning-thread"}},
+        )
+        self.assertIn("workflow-run", frames)
+        self.assertIn("requirement_spec_confirmation", frames)
+        self.assertIn("confirmationArtifact", frames)
+        self.assertIn("待确认需求", frames)
+        self.assertIn("RUN_FINISHED", frames)
+
     def test_requirement_spec_draft_save_uses_ag_ui_without_running_graph(self) -> None:
         """草稿保存应返回完整 AG-UI 生命周期，并保持需求处于待确认状态。"""
 
@@ -409,6 +478,10 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         capability = application_page_planning_capabilities()
         self.assertEqual(capability["customEventName"], "workflow-run")
+        self.assertEqual(
+            capability["recoveryActionField"],
+            "forwardedProps.applicationPlanningRecovery",
+        )
         self.assertEqual(capability["phases"], ["requirements", "project_planning"])
         self.assertEqual(capability["confirmationArtifacts"], ["requirement_spec", "project_plan"])
         self.assertEqual(

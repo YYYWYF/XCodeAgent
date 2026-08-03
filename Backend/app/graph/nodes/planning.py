@@ -76,6 +76,21 @@ def _detail_progress(message: str, **detail: object) -> None:
 
 
 def project_planning(state: ProjectState) -> dict:
+    existing_plan = state.get("project_plan")
+    if (
+        isinstance(existing_plan, dict)
+        and existing_plan.get("confirmation_status") == "pending_user_confirmation"
+        and not _has_explicit_user_submission(state)
+    ):
+        return {
+            "phase": "project_planning",
+            "status": "requires_user_input",
+            "project_plan": existing_plan,
+            "project_plan_path": state.get("project_plan_path", ""),
+            "project_plan_json_path": state.get("project_plan_json_path", ""),
+            "clarification": _project_plan_confirmation_payload(existing_plan),
+            "timeline": ["project_planning"],
+        }
     if state.get("project_plan") and _user_confirmed_project_plan(
         state.get("request", "")
     ):
@@ -1019,4 +1034,13 @@ def _user_confirmed_project_plan(request: str) -> bool:
             "补充一下",
             "不对",
         ),
+    )
+
+
+def _has_explicit_user_submission(state: ProjectState) -> bool:
+    """创建规划只接受本轮确认卡提交，避免恢复文案越过计划门禁。"""
+
+    return (
+        state.get("workflow_scope") != "application_planning"
+        or state.get("user_interaction_submission") is True
     )

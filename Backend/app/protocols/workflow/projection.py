@@ -162,7 +162,12 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
     return {
         key: item
         for key, item in value.items()
-        if key not in {"requirement_spec_json_path", "project_plan_json_path"}
+        if key
+        not in {
+            "requirement_spec_json_path",
+            "project_plan_json_path",
+            "user_interaction_submission",
+        }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
 

@@ -44,6 +44,20 @@ def requirements(state: ProjectState) -> dict:
     if (
         existing_spec
         and existing_spec.get("confirmation_status") == "pending_user_confirmation"
+        and not _has_explicit_user_submission(state)
+    ):
+        return {
+            "phase": "requirements",
+            "status": "requires_user_input",
+            "requirement_spec": existing_spec,
+            "requirement_spec_path": state.get("requirement_spec_path", ""),
+            "requirement_spec_json_path": state.get("requirement_spec_json_path", ""),
+            "clarification": _requirement_spec_confirmation_payload(existing_spec),
+            "timeline": ["requirements"],
+        }
+    if (
+        existing_spec
+        and existing_spec.get("confirmation_status") == "pending_user_confirmation"
         and not revision_requested
         and _user_confirmed_requirement_spec(request)
     ):
@@ -193,6 +207,15 @@ def _user_confirmed_requirement_spec(request: str) -> bool:
             "不对",
             "不好",
         ),
+    )
+
+
+def _has_explicit_user_submission(state: ProjectState) -> bool:
+    """创建规划必须收到本轮结构化交互提交，其他旧调用保持兼容。"""
+
+    return (
+        state.get("workflow_scope") != "application_planning"
+        or state.get("user_interaction_submission") is True
     )
 
 

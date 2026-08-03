@@ -282,6 +282,19 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertIn("系统有哪些用户角色", request)
         self.assertIn("普通员工、库管员", request)
         self.assertIn("入库管理、出库管理、库存查询", request)
+        self.assertTrue(inputs["user_interaction_submission"])
+
+    def test_plain_recovery_message_is_not_a_user_interaction_submission(self) -> None:
+        """普通恢复文案不得获得确认卡结构化提交权限。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "请从上次保存的规划状态继续执行。",
+                "forwardedProps": {"workflowScope": "application_planning"},
+            }
+        )
+
+        self.assertFalse(inputs["user_interaction_submission"])
 
     def test_removed_requirements_resume_falls_back_to_main_start(self) -> None:
         inputs = workflow_run_inputs(

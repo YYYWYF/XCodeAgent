@@ -289,6 +289,35 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
+  // 冷启动时只读恢复同一线程的 checkpoint，禁止借恢复动作执行任何规划节点。
+  const recoverPlanning = async (): Promise<void> => {
+    if (!application.workspaceRoot) return
+    setRunning(true)
+    setError('')
+    setStreamingContent('')
+    try {
+      const result = await session.sendMessage('读取待确认的应用规划状态。', {
+        application,
+        applicationPlanningRecovery: {
+          action: 'get',
+          workspaceRoot: application.workspaceRoot,
+          applicationId: application.id
+        },
+        editorMode: 'frontend',
+        workflowScope: 'application_planning',
+        workspaceRoot: application.workspaceRoot,
+        onContent: setStreamingContent,
+        onWorkflow: handleWorkflowChange
+      })
+      if (result.workflow) handleWorkflowChange(result.workflow)
+    } catch (reason) {
+      if (isAuthenticationFailure(reason)) return
+      setError(formatError(reason, '恢复待确认规划失败'))
+    } finally {
+      setRunning(false)
+    }
+  }
+
   // 首次挂载时启动新规划，或使用同一线程和最新快照恢复未完成规划。
   useEffect(() => {
     if (startedRef.current) return
@@ -300,12 +329,18 @@ export default function ApplicationPagePlanningModal({
     ) {
       return
     }
-    if (initialWorkflow && initialStatus !== 'running') return
+    if (initialLifecycle.initialization.status === 'awaiting_user') {
+      void recoverPlanning()
+      return
+    }
+    if (initialStatus !== 'running') return
     if (initialWorkflow) {
       void runPlanning('请从上次保存的规划状态继续执行。', undefined, initialWorkflow)
       return
     }
     void runPlanning(originalRequest)
+    // 同一 thread 的启动/恢复动作必须只执行一次，后续渲染由 startedRef 拦截。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialLifecycle.initialization.stage, originalRequest])
 
   // 提交当前确认卡答案，并由后端从公开状态推断恢复节点。

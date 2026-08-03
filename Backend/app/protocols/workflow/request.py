@@ -71,6 +71,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         clarification_answers=clarification_answers,
     )
+    user_interaction_submission = bool(
+        _clarification_answers_to_text(clarification_answers)
+    )
     resume_state = (
         _optional_dict(payload.get("resumeState"))
         or _optional_dict(payload.get("resume_state"))
@@ -258,6 +261,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(forwarded_props.get("cancel_run_id"))
         ),
         "request": request,
+        "user_interaction_submission": user_interaction_submission,
         "resume_from": resume_from,
         "resume_values": resume_values,
         "selected_skill_names": list(selected_skill_names),
