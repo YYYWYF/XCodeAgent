@@ -13,6 +13,7 @@ import MarkdownContent from '../MarkdownContent/MarkdownContent'
 import DetailReview from '../AiChatPanel/components/WorkflowRunCard/DetailReview'
 import RequirementSpecSummary from './RequirementSpecSummary'
 import RequirementSpecEditor from './RequirementSpecEditor'
+import UiDesignConfirmationPanel from './UiDesignConfirmationPanel'
 import type {
   WorkflowClarification,
   WorkflowClarificationAnswer,
@@ -93,6 +94,7 @@ function answerComplete(
 // 根据确认阶段给出符合创建规划语义的标题。
 function panelTitle(mode?: string): string {
   if (mode === 'requirement_spec_confirmation') return '确认需求文档'
+  if (mode === 'ui_design_confirmation') return '确认UI设计稿'
   if (mode === 'project_plan_confirmation') return '确认项目计划'
   if (mode === 'detail_review') return '审核页面与数据源细节'
   return '补充规划细节'
@@ -101,6 +103,7 @@ function panelTitle(mode?: string): string {
 // 根据确认阶段给出下一步按钮文案。
 function submitLabel(mode?: string): string {
   if (mode === 'requirement_spec_confirmation') return '需求正确，继续规划'
+  if (mode === 'ui_design_confirmation') return '确认设计稿并继续'
   if (mode === 'project_plan_confirmation') return '确认计划并进入工作区'
   if (!mode) return '重新生成当前规划'
   return '提交回答并继续'
@@ -229,6 +232,16 @@ export default function ApplicationPlanningQuestionPanel({
           review={clarification.review}
         />
       </section>
+    )
+  }
+
+  if (clarification.mode === 'ui_design_confirmation') {
+    return (
+      <UiDesignConfirmationPanel
+        disabled={disabled}
+        onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}
+        workflow={workflow}
+      />
     )
   }
 

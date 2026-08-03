@@ -88,17 +88,17 @@
     height: 36px;
   }
 
-  > div {
+  >div {
     display: grid;
     min-width: 0;
     gap: 2px;
 
-    > .ant-typography:first-child {
+    >.ant-typography:first-child {
       color: var(--modal-text);
       font-size: 14px;
     }
 
-    > .ant-typography-secondary {
+    >.ant-typography-secondary {
       color: var(--modal-text-secondary);
       font-size: 12px;
       line-height: 1.45;
@@ -116,16 +116,6 @@
   border-radius: 8px;
   background: rgba(139, 92, 246, 0.06);
   box-shadow: none;
-
-  &::after {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 4px;
-    background: var(--modal-accent);
-    content: '';
-  }
 
   h4.ant-typography {
     color: var(--modal-text);
@@ -195,7 +185,7 @@
     scrollbar-color: var(--modal-border-strong) transparent;
   }
 
-  .ant-collapse > .ant-collapse-item {
+  .ant-collapse>.ant-collapse-item {
     overflow: hidden;
     border: 1px solid var(--modal-border);
     border-radius: 10px;
@@ -212,7 +202,7 @@
     }
   }
 
-  .ant-collapse > .ant-collapse-item > .ant-collapse-header {
+  .ant-collapse>.ant-collapse-item>.ant-collapse-header {
     align-items: center;
     padding: 12px 14px;
     color: var(--modal-text);
@@ -229,7 +219,7 @@
     background: var(--modal-bg);
   }
 
-  .ant-collapse-content > .ant-collapse-content-box {
+  .ant-collapse-content>.ant-collapse-content-box {
     padding: 16px;
     background: var(--modal-bg);
   }
@@ -262,7 +252,7 @@
   .@{class-prefix}-workflow-detail-review-field {
     gap: 6px;
 
-    > .ant-typography {
+    >.ant-typography {
       color: var(--modal-text-secondary);
       font-size: 12px;
       font-weight: 600;
@@ -302,7 +292,7 @@
     display: grid;
     gap: 7px;
 
-    > .ant-typography {
+    >.ant-typography {
       color: var(--modal-text);
       font-size: 12px;
     }
@@ -321,6 +311,7 @@
 
 @media (max-width: 760px) {
   .@{class-prefix}-page-planning-modal {
+
     .ant-modal-header,
     .ant-modal-body {
       padding-right: 16px;
@@ -329,6 +320,7 @@
   }
 
   .@{class-prefix}-planning-question-panel.@{class-prefix}-is-detail-review {
+
     .@{class-prefix}-workflow-detail-review-summary,
     .@{class-prefix}-workflow-detail-review-fields,
     .@{class-prefix}-workflow-detail-review-actions {

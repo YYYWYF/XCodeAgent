@@ -583,7 +583,7 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
     """限制独立规划 Graph 与主 Graph 各自可恢复的节点集合。"""
 
     supported = (
-        {"requirements", "project_planning"}
+        {"requirements", "ui_confirmation", "project_planning"}
         if workflow_scope == "application_planning"
         else {
             "detail_confirmation",

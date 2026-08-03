@@ -482,8 +482,14 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             capability["recoveryActionField"],
             "forwardedProps.applicationPlanningRecovery",
         )
-        self.assertEqual(capability["phases"], ["requirements", "project_planning"])
-        self.assertEqual(capability["confirmationArtifacts"], ["requirement_spec", "project_plan"])
+        self.assertEqual(
+            capability["phases"],
+            ["requirements", "ui_confirmation", "project_planning"],
+        )
+        self.assertEqual(
+            capability["confirmationArtifacts"],
+            ["requirement_spec", "ui_designs", "project_plan"],
+        )
         self.assertEqual(
             capability["editableArtifacts"]["requirement_spec"]["actions"],
             ["save"],

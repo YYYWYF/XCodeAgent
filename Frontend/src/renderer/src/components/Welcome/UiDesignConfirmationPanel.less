@@ -1,0 +1,405 @@
+// UI确认面板：header 固定，body 左右分栏，右侧内容区自身滚动。
+.@{class-prefix}-planning-question-panel.@{class-prefix}-is-ui-confirmation {
+  display: flex;
+  max-height: 100%;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+
+  // 覆盖通用 header 的两列 grid，改为 flex 以容纳进度徽标。
+  .@{class-prefix}-planning-question-panel-header {
+    display: flex;
+    flex-shrink: 0;
+    align-items: flex-start;
+    overflow: visible;
+    gap: 13px;
+
+    h4 {
+      margin: 0;
+      color: var(--modal-text);
+      font-size: 18px;
+      line-height: 1.35;
+    }
+
+    p {
+      max-width: 720px;
+      margin: 4px 0 0;
+      color: var(--modal-text-secondary);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .@{class-prefix}-ui-design-header-copy {
+      flex: 1;
+      min-width: 0;
+    }
+  }
+}
+
+// 左右分栏主体：左侧锚点栏 + 右侧滚动内容。
+.@{class-prefix}-ui-design-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  gap: 16px;
+}
+
+// 左侧锚点栏：固定不滚动，内部列表超出时列表自身滚动。
+.@{class-prefix}-ui-design-anchor {
+  display: flex;
+  width: 220px;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--modal-border);
+  border-radius: 12px;
+  background: var(--modal-surface);
+}
+
+.@{class-prefix}-ui-design-anchor-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+// 锚点栏顶部「一键全部确认」按钮：内容左对齐。
+.@{class-prefix}-ui-design-anchor-confirm-all.ant-btn {
+  height: 38px;
+  border-radius: 8px;
+  font-weight: 600;
+  justify-content: flex-start;
+  border-color: var(--modal-accent);
+  background: var(--modal-accent);
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.22);
+
+  &:hover:not(:disabled) {
+    border-color: var(--modal-accent-hover);
+    background: var(--modal-accent-hover);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    box-shadow: none;
+  }
+}
+
+.@{class-prefix}-ui-design-anchor-summary.ant-typography {
+  font-size: 12px;
+  text-align: center;
+}
+
+.@{class-prefix}-ui-design-anchor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+// 单个锚点项：按钮形式，圆角，确认态/激活态视觉区分。
+.@{class-prefix}-ui-design-anchor-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--modal-text-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease,
+    color 0.15s ease;
+
+  &:hover {
+    background: var(--modal-surface-hover);
+    color: var(--modal-text);
+  }
+
+  &.@{class-prefix}-is-active {
+    border-color: var(--modal-accent);
+    background: var(--modal-surface-hover);
+    color: var(--modal-text);
+  }
+
+  &.@{class-prefix}-is-confirmed {
+    color: var(--modal-text);
+  }
+}
+
+.@{class-prefix}-ui-design-anchor-index {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--modal-border-strong);
+  border-radius: 50%;
+  background: var(--modal-field);
+  color: var(--modal-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-ui-design-anchor-item.@{class-prefix}-is-confirmed
+  .@{class-prefix}-ui-design-anchor-index {
+  border-color: var(--modal-accent);
+  background: var(--modal-accent);
+  color: #fff;
+}
+
+.@{class-prefix}-ui-design-anchor-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+// 右侧内容区：自身滚动，承载卡片列表 + 底部确认栏。
+.@{class-prefix}-ui-design-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+// 顶部进度徽标，展示已确认 X/N。
+.@{class-prefix}-planning-question-panel.@{class-prefix}-is-ui-confirmation .@{class-prefix}-ui-design-progress-badge {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 4px 12px;
+  border: 1px solid var(--modal-border-strong);
+  border-radius: 999px;
+  background: var(--modal-surface);
+  color: var(--modal-accent);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.@{class-prefix}-ui-design-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.@{class-prefix}-ui-design-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--modal-border);
+  border-radius: 14px;
+  background: var(--modal-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  scroll-margin-top: 8px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease,
+    background 0.2s ease;
+
+  &.@{class-prefix}-is-confirmed {
+    border-color: var(--modal-accent);
+    background: var(--modal-surface-hover);
+  }
+}
+
+.@{class-prefix}-ui-design-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.@{class-prefix}-ui-design-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.@{class-prefix}-ui-design-card-index {
+  display: flex;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--modal-border-strong);
+  border-radius: 50%;
+  background: var(--modal-field);
+  color: var(--modal-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-ui-design-card.@{class-prefix}-is-confirmed .@{class-prefix}-ui-design-card-index {
+  border-color: var(--modal-accent);
+  background: var(--modal-accent);
+  color: #fff;
+}
+
+.@{class-prefix}-ui-design-card-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+
+  >.ant-typography {
+    color: var(--modal-text);
+    font-size: 15px;
+  }
+}
+
+.@{class-prefix}-ui-design-card-path.ant-typography {
+  color: var(--modal-text-secondary);
+  font-size: 12px;
+}
+
+.@{class-prefix}-ui-design-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+// 「换一换」「对话调整」幽灵按钮：圆角、统一尺寸。
+.@{class-prefix}-ui-design-action-btn.ant-btn {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border-color: var(--modal-border-strong);
+  background: transparent;
+  color: var(--modal-text-secondary);
+  font-size: 13px;
+
+  &:hover:not(:disabled),
+  &:focus:not(:disabled) {
+    border-color: var(--modal-accent);
+    color: var(--modal-accent);
+    background: transparent;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+// 「确认本页」主按钮：圆角胶囊。
+.@{class-prefix}-ui-design-confirm-btn.ant-btn {
+  height: 34px;
+  padding: 0 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+
+  &.ant-btn-primary {
+    border-color: var(--modal-accent);
+    background: var(--modal-accent);
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.24);
+
+    &:hover:not(:disabled) {
+      border-color: var(--modal-accent-hover);
+      background: var(--modal-accent-hover);
+    }
+  }
+
+  &.ant-btn-default {
+    border-color: var(--modal-border-strong);
+    color: var(--modal-text);
+
+    &:hover:not(:disabled) {
+      border-color: var(--modal-accent);
+      color: var(--modal-accent);
+    }
+  }
+}
+
+.@{class-prefix}-ui-design-card-desc.ant-typography {
+  margin: 0;
+  color: var(--modal-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.@{class-prefix}-ui-design-card-preview {
+  width: 100%;
+  border: 1px solid var(--modal-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f7f7f8;
+}
+
+.@{class-prefix}-ui-design-iframe {
+  width: 100%;
+  height: 440px;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+
+.@{class-prefix}-ui-design-confirm-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--modal-border);
+
+  .ant-input {
+    border-color: var(--modal-border-strong);
+    background: var(--modal-field);
+    color: var(--modal-text);
+
+    &::placeholder {
+      color: var(--modal-text-secondary);
+    }
+  }
+}
+
+.@{class-prefix}-ui-design-confirm-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.@{class-prefix}-ui-design-confirm-hint.ant-typography {
+  color: var(--modal-text-secondary);
+  font-size: 13px;
+}
+
+// 「确认全部」大按钮：圆角、阴影、主色。
+.@{class-prefix}-ui-design-confirm-all-btn.ant-btn {
+  height: 42px;
+  padding: 0 28px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  border-color: var(--modal-accent);
+  background: var(--modal-accent);
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.28);
+
+  &:hover:not(:disabled) {
+    border-color: var(--modal-accent-hover);
+    background: var(--modal-accent-hover);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    box-shadow: none;
+  }
+}

@@ -68,11 +68,21 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
     ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+        ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
         ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
     },
     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+        ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+    },
+    ApplicationLifecycleStage.GENERATING_UI_DESIGNS: {
+        ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+    },
+    ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION: {
+        ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
         ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
     },
     ApplicationLifecycleStage.GENERATING_PROJECT_PLAN: {

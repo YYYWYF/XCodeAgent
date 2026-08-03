@@ -34,21 +34,16 @@ def _springboot_mybatis_skill_document() -> str:
     避免规划静默失去后端架构约束。
     """
 
-    try:
-        from app.services.builtin_skills import resolve_builtin_skills_root
+    from app.services.builtin_skills import read_builtin_skill_md
 
-        skill_file = (
-            resolve_builtin_skills_root()
-            / "springboot-mybatis-generate"
-            / "SKILL.md"
-        )
-        return skill_file.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return (
-            "(springboot-mybatis-generate SKILL.md 未找到，请仍按 Spring Boot + "
-            "MyBatis-Plus 标准分层架构规划后端任务：对象类(Entity/PO/DTO/Converter/Assembler) → "
-            "Repository/Mapper → ApplicationService → Controller。)"
-        )
+    content = read_builtin_skill_md("springboot-mybatis-generate")
+    if content:
+        return content
+    return (
+        "(springboot-mybatis-generate SKILL.md 未找到，请仍按 Spring Boot + "
+        "MyBatis-Plus 标准分层架构规划后端任务：对象类(Entity/PO/DTO/Converter/Assembler) → "
+        "Repository/Mapper → ApplicationService → Controller。)"
+    )
 
 
 def _task_preparation_prompt(

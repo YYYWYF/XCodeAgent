@@ -23,14 +23,23 @@ from app.services.application_lifecycle import (
 
 
 def _route_start(state: ProjectState) -> str:
-    """根据独立创建规划会话的恢复点选择两节点入口。"""
+    """根据独立创建规划会话的恢复点选择节点入口。"""
 
     resume_from = state.get("resume_from")
-    return resume_from if resume_from == "project_planning" else "requirements"
+    if resume_from in {"project_planning", "ui_confirmation"}:
+        return resume_from
+    return "requirements"
 
 
 def _route_requirements(state: ProjectState) -> str:
-    """需求未确认时结束当前轮次，否则进入项目规划。"""
+    """需求未确认时结束当前轮次，否则进入 UI确认。"""
+
+    clarification = state.get("clarification")
+    return "await_user_input" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "ui_confirmation"
+
+
+def _route_ui_confirmation(state: ProjectState) -> str:
+    """UI设计稿未全部确认时结束当前轮次，否则进入项目规划。"""
 
     clarification = state.get("clarification")
     return "await_user_input" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "project_planning"
@@ -78,6 +87,61 @@ def _requirements(state: ProjectState) -> dict:
         update = nodes.requirements(state)
         lifecycle = _persist_requirement_result(workspace, update, state)
         return {**update, "lifecycle": application_lifecycle_payload(lifecycle)}
+    except asyncio.CancelledError:
+        _persist_node_cancelled(workspace, state)
+        raise
+    except Exception as exc:
+        _persist_node_error(workspace, state, exc)
+        raise
+
+
+async def _ui_confirmation(state: ProjectState) -> dict:
+    """为每个页面生成线框图设计稿并等待用户逐页确认后放行项目规划。"""
+
+    workspace = _workspace(state)
+    try:
+        lifecycle = load_application_lifecycle(workspace) or _ensure_lifecycle(state)
+        # 需求确认完成后推进到 UI设计生成阶段（若尚未推进）。
+        if lifecycle.initialization.stage in {
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+            ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+        }:
+            lifecycle = persist_application_lifecycle_transition(
+                workspace,
+                stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                status=ApplicationLifecycleStatus.RUNNING,
+                active_run_id=state.get("active_run_id"),
+            )
+        update = await nodes.ui_confirmation(state)
+        if update.get("status") != "completed":
+            # 仅在当前阶段允许推进到 UI设计确认时才推进，避免恢复场景下的自转冲突。
+            if (
+                lifecycle.initialization.stage
+                != ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION
+            ):
+                lifecycle = persist_application_lifecycle_transition(
+                    workspace,
+                    stage=ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                    status=ApplicationLifecycleStatus.AWAITING_USER,
+                    active_run_id=state.get("active_run_id"),
+                )
+            return {
+                **update,
+                "workflow_scope": "application_planning",
+                "lifecycle": application_lifecycle_payload(lifecycle),
+            }
+        # 全部确认完成，推进到项目规划阶段。
+        lifecycle = persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+            status=ApplicationLifecycleStatus.RUNNING,
+            active_run_id=state.get("active_run_id"),
+        )
+        return {
+            **update,
+            "workflow_scope": "application_planning",
+            "lifecycle": application_lifecycle_payload(lifecycle),
+        }
     except asyncio.CancelledError:
         _persist_node_cancelled(workspace, state)
         raise
@@ -259,9 +323,11 @@ def _persist_requirement_result(workspace: str, update: dict, state: ProjectStat
             **common,
         )
     if update.get("status") == "completed":
+        # 需求确认完成后进入 UI设计生成阶段（而非直接项目规划），
+        # 与 Graph 路由 requirements -> ui_confirmation -> project_planning 对齐。
         return persist_application_lifecycle_transition(
             workspace,
-            stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+            stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
             status=ApplicationLifecycleStatus.RUNNING,
             **common,
         )
@@ -333,12 +399,18 @@ def build_application_planning_graph(*, checkpointer):
 
     builder = StateGraph(ProjectState)
     builder.add_node("requirements", _requirements)
+    builder.add_node("ui_confirmation", _ui_confirmation)
     builder.add_node("project_planning", _project_planning)
     builder.add_conditional_edges(START, _route_start, {
         "requirements": "requirements",
+        "ui_confirmation": "ui_confirmation",
         "project_planning": "project_planning",
     })
     builder.add_conditional_edges("requirements", _route_requirements, {
+        "ui_confirmation": "ui_confirmation",
+        "await_user_input": END,
+    })
+    builder.add_conditional_edges("ui_confirmation", _route_ui_confirmation, {
         "project_planning": "project_planning",
         "await_user_input": END,
     })

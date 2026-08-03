@@ -43,8 +43,8 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "stateSnapshotKey": "workflow",
         "customEventName": "workflow-run",
         "recoveryActionField": "forwardedProps.applicationPlanningRecovery",
-        "phases": ["requirements", "project_planning"],
-        "confirmationArtifacts": ["requirement_spec", "project_plan"],
+        "phases": ["requirements", "ui_confirmation", "project_planning"],
+        "confirmationArtifacts": ["requirement_spec", "ui_designs", "project_plan"],
         "editableArtifacts": {
             "requirement_spec": {
                 "requestField": "forwardedProps.editedRequirementSpec",

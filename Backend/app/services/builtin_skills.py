@@ -115,6 +115,20 @@ def builtin_skills_root_label() -> str:
     return BUILTIN_SKILLS_VIRTUAL_ROOT.rstrip("/")
 
 
+def read_builtin_skill_md(skill_name: str) -> str | None:
+    """读取指定内置技能 SKILL.md 全文，缺失时返回 None。
+
+    规划/生成模型处于 planning-only 边界，无法调用技能工具读取文件，因此需要把
+    SKILL.md 完整内容直接内联进 prompt 上下文。调用方负责在缺失时给出降级提示。
+    """
+
+    try:
+        skill_file = resolve_builtin_skills_root() / skill_name / "SKILL.md"
+        return skill_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+
 def list_builtin_skills(root: Path | None = None) -> list[BuiltinSkillSummary]:
     """从内置 SKILL.md 读取技能页面所需的只读卡片摘要。"""
 

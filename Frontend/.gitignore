@@ -5,3 +5,4 @@ resources/backend/
 .DS_Store
 .eslintcache
 *.log*
+.venv/

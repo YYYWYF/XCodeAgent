@@ -60,7 +60,7 @@ type Props = {
   onStopHandlerChange: (handler?: () => Promise<void>) => void
 }
 
-const phaseOrder = ['requirements', 'project_planning']
+const phaseOrder = ['requirements', 'ui_confirmation', 'project_planning']
 
 const phaseProgress: Record<
   string,
@@ -68,12 +68,18 @@ const phaseProgress: Record<
 > = {
   requirements: {
     active: 18,
-    complete: 34,
+    complete: 30,
     message: '正在分析需求并生成需求文档…',
     title: '正在确认产品需求'
   },
+  ui_confirmation: {
+    active: 45,
+    complete: 60,
+    message: '正在为各页面生成线框图设计稿…',
+    title: '正在生成UI设计稿'
+  },
   project_planning: {
-    active: 58,
+    active: 75,
     complete: 100,
     message: '正在生成项目计划…',
     title: '正在规划项目结构'
@@ -269,7 +275,10 @@ export default function ApplicationPagePlanningModal({
                 initialLifecycle.initialization.stage === 'generating_project_plan' ||
                 initialLifecycle.initialization.stage === 'awaiting_project_plan_confirmation'
                   ? 'project_planning'
-                  : 'requirements'
+                  : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
+                    initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
+                    ? 'ui_confirmation'
+                    : 'requirements'
             },
         workflowScope: 'application_planning',
         workspaceRoot: application.workspaceRoot,
@@ -441,6 +450,7 @@ export default function ApplicationPagePlanningModal({
             size="small"
           >
             <Step title="需求确认" />
+            <Step title="UI确认" />
             <Step title="项目规划" />
           </Steps>
 
