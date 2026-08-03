@@ -159,6 +159,29 @@ export type DagGenerationSnapshot = {
   artifacts: DagGenerationArtifactRecord[]
 }
 
+export type WorkspaceInspectionPathItem = {
+  path: string
+  kind: string
+}
+
+export type WorkspaceInspectionSnapshot = {
+  schemaVersion: string
+  revision: string
+  cacheHit: boolean
+  fileManifest: {
+    totalFiles: number
+    sourceFiles: number
+    truncated: boolean
+  }
+  techStack: string[]
+  projectRoots: WorkspaceInspectionPathItem[]
+  entrypoints: WorkspaceInspectionPathItem[]
+  codeGraph: {
+    provider: string
+    available: boolean
+  }
+}
+
 export type ProcessStepRecord = {
   id: string
   kind: 'reasoning' | 'tool' | 'command' | 'workflow'
@@ -174,6 +197,7 @@ export type ProcessStepRecord = {
   iterationKind?: string
   buildExecutionSlice?: import('../typings').WorkflowBuildExecutionSlice
   dagGeneration?: DagGenerationSnapshot
+  workspaceInspection?: WorkspaceInspectionSnapshot
   projectPlanUpdate?: WorkflowProjectPlanUpdate
 }
 
@@ -401,6 +425,7 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
   if (!['running', 'completed', 'failed', 'requires_user_input'].includes(status)) return undefined
   const checks = readIntegrationTestChecks(step.checks)
   const dagGeneration = readDagGenerationSnapshot(step.dagGeneration)
+  const workspaceInspection = readWorkspaceInspectionSnapshot(step.workspaceInspection)
   return {
     id,
     kind: kind as ProcessStepRecord['kind'],
@@ -418,8 +443,66 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
         ? (step.buildExecutionSlice as import('../typings').WorkflowBuildExecutionSlice)
         : undefined,
     ...(checks ? { checks } : {}),
-    ...(dagGeneration ? { dagGeneration } : {})
+    ...(dagGeneration ? { dagGeneration } : {}),
+    ...(workspaceInspection ? { workspaceInspection } : {})
   }
+}
+
+/** 解析工作区检查快照，并兼容历史状态使用的 snake_case 字段。 */
+export function readWorkspaceInspectionSnapshot(
+  value: unknown
+): WorkspaceInspectionSnapshot | undefined {
+  const snapshot = objectValue(parseStructuredValue(value))
+  const manifest = objectValue(snapshot.fileManifest ?? snapshot.file_manifest)
+  const codeGraph = objectValue(snapshot.codeGraph ?? snapshot.code_graph)
+  const projectRoots = readWorkspacePathItems(snapshot.projectRoots ?? snapshot.project_roots, 40)
+  const entrypoints = readWorkspacePathItems(snapshot.entrypoints, 80)
+  const schemaVersion = boundedString(snapshot.schemaVersion ?? snapshot.schema_version, 80)
+  const revision = boundedString(snapshot.revision ?? snapshot.workspace_revision, 80)
+  const hasManifest = Object.keys(manifest).length > 0
+  if (!schemaVersion && !revision && !hasManifest && projectRoots.length === 0) return undefined
+
+  return {
+    schemaVersion,
+    revision,
+    cacheHit: snapshot.cacheHit === true || snapshot.cache_hit === true,
+    fileManifest: {
+      totalFiles: nonNegativeInteger(manifest.totalFiles ?? manifest.total_files_indexed),
+      sourceFiles: nonNegativeInteger(manifest.sourceFiles ?? manifest.source_files_indexed),
+      truncated: manifest.truncated === true
+    },
+    techStack: boundedStringList(snapshot.techStack ?? snapshot.tech_stack, 40, 160),
+    projectRoots,
+    entrypoints,
+    codeGraph: {
+      provider: boundedString(codeGraph.provider, 80) || 'none',
+      available: codeGraph.available === true
+    }
+  }
+}
+
+/** 仅接受工作区相对路径，防止历史或未知事件把宿主机路径带入界面。 */
+function readWorkspacePathItems(value: unknown, limit: number): WorkspaceInspectionPathItem[] {
+  if (!Array.isArray(value)) return []
+  const items: WorkspaceInspectionPathItem[] = []
+  for (const item of value) {
+    const candidate = objectValue(item)
+    const path = boundedString(candidate.path, 1_000).replaceAll('\\', '/')
+    if (
+      !path ||
+      path.startsWith('/') ||
+      /^[a-z]:\//i.test(path) ||
+      path.split('/').includes('..')
+    ) {
+      continue
+    }
+    items.push({
+      path,
+      kind: boundedString(candidate.kind, 80) || 'unknown'
+    })
+    if (items.length >= limit) break
+  }
+  return items
 }
 
 /** 解析 DAG 生成快照，仅保留前端展示所需的受限结构。 */
@@ -666,7 +749,9 @@ function boundedStringList(value: unknown, itemLimit: number, textLimit: number)
 
 /** 把协议摘要字段安全转换为非负整数。 */
 function nonNegativeInteger(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(1_000_000, Math.max(0, Math.trunc(value)))
+    : 0
 }
 
 function messageContentToText(content: Message['content'] | undefined): string {

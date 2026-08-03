@@ -104,6 +104,7 @@ function normalizeSessionProcessSteps(value: unknown): JsonRecord[] {
     if (!id || !PROCESS_STEP_KINDS.has(kind) || !PROCESS_STEP_STATUSES.has(status)) continue
     const checks = normalizeSessionChecks(valueItem.checks)
     const dagGeneration = normalizeSessionDagGeneration(valueItem.dagGeneration)
+    const workspaceInspection = normalizeSessionWorkspaceInspection(valueItem.workspaceInspection)
     steps.push({
       id,
       kind,
@@ -114,10 +115,71 @@ function normalizeSessionProcessSteps(value: unknown): JsonRecord[] {
       sequence: typeof valueItem.sequence === 'number' ? valueItem.sequence : 0,
       appendDetail: valueItem.appendDetail === true,
       ...(checks.length > 0 ? { checks } : {}),
-      ...(dagGeneration ? { dagGeneration } : {})
+      ...(dagGeneration ? { dagGeneration } : {}),
+      ...(workspaceInspection ? { workspaceInspection } : {})
     })
   }
   return steps
+}
+
+/** 规范化工作区检查快照，仅持久化安全计数、标签和相对路径。 */
+function normalizeSessionWorkspaceInspection(value: unknown): JsonRecord | undefined {
+  if (!isJsonRecord(value)) return undefined
+  const manifest = isJsonRecord(value.fileManifest) ? value.fileManifest : {}
+  const codeGraph = isJsonRecord(value.codeGraph) ? value.codeGraph : {}
+  const projectRoots = normalizeSessionWorkspacePaths(value.projectRoots, 40)
+  const entrypoints = normalizeSessionWorkspacePaths(value.entrypoints, 80)
+  const schemaVersion = stringValue(value.schemaVersion).slice(0, 80)
+  const revision = stringValue(value.revision).slice(0, 80)
+  if (
+    !schemaVersion &&
+    !revision &&
+    Object.keys(manifest).length === 0 &&
+    projectRoots.length === 0
+  ) {
+    return undefined
+  }
+  return {
+    schemaVersion,
+    revision,
+    cacheHit: value.cacheHit === true,
+    fileManifest: {
+      totalFiles: nonNegativeSessionInteger(manifest.totalFiles),
+      sourceFiles: nonNegativeSessionInteger(manifest.sourceFiles),
+      truncated: manifest.truncated === true
+    },
+    techStack: normalizeSessionStringList(value.techStack, 40, 160),
+    projectRoots,
+    entrypoints,
+    codeGraph: {
+      provider: stringValue(codeGraph.provider).slice(0, 80) || 'none',
+      available: codeGraph.available === true
+    }
+  }
+}
+
+/** 过滤持久化快照中的绝对路径和父目录跳转。 */
+function normalizeSessionWorkspacePaths(value: unknown, limit: number): JsonRecord[] {
+  if (!Array.isArray(value)) return []
+  const paths: JsonRecord[] = []
+  for (const item of value) {
+    if (!isJsonRecord(item)) continue
+    const path = stringValue(item.path).trim().slice(0, 1_000).replaceAll('\\', '/')
+    if (
+      !path ||
+      path.startsWith('/') ||
+      /^[a-z]:\//i.test(path) ||
+      path.split('/').includes('..')
+    ) {
+      continue
+    }
+    paths.push({
+      path,
+      kind: stringValue(item.kind).trim().slice(0, 80) || 'unknown'
+    })
+    if (paths.length >= limit) break
+  }
+  return paths
 }
 
 /** 规范化 DAG 生成快照，仅持久化阶段、任务摘要和安全产物标签。 */
@@ -196,7 +258,9 @@ function normalizeSessionStringList(
 
 /** 把 DAG 摘要字段转换为非负整数。 */
 function nonNegativeSessionInteger(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(1_000_000, Math.max(0, Math.trunc(value)))
+    : 0
 }
 
 /** 规范化集成测试检查项，只持久化安全的可见摘要。 */

@@ -102,6 +102,11 @@ def workflow_capabilities() -> dict[str, Any]:
                         "Compact prepare-build-tasks snapshot containing ordered generation "
                         "stages, topological task summaries, counts, and safe artifact labels."
                     ),
+                    "workspaceInspection": (
+                        "Safe inspect-workspace summary containing bounded counts, detected "
+                        "stack, relative project roots and entrypoints, cache status, and the "
+                        "code-graph capability state."
+                    ),
                     "checks": {
                         "description": "Incremental integration-test check snapshot.",
                         "item": {

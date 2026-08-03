@@ -273,6 +273,20 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 ),
             },
         }
+    if node_name == "inspect_workspace":
+        workspace_inspection = _workspace_inspection_snapshot(update)
+        if workspace_inspection is None:
+            return {"message": "工作区快照检查已完成", "data": {}}
+        manifest = workspace_inspection["fileManifest"]
+        return {
+            "message": (
+                f"已索引 {manifest['totalFiles']} 个文件，"
+                f"其中源文件 {manifest['sourceFiles']} 个，"
+                f"识别 {len(workspace_inspection['techStack'])} 项技术栈和 "
+                f"{len(workspace_inspection['entrypoints'])} 个入口"
+            ),
+            "data": {"workspaceInspection": workspace_inspection},
+        }
     if node_name == "inspect_database_context":
         database_context = update.get("database_planning_context")
         database_context = database_context if isinstance(database_context, dict) else {}
@@ -372,6 +386,81 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {"status": update.get("status"), "phase": update.get("phase")},
         }
     return {"message": "", "data": {}}
+
+
+def _workspace_inspection_snapshot(update: dict[str, Any]) -> dict[str, Any] | None:
+    """把工作区摘要裁剪为不含宿主机绝对路径的稳定展示结构。"""
+
+    summary = update.get("workspace_snapshot_summary")
+    if not isinstance(summary, dict):
+        return None
+    manifest = summary.get("file_manifest")
+    manifest = manifest if isinstance(manifest, dict) else {}
+    code_graph = summary.get("code_graph")
+    code_graph = code_graph if isinstance(code_graph, dict) else {}
+    timeline = update.get("timeline")
+    timeline = timeline if isinstance(timeline, list) else []
+    return {
+        "schemaVersion": str(summary.get("schema_version") or "")[:80],
+        "revision": str(
+            summary.get("workspace_revision") or update.get("workspace_revision") or ""
+        )[:80],
+        "cacheHit": "inspect_workspace:cache_hit" in timeline,
+        "fileManifest": {
+            "totalFiles": _bounded_non_negative_int(manifest.get("total_files_indexed")),
+            "sourceFiles": _bounded_non_negative_int(manifest.get("source_files_indexed")),
+            "truncated": bool(manifest.get("truncated")),
+        },
+        "techStack": _bounded_string_list(summary.get("tech_stack"), limit=40),
+        "projectRoots": _safe_path_items(summary.get("project_roots"), limit=40),
+        "entrypoints": _safe_path_items(summary.get("entrypoints"), limit=80),
+        "codeGraph": {
+            "provider": str(code_graph.get("provider") or "none")[:80],
+            "available": bool(code_graph.get("available")),
+        },
+    }
+
+
+def _bounded_non_negative_int(value: Any) -> int:
+    """把外部计数规范为适合 UI 展示的非负整数。"""
+
+    if not isinstance(value, (int, float)):
+        return 0
+    try:
+        return max(0, min(int(value), 1_000_000))
+    except (OverflowError, ValueError):
+        return 0
+
+
+def _bounded_string_list(value: Any, *, limit: int) -> list[str]:
+    """裁剪字符串列表，避免工作流事件携带无界内容。"""
+
+    if not isinstance(value, list):
+        return []
+    return [text for item in value if (text := str(item).strip()[:160])][:limit]
+
+
+def _safe_path_items(value: Any, *, limit: int) -> list[dict[str, str]]:
+    """仅保留安全的工作区相对路径及其类型标签。"""
+
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, str]] = []
+    for raw_item in value:
+        if not isinstance(raw_item, dict):
+            continue
+        path = str(raw_item.get("path") or "").strip().replace("\\", "/")
+        if not path or path.startswith("/") or ":/" in path or ".." in Path(path).parts:
+            continue
+        items.append(
+            {
+                "path": path[:1_000],
+                "kind": str(raw_item.get("kind") or "unknown").strip()[:80],
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
 
 
 def _detail_confirmation_completed_message(update: dict[str, Any]) -> str:

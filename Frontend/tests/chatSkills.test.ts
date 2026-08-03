@@ -13,7 +13,8 @@ import {
   AgUiChatSession,
   buildWorkflowForwardedProps,
   readDagGenerationSnapshot,
-  readProjectPlanUpdate
+  readProjectPlanUpdate,
+  readWorkspaceInspectionSnapshot
 } from '../src/renderer/src/service/agUiAgent'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
 import {
@@ -698,6 +699,172 @@ test('AG-UI DAG 生成步骤按稳定 ID 合并最新完整快照', async () => 
   }
 })
 
+test('工作区检查快照过滤绝对路径并渲染默认展开的科技感面板', () => {
+  const snapshot = readWorkspaceInspectionSnapshot({
+    schemaVersion: '1.0.0',
+    revision: 'revision-1234567890',
+    cacheHit: true,
+    fileManifest: { totalFiles: 128, sourceFiles: 96, truncated: false },
+    techStack: ['FastAPI', 'React', 'Vite'],
+    projectRoots: [
+      { path: 'Backend/app', kind: 'backend' },
+      { path: '/private/workspace', kind: 'unsafe' }
+    ],
+    entrypoints: [{ path: 'Frontend/src/renderer/src/main.tsx', kind: 'frontend_renderer' }],
+    codeGraph: { provider: 'none', available: false },
+    workspaceSnapshotPath: '/private/workspace/cache/snapshot.json'
+  })
+  assert.ok(snapshot)
+
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: false,
+      steps: [
+        {
+          id: 'workflow:inspect_workspace',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 工作区快照检查',
+          detail: '已索引 128 个文件',
+          sequence: 1,
+          workspaceInspection: snapshot
+        }
+      ]
+    })
+  )
+
+  assert.equal(snapshot.projectRoots.length, 1)
+  assert.match(markup, /WORKSPACE SCAN/)
+  assert.match(markup, /CACHE HIT/)
+  assert.match(markup, /FastAPI/)
+  assert.match(markup, /Backend\/app/)
+  assert.match(markup, /语义图谱未启用/)
+  assert.ok((markup.match(/ open=""/g) || []).length >= 2)
+  assert.doesNotMatch(markup, /private\/workspace|snapshot\.json/)
+})
+
+test('AG-UI 工作区完成帧解析并保留结构化扫描结果', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as Record<string, unknown>
+    const threadId = String(request.threadId)
+    const runId = String(request.runId)
+    const events = [
+      { type: 'RUN_STARTED', threadId, runId },
+      {
+        type: 'CUSTOM',
+        name: 'agent-process',
+        value: {
+          id: 'workflow:inspect_workspace',
+          kind: 'workflow',
+          status: 'completed',
+          title: '已完成 工作区快照检查',
+          detail: '已索引 64 个文件',
+          sequence: 2,
+          workspaceInspection: {
+            schemaVersion: '1.0.0',
+            revision: 'live-revision',
+            cacheHit: false,
+            fileManifest: { totalFiles: 64, sourceFiles: 48, truncated: false },
+            techStack: ['React'],
+            projectRoots: [{ path: 'frontend/src', kind: 'frontend' }],
+            entrypoints: [],
+            codeGraph: { provider: 'none', available: false }
+          }
+        }
+      },
+      { type: 'RUN_FINISHED', threadId, runId, result: {} }
+    ]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' },
+      status: 200
+    })
+  }
+
+  try {
+    const session = new AgUiChatSession('thread-workspace', 'http://agent.test/workflow/run')
+    const result = await session.sendMessage('检查工作区', { editorMode: 'frontend' })
+    assert.equal(result.processSteps[0]?.workspaceInspection?.revision, 'live-revision')
+    assert.equal(result.processSteps[0]?.workspaceInspection?.fileManifest.sourceFiles, 48)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('工作区检查详情优先从完成事件恢复并兼容旧状态字段', () => {
+  const eventSteps = processStepsForDisplay(undefined, {
+    runId: 'run-workspace-event',
+    threadId: 'thread-workspace-event',
+    summary: { status: 'completed' },
+    events: [
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'inspect_workspace',
+        node: { label: '工作区快照检查' },
+        status: 'completed',
+        data: {
+          detail: {
+            workspaceInspection: {
+              schemaVersion: '1.0.0',
+              revision: 'event-revision',
+              cacheHit: false,
+              fileManifest: { totalFiles: 20, sourceFiles: 12, truncated: false },
+              techStack: ['React'],
+              projectRoots: [{ path: 'frontend/src', kind: 'frontend' }],
+              entrypoints: [],
+              codeGraph: { provider: 'none', available: false }
+            }
+          }
+        }
+      }
+    ],
+    state: {
+      workspace_snapshot_summary: {
+        schema_version: 'legacy',
+        workspace_revision: 'state-should-not-win',
+        file_manifest: { total_files_indexed: 1, source_files_indexed: 1 }
+      }
+    }
+  })
+  assert.equal(eventSteps?.[0].workspaceInspection?.revision, 'event-revision')
+  assert.equal(eventSteps?.[0].workspaceInspection?.fileManifest.totalFiles, 20)
+
+  const legacySteps = processStepsForDisplay(undefined, {
+    runId: 'run-workspace-legacy',
+    threadId: 'thread-workspace-legacy',
+    summary: { status: 'completed' },
+    events: [
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'inspect_workspace',
+        node: { label: '工作区快照检查' },
+        status: 'completed',
+        message: '完成：工作区快照检查',
+        data: { stateDelta: { timeline: ['inspect_workspace:cache_hit'] } }
+      }
+    ],
+    state: {
+      workspace_snapshot_summary: {
+        schema_version: '1.0.0',
+        workspace_revision: 'legacy-revision',
+        tech_stack: ['React'],
+        project_roots: [{ path: 'frontend/src', kind: 'frontend' }],
+        entrypoints: [],
+        file_manifest: {
+          total_files_indexed: 42,
+          source_files_indexed: 30,
+          truncated: true
+        },
+        code_graph: { provider: 'none', available: false }
+      }
+    }
+  })
+
+  assert.equal(legacySteps?.[0].workspaceInspection?.revision, 'legacy-revision')
+  assert.equal(legacySteps?.[0].workspaceInspection?.fileManifest.sourceFiles, 30)
+  assert.equal(legacySteps?.[0].workspaceInspection?.cacheHit, true)
+})
+
 test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
   const snapshot = readDagGenerationSnapshot({
     agent_note: 'raw-model-output',
@@ -1078,6 +1245,19 @@ test('Electron 会话持久化保留 Agent 步骤、检查清单和工具调用'
           ],
           summary: { unitCount: 1, taskCount: 1 },
           artifacts: []
+        },
+        workspaceInspection: {
+          schemaVersion: '1.0.0',
+          revision: 'persisted-revision',
+          cacheHit: true,
+          fileManifest: { totalFiles: 42, sourceFiles: 30, truncated: false },
+          techStack: ['React'],
+          projectRoots: [
+            { path: 'frontend/src', kind: 'frontend' },
+            { path: '/private/workspace', kind: 'unsafe' }
+          ],
+          entrypoints: [{ path: 'frontend/src/main.tsx', kind: 'frontend_renderer' }],
+          codeGraph: { provider: 'none', available: false }
         }
       }
     ],
@@ -1108,6 +1288,11 @@ test('Electron 会话持久化保留 Agent 步骤、检查清单和工具调用'
     ).length,
     1
   )
+  const persistedWorkspaceInspection = (message.processSteps as Array<Record<string, unknown>>)[0]
+    .workspaceInspection as Record<string, unknown>
+  assert.equal(persistedWorkspaceInspection.revision, 'persisted-revision')
+  assert.equal((persistedWorkspaceInspection.projectRoots as unknown[]).length, 1)
+  assert.doesNotMatch(JSON.stringify(persistedWorkspaceInspection), /private\/workspace/)
   assert.equal((message.toolCalls as Array<Record<string, unknown>>)[0].status, 'completed')
 })
 

@@ -189,6 +189,55 @@ class FakeProjectPlanningWaitGraph:
         )
 
 
+class FakeWorkspaceInspectionGraph:
+    """模拟工作区快照检查完成并命中缓存。"""
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        """发送包含安全摘要和内部路径的节点更新。"""
+
+        del initial_state, config, stream_mode
+        yield "updates", {
+            "inspect_workspace": {
+                "phase": "inspect_workspace",
+                "status": "completed",
+                "workspace_revision": "revision-1234567890",
+                "workspace_snapshot_path": "/private/workspace/cache/snapshot.json",
+                "workspace_snapshot_hash": "secret-hash",
+                "workspace_snapshot_summary": {
+                    "schema_version": "1.0.0",
+                    "workspace_revision": "revision-1234567890",
+                    "tech_stack": ["FastAPI", "React"],
+                    "project_roots": [
+                        {"path": "Backend/app", "kind": "backend"},
+                        {"path": "/private/workspace", "kind": "unsafe"},
+                    ],
+                    "entrypoints": [
+                        {"path": "Backend/app/main.py", "kind": "backend_api"}
+                    ],
+                    "file_manifest": {
+                        "total_files_indexed": 128,
+                        "source_files_indexed": 96,
+                        "truncated": False,
+                    },
+                    "code_graph": {"provider": "none", "available": False},
+                },
+                "timeline": ["inspect_workspace:cache_hit"],
+            }
+        }
+
+    async def aget_state(self, config):
+        """返回工作区检查后的最小最终状态。"""
+
+        del config
+        return SimpleNamespace(
+            values={
+                "phase": "prepare_build_tasks",
+                "status": "completed",
+                "timeline": ["inspect_workspace:cache_hit"],
+            }
+        )
+
+
 class FakeCodeChangesGraph:
     async def astream(self, initial_state, *, config, stream_mode):
         yield "updates", {
@@ -602,6 +651,45 @@ def _fake_code_change_set() -> dict:
 
 
 class WorkflowAgUiStreamTests(unittest.TestCase):
+    def test_workspace_inspection_projects_safe_structured_summary(self) -> None:
+        """工作区检查详情应包含识别结果，但不能暴露绝对缓存路径或哈希。"""
+
+        detail = _workflow_node_detail(
+            "inspect_workspace",
+            {
+                "workspace_revision": "revision-1234567890",
+                "workspace_snapshot_path": "/private/workspace/cache/snapshot.json",
+                "workspace_snapshot_hash": "secret-hash",
+                "workspace_snapshot_summary": {
+                    "schema_version": "1.0.0",
+                    "tech_stack": ["FastAPI", "React"],
+                    "project_roots": [
+                        {"path": "Backend/app", "kind": "backend"},
+                        {"path": "/private/workspace", "kind": "unsafe"},
+                    ],
+                    "entrypoints": [
+                        {"path": "Backend/app/main.py", "kind": "backend_api"}
+                    ],
+                    "file_manifest": {
+                        "total_files_indexed": 128,
+                        "source_files_indexed": 96,
+                        "truncated": False,
+                    },
+                    "code_graph": {"provider": "none", "available": False},
+                },
+                "timeline": ["inspect_workspace:cache_hit"],
+            },
+        )
+
+        snapshot = detail["data"]["workspaceInspection"]
+        self.assertEqual(snapshot["fileManifest"]["totalFiles"], 128)
+        self.assertEqual(snapshot["techStack"], ["FastAPI", "React"])
+        self.assertEqual(snapshot["projectRoots"], [{"path": "Backend/app", "kind": "backend"}])
+        self.assertTrue(snapshot["cacheHit"])
+        self.assertIn("已索引 128 个文件", detail["message"])
+        self.assertNotIn("/private/workspace", str(snapshot))
+        self.assertNotIn("secret-hash", str(snapshot))
+
     def test_detail_confirmation_projects_page_and_related_endpoint_markdown(self) -> None:
         """页面确认完成后只投影本轮页面与联动接口章节。"""
 
@@ -1065,6 +1153,36 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertEqual(dag_frames[1]["dagGeneration"]["stages"][1]["status"], "running")
         self.assertEqual(dag_frames[-1]["dagGeneration"]["tasks"][0]["id"], "page")
         self.assertLess(dag_frames[-2]["sequence"], dag_frames[-1]["sequence"])
+
+    def test_stream_attaches_workspace_inspection_to_completed_step(self) -> None:
+        """工作区完成帧应复用节点事件中的安全结构化摘要。"""
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeWorkspaceInspectionGraph(),
+                payload={
+                    "threadId": "thread-workspace-scan",
+                    "runId": "run-workspace-scan",
+                    "messages": [{"role": "user", "content": "检查工作区"}],
+                    "forwardedProps": {"resumeFrom": "inspect_workspace"},
+                },
+            )
+            return [frame async for frame in stream]
+
+        frames = _decode_agent_process_frames(asyncio.run(collect()))
+        completed = [
+            frame
+            for frame in frames
+            if frame.get("id") == "workflow:inspect_workspace"
+            and frame.get("status") == "completed"
+        ]
+
+        self.assertEqual(len(completed), 1)
+        snapshot = completed[0]["workspaceInspection"]
+        self.assertEqual(snapshot["fileManifest"]["sourceFiles"], 96)
+        self.assertEqual(snapshot["entrypoints"][0]["path"], "Backend/app/main.py")
+        self.assertTrue(snapshot["cacheHit"])
+        self.assertNotIn("/private/workspace", str(snapshot))
 
     def test_workflow_stream_forwards_integration_test_checks_progressively(self) -> None:
         """回归保护:runtime 必须把 LangGraph custom 流中的 ``integration_test.checks`` 事件

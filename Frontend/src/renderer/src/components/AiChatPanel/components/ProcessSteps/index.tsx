@@ -17,6 +17,7 @@ import { cx } from '../../../../utils'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import DagGenerationProgress from './DagGenerationProgress'
 import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
+import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
 import './ProcessSteps.less'
 
 const { Text } = Typography
@@ -37,11 +38,22 @@ export default function ProcessSteps({
 }: Props): ReactElement {
   const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
   const hasProjectPlanUpdate = steps.some((step) => Boolean(step.projectPlanUpdate))
-  const [open, setOpen] = useState(loading || waitingForInput || hasProjectPlanUpdate)
+  const hasWorkspaceInspection = steps.some((step) => Boolean(step.workspaceInspection))
+  const [open, setOpen] = useState(
+    loading || waitingForInput || hasProjectPlanUpdate || hasWorkspaceInspection
+  )
 
   useEffect(() => {
-    if (loading || waitingForInput || hasTestChecklist || hasProjectPlanUpdate) setOpen(true)
-  }, [hasProjectPlanUpdate, hasTestChecklist, loading, waitingForInput])
+    if (
+      loading ||
+      waitingForInput ||
+      hasTestChecklist ||
+      hasProjectPlanUpdate ||
+      hasWorkspaceInspection
+    ) {
+      setOpen(true)
+    }
+  }, [hasProjectPlanUpdate, hasTestChecklist, hasWorkspaceInspection, loading, waitingForInput])
 
   const statusClassName = loading ? 'running' : waitingForInput ? 'waiting' : 'completed'
 
@@ -108,10 +120,17 @@ function ProcessStep({
   const hasBuildRun = Boolean(step.buildExecutionSlice)
   const hasDagGeneration = Boolean(step.dagGeneration)
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
+  const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
   const expandable =
-    hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration || hasProjectPlanUpdate
+    hasDetail ||
+    hasResult ||
+    hasChecks ||
+    hasBuildRun ||
+    hasDagGeneration ||
+    hasProjectPlanUpdate ||
+    hasWorkspaceInspection
   const awaitingInput = waitingForInput && step.status === 'requires_user_input'
   const [open, setOpen] = useState(
     expandable &&
@@ -120,7 +139,8 @@ function ProcessStep({
         hasChecks ||
         hasBuildRun ||
         hasDagGeneration ||
-        hasProjectPlanUpdate)
+        hasProjectPlanUpdate ||
+        hasWorkspaceInspection)
   )
 
   useEffect(() => {
@@ -131,7 +151,8 @@ function ProcessStep({
         hasChecks ||
         hasBuildRun ||
         hasDagGeneration ||
-        hasProjectPlanUpdate)
+        hasProjectPlanUpdate ||
+        hasWorkspaceInspection)
     ) {
       setOpen(true)
     }
@@ -142,6 +163,7 @@ function ProcessStep({
     hasChecks,
     hasDagGeneration,
     hasProjectPlanUpdate,
+    hasWorkspaceInspection,
     step.status
   ])
 
@@ -154,6 +176,7 @@ function ProcessStep({
     hasBuildRun && 'has-build-run',
     hasDagGeneration && 'has-dag-generation',
     hasProjectPlanUpdate && 'has-project-plan-update',
+    hasWorkspaceInspection && 'has-workspace-inspection',
     isLast && 'last'
   )
   const summaryContent = (
@@ -193,15 +216,22 @@ function ProcessStep({
     >
       <summary className={cx('process-step-summary')}>{summaryContent}</summary>
       <div className={cx('process-step-detail')}>
-        {!hasChecks && !hasDagGeneration && !hasProjectPlanUpdate && step.detail && (
-          <DetailBlock
-            label={step.kind === 'reasoning' ? '思考内容' : '动作详情'}
-            value={step.detail}
-          />
-        )}
+        {!hasChecks &&
+          !hasDagGeneration &&
+          !hasProjectPlanUpdate &&
+          !hasWorkspaceInspection &&
+          step.detail && (
+            <DetailBlock
+              label={step.kind === 'reasoning' ? '思考内容' : '动作详情'}
+              value={step.detail}
+            />
+          )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
         {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
         {step.projectPlanUpdate && <ProjectPlanUpdatePanel update={step.projectPlanUpdate} />}
+        {step.workspaceInspection && (
+          <WorkspaceInspectionPanel snapshot={step.workspaceInspection} />
+        )}
         {step.buildExecutionSlice && (
           <BuildExecutionRunCard executionSlice={step.buildExecutionSlice} status={step.status} />
         )}

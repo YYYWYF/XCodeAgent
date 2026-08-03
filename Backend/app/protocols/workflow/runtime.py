@@ -680,6 +680,11 @@ def build_workflow_ag_ui_stream(
                             if node_name == "prepare_build_tasks"
                             else None
                         ),
+                        workspace_inspection=(
+                            detail.get("data", {}).get("workspaceInspection")
+                            if node_name == "inspect_workspace"
+                            else None
+                        ),
                     )
                     for frame in _tool_result_frames(
                         encoder,

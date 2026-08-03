@@ -69,6 +69,7 @@ def _process_frame(
     iteration_kind: str | None = None,
     build_execution_slice: dict[str, Any] | None = None,
     dag_generation: dict[str, Any] | None = None,
+    workspace_inspection: dict[str, Any] | None = None,
 ) -> str:
     value: dict[str, Any] = {
         "id": id,
@@ -92,6 +93,8 @@ def _process_frame(
         value["buildExecutionSlice"] = build_execution_slice
     if dag_generation is not None:
         value["dagGeneration"] = dag_generation
+    if workspace_inspection is not None:
+        value["workspaceInspection"] = workspace_inspection
     return encoder.encode(
         CustomEvent(
             name=PROCESS_EVENT_NAME,

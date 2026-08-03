@@ -3,7 +3,8 @@ import { isDirectModificationWorkflow } from '../components/AiChatPanel/directMo
 import {
   readDagGenerationSnapshot,
   readIntegrationTestChecks,
-  readProjectPlanUpdate
+  readProjectPlanUpdate,
+  readWorkspaceInspectionSnapshot
 } from './agUiAgent'
 import type { ProcessStepRecord } from './agUiAgent'
 
@@ -44,6 +45,19 @@ export function processStepsForDisplay(
     )
   }
 
+  const workspaceInspection = completedWorkspaceInspection(workflow)
+  if (workspaceInspection) {
+    const workspaceStepId = [...displaySteps]
+      .reverse()
+      .find(
+        (step) =>
+          step.nodeName === 'inspect_workspace' || step.id.startsWith('workflow:inspect_workspace')
+      )?.id
+    displaySteps = displaySteps.map((step) =>
+      step.id === workspaceStepId ? { ...step, workspaceInspection } : step
+    )
+  }
+
   const planUpdate = completedProjectPlanUpdate(workflow)
   if (!planUpdate) return displaySteps
   const targetStepId = planUpdate.attempt
@@ -58,6 +72,43 @@ export function processStepsForDisplay(
   return displaySteps.map((step) =>
     step.id === targetStepId ? { ...step, projectPlanUpdate: planUpdate.snapshot } : step
   )
+}
+
+/** 从完成事件或旧状态快照恢复工作区检查详情，并补齐缓存命中标记。 */
+function completedWorkspaceInspection(
+  workflow: WorkflowRunPayload | undefined
+): ProcessStepRecord['workspaceInspection'] {
+  if (!workflow) return undefined
+  const event = [...workflow.events]
+    .reverse()
+    .find(
+      (item) => item.nodeName === 'inspect_workspace' && item.type === 'workflow.node.completed'
+    )
+  const detail = event ? workflowEventDetail(event) : {}
+  const stateDelta =
+    event?.data?.stateDelta && typeof event.data.stateDelta === 'object'
+      ? (event.data.stateDelta as Record<string, unknown>)
+      : {}
+  const snapshot = readWorkspaceInspectionSnapshot(
+    detail.workspaceInspection ??
+      stateDelta.workspaceInspection ??
+      stateDelta.workspace_snapshot_summary ??
+      workflow.state?.workspaceInspection ??
+      workflow.state?.workspace_snapshot_summary ??
+      workflow.result?.workspaceInspection ??
+      workflow.result?.workspace_snapshot_summary
+  )
+  if (!snapshot) return undefined
+  const eventTimeline = Array.isArray(stateDelta.timeline)
+    ? stateDelta.timeline.filter((item): item is string => typeof item === 'string')
+    : []
+  return {
+    ...snapshot,
+    cacheHit:
+      snapshot.cacheHit ||
+      eventTimeline.includes('inspect_workspace:cache_hit') ||
+      workflowTimeline(workflow).includes('inspect_workspace:cache_hit')
+  }
 }
 
 /** 简单模式隐藏内部收尾步骤，并在运行时用最近工具活动替换所属 Workflow 动作详情。 */
