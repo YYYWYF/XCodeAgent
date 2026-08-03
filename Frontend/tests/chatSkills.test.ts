@@ -12,7 +12,8 @@ import {
 import {
   AgUiChatSession,
   buildWorkflowForwardedProps,
-  readDagGenerationSnapshot
+  readDagGenerationSnapshot,
+  readProjectPlanUpdate
 } from '../src/renderer/src/service/agUiAgent'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
 import {
@@ -804,6 +805,122 @@ test('旧会话从节点完成事件恢复 DAG 生成详情', () => {
   })
 
   assert.equal(steps?.[0].dagGeneration?.tasks[0]?.id, 'page-home')
+})
+
+test('页面细节确认把只读计划更新挂到正确执行轮次并默认展开', () => {
+  const projectPlanUpdate = readProjectPlanUpdate({
+    format: 'markdown',
+    readOnly: true,
+    documentName: 'project-plan.md',
+    status: 'confirmed',
+    targetType: 'page',
+    targetId: 'inventory-page',
+    summary: { pageCount: 1, endpointCount: 1 },
+    sections: [
+      {
+        id: 'page:inventory-page',
+        kind: 'page',
+        title: '库存列表',
+        subtitle: '/inventory',
+        content: '### 库存列表 `/inventory`\n\n#### 页面基本信息\n\n- 页面目标：查看库存'
+      },
+      {
+        id: 'endpoint:inventory-api:list-inventory',
+        kind: 'endpoint',
+        title: 'GET /api/inventory',
+        subtitle: 'API 契约 · inventory-api',
+        content: '# 接口详细设计：GET /api/inventory\n\n## 一、数据用途\n\n- 用途：查询库存'
+      }
+    ]
+  })
+  assert.ok(projectPlanUpdate)
+
+  const steps = processStepsForDisplay(
+    [
+      {
+        id: 'workflow:detail_confirmation',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成 页面细节确认',
+        detail: '项目计划书已更新',
+        sequence: 1,
+        nodeName: 'detail_confirmation',
+        attempt: 1
+      },
+      {
+        id: 'workflow:detail_confirmation:2',
+        kind: 'workflow',
+        status: 'completed',
+        title: '已完成 页面细节确认',
+        detail: '项目计划书已更新',
+        sequence: 2,
+        nodeName: 'detail_confirmation',
+        attempt: 2
+      }
+    ],
+    {
+      runId: 'run-plan-update',
+      threadId: 'thread-plan-update',
+      summary: { status: 'completed' },
+      events: [
+        {
+          type: 'workflow.node.completed',
+          nodeName: 'detail_confirmation',
+          status: 'completed',
+          attempt: 2,
+          data: { detail: { projectPlanUpdate } }
+        }
+      ]
+    }
+  )
+
+  assert.equal(steps?.[0].projectPlanUpdate, undefined)
+  assert.equal(steps?.[1].projectPlanUpdate?.targetId, 'inventory-page')
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, { loading: false, steps: steps?.slice(1) || [] })
+  )
+  assert.match(markup, /PROJECT PLAN UPDATE/)
+  assert.match(markup, /项目计划书本次更新/)
+  assert.match(markup, /只读/)
+  assert.match(markup, /库存列表/)
+  assert.match(markup, /GET \/api\/inventory/)
+  assert.match(markup, /<details[^>]*open=""/)
+  assert.doesNotMatch(markup, /动作详情/)
+})
+
+test('损坏或缺失的计划更新快照继续使用旧动作摘要', () => {
+  assert.equal(
+    readProjectPlanUpdate({
+      format: 'markdown',
+      readOnly: true,
+      status: 'confirmed',
+      targetType: 'page',
+      targetId: 'inventory-page',
+      documentName: 'project-plan.md',
+      sections: []
+    }),
+    undefined
+  )
+
+  const steps = processStepsForDisplay(undefined, {
+    runId: 'run-plan-update-legacy',
+    threadId: 'thread-plan-update-legacy',
+    summary: { status: 'completed' },
+    events: [
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'detail_confirmation',
+        node: { label: '页面细节确认' },
+        status: 'completed',
+        message: '项目计划书已更新'
+      }
+    ]
+  })
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, { loading: false, steps: steps || [] })
+  )
+  assert.match(markup, /项目计划书已更新/)
+  assert.doesNotMatch(markup, /PROJECT PLAN UPDATE/)
 })
 
 test('集成测试步骤渲染具体检查项而不是数字详情', () => {

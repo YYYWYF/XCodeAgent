@@ -82,6 +82,12 @@ def workflow_capabilities() -> dict[str, Any]:
                 "workflow.run.finished",
                 "workflow.run.failed",
             ],
+            "nodeCompletedDetail": {
+                "projectPlanUpdate": (
+                    "Optional read-only Markdown snapshot for the page or endpoint sections "
+                    "confirmed by detail_confirmation."
+                ),
+            },
             "agentProcess": {
                 "name": PROCESS_EVENT_NAME,
                 "optionalFields": {

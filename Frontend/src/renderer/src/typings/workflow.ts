@@ -170,6 +170,28 @@ export type WorkflowConfirmationArtifact = {
   content: string
 }
 
+export type WorkflowProjectPlanUpdateSection = {
+  id: string
+  kind: 'page' | 'endpoint'
+  title: string
+  subtitle?: string
+  content: string
+}
+
+export type WorkflowProjectPlanUpdate = {
+  format: 'markdown'
+  readOnly: true
+  documentName: string
+  status: 'confirmed'
+  targetType: 'page' | 'endpoint'
+  targetId: string
+  summary: {
+    pageCount: number
+    endpointCount: number
+  }
+  sections: WorkflowProjectPlanUpdateSection[]
+}
+
 export type ApplicationLifecycleStage =
   | 'collecting_requirement'
   | 'analyzing_requirement'

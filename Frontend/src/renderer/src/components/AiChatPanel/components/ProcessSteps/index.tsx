@@ -16,6 +16,7 @@ import type { IntegrationTestCheckRecord, ProcessStepRecord } from '../../../../
 import { cx } from '../../../../utils'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import DagGenerationProgress from './DagGenerationProgress'
+import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
 import './ProcessSteps.less'
 
 const { Text } = Typography
@@ -34,12 +35,13 @@ export default function ProcessSteps({
   waitingPrompt = '',
   waitingForInput = false
 }: Props): ReactElement {
-  const [open, setOpen] = useState(loading || waitingForInput)
   const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
+  const hasProjectPlanUpdate = steps.some((step) => Boolean(step.projectPlanUpdate))
+  const [open, setOpen] = useState(loading || waitingForInput || hasProjectPlanUpdate)
 
   useEffect(() => {
-    if (loading || waitingForInput || hasTestChecklist) setOpen(true)
-  }, [hasTestChecklist, loading, waitingForInput])
+    if (loading || waitingForInput || hasTestChecklist || hasProjectPlanUpdate) setOpen(true)
+  }, [hasProjectPlanUpdate, hasTestChecklist, loading, waitingForInput])
 
   const statusClassName = loading ? 'running' : waitingForInput ? 'waiting' : 'completed'
 
@@ -105,23 +107,43 @@ function ProcessStep({
   const hasChecks = Boolean(step.checks?.length)
   const hasBuildRun = Boolean(step.buildExecutionSlice)
   const hasDagGeneration = Boolean(step.dagGeneration)
+  const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
-  const expandable = hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration
+  const expandable =
+    hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration || hasProjectPlanUpdate
   const awaitingInput = waitingForInput && step.status === 'requires_user_input'
   const [open, setOpen] = useState(
     expandable &&
-      (step.status === 'running' || awaitingInput || hasChecks || hasBuildRun || hasDagGeneration)
+      (step.status === 'running' ||
+        awaitingInput ||
+        hasChecks ||
+        hasBuildRun ||
+        hasDagGeneration ||
+        hasProjectPlanUpdate)
   )
 
   useEffect(() => {
     if (
       expandable &&
-      (step.status === 'running' || awaitingInput || hasChecks || hasBuildRun || hasDagGeneration)
+      (step.status === 'running' ||
+        awaitingInput ||
+        hasChecks ||
+        hasBuildRun ||
+        hasDagGeneration ||
+        hasProjectPlanUpdate)
     ) {
       setOpen(true)
     }
-  }, [awaitingInput, expandable, hasBuildRun, hasChecks, hasDagGeneration, step.status])
+  }, [
+    awaitingInput,
+    expandable,
+    hasBuildRun,
+    hasChecks,
+    hasDagGeneration,
+    hasProjectPlanUpdate,
+    step.status
+  ])
 
   const className = cx(
     'process-step',
@@ -131,6 +153,7 @@ function ProcessStep({
     hasChecks && 'has-checks',
     hasBuildRun && 'has-build-run',
     hasDagGeneration && 'has-dag-generation',
+    hasProjectPlanUpdate && 'has-project-plan-update',
     isLast && 'last'
   )
   const summaryContent = (
@@ -170,7 +193,7 @@ function ProcessStep({
     >
       <summary className={cx('process-step-summary')}>{summaryContent}</summary>
       <div className={cx('process-step-detail')}>
-        {!hasChecks && !hasDagGeneration && step.detail && (
+        {!hasChecks && !hasDagGeneration && !hasProjectPlanUpdate && step.detail && (
           <DetailBlock
             label={step.kind === 'reasoning' ? '思考内容' : '动作详情'}
             value={step.detail}
@@ -178,6 +201,7 @@ function ProcessStep({
         )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
         {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
+        {step.projectPlanUpdate && <ProjectPlanUpdatePanel update={step.projectPlanUpdate} />}
         {step.buildExecutionSlice && (
           <BuildExecutionRunCard executionSlice={step.buildExecutionSlice} status={step.status} />
         )}

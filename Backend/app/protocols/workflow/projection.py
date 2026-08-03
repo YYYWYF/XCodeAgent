@@ -14,6 +14,10 @@ from app.protocols.workflow.definition import (
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.database_planning_context import database_context_requirement
 from app.workspace.code_changes import merge_code_change_sets
+from app.workspace.plan_documents import (
+    render_endpoint_detail_markdown,
+    render_page_detail_markdown,
+)
 
 
 def _workflow_progress_summary(
@@ -256,11 +260,17 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                     "detailSelection": update.get("detail_selection"),
                 },
             }
+        project_plan_update = _detail_confirmation_project_plan_update(update)
         return {
             "message": _detail_confirmation_completed_message(update),
             "data": {
                 "detailSelection": update.get("detail_selection"),
                 "detailPlans": update.get("detail_plans", []),
+                **(
+                    {"projectPlanUpdate": project_plan_update}
+                    if project_plan_update
+                    else {}
+                ),
             },
         }
     if node_name == "inspect_database_context":
@@ -387,6 +397,114 @@ def _detail_confirmation_completed_message(update: dict[str, Any]) -> str:
     if isinstance(remaining, int):
         return f"项目计划书已更新，剩余待设计对象={remaining}"
     return "项目计划书已更新"
+
+
+def _detail_confirmation_project_plan_update(
+    update: dict[str, Any],
+) -> dict[str, Any] | None:
+    """把本轮确认的页面与接口详情渲染为只读项目计划更新快照。"""
+
+    detail_plans = update.get("detail_plans")
+    if update.get("status") != "completed" or not isinstance(detail_plans, list):
+        return None
+
+    page_sections: list[dict[str, str]] = []
+    endpoint_sections: list[dict[str, str]] = []
+    for detail in detail_plans:
+        if not isinstance(detail, dict):
+            continue
+        page_id = str(detail.get("pageId") or "").strip()
+        endpoint_id = str(detail.get("endpoint_id") or "").strip()
+        if page_id:
+            content = _render_project_plan_page_update(detail)
+            if not content:
+                continue
+            page_sections.append(
+                {
+                    "id": f"page:{page_id}",
+                    "kind": "page",
+                    "title": str(detail.get("page_name") or page_id),
+                    "subtitle": str(detail.get("path") or ""),
+                    "content": content,
+                }
+            )
+            continue
+        if endpoint_id:
+            api_contract_id = str(detail.get("api_contract_id") or "").strip()
+            method = str(detail.get("method") or "GET").upper()
+            path = str(detail.get("path") or "").strip()
+            content = render_endpoint_detail_markdown(detail).strip()
+            if not content:
+                continue
+            endpoint_sections.append(
+                {
+                    "id": f"endpoint:{api_contract_id}:{endpoint_id}",
+                    "kind": "endpoint",
+                    "title": f"{method} {path}".strip() or endpoint_id,
+                    "subtitle": (
+                        f"API 契约 · {api_contract_id}"
+                        if api_contract_id
+                        else endpoint_id
+                    ),
+                    "content": content,
+                }
+            )
+
+    sections = [*page_sections, *endpoint_sections]
+    if not sections:
+        return None
+
+    selected_page_id = str(update.get("selectedPageId") or "").strip()
+    selected_endpoint_id = str(update.get("selected_endpoint_id") or "").strip()
+    target_type = str(update.get("detail_target_type") or "").strip()
+    if target_type not in {"page", "endpoint"}:
+        target_type = "endpoint" if selected_endpoint_id else "page"
+    target_id = (
+        selected_endpoint_id
+        if target_type == "endpoint"
+        else selected_page_id
+    ) or sections[0]["id"].split(":", 1)[-1]
+    raw_project_plan_path = str(update.get("project_plan_path") or "").strip()
+    document_name = (
+        Path(raw_project_plan_path).name
+        if raw_project_plan_path.lower().endswith(".md")
+        else "project-plan.md"
+    )
+    return {
+        "format": "markdown",
+        "readOnly": True,
+        "documentName": document_name,
+        "status": "confirmed",
+        "targetType": target_type,
+        "targetId": target_id,
+        "summary": {
+            "pageCount": len(page_sections),
+            "endpointCount": len(endpoint_sections),
+        },
+        "sections": sections,
+    }
+
+
+def _render_project_plan_page_update(detail: dict[str, Any]) -> str:
+    """渲染页面更新正文，同时移除外置详情文件的宿主路径。"""
+
+    references = (
+        detail.get("references")
+        if isinstance(detail.get("references"), dict)
+        else {}
+    )
+    safe_detail = {
+        **detail,
+        "references": {
+            **references,
+            "endpoint_detail_refs": [],
+        },
+    }
+    content = render_page_detail_markdown(safe_detail)
+    return content.replace(
+        "\nEndpointDetail 独立产物引用：\n- 无\n",
+        "\n",
+    ).strip()
 
 
 def _workflow_event(

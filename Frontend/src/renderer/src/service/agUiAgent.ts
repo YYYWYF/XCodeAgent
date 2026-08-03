@@ -11,6 +11,7 @@ import type {
   WorkflowBuildExecutionScope,
   WorkflowDebugOptions,
   WorkflowEvent,
+  WorkflowProjectPlanUpdate,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../typings'
@@ -73,11 +74,9 @@ export function buildWorkflowForwardedProps(
     detailTargetType: options.detailTargetType,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
-    buildExecutionScope: options.buildExecutionScope || (
-      options.workflowDebug?.enabled
-        ? options.workflowDebug.buildExecutionScope
-        : undefined
-    ),
+    buildExecutionScope:
+      options.buildExecutionScope ||
+      (options.workflowDebug?.enabled ? options.workflowDebug.buildExecutionScope : undefined),
     resumeState: options.resumeState,
     workflowScope: options.workflowScope,
     planControlAction: options.planControlAction,
@@ -175,6 +174,7 @@ export type ProcessStepRecord = {
   iterationKind?: string
   buildExecutionSlice?: import('../typings').WorkflowBuildExecutionSlice
   dagGeneration?: DagGenerationSnapshot
+  projectPlanUpdate?: WorkflowProjectPlanUpdate
 }
 
 /** 返回主工作流的 AG-UI 地址。 */
@@ -502,6 +502,59 @@ export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot
       isValid: summary.isValid === true
     },
     artifacts
+  }
+}
+
+/** 校验并裁剪页面细节确认产生的只读项目计划更新快照。 */
+export function readProjectPlanUpdate(value: unknown): WorkflowProjectPlanUpdate | undefined {
+  const update = objectValue(value)
+  const targetType = stringValue(update.targetType)
+  if (
+    update.format !== 'markdown' ||
+    update.readOnly !== true ||
+    update.status !== 'confirmed' ||
+    !['page', 'endpoint'].includes(targetType) ||
+    !Array.isArray(update.sections)
+  ) {
+    return undefined
+  }
+
+  const sections = update.sections
+    .flatMap((item) => {
+      const section = objectValue(item)
+      const kind = stringValue(section.kind)
+      const id = boundedString(section.id, 500)
+      const title = boundedString(section.title, 500)
+      const content = boundedString(section.content, 64_000)
+      if (!id || !title || !content || !['page', 'endpoint'].includes(kind)) return []
+      return [
+        {
+          id,
+          kind: kind as 'page' | 'endpoint',
+          title,
+          subtitle: boundedString(section.subtitle, 1_000) || undefined,
+          content
+        }
+      ]
+    })
+    .slice(0, 64)
+  const summary = objectValue(update.summary)
+  const documentName = boundedString(update.documentName, 500)
+  const targetId = boundedString(update.targetId, 500)
+  if (!documentName || !targetId || sections.length === 0) return undefined
+
+  return {
+    format: 'markdown',
+    readOnly: true,
+    documentName,
+    status: 'confirmed',
+    targetType: targetType as 'page' | 'endpoint',
+    targetId,
+    summary: {
+      pageCount: nonNegativeInteger(summary.pageCount),
+      endpointCount: nonNegativeInteger(summary.endpointCount)
+    },
+    sections
   }
 }
 

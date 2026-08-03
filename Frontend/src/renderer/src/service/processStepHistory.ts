@@ -1,6 +1,10 @@
 import type { WorkflowRunPayload } from '../typings'
 import { isDirectModificationWorkflow } from '../components/AiChatPanel/directModificationMode'
-import { readDagGenerationSnapshot, readIntegrationTestChecks } from './agUiAgent'
+import {
+  readDagGenerationSnapshot,
+  readIntegrationTestChecks,
+  readProjectPlanUpdate
+} from './agUiAgent'
 import type { ProcessStepRecord } from './agUiAgent'
 
 const WORKFLOW_NODE_LABELS: Record<string, string> = {
@@ -21,26 +25,39 @@ export function processStepsForDisplay(
   steps: ProcessStepRecord[] | undefined,
   workflow: WorkflowRunPayload | undefined
 ): ProcessStepRecord[] | undefined {
-  const displaySteps = sortProcessStepsForDisplay(
+  let displaySteps = sortProcessStepsForDisplay(
     steps?.length ? steps : completedWorkflowProcessSteps(workflow)
   )
   if (!displaySteps?.length) return displaySteps
   const finalChecks = completedIntegrationTestChecks(workflow)
-  if (!finalChecks?.length) return displaySteps
+  if (finalChecks?.length) {
+    const latestTestStepId = [...displaySteps]
+      .reverse()
+      .find(
+        (step) =>
+          step.nodeName === 'integration_test' || step.id.startsWith('workflow:integration_test')
+      )?.id
+    displaySteps = displaySteps.map((step) =>
+      step.id === latestTestStepId
+        ? { ...step, checks: mergeIntegrationTestChecks(step.checks, finalChecks) }
+        : step
+    )
+  }
 
-  const latestTestStepId = [...displaySteps]
-    .reverse()
-    .find(
-      (step) =>
-        step.nodeName === 'integration_test' || step.id.startsWith('workflow:integration_test')
-    )?.id
-  return displaySteps.map((step) => {
-    if (step.id !== latestTestStepId) return step
-    return {
-      ...step,
-      checks: mergeIntegrationTestChecks(step.checks, finalChecks)
-    }
-  })
+  const planUpdate = completedProjectPlanUpdate(workflow)
+  if (!planUpdate) return displaySteps
+  const targetStepId = planUpdate.attempt
+    ? processStepId('detail_confirmation', planUpdate.attempt)
+    : [...displaySteps]
+        .reverse()
+        .find(
+          (step) =>
+            step.nodeName === 'detail_confirmation' ||
+            step.id.startsWith('workflow:detail_confirmation')
+        )?.id
+  return displaySteps.map((step) =>
+    step.id === targetStepId ? { ...step, projectPlanUpdate: planUpdate.snapshot } : step
+  )
 }
 
 /** 简单模式隐藏内部收尾步骤，并在运行时用最近工具活动替换所属 Workflow 动作详情。 */
@@ -141,6 +158,10 @@ function completedWorkflowProcessSteps(
             detail.dagGeneration ?? workflow.state?.dagGeneration ?? workflow.result?.dagGeneration
           )
         : undefined
+    const projectPlanUpdate =
+      event.nodeName === 'detail_confirmation'
+        ? readProjectPlanUpdate(detail.projectPlanUpdate)
+        : undefined
     const step: ProcessStepRecord = {
       id: stepId,
       kind: 'workflow',
@@ -153,7 +174,8 @@ function completedWorkflowProcessSteps(
       iterationKind: event.iterationKind,
       ...(checks ? { checks } : {}),
       ...(buildExecutionSlice ? { buildExecutionSlice } : {}),
-      ...(dagGeneration ? { dagGeneration } : {})
+      ...(dagGeneration ? { dagGeneration } : {}),
+      ...(projectPlanUpdate ? { projectPlanUpdate } : {})
     }
     stepsById.set(step.id, step)
   }
@@ -181,6 +203,11 @@ function completedWorkflowProcessSteps(
   return steps.length > 0 ? steps : undefined
 }
 
+/** 返回节点轮次对应的稳定步骤 ID。 */
+function processStepId(nodeName: string, attempt: number): string {
+  return attempt === 1 ? `workflow:${nodeName}` : `workflow:${nodeName}:${attempt}`
+}
+
 /** 按 Workflow 阶段语义排序展示步骤，避免异步事件到达顺序把数据库检查放到 DAG 后面。 */
 function sortProcessStepsForDisplay(
   steps: ProcessStepRecord[] | undefined
@@ -194,10 +221,7 @@ function sortProcessStepsForDisplay(
 }
 
 /** 只修正数据库上下文检查与 DAG 生成的相对顺序，其它轮次保持后端 sequence。 */
-function databaseContextBeforeDagOrder(
-  left: ProcessStepRecord,
-  right: ProcessStepRecord
-): number {
+function databaseContextBeforeDagOrder(left: ProcessStepRecord, right: ProcessStepRecord): number {
   const leftNodeName = workflowStepNodeName(left)
   const rightNodeName = workflowStepNodeName(right)
   if (leftNodeName === 'inspect_database_context' && rightNodeName === 'prepare_build_tasks') {
@@ -217,10 +241,7 @@ function workflowStepNodeName(step: ProcessStepRecord): string {
 }
 
 /** 根据 Workflow 目标类型动态返回节点展示名称，兼容 endpoint 详细设计历史。 */
-function workflowNodeLabel(
-  nodeName: string,
-  workflow: WorkflowRunPayload
-): string | undefined {
+function workflowNodeLabel(nodeName: string, workflow: WorkflowRunPayload): string | undefined {
   const detailTargetType =
     workflow.state?.detailTargetType ||
     workflow.result?.detailTargetType ||
@@ -283,6 +304,29 @@ function completedIntegrationTestChecks(
       workflow.result?.testReport ??
       workflow.result?.test_report
   )
+}
+
+/** 从最新页面细节确认完成事件中读取只读项目计划更新快照。 */
+function completedProjectPlanUpdate(workflow: WorkflowRunPayload | undefined):
+  | {
+      attempt?: number
+      snapshot: NonNullable<ProcessStepRecord['projectPlanUpdate']>
+    }
+  | undefined {
+  if (!workflow) return undefined
+  const event = [...workflow.events]
+    .reverse()
+    .find(
+      (item) => item.nodeName === 'detail_confirmation' && item.type === 'workflow.node.completed'
+    )
+  if (!event) return undefined
+  const detail = workflowEventDetail(event)
+  const snapshot = readProjectPlanUpdate(detail.projectPlanUpdate)
+  if (!snapshot) return undefined
+  return {
+    attempt: typeof event.attempt === 'number' ? event.attempt : undefined,
+    snapshot
+  }
 }
 
 /** 按稳定检查 id 合并实时与完成态快照，完成态覆盖同名检查的最终结果。 */
