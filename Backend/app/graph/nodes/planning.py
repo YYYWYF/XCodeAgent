@@ -13,6 +13,7 @@ from app.agents.main.page_designer import (
     design_page_with_chat_model,
 )
 from app.graph.nodes.confirmation import user_confirmed_text
+from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.detail_review import (
@@ -44,6 +45,13 @@ from app.workspace.plan_documents import (
 
 
 logger = logging.getLogger("uvicorn.error")
+
+
+def _detail_workspace_options(state: ProjectState) -> dict[str, str]:
+    """仅在状态包含工作区时向详情生成链路传递绑定参数。"""
+
+    workspace_root = workspace_from_state(state)
+    return {"workspace_root": workspace_root} if workspace_root else {}
 
 
 def _planning_token_callback(token: str) -> None:
@@ -276,6 +284,7 @@ def detail_confirmation(state: ProjectState) -> dict:
                     source_plan,
                     frontend_pages=state.get("frontend_pages"),
                     selectedPageId=selectedPageId,
+                    **_detail_workspace_options(state),
                 )
             except PageDependencyGapError as exc:
                 return {
@@ -301,6 +310,7 @@ def detail_confirmation(state: ProjectState) -> dict:
                 selected_api_contract_id=selected_api_contract_id,
                 selected_endpoint_id=selected_endpoint_id,
                 detail_target_type=detail_target_type or "endpoint",
+                **_detail_workspace_options(state),
             )
             review_plan["confirmation_status"] = "pending_user_confirmation"
             project_plan_path = write_project_plan_document(state, review_plan)
@@ -348,7 +358,10 @@ def detail_confirmation(state: ProjectState) -> dict:
             state.get("request", ""),
             on_token=_planning_token_callback,
         )
-        revised_plan = _generate_all_detail_plans(revised_plan)
+        revised_plan = _generate_all_detail_plans(
+            revised_plan,
+            **_detail_workspace_options(state),
+        )
         revised_plan["confirmation_status"] = "pending_user_confirmation"
         project_plan_path = write_project_plan_document(state, revised_plan)
         return {
@@ -457,6 +470,7 @@ def detail_confirmation(state: ProjectState) -> dict:
             selected_api_contract_id=selected_api_contract_id or None,
             selected_endpoint_id=selected_endpoint_id or None,
             detail_target_type=detail_target_type or None,
+            **_detail_workspace_options(state),
         )
     except PageDependencyGapError as exc:
         return {
@@ -515,6 +529,7 @@ def _generate_all_detail_plans(
     selected_api_contract_id: str | None = None,
     selected_endpoint_id: str | None = None,
     detail_target_type: str | None = None,
+    workspace_root: str | None = None,
 ) -> dict:
     """为用户选中的页面或 endpoint 生成功能详细设计。"""
 
@@ -568,6 +583,7 @@ def _generate_all_detail_plans(
             updated_plan,
             selected_api_contract_id,
             selected_endpoint_id,
+            workspace_root,
         )
         updated_plan = {
             **updated_plan,
@@ -611,6 +627,7 @@ def _generate_all_detail_plans(
                     updated_plan,
                     api_contract_id,
                     endpoint_id,
+                    workspace_root,
                 )
             if str(existing_detail.get("status") or "") != "confirmed":
                 endpoint_review_details.append(existing_detail)
@@ -698,6 +715,7 @@ def _generate_endpoint_detail_plan(
     project_plan: dict,
     api_contract_id: str,
     endpoint_id: str,
+    workspace_root: str | None = None,
 ) -> tuple[dict, dict]:
     """复用独立 endpoint 设计链路生成详情并挂回 ProjectPlan 内存态。"""
 
@@ -719,7 +737,11 @@ def _generate_endpoint_detail_plan(
         endpoint_id=endpoint_id,
         data_source_id=endpoint_context.get("data_source_id"),
     )
-    database_context = prepare_endpoint_database_context(project_plan, endpoint_context)
+    database_context = prepare_endpoint_database_context(
+        project_plan,
+        endpoint_context,
+        workspace_root,
+    )
     endpoint_context = {**endpoint_context, "database_context": database_context}
     _detail_progress(
         database_context.get("message") or "数据库上下文准备完成。",

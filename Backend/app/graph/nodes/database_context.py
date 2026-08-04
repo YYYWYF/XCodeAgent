@@ -42,7 +42,11 @@ def inspect_database_context(state: ProjectState) -> dict:
             "database_planning_context": {},
             "timeline": ["inspect_database_context"],
         }
-    database_context = prepare_database_planning_context(project_plan, build_context)
+    database_context = prepare_database_planning_context(
+        project_plan,
+        build_context,
+        workspace_from_state(state),
+    )
     if database_context.get("status") == "connection_failed":
         return _blocked_result(
             project_plan,
@@ -86,7 +90,7 @@ def _blocked_result(
             AskUserQuestion(
                 header="数据库上下文",
                 question=(
-                    f"{message} 请补齐或修正 .env 中的 MYSQL_* 数据库连接信息后重试。"
+                    f"{message} 请补齐或修正当前应用的数据源连接配置后重试。"
                 ),
                 type="text",
                 placeholder="例如：已补齐数据库连接信息，请重新检查。",

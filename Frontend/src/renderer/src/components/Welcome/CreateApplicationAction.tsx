@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { createApplicationLifecycle } from '../../service/applicationLifecycle'
 import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
 import { MAX_ACTIVE_APPLICATION_PLANS } from '../../service/activeApplicationPlanning'
+import { encryptSensitiveDatasourceFields } from '../../service/databaseCredentialCrypto'
 import type { ApplicationConfig, ApplicationDraft, ApplicationLifecycle } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'
@@ -78,35 +79,36 @@ export default function CreateApplicationAction({
 
       const projectPath = values.projectPath.trim()
       const schema = buildApplicationSchema(values)
+      const persistedSchema = await encryptSensitiveDatasourceFields(schema)
       const planningThreadId = createPagePlanningThreadId()
       const projectDirectory = await workspaceApi.createProjectDirectory({
         workspacePath: projectPath,
-        applicationConfig: schema
+        applicationConfig: persistedSchema
       })
       const application: ApplicationConfig = {
-        ...schema,
+        ...persistedSchema,
         id: createApplicationId(),
-        name: schema.appName,
+        name: persistedSchema.appName,
         workspaceRoot: projectDirectory.path,
         projectParentPath: '',
         projectDirectoryName: pathBasename(projectPath),
         source: 'new',
-        enableAuth: schema.auth.enable,
-        enableTracking: schema.track.enable || schema.apiTrack.enable,
+        enableAuth: persistedSchema.auth.enable,
+        enableTracking: persistedSchema.track.enable || persistedSchema.apiTrack.enable,
         legacyTheme: 'custom',
         legacyLayout: 'side-nav',
         enableTabs: false,
         pages: ['默认页面'],
         defaultPage: '默认页面',
         hasDynamicRoutes: false,
-        schema,
+        schema: persistedSchema,
         createdAt: Date.now()
       }
-      await saveApplication(application)
-      const lifecycle = await createApplicationLifecycle(application, planningThreadId)
+      const persistedApplication = await saveApplication(application)
+      const lifecycle = await createApplicationLifecycle(persistedApplication, planningThreadId)
 
       setModalOpen(false)
-      onStartPlanning(application, planningThreadId, lifecycle)
+      onStartPlanning(persistedApplication, planningThreadId, lifecycle)
     } catch (error) {
       message.error(formatError(error, '创建应用失败'))
     } finally {

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from app.agents.database.generator import _verify_database_gaps
 from app.services.engineering_acceptance import (
@@ -637,17 +637,29 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             ],
         }
 
+        workspace = "/tmp/xcodeagent-database-verification"
         with patch(
             "app.agents.database.generator.inspect_mysql_schema",
             side_effect=[missing_summary, satisfied_summary],
-        ):
-            failed = _verify_database_gaps(tasks, before_summary)
-            completed = _verify_database_gaps(tasks, before_summary)
+        ) as inspect_schema:
+            failed = _verify_database_gaps(tasks, before_summary, workspace)
+            completed = _verify_database_gaps(tasks, before_summary, workspace)
 
         self.assertEqual(failed["status"], "failed")
         self.assertEqual(len(failed["remaining_gaps"]), 1)
         self.assertEqual(completed["status"], "completed")
         self.assertEqual(completed["remaining_gaps"], [])
+        target = {
+            "data_source_id": None,
+            "data_source": {"type": "database", "tables": []},
+            "method": "DATABASE",
+            "path": "database-leave",
+            "endpoint_id": None,
+        }
+        self.assertEqual(
+            inspect_schema.call_args_list,
+            [call(target, workspace), call(target, workspace)],
+        )
 
     def _frontend_contract_fixture(self) -> tuple[dict, dict]:
         """构造包含 API 模块和页面入口的前端契约测试数据。"""

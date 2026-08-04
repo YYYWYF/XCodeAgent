@@ -329,7 +329,16 @@ class CodeChangesAgUiTests(unittest.TestCase):
     def test_health_declares_code_changes_capabilities(self) -> None:
         """验证健康检查公开代码变更 AG-UI 能力。"""
 
-        payload = asyncio.run(health())
+        with patch(
+            "app.main.database_encryption_metadata",
+            return_value={
+                "enabled": True,
+                "algorithm": "RSA-OAEP-256",
+                "key_id": "platform-key-v1",
+                "public_key": "test-public-key",
+            },
+        ):
+            payload = asyncio.run(health())
 
         self.assertEqual(
             payload["tools"]["code_changes"]["endpoint"],  # type: ignore[index]

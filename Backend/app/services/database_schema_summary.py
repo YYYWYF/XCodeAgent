@@ -3,18 +3,28 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.tools.mysql_info import get_mysql_table_info
+from app.tools.mysql_info import (
+    get_mysql_table_info,
+    get_mysql_table_info_for_workspace,
+)
 
 
 _MAX_TABLES = 12
 _MAX_COLUMNS_PER_TABLE = 18
 
 
-def inspect_mysql_schema(target: dict[str, Any]) -> dict[str, Any]:
+def inspect_mysql_schema(
+    target: dict[str, Any],
+    workspace_root: str | None = None,
+) -> dict[str, Any]:
     """调用受控 MySQL 工具并返回真实数据库结构摘要。"""
 
     try:
-        tool_result = get_mysql_table_info.invoke({"table_name": None})
+        tool_result = (
+            get_mysql_table_info_for_workspace(workspace_root, table_name=None)
+            if workspace_root
+            else get_mysql_table_info.invoke({"table_name": None})
+        )
     except Exception as exc:
         return connection_failed(
             "tool_exception",

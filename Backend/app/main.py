@@ -50,6 +50,10 @@ from app.protocols.direct_modification import (
 from app.config import Settings
 from app.services.agent_file_documents import ensure_agents_document
 from app.services.builtin_skills import available_builtin_skills
+from app.services.database_crypto import (
+    database_encryption_metadata,
+    ensure_database_platform_key,
+)
 from app.services.project_launcher import (
     launch_backend_project,
     launch_frontend_project,
@@ -65,6 +69,9 @@ settings = Settings.from_env()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """初始化平台级持久资源，并在退出时释放工作流缓存。"""
+
+    ensure_database_platform_key()
     ensure_agents_document()
     try:
         yield
@@ -97,6 +104,8 @@ class ApprovalActionRequest(BaseModel):
 
 @app.get("/health")
 async def health() -> dict[str, object]:
+    """返回后端健康状态、基础设施能力和数据库加密公钥。"""
+
     return {
         "status": "ok",
         "provider": settings.model_provider,
@@ -111,6 +120,7 @@ async def health() -> dict[str, object]:
                 "endpoint": settings.langsmith_endpoint,
             }
         },
+        "database_encryption": database_encryption_metadata(),
         "tools": {
             "workflow_run": workflow_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),

@@ -1,24 +1,29 @@
 import { loadStoredApplications, saveStoredApplications } from '../../service/applicationStorage'
+import { encryptApplicationForPersistence } from '../../service/databaseCredentialCrypto'
 import type { ApplicationConfig } from '../../typings'
 
-export async function saveApplication(application: ApplicationConfig) {
+/** 保存不含 plantMode 明文密码的应用索引，并返回实际持久化对象。 */
+export async function saveApplication(application: ApplicationConfig): Promise<ApplicationConfig> {
+  const persistedApplication = await encryptApplicationForPersistence(application)
   const storedApplications = await loadStoredApplications()
   const nextApplications = [
-    application,
+    persistedApplication,
     ...storedApplications.filter(
       (storedApplication) =>
-        storedApplication.id !== application.id &&
-        (!application.workspaceRoot ||
-          storedApplication.workspaceRoot !== application.workspaceRoot)
+        storedApplication.id !== persistedApplication.id &&
+        (!persistedApplication.workspaceRoot ||
+          storedApplication.workspaceRoot !== persistedApplication.workspaceRoot)
     )
   ]
   await saveStoredApplications(nextApplications)
+  return persistedApplication
 }
 
+/** 保存应用后使用同一个密文对象打开工作台。 */
 export async function saveAndOpenApplication(
   application: ApplicationConfig,
   onOpenApplication: (application: ApplicationConfig) => void
-) {
-  await saveApplication(application)
-  onOpenApplication(application)
+): Promise<void> {
+  const persistedApplication = await saveApplication(application)
+  onOpenApplication(persistedApplication)
 }

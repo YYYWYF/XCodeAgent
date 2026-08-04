@@ -17,6 +17,7 @@
     "test:project-deletion": "node scripts/run-project-deletion-tests.mjs",
     "test:workflow-preview": "node scripts/run-workflow-preview-tests.mjs",
     "test:dag-generation": "node scripts/run-dag-generation-tests.mjs",
+    "test:database-crypto": "node scripts/run-database-credential-crypto-tests.mjs",
     "start": "electron-vite preview",
     "dev": "cross-env APP_ENV=dev electron-vite dev",
     "dev:st": "cross-env APP_ENV=st electron-vite dev",

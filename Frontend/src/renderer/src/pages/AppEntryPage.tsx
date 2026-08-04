@@ -94,11 +94,12 @@ function AppEntryContent(): JSX.Element {
           const confirmedApplication = application.planningConfirmedAt
             ? application
             : { ...application, planningConfirmedAt: Date.now() }
-          if (confirmedApplication !== application) {
-            await saveApplication(confirmedApplication)
-          }
+          const persistedApplication =
+            confirmedApplication !== application
+              ? await saveApplication(confirmedApplication)
+              : confirmedApplication
           planningController.dismissPlanning(application.id)
-          await openWorkbench(confirmedApplication, lifecycle)
+          await openWorkbench(persistedApplication, lifecycle)
           return
         }
       } catch (error) {

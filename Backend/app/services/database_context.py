@@ -17,6 +17,7 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 def prepare_endpoint_database_context(
     project_plan: dict[str, Any],
     endpoint_context: dict[str, Any],
+    workspace_root: str | None = None,
 ) -> dict[str, Any]:
     """为单个接口详细设计准备精简数据库上下文。"""
 
@@ -33,7 +34,7 @@ def prepare_endpoint_database_context(
             "not_database_source", "当前接口的数据源不是数据库。", target=target
         )
 
-    return inspect_mysql_schema(target)
+    return inspect_mysql_schema(target, workspace_root)
 
 
 def _database_context_enabled() -> bool:

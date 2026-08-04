@@ -207,6 +207,7 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
     <rect fill="#bfbfbf" height="6" rx="1" width="96" x="0" y="58" />
   ) : null
 
+  // 校验设置并通过统一应用保存入口加密数据库凭据。
   const handleSave = async (): Promise<void> => {
     try {
       const values = await form.validateFields()
@@ -230,8 +231,8 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
         environment,
         schema: { ...application.schema, ...rest, environment }
       }
-      await saveApplication(updatedApplication)
-      onSaved(updatedApplication)
+      const persistedApplication = await saveApplication(updatedApplication)
+      onSaved(persistedApplication)
       message.success('保存成功')
     } catch (error: any) {
       // antd validateFields 校验失败时返回 { errorFields, values }，非 Error 实例

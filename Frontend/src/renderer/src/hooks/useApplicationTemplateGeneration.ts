@@ -104,11 +104,11 @@ export function useApplicationTemplateGeneration({
           ...planning.application,
           planningConfirmedAt: Date.now()
         }
-        await saveApplication(confirmedApplication)
+        const persistedApplication = await saveApplication(confirmedApplication)
         const shouldOpenWorkbench = getVisiblePlanningId() === applicationId
         dismissPlanning(applicationId)
         if (shouldOpenWorkbench) {
-          await onOpenWorkbench(confirmedApplication, lifecycle)
+          await onOpenWorkbench(persistedApplication, lifecycle)
           message.success('应用模板文件生成完成，正在进入工作台')
         } else {
           message.success(`「${planning.application.appName}」初始化完成，可从最近项目打开`)

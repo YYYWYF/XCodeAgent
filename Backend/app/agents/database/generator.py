@@ -128,7 +128,7 @@ def generate_database_with_deep_agent(
     if not tasks:
         return []
 
-    database_summary = inspect_mysql_schema(_target_from_tasks(tasks))
+    database_summary = inspect_mysql_schema(_target_from_tasks(tasks), workspace)
     if database_summary.get("status") != "completed":
         return [_database_failure_result(task, database_summary) for task in tasks]
     required_schema = _required_schema_from_tasks(tasks, database_summary)
@@ -187,7 +187,7 @@ def generate_database_with_deep_agent(
         ]
 
     execution = execute_database_plan(plan=plan, execution_context=execution_context)
-    verification = _verify_database_gaps(tasks, database_summary)
+    verification = _verify_database_gaps(tasks, database_summary, workspace)
     if execution.get("status") == "completed" and verification.get("status") == "failed":
         execution = {
             **execution,
@@ -367,10 +367,11 @@ def _database_acceptance_evidence(
 def _verify_database_gaps(
     tasks: list[dict[str, Any]],
     before_summary: dict[str, Any],
+    workspace: str | None = None,
 ) -> dict[str, Any]:
     """执行后重新扫描数据库并确认任务声明的 gaps 已消除。"""
 
-    latest_summary = inspect_mysql_schema(_target_from_tasks(tasks))
+    latest_summary = inspect_mysql_schema(_target_from_tasks(tasks), workspace)
     if latest_summary.get("status") != "completed":
         return {
             "status": "failed",

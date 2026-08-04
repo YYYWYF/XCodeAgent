@@ -48,6 +48,7 @@ _UNKNOWN_ORIGIN_KINDS = {
 def prepare_database_planning_context(
     project_plan: dict[str, Any],
     build_context: dict[str, Any],
+    workspace_root: str | None = None,
 ) -> dict[str, Any]:
     """为任务规划阶段准备新版数据库上下文、差异和后续任务意图。"""
 
@@ -59,7 +60,7 @@ def prepare_database_planning_context(
         )
 
     probe_target = _probe_target(targets)
-    summary = inspect_mysql_schema(probe_target)
+    summary = inspect_mysql_schema(probe_target, workspace_root)
     if summary.get("status") == "connection_failed":
         required_schema = derive_required_database_schema(targets)
         return {

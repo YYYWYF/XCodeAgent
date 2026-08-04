@@ -7,6 +7,11 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from app.services.database_credentials import (
+    DatabaseCredentialError,
+    resolve_application_mysql_config,
+)
+
 
 def _escape(value: Any) -> Any:
     """把 DB-API 类型转换为 JSON 可序列化值。"""
@@ -332,7 +337,7 @@ def get_mysql_config() -> str:
 def get_mysql_table_info(
         table_name: str | None = None
 ) -> str:
-    """从 MYSQL_* 环境变量读取连接信息并检查 MySQL 数据库结构。
+    """从已绑定的当前应用工作区读取连接信息并检查 MySQL 数据库结构。
 
     Args:
         table_name: If provided, returns detail schema for this table only.
@@ -342,56 +347,48 @@ def get_mysql_table_info(
         A JSON string with the database schema information.
     """
 
-    host = os.getenv("MYSQL_HOST")
-    port_str = os.getenv("MYSQL_PORT")
-    user = os.getenv("MYSQL_USER")
-    password = os.getenv("MYSQL_PWD")
-    database = os.getenv("MYSQL_DATABASE")
+    return get_mysql_table_info_for_workspace(None, table_name=table_name)
 
-    missing = []
-    if not host:
-        missing.append("MYSQL_HOST")
-    if not port_str:
-        missing.append("MYSQL_PORT")
-    if not user:
-        missing.append("MYSQL_USER")
-    if not password:
-        missing.append("MYSQL_PWD")
-    if not database:
-        missing.append("MYSQL_DATABASE")
-    if missing:
-        return json.dumps(
-            {
-                "tool": "get_mysql_table_info",
-                "status": "error",
-                "error": (
-                    "Missing required environment variable(s): "
-                    f"{', '.join(missing)}. "
-                    "All of MYSQL_HOST, MYSQL_PORT, MYSQL_USER, "
-                    "MYSQL_PWD, MYSQL_DATABASE must be set."
-                ),
-            },
-            ensure_ascii=False,
+
+def create_get_mysql_table_info_tool(workspace_root: str | None):
+    """创建绑定应用工作区、但只向模型暴露 table_name 的 MySQL 工具。"""
+
+    @tool("get_mysql_table_info")
+    def workspace_get_mysql_table_info(table_name: str | None = None) -> str:
+        """检查当前应用配置的 MySQL 数据库结构。"""
+
+        return get_mysql_table_info_for_workspace(
+            workspace_root,
+            table_name=table_name,
         )
+
+    return workspace_get_mysql_table_info
+
+
+def get_mysql_table_info_for_workspace(
+    workspace_root: str | None,
+    *,
+    table_name: str | None = None,
+) -> str:
+    """在确定性后端边界解析凭据并调用原有 mysql_table_info。"""
 
     try:
-        port = int(port_str)  # type: ignore[arg-type]
-    except (ValueError, TypeError):
+        config = resolve_application_mysql_config(workspace_root)
+    except DatabaseCredentialError as exc:
         return json.dumps(
             {
                 "tool": "get_mysql_table_info",
                 "status": "error",
-                "error": f"MYSQL_PORT must be a valid integer, got '{port_str}'.",
+                "error": str(exc),
             },
             ensure_ascii=False,
         )
-
     return mysql_table_info(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        database=database,
+        host=config.host,
+        port=config.port,
+        user=config.user,
+        password=config.password,
+        database=config.database,
         table_name=table_name,
     )
 
