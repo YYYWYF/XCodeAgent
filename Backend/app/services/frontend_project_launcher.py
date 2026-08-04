@@ -24,13 +24,31 @@ _FRONTEND_PROCESSES: dict[str, subprocess.Popen[bytes]] = {}
 _FRONTEND_PROCESS_GUARD = threading.Lock()
 
 
-def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
-    """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。"""
+def launch_frontend_project(
+    workspace_path: str | Path,
+    *,
+    project_dir: str | Path | None = None,
+    runtime_subdir: str = "launch",
+) -> dict[str, Any]:
+    """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
+
+    project_dir 指定时直接定位该目录下的 package.json（跳过工作区 glob），
+    用于启动非标准位置的前端工程（如 .xcodeagent/ui-design 设计稿工程）。
+    runtime_subdir 指定运行时目录名（默认 launch），设计稿工程传
+    "launch-ui-design" 以独立 PID 文件避免与正式前端预览冲突。
+    """
 
     root = Path(workspace_path).expanduser().resolve()
-    package_path = _find_frontend_package_json(root)
-    if package_path is None:
-        return _failed_launch("未找到前端 package.json。", root=root)
+    if project_dir is not None:
+        package_path = Path(project_dir).expanduser().resolve() / "package.json"
+        if not package_path.is_file():
+            return _failed_launch(
+                f"未找到设计稿工程 package.json：{package_path}", root=root
+            )
+    else:
+        package_path = _find_frontend_package_json(root)
+        if package_path is None:
+            return _failed_launch("未找到前端 package.json。", root=root)
 
     package_json = _read_package_json(package_path)
     if package_json is None:
@@ -49,7 +67,7 @@ def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
         )
 
     package_manager = _select_package_manager(package_path.parent)
-    runtime_root = root / ".xcodeagent" / "runtime" / "launch"
+    runtime_root = root / ".xcodeagent" / "runtime" / runtime_subdir
     runtime_root.mkdir(parents=True, exist_ok=True)
     preview_url = _preview_url(scripts.get(script_name, ""))
     existing_server = _reuse_ready_server(runtime_root, preview_url)
@@ -116,7 +134,7 @@ def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
         preview_url=preview_url,
     )
     if process is not None:
-        _register_frontend_process(root, process)
+        _register_frontend_process(root, process, runtime_subdir=runtime_subdir)
     _stdout_log = Path(str(launch_result.get("stdout_log") or ""))
     _stdout_offset = int(launch_result.get("stdout_offset") or 0)
     _stderr_log = Path(str(launch_result.get("stderr_log") or ""))
@@ -169,13 +187,21 @@ def launch_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
     }
 
 
-def stop_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
-    """停止指定工作区由前端预览启动器记录的开发服务器进程。"""
+def stop_frontend_project(
+    workspace_path: str | Path,
+    *,
+    runtime_subdir: str = "launch",
+) -> dict[str, Any]:
+    """停止指定工作区由前端预览启动器记录的开发服务器进程。
+
+    runtime_subdir 与 launch_frontend_project 对应，用于定位独立运行的工程
+    （设计稿工程传 "launch-ui-design"）。
+    """
 
     root = Path(workspace_path).expanduser().resolve()
-    runtime_root = root / ".xcodeagent" / "runtime" / "launch"
+    runtime_root = root / ".xcodeagent" / "runtime" / runtime_subdir
     pid_file = runtime_root / "frontend.pid"
-    cleanup = _stop_frontend_process(root, pid_file)
+    cleanup = _stop_frontend_process(root, pid_file, runtime_subdir=runtime_subdir)
     return {
         "status": "stopped" if cleanup.get("success") else "failed",
         "message": (
@@ -191,41 +217,62 @@ def stop_frontend_project(workspace_path: str | Path) -> dict[str, Any]:
     }
 
 
-def _workspace_key(workspace: Path) -> str:
-    """生成跨平台稳定的工作区进程登记键。"""
+def _workspace_key(workspace: Path, runtime_subdir: str = "launch") -> str:
+    """生成跨平台稳定的工作区+运行目录进程登记键。
+
+    同一工作区可能有多个独立运行的前端工程（正式预览 + 设计稿工程），
+    用 runtime_subdir 区分，避免进程登记互相覆盖、停止时误杀。
+    """
 
     resolved = str(workspace.expanduser().resolve())
-    return resolved.lower() if os.name == "nt" else resolved
+    prefix = resolved.lower() if os.name == "nt" else resolved
+    return f"{prefix}::{runtime_subdir}"
 
 
-def _register_frontend_process(workspace: Path, process: subprocess.Popen[bytes]) -> None:
+def _register_frontend_process(
+    workspace: Path,
+    process: subprocess.Popen[bytes],
+    *,
+    runtime_subdir: str = "launch",
+) -> None:
     """登记指定工作区最近一次启动的前端预览进程。"""
 
     with _FRONTEND_PROCESS_GUARD:
-        _FRONTEND_PROCESSES[_workspace_key(workspace)] = process
+        _FRONTEND_PROCESSES[_workspace_key(workspace, runtime_subdir)] = process
 
 
-def _unregister_frontend_process(workspace: Path, process: subprocess.Popen[bytes] | None) -> None:
+def _unregister_frontend_process(
+    workspace: Path,
+    process: subprocess.Popen[bytes] | None,
+    *,
+    runtime_subdir: str = "launch",
+) -> None:
     """清理指定工作区的前端预览进程登记。"""
 
-    workspace_key = _workspace_key(workspace)
+    workspace_key = _workspace_key(workspace, runtime_subdir)
     with _FRONTEND_PROCESS_GUARD:
         current_process = _FRONTEND_PROCESSES.get(workspace_key)
         if process is None or current_process is process:
             _FRONTEND_PROCESSES.pop(workspace_key, None)
 
 
-def _stop_frontend_process(workspace: Path, pid_file: Path) -> dict[str, Any]:
+def _stop_frontend_process(
+    workspace: Path,
+    pid_file: Path,
+    *,
+    runtime_subdir: str = "launch",
+) -> dict[str, Any]:
     """优先停止内存登记的前端进程，缺失时回退到 PID 文件。"""
 
     with _FRONTEND_PROCESS_GUARD:
-        process = _FRONTEND_PROCESSES.get(_workspace_key(workspace))
+        process = _FRONTEND_PROCESSES.get(_workspace_key(workspace, runtime_subdir))
     if process is None:
         return _stop_frontend_process_from_pid_file(pid_file)
     cleanup = _terminate_frontend_process(
         workspace=workspace,
         process=process,
         pid_file=pid_file,
+        runtime_subdir=runtime_subdir,
     )
     if cleanup.get("success"):
         return cleanup
@@ -601,6 +648,7 @@ def _terminate_frontend_process(
     workspace: Path,
     process: subprocess.Popen[bytes],
     pid_file: Path,
+    runtime_subdir: str = "launch",
 ) -> dict[str, Any]:
     """终止仍由当前后端持有的前端预览 Popen 对象。"""
 
@@ -627,7 +675,7 @@ def _terminate_frontend_process(
     except (OSError, subprocess.TimeoutExpired) as exc:
         cleanup["error"] = str(exc)
     if cleanup["success"]:
-        _unregister_frontend_process(workspace, process)
+        _unregister_frontend_process(workspace, process, runtime_subdir=runtime_subdir)
         _remove_pid_file(pid_file, cleanup, expected_pid=pid)
     cleanup["finished_at"] = datetime.now(UTC).isoformat()
     return cleanup

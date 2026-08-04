@@ -14,6 +14,7 @@ import type {
   WorkflowRunPayload
 } from '../../typings'
 import { cx } from '../../utils'
+import DesignPreviewFrame from './DesignPreviewFrame'
 import './UiDesignConfirmationPanel.less'
 
 const { Paragraph, Text } = Typography
@@ -26,6 +27,8 @@ type PageDesign = {
   description?: string
   html_path?: string
   html?: string
+  code_path?: string
+  route_path?: string
   status?: string
 }
 
@@ -62,7 +65,18 @@ function readPages(clarification?: WorkflowClarification): PageDesign[] {
     : []
 }
 
-// 在创建规划页面展示逐页线框图设计稿，并收集用户的逐页/全部确认动作。
+// 从 workflow state/result 的 ui_designs.preview_origin 读取设计稿工程 dev server 地址。
+function readPreviewOrigin(workflow: WorkflowRunPayload): string | undefined {
+  for (const source of [workflow.state, workflow.result]) {
+    const uiDesigns = source?.ui_designs
+    if (!uiDesigns || typeof uiDesigns !== 'object') continue
+    const origin = (uiDesigns as Record<string, unknown>).preview_origin
+    if (typeof origin === 'string' && origin) return origin
+  }
+  return undefined
+}
+
+// 在创建规划页面展示逐页设计稿，并收集用户的逐页/全部确认动作。
 export default function UiDesignConfirmationPanel({
   disabled,
   onSubmit,
@@ -70,6 +84,7 @@ export default function UiDesignConfirmationPanel({
 }: Props): ReactElement | null {
   const clarification = planningClarification(workflow)
   const pages = useMemo(() => readPages(clarification), [clarification])
+  const previewOrigin = useMemo(() => readPreviewOrigin(workflow), [workflow])
   // 本地逐页确认状态：已确认的 pageId 集合。后端权威状态以提交时的一句确认为准。
   const [confirmedPageIds, setConfirmedPageIds] = useState<Set<string>>(new Set())
   const [feedback, setFeedback] = useState('')
@@ -163,7 +178,7 @@ export default function UiDesignConfirmationPanel({
         <div className={cx('ui-design-header-copy')}>
           <h4>确认UI设计稿</h4>
           <p>
-            逐页审核已生成的线框图设计稿，确认全部页面后进入项目规划。
+            逐页审核已生成的设计稿，确认全部页面后进入项目规划。
             「换一换」与「对话调整」即将开放，当前可先逐页确认或填写整体意见。
           </p>
         </div>
@@ -281,11 +296,10 @@ export default function UiDesignConfirmationPanel({
                       </Paragraph>
                     ) : null}
                     <div className={cx('ui-design-card-preview')}>
-                      {page.html ? (
-                        <iframe
-                          className={cx('ui-design-iframe')}
-                          sandbox="allow-same-origin"
-                          srcDoc={page.html}
+                      {page.code_path ? (
+                        <DesignPreviewFrame
+                          origin={previewOrigin}
+                          routePath={page.route_path}
                           title={`设计稿-${page.name || pageId}`}
                         />
                       ) : (

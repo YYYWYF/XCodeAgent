@@ -96,7 +96,7 @@ def _requirements(state: ProjectState) -> dict:
 
 
 async def _ui_confirmation(state: ProjectState) -> dict:
-    """为每个页面生成线框图设计稿并等待用户逐页确认后放行项目规划。"""
+    """为每个页面生成设计稿并等待用户逐页确认后放行项目规划。"""
 
     workspace = _workspace(state)
     try:

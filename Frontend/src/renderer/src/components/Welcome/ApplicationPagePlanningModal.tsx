@@ -74,7 +74,7 @@ const phaseProgress: Record<
   ui_confirmation: {
     active: 45,
     complete: 60,
-    message: '正在为各页面生成线框图设计稿…',
+    message: '正在为各页面生成设计稿…',
     title: '正在生成UI设计稿'
   },
   project_planning: {

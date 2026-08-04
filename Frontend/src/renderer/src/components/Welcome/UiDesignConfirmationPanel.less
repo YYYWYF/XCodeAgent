@@ -361,10 +361,46 @@
 
 .@{class-prefix}-ui-design-iframe {
   width: 100%;
-  height: 440px;
+  height: 600px;
   border: 0;
   display: block;
   background: #fff;
+}
+
+// 嵌入设计稿工程的 iframe 容器：相对定位，承载 loading/fallback 浮层。
+.@{class-prefix}-ui-design-frame-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.@{class-prefix}-ui-design-frame-loading {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.@{class-prefix}-ui-design-frame-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 600px;
+  padding: 24px;
+  text-align: center;
+  background: var(--modal-field);
+
+  code {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--modal-surface-hover);
+    font-size: 12px;
+  }
 }
 
 .@{class-prefix}-ui-design-confirm-footer {

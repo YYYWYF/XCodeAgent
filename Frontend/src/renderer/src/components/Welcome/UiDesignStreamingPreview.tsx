@@ -3,6 +3,7 @@ import type { ReactElement } from 'react'
 import { Typography } from 'antd'
 import type { WorkflowRunPayload } from '../../typings'
 import { cx } from '../../utils'
+import DesignPreviewFrame from './DesignPreviewFrame'
 import './UiDesignConfirmationPanel.less'
 
 const { Paragraph, Text } = Typography
@@ -14,6 +15,8 @@ type PageDesign = {
   description?: string
   html_path?: string
   html?: string
+  code_path?: string
+  route_path?: string
   status?: string
 }
 
@@ -36,13 +39,25 @@ function readStreamingPages(workflow: WorkflowRunPayload): PageDesign[] {
   return []
 }
 
+// 从 workflow state/result 的 ui_designs.preview_origin 读取设计稿工程 dev server 地址。
+function readPreviewOrigin(workflow: WorkflowRunPayload): string | undefined {
+  for (const source of [workflow.state, workflow.result]) {
+    const uiDesigns = source?.ui_designs
+    if (!uiDesigns || typeof uiDesigns !== 'object') continue
+    const origin = (uiDesigns as Record<string, unknown>).preview_origin
+    if (typeof origin === 'string' && origin) return origin
+  }
+  return undefined
+}
+
 // 在 UI确认节点生成期间，流式展示已就绪的设计稿与未就绪骨架，
-// 让用户边等边看到逐页完成的线框图，而不是干等到最后一次性出现。
+// 让用户边等边看到逐页完成的设计稿，而不是干等到最后一次性出现。
 export default function UiDesignStreamingPreview({
   workflow,
   total
 }: Props): ReactElement | null {
   const pages = useMemo(() => readStreamingPages(workflow), [workflow])
+  const previewOrigin = useMemo(() => readPreviewOrigin(workflow), [workflow])
   const readyCount = pages.length
   const totalCount = Math.max(total ?? 0, readyCount)
   const pendingCount = Math.max(totalCount - readyCount, 0)
@@ -58,7 +73,7 @@ export default function UiDesignStreamingPreview({
         <div className={cx('ui-design-header-copy')}>
           <h4>UI设计稿生成中</h4>
           <p>
-            正在逐页生成线框图设计稿，已就绪的页面会先行展示，
+            正在逐页生成设计稿，已就绪的页面会先行展示，
             全部生成完成后即可逐页确认。
           </p>
         </div>
@@ -90,11 +105,10 @@ export default function UiDesignStreamingPreview({
                     </Paragraph>
                   ) : null}
                   <div className={cx('ui-design-card-preview')}>
-                    {page.html ? (
-                      <iframe
-                        className={cx('ui-design-iframe')}
-                        sandbox="allow-same-origin"
-                        srcDoc={page.html}
+                    {page.code_path ? (
+                      <DesignPreviewFrame
+                        origin={previewOrigin}
+                        routePath={page.route_path}
                         title={`设计稿-${page.name || pageId}`}
                       />
                     ) : (
