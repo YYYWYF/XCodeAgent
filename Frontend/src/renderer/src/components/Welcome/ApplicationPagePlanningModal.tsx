@@ -214,11 +214,6 @@ export default function ApplicationPagePlanningModal({
   // UI确认节点生成期间，流式展示已就绪的设计稿，避免干等到最后一次性出现。
   const streamingUiPhase = showingProgress && planningWorkflowPhase(workflow) === 'ui_confirmation'
   const streamingUiTotal = planningUiDesignPageTotal(workflow)
-  // [DEBUG] 渲染条件诊断
-  // eslint-disable-next-line no-console
-  console.log(
-    `[UI渲染DEBUG] running=${running} awaitingInput=${awaitingUserInput} showingProgress=${showingProgress} phase=${planningWorkflowPhase(workflow)} streamingUiPhase=${streamingUiPhase} total=${streamingUiTotal}`
-  )
 
   // 向首页注册当前 AG-UI 会话的停止句柄，以便从规划页外安全取消运行。
   useEffect(() => {
@@ -240,20 +235,6 @@ export default function ApplicationPagePlanningModal({
   const handleWorkflowChange = (nextWorkflow: WorkflowRunPayload): void => {
     // 每个全屏规划实例只接收自己的线程事件，避免并行应用互相覆盖问题卡片。
     if (nextWorkflow.threadId !== threadId) return
-    // [DEBUG] 流式展示诊断：打印每次收到的 workflow 关键字段
-    const uiDesignsState = (nextWorkflow.state as Record<string, unknown>)?.ui_designs
-    const lastEvent = nextWorkflow.events[nextWorkflow.events.length - 1]
-    const dbgPhase = planningWorkflowPhase(nextWorkflow)
-    const dbgRequiresInput = planningWorkflowRequiresUserInput(nextWorkflow)
-    const dbgStatePages = (uiDesignsState as Record<string, unknown>)?.pages
-      ? ((uiDesignsState as Record<string, unknown>).pages as unknown[]).length
-      : -1
-    const dbgClarState = (nextWorkflow.state as Record<string, unknown>)?.clarification
-    const dbgClarStatus = (dbgClarState as Record<string, unknown>)?.status
-    // eslint-disable-next-line no-console
-    console.log(
-      `[UI流式DEBUG] phase=${dbgPhase} status=${nextWorkflow.summary.status} reqInput=${dbgRequiresInput} clarStatus=${dbgClarStatus} statePages=${dbgStatePages} evt=${lastEvent?.type}/${lastEvent?.nodeName}`
-    )
     setWorkflow(nextWorkflow)
     onWorkflowChange(nextWorkflow)
   }

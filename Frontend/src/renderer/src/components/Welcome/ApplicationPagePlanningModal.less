@@ -139,12 +139,10 @@
   gap: 12px;
   padding: 15px 18px;
   border-bottom: 1px solid var(--modal-border);
-  background: linear-gradient(
-    100deg,
-    rgba(139, 92, 246, 0.09),
-    rgba(139, 92, 246, 0.02) 55%,
-    transparent
-  );
+  background: linear-gradient(100deg,
+      rgba(139, 92, 246, 0.09),
+      rgba(139, 92, 246, 0.02) 55%,
+      transparent);
 }
 
 .@{class-prefix}-page-plan-card-index {
@@ -217,7 +215,7 @@
   gap: 8px 14px;
   margin-top: 8px;
 
-  > span {
+  >span {
     display: flex;
     align-items: flex-start;
     gap: 8px;
@@ -251,7 +249,7 @@
   border-radius: 9px;
   background: rgba(127, 127, 127, 0.025);
 
-  > div {
+  >div {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
@@ -310,7 +308,7 @@
     margin: 7px 0 0;
   }
 
-  dl > div {
+  dl>div {
     display: grid;
     grid-template-columns: 36px minmax(0, 1fr);
     gap: 7px;
@@ -372,27 +370,27 @@
   background: var(--modal-surface);
   box-shadow: 0 5px 16px rgba(15, 23, 42, 0.035);
 
-  > header {
+  >header {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
     gap: 9px;
 
-    > div {
+    >div {
       display: grid;
       gap: 4px;
       min-width: 0;
     }
   }
 
-  > footer {
+  >footer {
     display: grid;
     gap: 6px;
     margin-top: auto;
     padding-top: 11px;
     border-top: 1px solid var(--modal-border);
 
-    > div {
+    >div {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
@@ -434,7 +432,7 @@
   gap: 9px;
   margin: 0 0 12px;
 
-  > div {
+  >div {
     padding: 9px 10px;
     border-radius: 7px;
     background: rgba(127, 127, 127, 0.04);
@@ -456,6 +454,7 @@
 }
 
 @media (max-width: 760px) {
+
   .@{class-prefix}-page-plan-feature-list,
   .@{class-prefix}-page-plan-relation-grid,
   .@{class-prefix}-page-plan-api-grid {
@@ -533,7 +532,7 @@
     box-shadow: 0 0 14px rgba(139, 92, 246, 0.75);
   }
 
-  > span {
+  >span {
     position: absolute;
     top: 3px;
     left: 19px;
@@ -614,12 +613,10 @@
 .@{class-prefix}-planning-progress-glow {
   position: absolute;
   inset: 0;
-  background: linear-gradient(
-    100deg,
-    transparent 20%,
-    rgba(255, 255, 255, 0.52) 50%,
-    transparent 80%
-  );
+  background: linear-gradient(100deg,
+      transparent 20%,
+      rgba(255, 255, 255, 0.52) 50%,
+      transparent 80%);
   transform: translateX(-100%);
   animation: page-planning-shimmer 2.5s ease-in-out infinite;
 }
@@ -687,7 +684,7 @@
   margin-bottom: 2px;
 }
 
-.@{class-prefix}-planning-progress-stage > div:last-child {
+.@{class-prefix}-planning-progress-stage>div:last-child {
   display: grid;
   gap: 2px;
 }
@@ -708,7 +705,7 @@
   font-weight: 600;
 }
 
-.@{class-prefix}-planning-progress-messages > div {
+.@{class-prefix}-planning-progress-messages>div {
   max-height: 120px;
   margin-top: 7px;
   overflow: auto;
@@ -735,6 +732,7 @@
 }
 
 @keyframes page-planning-shimmer {
+
   65%,
   100% {
     transform: translateX(130%);
@@ -745,14 +743,16 @@
   70% {
     box-shadow: 0 0 0 7px rgba(139, 92, 246, 0);
   }
+
   100% {
     box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .@{class-prefix}-planning-progress-orbit::before,
-  .@{class-prefix}-planning-progress-orbit > span,
+  .@{class-prefix}-planning-progress-orbit>span,
   .@{class-prefix}-planning-progress-glow,
   .@{class-prefix}-planning-progress-pulse {
     animation: none;
@@ -860,21 +860,21 @@
   overflow: hidden;
   background: var(--modal-bg);
 
-  > .@{class-prefix}-planning-artifact-card {
+  >.@{class-prefix}-planning-artifact-card {
     display: flex;
     min-height: 0;
     flex-direction: column;
     border-radius: 10px;
     box-shadow: none;
 
-    > .@{class-prefix}-planning-artifact-content {
+    >.@{class-prefix}-planning-artifact-content {
       min-height: 0;
       max-height: none;
       flex: 1;
       overflow: auto;
     }
 
-    > header .ant-typography-secondary {
+    >header .ant-typography-secondary {
       overflow: visible;
       color: var(--modal-text-secondary);
       font-size: 12px;
@@ -954,6 +954,7 @@
 }
 
 .@{class-prefix}-planning-question-card-heading {
+
   h5.ant-typography,
   p.ant-typography {
     margin: 0;
@@ -1069,7 +1070,7 @@
   background: var(--modal-bg);
   box-shadow: 0 10px 30px rgba(30, 19, 44, 0.06);
 
-  > header {
+  >header {
     display: grid;
     grid-template-columns: 34px minmax(0, 1fr) auto;
     align-items: center;
@@ -1078,7 +1079,7 @@
     border-bottom: 1px solid var(--modal-border);
     background: var(--modal-surface);
 
-    > div {
+    >div {
       display: grid;
       gap: 2px;
     }
@@ -1118,7 +1119,7 @@
   }
 }
 
-.@{class-prefix}-planning-artifact-card > header > .@{class-prefix}-planning-artifact-actions {
+.@{class-prefix}-planning-artifact-card>header>.@{class-prefix}-planning-artifact-actions {
   display: flex;
   grid-auto-flow: column;
   align-items: center;
@@ -1182,7 +1183,7 @@
     margin-bottom: 12px;
   }
 
-  .ant-form-item-label > label {
+  .ant-form-item-label>label {
     font-size: 13px;
     color: var(--modal-text-secondary);
   }
@@ -1252,12 +1253,12 @@
   .ant-steps-item-finish .ant-steps-item-icon {
     border-color: var(--modal-accent);
 
-    > .ant-steps-icon {
+    >.ant-steps-icon {
       color: var(--modal-accent);
     }
   }
 
-  .ant-steps-item-finish > .ant-steps-item-container > .ant-steps-item-tail::after {
+  .ant-steps-item-finish>.ant-steps-item-container>.ant-steps-item-tail::after {
     background-color: #8b5cf6 !important;
     background-image: none !important;
   }
@@ -1267,10 +1268,7 @@
     background-image: none !important;
   }
 
-  .ant-steps-item-finish
-    > .ant-steps-item-container
-    > .ant-steps-item-content
-    > .ant-steps-item-title::after {
+  .ant-steps-item-finish>.ant-steps-item-container>.ant-steps-item-content>.ant-steps-item-title::after {
     background-color: var(--modal-accent) !important;
   }
 
@@ -1357,11 +1355,11 @@
 
 .@{class-prefix}-page-planning-screen-content {
   display: flex;
-  width: min(1180px, calc(100% - 48px));
+  width: calc(100% - 80px);
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  margin: 0 auto;
+  margin: 0 40px;
   padding: 20px 0 24px;
 }
 

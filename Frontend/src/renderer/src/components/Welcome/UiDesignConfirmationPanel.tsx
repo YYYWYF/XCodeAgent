@@ -128,7 +128,7 @@ export default function UiDesignConfirmationPanel({
         <div className={cx('ui-design-header-copy')}>
           <h4>确认UI设计稿</h4>
           <p>
-            逐页审核已生成的低保真线框图设计稿，确认全部页面后进入项目规划。
+            逐页审核已生成的线框图设计稿，确认全部页面后进入项目规划。
             「换一换」与「对话调整」即将开放，当前可先逐页确认或填写整体意见。
           </p>
         </div>

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any, AsyncIterator
 from urllib.parse import urlencode
 from uuid import uuid4
@@ -56,8 +55,6 @@ from app.config import Settings
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
-
-logger = logging.getLogger(__name__)
 
 
 def _next_node_attempt(node_attempts: dict[str, int], node_name: str) -> int:
@@ -442,13 +439,6 @@ def build_workflow_ag_ui_stream(
                         )
                         continue
                     if event_type == "ui_confirmation.progress":
-                        logger.warning(
-                            "ui_confirmation.progress received: message=%s ready=%s total=%s pages=%d",
-                            progress.get("message"),
-                            (progress.get("detail") or {}).get("ready") if isinstance(progress.get("detail"), dict) else None,
-                            (progress.get("detail") or {}).get("total") if isinstance(progress.get("detail"), dict) else None,
-                            len((progress.get("detail") or {}).get("pages", [])) if isinstance(progress.get("detail"), dict) else 0,
-                        )
                         progress_node = str(progress.get("node_name") or "ui_confirmation")
                         progress_attempt = _current_node_attempt(
                             node_attempts, progress_node
@@ -481,12 +471,6 @@ def build_workflow_ag_ui_stream(
                             # 而跳过流式预览、显示空白。
                             "clarification": {},
                         }
-                        logger.warning(
-                            "ui_confirmation.progress state: has_clarification=%s clar_status=%s initial_has_clar=%s",
-                            "clarification" in progress_state,
-                            (progress_state.get("clarification") or {}).get("status") if isinstance(progress_state.get("clarification"), dict) else None,
-                            "clarification" in initial_state,
-                        )
                         _workflow_event(
                             events,
                             "workflow.node.progress",

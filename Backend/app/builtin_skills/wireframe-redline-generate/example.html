@@ -38,7 +38,9 @@
     .head .meta b { color: var(--ink); }
 
     /* ---- two-column shell ---- */
-    .shell { display: grid; grid-template-columns: 1fr 280px; gap: 24px; align-items: start; }
+    .shell { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+    .shell > .browser { flex: 1 1 320px; min-width: 0; }
+    .shell > .spec { flex: 0 0 220px; }
 
     /* ---- browser chrome + canvas ---- */
     .browser { border: 2px solid var(--ink); border-radius: 10px; overflow: hidden; background: var(--card); box-shadow: 4px 6px 0 -2px rgba(28,27,26,0.12); }
@@ -113,8 +115,8 @@
     .spec .legend .swatch { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 
     @media (max-width: 1000px) {
-      .shell { grid-template-columns: 1fr; }
-      .spec { position: static; }
+      .shell > .browser { flex-basis: 100%; }
+      .shell > .spec { flex-basis: 100%; position: static; }
       .hero { grid-template-columns: 1fr; }
       .features { grid-template-columns: 1fr; }
       .footer { grid-template-columns: 1fr 1fr; }

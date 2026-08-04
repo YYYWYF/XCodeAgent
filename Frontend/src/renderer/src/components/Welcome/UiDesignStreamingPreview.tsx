@@ -58,7 +58,7 @@ export default function UiDesignStreamingPreview({
         <div className={cx('ui-design-header-copy')}>
           <h4>UI设计稿生成中</h4>
           <p>
-            正在逐页生成低保真线框图设计稿，已就绪的页面会先行展示，
+            正在逐页生成线框图设计稿，已就绪的页面会先行展示，
             全部生成完成后即可逐页确认。
           </p>
         </div>

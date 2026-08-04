@@ -399,7 +399,12 @@
   }
 
   &:disabled {
-    opacity: 0.5;
+    // 不用 opacity 衰减整体——半透明紫底会让白字在浅色主题下几乎不可见。
+    // 改用中性灰底 + 次级文字色，保证两个主题下禁用文字都清晰可读。
+    opacity: 1;
+    color: var(--modal-text-secondary);
+    border-color: var(--modal-border-strong);
+    background: var(--modal-surface-hover);
     box-shadow: none;
   }
 }
