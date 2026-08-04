@@ -888,6 +888,9 @@
 // 项目规划确认使用独立工作区壳层，覆盖通用确认面板的网格展示规则。
 .@{class-prefix}-planning-question-panel.@{class-prefix}-is-document-confirmation.@{class-prefix}-is-project-plan-confirmation {
   display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 0;
   height: 100%;
   padding-right: 0;
@@ -1374,16 +1377,32 @@
 
 // 项目规划确认页使用自己的顶栏和导航壳层，避免与通用规划步骤条重复占位。
 .@{class-prefix}-page-planning-screen.@{class-prefix}-is-project-plan-confirmation {
+  // 项目规划页嵌在根容器中，使用父容器宽度避免 100vw 把滚动条宽度重复算入布局。
+  width: 100%;
+  max-width: 100%;
+
+  .@{class-prefix}-page-planning-screen-body {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
   .@{class-prefix}-page-planning-screen-header {
     display: none;
   }
 
   .@{class-prefix}-page-planning-screen-content {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    margin: 0;
     padding: 0;
   }
 
   .@{class-prefix}-page-planning-review {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     gap: 0;
   }
 }
