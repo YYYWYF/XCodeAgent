@@ -186,7 +186,11 @@ def generate_database_with_deep_agent(
             for task in tasks
         ]
 
-    execution = execute_database_plan(plan=plan, execution_context=execution_context)
+    execution = execute_database_plan(
+        plan=plan,
+        execution_context=execution_context,
+        workspace_root=workspace,
+    )
     verification = _verify_database_gaps(tasks, database_summary, workspace)
     if execution.get("status") == "completed" and verification.get("status") == "failed":
         execution = {

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 from app.middleware.approvals import approval_store, operation_fingerprint
+from app.services.database_credentials import (
+    DatabaseCredentialError,
+    resolve_application_mysql_config,
+)
 
 
 _HIGH_RISK_PATTERNS = (
@@ -56,7 +60,7 @@ def create_database_execution_context(schema_summary: dict[str, Any]) -> Databas
     return DatabaseExecutionContext(
         schema_summary=schema_summary,
         schema_hash=schema_hash,
-        database=str(schema_summary.get("database") or os.getenv("MYSQL_DATABASE") or ""),
+        database=str(schema_summary.get("database") or ""),
     )
 
 
@@ -121,7 +125,7 @@ def request_database_approval_if_needed(
         operation_key=operation_key,
         title="高危数据库操作审批",
         description="Database Agent 生成了高危数据库变更计划，需要用户批准后才能执行。",
-        subject=f"{execution_context.database or 'MYSQL_DATABASE'} / {database_plan_hash(plan)[:12]}",
+        subject=f"{execution_context.database or '未指定数据库'} / {database_plan_hash(plan)[:12]}",
         risk=risk,
         details=json.dumps(
             {
@@ -141,8 +145,9 @@ def execute_database_plan(
     *,
     plan: dict[str, Any],
     execution_context: DatabaseExecutionContext,
+    workspace_root: str | Path | None = None,
 ) -> dict[str, Any]:
-    """按已审批或低风险计划执行 SQL，并返回紧凑执行证据。"""
+    """按当前应用配置执行已审批或低风险计划，并返回紧凑执行证据。"""
 
     statements = _plan_statements(plan)
     if not statements:
@@ -152,9 +157,19 @@ def execute_database_plan(
             "executed_statements": [],
             "schema_hash": execution_context.schema_hash,
         }
-    connection_config = _mysql_connection_config()
+    connection_config = _mysql_connection_config(workspace_root)
     if connection_config.get("status") == "error":
-        return connection_config
+        return {**connection_config, "schema_hash": execution_context.schema_hash}
+    if (
+        execution_context.database
+        and connection_config.get("database") != execution_context.database
+    ):
+        return {
+            "status": "error",
+            "failure_category": "tool_error",
+            "failure_reason": "当前应用数据库配置已变化，请重新读取数据库结构后再执行。",
+            "schema_hash": execution_context.schema_hash,
+        }
 
     import pymysql
 
@@ -244,29 +259,22 @@ def _plan_statements(plan: dict[str, Any]) -> list[str]:
     return [statement.strip().rstrip(";") for statement in raw if str(statement).strip()]
 
 
-def _mysql_connection_config() -> dict[str, Any]:
-    """从当前临时 .env 约定读取 MySQL 连接信息。"""
+def _mysql_connection_config(workspace_root: str | Path | None) -> dict[str, Any]:
+    """从当前应用工作区解析 MySQL 连接信息，不回退到全局环境变量。"""
 
-    required = {
-        "host": os.getenv("MYSQL_HOST"),
-        "port": os.getenv("MYSQL_PORT"),
-        "user": os.getenv("MYSQL_USER"),
-        "password": os.getenv("MYSQL_PWD"),
-        "database": os.getenv("MYSQL_DATABASE"),
-    }
-    missing = [name for name, value in required.items() if not value]
-    if missing:
-        return {
-            "status": "error",
-            "failure_category": "tool_error",
-            "failure_reason": "缺少数据库连接环境变量：" + ", ".join(missing),
-        }
     try:
-        port = int(str(required["port"]))
-    except ValueError:
+        config = resolve_application_mysql_config(workspace_root)
+    except DatabaseCredentialError as exc:
         return {
             "status": "error",
             "failure_category": "tool_error",
-            "failure_reason": f"MYSQL_PORT 不是合法整数：{required['port']}",
+            "failure_reason": str(exc),
         }
-    return {**required, "port": port, "status": "ok"}
+    return {
+        "host": config.host,
+        "port": config.port,
+        "user": config.user,
+        "password": config.password,
+        "database": config.database,
+        "status": "ok",
+    }

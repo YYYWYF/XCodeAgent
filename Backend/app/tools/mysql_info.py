@@ -9,6 +9,7 @@ from langchain_core.tools import tool
 
 from app.services.database_credentials import (
     DatabaseCredentialError,
+    MySQLConnectionConfig,
     resolve_application_mysql_config,
 )
 
@@ -397,7 +398,7 @@ def get_mysql_table_info_for_workspace(
 def execute_mysql_ddl(
         statements: list[str],
 ) -> str:
-    """从 MYSQL_* 环境变量读取连接信息并执行 DDL/SQL 语句。
+    """兼容旧工具入口，但没有绑定应用工作区时拒绝执行 DDL。
 
     Args:
         statements: 需要按顺序执行的 SQL 语句列表。每条语句以字符串传入，
@@ -407,57 +408,56 @@ def execute_mysql_ddl(
         A JSON string with the execution result.
     """
 
-    host = os.getenv("MYSQL_HOST")
-    port_str = os.getenv("MYSQL_PORT")
-    user = os.getenv("MYSQL_USER")
-    password = os.getenv("MYSQL_PWD")
-    database = os.getenv("MYSQL_DATABASE")
+    return execute_mysql_ddl_for_workspace(None, statements)
 
-    missing = []
-    if not host:
-        missing.append("MYSQL_HOST")
-    if not port_str:
-        missing.append("MYSQL_PORT")
-    if not user:
-        missing.append("MYSQL_USER")
-    if not password:
-        missing.append("MYSQL_PWD")
-    if missing:
-        return json.dumps(
-            {
-                "tool": "execute_mysql_ddl",
-                "status": "error",
-                "error": (
-                    "Missing required environment variable(s): "
-                    f"{', '.join(missing)}. "
-                    "All of MYSQL_HOST, MYSQL_PORT, MYSQL_USER, "
-                    "MYSQL_PWD, MYSQL_DATABASE must be set."
-                ),
-            },
-            ensure_ascii=False,
-        )
+
+def create_execute_mysql_ddl_tool(workspace_root: str | None):
+    """创建绑定当前应用工作区的 DDL 工具，避免向模型暴露连接凭据。"""
+
+    @tool("execute_mysql_ddl")
+    def workspace_execute_mysql_ddl(statements: list[str]) -> str:
+        """按当前应用配置执行传入的 DDL/SQL 语句。"""
+
+        return execute_mysql_ddl_for_workspace(workspace_root, statements)
+
+    return workspace_execute_mysql_ddl
+
+
+def execute_mysql_ddl_for_workspace(
+    workspace_root: str | None,
+    statements: list[str],
+) -> str:
+    """解析当前应用的加密数据库配置，并执行 DDL/SQL 语句。"""
 
     try:
-        port = int(port_str)  # type: ignore[arg-type]
-    except (ValueError, TypeError):
+        config = resolve_application_mysql_config(workspace_root)
+    except DatabaseCredentialError as exc:
         return json.dumps(
             {
                 "tool": "execute_mysql_ddl",
                 "status": "error",
-                "error": f"MYSQL_PORT must be a valid integer, got '{port_str}'.",
+                "error": str(exc),
             },
             ensure_ascii=False,
         )
+    return _execute_mysql_ddl_with_config(statements, config)
+
+
+def _execute_mysql_ddl_with_config(
+    statements: list[str],
+    config: MySQLConnectionConfig,
+) -> str:
+    """使用已解析的应用级连接配置执行 SQL，并保留旧工具结果协议。"""
 
     import pymysql
 
-    executed = []
+    executed: list[dict[str, Any]] = []
     try:
         connection = pymysql.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
+            host=config.host,
+            port=config.port,
+            user=config.user,
+            password=config.password,
             cursorclass=pymysql.cursors.DictCursor,
             autocommit=False,
             connect_timeout=10,
@@ -485,9 +485,7 @@ def execute_mysql_ddl(
     try:
         with connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    "USE `" + database.replace("`", "``") + "`"
-                )
+                cursor.execute("USE `" + config.database.replace("`", "``") + "`")
                 for statement in statements:
                     statement = str(statement).strip().rstrip(";")
                     if not statement:
