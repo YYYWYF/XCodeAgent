@@ -6,7 +6,7 @@ import {
   SwapOutlined
 } from '@ant-design/icons'
 import { Button, Input, Typography } from 'antd'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
   WorkflowClarification,
@@ -120,6 +120,36 @@ export default function UiDesignConfirmationPanel({
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
+  }, [])
+
+  // 默认选中第一个锚点。
+  useEffect(() => {
+    if (!activePageId && pages.length > 0) {
+      setActivePageId(pages[0].pageId || '')
+    }
+  }, [activePageId, pages])
+
+  // 滚动右侧内容区时，把可视区域最顶部的卡片同步为当前锚点。
+  useEffect(() => {
+    const container = scrollRef.current
+    if (!container) return
+    const handleScroll = (): void => {
+      const cards = container.querySelectorAll<HTMLElement>('[data-page-anchor]')
+      if (!cards.length) return
+      // 找第一个顶部已滚出可视区上沿的卡片，取它前一个；否则取第一个。
+      let current: string | undefined
+      const containerTop = container.scrollTop
+      for (const card of cards) {
+        if (card.offsetTop - container.offsetTop <= containerTop + 8) {
+          current = card.dataset.pageAnchor
+        } else {
+          break
+        }
+      }
+      if (current) setActivePageId(current)
+    }
+    container.addEventListener('scroll', handleScroll, { passive: true })
+    return () => container.removeEventListener('scroll', handleScroll)
   }, [])
 
   if (!clarification) return null
