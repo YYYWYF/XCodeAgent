@@ -90,7 +90,7 @@ def _blocked_result(
             AskUserQuestion(
                 header="数据库上下文",
                 question=(
-                    f"{message} 请补齐或修正当前应用的数据源连接配置后重试。"
+                    f"{message} 请在application.json中正确配置当前应用的数据源连接后重试。"
                 ),
                 type="text",
                 placeholder="例如：已补齐数据库连接信息，请重新检查。",

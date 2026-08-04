@@ -18,6 +18,20 @@ from app.services.database_planning_context import (
 )
 
 
+_TEST_WORKSPACE_ROOT = "/workspace-a"
+
+
+def _workspace_tool(tool: SimpleNamespace):
+    """把旧式工具 mock 适配为当前按工作区绑定的 MySQL 工具调用。"""
+
+    def invoke(_workspace_root: str, *, table_name: str | None = None) -> str:
+        """用原有 invoke mock 保留数据库规划测试的返回协议。"""
+
+        return tool.invoke({"table_name": table_name})
+
+    return invoke
+
+
 def _project_plan(method: str = "POST") -> dict:
     """构造包含 MySQL 数据源和单接口契约的测试 ProjectPlan。"""
 
@@ -284,8 +298,15 @@ class DatabaseContextV1Tests(unittest.TestCase):
         """数据库满足需求时生成新版 completed 上下文且不含任务意图。"""
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
-        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
-            context = prepare_database_planning_context(_project_plan(), _build_context())
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
+            side_effect=_workspace_tool(tool),
+        ):
+            context = prepare_database_planning_context(
+                _project_plan(),
+                _build_context(),
+                workspace_root=_TEST_WORKSPACE_ROOT,
+            )
 
         tool.invoke.assert_called_once_with({"table_name": None})
         self.assertEqual(context["schema_version"], "database-context.v1")
@@ -343,8 +364,15 @@ class DatabaseContextV1Tests(unittest.TestCase):
             ],
         }
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload(tables={})))
-        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
-            context = prepare_database_planning_context(_project_plan(), build_context)
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
+            side_effect=_workspace_tool(tool),
+        ):
+            context = prepare_database_planning_context(
+                _project_plan(),
+                build_context,
+                workspace_root=_TEST_WORKSPACE_ROOT,
+            )
 
         self.assertEqual(context["status"], "completed")
         self.assertEqual(context["gaps"][0]["kind"], "missing_table")
@@ -355,8 +383,15 @@ class DatabaseContextV1Tests(unittest.TestCase):
         """目标数据库不存在时仍完成上下文检查，并把建库转成后续任务。"""
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload(database_exists=False)))
-        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
-            context = prepare_database_planning_context(_project_plan(), _build_context())
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
+            side_effect=_workspace_tool(tool),
+        ):
+            context = prepare_database_planning_context(
+                _project_plan(),
+                _build_context(),
+                workspace_root=_TEST_WORKSPACE_ROOT,
+            )
 
         self.assertEqual(context["status"], "completed")
         self.assertFalse(context["actual_schema"]["database_exists"])
@@ -367,10 +402,14 @@ class DatabaseContextV1Tests(unittest.TestCase):
         """聚合响应和返回 null/0 的字段不应被误判为必须补库。"""
 
         tool = SimpleNamespace(invoke=Mock(return_value=_summary_tool_payload()))
-        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
+            side_effect=_workspace_tool(tool),
+        ):
             context = prepare_database_planning_context(
                 _summary_project_plan(),
                 _summary_build_context(),
+                workspace_root=_TEST_WORKSPACE_ROOT,
             )
 
         required_table = context["required_schema"]["tables"][0]
@@ -421,8 +460,15 @@ class DatabaseContextV1Tests(unittest.TestCase):
         ]
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
-        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
-            context = prepare_database_planning_context(_project_plan(), build_context)
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
+            side_effect=_workspace_tool(tool),
+        ):
+            context = prepare_database_planning_context(
+                _project_plan(),
+                build_context,
+                workspace_root=_TEST_WORKSPACE_ROOT,
+            )
 
         self.assertEqual(context["gaps"][0]["kind"], "missing_column")
         self.assertEqual(context["gaps"][0]["column"], "department")
@@ -451,8 +497,15 @@ class DatabaseContextV1Tests(unittest.TestCase):
         detail["data_origin"]["database_operations"] = []
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
-        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
-            context = prepare_database_planning_context(_project_plan(), build_context)
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
+            side_effect=_workspace_tool(tool),
+        ):
+            context = prepare_database_planning_context(
+                _project_plan(),
+                build_context,
+                workspace_root=_TEST_WORKSPACE_ROOT,
+            )
 
         self.assertEqual(context["gaps"], [])
         self.assertEqual(context["task_intents"], [])
@@ -477,8 +530,15 @@ class DatabaseContextV1Tests(unittest.TestCase):
         ]
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
-        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
-            context = prepare_database_planning_context(_project_plan(), build_context)
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
+            side_effect=_workspace_tool(tool),
+        ):
+            context = prepare_database_planning_context(
+                _project_plan(),
+                build_context,
+                workspace_root=_TEST_WORKSPACE_ROOT,
+            )
 
         self.assertEqual(context["gaps"][0]["kind"], "default_mismatch")
         self.assertEqual(
@@ -501,8 +561,15 @@ class DatabaseContextV1Tests(unittest.TestCase):
                 )
             )
         )
-        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
-            context = prepare_database_planning_context(_project_plan(), _build_context())
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
+            side_effect=_workspace_tool(tool),
+        ):
+            context = prepare_database_planning_context(
+                _project_plan(),
+                _build_context(),
+                workspace_root=_TEST_WORKSPACE_ROOT,
+            )
 
         self.assertEqual(context["status"], "connection_failed")
         self.assertEqual(context["connection"]["status"], "failed")
@@ -572,10 +639,14 @@ class DatabaseContextV1Tests(unittest.TestCase):
         """任务规划模型输入包含新版数据库上下文和已确认接口详情。"""
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
-        with patch("app.services.database_schema_summary.get_mysql_table_info", tool):
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
+            side_effect=_workspace_tool(tool),
+        ):
             database_context = prepare_database_planning_context(
                 _project_plan(),
                 _build_context(),
+                workspace_root=_TEST_WORKSPACE_ROOT,
             )
             build_context = _with_database_planning_context_from_state(
                 {"database_planning_context": database_context},

@@ -27,6 +27,7 @@ from app.services.database_crypto import (
     ensure_database_platform_key,
     load_database_platform_key,
 )
+from app.services.database_schema_summary import inspect_mysql_schema
 from app.tools.mysql_info import (
     create_get_mysql_table_info_tool,
     get_mysql_table_info,
@@ -59,6 +60,7 @@ def _write_application(workspace: Path, password: str, *, schema: str) -> None:
         json.dumps(
             {
                 "datasource": {
+                    "type": "DataBase",
                     "db": {
                         "plantMode": {
                             "domain": f"{schema}.mysql.local",
@@ -258,6 +260,132 @@ class ApplicationDatabaseCredentialTests(unittest.TestCase):
             with self.assertRaises(DatabaseCredentialError) as raised:
                 resolve_application_mysql_config(workspace)
             self.assertNotIn("secret-value", str(raised.exception))
+
+    def test_missing_workspace_fails_even_when_global_environment_exists(self) -> None:
+        """没有当前工作区时必须拒绝连接，不能回退到全局环境变量。"""
+
+        with patch.dict(
+            "os.environ",
+            {
+                "MYSQL_HOST": "global-host",
+                "MYSQL_PORT": "3306",
+                "MYSQL_USER": "global-user",
+                "MYSQL_PWD": "global-password",
+                "MYSQL_DATABASE": "global-database",
+            },
+        ):
+            with self.assertRaisesRegex(DatabaseCredentialError, "缺少当前应用工作区"):
+                resolve_application_mysql_config(None)
+
+    def test_only_database_datasource_type_is_supported(self) -> None:
+        """应用数据源类型只允许 database，不接受 mysql 或 db 别名。"""
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            root = Path(temporary_root)
+            for source_type in ("mysql", "db"):
+                with self.subTest(source_type=source_type):
+                    workspace = root / source_type
+                    _write_application(workspace, "legacy-password", schema="inventory")
+                    application_file = workspace / ".xcodeagent" / "application.json"
+                    payload = json.loads(application_file.read_text(encoding="utf-8"))
+                    payload["datasource"]["type"] = source_type
+                    application_file.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(DatabaseCredentialError, "必须是 database"):
+                        resolve_application_mysql_config(workspace)
+
+    def test_builtin_database_fails_closed_without_environment_fallback(self) -> None:
+        """平台内置数据库不能因为存在全局环境变量而被当成外部 MySQL。"""
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            workspace = Path(temporary_root) / "builtin"
+            target = workspace / ".xcodeagent" / "application.json"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                json.dumps(
+                    {
+                        "datasource": {
+                            "type": "DataBase",
+                            "db": {"useBuiltin": True},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"MYSQL_HOST": "global-host"}):
+                with self.assertRaisesRegex(DatabaseCredentialError, "平台内置数据库"):
+                    resolve_application_mysql_config(workspace)
+
+    def test_dbid_database_fails_closed_without_environment_fallback(self) -> None:
+        """DBID 模式必须等待专用连接适配器，不能借用全局 MySQL 配置。"""
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            workspace = Path(temporary_root) / "dbid"
+            target = workspace / ".xcodeagent" / "application.json"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                json.dumps(
+                    {
+                        "datasource": {
+                            "type": "DataBase",
+                            "db": {
+                                "useBuiltin": False,
+                                "dbidMode": {
+                                    "dbid": "dbid-1",
+                                    "userName": "reader",
+                                    "domain": "db.local",
+                                    "port": 3306,
+                                    "schema": "inventory",
+                                },
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"MYSQL_HOST": "global-host"}):
+                with self.assertRaisesRegex(DatabaseCredentialError, "DBID"):
+                    resolve_application_mysql_config(workspace)
+
+    def test_top_level_database_fields_are_not_used_as_application_credentials(self) -> None:
+        """旧顶层 database 字段不能绕过 datasource.db 的统一配置入口。"""
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            workspace = Path(temporary_root) / "legacy-shape"
+            target = workspace / ".xcodeagent" / "application.json"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                json.dumps(
+                    {
+                        "database": {
+                            "host": "legacy-host",
+                            "port": "3306",
+                            "username": "legacy-user",
+                            "password": "legacy-password",
+                        },
+                        "datasource": {
+                            "type": "DataBase",
+                            "db": {"useBuiltin": False},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(DatabaseCredentialError, "plantMode"):
+                resolve_application_mysql_config(workspace)
+
+    def test_schema_inspection_requires_workspace_before_invoking_database_tool(self) -> None:
+        """结构扫描缺少工作区时必须立即失败，不能进入无绑定工具分支。"""
+
+        with patch(
+            "app.services.database_schema_summary.get_mysql_table_info_for_workspace"
+        ) as database_tool:
+            result = inspect_mysql_schema(
+                {"data_source_id": "orders"},
+                workspace_root=" ",
+            )
+        self.assertEqual(result["status"], "connection_failed")
+        self.assertEqual(result["reason"], "missing_workspace")
+        database_tool.assert_not_called()
 
     def test_workspace_tool_preserves_result_and_model_input_schema(self) -> None:
         """工具只暴露 table_name，并原样返回 mysql_table_info 的 JSON。"""

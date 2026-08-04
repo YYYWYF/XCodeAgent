@@ -3,10 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.tools.mysql_info import (
-    get_mysql_table_info,
-    get_mysql_table_info_for_workspace,
-)
+from app.tools.mysql_info import get_mysql_table_info_for_workspace
 
 
 _MAX_TABLES = 12
@@ -19,11 +16,16 @@ def inspect_mysql_schema(
 ) -> dict[str, Any]:
     """调用受控 MySQL 工具并返回真实数据库结构摘要。"""
 
+    if workspace_root is None or not str(workspace_root).strip():
+        return connection_failed(
+            "missing_workspace",
+            "缺少当前应用工作区，无法读取应用级数据库连接配置。",
+            target=target,
+        )
     try:
-        tool_result = (
-            get_mysql_table_info_for_workspace(workspace_root, table_name=None)
-            if workspace_root
-            else get_mysql_table_info.invoke({"table_name": None})
+        tool_result = get_mysql_table_info_for_workspace(
+            workspace_root,
+            table_name=None,
         )
     except Exception as exc:
         return connection_failed(

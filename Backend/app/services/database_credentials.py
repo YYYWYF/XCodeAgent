@@ -12,6 +12,9 @@ from app.services.database_crypto import (
 )
 
 
+_DATABASE_SOURCE_TYPE = "database"
+
+
 class DatabaseCredentialError(RuntimeError):
     """表示应用级数据库连接配置缺失、非法或无法解密。"""
 
@@ -44,13 +47,41 @@ def load_application_json(workspace_root: str | Path) -> dict[str, Any]:
 
 
 def read_plant_mode(application: dict[str, Any]) -> dict[str, Any]:
-    """从应用配置中提取 datasource.db.plantMode 对象。"""
+    """从应用配置中提取唯一支持直接连接的 datasource.db.plantMode。"""
 
     datasource = application.get("datasource")
-    database = datasource.get("db") if isinstance(datasource, dict) else None
-    plant_mode = database.get("plantMode") if isinstance(database, dict) else None
-    if not isinstance(plant_mode, dict):
+    if not isinstance(datasource, dict):
+        raise DatabaseCredentialError("当前应用未配置 datasource 数据源。")
+    source_type = str(datasource.get("type") or "").strip().lower()
+    if source_type != _DATABASE_SOURCE_TYPE:
+        raise DatabaseCredentialError("当前应用的数据源类型必须是 database。")
+
+    database = datasource.get("db")
+    if not isinstance(database, dict):
+        raise DatabaseCredentialError("当前应用未配置 datasource.db 数据库信息。")
+
+    use_builtin = database.get("useBuiltin")
+    if use_builtin is True:
+        raise DatabaseCredentialError(
+            "当前应用使用平台内置数据库，暂不支持通过应用配置直接建立 MySQL 连接。"
+        )
+    if use_builtin is not None and not isinstance(use_builtin, bool):
+        raise DatabaseCredentialError("当前应用的 datasource.db.useBuiltin 必须是布尔值。")
+
+    plant_mode = database.get("plantMode")
+    dbid_mode = database.get("dbidMode")
+    if plant_mode is not None and dbid_mode is not None:
+        raise DatabaseCredentialError(
+            "当前应用同时配置了 plantMode 和 dbidMode，无法确定数据库连接模式。"
+        )
+    if dbid_mode is not None:
+        raise DatabaseCredentialError(
+            "当前应用使用 DBID 数据库连接模式，暂不支持直接建立 MySQL 连接。"
+        )
+    if plant_mode is None:
         raise DatabaseCredentialError("当前应用未配置 datasource.db.plantMode。")
+    if not isinstance(plant_mode, dict):
+        raise DatabaseCredentialError("当前应用的 datasource.db.plantMode 必须是对象。")
     return plant_mode
 
 
@@ -107,7 +138,7 @@ def resolve_application_mysql_config(
 ) -> MySQLConnectionConfig:
     """从指定应用工作区解析本次 MySQL 查询的完整连接配置。"""
 
-    if not workspace_root:
+    if workspace_root is None or not str(workspace_root).strip():
         raise DatabaseCredentialError("缺少当前应用工作区，无法读取数据库连接配置。")
     return validate_mysql_config(
         read_plant_mode(load_application_json(workspace_root)),
