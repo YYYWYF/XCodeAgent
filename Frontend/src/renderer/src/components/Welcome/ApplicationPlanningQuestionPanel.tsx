@@ -7,13 +7,16 @@ import {
   FileTextOutlined
 } from '@ant-design/icons'
 import { Button, Checkbox, Form, Input, Radio, Tag, Typography } from 'antd'
-import { useCallback, useState } from 'react'
-import type { ReactElement } from 'react'
+import type { FormInstance } from 'antd'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { KeyboardEventHandler, ReactElement } from 'react'
 import MarkdownContent from '../MarkdownContent/MarkdownContent'
 import DetailReview from '../AiChatPanel/components/WorkflowRunCard/DetailReview'
 import RequirementSpecSummary from './RequirementSpecSummary'
 import RequirementSpecEditor from './RequirementSpecEditor'
 import UiDesignConfirmationPanel from './UiDesignConfirmationPanel'
+import ProjectPlanSummary from './ProjectPlanSummary'
+import { projectPlanReadingSections } from './ProjectPlanReadingSections'
 import type {
   WorkflowClarification,
   WorkflowClarificationAnswer,
@@ -29,12 +32,17 @@ const { Paragraph, Text, Title } = Typography
 const { TextArea } = Input
 const OTHER_OPTION_VALUE = '__other__'
 
+type ProjectPlanConfirmationForm = {
+  answers: WorkflowClarificationAnswers
+}
+
 type Props = {
   disabled?: boolean
   onSaveRequirementSpec: (
     workflow: WorkflowRunPayload,
     spec: Record<string, unknown>
   ) => Promise<Record<string, unknown> | undefined>
+  onReturnHome: () => void
   onSubmit: (
     workflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers,
@@ -109,6 +117,259 @@ function submitLabel(mode?: string): string {
   return '提交回答并继续'
 }
 
+type ProjectPlanConfirmationLayoutProps = {
+  appName: string
+  artifactContent: string
+  disabled?: boolean
+  form: FormInstance<ProjectPlanConfirmationForm>
+  hasFeedback: boolean
+  onFeedbackTab: KeyboardEventHandler<HTMLTextAreaElement>
+  onFinish: (values: ProjectPlanConfirmationForm) => void
+  onReturnHome: () => void
+  onToggleOriginal: () => void
+  plan: Record<string, unknown>
+  projectPlanAnswerKey: string
+  planVersion: string
+  showOriginal: boolean
+}
+
+// 还原项目规划确认稿的完整工作区壳层，并把正式计划、原文和确认动作放在同一页面流中。
+function ProjectPlanConfirmationLayout({
+  appName,
+  artifactContent,
+  disabled,
+  form,
+  hasFeedback,
+  onFeedbackTab,
+  onFinish,
+  onReturnHome,
+  onToggleOriginal,
+  plan,
+  projectPlanAnswerKey,
+  planVersion,
+  showOriginal
+}: ProjectPlanConfirmationLayoutProps): ReactElement {
+  const projectMark = appName.slice(0, 1) || '旅'
+  const readingSections = useMemo(() => projectPlanReadingSections(plan), [plan])
+  const [activeReadingSectionId, setActiveReadingSectionId] = useState(
+    () => readingSections[0]?.id || ''
+  )
+  const contentRef = useRef<HTMLDivElement>(null)
+  // 记录点击章节触发的程序滚动，避免平滑滚动过程覆盖点击后的高亮状态。
+  const programmaticScrollSectionRef = useRef<string | null>(null)
+  const programmaticScrollTimerRef = useRef<number | undefined>(undefined)
+
+  // 根据主内容滚动位置计算当前阅读章节，让左侧高亮始终跟随视口位置。
+  useEffect(() => {
+    const contentRoot = contentRef.current
+    if (!contentRoot || showOriginal) return
+
+    const sectionTargets = readingSections
+      .map((section) => ({ id: section.id, element: document.getElementById(section.id) }))
+      .filter((target): target is { id: string; element: HTMLElement } => Boolean(target.element))
+    if (!sectionTargets.length) return
+
+    // 根据锚点与内容视口的相对位置，确定当前应该高亮的章节。
+    const updateActiveSection = (): void => {
+      if (programmaticScrollSectionRef.current) return
+      const rootRect = contentRoot.getBoundingClientRect()
+      const activationLine = rootRect.top + Math.min(180, Math.max(96, rootRect.height * 0.24))
+      let currentSectionId = sectionTargets[0].id
+      for (const target of sectionTargets) {
+        if (target.element.getBoundingClientRect().top <= activationLine) {
+          currentSectionId = target.id
+        } else {
+          break
+        }
+      }
+      setActiveReadingSectionId((current) =>
+        current === currentSectionId ? current : currentSectionId
+      )
+    }
+
+    let frameId: number | undefined
+    // 合并连续滚动事件，避免每个滚动像素都触发 React 状态更新。
+    const scheduleActiveSectionUpdate = (): void => {
+      if (frameId !== undefined) return
+      frameId = window.requestAnimationFrame(() => {
+        frameId = undefined
+        updateActiveSection()
+      })
+    }
+
+    // 平滑滚动结束后恢复基于视口位置的动态高亮计算。
+    const handleScrollEnd = (): void => {
+      if (!programmaticScrollSectionRef.current) return
+      programmaticScrollSectionRef.current = null
+      if (programmaticScrollTimerRef.current !== undefined) {
+        window.clearTimeout(programmaticScrollTimerRef.current)
+        programmaticScrollTimerRef.current = undefined
+      }
+      scheduleActiveSectionUpdate()
+    }
+
+    updateActiveSection()
+    contentRoot.addEventListener('scroll', scheduleActiveSectionUpdate, { passive: true })
+    contentRoot.addEventListener('scrollend', handleScrollEnd)
+    window.addEventListener('resize', scheduleActiveSectionUpdate)
+    return () => {
+      contentRoot.removeEventListener('scroll', scheduleActiveSectionUpdate)
+      contentRoot.removeEventListener('scrollend', handleScrollEnd)
+      window.removeEventListener('resize', scheduleActiveSectionUpdate)
+      if (frameId !== undefined) window.cancelAnimationFrame(frameId)
+      if (programmaticScrollTimerRef.current !== undefined) {
+        window.clearTimeout(programmaticScrollTimerRef.current)
+        programmaticScrollTimerRef.current = undefined
+      }
+      programmaticScrollSectionRef.current = null
+    }
+  }, [readingSections, showOriginal])
+
+  // 点击左侧章节时滚动到对应计划卡片，并立即反馈当前选中状态。
+  const handleReadingSectionClick = useCallback(
+    (sectionId: string): void => {
+      if (showOriginal) return
+      const contentRoot = contentRef.current
+      const target = document.getElementById(sectionId)
+      if (!contentRoot || !target) return
+      const rootRect = contentRoot.getBoundingClientRect()
+      const targetRect = target.getBoundingClientRect()
+      const targetTop = contentRoot.scrollTop + targetRect.top - rootRect.top - 16
+      if (programmaticScrollTimerRef.current !== undefined) {
+        window.clearTimeout(programmaticScrollTimerRef.current)
+      }
+      programmaticScrollSectionRef.current = sectionId
+      contentRoot.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+      setActiveReadingSectionId(sectionId)
+      // 兼容不触发 scrollend 的运行环境，保证滚动锁最终一定会释放。
+      const releaseDelay = Math.min(
+        1600,
+        Math.max(500, Math.round(Math.abs(targetTop - contentRoot.scrollTop) * 0.75))
+      )
+      programmaticScrollTimerRef.current = window.setTimeout(() => {
+        programmaticScrollSectionRef.current = null
+        programmaticScrollTimerRef.current = undefined
+      }, releaseDelay)
+    },
+    [showOriginal]
+  )
+
+  return (
+    <div className={cx('project-plan-confirmation-shell')}>
+      <header className={cx('project-plan-confirmation-topbar')}>
+        <div className={cx('project-plan-confirmation-brand-group')}>
+          <Button
+            aria-label="回到首页"
+            className={cx('project-plan-confirmation-back')}
+            icon={<ArrowLeftOutlined />}
+            onClick={onReturnHome}
+            title="回到首页"
+            type="text"
+          />
+          <div className={cx('project-plan-confirmation-brand')}>
+            <span className={cx('project-plan-confirmation-brand-mark')}>✦</span>
+            <span>XCodeAgent / 项目规划</span>
+          </div>
+        </div>
+        <div className={cx('project-plan-confirmation-topbar-meta')}>
+          <span>本地应用工程</span>
+          <span className={cx('project-plan-confirmation-live-dot')} aria-hidden="true" />
+          <span>待确认</span>
+        </div>
+      </header>
+
+      <div className={cx('project-plan-confirmation-layout')}>
+        <aside className={cx('project-plan-confirmation-sidebar')} aria-label="项目规划导航">
+          <div className={cx('project-plan-confirmation-project-heading')}>
+            <span className={cx('project-plan-confirmation-project-mark')}>{projectMark}</span>
+            <div className={cx('project-plan-confirmation-project-copy')}>
+              <strong>{appName}</strong>
+              <span>项目规划 · {planVersion}</span>
+            </div>
+          </div>
+
+          <nav className={cx('project-plan-confirmation-nav')} aria-label="项目规划阅读章节">
+            {readingSections.map((section) => {
+              const isActive = section.id === activeReadingSectionId
+              return (
+                <button
+                  aria-current={isActive ? 'step' : undefined}
+                  className={cx('project-plan-confirmation-nav-item', isActive && 'is-active')}
+                  disabled={showOriginal}
+                  key={section.id}
+                  onClick={() => handleReadingSectionClick(section.id)}
+                  type="button"
+                >
+                  {section.label}
+                </button>
+              )
+            })}
+          </nav>
+
+          <div className={cx('project-plan-confirmation-progress')}>
+            <span className={cx('project-plan-confirmation-sidebar-label')}>确认进度</span>
+            <div className={cx('project-plan-confirmation-step', 'is-done')} data-step="01">
+              需求文档 <span>完成</span>
+            </div>
+            <div className={cx('project-plan-confirmation-step', 'is-active')} data-step="02">
+              项目规划 <span>当前</span>
+            </div>
+            <div className={cx('project-plan-confirmation-step')} data-step="03">
+              进入工作区 <span>下一步</span>
+            </div>
+          </div>
+        </aside>
+
+        <main className={cx('project-plan-confirmation-main')}>
+          <div className={cx('project-plan-confirmation-main-content')} ref={contentRef}>
+            {showOriginal ? (
+              <section className={cx('project-plan-confirmation-original')}>
+                <header>
+                  <Text strong>项目计划原文</Text>
+                  <Text type="secondary">当前确认版本的 Markdown 文档</Text>
+                </header>
+                <MarkdownContent content={artifactContent} />
+              </section>
+            ) : (
+              <ProjectPlanSummary plan={plan} />
+            )}
+          </div>
+
+          <Form
+            className={cx('project-plan-confirmation-bar')}
+            form={form}
+            layout="vertical"
+            onFinish={onFinish}
+          >
+            <Form.Item name={['answers', projectPlanAnswerKey]} noStyle>
+              <TextArea
+                aria-label="项目规划意见"
+                autoSize={{ minRows: 1, maxRows: 2 }}
+                disabled={disabled}
+                onKeyDown={onFeedbackTab}
+                placeholder="意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容 (按 Tab 采用)"
+              />
+            </Form.Item>
+            <div className={cx('project-plan-confirmation-actions')}>
+              <Button disabled={disabled} onClick={onToggleOriginal} type="default">
+                {showOriginal ? '返回规划' : '查看原文'}
+              </Button>
+              <Button
+                disabled={disabled}
+                htmlType="submit"
+                icon={<CheckCircleOutlined />}
+                type="primary"
+              >
+                {hasFeedback ? '提交意见，调整规划' : '规划正确，进入工作区'}
+              </Button>
+            </div>
+          </Form>
+        </main>
+      </div>
+    </div>
+  )
+}
+
 // 从公开 Workflow 结果中读取 RequirementSpec 结构化状态，供默认概览视图使用。
 function requirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
   for (const source of [workflow.result, workflow.state]) {
@@ -120,20 +381,32 @@ function requirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> 
   return undefined
 }
 
+// 从公开 Workflow 结果中读取 ProjectPlan 结构化状态，供模块化规划视图使用。
+function projectPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
+  for (const source of [workflow.result, workflow.state]) {
+    const value = source?.project_plan
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
 // 使用创建规划页面自己的表单视觉展示问题和正式产物，不渲染通用 Workflow 卡片。
 export default function ApplicationPlanningQuestionPanel({
   disabled,
   onSaveRequirementSpec,
+  onReturnHome,
   onSubmit,
   rootPath,
   workflow
 }: Props): ReactElement | null {
   const [form] = Form.useForm<{ answers: WorkflowClarificationAnswers }>()
-  const requirementFeedback = Form.useWatch(
-    ['answers', 'requirement_spec_feedback'],
-    form
-  ) as WorkflowClarificationAnswer | undefined
+  const requirementFeedback = Form.useWatch(['answers', 'requirement_spec_feedback'], form) as
+    | WorkflowClarificationAnswer
+    | undefined
   const [showArtifactDetail, setShowArtifactDetail] = useState(false)
+  const [showProjectPlanOriginal, setShowProjectPlanOriginal] = useState(false)
   const [editingRequirement, setEditingRequirement] = useState(false)
   const [requirementDraft, setRequirementDraft] = useState<Record<string, unknown>>()
   const [savingRequirement, setSavingRequirement] = useState(false)
@@ -145,10 +418,9 @@ export default function ApplicationPlanningQuestionPanel({
   const projectPlanAnswerKey = questions[0]
     ? questionKey(questions[0], 0)
     : 'project_plan_confirmation'
-  const projectPlanFeedback = Form.useWatch(
-    ['answers', projectPlanAnswerKey],
-    form
-  ) as WorkflowClarificationAnswer | undefined
+  const projectPlanFeedback = Form.useWatch(['answers', projectPlanAnswerKey], form) as
+    | WorkflowClarificationAnswer
+    | undefined
   const handleConfirmationFeedbackTab = useTabToFillPlaceholder(form, [
     'answers',
     isRequirementConfirmation ? 'requirement_spec_feedback' : projectPlanAnswerKey
@@ -156,6 +428,7 @@ export default function ApplicationPlanningQuestionPanel({
   const hasRecoveryAction = clarification?.status === 'requires_user_input' && !questions.length
   const artifact = workflow.confirmationArtifact
   const spec = artifact?.id === 'requirement_spec' ? requirementSpec(workflow) : undefined
+  const plan = artifact?.id === 'project_plan' ? projectPlan(workflow) : undefined
   const displayedSpec = requirementDraft || spec
   const canShowSummary = Boolean(spec)
   // 意见非空时切换提交语义，避免按钮继续暗示需求文档完全正确。
@@ -177,9 +450,12 @@ export default function ApplicationPlanningQuestionPanel({
       return
     }
     if (!isRequirementConfirmation) {
-      onSubmit(workflow, questions.length
-        ? values.answers || {}
-        : { planning_recovery: '请重新生成当前规划，并提供可确认的正式文档或可填写的问题。' })
+      onSubmit(
+        workflow,
+        questions.length
+          ? values.answers || {}
+          : { planning_recovery: '请重新生成当前规划，并提供可确认的正式文档或可填写的问题。' }
+      )
       return
     }
     const feedback = values.answers?.requirement_spec_feedback
@@ -216,6 +492,39 @@ export default function ApplicationPlanningQuestionPanel({
     } finally {
       setSavingRequirement(false)
     }
+  }
+
+  if (isProjectPlanConfirmation && plan) {
+    const planApp =
+      plan.app && typeof plan.app === 'object' ? (plan.app as Record<string, unknown>) : {}
+    const planVersion = typeof plan.version === 'string' ? plan.version : '0.1.0'
+    const appName = typeof planApp.name === 'string' ? planApp.name : '未命名应用'
+
+    return (
+      <section
+        className={cx(
+          'planning-question-panel',
+          'is-document-confirmation',
+          'is-project-plan-confirmation'
+        )}
+      >
+        <ProjectPlanConfirmationLayout
+          appName={appName}
+          artifactContent={artifact?.content || ''}
+          disabled={disabled}
+          form={form}
+          hasFeedback={hasProjectPlanFeedback}
+          onFeedbackTab={handleConfirmationFeedbackTab}
+          onFinish={handleSubmit}
+          onReturnHome={onReturnHome}
+          onToggleOriginal={() => setShowProjectPlanOriginal((current) => !current)}
+          plan={plan}
+          planVersion={planVersion}
+          projectPlanAnswerKey={projectPlanAnswerKey}
+          showOriginal={showProjectPlanOriginal}
+        />
+      </section>
+    )
   }
 
   if (clarification.mode === 'detail_review' && clarification.review) {
@@ -271,7 +580,7 @@ export default function ApplicationPlanningQuestionPanel({
                   ? '请审核需求文档。需要补充时只在下方填写意见；文档正确时，直接点击右下角按钮继续。'
                   : isProjectPlanConfirmation
                     ? '请审核项目规划。需要调整时只在下方填写意见；规划正确时，直接点击右下角按钮进入工作区。'
-                  : artifact.name}
+                    : artifact.name}
               </Text>
             </div>
             {canShowSummary ? (
@@ -314,7 +623,7 @@ export default function ApplicationPlanningQuestionPanel({
                 ) : null}
               </div>
             ) : (
-              <Tag>Markdown</Tag>
+              <Tag>{artifact.id === 'project_plan' ? 'JSON' : 'Markdown'}</Tag>
             )}
           </header>
           <div className={cx('planning-artifact-content')}>
@@ -326,6 +635,12 @@ export default function ApplicationPlanningQuestionPanel({
               />
             ) : canShowSummary && !showArtifactDetail ? (
               <RequirementSpecSummary spec={displayedSpec!} />
+            ) : artifact.id === 'project_plan' ? (
+              plan ? (
+                <ProjectPlanSummary plan={plan} />
+              ) : (
+                <Text type="secondary">项目规划结构化数据暂不可用，请重新生成当前规划。</Text>
+              )
             ) : (
               <MarkdownContent content={artifact.content} />
             )}
@@ -356,122 +671,127 @@ export default function ApplicationPlanningQuestionPanel({
               </div>
             </header>
           ) : null}
-        {isDocumentConfirmation && !editingRequirement ? (
-          <Form.Item
-            className={cx('planning-confirmation-feedback')}
-            name={[
-              'answers',
-              isRequirementConfirmation ? 'requirement_spec_feedback' : projectPlanAnswerKey
-            ]}
-          >
-            <TextArea
-              aria-label={isRequirementConfirmation ? '需求文档意见' : '项目规划意见'}
-              autoSize={{ minRows: 1, maxRows: 2 }}
-              disabled={disabled}
-              placeholder={
-                isRequirementConfirmation
-                  ? '意见（可选）：如需调整，请填写具体内容 (按 Tab 采用)'
-                  : '意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容 (按 Tab 采用)'
-              }
-              onKeyDown={handleConfirmationFeedbackTab}
-            />
-          </Form.Item>
-        ) : (
-          questions.map((question, index) => {
-            const key = questionKey(question, index)
-            return (
-              <section className={cx('planning-question-card')} key={key}>
-                <div className={cx('planning-question-card-heading')}>
-                  <div>
-                    <div className={cx('planning-question-title')}>
-                      {question.header || question.dimension ? (
-                        <Tag>{question.header || question.dimension}</Tag>
-                      ) : null}
-                      <span aria-hidden className={cx('planning-question-required')}>
-                        *
-                      </span>
-                      <Title level={5}>{question.question || '请补充规划细节'}</Title>
-                    </div>
-                    {question.default_assumption ? (
-                      <Paragraph type="secondary">
-                        默认建议：{question.default_assumption}
-                      </Paragraph>
-                    ) : null}
-                  </div>
-                </div>
-                <Form.Item
-                  name={['answers', key]}
-                  required
-                  rules={[
-                    {
-                      validator: (_rule, value) =>
-                        answerComplete(question, value)
-                          ? Promise.resolve()
-                          : Promise.reject(new Error('请选择或补充这个问题'))
-                    }
-                  ]}
-                >
-                  <PlanningQuestionControl disabled={disabled} question={question} />
-                </Form.Item>
-              </section>
-            )
-          })
-        )}
-
-        {isDocumentConfirmation || questions.length ? (
-          <div
-            className={cx(
-              'page-planning-actions',
-              isDocumentConfirmation && 'is-document-confirmation'
-            )}
-          >
-            <Button
-              aria-label={
-                isRequirementConfirmation
-                  ? hasRequirementFeedback
-                    ? '提交需求文档意见并继续规划'
-                    : '确认需求文档正确并继续规划'
-                  : isProjectPlanConfirmation
-                    ? hasProjectPlanFeedback
-                      ? '提交项目规划意见并调整规划'
-                      : '确认项目规划正确并进入工作区'
-                  : undefined
-              }
-              disabled={disabled}
-              htmlType="submit"
-              icon={
-                clarification.mode?.includes('confirmation') ? (
-                  <CheckCircleOutlined />
-                ) : (
-                  <BulbOutlined />
-                )
-              }
-              type="primary"
+          {isDocumentConfirmation && !editingRequirement ? (
+            <Form.Item
+              className={cx('planning-confirmation-feedback')}
+              name={[
+                'answers',
+                isRequirementConfirmation ? 'requirement_spec_feedback' : projectPlanAnswerKey
+              ]}
             >
-              {editingRequirement
-                ? '确认修改并继续规划'
-                : isRequirementConfirmation && hasRequirementFeedback
-                  ? '提交意见，继续规划'
-                  : isProjectPlanConfirmation && hasProjectPlanFeedback
-                    ? '提交意见，调整规划'
+              <TextArea
+                aria-label={isRequirementConfirmation ? '需求文档意见' : '项目规划意见'}
+                autoSize={{ minRows: 1, maxRows: 2 }}
+                disabled={disabled}
+                placeholder={
+                  isRequirementConfirmation
+                    ? '意见（可选）：如需调整，请填写具体内容 (按 Tab 采用)'
+                    : '意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容 (按 Tab 采用)'
+                }
+                onKeyDown={handleConfirmationFeedbackTab}
+              />
+            </Form.Item>
+          ) : (
+            questions.map((question, index) => {
+              const key = questionKey(question, index)
+              return (
+                <section className={cx('planning-question-card')} key={key}>
+                  <div className={cx('planning-question-card-heading')}>
+                    <div>
+                      <div className={cx('planning-question-title')}>
+                        {question.header || question.dimension ? (
+                          <Tag>{question.header || question.dimension}</Tag>
+                        ) : null}
+                        <span aria-hidden className={cx('planning-question-required')}>
+                          *
+                        </span>
+                        <Title level={5}>{question.question || '请补充规划细节'}</Title>
+                      </div>
+                      {question.default_assumption ? (
+                        <Paragraph type="secondary">
+                          默认建议：{question.default_assumption}
+                        </Paragraph>
+                      ) : null}
+                    </div>
+                  </div>
+                  <Form.Item
+                    name={['answers', key]}
+                    required
+                    rules={[
+                      {
+                        validator: (_rule, value) =>
+                          answerComplete(question, value)
+                            ? Promise.resolve()
+                            : Promise.reject(new Error('请选择或补充这个问题'))
+                      }
+                    ]}
+                  >
+                    <PlanningQuestionControl disabled={disabled} question={question} />
+                  </Form.Item>
+                </section>
+              )
+            })
+          )}
+
+          {isDocumentConfirmation || questions.length ? (
+            <div
+              className={cx(
+                'page-planning-actions',
+                isDocumentConfirmation && 'is-document-confirmation'
+              )}
+            >
+              <Button
+                aria-label={
+                  isRequirementConfirmation
+                    ? hasRequirementFeedback
+                      ? '提交需求文档意见并继续规划'
+                      : '确认需求文档正确并继续规划'
                     : isProjectPlanConfirmation
-                      ? '规划正确，进入工作区'
-                  : submitLabel(clarification.mode)}
-            </Button>
-          </div>
-        ) : null}
-        {hasRecoveryAction ? (
-          <section className={cx('planning-question-card')}>
-            <Paragraph type="secondary">
-              当前规划没有返回可填写的问题，无法安全继续。可重新生成本阶段规划；不会修改已保存的应用设置。
-            </Paragraph>
-            <div className={cx('page-planning-actions')}>
-              <Button disabled={disabled} htmlType="submit" icon={<BulbOutlined />} type="primary">
-                重新生成当前规划
+                      ? hasProjectPlanFeedback
+                        ? '提交项目规划意见并调整规划'
+                        : '确认项目规划正确并进入工作区'
+                      : undefined
+                }
+                disabled={disabled}
+                htmlType="submit"
+                icon={
+                  clarification.mode?.includes('confirmation') ? (
+                    <CheckCircleOutlined />
+                  ) : (
+                    <BulbOutlined />
+                  )
+                }
+                type="primary"
+              >
+                {editingRequirement
+                  ? '确认修改并继续规划'
+                  : isRequirementConfirmation && hasRequirementFeedback
+                    ? '提交意见，继续规划'
+                    : isProjectPlanConfirmation && hasProjectPlanFeedback
+                      ? '提交意见，调整规划'
+                      : isProjectPlanConfirmation
+                        ? '规划正确，进入工作区'
+                        : submitLabel(clarification.mode)}
               </Button>
             </div>
-          </section>
-        ) : null}
+          ) : null}
+          {hasRecoveryAction ? (
+            <section className={cx('planning-question-card')}>
+              <Paragraph type="secondary">
+                当前规划没有返回可填写的问题，无法安全继续。可重新生成本阶段规划；不会修改已保存的应用设置。
+              </Paragraph>
+              <div className={cx('page-planning-actions')}>
+                <Button
+                  disabled={disabled}
+                  htmlType="submit"
+                  icon={<BulbOutlined />}
+                  type="primary"
+                >
+                  重新生成当前规划
+                </Button>
+              </div>
+            </section>
+          ) : null}
         </Form>
       ) : null}
     </section>
@@ -603,8 +923,17 @@ function PlanningQuestionControl({
       autoSize={{ minRows: 3, maxRows: 7 }}
       disabled={disabled}
       onChange={(event) => onChange?.(event.target.value)}
-      placeholder={question.placeholder ? `${question.placeholder} (按 Tab 采用)` : '请输入你的回答，也可以直接说明希望采用的方案。 (按 Tab 采用)'}
-      onKeyDown={(e) => handleTabToFillPlaceholder(e, question.placeholder || '请输入你的回答，也可以直接说明希望采用的方案。')}
+      placeholder={
+        question.placeholder
+          ? `${question.placeholder} (按 Tab 采用)`
+          : '请输入你的回答，也可以直接说明希望采用的方案。 (按 Tab 采用)'
+      }
+      onKeyDown={(e) =>
+        handleTabToFillPlaceholder(
+          e,
+          question.placeholder || '请输入你的回答，也可以直接说明希望采用的方案。'
+        )
+      }
       value={typeof value === 'string' ? value : ''}
     />
   )

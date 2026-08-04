@@ -5,6 +5,7 @@ import type {
   ApplicationConfig,
   ApplicationPlanningConfirmation,
   ApplicationLifecycle,
+  WorkflowClarification,
   WorkflowClarificationAnswers,
   WorkflowRunPayload
 } from '../../typings'
@@ -22,10 +23,7 @@ import ApplicationPlanningProgress, {
 } from './ApplicationPlanningProgress'
 import ApplicationPlanningQuestionPanel from './ApplicationPlanningQuestionPanel'
 import UiDesignStreamingPreview from './UiDesignStreamingPreview'
-import {
-  planningWorkflowPhase,
-  planningWorkflowRequiresUserInput
-} from './planningWorkflowState'
+import { planningWorkflowPhase, planningWorkflowRequiresUserInput } from './planningWorkflowState'
 import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
 import './ApplicationPagePlanningModal.less'
 
@@ -143,6 +141,19 @@ function workflowStep(workflow?: WorkflowRunPayload): number {
   return index >= 0 ? index : 0
 }
 
+// 判断当前是否已经进入项目规划确认，便于切换成完整的项目规划工作区壳层。
+function projectPlanConfirmationReady(workflow?: WorkflowRunPayload): boolean {
+  const clarifications = [
+    workflow?.summary.clarification,
+    workflow?.state?.clarification,
+    workflow?.result?.clarification
+  ]
+  return clarifications.some((clarification) => {
+    if (!clarification || typeof clarification !== 'object') return false
+    return (clarification as WorkflowClarification).mode === 'project_plan_confirmation'
+  })
+}
+
 // 将独立 Workflow 的当前节点转换为原页面规划进度组件需要的阶段时间线。
 function workflowProgressEvents(
   workflow?: WorkflowRunPayload,
@@ -214,6 +225,7 @@ export default function ApplicationPagePlanningModal({
   // UI确认节点生成期间，流式展示已就绪的设计稿，避免干等到最后一次性出现。
   const streamingUiPhase = showingProgress && planningWorkflowPhase(workflow) === 'ui_confirmation'
   const streamingUiTotal = planningUiDesignPageTotal(workflow)
+  const isProjectPlanConfirmation = projectPlanConfirmationReady(workflow)
 
   // 向首页注册当前 AG-UI 会话的停止句柄，以便从规划页外安全取消运行。
   useEffect(() => {
@@ -293,7 +305,7 @@ export default function ApplicationPagePlanningModal({
                 initialLifecycle.initialization.stage === 'awaiting_project_plan_confirmation'
                   ? 'project_planning'
                   : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
-                    initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
+                      initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
                     ? 'ui_confirmation'
                     : 'requirements'
             },
@@ -434,6 +446,7 @@ export default function ApplicationPagePlanningModal({
         'welcome-modal',
         'page-planning-modal',
         'page-planning-screen',
+        isProjectPlanConfirmation && 'is-project-plan-confirmation',
         `theme-${theme}`,
         !visible && 'is-hidden'
       )}
@@ -461,15 +474,17 @@ export default function ApplicationPagePlanningModal({
 
       <div className={cx('page-planning-screen-body')}>
         <div className={cx('page-planning-screen-content')}>
-          <Steps
-            className={cx('page-planning-steps')}
-            current={workflowStep(workflow)}
-            size="small"
-          >
-            <Step title="需求确认" />
-            <Step title="UI确认" />
-            <Step title="项目规划" />
-          </Steps>
+          {!isProjectPlanConfirmation ? (
+            <Steps
+              className={cx('page-planning-steps')}
+              current={workflowStep(workflow)}
+              size="small"
+            >
+              <Step title="需求确认" />
+              <Step title="UI确认" />
+              <Step title="项目规划" />
+            </Steps>
+          ) : null}
 
           {error ? (
             <Result
@@ -507,6 +522,7 @@ export default function ApplicationPagePlanningModal({
                 <ApplicationPlanningQuestionPanel
                   disabled={running}
                   onSaveRequirementSpec={handleSaveRequirementSpec}
+                  onReturnHome={onReturnHome}
                   onSubmit={handleSubmitClarification}
                   rootPath={application.schema?.menus?.rootPath || '/'}
                   workflow={workflow}

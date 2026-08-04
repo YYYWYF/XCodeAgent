@@ -1,0 +1,1331 @@
+.@{class-prefix}-project-plan-confirmation-shell {
+  --project-plan-bg: light-dark(#f6f5fb, #171522);
+  --project-plan-surface: light-dark(#ffffff, #211e2f);
+  --project-plan-surface-soft: light-dark(#faf9fd, #28243a);
+  --project-plan-canvas: light-dark(#f3f1f8, #1b1828);
+  --project-plan-border: light-dark(#e8e5f0, #3a354d);
+  --project-plan-border-strong: light-dark(#d8d1e7, #51496b);
+  --project-plan-text: light-dark(#292638, #f5f1ff);
+  --project-plan-text-soft: light-dark(#746d86, #b7aecb);
+  --project-plan-purple: light-dark(#7356d8, #a98ff7);
+  --project-plan-purple-soft: light-dark(#f0ecff, #352c56);
+  --project-plan-purple-line: light-dark(#cfc3f7, #62518f);
+  --project-plan-storage: light-dark(#557fae, #8eb9ea);
+  --project-plan-storage-surface: light-dark(#eef5fd, #24384e);
+  --project-plan-entity: light-dark(#4d8f72, #82cda8);
+  --project-plan-entity-surface: light-dark(#edf8f2, #203d32);
+  --project-plan-api: light-dark(#bd7044, #f2a77c);
+  --project-plan-api-surface: light-dark(#fff4ed, #4a2e23);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--project-plan-text);
+  background: var(--project-plan-bg);
+  color-scheme: light dark;
+}
+
+.@{class-prefix}-project-plan-confirmation-topbar {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--project-plan-border);
+  background: color-mix(in srgb, var(--project-plan-surface) 84%, transparent);
+}
+
+.@{class-prefix}-project-plan-confirmation-brand-group,
+.@{class-prefix}-project-plan-confirmation-brand,
+.@{class-prefix}-project-plan-confirmation-topbar-meta {
+  display: flex;
+  align-items: center;
+}
+
+.@{class-prefix}-project-plan-confirmation-brand-group {
+  gap: 8px;
+  min-width: 0;
+}
+
+.@{class-prefix}-project-plan-confirmation-back.ant-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  padding: 0;
+  color: var(--project-plan-text-soft);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+
+  &:hover,
+  &:focus {
+    color: var(--project-plan-purple);
+    background: var(--project-plan-purple-soft);
+  }
+}
+
+.@{class-prefix}-project-plan-confirmation-brand {
+  gap: 8px;
+  color: var(--project-plan-text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.@{class-prefix}-project-plan-confirmation-brand-mark {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 7px;
+  color: #fff;
+  background: var(--project-plan-purple);
+  font-size: 11px;
+}
+
+.@{class-prefix}-project-plan-confirmation-topbar-meta {
+  gap: 9px;
+  color: var(--project-plan-text-soft);
+  font-size: 12px;
+}
+
+.@{class-prefix}-project-plan-confirmation-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--project-plan-purple);
+}
+
+.@{class-prefix}-project-plan-confirmation-layout {
+  display: grid;
+  grid-template-columns: 174px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.@{class-prefix}-project-plan-confirmation-sidebar {
+  display: grid;
+  align-content: start;
+  gap: 28px;
+  min-width: 0;
+  padding: 25px 13px 22px;
+  border-right: 1px solid var(--project-plan-border);
+  background: var(--project-plan-surface-soft);
+}
+
+.@{class-prefix}-project-plan-confirmation-project-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 0 6px;
+}
+
+.@{class-prefix}-project-plan-confirmation-project-mark {
+  display: inline-grid;
+  width: 31px;
+  height: 31px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--project-plan-purple-line);
+  border-radius: 10px;
+  color: var(--project-plan-purple);
+  background: var(--project-plan-purple-soft);
+  font-size: 12px;
+}
+
+.@{class-prefix}-project-plan-confirmation-project-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+
+  strong {
+    overflow: hidden;
+    color: var(--project-plan-text);
+    font-size: 13px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span {
+    overflow: hidden;
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-project-plan-confirmation-nav {
+  display: grid;
+  gap: 4px;
+}
+
+.@{class-prefix}-project-plan-confirmation-nav-item {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: 35px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--project-plan-text-soft);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
+
+  &::before {
+    width: 6px;
+    height: 6px;
+    border: 1px solid var(--project-plan-border-strong);
+    border-radius: 2px;
+    content: '';
+  }
+
+  &:not(:last-child)::after {
+    position: absolute;
+    top: calc(50% + 5px);
+    bottom: -9px;
+    left: 12px;
+    width: 1px;
+    background: var(--project-plan-border);
+    content: '';
+  }
+
+  &:hover:not(:disabled) {
+    color: var(--project-plan-purple);
+    background: var(--project-plan-purple-soft);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.62;
+  }
+
+  &.@{class-prefix}-is-active {
+    color: var(--project-plan-purple);
+    background: var(--project-plan-purple-soft);
+
+    &::before {
+      border-color: var(--project-plan-purple);
+      background: var(--project-plan-purple);
+    }
+  }
+}
+
+.@{class-prefix}-project-plan-confirmation-progress {
+  display: grid;
+  gap: 3px;
+}
+
+.@{class-prefix}-project-plan-confirmation-sidebar-label {
+  display: block;
+  margin: 0 6px 9px;
+  color: var(--project-plan-text-soft);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.@{class-prefix}-project-plan-confirmation-step {
+  position: relative;
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  color: var(--project-plan-text-soft);
+  font-size: 11px;
+
+  &::before {
+    z-index: 1;
+    display: grid;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 1px solid var(--project-plan-border-strong);
+    border-radius: 50%;
+    color: var(--project-plan-text-soft);
+    background: var(--project-plan-surface-soft);
+    content: attr(data-step);
+    font-size: 9px;
+  }
+
+  &:not(:last-child)::after {
+    position: absolute;
+    top: 25px;
+    bottom: -11px;
+    left: 13px;
+    width: 1px;
+    background: var(--project-plan-border);
+    content: '';
+  }
+
+  > span {
+    margin-left: auto;
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+  }
+
+  &.@{class-prefix}-is-done::before {
+    border-color: var(--project-plan-entity);
+    color: var(--project-plan-entity);
+    background: var(--project-plan-entity-surface);
+    content: '✓';
+  }
+
+  &.@{class-prefix}-is-active {
+    color: var(--project-plan-text);
+
+    &::before {
+      border-color: var(--project-plan-purple);
+      color: var(--project-plan-purple);
+      background: var(--project-plan-purple-soft);
+      content: '02';
+    }
+
+    > span {
+      color: var(--project-plan-purple);
+    }
+  }
+}
+
+.@{class-prefix}-project-plan-confirmation-main {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 28px 30px 24px;
+  overflow: hidden;
+  background: var(--project-plan-bg);
+}
+
+.@{class-prefix}-project-plan-confirmation-main-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: var(--project-plan-border-strong) transparent;
+}
+
+.@{class-prefix}-project-plan-confirmation-original {
+  overflow: hidden;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 13px;
+  background: var(--project-plan-surface);
+
+  > header {
+    display: grid;
+    gap: 3px;
+    padding: 14px 15px;
+    border-bottom: 1px solid var(--project-plan-border);
+    background: var(--project-plan-surface-soft);
+
+    .ant-typography {
+      margin: 0;
+    }
+
+    .ant-typography-strong {
+      color: var(--project-plan-text);
+      font-size: 14px;
+    }
+
+    .ant-typography-secondary {
+      color: var(--project-plan-text-soft);
+      font-size: 11px;
+    }
+  }
+
+  > .@{class-prefix}-markdown-content {
+    padding: 16px;
+  }
+}
+
+.@{class-prefix}-project-plan-confirmation-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 15px;
+  padding: 11px 12px;
+  border: 1px solid var(--project-plan-purple-line);
+  border-radius: 11px;
+  background: var(--project-plan-purple-soft);
+
+  .ant-form-item {
+    min-width: 0;
+    margin: 0;
+  }
+
+  textarea.ant-input {
+    min-height: 32px;
+    max-height: 66px;
+    padding: 6px 8px;
+    border: 0;
+    outline: 0;
+    color: var(--project-plan-text);
+    background: transparent;
+    box-shadow: none;
+    font-size: 12px;
+    line-height: 1.45;
+    resize: none;
+
+    &::placeholder {
+      color: var(--project-plan-text-soft);
+    }
+  }
+}
+
+.@{class-prefix}-project-plan-confirmation-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .ant-btn {
+    min-height: 32px;
+    border-radius: 7px;
+    font-size: 11px;
+  }
+
+  .ant-btn-default {
+    color: var(--project-plan-text-soft);
+    border-color: var(--project-plan-border-strong);
+    background: var(--project-plan-surface);
+  }
+
+  .ant-btn-primary {
+    color: #fff;
+    border-color: var(--project-plan-purple);
+    background: var(--project-plan-purple);
+    box-shadow: none;
+  }
+}
+
+.@{class-prefix}-project-plan-summary {
+  --project-plan-surface: light-dark(#ffffff, #211e2f);
+  --project-plan-surface-soft: light-dark(#faf9fd, #28243a);
+  --project-plan-canvas: light-dark(#f3f1f8, #1b1828);
+  --project-plan-border: light-dark(#e8e5f0, #3a354d);
+  --project-plan-border-strong: light-dark(#d8d1e7, #51496b);
+  --project-plan-text: light-dark(#292638, #f5f1ff);
+  --project-plan-text-soft: light-dark(#746d86, #b7aecb);
+  --project-plan-purple: light-dark(#7356d8, #a98ff7);
+  --project-plan-purple-soft: light-dark(#f0ecff, #352c56);
+  --project-plan-purple-line: light-dark(#cfc3f7, #62518f);
+  --project-plan-storage: light-dark(#557fae, #8eb9ea);
+  --project-plan-storage-surface: light-dark(#eef5fd, #24384e);
+  --project-plan-entity: light-dark(#4d8f72, #82cda8);
+  --project-plan-entity-surface: light-dark(#edf8f2, #203d32);
+  --project-plan-api: light-dark(#bd7044, #f2a77c);
+  --project-plan-api-surface: light-dark(#fff4ed, #4a2e23);
+  display: grid;
+  gap: 18px;
+}
+
+.@{class-prefix}-project-plan-summary-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 2px;
+
+  h3.ant-typography {
+    margin: 0 0 4px;
+    color: var(--project-plan-text);
+    font-size: 18px;
+    font-weight: 500;
+    line-height: 1.4;
+  }
+
+  .ant-typography-secondary {
+    color: var(--project-plan-text-soft);
+    font-size: 12px;
+  }
+
+  p.ant-typography {
+    margin: 0;
+    line-height: 1.55;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-hero-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0;
+}
+
+.@{class-prefix}-project-plan-summary-eyebrow {
+  margin: 0 0 5px;
+  color: var(--project-plan-purple);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 11px !important;
+  letter-spacing: 0.08em;
+}
+
+.@{class-prefix}-project-plan-summary-hero-meta {
+  display: grid;
+  flex: 0 0 auto;
+  justify-items: end;
+  gap: 7px;
+  padding-top: 3px;
+
+  > .ant-typography {
+    margin: 0;
+    color: var(--project-plan-text-soft);
+  }
+}
+
+.@{class-prefix}-project-plan-summary-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--project-plan-purple);
+  border-color: var(--project-plan-purple-line);
+  border-radius: 999px;
+  background: var(--project-plan-purple-soft);
+  font-size: 11px;
+
+  &::before {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    content: '';
+  }
+}
+
+.@{class-prefix}-project-plan-summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.@{class-prefix}-project-plan-summary-metrics > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 10px;
+  background: var(--project-plan-surface);
+}
+
+.@{class-prefix}-project-plan-summary-metrics .ant-typography-strong {
+  color: var(--project-plan-text);
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.@{class-prefix}-project-plan-summary-metrics .ant-typography-secondary {
+  color: var(--project-plan-text-soft);
+  font-size: 11px;
+}
+
+.@{class-prefix}-project-plan-summary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.@{class-prefix}-project-plan-summary-section {
+  display: grid;
+  align-content: start;
+  gap: 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 13px;
+  background: var(--project-plan-surface);
+
+  &.@{class-prefix}-is-wide {
+    grid-column: 1 / -1;
+  }
+
+  > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+    min-height: 48px;
+    padding: 0 15px;
+    border-bottom: 1px solid var(--project-plan-border);
+    background: var(--project-plan-surface-soft);
+  }
+
+  > :not(header) {
+    min-width: 0;
+    padding: 14px 15px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-section-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  color: var(--modal-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--modal-accent) 10%, var(--modal-surface));
+  place-items: center;
+}
+
+.@{class-prefix}-project-plan-summary-section-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+
+  > .ant-typography-strong {
+    margin: 0;
+    color: var(--project-plan-text);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  > .ant-typography-secondary {
+    overflow: hidden;
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-section-index {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--project-plan-purple);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 11px;
+}
+
+.@{class-prefix}-project-plan-summary-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+
+  > div {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  dt {
+    color: var(--project-plan-text-soft);
+  }
+
+  dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--project-plan-text);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.@{class-prefix}-project-plan-summary-overview-modules {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+
+  > .ant-typography-secondary {
+    color: var(--project-plan-text-soft);
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-flow-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.@{class-prefix}-project-plan-summary-flow {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 9px;
+  background: var(--project-plan-surface-soft);
+
+  > .ant-typography-strong {
+    color: var(--project-plan-text);
+    font-size: 13px;
+  }
+
+  > p.ant-typography-secondary {
+    display: -webkit-box;
+    overflow: hidden;
+    margin: 0;
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+    line-height: 1.5;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-flow-index {
+  display: block;
+  margin-bottom: 1px;
+  overflow: hidden;
+  color: var(--project-plan-purple) !important;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 11px !important;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-project-plan-summary-facts.is-architecture {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+
+  > div {
+    grid-template-columns: 42px minmax(0, 1fr);
+    padding: 8px 0;
+    border-bottom: 1px solid var(--project-plan-border);
+  }
+
+  > div:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-label-groups {
+  display: grid;
+  gap: 10px;
+
+  > div {
+    display: grid;
+    gap: 5px;
+  }
+
+  .ant-typography-secondary {
+    color: var(--project-plan-text-soft);
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+
+  .ant-tag {
+    margin: 0;
+    color: var(--project-plan-purple);
+    border-color: var(--project-plan-purple-line);
+    border-radius: 6px;
+    background: var(--project-plan-purple-soft);
+    font-size: 11px;
+    line-height: 19px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  color: var(--project-plan-text);
+  font-size: 12px;
+  line-height: 1.55;
+
+  li {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+
+    &::before {
+      width: 15px;
+      height: 15px;
+      flex: 0 0 15px;
+      margin-top: 1px;
+      border: 1px solid var(--project-plan-border-strong);
+      border-radius: 4px;
+      content: '';
+    }
+  }
+}
+
+.@{class-prefix}-project-plan-summary-items-grid,
+.@{class-prefix}-project-plan-summary-api-grid {
+  display: grid;
+  gap: 9px;
+}
+
+.@{class-prefix}-project-plan-summary-api-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.@{class-prefix}-project-plan-summary-api {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 10px;
+  background: var(--project-plan-surface-soft);
+}
+
+.@{class-prefix}-project-plan-summary-api-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.@{class-prefix}-project-plan-summary-api-authentication {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--project-plan-text-soft);
+  border-color: var(--project-plan-border);
+  border-radius: 999px;
+  background: var(--project-plan-surface);
+  font-size: 10px;
+}
+
+.@{class-prefix}-project-plan-summary-api-list {
+  display: grid;
+  gap: 6px;
+}
+
+.@{class-prefix}-project-plan-summary-endpoint {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 0.9fr);
+  align-items: center;
+  gap: 4px 7px;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--project-plan-canvas);
+
+  .ant-tag {
+    margin: 0;
+    color: var(--project-plan-purple);
+    border-color: var(--project-plan-purple-line);
+    border-radius: 5px;
+    background: var(--project-plan-purple-soft);
+    font-size: 10px;
+  }
+
+  > .ant-tag:first-child {
+    min-width: 34px;
+    text-align: center;
+  }
+
+  .ant-typography {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+    line-height: 1.45;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-item-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+
+  > .ant-typography {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--project-plan-text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  code {
+    flex: 0 1 auto;
+  }
+}
+
+.@{class-prefix}-project-plan-code-tag {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 6px;
+  margin: 0;
+  color: var(--project-plan-purple);
+  border-color: var(--project-plan-purple-line);
+  border-radius: 5px;
+  background: var(--project-plan-purple-soft);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-project-plan-summary-data-source {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 11px;
+  background: var(--project-plan-surface-soft);
+
+  > footer {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 9px 12px;
+    border-top: 1px solid var(--project-plan-border);
+    background: color-mix(in srgb, var(--project-plan-purple) 4%, var(--project-plan-surface));
+
+    .ant-typography {
+      margin: 0;
+      color: var(--project-plan-text);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .ant-typography-secondary {
+      color: var(--project-plan-text-soft);
+    }
+  }
+}
+
+.@{class-prefix}-project-plan-summary-data-source-header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px 0;
+
+  > div {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+
+    > .ant-typography {
+      min-width: 0;
+      overflow: hidden;
+      margin: 0;
+      color: var(--project-plan-text);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    p.ant-typography {
+      color: var(--project-plan-text-soft);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+  }
+
+  > .ant-tag {
+    margin: 0;
+    color: var(--project-plan-purple);
+    border-color: var(--project-plan-purple-line);
+    border-radius: 999px;
+    background: var(--project-plan-purple-soft);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-data-source-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  color: var(--project-plan-purple);
+  border: 1px solid var(--project-plan-purple-line);
+  border-radius: 9px;
+  background: var(--project-plan-purple-soft);
+  place-items: center;
+}
+
+.@{class-prefix}-project-plan-summary-data-source-relation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 54px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+  padding: 13px 12px 12px;
+}
+
+.@{class-prefix}-project-plan-summary-data-source-relation-group {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 112px;
+  padding: 10px;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 9px;
+  background: var(--project-plan-surface);
+
+  &.@{class-prefix}-is-entity {
+    border-color: color-mix(in srgb, var(--project-plan-entity) 38%, var(--project-plan-border));
+    background: color-mix(
+      in srgb,
+      var(--project-plan-entity-surface) 72%,
+      var(--project-plan-surface)
+    );
+  }
+
+  &.@{class-prefix}-is-api {
+    border-color: color-mix(in srgb, var(--project-plan-api) 38%, var(--project-plan-border));
+    background: color-mix(
+      in srgb,
+      var(--project-plan-api-surface) 72%,
+      var(--project-plan-surface)
+    );
+  }
+
+  &.@{class-prefix}-is-storage {
+    border-color: color-mix(in srgb, var(--project-plan-storage) 38%, var(--project-plan-border));
+    background: color-mix(
+      in srgb,
+      var(--project-plan-storage-surface) 72%,
+      var(--project-plan-surface)
+    );
+  }
+}
+
+.@{class-prefix}-project-plan-summary-data-source-relation-heading {
+  display: flex;
+  align-items: center;
+  min-height: 18px;
+
+  > .ant-typography:first-child {
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-data-source-entities,
+.@{class-prefix}-project-plan-summary-data-source-apis {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.@{class-prefix}-project-plan-summary-data-source-entity,
+.@{class-prefix}-project-plan-summary-data-source-api {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 7px;
+  background: var(--project-plan-surface);
+}
+
+.@{class-prefix}-project-plan-summary-data-source-entity {
+  display: grid;
+  gap: 3px;
+
+  > .ant-typography:first-child {
+    overflow: hidden;
+    color: var(--project-plan-text);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  p.ant-typography,
+  > .ant-typography-secondary {
+    margin: 0;
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-data-source-api {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  > .ant-typography {
+    min-width: 0;
+    overflow: hidden;
+    margin: 0;
+    color: var(--project-plan-text);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > p.ant-typography {
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .@{class-prefix}-project-plan-code-tag {
+    flex: 0 1 auto;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-data-source-relation-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  color: var(--project-plan-purple);
+  font-size: 18px;
+}
+
+.@{class-prefix}-project-plan-summary-permission-acceptance {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 18px;
+}
+
+.@{class-prefix}-project-plan-summary-permission,
+.@{class-prefix}-project-plan-summary-acceptance {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+
+  > .ant-typography-secondary:first-child {
+    color: var(--project-plan-text-soft);
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-permission-role {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 8px;
+  background: var(--project-plan-surface);
+
+  > .ant-typography-strong {
+    color: var(--project-plan-text);
+    font-size: 12px;
+  }
+
+  > .ant-typography-secondary {
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-permission-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+
+  .ant-tag {
+    margin: 0;
+    color: var(--project-plan-purple);
+    border-color: var(--project-plan-purple-line);
+    border-radius: 5px;
+    background: var(--project-plan-purple-soft);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-section {
+  > .@{class-prefix}-project-plan-tree-preview {
+    padding: 14px 15px 15px;
+    border: 0;
+    background: transparent;
+  }
+
+  .@{class-prefix}-project-plan-tree-header {
+    display: none;
+  }
+
+  .@{class-prefix}-project-plan-tree-list {
+    gap: 8px;
+  }
+
+  .@{class-prefix}-project-plan-tree-node.@{class-prefix}-menu-node {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    padding: 10px 11px;
+    overflow: visible;
+    border-radius: 10px;
+    border-color: var(--project-plan-border);
+    background: var(--project-plan-surface-soft);
+  }
+
+  .@{class-prefix}-project-plan-tree-menu-header {
+    padding: 0;
+    border-bottom: 0;
+    background: transparent;
+  }
+
+  .@{class-prefix}-project-plan-tree-children {
+    padding: 0;
+  }
+
+  .@{class-prefix}-project-plan-tree-node.@{class-prefix}-page-node {
+    padding: 8px 9px;
+    border-radius: 7px;
+    border-color: var(--project-plan-border);
+    background: var(--project-plan-surface);
+  }
+}
+
+.@{class-prefix}-planning-question-panel.@{class-prefix}-is-project-plan-confirmation {
+  display: block;
+  height: 100%;
+  min-height: 0;
+  padding-right: 0;
+  overflow: hidden;
+  background: var(--modal-bg);
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-project-plan-confirmation-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-project-plan-confirmation-sidebar {
+    grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 14px 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--project-plan-border);
+  }
+
+  .@{class-prefix}-project-plan-confirmation-nav {
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  }
+
+  .@{class-prefix}-project-plan-confirmation-nav-item {
+    justify-content: center;
+    padding: 0 5px;
+    font-size: 11px;
+    text-align: center;
+
+    &::before {
+      display: none;
+    }
+
+    &::after {
+      display: none;
+    }
+  }
+
+  .@{class-prefix}-project-plan-confirmation-progress {
+    display: none;
+  }
+
+  .@{class-prefix}-project-plan-confirmation-main {
+    padding: 24px 20px;
+  }
+
+  .@{class-prefix}-project-plan-summary-hero {
+    display: grid;
+  }
+
+  .@{class-prefix}-project-plan-summary-hero-meta {
+    justify-items: start;
+    grid-auto-flow: column;
+    align-items: center;
+    justify-content: start;
+  }
+
+  .@{class-prefix}-project-plan-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-project-plan-summary-section.@{class-prefix}-is-wide {
+    grid-column: auto;
+  }
+
+  .@{class-prefix}-project-plan-summary-overview,
+  .@{class-prefix}-project-plan-summary-flow-list,
+  .@{class-prefix}-project-plan-summary-facts.is-architecture,
+  .@{class-prefix}-project-plan-summary-permission-acceptance,
+  .@{class-prefix}-project-plan-summary-api-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-project-plan-summary-data-source-relation {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-project-plan-summary-data-source-relation-arrow {
+    min-height: 26px;
+    justify-content: center;
+
+    .anticon {
+      transform: rotate(90deg);
+    }
+  }
+}
+
+@media (max-width: 520px) {
+  .@{class-prefix}-project-plan-confirmation-topbar {
+    padding: 0 14px;
+  }
+
+  .@{class-prefix}-project-plan-confirmation-topbar-meta span:first-child {
+    display: none;
+  }
+
+  .@{class-prefix}-project-plan-confirmation-main {
+    padding: 20px 14px;
+  }
+
+  .@{class-prefix}-project-plan-confirmation-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-project-plan-confirmation-actions {
+    justify-content: flex-end;
+
+    .ant-btn-primary {
+      flex: 1;
+    }
+  }
+
+  .@{class-prefix}-project-plan-summary-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .@{class-prefix}-project-plan-summary-api-header {
+    display: grid;
+  }
+
+  .@{class-prefix}-project-plan-summary-api-authentication {
+    width: fit-content;
+  }
+
+  .@{class-prefix}-project-plan-summary-endpoint {
+    grid-template-columns: auto minmax(0, 1fr);
+
+    .ant-typography {
+      grid-column: 2;
+    }
+  }
+}
