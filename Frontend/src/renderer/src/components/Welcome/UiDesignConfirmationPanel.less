@@ -68,23 +68,40 @@
 
 // 锚点栏顶部「一键全部确认」按钮：内容左对齐。
 .@{class-prefix}-ui-design-anchor-confirm-all.ant-btn {
-  height: 38px;
-  border-radius: 8px;
+  height: 42px;
+  padding: 0 22px;
+  border-radius: 10px;
+  font-size: 14px;
   font-weight: 600;
-  justify-content: flex-start;
+  color: var(--modal-accent);
+  justify-content: center;
+  // 次级操作：透明紫底 + 紫边紫字，与右侧实心主按钮形成主次区分。
   border-color: var(--modal-accent);
-  background: var(--modal-accent);
-  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.22);
+  background: rgba(139, 92, 246, 0.1);
+  box-shadow: none;
 
   &:hover:not(:disabled) {
+    color: var(--modal-accent-hover);
     border-color: var(--modal-accent-hover);
-    background: var(--modal-accent-hover);
+    background: rgba(139, 92, 246, 0.18);
   }
 
   &:disabled {
-    opacity: 0.5;
+    opacity: 1;
+    color: var(--modal-text-secondary) !important;
+    border-color: var(--modal-border-strong);
+    background: var(--modal-surface-hover);
     box-shadow: none;
   }
+}
+
+// 底部两个按钮并排容器：一键全部确认 + 进入项目规划。
+.@{class-prefix}-ui-design-confirm-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .@{class-prefix}-ui-design-anchor-summary.ant-typography {
@@ -352,11 +369,13 @@
 
 .@{class-prefix}-ui-design-confirm-footer {
   display: flex;
+  flex-shrink: 0;
   flex-direction: column;
   gap: 12px;
   margin-top: 4px;
-  padding-top: 16px;
+  padding: 16px 0 0;
   border-top: 1px solid var(--modal-border);
+  background: var(--modal-surface);
 
   .ant-input {
     border-color: var(--modal-border-strong);
@@ -389,11 +408,13 @@
   border-radius: 10px;
   font-size: 14px;
   font-weight: 600;
+  color: #fff;
   border-color: var(--modal-accent);
   background: var(--modal-accent);
   box-shadow: 0 4px 14px rgba(139, 92, 246, 0.28);
 
   &:hover:not(:disabled) {
+    color: #fff;
     border-color: var(--modal-accent-hover);
     background: var(--modal-accent-hover);
   }

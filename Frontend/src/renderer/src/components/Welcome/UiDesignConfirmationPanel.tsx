@@ -2,6 +2,7 @@ import {
   CheckOutlined,
   CheckSquareOutlined,
   MessageOutlined,
+  MinusSquareOutlined,
   SwapOutlined
 } from '@ant-design/icons'
 import { Button, Input, Typography } from 'antd'
@@ -93,9 +94,13 @@ export default function UiDesignConfirmationPanel({
     })
   }, [])
 
-  // 一键把所有未确认页面标记为已确认（本地状态），方便批量通过后再提交。
+  // 一键全部确认/取消：已全部确认时再点清空，否则标记全部已确认。
   const confirmAllPages = useCallback((): void => {
-    setConfirmedPageIds(new Set(pages.map((page) => page.pageId || '')))
+    setConfirmedPageIds((current) => {
+      const allIds = pages.map((page) => page.pageId || '')
+      const allConfirmed = allIds.length > 0 && allIds.every((id) => current.has(id))
+      return allConfirmed ? new Set<string>() : new Set(allIds)
+    })
   }, [pages])
 
   const confirmAll = (): void => {
@@ -142,19 +147,10 @@ export default function UiDesignConfirmationPanel({
       {pages.length === 0 ? (
         <Paragraph type="secondary">暂无可展示的页面设计稿。</Paragraph>
       ) : (
+        <>
         <div className={cx('ui-design-body')}>
           <aside className={cx('ui-design-anchor')}>
             <div className={cx('ui-design-anchor-actions')}>
-              <Button
-                block
-                className={cx('ui-design-anchor-confirm-all')}
-                disabled={disabled || allConfirmed}
-                icon={<CheckSquareOutlined />}
-                onClick={confirmAllPages}
-                type="primary"
-              >
-                一键全部确认
-              </Button>
               <Text className={cx('ui-design-anchor-summary')} type="secondary">
                 {allConfirmed
                   ? '全部已确认'
@@ -270,33 +266,44 @@ export default function UiDesignConfirmationPanel({
                 )
               })}
             </div>
+          </div>
+        </div>
 
-            <div className={cx('ui-design-confirm-footer')}>
-              <TextArea
-                onChange={(event) => setFeedback(event.target.value)}
-                placeholder="整体意见（可选）：例如确认全部设计稿 / 第2页需要改成表格布局。"
-                rows={2}
-                value={feedback}
-              />
-              <div className={cx('ui-design-confirm-footer-row')}>
-                <Text className={cx('ui-design-confirm-hint')} type="secondary">
-                  {allConfirmed
-                    ? '所有页面设计稿已确认，可以进入项目规划。'
-                    : `请先逐页确认所有 ${pages.length} 个页面设计稿（已确认 ${confirmedCount} 个）。`}
-                </Text>
-                <Button
-                  className={cx('ui-design-confirm-all-btn')}
-                  disabled={disabled || !allConfirmed}
-                  onClick={confirmAll}
-                  size="large"
-                  type="primary"
-                >
-                  确认全部设计稿，进入项目规划
-                </Button>
-              </div>
+        <div className={cx('ui-design-confirm-footer')}>
+          <TextArea
+            onChange={(event) => setFeedback(event.target.value)}
+            placeholder="整体意见（可选）：例如确认全部设计稿 / 第2页需要改成表格布局。"
+            rows={2}
+            value={feedback}
+          />
+          <div className={cx('ui-design-confirm-footer-row')}>
+            <Text className={cx('ui-design-confirm-hint')} type="secondary">
+              {allConfirmed
+                ? '所有页面设计稿已确认，可以进入项目规划。'
+                : `请先逐页确认所有 ${pages.length} 个页面设计稿（已确认 ${confirmedCount} 个）。`}
+            </Text>
+            <div className={cx('ui-design-confirm-actions')}>
+              <Button
+                className={cx('ui-design-anchor-confirm-all')}
+                disabled={disabled}
+                icon={allConfirmed ? <MinusSquareOutlined /> : <CheckSquareOutlined />}
+                onClick={confirmAllPages}
+              >
+                {allConfirmed ? '取消全部确认' : '一键全部确认'}
+              </Button>
+              <Button
+                className={cx('ui-design-confirm-all-btn')}
+                disabled={disabled || !allConfirmed}
+                onClick={confirmAll}
+                size="large"
+                type="primary"
+              >
+                进入项目规划
+              </Button>
             </div>
           </div>
         </div>
+        </>
       )}
     </section>
   )
