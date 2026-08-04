@@ -567,6 +567,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 进程先温和终止并等待 5 秒，超时后强制结束；只有确认退出才删除 PID 和内存登记。无法读取 PID、无法确认身份或强杀后仍存活时返回 `failed_stage=backend_cleanup`，不执行 Maven；`prebuild_cleanup` 保存来源、PID、身份校验、强杀和错误摘要；
 - 在 `backend/` 执行 `mvn clean install`，构建输出写入 `.xcodeagent/runtime/launch/backend-build.stdout.log` 和 `backend-build.stderr.log`；
 - 在 `backend/target/` 查找唯一的 `*-SNAPSHOT.jar` 主包，排除 `original-*`、sources、javadoc 和 tests/test 等附属包；无主包或存在多个主包均启动失败；
+- 在启动 Java 子进程前，从当前工作区 `.xcodeagent/application.json` 的 `datasource.db.plantMode` 解析应用数据库配置，清除继承环境中的 `MYSQL_*` 和 `SPRING_DATASOURCE_*`，再注入当前应用对应的数据库变量；配置存在但非法时以 `failed_stage=backend_database_config` 在 Maven 前失败，缺少配置文件时也不回退到 Backend 服务 `.env`；
 - 在 `backend/target/` 以 `java -jar <JAR绝对路径>` 启动后台进程，将 pid 和 stdout/stderr 写入 `.xcodeagent/runtime/launch/backend.pid`、`backend.stdout.log` 和 `backend.stderr.log`；
 - Java 就绪检查只读取本次启动后追加的 stdout/stderr；进程存活且日志包含精确标志 `Spring Boot Version` 或 `ZA21 Version` 才继续启动前端，普通 `Started ...` 日志不构成就绪证据；
 - 在工作区内优先读取 `Frontend/package.json`，其次尝试 `frontend/package.json`、`app/frontend/package.json` 和根 `package.json`；
@@ -635,6 +636,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 实现 API、校验和权限；
 - 编写后端测试；
 - 遵守已经确认的 API 契约。
+- 数据源生成时使用绑定当前工作区的 `get_mysql_config` 读取 `.xcodeagent/application.json` 中的 `datasource.db.plantMode`，不读取 Backend 服务 `.env`；未绑定工作区的兼容入口直接失败。
 
 如果契约不可实现，应返回变更申请，不得静默修改契约。
 
@@ -646,7 +648,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 
 - 负责数据库 owner 任务的最新结构扫描、SQL 计划生成和执行前风险分析；
 - 工作区文件系统只读，不修改后端、前端、ProjectPlan、PageDetail 或任务 DAG；
-- 真实数据库摘要来自绑定当前 `workspaceRoot` 的 `get_mysql_table_info`，连接信息读取应用级 `application.json` 并在后端内存解密；第一阶段的 DDL 执行服务仍按既有 `.env` `MYSQL_*` 配置运行，二者不可混为同一配置边界；
+- 真实数据库摘要和 DDL 执行都使用绑定当前 `workspaceRoot` 的应用级 `application.json` 数据源配置；后端只在本次操作内存中解密 `plantMode.pwd`，未绑定工作区的兼容入口直接失败，不回退到 Backend 服务的 `.env`；
 - 高危 SQL 计划必须先创建 `database.execute` 审批，请求批准的是计划指纹而不是自然语言任务；
 - 只有低风险或已审批的同指纹计划才交给确定性执行服务事务执行，并以数据库执行证据完成任务。
 
