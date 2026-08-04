@@ -24,6 +24,7 @@ import PageContextHeader from './components/PageContextHeader'
 import type { PageContextStatus } from './components/PageContextHeader'
 import PlanExecutionDock from './components/PlanExecutionDock'
 import SessionSidebar from './components/SessionSidebar'
+import WorkspaceDebugDock from './components/WorkspaceDebugDock'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import DetailConfirmationPageSelector from '../DetailConfirmationPageSelector'
@@ -1013,63 +1014,72 @@ export default function AiChatPanel({
               displayedPlanExecutionMode,
               directModificationRunning
             ) ? (
-              <>
-                {planExecutionShowsDebugResume(displayedPlanExecutionMode) &&
-                  !targetExecutionContext.dependencyLocked && (
-                    <ChatComposer
-                      activeWorkflow={activeWorkflow}
-                      copy={copy}
-                      debugOnly
-                      draft=""
-                      error={error}
-                      initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
-                      key={`paused-debug-${activeWorkflow?.runId || ''}-${scopedExecution?.phase || ''}`}
-                      loading={loading}
-                      onDraftChange={() => undefined}
-                      onSelectedSkillsChange={() => undefined}
-                      onSend={handleResumePlan}
-                      onStopGenerating={handleStopGenerating}
-                      stopping={stopping}
-                      selectedSkills={[]}
-                      workspaceBusy={workspaceBusy}
-                      workspaceRoot={workspaceRoot}
-                    />
-                  )}
-                <PlanExecutionDock
-                  dependencyLocked={targetExecutionContext.dependencyLocked}
-                  error={scopedExecution?.error?.message || error}
-                  execution={scopedExecution}
-                  mode={displayedPlanExecutionMode}
-                  onAccept={handleAcceptPreview}
-                  onAdjust={(feedback) => void handleAdjustPlan(feedback)}
-                  onConfirmInteraction={handleConfirmPlanInteraction}
-                  onEnd={() => void handleEndPlan(scopedExecution?.runId)}
-                  onOpenPreview={() => void handleOpenFullscreenPreview()}
-                  onRetry={() => void handleRetryPlan()}
-                  onStop={
-                    loading
-                      ? handleStopGenerating
-                      : () => void handleStopPlan(scopedExecution?.runId)
-                  }
-                  onViewPlan={handleViewPlan}
-                />
-              </>
-            ) : (
-              <ChatComposer
+              <WorkspaceDebugDock
                 activeWorkflow={activeWorkflow}
                 copy={copy}
-                draft={draft}
-                error={error}
+                initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
                 loading={loading}
-                onDraftChange={(value) => setDraftByKey(draftKey, value)}
-                onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
-                onSend={handleSend}
+                onSend={
+                  planExecutionShowsDebugResume(displayedPlanExecutionMode) && activeWorkflow
+                    ? handleResumePlan
+                    : handleSend
+                }
                 onStopGenerating={handleStopGenerating}
+                rightContent={
+                  <PlanExecutionDock
+                    dependencyLocked={targetExecutionContext.dependencyLocked}
+                    error={scopedExecution?.error?.message || error}
+                    execution={scopedExecution}
+                    mode={displayedPlanExecutionMode}
+                    onAccept={handleAcceptPreview}
+                    onAdjust={(feedback) => void handleAdjustPlan(feedback)}
+                    onConfirmInteraction={handleConfirmPlanInteraction}
+                    onEnd={() => void handleEndPlan(scopedExecution?.runId)}
+                    onOpenPreview={() => void handleOpenFullscreenPreview()}
+                    onRetry={() => void handleRetryPlan()}
+                    onStop={
+                      loading
+                        ? handleStopGenerating
+                        : () => void handleStopPlan(scopedExecution?.runId)
+                    }
+                    onViewPlan={handleViewPlan}
+                  />
+                }
                 stopping={stopping}
-                selectedSkills={selectedSkills}
                 workspaceBusy={workspaceBusy}
                 workspaceRoot={workspaceRoot}
               />
+            ) : (
+              <>
+                <ChatComposer
+                  activeWorkflow={activeWorkflow}
+                  copy={copy}
+                  draft={draft}
+                  error={error}
+                  loading={loading}
+                  onDraftChange={(value) => setDraftByKey(draftKey, value)}
+                  onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
+                  onSend={handleSend}
+                  onStopGenerating={handleStopGenerating}
+                  stopping={stopping}
+                  selectedSkills={selectedSkills}
+                  workspaceBusy={workspaceBusy}
+                  workspaceRoot={workspaceRoot}
+                />
+                {displayedPlanExecutionMode !== 'idle' ? (
+                  <WorkspaceDebugDock
+                    activeWorkflow={activeWorkflow}
+                    copy={copy}
+                    initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
+                    loading={loading}
+                    onSend={handleSend}
+                    onStopGenerating={handleStopGenerating}
+                    stopping={stopping}
+                    workspaceBusy={workspaceBusy}
+                    workspaceRoot={workspaceRoot}
+                  />
+                ) : null}
+              </>
             )}
 
             {(requiresPageDetailDesign(activePageOption) ||

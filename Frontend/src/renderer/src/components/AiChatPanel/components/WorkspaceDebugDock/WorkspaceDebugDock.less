@@ -1,0 +1,199 @@
+.@{class-prefix}-workspace-debug-dock {
+  display: grid;
+  width: min(calc(100% - 60px), 1080px);
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 8px;
+  margin: 12px auto 10px;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 11px;
+  box-shadow: 0 4px 14px rgba(23, 20, 43, 0.04);
+}
+
+.@{class-prefix}-workspace-debug-dock.@{class-prefix}-has-right {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: stretch;
+}
+
+.@{class-prefix}-workspace-debug-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.@{class-prefix}-workspace-debug-panel-header {
+  display: flex;
+  min-width: 0;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+}
+
+.@{class-prefix}-workspace-debug-panel-icon {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.@{class-prefix}-workspace-debug-panel-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 6px;
+
+  .ant-typography {
+    margin: 0;
+    overflow: hidden;
+    color: var(--wb-text);
+    font-size: 12px;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-workspace-debug-composer {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface-subtle);
+
+  .@{class-prefix}-ai-chat-composer {
+    padding: 0;
+    background: transparent;
+  }
+
+  .@{class-prefix}-ai-chat-composer-column {
+    width: 100%;
+    gap: 0;
+  }
+
+  .@{class-prefix}-ai-chat-composer-frame {
+    min-height: 0;
+    padding: 5px 7px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .@{class-prefix}-workflow-debug-fields {
+    gap: 6px;
+  }
+
+  .@{class-prefix}-workflow-debug-node-select {
+    width: 180px;
+    flex-basis: 180px;
+  }
+
+  .@{class-prefix}-ai-chat-composer-footer {
+    padding-top: 4px;
+  }
+
+  .@{class-prefix}-composer-send-button.ant-btn {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+  }
+}
+
+.@{class-prefix}-workspace-debug-right {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  border-top: 1px solid var(--wb-border);
+  padding-top: 8px;
+
+  > .@{class-prefix}-plan-execution-dock {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 8px;
+    box-shadow: none;
+  }
+
+  .@{class-prefix}-plan-execution-dock-main {
+    min-height: 0;
+    height: 100%;
+    padding: 6px 8px;
+    gap: 8px;
+  }
+
+  .@{class-prefix}-plan-execution-dock-icon {
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
+    border-radius: 7px;
+    font-size: 14px;
+  }
+
+  .@{class-prefix}-plan-execution-dock-copy {
+    min-width: 0;
+
+    .ant-typography {
+      font-size: 11px;
+      line-height: 16px;
+    }
+
+    .ant-typography-secondary {
+      font-size: 10px;
+    }
+  }
+
+  .@{class-prefix}-plan-execution-dock-actions {
+    gap: 4px;
+
+    .ant-btn {
+      height: 28px;
+      padding: 0 7px;
+      border-radius: 6px;
+      font-size: 10px;
+    }
+  }
+
+  .@{class-prefix}-plan-execution-dock-loading {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-workspace-debug-dock {
+    width: calc(100% - 24px);
+    margin-bottom: 8px;
+  }
+
+  .@{class-prefix}-workspace-debug-dock.@{class-prefix}-has-right {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .@{class-prefix}-workspace-debug-right {
+    padding-top: 6px;
+    padding-left: 0;
+    border-top: 1px solid var(--wb-border);
+    border-left: 0;
+  }
+}
