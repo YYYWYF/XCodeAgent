@@ -190,7 +190,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(task["change_scope"][0]["operation"], "add")
         self.assertEqual(task["impact_scope"]["affected_modules"], ["pages", "router"])
         self.assertFalse(task["can_run_in_parallel"])
-        self.assertEqual(task["acceptance_criteria"], ["访问 /login 可完成表单校验"])
+        self.assertNotIn("访问 /login 可完成表单校验", task["acceptance_criteria"])
+        self.assertEqual(
+            [check["kind"] for check in task["acceptance_checks"]],
+            ["file_operation", "file_operation", "scope_boundary"],
+        )
         self.assertEqual(task["unit_id"], "application:root")
         self.assertEqual(plan["build_units"]["application:root"]["task_ids"], ["page-login"])
 
@@ -537,7 +541,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("path: 'dashboard'", menu_task["description"])
         self.assertNotIn("/page/dashboard", menu_task["description"])
         self.assertNotIn("firstLevel.children", menu_task["description"])
-        self.assertIn("新增菜单项 path 为 dashboard", menu_task["acceptance_criteria"][2])
+        self.assertIn("path=dashboard", menu_task["acceptance_criteria"][2])
 
     def test_v3_markdown_renders_units_and_task_graph(self) -> None:
         plan = create_build_task_plan(

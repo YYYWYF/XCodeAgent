@@ -119,8 +119,8 @@ class BuildSchedulerTests(unittest.TestCase):
 
         self.assertEqual(decision["action"], "repair")
 
-    def test_structured_already_satisfied_requires_exact_files_and_all_criteria(self) -> None:
-        """已满足只能由精确磁盘目标和逐条验收证据确定性通过。"""
+    def test_already_satisfied_ignores_agent_claim_and_verifies_all_checks(self) -> None:
+        """已满足必须由磁盘与工程检查证明，Agent 自报证据不参与裁决。"""
 
         task = {
             "id": "page",
@@ -134,13 +134,6 @@ class BuildSchedulerTests(unittest.TestCase):
             ],
             "acceptance_criteria": ["页面可编译", "标题可见"],
         }
-        evidence = {
-            "target_files": ["frontend/src/pages/Dashboard/index.tsx"],
-            "acceptance_criteria": [
-                {"criterion_index": 0, "status": "passed", "evidence": "pnpm build"},
-                {"criterion_index": 1, "status": "passed", "evidence": "组件包含标题"},
-            ],
-        }
         with tempfile.TemporaryDirectory() as workspace:
             target = Path(workspace) / task["target_files"][0]
             target.parent.mkdir(parents=True)
@@ -150,7 +143,7 @@ class BuildSchedulerTests(unittest.TestCase):
                     {
                         "task_id": "page",
                         "status": "already_satisfied",
-                        "satisfaction_evidence": evidence,
+                        "satisfaction_evidence": {"claimed": "passed"},
                     }
                 ],
                 code_change_set=None,
@@ -160,6 +153,66 @@ class BuildSchedulerTests(unittest.TestCase):
 
         self.assertEqual(results[0]["status"], "already_satisfied")
         self.assertEqual(results[0]["scheduler_decision"]["action"], "complete")
+        self.assertEqual(len(results[0]["acceptance_evidence"]), 2)
+        self.assertTrue(
+            all(item["status"] == "passed" for item in results[0]["acceptance_evidence"])
+        )
+
+    def test_completed_requires_every_exact_file_operation(self) -> None:
+        """Agent 只修改部分目标文件时，completed 必须被确定性验收拒绝。"""
+
+        task = {
+            "id": "page",
+            "owner": "frontend",
+            "change_scope": [
+                {"operation": "add", "path": "frontend/src/pages/Page/index.tsx"},
+                {"operation": "add", "path": "frontend/src/apis/pageApi.ts"},
+            ],
+        }
+        results = verify_task_file_changes(
+            results=[{"task_id": "page", "status": "completed"}],
+            code_change_set={
+                "files": [
+                    {
+                        "path": "frontend/src/pages/Page/index.tsx",
+                        "changeType": "added",
+                    }
+                ]
+            },
+            tasks=[task],
+        )
+
+        self.assertEqual(results[0]["status"], "failed")
+        self.assertEqual(results[0]["failure_category"], "acceptance_verification_failed")
+        self.assertIn("frontend/src/apis/pageApi.ts", results[0]["failure_reason"])
+
+    def test_completed_rejects_wrong_change_type_and_batch_scope_violation(self) -> None:
+        """文件操作类型不符或批次越权时，任务不得标记完成。"""
+
+        task = {
+            "id": "page",
+            "owner": "frontend",
+            "change_scope": [
+                {"operation": "add", "path": "frontend/src/pages/Page/index.tsx"}
+            ],
+        }
+        results = verify_task_file_changes(
+            results=[{"task_id": "page", "status": "completed"}],
+            code_change_set={
+                "files": [
+                    {
+                        "path": "frontend/src/pages/Page/index.tsx",
+                        "changeType": "modified",
+                    }
+                ]
+            },
+            tasks=[task],
+            batch_unauthorized_paths=["frontend/vite.config.ts"],
+        )
+
+        self.assertEqual(results[0]["status"], "failed")
+        self.assertIn("预期差异类型 added", results[0]["failure_reason"])
+        self.assertIn("frontend/vite.config.ts", results[0]["failure_reason"])
 
     def test_similar_file_cannot_satisfy_missing_exact_target(self) -> None:
         """语义相似但路径不同的文件不得通过已满足校验。"""
@@ -203,7 +256,7 @@ class BuildSchedulerTests(unittest.TestCase):
             )
 
         self.assertEqual(results[0]["status"], "failed")
-        self.assertEqual(results[0]["failure_category"], "no_file_changes")
+        self.assertEqual(results[0]["failure_category"], "acceptance_verification_failed")
 
     def test_already_satisfied_dependency_unblocks_downstream_task(self) -> None:
         """结构化已满足是终态，必须和 completed 一样解除下游依赖。"""

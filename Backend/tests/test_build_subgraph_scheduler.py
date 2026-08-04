@@ -32,14 +32,14 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "owner": "backend",
                 "status": "pending",
                 "dependencies": [],
-                "change_scope": [{"path": "Backend/app/api.py"}],
+                "change_scope": [{"operation": "add", "path": "Backend/app/api.py"}],
             },
             {
                 "id": "page",
                 "owner": "frontend",
                 "status": "pending",
                 "dependencies": [],
-                "change_scope": [{"path": "Frontend/src/Page.tsx"}],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Page.tsx"}],
             },
         ]
 
@@ -92,7 +92,11 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 {"task_id": "page-a", "status": "completed"},
                 {"task_id": "page-b", "status": "completed"},
             ],
-            code_change_set={"files": [{"path": "Frontend/src/PageA.tsx"}]},
+            code_change_set={
+                "files": [
+                    {"path": "Frontend/src/PageA.tsx", "changeType": "modified"}
+                ]
+            },
             tasks=[
                 {"id": "page-a", "allowed_paths": ["Frontend/src/PageA.tsx"]},
                 {"id": "page-b", "allowed_paths": ["Frontend/src/PageB.tsx"]},
@@ -102,7 +106,10 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual(results[0]["changed_files"], ["Frontend/src/PageA.tsx"])
         self.assertEqual(results[0]["status"], "completed")
         self.assertEqual(results[1]["status"], "failed")
-        self.assertEqual(results[1]["failure_category"], "no_file_changes")
+        self.assertEqual(
+            results[1]["failure_category"],
+            "acceptance_verification_failed",
+        )
 
     def test_build_scheduler_runs_dependency_order_until_complete(self) -> None:
         runner_skill_sets: list[list[str] | None] = []
@@ -112,14 +119,14 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "owner": "backend",
                 "status": "pending",
                 "dependencies": [],
-                "change_scope": [{"path": "Backend/app/api.py"}],
+                "change_scope": [{"operation": "add", "path": "Backend/app/api.py"}],
             },
             {
                 "id": "page",
                 "owner": "frontend",
                 "status": "pending",
                 "dependencies": ["api"],
-                "change_scope": [{"path": "Frontend/src/Page.tsx"}],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Page.tsx"}],
             },
         ]
 
@@ -326,7 +333,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "owner": "backend",
                 "status": "pending",
                 "dependencies": [],
-                "change_scope": [{"path": "Backend/app/orders.py"}],
+                "change_scope": [{"operation": "add", "path": "Backend/app/orders.py"}],
             },
             {
                 "id": "page",
@@ -334,7 +341,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "owner": "frontend",
                 "status": "pending",
                 "dependencies": ["api"],
-                "change_scope": [{"path": "Frontend/src/Orders.tsx"}],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Orders.tsx"}],
             },
         ]
 
@@ -521,7 +528,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "owner": "frontend",
                 "status": "pending",
                 "dependencies": [],
-                "change_scope": [{"path": "Frontend/src/Page.tsx"}],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Page.tsx"}],
                 "allowed_paths": ["Frontend/src/**"],
                 "acceptance_criteria": ["页面可渲染"],
             },
@@ -616,7 +623,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "owner": "backend",
                 "status": "pending",
                 "dependencies": [],
-                "change_scope": [{"path": "Backend/app/orders.py"}],
+                "change_scope": [{"operation": "add", "path": "Backend/app/orders.py"}],
             },
             {
                 "id": "orders-page",
@@ -624,7 +631,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "owner": "frontend",
                 "status": "pending",
                 "dependencies": ["orders-api"],
-                "change_scope": [{"path": "Frontend/src/Orders.tsx"}],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Orders.tsx"}],
             },
             {
                 "id": "customers-page",
@@ -632,7 +639,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "owner": "frontend",
                 "status": "pending",
                 "dependencies": [],
-                "change_scope": [{"path": "Frontend/src/Customers.tsx"}],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Customers.tsx"}],
             },
         ]
 
@@ -721,7 +728,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "status": "completed",
                 "dependencies": [],
                 "allowed_paths": ["Frontend/src/Orders.tsx"],
-                "change_scope": [{"path": "Frontend/src/Orders.tsx"}],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Orders.tsx"}],
             }
         ]
         repair_task = {
@@ -733,7 +740,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             "status": "pending",
             "dependencies": [],
             "allowed_paths": ["Frontend/src/Orders.tsx"],
-            "change_scope": [{"path": "Frontend/src/Orders.tsx"}],
+            "change_scope": [{"operation": "add", "path": "Frontend/src/Orders.tsx"}],
         }
 
         def repair_runner(**kwargs):

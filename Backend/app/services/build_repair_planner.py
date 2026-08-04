@@ -4,8 +4,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from hashlib import sha256
 import json
+from fnmatch import fnmatch
 from typing import Any
 
+from app.services.engineering_acceptance import compile_repair_engineering_acceptance
 from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
@@ -464,12 +466,13 @@ def _repair_task(
         or f"修复任务 {parent_id} 的执行失败："
         f"{result.get('agent_note') or result.get('failure_category') or '实现未通过验证'}"
     )
-    acceptance = _string_list(parent_task.get("acceptance_criteria"))
-    if not acceptance:
-        acceptance = [f"原任务 {parent_id} 的验收条件重新满足。"]
-    # 修复计划不得把“必须产生写入”等实现动作提升为新验收条件；
-    # 修复任务始终复用原任务的用户可验证结果，避免已满足任务被迫制造重复变更。
-    return {
+    repair_change_scope = _repair_change_scope(
+        parent_task,
+        raw_task,
+        strategy=strategy,
+    )
+    # 修复任务仅继承父任务的结果型工程契约，文件差异必须按本轮修复范围重新编译。
+    repair_task = {
         "id": repair_id,
         "kind": "repair",
         "owner": parent_task.get("owner"),
@@ -494,16 +497,17 @@ def _repair_task(
         },
         "allowed_paths": _string_list(parent_task.get("allowed_paths")),
         "target_files": _string_list(parent_task.get("target_files")),
-        "change_scope": parent_task.get("change_scope", []),
+        "change_scope": repair_change_scope,
+        "database_scope": parent_task.get("database_scope", {}),
+        "approval": parent_task.get("approval", {}),
         "impact_scope": parent_task.get("impact_scope", {}),
         "can_run_in_parallel": False,
         "parallel_reason": "repair task must serialize with the failed parent scope.",
         "repair_strategy": strategy,
         "repair_boundaries": boundaries or _repair_boundaries(parent_task, {}),
-        "acceptance_criteria": [
-            *acceptance,
-            "不得扩大原任务 change_scope、allowed_paths、API 契约或项目计划边界。",
-        ],
+        "acceptance_criteria": [],
+        "acceptance_checks": [],
+        "engineering_context": parent_task.get("engineering_context", {}),
         "failure_evidence": {
             "failure_category": result.get("failure_category"),
             "failure_signature": source_ref["failure_signature"],
@@ -512,6 +516,81 @@ def _repair_task(
             "commands": result.get("commands", []),
         },
     }
+    return compile_repair_engineering_acceptance(repair_task, parent_task)
+
+
+def _repair_change_scope(
+    parent_task: dict[str, Any],
+    raw_task: dict[str, Any],
+    *,
+    strategy: str,
+) -> list[dict[str, str]]:
+    """提取 RepairPlanner 的精确修复范围，并拒绝越过父任务授权的路径。"""
+
+    allowed_paths = _string_list(parent_task.get("allowed_paths"))
+    parent_paths = [
+        str(item.get("path") or "").strip()
+        for item in parent_task.get("change_scope", [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    ]
+    raw_scope = raw_task.get("change_scope")
+    result: list[dict[str, str]] = []
+    if isinstance(raw_scope, list):
+        for item in raw_scope:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if not path or not _repair_path_allowed(path, allowed_paths, parent_paths):
+                continue
+            operation = str(item.get("operation") or "modify").lower()
+            if operation not in {"add", "modify", "delete"}:
+                operation = "modify"
+            result.append(
+                {
+                    "operation": operation,
+                    "path": path,
+                    "description": str(item.get("description") or "执行受限修复。"),
+                }
+            )
+    if result:
+        return result
+
+    # 兼容旧 RepairPlanner：只在描述明确提到某个父任务精确路径时推导 modify。
+    repair_text = "\n".join(
+        str(value or "")
+        for value in (
+            raw_task.get("title"),
+            raw_task.get("description"),
+            strategy,
+        )
+    )
+    return [
+        {
+            "operation": "modify",
+            "path": path,
+            "description": "根据修复描述修改该精确目标文件。",
+        }
+        for path in parent_paths
+        if path.lstrip("./") in repair_text or path in repair_text
+    ]
+
+
+def _repair_path_allowed(
+    path: str,
+    allowed_paths: list[str],
+    parent_paths: list[str],
+) -> bool:
+    """判断 RepairPlanner 声明路径是否仍位于父任务文件授权范围。"""
+
+    normalized = path.lstrip("./")
+    patterns = [*allowed_paths, *parent_paths]
+    for pattern in patterns:
+        candidate = pattern.lstrip("./")
+        if candidate.endswith("/**") and normalized.startswith(candidate[:-3].rstrip("/") + "/"):
+            return True
+        if fnmatch(normalized, candidate):
+            return True
+    return False
 
 
 def _source_ref(

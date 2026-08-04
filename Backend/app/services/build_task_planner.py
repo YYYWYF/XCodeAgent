@@ -12,6 +12,11 @@ from app.services.build_task_menu import (
     ensure_page_route_registration_task,
     reconcile_live_page_paths,
 )
+from app.services.engineering_acceptance import (
+    compile_engineering_acceptance,
+    engineering_acceptance_contract_errors,
+    ensure_engineering_acceptance,
+)
 from app.services.build_unit_compiler import (
     annotate_unit_inputs,
     apply_unit_compilation,
@@ -285,11 +290,6 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
         dependencies = _dedupe_normalized_strings(
             _string_list(item.get("dependencies"))
         )
-        acceptance = _dedupe_normalized_strings(
-            _string_list(item.get("acceptance_criteria"))
-        )
-        if not acceptance:
-            acceptance = [f"{description}完成并通过相关构建或测试验证。"]
         can_parallel = bool(item.get("can_run_in_parallel", True))
         database_scope = _dict_value(item.get("database_scope"))
         allowed_paths = (
@@ -345,10 +345,10 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
                     item.get("parallel_reason"),
                     "依赖满足且目标文件不冲突时可并行。",
                 ),
-                "acceptance_criteria": acceptance,
-                "verification_commands": _dedupe_normalized_strings(
-                    _string_list(item.get("verification_commands"))
-                ),
+                "acceptance_criteria": [],
+                "acceptance_checks": [],
+                "engineering_context": _dict_value(item.get("engineering_context")),
+                "verification_commands": [],
             }
         )
     return tasks
@@ -675,6 +675,7 @@ def _task_semantic_errors(
             errors.append(f"Task {task_id} is {owner} owner but declares database_scope.")
         if owner == "backend" and task_type.startswith("database."):
             errors.append(f"Task {task_id} is backend owner but declares database task_type {task_type}.")
+        errors.extend(engineering_acceptance_contract_errors(task))
     return errors
 
 
@@ -862,7 +863,7 @@ def _canonical_task(task: dict[str, Any]) -> dict[str, Any]:
     canonical["source_refs"] = (
         task.get("source_refs") if isinstance(task.get("source_refs"), dict) else {}
     )
-    return canonical
+    return ensure_engineering_acceptance(canonical)
 
 
 def _default_task_type(owner: str) -> str:
@@ -944,6 +945,14 @@ def create_build_task_plan(
         raise ValueError("Build task model output did not include any valid tasks.")
     base_plan = deepcopy(base_build_task_plan or {})
     tasks = apply_unit_compilation(base_plan, proposed_tasks, context)
+    acceptance_context = {
+        **context,
+        "executable_details": (
+            _dict_value(project_plan.get("executable_details"))
+            or _dict_value(context.get("executable_details"))
+        ),
+    }
+    tasks = compile_engineering_acceptance(tasks, acceptance_context)
     tasks, execution_batches = _annotate_parallelism(tasks)
     task_graph = _build_task_graph(tasks, execution_batches, context)
     blocked_batches = [

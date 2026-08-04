@@ -264,6 +264,7 @@ def _database_already_satisfied_result(
             "summary": summary,
             "reason": "schema_gaps_already_satisfied",
         },
+        "acceptance_evidence": _database_acceptance_evidence(task, passed=True, summary=summary),
     }
 
 
@@ -334,8 +335,33 @@ def _database_task_result(
         "database_change_plan": plan,
         "database_risk": risk,
         "database_execution": execution,
+        "acceptance_evidence": _database_acceptance_evidence(
+            task,
+            passed=status in {"completed", "already_satisfied"},
+            summary=str(execution.get("summary") or plan.get("summary") or agent_note),
+        ),
         "executed_by": executed_by,
     }
+
+
+def _database_acceptance_evidence(
+    task: dict[str, Any],
+    *,
+    passed: bool,
+    summary: str,
+) -> list[dict[str, Any]]:
+    """把确定性数据库复查和审批结果投射为逐项工程验收证据。"""
+
+    return [
+        {
+            "check_id": check.get("id"),
+            "kind": check.get("kind"),
+            "status": "passed" if passed else "failed",
+            "evidence": summary,
+        }
+        for check in task.get("acceptance_checks", [])
+        if isinstance(check, dict)
+    ]
 
 
 def _verify_database_gaps(
@@ -343,37 +369,29 @@ def _verify_database_gaps(
     before_summary: dict[str, Any],
 ) -> dict[str, Any]:
     """执行后重新扫描数据库并确认任务声明的 gaps 已消除。"""
+
+    latest_summary = inspect_mysql_schema(_target_from_tasks(tasks))
+    if latest_summary.get("status") != "completed":
+        return {
+            "status": "failed",
+            "summary": str(latest_summary.get("message") or "数据库执行后复查失败。"),
+            "latest_summary": latest_summary,
+        }
+    required_schema = _required_schema_from_tasks(tasks, before_summary)
+    remaining_gaps = diff_database_schema(
+        actual_schema=_actual_schema_from_summary(latest_summary),
+        required_schema=required_schema,
+    )
     return {
-        "status": "completed",
-        "summary": "数据库执行后复查通过，目标结构差异已消除。",
-        "latest_summary": inspect_mysql_schema(_target_from_tasks(tasks))
+        "status": "failed" if remaining_gaps else "completed",
+        "summary": (
+            f"数据库执行后仍存在 {len(remaining_gaps)} 个目标结构差异。"
+            if remaining_gaps
+            else "数据库执行后复查通过，目标结构差异已消除。"
+        ),
+        "remaining_gaps": remaining_gaps,
+        "latest_summary": latest_summary,
     }
-    # required_schema = _required_schema_from_tasks(tasks, before_summary)
-    # if not required_schema.get("tables"):
-    #     return {"status": "skipped", "summary": "任务未声明可复查的目标 schema。"}
-    # latest_summary = inspect_mysql_schema(_target_from_tasks(tasks))
-    # if latest_summary.get("status") != "completed":
-    #     return {
-    #         "status": "failed",
-    #         "summary": latest_summary.get("message") or "数据库执行后复查失败。",
-    #         "latest_summary": latest_summary,
-    #     }
-    # remaining_gaps = diff_database_schema(
-    #     actual_schema=_actual_schema_from_summary(latest_summary),
-    #     required_schema=required_schema,
-    # )
-    # if remaining_gaps:
-    #     return {
-    #         "status": "failed",
-    #         "summary": f"数据库执行后仍有 {len(remaining_gaps)} 个结构差异。",
-    #         "remaining_gaps": remaining_gaps,
-    #         "latest_summary": latest_summary,
-    #     }
-    # return {
-    #     "status": "completed",
-    #     "summary": "数据库执行后复查通过，目标结构差异已消除。",
-    #     "latest_summary": latest_summary,
-    # }
 
 
 def _required_schema_from_tasks(

@@ -24,6 +24,11 @@ from app.services.build_repair_planner import (
 )
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
+from app.services.engineering_acceptance_verifier import (
+    apply_batch_scope_violation,
+    unauthorized_batch_paths,
+)
+from app.services.engineering_acceptance import migrate_legacy_repair_acceptance
 from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
@@ -43,7 +48,9 @@ from app.services.build_scheduler import (
 from app.workspace.code_changes import (
     build_code_change_set,
     code_change_state_update,
+    diff_workspace_snapshots,
     merge_code_change_sets,
+    snapshot_workspace,
 )
 from app.workspace.plan_documents import (
     project_plan_json_path,
@@ -199,6 +206,8 @@ def _execute_ready_tasks(
 
     all_results: list[dict[str, Any]] = []
     code_change_sets: list[dict[str, Any]] = []
+    workspace = workspace_from_state(state)
+    batch_before = snapshot_workspace(workspace)
     owner_groups = list(_group_tasks_by_owner(ready_tasks).items())
     with ThreadPoolExecutor(
         max_workers=max(1, len(owner_groups)),
@@ -223,6 +232,25 @@ def _execute_ready_tasks(
             all_results.extend(owner_results)
             if owner_change_set:
                 code_change_sets.append(owner_change_set)
+    batch_after = snapshot_workspace(workspace)
+    batch_files = diff_workspace_snapshots(
+        batch_before,
+        batch_after,
+        source_tool="build.batch",
+    )
+    batch_change_set = (
+        build_code_change_set(
+            workspace_root=batch_after.root,
+            files=batch_files,
+            source_tool="build.batch",
+        )
+        if batch_files and batch_after is not None
+        else None
+    )
+    all_results = apply_batch_scope_violation(
+        all_results,
+        unauthorized_batch_paths(batch_change_set, ready_tasks),
+    )
     return all_results, code_change_sets
 
 
@@ -524,8 +552,8 @@ def run_build_scheduler(
     """按 build_execution_scope 裁剪任务图，并持续调度到当前切片完成或阻塞。"""
 
     build_task_plan = dict(state.get("build_task_plan") or {})
-    canonical_tasks = list(
-        state.get("tasks") or tasks_from_build_task_plan(build_task_plan)
+    canonical_tasks = migrate_legacy_repair_acceptance(
+        list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
     )
     build_task_plan = replace_build_task_plan_tasks(build_task_plan, canonical_tasks)
     incoming_repair_task_plan = state.get("repair_task_plan")

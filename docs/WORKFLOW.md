@@ -314,6 +314,10 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已�
 
 任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：`owner=database` 的任务必须挂在 `database:*` Unit，`task_type` 只能是 `database.change`、`database.seed` 或 `database.verify`，必须声明非空 `database_scope`，不得包含 Java/TypeScript/Python/样式等代码文件路径；高危数据库操作如删表、删字段、删除数据、truncate 必须声明 `approval.required=true`。Backend task 不得声明 `database_scope` 或 `database.*` task_type；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。违反这些规则时 `task_graph.validation.is_valid=false`，`prepare_build_tasks` 不会进入 Build。
 
+Build Task 使用独立的工程验收层，不复制 PageDetail、EndpointDetail 或需求文档中的业务验收。角色数据范围、业务状态转换、页面可见内容、筛选交互、loading/empty/error 和点击行为继续保留在详细设计与最终页面验收中，也继续作为代码生成上下文；任务规划模型必须返回空 `acceptance_criteria`。确定性编译器忽略模型输出的验收文案，依据 `owner/task_type/change_scope/allowed_paths/source_refs/build_context` 生成带稳定 ID 的内部 `acceptance_checks`，再把检查描述投影到兼容前端的 `acceptance_criteria: string[]`。检查范围仅包括精确文件操作、授权路径边界、菜单登记、前端集中 service 与正式 API/Schema、Spring Mapping 与 DTO/响应模型、数据库 schema gap 和必要审批；build、lint、typecheck 和 test 仍属于后续集成质量门禁，不重复成为 Build Task 验收点。
+
+恢复旧 `build-dag.v3` 时会从任务元数据重新编译工程检查并清除旧业务验收文案。若旧接口任务缺少生成 API/Spring 契约检查所需的 Endpoint/API Contract 上下文，任务图校验失败并要求重新执行 `prepare_build_tasks`，不得用泛化文案或 Agent 自报证据继续执行。
+
 数据库任务的生成条件由 `database-context.v1.gaps/task_intents` 兜底：如果 database_change gaps 为空，模型生成的多余 `database.change` 会被移除；如果 database_change gaps 非空，每个 gap 都必须被 database task 覆盖。模型生成数据库任务但漏 `database_scope` 时，编译器会在能唯一匹配 gap intent 的情况下补齐；无法唯一匹配时返回精准语义错误，而不是泛化为缺失依赖或循环依赖。缺库、缺表、明确需要补的缺字段、明显类型不兼容、nullable 不满足等才转成数据库任务；聚合字段、返回 null/0、后端类型转换等进入 backend_adaptation。真实库里多出来的对象不会自动生成删除任务。
 
 Build DAG 只注册具有 `change_scope`、`allowed_paths`、`target_files` 或数据库 `database_scope` 的可执行任务。仅检查已有前端壳、路由或布局的候选任务不会进入任务注册表，统一交给 `integration_test` 验证；`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
@@ -409,9 +413,9 @@ scheduler loop:
 
 这一路径的参考架构映射如下：learn-coding-agent 的“读取实时事实—计划—行动—验证”循环体现在执行前重新扫描数据库并记录执行证据；OpenCode 的权限模型体现在审批由工具/调度层按操作指纹拦截，而不是只写进 prompt；Deep Agents 只负责数据库计划推理，工作区权限为只读，实际 SQL 执行、人类审批和状态推进都在外层确定性 harness 中。为满足 128k 上下文预算，Database Agent 只接收当前批次任务、最新压缩 schema summary、API Contract 摘要和计划要求，不加载完整数据库、完整仓库或历史消息。
 
-Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 Main Agent。它由 `BuildScheduler` 严格约束输入和输出，只在调度器已将失败分类为 `repair` 后被调用，不直接操作 DAG、任务状态或调度循环。调度器传入的 `RepairPlannerInput` 包含原 task、失败 attempt result、允许修改范围 `change_scope/allowed_paths`、当前 `WorkspaceSnapshot` 或 targeted snapshot、失败日志引用和原验收标准。Planner 返回 `RepairPlan`，只能是三种决策之一：
+Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 Main Agent。它由 `BuildScheduler` 严格约束输入和输出，只在调度器已将失败分类为 `repair` 后被调用，不直接操作 DAG、任务状态或调度循环。调度器传入的 `RepairPlannerInput` 包含原 task、失败 attempt result、允许修改范围 `change_scope/allowed_paths`、当前 `WorkspaceSnapshot` 或 targeted snapshot、失败日志引用和原工程验收检查。Planner 返回 `RepairPlan`，只能是三种决策之一：
 
-- `repair`：包含修复策略、边界说明和一个或多个 repair task；服务层会强制 repair task 继承原任务的 owner、change_scope、allowed_paths、依赖隔离和验收边界；
+- `repair`：包含修复策略、边界说明和一个或多个带精确 `change_scope` 的 repair task；服务层强制继承 owner、最大 allowed_paths、依赖隔离和结果型验收边界，但按本轮精确范围重新编译文件操作检查；
 - `requires_user_confirmation`：表示需要扩大修改范围、变更已确认需求/API 契约或做用户可见产品决策，调度器停止继续释放后续任务；
 - `terminal_failure`：表示证据不足、修复预算耗尽或失败不可自动处理，调度器停止构建并保留失败证据。
 
@@ -501,9 +505,10 @@ testing.START
 - 页面任务进入 DAG 前，以实时工作区校对模型计划路径。只有当计划入口不存在，且实时 `frontend/src/pages` 中存在唯一的同义目录（忽略大小写、分隔符和 `Page` 后缀）时，才把目标路径改写到该既有入口并把 `add` 改成 `modify`；多候选时不得猜测。这样可修复 WorkspaceSnapshot 在长流程中变旧造成的 `DashboardPage`/`Dashboard` 重复入口，同时保留可审计的 `path_reconciliation`。
 - 模板页面必须具备页面范围内的菜单与自动路由登记结果。任务编译器先读取实时 `frontend/src/constants/menus.ts`：脚手架已写入完全一致的 `{ path, name, key }` 时，不再补充重复任务，并将模型已有菜单任务标记为 `already_satisfied`；仅在条目缺失时生成只能追加 `BIZ_MENUS.firstLevel.children` 的受限任务。PageKey 必须与规范页面目录完全一致，不得修改路由生成器或既有菜单项。
 - 任何具有精确 `target_files` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
-- 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`。`already_satisfied` 只有在报告覆盖全部精确目标文件、磁盘状态符合 `add/modify/delete`、并按零基 `criterion_index` 为每条原始验收标准提供 passed evidence 时才成立；旧版完整 criterion 文本仍可读取，但自然语言中的“已满足”或相似路径不能改变调度状态。代码生成 runner 强制使用该结构化协议，缺失或损坏的顶层报告统一成为 `runner_protocol_error`，不得兼容成 `completed`。
+- 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`，但状态声明和自然语言证据都不构成验收结果。调度器对 `completed` 与 `already_satisfied` 统一逐项执行 `acceptance_checks`：前者使用工作区前后快照核对每个精确文件的 `changeType`，后者核对当前磁盘目标状态；整个并发批次按所有任务授权范围的并集检查越权变更；菜单使用共享解析器核对 `{ path, name, key, hideInMenu }`；前端 API 文件必须声明正式方法、路径和请求/响应类型，页面文件只检查 PageDetail 明确绑定的响应字段，不要求消费完整响应；Spring 后端必须具备 Mapping、DTO 字段和可证明的 JSON wire-name 映射，允许 Java camelCase 配合 `@JsonProperty`、`@JsonNaming` 或 Spring Jackson 全局 snake_case 策略。响应包装模型引用既有 DTO 时，验收器保持任务写入范围不变，只从目标模型的真实 Java 类型引用出发，在工作区内有限深度读取被引用 DTO 作为嵌套 Schema 的只读证据，不进行全仓库同名字段扫描。数据库任务执行后重新读取真实 Schema 并确认 gap 消除，必要审批必须先匹配计划指纹。任何检查缺少确定性证据或不匹配都转为 `acceptance_verification_failed` 并进入 RepairPlanner。缺失或损坏的顶层 Agent 报告仍统一成为 `runner_protocol_error`。
 - Deep Agent 工具活动继续使用根图和子图流；执行器按“根图优先、浅层 namespace 优先、同层最新优先”恢复最终 `values/messages`。根 `values` 快照不含 `messages` 时先使用根消息分片，再回退到最浅层 Agent namespace，且不得把工具结果或更深子 Agent 文本误作主 Agent 报告。
-- RepairPlanner 只能复用父任务的原始验收标准，不能把“必须产生文件变更”等执行动作扩展成新验收点；修复任务以 `already_satisfied` 验证目标状态时，与真实写入成功一样关闭失败父任务，避免制造重复菜单或其他非幂等改动。
+- RepairPlanner 必须为每个修复任务返回父任务授权内的精确 `change_scope`。修复任务不继承父任务历史执行的 `add/modify/delete` 差异检查，而是按本轮范围重新编译文件检查；父任务的菜单/API/Schema 等最终结果检查继续继承。兼容旧 RepairPlanner 且无法确定精确文件时，`completed` 至少要产生一处授权变更，`already_satisfied` 必须证明原精确目标状态成立。只有本轮文件检查和继承的结果检查全部通过才可关闭父任务，从而避免要求 DTO 小修复重新新增整个模块，也避免重复菜单等非幂等改动。
+- 恢复旧 DAG 时，如果 Repair 正是因为继承父任务 `added` 差异而产生 `acceptance_verification_failed`，调度器会从旧修复描述中恢复明确提及的精确父任务路径、按 `modify` 重编译检查并把该 Repair 恢复为 `pending`；其他失败类型和无法确认父任务的 Repair 不会被自动重置。
 
 该边界继续对应 learn-coding-agent 的“收集实时事实—执行—立即验证”循环；对应 OpenCode 的稳定任务 ID、显式任务状态和权限受限执行；对应 Deep Agents 的根/子图消息分流与结构化 subagent 结果。任务状态、文件归属和验收仍由外层确定性调度器裁决，Agent 输出视为不可信输入；Graph State 只保存紧凑报告和证据引用，不复制完整消息流或工具日志，保持在 128k 上下文预算内。
 

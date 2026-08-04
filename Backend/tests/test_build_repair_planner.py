@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import unittest
 
+from app.services.engineering_acceptance import (
+    compile_engineering_acceptance,
+    migrate_legacy_repair_acceptance,
+)
 from app.services.build_repair_planner import (
     approve_repair_scope_confirmation,
     append_repair_tasks_to_build_plan,
@@ -169,17 +173,31 @@ class BuildRepairPlannerTests(unittest.TestCase):
         self.assertEqual(closed[0]["status"], "already_satisfied")
         self.assertTrue(closed[0]["completed_by_repair"])
 
-    def test_repair_task_keeps_parent_acceptance_and_rejects_forced_write_criterion(self) -> None:
-        """RepairPlanner 不得把“必须产生变更”扩展成新的验收条件。"""
+    def test_repair_task_keeps_parent_outcome_checks_and_rejects_business_criterion(self) -> None:
+        """Repair 只继承结果型工程检查，不接受 Planner 自行扩展的验收文案。"""
 
-        task = {
-            "id": "menu",
-            "owner": "frontend",
-            "status": "failed",
-            "change_scope": [{"path": "frontend/src/constants/menus.ts"}],
-            "allowed_paths": ["frontend/src/constants/menus.ts"],
-            "acceptance_criteria": ["DashboardPage 菜单项存在"],
-        }
+        task = compile_engineering_acceptance(
+            [
+                {
+                    "id": "menu",
+                    "owner": "frontend",
+                    "status": "failed",
+                    "change_scope": [
+                        {"operation": "modify", "path": "frontend/src/constants/menus.ts"}
+                    ],
+                    "allowed_paths": ["frontend/src/constants/menus.ts"],
+                    "engineering_context": {
+                        "menu_registration": {
+                            "file": "frontend/src/constants/menus.ts",
+                            "path": "dashboard",
+                            "name": "概览",
+                            "key": "DashboardPage",
+                        }
+                    },
+                }
+            ],
+            {},
+        )[0]
         result = {
             "task_id": "menu",
             "status": "failed",
@@ -203,9 +221,113 @@ class BuildRepairPlannerTests(unittest.TestCase):
             },
         )
 
-        acceptance = plan["tasks"][0]["acceptance_criteria"]
-        self.assertIn("DashboardPage 菜单项存在", acceptance)
-        self.assertNotIn("文件必须产生实际变更（非空写入）", acceptance)
+        repair_task = plan["tasks"][0]
+        acceptance = repair_task["acceptance_criteria"]
+        self.assertIn("menu_registration", [item["kind"] for item in repair_task["acceptance_checks"]])
+        self.assertFalse(any("文件必须产生实际变更（非空写入）" in item for item in acceptance))
+
+    def test_repair_recompiles_file_operations_for_exact_repair_scope(self) -> None:
+        """修复 DTO 时不得继续要求父任务全部新增文件再次产生 added 差异。"""
+
+        parent = compile_engineering_acceptance(
+            [
+                {
+                    "id": "backend-create",
+                    "owner": "backend",
+                    "status": "failed",
+                    "change_scope": [
+                        {"operation": "add", "path": "backend/Entity.java"},
+                        {"operation": "add", "path": "backend/CreateDTO.java"},
+                    ],
+                }
+            ],
+            {},
+        )[0]
+        result = {
+            "task_id": "backend-create",
+            "status": "failed",
+            "failure_category": "acceptance_verification_failed",
+            "scheduler_decision": {
+                "action": "repair",
+                "reason": "acceptance_verification_failed",
+            },
+        }
+
+        plan = create_build_failure_repair_plan(
+            failed_results=[result],
+            tasks=[parent],
+            repair_planner=lambda _: {
+                "decision": "repair",
+                "strategy": "补充 DTO JSON 映射。",
+                "repair_tasks": [
+                    {
+                        "title": "修复 DTO",
+                        "description": "只修改 DTO 映射。",
+                        "change_scope": [
+                            {
+                                "operation": "modify",
+                                "path": "backend/CreateDTO.java",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+
+        repair_checks = plan["tasks"][0]["acceptance_checks"]
+        file_checks = [item for item in repair_checks if item["kind"] == "file_operation"]
+        self.assertEqual(len(file_checks), 1)
+        self.assertEqual(file_checks[0]["target_paths"], ["backend/CreateDTO.java"])
+        self.assertEqual(file_checks[0]["expected"]["change_type"], "modified")
+
+    def test_migrates_legacy_repair_add_checks_for_safe_resume(self) -> None:
+        """旧 Repair 因重复要求 added 失败时，应恢复 DTO 精确范围并允许续跑。"""
+
+        parent = compile_engineering_acceptance(
+            [
+                {
+                    "id": "backend-create",
+                    "owner": "backend",
+                    "status": "failed",
+                    "change_scope": [
+                        {"operation": "add", "path": "/backend/Entity.java"},
+                        {"operation": "add", "path": "/backend/CreateDTO.java"},
+                    ],
+                }
+            ],
+            {},
+        )[0]
+        legacy_repair = {
+            **parent,
+            "id": "repair:backend-create:legacy",
+            "kind": "repair",
+            "repairs": {"task_id": "backend-create"},
+            "description": "Edit /backend/CreateDTO.java to add JSON mapping.",
+            "status": "failed",
+            "last_result_status": "failed",
+            "failure_category": "acceptance_verification_failed",
+            "failure_reason": "Entity 预期差异类型 added，实际为 none。",
+        }
+
+        migrated = migrate_legacy_repair_acceptance([parent, legacy_repair])[1]
+
+        self.assertEqual(migrated["status"], "pending")
+        self.assertTrue(migrated["legacy_acceptance_recovered"])
+        self.assertEqual(
+            migrated["change_scope"],
+            [
+                {
+                    "operation": "modify",
+                    "path": "/backend/CreateDTO.java",
+                    "description": "从旧 Repair 描述恢复的精确修复目标。",
+                }
+            ],
+        )
+        file_checks = [
+            item for item in migrated["acceptance_checks"] if item["kind"] == "file_operation"
+        ]
+        self.assertEqual(len(file_checks), 1)
+        self.assertEqual(file_checks[0]["expected"]["change_type"], "modified")
 
 
 if __name__ == "__main__":

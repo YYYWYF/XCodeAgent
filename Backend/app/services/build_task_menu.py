@@ -123,6 +123,8 @@ def ensure_page_route_registration_task(
         return _mark_existing_menu_tasks_satisfied(
             tasks,
             menu_tasks=menu_tasks,
+            page_task_ids=page_task_ids,
+            page_unit_id=page_unit_id,
             page_key=page_key,
             page_name=page_name,
             menu_path=menu_path,
@@ -159,7 +161,7 @@ def ensure_page_route_registration_task(
             "public_contracts": [],
             "risks": ["菜单 key 必须与页面目录 PageKey 完全一致。"],
         },
-        "verification_commands": ["cd frontend && pnpm build"],
+        "verification_commands": [],
     }
     return [*tasks, route_task]
 
@@ -300,6 +302,15 @@ def _menu_registration_task_payload(
         "can_run_in_parallel": False,
         "parallel_reason": "菜单是共享的增量文件，必须在页面入口完成后串行追加。",
         "acceptance_criteria": acceptance,
+        "engineering_context": {
+            "menu_registration": {
+                "file": FRONTEND_MENU_PATH,
+                "path": menu_path,
+                "name": page_name,
+                "key": page_key,
+                "hide_in_menu": hide_in_menu,
+            }
+        },
     }
 
 
@@ -342,12 +353,7 @@ def _normalize_existing_menu_tasks(
                 **_impact_scope(task.get("impact_scope"), payload["description"]),
                 "affected_modules": [FRONTEND_MENU_PATH],
             },
-            "verification_commands": _dedupe_normalized_strings(
-                [
-                    *_string_list(task.get("verification_commands")),
-                    "cd frontend && pnpm build",
-                ]
-            ),
+            "verification_commands": [],
         }
         if str(task.get("id") or "") in menu_task_ids
         else task
@@ -379,6 +385,37 @@ def _menu_entry_exists(
     return False
 
 
+def menu_registration_matches(
+    workspace_root: str | Path,
+    registration: dict[str, Any],
+) -> bool:
+    """复用菜单解析规则核对确定性工程验收中的完整菜单登记。"""
+
+    file_path = str(registration.get("file") or FRONTEND_MENU_PATH).lstrip("./")
+    menu_file = Path(workspace_root).expanduser().resolve() / file_path
+    try:
+        content = menu_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return False
+    expected = {
+        "path": str(registration.get("path") or ""),
+        "name": str(registration.get("name") or ""),
+        "key": str(registration.get("key") or ""),
+    }
+    expected_hidden = bool(registration.get("hide_in_menu"))
+    for match in re.finditer(r"\{(?P<body>[^{}]*)\}", content, flags=re.DOTALL):
+        body = match.group("body")
+        properties = {
+            name: _typescript_string_property(body, name)
+            for name in ("path", "name", "key")
+        }
+        if properties != expected:
+            continue
+        hidden = bool(re.search(r"\bhideInMenu\s*:\s*true\b", body))
+        return hidden is expected_hidden
+    return False
+
+
 def _typescript_string_property(body: str, name: str) -> str:
     """从简单 TypeScript 对象文本中读取一个字符串属性。"""
 
@@ -393,6 +430,8 @@ def _mark_existing_menu_tasks_satisfied(
     tasks: list[dict[str, Any]],
     *,
     menu_tasks: list[dict[str, Any]],
+    page_task_ids: list[str],
+    page_unit_id: str,
     page_key: str,
     page_name: str,
     menu_path: str,
@@ -401,6 +440,13 @@ def _mark_existing_menu_tasks_satisfied(
 
     if not menu_tasks:
         return tasks
+    payload = _menu_registration_task_payload(
+        page_task_ids=page_task_ids,
+        page_unit_id=page_unit_id,
+        page_key=page_key,
+        page_name=page_name,
+        menu_path=menu_path,
+    )
     matching_ids = {
         str(task.get("id") or "")
         for task in menu_tasks
@@ -415,6 +461,7 @@ def _mark_existing_menu_tasks_satisfied(
     return [
         {
             **task,
+            **payload,
             "status": "already_satisfied",
             "last_result_status": "already_satisfied",
             "satisfaction_evidence": {
