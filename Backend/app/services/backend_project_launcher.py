@@ -14,6 +14,11 @@ from app.services.backend_process_registry import (
     stop_previous_backend_process,
     terminate_backend_process,
 )
+from app.services.database_credentials import (
+    DatabaseCredentialError,
+    build_mysql_jdbc_url,
+    resolve_application_mysql_config,
+)
 from app.utils.subprocess_output import subprocess_output_text
 
 
@@ -21,6 +26,19 @@ BACKEND_BUILD_TIMEOUT_SECONDS = 600
 BACKEND_READY_TIMEOUT_SECONDS = 60
 BACKEND_READY_INTERVAL_SECONDS = 1
 BACKEND_READY_MARKERS = ("Spring Boot", "ZA21 Version")
+_BACKEND_DATABASE_ENV_KEYS = frozenset(
+    {
+        "MYSQL_HOST",
+        "MYSQL_PORT",
+        "MYSQL_USER",
+        "MYSQL_PWD",
+        "MYSQL_DATABASE",
+        "MYSQL_JDBC_URL",
+        "SPRING_DATASOURCE_URL",
+        "SPRING_DATASOURCE_USERNAME",
+        "SPRING_DATASOURCE_PASSWORD",
+    }
+)
 
 
 def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
@@ -118,6 +136,17 @@ def _launch_backend_project_locked(
 ) -> dict[str, Any]:
     """在工作区锁内完成旧进程清理、Maven 构建和新 Java 进程启动。"""
 
+    runtime_environment, database_config_error = _backend_runtime_environment(root)
+    if database_config_error:
+        return _failed_backend_launch(
+            f"当前应用数据库配置不可用于启动后端：{database_config_error}",
+            root=root,
+            backend_root=backend_root,
+            pom_path=pom_path,
+            runtime_root=runtime_root,
+            failed_stage="backend_database_config",
+        )
+
     prebuild_cleanup = stop_previous_backend_process(
         workspace=root,
         backend_root=backend_root,
@@ -181,6 +210,7 @@ def _launch_backend_project_locked(
         java_command=java_command,
         jar_path=jar_path,
         runtime_root=runtime_root,
+        environment=runtime_environment,
     )
     if process is not None:
         register_backend_process(root, process)
@@ -418,8 +448,9 @@ def _start_backend_server(
     java_command: str,
     jar_path: Path,
     runtime_root: Path,
+    environment: dict[str, str],
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
-    """在 target 目录后台启动 Java JAR，并记录本次日志偏移量。"""
+    """在 target 目录后台启动 Java JAR，并注入当前应用的数据库环境。"""
 
     argv = [java_command, "-jar", str(jar_path.resolve())]
     stdout_path = runtime_root / "backend.stdout.log"
@@ -435,6 +466,7 @@ def _start_backend_server(
             stdout=stdout,
             stderr=stderr,
             stdin=subprocess.DEVNULL,
+            env=environment,
             # macOS Java 服务继承 Electron 后端进程组，应用退出时可统一回收。
             start_new_session=os.name == "nt",
         )
@@ -523,6 +555,38 @@ def _log_contains_backend_ready_marker(path: Path, offset: int) -> bool:
     except OSError:
         return False
     return any(marker in content for marker in BACKEND_READY_MARKERS)
+
+
+def _backend_runtime_environment(root: Path) -> tuple[dict[str, str], str | None]:
+    """构造后端子进程环境，清除全局数据库变量并绑定当前应用配置。"""
+
+    environment = os.environ.copy()
+    for key in _BACKEND_DATABASE_ENV_KEYS:
+        environment.pop(key, None)
+
+    application_file = root / ".xcodeagent" / "application.json"
+    if not application_file.is_file():
+        return environment, None
+    try:
+        config = resolve_application_mysql_config(root)
+    except DatabaseCredentialError as exc:
+        return environment, str(exc)
+
+    jdbc_url = build_mysql_jdbc_url(config)
+    environment.update(
+        {
+            "MYSQL_HOST": config.host,
+            "MYSQL_PORT": str(config.port),
+            "MYSQL_USER": config.user,
+            "MYSQL_PWD": config.password,
+            "MYSQL_DATABASE": config.database,
+            "MYSQL_JDBC_URL": jdbc_url,
+            "SPRING_DATASOURCE_URL": jdbc_url,
+            "SPRING_DATASOURCE_USERNAME": config.user,
+            "SPRING_DATASOURCE_PASSWORD": config.password,
+        }
+    )
+    return environment, None
 
 
 def _base_backend_launch_payload(

@@ -11,7 +11,7 @@ from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.tools.delete_file import create_delete_file_tool
 from app.tools.execute import create_execute_tool
-from app.tools.mysql_info import get_mysql_config
+from app.tools.mysql_info import create_get_mysql_config_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
@@ -53,7 +53,7 @@ def create_data_source_agent(
         tools=[
             create_delete_file_tool(workspace_root),
             create_execute_tool(workspace_root),
-            get_mysql_config,
+            create_get_mysql_config_tool(workspace_root),
         ],
         middleware=[DirectModificationMiddleware()],
         backend=create_workspace_backend(

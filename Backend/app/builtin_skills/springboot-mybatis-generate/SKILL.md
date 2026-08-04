@@ -120,7 +120,7 @@ spring:
     password: <password>
 ```
 
-**数据源缺失时，调用 `get_mysql_config` 工具获取数据库连接信息**：该工具从 `MYSQL_*` 环境变量读取并返回 `host` / `port` / `user` / `password` / `database` / `jdbc_url`，据此填充 `spring.datasource.url` / `username` / `password`。不要凭空猜测数据库连接信息。
+**数据源缺失时，调用当前工作区绑定的 `get_mysql_config` 工具获取数据库连接信息**：该工具从当前应用 `.xcodeagent/application.json` 读取并解密 `datasource.db.plantMode`，返回 `host` / `port` / `user` / `password` / `database` / `jdbc_url`，据此填充 `spring.datasource.url` / `username` / `password`。不要凭空猜测数据库连接信息，也不要读取后端服务自身的 `.env`。
 
 ### 三、检查 MyBatis-Plus 配置类
 
@@ -152,7 +152,7 @@ public class MyBatisPlusConfig {
 ### 前置校验的验收标准
 
 - `pom.xml` 包含 `mybatis-plus-boot-starter`、`mysql-connector-j`、`lombok`、`mapstruct`、`mapstruct-processor` 五个依赖（缺失才补充，已有不动）
-- `application.yml` 配置了 `spring.datasource.url` / `username` / `password`（缺失时先调用 `get_mysql_config` 工具获取数据库连接信息再填充）
+- `application.yml` 配置了 `spring.datasource.url` / `username` / `password`（缺失时先调用当前工作区绑定的 `get_mysql_config` 工具获取数据库连接信息再填充）
 - 存在 `MyBatisPlusConfig` 配置类并注册了 `PaginationInnerInterceptor`
 - 前置校验任务的 `acceptance_criteria` 使用以上验收；模块生成任务（阶段一至四整合为一个任务）的 `acceptance_criteria` 覆盖 11 个生成文件编译通过、REST 端点可用
 

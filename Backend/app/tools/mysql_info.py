@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from hashlib import sha256
 from typing import Any
 
 from langchain_core.tools import tool
 
 from app.services.database_credentials import (
+    build_mysql_jdbc_url,
     DatabaseCredentialError,
     MySQLConnectionConfig,
     resolve_application_mysql_config,
@@ -261,7 +261,7 @@ def mysql_table_info(
 
 @tool("get_mysql_config")
 def get_mysql_config() -> str:
-    """从 MYSQL_* 环境变量读取数据库连接配置，用于补齐 Spring 数据源配置。
+    """兼容旧工具入口，但没有绑定应用工作区时拒绝返回数据库配置。
 
     当后端项目 application.yml 缺少 spring.datasource 配置时，调用本工具获取
     数据库连接信息（host/port/user/password/database）及其 JDBC URL，据此填充
@@ -271,64 +271,45 @@ def get_mysql_config() -> str:
         A JSON string with the MySQL connection config.
     """
 
-    host = os.getenv("MYSQL_HOST")
-    port_str = os.getenv("MYSQL_PORT")
-    user = os.getenv("MYSQL_USER")
-    password = os.getenv("MYSQL_PWD")
-    database = os.getenv("MYSQL_DATABASE")
+    return get_mysql_config_for_workspace(None)
 
-    missing = []
-    if not host:
-        missing.append("MYSQL_HOST")
-    if not port_str:
-        missing.append("MYSQL_PORT")
-    if not user:
-        missing.append("MYSQL_USER")
-    if not password:
-        missing.append("MYSQL_PWD")
-    if not database:
-        missing.append("MYSQL_DATABASE")
-    if missing:
-        return json.dumps(
-            {
-                "tool": "get_mysql_config",
-                "status": "error",
-                "error": (
-                    "Missing required environment variable(s): "
-                    f"{', '.join(missing)}. "
-                    "All of MYSQL_HOST, MYSQL_PORT, MYSQL_USER, "
-                    "MYSQL_PWD, MYSQL_DATABASE must be set."
-                ),
-            },
-            ensure_ascii=False,
-        )
+
+def create_get_mysql_config_tool(workspace_root: str | None):
+    """创建绑定当前应用工作区的数据源配置工具。"""
+
+    @tool("get_mysql_config")
+    def workspace_get_mysql_config() -> str:
+        """读取当前应用的 MySQL 配置，用于补齐生成项目的数据源。"""
+
+        return get_mysql_config_for_workspace(workspace_root)
+
+    return workspace_get_mysql_config
+
+
+def get_mysql_config_for_workspace(workspace_root: str | None) -> str:
+    """解析当前应用配置并返回生成 Spring 数据源所需的连接信息。"""
 
     try:
-        port = int(port_str)  # type: ignore[arg-type]
-    except (ValueError, TypeError):
+        config = resolve_application_mysql_config(workspace_root)
+    except DatabaseCredentialError as exc:
         return json.dumps(
             {
                 "tool": "get_mysql_config",
                 "status": "error",
-                "error": f"MYSQL_PORT must be a valid integer, got '{port_str}'.",
+                "error": str(exc),
             },
             ensure_ascii=False,
         )
-
     return json.dumps(
         {
             "tool": "get_mysql_config",
             "status": "ok",
-            "host": host,
-            "port": port,
-            "user": user,
-            "password": password,
-            "database": database,
-            "jdbc_url": (
-                f"jdbc:mysql://{host}:{port}/{database}"
-                "?useUnicode=true&characterEncoding=utf-8&useSSL=false"
-                "&serverTimezone=Asia/Shanghai"
-            ),
+            "host": config.host,
+            "port": config.port,
+            "user": config.user,
+            "password": config.password,
+            "database": config.database,
+            "jdbc_url": build_mysql_jdbc_url(config),
         },
         ensure_ascii=False,
     )

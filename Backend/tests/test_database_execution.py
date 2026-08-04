@@ -14,7 +14,12 @@ from app.services.database_execution import (
     create_database_execution_context,
     execute_database_plan,
 )
-from app.tools.mysql_info import create_execute_mysql_ddl_tool, execute_mysql_ddl
+from app.tools.mysql_info import (
+    create_execute_mysql_ddl_tool,
+    create_get_mysql_config_tool,
+    execute_mysql_ddl,
+    get_mysql_config,
+)
 
 
 def _write_application(
@@ -218,6 +223,57 @@ class DatabaseExecutionTests(unittest.TestCase):
             },
         ):
             result = json.loads(execute_mysql_ddl.invoke({"statements": ["DROP TABLE orders"]}))
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("缺少当前应用工作区", result["error"])
+
+    def test_bound_mysql_config_tool_uses_application_credentials(self) -> None:
+        """生成工具必须返回当前应用配置，而不是全局环境变量。"""
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            workspace = Path(temporary_root) / "app"
+            _write_application(
+                workspace,
+                host="generation.mysql.local",
+                port=3312,
+                user="generation_user",
+                password="generation-password",
+                database="generation_schema",
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "MYSQL_HOST": "global.mysql.local",
+                    "MYSQL_PORT": "3306",
+                    "MYSQL_USER": "global_user",
+                    "MYSQL_PWD": "global-password",
+                    "MYSQL_DATABASE": "global_schema",
+                },
+            ):
+                result = json.loads(create_get_mysql_config_tool(workspace).invoke({}))
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["host"], "generation.mysql.local")
+        self.assertEqual(result["port"], 3312)
+        self.assertEqual(result["user"], "generation_user")
+        self.assertEqual(result["password"], "generation-password")
+        self.assertEqual(result["database"], "generation_schema")
+        self.assertIn("generation.mysql.local:3312/generation_schema", result["jdbc_url"])
+
+    def test_unbound_mysql_config_tool_fails_closed(self) -> None:
+        """旧的无工作区配置工具必须拒绝读取全局环境变量。"""
+
+        with patch.dict(
+            os.environ,
+            {
+                "MYSQL_HOST": "global.mysql.local",
+                "MYSQL_PORT": "3306",
+                "MYSQL_USER": "global_user",
+                "MYSQL_PWD": "global-password",
+                "MYSQL_DATABASE": "global_schema",
+            },
+        ):
+            result = json.loads(get_mysql_config.invoke({}))
 
         self.assertEqual(result["status"], "error")
         self.assertIn("缺少当前应用工作区", result["error"])

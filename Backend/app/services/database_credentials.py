@@ -146,6 +146,16 @@ def resolve_application_mysql_config(
     )
 
 
+def build_mysql_jdbc_url(config: MySQLConnectionConfig) -> str:
+    """根据已解析的应用级配置构造 Spring 可用的 MySQL JDBC URL。"""
+
+    return (
+        f"jdbc:mysql://{config.host}:{config.port}/{config.database}"
+        "?useUnicode=true&characterEncoding=utf-8&useSSL=false"
+        "&serverTimezone=Asia/Shanghai"
+    )
+
+
 def _required_text(value: Any, field_name: str) -> str:
     """读取非空文本字段，同时避免把原值写入异常。"""
 
