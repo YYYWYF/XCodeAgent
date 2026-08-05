@@ -365,6 +365,12 @@
   border: 0;
   display: block;
   background: #fff;
+
+  &.@{class-prefix}-is-fullscreen {
+    // 全屏 Modal 内撑满可用高度（Modal body 自带 padding，留出余量）。
+    height: calc(100vh - 120px);
+    min-height: 480px;
+  }
 }
 
 // 嵌入设计稿工程的 iframe 容器：相对定位，承载 loading/fallback 浮层。
@@ -505,5 +511,25 @@
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+// 全屏查看设计稿的 Modal：顶部居中，高度撑满，iframe 在 body 内自适应。
+.@{class-prefix}-ui-design-fullscreen-modal {
+  .ant-modal {
+    top: 4vh;
+    max-width: none;
+  }
+
+  .ant-modal-content {
+    height: 92vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ant-modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
 }

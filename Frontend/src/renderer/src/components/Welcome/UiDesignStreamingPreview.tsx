@@ -1,6 +1,7 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
-import { Typography } from 'antd'
+import { Button, Modal, Typography } from 'antd'
+import { FullscreenOutlined } from '@ant-design/icons'
 import type { WorkflowRunPayload } from '../../typings'
 import { cx } from '../../utils'
 import DesignPreviewFrame from './DesignPreviewFrame'
@@ -58,6 +59,7 @@ export default function UiDesignStreamingPreview({
 }: Props): ReactElement | null {
   const pages = useMemo(() => readStreamingPages(workflow), [workflow])
   const previewOrigin = useMemo(() => readPreviewOrigin(workflow), [workflow])
+  const [fullscreenPage, setFullscreenPage] = useState<PageDesign | null>(null)
   const readyCount = pages.length
   const totalCount = Math.max(total ?? 0, readyCount)
   const pendingCount = Math.max(totalCount - readyCount, 0)
@@ -97,6 +99,17 @@ export default function UiDesignStreamingPreview({
                           </Text>
                         ) : null}
                       </div>
+                    </div>
+                    <div className={cx('ui-design-card-actions')}>
+                      <Button
+                        className={cx('ui-design-action-btn')}
+                        disabled={!page.code_path}
+                        icon={<FullscreenOutlined />}
+                        onClick={() => setFullscreenPage(page)}
+                        title="全屏查看"
+                      >
+                        放大
+                      </Button>
                     </div>
                   </div>
                   {page.description ? (
@@ -142,6 +155,25 @@ export default function UiDesignStreamingPreview({
           </div>
         </div>
       </div>
+
+      <Modal
+        bodyStyle={{ padding: 0 }}
+        footer={null}
+        onCancel={() => setFullscreenPage(null)}
+        open={Boolean(fullscreenPage)}
+        title={fullscreenPage?.name || '设计稿预览'}
+        width="90vw"
+        wrapClassName={cx('ui-design-fullscreen-modal')}
+      >
+        {fullscreenPage ? (
+          <DesignPreviewFrame
+            fullscreen
+            origin={previewOrigin}
+            routePath={fullscreenPage.route_path}
+            title={`设计稿-${fullscreenPage.name || fullscreenPage.pageId}`}
+          />
+        ) : null}
+      </Modal>
     </section>
   )
 }

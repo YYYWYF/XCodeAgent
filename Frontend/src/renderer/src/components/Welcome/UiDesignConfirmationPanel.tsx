@@ -1,11 +1,12 @@
 import {
   CheckOutlined,
   CheckSquareOutlined,
+  FullscreenOutlined,
   MessageOutlined,
   MinusSquareOutlined,
   SwapOutlined
 } from '@ant-design/icons'
-import { Button, Input, Typography } from 'antd'
+import { Button, Input, Modal, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
@@ -89,6 +90,8 @@ export default function UiDesignConfirmationPanel({
   const [confirmedPageIds, setConfirmedPageIds] = useState<Set<string>>(new Set())
   const [feedback, setFeedback] = useState('')
   const [activePageId, setActivePageId] = useState<string>('')
+  // 全屏查看的设计稿页面（null=关闭）。
+  const [fullscreenPage, setFullscreenPage] = useState<PageDesign | null>(null)
   // 滚动容器引用，用于锚点点击时滚动到对应卡片。
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -261,6 +264,15 @@ export default function UiDesignConfirmationPanel({
                       <div className={cx('ui-design-card-actions')}>
                         <Button
                           className={cx('ui-design-action-btn')}
+                          disabled={!page.code_path}
+                          icon={<FullscreenOutlined />}
+                          onClick={() => setFullscreenPage(page)}
+                          title="全屏查看"
+                        >
+                          放大
+                        </Button>
+                        <Button
+                          className={cx('ui-design-action-btn')}
                           disabled
                           icon={<SwapOutlined />}
                           title="即将开放"
@@ -349,6 +361,26 @@ export default function UiDesignConfirmationPanel({
         </div>
         </>
       )}
+
+      <Modal
+        bodyStyle={{ padding: 0 }}
+        cancelText="关闭"
+        footer={null}
+        onCancel={() => setFullscreenPage(null)}
+        open={Boolean(fullscreenPage)}
+        title={fullscreenPage?.name || '设计稿预览'}
+        width="90vw"
+        wrapClassName={cx('ui-design-fullscreen-modal')}
+      >
+        {fullscreenPage ? (
+          <DesignPreviewFrame
+            fullscreen
+            origin={previewOrigin}
+            routePath={fullscreenPage.route_path}
+            title={`设计稿-${fullscreenPage.name || fullscreenPage.pageId}`}
+          />
+        ) : null}
+      </Modal>
     </section>
   )
 }

@@ -223,7 +223,13 @@ export default function ApplicationPagePlanningModal({
   const awaitingUserInput = planningWorkflowRequiresUserInput(workflow)
   const showingProgress = !workflow || (running && !awaitingUserInput)
   // UI确认节点生成期间，流式展示已就绪的设计稿，避免干等到最后一次性出现。
-  const streamingUiPhase = showingProgress && planningWorkflowPhase(workflow) === 'ui_confirmation'
+  // 排除 ui_confirmation 已完成（用户一键确认全部设计稿后同 run 流转到 project_planning，
+  // 但 project_planning 的 started 帧到达前可能短暂停留在 ui_confirmation completed 帧），
+  // 否则会误显示"设计稿生成中"。
+  const streamingUiPhase =
+    showingProgress &&
+    planningWorkflowPhase(workflow) === 'ui_confirmation' &&
+    workflow?.summary?.status !== 'completed'
   const streamingUiTotal = planningUiDesignPageTotal(workflow)
   const isProjectPlanConfirmation = projectPlanConfirmationReady(workflow)
 

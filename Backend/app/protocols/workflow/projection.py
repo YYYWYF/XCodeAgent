@@ -80,6 +80,14 @@ def _workflow_start_node(
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     """仅预测下一个 UI 时间线节点，不参与 LangGraph 实际路由。"""
 
+    if node_name == "ui_confirmation":
+        # 仅 application_planning 使用：待确认时 Graph 走 END 等待用户，不发 started；
+        # 用户确认全部设计稿后同 run 内流转到 project_planning，必须预测下一节点，
+        # 否则 project_planning 执行期间前端 phase 仍停留在 ui_confirmation，
+        # 误判为"设计稿生成中"继续渲染设计稿区域。
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["project_planning"]
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):
             return ["launch_project"]

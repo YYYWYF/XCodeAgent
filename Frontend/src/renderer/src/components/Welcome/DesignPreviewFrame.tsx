@@ -13,19 +13,22 @@ type Props = {
   routePath?: string
   /** iframe 标题。 */
   title?: string
+  /** 全屏模式：iframe 撑满视口高度（用于放大查看 Modal 内）。 */
+  fullscreen?: boolean
 }
 
 // 嵌入设计稿工程 dev server 的实时渲染画面。
 // - origin 为空（工程未启动）时显示提示。
 // - routePath 为空或页面未就绪时显示占位文案。
-// - iframe 固定高度，内容超出时在 iframe 内部滚动。
+// - iframe 固定高度（fullscreen 时撑满视口），内容超出时在 iframe 内部滚动。
 // - 先用 fetch 探测端口可达性：工程未启动时 fetch 会 reject，直接显示提示，
 //   避免跨域 iframe 加载错误页时 onLoad 仍触发、无法区分成败的问题。
 // - 探测可达后再挂载 iframe，并保留一个加载超时兜底。
 export default function DesignPreviewFrame({
   origin,
   routePath,
-  title
+  title,
+  fullscreen = false
 }: Props): ReactElement {
   // reachable: null=探测中, true=可达, false=不可达
   const [reachable, setReachable] = useState<boolean | null>(null)
@@ -117,7 +120,7 @@ export default function DesignPreviewFrame({
       ) : null}
       {reachable ? (
         <iframe
-          className={cx('ui-design-iframe')}
+          className={cx('ui-design-iframe', fullscreen && 'is-fullscreen')}
           onLoad={() => {
             setLoaded(true)
             if (timerRef.current) clearTimeout(timerRef.current)
