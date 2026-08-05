@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.planner import revise_project_plan_with_chat_model
 from app.agents.main.task_preparer import prepare_build_tasks_with_main_agent
@@ -26,7 +24,6 @@ from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     tasks_from_build_task_plan,
 )
-from app.services.code_graph.context import CodeGraphContextResolver
 from app.services.build_unit_skeleton import (
     apply_target_unit_dependencies,
     ensure_build_unit_skeleton,
@@ -118,10 +115,6 @@ def prepare_build_tasks(state: ProjectState) -> dict:
     workspace_snapshot = _workspace_snapshot_from_state(state)
     build_execution_scope = _build_execution_scope_from_state(state)
     existing_build_task_plan = _existing_build_task_plan(state)
-    code_graph_context = _code_graph_planning_context(
-        workspace,
-        request=str(state.get("request") or ""),
-    )
     progress = create_build_task_progress_tracker()
 
     progress.start("unit_skeleton", "正在根据已确认项目计划生成 Unit DAG 骨架。")
@@ -259,7 +252,6 @@ def prepare_build_tasks(state: ProjectState) -> dict:
             workspace_snapshot=workspace_snapshot,
             build_context=build_context,
             build_task_plan=build_task_plan,
-            code_graph_context=code_graph_context,
         )
     except ValueError as exc:
         progress.fail(
@@ -437,34 +429,6 @@ def _workspace_snapshot_from_state(state: ProjectState) -> dict:
     if snapshot_path:
         return load_workspace_snapshot_json(snapshot_path)
     return {}
-
-
-def _code_graph_planning_context(
-    workspace: str | None,
-    *,
-    request: str,
-) -> dict[str, Any]:
-    """只从显式用户 workspaceRoot 的已建索引中读取规划导航上下文。"""
-
-    if not workspace:
-        return {
-            "schemaVersion": "xcodeagent.workspace-planning-context.v1",
-            "status": "skipped",
-            "message": "没有显式 workspaceRoot，本次不查询代码图。",
-            "fallback": "workspace_search",
-        }
-    try:
-        return CodeGraphContextResolver().planning_context(
-            Path(workspace).expanduser().resolve(),
-            request[:1_000],
-        )
-    except (OSError, RuntimeError, ValueError) as exc:
-        return {
-            "schemaVersion": "xcodeagent.workspace-planning-context.v1",
-            "status": "unavailable",
-            "message": f"代码图规划上下文不可用：{type(exc).__name__}。",
-            "fallback": "workspace_search",
-        }
 
 
 def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:

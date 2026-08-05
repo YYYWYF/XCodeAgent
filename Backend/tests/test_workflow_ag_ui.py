@@ -219,7 +219,32 @@ class FakeWorkspaceInspectionGraph:
                         "source_files_indexed": 96,
                         "truncated": False,
                     },
-                    "code_graph": {"provider": "none", "available": False},
+                    "code_graph": {
+                        "provider": "code-review-graph",
+                        "providerVersion": "2.3.7",
+                        "status": "ready",
+                        "available": True,
+                        "buildType": "full",
+                        "filesIndexed": 41,
+                        "symbolsIndexed": 122,
+                        "relationsIndexed": 495,
+                        "languages": ["java", "typescript"],
+                        "nodesByKind": [{"kind": "Function", "count": 78}],
+                        "relationsByKind": [{"kind": "CALLS", "count": 332}],
+                        "sampleSymbols": [
+                            {
+                                "name": "login",
+                                "kind": "function",
+                                "language": "typescript",
+                                "path": "frontend/src/api/auth.ts",
+                                "lineStart": 12,
+                                "lineEnd": 24,
+                            }
+                        ],
+                        "warningCount": 0,
+                        "warnings": [],
+                        "durationMs": 4700,
+                    },
                 },
                 "timeline": ["inspect_workspace:cache_hit"],
             }
@@ -675,7 +700,32 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                         "source_files_indexed": 96,
                         "truncated": False,
                     },
-                    "code_graph": {"provider": "none", "available": False},
+                    "code_graph": {
+                        "provider": "code-review-graph",
+                        "providerVersion": "2.3.7",
+                        "status": "ready",
+                        "available": True,
+                        "buildType": "full",
+                        "filesIndexed": 41,
+                        "symbolsIndexed": 122,
+                        "relationsIndexed": 495,
+                        "languages": ["java", "typescript"],
+                        "nodesByKind": [{"kind": "Function", "count": 78}],
+                        "relationsByKind": [{"kind": "CALLS", "count": 332}],
+                        "sampleSymbols": [
+                            {
+                                "name": "login",
+                                "kind": "function",
+                                "language": "typescript",
+                                "path": "frontend/src/api/auth.ts",
+                                "lineStart": 12,
+                                "lineEnd": 24,
+                            }
+                        ],
+                        "warningCount": 0,
+                        "warnings": [],
+                        "durationMs": 4700,
+                    },
                 },
                 "timeline": ["inspect_workspace:cache_hit"],
             },
@@ -686,6 +736,9 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertEqual(snapshot["techStack"], ["FastAPI", "React"])
         self.assertEqual(snapshot["projectRoots"], [{"path": "Backend/app", "kind": "backend"}])
         self.assertTrue(snapshot["cacheHit"])
+        self.assertEqual(snapshot["codeGraph"]["filesIndexed"], 41)
+        self.assertEqual(snapshot["codeGraph"]["nodesByKind"][0]["kind"], "Function")
+        self.assertNotIn("codeNavigation", snapshot)
         self.assertIn("已索引 128 个文件", detail["message"])
         self.assertNotIn("/private/workspace", str(snapshot))
         self.assertNotIn("secret-hash", str(snapshot))

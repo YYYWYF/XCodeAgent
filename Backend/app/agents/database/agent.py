@@ -8,7 +8,6 @@ from app.agents.workspace_scope import (
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.tools.mysql_info import create_get_mysql_table_info_tool
-from app.tools.code_graph_context import create_code_graph_context_tool
 
 
 def create_database_agent(
@@ -45,7 +44,6 @@ def create_database_agent(
         "If no SQL is needed, return an empty `statements` list and mark the task "
         "as `already_satisfied`. "
         "Never execute SQL yourself; execution and approval are handled by the harness."
-        " If code location must be checked, use code_graph_context with the bound workspaceRoot."
     )
     return create_deep_agent(
         name="database-change-agent",
@@ -55,7 +53,7 @@ def create_database_agent(
         ),
         skills=[USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
-        tools=[create_code_graph_context_tool(workspace_root), create_get_mysql_table_info_tool(workspace_root)],
+        tools=[create_get_mysql_table_info_tool(workspace_root)],
         backend=create_workspace_backend(
             workspace_root,
             user_skills_backend=user_skills_backend,

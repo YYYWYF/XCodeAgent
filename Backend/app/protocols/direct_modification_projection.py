@@ -7,6 +7,7 @@ from app.protocols.workflow.stream_events import (
     integration_test_check_summary,
     integration_test_checks,
 )
+from app.protocols.workflow.projection import _workspace_inspection_snapshot
 from app.services.direct_modification import direct_state_message
 
 
@@ -109,7 +110,11 @@ def public_direct_state(state: dict[str, Any]) -> dict[str, Any]:
         "workspace_scan_progress",
         "code_graph_index",
     )
-    return {key: state[key] for key in keys if key in state}
+    public_state = {key: state[key] for key in keys if key in state}
+    inspection = _workspace_inspection_snapshot(state)
+    if inspection is not None:
+        public_state["workspaceInspection"] = inspection
+    return public_state
 
 
 def direct_node_event(
@@ -188,11 +193,18 @@ def direct_node_process_step(
     if node_name == "scan_workspace_code":
         graph = update.get("workspace_snapshot_summary")
         graph = graph.get("code_graph") if isinstance(graph, dict) else {}
-        detail = str(
-            graph.get("message")
-            if isinstance(graph, dict) and graph.get("message")
-            else update.get("message") or "代码扫描完成。"
-        )
+        if isinstance(graph, dict) and graph.get("available"):
+            detail = (
+                f"代码图解析 {graph.get('filesIndexed', 0)} 个文件，"
+                f"建立 {graph.get('symbolsIndexed', 0)} 个节点和 "
+                f"{graph.get('relationsIndexed', 0)} 条关系"
+            )
+        else:
+            detail = str(
+                graph.get("message")
+                if isinstance(graph, dict) and graph.get("message")
+                else update.get("message") or "代码扫描完成。"
+            )
     workspace_scan_progress = update.get("workspace_scan_progress")
     workspace_scan_progress = (
         workspace_scan_progress
@@ -200,9 +212,8 @@ def direct_node_process_step(
         else None
     )
     workspace_inspection = (
-        update.get("workspace_snapshot_summary")
+        _workspace_inspection_snapshot(update)
         if node_name == "scan_workspace_code"
-        and isinstance(update.get("workspace_snapshot_summary"), dict)
         else None
     )
     return {

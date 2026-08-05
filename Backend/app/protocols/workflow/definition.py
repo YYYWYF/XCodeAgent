@@ -105,8 +105,8 @@ def workflow_capabilities() -> dict[str, Any]:
                     ),
                     "workspaceInspection": (
                         "Safe inspect-workspace summary containing bounded counts, detected "
-                        "stack, relative project roots and entrypoints, cache status, and the "
-                        "code-graph provider/build status plus symbol and relation counts."
+                        "stack, relative project roots and entrypoints, cache status, CRG node "
+                        "and relation distributions, symbol previews, and warnings."
                     ),
                     "workspaceInspectionProgress": (
                         "Running bounded code-review-graph progress with stage, message, and "

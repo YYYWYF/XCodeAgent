@@ -78,7 +78,7 @@ class CodeReviewGraphAdapter:
                 warnings: list[str] = []
                 for relative in source_files:
                     if not self._safe_relative(relative):
-                        warnings.append(f"ignored unsafe path: {relative[:120]}")
+                        warnings.append("ignored unsafe path")
                         continue
                     absolute = (root / relative).resolve()
                     if not self._is_inside(absolute, root) or not absolute.is_file():
@@ -96,9 +96,11 @@ class CodeReviewGraphAdapter:
                         symbols_indexed += len(nodes)
                         relations_indexed += len(edges)
                     except (OSError, PermissionError) as exc:
-                        warnings.append(f"{relative}: {str(exc)[:160]}")
+                        warnings.append(self._warning(relative, type(exc).__name__))
                     except Exception as exc:  # pragma: no cover - parser-specific failures
-                        warnings.append(f"{relative}: parser error: {str(exc)[:160]}")
+                        warnings.append(
+                            self._warning(relative, f"parser error ({type(exc).__name__})")
+                        )
                     if files_indexed % 50 == 0 or files_indexed == len(source_files):
                         self._emit(
                             callback,
@@ -117,7 +119,7 @@ class CodeReviewGraphAdapter:
                         )
                 store.set_metadata("last_build_type", "full")
                 store.set_metadata("last_updated", str(int(time.time())))
-                stats = store.get_stats()
+                summary = self._graph_summary(store, root)
             # 只有完整 DB 成功关闭后才替换正式文件，避免中断留下半张图。
             temporary_db.replace(db_path)
         finally:
@@ -136,19 +138,23 @@ class CodeReviewGraphAdapter:
                 message="正在建立调用关系并定位相关测试…",
                 files_discovered=len(source_files),
                 files_indexed=files_indexed,
-                symbols_indexed=stats.total_nodes,
-                relations_indexed=stats.total_edges,
+                symbols_indexed=summary["nodes"],
+                relations_indexed=summary["edges"],
             ),
         )
         return CodeGraphIndexResult(
             status="ready",
             provider_version=self.version(),
             build_type="full",
-            files_indexed=stats.files_count,
-            symbols_indexed=stats.total_nodes,
-            relations_indexed=stats.total_edges,
-            languages=tuple(sorted(stats.languages)),
-            warnings=tuple(warnings[:20]),
+            files_indexed=summary["files"],
+            symbols_indexed=summary["nodes"],
+            relations_indexed=summary["edges"],
+            languages=tuple(summary["languages"]),
+            nodes_by_kind=tuple(summary["nodes_by_kind"]),
+            relations_by_kind=tuple(summary["relations_by_kind"]),
+            sample_symbols=tuple(summary["sample_symbols"]),
+            warnings=tuple(warnings[:5]),
+            warning_count=len(warnings),
             duration_ms=duration_ms,
             message="代码扫描完成，已建立工作区代码索引。",
             files=tuple(source_files),
@@ -222,22 +228,28 @@ class CodeReviewGraphAdapter:
                     )
                     files_updated += 1
                 except (OSError, PermissionError) as exc:
-                    warnings.append(f"{relative}: {str(exc)[:160]}")
+                    warnings.append(self._warning(relative, type(exc).__name__))
                 except Exception as exc:  # pragma: no cover - parser-specific failures
-                    warnings.append(f"{relative}: parser error: {str(exc)[:160]}")
+                    warnings.append(
+                        self._warning(relative, f"parser error ({type(exc).__name__})")
+                    )
             store.set_metadata("last_build_type", "incremental")
             store.set_metadata("last_updated", str(int(time.time())))
-            stats = store.get_stats()
+            summary = self._graph_summary(store, root)
         duration_ms = int((time.perf_counter() - started) * 1_000)
         return CodeGraphIndexResult(
             status="ready",
             provider_version=self.version(),
             build_type="incremental",
-            files_indexed=stats.files_count,
-            symbols_indexed=stats.total_nodes,
-            relations_indexed=stats.total_edges,
-            languages=tuple(sorted(stats.languages)),
-            warnings=tuple(warnings[:20]),
+            files_indexed=summary["files"],
+            symbols_indexed=summary["nodes"],
+            relations_indexed=summary["edges"],
+            languages=tuple(summary["languages"]),
+            nodes_by_kind=tuple(summary["nodes_by_kind"]),
+            relations_by_kind=tuple(summary["relations_by_kind"]),
+            sample_symbols=tuple(summary["sample_symbols"]),
+            warnings=tuple(warnings[:5]),
+            warning_count=len(warnings),
             duration_ms=duration_ms,
             message=(
                 f"代码索引已增量更新，重新解析 {files_updated} 个文件。"
@@ -376,13 +388,70 @@ class CodeReviewGraphAdapter:
 
         GraphStore, _, _ = self._load_imports()
         with GraphStore(db_path) as store:
-            stats = store.get_stats()
+            # 固定 cache 布局为 <workspace>/.xcodeagent/cache/code-graph/v1；
+            # 这里只用于把样例节点转换为 workspace-relative path。
+            workspace_root = db_path.parents[4] if len(db_path.parents) > 4 else db_path.parent
+            return self._graph_summary(store, workspace_root)
+
+    def _graph_summary(self, store: Any, workspace_root: Path) -> dict[str, Any]:
+        """从 CRG 公共 API 提取有界统计和代表性符号。"""
+
+        stats = store.get_stats()
+        samples: list[dict[str, Any]] = []
+        samples_per_file: dict[str, int] = {}
+        try:
+            candidates = store.get_nodes_by_size(min_lines=0, limit=64)
+        except Exception:
+            candidates = []
+        for node in candidates:
+            if str(self._value(node, "kind") or "").casefold() == "file":
+                continue
+            preview = self._node_dict(node, workspace_root)
+            path = str(preview.get("path") or "")
+            if not path or samples_per_file.get(path, 0) >= 2:
+                continue
+            samples.append(
+                {
+                    "name": preview.get("name", ""),
+                    "kind": preview.get("kind", ""),
+                    "language": preview.get("language", ""),
+                    "path": path,
+                    "lineStart": preview.get("lineStart", 0),
+                    "lineEnd": preview.get("lineEnd", 0),
+                }
+            )
+            samples_per_file[path] = samples_per_file.get(path, 0) + 1
+            if len(samples) >= 8:
+                break
         return {
-            "files": stats.files_count,
-            "nodes": stats.total_nodes,
-            "edges": stats.total_edges,
-            "languages": sorted(stats.languages),
+            "files": max(0, int(stats.files_count)),
+            "nodes": max(0, int(stats.total_nodes)),
+            "edges": max(0, int(stats.total_edges)),
+            "languages": sorted(str(item)[:40] for item in stats.languages),
+            "nodes_by_kind": self._distributions(stats.nodes_by_kind),
+            "relations_by_kind": self._distributions(stats.edges_by_kind),
+            "sample_symbols": samples,
         }
+
+    @staticmethod
+    def _distributions(value: Any) -> list[dict[str, Any]]:
+        """把 CRG 类型计数排序并裁剪为前端可展示的最多十二类。"""
+
+        if not isinstance(value, dict):
+            return []
+        items = [
+            {"kind": str(kind)[:80], "count": max(0, int(count))}
+            for kind, count in value.items()
+            if str(kind).strip()
+        ]
+        return sorted(items, key=lambda item: (-item["count"], item["kind"]))[:12]
+
+    @staticmethod
+    def _warning(path: str, detail: str) -> str:
+        """生成不包含宿主机路径和异常正文的脱敏扫描 warning。"""
+
+        safe_path = path.replace("\\", "/")[:200]
+        return f"{safe_path}: {detail[:100]}"
 
     def _load_imports(self) -> tuple[Any, Any, Any]:
         """只导入 CRG 的 parser、GraphStore 和增量依赖查找函数。"""

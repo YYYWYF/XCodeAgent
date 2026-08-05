@@ -8,7 +8,6 @@ from app.agents.workspace_scope import (
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
-from app.tools.code_graph_context import create_code_graph_context_tool
 
 
 def create_repair_planner_agent(
@@ -36,7 +35,6 @@ def create_repair_planner_agent(
         "If the failure is not actionable with the provided evidence, return "
         "terminal_failure. "
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}"
-        " Use code_graph_context only for bounded code navigation when validating a repair scope."
     )
     return create_deep_agent(
         name="repair-planner-agent",
@@ -46,7 +44,7 @@ def create_repair_planner_agent(
         ),
         skills=[USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
-        tools=[create_code_graph_context_tool(workspace_root)],
+        tools=[],
         backend=create_workspace_backend(
             workspace_root,
             user_skills_backend=user_skills_backend,

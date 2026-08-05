@@ -1,6 +1,7 @@
 from deepagents import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 
+from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE
 from app.agents.workspace_scope import (
     create_workspace_backend,
     create_workspace_permissions,
@@ -45,9 +46,8 @@ def create_frontend_agent(
         "use edit_file to modify the existing file instead of retrying write_file "
         "with the same path. If you must create a new file, use a unique filename "
         "(e.g. append a number or timestamp). Never retry write_file with the same "
-        "path more than once. Before reading a broad directory, use the built-in "
-        "code_graph_context tool to locate relevant files and symbols; the graph is "
-        "navigation only, so read the actual source before editing."
+        "path more than once.\n\n"
+        f"{CODE_GRAPH_TASK_EXECUTION_GUIDANCE}"
     )
     execute_tool = create_execute_tool(workspace_root)
     runtime_tools = [

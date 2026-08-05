@@ -7,7 +7,6 @@ from app.agents.workspace_scope import (
 )
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
-from app.tools.code_graph_context import create_code_graph_context_tool
 
 
 def create_test_agent(
@@ -29,7 +28,6 @@ def create_test_agent(
         "guessing. Explain the supported revision request for the Main Agent. Return a concise "
         "validation report. Treat workspace filesystem write tools as unavailable "
         "unless explicitly allowed by the harness."
-        " Use code_graph_context to locate affected symbols or related tests before reading source."
     )
     return create_deep_agent(
         name="test-agent",
@@ -39,7 +37,7 @@ def create_test_agent(
         ),
         skills=[USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
-        tools=[create_code_graph_context_tool(workspace_root)],
+        tools=[],
         backend=create_workspace_backend(
             workspace_root,
             user_skills_backend=user_skills_backend,

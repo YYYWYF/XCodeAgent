@@ -51,7 +51,10 @@ export function processStepsForDisplay(
       .reverse()
       .find(
         (step) =>
-          step.nodeName === 'inspect_workspace' || step.id.startsWith('workflow:inspect_workspace')
+          step.nodeName === 'inspect_workspace' ||
+          step.nodeName === 'scan_workspace_code' ||
+          step.id.startsWith('workflow:inspect_workspace') ||
+          step.id.startsWith('direct:scan_workspace_code')
       )?.id
     displaySteps = displaySteps.map((step) =>
       step.id === workspaceStepId ? { ...step, workspaceInspection } : step
@@ -143,7 +146,9 @@ function completedWorkspaceInspection(
   const event = [...workflow.events]
     .reverse()
     .find(
-      (item) => item.nodeName === 'inspect_workspace' && item.type === 'workflow.node.completed'
+      (item) =>
+        (item.nodeName === 'inspect_workspace' || item.nodeName === 'scan_workspace_code') &&
+        item.type === 'workflow.node.completed'
     )
   const detail = event ? workflowEventDetail(event) : {}
   const stateDelta =
@@ -168,7 +173,9 @@ function completedWorkspaceInspection(
     cacheHit:
       snapshot.cacheHit ||
       eventTimeline.includes('inspect_workspace:cache_hit') ||
-      workflowTimeline(workflow).includes('inspect_workspace:cache_hit')
+      workflowTimeline(workflow).some((item) =>
+        ['inspect_workspace:cache_hit', 'scan_workspace_code:cache_hit'].includes(item)
+      )
   }
 }
 

@@ -125,11 +125,54 @@ class CodeGraphManager:
                     symbols_indexed=int(stats.get("nodes", 0)),
                     relations_indexed=int(stats.get("edges", 0)),
                     languages=tuple(str(item) for item in stats.get("languages", [])),
+                    nodes_by_kind=tuple(
+                        self._summary_distributions(
+                            stats.get("nodes_by_kind")
+                            or metadata.get("nodesByKind")
+                        )
+                    ),
+                    relations_by_kind=tuple(
+                        self._summary_distributions(
+                            stats.get("relations_by_kind")
+                            or metadata.get("relationsByKind")
+                        )
+                    ),
+                    sample_symbols=tuple(
+                        self._summary_samples(
+                            stats.get("sample_symbols")
+                            or metadata.get("sampleSymbols")
+                        )
+                    ),
                     message="代码索引缓存已就绪，本次无需重新扫描。",
+                    warnings=tuple(
+                        self._safe_warnings(
+                            metadata.get("warnings"),
+                        )
+                    ),
+                    warning_count=self._bounded_count(metadata.get("warningCount")),
                     cache_hit=True,
                     manifest_fingerprint=fingerprint,
                     files=tuple(files),
                 )
+                try:
+                    # 旧版 index.json 可能没有摘要字段；cache hit 仍可从 SQLite
+                    # 重算并补齐元数据，保证后续恢复和调试都能看到同一结构。
+                    self._write_metadata(
+                        metadata_path,
+                        {
+                            **metadata,
+                            "status": "ready",
+                            "nodesByKind": list(result.nodes_by_kind),
+                            "relationsByKind": list(result.relations_by_kind),
+                            "sampleSymbols": list(result.sample_symbols),
+                            "languages": list(result.languages),
+                            "warningCount": result.warning_count,
+                            "warnings": list(result.warnings),
+                        },
+                    )
+                except OSError:
+                    # 读取已有索引不应因为元数据补写失败而降级。
+                    pass
                 self._emit(callback, result)
                 return result
             except Exception:
@@ -375,6 +418,11 @@ class CodeGraphManager:
                 "filesIndexed": result.files_indexed,
                 "symbolsIndexed": result.symbols_indexed,
                 "relationsIndexed": result.relations_indexed,
+                "languages": list(result.languages),
+                "nodesByKind": list(result.nodes_by_kind),
+                "relationsByKind": list(result.relations_by_kind),
+                "sampleSymbols": list(result.sample_symbols),
+                "warningCount": result.warning_count,
                 "warnings": list(result.warnings),
                 "updatedAt": int(time.time()),
             },
@@ -492,6 +540,96 @@ class CodeGraphManager:
 
         payload = json.dumps(cls._file_stats(root, files), sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+    @staticmethod
+    def _summary_distributions(value: Any) -> list[dict[str, Any]]:
+        """规范化缓存或适配器返回的节点/关系分类摘要。"""
+
+        if isinstance(value, dict):
+            value = [
+                {"kind": kind, "count": count}
+                for kind, count in value.items()
+            ]
+        if not isinstance(value, list):
+            return []
+        items: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind") or "").strip()[:80]
+            if not kind:
+                continue
+            try:
+                count = max(0, min(int(item.get("count") or 0), 1_000_000))
+            except (TypeError, ValueError, OverflowError):
+                count = 0
+            items.append({"kind": kind, "count": count})
+        return sorted(items, key=lambda item: (-item["count"], item["kind"]))[:12]
+
+    @classmethod
+    def _summary_samples(cls, value: Any) -> list[dict[str, Any]]:
+        """裁剪并校验缓存中的代表性符号样例，拒绝绝对路径。"""
+
+        if not isinstance(value, list):
+            return []
+        samples: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip().replace("\\", "/")
+            if (
+                not path
+                or path.startswith("/")
+                or ":/" in path
+                or ".." in PurePosixPath(path).parts
+            ):
+                continue
+            samples.append(
+                {
+                    "name": str(item.get("name") or "")[:200],
+                    "kind": str(item.get("kind") or "")[:80],
+                    "language": str(item.get("language") or "")[:40],
+                    "path": path[:1_000],
+                    "lineStart": cls._bounded_count(item.get("lineStart")),
+                    "lineEnd": cls._bounded_count(item.get("lineEnd")),
+                }
+            )
+            if len(samples) >= 8:
+                break
+        return samples
+
+    @staticmethod
+    def _safe_warnings(value: Any) -> list[str]:
+        """裁剪索引 warning 并移除可能出现的宿主机绝对路径。"""
+
+        if not isinstance(value, list):
+            return []
+        warnings: list[str] = []
+        for item in value[:5]:
+            text = str(item or "").strip().replace("\\", "/")
+            if not text:
+                continue
+            prefix, separator, detail = text.partition(":")
+            if (
+                not prefix
+                or prefix.startswith("/")
+                or ":/" in prefix
+                or ".." in PurePosixPath(prefix).parts
+            ):
+                text = "索引 warning 已脱敏"
+            elif separator and ("/" in detail or "\\" in detail):
+                text = f"{prefix[:160]}: warning 已脱敏"
+            warnings.append(text[:240])
+        return warnings
+
+    @staticmethod
+    def _bounded_count(value: Any) -> int:
+        """把索引元数据中的计数字段安全限制为非负整数。"""
+
+        try:
+            return max(0, min(int(value or 0), 1_000_000))
+        except (TypeError, ValueError, OverflowError):
+            return 0
 
     @staticmethod
     def _emit(callback: ProgressCallback | None, value: CodeGraphProgress | CodeGraphIndexResult) -> None:

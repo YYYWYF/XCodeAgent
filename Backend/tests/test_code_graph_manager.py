@@ -25,11 +25,18 @@ class CodeGraphManagerTests(unittest.TestCase):
             first = manager.ensure_index(root, ["app.py"], revision="r1", timeout_seconds=5)
             self.assertEqual(first.status, "ready")
             self.assertEqual(first.build_type, "full")
+            self.assertGreaterEqual(len(first.nodes_by_kind), 1)
+            self.assertGreaterEqual(len(first.relations_by_kind), 1)
+            self.assertLessEqual(len(first.sample_symbols), 8)
+            self.assertTrue(all(not str(item["path"]).startswith("/") for item in first.sample_symbols))
             graph_dir = root / ".xcodeagent" / "cache" / "code-graph" / "v1"
             self.assertTrue((graph_dir / "graph.sqlite3").is_file())
             self.assertTrue((graph_dir / "index.json").is_file())
             index = json.loads((graph_dir / "index.json").read_text(encoding="utf-8"))
             self.assertEqual(index["files"], ["app.py"])
+            self.assertIn("nodesByKind", index)
+            self.assertIn("relationsByKind", index)
+            self.assertIn("warningCount", index)
 
             cache_hit = manager.ensure_index(
                 root,
@@ -38,6 +45,8 @@ class CodeGraphManagerTests(unittest.TestCase):
                 timeout_seconds=5,
             )
             self.assertEqual(cache_hit.status, "cache_hit")
+            self.assertEqual(cache_hit.nodes_by_kind, first.nodes_by_kind)
+            self.assertEqual(cache_hit.relations_by_kind, first.relations_by_kind)
 
             added = root / "auth.py"
             added.write_text("def authenticate():\n    return True\n", encoding="utf-8")
@@ -146,8 +155,18 @@ class CodeGraphManagerTests(unittest.TestCase):
                 timeout_seconds=0.001,
             )
             self.assertEqual(result.status, "indexing")
+            self.assertNotIn("filesIndexed", result.as_dict())
+            self.assertNotIn("nodesByKind", result.as_dict())
             time.sleep(0.12)
             self.assertTrue(manager._states[str(root.resolve())][1].done())
+
+    def test_cached_warnings_never_expose_host_paths(self) -> None:
+        """历史 metadata 中的异常正文也不能把宿主机路径投影到 UI。"""
+
+        manager = CodeGraphManager()
+        warnings = manager._safe_warnings(["app.py: /Users/secret/workspace/file.py"])
+        self.assertEqual(warnings, ["app.py: warning 已脱敏"])
+        self.assertNotIn("/Users", json.dumps(warnings))
 
 
 if __name__ == "__main__":

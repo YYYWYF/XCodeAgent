@@ -53,7 +53,6 @@ def _scan_workspace(state: ProjectState, *, node_name: str) -> dict[str, Any]:
         code_graph_provider=provider,
         on_progress=on_progress,
     )
-
     return {
         "phase": node_name,
         "status": "completed",
@@ -64,7 +63,7 @@ def _scan_workspace(state: ProjectState, *, node_name: str) -> dict[str, Any]:
         "workspace_snapshot_summary": _snapshot_summary(snapshot),
         "workspace_snapshot_path": snapshot_path,
         "workspace_snapshot_hash": snapshot_hash(snapshot),
-        "workspace_revision": snapshot["workspace_revision"],
+        "workspace_revision": str(snapshot.get("workspace_revision") or ""),
         "timeline": [
             f"{node_name}:cache_hit" if cache_hit else node_name
         ],
@@ -94,6 +93,11 @@ def _snapshot_summary(snapshot: dict) -> dict:
                 "symbolsIndexed",
                 "relationsIndexed",
                 "languages",
+                "nodesByKind",
+                "relationsByKind",
+                "sampleSymbols",
+                "warningCount",
+                "warnings",
                 "message",
                 "durationMs",
                 "cacheHit",

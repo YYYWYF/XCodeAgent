@@ -269,21 +269,22 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 ### `inspect_workspace`
 
-确定性、可缓存的工作区检查节点，负责在任务拆分前生成 `WorkspaceSnapshot`：
+确定性、可缓存的工作区检查节点，负责在任务拆分前生成 `WorkspaceSnapshot`，并为后续执行 Agent 准备工作区级代码图索引：
 
 - 解析当前 workspace revision，包含 Git HEAD、暂存区 diff、未暂存 diff、未跟踪文件清单、关键 lock/config 文件和 inspector schema 版本；
 - 命中 `.xcodeagent/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json` 时直接复用；
 - 未命中时用轻量扫描识别项目根、技术栈、入口文件、构建/测试命令、FastAPI 路由、Pydantic 模型、Workflow 节点、React 组件、API client、Electron IPC、AG-UI 使用点和共享契约候选；
 - 将完整 snapshot 写入 `.xcodeagent/cache/workspace-snapshots/`，Graph State 只保存 `workspace_snapshot_summary`、`workspace_snapshot_path`、`workspace_snapshot_hash` 和 `workspace_revision`；
-- 预留 `CodeGraphProvider` 扩展点。第一期默认使用空 provider，后续可接 Codebase Memory MCP、SCIP、Serena 或 tree-sitter 图索引，把图查询结果并入 `snapshot.code_graph`。
+- 只对显式用户 `workspaceRoot` 的安全源码清单内嵌调用 `code-review-graph`，在 `.xcodeagent/cache/code-graph/v1/` 维护 `graph.sqlite3` 与 `index.json`；按 revision 执行 cache hit、增量更新或全量构建，超时或失败时继续使用文件搜索。
+- `snapshot.code_graph` 只保存有界的文件、节点、关系、语言、代表性符号和脱敏 warning 统计，供 AG-UI 工作区扫描卡片展示；扫描节点不针对当前请求查询符号，也不保存 request-scoped 导航上下文。
 
-该节点不生成任务、不修改代码、不调用写工具，也不把快照写入 `ProjectPlan`。它只回答“当前工作区事实是什么”，供后续模型规划和确定性调度引用。
+该节点不生成任务、不修改业务代码，也不把快照写入 `ProjectPlan`。它只回答“当前工作区事实是什么”并准备可查询索引，供后续模型规划、确定性调度和执行 Agent 导航使用。
 
 ### `prepare_build_tasks`
 
 先由确定性服务根据已经确认并写回的 `ProjectPlan` 生成完整 `build-dag.v3` Unit DAG 骨架，再由 planning-only ChatModel 只根据当前范围的 `PageDetail`、EndpointDetail、真实数据库摘要和 `WorkspaceSnapshot` 生成可执行静态 task DAG：
 
-- 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为唯一工作区事实来源，不读取、创建、修改或删除代码文件；
+- 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为唯一工作区事实来源，不读取、创建、修改或删除代码文件，也不查询或注入 request-scoped 代码图上下文；
 - 生成稳定的 `task_id`；
 - 指定任务 owner，只允许 `database`、`backend`、`frontend`；
 - 指定任务类型，例如 `database.change`、`database.seed`、`database.verify`、`backend.code`、`backend.verify`、`frontend.code`、`frontend.verify`；
@@ -309,6 +310,8 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已�
 - `page:<pageId>` 表示页面实现范围。
 
 页面 Unit 依赖它使用的 backend endpoint Unit。database Unit 保留在全局 Unit 骨架中，但不会仅因 API Contract 声明了 `data_source_id` 就自动成为依赖；只有当前 scope 的已确认 EndpointDetail 明确指向数据库时，才动态增加 `database:<dataSourceId> → backend:endpoint:<apiContractId>:<endpointId>`，从而形成 `database → endpoint → page`。mock、静态或第三方接口只形成 `endpoint → page`。该实现直接复用既有 `database-context.v1.gaps/task_intents`、database task 归一化和审批逻辑，不新增另一套数据库任务生成器。
+
+代码图不参与 DAG 任务生成。进入 `build` 后，Frontend Agent 与承载 backend task 的 DataSource Agent 才按 `task_id` 使用绑定当前 `workspaceRoot` 的 `code_graph_context`：已有目标文件优先查询 `file_summary`，未知业务符号优先查询 `search_symbols`，命中后再按需查询引用、影响和相关测试。只有 `status=ready` 且 `matches/relations/relatedTests/impactedFiles` 至少一项非空的结果才作为导航；空结果、异常或不可用状态会立即降级为任务 `target_files/allowed_paths/change_scope` 内的文件搜索和真实源码读取，不会令任务失败或扩大写入授权。代码图始终不是源码事实，修改前必须读取当前文件。
 
 任务规划模型输入中的 `database_planning_context` 只来自前置 `inspect_database_context` 节点：当当前 endpoint scope 或页面/API scope 内存在 `EndpointDetail.data_origin` 明确指向数据库的接口时，前置节点已经调用 `get_mysql_table_info` 读取真实库表事实，并生成 `schema_version=database-context.v1` 的上下文；`prepare_build_tasks` 再把该上下文与 EndpointDetail、API Contract 一起放入 `TaskPreparationContext.executable_details`。模型必须把 `actual_schema` 作为唯一真实数据库结构来源，把结构化操作编译出的 `resolution_items/gaps/task_intents` 作为拆分依据：只有真实 Schema Diff 仍存在的 `database_change` gap 才能生成 database task，且任务必须携带对应 `task_intent.database_scope`；`backend_adaptation` 只能生成 backend task；`needs_user_confirmation` 不得被转成半截 build task。外部 API scope 不携带数据库上下文，也不得生成 database Unit 或 database task。
 

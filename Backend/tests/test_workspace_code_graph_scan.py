@@ -7,7 +7,11 @@ from unittest.mock import patch
 
 from app.graph.direct_modification_workflow import direct_next_node_name
 from app.graph.nodes.workspace_inspection import inspect_workspace as inspect_node
-from app.services.workspace_inspector import inspect_workspace, source_files_for_code_graph
+from app.services.workspace_inspector import (
+    _entrypoints,
+    inspect_workspace,
+    source_files_for_code_graph,
+)
 
 
 class WorkspaceCodeGraphScanTests(unittest.TestCase):
@@ -72,6 +76,7 @@ class WorkspaceCodeGraphScanTests(unittest.TestCase):
             result = inspect_node({"project_id": "without-workspace"})
         manager_factory.assert_not_called()
         self.assertEqual(result["workspace_snapshot_summary"]["code_graph"]["provider"], "none")
+        self.assertNotIn("workspace_code_navigation_context", result)
 
     def test_agent_repository_root_is_never_accepted_by_code_graph(self) -> None:
         """代码图管理器拒绝把 XCodeAgent 自己的工程目录当作用户工作区。"""
@@ -96,6 +101,28 @@ class WorkspaceCodeGraphScanTests(unittest.TestCase):
             "execute_frontend",
         )
 
+    def test_entrypoints_include_user_frontend_and_spring_application_files(self) -> None:
+        """确定性入口识别覆盖用户前端和 Spring Boot 主类。"""
+
+        entries = _entrypoints(
+            [
+                "frontend/src/main.tsx",
+                "frontend/src/routes/index.tsx",
+                "backend/src/main/java/com/example/Application.java",
+            ]
+        )
+        self.assertEqual(
+            {item["path"] for item in entries},
+            {
+                "frontend/src/main.tsx",
+                "frontend/src/routes/index.tsx",
+                "backend/src/main/java/com/example/Application.java",
+            },
+        )
+        self.assertEqual(
+            next(item["kind"] for item in entries if item["path"].endswith("Application.java")),
+            "spring_application",
+        )
 
 if __name__ == "__main__":
     unittest.main()

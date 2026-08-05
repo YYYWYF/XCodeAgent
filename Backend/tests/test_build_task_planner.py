@@ -63,6 +63,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         self.assertIn("same Unit only", prompt)
         self.assertIn("do not copy its task ids into dependencies", prompt)
+        self.assertNotIn("WorkspaceNavigationContext", prompt)
 
     def test_model_usage_accepts_null_provider_token_usage(self) -> None:
         """Provider 将 token_usage 返回为 null 时，诊断日志不得中断任务规划。"""

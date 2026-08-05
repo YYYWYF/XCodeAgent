@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -172,7 +173,7 @@ def _workflow_artifacts(value: dict[str, Any]) -> dict[str, Any]:
 def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
     """在状态发送到前端前移除内部 JSON 工件路径。"""
 
-    return {
+    public_state = {
         key: item
         for key, item in value.items()
         if key
@@ -183,6 +184,10 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
+    inspection = _workspace_inspection_snapshot(value)
+    if inspection is not None:
+        public_state["workspaceInspection"] = inspection
+    return public_state
 
 
 def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
@@ -287,13 +292,21 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
         if workspace_inspection is None:
             return {"message": "工作区代码扫描已完成", "data": {}}
         manifest = workspace_inspection["fileManifest"]
+        graph = workspace_inspection["codeGraph"]
+        message = (
+            f"已索引 {manifest['totalFiles']} 个文件，"
+            f"其中源文件 {manifest['sourceFiles']} 个，"
+            f"识别 {len(workspace_inspection['techStack'])} 项技术栈和 "
+            f"{len(workspace_inspection['entrypoints'])} 个入口"
+        )
+        if graph.get("available"):
+            message += (
+                f"，代码图解析 {graph.get('filesIndexed', 0)} 个文件，"
+                f"建立 {graph.get('symbolsIndexed', 0)} 个节点和 "
+                f"{graph.get('relationsIndexed', 0)} 条关系"
+            )
         return {
-            "message": (
-                f"已索引 {manifest['totalFiles']} 个文件，"
-                f"其中源文件 {manifest['sourceFiles']} 个，"
-                f"识别 {len(workspace_inspection['techStack'])} 项技术栈和 "
-                f"{len(workspace_inspection['entrypoints'])} 个入口"
-            ),
+            "message": message,
             "data": {"workspaceInspection": workspace_inspection},
         }
     if node_name == "inspect_database_context":
@@ -407,9 +420,39 @@ def _workspace_inspection_snapshot(update: dict[str, Any]) -> dict[str, Any] | N
     manifest = manifest if isinstance(manifest, dict) else {}
     code_graph = summary.get("code_graph")
     code_graph = code_graph if isinstance(code_graph, dict) else {}
+    code_graph_available = bool(code_graph.get("available"))
     timeline = update.get("timeline")
     timeline = timeline if isinstance(timeline, list) else []
-    return {
+    graph_payload: dict[str, Any] = {
+        "provider": str(code_graph.get("provider") or "none")[:80],
+        "providerVersion": str(code_graph.get("providerVersion") or "")[:40],
+        "status": str(code_graph.get("status") or "unavailable")[:40],
+        "available": code_graph_available,
+        "buildType": str(code_graph.get("buildType") or "")[:40],
+        "languages": _bounded_string_list(code_graph.get("languages"), limit=20),
+        "message": str(code_graph.get("message") or "")[:300],
+        "cacheHit": bool(code_graph.get("cacheHit")),
+    }
+    # 索引未完成或失败时不投影零值统计，避免 UI 把降级状态误读成空图。
+    if code_graph_available:
+        graph_payload.update(
+            {
+                "filesIndexed": _bounded_non_negative_int(code_graph.get("filesIndexed")),
+                "symbolsIndexed": _bounded_non_negative_int(code_graph.get("symbolsIndexed")),
+                "relationsIndexed": _bounded_non_negative_int(
+                    code_graph.get("relationsIndexed")
+                ),
+                "nodesByKind": _safe_graph_distributions(code_graph.get("nodesByKind")),
+                "relationsByKind": _safe_graph_distributions(
+                    code_graph.get("relationsByKind")
+                ),
+                "sampleSymbols": _safe_graph_symbols(code_graph.get("sampleSymbols")),
+                "warningCount": _bounded_non_negative_int(code_graph.get("warningCount")),
+                "warnings": _bounded_string_list(code_graph.get("warnings"), limit=5),
+                "durationMs": _bounded_non_negative_int(code_graph.get("durationMs")),
+            }
+        )
+    snapshot = {
         "schemaVersion": str(summary.get("schema_version") or "")[:80],
         "revision": str(
             summary.get("workspace_revision") or update.get("workspace_revision") or ""
@@ -423,21 +466,90 @@ def _workspace_inspection_snapshot(update: dict[str, Any]) -> dict[str, Any] | N
         "techStack": _bounded_string_list(summary.get("tech_stack"), limit=40),
         "projectRoots": _safe_path_items(summary.get("project_roots"), limit=40),
         "entrypoints": _safe_path_items(summary.get("entrypoints"), limit=80),
-        "codeGraph": {
-            "provider": str(code_graph.get("provider") or "none")[:80],
-            "providerVersion": str(code_graph.get("providerVersion") or "")[:40],
-            "status": str(code_graph.get("status") or "unavailable")[:40],
-            "available": bool(code_graph.get("available")),
-            "buildType": str(code_graph.get("buildType") or "")[:40],
-            "filesIndexed": _bounded_non_negative_int(code_graph.get("filesIndexed")),
-            "symbolsIndexed": _bounded_non_negative_int(code_graph.get("symbolsIndexed")),
-            "relationsIndexed": _bounded_non_negative_int(code_graph.get("relationsIndexed")),
-            "languages": _bounded_string_list(code_graph.get("languages"), limit=20),
-            "message": str(code_graph.get("message") or "")[:300],
-            "durationMs": _bounded_non_negative_int(code_graph.get("durationMs")),
-            "cacheHit": bool(code_graph.get("cacheHit")),
-        },
+        "codeGraph": graph_payload,
     }
+    return _bound_workspace_inspection_extension(snapshot)
+
+
+def _bound_workspace_inspection_extension(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """把代码图展示扩展控制在约十二 KB 内。"""
+
+    def extension_size() -> int:
+        """计算当前代码图扩展的 UTF-8 字符近似长度。"""
+
+        return len(
+            json.dumps(
+                {"codeGraph": snapshot.get("codeGraph")},
+                ensure_ascii=False,
+            )
+        )
+
+    graph = snapshot.get("codeGraph")
+    while extension_size() > 12_000:
+        if isinstance(graph, dict) and graph.get("sampleSymbols"):
+            graph["sampleSymbols"] = graph["sampleSymbols"][:-1]
+        elif isinstance(graph, dict) and graph.get("relationsByKind"):
+            graph["relationsByKind"] = graph["relationsByKind"][:-2]
+        elif isinstance(graph, dict) and graph.get("nodesByKind"):
+            graph["nodesByKind"] = graph["nodesByKind"][:-2]
+        else:
+            break
+    return snapshot
+
+
+def _safe_graph_distributions(value: Any) -> list[dict[str, Any]]:
+    """裁剪节点或关系分类，防止第三方统计无界进入 AG-UI。"""
+
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for raw_item in value[:12]:
+        if not isinstance(raw_item, dict):
+            continue
+        kind = str(raw_item.get("kind") or "").strip()[:80]
+        if not kind:
+            continue
+        items.append(
+            {
+                "kind": kind,
+                "count": _bounded_non_negative_int(raw_item.get("count")),
+            }
+        )
+    return items
+
+
+def _safe_graph_symbols(value: Any) -> list[dict[str, Any]]:
+    """裁剪代表性符号并只保留工作区相对路径和行号。"""
+
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for raw_item in value[:8]:
+        if not isinstance(raw_item, dict):
+            continue
+        path = _safe_relative_path(raw_item.get("path"))
+        if not path:
+            continue
+        items.append(
+            {
+                "name": str(raw_item.get("name") or "")[:200],
+                "kind": str(raw_item.get("kind") or "")[:80],
+                "language": str(raw_item.get("language") or "")[:40],
+                "path": path,
+                "lineStart": _bounded_non_negative_int(raw_item.get("lineStart")),
+                "lineEnd": _bounded_non_negative_int(raw_item.get("lineEnd")),
+            }
+        )
+    return items
+
+
+def _safe_relative_path(value: Any) -> str:
+    """只接受工作区相对路径，拒绝绝对路径和路径穿越。"""
+
+    path = str(value or "").strip().replace("\\", "/")
+    if not path or path.startswith("/") or ":/" in path or ".." in Path(path).parts:
+        return ""
+    return path[:1_000]
 
 
 def _bounded_non_negative_int(value: Any) -> int:

@@ -50,16 +50,10 @@ def _task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
     build_context: dict[str, Any] | None = None,
-    code_graph_context: dict[str, Any] | None = None,
 ) -> str:
     """组合全局计划与定向详情上下文，约束模型仅返回当前 Unit 的任务候选。"""
     snapshot_text = json.dumps(
         _compact_workspace_snapshot(workspace_snapshot),
-        ensure_ascii=False,
-        indent=2,
-    )
-    graph_context_text = json.dumps(
-        code_graph_context or {},
         ensure_ascii=False,
         indent=2,
     )
@@ -254,7 +248,6 @@ def _task_preparation_prompt(
         "workspace_analysis must summarize the directories, entry files, stack, and "
         "conventions used from the WorkspaceSnapshot.\n\n"
         f"WorkspaceSnapshot (bounded planning projection):\n{snapshot_text}\n\n"
-        f"WorkspaceNavigationContext (code-review-graph, bounded):\n{graph_context_text}\n\n"
         f"TargetBuildContext:\n{json.dumps(build_context or {}, ensure_ascii=False, indent=2)}\n\n"
         f"TaskPreparationContext:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
     )
@@ -329,7 +322,6 @@ def _invoke_live_main_agent(
     workspace: str | None = None,
     workspace_snapshot: dict[str, Any] | None = None,
     build_context: dict[str, Any] | None = None,
-    code_graph_context: dict[str, Any] | None = None,
     settings: Settings | None = None,
 ) -> str:
     """调用无工具 ChatModel 执行只读的构建任务候选规划。"""
@@ -339,7 +331,6 @@ def _invoke_live_main_agent(
         project_plan,
         workspace_snapshot,
         build_context,
-        code_graph_context,
     )
     result = create_chat_model(active_settings).bind(
         max_tokens=active_settings.default_max_tokens
@@ -360,7 +351,6 @@ def prepare_build_tasks_with_main_agent(
     workspace: str | None = None,
     workspace_snapshot: dict[str, Any] | None = None,
     build_context: dict[str, Any] | None = None,
-    code_graph_context: dict[str, Any] | None = None,
     build_task_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """通过直接模型边界生成当前范围的可执行 Build DAG 候选任务。"""
@@ -371,7 +361,6 @@ def prepare_build_tasks_with_main_agent(
         workspace=workspace,
         workspace_snapshot=workspace_snapshot,
         build_context=build_context,
-        code_graph_context=code_graph_context,
         settings=settings,
     )
     preparation_source = "direct_chat_model"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE
 from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
@@ -102,6 +103,8 @@ def _frontend_generation_prompt(
         f"to virtual root '/'. Do NOT write to `Frontend/src/`, bare `src/`, or `/app/"
         f"frontend/` — those are wrong for this workspace. Before writing, use list_files "
         f"on `/{frontend_root}/src/pages/` to confirm the scaffolded page directories.\n\n"
+        + CODE_GRAPH_TASK_EXECUTION_GUIDANCE
+        + "\n\n"
         + _page_template_instruction(page_template)
         + data_source_instruction
         + "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"

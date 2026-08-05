@@ -57,8 +57,12 @@ class CodeGraphIndexResult:
     symbols_indexed: int = 0
     relations_indexed: int = 0
     languages: tuple[str, ...] = ()
+    nodes_by_kind: tuple[dict[str, Any], ...] = ()
+    relations_by_kind: tuple[dict[str, Any], ...] = ()
+    sample_symbols: tuple[dict[str, Any], ...] = ()
     message: str = ""
     warnings: tuple[str, ...] = ()
+    warning_count: int = 0
     duration_ms: int = 0
     cache_hit: bool = False
     manifest_fingerprint: str = ""
@@ -74,23 +78,35 @@ class CodeGraphIndexResult:
     def as_dict(self) -> dict[str, Any]:
         """把索引结果转换为前端和工作流状态共用的安全结构。"""
 
-        return {
+        payload: dict[str, Any] = {
             "provider": self.provider,
             "providerVersion": self.provider_version,
             "status": self.status,
             "available": self.available,
             "buildType": self.build_type,
             "workspaceRevision": self.workspace_revision,
-            "filesIndexed": self.files_indexed,
-            "symbolsIndexed": self.symbols_indexed,
-            "relationsIndexed": self.relations_indexed,
-            "languages": list(self.languages),
             "message": self.message,
-            "warnings": list(self.warnings),
-            "durationMs": self.duration_ms,
+            "warningCount": max(self.warning_count, len(self.warnings)),
+            "warnings": list(self.warnings[:5]),
             "cacheHit": self.cache_hit,
             "progress": self.progress.as_dict() if self.progress else None,
         }
+        # 未完成或降级结果不携带零值图统计，避免 UI 把文件搜索 fallback
+        # 误显示成一张已经建立但恰好为空的代码图。
+        if self.available:
+            payload.update(
+                {
+                    "filesIndexed": self.files_indexed,
+                    "symbolsIndexed": self.symbols_indexed,
+                    "relationsIndexed": self.relations_indexed,
+                    "languages": list(self.languages),
+                    "nodesByKind": [dict(item) for item in self.nodes_by_kind[:12]],
+                    "relationsByKind": [dict(item) for item in self.relations_by_kind[:12]],
+                    "sampleSymbols": [dict(item) for item in self.sample_symbols[:8]],
+                    "durationMs": self.duration_ms,
+                }
+            )
+        return payload
 
 
 @dataclass(frozen=True)

@@ -256,6 +256,20 @@ export type WorkspaceInspectionPathItem = {
   kind: string
 }
 
+export type CodeGraphDistribution = {
+  kind: string
+  count: number
+}
+
+export type CodeGraphSymbolPreview = {
+  name: string
+  kind: string
+  language: string
+  path: string
+  lineStart: number
+  lineEnd: number
+}
+
 export type WorkspaceInspectionSnapshot = {
   schemaVersion: string
   revision: string
@@ -278,6 +292,11 @@ export type WorkspaceInspectionSnapshot = {
     symbolsIndexed?: number
     relationsIndexed?: number
     languages?: string[]
+    nodesByKind?: CodeGraphDistribution[]
+    relationsByKind?: CodeGraphDistribution[]
+    sampleSymbols?: CodeGraphSymbolPreview[]
+    warningCount?: number
+    warnings?: string[]
     message?: string
     durationMs?: number
     cacheHit?: boolean
@@ -614,15 +633,53 @@ export function readWorkspaceInspectionSnapshot(
       status: boundedString(codeGraph.status, 40) || undefined,
       available: codeGraph.available === true,
       buildType: boundedString(codeGraph.buildType, 40) || undefined,
-      filesIndexed: nonNegativeInteger(codeGraph.filesIndexed),
-      symbolsIndexed: nonNegativeInteger(codeGraph.symbolsIndexed),
-      relationsIndexed: nonNegativeInteger(codeGraph.relationsIndexed),
+      filesIndexed: optionalNonNegativeInteger(codeGraph.filesIndexed),
+      symbolsIndexed: optionalNonNegativeInteger(codeGraph.symbolsIndexed),
+      relationsIndexed: optionalNonNegativeInteger(codeGraph.relationsIndexed),
       languages: boundedStringList(codeGraph.languages, 20, 40),
+      nodesByKind: readCodeGraphDistributions(codeGraph.nodesByKind ?? codeGraph.nodes_by_kind),
+      relationsByKind: readCodeGraphDistributions(
+        codeGraph.relationsByKind ?? codeGraph.relations_by_kind
+      ),
+      sampleSymbols: readCodeGraphSymbols(codeGraph.sampleSymbols ?? codeGraph.sample_symbols),
+      warningCount: optionalNonNegativeInteger(codeGraph.warningCount ?? codeGraph.warning_count),
+      warnings: boundedStringList(codeGraph.warnings, 5, 240),
       message: boundedString(codeGraph.message, 300) || undefined,
-      durationMs: nonNegativeInteger(codeGraph.durationMs),
+      durationMs: optionalNonNegativeInteger(codeGraph.durationMs),
       cacheHit: codeGraph.cacheHit === true
     }
   }
+}
+
+/** 解析 CRG 节点或关系的分类统计，并限制展示条数。 */
+function readCodeGraphDistributions(value: unknown): CodeGraphDistribution[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 12).flatMap((item) => {
+    const candidate = objectValue(item)
+    const kind = boundedString(candidate.kind, 80)
+    if (!kind) return []
+    return [{ kind, count: nonNegativeInteger(candidate.count) }]
+  })
+}
+
+/** 解析代表性符号预览，只保留相对路径和行号。 */
+function readCodeGraphSymbols(value: unknown): CodeGraphSymbolPreview[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 8).flatMap((item) => {
+    const candidate = objectValue(item)
+    const path = readWorkspaceRelativePath(candidate.path)
+    if (!path) return []
+    return [
+      {
+        name: boundedString(candidate.name, 200),
+        kind: boundedString(candidate.kind, 80),
+        language: boundedString(candidate.language, 40),
+        path,
+        lineStart: nonNegativeInteger(candidate.lineStart ?? candidate.line_start),
+        lineEnd: nonNegativeInteger(candidate.lineEnd ?? candidate.line_end)
+      }
+    ]
+  })
 }
 
 /** 仅接受工作区相对路径，防止历史或未知事件把宿主机路径带入界面。 */
@@ -631,15 +688,8 @@ function readWorkspacePathItems(value: unknown, limit: number): WorkspaceInspect
   const items: WorkspaceInspectionPathItem[] = []
   for (const item of value) {
     const candidate = objectValue(item)
-    const path = boundedString(candidate.path, 1_000).replaceAll('\\', '/')
-    if (
-      !path ||
-      path.startsWith('/') ||
-      /^[a-z]:\//i.test(path) ||
-      path.split('/').includes('..')
-    ) {
-      continue
-    }
+    const path = readWorkspaceRelativePath(candidate.path)
+    if (!path) continue
     items.push({
       path,
       kind: boundedString(candidate.kind, 80) || 'unknown'
@@ -647,6 +697,15 @@ function readWorkspacePathItems(value: unknown, limit: number): WorkspaceInspect
     if (items.length >= limit) break
   }
   return items
+}
+
+/** 仅接受工作区相对路径，过滤绝对路径、盘符路径和路径穿越。 */
+function readWorkspaceRelativePath(value: unknown): string {
+  const path = boundedString(value, 1_000).replaceAll('\\', '/')
+  if (!path || path.startsWith('/') || /^[a-z]:\//i.test(path) || path.split('/').includes('..')) {
+    return ''
+  }
+  return path
 }
 
 /** 解析 DAG 生成快照，仅保留前端展示所需的受限结构。 */
@@ -1091,6 +1150,13 @@ function nonNegativeInteger(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.min(1_000_000, Math.max(0, Math.trunc(value)))
     : 0
+}
+
+/** 保留缺失字段，避免把未完成索引伪装成零值统计。 */
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(1_000_000, Math.max(0, Math.trunc(value)))
+    : undefined
 }
 
 function messageContentToText(content: Message['content'] | undefined): string {

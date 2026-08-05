@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE
 from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
@@ -55,6 +56,7 @@ def _data_source_generation_prompt(
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n"
         "Treat every allowed_paths entry as relative to virtual root '/'. For example, "
         "app/backend/** means /app/backend/** in filesystem tool calls.\n\n"
+        f"{CODE_GRAPH_TASK_EXECUTION_GUIDANCE}\n\n"
         "Return one final JSON object with `task_results`, containing exactly one result per "
         "approved task. Each result must include `task_id`, `status` (`completed`, "
         "`already_satisfied`, or `failed`), and `summary`. Use `already_satisfied` only when "

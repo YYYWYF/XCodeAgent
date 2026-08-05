@@ -13,7 +13,7 @@ from typing import Any, Protocol
 from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
 
-INSPECTOR_SCHEMA_VERSION = "1.1.0"
+INSPECTOR_SCHEMA_VERSION = "1.2.0"
 MAX_FILE_BYTES = 256_000
 MAX_FILES = 4_000
 SENSITIVE_FILE_NAMES_CASEFOLD = {name.casefold() for name in SENSITIVE_FILE_NAMES}
@@ -442,6 +442,8 @@ def _tech_stack(
 
 
 def _entrypoints(files: list[str]) -> list[dict[str, str]]:
+    """识别前端、后端和 Spring Boot 的确定性工程入口。"""
+
     candidates = {
         "Backend/app/main.py": "backend_api",
         "Backend/app/graph/workflow.py": "workflow_graph",
@@ -451,12 +453,27 @@ def _entrypoints(files: list[str]) -> list[dict[str, str]]:
         "Frontend/src/renderer/src/main.tsx": "frontend_renderer",
         "Frontend/src/renderer/src/App.tsx": "frontend_app",
         "Frontend/vite.config.ts": "frontend_vite",
+        "frontend/src/index.tsx": "frontend_renderer",
+        "frontend/src/main.tsx": "frontend_renderer",
+        "frontend/src/App.tsx": "frontend_app",
+        "frontend/src/routes/index.tsx": "frontend_routes",
     }
-    return [
+    entries = [
         {"path": path, "kind": kind}
         for path, kind in candidates.items()
         if path in files
     ]
+    entries.extend(
+        {
+            "path": path,
+            "kind": "spring_application",
+        }
+        for path in sorted(files)
+        if path.endswith("/Application.java")
+        and path.startswith(("backend/src/main/java/", "Backend/src/main/java/"))
+        and path not in {item["path"] for item in entries}
+    )
+    return entries
 
 
 def _build_commands(

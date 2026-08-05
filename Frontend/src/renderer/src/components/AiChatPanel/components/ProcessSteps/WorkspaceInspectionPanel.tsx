@@ -8,6 +8,8 @@ import {
 import { Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type {
+  CodeGraphDistribution,
+  CodeGraphSymbolPreview,
   WorkspaceInspectionPathItem,
   WorkspaceInspectionSnapshot
 } from '../../../../service/agUiAgent'
@@ -37,12 +39,20 @@ export default function WorkspaceInspectionPanel({ snapshot }: Props): ReactElem
           : graph.available
             ? 'GRAPH READY'
             : 'FILE SEARCH FALLBACK'
+  const statusParts = [
+    graphStatusLabel,
+    graph.providerVersion ? `CRG ${graph.providerVersion}` : undefined,
+    graph.buildType && graph.buildType !== 'cache_hit'
+      ? graph.buildType.replaceAll('_', ' ').toUpperCase()
+      : undefined,
+    graph.available && graph.durationMs ? `${(graph.durationMs / 1_000).toFixed(1)}s` : undefined
+  ].filter(Boolean)
   const metrics = [
-    { label: '索引文件', value: snapshot.fileManifest.totalFiles },
-    { label: '源文件', value: snapshot.fileManifest.sourceFiles },
-    { label: '项目根', value: snapshot.projectRoots.length },
-    { label: '图符号', value: graph.symbolsIndexed ?? 0 },
-    { label: '图关系', value: graph.relationsIndexed ?? 0 }
+    { label: '工作区文件', value: snapshot.fileManifest.totalFiles },
+    { label: '可识别源码', value: snapshot.fileManifest.sourceFiles },
+    { label: '图解析文件', value: graph.available ? graph.filesIndexed : undefined },
+    { label: '图节点', value: graph.available ? graph.symbolsIndexed : undefined },
+    { label: '图关系', value: graph.available ? graph.relationsIndexed : undefined }
   ]
 
   return (
@@ -61,7 +71,7 @@ export default function WorkspaceInspectionPanel({ snapshot }: Props): ReactElem
         </div>
         <div className={cx('workspace-inspection-status')}>
           <span className={cx('workspace-inspection-status-dot')} aria-hidden="true" />
-          <span>{graphStatusLabel}</span>
+          <span>{statusParts.join(' · ')}</span>
           <code>REV {revision}</code>
         </div>
       </header>
@@ -70,7 +80,7 @@ export default function WorkspaceInspectionPanel({ snapshot }: Props): ReactElem
         {metrics.map((metric, index) => (
           <div className={cx('workspace-inspection-metric')} key={metric.label}>
             <small>{String(index + 1).padStart(2, '0')}</small>
-            <strong>{metric.value.toLocaleString()}</strong>
+            <strong>{metric.value === undefined ? '—' : metric.value.toLocaleString()}</strong>
             <span>{metric.label}</span>
           </div>
         ))}
@@ -94,10 +104,12 @@ export default function WorkspaceInspectionPanel({ snapshot }: Props): ReactElem
         </section>
 
         <section className={cx('workspace-inspection-block', 'entrypoints')}>
-          <BlockTitle icon={<RadarChartOutlined />} title="入口定位" />
+          <BlockTitle icon={<RadarChartOutlined />} title="工程入口" />
           <PathList emptyText="未识别到已知入口文件" items={snapshot.entrypoints} />
         </section>
       </div>
+
+      <CodeGraphSummary graph={graph} />
 
       <footer className={cx('workspace-inspection-signals')}>
         <InspectionSignal
@@ -122,6 +134,106 @@ export default function WorkspaceInspectionPanel({ snapshot }: Props): ReactElem
         />
       </footer>
     </section>
+  )
+}
+
+/** 展示 CRG 的分类统计、代表性符号和脱敏 warning。 */
+function CodeGraphSummary({
+  graph
+}: {
+  graph: WorkspaceInspectionSnapshot['codeGraph']
+}): ReactElement {
+  const available = graph.available
+  const nodes = graph.nodesByKind || []
+  const relations = graph.relationsByKind || []
+  const samples = graph.sampleSymbols || []
+  const warnings = graph.warnings || []
+  return (
+    <section className={cx('workspace-inspection-accordion')}>
+      <details open={available}>
+        <summary>
+          <span className={cx('workspace-inspection-accordion-title')}>
+            <RadarChartOutlined />
+            <Text strong>代码图摘要</Text>
+          </span>
+          <span className={cx('workspace-inspection-accordion-meta')}>
+            {available ? `${nodes.length + relations.length} 类统计` : '文件搜索降级'}
+          </span>
+        </summary>
+        {available ? (
+          <div className={cx('workspace-inspection-graph-summary')}>
+            <div className={cx('workspace-inspection-summary-column')}>
+              <SummaryHeading title="语言" />
+              <div className={cx('workspace-inspection-tags')}>
+                {(graph.languages || []).length > 0 ? (
+                  (graph.languages || []).map((language) => <span key={language}>{language}</span>)
+                ) : (
+                  <Text type="secondary">未返回语言统计</Text>
+                )}
+              </div>
+              <SummaryHeading title="节点构成" />
+              <DistributionList items={nodes} />
+            </div>
+            <div className={cx('workspace-inspection-summary-column')}>
+              <SummaryHeading title="关系构成" />
+              <DistributionList items={relations} />
+              <SummaryHeading title="代表性符号" />
+              <SymbolPreviewList items={samples} />
+            </div>
+            {graph.warningCount || warnings.length > 0 ? (
+              <div className={cx('workspace-inspection-summary-warning')}>
+                <WarningOutlined />
+                <span>
+                  解析 warning {graph.warningCount || warnings.length} 条
+                  {warnings.length > 0 ? `：${warnings.join('；')}` : ''}
+                </span>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <Text type="secondary">
+            {graph.message || '代码图暂不可用，Agent 将继续使用文件搜索。'}
+          </Text>
+        )}
+      </details>
+    </section>
+  )
+}
+
+/** 渲染摘要分区的小标题。 */
+function SummaryHeading({ title }: { title: string }): ReactElement {
+  return <Text className={cx('workspace-inspection-summary-heading')}>{title}</Text>
+}
+
+/** 渲染节点或关系分类统计。 */
+function DistributionList({ items }: { items: CodeGraphDistribution[] }): ReactElement {
+  if (items.length === 0) return <Text type="secondary">暂无分类统计</Text>
+  return (
+    <div className={cx('workspace-inspection-distributions')}>
+      {items.map((item) => (
+        <span key={item.kind}>
+          <code>{item.kind}</code>
+          <strong>{item.count.toLocaleString()}</strong>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** 渲染代表性符号的相对路径、类型和行号。 */
+function SymbolPreviewList({ items }: { items: CodeGraphSymbolPreview[] }): ReactElement {
+  if (items.length === 0) return <Text type="secondary">暂无代表性符号</Text>
+  return (
+    <ul className={cx('workspace-inspection-symbol-list')}>
+      {items.map((item, index) => (
+        <li key={`${item.path}:${item.name}:${index}`}>
+          <code title={item.path}>{item.path}</code>
+          <span>
+            {item.name || '未命名符号'} · {item.kind || 'symbol'} · L{item.lineStart}–{item.lineEnd}
+          </span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
