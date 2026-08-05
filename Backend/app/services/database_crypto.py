@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import os
 import stat
 import tempfile
@@ -14,6 +15,9 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from app.services.user_skills import user_skills_working_dir
+
+
+logger = logging.getLogger(__name__)
 
 
 SECRET_PREFIX = "xcodeagent-secret"
@@ -211,10 +215,15 @@ def _read_key_file(target: Path) -> bytes:
             raise DatabaseCryptoError("平台数据库密钥路径不是普通文件。")
         if (path_stat.st_dev, path_stat.st_ino) != (file_stat.st_dev, file_stat.st_ino):
             raise DatabaseCryptoError("平台数据库密钥文件在读取期间发生变化。")
-        if hasattr(os, "fchmod"):
-            os.fchmod(file_descriptor, 0o600)
-        else:
-            target.chmod(0o600)
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(file_descriptor, 0o600)
+            else:
+                target.chmod(0o600)
+        except OSError as exc:
+            # Windows 没有 POSIX 权限位：Python 3.13 起 os.fchmod 存在但必然抛
+            # PermissionError(WinError 5)。收紧失败不应阻断密钥读取，记录告警即可。
+            logger.warning("无法收紧平台数据库密钥文件权限：%s", exc)
         with os.fdopen(file_descriptor, "rb", closefd=True) as key_stream:
             file_descriptor = None
             return key_stream.read(_MAX_KEY_FILE_BYTES + 1)
