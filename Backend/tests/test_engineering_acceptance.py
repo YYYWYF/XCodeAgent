@@ -237,6 +237,44 @@ class EngineeringAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(recovered["acceptance_criteria"], ["pom.xml 必须被修改。"])
 
+    def test_verifier_normalizes_legacy_infrastructure_task_before_checking(self) -> None:
+        """直接调用验收器时也必须过滤旧配置任务上的接口契约检查。"""
+
+        task = {
+            "id": "backend-precheck",
+            "owner": "backend",
+            "source_refs": {"endpoint_ids": ["leave.list"]},
+            "change_scope": [{"operation": "modify", "path": "backend/pom.xml"}],
+            "acceptance_checks": [
+                {
+                    "id": "file",
+                    "kind": "file_operation",
+                    "target_paths": ["backend/pom.xml"],
+                    "expected": {"operation": "modify"},
+                },
+                {
+                    "id": "contract",
+                    "kind": "backend_contract_binding",
+                    "target_paths": ["backend/pom.xml"],
+                    "expected": {"endpoints": [{"method": "GET", "path": "/api/leave"}]},
+                },
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            pom = Path(workspace) / "backend/pom.xml"
+            pom.parent.mkdir(parents=True)
+            pom.write_text("<project />", encoding="utf-8")
+            evidence, errors = verify_engineering_acceptance(
+                task=task,
+                status="already_satisfied",
+                code_change_set=None,
+                workspace_root=workspace,
+            )
+
+        self.assertFalse(errors)
+        self.assertEqual([item["kind"] for item in evidence], ["file_operation"])
+
     def test_confirmed_endpoint_detail_overrides_project_plan_source_type(self) -> None:
         """已确认 EndpointDetail 的 third_party 来源必须覆盖 ProjectPlan 的旧 database 声明。"""
 

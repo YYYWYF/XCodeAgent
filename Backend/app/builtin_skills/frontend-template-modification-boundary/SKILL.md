@@ -58,33 +58,31 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | `src/components/<Module>/` | 可复用组件 `index.tsx` |
 | `src/apis/` | 业务接口 `<biz>Api.ts` |
 
-> 如果任务需要运行命令（如类型检查、构建、安装），**直接用 `execute` 工具跑命令**，**绝对不要**创建任何 `.sh`/`.py`/`.js`/`.mjs` 脚本文件（无论放在 `/frontend/`、`/tmp/` 还是工作区任何位置都不允许）。详见下方「🔴 验证代码：直接用 execute 工具，禁止创建脚本」一节。
+> 在 XCodeAgent 的 Frontend task 中，类型检查、构建、安装、lint 和测试由外层 integration-test 阶段统一执行，Frontend Agent 不调用这些项目级命令。独立人工流程且用户明确要求验证时，仍然禁止创建临时脚本。
 
-## 🔴 验证代码：直接用 execute 工具，禁止创建脚本
+## 🔴 验证边界：由外层质量门禁统一执行
 
-写完页面代码后，如果需要做类型检查或构建验证，**必须直接调用 `execute` 工具运行命令**，命令本身就是一条 shell 字符串，由 `execute` 在工作区根目录执行。**严禁**先用 `write_file` 写出 `.sh`/`.py`/`.js` 脚本再去执行它——这会污染工作区，且违反本技能的文件边界规范。
+在 XCodeAgent 的 Frontend task 中，写完代码后不要运行依赖安装、TypeScript 类型检查、lint、build、unit test 或 dev-server 命令。外层 integration-test 阶段会在所有 owner task 完成后统一执行仓库级检查；如果发现依赖或命令缺失，应在最终 JSON 中报告，不能通过安装依赖或临时脚本绕过边界。
 
-### 正确做法（直接 execute）
+### 外层质量门禁负责的检查
 
-| 目的 | 直接传给 `execute` 的命令 |
+| 目的 | 执行方 |
 | --- | --- |
-| TypeScript 类型检查 | `cd frontend && npx tsc --noEmit` |
-| 生产构建 | `cd frontend && pnpm run build` |
-| 启动开发服务器（仅按需） | `cd frontend && pnpm run dev` |
+| TypeScript 类型检查 | 由外层 integration-test 阶段按工程配置执行 |
+| 生产构建 | 由外层 integration-test 阶段按工程配置执行 |
+| lint、单元测试和依赖检查 | 由外层 integration-test 阶段按工程配置执行 |
 
-注意命令里用的是 **`cd frontend`（相对路径，无前导斜杠）**，因为 `execute` 的工作目录就是工作区根目录，前端工程位于其下的 `frontend/`。
+Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码，不负责启动开发服务器或修改依赖清单。
 
-### ❌ 错误做法（严禁）
+### ❌ Frontend Agent 禁止行为
 
 - ❌ 创建 `run_build.sh`、`run_tsc.sh`、`run_check.sh`、`run_check.py` 等任何脚本文件，再想办法执行它。
-- ❌ 在命令里写 `cd /frontend`（带前导斜杠的绝对路径）——这是不存在的路径。`/frontend/` 仅在 `write_file`/`read_file` 等**文件系统工具**里作为虚拟路径前缀使用，**不能**用在 `execute` 的 shell 命令里。两者不要混淆：
-  - 文件系统工具（`write_file`/`read_file`/`list_files`）：用虚拟绝对路径 `/frontend/src/pages/...`
-  - `execute` 工具（跑命令）：用相对路径 `cd frontend && ...`
+- ❌ 在 Frontend task 中调用 `pnpm install`、`npm install`、`pnpm add`、`npx tsc` 或项目级 build/lint/test 命令。
 - ❌ 把脚本写到 `/tmp/`、工作区根目录或 `/frontend/` 根目录来"绕过"限制——任何位置都不允许生成临时脚本。
 
-### 读取命令输出
+### 独立人工流程读取命令输出
 
-`execute` 会返回 JSON：`{ exit_code, stdout, stderr }`。直接从返回值里读输出和退出码即可，**不要**用 `echo "EXIT_CODE=$?"` 之类的方式自己包装，更不要为此创建脚本。退出码 `0` 即成功，非 `0` 时看 `stderr`/`stdout` 排错。
+只有在脱离 XCodeAgent task 的独立人工流程中，用户明确要求执行命令时，才读取 `execute` 返回的 `{ exit_code, stdout, stderr }`；不要用 `echo "EXIT_CODE=$?"` 包装命令，也不要为此创建脚本。
 
 ## 核心原则
 
@@ -378,7 +376,7 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 ## 禁止行为清单
 
 - ❌ 在 `/frontend/` 根目录下创建任何新文件（`.py`、`.sh`、`.md`、`.json`、`.env` 等）
-- ❌ 在工作区**任何位置**（`/frontend/`、`/tmp/`、工作区根等）生成脚本文件（`.sh`/`.py`/`.js`/`.mjs` 等检查脚本、安装脚本、部署脚本）——验证代码请直接用 `execute` 工具跑 `cd frontend && npx tsc --noEmit` / `cd frontend && pnpm run build`，详见「🔴 验证代码」一节
+- ❌ 在工作区**任何位置**（`/frontend/`、`/tmp/`、工作区根等）生成脚本文件（`.sh`/`.py`/`.js`/`.mjs` 等检查脚本、安装脚本、部署脚本）。Frontend task 的项目级验证由外层 integration-test 阶段统一执行，Agent 不得自行调用验证命令。
 - ❌ 在 `/frontend/` 下生成非前端代码文件（Python、Shell、Bash 等）
 - ❌ 修改 `src/routes/index.tsx`、`src/utils/route.tsx` 以手动注册路由（路由由菜单自动生成）
 - ❌ 修改 `src/App.tsx`、`src/index.tsx` 入口装配
@@ -392,19 +390,9 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 - ❌ 修改 `src/styles/**` 全局样式（页面样式用 Tailwind 或在公共目录规范内处理）
 - ❌ 为了加依赖而改 `package.json`（所需依赖应假设已存在；若确实缺失，向用户说明，由用户安装）
 
-## 例外：修复任务中安装缺失依赖
+## 依赖缺失处理
 
-当任务上下文标记为修复任务（`kind === "repair"`）时，允许使用 `execute` 工具安装 `package.json` 中未声明的依赖：
-
-```bash
-cd frontend && pnpm add <包名>
-```
-
-**使用条件**：
-- 仅修复任务允许，页面生成任务仍禁止
-- 安装后必须重新验证：`cd frontend && pnpm run build`
-- 优先安装稳定版本（不指定版本号，让 pnpm 解析最新稳定版）
-- 一次安装所有缺失的依赖（批量 `pnpm add`），减少重复构建
+Frontend task 不自动安装依赖。即使任务被标记为 repair，依赖缺失也只能作为阻塞信息写入最终 JSON，并交由外层流程或用户处理；Agent 不得调用 `pnpm install`、`pnpm add`、`npm install` 或其他安装命令，也不得在 task 内重新执行项目构建验证。
 
 ## 与其他技能的关系
 

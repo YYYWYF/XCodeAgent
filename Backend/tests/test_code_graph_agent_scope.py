@@ -87,6 +87,12 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                 self.assertIn("always read the current source file", compact_prompt)
                 self.assertIn("never expands the task's authorized paths", compact_prompt)
 
+        self.assertIn("Do not run project-level dependency installation", frontend_prompt)
+        self.assertIn("Do not call `pnpm install`, `npm install`, or `npx tsc`", frontend_prompt)
+        self.assertIn("outer integration-test phase performs the repository checks", frontend_prompt)
+        self.assertIn("Do not run project-level dependency installation", data_source_prompt)
+        self.assertNotIn("regular backend verification", data_source_prompt)
+
     def test_empty_or_unavailable_tool_result_keeps_workspace_search_fallback(self) -> None:
         """空图结果和查询异常必须显式返回文件搜索降级信息。"""
 

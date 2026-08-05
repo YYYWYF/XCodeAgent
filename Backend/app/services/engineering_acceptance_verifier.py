@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.build_task_menu import menu_registration_matches
+from app.services.engineering_acceptance import ensure_engineering_acceptance
 from app.services.engineering_contract_verifier import verify_contract_binding
 
 
@@ -32,6 +33,8 @@ def verify_engineering_acceptance(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """确定性执行任务的全部工程检查并返回证据与错误。"""
 
+    # 验收入口也要重新归一化任务，防止历史 DAG 绕过 scheduler 后把契约检查误挂到配置任务。
+    task = ensure_engineering_acceptance(task)
     checks = _dict_items(task.get("acceptance_checks"))
     if not checks:
         return [], ["任务缺少 acceptance_checks，请重新执行 prepare_build_tasks。"]
