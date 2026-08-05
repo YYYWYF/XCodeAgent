@@ -414,6 +414,97 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(plan["summary"]["already_satisfied"], 1)
         self.assertEqual(plan["summary"]["completed"], 1)
 
+    def test_existing_menu_is_removed_from_mixed_page_task(self) -> None:
+        """页面、API 与菜单混合任务遇到既有菜单时只移除菜单写入，其他工作仍需执行。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "dashboard_page",
+                        "name": "概览页",
+                        "path": "/page/home",
+                        "module_id": "dashboard",
+                    }
+                ]
+            },
+        }
+        build_context = {
+            "target": {"type": "page", "id": "dashboard_page"},
+            "page_detail": {"page_name": "概览页", "path": "/page/home"},
+            "required_unit_ids": ["page:dashboard_page"],
+        }
+        base_plan = {
+            "schema_version": "build-dag.v3",
+            "build_units": {
+                "page:dashboard_page": {
+                    "id": "page:dashboard_page",
+                    "kind": "page",
+                }
+            },
+            "unit_graph": {
+                "nodes": ["page:dashboard_page"],
+                "edges": [],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            page = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
+            page.parent.mkdir(parents=True)
+            page.write_text("export default function DashboardPage() {}", encoding="utf-8")
+            menus = Path(workspace) / "frontend/src/constants/menus.ts"
+            menus.parent.mkdir(parents=True)
+            menus.write_text(
+                "export const BIZ_MENUS = [{ path: 'home', name: '概览页', key: 'DashboardPage' }];",
+                encoding="utf-8",
+            )
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "task-dashboard",
+                            "unit_id": "page:dashboard_page",
+                            "owner": "frontend",
+                            "description": "实现概览页并确认菜单注册",
+                            "change_scope": [
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/pages/DashboardPage/index.tsx",
+                                },
+                                {
+                                    "operation": "add",
+                                    "path": "frontend/src/apis/leaveApi.ts",
+                                },
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/constants/menus.ts",
+                                },
+                            ],
+                        }
+                    ]
+                },
+                base_build_task_plan=base_plan,
+                build_context=build_context,
+                workspace_root=workspace,
+            )
+
+        task = plan["task_registry"]["task-dashboard"]
+        self.assertEqual(task["status"], "pending")
+        self.assertEqual(
+            task["target_files"],
+            [
+                "frontend/src/pages/DashboardPage/index.tsx",
+                "frontend/src/apis/leaveApi.ts",
+            ],
+        )
+        self.assertNotIn("frontend/src/constants/menus.ts", task["allowed_paths"])
+        self.assertEqual(
+            task["pre_satisfied_targets"][0]["path"],
+            "frontend/src/constants/menus.ts",
+        )
+
     def test_scaffolded_menu_entry_prevents_deterministic_duplicate_task(self) -> None:
         """模型未生成菜单任务时，已存在的脚手架菜单也不得被确定性重复补齐。"""
 

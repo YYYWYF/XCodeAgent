@@ -65,6 +65,49 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def repair_unescaped_json_string_quotes(text: str) -> str:
+    """仅转义 JSON 字符串内部明显未转义的双引号，供严格协议做一次受控恢复。"""
+
+    repaired: list[str] = []
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text):
+        if not in_string:
+            repaired.append(character)
+            if character == '"':
+                in_string = True
+            continue
+        if escaped:
+            repaired.append(character)
+            escaped = False
+            continue
+        if character == "\\":
+            repaired.append(character)
+            escaped = True
+            continue
+        if character != '"':
+            repaired.append(character)
+            continue
+
+        next_character = _next_non_whitespace_character(text, index + 1)
+        if next_character is None or next_character in {":", ",", "}", "]"}:
+            repaired.append(character)
+            in_string = False
+            continue
+        # JSON 字符串闭合引号后只能跟结构字符；其他字符说明模型把正文引号直接写进了字符串。
+        repaired.append('\\"')
+    return "".join(repaired)
+
+
+def _next_non_whitespace_character(text: str, start: int) -> str | None:
+    """返回指定位置后的首个非空白字符，文本结束时返回 None。"""
+
+    for character in text[start:]:
+        if not character.isspace():
+            return character
+    return None
+
+
 def _response_fingerprint(text: str) -> str:
     """生成模型响应短哈希，以便关联日志且不记录可能包含敏感信息的正文。"""
 

@@ -28,6 +28,15 @@ def ensure_engineering_acceptance(task: dict[str, Any]) -> dict[str, Any]:
 
     existing = _dict_items(task.get("acceptance_checks"))
     if existing:
+        if not _task_requires_contract_binding(task):
+            # 旧计划可能把 endpoint id 机械投影成配置任务的契约验收；
+            # 恢复时只移除错误归属的契约检查，保留文件、范围和其他确定性门禁。
+            existing = [
+                check
+                for check in existing
+                if check.get("kind")
+                not in {"frontend_contract_binding", "backend_contract_binding"}
+            ]
         return {
             **task,
             "acceptance_checks": existing,
@@ -172,7 +181,7 @@ def engineering_acceptance_contract_errors(task: dict[str, Any]) -> list[str]:
         )
     endpoint_ids = _string_list(_dict_value(task.get("source_refs")).get("endpoint_ids"))
     contract_kinds = {"frontend_contract_binding", "backend_contract_binding"}
-    if endpoint_ids and str(task.get("owner") or "") in {"frontend", "backend"} and not any(
+    if endpoint_ids and _task_requires_contract_binding(task) and not any(
         check.get("kind") in contract_kinds for check in checks
     ):
         errors.append(
@@ -199,7 +208,11 @@ def _compile_task(
         menu_check = _menu_registration_check(task)
         if menu_check:
             checks.append(menu_check)
-        contract_check = _contract_binding_check(task, context)
+        contract_check = (
+            _contract_binding_check(task, context)
+            if _task_requires_contract_binding(task)
+            else None
+        )
         if contract_check:
             checks.append(contract_check)
     compiled["acceptance_checks"] = checks
@@ -209,7 +222,7 @@ def _compile_task(
     compiled["engineering_acceptance_recompile_required"] = bool(
         recovery
         and endpoint_ids
-        and str(task.get("owner") or "") in {"frontend", "backend"}
+        and _task_requires_contract_binding(task)
         and not any(
             check.get("kind") in {"frontend_contract_binding", "backend_contract_binding"}
             for check in checks
@@ -353,12 +366,15 @@ def _contract_binding_check(
         str(item.get("id") or ""): str(item.get("type") or "").lower()
         for item in _dict_items(executable.get("data_sources"))
     }
+    confirmed_source_types = _confirmed_endpoint_source_types(context, executable)
     page_bindings = _page_response_bindings(executable)
     expectations: list[dict[str, Any]] = []
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
         schemas = _dict_value(contract.get("schemas"))
-        source_type = data_sources.get(str(contract.get("data_source_id") or ""), "")
+        planned_source_type = data_sources.get(
+            str(contract.get("data_source_id") or ""), ""
+        )
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "")
             if endpoint_id not in endpoint_ids:
@@ -366,6 +382,11 @@ def _contract_binding_check(
             response_fields = _schema_fields(
                 schemas,
                 endpoint.get("response_schema_ref"),
+            )
+            source_type = (
+                confirmed_source_types.get((contract_id, endpoint_id))
+                or confirmed_source_types.get(("", endpoint_id))
+                or planned_source_type
             )
             expectations.append(
                 {
@@ -414,6 +435,86 @@ def _contract_binding_check(
         target_paths=_allowed_paths(task),
         expected={"endpoints": expectations},
     )
+
+
+def _task_requires_contract_binding(task: dict[str, Any]) -> bool:
+    """仅让真正拥有接口实现或前端接口消费代码的任务承担契约验收。"""
+
+    endpoint_ids = _string_list(_dict_value(task.get("source_refs")).get("endpoint_ids"))
+    if not endpoint_ids:
+        return False
+    owner = str(task.get("owner") or "")
+    paths = [
+        "/" + path.lstrip("/").replace("\\", "/").lower()
+        for path in _allowed_paths(task)
+    ]
+    if owner == "backend":
+        return any(_is_backend_endpoint_implementation_path(path) for path in paths)
+    if owner == "frontend":
+        return any(
+            "/src/apis/" in path
+            or ("/src/pages/" in path and path.endswith((".tsx", ".ts", ".jsx", ".js")))
+            for path in paths
+        )
+    return False
+
+
+def _is_backend_endpoint_implementation_path(path: str) -> bool:
+    """识别可承载 Spring Mapping 的后端处理器路径，排除配置与基础设施前置文件。"""
+
+    if not path.endswith((".java", ".kt")):
+        return False
+    filename = path.rsplit("/", 1)[-1]
+    return (
+        any(token in path for token in ("/controller/", "/adapter/web/", "/web/", "/api/"))
+        or filename.endswith(
+            (
+                "controller.java",
+                "controller.kt",
+                "resource.java",
+                "resource.kt",
+                "endpoint.java",
+                "endpoint.kt",
+                "handler.java",
+                "handler.kt",
+            )
+        )
+    )
+
+
+def _confirmed_endpoint_source_types(
+    context: dict[str, Any],
+    executable: dict[str, Any],
+) -> dict[tuple[str, str], str]:
+    """从已确认 EndpointDetail 提取数据来源，并覆盖 ProjectPlan 中的旧来源声明。"""
+
+    details = [
+        *_dict_items(context.get("direct_endpoint_details")),
+        *_dict_items(executable.get("endpoint_detail_plans")),
+    ]
+    direct_detail = _dict_value(context.get("endpoint_detail"))
+    if direct_detail:
+        details.append(direct_detail)
+    result: dict[tuple[str, str], str] = {}
+    for detail in details:
+        endpoint_id = str(detail.get("endpoint_id") or detail.get("id") or "")
+        if endpoint_id.startswith("endpoint_detail:"):
+            endpoint_id = endpoint_id.rsplit(":", 1)[-1]
+        if not endpoint_id:
+            continue
+        contract_id = str(detail.get("api_contract_id") or "")
+        decision = _dict_value(detail.get("endpoint_decision"))
+        origin = _dict_value(decision.get("data_origin")) or _dict_value(
+            detail.get("data_origin")
+        )
+        effective_source = _dict_value(origin.get("effective_source"))
+        source_type = str(
+            effective_source.get("kind") or origin.get("source_type") or ""
+        ).lower()
+        if source_type:
+            result[(contract_id, endpoint_id)] = source_type
+            result.setdefault(("", endpoint_id), source_type)
+    return result
 
 
 def _database_checks(task: dict[str, Any]) -> list[dict[str, Any]]:

@@ -45,6 +45,13 @@ def create_data_source_agent(
         "code_graph_context tool to locate relevant files and symbols; the graph is "
         "navigation only, so read the actual source before editing."
     )
+    execute_tool = create_execute_tool(workspace_root)
+    runtime_tools = [
+        create_code_graph_context_tool(workspace_root),
+        create_delete_file_tool(workspace_root),
+        execute_tool,
+        create_get_mysql_config_tool(workspace_root),
+    ]
     return create_deep_agent(
         name="data-source-generation-agent",
         model=model,
@@ -53,13 +60,8 @@ def create_data_source_agent(
         ),
         skills=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
-        tools=[
-            create_code_graph_context_tool(workspace_root),
-            create_delete_file_tool(workspace_root),
-            create_execute_tool(workspace_root),
-            create_get_mysql_config_tool(workspace_root),
-        ],
-        middleware=[DirectModificationMiddleware()],
+        tools=runtime_tools,
+        middleware=[DirectModificationMiddleware(required_tools=[execute_tool])],
         backend=create_workspace_backend(
             workspace_root,
             include_builtin_skills=True,

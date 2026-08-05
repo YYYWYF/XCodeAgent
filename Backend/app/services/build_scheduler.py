@@ -11,6 +11,7 @@ from app.services.engineering_acceptance_verifier import verify_engineering_acce
 TERMINAL_STATUSES = {"completed", "failed", "already_satisfied"}
 RUNNABLE_STATUS = "pending"
 RETRYABLE_FAILURES = {
+    "invalid_structured_response",
     "runner_crash",
     "timeout",
     "tool_error",

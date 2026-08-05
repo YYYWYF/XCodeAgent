@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage
 
 from app.middleware.direct_modification import (
     DIRECT_MODIFICATION_MODE_MARKER,
+    _ensure_required_model_tools,
     _prepare_direct_model_request,
 )
 
@@ -19,6 +20,7 @@ class _FakeModel:
         """保存测试模型的公开配置。"""
 
         self.values = values
+
 
 def _request(messages):
     """构造无需真实 Provider 的最小 ModelRequest。"""
@@ -57,6 +59,26 @@ class DirectModificationMiddlewareTests(unittest.TestCase):
         request = _request([HumanMessage(content="正式生成任务")])
 
         self.assertIs(_prepare_direct_model_request(request), request)
+
+    def test_required_execute_tool_is_restored_before_model_call(self) -> None:
+        """中间层或缓存遗漏 execute 时必须在模型调用前恢复，避免 Agent 无法运行验证。"""
+
+        request = ModelRequest(
+            model=_FakeModel(),
+            messages=[HumanMessage(content="正式生成任务")],
+            tools=[SimpleNamespace(name="read_file")],
+        )
+
+        prepared = _ensure_required_model_tools(
+            request,
+            [SimpleNamespace(name="execute"), SimpleNamespace(name="read_file")],
+        )
+
+        self.assertEqual(
+            [tool.name for tool in prepared.tools],
+            ["read_file", "execute"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

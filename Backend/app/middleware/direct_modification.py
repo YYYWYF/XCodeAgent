@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
@@ -14,6 +14,11 @@ _DIRECT_DISABLED_TOOLS = {"task", "write_todos"}
 class DirectModificationMiddleware(AgentMiddleware):
     """在共用 Agent 中仅对快速修改请求移除复杂编排工具。"""
 
+    def __init__(self, required_tools: Sequence[Any] | None = None):
+        """保存每次模型调用都必须暴露的工作区工具，防止运行时工具集被中间层丢失。"""
+
+        self.required_tools = tuple(required_tools or ())
+
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -21,7 +26,8 @@ class DirectModificationMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """同步模型调用前应用快速模式工具策略，主工作流请求保持原样。"""
 
-        return handler(_prepare_direct_model_request(request))
+        prepared = _ensure_required_model_tools(request, self.required_tools)
+        return handler(_prepare_direct_model_request(prepared))
 
     async def awrap_model_call(
         self,
@@ -30,7 +36,25 @@ class DirectModificationMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """异步模型调用前应用与同步入口一致的快速模式工具策略。"""
 
-        return await handler(_prepare_direct_model_request(request))
+        prepared = _ensure_required_model_tools(request, self.required_tools)
+        return await handler(_prepare_direct_model_request(prepared))
+
+
+def _ensure_required_model_tools(
+    request: ModelRequest,
+    required_tools: Sequence[Any],
+) -> ModelRequest:
+    """把缺失的必需工具补回模型请求，已有工具保持原顺序且不重复。"""
+
+    existing_names = {_tool_name(tool) for tool in request.tools}
+    missing_tools = [
+        tool
+        for tool in required_tools
+        if _tool_name(tool) and _tool_name(tool) not in existing_names
+    ]
+    return request if not missing_tools else request.override(
+        tools=[*request.tools, *missing_tools]
+    )
 
 
 def _prepare_direct_model_request(request: ModelRequest) -> ModelRequest:

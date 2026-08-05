@@ -48,8 +48,8 @@ class BuildResultCoordinatorTests(unittest.TestCase):
         self.assertEqual(results[0]["status"], "failed")
         self.assertEqual(results[0]["failure_category"], "runner_protocol_error")
 
-    def test_malformed_task_results_cannot_fall_back_to_nested_evidence(self) -> None:
-        """损坏的顶层报告即使含合法内部对象，也必须成为协议失败。"""
+    def test_unescaped_summary_quotes_are_repaired_once(self) -> None:
+        """summary 内未转义双引号应受控修复，不能把已返回任务误报为 omitted。"""
 
         note = """{
           "task_results": [{
@@ -70,8 +70,24 @@ class BuildResultCoordinatorTests(unittest.TestCase):
             require_structured=True,
         )
 
+        self.assertEqual(results[0]["status"], "already_satisfied")
+        self.assertTrue(results[0]["structured_response_recovered"])
+
+    def test_unrecoverable_structured_json_has_precise_failure_category(self) -> None:
+        """无法修复的结构化 JSON 必须报告格式损坏，而不是误报任务遗漏。"""
+
+        results = create_agent_task_results(
+            [{"id": "menu", "owner": "frontend"}],
+            '{"task_results":[{"task_id":"menu"',
+            require_structured=True,
+        )
+
         self.assertEqual(results[0]["status"], "failed")
-        self.assertEqual(results[0]["failure_category"], "runner_protocol_error")
+        self.assertEqual(
+            results[0]["failure_category"],
+            "invalid_structured_response",
+        )
+        self.assertIn("malformed", results[0]["failure_reason"])
 
     def test_required_structured_report_rejects_empty_agent_text(self) -> None:
         """要求结构化协议时，无最终文本不得兼容成 completed。"""
@@ -83,7 +99,10 @@ class BuildResultCoordinatorTests(unittest.TestCase):
         )
 
         self.assertEqual(results[0]["status"], "failed")
-        self.assertEqual(results[0]["failure_category"], "runner_protocol_error")
+        self.assertEqual(
+            results[0]["failure_category"],
+            "invalid_structured_response",
+        )
 
 
 if __name__ == "__main__":

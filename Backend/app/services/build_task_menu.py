@@ -436,7 +436,7 @@ def _mark_existing_menu_tasks_satisfied(
     page_name: str,
     menu_path: str,
 ) -> list[dict[str, Any]]:
-    """把脚手架已完成的当前页面菜单任务标记为确定性已满足。"""
+    """把独立菜单任务标记已满足，并从混合页面任务中移除已满足的菜单写入。"""
 
     if not menu_tasks:
         return tasks
@@ -458,29 +458,95 @@ def _mark_existing_menu_tasks_satisfied(
         f"脚手架已在 {FRONTEND_MENU_PATH} 注册 "
         f"{{ path: '{menu_path}', name: '{page_name}', key: '{page_key}' }}。"
     )
-    return [
-        {
-            **task,
-            **payload,
-            "status": "already_satisfied",
-            "last_result_status": "already_satisfied",
-            "satisfaction_evidence": {
-                "target_files": [FRONTEND_MENU_PATH],
-                "acceptance_criteria": [
-                    {
-                        "criterion_index": index,
-                        "status": "passed",
-                        "evidence": evidence_text,
-                    }
-                    for index, _ in enumerate(task.get("acceptance_criteria", []))
-                ],
-            },
-            "satisfied_by": "frontend-template-page-scaffold",
-        }
-        if str(task.get("id") or "") in matching_ids
-        else task
-        for task in tasks
+    normalized: list[dict[str, Any]] = []
+    for task in tasks:
+        if str(task.get("id") or "") not in matching_ids:
+            normalized.append(task)
+            continue
+        if _task_only_targets_menu(task):
+            normalized.append(
+                {
+                    **task,
+                    **payload,
+                    "status": "already_satisfied",
+                    "last_result_status": "already_satisfied",
+                    "satisfaction_evidence": {
+                        "target_files": [FRONTEND_MENU_PATH],
+                        "acceptance_criteria": [
+                            {
+                                "criterion_index": index,
+                                "status": "passed",
+                                "evidence": evidence_text,
+                            }
+                            for index, _ in enumerate(
+                                task.get("acceptance_criteria", [])
+                            )
+                        ],
+                    },
+                    "satisfied_by": "frontend-template-page-scaffold",
+                }
+            )
+            continue
+        normalized.append(_remove_satisfied_menu_target(task, evidence_text))
+    return normalized
+
+
+def _task_only_targets_menu(task: dict[str, Any]) -> bool:
+    """判断任务是否只负责菜单文件，避免把页面与 API 混合任务整体标记为已满足。"""
+
+    targets = {
+        path.lstrip("/")
+        for path in [
+            *_string_list(task.get("target_files")),
+            *_string_list(task.get("allowed_paths")),
+        ]
+        if path
+    }
+    return bool(targets) and targets == {FRONTEND_MENU_PATH}
+
+
+def _remove_satisfied_menu_target(
+    task: dict[str, Any], evidence_text: str
+) -> dict[str, Any]:
+    """从混合任务移除已存在的菜单写目标，同时保留其余页面和接口工作。"""
+
+    def remaining_paths(value: Any) -> list[str]:
+        """过滤列表中的菜单目标并保持原有路径写法。"""
+
+        return [
+            path
+            for path in _string_list(value)
+            if path.lstrip("/") != FRONTEND_MENU_PATH
+        ]
+
+    remaining_scope = [
+        change
+        for change in task.get("change_scope", [])
+        if isinstance(change, dict)
+        and str(change.get("path") or "").lstrip("/") != FRONTEND_MENU_PATH
     ]
+    return {
+        **task,
+        "description": (
+            f"{str(task.get('description') or '').strip()} "
+            f"{evidence_text} 菜单已满足，不得再次修改 {FRONTEND_MENU_PATH}。"
+        ).strip(),
+        "allowed_paths": remaining_paths(task.get("allowed_paths")),
+        "target_files": remaining_paths(task.get("target_files")),
+        "change_scope": remaining_scope,
+        "pre_satisfied_targets": [
+            *[
+                item
+                for item in task.get("pre_satisfied_targets", [])
+                if isinstance(item, dict)
+            ],
+            {
+                "path": FRONTEND_MENU_PATH,
+                "satisfied_by": "frontend-template-page-scaffold",
+                "evidence": evidence_text,
+            },
+        ],
+    }
 
 
 def _page_skeleton(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]:

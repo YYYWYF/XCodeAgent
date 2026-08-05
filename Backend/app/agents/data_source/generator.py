@@ -63,6 +63,8 @@ def _data_source_generation_prompt(
         "natural-language claims are never acceptance evidence. "
         "A similar file at another path is not "
         "valid evidence. Failed work must include `failure_category` and `failure_reason`.\n\n"
+        "The JSON must be syntactically valid: escape every double quote inside summary text "
+        "and do not wrap the object in a Markdown fence.\n\n"
         f"Approved data-source tasks:\n{json.dumps(tasks, ensure_ascii=False, indent=2)}\n\n"
         f"BuildTaskPlan summary:\n{json.dumps(build_task_plan.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}\n\n"

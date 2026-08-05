@@ -178,6 +178,103 @@ class EngineeringAcceptanceTests(unittest.TestCase):
 
         self.assertFalse(errors)
 
+    def test_backend_infrastructure_task_does_not_own_endpoint_contract(self) -> None:
+        """只修改依赖与配置的后端前置任务不得承担 Controller/DTO 契约验收。"""
+
+        task = {
+            "id": "backend-precheck",
+            "owner": "backend",
+            "source_refs": {"endpoint_ids": ["leave.list"]},
+            "change_scope": [
+                {"operation": "modify", "path": "backend/pom.xml"},
+                {
+                    "operation": "add",
+                    "path": "backend/src/main/java/example/MyBatisPlusConfig.java",
+                },
+            ],
+        }
+
+        compiled = compile_engineering_acceptance(
+            [task],
+            self._contract_context(),
+        )[0]
+
+        self.assertNotIn(
+            "backend_contract_binding",
+            [check["kind"] for check in compiled["acceptance_checks"]],
+        )
+        self.assertFalse(engineering_acceptance_contract_errors(compiled))
+
+    def test_legacy_infrastructure_task_drops_misassigned_contract_check(self) -> None:
+        """恢复旧 DAG 时应移除配置任务上历史误分配的端点契约检查。"""
+
+        task = {
+            "id": "backend-precheck",
+            "owner": "backend",
+            "source_refs": {"endpoint_ids": ["leave.list"]},
+            "change_scope": [
+                {"operation": "modify", "path": "backend/pom.xml"},
+            ],
+            "acceptance_checks": [
+                {
+                    "id": "file",
+                    "kind": "file_operation",
+                    "description": "pom.xml 必须被修改。",
+                },
+                {
+                    "id": "contract",
+                    "kind": "backend_contract_binding",
+                    "description": "错误分配的接口契约检查。",
+                },
+            ],
+        }
+
+        recovered = ensure_engineering_acceptance(task)
+
+        self.assertEqual(
+            [check["kind"] for check in recovered["acceptance_checks"]],
+            ["file_operation"],
+        )
+        self.assertEqual(recovered["acceptance_criteria"], ["pom.xml 必须被修改。"])
+
+    def test_confirmed_endpoint_detail_overrides_project_plan_source_type(self) -> None:
+        """已确认 EndpointDetail 的 third_party 来源必须覆盖 ProjectPlan 的旧 database 声明。"""
+
+        task = {
+            "id": "backend-leave-list",
+            "owner": "backend",
+            "source_refs": {"endpoint_ids": ["leave.list"]},
+            "change_scope": [
+                {"operation": "add", "path": "backend/LeaveController.java"}
+            ],
+        }
+        context = self._contract_context()
+        context["direct_endpoint_details"] = [
+            {
+                "api_contract_id": "leave-api",
+                "endpoint_id": "leave.list",
+                "status": "confirmed",
+                "endpoint_decision": {
+                    "data_origin": {
+                        "source_type": "third_party",
+                        "effective_source": {"kind": "third_party"},
+                    }
+                },
+            }
+        ]
+
+        compiled = compile_engineering_acceptance([task], context)[0]
+        contract_check = next(
+            check
+            for check in compiled["acceptance_checks"]
+            if check["kind"] == "backend_contract_binding"
+        )
+
+        self.assertEqual(
+            contract_check["expected"]["endpoints"][0]["source_type"],
+            "third_party",
+        )
+
     def test_backend_contract_requires_explicit_snake_case_wire_mapping(self) -> None:
         """Java camelCase 字段只有具备 Jackson 映射时才能满足 snake_case 契约。"""
 

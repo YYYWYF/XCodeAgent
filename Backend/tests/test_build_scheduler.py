@@ -119,6 +119,19 @@ class BuildSchedulerTests(unittest.TestCase):
 
         self.assertEqual(decision["action"], "repair")
 
+    def test_classifies_invalid_structured_response_as_retry(self) -> None:
+        """损坏且无法恢复的 Agent 终态报告应进入受控重试分类。"""
+
+        decision = classify_task_result(
+            {
+                "task_id": "page",
+                "status": "failed",
+                "failure_category": "invalid_structured_response",
+            }
+        )
+
+        self.assertEqual(decision["action"], "retry")
+
     def test_already_satisfied_ignores_agent_claim_and_verifies_all_checks(self) -> None:
         """已满足必须由磁盘与工程检查证明，Agent 自报证据不参与裁决。"""
 
