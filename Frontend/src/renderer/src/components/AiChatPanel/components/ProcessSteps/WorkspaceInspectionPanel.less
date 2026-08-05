@@ -258,6 +258,56 @@
   border-top: 1px solid var(--wb-border);
 }
 
+.@{class-prefix}-workspace-inspection-progress {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 11px 12px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 10px;
+}
+
+.@{class-prefix}-workspace-inspection-progress-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--wb-accent);
+  font-size: 11px;
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-workspace-inspection-progress-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+
+  > span {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--wb-text-tertiary);
+    font-size: 9px;
+
+    strong {
+      color: var(--wb-text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 14px;
+    }
+  }
+}
+
 .@{class-prefix}-workspace-inspection-signal {
   min-width: 0;
   gap: 6px;
@@ -305,6 +355,10 @@
 @media (max-width: 480px) {
   .@{class-prefix}-workspace-inspection-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-workspace-inspection-progress-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

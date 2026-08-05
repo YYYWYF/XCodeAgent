@@ -11,7 +11,11 @@ from app.agents.direct_modification import (
     parse_direct_modification_agent_result,
 )
 from app.agents.tool_activity_stream import ToolActivityCallback
-from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
+from app.graph.nodes.common import (
+    capture_agent_file_changes,
+    refresh_code_graph_after_changes,
+    workspace_from_state,
+)
 from app.graph.nodes.lifecycle import launch_project
 from app.graph.state import ProjectState
 from app.graph.subgraphs.testing import integration_test
@@ -113,12 +117,18 @@ def execute_frontend_direct_modification(state: ProjectState) -> dict[str, Any]:
         code_change_set=captured.code_change_set,
         owner="frontend",
     )
+    code_graph_index = refresh_code_graph_after_changes(
+        workspace,
+        [captured.code_change_set] if captured.code_change_set else [],
+        on_progress=_code_graph_progress_writer("execute_frontend"),
+    )
     return _stage_update(
         state,
         stage="frontend",
         phase="execute_frontend",
         stage_result=stage_result,
         code_change_set=captured.code_change_set,
+        code_graph_index=code_graph_index,
     )
 
 
@@ -143,6 +153,11 @@ def execute_backend_direct_modification(state: ProjectState) -> dict[str, Any]:
         code_change_set=captured.code_change_set,
         owner="backend",
     )
+    code_graph_index = refresh_code_graph_after_changes(
+        workspace,
+        [captured.code_change_set] if captured.code_change_set else [],
+        on_progress=_code_graph_progress_writer("execute_backend"),
+    )
     handoff = dict(stage_result.get("backendHandoff") or {})
     handoff["changedFiles"] = list(stage_result.get("changedFiles") or [])
     return {
@@ -152,6 +167,7 @@ def execute_backend_direct_modification(state: ProjectState) -> dict[str, Any]:
             phase="execute_backend",
             stage_result=stage_result,
             code_change_set=captured.code_change_set,
+            code_graph_index=code_graph_index,
         ),
         "backend_handoff": handoff,
     }
@@ -262,6 +278,7 @@ def _stage_update(
     phase: str,
     stage_result: dict[str, Any],
     code_change_set: dict[str, Any] | None,
+    code_graph_index: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """合并单个 Agent 阶段结果和本轮权威代码差异。"""
 
@@ -279,6 +296,7 @@ def _stage_update(
         },
         "direct_code_change_sets": change_sets,
         "code_changes": code_change_set or state.get("code_changes", {}),
+        **({"code_graph_index": code_graph_index} if code_graph_index else {}),
         "timeline": [phase],
     }
 
@@ -318,6 +336,30 @@ def _tool_activity_writer(node_name: str) -> ToolActivityCallback:
                 "type": "direct_modification.tool_activity",
                 "node_name": node_name,
                 "activity": activity,
+            }
+        )
+
+    return report
+
+
+def _code_graph_progress_writer(node_name: str) -> ToolActivityCallback:
+    """把写入后的代码图刷新进度送入快速修改 AG-UI 流。"""
+
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        writer = lambda _event: None
+
+    def report(progress: Any) -> None:
+        """发送一条代码图刷新 custom 事件。"""
+
+        detail = progress.as_dict() if hasattr(progress, "as_dict") else {}
+        writer(
+            {
+                "type": "workspace_inspection.progress",
+                "node_name": node_name,
+                "message": str(detail.get("message") or "正在更新代码索引…"),
+                "detail": detail,
             }
         )
 

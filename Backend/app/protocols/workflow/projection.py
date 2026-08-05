@@ -54,6 +54,7 @@ def _workflow_progress_summary(
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
         "lifecycle": result.get("lifecycle"),
+        "workspaceInspectionProgress": result.get("workspace_scan_progress"),
     }
 
 
@@ -284,7 +285,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
     if node_name == "inspect_workspace":
         workspace_inspection = _workspace_inspection_snapshot(update)
         if workspace_inspection is None:
-            return {"message": "工作区快照检查已完成", "data": {}}
+            return {"message": "工作区代码扫描已完成", "data": {}}
         manifest = workspace_inspection["fileManifest"]
         return {
             "message": (
@@ -424,7 +425,17 @@ def _workspace_inspection_snapshot(update: dict[str, Any]) -> dict[str, Any] | N
         "entrypoints": _safe_path_items(summary.get("entrypoints"), limit=80),
         "codeGraph": {
             "provider": str(code_graph.get("provider") or "none")[:80],
+            "providerVersion": str(code_graph.get("providerVersion") or "")[:40],
+            "status": str(code_graph.get("status") or "unavailable")[:40],
             "available": bool(code_graph.get("available")),
+            "buildType": str(code_graph.get("buildType") or "")[:40],
+            "filesIndexed": _bounded_non_negative_int(code_graph.get("filesIndexed")),
+            "symbolsIndexed": _bounded_non_negative_int(code_graph.get("symbolsIndexed")),
+            "relationsIndexed": _bounded_non_negative_int(code_graph.get("relationsIndexed")),
+            "languages": _bounded_string_list(code_graph.get("languages"), limit=20),
+            "message": str(code_graph.get("message") or "")[:300],
+            "durationMs": _bounded_non_negative_int(code_graph.get("durationMs")),
+            "cacheHit": bool(code_graph.get("cacheHit")),
         },
     }
 
@@ -784,6 +795,7 @@ def _workflow_visual_payload(
         "selectedSkillNames": result.get("selected_skill_names", []),
         "lifecycle": result.get("lifecycle"),
         "ui_designs": result.get("ui_designs"),
+        "workspaceInspectionProgress": result.get("workspace_scan_progress"),
     }
     payload = {
         "runId": run_id,

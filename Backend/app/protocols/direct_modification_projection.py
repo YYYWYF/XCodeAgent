@@ -12,6 +12,7 @@ from app.services.direct_modification import direct_state_message
 
 DIRECT_NODE_LABELS = {
     "classify_intent": "识别修改意图",
+    "scan_workspace_code": "扫描工作区代码",
     "execute_backend": "执行后端修改",
     "execute_frontend": "执行前端修改",
     "integration_test": "验证项目",
@@ -20,8 +21,9 @@ DIRECT_NODE_LABELS = {
 }
 DIRECT_NODE_PERCENT = {
     "classify_intent": 10,
-    "execute_backend": 35,
-    "execute_frontend": 60,
+    "scan_workspace_code": 20,
+    "execute_backend": 40,
+    "execute_frontend": 65,
     "integration_test": 80,
     "launch_project": 95,
     "finalize_direct_modification": 100,
@@ -102,6 +104,10 @@ def public_direct_state(state: dict[str, Any]) -> dict[str, Any]:
         "preview_url",
         "launch_result",
         "code_changes",
+        "workspace_snapshot_summary",
+        "workspace_revision",
+        "workspace_scan_progress",
+        "code_graph_index",
     )
     return {key: state[key] for key in keys if key in state}
 
@@ -178,15 +184,46 @@ def direct_node_process_step(
         if node_name == "integration_test"
         else None
     )
+    detail = direct_state_message(update)
+    if node_name == "scan_workspace_code":
+        graph = update.get("workspace_snapshot_summary")
+        graph = graph.get("code_graph") if isinstance(graph, dict) else {}
+        detail = str(
+            graph.get("message")
+            if isinstance(graph, dict) and graph.get("message")
+            else update.get("message") or "代码扫描完成。"
+        )
+    workspace_scan_progress = update.get("workspace_scan_progress")
+    workspace_scan_progress = (
+        workspace_scan_progress
+        if isinstance(workspace_scan_progress, dict)
+        else None
+    )
+    workspace_inspection = (
+        update.get("workspace_snapshot_summary")
+        if node_name == "scan_workspace_code"
+        and isinstance(update.get("workspace_snapshot_summary"), dict)
+        else None
+    )
     return {
         "id": f"direct:{node_name}",
         "kind": "workflow",
         "status": status,
         "title": f"{'已完成' if status == 'completed' else '执行失败' if status == 'failed' else '等待输入'} {label}",
-        "detail": integration_test_check_summary(checks) if checks else direct_state_message(update),
+        "detail": integration_test_check_summary(checks) if checks else detail,
         "sequence": DIRECT_NODE_PERCENT.get(node_name, 0),
         "nodeName": node_name,
         **({"checks": checks} if checks else {}),
+        **(
+            {"workspaceInspectionProgress": workspace_scan_progress}
+            if workspace_scan_progress is not None
+            else {}
+        ),
+        **(
+            {"workspaceInspection": workspace_inspection}
+            if workspace_inspection is not None
+            else {}
+        ),
     }
 
 

@@ -83,6 +83,12 @@ def direct_modification_capabilities() -> dict[str, Any]:
             "subagentsEnabled": False,
             "todoPlanningEnabled": False,
         },
+        "scan": {
+            "node": "scan_workspace_code",
+            "label": "扫描工作区代码",
+            "progressEvent": "workspace_inspection.progress",
+            "fallback": "workspace_search",
+        },
     }
 
 
@@ -307,6 +313,39 @@ async def _report_custom_progress(
 
     progress = chunk if isinstance(chunk, dict) else {}
     event_type = str(progress.get("type") or "")
+    if event_type == "workspace_inspection.progress":
+        detail = (
+            progress.get("detail")
+            if isinstance(progress.get("detail"), dict)
+            else {}
+        )
+        state["workspace_scan_progress"] = detail
+        node_name = str(progress.get("node_name") or "scan_workspace_code")
+        await report(
+            AgUiActionProgress(
+                stage=node_name,
+                message=str(progress.get("message") or "正在扫描用户工作区代码…"),
+                detail=str(progress.get("message") or ""),
+                percent=DIRECT_NODE_PERCENT.get(node_name, 20),
+                data=direct_progress_payload(
+                    state,
+                    events=events,
+                    process_step={
+                        "id": f"direct:{node_name}",
+                        "kind": "workflow",
+                        "status": "running",
+                        "title": "正在执行 扫描工作区代码",
+                        "detail": str(
+                            progress.get("message") or "正在扫描用户工作区代码…"
+                        ),
+                        "sequence": DIRECT_NODE_PERCENT.get(node_name, 20),
+                        "nodeName": node_name,
+                        "workspaceInspectionProgress": detail,
+                    },
+                ),
+            )
+        )
+        return
     if event_type == "direct_modification.tool_activity":
         activity = progress.get("activity") if isinstance(progress.get("activity"), dict) else {}
         call_id = str(activity.get("callId") or uuid4().hex)

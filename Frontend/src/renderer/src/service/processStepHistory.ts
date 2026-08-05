@@ -10,7 +10,8 @@ import type { DagGenerationSnapshot, ProcessStepRecord } from './agUiAgent'
 
 const WORKFLOW_NODE_LABELS: Record<string, string> = {
   detail_confirmation: '页面细节确认',
-  inspect_workspace: '工作区快照检查',
+  inspect_workspace: '扫描工作区代码',
+  scan_workspace_code: '扫描工作区代码',
   inspect_database_context: '数据库上下文检查',
   prepare_build_tasks: '构建任务 DAG 生成',
   build: '代码生成与构建协调',

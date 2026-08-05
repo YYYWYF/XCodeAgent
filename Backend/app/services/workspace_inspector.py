@@ -5,24 +5,34 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
-INSPECTOR_SCHEMA_VERSION = "1.0.0"
+
+INSPECTOR_SCHEMA_VERSION = "1.1.0"
 MAX_FILE_BYTES = 256_000
 MAX_FILES = 4_000
+SENSITIVE_FILE_NAMES_CASEFOLD = {name.casefold() for name in SENSITIVE_FILE_NAMES}
 
 IGNORED_DIRS = {
     ".git",
+    ".hg",
+    ".svn",
     ".xcodeagent",
     ".venv",
     "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
     "build",
     "dist",
     "node_modules",
+    ".next",
+    ".turbo",
     "out",
 }
 
@@ -41,6 +51,29 @@ SOURCE_SUFFIXES = {
     ".html",
 }
 
+CODE_GRAPH_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cs",
+    ".go",
+    ".h",
+    ".hpp",
+    ".java",
+    ".js",
+    ".jsx",
+    ".kt",
+    ".kts",
+    ".php",
+    ".py",
+    ".rb",
+    ".rs",
+    ".swift",
+    ".ts",
+    ".tsx",
+}
+SOURCE_SUFFIXES.update(CODE_GRAPH_SUFFIXES)
+
 # Matches frontend source roots for both the XcodeAgent's own Electron frontend
 # (Frontend/src/) and user applications scaffolded under frontend/src/.
 # Exposing user-app frontend files in the WorkspaceSnapshot lets the build-task
@@ -50,25 +83,47 @@ FRONTEND_SRC_RE = re.compile(r"^(?:Frontend/src/|frontend/src/)")
 
 
 class CodeGraphProvider(Protocol):
-    """Optional semantic graph extension point for future workspace inspection."""
+    """工作区检查可选的语义代码图 Provider 协议。"""
 
     def available(self) -> bool:
-        """Return whether a code graph index can serve this workspace."""
+        """判断代码图索引能力是否可用。"""
 
-    def inspect(self, workspace_root: Path, files: list[str]) -> dict[str, Any]:
-        """Return additional graph facts keyed by stable schema fields."""
+    def inspect(
+        self,
+        workspace_root: Path,
+        files: list[str],
+        *,
+        revision: str = "",
+        callback: Callable[[Any], None] | None = None,
+    ) -> dict[str, Any]:
+        """在指定用户工作区内检查代码图，并把进度交给调用方。"""
 
 
 class NullCodeGraphProvider:
-    """Default provider used until a full code graph index is integrated."""
+    """没有显式用户工作区或依赖不可用时使用的安全空 Provider。"""
 
     def available(self) -> bool:
+        """声明空 Provider 不执行代码图扫描。"""
+
         return False
 
-    def inspect(self, workspace_root: Path, files: list[str]) -> dict[str, Any]:
+    def inspect(
+        self,
+        workspace_root: Path,
+        files: list[str],
+        *,
+        revision: str = "",
+        callback: Callable[[Any], None] | None = None,
+    ) -> dict[str, Any]:
+        """在没有显式 workspaceRoot 或第三方包时返回安全的跳过结果。"""
+
+        del workspace_root, files, revision, callback
         return {
             "provider": "none",
             "available": False,
+            "status": "skipped",
+            "reason": "no_explicit_workspace",
+            "message": "没有显式 workspaceRoot，本次不执行代码图扫描。",
             "facts": {},
         }
 
@@ -78,25 +133,51 @@ def inspect_workspace(
     *,
     cache_root: Path,
     code_graph_provider: CodeGraphProvider | None = None,
+    on_progress: Callable[[Any], None] | None = None,
 ) -> tuple[dict[str, Any], str, bool]:
-    """Build or load a deterministic, cacheable workspace snapshot."""
+    """构建或读取工作区快照，并在每次工作流扫描时校验用户代码图缓存。"""
 
     workspace_root = workspace_root.resolve()
     files = _list_workspace_files(workspace_root)
     revision = _workspace_revision(workspace_root, files)
+    source_files = source_files_for_code_graph(workspace_root, files)
+    if code_graph_provider is None:
+        graph_facts = NullCodeGraphProvider().inspect(
+            workspace_root,
+            source_files,
+            revision=revision,
+            callback=on_progress,
+        )
+    else:
+        # Provider 自己负责判断 CRG 是否可用，避免在这里先调用 available()
+        # 而把“依赖缺失/构建失败”误投影成没有 provider 的静默跳过。
+        graph_facts = code_graph_provider.inspect(
+            workspace_root,
+            source_files,
+            revision=revision,
+            callback=on_progress,
+        )
     cache_path = (
         cache_root
         / "workspace-snapshots"
         / f"{revision}.{INSPECTOR_SCHEMA_VERSION}.json"
     )
     if cache_path.is_file():
-        return json.loads(cache_path.read_text(encoding="utf-8")), str(cache_path), True
+        snapshot = json.loads(cache_path.read_text(encoding="utf-8"))
+        if isinstance(snapshot, dict):
+            snapshot["code_graph"] = graph_facts
+            snapshot["workspace_revision"] = revision
+            cache_path.write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            return snapshot, str(cache_path), True
 
     snapshot = _build_snapshot(
         workspace_root,
         revision=revision,
         files=files,
-        code_graph_provider=code_graph_provider or NullCodeGraphProvider(),
+        code_graph_facts=graph_facts,
     )
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(
@@ -104,6 +185,30 @@ def inspect_workspace(
         encoding="utf-8",
     )
     return snapshot, str(cache_path), False
+
+
+def workspace_inventory(workspace_root: Path) -> tuple[list[str], str]:
+    """生成用户工作区的安全相对路径清单和 revision，供代码图增量更新复用。"""
+
+    root = workspace_root.expanduser().resolve()
+    if not root.is_dir():
+        return [], ""
+    files = _list_workspace_files(root)
+    return files, _workspace_revision(root, files)
+
+
+def source_files_for_code_graph(workspace_root: Path, files: list[str]) -> list[str]:
+    """从工作区清单中筛出可安全交给 CRG 解析的源码文件。"""
+
+    root = workspace_root.resolve()
+    return [
+        relative
+        for relative in files
+        if Path(relative).suffix.lower() in CODE_GRAPH_SUFFIXES
+        and _safe_workspace_file(root, relative)
+        and _can_read(root / relative)
+        and not _is_binary_source(root / relative)
+    ]
 
 
 def snapshot_hash(snapshot: dict[str, Any]) -> str:
@@ -137,6 +242,7 @@ def _list_workspace_files(workspace_root: Path) -> list[str]:
             path
             for path in rg_result.stdout.splitlines()
             if path and not _is_ignored_path(path)
+            and _safe_workspace_file(workspace_root, path)
         )[:MAX_FILES]
 
     files: list[str] = []
@@ -157,7 +263,7 @@ def _list_workspace_files(workspace_root: Path) -> list[str]:
             if len(files) >= MAX_FILES:
                 break
             relative = Path((current / filename).relative_to(workspace_root)).as_posix()
-            if _is_ignored_path(relative):
+            if _is_ignored_path(relative) or not _safe_workspace_file(workspace_root, relative):
                 continue
             files.append(relative)
     return sorted(files)
@@ -186,6 +292,10 @@ def _workspace_revision(workspace_root: Path, files: list[str]) -> str:
         manifest = "\n".join(files)
         parts.append(f"manifest:{_hash_text(manifest)}")
 
+    # Git diff 能覆盖仓库内内容变化；stat manifest 则覆盖非 Git 工作区以及
+    # 用户刚创建、尚未加入 Git 的文件，同时避免每次都重新读取全部源码。
+    parts.append(f"file_stats:{_hash_text(_file_stat_manifest(workspace_root, files))}")
+
     for name in (
         "package.json",
         "pnpm-lock.yaml",
@@ -204,7 +314,7 @@ def _build_snapshot(
     *,
     revision: str,
     files: list[str],
-    code_graph_provider: CodeGraphProvider,
+    code_graph_facts: dict[str, Any],
 ) -> dict[str, Any]:
     package_json = _read_json(workspace_root / "package.json")
     frontend_package_path = next(
@@ -232,13 +342,10 @@ def _build_snapshot(
     source_files = [
         path
         for path in files
-        if Path(path).suffix in SOURCE_SUFFIXES and _can_read(workspace_root / path)
+        if Path(path).suffix in SOURCE_SUFFIXES
+        and _safe_workspace_file(workspace_root, path)
+        and _can_read(workspace_root / path)
     ]
-    graph_facts = (
-        code_graph_provider.inspect(workspace_root, source_files)
-        if code_graph_provider.available()
-        else NullCodeGraphProvider().inspect(workspace_root, source_files)
-    )
 
     return {
         "schema_version": INSPECTOR_SCHEMA_VERSION,
@@ -272,8 +379,8 @@ def _build_snapshot(
             "source_files_indexed": len(source_files),
             "truncated": len(files) >= MAX_FILES,
         },
-        "code_graph": graph_facts,
-        "risk_notes": _risk_notes(files, graph_facts),
+        "code_graph": code_graph_facts,
+        "risk_notes": _risk_notes(files, code_graph_facts),
     }
 
 
@@ -569,6 +676,44 @@ def _read_text(path: Path) -> str:
 
 def _can_read(path: Path) -> bool:
     return path.is_file() and path.stat().st_size <= MAX_FILE_BYTES
+
+
+def _is_binary_source(path: Path) -> bool:
+    """排除带 NUL 字节的二进制伪源码，避免把图片或编译产物交给解析器。"""
+
+    try:
+        return b"\0" in path.read_bytes()[:4_096]
+    except OSError:
+        return True
+
+
+def _safe_workspace_file(workspace_root: Path, relative: str) -> bool:
+    """确认清单路径不是敏感文件且解析后仍位于用户 workspaceRoot 内。"""
+
+    candidate = workspace_root / relative
+    if Path(relative).name.casefold() in SENSITIVE_FILE_NAMES_CASEFOLD:
+        return False
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(workspace_root.resolve())
+    except (OSError, ValueError):
+        return False
+    return resolved.is_file()
+
+
+def _file_stat_manifest(workspace_root: Path, files: list[str]) -> str:
+    """生成只包含相对路径、大小和 mtime 的轻量 revision 输入。"""
+
+    entries: list[str] = []
+    for relative in files:
+        if not _safe_workspace_file(workspace_root, relative):
+            continue
+        try:
+            stat = (workspace_root / relative).stat()
+        except OSError:
+            continue
+        entries.append(f"{relative}:{stat.st_size}:{stat.st_mtime_ns}")
+    return "\n".join(entries)
 
 
 def _hash_file(path: Path) -> str:

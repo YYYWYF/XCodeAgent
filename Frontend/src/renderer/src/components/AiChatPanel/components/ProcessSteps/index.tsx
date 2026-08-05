@@ -12,7 +12,11 @@ import {
 import { Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { IntegrationTestCheckRecord, ProcessStepRecord } from '../../../../service/agUiAgent'
+import type {
+  IntegrationTestCheckRecord,
+  ProcessStepRecord,
+  WorkspaceInspectionProgress
+} from '../../../../service/agUiAgent'
 import { cx } from '../../../../utils'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import DagGenerationProgress from './DagGenerationProgress'
@@ -121,6 +125,7 @@ function ProcessStep({
   const hasDagGeneration = Boolean(step.dagGeneration)
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasWorkspaceInspection = Boolean(step.workspaceInspection)
+  const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
   const expandable =
@@ -130,7 +135,8 @@ function ProcessStep({
     hasBuildRun ||
     hasDagGeneration ||
     hasProjectPlanUpdate ||
-    hasWorkspaceInspection
+    hasWorkspaceInspection ||
+    hasWorkspaceInspectionProgress
   const awaitingInput = waitingForInput && step.status === 'requires_user_input'
   const [open, setOpen] = useState(
     expandable &&
@@ -140,7 +146,8 @@ function ProcessStep({
         hasBuildRun ||
         hasDagGeneration ||
         hasProjectPlanUpdate ||
-        hasWorkspaceInspection)
+        hasWorkspaceInspection ||
+        hasWorkspaceInspectionProgress)
   )
 
   useEffect(() => {
@@ -152,7 +159,8 @@ function ProcessStep({
         hasBuildRun ||
         hasDagGeneration ||
         hasProjectPlanUpdate ||
-        hasWorkspaceInspection)
+        hasWorkspaceInspection ||
+        hasWorkspaceInspectionProgress)
     ) {
       setOpen(true)
     }
@@ -164,6 +172,7 @@ function ProcessStep({
     hasDagGeneration,
     hasProjectPlanUpdate,
     hasWorkspaceInspection,
+    hasWorkspaceInspectionProgress,
     step.status
   ])
 
@@ -177,6 +186,7 @@ function ProcessStep({
     hasDagGeneration && 'has-dag-generation',
     hasProjectPlanUpdate && 'has-project-plan-update',
     hasWorkspaceInspection && 'has-workspace-inspection',
+    hasWorkspaceInspectionProgress && 'has-workspace-inspection-progress',
     isLast && 'last'
   )
   const summaryContent = (
@@ -220,6 +230,7 @@ function ProcessStep({
           !hasDagGeneration &&
           !hasProjectPlanUpdate &&
           !hasWorkspaceInspection &&
+          !hasWorkspaceInspectionProgress &&
           step.detail && (
             <DetailBlock
               label={step.kind === 'reasoning' ? '思考内容' : '动作详情'}
@@ -229,6 +240,9 @@ function ProcessStep({
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
         {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
         {step.projectPlanUpdate && <ProjectPlanUpdatePanel update={step.projectPlanUpdate} />}
+        {step.workspaceInspectionProgress && !step.workspaceInspection && (
+          <WorkspaceInspectionProgressPanel progress={step.workspaceInspectionProgress} />
+        )}
         {step.workspaceInspection && (
           <WorkspaceInspectionPanel snapshot={step.workspaceInspection} />
         )}
@@ -238,6 +252,36 @@ function ProcessStep({
         {step.result && <DetailBlock label="执行结果" value={step.result} />}
       </div>
     </details>
+  )
+}
+
+/** 展示代码图扫描期间的阶段、文件、符号和关系实时计数。 */
+function WorkspaceInspectionProgressPanel({
+  progress
+}: {
+  progress: WorkspaceInspectionProgress
+}): ReactElement {
+  const metrics = [
+    { label: '发现文件', value: progress.filesDiscovered },
+    { label: '已索引', value: progress.filesIndexed },
+    { label: '符号', value: progress.symbolsIndexed },
+    { label: '关系', value: progress.relationsIndexed }
+  ]
+  return (
+    <section className={cx('workspace-inspection-progress')} aria-label="代码扫描进度">
+      <div className={cx('workspace-inspection-progress-heading')}>
+        <LoadingOutlined spin />
+        <span>{progress.message || '正在扫描用户工作区代码…'}</span>
+      </div>
+      <div className={cx('workspace-inspection-progress-metrics')}>
+        {metrics.map((metric) => (
+          <span key={metric.label}>
+            <strong>{metric.value.toLocaleString()}</strong>
+            {metric.label}
+          </span>
+        ))}
+      </div>
+    </section>
   )
 }
 

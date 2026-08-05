@@ -10,7 +10,7 @@ PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
     "detail_confirmation": "页面细节确认",
-    "inspect_workspace": "工作区快照检查",
+    "inspect_workspace": "扫描工作区代码",
     "inspect_database_context": "数据库上下文检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
@@ -106,7 +106,11 @@ def workflow_capabilities() -> dict[str, Any]:
                     "workspaceInspection": (
                         "Safe inspect-workspace summary containing bounded counts, detected "
                         "stack, relative project roots and entrypoints, cache status, and the "
-                        "code-graph capability state."
+                        "code-graph provider/build status plus symbol and relation counts."
+                    ),
+                    "workspaceInspectionProgress": (
+                        "Running bounded code-review-graph progress with stage, message, and "
+                        "file/symbol/relation counters."
                     ),
                     "checks": {
                         "description": "Incremental integration-test check snapshot.",
@@ -120,6 +124,12 @@ def workflow_capabilities() -> dict[str, Any]:
                     }
                 },
             },
+        },
+        "scan": {
+            "node": "inspect_workspace",
+            "label": "扫描工作区代码",
+            "progressEvent": "workspace_inspection.progress",
+            "fallback": "workspace_search",
         },
         "phases": [
             {"id": node_id, "label": label}

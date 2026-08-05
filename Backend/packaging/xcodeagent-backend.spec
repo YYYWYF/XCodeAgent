@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 
 backend_root = Path(SPECPATH).parent.resolve()
@@ -13,9 +18,18 @@ datas = [
         "app/builtin_skills",
     ),
 ]
+binaries = []
 
-for package_name in ("ag_ui", "langchain_core", "langgraph"):
+for package_name in (
+    "ag_ui",
+    "langchain_core",
+    "langgraph",
+    "code_review_graph",
+    "tree_sitter",
+    "tree_sitter_language_pack",
+):
     datas += collect_data_files(package_name)
+    binaries += collect_dynamic_libs(package_name)
 
 for distribution_name in (
     "ag-ui-protocol",
@@ -27,6 +41,9 @@ for distribution_name in (
     "pydantic",
     "PyYAML",
     "uvicorn",
+    "code-review-graph",
+    "tree-sitter",
+    "tree-sitter-language-pack",
 ):
     datas += copy_metadata(distribution_name)
 
@@ -43,6 +60,9 @@ for package_name in (
     "starlette",
     "uvicorn",
     "yaml",
+    "code_review_graph",
+    "tree_sitter",
+    "tree_sitter_language_pack",
 ):
     hiddenimports += collect_submodules(package_name)
 
@@ -56,7 +76,7 @@ hiddenimports += [
 a = Analysis(
     [str(backend_root / "packaging" / "backend_server.py")],
     pathex=[str(backend_root)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

@@ -10,6 +10,7 @@ from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.middleware.direct_modification import DirectModificationMiddleware
 from app.tools.delete_file import create_delete_file_tool
+from app.tools.code_graph_context import create_code_graph_context_tool
 from app.tools.execute import create_execute_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
@@ -44,7 +45,9 @@ def create_frontend_agent(
         "use edit_file to modify the existing file instead of retrying write_file "
         "with the same path. If you must create a new file, use a unique filename "
         "(e.g. append a number or timestamp). Never retry write_file with the same "
-        "path more than once."
+        "path more than once. Before reading a broad directory, use the built-in "
+        "code_graph_context tool to locate relevant files and symbols; the graph is "
+        "navigation only, so read the actual source before editing."
     )
     return create_deep_agent(
         name="frontend-generation-agent",
@@ -54,7 +57,11 @@ def create_frontend_agent(
         ),
         skills=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
-        tools=[create_delete_file_tool(workspace_root), create_execute_tool(workspace_root)],
+        tools=[
+            create_code_graph_context_tool(workspace_root),
+            create_delete_file_tool(workspace_root),
+            create_execute_tool(workspace_root),
+        ],
         middleware=[DirectModificationMiddleware()],
         backend=backend,
         permissions=create_workspace_permissions(

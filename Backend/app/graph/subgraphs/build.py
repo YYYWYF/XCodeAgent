@@ -14,7 +14,11 @@ from app.agents.frontend.generator import generate_frontend_with_deep_agent
 from app.agents.repair_planner import (
     plan_build_failure_repair_with_repair_planner_agent,
 )
-from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
+from app.graph.nodes.common import (
+    capture_agent_file_changes,
+    refresh_code_graph_after_changes,
+    workspace_from_state,
+)
 from app.graph.state import ProjectState
 from app.services.build_repair_planner import (
     approve_repair_scope_confirmation,
@@ -740,6 +744,12 @@ def run_build_scheduler(
             {**current_state, "tasks": running_tasks},
             ready_tasks,
             on_batch_tool_activity=update_batch_tool_activity,
+        )
+        # 每个调度批次完成后刷新一次代码图，让后续阶段查询到真实的新文件、
+        # 新符号和新关系；刷新失败只影响导航，不影响任务结果。
+        refresh_code_graph_after_changes(
+            workspace_from_state(current_state),
+            code_change_sets,
         )
         database_approval = _database_approval_result(results)
         if database_approval is not None:

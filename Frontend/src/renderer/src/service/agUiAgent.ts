@@ -270,8 +270,29 @@ export type WorkspaceInspectionSnapshot = {
   entrypoints: WorkspaceInspectionPathItem[]
   codeGraph: {
     provider: string
+    providerVersion?: string
+    status?: string
     available: boolean
+    buildType?: string
+    filesIndexed?: number
+    symbolsIndexed?: number
+    relationsIndexed?: number
+    languages?: string[]
+    message?: string
+    durationMs?: number
+    cacheHit?: boolean
   }
+}
+
+export type WorkspaceInspectionProgress = {
+  stage: string
+  status: string
+  message: string
+  filesDiscovered: number
+  filesIndexed: number
+  symbolsIndexed: number
+  relationsIndexed: number
+  cacheHit: boolean
 }
 
 export type ProcessStepRecord = {
@@ -290,6 +311,7 @@ export type ProcessStepRecord = {
   buildExecutionSlice?: import('../typings').WorkflowBuildExecutionSlice
   dagGeneration?: DagGenerationSnapshot
   workspaceInspection?: WorkspaceInspectionSnapshot
+  workspaceInspectionProgress?: WorkspaceInspectionProgress
   projectPlanUpdate?: WorkflowProjectPlanUpdate
 }
 
@@ -518,6 +540,9 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
   const checks = readIntegrationTestChecks(step.checks)
   const dagGeneration = readDagGenerationSnapshot(step.dagGeneration)
   const workspaceInspection = readWorkspaceInspectionSnapshot(step.workspaceInspection)
+  const workspaceInspectionProgress = readWorkspaceInspectionProgress(
+    step.workspaceInspectionProgress
+  )
   return {
     id,
     kind: kind as ProcessStepRecord['kind'],
@@ -536,7 +561,24 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
         : undefined,
     ...(checks ? { checks } : {}),
     ...(dagGeneration ? { dagGeneration } : {}),
-    ...(workspaceInspection ? { workspaceInspection } : {})
+    ...(workspaceInspection ? { workspaceInspection } : {}),
+    ...(workspaceInspectionProgress ? { workspaceInspectionProgress } : {})
+  }
+}
+
+/** 解析代码图扫描中的实时计数，供运行中的流程步骤原位更新。 */
+function readWorkspaceInspectionProgress(value: unknown): WorkspaceInspectionProgress | undefined {
+  const progress = objectValue(value)
+  if (!Object.keys(progress).length) return undefined
+  return {
+    stage: boundedString(progress.stage, 80),
+    status: boundedString(progress.status, 40),
+    message: boundedString(progress.message, 300),
+    filesDiscovered: nonNegativeInteger(progress.filesDiscovered),
+    filesIndexed: nonNegativeInteger(progress.filesIndexed),
+    symbolsIndexed: nonNegativeInteger(progress.symbolsIndexed),
+    relationsIndexed: nonNegativeInteger(progress.relationsIndexed),
+    cacheHit: progress.cacheHit === true
   }
 }
 
@@ -568,7 +610,17 @@ export function readWorkspaceInspectionSnapshot(
     entrypoints,
     codeGraph: {
       provider: boundedString(codeGraph.provider, 80) || 'none',
-      available: codeGraph.available === true
+      providerVersion: boundedString(codeGraph.providerVersion, 40) || undefined,
+      status: boundedString(codeGraph.status, 40) || undefined,
+      available: codeGraph.available === true,
+      buildType: boundedString(codeGraph.buildType, 40) || undefined,
+      filesIndexed: nonNegativeInteger(codeGraph.filesIndexed),
+      symbolsIndexed: nonNegativeInteger(codeGraph.symbolsIndexed),
+      relationsIndexed: nonNegativeInteger(codeGraph.relationsIndexed),
+      languages: boundedStringList(codeGraph.languages, 20, 40),
+      message: boundedString(codeGraph.message, 300) || undefined,
+      durationMs: nonNegativeInteger(codeGraph.durationMs),
+      cacheHit: codeGraph.cacheHit === true
     }
   }
 }

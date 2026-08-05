@@ -23,10 +23,26 @@ type Props = {
 /** 展示工作区静态扫描的结构化摘要和关键识别结果。 */
 export default function WorkspaceInspectionPanel({ snapshot }: Props): ReactElement {
   const revision = snapshot.revision.slice(0, 12) || 'UNVERSIONED'
+  const graph = snapshot.codeGraph
+  const graphStatus = graph.status || (graph.available ? 'ready' : 'unavailable')
+  const graphWarning =
+    !graph.available || ['failed', 'indexing', 'unavailable'].includes(graphStatus)
+  const graphStatusLabel =
+    graph.cacheHit || graphStatus === 'cache_hit'
+      ? 'CACHE HIT'
+      : graphStatus === 'incremental' || graph.buildType === 'incremental'
+        ? 'INCREMENTAL READY'
+        : graphStatus === 'indexing'
+          ? 'BACKGROUND INDEXING'
+          : graph.available
+            ? 'GRAPH READY'
+            : 'FILE SEARCH FALLBACK'
   const metrics = [
     { label: '索引文件', value: snapshot.fileManifest.totalFiles },
     { label: '源文件', value: snapshot.fileManifest.sourceFiles },
-    { label: '项目根', value: snapshot.projectRoots.length }
+    { label: '项目根', value: snapshot.projectRoots.length },
+    { label: '图符号', value: graph.symbolsIndexed ?? 0 },
+    { label: '图关系', value: graph.relationsIndexed ?? 0 }
   ]
 
   return (
@@ -39,13 +55,13 @@ export default function WorkspaceInspectionPanel({ snapshot }: Props): ReactElem
           <span className={cx('workspace-inspection-heading')}>
             <Text className={cx('workspace-inspection-eyebrow')}>WORKSPACE SCAN</Text>
             <Text className={cx('workspace-inspection-title')} strong>
-              工作区结构扫描
+              工作区代码扫描
             </Text>
           </span>
         </div>
         <div className={cx('workspace-inspection-status')}>
           <span className={cx('workspace-inspection-status-dot')} aria-hidden="true" />
-          <span>{snapshot.cacheHit ? 'CACHE HIT' : 'SNAPSHOT READY'}</span>
+          <span>{graphStatusLabel}</span>
           <code>REV {revision}</code>
         </div>
       </header>
@@ -85,11 +101,15 @@ export default function WorkspaceInspectionPanel({ snapshot }: Props): ReactElem
 
       <footer className={cx('workspace-inspection-signals')}>
         <InspectionSignal
-          warning={!snapshot.codeGraph.available}
+          warning={graphWarning}
           text={
-            snapshot.codeGraph.available
-              ? `语义图谱已连接 · ${snapshot.codeGraph.provider}`
-              : '语义图谱未启用 · 当前使用确定性文件与模式扫描'
+            graph.available
+              ? `代码图已就绪 · ${graph.provider}${graph.buildType ? ` · ${graph.buildType}` : ''}`
+              : graphStatus === 'indexing'
+                ? '代码图仍在后台构建 · 当前使用文件搜索'
+                : graphStatus === 'failed'
+                  ? '代码图构建失败 · 当前使用文件搜索'
+                  : '代码图不可用 · 当前使用确定性文件与模式扫描'
           }
         />
         <InspectionSignal

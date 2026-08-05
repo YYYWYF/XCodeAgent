@@ -70,6 +70,7 @@ def _process_frame(
     build_execution_slice: dict[str, Any] | None = None,
     dag_generation: dict[str, Any] | None = None,
     workspace_inspection: dict[str, Any] | None = None,
+    workspace_inspection_progress: dict[str, Any] | None = None,
 ) -> str:
     value: dict[str, Any] = {
         "id": id,
@@ -95,6 +96,8 @@ def _process_frame(
         value["dagGeneration"] = dag_generation
     if workspace_inspection is not None:
         value["workspaceInspection"] = workspace_inspection
+    if workspace_inspection_progress is not None:
+        value["workspaceInspectionProgress"] = workspace_inspection_progress
     return encoder.encode(
         CustomEvent(
             name=PROCESS_EVENT_NAME,

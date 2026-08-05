@@ -59,6 +59,8 @@ class ProjectState(TypedDict, total=False):
     workspace_snapshot_path: str
     workspace_snapshot_hash: str
     workspace_revision: str
+    workspace_scan_progress: dict[str, Any]
+    code_graph_index: dict[str, Any]
     build_execution_scope: dict[str, str]
     execution_resource_claims: list[dict[str, Any]]
     build_execution_slice: dict[str, Any]

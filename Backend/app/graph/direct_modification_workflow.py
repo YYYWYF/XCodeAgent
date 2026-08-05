@@ -12,21 +12,34 @@ from app.graph.nodes.direct_modification import (
     launch_direct_modification_project,
     run_direct_modification_integration_test,
 )
+from app.graph.nodes.workspace_inspection import scan_workspace_code
 from app.graph.state import ProjectState
 from app.persistence.checkpoints import workflow_checkpoint_db_path, workflow_checkpointer
 
 
 def _route_classification(
     state: ProjectState,
-) -> Literal["execute_frontend", "execute_backend", "finalize"]:
+) -> Literal["scan_workspace_code", "finalize"]:
     """按分类结果选择单端、跨端第一阶段或直接终止。"""
 
     if state.get("status") != "in_progress":
         return "finalize"
     owner = state.get("direct_modification_owner")
-    if owner == "frontend":
+    if owner in {"frontend", "backend", "fullstack"}:
+        return "scan_workspace_code"
+    return "finalize"
+
+
+def _route_scan_workspace(
+    state: ProjectState,
+) -> Literal["execute_frontend", "execute_backend", "finalize"]:
+    """扫描完成后按已确认的快速修改归属进入对应执行阶段。"""
+
+    if state.get("status") != "in_progress":
+        return "finalize"
+    if state.get("direct_modification_owner") == "frontend":
         return "execute_frontend"
-    if owner in {"backend", "fullstack"}:
+    if state.get("direct_modification_owner") in {"backend", "fullstack"}:
         return "execute_backend"
     return "finalize"
 
@@ -67,6 +80,9 @@ def direct_next_node_name(node_name: str, state: ProjectState) -> str | None:
     if node_name == "classify_intent":
         route = _route_classification(state)
         return "finalize_direct_modification" if route == "finalize" else route
+    if node_name == "scan_workspace_code":
+        route = _route_scan_workspace(state)
+        return "finalize_direct_modification" if route == "finalize" else route
     if node_name == "execute_backend":
         route = _route_backend(state)
         return "finalize_direct_modification" if route == "finalize" else route
@@ -86,6 +102,7 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
 
     builder = StateGraph(ProjectState)
     builder.add_node("classify_intent", classify_direct_modification)
+    builder.add_node("scan_workspace_code", scan_workspace_code)
     builder.add_node("execute_frontend", execute_frontend_direct_modification)
     builder.add_node("execute_backend", execute_backend_direct_modification)
     builder.add_node("integration_test", run_direct_modification_integration_test)
@@ -96,6 +113,14 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
     builder.add_conditional_edges(
         "classify_intent",
         _route_classification,
+        {
+            "scan_workspace_code": "scan_workspace_code",
+            "finalize": "finalize_direct_modification",
+        },
+    )
+    builder.add_conditional_edges(
+        "scan_workspace_code",
+        _route_scan_workspace,
         {
             "execute_frontend": "execute_frontend",
             "execute_backend": "execute_backend",

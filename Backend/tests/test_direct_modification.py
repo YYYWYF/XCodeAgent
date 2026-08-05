@@ -21,6 +21,7 @@ from app.graph.direct_modification_workflow import (
     _route_classification,
     _route_frontend,
     _route_integration_test,
+    _route_scan_workspace,
     direct_next_node_name,
 )
 from app.graph.nodes.direct_modification import (
@@ -191,7 +192,8 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(update["direct_modification_owner"], "fullstack")
         self.assertEqual(update["launch_result"], {})
         self.assertIs(update["quality_gate_passed"], False)
-        self.assertEqual(_route_classification(update), "execute_backend")
+        self.assertEqual(_route_classification(update), "scan_workspace_code")
+        self.assertEqual(_route_scan_workspace(update), "execute_backend")
 
     def test_clarification_summary_is_finalized_once_and_reused_on_next_run(self) -> None:
         """等待轮只在收尾节点记录一次摘要，下一轮分类可读取旧请求和澄清问题。"""
@@ -254,7 +256,8 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(captured["conversation_summary"].count("用户：sdf"), 1)
         self.assertEqual(continued["status"], "in_progress")
         self.assertEqual(continued["clarification"], {})
-        self.assertEqual(_route_classification(continued), "execute_frontend")
+        self.assertEqual(_route_classification(continued), "scan_workspace_code")
+        self.assertEqual(_route_scan_workspace(continued), "execute_frontend")
 
     def test_frontend_execution_uses_real_workspace_diff(self) -> None:
         """前端阶段以工作区快照为权威变更清单。"""
@@ -443,14 +446,14 @@ class DirectModificationNodeTests(unittest.TestCase):
         next_node = direct_next_node_name("classify_intent", state)
         running_step = direct_node_running_process_step(str(next_node))
         completed_step = direct_node_process_step(
-            "execute_frontend",
-            {"status": "in_progress", "message": "前端修改完成。"},
+            "scan_workspace_code",
+            {"status": "in_progress", "message": "代码扫描完成。"},
         )
 
-        self.assertEqual(next_node, "execute_frontend")
+        self.assertEqual(next_node, "scan_workspace_code")
         self.assertEqual(running_step["id"], completed_step["id"])
         self.assertEqual(running_step["status"], "running")
-        self.assertEqual(running_step["title"], "正在执行 执行前端修改")
+        self.assertEqual(running_step["title"], "正在执行 扫描工作区代码")
         self.assertEqual(completed_step["status"], "completed")
 
     def test_started_event_exposes_running_copy(self) -> None:
@@ -566,6 +569,20 @@ class DirectModificationProtocolTests(unittest.TestCase):
                         "message": "已识别前端修改。",
                         "direct_modification_owner": "frontend",
                         "direct_modification_scope": "direct",
+                    }
+                }
+                yield "updates", {
+                    "scan_workspace_code": {
+                        "phase": "scan_workspace_code",
+                        "status": "in_progress",
+                        "message": "代码扫描完成。",
+                        "workspace_snapshot_summary": {
+                            "code_graph": {
+                                "status": "cache_hit",
+                                "available": True,
+                                "message": "代码索引缓存已就绪。",
+                            }
+                        },
                     }
                 }
                 yield "updates", {

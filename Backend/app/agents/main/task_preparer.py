@@ -50,12 +50,18 @@ def _task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
     build_context: dict[str, Any] | None = None,
+    code_graph_context: dict[str, Any] | None = None,
 ) -> str:
     """组合全局计划与定向详情上下文，约束模型仅返回当前 Unit 的任务候选。"""
-    snapshot_text = (
-        json.dumps(workspace_snapshot, ensure_ascii=False, indent=2)
-        if workspace_snapshot
-        else "{}"
+    snapshot_text = json.dumps(
+        _compact_workspace_snapshot(workspace_snapshot),
+        ensure_ascii=False,
+        indent=2,
+    )
+    graph_context_text = json.dumps(
+        code_graph_context or {},
+        ensure_ascii=False,
+        indent=2,
     )
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
@@ -64,7 +70,8 @@ def _task_preparation_prompt(
     # 规划模型处于 planning-only 边界，无法读取技能文件，须把 SKILL.md 内联进 prompt。
     backend_skill_document = _springboot_mybatis_skill_document()
     # 从 WorkspaceSnapshot 中提取真实后端目录树，直接注入 prompt。
-    backend_snapshot = workspace_snapshot.get("backend") if workspace_snapshot else None
+    compact_snapshot = _compact_workspace_snapshot(workspace_snapshot)
+    backend_snapshot = compact_snapshot.get("backend") if compact_snapshot else None
     backend_dir_structure = (
         backend_snapshot.get("dir_structure")
         if isinstance(backend_snapshot, dict) and backend_snapshot.get("dir_structure")
@@ -246,10 +253,74 @@ def _task_preparation_prompt(
         "summary, but dependencies on tasks are the source of truth for DAG edges. "
         "workspace_analysis must summarize the directories, entry files, stack, and "
         "conventions used from the WorkspaceSnapshot.\n\n"
-        f"WorkspaceSnapshot:\n{snapshot_text}\n\n"
+        f"WorkspaceSnapshot (bounded planning projection):\n{snapshot_text}\n\n"
+        f"WorkspaceNavigationContext (code-review-graph, bounded):\n{graph_context_text}\n\n"
         f"TargetBuildContext:\n{json.dumps(build_context or {}, ensure_ascii=False, indent=2)}\n\n"
         f"TaskPreparationContext:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
     )
+
+
+def _compact_workspace_snapshot(
+    workspace_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """裁剪规划 Prompt 的工作区快照，只保留导航所需的有限事实。"""
+
+    if not isinstance(workspace_snapshot, dict):
+        return {}
+    compact: dict[str, Any] = {}
+    for key in (
+        "schema_version",
+        "workspace_revision",
+        "project_roots",
+        "tech_stack",
+        "entrypoints",
+        "build_commands",
+        "test_commands",
+        "file_manifest",
+        "shared_contracts",
+        "high_value_files",
+        "code_graph",
+    ):
+        if key in workspace_snapshot:
+            compact[key] = _bounded_prompt_value(workspace_snapshot[key], limit=80)
+    for key in ("backend", "frontend"):
+        value = workspace_snapshot.get(key)
+        if not isinstance(value, dict):
+            continue
+        bounded = {
+            item_key: _bounded_prompt_value(item_value, limit=80)
+            for item_key, item_value in value.items()
+            if item_key
+            in {
+                "api_routes",
+                "models",
+                "workflow_nodes",
+                "agent_factories",
+                "components",
+                "pages",
+                "api_clients",
+                "ipc_calls",
+                "ag_ui_usage",
+                "dir_structure",
+            }
+        }
+        compact[key] = bounded
+    return compact
+
+
+def _bounded_prompt_value(value: Any, *, limit: int) -> Any:
+    """限制规划上下文中的列表、字符串和嵌套对象，避免模型看到无界快照。"""
+
+    if isinstance(value, str):
+        return value[:12_000]
+    if isinstance(value, list):
+        return [_bounded_prompt_value(item, limit=limit) for item in value[:limit]]
+    if isinstance(value, dict):
+        return {
+            str(key)[:120]: _bounded_prompt_value(item, limit=limit)
+            for key, item in list(value.items())[:limit]
+        }
+    return value
 
 
 def _invoke_live_main_agent(
@@ -258,6 +329,7 @@ def _invoke_live_main_agent(
     workspace: str | None = None,
     workspace_snapshot: dict[str, Any] | None = None,
     build_context: dict[str, Any] | None = None,
+    code_graph_context: dict[str, Any] | None = None,
     settings: Settings | None = None,
 ) -> str:
     """调用无工具 ChatModel 执行只读的构建任务候选规划。"""
@@ -267,6 +339,7 @@ def _invoke_live_main_agent(
         project_plan,
         workspace_snapshot,
         build_context,
+        code_graph_context,
     )
     result = create_chat_model(active_settings).bind(
         max_tokens=active_settings.default_max_tokens
@@ -287,6 +360,7 @@ def prepare_build_tasks_with_main_agent(
     workspace: str | None = None,
     workspace_snapshot: dict[str, Any] | None = None,
     build_context: dict[str, Any] | None = None,
+    code_graph_context: dict[str, Any] | None = None,
     build_task_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """通过直接模型边界生成当前范围的可执行 Build DAG 候选任务。"""
@@ -297,6 +371,7 @@ def prepare_build_tasks_with_main_agent(
         workspace=workspace,
         workspace_snapshot=workspace_snapshot,
         build_context=build_context,
+        code_graph_context=code_graph_context,
         settings=settings,
     )
     preparation_source = "direct_chat_model"
