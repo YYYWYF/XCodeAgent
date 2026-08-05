@@ -9,7 +9,7 @@ from app.services.execution_resource_scope import resolve_execution_resource_cla
 from app.services.frontend_page_tree import flatten_frontend_pages, frontend_page_ids
 
 from app.workspace.plan_documents import load_project_plan_json
-from app.workspace.spec_documents import load_requirement_spec_json
+from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
 from app.workspace.task_documents import load_build_task_plan_json
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 from app.services.build_task_planner import tasks_from_build_task_plan
@@ -715,6 +715,11 @@ def _project_plan_start_values(
             "frontend_pages": normalized_pages,
             "project_plan_path": _markdown_sibling_path(project_plan_path),
             "project_plan_json_path": str(project_plan_path),
+            # 加载 UI确认阶段持久化的设计稿索引（pageId→page_key 映射），
+            # 供 build 阶段前端 agent read_file 还原设计稿视觉。缺失时为空 dict 降级。
+            "ui_designs": load_ui_designs_json(
+                workspace_root / ".xcodeagent" / "specs" / "ui-designs.json"
+            ),
         }
     return {}
 

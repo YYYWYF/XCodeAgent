@@ -29,11 +29,10 @@ from app.services.ui_design_generator import (
     persist_page_code,
     rewrite_menus,
     route_path_for_page,
-    validate_tsx,
 )
 from app.services.ui_design_project_setup import setup_ui_design_project
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
-from app.workspace.spec_documents import workspace_root
+from app.workspace.spec_documents import workspace_root, write_ui_designs_json
 
 
 logger = logging.getLogger(__name__)
@@ -198,23 +197,12 @@ async def _generate_one_page(
             pages=list(ready_pages),
         )
         try:
-            code = await asyncio.to_thread(generate_page_react_code, page, page_key)
-            ok, err = await asyncio.to_thread(validate_tsx, project_dir, code)
-            if not ok:
-                logger.warning(
-                    "ui_design_validate_failed page_id=%s err=%s", page_id, err[:200]
-                )
-                entry["status"] = "generation_failed"
-                entry["error"] = err[:500]
-                ready_pages.append(entry)
-                _emit_progress(
-                    f"设计稿语法校验失败：{entry['name']}（{len(ready_pages)}/{total}）",
-                    pageId=page_id,
-                    ready=len(ready_pages),
-                    total=total,
-                    pages=list(ready_pages),
-                )
-                return entry
+            # generate_page_react_code 内部已做完整校验（非空 + 未定义引用 +
+            # esbuild 语法）并自动修复重试，返回的代码保证可渲染；校验全部
+            # 失败时抛 ValueError，由下方 except 捕获标记 generation_failed。
+            code = await asyncio.to_thread(
+                generate_page_react_code, page, page_key, project_dir
+            )
             entry["code_path"] = persist_page_code(project_dir, page_key, code)
             ready_pages.append(entry)
             _emit_progress(
@@ -224,9 +212,10 @@ async def _generate_one_page(
                 total=total,
                 pages=list(ready_pages),
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("ui_design_generation_failed page_id=%s", page_id)
             entry["status"] = "generation_failed"
+            entry["error"] = str(exc)[:500]
             ready_pages.append(entry)
             _emit_progress(
                 f"设计稿生成失败：{entry['name']}（{len(ready_pages)}/{total}）",
@@ -307,6 +296,7 @@ async def ui_confirmation(state: ProjectState) -> dict:
         and existing.get("confirmation_status") == "pending_user_confirmation"
         and not _has_explicit_user_submission(state)
     ):
+        _persist_ui_designs(state, existing)
         return {
             "phase": "ui_confirmation",
             "status": "requires_user_input",
@@ -330,6 +320,7 @@ async def ui_confirmation(state: ProjectState) -> dict:
             "confirmation_status": "confirmed",
             "pages": confirmed_pages,
         }
+        _persist_ui_designs(state, ui_designs)
         return {
             "phase": "ui_confirmation",
             "status": "completed",
@@ -340,6 +331,7 @@ async def ui_confirmation(state: ProjectState) -> dict:
 
     # 首次进入或重新生成：并发为每个页面生成 React 设计稿。
     ui_designs = await _build_initial_ui_designs(state)
+    _persist_ui_designs(state, ui_designs)
     return {
         "phase": "ui_confirmation",
         "status": "requires_user_input",
@@ -347,3 +339,18 @@ async def ui_confirmation(state: ProjectState) -> dict:
         "clarification": _ui_design_confirmation_payload(ui_designs),
         "timeline": ["ui_confirmation"],
     }
+
+
+def _persist_ui_designs(state: ProjectState, ui_designs: dict[str, Any]) -> None:
+    """把 ui_designs 落盘到工作区 specs/ui-designs.json，供主 workflow build 阶段读取。
+
+    写盘失败只记日志不中断节点：设计稿代码文件已落盘，索引缺失时 build 阶段降级
+    为不读设计稿，不影响主流程。
+    """
+
+    if not isinstance(ui_designs, dict) or not ui_designs:
+        return
+    try:
+        write_ui_designs_json(state, ui_designs)
+    except Exception:
+        logger.exception("ui_designs_persist_failed")

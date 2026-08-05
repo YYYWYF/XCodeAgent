@@ -133,26 +133,221 @@ def _extract_tsx_code(text: str) -> str:
     return "\n".join(lines[start:]).strip() or stripped
 
 
-def generate_page_react_code(page: dict[str, Any], page_key: str) -> str:
-    """调用 LLM 为单个页面生成 React 设计稿 .tsx 代码。
+# ---------------------------------------------------------------------------
+# 生成后静态校验：捕获 esbuild 查不出的"空代码"与"未定义引用"两类错误
+# ---------------------------------------------------------------------------
 
-    返回 .tsx 源码字符串。模型调用失败时抛出，由调用方（Graph 节点）捕获并
-    持久化为节点失败状态。
+# React / TS 内置、无需 import 即可在 JSX 中使用的大写标识符。
+_REACT_BUILTIN_TAGS = {"Fragment", "React"}
+
+
+def _collect_imported_and_local_names(code: str) -> set[str]:
+    """收集代码中所有已 import 或本地定义的标识符名。
+
+    覆盖：默认导入、命名导入（含 `as` 重命名）、命名空间导入（`* as X`）、
+    解构赋值（`const { Text, Title } = Typography`）、以及 const/function/
+    type/interface/enum/class 的顶层定义。
+    """
+
+    names: set[str] = set()
+    # import 语句：默认导入 + 命名导入块 + 命名空间
+    for m in re.finditer(
+        r"^\s*import\s+(?:(\w+)(?:\s*,\s*)?)?(\{[^}]*\})?\s*(\*\s+as\s+(\w+))?\s*from",
+        code,
+        re.MULTILINE,
+    ):
+        if m.group(1):  # 默认导入名
+            names.add(m.group(1))
+        if m.group(2):  # 命名导入块 { A, B as C }
+            for binding in m.group(2)[1:-1].split(","):
+                token = binding.strip()
+                if not token:
+                    continue
+                # 取 `as` 后的重命名，否则取首标识符
+                as_match = re.search(r"\bas\s+(\w+)$", token)
+                names.add(as_match.group(1) if as_match else token.split()[0])
+        if m.group(4):  # * as Namespace
+            names.add(m.group(4))
+
+    # 解构赋值：const { Text, Title } = Typography;（含默认值与重命名）
+    for m in re.finditer(
+        r"(?:const|let|var)\s*\{([^}]*)\}\s*=",
+        code,
+    ):
+        for binding in m.group(1).split(","):
+            token = binding.strip()
+            if not token:
+                continue
+            as_match = re.search(r"\bas\s+(\w+)", token)
+            names.add(as_match.group(1) if as_match else re.match(r"\w+", token).group(0))
+
+    # 顶层定义：const/function/type/interface/enum/class X
+    for m in re.finditer(
+        r"(?:^|\n)\s*(?:export\s+)?(?:const|let|var|function|type|interface|enum|class)\s+([A-Za-z_$][\w$]*)",
+        code,
+    ):
+        names.add(m.group(1))
+    return names
+
+
+def _collect_jsx_component_tags(code: str) -> set[str]:
+    """收集代码中 JSX 里所有大写开头的组件标签名（如 ProTable、Button）。
+
+    只取首字母大写的标签（小写是 HTML 原生标签，不需 import）。成员表达式
+    （如 `<ProForm.Text>`）取首段 `ProForm`。
+    """
+
+    tags: set[str] = set()
+    for m in re.finditer(r"<([A-Z][\w$]*)", code):
+        tags.add(m.group(1))
+    return tags
+
+
+def _find_undefined_refs(code: str) -> list[str]:
+    """返回 JSX 中使用但未 import/未定义的组件名列表（已排序去重）。
+
+    捕获 LLM 最常见的错误：用了 `<ProTable>` 却忘记在 import 里加上
+    `ProTable`。esbuild 的 transform 只做语法转换不查引用，这类错误能通过
+    语法校验但在浏览器里 ReferenceError 白屏。
+    """
+
+    if not code.strip():
+        return []
+    defined = _collect_imported_and_local_names(code) | _REACT_BUILTIN_TAGS
+    used = _collect_jsx_component_tags(code)
+    return sorted(used - defined)
+
+
+def _is_meaningful_code(code: str) -> bool:
+    """判断生成的代码是否是有意义的页面组件（非空、有 export default）。
+
+    拒绝三类无效输出：纯空白（LLM 返回空）、无 `export default`（未导出
+    页面组件，路由 lazy import 会拿到 undefined）、以及过短碎片（< 30 字符，
+    通常是截断或错误占位）。
+    """
+
+    if not code or not code.strip():
+        return False
+    if len(code.strip()) < 30:
+        return False
+    return bool(re.search(r"export\s+default", code))
+
+
+def validate_page_code(project_dir: str, code: str) -> tuple[bool, str]:
+    """对单页设计稿代码做完整校验：非空 + 未定义引用 + esbuild 语法。
+
+    返回 (是否通过, 错误信息)。错误信息为人类可读的修复指引，供回喂 LLM
+    自动修复或展示给用户。esbuild 不可用时跳过语法校验（仅降级，不阻断）。
+    """
+
+    if not _is_meaningful_code(code):
+        return (
+            False,
+            "生成的代码为空、过短或缺少 `export default` 导出。"
+            "请输出一个完整的、以 `export default <ComponentName>` 结尾的页面组件。",
+        )
+    undefined = _find_undefined_refs(code)
+    if undefined:
+        return (
+            False,
+            "以下组件在 JSX 中被使用但未 import 或未定义，会导致运行时 "
+            "ReferenceError 白屏：" + ", ".join(undefined) + "。"
+            "请在 import 语句中补充这些组件（Pro 系列从 "
+            "@ant-design/pro-components、基础组件从 antd、图标从 "
+            "@ant-design/icons 导入）。",
+        )
+    # 语法校验放最后：前两项是 LLM 高频错误，esbuild 查不出。
+    return validate_tsx(project_dir, code)
+
+
+def _build_repair_prompt(
+    page: dict[str, Any], page_key: str, prev_code: str, errors: list[str]
+) -> str:
+    """构造修复 prompt：把前次代码与具体错误清单回喂 LLM 让其定向修正。"""
+
+    error_block = "\n".join(f"- {e}" for e in errors)
+    return (
+        "You previously generated a React + antd5 + @ant-design/pro-components "
+        ".tsx page for the page below, but it failed validation. Fix the issues "
+        "and return the COMPLETE corrected .tsx file.\n\n"
+        "Output rules (same as before):\n"
+        "- Return a single .tsx file's source code ONLY. No markdown fences, "
+        "no commentary.\n"
+        "- Keep the parts that were correct; only fix the reported problems.\n"
+        f"- The component name MUST be {page_key}, exported via "
+        "`export default`.\n\n"
+        "--- PAGE TO DESIGN ---\n"
+        f"{_page_brief(page)}\n"
+        "--- END PAGE ---\n\n"
+        "--- PREVIOUS CODE (has bugs) ---\n"
+        f"{prev_code}\n"
+        "--- END PREVIOUS CODE ---\n\n"
+        "--- VALIDATION ERRORS TO FIX ---\n"
+        f"{error_block}\n"
+        "--- END ERRORS ---\n\n"
+        "Return the full corrected .tsx file now."
+    )
+
+
+def generate_page_react_code(
+    page: dict[str, Any], page_key: str, project_dir: str = ""
+) -> str:
+    """调用 LLM 为单个页面生成 React 设计稿 .tsx 代码，并校验+自动修复。
+
+    生成后对代码做完整校验（非空 + 未定义引用 + esbuild 语法）。校验失败时
+    把具体错误回喂 LLM 让其定向修正，最多重试 `ui_design_max_retries` 次。
+    全部重试仍失败则抛出 ValueError，由调用方（Graph 节点）捕获并持久化为
+    节点 generation_failed 状态——避免把白屏代码静默写入工程。
+
+    project_dir 用于 esbuild 语法校验定位依赖；缺省时跳过语法校验（仅做
+    非空与未定义引用检查，仍能拦截 LLM 高频错误）。
     """
 
     settings = Settings.from_env()
+    model = create_chat_model(settings).bind(max_tokens=settings.ui_design_max_tokens)
+    page_id = str(page.get("pageId") or page.get("id") or "")
+    max_retries = max(0, settings.ui_design_max_retries)
+
+    # 首次生成
     prompt = _build_ui_design_prompt(page, page_key)
-    result = create_chat_model(settings).bind(
-        max_tokens=settings.ui_design_max_tokens
-    ).invoke(prompt)
+    result = model.invoke(prompt)
     content = _coerce_content_text(getattr(result, "content", ""))
     code = _extract_tsx_code(content)
     logger.info(
-        "ui_design_generated page_id=%s content_chars=%s code_chars=%s",
-        str(page.get("pageId") or page.get("id") or ""),
+        "ui_design_generated page_id=%s attempt=1 content_chars=%s code_chars=%s",
+        page_id,
         len(content),
         len(code),
     )
+
+    # 校验 + 自动修复重试闭环
+    ok, err = validate_page_code(project_dir, code)
+    attempt = 1
+    while not ok and attempt <= max_retries:
+        attempt += 1
+        logger.warning(
+            "ui_design_validate_failed page_id=%s attempt=%s err=%s",
+            page_id,
+            attempt - 1,
+            err[:200],
+        )
+        repair_prompt = _build_repair_prompt(page, page_key, code, [err])
+        result = model.invoke(repair_prompt)
+        content = _coerce_content_text(getattr(result, "content", ""))
+        code = _extract_tsx_code(content)
+        logger.info(
+            "ui_design_repaired page_id=%s attempt=%s code_chars=%s",
+            page_id,
+            attempt,
+            len(code),
+        )
+        ok, err = validate_page_code(project_dir, code)
+
+    if not ok:
+        # 全部重试仍失败：抛出，由节点标记 generation_failed，不写白屏代码。
+        raise ValueError(
+            f"ui_design code validation failed after {attempt} attempts: {err[:300]}"
+        )
     return code
 
 

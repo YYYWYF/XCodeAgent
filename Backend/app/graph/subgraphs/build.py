@@ -299,6 +299,7 @@ def _execute_owner_tasks(
                 workspace=workspace,
                 selected_skill_names=state.get("selected_skill_names"),
                 **({"page_template": state.get("page_template")} if owner == "frontend" else {}),
+                **({"ui_designs": state.get("ui_designs")} if owner == "frontend" else {}),
                 on_tool_activity=(
                     (
                         lambda activity: on_batch_tool_activity(owner_tasks, activity)

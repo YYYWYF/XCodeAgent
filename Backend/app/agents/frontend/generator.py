@@ -46,12 +46,78 @@ def _page_template_instruction(page_template: dict[str, Any] | None) -> str:
     )
 
 
+def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
+    """构造 UI设计稿参考指令：pageId → 设计稿虚拟路径映射，让 agent 还原视觉。
+
+    仿照 _page_template_instruction 的"read_file 读参考代码再生成"模式。设计稿是
+    UI确认阶段生成并经用户确认的纯视觉 React+antd+pro-components mockup，落盘在
+    /.xcodeagent/ui-design/src/pages/<page_key>/index.tsx。前端 agent 处理某个
+    page task 时（unit_id = page:<pageId>），按映射 read_file 对应设计稿，高保真
+    还原其视觉结构，再把静态数据/无交互换成真实 API/数据层。
+    """
+
+    if not isinstance(ui_designs, dict):
+        return ""
+    pages = ui_designs.get("pages")
+    if not isinstance(pages, list) or not pages:
+        return ""
+    entries: list[dict[str, str]] = []
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        page_id = str(page.get("pageId") or "").strip()
+        page_key = str(page.get("page_key") or "").strip()
+        if not page_id or not page_key:
+            continue
+        entries.append(
+            {
+                "pageId": page_id,
+                "designPath": f"/.xcodeagent/ui-design/src/pages/{page_key}/index.tsx",
+                "name": str(page.get("name") or page_id),
+            }
+        )
+    if not entries:
+        return ""
+    return (
+        "## UI Design Reference (MUST READ BEFORE WRITING EACH PAGE)\n"
+        "For each frontend page task, the task's unit_id is `page:<pageId>`. Before writing "
+        "the page, find the matching pageId in the design reference map below and use "
+        "`read_file` on its designPath. The design file is a pure-visual React + antd + "
+        "@ant-design/pro-components mockup created and confirmed by the user during the UI "
+        "design phase. You MUST faithfully reproduce its visual structure: page layout, "
+        "component selection (ProTable / ProForm / ProCard / ProList / ModalForm / "
+        "DrawerForm / StepsForm), column definitions, form fields, card sections, and the "
+        "overall page composition. The design's visual choices are the PRIMARY reference for "
+        "what the page should look like.\n\n"
+        "CRITICAL — the design is pure-visual; you MUST adapt it into real business code:\n"
+        "- The design uses a static in-memory `dataSource` array. You MUST replace it with "
+        "real data fetching: ProTable `request` calling the page's API (from ProjectPlan."
+        "api_contracts and the task's endpoint_ids), OR the in-memory mock data layer "
+        "pattern from the code-block-template skill when ProjectPlan.data_sources declares "
+        "type=mock/static. Never ship the design's raw static array as the data source.\n"
+        "- Buttons and forms in the design have no-op onClick / onFinish. You MUST wire them "
+        "to real API calls (create / update / delete) per the task's endpoint_ids and "
+        "api_contracts.\n"
+        "- The design has no route params. Add React Router params (e.g. :id) and "
+        "useSearchParams per the page's path and navigation requirements.\n"
+        "- Keep the design's Pro component choices and layout intact; only swap the data "
+        "and interaction layer. Do NOT downgrade a ProCard to antd Card, a ProTable to antd "
+        "Table, or a ModalForm to antd Modal.\n"
+        "- If a design file is missing or unreadable for a pageId, fall back to the "
+        "code-block-template skill and ProjectPlan to generate that page; do not block or "
+        "fail the task.\n\n"
+        f"Design reference map (pageId → designPath):\n"
+        f"{json.dumps(entries, ensure_ascii=False, indent=2)}\n\n"
+    )
+
+
 def _frontend_generation_prompt(
     *,
     project_plan: dict[str, Any],
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
     page_template: dict[str, Any] | None = None,
+    ui_designs: dict[str, Any] | None = None,
 ) -> str:
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
@@ -106,6 +172,7 @@ def _frontend_generation_prompt(
         + CODE_GRAPH_TASK_EXECUTION_GUIDANCE
         + "\n\n"
         + _page_template_instruction(page_template)
+        + _ui_design_reference_instruction(ui_designs)
         + data_source_instruction
         + "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
         "Before generating or modifying any frontend code, you MUST read the following "
@@ -166,6 +233,7 @@ def _invoke_live_frontend_agent(
     workspace: str | None,
     selected_skill_names: list[str] | None,
     page_template: dict[str, Any] | None = None,
+    ui_designs: dict[str, Any] | None = None,
     on_tool_activity: ToolActivityCallback | None = None,
 ) -> str:
     """使用本次工作流的技能白名单调用前端 Deep Agent。"""
@@ -184,6 +252,7 @@ def _invoke_live_frontend_agent(
                         build_task_plan=build_task_plan,
                         tasks=tasks,
                         page_template=page_template,
+                        ui_designs=ui_designs,
                     ),
                 }
             ]
@@ -201,6 +270,7 @@ def generate_frontend_with_deep_agent(
     workspace: str | None = None,
     selected_skill_names: list[str] | None = None,
     page_template: dict[str, Any] | None = None,
+    ui_designs: dict[str, Any] | None = None,
     on_tool_activity: ToolActivityCallback | None = None,
 ) -> list[dict[str, Any]]:
     """通过带技能白名单的 Frontend Deep Agent 执行已批准任务。"""
@@ -216,6 +286,7 @@ def generate_frontend_with_deep_agent(
         workspace=workspace,
         selected_skill_names=selected_skill_names,
         page_template=page_template,
+        ui_designs=ui_designs,
         on_tool_activity=on_tool_activity,
     )
     return create_agent_task_results(

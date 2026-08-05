@@ -167,3 +167,33 @@ def write_requirement_spec_json(state: dict[str, Any], spec: dict[str, Any]) -> 
 
 def load_requirement_spec_json(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def ui_designs_json_path(state: dict[str, Any]) -> Path:
+    """返回工作区下 UI设计稿索引 JSON 的路径，与 requirement-spec.json 同目录。"""
+
+    return workflow_artifact_root(state) / "specs" / "ui-designs.json"
+
+
+def write_ui_designs_json(state: dict[str, Any], ui_designs: dict[str, Any]) -> str:
+    """把 ui_designs 状态（含 pageId→page_key 映射）落盘，供主 workflow build 阶段读取。"""
+
+    path = ui_designs_json_path(state)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(ui_designs, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def load_ui_designs_json(path: str | Path) -> dict[str, Any]:
+    """读取已落盘的 ui_designs 索引，缺失或损坏时返回空 dict 降级。"""
+
+    resolved = Path(path)
+    if not resolved.is_file():
+        return {}
+    try:
+        return json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
