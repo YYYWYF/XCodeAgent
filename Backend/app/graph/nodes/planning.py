@@ -25,7 +25,15 @@ from app.services.frontend_page_tree import (
     update_frontend_page_leaves,
 )
 from app.services.database_context import prepare_endpoint_database_context
-from app.services.project_plan import apply_project_plan_feedback
+from app.services.data_source_policy import (
+    apply_authoritative_datasource_type,
+    read_application_datasource_type,
+)
+from app.services.project_plan import (
+    apply_project_plan_datasource_policy,
+    apply_project_plan_feedback,
+    validate_project_plan_datasource_policy,
+)
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_detail_plan import (
     attach_endpoint_detail_plan,
@@ -38,9 +46,7 @@ from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
     edited_project_plan_markdown,
     project_plan_json_path,
-    project_plan_markdown_path,
     write_project_plan_document,
-    write_project_plan_json,
 )
 
 
@@ -84,7 +90,15 @@ def _detail_progress(message: str, **detail: object) -> None:
 
 
 def project_planning(state: ProjectState) -> dict:
+    """生成或确认 ProjectPlan，并始终执行应用数据源权威策略。"""
+
+    datasource_type = read_application_datasource_type(workspace_from_state(state))
     existing_plan = state.get("project_plan")
+    if isinstance(existing_plan, dict):
+        existing_plan = apply_project_plan_datasource_policy(
+            existing_plan,
+            datasource_type,
+        )
     if (
         isinstance(existing_plan, dict)
         and existing_plan.get("confirmation_status") == "pending_user_confirmation"
@@ -104,29 +118,35 @@ def project_planning(state: ProjectState) -> dict:
     ):
         edited_markdown = edited_project_plan_markdown(
             state,
-            state["project_plan"],
+            existing_plan,
         )
         synchronized_plan = (
             sync_project_plan_from_markdown(
-                state["project_plan"],
+                existing_plan,
                 state.get("requirement_spec", {}),
                 edited_markdown,
+                datasource_type,
             )
             if edited_markdown is not None
-            else state["project_plan"]
+            else existing_plan
         )
         project_plan = {
             **apply_project_plan_feedback(
                 synchronized_plan,
                 state.get("request", ""),
+                datasource_type,
             ),
             "confirmation_status": "confirmed",
         }
-        validation_errors = _project_plan_validation_errors(project_plan)
+        validation_errors = _project_plan_validation_errors(
+            project_plan,
+            datasource_type,
+        )
         if validation_errors:
             repaired_plan, remaining_errors = _repair_project_plan_validation_errors(
                 project_plan,
                 validation_errors,
+                datasource_type,
             )
             repaired_path = write_project_plan_document(state, repaired_plan)
             return {
@@ -142,12 +162,8 @@ def project_planning(state: ProjectState) -> dict:
                 ),
                 "timeline": ["project_planning"],
             }
-        markdown_path = project_plan_markdown_path(state)
-        if markdown_path.is_file():
-            project_plan_path = str(markdown_path)
-            write_project_plan_json(state, project_plan)
-        else:
-            project_plan_path = write_project_plan_document(state, project_plan)
+        # 完整重写 Markdown，确保手动篡改的数据源类型和实现边界也被恢复。
+        project_plan_path = write_project_plan_document(state, project_plan)
         return {
             "phase": "project_planning",
             "status": "completed",
@@ -158,7 +174,10 @@ def project_planning(state: ProjectState) -> dict:
             "timeline": ["project_planning"],
         }
 
-    requirement_spec = state["requirement_spec"]
+    requirement_spec = apply_authoritative_datasource_type(
+        state["requirement_spec"],
+        datasource_type,
+    )
     if state.get("project_plan") and state.get("request"):
         requirement_spec = {
             **requirement_spec,
@@ -167,22 +186,28 @@ def project_planning(state: ProjectState) -> dict:
     project_plan = plan_project_with_chat_model(
         requirement_spec,
         **(
-            {"existing_plan": state["project_plan"]}
-            if state.get("project_plan")
+            {"existing_plan": existing_plan}
+            if existing_plan
             else {}
         ),
+        datasource_type=datasource_type,
         on_token=_planning_token_callback,
     )
     project_plan = apply_project_plan_feedback(
         project_plan,
         state.get("request", ""),
+        datasource_type,
     )
     project_plan["confirmation_status"] = "pending_user_confirmation"
-    validation_errors = _project_plan_validation_errors(project_plan)
+    validation_errors = _project_plan_validation_errors(
+        project_plan,
+        datasource_type,
+    )
     if validation_errors:
         project_plan, validation_errors = _repair_project_plan_validation_errors(
             project_plan,
             validation_errors,
+            datasource_type,
         )
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = (
@@ -976,18 +1001,30 @@ def _project_plan_dependency_error_summary(errors: list[str]) -> str:
     return "当前剩余问题：" + "；".join(visible_errors) + "。"
 
 
-def _project_plan_validation_errors(project_plan: dict) -> list[str]:
+def _project_plan_validation_errors(
+    project_plan: dict,
+    datasource_type: str | None = None,
+) -> list[str]:
     """汇总 ProjectPlan 页面依赖和 API 契约闭合性错误。"""
 
-    return [
+    errors = [
         *validate_project_plan_dependencies(project_plan),
         *validate_api_contract_consistency(project_plan),
     ]
+    if datasource_type is not None:
+        errors.extend(
+            validate_project_plan_datasource_policy(
+                project_plan,
+                datasource_type,  # type: ignore[arg-type]
+            )
+        )
+    return errors
 
 
 def _repair_project_plan_validation_errors(
     project_plan: dict,
     errors: list[str],
+    datasource_type: str | None = None,
 ) -> tuple[dict, list[str]]:
     """把确定性校验错误回灌给规划模型，最多自动修订一次完整计划。"""
 
@@ -996,10 +1033,11 @@ def _repair_project_plan_validation_errors(
     )
     repaired = revise_project_plan_with_chat_model(
         project_plan, feedback,
+        datasource_type=datasource_type,  # type: ignore[arg-type]
         on_token=_planning_token_callback,
     )
     repaired["confirmation_status"] = "pending_user_confirmation"
-    return repaired, _project_plan_validation_errors(repaired)
+    return repaired, _project_plan_validation_errors(repaired, datasource_type)
 
 
 def _project_plan_revision_required_payload(reason: str) -> dict:

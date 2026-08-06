@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 
 
 DatasourceType = Literal["database", "static", "external_api"]
+EnabledDatasourceType = Literal["database", "static"]
 ENABLED_DATASOURCE_TYPES = frozenset({"database", "static"})
 CANONICAL_DATASOURCE_TYPES = frozenset({"database", "static", "external_api"})
 
@@ -42,21 +43,49 @@ def read_application_datasource_type(workspace_root: str | Path) -> DatasourceTy
 
 def ensure_requirements_datasource_type(
     datasource_type: DatasourceType,
-) -> Literal["database", "static"]:
+) -> EnabledDatasourceType:
     """拒绝当前创建规划流程尚未启用的 external_api 数据源。"""
 
     if not isinstance(datasource_type, str) or datasource_type not in CANONICAL_DATASOURCE_TYPES:
         raise DataSourcePolicyError("当前应用的数据源类型无效。")
     if datasource_type not in ENABLED_DATASOURCE_TYPES:
         raise DataSourcePolicyError("当前创建应用流程暂不支持 external_api 数据源。")
-    return cast(Literal["database", "static"], datasource_type)
+    return cast(EnabledDatasourceType, datasource_type)
+
+
+def ensure_enabled_datasource_type(
+    datasource_type: DatasourceType,
+) -> EnabledDatasourceType:
+    """校验当前正式规划链路已启用的数据源类型。"""
+
+    return ensure_requirements_datasource_type(datasource_type)
+
+
+def datasource_type_from_artifact(
+    artifact: dict[str, Any],
+    *,
+    fallback: EnabledDatasourceType | None = None,
+) -> EnabledDatasourceType:
+    """从正式工件提取唯一数据源类型，并拒绝混合类型和旧类型。"""
+
+    sources = artifact.get("data_sources")
+    source_types = {
+        str(source.get("type") or "")
+        for source in sources
+        if isinstance(source, dict)
+    } if isinstance(sources, list) else set()
+    if not source_types and fallback is not None:
+        return ensure_enabled_datasource_type(fallback)
+    if len(source_types) != 1:
+        raise DataSourcePolicyError("正式工件必须包含唯一且一致的数据源类型。")
+    return ensure_enabled_datasource_type(cast(DatasourceType, source_types.pop()))
 
 
 def apply_authoritative_datasource_type(
     spec: dict[str, Any],
     datasource_type: DatasourceType,
 ) -> dict[str, Any]:
-    """复制 RequirementSpec，并把所有数据源类型投影为应用配置类型。"""
+    """复制正式工件，并把所有数据源类型投影为应用配置类型。"""
 
     if not isinstance(datasource_type, str) or datasource_type not in CANONICAL_DATASOURCE_TYPES:
         raise DataSourcePolicyError("不能投影无效的数据源类型。")

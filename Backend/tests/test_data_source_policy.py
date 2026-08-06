@@ -8,6 +8,7 @@ from pathlib import Path
 from app.services.data_source_policy import (
     DataSourcePolicyError,
     apply_authoritative_datasource_type,
+    datasource_type_from_artifact,
     ensure_requirements_datasource_type,
     read_application_datasource_type,
 )
@@ -100,6 +101,16 @@ class DataSourcePolicyTests(unittest.TestCase):
 
         with self.assertRaises(DataSourcePolicyError):
             create_requirement_spec("创建订单系统", datasource_type="mock")  # type: ignore[arg-type]
+
+    def test_formal_artifact_rejects_mixed_or_legacy_types(self) -> None:
+        """ProjectPlan 等正式工件不能混用类型，也不能读取 mock。"""
+
+        with self.assertRaises(DataSourcePolicyError):
+            datasource_type_from_artifact(
+                {"data_sources": [{"type": "database"}, {"type": "static"}]}
+            )
+        with self.assertRaises(DataSourcePolicyError):
+            datasource_type_from_artifact({"data_sources": [{"type": "mock"}]})
 
 
 if __name__ == "__main__":

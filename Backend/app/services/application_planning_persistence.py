@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.services.data_source_policy import CANONICAL_DATASOURCE_TYPES
 from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
 
 
@@ -290,23 +291,20 @@ def _api_payload(project_plan: dict[str, Any]) -> tuple[list[dict[str, Any]], di
 def _data_sources(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
     """把 ProjectPlan 数据源规范为 application.json 的稳定驼峰结构。"""
 
-    type_map = {
-        "database": "database",
-        "db": "database",
-        "api": "external_api",
-        "external_api": "external_api",
-        "mock": "static",
-        "static": "static",
-        "none": "none",
-    }
     result = []
     for source in _dict_items(project_plan.get("data_sources")):
+        source_type = str(source.get("type") or "")
+        if source_type not in CANONICAL_DATASOURCE_TYPES:
+            raise ValueError(
+                f"ProjectPlan 数据源 {source.get('id') or 'unknown'} 使用了无效类型。"
+            )
         schema_refs = _text_items(source.get("schema_refs"))
         entities = _text_items(source.get("entities"))
         result.append({
             "id": str(source.get("id") or f"data-source-{len(result) + 1}"),
             "name": str(source.get("name") or source.get("id") or "数据源"),
-            "type": type_map.get(str(source.get("type") or "none").lower(), "static"),
+            "description": str(source.get("description") or ""),
+            "type": source_type,
             "entities": [
                 {
                     "name": name,

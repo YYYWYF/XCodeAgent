@@ -7,7 +7,10 @@ from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.data_source_policy import DatasourceType
-from app.services.project_plan import create_project_plan
+from app.services.project_plan import (
+    create_project_plan,
+    validate_project_plan_datasource_policy,
+)
 from app.services.requirement_spec import create_requirement_spec
 from app.utils.model_output import extract_json_object
 
@@ -26,7 +29,12 @@ def _sync_prompt(
         f"Keep every data_sources[].type exactly {datasource_type}; the user cannot change this field, "
         "and the legacy type mock must never be emitted.\n\n"
         if artifact_name == "RequirementSpec"
-        else ""
+        else (
+            f"For ProjectPlan data_sources, the authoritative application type is {datasource_type}. "
+            f"Keep every data_sources[].type exactly {datasource_type}; user Markdown cannot change "
+            "the type or its architecture implementation boundary. Preserve data source ids and "
+            "contract references, and never emit mock.\n\n"
+        )
     )
     return (
         f"You synchronize a user-edited {artifact_name} Markdown document back into its internal JSON.\n"
@@ -114,11 +122,15 @@ def sync_project_plan_from_markdown(
     existing_plan: dict[str, Any],
     requirement_spec: dict[str, Any],
     edited_markdown: str,
+    datasource_type: DatasourceType = "database",
 ) -> dict[str, Any]:
+    """同步 ProjectPlan Markdown，并恢复应用权威类型和实现边界。"""
+
     synced = _invoke_sync_model(
         artifact_name="ProjectPlan",
         structured_document=existing_plan,
         edited_markdown=edited_markdown,
+        datasource_type=datasource_type,
     )
     normalized = create_project_plan(
         requirement_spec,
@@ -126,6 +138,7 @@ def sync_project_plan_from_markdown(
         planning_source="user_edited_markdown",
         agent_plan=synced,
         authoritative_agent_plan=True,
+        datasource_type=datasource_type,
     )
     if isinstance(synced.get("app"), dict):
         normalized["app"] = synced["app"]
@@ -140,6 +153,9 @@ def sync_project_plan_from_markdown(
         if value is not None:
             normalized[key] = value
     errors = validate_api_contract_consistency(normalized)
+    errors.extend(
+        validate_project_plan_datasource_policy(normalized, datasource_type)
+    )
     if errors:
         raise ValueError("编辑后的项目计划存在不一致：" + "; ".join(errors))
     normalized["markdown_sync"] = {

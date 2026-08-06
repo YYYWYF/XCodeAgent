@@ -49,6 +49,20 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
         self.assertIn("Do NOT use #/definitions/...", prompt)
         self.assertIn("#/components/schemas/...", prompt)
 
+    def test_static_project_planning_prompt_disables_database_backend(self) -> None:
+        """Static 规划提示必须把契约定义为前端内存边界并禁止数据库实现。"""
+
+        spec = create_requirement_spec(
+            "创建库存查看系统",
+            datasource_type="static",
+        )
+        prompt = planner._planning_prompt(spec, datasource_type="static")
+
+        self.assertIn("type=static", prompt)
+        self.assertIn("frontend in-memory mock", prompt)
+        self.assertIn("do not represent a real HTTP backend", prompt)
+        self.assertIn("Do not emit generic full CRUD", prompt)
+
     def test_requirements_uses_direct_model_with_only_ask_user(self) -> None:
         message = AIMessage(
             content="",

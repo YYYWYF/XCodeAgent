@@ -23,17 +23,9 @@ type SectionProps = {
 }
 
 const dataSourceTypeLabels: Record<string, string> = {
-  api: 'API',
-  database: 'DATABASE',
-  external_api: 'EXTERNAL API',
-  file: 'FILE',
-  internal: 'INTERNAL',
-  internal_data_source: 'INTERNAL',
-  local: 'LOCAL',
-  local_storage: 'LOCAL',
-  mock: 'MOCK',
-  none: 'NONE',
-  static: 'STATIC'
+  database: '数据库',
+  external_api: '外部 API',
+  static: '静态数据'
 }
 
 type ProjectPlanEntity = {
@@ -148,8 +140,7 @@ function projectPlanBusinessFlows(value: unknown): ProjectPlanBusinessFlow[] {
 function projectPlanFlowSummary(flow: ProjectPlanBusinessFlow): string {
   const presetPaths: Record<string, string> = {
     browse_location_detail: '地点卡片 → 详情页',
-    get_recommendation: '首页 → 偏好输入 → 推荐结果',
-    use_historical_preference: 'LocalStorage → 快速推荐'
+    get_recommendation: '首页 → 偏好输入 → 推荐结果'
   }
   return presetPaths[flow.id] || flow.steps.join(' → ') || '流程步骤待补充'
 }
@@ -165,11 +156,6 @@ function projectPlanFlowCode(flow: ProjectPlanBusinessFlow): string {
     flow.id.replace(/_/g, ' ') ||
     'FLOW'
   ).toUpperCase()
-}
-
-// 判断数据源是否代表浏览器本地存储，以便没有 API 关系时展示真实存储目标。
-function isProjectPlanLocalStorageSource(value: unknown): boolean {
-  return ['local', 'local_storage', 'localstorage'].includes(fieldText(value).toLowerCase())
 }
 
 // 从 schema_refs 中提取契约 ID，供旧版计划兼容建立数据源到 API 的关系。
@@ -290,11 +276,11 @@ function DataSourceItem({
   const relatedApis = relatedApiContracts(source, apiContracts).filter(
     (contract) => contract.resource || contract.basePath
   )
-  const isLocalStorageSource = isProjectPlanLocalStorageSource(source.type)
+  const isStaticSource = fieldText(source.type) === 'static'
   const seedStrategy = seedStrategyText(source.seed_strategy)
   const sourceMeta =
     description ||
-    `${dataSourceTypeText(source.type)} · ${isLocalStorageSource ? '用户输入创建' : '预置地点数据'}`
+    dataSourceTypeText(source.type)
 
   return (
     <article className={cx('project-plan-summary-data-source')}>
@@ -335,7 +321,7 @@ function DataSourceItem({
         </section>
         <span
           className={cx('project-plan-summary-data-source-relation-arrow')}
-          aria-label={relatedApis.length ? '实体关联 API' : '实体关联数据存储'}
+          aria-label={isStaticSource ? '实体关联前端 Mock 数据契约' : '实体关联真实 HTTP API'}
           role="img"
         >
           <ArrowRightOutlined />
@@ -343,12 +329,12 @@ function DataSourceItem({
         <section
           className={cx(
             'project-plan-summary-data-source-relation-group',
-            relatedApis.length ? 'is-api' : isLocalStorageSource ? 'is-storage' : 'is-api'
+            'is-api'
           )}
         >
           <div className={cx('project-plan-summary-data-source-relation-heading')}>
             <Text strong>
-              {relatedApis.length ? '关联 API' : isLocalStorageSource ? '本地存储' : '关联 API'}
+              {isStaticSource ? '前端 Mock 数据契约' : '真实 HTTP API'}
             </Text>
           </div>
           <div className={cx('project-plan-summary-data-source-apis')}>
@@ -363,13 +349,8 @@ function DataSourceItem({
                   </article>
                 )
               })
-            ) : isLocalStorageSource ? (
-              <article className={cx('project-plan-summary-data-source-api')}>
-                <Text strong>LocalStorage</Text>
-                <Paragraph type="secondary">再次访问时读取历史偏好</Paragraph>
-              </article>
             ) : (
-              <Text type="secondary">暂无关联 API</Text>
+              <Text type="secondary">暂无关联数据契约</Text>
             )}
           </div>
         </section>
@@ -463,6 +444,8 @@ export default function ProjectPlanSummary({ plan }: Props): ReactElement {
     .filter((item): item is ApiContractInfo => Boolean(item))
   const pageTree = projectPlanPageTreeNodes(plan.frontend_pages)
   const dataSources = recordItems(plan.data_sources)
+  const datasourceType = fieldText(dataSources[0]?.type, 'database')
+  const isStaticDatasource = datasourceType === 'static'
   const permissionModel = asRecord(plan.permission_model)
   const permissionRoles = recordItems(permissionModel.roles)
   const operationPermissions = recordItems(permissionModel.operation_permissions)
@@ -617,8 +600,12 @@ export default function ProjectPlanSummary({ plan }: Props): ReactElement {
           <PlanSection
             anchorId={PROJECT_PLAN_READING_SECTION_IDS.data}
             count={`${apiContracts.length} 个资源`}
-            description="资源和接口路径"
-            title="API 契约"
+            description={
+              isStaticDatasource
+                ? '供页面设计与前端数据访问模块使用，不代表真实 HTTP 后端'
+                : '真实后端资源和 HTTP 接口路径'
+            }
+            title={isStaticDatasource ? '前端 Mock 数据契约' : '真实 HTTP API 契约'}
           >
             <div className={cx('project-plan-summary-api-grid')}>
               {apiContracts.map((contract, index) => (

@@ -40,6 +40,9 @@ export function projectPlanReadingSections(
   const hasPages = projectPlanPageTreeNodes(plan.frontend_pages).length > 0
   const hasApiContracts = hasItems(plan.api_contracts)
   const hasDataSources = hasItems(plan.data_sources)
+  const datasourceType = Array.isArray(plan.data_sources)
+    ? asRecord(plan.data_sources[0]).type
+    : undefined
 
   return [
     {
@@ -62,7 +65,10 @@ export function projectPlanReadingSections(
       ? [
           {
             id: PROJECT_PLAN_READING_SECTION_IDS.data,
-            label: 'API 契约与数据关系'
+            label:
+              datasourceType === 'static'
+                ? '前端 Mock 契约与数据关系'
+                : 'HTTP API 契约与数据关系'
           }
         ]
       : []),

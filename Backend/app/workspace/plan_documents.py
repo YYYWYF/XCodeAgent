@@ -499,6 +499,8 @@ def _frontend_page_tree_markdown(nodes: Any, *, level: int = 0) -> list[str]:
 
 
 def render_project_plan_markdown(plan: dict[str, Any]) -> str:
+    """按 ProjectPlan 数据源类型渲染真实 HTTP 或前端 Mock 契约文档。"""
+
     overview = plan.get("requirements_overview", {})
     acceptance_criteria = plan.get("project_acceptance_criteria") or plan.get(
         "acceptance_criteria",
@@ -515,9 +517,10 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     )
     data_sources = "\n".join(
         f"- `{source.get('id', 'unknown')}` {source.get('name', '未命名数据源')}："
+        f"{source.get('description', '') or '暂无业务描述'}；"
         f"实体 {_joined_items(source.get('entities', []))}，"
         f"Schema 引用 {_code_items(source.get('schema_refs', []))}，"
-        f"类型 {source.get('type', 'mock')}"
+        f"类型 {source.get('type', 'database')}"
         for source in _dict_items(plan.get("data_sources", []))
     )
     permissions = plan.get("permission_model", {})
@@ -538,6 +541,34 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     )
     app = plan.get("app", {})
     architecture = plan.get("architecture", {})
+    datasource_type = next(
+        (
+            str(source.get("type"))
+            for source in _dict_items(plan.get("data_sources", []))
+            if source.get("type")
+        ),
+        "database",
+    )
+    contract_title = (
+        "前端 Mock 数据契约"
+        if datasource_type == "static"
+        else "真实 HTTP API 契约"
+    )
+    backend_stack = (
+        architecture.get("backend_tech_stack")
+        if isinstance(architecture.get("backend_tech_stack"), dict)
+        else {}
+    )
+    backend_stack_text = "；".join(
+        f"{label}{backend_stack[key]}"
+        for key, label in (
+            ("language", "开发语言 "),
+            ("framework", "开发框架 "),
+            ("database", "数据库 "),
+            ("cache", "缓存 "),
+        )
+        if backend_stack.get(key)
+    ) or "待补充后端技术栈"
 
     return f"""# {app.get('name', '未命名应用')}总体计划书
 
@@ -564,13 +595,13 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 - 前端：{architecture.get('frontend', '待补充前端架构')}
 - 后端：{architecture.get('backend', '待补充后端架构')}
-- 后端技术栈：开发语言 Java8；开发框架 Springboot；数据库 MySQL8；缓存 Redis
+- 后端技术栈：{backend_stack_text}
 - 数据：{architecture.get('data', '待补充数据架构')}
 - 测试：{architecture.get('testing', '待补充测试策略')}
 
-## API 契约
+## {contract_title}
 
-{api_contracts or "- 暂无 API 契约"}
+{api_contracts or "- 暂无数据契约"}
 
 ## 前端页面清单
 

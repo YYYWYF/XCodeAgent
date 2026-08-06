@@ -9,6 +9,11 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.frontend_page_tree import flatten_frontend_pages
+from app.services.data_source_policy import (
+    DatasourceType,
+    datasource_type_from_artifact,
+    ensure_enabled_datasource_type,
+)
 from app.services.project_plan import (
     apply_project_plan_feedback,
     create_project_plan,
@@ -23,12 +28,32 @@ BACKEND_TECH_STACK_REQUIREMENT = (
     "and api/data planning must not choose Node.js, Python, Go, PostgreSQL, SQLite, MongoDB, "
     "or any alternative backend/database/cache stack."
 )
+STATIC_DATA_SOURCE_REQUIREMENT = (
+    "The authoritative application data source type is static. ProjectPlan data_sources must use "
+    "type=static exactly and must never emit mock. Model api_contracts as a frontend in-memory mock "
+    "data-access boundary; they preserve schemas, operations, endpoint ids, methods and paths for "
+    "frontend planning, but do not represent a real HTTP backend. Do not declare MySQL, Redis, "
+    "MyBatis, database migrations, database operations, or backend business endpoints."
+)
 
 
 def _planning_prompt(
     requirement_spec: dict[str, Any],
     existing_plan: dict[str, Any] | None = None,
+    datasource_type: DatasourceType | None = None,
 ) -> str:
+    """构造带权威数据源类型和契约实现边界的项目规划提示。"""
+
+    effective_type = (
+        ensure_enabled_datasource_type(datasource_type)
+        if datasource_type is not None
+        else datasource_type_from_artifact(requirement_spec, fallback="database")
+    )
+    datasource_requirement = (
+        STATIC_DATA_SOURCE_REQUIREMENT
+        if effective_type == "static"
+        else BACKEND_TECH_STACK_REQUIREMENT
+    )
     revision_context = (
         "Update the existing ProjectPlan using planning_adjustment_request from the RequirementSpec. "
         "The latest user feedback overrides conflicting older plan content. Return the complete updated "
@@ -42,7 +67,10 @@ def _planning_prompt(
         "This is a planning-only boundary. Do not call tools, do not call subagents, "
         "do not delegate tasks, and do not generate or modify code.\n"
         "Create a project-level planning document from the RequirementSpec.\n"
-        f"{BACKEND_TECH_STACK_REQUIREMENT}\n"
+        f"{datasource_requirement}\n"
+        f"The authoritative data source type is {effective_type}. Preserve every RequirementSpec "
+        "data source id, name, description, entities and type exactly. Never change the type based "
+        "on requirements or revision feedback.\n"
         "If RequirementSpec.app_info.route_root_path is present and non-empty, treat it as the fixed page root route prefix. "
         "All emitted page paths and all non-empty menu unique_path values must stay under that root prefix.\n"
         "If RequirementSpec.app_info.menu_enabled is true, the application uses menus. In that case, no business page may use the bare root route "
@@ -139,10 +167,14 @@ def _planning_prompt(
         "Dynamic/detail pages with path parameters are hidden routable pages and do not count as visible menu leaves when deciding whether a parent menu is needed. "
         "Do not emit duplicate root permissions, endpoint_dependencies, navigation_targets, data_dependencies, "
         "or states fields\n"
-        "- data_sources: data source list with entities, schema_refs, and seed strategy; never duplicate fields\n"
+        "- data_sources: copy id, name, description, entities and type from RequirementSpec exactly; "
+        "only add planning fields such as schema_refs and seed strategy; never duplicate fields\n"
         "- permission_model: roles, page access, operation permissions\n"
         "- risks: planning risks and items to refine later\n\n"
         "API contracts are the canonical backend/frontend boundary. The first generated ProjectPlan must "
+        "derive each contract from the data source name, description and entities together with pages, "
+        "page operations, feature modules, business flows and acceptance criteria. Do not emit generic "
+        "full CRUD for every data source; include only operations required by the business plan.\n"
         "already satisfy the following non-negotiable dependency contract:\n"
         "0. If data_sources is non-empty, api_contracts must also be non-empty and every data source must "
         "be represented by at least one contract.\n"
@@ -182,20 +214,25 @@ def _invoke_live_chat_model(
     requirement_spec: dict[str, Any],
     *,
     existing_plan: dict[str, Any] | None = None,
+    datasource_type: DatasourceType | None = None,
     settings: Settings | None = None,
     on_token: Callable[[str], None] | None = None,
 ) -> str:
+    """调用项目规划模型，并透传数据源实现边界。"""
+
     active_settings = settings or Settings.from_env()
     model = create_chat_model(active_settings)
     if on_token is None:
         result = model.invoke(
-            _planning_prompt(requirement_spec, existing_plan)
+            _planning_prompt(requirement_spec, existing_plan, datasource_type)
         )
         content = getattr(result, "content", "")
         return _coerce_content_text(content) or ""
 
     accumulated_text = ""
-    for chunk in model.stream(_planning_prompt(requirement_spec, existing_plan)):
+    for chunk in model.stream(
+        _planning_prompt(requirement_spec, existing_plan, datasource_type)
+    ):
         if isinstance(chunk, AIMessageChunk):
             token = chunk.content
             if isinstance(token, str) and token:
@@ -208,14 +245,16 @@ def plan_project_with_chat_model(
     requirement_spec: dict[str, Any],
     *,
     existing_plan: dict[str, Any] | None = None,
+    datasource_type: DatasourceType | None = None,
     on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Use a direct chat-model call to produce a ProjectPlan."""
+    """直接调用聊天模型生成受数据源策略保护的 ProjectPlan。"""
 
     settings = Settings.from_env()
     agent_note = _invoke_live_chat_model(
         requirement_spec,
         existing_plan=existing_plan,
+        datasource_type=datasource_type,
         settings=settings,
         on_token=on_token,
     )
@@ -227,6 +266,7 @@ def plan_project_with_chat_model(
         planning_source=planning_source,
         agent_plan=extract_json_object(agent_note),
         authoritative_agent_plan=True,
+        datasource_type=datasource_type,
     )
     return plan
 
@@ -249,8 +289,16 @@ def revise_project_plan_with_chat_model(
     existing_plan: dict[str, Any],
     user_feedback: str,
     *,
+    datasource_type: DatasourceType | None = None,
     on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
+    """按最新反馈修订 ProjectPlan，同时保持原应用数据源类型。"""
+
+    effective_datasource_type = (
+        ensure_enabled_datasource_type(datasource_type)
+        if datasource_type is not None
+        else datasource_type_from_artifact(existing_plan, fallback="database")
+    )
     requirement_spec = {
         "version": existing_plan.get("requirement_spec_version", "0.1.0"),
         "app_info": {
@@ -279,9 +327,14 @@ def revise_project_plan_with_chat_model(
     revised = plan_project_with_chat_model(
         requirement_spec,
         existing_plan=existing_plan,
+        datasource_type=effective_datasource_type,
         on_token=on_token,
     )
-    revised = apply_project_plan_feedback(revised, user_feedback)
+    revised = apply_project_plan_feedback(
+        revised,
+        user_feedback,
+        effective_datasource_type,
+    )
     revised["planning_source"] = "direct_chat_model_revision"
     revised["confirmation_status"] = "pending_user_confirmation"
     return revised

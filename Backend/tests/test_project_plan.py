@@ -13,7 +13,12 @@ from app.services.page_detail_plan import (
     create_page_detail_plan,
     extract_page_detail_context,
 )
-from app.services.project_plan import create_project_plan, normalize_project_plan
+from app.services.application_planning_persistence import project_plan_application_payload
+from app.services.project_plan import (
+    create_project_plan,
+    normalize_project_plan,
+    validate_project_plan_datasource_policy,
+)
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import render_project_plan_markdown
 
@@ -77,7 +82,7 @@ class ProjectPlanTests(unittest.TestCase):
             ["库存管理系统核心流程通过端到端验收。"],
         )
 
-    def test_authoritative_agent_plan_can_replace_page_and_role_scoped_content(self) -> None:
+    def test_authoritative_agent_plan_cannot_replace_requirement_pages(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         only_page = {
             "pageId": "inventory_only",
@@ -96,9 +101,13 @@ class ProjectPlanTests(unittest.TestCase):
             authoritative_agent_plan=True,
         )
 
-        self.assertEqual([page["pageId"] for page in plan["frontend_pages"]], ["inventory_only"])
+        self.assertEqual(
+            [page["pageId"] for page in plan["frontend_pages"]],
+            [page["pageId"] for page in spec["pages"]],
+        )
+        self.assertNotIn("inventory_only", [page["pageId"] for page in plan["frontend_pages"]])
 
-    def test_agent_pages_without_paths_get_unique_pageId_routes(self) -> None:
+    def test_agent_cannot_add_pages_outside_requirement_spec(self) -> None:
         spec = create_requirement_spec("创建一个人员管理系统")
 
         plan = create_project_plan(
@@ -113,8 +122,15 @@ class ProjectPlanTests(unittest.TestCase):
             authoritative_agent_plan=True,
         )
 
-        paths = [page["path"] for page in plan["frontend_pages"]]
-        self.assertEqual(paths, ["/", "/employees-list", "/onboarding-form"])
+        baseline = create_project_plan(spec)
+        self.assertEqual(
+            [page["pageId"] for page in plan["frontend_pages"]],
+            [page["pageId"] for page in baseline["frontend_pages"]],
+        )
+        self.assertEqual(
+            [page["path"] for page in plan["frontend_pages"]],
+            [page["path"] for page in baseline["frontend_pages"]],
+        )
 
     def test_requirement_pages_with_duplicate_root_paths_get_unique_routes(self) -> None:
         spec = create_requirement_spec(
@@ -253,7 +269,7 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertIn("endpoint_dependencies", markdown)
         self.assertIn("## 权限体系", markdown)
 
-    def test_project_plan_generates_complete_api_endpoint_contracts(self) -> None:
+    def test_project_plan_generates_required_api_endpoint_contracts(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
 
         plan = create_project_plan(spec)
@@ -277,12 +293,7 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertTrue(endpoint["path"].startswith("/api/"))
         self.assertIsInstance(endpoint["parameters"], list)
         self.assertIn(endpoint["response_schema_ref"], contract["schemas"])
-        create_endpoint = next(
-            candidate
-            for candidate in contract["endpoints"]
-            if candidate["id"].endswith(".create")
-        )
-        self.assertIn(create_endpoint["request_schema_ref"], contract["schemas"])
+        self.assertLess(len(contract["endpoints"]), 5)
         self.assertNotIn("schema", plan["data_sources"][0])
         self.assertTrue(plan["data_sources"][0]["schema_refs"])
         self.assertTrue(endpoint_dependency["endpoint_id"])
@@ -330,7 +341,7 @@ class ProjectPlanTests(unittest.TestCase):
         """模型使用 contract_id 时仍保留契约并补齐唯一数据源关联。"""
 
         spec = create_requirement_spec("创建一个天气预报系统")
-        source_id = "weather_source"
+        source_id = spec["data_sources"][0]["id"]
         plan = create_project_plan(
             spec,
             agent_plan={
@@ -338,7 +349,7 @@ class ProjectPlanTests(unittest.TestCase):
                     {
                         "id": source_id,
                         "name": "天气数据源",
-                        "type": "api",
+                        "type": "database",
                         "entities": ["Weather"],
                         "schema_refs": ["Weather"],
                     }
@@ -346,6 +357,7 @@ class ProjectPlanTests(unittest.TestCase):
                 "api_contracts": [
                     {
                         "contract_id": "weather_contract",
+                        "data_source_id": source_id,
                         "schemas": {
                             "Weather": {
                                 "type": "object",
@@ -683,7 +695,87 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertIsInstance(plan["frontend_pages"][0]["references"]["endpoint_dependencies"], list)
         self.assertTrue(plan["frontend_pages"][0]["references"]["permissions"])
         self.assertIsInstance(plan["api_contracts"][0]["endpoints"], list)
-        self.assertIn("## API 契约", markdown)
+        self.assertIn("## 真实 HTTP API 契约", markdown)
+
+    def test_static_project_plan_keeps_contracts_without_database_stack(self) -> None:
+        """Static 计划保留逻辑契约，但不得声明数据库实现。"""
+
+        spec = create_requirement_spec("创建一个库存查看系统", datasource_type="static")
+        plan = create_project_plan(
+            spec,
+            datasource_type="static",
+            agent_plan={
+                "architecture": {
+                    "orm": "MyBatis",
+                    "migration": "Flyway database migration",
+                }
+            },
+        )
+        markdown = render_project_plan_markdown(plan)
+
+        self.assertTrue(plan["api_contracts"])
+        self.assertEqual(plan["data_sources"][0]["type"], "static")
+        self.assertTrue(plan["data_sources"][0]["description"])
+        self.assertNotIn("database", plan["architecture"]["backend_tech_stack"])
+        self.assertNotIn("cache", plan["architecture"]["backend_tech_stack"])
+        self.assertNotIn("orm", plan["architecture"])
+        self.assertNotIn("migration", plan["architecture"])
+        self.assertIn("## 前端 Mock 数据契约", markdown)
+        self.assertEqual(validate_project_plan_datasource_policy(plan, "static"), [])
+
+    def test_database_project_plan_uses_real_http_mysql_and_redis(self) -> None:
+        """Database 计划固定真实 HTTP、MySQL8 和 Redis。"""
+
+        spec = create_requirement_spec("创建订单管理系统", datasource_type="database")
+        plan = create_project_plan(spec, datasource_type="database")
+
+        self.assertEqual(plan["architecture"]["data_contract"], "真实 HTTP API 契约。")
+        self.assertEqual(plan["architecture"]["backend_tech_stack"]["database"], "MySQL8")
+        self.assertEqual(plan["architecture"]["backend_tech_stack"]["cache"], "Redis")
+        self.assertEqual(validate_project_plan_datasource_policy(plan, "database"), [])
+
+    def test_project_plan_preserves_requirement_datasource_business_fields(self) -> None:
+        """模型只能补充规划字段，不能覆盖需求数据源业务字段。"""
+
+        spec = create_requirement_spec("创建订单管理系统", datasource_type="static")
+        source = spec["data_sources"][0]
+        plan = create_project_plan(
+            spec,
+            datasource_type="static",
+            authoritative_agent_plan=True,
+            agent_plan={
+                "data_sources": [
+                    {
+                        "id": source["id"],
+                        "name": "模型改名",
+                        "description": "模型改写描述",
+                        "entities": ["ChangedEntity"],
+                        "type": "database",
+                        "seed_strategy": "model_seed",
+                    }
+                ]
+            },
+        )
+
+        planned = plan["data_sources"][0]
+        for key in ("id", "name", "description", "entities", "type"):
+            self.assertEqual(planned[key], source[key])
+        self.assertEqual(planned["seed_strategy"], "model_seed")
+
+    def test_application_projection_rejects_mock_and_keeps_static_description(self) -> None:
+        """application.json 投影只写正式类型并保留数据源描述。"""
+
+        spec = create_requirement_spec("创建库存查看系统", datasource_type="static")
+        plan = create_project_plan(spec, datasource_type="static")
+        payload = project_plan_application_payload(plan)
+        self.assertEqual(payload["dataSources"][0]["type"], "static")
+        self.assertEqual(
+            payload["dataSources"][0]["description"],
+            plan["data_sources"][0]["description"],
+        )
+        plan["data_sources"][0]["type"] = "mock"
+        with self.assertRaises(ValueError):
+            project_plan_application_payload(plan)
 
 
 if __name__ == "__main__":
