@@ -3,11 +3,30 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from app.services.database_planning_context import endpoint_detail_uses_database
 from app.services.frontend_page_tree import find_frontend_page
+
+
+def _page_key_from_page_id(page_id: str) -> str:
+    """将 snake_case 的 pageId 转换为 PascalCase 的 PageKey。
+
+    与前端 templateApi.ts 的 pageKeyFromPageId 保持一致：
+    按 _ / - / 空格分段，每段首字母大写后拼接，保留所有段（含 "page" 后缀）。
+    例：dashboard_page → DashboardPage，order_list_page → OrderListPage。
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(page_id or "page")).strip("-")
+    segments = [s for s in re.split(r"[-_\s]+", cleaned) if s]
+    if not segments:
+        return "Page"
+    pascal = "".join(seg[:1].upper() + seg[1:].lower() for seg in segments)
+    # 确保以字母开头
+    if not pascal[:1].isalpha():
+        pascal = "Page" + pascal
+    return pascal
 
 
 def resolve_target_build_context(
@@ -90,7 +109,11 @@ def _page_context(
             database_source_ids.append(source_id)
 
     return {
-        "target": {"type": "page", "id": page_id},
+        "target": {
+            "type": "page",
+            "id": page_id,
+            "page_key": _page_key_from_page_id(page_id),
+        },
         "page_detail": page_detail,
         "endpoint_detail": None,
         "direct_endpoint_details": endpoint_details,

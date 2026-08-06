@@ -29,6 +29,24 @@ def _safe_id(value: Any, fallback: str) -> str:
     return normalized or fallback
 
 
+def _page_key_from_page_id(page_id: str) -> str:
+    """将 snake_case 的 pageId 转换为 PascalCase 的 PageKey。
+
+    与前端 templateApi.ts 的 pageKeyFromPageId 和后端 build_context_resolver.py 保持一致：
+    按 _ / - / 空格分段，每段首字母大写后拼接，保留所有段（含 "page" 后缀）。
+    例：dashboard_page → DashboardPage，order_list_page → OrderListPage。
+    """
+
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(page_id or "page")).strip("-")
+    segments = [s for s in re.split(r"[-_\s]+", cleaned) if s]
+    if not segments:
+        return "Page"
+    pascal = "".join(seg[:1].upper() + seg[1:].lower() for seg in segments)
+    if not pascal[:1].isalpha():
+        pascal = "Page" + pascal
+    return pascal
+
+
 def _page_detail_map(project_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """按页面 id 索引已确认的页面详细设计。"""
 
@@ -170,6 +188,7 @@ def _page_menu_item(
         for item in _dict_items(detail.get("operation_interactions"))
         if item.get("action")
     ]
+    page_key = _page_key_from_page_id(pageId) if pageId else _safe_id(page.get("path") or page.get("name"), "page")
     return {
         "key": pageId or _safe_id(page.get("path") or page.get("name"), "page"),
         "path": str(page.get("path") or "/"),
@@ -183,7 +202,7 @@ def _page_menu_item(
         ),
         "keyFeatures": features
         or [str(page.get("description") or page.get("name") or "页面核心功能")],
-        "pageKey": pageId or _safe_id(page.get("path") or page.get("name"), "page"),
+        "pageKey": page_key,
         "design": _page_design(page, detail),
     }
 
