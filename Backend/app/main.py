@@ -55,10 +55,8 @@ from app.services.database_crypto import (
     ensure_database_platform_key,
 )
 from app.services.project_launcher import (
-    launch_backend_project,
-    launch_frontend_project,
+    launch_project_preview,
     stop_project_preview,
-    stop_backend_project,
 )
 from app.workspace import workspace as workspace_tools
 from app.middleware.approvals import approval_store
@@ -359,52 +357,14 @@ class ProjectLaunchRequest(BaseModel):
 
 @app.post("/api/projects/launch")
 def api_launch_project(request: ProjectLaunchRequest) -> dict[str, Any]:
-    """启动模板项目的后端与前端预览。
+    """按应用数据源类型启动模板项目预览。
 
     用于在模板下载完成、进入工作区后自动启动开发服务器。
-    执行顺序：先启后端（如果存在 backend/pom.xml），再启前端。
+    Static 仅启动前端；Database 在存在 Maven 工程时先启动后端再启动前端。
     FastAPI 自动将同步函数放在线程池中执行，不会阻塞事件循环。
     """
 
-    root = Path(request.workspace).expanduser().resolve()
-    backend_root = root / "backend"
-    pom_path = backend_root / "pom.xml"
-    has_backend_project = pom_path.is_file()
-
-    backend: dict[str, Any] = {"status": "skipped", "message": "未找到后端项目，跳过。"}
-    backend_process = None
-
-    if has_backend_project:
-        backend = launch_backend_project(root)
-        backend_process = backend.pop("_process", None)
-        if backend.get("status") == "failed":
-            return {
-                "status": "failed",
-                "message": f"后端启动失败：{backend.get('message')}",
-                "backend": backend,
-                "frontend": None,
-                "failed_stage": backend.get("failed_stage"),
-            }
-
-    frontend = launch_frontend_project(root)
-    if frontend.get("status") == "failed":
-        if backend_process is not None and has_backend_project:
-            stop_backend_project(backend, backend_process)
-        return {
-            "status": "failed",
-            "message": f"前端启动失败：{frontend.get('message')}",
-            "backend": backend,
-            "frontend": frontend,
-            "failed_stage": "frontend_start",
-        }
-
-    return {
-        "status": "running",
-        "message": "后端与前端项目均已启动并就绪。",
-        "preview_url": frontend.get("preview_url"),
-        "backend": backend,
-        "frontend": frontend,
-    }
+    return launch_project_preview(request.workspace)
 
 
 @app.post("/api/projects/stop")

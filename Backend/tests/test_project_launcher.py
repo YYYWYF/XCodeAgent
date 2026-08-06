@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import threading
@@ -23,13 +24,16 @@ from app.services.backend_process_registry import (
     register_backend_process,
     stop_previous_backend_process,
 )
-from app.services.project_launcher import (
+from app.services.frontend_project_launcher import (
     _dev_server_log_is_ready,
     _preview_is_ready,
     _wait_until_ready,
+)
+from app.services.project_launcher import (
     find_backend_project_root,
     launch_backend_project,
     launch_frontend_project,
+    launch_project_preview,
     stop_backend_project,
 )
 
@@ -41,11 +45,21 @@ class ProjectLauncherTests(unittest.TestCase):
         backend_process_registry._BACKEND_PROCESSES.clear()
         backend_process_registry._BACKEND_LAUNCH_LOCKS.clear()
 
+    def _write_application(self, workspace: str, datasource_type: str) -> None:
+        """写入启动测试所需的最小应用数据源配置。"""
+
+        config_dir = Path(workspace) / ".xcodeagent"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_dir.joinpath("application.json").write_text(
+            json.dumps({"datasource": {"type": datasource_type}}),
+            encoding="utf-8",
+        )
+
     def test_preview_healthcheck_accepts_http_404_as_listening(self) -> None:
         """验证 urllib 将 404 表示为 HTTPError 时仍判定服务已经监听。"""
 
         error = HTTPError("http://127.0.0.1:3000", 404, "Not Found", {}, None)
-        with patch("app.services.project_launcher.urlopen", side_effect=error):
+        with patch("app.services.frontend_project_launcher.urlopen", side_effect=error):
             ready = _preview_is_ready("http://127.0.0.1:3000")
 
         self.assertTrue(ready)
@@ -57,7 +71,7 @@ class ProjectLauncherTests(unittest.TestCase):
             stdout_log = Path(directory) / "frontend.stdout.log"
             stdout_log.write_text("Starting...\nCompiled successfully!\n", encoding="utf-8")
             fake_process = SimpleNamespace(poll=lambda: None)
-            with patch("app.services.project_launcher._preview_is_ready", return_value=False):
+            with patch("app.services.frontend_project_launcher._preview_is_ready", return_value=False):
                 ready = _wait_until_ready(
                     "http://127.0.0.1:3000",
                     fake_process,
@@ -92,23 +106,23 @@ class ProjectLauncherTests(unittest.TestCase):
             package_manager_command = r"C:\Program Files\nodejs\pnpm.cmd"
             with (
                 patch(
-                    "app.services.project_launcher.shutil.which",
+                    "app.services.frontend_project_launcher.shutil.which",
                     return_value=package_manager_command,
                 ),
                 patch(
-                    "app.services.project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.subprocess.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
                 ) as run,
                 patch(
-                    "app.services.project_launcher.subprocess.Popen",
+                    "app.services.frontend_project_launcher.subprocess.Popen",
                     return_value=fake_process,
                 ) as popen,
-                patch("app.services.project_launcher._wait_until_ready", return_value=True),
+                patch("app.services.frontend_project_launcher._wait_until_ready", return_value=True),
             ):
                 result = launch_frontend_project(workspace)
 
         self.assertEqual(result["status"], "running")
-        self.assertEqual(result["preview_url"], "http://127.0.0.1:80")
+        self.assertEqual(result["preview_url"], "http://localhost:80")
         self.assertTrue(
             result["package_json_path"].replace("\\", "/").lower().endswith(
                 "frontend/package.json"
@@ -122,7 +136,7 @@ class ProjectLauncherTests(unittest.TestCase):
             popen.call_args.args[0],
             [package_manager_command, "run", "dev"],
         )
-        self.assertEqual(popen.call_args.kwargs["env"]["HOST"], "127.0.0.1")
+        self.assertEqual(popen.call_args.kwargs["env"]["HOST"], "localhost")
         self.assertEqual(popen.call_args.kwargs["env"]["BROWSER"], "none")
 
     def test_react_scripts_launch_does_not_force_loopback_host(self) -> None:
@@ -137,17 +151,17 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
             with (
-                patch.dict("app.services.project_launcher.os.environ", {"HOST": "inherited"}),
-                patch("app.services.project_launcher.shutil.which", return_value="/usr/bin/npm"),
+                patch.dict("app.services.frontend_project_launcher.os.environ", {"HOST": "inherited"}),
+                patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
                 patch(
-                    "app.services.project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.subprocess.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
                 ),
                 patch(
-                    "app.services.project_launcher.subprocess.Popen",
+                    "app.services.frontend_project_launcher.subprocess.Popen",
                     return_value=fake_process,
                 ) as popen,
-                patch("app.services.project_launcher._wait_until_ready", return_value=True),
+                patch("app.services.frontend_project_launcher._wait_until_ready", return_value=True),
             ):
                 result = launch_frontend_project(workspace)
 
@@ -173,11 +187,11 @@ class ProjectLauncherTests(unittest.TestCase):
             }
             with (
                 patch(
-                    "app.services.project_launcher._reuse_ready_server",
+                    "app.services.frontend_project_launcher._reuse_ready_server",
                     return_value=existing_server,
                 ),
-                patch("app.services.project_launcher._run_install") as run_install,
-                patch("app.services.project_launcher._start_dev_server") as start_dev_server,
+                patch("app.services.frontend_project_launcher._run_install") as run_install,
+                patch("app.services.frontend_project_launcher._start_dev_server") as start_dev_server,
             ):
                 result = launch_frontend_project(workspace)
 
@@ -199,16 +213,16 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             fake_process = SimpleNamespace(pid=12345, poll=lambda: 1)
             with (
-                patch("app.services.project_launcher.shutil.which", return_value="/usr/bin/npm"),
+                patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
                 patch(
-                    "app.services.project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.subprocess.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
                 ),
                 patch(
-                    "app.services.project_launcher.subprocess.Popen",
+                    "app.services.frontend_project_launcher.subprocess.Popen",
                     return_value=fake_process,
                 ),
-                patch("app.services.project_launcher._wait_until_ready", return_value=False),
+                patch("app.services.frontend_project_launcher._wait_until_ready", return_value=False),
             ):
                 result = launch_frontend_project(workspace)
 
@@ -228,16 +242,16 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
             with (
-                patch("app.services.project_launcher.shutil.which", return_value="/usr/bin/npm"),
+                patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
                 patch(
-                    "app.services.project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.subprocess.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
                 ),
                 patch(
-                    "app.services.project_launcher.subprocess.Popen",
+                    "app.services.frontend_project_launcher.subprocess.Popen",
                     return_value=fake_process,
                 ),
-                patch("app.services.project_launcher._wait_until_ready", return_value=False),
+                patch("app.services.frontend_project_launcher._wait_until_ready", return_value=False),
             ):
                 result = launch_frontend_project(workspace)
 
@@ -249,7 +263,7 @@ class ProjectLauncherTests(unittest.TestCase):
         """验证健康检查在子进程退出后不会继续请求预览地址。"""
 
         fake_process = SimpleNamespace(poll=lambda: 1)
-        with patch("app.services.project_launcher.urlopen") as urlopen:
+        with patch("app.services.frontend_project_launcher.urlopen") as urlopen:
             ready = _wait_until_ready("http://127.0.0.1:3000", fake_process)
 
         self.assertFalse(ready)
@@ -273,11 +287,11 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "app.services.project_launcher.shutil.which",
+                    "app.services.frontend_project_launcher.shutil.which",
                     return_value="/usr/bin/npm",
                 ),
                 patch(
-                    "app.services.project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.subprocess.run",
                     side_effect=timeout,
                 ),
             ):
@@ -304,11 +318,11 @@ class ProjectLauncherTests(unittest.TestCase):
             error = FileNotFoundError(2, "系统找不到指定的文件", package_manager_command)
             with (
                 patch(
-                    "app.services.project_launcher.shutil.which",
+                    "app.services.frontend_project_launcher.shutil.which",
                     return_value=package_manager_command,
                 ),
                 patch(
-                    "app.services.project_launcher.subprocess.run",
+                    "app.services.frontend_project_launcher.subprocess.run",
                     side_effect=error,
                 ),
             ):
@@ -962,13 +976,90 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertTrue(cleanup["pid_file_preserved"])
         self.assertEqual(preserved_pid, "222")
 
-    def test_launch_project_returns_acceptance_request_after_successful_launch(self) -> None:
-        backend_result = {
+    def test_static_preview_starts_frontend_only_even_when_backend_exists(self) -> None:
+        """Static 必须跳过后端发现、启动和数据库凭据链路。"""
+
+        frontend_result = {
             "status": "running",
-            "message": "backend ok",
-            "server": {"pid": 321},
-            "_process": MagicMock(pid=321),
+            "preview_url": "http://127.0.0.1:80",
+            "server": {"pid": 123},
         }
+        with tempfile.TemporaryDirectory() as workspace:
+            self._write_application(workspace, "static")
+            with (
+                patch("app.services.project_launcher.find_backend_project_root") as find_backend,
+                patch("app.services.project_launcher.launch_backend_project") as launch_backend,
+                patch(
+                    "app.services.backend_project_launcher.resolve_application_mysql_config"
+                ) as resolve_credentials,
+                patch(
+                    "app.services.project_launcher.launch_frontend_project",
+                    return_value=frontend_result,
+                ) as launch_frontend,
+            ):
+                result = launch_project_preview(workspace)
+
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(result["datasource_type"], "static")
+        self.assertEqual(result["backend"]["reason"], "static_frontend_only")
+        find_backend.assert_not_called()
+        launch_backend.assert_not_called()
+        resolve_credentials.assert_not_called()
+        launch_frontend.assert_called_once()
+
+    def test_database_preview_starts_backend_then_frontend(self) -> None:
+        """Database 在后端工程存在时保持先后端、后前端的启动顺序。"""
+
+        calls: list[str] = []
+        backend_process = MagicMock(pid=321)
+        with tempfile.TemporaryDirectory() as workspace:
+            self._write_application(workspace, "database")
+            root = Path(workspace).resolve()
+            with (
+                patch(
+                    "app.services.project_launcher.find_backend_project_root",
+                    return_value=root / "backend",
+                ),
+                patch(
+                    "app.services.project_launcher.launch_backend_project",
+                    side_effect=lambda _root: calls.append("backend") or {
+                        "status": "running",
+                        "_process": backend_process,
+                    },
+                ),
+                patch(
+                    "app.services.project_launcher.launch_frontend_project",
+                    side_effect=lambda _root: calls.append("frontend") or {
+                        "status": "running",
+                        "preview_url": "http://127.0.0.1:80",
+                    },
+                ),
+            ):
+                result = launch_project_preview(workspace)
+
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(result["datasource_type"], "database")
+        self.assertEqual(calls, ["backend", "frontend"])
+        self.assertNotIn("_process", result["backend"])
+
+    def test_preview_rejects_missing_or_disabled_datasource_config(self) -> None:
+        """缺少应用配置或使用 external_api 时不得启动任何项目进程。"""
+
+        for datasource_type in (None, "external_api"):
+            with self.subTest(datasource_type=datasource_type), tempfile.TemporaryDirectory() as workspace:
+                if datasource_type is not None:
+                    self._write_application(workspace, datasource_type)
+                with (
+                    patch("app.services.project_launcher.launch_backend_project") as backend,
+                    patch("app.services.project_launcher.launch_frontend_project") as frontend,
+                ):
+                    result = launch_project_preview(workspace)
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["failed_stage"], "datasource_policy")
+                backend.assert_not_called()
+                frontend.assert_not_called()
+
+    def test_launch_project_returns_acceptance_request_after_successful_launch(self) -> None:
         frontend_result = {
             "status": "running",
             "message": "ok",
@@ -976,23 +1067,17 @@ class ProjectLauncherTests(unittest.TestCase):
             "package_json_path": "/workspace/Frontend/package.json",
             "server": {"pid": 123},
         }
-        calls: list[tuple[str, Path]] = []
-        with (
-            patch(
-                "app.graph.nodes.lifecycle.find_backend_project_root",
-                return_value=Path("/workspace/backend"),
-            ),
-            patch(
-                "app.graph.nodes.lifecycle.launch_backend_project",
-                side_effect=lambda workspace: calls.append(("backend", workspace))
-                or backend_result,
-            ),
-            patch(
-                "app.graph.nodes.lifecycle.launch_frontend_project",
-                side_effect=lambda workspace: calls.append(("frontend", workspace))
-                or frontend_result,
-            ),
-        ):
+        launch_result = {
+            **frontend_result,
+            "status": "running",
+            "backend": {"status": "running", "server": {"pid": 321}},
+            "frontend": frontend_result,
+            "failed_stage": None,
+        }
+        with patch(
+            "app.graph.nodes.lifecycle.launch_project_preview",
+            return_value=launch_result,
+        ) as launcher:
             result = launch_project({"workspace": "/workspace"})
 
         self.assertEqual(result["status"], "requires_user_input")
@@ -1000,37 +1085,19 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["acceptance_request"]["preview_url"], "http://127.0.0.1:80")
         self.assertEqual(result["launch_result"]["backend"]["status"], "running")
         self.assertEqual(result["launch_result"]["frontend"], frontend_result)
-        self.assertNotIn("_process", result["launch_result"]["backend"])
-        self.assertEqual(
-            calls,
-            [
-                ("backend", Path("/workspace").resolve()),
-                ("frontend", Path("/workspace").resolve()),
-            ],
-        )
+        launcher.assert_called_once_with(Path("/workspace").resolve())
 
     def test_launch_project_reports_startup_failure(self) -> None:
-        backend_process = MagicMock(pid=321)
-        backend_result = {
-            "status": "running",
-            "message": "backend ok",
-            "server": {"pid": 321},
-            "_process": backend_process,
+        launch_result = {
+            "status": "failed",
+            "message": "未找到前端 package.json。",
+            "backend": {"status": "running"},
+            "frontend": {"status": "failed"},
+            "failed_stage": "frontend_start",
         }
-        with (
-            patch(
-                "app.graph.nodes.lifecycle.find_backend_project_root",
-                return_value=Path("/workspace/backend"),
-            ),
-            patch(
-                "app.graph.nodes.lifecycle.launch_backend_project",
-                return_value=backend_result,
-            ) as launch_backend,
-            patch(
-                "app.graph.nodes.lifecycle.launch_frontend_project",
-                return_value={"status": "failed", "message": "未找到前端 package.json。"},
-            ) as launch_frontend,
-            patch("app.graph.nodes.lifecycle.stop_backend_project") as stop_backend,
+        with patch(
+            "app.graph.nodes.lifecycle.launch_project_preview",
+            return_value=launch_result,
         ):
             result = launch_project({"workspace": "/workspace"})
 
@@ -1040,9 +1107,6 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["preview_url"], "未找到前端 package.json。")
         self.assertEqual(result["launch_result"]["preview_url"], result["preview_url"])
         self.assertEqual(result["acceptance_request"]["preview_url"], result["preview_url"])
-        launch_backend.assert_called_once_with(Path("/workspace").resolve())
-        launch_frontend.assert_called_once_with(Path("/workspace").resolve())
-        stop_backend.assert_called_once_with(backend_result, backend_process)
 
     def test_launch_project_does_not_start_frontend_when_backend_fails(self) -> None:
         """验证后端失败时工作流立即终止且不调用前端 launcher。"""
@@ -1052,18 +1116,11 @@ class ProjectLauncherTests(unittest.TestCase):
             "message": "Maven build failed",
             "failed_stage": "backend_build",
         }
-        with (
-            patch(
-                "app.graph.nodes.lifecycle.find_backend_project_root",
-                return_value=Path("/workspace/backend"),
-            ),
-            patch(
-                "app.graph.nodes.lifecycle.launch_backend_project",
-                return_value=backend_result,
-            ) as launch_backend,
-            patch(
-                "app.graph.nodes.lifecycle.launch_frontend_project"
-            ) as launch_frontend,
+        backend_result["backend"] = backend_result.copy()
+        backend_result["frontend"] = None
+        with patch(
+            "app.graph.nodes.lifecycle.launch_project_preview",
+            return_value=backend_result,
         ):
             result = launch_project({"workspace": "/workspace"})
 
@@ -1072,11 +1129,9 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["preview_url"], "Maven build failed")
         self.assertEqual(result["launch_result"]["preview_url"], result["preview_url"])
         self.assertIsNone(result["launch_result"]["frontend"])
-        launch_backend.assert_called_once_with(Path("/workspace").resolve())
-        launch_frontend.assert_not_called()
 
     def test_launch_project_starts_frontend_when_backend_is_missing(self) -> None:
-        """验证纯前端工作区跳过后端并正常进入预览验收。"""
+        """验证统一启动结果中的纯前端应用正常进入预览验收。"""
 
         frontend_result = {
             "status": "running",
@@ -1087,15 +1142,18 @@ class ProjectLauncherTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace).resolve()
-            with (
-                patch(
-                    "app.graph.nodes.lifecycle.launch_backend_project"
-                ) as launch_backend,
-                patch(
-                    "app.graph.nodes.lifecycle.launch_frontend_project",
-                    return_value=frontend_result,
-                ) as launch_frontend,
-            ):
+            launch_result = {
+                **frontend_result,
+                "status": "running",
+                "message": "Static 应用前端项目已启动并就绪。",
+                "backend": {"status": "skipped", "reason": "static_frontend_only"},
+                "frontend": frontend_result,
+                "failed_stage": None,
+            }
+            with patch(
+                "app.graph.nodes.lifecycle.launch_project_preview",
+                return_value=launch_result,
+            ) as launcher:
                 result = launch_project({"workspace": workspace})
 
         self.assertEqual(result["status"], "requires_user_input")
@@ -1104,26 +1162,22 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["launch_result"]["frontend"], frontend_result)
         self.assertIn("前端项目已启动", result["launch_result"]["message"])
         self.assertNotIn("Java 后端与前端", result["launch_result"]["message"])
-        launch_backend.assert_not_called()
-        launch_frontend.assert_called_once_with(root)
+        launcher.assert_called_once_with(root)
 
     def test_launch_project_does_not_stop_backend_for_frontend_only_failure(self) -> None:
-        """验证纯前端启动失败时不会执行不存在的后端进程回滚。"""
+        """验证纯前端启动失败能被 Workflow 正确映射。"""
 
         frontend_result = {"status": "failed", "message": "frontend failed"}
         with tempfile.TemporaryDirectory() as workspace:
-            root = Path(workspace).resolve()
-            with (
-                patch(
-                    "app.graph.nodes.lifecycle.launch_backend_project"
-                ) as launch_backend,
-                patch(
-                    "app.graph.nodes.lifecycle.launch_frontend_project",
-                    return_value=frontend_result,
-                ) as launch_frontend,
-                patch(
-                    "app.graph.nodes.lifecycle.stop_backend_project"
-                ) as stop_backend,
+            launch_result = {
+                **frontend_result,
+                "backend": {"status": "skipped", "reason": "static_frontend_only"},
+                "frontend": frontend_result,
+                "failed_stage": "frontend_start",
+            }
+            with patch(
+                "app.graph.nodes.lifecycle.launch_project_preview",
+                return_value=launch_result,
             ):
                 result = launch_project({"workspace": workspace})
 
@@ -1131,9 +1185,6 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["launch_result"]["failed_stage"], "frontend_start")
         self.assertEqual(result["launch_result"]["backend"]["status"], "skipped")
         self.assertEqual(result["launch_result"]["frontend"], frontend_result)
-        launch_backend.assert_not_called()
-        launch_frontend.assert_called_once_with(root)
-        stop_backend.assert_not_called()
 
     def test_acceptance_rejects_implicit_confirmation(self) -> None:
         """缺少结构化验收动作时不能完成交付。"""

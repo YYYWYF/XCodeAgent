@@ -1,65 +1,15 @@
 from app.graph.state import ProjectState
-from app.services.project_launcher import (
-    find_backend_project_root,
-    launch_backend_project,
-    launch_frontend_project,
-    stop_backend_project,
-)
+from app.services.project_launcher import launch_project_preview
 from app.workspace.spec_documents import workspace_root
 
 
 def launch_project(state: ProjectState) -> dict:
-    """按工程能力启动可选 Java 后端与前端，并返回完整启动证据。"""
+    """按应用权威数据源类型启动预览，并返回完整启动证据。"""
 
     root = workspace_root(state).resolve()
-    backend_process = None
-    if find_backend_project_root(root) is None:
-        backend = {
-            "status": "skipped",
-            "message": "未识别到后端 Maven 工程，已跳过后端启动。",
-            "workspace": str(root),
-            "failed_stage": None,
-        }
-    else:
-        backend = launch_backend_project(root)
-        backend_process = backend.pop("_process", None)
-        if backend.get("status") == "failed":
-            launch = {
-                "status": "failed",
-                "message": backend.get("message"),
-                "workspace": backend.get("workspace"),
-                "preview_url": None,
-                "package_json_path": None,
-                "server": None,
-                "backend": backend,
-                "frontend": None,
-                "failed_stage": backend.get("failed_stage"),
-            }
-            return _failed_project_launch(launch)
-
-    frontend = launch_frontend_project(root)
-    if frontend.get("status") == "failed":
-        if backend_process is not None:
-            stop_backend_project(backend, backend_process)
-        launch = {
-            **frontend,
-            "backend": backend,
-            "frontend": frontend,
-            "failed_stage": "frontend_start",
-        }
+    launch = launch_project_preview(root)
+    if launch.get("status") == "failed":
         return _failed_project_launch(launch)
-
-    launch = {
-        **frontend,
-        "message": (
-            "前端项目已启动并就绪，未识别到后端工程。"
-            if backend.get("status") == "skipped"
-            else "Java 后端与前端项目均已启动并就绪。"
-        ),
-        "backend": backend,
-        "frontend": frontend,
-        "failed_stage": None,
-    }
     preview_url = launch.get("preview_url")
     return {
         "phase": "launch_project",
