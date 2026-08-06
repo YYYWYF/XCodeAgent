@@ -126,7 +126,7 @@ export function buildApplicationPlanningRequest(application: ApplicationConfig):
     `应用场景：${scenario}`,
     `目标终端：${terminal}。`,
     `导航布局：${layout.type || '由规划阶段确定'}，页头=${layout.useHeader ? '启用' : '禁用'}，页脚=${layout.useFooter ? '启用' : '禁用'}。`,
-    `数据库类型：${datasource}。`,
+    `数据源类型：${datasource}。`,
     `认证：${authEnabled ? '启用' : '不启用'}。`,
     '本轮只完成需求文档和项目计划，不生成页面细节或代码。'
   ].join('\n')

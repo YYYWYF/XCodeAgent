@@ -6,42 +6,80 @@ export type ApplicationLayoutType = '' | 'side' | 'top' | 'mix';
 
 /** 标识应用支持的数据源大类。 */
 export enum DatasourceEnum {
-  DB = 'DataBase',
-  API = 'Api'
+  DB = 'database',
+  API = 'external_api',
+  STATIC = 'static'
 }
 
 /** 标识新建应用表单中的外部数据库连接方案，不写入 application.json。 */
 export type DatasourceConnectionMode = 'dbid' | 'plant';
 
-/** 描述最终写入 application.json 的数据库数据源配置。 */
-export interface ApplicationDatasourceConfig {
-  type: DatasourceEnum;
-  db: {
-    useBuiltin: boolean;
-    plantMode?: {
-      domain: string;
-      port: number;
-      userName: string;
-      pwd: string;
-      schema: string;
-    };
-    dbidMode?: {
-      dbid: string;
-      userName: string;
-      domain: string;
-      port: number;
-      schema: string;
-    };
+/** 描述数据库数据源持久化所需的连接信息。 */
+export interface DatabaseDatasourceDetails {
+  useBuiltin: boolean;
+  plantMode?: {
+    domain: string;
+    port: number;
+    userName: string;
+    pwd: string;
+    schema: string;
+  };
+  dbidMode?: {
+    dbid: string;
+    userName: string;
+    domain: string;
+    port: number;
+    schema: string;
   };
 }
 
-/** 扩展最终数据源配置，保存仅供创建表单控制显隐的连接方案。 */
-export interface ApplicationDatasourceDraft {
-  type: DatasourceEnum;
-  db: ApplicationDatasourceConfig['db'] & {
+/** 描述最终写入 application.json 的数据库数据源配置。 */
+export interface DatabaseDatasourceConfig {
+  type: DatasourceEnum.DB;
+  db: DatabaseDatasourceDetails;
+}
+
+/** 描述最终写入 application.json 的静态数据源配置，不能包含数据库字段。 */
+export interface StaticDatasourceConfig {
+  type: DatasourceEnum.STATIC;
+}
+
+/** 描述暂未启用的外部 API 数据源配置。 */
+export interface ExternalApiDatasourceConfig {
+  type: DatasourceEnum.API;
+}
+
+/** 描述正式应用配置中的判别联合数据源。 */
+export type ApplicationDatasourceConfig =
+  | DatabaseDatasourceConfig
+  | StaticDatasourceConfig
+  | ExternalApiDatasourceConfig;
+
+/** 描述数据库数据源在新建表单中的临时连接配置。 */
+export interface DatabaseDatasourceDraft {
+  type: DatasourceEnum.DB;
+  db: DatabaseDatasourceDetails & {
     connectionMode?: DatasourceConnectionMode;
   };
 }
+
+/** 描述静态数据源在新建表单中的配置。 */
+export interface StaticDatasourceDraft {
+  type: DatasourceEnum.STATIC;
+  db?: never;
+}
+
+/** 描述外部 API 数据源在新建表单中的配置。 */
+export interface ExternalApiDatasourceDraft {
+  type: DatasourceEnum.API;
+  db?: never;
+}
+
+/** 描述新建应用表单中的判别联合数据源草稿。 */
+export type ApplicationDatasourceDraft =
+  | DatabaseDatasourceDraft
+  | StaticDatasourceDraft
+  | ExternalApiDatasourceDraft;
 
 export type ApplicationTrackMethod = string;
 export type DatabaseConnectionMode = 'dbid' | 'connectionString';
@@ -304,7 +342,7 @@ export interface ApplicationApiAccess {
 export interface ApplicationDataSourceDefinition {
   id: string;
   name: string;
-  type: 'database' | 'external_api' | 'static' | 'none';
+  type: DatasourceEnum;
   entities: Array<{ name: string; schemaRef: string }>;
   relations: Array<{
     from: string;

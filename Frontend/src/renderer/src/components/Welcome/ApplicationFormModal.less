@@ -10,7 +10,9 @@
   border: 1px solid var(--modal-border);
   border-radius: 12px;
   background: var(--modal-surface);
-  transition: border-color 0.2s ease, opacity 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    opacity 0.2s ease;
 
   // 基础信息、项目位置占整行
   &--full {
@@ -217,6 +219,46 @@
 // 数据库配置保持标题、条件字段和端口输入在明暗主题下使用统一弹窗变量。
 .@{class-prefix}-datasource-config-title {
   margin-bottom: 18px;
+}
+
+// 数据源类型卡片使用弹窗主题变量，保证明暗主题下的说明文字和禁用态可读。
+.@{class-prefix}-datasource-type-picker {
+  width: 100%;
+
+  .ant-radio-button-wrapper {
+    height: auto;
+    min-width: 190px;
+    padding: 10px 14px;
+    white-space: normal;
+  }
+
+  .ant-radio-button-wrapper-checked .@{class-prefix}-datasource-type-description {
+    color: rgba(255, 255, 255, 0.82);
+  }
+
+  .ant-radio-button-wrapper-disabled {
+    color: var(--modal-text-secondary);
+    background: var(--modal-surface);
+    opacity: 0.68;
+  }
+}
+
+.@{class-prefix}-datasource-type-option {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.35;
+}
+
+.@{class-prefix}-datasource-type-label {
+  color: inherit;
+  font-weight: 600;
+}
+
+.@{class-prefix}-datasource-type-description {
+  color: var(--modal-text-secondary);
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .@{class-prefix}-datasource-config-fields {

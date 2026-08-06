@@ -89,7 +89,7 @@ const environment = { dev: [{ key: 'UNCHANGED', value: '1' }], prod: [] }
 const schema = {
   appName: 'crypto-test',
   datasource: {
-    type: 'DataBase',
+    type: 'database',
     db: {
       useBuiltin: false,
       plantMode: {

@@ -115,10 +115,13 @@ export async function encryptPlantModePassword(
   ].join(':')
 }
 
-/** 复制应用 schema，仅加密 plantMode.pwd，供所有后续持久化共用。 */
+/** 复制应用 schema，仅对 database + plantMode.pwd 加密，Static 不触碰数据库字段。 */
 export async function encryptSensitiveDatasourceFields(
   schema: ApplicationSchemaConfig
 ): Promise<ApplicationSchemaConfig> {
+  if (!isDatabaseDatasourceType(schema.datasource.type)) return schema
+  if (!('db' in schema.datasource) || !schema.datasource.db) return schema
+
   const plantMode = schema.datasource.db.plantMode
   if (!plantMode) return schema
   const encryptedPassword = await encryptPlantModePassword(plantMode.pwd)
@@ -135,6 +138,11 @@ export async function encryptSensitiveDatasourceFields(
       }
     }
   }
+}
+
+/** 在不引入渲染器运行时依赖的前提下判断当前正式数据库类型。 */
+function isDatabaseDatasourceType(value: unknown): boolean {
+  return value === 'database'
 }
 
 /** 加密完整应用索引对象，并让顶层 datasource 与嵌套 schema 共享密文配置。 */

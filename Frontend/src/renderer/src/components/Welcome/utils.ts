@@ -41,50 +41,42 @@ function parseEnv(value?: string) {
     .filter(Boolean)
 }
 
-/** 将表单数据源草稿收敛为互斥且可持久化的数据库配置。 */
+/** 将表单数据源草稿收敛为统一的小写正式数据源配置。 */
 export function buildDatasourceConfig(
   draft: ApplicationDraft['datasource']
 ): ApplicationDatasourceConfig {
-  const { connectionMode, useBuiltin } = draft.db
-  if (useBuiltin) {
-    return {
-      type: DatasourceEnum.DB,
-      db: { useBuiltin: true }
-    }
+  const datasourceType = draft?.type ?? DatasourceEnum.DB
+  if (datasourceType === DatasourceEnum.STATIC) {
+    return { type: DatasourceEnum.STATIC }
   }
-  if (connectionMode === 'dbid') {
-    const dbidMode = draft.db.dbidMode
-    return {
-      type: DatasourceEnum.DB,
-      db: {
-        useBuiltin: false,
-        dbidMode: {
-          dbid: String(dbidMode?.dbid || '').trim(),
-          userName: String(dbidMode?.userName || '').trim(),
-          domain: String(dbidMode?.domain || '').trim(),
-          port: Number(dbidMode?.port),
-          schema: String(dbidMode?.schema || '').trim()
-        }
+  if (datasourceType === DatasourceEnum.API) {
+    throw new Error('外部 API 数据源暂未启用。')
+  }
+
+  const databaseDraft = draft as Extract<
+    ApplicationDraft['datasource'],
+    { type: DatasourceEnum.DB }
+  >
+  const database = databaseDraft.db
+  if (!database || database.useBuiltin !== false || database.connectionMode !== 'plant') {
+    throw new Error('当前仅支持通过账号密码连接外部数据库。')
+  }
+
+  const plantMode = database.plantMode
+  if (!plantMode) throw new Error('外部数据库必须填写账号密码连接信息。')
+  return {
+    type: DatasourceEnum.DB,
+    db: {
+      useBuiltin: false,
+      plantMode: {
+        domain: String(plantMode.domain || '').trim(),
+        port: Number(plantMode.port),
+        userName: String(plantMode.userName || '').trim(),
+        pwd: String(plantMode.pwd || '').trim(),
+        schema: String(plantMode.schema || '').trim()
       }
     }
   }
-  if (connectionMode === 'plant') {
-    const plantMode = draft.db.plantMode
-    return {
-      type: DatasourceEnum.DB,
-      db: {
-        useBuiltin: false,
-        plantMode: {
-          domain: String(plantMode?.domain || '').trim(),
-          port: Number(plantMode?.port),
-          userName: String(plantMode?.userName || '').trim(),
-          pwd: String(plantMode?.pwd || '').trim(),
-          schema: String(plantMode?.schema || '').trim()
-        }
-      }
-    }
-  }
-  throw new Error('外部数据库必须选择连接方案。')
 }
 
 // 把新建应用表单转换为可写入 application.json 的初始配置。
