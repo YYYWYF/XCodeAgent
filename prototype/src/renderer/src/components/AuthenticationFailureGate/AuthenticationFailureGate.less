@@ -1,0 +1,59 @@
+.@{class-prefix}-authentication-failure-modal {
+  .ant-modal-content {
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 10px;
+    box-shadow: 0 24px 72px rgba(0, 0, 0, 0.3);
+  }
+
+  .ant-modal-body {
+    padding: 32px;
+  }
+
+  &.@{class-prefix}-theme-dark {
+    .ant-modal-content {
+      color: #f2f2f2;
+      background: #28282b;
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    .ant-typography {
+      color: #f2f2f2;
+    }
+
+    .@{class-prefix}-authentication-failure-error.ant-typography {
+      color: #ff8a80;
+    }
+  }
+}
+
+body:has(.@{class-prefix}-authentication-failure-modal) .ant-modal-mask {
+  background: rgba(5, 12, 24, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.@{class-prefix}-authentication-failure-content {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  text-align: center;
+
+  > .anticon {
+    color: #d4380d;
+    font-size: 42px;
+  }
+
+  h3.ant-typography,
+  .ant-typography {
+    margin: 0;
+  }
+
+  .ant-btn {
+    height: 44px;
+    margin-top: 10px;
+    border-radius: 6px;
+  }
+}
+
+.@{class-prefix}-authentication-failure-error.ant-typography {
+  color: #cf1322;
+}

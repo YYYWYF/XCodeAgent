@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>武汉分行项目管理系统 · 预览</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif; color: #1f2933; background: #f5f5f7; }
+      .app-nav { display: flex; align-items: center; gap: 16px; height: 52px; padding: 0 22px; background: linear-gradient(90deg, #5d31dc, #7c3aed); color: #fff; font-size: 13px; }
+      .app-nav strong { font-size: 15px; margin-right: 6px; }
+      .app-nav a { color: rgba(255,255,255,0.85); cursor: pointer; text-decoration: none; }
+      .app-nav a.active { color: #fff; font-weight: 600; }
+      .app-nav .spacer { flex: 1; }
+      .app-nav .env { font-size: 11px; opacity: 0.7; }
+      .app-body { padding: 20px 22px; max-width: 1100px; margin: 0 auto; }
+      .app-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+      .app-head h1 { margin: 0; font-size: 20px; }
+      .app-head .crumb { font-size: 12px; color: #8a8f99; }
+      .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+      .field { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #555; }
+      .field input, .field select { height: 30px; border: 1px solid #d9d9d9; border-radius: 4px; padding: 0 8px; font-size: 13px; background: #fff; }
+      .btn { height: 30px; padding: 0 14px; border: none; border-radius: 4px; background: #6b3cf0; color: #fff; font-size: 13px; cursor: pointer; }
+      .btn.ghost { background: #fff; color: #6b3cf0; border: 1px solid #6b3cf0; }
+      .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+      .stat { border: 1px solid #ececf0; border-radius: 10px; padding: 14px 16px; background: #fff; }
+      .stat small { color: #8a8f99; font-size: 12px; }
+      .stat strong { display: block; font-size: 24px; color: #6b3cf0; margin-top: 4px; }
+      .card { border: 1px solid #ececf0; border-radius: 10px; background: #fff; overflow: hidden; }
+      .card-head { padding: 12px 16px; border-bottom: 1px solid #f0f0f2; font-weight: 600; font-size: 14px; }
+      .card-body { padding: 16px; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid #f0f0f2; }
+      th { color: #8a8f99; font-weight: 500; background: #fafafa; }
+      .tag { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; }
+      .tag-ok { background: #e7f7ee; color: #1a7f37; }
+      .tag-wait { background: #fff1e7; color: #b45309; }
+      .tag-purple { background: #f0eaff; color: #6b3cf0; }
+      .form-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+      .form-item { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: #555; min-width: 200px; }
+      .form-item input, .form-item select, .form-item textarea { height: 32px; border: 1px solid #d9d9d9; border-radius: 4px; padding: 0 8px; font-size: 13px; background: #fff; }
+      .form-item textarea { height: auto; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <nav class="app-nav" id="nav"></nav>
+    <div class="app-body">
+      <div class="app-head">
+        <h1 id="pageTitle"></h1>
+        <span class="crumb" id="pagePath"></span>
+      </div>
+      <div id="content"></div>
+    </div>
+
+    <script>
+      // 生成的"应用"：按路由渲染对应页面 UI（对应页面详细设计）
+      var MENU = [
+        ['/my-projects', '我的项目'], ['/my-rechecks', '我的回检'], ['/recheck-review', '回检审核']
+      ];
+      var path = location.pathname;
+      var title = '页面';
+
+      function table(headers, rows) {
+        return '<table><thead><tr>' + headers.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' +
+          rows.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>';
+      }
+
+      var PAGES = {
+        '/my-projects': {
+          title: '我的项目',
+          body: '<div class="toolbar">' +
+            '<span class="field">状态<select><option>全部</option><option>进行中</option><option>已完成</option><option>已验收</option></select></span>' +
+            '<span class="field"><input placeholder="项目名称 / 关键字"></span>' +
+            '<button class="btn">查询</button><button class="btn">新建项目</button></div>' +
+            table(['项目名称', '状态', '负责人', '进度', '创建时间'], [
+              ['分行数据中台项目', '<span class="tag tag-purple">进行中</span>', '张伟', '60%', '2026-06-12'],
+              ['对公授信流程优化', '<span class="tag tag-purple">进行中</span>', '李娜', '35%', '2026-07-01'],
+              ['零售客户画像平台', '<span class="tag tag-ok">已验收</span>', '王强', '100%', '2026-04-18'],
+              ['合规报表改造', '<span class="tag tag-wait">已完成</span>', '刘敏', '100%', '2026-05-06']
+            ])
+        },
+        '/my-rechecks': {
+          title: '我的回检',
+          body: '<div class="toolbar">' +
+            '<span class="field">状态<select><option>全部</option><option>待审核</option><option>已通过</option><option>已驳回</option></select></span>' +
+            '<button class="btn">提交回检</button></div>' +
+            '<div class="card"><div class="card-head">提交需求回检单</div><div class="card-body">' +
+            '<div class="form-row">' +
+            '<span class="form-item">关联项目<select><option>分行数据中台项目</option><option>对公授信流程优化</option></select></span>' +
+            '<span class="form-item">需求达成情况<input placeholder="整体达成情况"></span></div>' +
+            '<div class="form-row"><span class="form-item" style="flex:1">问题与建议<textarea rows="2" placeholder="未达成项、问题与改进建议"></textarea></span></div>' +
+            '<button class="btn">提交回检单</button></div></div>' +
+            table(['回检单号', '关联项目', '填报人', '状态', '提交时间'], [
+              ['RC-2026-0812', '零售客户画像平台', '陈静', '<span class="tag tag-ok">已通过</span>', '2026-07-20'],
+              ['RC-2026-0830', '合规报表改造', '陈静', '<span class="tag tag-wait">已驳回</span>', '2026-07-26']
+            ])
+        },
+        '/recheck-review': {
+          title: '回检审核',
+          body: '<div class="toolbar"><span class="field">待审核 <strong>2</strong> 条</span></div>' +
+            table(['回检单号', '关联项目', '填报人', '提交时间', '操作'], [
+              ['RC-2026-0845', '对公授信流程优化', '赵磊', '2026-08-02', '<button class="btn">审核</button>'],
+              ['RC-2026-0849', '分行数据中台项目', '孙悦', '2026-08-03', '<button class="btn">审核</button>']
+            ])
+        }
+      };
+
+      var current = PAGES[path] || { title: '页面', body: '<div class="card"><div class="card-body">页面未生成</div></div>' };
+      document.title = '武汉分行项目管理系统 · ' + current.title;
+      document.getElementById('pageTitle').textContent = current.title;
+      document.getElementById('pagePath').textContent = path;
+      document.getElementById('content').innerHTML = current.body;
+      document.getElementById('nav').innerHTML = '<strong>武汉分行项目管理系统</strong>' +
+        MENU.map(function (m) { return '<a href="' + m[0] + '" class="' + (m[0] === path ? 'active' : '') + '">' + m[1] + '</a>'; }).join('') +
+        '<span class="spacer"></span><span class="env">dev · 分行环境</span>';
+    </script>
+  </body>
+</html>

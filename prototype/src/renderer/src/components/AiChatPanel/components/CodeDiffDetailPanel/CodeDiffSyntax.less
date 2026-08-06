@@ -1,0 +1,95 @@
+.@{class-prefix}-code-diff-view {
+  overflow: auto;
+  --diff-background-color: var(--code-panel-code-bg);
+  --diff-text-color: var(--wb-text);
+  --diff-font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  --diff-gutter-insert-background-color: var(--code-panel-insert);
+  --diff-gutter-insert-text-color: var(--wb-code-add-text);
+  --diff-gutter-delete-background-color: var(--code-panel-delete);
+  --diff-gutter-delete-text-color: var(--wb-code-delete-text);
+  --diff-code-insert-background-color: var(--code-panel-insert);
+  --diff-code-insert-text-color: var(--wb-code-add-text);
+  --diff-code-delete-background-color: var(--code-panel-delete);
+  --diff-code-delete-text-color: var(--wb-code-delete-text);
+  --diff-code-insert-edit-background-color: color-mix(
+    in srgb,
+    var(--wb-code-add-text) 18%,
+    transparent
+  );
+  --diff-code-delete-edit-background-color: color-mix(
+    in srgb,
+    var(--wb-code-delete-text) 18%,
+    transparent
+  );
+
+  .diff {
+    min-width: 100%;
+    width: max-content;
+    font-size: 12px;
+    font-variant-ligatures: none;
+  }
+
+  .diff-line {
+    line-height: 1.65;
+  }
+
+  .diff-gutter {
+    min-width: 24px;
+    padding: 0 4px;
+    color: var(--wb-text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .diff-unified {
+    col.diff-gutter-col {
+      width: 24px;
+    }
+
+    col.diff-gutter-col:first-child {
+      width: 0;
+    }
+
+    .diff-line > .diff-gutter:first-child {
+      display: none;
+    }
+  }
+
+  .diff-gutter-insert {
+    box-shadow: inset 4px 0 0 var(--wb-code-add-text);
+  }
+
+  .diff-gutter-delete {
+    box-shadow: inset 4px 0 0 var(--wb-code-delete-text);
+  }
+
+  .diff-code {
+    padding: 1px 16px 1px 8px;
+    white-space: pre;
+    word-break: normal;
+  }
+}
+
+.@{class-prefix}-workbench-shell[data-theme='light'] .@{class-prefix}-code-diff-view {
+  @import (less) 'highlight.js/styles/github.css';
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] .@{class-prefix}-code-diff-view {
+  @import (less) 'highlight.js/styles/github-dark.css';
+}
+
+.@{class-prefix}-workbench-shell .@{class-prefix}-code-diff-view .diff-code.hljs {
+  display: table-cell;
+  padding: 1px 16px 1px 8px;
+  overflow: visible;
+  color: inherit;
+  background: var(--diff-background-color);
+
+  &.diff-code-insert {
+    background: var(--diff-code-insert-background-color);
+  }
+
+  &.diff-code-delete {
+    background: var(--diff-code-delete-background-color);
+  }
+}

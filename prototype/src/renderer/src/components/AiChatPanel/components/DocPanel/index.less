@@ -1,0 +1,162 @@
+.@{class-prefix}-doc-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  border: 1px solid var(--wb-border-strong, #e5e7eb);
+  border-radius: 8px;
+  background: var(--wb-surface, #ffffff);
+  overflow: hidden;
+}
+
+.@{class-prefix}-doc-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--wb-border, #eef0f3);
+  background: var(--wb-surface-subtle, #f7f8fa);
+
+  &.@{class-prefix}-editing {
+    background: color-mix(in srgb, var(--wb-accent, #6b3cf0) 8%, var(--wb-surface-subtle, #f7f8fa));
+  }
+}
+
+.@{class-prefix}-doc-panel-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.@{class-prefix}-doc-panel-dirty-hint {
+  font-size: 12px;
+}
+
+/* 编辑区：全面板编辑器，内部留白让文字协调（IDE 打开文件即编辑）。 */
+.@{class-prefix}-doc-panel-stage.@{class-prefix}-editor {
+  padding: 0;
+}
+
+.@{class-prefix}-doc-panel-editor {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 28px 32px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--wb-text, #1f2329);
+  font-family: "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.75;
+  resize: none;
+  caret-color: var(--wb-accent, #6b3cf0);
+
+  &::placeholder {
+    color: var(--wb-text-tertiary, #c0c4cc);
+  }
+}
+
+.@{class-prefix}-doc-panel.@{class-prefix}-editing .@{class-prefix}-doc-panel-stage {
+  padding: 16px 18px;
+}
+
+.@{class-prefix}-doc-panel-path {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--wb-surface, #ffffff);
+  border: 1px solid var(--wb-border, #eef0f3);
+  font-size: 12px;
+  color: var(--wb-text-secondary, #8a9099);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.@{class-prefix}-doc-panel-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 32px;
+}
+
+.@{class-prefix}-doc-panel-content {
+  animation: xa-doc-panel-fade-in 0.45s ease both;
+}
+
+.@{class-prefix}-doc-panel-empty,
+.@{class-prefix}-doc-panel-generating {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+}
+
+/* 渐变圆底图标（空态 + 生成中共用），参考 DagGenerationProgress 视觉 */
+.@{class-prefix}-doc-panel-orb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 6px;
+  border-radius: 50%;
+  font-size: 28px;
+  color: var(--wb-accent, #6b3cf0);
+  background: color-mix(in srgb, var(--wb-accent, #6b3cf0) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wb-accent, #6b3cf0) 24%, transparent);
+
+  &.@{class-prefix}-loading {
+    color: #fff;
+    background: linear-gradient(135deg, var(--wb-accent-soft, #a97aff), var(--wb-accent, #6b3cf0));
+    border: 0;
+    box-shadow: 0 8px 22px color-mix(in srgb, var(--wb-accent, #6b3cf0) 32%, transparent);
+    animation: xa-doc-panel-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+.@{class-prefix}-doc-panel-generating-bar {
+  display: block;
+  width: 180px;
+  max-width: 60%;
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--wb-surface-hover, #eef0f3);
+  overflow: hidden;
+
+  > i {
+    display: block;
+    width: 40%;
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--wb-accent, #6b3cf0), transparent);
+    animation: xa-doc-panel-slide 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes xa-doc-panel-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.06); opacity: 0.92; }
+}
+@keyframes xa-doc-panel-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+@keyframes xa-doc-panel-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

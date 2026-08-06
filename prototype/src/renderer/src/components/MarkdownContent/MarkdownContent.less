@@ -1,0 +1,133 @@
+.@{class-prefix}-markdown-content {
+  min-width: 0;
+  color: var(--wb-text, #1f2937);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+
+  > :first-child {
+    margin-top: 0;
+  }
+
+  > :last-child {
+    margin-bottom: 0;
+  }
+
+  p {
+    margin: 0 0 8px;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    margin: 12px 0 6px;
+    color: var(--wb-text, #111827);
+    font-weight: 600;
+    line-height: 1.35;
+    letter-spacing: 0;
+  }
+
+  h1 {
+    font-size: 18px;
+  }
+
+  h2 {
+    font-size: 16px;
+  }
+
+  h3 {
+    font-size: 15px;
+  }
+
+  h4,
+  h5,
+  h6 {
+    font-size: 13px;
+  }
+
+  ul,
+  ol {
+    margin: 0 0 8px;
+    padding-left: 20px;
+  }
+
+  li + li {
+    margin-top: 4px;
+  }
+
+  blockquote {
+    margin: 0 0 8px;
+    padding: 6px 10px;
+    color: var(--wb-text-secondary, #4b5563);
+    background: var(--wb-surface-subtle, #f4f7fb);
+    border-left: 3px solid var(--wb-border-strong, #9fb2c8);
+    border-radius: 0 6px 6px 0;
+  }
+
+  code {
+    padding: 1px 5px;
+    color: var(--wb-text, #202124);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 12px;
+    background: var(--wb-surface-subtle, #eef2f7);
+    border: 1px solid var(--wb-border, #dbe3ee);
+    border-radius: 4px;
+  }
+
+  pre {
+    margin: 0 0 8px;
+    padding: 10px 12px;
+    overflow: auto;
+    color: var(--wb-text, #e6edf3);
+    background: var(--wb-editor, #101820);
+    border: 1px solid var(--wb-border, #243244);
+    border-radius: 8px;
+
+    code {
+      display: block;
+      padding: 0;
+      color: inherit;
+      white-space: pre;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+    }
+  }
+
+  a {
+    color: var(--wb-text, #6b3cf0);
+    text-decoration: underline;
+    text-decoration-color: var(--wb-border-strong, currentColor);
+    text-underline-offset: 2px;
+  }
+
+  table {
+    display: block;
+    width: 100%;
+    margin: 0 0 8px;
+    overflow: auto;
+    border-collapse: collapse;
+  }
+
+  th,
+  td {
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    border: 1px solid var(--wb-border, #d8e0ea);
+  }
+
+  th {
+    font-weight: 600;
+    background: var(--wb-surface-subtle, #f1f5f9);
+  }
+
+  hr {
+    margin: 10px 0;
+    border: 0;
+    border-top: 1px solid var(--wb-border, #d8e0ea);
+  }
+}

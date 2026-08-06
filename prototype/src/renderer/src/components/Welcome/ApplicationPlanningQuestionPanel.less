@@ -1,0 +1,346 @@
+.@{class-prefix}-page-planning-modal {
+  .ant-modal {
+    top: 48px;
+  }
+
+  .ant-modal-header {
+    padding: 18px 24px;
+  }
+
+  .ant-modal-body {
+    max-height: min(700px, calc(100vh - 170px));
+    padding: 18px 24px 22px;
+  }
+}
+
+.@{class-prefix}-page-planning-title {
+  gap: 12px;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.@{class-prefix}-page-planning-title-back.ant-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--modal-text-secondary);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+
+  &:hover,
+  &:focus {
+    color: var(--modal-accent) !important;
+    border: 0;
+    background: transparent;
+  }
+}
+
+.@{class-prefix}-page-planning-title-divider {
+  height: 22px;
+  background: var(--modal-border);
+}
+
+.@{class-prefix}-page-planning-steps.ant-steps {
+  margin: 0 0 16px;
+  padding: 14px 18px;
+  border: 1px solid var(--modal-border);
+  border-radius: 12px;
+  background: var(--modal-surface);
+
+  .ant-steps-item-icon {
+    width: 28px;
+    height: 28px;
+    margin-right: 10px;
+    line-height: 26px;
+  }
+
+  .ant-steps-item-title {
+    color: var(--modal-text-secondary) !important;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 28px;
+  }
+
+  .ant-steps-item-process .ant-steps-item-title,
+  .ant-steps-item-finish .ant-steps-item-title {
+    color: var(--modal-text) !important;
+  }
+}
+
+.@{class-prefix}-planning-question-panel {
+  gap: 14px;
+}
+
+.@{class-prefix}-planning-question-section-header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border: 1px solid var(--modal-border);
+  border-radius: 10px;
+  background: var(--modal-surface);
+  box-shadow: none;
+
+  .@{class-prefix}-planning-artifact-icon {
+    height: 36px;
+  }
+
+  > div {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+
+    > .ant-typography:first-child {
+      color: var(--modal-text);
+      font-size: 14px;
+    }
+
+    > .ant-typography-secondary {
+      color: var(--modal-text-secondary);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+  }
+}
+
+.@{class-prefix}-planning-question-panel-header {
+  position: relative;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 13px;
+  padding: 14px 16px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.06);
+  box-shadow: none;
+
+  &::after {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 4px;
+    background: var(--modal-accent);
+    content: '';
+  }
+
+  h4.ant-typography {
+    color: var(--modal-text);
+    font-size: 18px;
+    line-height: 1.35;
+  }
+
+  p.ant-typography {
+    max-width: 720px;
+    margin-top: 3px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+}
+
+.@{class-prefix}-planning-question-panel-icon {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--modal-accent);
+  background: rgba(139, 92, 246, 0.11);
+  box-shadow: none;
+}
+
+.@{class-prefix}-planning-question-panel.@{class-prefix}-is-detail-review {
+  .@{class-prefix}-workflow-detail-review {
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .@{class-prefix}-workflow-detail-review-summary {
+    display: grid;
+    grid-template-columns: repeat(3, max-content) minmax(0, 1fr);
+    gap: 8px;
+    padding: 0 2px;
+
+    .ant-tag {
+      margin: 0;
+      padding: 3px 10px;
+      border-color: var(--modal-border);
+      border-radius: 999px;
+      color: var(--modal-text);
+      background: var(--modal-surface);
+      font-size: 12px;
+      line-height: 20px;
+    }
+
+    .ant-typography {
+      align-self: center;
+      justify-self: end;
+      font-size: 12px;
+    }
+  }
+
+  .ant-collapse {
+    display: grid;
+    gap: 8px;
+    max-height: 270px;
+    padding-right: 3px;
+    overflow-y: auto;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    scrollbar-color: var(--modal-border-strong) transparent;
+  }
+
+  .ant-collapse > .ant-collapse-item {
+    overflow: hidden;
+    border: 1px solid var(--modal-border);
+    border-radius: 10px;
+    background: var(--modal-surface);
+    transition: border-color .2s ease, box-shadow .2s ease;
+
+    &:hover {
+      border-color: rgba(139, 92, 246, 0.38);
+    }
+
+    &.ant-collapse-item-active {
+      border-color: rgba(139, 92, 246, 0.45);
+      box-shadow: 0 8px 24px rgba(76, 29, 149, 0.07);
+    }
+  }
+
+  .ant-collapse > .ant-collapse-item > .ant-collapse-header {
+    align-items: center;
+    padding: 12px 14px;
+    color: var(--modal-text);
+    background: var(--modal-surface);
+
+    .ant-collapse-arrow {
+      color: var(--modal-text-secondary);
+      font-size: 11px;
+    }
+  }
+
+  .ant-collapse-content {
+    border-top: 1px solid var(--modal-border);
+    background: var(--modal-bg);
+  }
+
+  .ant-collapse-content > .ant-collapse-content-box {
+    padding: 16px;
+    background: var(--modal-bg);
+  }
+
+  .@{class-prefix}-workflow-detail-review-title {
+    gap: 9px;
+
+    .ant-tag {
+      margin: 0;
+      padding: 1px 8px;
+      border-color: rgba(139, 92, 246, 0.18);
+      border-radius: 6px;
+      color: var(--modal-accent);
+      background: rgba(139, 92, 246, 0.07);
+      font-size: 11px;
+    }
+
+    .ant-typography {
+      color: var(--modal-text);
+      font-size: 14px;
+    }
+  }
+
+  .@{class-prefix}-workflow-detail-review-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .@{class-prefix}-workflow-detail-review-field {
+    gap: 6px;
+
+    > .ant-typography {
+      color: var(--modal-text-secondary);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    textarea.ant-input {
+      padding: 9px 11px;
+      border-color: var(--modal-border);
+      border-radius: 8px;
+      color: var(--modal-text);
+      background: var(--modal-field);
+      font-size: 13px;
+      line-height: 1.55;
+      resize: vertical;
+    }
+  }
+
+  .@{class-prefix}-workflow-detail-review-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 14px;
+    padding: 14px;
+    border: 1px solid var(--modal-border);
+    border-radius: 10px;
+    background: var(--modal-surface);
+
+    .ant-btn {
+      min-width: 210px;
+      height: 42px;
+      border-radius: 9px;
+      font-weight: 600;
+    }
+  }
+
+  .@{class-prefix}-workflow-detail-review-note {
+    display: grid;
+    gap: 7px;
+
+    > .ant-typography {
+      color: var(--modal-text);
+      font-size: 12px;
+    }
+
+    textarea.ant-input {
+      min-height: 42px;
+      padding: 9px 11px;
+      border-color: var(--modal-border);
+      border-radius: 8px;
+      color: var(--modal-text);
+      background: var(--modal-field);
+      font-size: 13px;
+    }
+  }
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-page-planning-modal {
+    .ant-modal-header,
+    .ant-modal-body {
+      padding-right: 16px;
+      padding-left: 16px;
+    }
+  }
+
+  .@{class-prefix}-planning-question-panel.@{class-prefix}-is-detail-review {
+    .@{class-prefix}-workflow-detail-review-summary,
+    .@{class-prefix}-workflow-detail-review-fields,
+    .@{class-prefix}-workflow-detail-review-actions {
+      grid-template-columns: 1fr;
+    }
+
+    .@{class-prefix}-workflow-detail-review-summary .ant-typography {
+      justify-self: start;
+    }
+
+    .@{class-prefix}-workflow-detail-review-actions .ant-btn {
+      width: 100%;
+    }
+  }
+}

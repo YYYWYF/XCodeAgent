@@ -2,3 +2,6 @@
 .DS_Store
 **/.env
 **/var/workspaces/
+.claude/
+.codegraph/
+.mcp.json

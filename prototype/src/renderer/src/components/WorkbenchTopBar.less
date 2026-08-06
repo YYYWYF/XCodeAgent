@@ -1,0 +1,203 @@
+.@{class-prefix}-workbench-topbar {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 12px;
+  gap: 8px;
+  border-bottom: 1px solid var(--wb-border);
+  background: var(--wb-canvas);
+}
+
+/* —— Logo（独立块）—— */
+.@{class-prefix}-workbench-topbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--wb-text);
+  flex: 0 0 auto;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+  }
+}
+
+.@{class-prefix}-workbench-topbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--wb-border);
+  flex: 0 0 auto;
+}
+
+/* —— 应用卡（与阶段连着）—— */
+.@{class-prefix}-workbench-topbar-app {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--wb-surface-subtle);
+  cursor: pointer;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  flex: 0 0 auto;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-workbench-topbar-app-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* —— 阶段 stepper（横排紧凑）+ 节点状态内联 —— */
+.@{class-prefix}-workbench-topbar-phase {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.@{class-prefix}-workbench-topbar-stepper {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.@{class-prefix}-workbench-topbar-arrow {
+  color: var(--wb-text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 3px;
+  user-select: none;
+}
+
+.@{class-prefix}-workbench-topbar-phase-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+  }
+
+  &[disabled] {
+    cursor: default;
+
+    &:hover {
+      background: transparent;
+    }
+  }
+
+  &.@{class-prefix}-active {
+    color: #fff;
+    background: var(--wb-accent);
+    border-color: var(--wb-accent);
+    font-weight: 600;
+  }
+
+  &.@{class-prefix}-reached:not(.@{class-prefix}-active) {
+    color: var(--wb-accent);
+  }
+}
+
+.@{class-prefix}-workbench-topbar-phase-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+.@{class-prefix}-workbench-topbar-node {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+/* —— 右侧状态提示（Agent + 跟随旅程）—— */
+.@{class-prefix}-workbench-topbar-tail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.@{class-prefix}-workbench-topbar-agent {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-workbench-topbar-follow {
+  cursor: default;
+  user-select: none;
+}
+
+/* —— 右侧预览开关（VSCode 式，归属顶栏而非对话区）—— */
+.@{class-prefix}-workbench-topbar-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--wb-text-tertiary);
+  flex: 0 0 auto;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+    color: var(--wb-text);
+  }
+
+  &.@{class-prefix}-active {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+}
+
+/* —— 主题切换（不相关功能，放最右上角）—— */
+.@{class-prefix}-workbench-topbar-theme {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--wb-text-tertiary);
+  flex: 0 0 auto;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+    color: var(--wb-text);
+  }
+}

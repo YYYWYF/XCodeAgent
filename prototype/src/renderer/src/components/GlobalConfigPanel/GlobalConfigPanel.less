@@ -1,0 +1,126 @@
+.@{class-prefix}-global-config-panel {
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+  background: #f7f9fc;
+}
+
+.@{class-prefix}-global-config-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px 32px 24px;
+  background: #ffffff;
+  border-bottom: 1px solid #e5e9f0;
+
+  .ant-typography {
+    margin-bottom: 0;
+  }
+
+  h2.ant-typography {
+    margin-top: 4px;
+    color: #172033;
+  }
+
+  p.ant-typography {
+    margin-top: 8px;
+    color: #667085;
+  }
+}
+
+.@{class-prefix}-save-config-button.ant-btn {
+  border-radius: 8px;
+}
+
+.@{class-prefix}-global-config-eyebrow {
+  color: #6b3cf0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.@{class-prefix}-global-config-content {
+  flex: 1;
+  min-height: 0;
+  padding: 24px 32px 32px;
+  overflow: auto;
+}
+
+.@{class-prefix}-config-card.ant-card {
+  border: 1px solid #e2e7ef;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(31, 41, 51, 0.04);
+}
+
+.@{class-prefix}-app-profile-card {
+  margin-bottom: 16px;
+}
+
+.@{class-prefix}-config-section-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 22px;
+
+  h4.ant-typography {
+    margin: 0 0 4px;
+    color: #202939;
+  }
+
+  p.ant-typography {
+    margin: 0;
+    color: #7b8494;
+    font-size: 13px;
+  }
+}
+
+.@{class-prefix}-config-section-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  color: #6b3cf0;
+  font-size: 18px;
+  background: #f0ebff;
+  border-radius: 9px;
+
+  &.@{class-prefix}-app-icon {
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #6b3cf0, #9b70ff);
+  }
+}
+
+.@{class-prefix}-config-field-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+
+  label {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 7px;
+  }
+}
+
+.@{class-prefix}-config-placeholder {
+  padding: 28px 4px;
+  color: #98a2b3;
+
+  h4.ant-typography {
+    margin: 0 0 8px;
+    color: #667085;
+  }
+
+  p.ant-typography {
+    max-width: 620px;
+    margin: 0;
+    color: #98a2b3;
+  }
+}

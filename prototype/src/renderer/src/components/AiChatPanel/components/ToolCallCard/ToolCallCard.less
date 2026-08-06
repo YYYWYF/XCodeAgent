@@ -1,0 +1,76 @@
+.@{class-prefix}-tool-call-card {
+  overflow: hidden;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface-subtle);
+
+  &.@{class-prefix}-completed {
+    border-color: var(--wb-border-strong);
+    background: var(--wb-surface-subtle);
+  }
+}
+
+.@{class-prefix}-tool-call-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  color: var(--wb-text);
+  cursor: pointer;
+  user-select: none;
+
+  &::marker {
+    color: var(--wb-text-tertiary);
+  }
+}
+
+.@{class-prefix}-tool-call-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--wb-text-secondary);
+}
+
+.@{class-prefix}-tool-call-card.@{class-prefix}-completed {
+  .@{class-prefix}-tool-call-icon {
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-tool-call-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 10px 10px 26px;
+}
+
+.@{class-prefix}-tool-call-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.@{class-prefix}-tool-call-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-tool-call-content {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  color: var(--wb-text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+}

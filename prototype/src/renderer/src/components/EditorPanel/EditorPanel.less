@@ -1,0 +1,41 @@
+.@{class-prefix}-workbench-right {
+  flex: 1;
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+}
+
+.@{class-prefix}-editor-content {
+  position: relative;
+}
+
+.@{class-prefix}-editor-message-bridge {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  left: 20px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #dce4ef;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(31, 41, 51, 0.08);
+  backdrop-filter: blur(8px);
+
+  .@{class-prefix}-editor-message-bridge-title {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 7px;
+    color: #6b3cf0;
+  }
+
+  > .ant-typography:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

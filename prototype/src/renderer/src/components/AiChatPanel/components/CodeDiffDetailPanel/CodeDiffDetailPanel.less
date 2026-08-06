@@ -1,0 +1,266 @@
+@import './CodeDiffSyntax.less';
+
+.@{class-prefix}-code-diff-detail-panel {
+  --code-panel-bg: #ffffff;
+  --code-panel-code-bg: #ffffff;
+  --code-panel-header: rgba(255, 255, 255, 0.96);
+  --code-panel-active: #f0f3ff;
+  --code-panel-border: #d8deeb;
+  --code-panel-insert: #e6f4ea;
+  --code-panel-delete: #fce8e6;
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  color: var(--wb-text);
+  background: var(--code-panel-bg);
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] .@{class-prefix}-code-diff-detail-panel {
+  --code-panel-bg: var(--wb-canvas);
+  --code-panel-code-bg: var(--wb-canvas);
+  --code-panel-header: var(--wb-canvas);
+  --code-panel-active: var(--wb-surface-subtle);
+  --code-panel-border: var(--wb-border);
+  --code-panel-insert: rgba(46, 160, 67, 0.2);
+  --code-panel-delete: rgba(248, 81, 73, 0.2);
+}
+
+.@{class-prefix}-code-diff-detail-header {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--code-panel-border);
+  background: var(--code-panel-header);
+
+  h4.ant-typography {
+    position: relative;
+    z-index: 1;
+    margin: 0 0 5px;
+    letter-spacing: -0.02em;
+  }
+}
+
+.@{class-prefix}-code-diff-close-button.ant-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  color: var(--wb-text);
+  font-size: 16px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+  }
+}
+
+.@{class-prefix}-code-diff-detail-title {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.@{class-prefix}-code-diff-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.@{class-prefix}-code-diff-file-count {
+  padding: 2px 7px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--code-panel-border);
+  border-radius: 4px;
+}
+
+.@{class-prefix}-code-diff-body {
+  --code-diff-scrollbar-size: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--code-panel-code-bg);
+  scrollbar-color: var(--wb-border-strong) transparent;
+  scrollbar-gutter: auto;
+  scrollbar-width: thin;
+
+  &::-webkit-scrollbar {
+    width: var(--code-diff-scrollbar-size);
+    height: var(--code-diff-scrollbar-size);
+    background: transparent !important;
+  }
+
+  &::-webkit-scrollbar-track,
+  &::-webkit-scrollbar-track-piece,
+  &::-webkit-scrollbar-corner {
+    background: transparent !important;
+    border: 0;
+    box-shadow: none;
+  }
+
+  &::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+    background: transparent !important;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--wb-border-strong);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+    border-radius: 10px;
+  }
+}
+
+.@{class-prefix}-code-diff-file-stack {
+  display: flex;
+  width: calc(100% + var(--code-diff-scrollbar-size));
+  min-width: 0;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+}
+
+.@{class-prefix}-code-diff-file {
+  overflow: clip;
+  background: var(--code-panel-header);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+
+  &.@{class-prefix}-selected {
+    box-shadow: inset 3px 0 0 var(--wb-accent);
+  }
+}
+
+.@{class-prefix}-code-diff-active-file {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 16px;
+  background: var(--code-panel-code-bg);
+  backdrop-filter: blur(12px);
+}
+
+.@{class-prefix}-code-diff-file-path {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: baseline;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-code-diff-file-directory {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  > span {
+    direction: ltr;
+    unicode-bidi: plaintext;
+  }
+}
+
+.@{class-prefix}-code-diff-file-name.ant-typography {
+  min-width: 0;
+  max-width: 58%;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--wb-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-code-diff-file-stats.ant-typography {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-code-diff-block {
+  &:not(:last-child) {
+    border-bottom: 1px solid var(--code-panel-border);
+  }
+}
+
+.@{class-prefix}-code-diff-block-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  background: var(--code-panel-header);
+}
+
+.@{class-prefix}-code-diff-raw {
+  margin: 0;
+  padding: 12px 16px;
+  overflow: auto;
+  color: var(--wb-text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+  background: var(--code-panel-code-bg);
+}
+
+.@{class-prefix}-code-diff-empty {
+  padding: 28px 16px;
+  text-align: center;
+}
+
+.@{class-prefix}-code-diff-truncated {
+  display: block;
+  padding: 8px 16px 12px;
+  background: var(--code-panel-header);
+}
+
+.@{class-prefix}-workbench-shell[data-theme='light'] {
+  .@{class-prefix}-code-diff-detail-header h4.ant-typography,
+  .@{class-prefix}-code-diff-active-file .ant-typography {
+    color: #15243b;
+  }
+
+  .@{class-prefix}-code-diff-close-button.ant-btn:hover,
+  .@{class-prefix}-code-diff-close-button.ant-btn:focus-visible {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] {
+  .@{class-prefix}-code-diff-close-button.ant-btn:hover,
+  .@{class-prefix}-code-diff-close-button.ant-btn:focus-visible {
+    color: #ffffff;
+    background: #354052;
+  }
+}

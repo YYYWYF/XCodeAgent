@@ -1,0 +1,223 @@
+.@{class-prefix}-browser-preview-panel {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--wb-editor);
+}
+
+.@{class-prefix}-browser-preview-toolbar {
+  display: grid;
+  min-height: 58px;
+  align-items: center;
+  grid-template-columns: auto auto minmax(220px, 1fr) auto minmax(132px, 180px) auto auto;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--wb-canvas);
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-browser-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+
+  span {
+    width: 10px;
+    height: 10px;
+    background: #d4dbe6;
+    border-radius: 50%;
+
+    &:first-child {
+      background: #ff6b66;
+    }
+
+    &:nth-child(2) {
+      background: #ffc44d;
+    }
+
+    &:nth-child(3) {
+      background: #36c275;
+    }
+  }
+}
+
+.@{class-prefix}-browser-navigation {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+
+  .ant-btn {
+    width: 30px;
+    height: 30px;
+    color: #5c6675;
+    border-radius: 6px;
+
+    &:hover,
+    &:focus {
+      color: var(--wb-accent);
+      background: var(--wb-accent-soft);
+    }
+  }
+}
+
+.@{class-prefix}-browser-address-input.ant-input-search {
+  min-width: 0;
+
+  .ant-input-affix-wrapper,
+  .ant-input,
+  .ant-input-search-button {
+    height: 34px;
+  }
+
+  .ant-input-affix-wrapper {
+    background: #f6f8fb;
+    border-color: #d8e0ea;
+    border-radius: 8px 0 0 8px;
+  }
+
+  .ant-input {
+    background: transparent;
+    font-size: 13px;
+  }
+
+  .ant-input-search-button {
+    border-radius: 0 8px 8px 0 !important;
+  }
+}
+
+.@{class-prefix}-browser-page-select.ant-select {
+  min-width: 0;
+
+  .ant-select-selector {
+    height: 34px !important;
+    align-items: center;
+    border-color: #d8e0ea !important;
+    border-radius: 8px !important;
+  }
+}
+
+.@{class-prefix}-browser-viewport-switcher.ant-segmented {
+  padding: 3px;
+  background: #f1f4f8;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+
+  .ant-segmented-item {
+    min-width: 30px;
+    border-radius: 6px;
+  }
+}
+
+.@{class-prefix}-browser-inspector-button-shell {
+  display: inline-flex;
+}
+
+.@{class-prefix}-browser-inspector-button.ant-btn {
+  height: 34px;
+  color: #ffffff;
+  background: var(--wb-accent);
+  border-color: var(--wb-accent);
+  border-radius: 8px;
+
+  &:hover,
+  &:focus {
+    color: #ffffff;
+    background: var(--wb-accent-hover);
+    border-color: var(--wb-accent-hover);
+  }
+
+  &[disabled],
+  &[disabled]:hover,
+  &[disabled]:focus {
+    color: rgba(255, 255, 255, 0.78);
+    background: var(--wb-accent);
+    border-color: var(--wb-accent);
+    opacity: 0.58;
+  }
+}
+
+.@{class-prefix}-browser-preview-stage {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  overflow: hidden;
+  background: var(--wb-canvas);
+}
+
+/* iframe 加载中的圆动画覆盖层：纯圆浮在预览区，无背景矩形。 */
+.@{class-prefix}-browser-preview-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.@{class-prefix}-browser-preview-viewport {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--wb-canvas);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  transition:
+    width 0.18s ease,
+    height 0.18s ease;
+
+  &.@{class-prefix}-tablet {
+    width: 100%;
+    height: 100%;
+  }
+
+  &.@{class-prefix}-mobile {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border-radius: 0;
+  }
+}
+
+.@{class-prefix}-browser-preview-frame {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-browser-preview-error {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  max-width: calc(100% - 32px);
+  padding: 6px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: #fff2f0;
+  border: 1px solid #ffccc7;
+  border-radius: 7px;
+}
+
+@media (max-width: 1100px) {
+  .@{class-prefix}-browser-preview-toolbar {
+    grid-template-columns: auto auto minmax(180px, 1fr) auto auto auto;
+  }
+
+  .@{class-prefix}-browser-page-select.ant-select {
+    display: none;
+  }
+}

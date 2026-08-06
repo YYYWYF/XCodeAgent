@@ -1,0 +1,243 @@
+.@{class-prefix}-ai-chat-panel {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: row;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-ai-chat-assistant {
+  position: relative;
+  display: flex;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  flex-direction: row;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-ai-chat-panel:not(.@{class-prefix}-embedded-preview-open) {
+  .@{class-prefix}-ai-chat-assistant {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: none;
+    border-right: 0;
+  }
+}
+
+.@{class-prefix}-embedded-preview-open {
+  .@{class-prefix}-ai-chat-assistant {
+    flex: 0 0 var(--assistant-panel-width, 660px);
+    width: var(--assistant-panel-width, 660px);
+    border-right: 0;
+  }
+}
+
+.@{class-prefix}-split-dragging {
+  cursor: col-resize;
+
+  .@{class-prefix}-embedded-preview-pane {
+    pointer-events: none;
+  }
+}
+
+.@{class-prefix}-element-inspection-active {
+  .@{class-prefix}-panel-split-handle {
+    cursor: default;
+    pointer-events: none;
+  }
+}
+
+.@{class-prefix}-element-inspection-interaction-mask {
+  position: absolute;
+  z-index: 100;
+  inset: 0;
+  cursor: not-allowed;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.@{class-prefix}-panel-split-handle {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  flex: 0 0 10px;
+  width: 10px;
+  min-width: 10px;
+  margin: 0 -5px;
+  height: 100%;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  background: transparent;
+
+  &::before {
+    position: absolute;
+    top: 0;
+    left: 4px;
+    width: 1px;
+    height: 100%;
+    content: '';
+    background: var(--wb-border);
+    transition:
+      background 0.16s ease,
+      box-shadow 0.16s ease;
+  }
+
+  &::after {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 10px;
+    height: 100%;
+    content: '';
+    background: transparent;
+  }
+
+  &.@{class-prefix}-dragging,
+  &:focus-visible {
+    &::before {
+      background: var(--wb-border);
+      box-shadow: none;
+    }
+
+    .@{class-prefix}-panel-split-handle-icon {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: -2px;
+  }
+}
+
+.@{class-prefix}-panel-split-handle-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  display: inline-flex;
+  width: 22px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-text);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 6px;
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.92);
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+
+.@{class-prefix}-embedded-preview-pane {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-diff-detail-pane {
+  flex: 1 1 auto;
+  width: auto;
+  border-left: 0;
+}
+
+.@{class-prefix}-ai-chat-main {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--wb-canvas);
+  container-name: ai-chat-main;
+  container-type: inline-size;
+}
+
+.@{class-prefix}-preview-action-error.ant-alert {
+  margin: 10px 16px 0;
+  border-radius: 8px;
+}
+
+@media (max-width: 1500px) {
+  .@{class-prefix}-embedded-preview-open {
+    .@{class-prefix}-session-sidebar {
+      display: none;
+    }
+  }
+}
+
+@media (max-width: 900px) {
+  .@{class-prefix}-ai-chat-panel.@{class-prefix}-embedded-preview-open,
+  .@{class-prefix}-ai-chat-panel.@{class-prefix}-diff-panel-open {
+    flex-direction: column;
+
+    .@{class-prefix}-ai-chat-assistant {
+      width: 100%;
+      min-width: 0;
+      min-height: 340px;
+      flex: 1 1 58%;
+    }
+
+    .@{class-prefix}-embedded-preview-pane {
+      width: 100%;
+      min-width: 0;
+      min-height: 220px;
+      flex: 1 1 42%;
+      border-top: 1px solid var(--wb-border);
+      border-left: 0;
+    }
+  }
+
+  .@{class-prefix}-panel-split-handle {
+    display: none;
+  }
+
+  .@{class-prefix}-diff-detail-pane {
+    width: 100%;
+    flex-basis: auto;
+  }
+}
+
+/* #2 右侧工作区：tab 条 + 内容区。embedded-preview-pane 默认是横向，
+   workspace-pane 改成纵向，让 tab 条在顶、内容在下。 */
+.@{class-prefix}-workspace-pane {
+  display: flex;
+  flex-direction: column;
+}
+
+.@{class-prefix}-workspace-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+
+  > * {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
+
+/* 右侧「文档」tab 承载确认卡片（待确认内容 + 确认按钮）时，容器可滚动 */
+.@{class-prefix}-confirm-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+}

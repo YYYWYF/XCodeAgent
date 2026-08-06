@@ -1,0 +1,423 @@
+// 工作流确认态的控制台视觉层，复用全局工作台主题变量以适配明暗主题。
+.@{class-prefix}-workflow-run-card {
+  position: relative;
+  gap: 14px;
+  padding: 16px;
+  overflow: hidden;
+  border-color: var(--wb-border-strong);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, var(--wb-accent-soft), transparent 38%), var(--wb-surface-subtle);
+  box-shadow: 0 14px 30px rgba(45, 30, 104, 0.04);
+
+  &::before {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    content: '';
+    background: linear-gradient(90deg, var(--wb-accent), transparent 72%);
+  }
+
+  .ant-tag {
+    background: var(--wb-surface-subtle) !important;
+  }
+}
+
+.@{class-prefix}-workflow-run-card-pending {
+  border-color: var(--wb-accent-border);
+}
+
+.@{class-prefix}-workflow-run-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.@{class-prefix}-workflow-run-signal {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  background: var(--wb-accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px var(--wb-accent-soft);
+}
+
+.@{class-prefix}-workflow-run-name {
+  display: block;
+  color: var(--wb-accent) !important;
+  font-size: 15px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.@{class-prefix}-workflow-run-status.ant-tag {
+  max-width: 48%;
+  padding: 3px 8px;
+  overflow: hidden;
+  color: var(--wb-accent) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-color: var(--wb-accent-border) !important;
+  border-radius: 5px;
+}
+
+.@{class-prefix}-workflow-run-message {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  padding: 10px 12px;
+  color: var(--wb-text);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-workflow-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+
+  .ant-typography {
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  span {
+    color: var(--wb-accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-workflow-artifact-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+
+  .ant-typography {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ant-typography code {
+    padding: 0;
+    color: var(--wb-text);
+    background: transparent;
+    border: 0;
+  }
+}
+
+.@{class-prefix}-workflow-artifact-marker {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  background: var(--wb-accent);
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+.@{class-prefix}-workflow-clarification {
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+}
+
+.@{class-prefix}-workflow-confirmation-count.ant-tag {
+  display: inline-flex;
+  min-width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: var(--wb-accent) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--wb-accent-soft) !important;
+  border-color: var(--wb-accent-border) !important;
+  border-radius: 8px;
+}
+
+.@{class-prefix}-workflow-detail-review-summary {
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0 4px;
+}
+
+.@{class-prefix}-workflow-detail-review-intro {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+
+  .ant-typography-secondary {
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-workflow-detail-review-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-end;
+  gap: 6px;
+
+  .ant-tag {
+    padding: 4px 7px;
+    color: #fff !important;
+    font-size: 11px;
+    background: var(--wb-accent) !important;
+    border-color: var(--wb-accent) !important;
+    border-radius: 6px;
+
+    strong {
+      margin-left: 3px;
+      color: #fff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+  }
+}
+
+.@{class-prefix}-workflow-detail-review {
+  .ant-collapse {
+    border-radius: 10px;
+    background: transparent !important;
+
+    &.ant-collapse-borderless,
+    .ant-collapse-item,
+    .ant-collapse-content {
+      border: 0 !important;
+    }
+
+    .ant-collapse-item,
+    .ant-collapse-header,
+    .ant-collapse-content,
+    .ant-collapse-content-box {
+      background: transparent !important;
+    }
+  }
+
+  .ant-collapse-header,
+  .ant-collapse-content,
+  .ant-collapse-content-box {
+    color: var(--wb-text);
+  }
+
+  .ant-collapse-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 14px 12px 0 !important;
+  }
+
+  .ant-collapse-expand-icon {
+    display: inline-flex;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    align-items: center;
+    justify-content: center;
+
+    > span {
+      display: flex !important;
+    }
+  }
+
+  .ant-collapse-arrow {
+    display: inline-flex;
+    position: static !important;
+    left: auto !important;
+    width: 34px;
+    height: 34px;
+    align-items: center;
+    justify-content: center;
+    color: var(--wb-accent) !important;
+    background: transparent;
+    border: 0;
+    font-size: 32px;
+    font-weight: 900;
+    transition: color 160ms ease, transform 160ms ease;
+
+    &:hover {
+      color: var(--wb-accent-hover) !important;
+    }
+  }
+
+  > .ant-collapse-item > .ant-collapse-header {
+    align-items: center;
+
+    > .ant-collapse-expand-icon {
+      display: inline-flex;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      align-items: center;
+      justify-content: center;
+      margin: 0;
+      line-height: 0;
+    }
+
+    > .ant-collapse-expand-icon > .ant-collapse-arrow {
+      display: flex !important;
+      width: 100% !important;
+      height: 100% !important;
+      flex: 0 0 auto;
+      align-items: center !important;
+      justify-content: center !important;
+      margin: 0;
+      font-size: 32px;
+      line-height: 0 !important;
+      vertical-align: baseline;
+
+      svg {
+        display: block !important;
+        width: 1em !important;
+        height: 1em !important;
+        flex: 0 0 auto;
+        margin: 0 !important;
+      }
+    }
+
+    .ant-collapse-header-text {
+      display: flex;
+      min-height: 34px;
+      align-items: center;
+    }
+  }
+
+  .ant-collapse-content {
+    border-top: 1px solid var(--wb-accent-soft);
+  }
+
+  .ant-collapse-content-box {
+    padding: 16px !important;
+  }
+}
+
+.@{class-prefix}-workflow-detail-review-title {
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-height: 34px;
+  margin-left: 0;
+}
+
+.@{class-prefix}-workflow-detail-review-target-icon {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 7px;
+}
+
+.@{class-prefix}-workflow-detail-review-target-kind {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  background: var(--wb-accent);
+  border: 1px solid var(--wb-accent);
+  border-radius: 5px;
+  box-shadow: 0 4px 10px var(--wb-accent-soft);
+}
+
+.@{class-prefix}-workflow-detail-review-target-name {
+  overflow: hidden;
+  color: var(--wb-text) !important;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-workflow-detail-review-actions {
+  --workflow-detail-review-action-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding-top: 2px;
+
+  .ant-btn-primary {
+    height: var(--workflow-detail-review-action-height);
+    min-height: var(--workflow-detail-review-action-height);
+    padding: 0 16px;
+    color: #fff !important;
+    font-weight: 600;
+    background: linear-gradient(135deg, var(--wb-accent), var(--wb-accent-hover)) !important;
+    border-color: transparent !important;
+    border-radius: 9px;
+    box-shadow: 0 8px 18px var(--wb-accent-soft);
+
+    &:hover,
+    &:focus {
+      color: #fff !important;
+      background: linear-gradient(135deg, var(--wb-accent-hover), var(--wb-accent)) !important;
+      box-shadow: 0 10px 22px var(--wb-accent-soft);
+    }
+  }
+}
+
+.@{class-prefix}-workflow-detail-review-note {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+
+  .ant-input {
+    height: var(--workflow-detail-review-action-height) !important;
+    min-height: var(--workflow-detail-review-action-height) !important;
+    max-height: var(--workflow-detail-review-action-height) !important;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    resize: none;
+  }
+}
+
+.@{class-prefix}-workflow-detail-review-note-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-workflow-detail-review-summary {
+    flex-direction: column;
+  }
+
+  .@{class-prefix}-workflow-detail-review-metrics {
+    justify-content: flex-start;
+  }
+
+  .@{class-prefix}-workflow-detail-review-actions {
+    grid-template-columns: 1fr;
+
+    .ant-btn-primary {
+      width: 100%;
+    }
+  }
+}
+
+@import './WorkflowDetailReviewForm.less';

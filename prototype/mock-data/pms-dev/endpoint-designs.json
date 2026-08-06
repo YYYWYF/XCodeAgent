@@ -1,0 +1,90 @@
+{
+  "ep-my-projects": {
+    "name": "我的项目查询",
+    "method": "GET",
+    "path": "/api/projects/my",
+    "summary": "我的项目分页查询（按状态/关键字筛选）",
+    "data_usage": { "purpose": "「我的项目」页列表数据来源", "served_pages": ["my-projects"], "consumer": "frontend" },
+    "data_origin": {
+      "source_type": "database",
+      "effective_source": { "kind": "table", "database": "wh_branch", "tables": ["project", "project_member"] },
+      "notes": ["按当前登录用户过滤负责人/成员", "project 主表与 project_member 联查"]
+    },
+    "interface_design": {
+      "request": { "method": "GET", "headers": ["Authorization"], "query_parameters": [{ "name": "page", "in": "query", "required": false, "schema": "number" }, { "name": "pageSize", "in": "query", "required": false, "schema": "number" }, { "name": "status", "in": "query", "required": false, "schema": "string" }, { "name": "keyword", "in": "query", "required": false, "schema": "string" }] },
+      "response_format": { "status_code": 200, "schema": { "list": [{ "id": "string", "name": "string", "status": "string", "owner": "string", "progress": "number" }], "total": "number" }, "errors": ["401 未认证"] }
+    },
+    "processing_logic": ["按当前用户与状态/关键字过滤", "按创建时间倒序分页"],
+    "acceptance_criteria": ["支持状态与关键字筛选", "分页返回 total 与 list"]
+  },
+  "ep-project-create": {
+    "name": "创建项目",
+    "method": "POST",
+    "path": "/api/projects",
+    "summary": "创建项目（含基础信息与负责人）",
+    "data_usage": { "purpose": "「我的项目」页新建项目", "served_pages": ["my-projects"], "consumer": "frontend" },
+    "data_origin": { "source_type": "database", "effective_source": { "kind": "table", "database": "wh_branch", "tables": ["project"] }, "notes": ["项目编号由序列生成"] },
+    "interface_design": {
+      "request": { "method": "POST", "headers": ["Authorization", "Content-Type"], "request_body": { "required": true, "schema": { "name": "string", "description": "string", "ownerId": "string", "startDate": "string" } } },
+      "response_format": { "status_code": 201, "schema": { "id": "string", "status": "string" }, "errors": ["400 参数非法"] }
+    },
+    "processing_logic": ["校验项目名称与负责人", "事务内写主单", "状态置为进行中"],
+    "acceptance_criteria": ["创建成功返回项目编号", "必填项校验"]
+  },
+  "ep-my-rechecks": {
+    "name": "我的回检查询",
+    "method": "GET",
+    "path": "/api/rechecks/my",
+    "summary": "我的回检单分页查询",
+    "data_usage": { "purpose": "「我的回检」页列表数据", "served_pages": ["my-rechecks"], "consumer": "frontend" },
+    "data_origin": { "source_type": "database", "effective_source": { "kind": "table", "database": "wh_branch", "tables": ["recheck", "project"] }, "notes": ["按填报人过滤", "recheck 与 project 联查取项目名"] },
+    "interface_design": {
+      "request": { "method": "GET", "headers": ["Authorization"], "query_parameters": [{ "name": "page", "in": "query", "required": false, "schema": "number" }, { "name": "pageSize", "in": "query", "required": false, "schema": "number" }, { "name": "status", "in": "query", "required": false, "schema": "string" }] },
+      "response_format": { "status_code": 200, "schema": { "list": [{ "id": "string", "projectName": "string", "status": "string", "createdAt": "string" }], "total": "number" }, "errors": ["401 未认证"] }
+    },
+    "processing_logic": ["按当前填报人过滤", "按审核状态筛选"],
+    "acceptance_criteria": ["分页返回我的回检单", "支持状态筛选"]
+  },
+  "ep-recheck-create": {
+    "name": "提交回检单",
+    "method": "POST",
+    "path": "/api/rechecks",
+    "summary": "提交需求回检单",
+    "data_usage": { "purpose": "「我的回检」页提交回检", "served_pages": ["my-rechecks"], "consumer": "frontend" },
+    "data_origin": { "source_type": "database", "effective_source": { "kind": "table", "database": "wh_branch", "tables": ["recheck"] }, "notes": ["状态置为待审核"] },
+    "interface_design": {
+      "request": { "method": "POST", "headers": ["Authorization", "Content-Type"], "request_body": { "required": true, "schema": { "projectId": "string", "achievement": "string", "issues": "string", "suggestion": "string" } } },
+      "response_format": { "status_code": 201, "schema": { "id": "string", "status": "string" }, "errors": ["400 参数非法"] }
+    },
+    "processing_logic": ["校验项目与达成情况必填", "状态置为待审核"],
+    "acceptance_criteria": ["提交成功返回回检单号", "必填项校验"]
+  },
+  "ep-recheck-pending": {
+    "name": "待审核回检列表",
+    "method": "GET",
+    "path": "/api/rechecks/pending",
+    "summary": "待审核回检单列表",
+    "data_usage": { "purpose": "「回检审核」页待审核列表", "served_pages": ["recheck-review"], "consumer": "frontend" },
+    "data_origin": { "source_type": "database", "effective_source": { "kind": "table", "database": "wh_branch", "tables": ["recheck", "project"] }, "notes": ["按待审核状态过滤"] },
+    "interface_design": {
+      "request": { "method": "GET", "headers": ["Authorization"], "query_parameters": [{ "name": "page", "in": "query", "required": false, "schema": "number" }, { "name": "pageSize", "in": "query", "required": false, "schema": "number" }] },
+      "response_format": { "status_code": 200, "schema": { "list": [{ "id": "string", "projectName": "string", "reporter": "string", "createdAt": "string" }], "total": "number" }, "errors": ["401 未认证"] }
+    },
+    "processing_logic": ["按待审核状态过滤", "按提交时间排序"],
+    "acceptance_criteria": ["分页返回待审核回检单"]
+  },
+  "ep-recheck-review": {
+    "name": "审核回检单",
+    "method": "PUT",
+    "path": "/api/rechecks/{id}/review",
+    "summary": "审核回检单（通过/驳回）",
+    "data_usage": { "purpose": "「回检审核」页通过/驳回操作", "served_pages": ["recheck-review"], "consumer": "frontend" },
+    "data_origin": { "source_type": "database", "effective_source": { "kind": "table", "database": "wh_branch", "tables": ["recheck"] }, "notes": ["通过置完成；驳回记录整改要求并回流填报人"] },
+    "interface_design": {
+      "request": { "method": "PUT", "headers": ["Authorization", "Content-Type"], "path_parameters": [{ "name": "id", "in": "path", "required": true, "schema": "string" }], "request_body": { "required": true, "schema": { "decision": "approved|rejected", "comment": "string" } } },
+      "response_format": { "status_code": 200, "schema": { "status": "string" }, "errors": ["409 状态非法"] }
+    },
+    "processing_logic": ["校验回检单为待审核", "通过置完成；驳回置驳回并记录整改要求", "驳回回检单状态回流填报人可见"],
+    "acceptance_criteria": ["通过/驳回可用", "驳回必填整改要求", "重复审核返回 409"]
+  }
+}

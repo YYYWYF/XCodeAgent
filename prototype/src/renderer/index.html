@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>XCodeAgent · 原型</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- 先注入 mock 数据层（构造 window.xcodeAgent + 拦截 fetch），再加载真实 renderer -->
+    <script type="module" src="/src/mock/preload.ts"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

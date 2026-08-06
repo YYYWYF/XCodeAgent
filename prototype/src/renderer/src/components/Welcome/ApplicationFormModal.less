@@ -1,0 +1,277 @@
+.@{class-prefix}-application-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.@{class-prefix}-application-form-section {
+  min-width: 0;
+  padding: 18px 20px 8px;
+  border: 1px solid var(--modal-border);
+  border-radius: 12px;
+  background: var(--modal-surface);
+  transition: border-color 0.2s ease, opacity 0.2s ease;
+
+  // 基础信息、项目位置占整行
+  &--full {
+    grid-column: 1 / -1;
+  }
+
+  // 开关类分区（认证 / 页面埋点 / 接口埋点）
+  &--toggle {
+    .ant-form-item {
+      margin-bottom: 8px;
+    }
+  }
+
+  // 关闭时整体灰显
+  &--disabled {
+    opacity: 0.55;
+  }
+
+  .ant-form-item {
+    margin-bottom: 16px;
+  }
+
+  .ant-radio-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .ant-radio-button-wrapper {
+    border-left-width: 1px;
+    border-radius: 6px;
+
+    &:not(:first-child)::before {
+      display: none;
+    }
+  }
+}
+
+// 分区标题：左侧主题色竖条 + 图标 + 文案
+.@{class-prefix}-application-form-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.@{class-prefix}-application-form-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.@{class-prefix}-application-form-section-icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  color: var(--modal-accent);
+  font-size: 16px;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.14);
+}
+
+.@{class-prefix}-theme-light .@{class-prefix}-application-form-section-icon {
+  background: #f1ebff;
+}
+
+.@{class-prefix}-application-form-section-text {
+  color: var(--modal-text);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.@{class-prefix}-application-form-switch {
+  margin-bottom: 0 !important;
+}
+
+// 双列字段网格：同分区内的短字段并排
+.@{class-prefix}-application-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+
+  .ant-form-item:last-child {
+    margin-bottom: 16px;
+  }
+}
+
+.@{class-prefix}-project-path-preview {
+  display: block;
+  margin: -4px 0 12px;
+  padding: 9px 11px;
+  color: var(--modal-text-secondary);
+  border: 1px dashed var(--modal-border-strong);
+  border-radius: 7px;
+  background: var(--modal-field);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.@{class-prefix}-application-icon-picker {
+  .ant-radio-button-wrapper {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    font-size: 18px;
+    color: var(--modal-text-secondary);
+
+    .anticon {
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    &:hover {
+      color: var(--modal-text);
+    }
+
+    &-checked {
+      color: #fff;
+    }
+  }
+}
+
+.@{class-prefix}-nav-mode-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+
+  .ant-form-item {
+    margin-bottom: 0;
+  }
+}
+
+.@{class-prefix}-nav-mode-picker {
+  .ant-radio-button-wrapper {
+    height: auto;
+    padding: 4px 6px 4px;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+
+    &:first-child {
+      border-radius: 6px;
+    }
+
+    &:last-child {
+      border-radius: 6px;
+    }
+
+    // 选中布局卡片时使标签在强调色背景上保持清晰。
+    &-checked .@{class-prefix}-nav-preview-label {
+      color: #fff;
+    }
+  }
+}
+
+.@{class-prefix}-nav-mode-toggles {
+  display: flex;
+  gap: 16px;
+  padding-top: 24px;
+
+  .ant-form-item {
+    margin-bottom: 0;
+
+    .ant-form-item-label {
+      padding-bottom: 2px;
+
+      > label {
+        font-size: 13px;
+        height: auto;
+      }
+    }
+  }
+}
+
+.@{class-prefix}-nav-preview {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.@{class-prefix}-nav-preview-label {
+  font-size: 12px;
+  color: var(--modal-text);
+  line-height: 1;
+}
+
+.@{class-prefix}-application-form-scenario {
+  textarea {
+    resize: vertical !important;
+  }
+}
+
+// 主题颜色选择器
+.@{class-prefix}-theme-color-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.@{class-prefix}-theme-color-swatch-wrapper {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.@{class-prefix}-theme-color-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 2px solid var(--modal-border);
+}
+
+.@{class-prefix}-theme-color-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+// Tab 键填充提示样式
+.@{class-prefix}-tab-hint-input {
+  // placeholder 中的 Tab 提示使用较浅的颜色
+  &::placeholder {
+    color: var(--ant-color-text-placeholder, #bfbfbf) !important;
+  }
+}
+
+// 确保 antd Input 的 placeholder 样式正确
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-textarea {
+  &::placeholder {
+    color: var(--ant-color-text-placeholder, #bfbfbf);
+  }
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-application-form {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-application-form-section--full {
+    grid-column: auto;
+  }
+
+  .@{class-prefix}-application-form-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,275 @@
+/* 流内挡板卡（对话区承载，不再整列覆盖） */
+/* 对话消息形式的挡板：卡头（标题 + 状态 Tag）+ Agent 叙述 + 目标信息 + 模板控件 + 开始按钮。
+   外层卡片对齐「工作流执行」节点：渐变底、顶部主题线、大圆角。 */
+.@{class-prefix}-detail-page-selector-inline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  margin-top: 2px;
+  padding: 16px;
+  overflow: hidden;
+  border: 1px solid var(--wb-border-strong, #e5e7eb);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, var(--wb-accent-soft), transparent 38%), var(--wb-surface-subtle, #f7f8fa);
+  box-shadow: 0 14px 30px rgba(45, 30, 104, 0.04);
+  color: var(--wb-text);
+
+  &::before {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    content: '';
+    background: linear-gradient(90deg, var(--wb-accent), transparent 72%);
+  }
+}
+
+.@{class-prefix}-detail-page-selector-inline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.@{class-prefix}-detail-page-selector-inline-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.@{class-prefix}-detail-page-selector-inline-signal {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  background: var(--wb-accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px var(--wb-accent-soft);
+}
+
+.@{class-prefix}-detail-page-selector-inline-name {
+  display: block;
+  color: var(--wb-accent) !important;
+  font-size: 15px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.@{class-prefix}-detail-page-selector-inline-status.ant-tag {
+  margin: 0;
+  padding: 3px 8px;
+  color: var(--wb-accent) !important;
+  font-size: 11px;
+  line-height: 18px;
+  background: var(--wb-surface, #ffffff) !important;
+  border-color: var(--wb-accent-border) !important;
+  border-radius: 5px;
+}
+
+.@{class-prefix}-detail-page-selector-message {
+  display: flex;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--wb-surface, #ffffff);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-detail-page-selector-message-text {
+  color: var(--wb-text) !important;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.@{class-prefix}-detail-page-selector-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.@{class-prefix}-detail-page-selector-locked-template {
+  display: flex;
+  margin: 0;
+  padding: 12px;
+  text-align: left;
+  background: color-mix(in srgb, var(--wb-surface) 74%, transparent);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.@{class-prefix}-detail-page-selector-target {
+  display: flex;
+  margin: 0;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  flex-direction: column;
+  gap: 6px;
+
+  > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .ant-typography { margin: 0; }
+}
+
+.@{class-prefix}-detail-page-selector-section-title {
+  display: block;
+  color: var(--wb-text) !important;
+  font-size: 13px;
+}
+
+.ant-btn.@{class-prefix}-detail-page-selector-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---------- 页面模板选择 ---------- */
+.@{class-prefix}-detail-page-selector-template-cards {
+  display: grid;
+  gap: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+
+  &::-webkit-scrollbar { width: 5px; }
+  &::-webkit-scrollbar-thumb {
+    background: var(--wb-border);
+    border-radius: 8px;
+  }
+}
+
+.@{class-prefix}-detail-page-selector-template-card {
+  position: relative;
+  display: flex;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 12px;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+  flex-direction: column;
+
+  &:hover {
+    border-color: var(--wb-accent-border);
+    box-shadow: 0 6px 20px rgba(107, 60, 240, 0.16);
+    transform: translateY(-2px);
+  }
+
+  /* 选中态：主题色边框 + 柔和阴影 */
+  &.@{class-prefix}-selected {
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent);
+    box-shadow: 0 6px 20px rgba(107, 60, 240, 0.18);
+  }
+
+  &.@{class-prefix}-selected:hover {
+    border-color: var(--wb-accent);
+    box-shadow: 0 8px 26px rgba(107, 60, 240, 0.24);
+  }
+}
+
+/* 预览图区域 */
+.@{class-prefix}-detail-page-selector-template-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 88px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--wb-border) 30%, transparent);
+
+  > img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top center;
+    transition: transform 0.3s ease;
+  }
+
+  &:hover > img {
+    transform: scale(1.05);
+  }
+}
+
+/* ---------- 悬停遮罩 + 预览按钮 ---------- */
+.@{class-prefix}-detail-page-selector-template-thumb-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #fff;
+  font-size: 15px;
+  background: rgba(15, 8, 30, 0.52);
+  border-radius: 0;
+  cursor: zoom-in;
+  flex-direction: column;
+  backdrop-filter: blur(3px);
+  animation: xcodeagent-overlay-fade-in 0.15s ease;
+
+  span {
+    font-size: 13px;
+    letter-spacing: 0.04em;
+  }
+}
+
+@keyframes xcodeagent-overlay-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 移除旧的悬停放大提示 */
+.@{class-prefix}-detail-page-selector-template-thumb-zoom-hint {
+  display: none;
+}
+
+.@{class-prefix}-detail-page-selector-template-thumb-empty {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  color: var(--wb-text-secondary);
+  font-size: 28px;
+  place-items: center;
+  gap: 6px;
+}
+
+/* 卡片文字区 */
+.@{class-prefix}-detail-page-selector-template-card-body {
+  display: flex;
+  padding: 12px 14px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.@{class-prefix}-detail-page-selector-template-card-name {
+  display: block;
+  font-size: 14px;
+}
+
+/* 描述文字：两行省略 + 原生的title tooltip */
+.@{class-prefix}-detail-page-selector-template-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  cursor: default;
+}
+
