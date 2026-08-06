@@ -6,16 +6,17 @@ from typing import Any
 
 WORKFLOW_ARTIFACT_DIR = ".xcodeagent"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+WORKSPACES_BASE = Path(__file__).resolve().parents[4]
 
 
 def workspace_root(state: dict[str, Any]) -> Path:
     workspace = state.get("workspace") or state.get("workspace_path")
     if workspace:
         path = Path(workspace)
-        return path if path.is_absolute() else REPOSITORY_ROOT / path
+        return path if path.is_absolute() else WORKSPACES_BASE / path
 
     project_id = state.get("project_id") or "demo-project"
-    return REPOSITORY_ROOT / "var" / "workspaces" / str(project_id)
+    return WORKSPACES_BASE / "var" / "workspaces" / str(project_id)
 
 
 def workflow_artifact_root(state: dict[str, Any]) -> Path:

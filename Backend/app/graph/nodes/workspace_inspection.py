@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from langgraph.config import get_stream_writer
+
+logger = logging.getLogger(__name__)
 
 from app.graph.state import ProjectState
 from app.services.code_graph.manager import get_code_graph_manager

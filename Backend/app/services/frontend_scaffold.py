@@ -28,26 +28,6 @@ import { Route } from '@/typings/workbench';
 export const BIZ_MENUS: Route[] = [
 """
 
-_MENUS_TS_SYSTEM = """\
-];
-
-export const SYSTEM_MENUS: Route[] = [
-  {
-    path: 'system',
-    name: '系统管理',
-    icon: 'SettingFilled',
-    children: [
-      {
-        path: 'role',
-        name: '角色授权',
-        icon: 'UserOutlined',
-        key: 'Role'
-      }
-    ]
-  }
-];
-"""
-
 _HELLO_AGENT = "hello agent!"
 
 
@@ -136,34 +116,14 @@ def _write_menus_ts(
     frontend_dir: Path,
     pages: list[dict[str, Any]],
 ) -> Path:
-    """重写 src/constants/menus.ts，包含模板默认菜单项 + 所有项目页面。"""
+    """重写 src/constants/menus.ts，只包含项目页面的 BIZ_MENUS。"""
 
     lines: list[str] = [_MENUS_TS_HEADER]
 
-    # 保留模板自带的 DefaultPage 菜单
-    _write_menu_item(lines, {
-        "path": "firstLevel",
-        "name": "一级目录",
-        "icon": "https://cmbjs.paas.cmbchina.cn/documents/documentIcon/ant-design.png",
-        "children": [{
-            "path": "default",
-            "name": "默认页面",
-            "key": "DefaultPage",
-        }],
-    }, indent=1)
-
-    _write_menu_item(lines, {
-        "path": "https://www.baidu.com",
-        "name": "外部链接",
-        "icon": "GithubFilled",
-        "target": "_blank",
-    }, indent=1)
-
-    # 追加所有项目页面
     for page in pages:
         _write_menu_item(lines, page, indent=1)
 
-    lines.append(_MENUS_TS_SYSTEM)
+    lines.append("];\n")
 
     menus_path = frontend_dir / "src" / "constants" / "menus.ts"
     try:
