@@ -62,6 +62,26 @@ def _merge_agent_items(
         # 模型显式返回空契约时保留由数据源确定性生成的契约，避免业务计划静默退化为空数组。
         if key == "api_contracts" and not agent_items and default_items:
             return default_items
+
+        if key == "frontend_pages":
+            # 页面集合来自需求文档（default_items），不得增删改。
+            # 模型只负责往已有 pageId 上补充 references/依赖标注，不负责发明新页面。
+            agent_by_id = {
+                str(item[identity_key]): item
+                for item in agent_items
+                if item.get(identity_key)
+            }
+            seen_ids: set[str] = set()
+            result: list[dict[str, Any]] = []
+            for default in default_items:
+                page_id = str(default.get(identity_key, ""))
+                if not page_id or page_id in seen_ids:
+                    continue
+                seen_ids.add(page_id)
+                agent_supplement = agent_by_id.get(page_id, {})
+                result.append(_merge_agent_item(default, agent_supplement))
+            return result
+
         defaults_by_id = {
             str(item[identity_key]): item
             for item in default_items
@@ -72,21 +92,28 @@ def _merge_agent_items(
             for item in default_items
             if item.get("data_source_id")
         }
-        return [
-            _merge_agent_item(
-                defaults_by_id.get(str(item[identity_key]))
-                or defaults_by_source.get(str(item.get("data_source_id") or ""))
-                or (
-                    default_items[0]
-                    if key == "api_contracts"
-                    and len(default_items) == 1
-                    and len(agent_items) == 1
-                    else {}
-                ),
-                item,
+        merged: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for item in agent_items:
+            item_id = str(item[identity_key])
+            if item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+            merged.append(
+                _merge_agent_item(
+                    defaults_by_id.get(item_id)
+                    or defaults_by_source.get(str(item.get("data_source_id") or ""))
+                    or (
+                        default_items[0]
+                        if key == "api_contracts"
+                        and len(default_items) == 1
+                        and len(agent_items) == 1
+                        else {}
+                    ),
+                    item,
+                )
             )
-            for item in agent_items
-        ]
+        return merged
 
     by_id = {
         str(item[identity_key]): item

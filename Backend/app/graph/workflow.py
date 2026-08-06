@@ -16,6 +16,7 @@ from app.persistence.checkpoints import (
     workflow_checkpointer,
 )
 from app.services.database_planning_context import database_context_requirement
+from app.services.frontend_scaffold import scaffold_frontend_pages
 
 
 def route_workflow_start(state: ProjectState) -> str:

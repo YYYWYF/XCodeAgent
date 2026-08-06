@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessageChunk
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
+from app.services.frontend_page_tree import flatten_frontend_pages
 from app.services.project_plan import (
     apply_project_plan_feedback,
     create_project_plan,
@@ -122,7 +123,11 @@ def _planning_prompt(
         "Use \"$ref\": \"InventoryItem\", request_schema_ref: \"InventoryItem\", and "
         "response_schema_ref: \"InventoryListResponse\". Do NOT use #/definitions/..., "
         "#/components/schemas/..., components, definitions, schema_definitions, or OpenAPI document wrappers.\n"
-        "- frontend_pages: menu tree plus page leaves. A menu node uses exactly {name, unique_path, children}. "
+        "- frontend_pages: menu tree plus page leaves. CRITICAL: the page leaf set (every pageId) MUST come from "
+        "RequirementSpec.pages and match them one-to-one. You may NOT invent, merge, rename, or omit any page. "
+        "Your only job is to wrap them with a menu tree and attach references {permissions, endpoint_dependencies, "
+        "navigation_targets}. Never change an existing pageId, name, module_id, or path. "
+        "A menu node uses exactly {name, unique_path, children}. "
         "Each child may be another menu node or a page leaf. Every page leaf must still include unique non-empty "
         "pageId, unique path, module_id, description, and references {permissions, endpoint_dependencies "
         "[{endpoint_id, usage, trigger, required_for_initial_load}], navigation_targets "
@@ -226,6 +231,20 @@ def plan_project_with_chat_model(
     return plan
 
 
+def _plan_pages_for_repair(existing_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """从已有计划中提取扁平页面列表，供修复路径当作 requirement_spec.pages 使用。
+
+    修复时 existing_plan 里的 frontend_pages 已经是菜单树（LEAF/Branch），
+    直接当 pages 传给 _frontend_pages 会让非叶节点被覆盖为 pageId="page"，
+    导致菜单下只有首页概览 + 默认页面，其余业务页全部丢失。
+    """
+    pages = existing_plan.get("frontend_pages", [])
+    flat = flatten_frontend_pages(pages)
+    if flat:
+        return flat
+    return pages
+
+
 def revise_project_plan_with_chat_model(
     existing_plan: dict[str, Any],
     user_feedback: str,
@@ -251,7 +270,7 @@ def revise_project_plan_with_chat_model(
             "modules",
             [],
         ),
-        "pages": existing_plan.get("frontend_pages", []),
+        "pages": _plan_pages_for_repair(existing_plan),
         "data_sources": existing_plan.get("data_sources", []),
         "business_flows": existing_plan.get("business_flows", []),
         "acceptance_criteria": existing_plan.get("acceptance_criteria", []),

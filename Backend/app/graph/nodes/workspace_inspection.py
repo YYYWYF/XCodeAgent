@@ -6,6 +6,7 @@ from langgraph.config import get_stream_writer
 
 from app.graph.state import ProjectState
 from app.services.code_graph.manager import get_code_graph_manager
+from app.services.frontend_scaffold import scaffold_frontend_pages
 from app.services.workspace_inspector import inspect_workspace as inspect_workspace_service
 from app.services.workspace_inspector import snapshot_hash
 from app.workspace.spec_documents import workspace_root
@@ -13,8 +14,13 @@ from app.workspace.workspace_snapshot_documents import workspace_snapshot_cache_
 
 
 def inspect_workspace(state: ProjectState) -> dict:
-    """扫描正式工作流的用户工作区，并把代码图进度写入 Graph custom stream。"""
+    """扫描正式工作流的用户工作区，并把代码图进度写入 Graph custom stream。
 
+    detail_confirmation 完成后首次进入时，根据 ProjectPlan 自动为前端模板工程
+    生成菜单（menus.ts）和页面占位目录（src/pages/<key>/index.tsx）。
+    """
+
+    _scaffold_frontend_once(state)
     return _scan_workspace(state, node_name="inspect_workspace")
 
 
@@ -113,3 +119,29 @@ def _stream_writer() -> Any:
         return get_stream_writer()
     except RuntimeError:
         return lambda _event: None
+
+
+def _scaffold_frontend_once(state: ProjectState) -> None:
+    """在 detail_confirmation 完成后的首次 workspace 检查中执行前端脚手架。
+
+    仅在 resume_from != 'inspect_workspace' 时执行（避免每次恢复都重复
+    生成脚手架文件）。
+    """
+
+    if state.get("resume_from") == "inspect_workspace":
+        return
+    project_plan = state.get("project_plan")
+    if not isinstance(project_plan, dict):
+        return
+    workspace = str(workspace_root(state) or "").strip()
+    if not workspace:
+        return
+    try:
+        result = scaffold_frontend_pages(workspace, project_plan)
+        logger.info(
+            "frontend_scaffold status=%s pages=%d",
+            result.get("status"),
+            len(result.get("pages", [])),
+        )
+    except Exception:
+        logger.exception("frontend_scaffold_failed")
