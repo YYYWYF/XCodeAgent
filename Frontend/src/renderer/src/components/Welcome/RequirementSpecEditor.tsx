@@ -6,8 +6,9 @@ import {
   PlusOutlined,
   TeamOutlined
 } from '@ant-design/icons'
-import { Button, Input, Select, Typography } from 'antd'
+import { Button, Input, Tag, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
+import { DatasourceEnum } from '../../typings'
 import { cx } from '../../utils'
 import RequirementSpecFlowEditor from './RequirementSpecFlowSteps'
 import './RequirementSpecEditor.less'
@@ -16,6 +17,7 @@ const { Text, Title } = Typography
 const { TextArea } = Input
 
 type Props = {
+  datasourceType: DatasourceEnum
   onChange: (spec: Record<string, unknown>) => void
   rootPath: string
   spec: Record<string, unknown>
@@ -105,8 +107,18 @@ function EditorField({ children, label }: { children: ReactNode; label: string }
 }
 
 // 以结构化表单编辑概览中的应用、页面、角色、流程和数据源。
-export default function RequirementSpecEditor({ onChange, rootPath, spec }: Props): ReactElement {
+export default function RequirementSpecEditor({
+  datasourceType,
+  onChange,
+  rootPath,
+  spec
+}: Props): ReactElement {
   const appInfo = asRecord(spec.app_info)
+  const dataSourceTypeLabels: Record<DatasourceEnum, string> = {
+    [DatasourceEnum.DB]: '数据库',
+    [DatasourceEnum.API]: '外部 API',
+    [DatasourceEnum.STATIC]: '静态数据'
+  }
 
   // 只更新应用定位字段，保留内部规划元数据。
   const updateApp = (field: string, value: string): void => {
@@ -115,7 +127,11 @@ export default function RequirementSpecEditor({ onChange, rootPath, spec }: Prop
 
   // 替换指定模块的整个条目列表。
   const replaceList = (field: ListField, items: Record<string, unknown>[]): void => {
-    onChange({ ...spec, [field]: items })
+    const nextItems =
+      field === 'data_sources'
+        ? items.map((item) => ({ ...item, type: datasourceType }))
+        : items
+    onChange({ ...spec, [field]: nextItems })
   }
 
   // 修改指定模块的单个条目字段。
@@ -289,7 +305,7 @@ export default function RequirementSpecEditor({ onChange, rootPath, spec }: Prop
           addItem('data_sources', {
             id: draftId('source'),
             name: '新数据源',
-            type: 'mock',
+            type: datasourceType,
             description: '',
             entities: []
           })
@@ -309,16 +325,7 @@ export default function RequirementSpecEditor({ onChange, rootPath, spec }: Prop
               />
             </EditorField>
             <EditorField label="数据源类型">
-              <Select
-                onChange={(value) => updateItem('data_sources', index, 'type', value)}
-                options={[
-                  { label: '模拟数据', value: 'mock' },
-                  { label: '数据库', value: 'database' },
-                  { label: '外部接口', value: 'external_api' },
-                  { label: '静态数据', value: 'static' }
-                ]}
-                value={textValue(item.type) || 'mock'}
-              />
+              <Tag>{dataSourceTypeLabels[datasourceType]}</Tag>
             </EditorField>
             <EditorField label="数据源说明">
               <TextArea

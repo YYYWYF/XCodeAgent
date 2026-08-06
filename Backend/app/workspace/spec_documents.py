@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 WORKFLOW_ARTIFACT_DIR = ".xcodeagent"
@@ -28,6 +29,8 @@ def _bullet_items(items: list[str]) -> str:
 
 
 def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
+    """把 RequirementSpec 渲染为用户可编辑的 Markdown 文档。"""
+
     modules = "\n".join(
         f"- `{module.get('id', 'module')}` {module.get('name', '业务模块')}："
         f"{module.get('description', '待补充模块说明')}（{module.get('priority', 'must')}）"
@@ -43,7 +46,7 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     )
     data_sources = "\n".join(
         f"- `{source.get('id', 'source')}` {source.get('name', '业务数据源')}"
-        f"（{source.get('type', 'mock')}）：{source.get('description', '待补充数据源说明')}"
+        f"（{source.get('type', 'database')}）：{source.get('description', '待补充数据源说明')}"
         f"{'；实体：' + '、'.join(str(item) for item in source.get('entities', [])) if source.get('entities') else ''}"
         for source in spec.get("data_sources", [])
         if isinstance(source, dict)
@@ -114,6 +117,35 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 
 {assumptions}
 """
+
+
+def synchronize_requirement_spec_markdown_datasource_types(
+    markdown: str,
+    spec: dict[str, Any],
+) -> str:
+    """只修正 Markdown 数据源类型，保留用户对其余文案的原始编辑。"""
+
+    synchronized = markdown
+    sources = spec.get("data_sources")
+    if not isinstance(sources, list):
+        return synchronized
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_id = str(source.get("id") or "").strip()
+        datasource_type = str(source.get("type") or "").strip()
+        if not source_id or not datasource_type:
+            continue
+        pattern = re.compile(
+            rf"(^-\s*`{re.escape(source_id)}`[^（\n]*（)[^）]*(）)",
+            re.MULTILINE,
+        )
+        synchronized = pattern.sub(
+            lambda match: f"{match.group(1)}{datasource_type}{match.group(2)}",
+            synchronized,
+            count=1,
+        )
+    return synchronized
 
 
 def write_requirement_spec_document(

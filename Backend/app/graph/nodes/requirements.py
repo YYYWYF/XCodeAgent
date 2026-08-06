@@ -12,12 +12,18 @@ from app.graph.nodes.confirmation import (
     user_requested_changes_text,
 )
 from app.graph.state import ProjectState
+from app.services.data_source_policy import (
+    apply_authoritative_datasource_type,
+    ensure_requirements_datasource_type,
+    read_application_datasource_type,
+)
 from app.services.requirement_spec import apply_requirement_spec_editor_changes
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload, clear_clarification
 from app.workspace.spec_documents import (
     edited_requirement_spec_markdown,
     requirement_spec_json_path,
     requirement_spec_markdown_path,
+    synchronize_requirement_spec_markdown_datasource_types,
     workspace_root,
     write_requirement_spec_document,
     write_requirement_spec_json,
@@ -38,7 +44,15 @@ def _llm_token_callback(token: str) -> None:
 
 
 def requirements(state: ProjectState) -> dict:
+    """生成、修订或确认 RequirementSpec，并始终执行应用数据源策略保护。"""
+
+    # 每次进入需求节点都从 application.json 读取类型，避免 checkpoint 或模型输出改变数据源大类。
+    datasource_type = ensure_requirements_datasource_type(
+        read_application_datasource_type(workspace_root(state))
+    )
     existing_spec = state.get("requirement_spec")
+    if isinstance(existing_spec, dict):
+        existing_spec = apply_authoritative_datasource_type(existing_spec, datasource_type)
     request = state.get("request", "")
     revision_requested = _requirement_revision_requested(request)
     if (
@@ -66,14 +80,23 @@ def requirements(state: ProjectState) -> dict:
             synchronized_spec = apply_requirement_spec_editor_changes(
                 existing_spec,
                 editor_changes,
+                datasource_type=datasource_type,
             )
             edited_markdown = None
         else:
             edited_markdown = edited_requirement_spec_markdown(state, existing_spec)
             synchronized_spec = (
-                sync_requirement_spec_from_markdown(existing_spec, edited_markdown)
+                sync_requirement_spec_from_markdown(
+                    existing_spec,
+                    edited_markdown,
+                    datasource_type=datasource_type,
+                )
                 if edited_markdown is not None
                 else existing_spec
+            )
+            synchronized_spec = apply_authoritative_datasource_type(
+                synchronized_spec,
+                datasource_type,
             )
         spec = {
             **synchronized_spec,
@@ -86,6 +109,13 @@ def requirements(state: ProjectState) -> dict:
             spec_path = write_requirement_spec_document(state, spec)
         elif markdown_path.is_file():
             spec_path = str(markdown_path)
+            markdown_content = markdown_path.read_text(encoding="utf-8")
+            synchronized_markdown = synchronize_requirement_spec_markdown_datasource_types(
+                markdown_content,
+                spec,
+            )
+            if synchronized_markdown != markdown_content:
+                markdown_path.write_text(synchronized_markdown, encoding="utf-8")
             write_requirement_spec_json(state, spec)
         else:
             spec_path = write_requirement_spec_document(state, spec)
@@ -107,9 +137,13 @@ def requirements(state: ProjectState) -> dict:
     analysis = analyze_requirements_with_chat_model(
         analysis_request,
         existing_spec=existing_spec,
+        datasource_type=datasource_type,
         on_token=_llm_token_callback,
     )
-    spec = analysis["requirement_spec"]
+    spec = apply_authoritative_datasource_type(
+        analysis["requirement_spec"],
+        datasource_type,
+    )
     _apply_menus_root_path_to_pages(spec, state)
     clarification = analysis["clarification"]
     if _should_suppress_repeat_clarification(existing_spec, clarification):

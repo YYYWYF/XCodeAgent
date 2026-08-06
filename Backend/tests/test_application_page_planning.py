@@ -26,6 +26,17 @@ from app.services.requirement_spec import create_requirement_spec
 from app.workspace.spec_documents import write_requirement_spec_document
 
 
+def _write_application_config(workspace: Path, datasource_type: str = "database") -> None:
+    """为应用规划草稿保存测试写入最小的权威数据源配置。"""
+
+    application_dir = workspace / ".xcodeagent"
+    application_dir.mkdir(parents=True, exist_ok=True)
+    (application_dir / "application.json").write_text(
+        json.dumps({"schemaVersion": 2, "datasource": {"type": datasource_type}}),
+        encoding="utf-8",
+    )
+
+
 def _confirmed_state(workspace: Path) -> dict[str, object]:
     """构造包含已确认 RequirementSpec、ProjectPlan 和 API 契约的最小状态。"""
 
@@ -168,6 +179,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as directory:
+            _write_application_config(Path(directory))
             write_requirement_spec_document({"workspace": directory}, spec)
             stream = build_application_page_planning_ag_ui_stream(
                 graph=object(),

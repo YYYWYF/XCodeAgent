@@ -6,6 +6,7 @@ from typing import Any
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.data_source_policy import DatasourceType
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
 from app.utils.model_output import extract_json_object
@@ -16,7 +17,17 @@ def _sync_prompt(
     artifact_name: str,
     structured_document: dict[str, Any],
     edited_markdown: str,
+    datasource_type: DatasourceType = "database",
 ) -> str:
+    """构建 Markdown 同步提示，并在 RequirementSpec 阶段固定数据源类型。"""
+
+    datasource_instruction = (
+        f"For RequirementSpec data_sources, the authoritative application type is {datasource_type}. "
+        f"Keep every data_sources[].type exactly {datasource_type}; the user cannot change this field, "
+        "and the legacy type mock must never be emitted.\n\n"
+        if artifact_name == "RequirementSpec"
+        else ""
+    )
     return (
         f"You synchronize a user-edited {artifact_name} Markdown document back into its internal JSON.\n"
         "This is a document-sync boundary. Do not call tools, do not generate code, and return only "
@@ -24,6 +35,7 @@ def _sync_prompt(
         "for user-visible business content. Preserve internal ids, schema details, dependencies, and "
         "metadata that the Markdown does not represent. Apply additions, edits, and removals expressed "
         "by the Markdown, but do not invent unrelated fields or discard hidden structured details.\n\n"
+        f"{datasource_instruction}"
         f"Current internal JSON:\n{json.dumps(structured_document, ensure_ascii=False)}\n\n"
         f"User-edited Markdown:\n{edited_markdown}"
     )
@@ -34,13 +46,17 @@ def _invoke_sync_model(
     artifact_name: str,
     structured_document: dict[str, Any],
     edited_markdown: str,
+    datasource_type: DatasourceType = "database",
 ) -> dict[str, Any]:
+    """调用 Markdown 同步模型并解析结构化 RequirementSpec。"""
+
     settings = Settings.from_env()
     result = create_chat_model(settings).invoke(
         _sync_prompt(
             artifact_name=artifact_name,
             structured_document=structured_document,
             edited_markdown=edited_markdown,
+            datasource_type=datasource_type,
         )
     )
     content = getattr(result, "content", result)
@@ -60,11 +76,15 @@ def _invoke_sync_model(
 def sync_requirement_spec_from_markdown(
     existing_spec: dict[str, Any],
     edited_markdown: str,
+    datasource_type: DatasourceType = "database",
 ) -> dict[str, Any]:
+    """同步用户编辑的 RequirementSpec Markdown，并恢复应用权威类型。"""
+
     synced = _invoke_sync_model(
         artifact_name="RequirementSpec",
         structured_document=existing_spec,
         edited_markdown=edited_markdown,
+        datasource_type=datasource_type,
     )
     request = str(
         synced.get("source_request")
@@ -76,7 +96,9 @@ def sync_requirement_spec_from_markdown(
         request,
         agent_note="synchronized from user-edited RequirementSpec Markdown",
         agent_spec=synced,
+        existing_spec=existing_spec,
         authoritative_agent_spec=True,
+        datasource_type=datasource_type,
     )
     for key in ("analyzed_by", "analysis_source"):
         if key in existing_spec:

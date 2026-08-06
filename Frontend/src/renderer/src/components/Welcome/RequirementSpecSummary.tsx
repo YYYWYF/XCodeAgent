@@ -54,15 +54,8 @@ function itemLabels(value: unknown): string[] {
 }
 
 const dataSourceTypeLabels: Record<string, string> = {
-  api: '接口数据',
   database: '数据库',
-  external_api: '外部接口',
-  file: '文件数据',
-  internal: '内部数据来源',
-  internal_data_source: '内部数据来源',
-  local: '本地数据',
-  mock: '模拟数据',
-  none: '无数据源',
+  external_api: '外部 API',
   static: '静态数据'
 }
 

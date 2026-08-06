@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import ANY, patch
 
-from app.graph.nodes.requirements import requirements
+from app.graph.nodes.requirements import requirements as requirements_node
 from app.services.requirement_spec import (
     SaveRequirementSpecDraftRequest,
     create_requirement_spec,
@@ -15,6 +15,27 @@ from app.services.requirement_spec import (
 )
 from app.tools.ask_user import clear_clarification
 from app.workspace.spec_documents import write_requirement_spec_document
+
+
+def _write_application_config(workspace: str, datasource_type: str = "database") -> None:
+    """为需求节点单测创建最小的 application.json 权威数据源配置。"""
+
+    application_dir = Path(workspace) / ".xcodeagent"
+    application_dir.mkdir(parents=True, exist_ok=True)
+    (application_dir / "application.json").write_text(
+        json.dumps(
+            {"schemaVersion": 2, "datasource": {"type": datasource_type}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def requirements(state: dict) -> dict:
+    """为需求节点测试补齐应用配置后执行真实 requirements 节点。"""
+
+    _write_application_config(str(state["workspace"]))
+    return requirements_node(state)
 
 
 class RequirementsConfirmationTests(unittest.TestCase):
@@ -93,6 +114,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
         analyzer.assert_called_once_with(
             "创建一个库存管理系统",
             existing_spec=None,
+            datasource_type="database",
             on_token=ANY,
         )
         self.assertEqual(result["status"], "requires_user_input")
@@ -110,6 +132,32 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual(len(result["clarification"]["questions"]), 1)
         self.assertIn("## 待确认问题\n\n- 暂无", markdown)
         self.assertNotIn("请确认已生成的需求文档是否正确", markdown)
+
+    def test_requirement_type_comes_from_static_application_config(self) -> None:
+        """即使模型返回 database，Static 应用也必须投影为 static。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统", datasource_type="database")
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace, datasource_type="static")
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": spec,
+                    "clarification": clear_clarification(spec),
+                },
+            ):
+                result = requirements_node(
+                    {
+                        "request": "创建一个库存管理系统",
+                        "workspace": workspace,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertTrue(result["requirement_spec"]["data_sources"])
+        self.assertTrue(
+            all(source["type"] == "static" for source in result["requirement_spec"]["data_sources"])
+        )
 
     def test_confirmed_requirement_spec_continues_to_planning(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
@@ -272,11 +320,21 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     "description": "查看仓储运营指标。",
                 }
             ],
+            "data_sources": [
+                {
+                    **spec["data_sources"][0],
+                    "id": "tampered_source_id",
+                    "type": "mock",
+                    "entities": ["Warehouse"],
+                },
+                *spec["data_sources"][1:],
+            ],
         }
 
         with tempfile.TemporaryDirectory() as workspace:
             state = {"workspace": workspace}
             write_requirement_spec_document(state, spec)
+            _write_application_config(workspace)
             saved = save_requirement_spec_draft(
                 SaveRequirementSpecDraftRequest.model_validate(
                     {
@@ -295,6 +353,15 @@ class RequirementsConfirmationTests(unittest.TestCase):
 
         self.assertIn("# 仓储运营中心需求 Spec", markdown)
         self.assertIn("仓储总览", markdown)
+        self.assertEqual(
+            saved["requirementSpec"]["data_sources"][0]["id"],
+            spec["data_sources"][0]["id"],
+        )
+        self.assertEqual(saved["requirementSpec"]["data_sources"][0]["type"], "database")
+        self.assertEqual(
+            saved["requirementSpec"]["data_sources"][0]["entities"],
+            spec["data_sources"][0]["entities"],
+        )
         self.assertEqual(saved["requirementSpec"]["confirmation_status"], "pending_user_confirmation")
         self.assertEqual(internal_json["confirmation_status"], "pending_user_confirmation")
         self.assertEqual(saved["artifact"]["content"], markdown)
@@ -487,10 +554,15 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 spec["app_info"]["name"],
                 "仓储管理应用",
             )
+            edited_markdown = edited_markdown.replace("（database）", "（mock）")
             markdown_path.write_text(edited_markdown, encoding="utf-8")
             synchronized = {
                 **spec,
                 "app_info": {**spec["app_info"], "name": "仓储管理应用"},
+                "data_sources": [
+                    {**spec["data_sources"][0], "type": "mock"},
+                    *spec["data_sources"][1:],
+                ],
             }
 
             with patch(
@@ -512,10 +584,17 @@ class RequirementsConfirmationTests(unittest.TestCase):
             )
             preserved_markdown = markdown_path.read_text(encoding="utf-8")
 
-        synchronizer.assert_called_once_with(spec, edited_markdown)
+        synchronizer.assert_called_once_with(
+            spec,
+            edited_markdown,
+            datasource_type="database",
+        )
         self.assertEqual(result["requirement_spec"]["app_info"]["name"], "仓储管理应用")
         self.assertEqual(internal_json["app_info"]["name"], "仓储管理应用")
-        self.assertEqual(preserved_markdown, edited_markdown)
+        self.assertEqual(internal_json["data_sources"][0]["type"], "database")
+        self.assertNotEqual(preserved_markdown, edited_markdown)
+        self.assertIn("（database）", preserved_markdown)
+        self.assertIn("仓储管理应用", preserved_markdown)
 
 
 if __name__ == "__main__":

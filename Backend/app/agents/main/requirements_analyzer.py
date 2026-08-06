@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
+from app.services.data_source_policy import DatasourceType, apply_authoritative_datasource_type
 from app.services.requirement_spec import (
     create_requirement_spec,
     merge_clarification_answers_into_spec,
@@ -19,7 +20,10 @@ from app.utils.model_output import extract_json_object
 def _requirements_prompt(
     request: str,
     existing_spec: dict[str, Any] | None = None,
+    datasource_type: DatasourceType = "database",
 ) -> str:
+    """构建需求模型提示，并注入只读的应用数据源类型。"""
+
     revision_context = (
         "Revise the existing RequirementSpec using the latest user feedback. "
         "The latest feedback overrides conflicting older requirements. Preserve stable ids for "
@@ -58,6 +62,10 @@ def _requirements_prompt(
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 用户角色, 功能模块, "
         "页面清单, 数据源清单, 业务流程, 验收标准.\n"
+        f"The authoritative application datasource type is {datasource_type}. Every data_sources item "
+        f"MUST use exactly type={datasource_type}. The type is read-only policy data: do not infer it "
+        "from user wording, do not change it, and never emit the legacy type mock. Generate only the "
+        "business data-source name, description, and entity list.\n"
         f"{clarification_policy}"
         f"{followup_policy}"
         "When asking, questions can be choice, text, or yesno. For every choice question, first decide "
@@ -82,6 +90,7 @@ def _invoke_live_chat_model(
     request: str,
     *,
     existing_spec: dict[str, Any] | None = None,
+    datasource_type: DatasourceType = "database",
     settings: Settings | None = None,
     on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -90,12 +99,12 @@ def _invoke_live_chat_model(
     active_settings = settings or Settings.from_env()
     runnable = create_chat_model(active_settings).bind_tools([ask_user])
     if on_token is None:
-        result = runnable.invoke(_requirements_prompt(request, existing_spec))
+        result = runnable.invoke(_requirements_prompt(request, existing_spec, datasource_type))
         return {"messages": [result]}
 
     accumulated_text = ""
     merged_chunk: AIMessageChunk | None = None
-    for chunk in runnable.stream(_requirements_prompt(request, existing_spec)):
+    for chunk in runnable.stream(_requirements_prompt(request, existing_spec, datasource_type)):
         if isinstance(chunk, AIMessageChunk):
             # glm-5.2 流式 chunk.content 是 content block 列表（如
             # [{"text": "...", "type": "text", "index": 0}]），不是纯字符串。
@@ -123,6 +132,7 @@ def analyze_requirements_with_chat_model(
     request: str,
     existing_spec: dict[str, Any] | None = None,
     *,
+    datasource_type: DatasourceType = "database",
     on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """直接调用需求模型生成 RequirementSpec，并在关键需求不足时请求澄清。"""
@@ -131,6 +141,7 @@ def analyze_requirements_with_chat_model(
     agent_result = _invoke_live_chat_model(
         request,
         existing_spec=existing_spec,
+        datasource_type=datasource_type,
         settings=settings,
         on_token=on_token,
     )
@@ -145,9 +156,12 @@ def analyze_requirements_with_chat_model(
         agent_note=agent_note,
         agent_spec=agent_spec,
         existing_spec=existing_spec,
+        datasource_type=datasource_type,
     )
     if _is_clarification_followup(existing_spec):
         spec = merge_clarification_answers_into_spec(spec, request)
+        # 澄清答案可能新增或复写数据源，合并后再次恢复 application.json 的权威类型。
+        spec = apply_authoritative_datasource_type(spec, datasource_type)
     clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
     spec["assumptions"] = clarification["assumptions"]

@@ -24,6 +24,7 @@ import type {
   WorkflowClarificationQuestion,
   WorkflowRunPayload
 } from '../../typings'
+import type { DatasourceEnum } from '../../typings'
 import { cx } from '../../utils'
 import { useTabToFillPlaceholder } from './hooks/useTabToFillPlaceholder'
 import './ApplicationPlanningQuestionPanel.less'
@@ -37,6 +38,7 @@ type ProjectPlanConfirmationForm = {
 }
 
 type Props = {
+  datasourceType: DatasourceEnum
   disabled?: boolean
   onSaveRequirementSpec: (
     workflow: WorkflowRunPayload,
@@ -394,6 +396,7 @@ function projectPlan(workflow: WorkflowRunPayload): Record<string, unknown> | un
 
 // 使用创建规划页面自己的表单视觉展示问题和正式产物，不渲染通用 Workflow 卡片。
 export default function ApplicationPlanningQuestionPanel({
+  datasourceType,
   disabled,
   onSaveRequirementSpec,
   onReturnHome,
@@ -629,6 +632,7 @@ export default function ApplicationPlanningQuestionPanel({
           <div className={cx('planning-artifact-content')}>
             {editingRequirement && requirementDraft ? (
               <RequirementSpecEditor
+                datasourceType={datasourceType}
                 onChange={setRequirementDraft}
                 rootPath={rootPath || '/'}
                 spec={requirementDraft}
