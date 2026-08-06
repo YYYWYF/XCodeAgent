@@ -40,7 +40,7 @@ def reconcile_live_page_paths(
 
     replacements: list[tuple[str, str, str, str]] = []
     for task in tasks:
-        for path in _task_target_files(task):
+        for path in _task_page_entry_paths(task):
             planned_path = str(path).lstrip("./")
             planned_key = _page_key_from_entry_path(planned_path)
             if not planned_key or (Path(workspace_root) / planned_path).is_file():
@@ -99,7 +99,7 @@ def ensure_page_route_registration_task(
         key
         for task in tasks
         if _task_matches_page_unit(task, page_unit_id)
-        for path in _task_target_files(task)
+        for path in _task_page_entry_paths(task)
         if (key := _page_key_from_entry_path(str(path)))
     }
     if len(page_keys) != 1:
@@ -112,7 +112,7 @@ def ensure_page_route_registration_task(
     confirmed_path = str(page.get("path") or _dict_value(build_context.get("page_detail")).get("path") or "")
     menu_path = _menu_route_path(confirmed_path, page.get("module_id"), page_key)
     menu_tasks = [
-        task for task in tasks if FRONTEND_MENU_PATH in _task_target_files(task)
+        task for task in tasks if FRONTEND_MENU_PATH in _task_page_entry_paths(task)
     ]
     if _menu_entry_exists(
         menu_file,
@@ -598,6 +598,28 @@ def _task_target_files(task: dict[str, Any]) -> list[str]:
     """读取当前 DAG v3 任务的目标文件。"""
 
     return _string_list(task.get("target_files"))
+
+
+def _task_page_entry_paths(task: dict[str, Any]) -> list[str]:
+    """收集任务中所有可能携带页面 PageKey 的文件路径。
+
+    同时读 target_files 与 change_scope：模型常把页面入口
+    （frontend/src/pages/<Key>/index.tsx）只放在 change_scope 而漏进
+    target_files，单读 target_files 会使页面入口缺失。这里合并两个字段
+    的路径，再由调用方用 _page_key_from_entry_path 过滤出页面入口。
+    """
+
+    paths = list(_task_target_files(task))
+    change_scope = task.get("change_scope")
+    if isinstance(change_scope, list):
+        for item in change_scope:
+            if isinstance(item, dict):
+                path = str(item.get("path") or "").strip()
+            else:
+                path = str(item).strip()
+            if path:
+                paths.append(path)
+    return paths
 
 
 def _string_list(value: Any) -> list[str]:

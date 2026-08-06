@@ -233,8 +233,61 @@ def _is_meaningful_code(code: str) -> bool:
     return bool(re.search(r"export\s+default", code))
 
 
+# 设计稿工程允许的 import 来源白名单。SKILL.md 约束只用这三个库 + react。
+# 白名单外的依赖（umi/mockjs/xlsx/axios/@/apis 等）工程未安装或会冲突，
+# import 它会导致 Vite "Failed to resolve import" 白屏。
+_ALLOWED_IMPORT_SOURCES = {
+    "react",
+    "react-dom",
+    "antd",
+    "@ant-design/pro-components",
+    "@ant-design/icons",
+    "@ant-design/cssinjs",
+}
+
+# 常见禁用来源 → 修复指引。LLM 常误从这些库引路由/数据/导出功能。
+_FORBIDDEN_IMPORT_HINTS = {
+    "umi": "umi 是框架，设计稿工程未安装。路由参数用 react-router-dom 的 "
+    "`useParams`/`useNavigate`（`import { useParams, useNavigate } from "
+    "'react-router-dom'`），或设计稿用 Mock 数据直接渲染、不用路由参数。",
+    "mockjs": "工程未安装 mockjs。Mock 数据用内联静态数组。",
+    "xlsx": "工程未安装 xlsx。导出按钮 onClick 给 no-op 即可。",
+    "axios": "设计稿禁 API 请求。用内联静态 Mock 数据数组，不引 axios。",
+    "dayjs": "如需日期格式化，用原生 Date 方法或工程已装的 date-fns。",
+}
+
+
+def _find_forbidden_imports(code: str) -> list[str]:
+    """返回代码中引用的非白名单 import 来源（排序去重）。
+
+    捕获 LLM 违反 SKILL.md 引入 umi/mockjs/xlsx/axios 等未安装依赖的错误。
+    esbuild 语法校验查不出 import 是否可解析，只在浏览器加载时报
+    "Failed to resolve import" 白屏。
+    """
+
+    sources: set[str] = set()
+    for m in re.finditer(
+        r"^\s*import\s+(?:[^'\";]+\s+from\s+)?['\"]([^'\"]+)['\"]",
+        code,
+        re.MULTILINE,
+    ):
+        source = m.group(1).strip()
+        if not source:
+            continue
+        # 取包名主体：去 v1 前缀、去 @scope/name 之外的子路径、去版本
+        pkg = source
+        if pkg.startswith("@"):
+            parts = pkg.split("/")
+            pkg = "/".join(parts[:2]) if len(parts) >= 2 else pkg
+        else:
+            pkg = pkg.split("/")[0]
+        if pkg and pkg not in _ALLOWED_IMPORT_SOURCES:
+            sources.add(source)
+    return sorted(sources)
+
+
 def validate_page_code(project_dir: str, code: str) -> tuple[bool, str]:
-    """对单页设计稿代码做完整校验：非空 + 未定义引用 + esbuild 语法。
+    """对单页设计稿代码做完整校验：非空 + 未定义引用 + 禁用依赖 + esbuild 语法。
 
     返回 (是否通过, 错误信息)。错误信息为人类可读的修复指引，供回喂 LLM
     自动修复或展示给用户。esbuild 不可用时跳过语法校验（仅降级，不阻断）。
@@ -246,6 +299,25 @@ def validate_page_code(project_dir: str, code: str) -> tuple[bool, str]:
             "生成的代码为空、过短或缺少 `export default` 导出。"
             "请输出一个完整的、以 `export default <ComponentName>` 结尾的页面组件。",
         )
+    forbidden = _find_forbidden_imports(code)
+    if forbidden:
+        hints = []
+        for source in forbidden:
+            pkg = source.split("/")[0] if not source.startswith("@") else "/".join(source.split("/")[:2])
+            hint = _FORBIDDEN_IMPORT_HINTS.get(pkg)
+            if hint:
+                hints.append(f"- {source}: {hint}")
+            else:
+                hints.append(
+                    f"- {source}: 工程未安装此依赖，设计稿只允许 react / antd / "
+                    f"@ant-design/pro-components / @ant-design/icons。请改用白名单内"
+                    f"的等价写法或内联 Mock 数据。"
+                )
+        return (
+            False,
+            "以下 import 引用了设计稿工程未安装或禁用的依赖，会导致 Vite 加载时"
+            "“Failed to resolve import”白屏：\n" + "\n".join(hints),
+        )
     undefined = _find_undefined_refs(code)
     if undefined:
         return (
@@ -256,7 +328,7 @@ def validate_page_code(project_dir: str, code: str) -> tuple[bool, str]:
             "@ant-design/pro-components、基础组件从 antd、图标从 "
             "@ant-design/icons 导入）。",
         )
-    # 语法校验放最后：前两项是 LLM 高频错误，esbuild 查不出。
+    # 语法校验放最后：前三项是 LLM 高频错误，esbuild 查不出。
     return validate_tsx(project_dir, code)
 
 

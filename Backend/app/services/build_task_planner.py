@@ -285,8 +285,15 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
         description = _text(item.get("description"), _text(item.get("title"), task_id))
         target_files = _string_list(item.get("target_files"))
         change_scope = _change_scope(item.get("change_scope"), target_files)
-        if not target_files:
-            target_files = [change["path"] for change in change_scope]
+        # target_files 必须覆盖 change_scope 里的全部路径：模型常把页面入口
+        # （frontend/src/pages/<Key>/index.tsx）只放在 change_scope 而漏进
+        # target_files。下游 ensure_page_route_registration_task /
+        # reconcile_live_page_paths 只从 target_files 提取页面 PageKey，若页面
+        # 入口缺失会使 page_keys 为空 → “must resolve to exactly one frontend
+        # page entry” 误报。这里始终合并（去重），而非仅在 target_files 为空时派生。
+        target_files = _dedupe_normalized_strings(
+            [*target_files, *[change["path"] for change in change_scope]]
+        )
         dependencies = _dedupe_normalized_strings(
             _string_list(item.get("dependencies"))
         )
