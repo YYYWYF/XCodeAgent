@@ -132,7 +132,7 @@ def _ensure_key_directory(key_directory: Path) -> None:
         if key_directory.is_symlink():
             raise DatabaseCryptoError("XCodeAgent 用户级密钥目录不允许使用符号链接。")
         key_directory.mkdir(mode=0o700, exist_ok=True)
-        key_directory.chmod(0o700)
+        _set_posix_mode(key_directory, 0o700)
     except DatabaseCryptoError:
         raise
     except OSError as exc:
@@ -176,7 +176,7 @@ def _write_key_file_atomic(target: Path, payload: bytes) -> None:
             delete=False,
         ) as temporary:
             temporary_path = Path(temporary.name)
-            os.chmod(temporary.name, 0o600)
+            _set_posix_mode(temporary.name, 0o600)
             temporary.write(payload)
             temporary.flush()
             os.fsync(temporary.fileno())
@@ -184,7 +184,7 @@ def _write_key_file_atomic(target: Path, payload: bytes) -> None:
             raise DatabaseCryptoError("平台数据库密钥文件不允许使用符号链接。")
         os.replace(temporary_path, target)
         temporary_path = None
-        target.chmod(0o600)
+        _set_posix_mode(target, 0o600)
     except (OSError, DatabaseCryptoError) as exc:
         raise DatabaseCryptoError("无法安全写入平台数据库密钥文件。") from exc
     finally:
@@ -215,15 +215,7 @@ def _read_key_file(target: Path) -> bytes:
             raise DatabaseCryptoError("平台数据库密钥路径不是普通文件。")
         if (path_stat.st_dev, path_stat.st_ino) != (file_stat.st_dev, file_stat.st_ino):
             raise DatabaseCryptoError("平台数据库密钥文件在读取期间发生变化。")
-        try:
-            if hasattr(os, "fchmod"):
-                os.fchmod(file_descriptor, 0o600)
-            else:
-                target.chmod(0o600)
-        except OSError as exc:
-            # Windows 没有 POSIX 权限位：Python 3.13 起 os.fchmod 存在但必然抛
-            # PermissionError(WinError 5)。收紧失败不应阻断密钥读取，记录告警即可。
-            logger.warning("无法收紧平台数据库密钥文件权限：%s", exc)
+        _set_posix_fd_mode(file_descriptor, target, 0o600)
         with os.fdopen(file_descriptor, "rb", closefd=True) as key_stream:
             file_descriptor = None
             return key_stream.read(_MAX_KEY_FILE_BYTES + 1)
@@ -234,6 +226,31 @@ def _read_key_file(target: Path) -> bytes:
     finally:
         if file_descriptor is not None:
             os.close(file_descriptor)
+
+
+def _set_posix_mode(path: str | Path, mode: int) -> None:
+    """仅在 POSIX 系统设置 Unix 文件权限，避免 Windows chmod 误报启动失败。"""
+
+    if os.name == "nt":
+        return
+    current_mode = stat.S_IMODE(os.stat(path, follow_symlinks=False).st_mode)
+    if current_mode == mode:
+        return
+    os.chmod(path, mode)
+
+
+def _set_posix_fd_mode(file_descriptor: int, path: Path, mode: int) -> None:
+    """仅在 POSIX 系统通过文件描述符收紧密钥文件权限。"""
+
+    if os.name == "nt":
+        return
+    current_mode = stat.S_IMODE(os.fstat(file_descriptor).st_mode)
+    if current_mode == mode:
+        return
+    if hasattr(os, "fchmod"):
+        os.fchmod(file_descriptor, mode)
+    else:
+        path.chmod(mode)
 
 
 def _parse_key_file(payload: Any) -> PlatformKeyMaterial:

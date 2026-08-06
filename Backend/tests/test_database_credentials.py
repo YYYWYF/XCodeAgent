@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -21,6 +22,8 @@ from app.services.database_credentials import (
 from app.services.database_crypto import (
     DatabaseCryptoError,
     PLATFORM_KEY_ID,
+    _set_posix_fd_mode,
+    _set_posix_mode,
     database_key_file_path,
     database_encryption_metadata,
     decrypt_password,
@@ -89,8 +92,26 @@ class DatabasePlatformKeyTests(unittest.TestCase):
             first = ensure_database_platform_key(key_file=key_file)
             second = ensure_database_platform_key(key_file=key_file)
             self.assertEqual(first.public_key_pem, second.public_key_pem)
-            self.assertEqual(stat.S_IMODE(key_file.parent.stat().st_mode), 0o700)
-            self.assertEqual(stat.S_IMODE(key_file.stat().st_mode), 0o600)
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(key_file.parent.stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE(key_file.stat().st_mode), 0o600)
+
+    def test_windows_skips_posix_permission_calls(self) -> None:
+        """Windows 依赖用户目录 ACL，不应因 POSIX chmod/fchmod 失败而阻止启动。"""
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            key_file = Path(temporary_root) / "runtime" / "keys" / "database-platform-key.json"
+            with patch("app.services.database_crypto.os.name", "nt"), patch(
+                "app.services.database_crypto.os.chmod"
+            ) as chmod, patch("app.services.database_crypto.os.fchmod") as fchmod, patch.object(
+                Path, "chmod"
+            ) as path_chmod:
+                _set_posix_mode(key_file, 0o600)
+                _set_posix_fd_mode(1, key_file, 0o600)
+
+            chmod.assert_not_called()
+            fchmod.assert_not_called()
+            path_chmod.assert_not_called()
 
     def test_public_metadata_never_contains_private_key(self) -> None:
         """健康检查使用的元数据只能暴露公钥和协议标识。"""
