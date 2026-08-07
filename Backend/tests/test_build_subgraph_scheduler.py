@@ -612,6 +612,118 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             ["repair-skill"],
         )
 
+    def test_failed_task_does_not_abort_independent_ready_tasks(self) -> None:
+        """失败任务不应阻止与其无依赖关系的独立任务继续执行。"""
+        tasks = [
+            {
+                "id": "task_backend_bootstrap",
+                "owner": "backend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [{"operation": "add", "path": "Backend/app/bootstrap.py"}],
+            },
+            {
+                "id": "task_frontend_api_client",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/apiClient.ts"}],
+            },
+            {
+                "id": "task_frontend_ledger_page",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": ["task_frontend_api_client"],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Ledger.tsx"}],
+            },
+            {
+                "id": "task_backend_project_list",
+                "owner": "backend",
+                "status": "pending",
+                "dependencies": ["task_backend_bootstrap"],
+                "change_scope": [{"operation": "add", "path": "Backend/app/project_list.py"}],
+            },
+        ]
+
+        def backend_runner(**kwargs):
+            # bootstrap 始终崩溃（runner_crash，可重试但不可修复）
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": task["owner"],
+                    "status": "failed",
+                    "failure_category": "runner_crash",
+                    "failure_reason": "ReadTimeout",
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        def frontend_runner(**kwargs):
+            for task in kwargs["tasks"]:
+                _write_workspace_file(
+                    kwargs.get("workspace"), task["change_scope"][0]["path"]
+                )
+            return [
+                {"task_id": task["id"], "owner": task["owner"], "status": "completed"}
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_data_sources_with_deep_agent",
+                    side_effect=backend_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=frontend_runner,
+                ),
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v3",
+                                "build_units": {
+                                    "application:root": {
+                                        "id": "application:root",
+                                        "kind": "application",
+                                        "task_ids": [
+                                            "task_backend_bootstrap",
+                                            "task_frontend_api_client",
+                                            "task_frontend_ledger_page",
+                                            "task_backend_project_list",
+                                        ],
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["application:root"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "timeline": [],
+                    }
+                )
+
+        statuses = {task["id"]: task["status"] for task in result["tasks"]}
+        # 独立任务必须实际执行完成（修复前会停在 pending）
+        self.assertEqual(statuses["task_frontend_api_client"], "completed")
+        self.assertEqual(statuses["task_frontend_ledger_page"], "completed")
+        # 失败任务保持失败
+        self.assertEqual(statuses["task_backend_bootstrap"], "failed")
+        # 被失败任务阻塞的下游保持 pending（未被派发）
+        self.assertEqual(statuses["task_backend_project_list"], "pending")
+        # ledger 必须出现在派发事件中（关键断言：修复前不会出现）
+        self.assertIn(
+            "scheduler:dispatch:task_frontend_ledger_page", result["build_events"]
+        )
+        # 最终构建状态为 failed（bootstrap 失败且其下游永久阻塞）
+        self.assertEqual(result["build_summary"]["status"], "failed")
+        self.assertEqual(result["build_summary"]["completed"], 2)
+        self.assertEqual(result["build_summary"]["failed"], 1)
+        self.assertEqual(result["build_summary"]["pending"], 1)
+
     def test_page_scope_does_not_execute_unrelated_page_tasks(self) -> None:
         """页面范围只调度目标页面闭包内任务，不更新其他页面任务。"""
 

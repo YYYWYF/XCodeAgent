@@ -573,12 +573,17 @@ def _page_skeleton(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]
 
 
 def _menu_route_path(confirmed_path: str, module_id: Any, page_key: str) -> str:
-    """按前端脚手架规则把确认路径转换为菜单末级 path。"""
+    """按前端脚手架规则把确认路径转换为菜单 path。
+
+    脚手架在 menus.ts 中使用页面的完整确认路径（如 ``/page/page/projects``）
+    作为菜单项 path，而非仅取末级段。返回完整路径以确保确定性菜单登记检查
+    与脚手架生成的菜单条目完全匹配。
+    """
 
     del module_id
-    segments = [segment for segment in confirmed_path.strip().strip("/").split("/") if segment]
-    if segments:
-        return segments[-1]
+    path = str(confirmed_path or "").strip()
+    if path:
+        return path
     return page_key[:1].lower() + page_key[1:]
 
 

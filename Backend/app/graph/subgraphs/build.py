@@ -896,9 +896,16 @@ def run_build_scheduler(
             )
             continue
 
-        if summary["status"] in {"requires_confirmation", "failed"}:
+        if summary["status"] == "requires_confirmation":
             build_events.append(f"scheduler:{summary['status']}")
             break
+        # 失败任务不再立即终止调度循环：本批任务失败只阻塞其下游
+        # （select_ready_build_batch 已排除依赖失败的任务），与失败任务无关的
+        # 独立就绪任务应在下一轮继续并行调度。当 DAG 真正停滞（无就绪任务且
+        # 无可推进的 pending）时，下一轮循环顶部的 `if not ready_tasks: break`
+        # （scheduler:blocked）会自然退出，随后由最终的 build_summary 汇总出
+        # failed 状态。这样前后端任务能真正并行，一个后端任务失败不会拖死
+        # 与它无依赖关系的前端任务。
     else:
         build_events.append("scheduler:iteration_budget_exhausted")
 
