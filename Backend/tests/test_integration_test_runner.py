@@ -14,6 +14,65 @@ from app.services.test_validation import create_revision_requests, evaluate_qual
 
 
 class IntegrationTestRunnerTests(unittest.TestCase):
+    def test_static_application_skips_all_backend_checks(self) -> None:
+        """Static 即使保留 Maven 模板，也只执行前端质量门。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            frontend = root / "frontend"
+            backend = root / "backend"
+            application_dir = root / ".xcodeagent"
+            frontend.mkdir()
+            backend.mkdir()
+            application_dir.mkdir()
+            (application_dir / "application.json").write_text(
+                '{"datasource":{"type":"static"}}',
+                encoding="utf-8",
+            )
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"vite build"}}',
+                encoding="utf-8",
+            )
+            (frontend / "pnpm-lock.yaml").write_text(
+                "lockfileVersion: '9.0'",
+                encoding="utf-8",
+            )
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def fake_run(argv, **kwargs):
+                """记录 Static 实际执行命令并统一返回成功。"""
+
+                calls.append(argv)
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with (
+                patch(
+                    "app.services.integration_test_runner.shutil.which",
+                    side_effect=lambda name: name,
+                ),
+                patch(
+                    "app.services.integration_test_runner.subprocess.run",
+                    side_effect=fake_run,
+                ),
+            ):
+                result = run_integration_checks({"workspace": workspace})
+
+        check_ids = [item["id"] for item in result["test_results"]]
+        self.assertIn("frontend_build", check_ids)
+        self.assertFalse(any(check_id.startswith("backend_") for check_id in check_ids))
+        self.assertFalse(any("clean" in argv and "install" in argv for argv in calls))
+        report = evaluate_quality_gate(
+            test_results=result["test_results"],
+            agent_note="ok",
+        )
+        self.assertFalse(
+            any(
+                check_id.startswith("backend_")
+                for check_id in report["quality_gate"]["required_checks"]
+            )
+        )
+
     def test_runs_real_project_scripts_and_returns_structured_results(self) -> None:
         """验证真实项目脚本会生成结构化结果，且完全跳过 E2E 命令。"""
 
@@ -119,8 +178,15 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         """验证 Maven 工程优先使用当前系统可执行的 wrapper。"""
 
         with tempfile.TemporaryDirectory() as workspace:
-            backend = Path(workspace) / "Backend"
+            root = Path(workspace)
+            backend = root / "Backend"
+            application_dir = root / ".xcodeagent"
             backend.mkdir()
+            application_dir.mkdir()
+            (application_dir / "application.json").write_text(
+                '{"datasource":{"type":"database"}}',
+                encoding="utf-8",
+            )
             (backend / "pom.xml").write_text("<project />", encoding="utf-8")
             (backend / "mvnw").write_text("#!/bin/sh\n", encoding="utf-8")
             (backend / "mvnw.cmd").write_text("@echo off\r\n", encoding="utf-8")

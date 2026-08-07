@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.services.data_source_policy import read_application_datasource_type
 from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
@@ -33,23 +34,35 @@ def run_integration_checks(
     *,
     on_progress: CheckProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """顺序执行集成检查，并在每项检查状态变化时通知调用方。"""
+    """按应用数据源类型执行必要集成检查，并逐项通知检查状态。"""
 
     root = workspace_root(state).resolve()
     log_root = workflow_artifact_root(state).resolve() / "runtime" / "tests"
     log_root.mkdir(parents=True, exist_ok=True)
     frontend = _find_frontend_package(root)
     workspace_package = _read_package_project(root / "package.json")
+    datasource_type = _configured_datasource_type(root)
 
     results: list[dict[str, Any]] = []
     events: list[str] = []
     for result in _frontend_checks(root, log_root, frontend, on_progress=on_progress):
         results.append(result)
         events.append(result["id"])
-    for result in _backend_checks(root, log_root, on_progress=on_progress):
-        results.append(result)
-        events.append(result["id"])
+    # Static 是纯前端运行时，即使模板保留 pom.xml 也不得触发后端质量门。
+    if datasource_type != "static":
+        for result in _backend_checks(root, log_root, on_progress=on_progress):
+            results.append(result)
+            events.append(result["id"])
     return {"test_results": results, "test_events": events}
+
+
+def _configured_datasource_type(root: Path) -> str | None:
+    """仅在合法应用配置存在时读取权威类型，普通快速修改工作区继续自动发现工程。"""
+
+    application_path = root / ".xcodeagent" / "application.json"
+    if not application_path.is_file():
+        return None
+    return read_application_datasource_type(root)
 
 
 def report_check_progress(

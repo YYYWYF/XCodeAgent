@@ -1,7 +1,4 @@
-import {
-  CheckCircleOutlined,
-  DatabaseOutlined,
-} from "@ant-design/icons";
+import { CheckCircleOutlined, DatabaseOutlined } from "@ant-design/icons";
 import { Alert, Button, Collapse, Input, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
@@ -87,12 +84,20 @@ export default function DetailReview({
           <Text strong>本轮设计已生成</Text>
         </div>
         <div className={cx("workflow-detail-review-metrics")}>
-          <Tag>页面 <strong>{review.summary?.page_count || 0}</strong></Tag>
-          <Tag>接口 <strong>{review.summary?.endpoint_count || 0}</strong></Tag>
-          <Tag>API 契约 <strong>{review.summary?.api_contract_count || 0}</strong></Tag>
+          <Tag>
+            页面 <strong>{review.summary?.page_count || 0}</strong>
+          </Tag>
+          <Tag>
+            接口 <strong>{review.summary?.endpoint_count || 0}</strong>
+          </Tag>
+          <Tag>
+            API 契约 <strong>{review.summary?.api_contract_count || 0}</strong>
+          </Tag>
         </div>
       </div>
-      {missingSelectedPagePlan || missingSelectedEndpointPlan || targets.length === 0 ? (
+      {missingSelectedPagePlan ||
+      missingSelectedEndpointPlan ||
+      targets.length === 0 ? (
         <Alert
           message={
             message ||
@@ -115,10 +120,15 @@ export default function DetailReview({
                   <span className={cx("workflow-detail-review-target-kind")}>
                     {targetKindLabel(target.target_type)}
                   </span>
-                  <Text className={cx("workflow-detail-review-target-name")} strong>
+                  <Text
+                    className={cx("workflow-detail-review-target-name")}
+                    strong
+                  >
                     {target.name || target.target_id}
                   </Text>
-                  {changes[target.target_id] && <Tag color="purple">已修改</Tag>}
+                  {changes[target.target_id] && (
+                    <Tag color="purple">已修改</Tag>
+                  )}
                 </div>
               }
               key={`${target.target_type}:${target.target_id}`}
@@ -178,7 +188,9 @@ export default function DetailReview({
 }
 
 // 将后端审核对象类型转换为用户可读标签。
-function targetKindLabel(targetType: WorkflowDetailReviewTarget["target_type"]): string {
+function targetKindLabel(
+  targetType: WorkflowDetailReviewTarget["target_type"],
+): string {
   if (targetType === "page") return "页面";
   if (targetType === "endpoint") return "接口";
   return "对象";
@@ -365,7 +377,9 @@ function EndpointReviewEditor({
       <ReviewSummaryField
         disabled={disabled}
         label="接口行为决策（处理逻辑与验收标准的唯一来源）"
-        onChange={(value) => onChange("endpoint_decision", parseJsonObject(value))}
+        onChange={(value) =>
+          onChange("endpoint_decision", parseJsonObject(value))
+        }
         value={jsonSummary(
           objectChange(changes.endpoint_decision, target.endpoint_decision),
         )}
@@ -373,7 +387,9 @@ function EndpointReviewEditor({
       <ReviewSummaryField
         disabled={disabled}
         label="三、接口设计"
-        onChange={(value) => onChange("interface_design", parseJsonObject(value))}
+        onChange={(value) =>
+          onChange("interface_design", parseJsonObject(value))
+        }
         value={jsonSummary(
           objectChange(changes.interface_design, target.interface_design),
         )}
@@ -403,7 +419,12 @@ function ReviewTextField({
   value,
 }: FieldProps<string>): ReactElement {
   return (
-    <label className={cx("workflow-detail-review-field", "workflow-detail-review-field-compact")}>
+    <label
+      className={cx(
+        "workflow-detail-review-field",
+        "workflow-detail-review-field-compact",
+      )}
+    >
       <Text type="secondary">{label}</Text>
       <TextArea
         autoSize={{ minRows: 4, maxRows: 4 }}
@@ -423,7 +444,12 @@ function ReviewListField({
   value,
 }: FieldProps<string[]>): ReactElement {
   return (
-    <label className={cx("workflow-detail-review-field", "workflow-detail-review-field-structured")}>
+    <label
+      className={cx(
+        "workflow-detail-review-field",
+        "workflow-detail-review-field-structured",
+      )}
+    >
       <Text type="secondary">{label}</Text>
       <TextArea
         autoSize={{ minRows: 4, maxRows: 4 }}
@@ -443,7 +469,12 @@ function ReviewSummaryField({
   value,
 }: FieldProps<string>): ReactElement {
   return (
-    <label className={cx("workflow-detail-review-field", "workflow-detail-review-field-expanded")}>
+    <label
+      className={cx(
+        "workflow-detail-review-field",
+        "workflow-detail-review-field-expanded",
+      )}
+    >
       <Text type="secondary">{label}</Text>
       <TextArea
         autoSize={{ minRows: 4, maxRows: 4 }}
@@ -473,16 +504,16 @@ function listChange(changed: unknown, initial: unknown): string[] {
   return Array.isArray(changed)
     ? changed.map(String)
     : Array.isArray(initial)
-    ? initial.map(String)
-    : [];
+      ? initial.map(String)
+      : [];
 }
 
 function stringChange(changed: unknown, initial: unknown): string {
   return typeof changed === "string"
     ? changed
     : typeof initial === "string"
-    ? initial
-    : "";
+      ? initial
+      : "";
 }
 
 function objectChange(
@@ -510,14 +541,15 @@ function objectValue(value: unknown): Record<string, unknown> {
 function isNeedsUserConfirmationDataOrigin(value: unknown): boolean {
   const origin = objectValue(value);
   const effectiveSource = objectValue(origin.effective_source);
-  const sourceType = String(origin.source_type || effectiveSource.kind || "");
-  const hasPendingDifference = Array.isArray(origin.differences) &&
+  const effectiveKind = String(effectiveSource.kind || "");
+  const hasPendingDifference =
+    Array.isArray(origin.differences) &&
     origin.differences.some(
       (item) =>
         isRecord(item) &&
         String(item.resolution_kind || "") === "needs_user_confirmation",
     );
-  return sourceType === "needs_user_confirmation" || hasPendingDifference;
+  return effectiveKind === "needs_user_confirmation" || hasPendingDifference;
 }
 
 // 判断详情确认是否还缺少数据来源决策，防止用户直接跳过未决数据库方案。
@@ -534,16 +566,17 @@ function requiresDataOriginDecision(
 function isResolvedDataOrigin(value: unknown): boolean {
   const origin = objectValue(value);
   const effectiveSource = objectValue(origin.effective_source);
-  const sourceType = String(origin.source_type || effectiveSource.kind || "");
-  if (sourceType === "mysql_new_table" || sourceType === "mysql_existing") {
+  const sourceType = String(origin.source_type || "");
+  const effectiveKind = String(effectiveSource.kind || "");
+  if (
+    sourceType === "database" &&
+    (effectiveKind === "mysql_new_table" || effectiveKind === "mysql_existing")
+  ) {
     return Boolean(
       effectiveSource.database &&
         Array.isArray(effectiveSource.tables) &&
         effectiveSource.tables.length > 0,
     );
-  }
-  if (sourceType === "third_party") {
-    return Boolean(effectiveSource.provider && effectiveSource.endpoint);
   }
   return false;
 }
@@ -591,11 +624,7 @@ function parseDataOriginSummary(
   };
   summaryLines(value).forEach((line) => {
     if (line.startsWith("来源类型：")) {
-      next.source_type = line.replace("来源类型：", "").trim();
-      next.effective_source = {
-        ...objectValue(next.effective_source),
-        kind: next.source_type,
-      };
+      // 数据源大类由 ProjectPlan 决定，摘要编辑不得改变 source_type 或实现来源。
       return;
     }
     if (line.startsWith("有效来源：")) {
@@ -606,7 +635,9 @@ function parseDataOriginSummary(
       return;
     }
     if (line.startsWith("字段映射：")) {
-      next.field_mappings = parseFieldMappingLines(line.replace("字段映射：", ""));
+      next.field_mappings = parseFieldMappingLines(
+        line.replace("字段映射：", ""),
+      );
       return;
     }
     if (line.startsWith("差异项：")) {
@@ -655,7 +686,10 @@ function differenceLine(value: Record<string, unknown>): string {
 function parseFieldMappingLines(value: string): Array<Record<string, unknown>> {
   return splitInlineItems(value).map((item) => {
     const [target, sourceWithRule] = splitPair(item, "<-");
-    const [source, rule] = splitPair(sourceWithRule.replace(/[（）]/g, ""), "，");
+    const [source, rule] = splitPair(
+      sourceWithRule.replace(/[（）]/g, ""),
+      "，",
+    );
     return {
       target_field: target,
       source,
@@ -738,9 +772,7 @@ function layoutDesignSummary(value: unknown, fallbackLayout: unknown): string {
     regionText ? `区域划分：\n${regionText}` : "区域划分：待补充",
     `主要内容呈现：${String(layout.primary_content_presentation || "待补充")}`,
     `操作入口位置：${String(layout.operation_entry_position || "待补充")}`,
-    `响应式与信息密度：${String(
-      layout.responsive_strategy || fallback.responsive || "待补充",
-    )}`,
+    `响应式与信息密度：${String(layout.responsive_strategy || fallback.responsive || "待补充")}`,
   ].join("\n");
 }
 

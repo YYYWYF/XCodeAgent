@@ -323,7 +323,7 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
             "",
             "## 二、数据来源",
             "",
-            f"- 来源类型：{data_origin.get('source_type') or '待确认'}",
+            f"- 来源类型：{_endpoint_source_label(data_origin)}",
             f"- 有效来源：{_json_brief(effective_source)}",
             f"- 字段映射：{_json_brief(data_origin.get('field_mappings'))}",
             f"- 差异项：{_json_brief(data_origin.get('differences'))}",
@@ -372,6 +372,19 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
             "",
         ]
     )
+
+
+def _endpoint_source_label(data_origin: dict[str, Any]) -> str:
+    """将 EndpointDetail 正式来源转换为用户可读标签。"""
+
+    source_type = str(data_origin.get("source_type") or "")
+    if source_type == "static":
+        return "前端 Mock 数据契约"
+    if source_type == "database":
+        return "真实 HTTP API（数据库）"
+    if source_type == "external_api":
+        return "外部 API"
+    return "待确认"
 
 
 def _schema_type(schema: Any) -> str:

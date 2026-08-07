@@ -21,6 +21,25 @@ PUBLIC_UNIT_IDS = (
 )
 
 
+def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
+    """按权威数据源类型选择公共 Unit，Static 不创建后端启动和 HTTP 客户端。"""
+
+    source_types = {
+        str(source.get("type") or "")
+        for source in _dict_items(project_plan.get("data_sources"))
+    }
+    if source_types == {"static"}:
+        return (
+            "frontend:shell",
+            "frontend:route-registry",
+            "frontend:auth-guard",
+            "app:integration",
+        )
+    if source_types != {"database"}:
+        raise ValueError("Build Unit 骨架仅支持唯一的 database 或 static 数据源类型。")
+    return PUBLIC_UNIT_IDS
+
+
 def ensure_build_unit_skeleton(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
@@ -70,12 +89,17 @@ def _build_units(
     """从确认计划构造公共、数据源、endpoint 和页面 Unit，并尽量保留已有状态。"""
 
     existing = existing_units if isinstance(existing_units, dict) else {}
-    unit_ids = ["application:root", *PUBLIC_UNIT_IDS]
+    source_type = next(
+        iter({str(item.get("type") or "") for item in _dict_items(project_plan.get("data_sources"))}),
+        "",
+    )
+    unit_ids = ["application:root", *_public_unit_ids(project_plan)]
     unit_ids.extend(
-        f"database:{source_id}"
+        f"frontend:data:{source_id}" if source_type == "static" else f"database:{source_id}"
         for source_id in _ids(project_plan.get("data_sources"), "id")
     )
-    unit_ids.extend(_endpoint_unit_ids(project_plan.get("api_contracts")))
+    if source_type == "database":
+        unit_ids.extend(_endpoint_unit_ids(project_plan.get("api_contracts")))
     unit_ids.extend(
         f"page:{page_id}"
         for page_id in _ids(flatten_frontend_pages(project_plan.get("frontend_pages")), "pageId")
@@ -98,7 +122,11 @@ def _unit_definition(unit_id: str, existing_unit: Any) -> dict[str, Any]:
         "id": unit_id,
         "kind": kind,
         **({"page_id": target_id} if kind == "page" else {}),
-        **({"data_source_id": target_id} if kind == "database" else {}),
+        **(
+            {"data_source_id": target_id.removeprefix("data:")}
+            if kind == "database" or target_id.startswith("data:")
+            else {}
+        ),
         **(
             {
                 "api_contract_id": target_id.split(":", 1)[0],
@@ -123,7 +151,12 @@ def _unit_graph(
     nodes = list(build_units)
     edges: list[dict[str, str]] = []
     errors: list[str] = []
-    for public_unit_id in PUBLIC_UNIT_IDS:
+    public_unit_ids = _public_unit_ids(project_plan)
+    source_type = next(
+        iter({str(item.get("type") or "") for item in _dict_items(project_plan.get("data_sources"))}),
+        "",
+    )
+    for public_unit_id in public_unit_ids:
         if public_unit_id != "app:integration":
             edges.append(
                 {
@@ -140,12 +173,14 @@ def _unit_graph(
         if detail.get("pageId") or detail.get("id")
     }
     for source_id in _ids(project_plan.get("data_sources"), "id"):
-        source_unit_id = f"database:{source_id}"
+        source_unit_id = (
+            f"frontend:data:{source_id}" if source_type == "static" else f"database:{source_id}"
+        )
         edges.append(
             {"from": "application:root", "to": source_unit_id, "type": "contains"}
         )
 
-    for contract in contracts:
+    for contract in contracts if source_type == "database" else []:
         contract_id = str(contract.get("id") or "")
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "")
@@ -168,7 +203,7 @@ def _unit_graph(
         for public_unit_id in (
             "frontend:shell",
             "frontend:route-registry",
-            "frontend:api-client",
+            *([] if source_type == "static" else ["frontend:api-client"]),
         ):
             edges.append({"from": public_unit_id, "to": page_unit_id, "type": "depends_on"})
         if _page_requires_auth(page):
@@ -179,7 +214,11 @@ def _unit_graph(
             page,
             page_details_by_id.get(page_id),
         )
-        for endpoint_unit_id in _page_endpoint_unit_ids(dependency_source, contracts):
+        endpoint_unit_ids = _page_endpoint_unit_ids(dependency_source, contracts)
+        if source_type == "static":
+            for source_unit_id in _page_static_source_unit_ids(endpoint_unit_ids, contracts):
+                edges.append({"from": source_unit_id, "to": page_unit_id, "type": "depends_on"})
+        for endpoint_unit_id in endpoint_unit_ids if source_type == "database" else []:
             if endpoint_unit_id not in build_units:
                 errors.append(f"Page {page_id} references unknown endpoint Unit {endpoint_unit_id}.")
                 continue
@@ -275,7 +314,7 @@ def _skeleton_fingerprint(
     """为 Unit 骨架输入生成稳定指纹，供后续页面请求复用。"""
 
     payload = {
-        "skeleton_policy": "endpoint-detail-scoped-database-v1",
+        "skeleton_policy": "source-aware-endpoint-detail-v2",
         "project_plan_version": project_plan.get("version"),
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),
@@ -366,6 +405,24 @@ def _page_endpoint_unit_ids(
         for endpoint_id in dict.fromkeys(endpoint_ids)
         if endpoint_id in endpoint_to_contract
     ]
+
+
+def _page_static_source_unit_ids(
+    endpoint_unit_ids: list[str],
+    api_contracts: list[dict[str, Any]],
+) -> list[str]:
+    """把页面契约依赖映射为 Static 前端数据模块 Unit。"""
+
+    contract_sources = {
+        str(contract.get("id") or ""): str(contract.get("data_source_id") or "")
+        for contract in api_contracts
+        if contract.get("id") and contract.get("data_source_id")
+    }
+    source_ids = [
+        contract_sources.get(unit_id.removeprefix("backend:endpoint:").split(":", 1)[0], "")
+        for unit_id in endpoint_unit_ids
+    ]
+    return [f"frontend:data:{source_id}" for source_id in dict.fromkeys(source_ids) if source_id]
 
 
 def _page_requires_auth(page: dict[str, Any]) -> bool:

@@ -11,17 +11,15 @@ from app.config import Settings
 from app.services.page_detail_plan import (
     compose_endpoint_detail_from_decision,
     create_page_detail_plan,
-    normalize_endpoint_data_origin,
-    validate_endpoint_decision,
 )
 from app.utils.model_output import extract_json_object
 
 
 ENDPOINT_DECISION_OUTPUT_SCHEMA: dict[str, Any] = {
     "data_origin": {
-        "source_type": "mock|third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
+        "source_type": "database|static|external_api",
         "effective_source": {
-            "kind": "mock|third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
+            "kind": "frontend_mock|third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
             "data_source_id": "string|null",
             "database": "string|null",
             "tables": ["string"],
@@ -244,17 +242,19 @@ def _endpoint_decision_prompt(
         "and columns as the existing MySQL reference for mysql_existing field mapping. "
         "When database_context is skipped or failed, do not invent inspected tables; continue from "
         "the API contract and record concrete unresolved schema gaps in data_origin.differences. "
-        "If data source origin is unclear, set data_origin.source_type to needs_user_confirmation "
-        "and put the unresolved decision in data_origin.differences. "
+        "data_origin.source_type is the immutable ProjectPlan data source category and must be "
+        "database, static, or external_api. If the concrete implementation is unclear, keep that "
+        "category and set effective_source.kind to needs_user_confirmation. "
         "operation_semantics must express contract behavior once, without implementation prose. "
         "For a single-resource endpoint, target_cardinality and multiple_match_behavior must make "
         "the single-resource boundary explicit. selector.fields must only use contract parameters "
         "or request fields. success_status_code must follow the API contract when declared. "
         "Even when data_origin needs confirmation, still describe the endpoint's intended contract "
         "semantics; the workflow will stop before composing executable detail fields. "
-        "If the page's data source type is mock or static (frontend in-memory mock, no real backend), "
-        "set data_origin.source_type and effective_source.kind to \"mock\" with a description noting "
-        "the page uses in-memory mock data and does not call any real API.\n\n"
+        "If the ProjectPlan data source type is static, set data_origin.source_type to \"static\" "
+        "and effective_source.kind to \"frontend_mock\". It uses the frontend in-memory data module, "
+        "has no database operations, and does not create a real backend endpoint. Never emit mock as "
+        "a formal source_type or effective_source.kind.\n\n"
         f"Latest user feedback:\n{user_request}\n\n"
         f"Endpoint context:\n{json.dumps(endpoint_context, ensure_ascii=False)}"
     )
@@ -284,11 +284,6 @@ def design_endpoint_with_chat_model(
         ) from exc
     if not endpoint_decision:
         raise ValueError("接口决策模型未返回可解析的 JSON 设计内容。")
-    if isinstance(endpoint_decision.get("data_origin"), dict):
-        endpoint_decision["data_origin"] = normalize_endpoint_data_origin(
-            endpoint_decision["data_origin"]
-        )
-    validate_endpoint_decision(endpoint_decision)
     detail_plan = compose_endpoint_detail_from_decision(
         project_plan,
         endpoint_context,

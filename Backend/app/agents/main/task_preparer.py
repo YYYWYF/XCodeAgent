@@ -52,6 +52,12 @@ def _task_preparation_prompt(
     build_context: dict[str, Any] | None = None,
 ) -> str:
     """组合全局计划与定向详情上下文，约束模型仅返回当前 Unit 的任务候选。"""
+    if _task_preparation_datasource_type(project_plan) == "static":
+        return _static_task_preparation_prompt(
+            project_plan,
+            workspace_snapshot,
+            build_context,
+        )
     snapshot_text = json.dumps(
         _compact_workspace_snapshot(workspace_snapshot),
         ensure_ascii=False,
@@ -319,6 +325,56 @@ def _bounded_prompt_value(value: Any, *, limit: int) -> Any:
             for key, item in list(value.items())[:limit]
         }
     return value
+
+
+def _task_preparation_datasource_type(project_plan: dict[str, Any]) -> str:
+    """从任务准备投影读取唯一正式数据源类型。"""
+
+    skeleton = project_plan.get("application_skeleton")
+    sources = skeleton.get("data_sources") if isinstance(skeleton, dict) else None
+    source_types = {
+        str(source.get("type") or "")
+        for source in sources or []
+        if isinstance(source, dict)
+    }
+    if len(source_types) != 1 or next(iter(source_types)) not in {"database", "static"}:
+        raise ValueError("任务准备上下文必须包含唯一的 database 或 static 数据源类型。")
+    return next(iter(source_types))
+
+
+def _static_task_preparation_prompt(
+    project_plan: dict[str, Any],
+    workspace_snapshot: dict[str, Any] | None,
+    build_context: dict[str, Any] | None,
+) -> str:
+    """构造 Static 专用任务提示，不注入 Spring、MyBatis 或数据库生成要求。"""
+
+    snapshot_text = json.dumps(
+        _compact_workspace_snapshot(workspace_snapshot), ensure_ascii=False, indent=2
+    )
+    return (
+        "You are the build-task planning model for a STATIC frontend-only application.\n"
+        "This is planning-only: do not call tools, inspect extra files, or generate code.\n"
+        "ProjectPlan data source type is immutable static and its runtime implementation is "
+        "effective_source=frontend_mock. Create tasks only for required frontend:data:<sourceId> "
+        "and page:<pageId> Units listed in TargetBuildContext.required_unit_ids. Never create "
+        "database, backend, backend:bootstrap, Controller, Mapper, PO, Spring Boot, MyBatis, "
+        "migration, datasource, or real HTTP endpoint work.\n"
+        "For each frontend:data Unit, plan src/apis/<business>Api.ts as the sole owner of a "
+        "module-level in-memory record collection and async list/create/update/delete functions "
+        "strictly bounded by executable_details.api_contracts. Page components must import that "
+        "module and must not contain business-data arrays or call a backend service.\n"
+        "All files live under /frontend/. Reuse the existing scaffold. Do not modify package.json, "
+        "vite.config.ts, src/apis/service.ts, framework entry files, or dependencies. The only "
+        "permitted scaffold edit is appending the current page to src/constants/menus.ts.\n"
+        "Return one JSON object with workspace_analysis and tasks. Every task must use an allowed "
+        "Unit ID, owner=frontend, Simplified Chinese title/description, same-Unit dependencies only, "
+        "exact change_scope paths, impact_scope, can_run_in_parallel, parallel_reason, status=pending, "
+        "acceptance_criteria=[], and verification_commands=[]. Do not plan tests or verification.\n\n"
+        f"WorkspaceSnapshot:\n{snapshot_text}\n\n"
+        f"TargetBuildContext:\n{json.dumps(build_context or {}, ensure_ascii=False, indent=2)}\n\n"
+        f"TaskPreparationContext:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
+    )
 
 
 def _invoke_live_main_agent(

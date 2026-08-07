@@ -31,7 +31,10 @@ def _project_plan() -> dict:
                 },
             },
         ],
-        "data_sources": [{"id": "orders"}, {"id": "customers"}],
+        "data_sources": [
+            {"id": "orders", "type": "database"},
+            {"id": "customers", "type": "database"},
+        ],
         "api_contracts": [
             {
                 "id": "orders-api",
@@ -95,7 +98,7 @@ class BuildUnitSkeletonTests(unittest.TestCase):
                         "endpoint_id": "orders.list",
                         "data_source_id": "orders",
                         "data_origin": {
-                            "source_type": "mysql_existing",
+                            "source_type": "database",
                             "effective_source": {"kind": "mysql_existing"},
                         },
                     },
@@ -104,8 +107,8 @@ class BuildUnitSkeletonTests(unittest.TestCase):
                         "endpoint_id": "customers.list",
                         "data_source_id": "customers",
                         "data_origin": {
-                            "source_type": "mock",
-                            "effective_source": {"kind": "mock"},
+                            "source_type": "static",
+                            "effective_source": {"kind": "frontend_mock"},
                         },
                     },
                 ]
@@ -119,6 +122,24 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         self.assertNotIn(
             {"from": "database:customers", "to": "backend:endpoint:customers-api:customers.list", "type": "depends_on"},
             scoped["unit_graph"]["edges"],
+        )
+
+    def test_static_builds_frontend_data_units_without_backend_units(self) -> None:
+        """Static 骨架只建立前端内存数据模块到页面的依赖。"""
+
+        project_plan = _project_plan()
+        project_plan["data_sources"] = [
+            {**source, "type": "static"} for source in project_plan["data_sources"]
+        ]
+        plan = ensure_build_unit_skeleton(project_plan, {})
+
+        self.assertIn("frontend:data:orders", plan["build_units"])
+        self.assertNotIn("database:orders", plan["build_units"])
+        self.assertNotIn("backend:bootstrap", plan["build_units"])
+        self.assertNotIn("backend:endpoint:orders-api:orders.list", plan["build_units"])
+        self.assertIn(
+            {"from": "frontend:data:orders", "to": "page:orders", "type": "depends_on"},
+            plan["unit_graph"]["edges"],
         )
 
     def test_reuses_unchanged_skeleton_without_rebuilding_units(self) -> None:

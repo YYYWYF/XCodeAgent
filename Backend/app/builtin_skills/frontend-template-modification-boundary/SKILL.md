@@ -195,16 +195,16 @@ export function fetchDutyList(params: DutyListQuery) {
 }
 ```
 
-### 🔴 数据源类型决定 API 写法（mock vs 真实接口）
+### 🔴 数据源类型决定 API 写法（Static vs Database）
 
 页面详细设计里的 `data_origin.source_type` / ProjectPlan 的 `data_sources[].type` 决定 `src/apis/<biz>Api.ts` 用哪种写法，**必须严格匹配，不能混用**：
 
-#### 情况 A：数据源是 mock / static（前端内存模拟数据）
+#### 情况 A：数据源是 static（实现来源 frontend_mock）
 
-当数据源类型是 `mock`/`static` 时，页面**不调用任何真实后端接口**，`src/apis/<biz>Api.ts` 里写**内存 mock 函数**：模块级维护一个假数据数组，用 `delay(ms)` 模拟网络延迟，导出的 async 函数对数组做筛选/分页/增删改后返回。**不要** `import service`、**不要** `service.get('/api/...')`、**不要**改 `vite.config.ts` 加 mock 插件——内存函数本身就是 mock。
+当正式数据源类型是 `static`，且详情实现来源为 `frontend_mock` 时，页面**不调用任何真实后端接口**，`src/apis/<biz>Api.ts` 里写**内存数据访问函数**：模块级维护一组测试记录，用 `delay(ms)` 模拟网络延迟，导出的 async 函数严格按 API 契约对记录做筛选、分页、增删改后返回。**不要** `import service`、**不要** `service.get('/api/...')`、**不要**改 `vite.config.ts` 加 Mock 插件；页面组件也不得自行维护业务静态数组。
 
 ```ts
-// src/apis/dutyApi.ts —— mock 数据源写法
+// src/apis/dutyApi.ts —— Static 前端内存数据模块写法
 import type { DutyListItem, DutyListQuery, PaginatedResult } from '@/typings/duty';
 
 // 内存假数据
@@ -256,7 +256,7 @@ export async function deleteDuty(id: string) {
 
 当数据源类型是 `mysql`/`external_api`/`third_party` 等真实后端时，才用上面的 `service.get('/api/...')` 写法，复用 `service.ts` 的 axios 实例调用真实接口。
 
-> 判断依据：以本次任务的 ProjectPlan `data_sources[].type` 和页面详细设计 `data_origin.source_type` 为准。生成代码前先用 `read_file` 读页面详细设计确认数据源类型，再选 A 或 B。**mock 场景误用 service.get 会导致页面请求不存在的后端接口、表格一直 loading。**
+> 判断依据：ProjectPlan `data_sources[].type=static`，且 EndpointDetail 为 `source_type=static`、`effective_source.kind=frontend_mock` 时选择 A；`database/mysql_existing` 时选择 B。旧 `mock` 不是正式类型，不得据此生成。Static 场景误用 `service.get` 会导致页面请求不存在的后端接口、表格一直 loading。
 
 ## 🟢 自由编写与公共目录放置规则
 

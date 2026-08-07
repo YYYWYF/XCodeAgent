@@ -63,8 +63,8 @@ def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
                 "data_source_id": source_id,
                 "status": "confirmed",
                 "data_origin": {
-                    "source_type": "mock",
-                    "effective_source": {"kind": "mock"},
+                    "source_type": "static",
+                    "effective_source": {"kind": "frontend_mock"},
                 },
                 **supplied_endpoint_details.get((contract_id, endpoint_id), {}),
             }
@@ -104,8 +104,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 },
             ],
             "data_sources": [
-                {"id": "orders", "detail_design": {"status": "confirmed", "json_path": "data/orders.json"}},
-                {"id": "customers", "detail_design": {"status": "confirmed", "json_path": "data/customers.json"}},
+                {"id": "orders", "type": "database", "detail_design": {"status": "confirmed", "json_path": "data/orders.json"}},
+                {"id": "customers", "type": "database", "detail_design": {"status": "confirmed", "json_path": "data/customers.json"}},
             ],
             "api_contracts": [
                 {"id": "orders-api", "data_source_id": "orders", "endpoints": [{"id": "orders.list"}]},
@@ -273,7 +273,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 },
             ],
             "data_sources": [
-                {"id": "orders", "detail_design": {"status": "confirmed", "json_path": "data/orders.json"}},
+                {"id": "orders", "type": "database", "detail_design": {"status": "confirmed", "json_path": "data/orders.json"}},
             ],
             "api_contracts": [
                 {"id": "orders-api", "data_source_id": "orders", "endpoints": [{"id": "orders.list"}]},
@@ -348,6 +348,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "data_sources": [
                 {
                     "id": "orders",
+                    "type": "database",
                     "detail_design": {
                         "status": "confirmed",
                         "json_path": "data/orders.json",
@@ -436,8 +437,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "backend-endpoint-orders-api-orders-list--shared-api-client-task",
             task_registry,
         )
-        self.assertIn(
+        self.assertNotIn(
             "backend-endpoint-orders-api-orders-list--shared-api-client-task",
+            task_registry["orders-page-task"]["dependencies"],
+        )
+        self.assertIn(
+            "shared-api-client-task",
             task_registry["orders-page-task"]["dependencies"],
         )
 
@@ -466,6 +471,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "data_sources": [
                 {
                     "id": "orders",
+                    "type": "database",
                     "detail_design": {
                         "status": "confirmed",
                         "json_path": "data/orders.json",
@@ -616,7 +622,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             "shared-api-client-task",
             task_registry["order-reports-page-task"]["dependencies"],
         )
-        self.assertIn(
+        self.assertNotIn(
             "orders-api-task",
             task_registry["order-reports-page-task"]["dependencies"],
         )

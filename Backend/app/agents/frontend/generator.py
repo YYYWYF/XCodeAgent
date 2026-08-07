@@ -94,7 +94,8 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
         "real data fetching: ProTable `request` calling the page's API (from ProjectPlan."
         "api_contracts and the task's endpoint_ids), OR the in-memory mock data layer "
         "pattern from the code-block-template skill when ProjectPlan.data_sources declares "
-        "type=mock/static. Never ship the design's raw static array as the data source.\n"
+        "type=static with effective_source=frontend_mock. Never ship the design's raw visual "
+        "sample array as the runtime data source.\n"
         "- Buttons and forms in the design have no-op onClick / onFinish. You MUST wire them "
         "to real API calls (create / update / delete) per the task's endpoint_ids and "
         "api_contracts.\n"
@@ -122,19 +123,18 @@ def _frontend_generation_prompt(
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
     frontend_root = "frontend"
-    # 判断本次任务的数据源是否含 mock/static：若是，前端用内存 mock 函数提供数据，
-    # 不调用真实后端接口，也不在 vite.config.ts 里加 mock 插件。
-    mock_source_types = {"mock", "static", "none", ""}
+    # Static 的正式实现来源固定为前端内存数据模块，不兼容旧 mock 类型。
     raw_data_sources = project_plan.get("data_sources")
     data_source_list = raw_data_sources if isinstance(raw_data_sources, list) else []
-    has_mock_data_source = any(
+    has_static_data_source = any(
         isinstance(source, dict)
-        and str(source.get("type") or source.get("source_type") or "").lower() in mock_source_types
+        and str(source.get("type") or "") == "static"
         for source in data_source_list
     )
     data_source_instruction = (
-        "## CRITICAL: Data source is MOCK — use in-memory mock functions, NOT real API calls\n"
-        "The ProjectPlan data_sources for this page declare type=mock/static. This page MUST "
+        "## CRITICAL: Data source is STATIC with effective_source=frontend_mock\n"
+        "The ProjectPlan data_sources for this page declare type=static. Implement the approved "
+        "API contracts as a frontend in-memory data-access module. This page MUST "
         "use **in-memory mock functions** for all data — do NOT call real backend APIs, do NOT "
         "use `service.get('/api/...')`, and do NOT configure a real backend proxy in vite.config.ts. "
         "Instead, write the mock data layer in `src/apis/<biz>Api.ts` following the page template's "
@@ -143,9 +143,10 @@ def _frontend_generation_prompt(
         "paginate/mutate the in-memory array and return `{ data, success, total }` (list) or "
         "`{ success }` (mutation). The page component imports these functions and calls them from "
         "ProTable's `request` / button handlers, exactly like the template. Keep `service.ts` "
-        "untouched (it is not used under mock mode). Do NOT modify vite.config.ts to add a mock "
-        "plugin — the in-memory functions are the mock.\n\n"
-        if has_mock_data_source
+        "untouched. Do NOT modify vite.config.ts to add a mock plugin. Keep all runtime records "
+        "inside the API module; page components must never contain standalone business-data arrays. "
+        "Only implement operations and fields declared by the approved contracts.\n\n"
+        if has_static_data_source
         else ""
     )
     return (

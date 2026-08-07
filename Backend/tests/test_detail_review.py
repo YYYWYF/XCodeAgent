@@ -16,7 +16,7 @@ class DetailReviewTests(unittest.TestCase):
         """用户闭合来源决策后，应从同一 EndpointDecision 重新生成派生字段。"""
 
         pending_origin = {
-            "source_type": "needs_user_confirmation",
+            "source_type": "database",
             "effective_source": {
                 "kind": "needs_user_confirmation",
                 "description": "请选择实现来源",
@@ -38,11 +38,29 @@ class DetailReviewTests(unittest.TestCase):
         plan = {
             "frontend_pages": [],
             "page_detail_plans": [],
-            "api_contracts": [],
+            "data_sources": [{"id": "user_source", "type": "static"}],
+            "api_contracts": [
+                {
+                    "id": "user_api",
+                    "data_source_id": "user_source",
+                    "schemas": {
+                        "UserResponse": {"type": "object", "properties": {}}
+                    },
+                    "endpoints": [
+                        {
+                            "id": "user_api.delete",
+                            "method": "DELETE",
+                            "path": "/users",
+                            "response_schema_ref": "UserResponse",
+                        }
+                    ],
+                }
+            ],
             "endpoint_detail_plans": [
                 {
                     "api_contract_id": "user_api",
                     "endpoint_id": "user_api.delete",
+                    "data_source_id": "user_source",
                     "method": "DELETE",
                     "path": "/users/{id}",
                     "data_origin": pending_origin,
@@ -66,8 +84,8 @@ class DetailReviewTests(unittest.TestCase):
             ],
         }
         resolved_origin = {
-            "source_type": "mock",
-            "effective_source": {"kind": "mock", "description": "内存数据"},
+            "source_type": "static",
+            "effective_source": {"kind": "frontend_mock", "description": "内存数据"},
             "field_mappings": [],
             "differences": [],
             "database_operations": [],
@@ -94,7 +112,7 @@ class DetailReviewTests(unittest.TestCase):
         self.assertEqual(detail["design_stage"], "complete")
         self.assertEqual(
             detail["endpoint_decision"]["data_origin"]["source_type"],
-            "mock",
+            "static",
         )
         self.assertTrue(detail["processing_logic"])
         self.assertTrue(detail["acceptance_criteria"])
@@ -164,13 +182,31 @@ class DetailReviewTests(unittest.TestCase):
         plan = {
             "frontend_pages": [],
             "page_detail_plans": [],
-            "api_contracts": [],
+            "data_sources": [{"id": "user_source", "type": "database"}],
+            "api_contracts": [
+                {
+                    "id": "user_api",
+                    "data_source_id": "user_source",
+                    "schemas": {
+                        "UserRolesResponse": {"type": "object", "properties": {}}
+                    },
+                    "endpoints": [
+                        {
+                            "id": "user-roles",
+                            "method": "GET",
+                            "path": "/user-roles",
+                            "response_schema_ref": "UserRolesResponse",
+                        }
+                    ],
+                }
+            ],
             "endpoint_detail_plans": [
                 {
                     "api_contract_id": "user_api",
                     "endpoint_id": "user-roles",
+                    "data_source_id": "user_source",
                     "data_origin": {
-                        "source_type": "needs_user_confirmation",
+                        "source_type": "database",
                         "effective_source": {
                             "kind": "needs_user_confirmation",
                             "description": "需确认新建 role 表或从 user 表派生",
@@ -193,13 +229,31 @@ class DetailReviewTests(unittest.TestCase):
         plan = {
             "frontend_pages": [],
             "page_detail_plans": [],
-            "api_contracts": [],
+            "data_sources": [{"id": "user_source", "type": "database"}],
+            "api_contracts": [
+                {
+                    "id": "user_api",
+                    "data_source_id": "user_source",
+                    "schemas": {
+                        "UserRolesResponse": {"type": "object", "properties": {}}
+                    },
+                    "endpoints": [
+                        {
+                            "id": "user-roles",
+                            "method": "GET",
+                            "path": "/user-roles",
+                            "response_schema_ref": "UserRolesResponse",
+                        }
+                    ],
+                }
+            ],
             "endpoint_detail_plans": [
                 {
                     "api_contract_id": "user_api",
                     "endpoint_id": "user-roles",
+                    "data_source_id": "user_source",
                     "data_origin": {
-                        "source_type": "needs_user_confirmation",
+                        "source_type": "database",
                         "effective_source": {
                             "kind": "needs_user_confirmation",
                             "description": "需确认新建 role 表或从 user 表派生",
@@ -274,7 +328,7 @@ class DetailReviewTests(unittest.TestCase):
 
         self.assertEqual(
             result["endpoint_detail_plans"][0]["data_origin"]["source_type"],
-            "mysql_new_table",
+            "database",
         )
         self.assertEqual(result["endpoint_detail_plans"][0]["status"], "confirmed")
 
@@ -290,7 +344,7 @@ class DetailReviewTests(unittest.TestCase):
                     "api_contract_id": "user_api",
                     "endpoint_id": "user-list",
                     "data_origin": {
-                        "source_type": "mysql_existing",
+                        "source_type": "database",
                         "effective_source": {
                             "kind": "mysql_existing",
                             "database": "xcode",
@@ -332,7 +386,7 @@ class DetailReviewTests(unittest.TestCase):
                     "api_contract_id": "user_api",
                     "endpoint_id": "user-list",
                     "data_origin": {
-                        "source_type": "mysql_existing",
+                        "source_type": "database",
                         "effective_source": {
                             "kind": "mysql_existing",
                             "database": "xcode",

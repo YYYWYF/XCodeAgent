@@ -51,7 +51,10 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """任务模型不得手写跨 Unit 或 reusable task 依赖。"""
 
         prompt = _task_preparation_prompt(
-            {"version": "1.0.0"},
+            {
+                "version": "1.0.0",
+                "application_skeleton": {"data_sources": [{"id": "main", "type": "database"}]},
+            },
             {},
             {
                 "target": {"type": "page", "id": "dashboard"},
@@ -63,6 +66,30 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         self.assertIn("same Unit only", prompt)
         self.assertIn("do not copy its task ids into dependencies", prompt)
+
+    def test_static_task_prompt_excludes_backend_generation_requirements(self) -> None:
+        """Static 任务准备不读取或注入后端数据库技能。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "data_sources": [{"id": "orders", "type": "static"}]
+            },
+            "executable_details": {"data_sources": [], "api_contracts": []},
+        }
+        with patch(
+            "app.agents.main.task_preparer._springboot_mybatis_skill_document"
+        ) as backend_skill:
+            prompt = _task_preparation_prompt(
+                project_plan,
+                {},
+                {"required_unit_ids": ["frontend:data:orders", "page:orders"]},
+            )
+
+        backend_skill.assert_not_called()
+        self.assertIn("frontend:data:<sourceId>", prompt)
+        self.assertIn("Never create database, backend", prompt)
+        self.assertNotIn("INJECTED springboot-mybatis-generate", prompt)
         self.assertNotIn("WorkspaceNavigationContext", prompt)
 
     def test_model_usage_accepts_null_provider_token_usage(self) -> None:
@@ -133,7 +160,12 @@ class BuildTaskPlannerTests(unittest.TestCase):
             patch("app.agents.main.task_preparer.Settings.from_env", return_value=settings),
             patch("app.agents.main.task_preparer.create_chat_model", return_value=model),
         ):
-            prepare_build_tasks_with_main_agent({"version": "1.0.0"})
+            prepare_build_tasks_with_main_agent(
+                {
+                    "version": "1.0.0",
+                    "application_skeleton": {"data_sources": [{"id": "main", "type": "database"}]},
+                }
+            )
 
         model.bind.assert_called_once_with(max_tokens=4096)
 
@@ -814,7 +846,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "endpoint_id": "core.create",
                         "method": "POST",
                         "data_origin": {
-                            "source_type": "mysql_new_table",
+                            "source_type": "database",
                             "effective_source": {"kind": "mysql_new_table"},
                             "differences": ["需要建表。"],
                         },
@@ -956,7 +988,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "endpoint_id": "user.list",
                         "method": "GET",
                         "data_origin": {
-                            "source_type": "mysql_existing",
+                            "source_type": "database",
                             "effective_source": {"kind": "mysql_existing"},
                             "differences": [],
                             "notes": [],

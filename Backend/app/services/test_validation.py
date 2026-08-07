@@ -107,6 +107,18 @@ def evaluate_quality_gate(
 ) -> dict[str, Any]:
     passed = all(result["passed"] for result in test_results)
     revision_requests = create_revision_requests(test_results)
+    default_required_ids = {check_id for check_id, _ in REQUIRED_TEST_CHECKS}
+    required_checks = [
+        str(result.get("id") or "")
+        for result in test_results
+        if result.get("id")
+        and bool(
+            result.get(
+                "required",
+                str(result.get("id") or "") in default_required_ids,
+            )
+        )
+    ]
     return {
         "version": "0.1.0",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -122,7 +134,7 @@ def evaluate_quality_gate(
         "revision_requests": revision_requests,
         "quality_gate": {
             "passed": passed,
-            "required_checks": [check_id for check_id, _ in REQUIRED_TEST_CHECKS],
+            "required_checks": required_checks,
             "evaluated_by": "deterministic-quality-gate",
         },
     }

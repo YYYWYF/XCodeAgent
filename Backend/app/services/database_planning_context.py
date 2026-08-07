@@ -16,33 +16,7 @@ from app.services.database_schema_summary import (
     target_summary,
 )
 
-_DATABASE_ORIGIN_KINDS = {
-    "mysql",
-    "mysql_existing",
-    "mysql_new_table",
-    "database",
-    "db",
-}
-_EXTERNAL_ORIGIN_KINDS = {
-    "third_party",
-    "external_api",
-    "http_api",
-    "api",
-    "rest_api",
-}
-# mock / static 数据源：前端用内存 mock 函数提供数据，不连任何后端。
-# 这类接口既不需要数据库扫描，也不算"未明确来源"——它是已明确声明用 mock 的。
-_MOCK_ORIGIN_KINDS = {
-    "mock",
-    "static",
-    "none",
-}
-_UNKNOWN_ORIGIN_KINDS = {
-    "",
-    "unknown",
-    "needs_user_confirmation",
-    "missing",
-}
+_DATABASE_ORIGIN_KINDS = {"mysql_existing", "mysql_new_table"}
 
 
 def prepare_database_planning_context(
@@ -141,7 +115,7 @@ def endpoint_detail_uses_database(endpoint_detail: Any) -> bool:
 
 
 def endpoint_detail_origin_kind(endpoint_detail: Any) -> str:
-    """读取 EndpointDetail.data_origin 的显式来源类型，供路由和 Unit 过滤复用。"""
+    """读取正式 EndpointDetail 的具体实现来源，旧 mock 表达不会被识别为数据库。"""
 
     if not isinstance(endpoint_detail, dict):
         return ""
@@ -154,9 +128,15 @@ def endpoint_detail_origin_kind(endpoint_detail: Any) -> str:
         if isinstance(effective_source, dict)
         else ""
     )
-    source_type = str(data_origin.get("source_type") or "")
-    kind = (effective_kind or source_type).strip().lower()
-    return kind if kind not in _EXTERNAL_ORIGIN_KINDS else "external_api"
+    source_type = str(data_origin.get("source_type") or "").strip()
+    allowed_kinds = {
+        "database": {"mysql_existing", "mysql_new_table", "needs_user_confirmation"},
+        "static": {"frontend_mock"},
+        "external_api": {"third_party", "needs_user_confirmation"},
+    }
+    if source_type not in allowed_kinds or effective_kind not in allowed_kinds[source_type]:
+        return ""
+    return effective_kind
 
 
 def _endpoint_targets(

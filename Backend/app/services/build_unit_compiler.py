@@ -214,6 +214,15 @@ def _unit_source_refs(
             "page_detail": _dict_value(refs.get("page_detail")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
         }
+    if unit_id.startswith("frontend:data:"):
+        return {
+            **existing,
+            "type": "frontend_mock_contract",
+            "target": target,
+            "data_source_ids": _string_list(build_context.get("data_source_ids")),
+            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
+            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+        }
     if unit_id.startswith("database:"):
         database_context = _dict_value(build_context.get("database_planning_context"))
         source_refs = {
@@ -281,6 +290,14 @@ def _unit_fingerprint_payload(
             "source_refs": source_refs,
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
             "data_source_ids": _string_list(build_context.get("data_source_ids")),
+        }
+    if unit_id.startswith("frontend:data:"):
+        return {
+            "unit_id": unit_id,
+            "source_refs": source_refs,
+            "data_source_ids": _string_list(build_context.get("data_source_ids")),
+            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
+            "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
         }
     if unit_id.startswith("database:"):
         return {

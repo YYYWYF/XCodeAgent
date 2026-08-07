@@ -11,6 +11,7 @@ from app.services.api_contracts import (
 )
 from app.services.frontend_page_tree import update_frontend_page_leaves
 from app.services.page_detail_plan import (
+    apply_endpoint_datasource_policy,
     normalize_endpoint_data_origin,
     refresh_endpoint_detail_from_decision,
 )
@@ -154,6 +155,7 @@ def apply_detail_review_submission(
             )
         elif target_type == "endpoint":
             _apply_endpoint_target_patch(
+                updated,
                 updated.get("endpoint_detail_plans", []),
                 target_id,
                 changes,
@@ -416,6 +418,7 @@ def _apply_target_patch(
 
 
 def _apply_endpoint_target_patch(
+    project_plan: dict[str, Any],
     details: Any,
     target_id: str,
     changes: dict[str, Any],
@@ -439,6 +442,13 @@ def _apply_endpoint_target_patch(
     if target is None:
         raise ValueError(f"unknown endpoint detail review target: {target_id}")
     for key, value in changes.items():
+        if key == "data_origin":
+            target[key] = apply_endpoint_datasource_policy(
+                project_plan,
+                {"data_source_id": target.get("data_source_id")},
+                value,
+            )
+            continue
         target[key] = _normalize_editable_value(key, value, target.get(key))
     decision = target.get("endpoint_decision")
     if isinstance(decision, dict):
@@ -471,17 +481,20 @@ def _assert_endpoint_data_origins_resolved(
         data_origin = normalize_endpoint_data_origin(detail.get("data_origin"))
         effective_source = data_origin.get("effective_source")
         source_type = str(data_origin.get("source_type") or "")
+        effective_kind = ""
         if isinstance(effective_source, dict):
-            source_type = str(effective_source.get("kind") or source_type)
+            effective_kind = str(effective_source.get("kind") or "")
         endpoint_name = str(
             detail.get("endpoint_id") or detail.get("name") or "endpoint"
         )
-        if source_type == "needs_user_confirmation":
+        if effective_kind == "needs_user_confirmation":
             errors.append(f"{endpoint_name}: data source needs user confirmation")
             continue
         errors.extend(
             f"{endpoint_name}: {message}"
-            for message in _endpoint_database_design_errors(data_origin, source_type)
+            for message in _endpoint_database_design_errors(
+                data_origin, source_type, effective_kind
+            )
         )
     if errors:
         raise ValueError(
@@ -493,6 +506,7 @@ def _assert_endpoint_data_origins_resolved(
 def _endpoint_database_design_errors(
     data_origin: dict[str, Any],
     source_type: str,
+    effective_kind: str,
 ) -> list[str]:
     """校验结构化字段决策和数据库操作之间的引用与必填信息。"""
 
@@ -553,9 +567,9 @@ def _endpoint_database_design_errors(
                 f"database operation {operation_id} is not referenced by a difference"
             )
 
-    if source_type in {"mock", "third_party"} and operations:
+    if source_type in {"static", "external_api"} and operations:
         errors.append(f"{source_type} data source cannot declare database operations")
-    if source_type == "mysql_new_table" and not any(
+    if effective_kind == "mysql_new_table" and not any(
         operation.get("operation") == "create_table" for operation in operations
     ):
         errors.append("mysql_new_table requires create_table operation")

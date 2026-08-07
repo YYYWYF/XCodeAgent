@@ -87,8 +87,11 @@ def _page_context(
     endpoint_details: list[dict[str, Any]] = []
     endpoint_refs: list[dict[str, Any]] = []
     database_source_ids: list[str] = []
+    static_source_ids: list[str] = []
     for source_id in source_ids:
-        _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
+        source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
+        if _source_type(source) == "static":
+            static_source_ids.append(source_id)
     for endpoint_id in endpoint_ids:
         endpoint = endpoint_index[endpoint_id]
         detail = _load_external_detail(
@@ -124,11 +127,12 @@ def _page_context(
         "required_unit_ids": [
             "frontend:shell",
             "frontend:route-registry",
-            "frontend:api-client",
+            *(["frontend:api-client"] if not static_source_ids else []),
             *(["frontend:auth-guard"] if _page_requires_auth(page) else []),
-            *(["backend:bootstrap"] if source_ids else []),
+            *(["backend:bootstrap"] if source_ids and not static_source_ids else []),
+            *(f"frontend:data:{source_id}" for source_id in static_source_ids),
             *(f"database:{source_id}" for source_id in database_source_ids),
-            *list(dict.fromkeys(endpoint_unit_ids)),
+            *([] if static_source_ids else list(dict.fromkeys(endpoint_unit_ids))),
             f"page:{page_id}",
         ],
         "source_refs": {
@@ -146,7 +150,6 @@ def _data_source_context(
     """以 ProjectPlan 契约解析数据单元，并按需补充已有 endpoint 详情。"""
 
     source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
-    del source
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = [
         endpoint_id for endpoint_id, endpoint in endpoint_index.items()
@@ -168,7 +171,11 @@ def _data_source_context(
         "direct_endpoint_details": endpoint_details,
         "endpoint_ids": endpoint_ids,
         "data_source_ids": [source_id],
-        "required_unit_ids": [f"database:{source_id}"],
+        "required_unit_ids": [
+            f"frontend:data:{source_id}"
+            if _source_type(source) == "static"
+            else f"database:{source_id}"
+        ],
         "source_refs": {
             "endpoint_details": endpoint_refs,
         },
@@ -199,7 +206,7 @@ def _endpoint_context(
         raise ValueError(f"Endpoint {endpoint_id} does not declare a data source.")
     if not contract_id:
         raise ValueError(f"Endpoint {endpoint_id} does not declare an API contract.")
-    _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
+    source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
     detail = _load_external_detail(
         endpoint.get("detail_design"),
         "EndpointDetail",
@@ -224,15 +231,19 @@ def _endpoint_context(
         "required_endpoint_ids": [endpoint_id],
         "api_contract_ids": [contract_id],
         "data_source_ids": [source_id],
-        "required_unit_ids": [
-            "backend:bootstrap",
-            *(
-                [f"database:{source_id}"]
-                if endpoint_detail_uses_database(detail)
-                else []
-            ),
-            _endpoint_unit_id(contract_id, endpoint_id),
-        ],
+        "required_unit_ids": (
+            [f"frontend:data:{source_id}"]
+            if _source_type(source) == "static"
+            else [
+                "backend:bootstrap",
+                *(
+                    [f"database:{source_id}"]
+                    if endpoint_detail_uses_database(detail)
+                    else []
+                ),
+                _endpoint_unit_id(contract_id, endpoint_id),
+            ]
+        ),
         "source_refs": {
             "endpoint_detail": _artifact_ref(endpoint.get("detail_design"), endpoint_id),
             "endpoint_details": [_artifact_ref(endpoint.get("detail_design"), endpoint_id)],
@@ -275,6 +286,17 @@ def _required_item(value: Any, key: str, target_id: str, label: str) -> dict[str
     if item is None:
         raise ValueError(f"ProjectPlan does not contain {label} {target_id}.")
     return item
+
+
+def _source_type(source: dict[str, Any]) -> str:
+    """读取正式数据源类型，并拒绝旧 mock 或缺失类型进入构建链路。"""
+
+    source_type = str(source.get("type") or "")
+    if source_type not in {"database", "static", "external_api"}:
+        raise ValueError("ProjectPlan data source type must be database, static, or external_api.")
+    if source_type == "external_api":
+        raise ValueError("external_api data source is not enabled in the current build workflow.")
+    return source_type
 
 
 def _load_external_detail(

@@ -60,8 +60,8 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
                 "data_source_id": source_id,
                 "status": "confirmed",
                 "data_origin": {
-                    "source_type": "mock",
-                    "effective_source": {"kind": "mock"},
+                    "source_type": "database",
+                    "effective_source": {"kind": "mysql_existing"},
                 },
             },
         )
@@ -79,8 +79,8 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
             },
         ],
         "data_sources": [
-            {"id": "orders"},
-            {"id": "customers"},
+            {"id": "orders", "type": "database"},
+            {"id": "customers", "type": "database"},
         ],
         "api_contracts": [
             {
@@ -140,7 +140,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
             ["orders.list"],
         )
         self.assertEqual(context["required_endpoint_ids"], ["orders.list"])
-        self.assertNotIn("database:orders", context["required_unit_ids"])
+        self.assertIn("database:orders", context["required_unit_ids"])
         self.assertNotIn("database:customers", context["required_unit_ids"])
         self.assertIn(
             "backend:endpoint:orders-api:orders.list",
@@ -213,8 +213,8 @@ class PageBuildContextResolverTests(unittest.TestCase):
                     "data_source_id": "orders",
                     "status": "confirmed",
                     "data_origin": {
-                        "source_type": "mock",
-                        "effective_source": {"kind": "mock"},
+                        "source_type": "database",
+                        "effective_source": {"kind": "mysql_existing"},
                     },
                 },
             )
@@ -288,7 +288,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
                     "status": "confirmed",
                     "interface_design": {"route": "GET /orders"},
                     "data_origin": {
-                        "source_type": "mysql_existing",
+                        "source_type": "database",
                         "effective_source": {"kind": "mysql_existing"},
                     },
                 },
@@ -312,6 +312,35 @@ class PageBuildContextResolverTests(unittest.TestCase):
             context["required_unit_ids"],
             ["backend:bootstrap", "database:orders", "backend:endpoint:orders-api:orders.list"],
         )
+
+    def test_static_page_context_only_requires_frontend_data_module(self) -> None:
+        """Static 页面不要求后端、数据库或业务 Endpoint Unit。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            plan["data_sources"] = [
+                {**source, "type": "static"} for source in plan["data_sources"]
+            ]
+            detail_path = workspace_path / ".xcodeagent/plans/endpoints/endpoint--orders-api--orders.list.json"
+            detail = json.loads(detail_path.read_text(encoding="utf-8"))
+            detail["data_origin"] = {
+                "source_type": "static",
+                "effective_source": {"kind": "frontend_mock"},
+            }
+            _write_json(detail_path, detail)
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+
+        self.assertIn("frontend:data:orders", context["required_unit_ids"])
+        self.assertNotIn("backend:bootstrap", context["required_unit_ids"])
+        self.assertFalse(any(unit.startswith("database:") for unit in context["required_unit_ids"]))
+        self.assertFalse(any(unit.startswith("backend:endpoint:") for unit in context["required_unit_ids"]))
 
     def test_page_context_rejects_unknown_endpoint(self) -> None:
         """页面外置详情引用未知 endpoint 时返回明确错误。"""

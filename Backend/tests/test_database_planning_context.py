@@ -38,7 +38,7 @@ def _project_plan(method: str = "POST") -> dict:
     return {
         "version": "plan-v1",
         "confirmation_status": "confirmed",
-        "data_sources": [{"id": "orders", "name": "订单库", "type": "mysql"}],
+        "data_sources": [{"id": "orders", "name": "订单库", "type": "database"}],
         "api_contracts": [
             {
                 "id": "orders-api",
@@ -89,7 +89,7 @@ def _build_context(endpoint_id: str = "orders.create") -> dict:
                 "method": "POST",
                 "path": "/orders",
                 "data_origin": {
-                    "source_type": "mysql_existing",
+                    "source_type": "database",
                     "effective_source": {
                         "kind": "mysql_existing",
                         "data_source_id": "orders",
@@ -205,7 +205,7 @@ def _summary_build_context() -> dict:
                 "method": "GET",
                 "path": "/api/core-management/summary",
                 "data_origin": {
-                    "source_type": "mysql_existing",
+                    "source_type": "database",
                     "effective_source": {
                         "kind": "mysql_existing",
                         "database": "xcode",
@@ -322,7 +322,7 @@ class DatabaseContextV1Tests(unittest.TestCase):
         build_context = _build_context()
         detail = build_context["direct_endpoint_details"][0]
         detail["data_origin"] = {
-            "source_type": "mysql_new_table",
+            "source_type": "database",
             "effective_source": {
                 "kind": "mysql_new_table",
                 "database": "sales",
@@ -591,8 +591,8 @@ class DatabaseContextV1Tests(unittest.TestCase):
         self.assertFalse(requirement["required"])
         self.assertEqual(requirement["status"], "not_required")
 
-    def test_third_party_endpoint_scope_excludes_database_unit(self) -> None:
-        """外部 API endpoint 的构建范围不应包含 database Unit。"""
+    def test_external_api_endpoint_scope_is_rejected_while_disabled(self) -> None:
+        """外部 API 尚未启用时不得进入构建范围。"""
 
         with tempfile.TemporaryDirectory() as tmpdir:
             detail_path = Path(tmpdir) / "endpoint.json"
@@ -602,7 +602,7 @@ class DatabaseContextV1Tests(unittest.TestCase):
                         **_build_context()["direct_endpoint_details"][0],
                         "status": "confirmed",
                         "data_origin": {
-                            "source_type": "third_party",
+                            "source_type": "external_api",
                             "effective_source": {
                                 "kind": "third_party",
                                 "name": "remote-api",
@@ -617,23 +617,19 @@ class DatabaseContextV1Tests(unittest.TestCase):
                 encoding="utf-8",
             )
             plan = _project_plan()
+            plan["data_sources"][0]["type"] = "external_api"
             plan["api_contracts"][0]["endpoints"][0]["detail_design"] = {
                 "status": "confirmed",
                 "json_path": str(detail_path),
             }
 
-            context = resolve_target_build_context(
-                plan,
-                target_type="endpoint",
-                target_id="orders.create",
-                api_contract_id="orders-api",
-            )
-
-        self.assertNotIn("database:orders", context["required_unit_ids"])
-        self.assertIn(
-            "backend:endpoint:orders-api:orders.create",
-            context["required_unit_ids"],
-        )
+            with self.assertRaisesRegex(ValueError, "external_api"):
+                resolve_target_build_context(
+                    plan,
+                    target_type="endpoint",
+                    target_id="orders.create",
+                    api_contract_id="orders-api",
+                )
 
     def test_task_preparation_view_includes_new_database_context(self) -> None:
         """任务规划模型输入包含新版数据库上下文和已确认接口详情。"""

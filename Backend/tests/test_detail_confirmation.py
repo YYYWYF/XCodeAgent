@@ -13,6 +13,7 @@ from app.services.page_detail_plan import (
     create_page_detail_plan,
     extract_endpoint_detail_context,
     extract_page_detail_context,
+    normalize_endpoint_data_origin,
 )
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
@@ -35,6 +36,9 @@ class DetailConfirmationTests(unittest.TestCase):
         """endpoint 模型只生成决策对象，正式详情由确定性第二步完成。"""
 
         project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
+        project_plan["data_sources"] = [
+            {**source, "type": "static"} for source in project_plan["data_sources"]
+        ]
         page_context = extract_page_detail_context(
             project_plan,
             project_plan["frontend_pages"][0]["pageId"],
@@ -45,8 +49,8 @@ class DetailConfirmationTests(unittest.TestCase):
         )
         decision = {
             "data_origin": {
-                "source_type": "mock",
-                "effective_source": {"kind": "mock", "description": "内存数据"},
+                "source_type": "static",
+                "effective_source": {"kind": "frontend_mock", "description": "内存数据"},
                 "field_mappings": [],
                 "differences": [],
                 "database_operations": [],
@@ -103,7 +107,7 @@ class DetailConfirmationTests(unittest.TestCase):
             endpoint_context,
             {
                 "data_origin": {
-                    "source_type": "mysql_existing",
+                    "source_type": "database",
                     "effective_source": {
                         "kind": "mysql_existing",
                         "database": "xcode",
@@ -145,6 +149,9 @@ class DetailConfirmationTests(unittest.TestCase):
         """闭合决策的处理逻辑与验收标准必须由同一基数和结果规则投影。"""
 
         project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
+        project_plan["data_sources"] = [
+            {**source, "type": "static"} for source in project_plan["data_sources"]
+        ]
         page_context = extract_page_detail_context(
             project_plan,
             project_plan["frontend_pages"][0]["pageId"],
@@ -155,8 +162,8 @@ class DetailConfirmationTests(unittest.TestCase):
         )
         decision = {
             "data_origin": {
-                "source_type": "mock",
-                "effective_source": {"kind": "mock", "description": "内存数据"},
+                "source_type": "static",
+                "effective_source": {"kind": "frontend_mock", "description": "内存数据"},
                 "field_mappings": [],
                 "differences": [],
                 "database_operations": [],
@@ -185,6 +192,19 @@ class DetailConfirmationTests(unittest.TestCase):
         self.assertTrue(any("恰好一个目标" in item for item in detail["processing_logic"]))
         self.assertTrue(any("exactly_one" in item for item in detail["acceptance_criteria"]))
         self.assertTrue(any("拒绝执行" in item for item in detail["processing_logic"]))
+
+    def test_endpoint_detail_rejects_old_mock_source_type(self) -> None:
+        """旧 mock 正式工件不会在读取时被归一化为 Static。"""
+
+        with self.assertRaisesRegex(ValueError, "source_type"):
+            normalize_endpoint_data_origin({
+                "source_type": "mock",
+                "effective_source": {"kind": "mock"},
+                "field_mappings": [],
+                "differences": [],
+                "database_operations": [],
+                "notes": [],
+            })
 
     def test_model_json_overrides_endpoint_detail_fields(self) -> None:
         """EndpointDetail 应接受模型正式字段覆盖。"""
@@ -388,6 +408,9 @@ class DetailConfirmationTests(unittest.TestCase):
 
     def test_detail_review_applies_page_patch_and_confirms_once(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建库存系统"))
+        project_plan["data_sources"] = [
+            {**source, "type": "static"} for source in project_plan["data_sources"]
+        ]
         page_context = extract_page_detail_context(
             project_plan,
             project_plan["frontend_pages"][0]["pageId"],

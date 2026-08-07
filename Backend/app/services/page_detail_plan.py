@@ -649,6 +649,14 @@ def extract_endpoint_detail_context(
     if not endpoint:
         raise ValueError(f"API 契约 {api_contract_id} 中不存在接口：{endpoint_id}")
     data_source_id = str(contract.get("data_source_id") or api_contract_id)
+    data_source = next(
+        (
+            source
+            for source in _dict_items(project_plan.get("data_sources"))
+            if str(source.get("id") or "") == data_source_id
+        ),
+        {},
+    )
     dependent_pages = [
         {
             "pageId": page.get("pageId") or page.get("id"),
@@ -671,6 +679,13 @@ def extract_endpoint_detail_context(
         "api_contract": contract,
         "api_contract_id": api_contract_id,
         "data_source_id": data_source_id,
+        "data_source": {
+            "id": data_source_id,
+            "name": data_source.get("name"),
+            "description": data_source.get("description"),
+            "entities": data_source.get("entities") or [],
+            "type": data_source.get("type"),
+        },
         "endpoint": endpoint,
         "endpoint_id": endpoint_id,
         "method": str(endpoint.get("method") or "GET").upper(),
@@ -819,6 +834,12 @@ def compose_endpoint_detail_from_decision(
 ) -> dict[str, Any]:
     """以 EndpointDecision 为唯一语义来源，确定性组装正式 EndpointDetail。"""
 
+    endpoint_decision = deepcopy(endpoint_decision)
+    endpoint_decision["data_origin"] = apply_endpoint_datasource_policy(
+        project_plan,
+        endpoint_context,
+        endpoint_decision.get("data_origin"),
+    )
     validate_endpoint_decision(endpoint_decision)
     detail_plan = create_endpoint_detail_plan(
         project_plan,
@@ -864,6 +885,19 @@ def validate_endpoint_decision(value: Any) -> None:
         raise ValueError("接口决策缺少有效字段：data_origin")
     if not isinstance(data_origin.get("effective_source"), dict):
         raise ValueError("接口决策缺少有效来源：data_origin.effective_source")
+    source_type = str(data_origin.get("source_type") or "")
+    effective_kind = str(data_origin["effective_source"].get("kind") or "")
+    allowed_kinds = {
+        "database": {"mysql_existing", "mysql_new_table", "needs_user_confirmation"},
+        "static": {"frontend_mock"},
+        "external_api": {"third_party", "needs_user_confirmation"},
+    }
+    if source_type not in allowed_kinds:
+        raise ValueError("接口决策数据源类型非法，仅支持 database、static、external_api")
+    if effective_kind not in allowed_kinds[source_type]:
+        raise ValueError(
+            f"接口决策实现来源 {effective_kind or 'missing'} 与数据源类型 {source_type} 不匹配"
+        )
     for list_field in ("field_mappings", "differences", "database_operations", "notes"):
         if not isinstance(data_origin.get(list_field), list):
             raise ValueError(f"接口决策字段类型错误：data_origin.{list_field} 必须是数组")
@@ -1052,48 +1086,33 @@ def _default_endpoint_data_origin(
         {},
     )
     source_type = str(data_source.get("type") or data_source.get("source_type") or "")
-    normalized_type = source_type.lower()
-    is_third_party = normalized_type in {"third_party", "http", "api", "external_api"}
-    # mock / static 数据源：前端用内存 mock 函数模拟，不连任何后端，不应被当成 MySQL。
-    is_mock = normalized_type in {"mock", "static", "none", ""}
-    is_mysql = (
-        not is_mock
-        and not is_third_party
-        and (
-            normalized_type in {"mysql", "database", "db"}
-            or data_source_id.lower().startswith("mysql")
-        )
-    )
-    if is_mock:
-        kind = "mock"
-        source_type_label = "mock"
-        description = "本页面数据来源为模拟数据，前端用内存 mock 函数提供数据，不调用真实后端接口。"
-    elif is_third_party:
+    if source_type == "static":
+        kind = "frontend_mock"
+        description = "本页面使用前端内存 Mock 数据模块，不调用真实后端接口。"
+    elif source_type == "external_api":
         kind = "third_party"
-        source_type_label = "third_party"
         description = "本接口数据来源于第三方接口。"
-    elif is_mysql:
+    elif source_type == "database":
         kind = "mysql_existing"
-        source_type_label = "mysql_existing"
         description = "基于已声明的 MySQL 数据源读取并组装接口响应。"
     else:
-        kind = "needs_user_confirmation"
-        source_type_label = "needs_user_confirmation"
-        description = "数据来源需要用户确认。"
+        raise ValueError(
+            f"数据源 {data_source_id or 'missing'} 的类型无效，仅支持 database、static、external_api。"
+        )
     return {
-        "source_type": source_type_label,
+        "source_type": source_type,
         "effective_source": {
             "kind": kind,
             "data_source_id": data_source_id,
-            "database": "MySQL8" if is_mysql else None,
+            "database": "MySQL8" if source_type == "database" else None,
             "tables": _normalize_origin_tables(
                 data_source.get("tables")
                 or data_source.get("entities")
                 or data_source.get("table_names")
             ),
-            "provider": data_source.get("provider") if is_third_party else None,
-            "endpoint": data_source.get("endpoint") if is_third_party else None,
-            "method": data_source.get("method") if is_third_party else None,
+            "provider": data_source.get("provider") if source_type == "external_api" else None,
+            "endpoint": data_source.get("endpoint") if source_type == "external_api" else None,
+            "method": data_source.get("method") if source_type == "external_api" else None,
             "description": description,
         },
         "field_mappings": [],
@@ -1103,7 +1122,7 @@ def _default_endpoint_data_origin(
                 "expected": "API 契约响应字段均有明确来源",
                 "actual": "当前仅识别到 ProjectPlan 声明的数据源摘要",
                 "resolution_kind": (
-                    "already_supported" if is_mock else "needs_user_confirmation"
+                    "already_supported" if source_type == "static" else "needs_user_confirmation"
                 ),
                 "operation_refs": [],
                 "backend_adaptation": None,
@@ -1115,22 +1134,29 @@ def _default_endpoint_data_origin(
 
 
 def normalize_endpoint_data_origin(value: Any) -> dict[str, Any]:
-    """把新旧数据来源结构统一折叠为唯一有效来源与差异项。"""
+    """规范化正式数据来源结构，并保持大类与具体实现来源相互独立。"""
 
     origin = value if isinstance(value, dict) else {}
-    source_type = str(origin.get("source_type") or "needs_user_confirmation")
+    source_type = str(origin.get("source_type") or "")
+    if source_type not in {"database", "static", "external_api"}:
+        raise ValueError("EndpointDetail.source_type 仅支持 database、static、external_api。")
     effective_source = origin.get("effective_source")
     if not isinstance(effective_source, dict):
-        effective_source = _effective_source_from_legacy_origin(origin, source_type)
-    normalized_source_type = str(
-        effective_source.get("kind") or source_type or "needs_user_confirmation"
-    )
+        raise ValueError("EndpointDetail.effective_source 必须是对象。")
+    effective_kind = str(effective_source.get("kind") or "")
+    allowed_kinds = {
+        "database": {"mysql_existing", "mysql_new_table", "needs_user_confirmation"},
+        "static": {"frontend_mock"},
+        "external_api": {"third_party", "needs_user_confirmation"},
+    }
+    if effective_kind not in allowed_kinds[source_type]:
+        raise ValueError(f"EndpointDetail 实现来源 {effective_kind or 'missing'} 与 {source_type} 不匹配。")
     return {
-        "source_type": normalized_source_type,
+        "source_type": source_type,
         "effective_source": {
             key: value
             for key, value in {
-                "kind": normalized_source_type,
+                "kind": effective_kind,
                 "data_source_id": effective_source.get("data_source_id"),
                 "database": effective_source.get("database"),
                 "tables": _normalize_origin_tables(effective_source.get("tables")),
@@ -1158,36 +1184,41 @@ def normalize_endpoint_data_origin(value: Any) -> dict[str, Any]:
     }
 
 
-def _effective_source_from_legacy_origin(
-    origin: dict[str, Any],
-    source_type: str,
+def apply_endpoint_datasource_policy(
+    project_plan: dict[str, Any],
+    endpoint_context: dict[str, Any],
+    value: Any,
 ) -> dict[str, Any]:
-    """从旧版三分支数据来源中提取唯一有效分支。"""
+    """按 ProjectPlan 权威类型钳制模型来源，Static 固定映射到前端内存 Mock。"""
 
-    candidate_types = [
-        source_type,
-        "third_party",
-        "mysql_existing",
-        "mysql_new_table",
-    ]
-    for candidate_type in candidate_types:
-        branch = origin.get(candidate_type)
-        if not isinstance(branch, dict):
-            continue
-        if branch.get("applicable") is False and candidate_type != source_type:
-            continue
-        return {
-            **branch,
-            "kind": candidate_type,
-            "description": branch.get("purpose")
-            or branch.get("query_description")
-            or branch.get("note")
-            or "",
+    data_source_id = str(endpoint_context.get("data_source_id") or "")
+    authoritative = _default_endpoint_data_origin(project_plan, data_source_id)
+    if authoritative["source_type"] == "static":
+        return authoritative
+
+    origin = value if isinstance(value, dict) else {}
+    effective_source = origin.get("effective_source")
+    effective_source = effective_source if isinstance(effective_source, dict) else {}
+    authoritative_type = str(authoritative["source_type"])
+    allowed_kind = {
+        "database": {"mysql_existing", "mysql_new_table", "needs_user_confirmation"},
+        "external_api": {"third_party", "needs_user_confirmation"},
+    }[authoritative_type]
+    proposed_kind = str(effective_source.get("kind") or "")
+    if proposed_kind not in allowed_kind:
+        proposed_kind = str(authoritative["effective_source"]["kind"])
+    return normalize_endpoint_data_origin(
+        {
+            **origin,
+            "source_type": authoritative_type,
+            "effective_source": {
+                **authoritative["effective_source"],
+                **effective_source,
+                "kind": proposed_kind,
+                "data_source_id": data_source_id,
+            },
         }
-    return {
-        "kind": source_type or "needs_user_confirmation",
-        "description": "数据来源需要用户确认。",
-    }
+    )
 
 
 def _normalize_field_mappings(value: Any) -> list[dict[str, Any]]:

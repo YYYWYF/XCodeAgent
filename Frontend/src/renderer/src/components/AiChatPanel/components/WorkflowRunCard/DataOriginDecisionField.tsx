@@ -11,14 +11,11 @@ type DataOriginDecisionFieldProps = {
   value: Record<string, unknown>;
 };
 
-type DecisionStrategy = "mysql_new_table" | "mysql_existing" | "third_party";
+type DecisionStrategy = "mysql_new_table" | "mysql_existing";
 
 type DecisionDraft = {
   column: string;
   database: string;
-  endpoint: string;
-  method: string;
-  provider: string;
   seed: string;
   table: string;
 };
@@ -72,7 +69,6 @@ export default function DataOriginDecisionField({
           <Space direction="vertical" size={8}>
             <Radio value="mysql_new_table">A. 新建数据库表</Radio>
             <Radio value="mysql_existing">B. 给现有表增加字段</Radio>
-            <Radio value="third_party">C. 使用第三方服务</Radio>
           </Space>
         </Radio.Group>
         {strategy === "mysql_new_table" && (
@@ -125,33 +121,12 @@ export default function DataOriginDecisionField({
             />
           </div>
         )}
-        {strategy === "third_party" && (
-          <div className={cx("workflow-data-origin-decision-grid")}>
-            <DecisionInput
-              disabled={disabled}
-              label="服务方"
-              onChange={(nextValue) => updateDraft("provider", nextValue)}
-              placeholder="例如 Auth0 / IAM 服务"
-              value={draft.provider}
-            />
-            <DecisionInput
-              disabled={disabled}
-              label="接口地址"
-              onChange={(nextValue) => updateDraft("endpoint", nextValue)}
-              placeholder="例如 /roles"
-              value={draft.endpoint}
-            />
-            <DecisionInput
-              disabled={disabled}
-              label="请求方法"
-              onChange={(nextValue) => updateDraft("method", nextValue)}
-              placeholder="例如 GET"
-              value={draft.method}
-            />
-          </div>
-        )}
-        <Text className={cx("workflow-data-origin-decision-hint")} type="secondary">
-          选择并补全后，这里会提交为确定的数据来源，不再保留 needs_user_confirmation。
+        <Text
+          className={cx("workflow-data-origin-decision-hint")}
+          type="secondary"
+        >
+          选择并补全后，这里会提交为确定的数据来源，不再保留
+          needs_user_confirmation。
         </Text>
       </div>
     </section>
@@ -196,9 +171,6 @@ function inferDecisionDraft(origin: Record<string, unknown>): DecisionDraft {
   return {
     column: suggestedColumn(origin),
     database: stringValue(effectiveSource.database),
-    endpoint: stringValue(effectiveSource.endpoint),
-    method: stringValue(effectiveSource.method) || "GET",
-    provider: stringValue(effectiveSource.provider),
     seed: description.includes("管理员") ? "管理员、普通用户" : "",
     table: suggestedTable(origin, tables),
   };
@@ -229,11 +201,12 @@ function draftForStrategy(
 }
 
 // 读取当前对象里已经确定过的来源类型，用于编辑已选方案时保持选中态。
-function resolvedStrategy(origin: Record<string, unknown>): DecisionStrategy | undefined {
-  const sourceType = stringValue(origin.source_type || recordValue(origin.effective_source).kind);
-  if (sourceType === "mysql_new_table") return "mysql_new_table";
-  if (sourceType === "mysql_existing") return "mysql_existing";
-  if (sourceType === "third_party") return "third_party";
+function resolvedStrategy(
+  origin: Record<string, unknown>,
+): DecisionStrategy | undefined {
+  const effectiveKind = stringValue(recordValue(origin.effective_source).kind);
+  if (effectiveKind === "mysql_new_table") return "mysql_new_table";
+  if (effectiveKind === "mysql_existing") return "mysql_existing";
   return undefined;
 }
 
@@ -259,13 +232,15 @@ function buildDataOrigin(
   draft: DecisionDraft,
   current: Record<string, unknown>,
 ): Record<string, unknown> | null {
-  const dataSourceId = stringValue(recordValue(current.effective_source).data_source_id);
+  const dataSourceId = stringValue(
+    recordValue(current.effective_source).data_source_id,
+  );
   const database = draft.database.trim();
   const table = draft.table.trim();
   if (strategy === "mysql_new_table") {
     if (!database || !table) return null;
     return {
-      source_type: "mysql_new_table",
+      source_type: "database",
       effective_source: {
         kind: "mysql_new_table",
         data_source_id: dataSourceId || undefined,
@@ -274,7 +249,11 @@ function buildDataOrigin(
         description: `在 ${database} 数据库中新建 ${table} 表，作为该接口的数据来源。`,
       },
       field_mappings: [
-        { target_field: "id", source: `${table}.id`, rule: "直接映射或转为字符串" },
+        {
+          target_field: "id",
+          source: `${table}.id`,
+          rule: "直接映射或转为字符串",
+        },
         { target_field: "name", source: `${table}.name`, rule: "直接映射" },
       ],
       differences: [
@@ -296,8 +275,22 @@ function buildDataOrigin(
             name: table,
             comment: "接口数据表",
             columns: [
-              { name: "id", type: "varchar(64)", nullable: false, default: null, comment: "主键", auto_increment: false },
-              { name: "name", type: "varchar(255)", nullable: false, default: null, comment: "名称", auto_increment: false },
+              {
+                name: "id",
+                type: "varchar(64)",
+                nullable: false,
+                default: null,
+                comment: "主键",
+                auto_increment: false,
+              },
+              {
+                name: "name",
+                type: "varchar(255)",
+                nullable: false,
+                default: null,
+                comment: "名称",
+                auto_increment: false,
+              },
             ],
             primary_key: ["id"],
             indexes: [],
@@ -317,7 +310,7 @@ function buildDataOrigin(
     const column = draft.column.trim();
     if (!database || !table || !column) return null;
     return {
-      source_type: "mysql_existing",
+      source_type: "database",
       effective_source: {
         kind: "mysql_existing",
         data_source_id: dataSourceId || undefined,
@@ -326,8 +319,16 @@ function buildDataOrigin(
         description: `复用 ${database}.${table} 表，并新增 ${column} 字段承载该接口所需数据。`,
       },
       field_mappings: [
-        { target_field: "id", source: `${table}.id`, rule: "直接映射或转为字符串" },
-        { target_field: "name", source: `${table}.${column}`, rule: "作为展示名称或角色值" },
+        {
+          target_field: "id",
+          source: `${table}.id`,
+          rule: "直接映射或转为字符串",
+        },
+        {
+          target_field: "name",
+          source: `${table}.${column}`,
+          rule: "作为展示名称或角色值",
+        },
       ],
       differences: [
         {
@@ -360,41 +361,17 @@ function buildDataOrigin(
       notes: [`角色数据从 ${table}.${column} 派生`],
     };
   }
-  const provider = draft.provider.trim();
-  const endpoint = draft.endpoint.trim();
-  const method = draft.method.trim().toUpperCase() || "GET";
-  if (!provider || !endpoint) return null;
-  return {
-    source_type: "third_party",
-    effective_source: {
-      kind: "third_party",
-      provider,
-      endpoint,
-      method,
-      description: `通过 ${provider} 的 ${method} ${endpoint} 获取该接口所需数据。`,
-    },
-    field_mappings: [],
-    differences: [
-      {
-        field: "data_source",
-        expected: "外部服务提供接口所需字段",
-        actual: "本地数据库不直接维护该数据",
-        resolution_kind: "already_supported",
-        operation_refs: [],
-        backend_adaptation: null,
-      },
-    ],
-    database_operations: [],
-    notes: ["构建任务不需要新增本地数据库表"],
-  };
+  return null;
 }
 
 // 构造未补全状态，确保用户清空必填项后不会沿用上一次的有效方案。
-function incompleteDataOrigin(current: Record<string, unknown>): Record<string, unknown> {
+function incompleteDataOrigin(
+  current: Record<string, unknown>,
+): Record<string, unknown> {
   const effectiveSource = recordValue(current.effective_source);
   return {
     ...current,
-    source_type: "needs_user_confirmation",
+    source_type: "database",
     effective_source: {
       ...effectiveSource,
       kind: "needs_user_confirmation",
@@ -409,7 +386,12 @@ function originDescription(origin: Record<string, unknown>): string {
   const description = stringValue(effectiveSource.description);
   if (description) return description;
   const differences = arrayRecords(origin.differences);
-  return differences.map((item) => stringValue(item.resolution || item.field)).filter(Boolean).join("；") || "请确认该接口的数据实现方式。";
+  return (
+    differences
+      .map((item) => stringValue(item.resolution || item.field))
+      .filter(Boolean)
+      .join("；") || "请确认该接口的数据实现方式。"
+  );
 }
 
 // 从差异项和说明中推断常见的角色列名。
@@ -421,9 +403,13 @@ function suggestedColumn(origin: Record<string, unknown>): string {
 }
 
 // 从现有来源和差异项中推断默认表名，新建表优先使用 role。
-function suggestedTable(origin: Record<string, unknown>, tables: string[]): string {
+function suggestedTable(
+  origin: Record<string, unknown>,
+  tables: string[],
+): string {
   const description = originDescription(origin).toLowerCase();
-  if (description.includes("role") || description.includes("角色")) return "role";
+  if (description.includes("role") || description.includes("角色"))
+    return "role";
   return tables[0] || "";
 }
 
