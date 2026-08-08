@@ -139,6 +139,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     detail_review_submission = _detail_review_submission(clarification_answers)
     acceptance_decision = _page_acceptance_decision(clarification_answers)
+    acceptance_adjustment = _acceptance_adjustment(clarification_answers)
     ui_design_action = _ui_design_action(clarification_answers)
     if acceptance_decision:
         resume_from = "acceptance"
