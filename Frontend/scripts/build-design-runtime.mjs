@@ -40,7 +40,10 @@ await build({
       fileName: () => 'antd5-runtime.js'
     },
     outDir: resolve(root, 'src/renderer/public/design-runtime'),
-    emptyOutDir: true,
+    // 不要清空产物目录：design-frame.html 与 antd5-runtime.js 共存于此目录，
+    // emptyOutDir=true 会误删 design-frame.html 导致 DesignRenderer iframe 加载 404、
+    // "iframe 就绪超时"。文件名固定为 antd5-runtime.js，会原地覆盖。
+    emptyOutDir: false,
     // 设计稿只用浏览器端，不需要 node polyfill。
     minify: 'esbuild',
     sourcemap: false,

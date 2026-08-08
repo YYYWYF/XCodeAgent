@@ -442,6 +442,40 @@ export default function ApplicationPlanningQuestionPanel({
 
   if (!clarification) return null
 
+  // run 中途流式快照可能产生未知 mode（如 undefined、project_plan_dependency_validation_error），
+  // 此时 clarification.pages 也会丢失。缓存最近一次有效的 UI 确认 workflow，run 中途用缓存
+  // 渲染，保持左侧页面列表 + 右侧渲染区布局不动，单页加载态由面板内 actionPageId 控制。
+  const clarificationPages = (clarification as unknown as Record<string, unknown>).pages
+  const hasUiDesignPages = Array.isArray(clarificationPages) && clarificationPages.length > 0
+  const lastValidUiWorkflowRef = useRef<WorkflowRunPayload | undefined>(undefined)
+  if (clarification.mode === 'ui_design_confirmation' && hasUiDesignPages) {
+    lastValidUiWorkflowRef.current = workflow
+  }
+  const effectiveWorkflow =
+    clarification.mode === 'ui_design_confirmation' && hasUiDesignPages
+      ? workflow
+      : lastValidUiWorkflowRef.current ?? workflow
+  // run 中途 mode 变未知（undefined/project_plan_dependency_validation_error 等）但曾进入过
+  // UI 确认阶段：用缓存的有效 UI workflow 渲染，保持布局不动，单页加载态由面板内控制。
+  const knownConfirmationModes = new Set([
+    'ui_design_confirmation',
+    'project_plan_confirmation',
+    'requirement_spec_confirmation',
+    'detail_review',
+  ])
+  if (
+    !knownConfirmationModes.has(clarification.mode || '') &&
+    lastValidUiWorkflowRef.current
+  ) {
+    return (
+      <UiDesignConfirmationPanel
+        disabled={disabled}
+        onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}
+        workflow={effectiveWorkflow}
+      />
+    )
+  }
+
   // 需求确认阶段的自然语言意见直接作为确认答案提交，后端据此区分确认或修订。
   const handleSubmit = (values: { answers?: WorkflowClarificationAnswers }): void => {
     if (isProjectPlanConfirmation) {

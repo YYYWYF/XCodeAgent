@@ -139,17 +139,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     detail_review_submission = _detail_review_submission(clarification_answers)
     acceptance_decision = _page_acceptance_decision(clarification_answers)
-    acceptance_adjustment = _acceptance_adjustment(clarification_answers)
-    if acceptance_decision and workflow_action != "retry_failed_tasks":
-        resume_from = (
-            "acceptance"
-            if acceptance_decision == "accepted"
-            else acceptance_adjustment_resume_node(acceptance_adjustment)
-        )
-    elif workflow_action == "retry_failed_tasks":
-        # 重试动作不能携带旧验收提交，避免一次请求同时触发两个互斥节点。
-        acceptance_decision = {}
-        acceptance_adjustment = None
+    ui_design_action = _ui_design_action(clarification_answers)
+    if acceptance_decision:
+        resume_from = "acceptance"
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
         or _optional_text(payload.get("selected_page_id"))
@@ -263,6 +255,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             if detail_review_submission
             else {}
         ),
+        **({"ui_design_action": ui_design_action} if ui_design_action else {}),
         **({"acceptance_decision": acceptance_decision} if acceptance_decision else {}),
         **(
             {"acceptance_adjustment": acceptance_adjustment}
@@ -730,6 +723,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "selected_skill_names",
         "workflow_scope",
         "acceptance_adjustment",
+        "ui_designs",
     }
     resumed_values = {
         key: merged[key]
@@ -1282,6 +1276,54 @@ def _detail_review_submission(value: Any) -> dict[str, Any] | None:
     if submission.get("review_status") != "confirmed":
         return None
     return submission
+
+
+def _ui_design_action(value: Any) -> dict[str, Any] | None:
+    """从结构化确认答案中提取 UI 确认节点的单页/多页动作。
+
+    单页动作形如 ``{ui_design_action: {pageId, action, templateId?}}``，由前端
+    UiDesignConfirmationPanel 在用户逐页"选模板"或"换一换"时即时提交。
+    多页调整动作形如 ``{ui_design_action: {action: "adjust_pages", pageIds: [...],
+    instruction: "..."}}``，由底部斜杠提及 + 调整按钮提交。
+    action 接受 select_template / regenerate / adjust_pages；其余视为无动作。
+    """
+
+    if not isinstance(value, dict):
+        return None
+    action = value.get("ui_design_action")
+    if not isinstance(action, dict):
+        return None
+    action_type = _optional_text(action.get("action"))
+    if action_type not in {"select_template", "regenerate", "adjust_pages"}:
+        return None
+
+    # 多页调整：pageIds 数组（可为空，空时由大模型按 instruction 自行判断）+
+    # instruction 字符串（非空校验）。
+    if action_type == "adjust_pages":
+        raw_ids = action.get("pageIds")
+        if isinstance(raw_ids, str):
+            raw_ids = [raw_ids]
+        page_ids = (
+            [str(pid).strip() for pid in raw_ids if str(pid).strip()]
+            if isinstance(raw_ids, list)
+            else []
+        )
+        instruction = _optional_text(action.get("instruction"))
+        if not instruction:
+            return None
+        return {"action": "adjust_pages", "pageIds": page_ids, "instruction": instruction}
+
+    # 单页动作：pageId + action，select_template 还需 templateId。
+    page_id = _optional_text(action.get("pageId")) or _optional_text(action.get("page_id"))
+    if not page_id:
+        return None
+    result: dict[str, Any] = {"pageId": page_id, "action": action_type}
+    template_id = _optional_text(action.get("templateId")) or _optional_text(action.get("template_id"))
+    if action_type == "select_template":
+        if not template_id:
+            return None
+        result["templateId"] = template_id
+    return result
 
 
 def _selected_answer_text(value: Any) -> str:

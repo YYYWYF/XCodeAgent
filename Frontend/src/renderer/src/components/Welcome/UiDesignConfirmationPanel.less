@@ -136,9 +136,14 @@
   transition: background 0.15s ease, border-color 0.15s ease,
     color 0.15s ease;
 
-  &:hover {
+  &:hover:not(:disabled) {
     background: var(--modal-surface-hover);
     color: var(--modal-text);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 
   &.@{class-prefix}-is-active {
@@ -149,6 +154,12 @@
 
   &.@{class-prefix}-is-confirmed {
     color: var(--modal-text);
+
+    // 已完成设计稿的页面：名称加粗，与未完成页面区分。
+    .@{class-prefix}-ui-design-anchor-label {
+      color: var(--modal-text);
+      font-weight: 600;
+    }
   }
 }
 
@@ -169,6 +180,7 @@
 
 .@{class-prefix}-ui-design-anchor-item.@{class-prefix}-is-confirmed
   .@{class-prefix}-ui-design-anchor-index {
+  // 完成态：实心主题色圆圈 + 白字勾，区别于未完成的描边圆圈。
   border-color: var(--modal-accent);
   background: var(--modal-accent);
   color: #fff;
@@ -188,7 +200,9 @@
   flex: 1;
   flex-direction: column;
   gap: 16px;
-  overflow-y: auto;
+  // 单页布局：右侧只展示当前选中页，不再纵向滚动所有页面卡片。
+  // 预览区在卡片内部滚动，避免整列滚动造成的臃肿感。
+  overflow: hidden;
   padding-right: 4px;
 }
 
@@ -221,7 +235,9 @@
   border-radius: 14px;
   background: var(--modal-surface);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  scroll-margin-top: 8px;
+  // 单页布局：卡片填满右侧内容区，预览区在卡片内滚动。
+  flex: 1;
+  min-height: 0;
   transition: border-color 0.2s ease, box-shadow 0.2s ease,
     background 0.2s ease;
 
@@ -262,6 +278,7 @@
 }
 
 .@{class-prefix}-ui-design-card.@{class-prefix}-is-confirmed .@{class-prefix}-ui-design-card-index {
+  // 完成态：实心主题色圆圈 + 白字勾，与左侧列表一致。
   border-color: var(--modal-accent);
   background: var(--modal-accent);
   color: #fff;
@@ -352,11 +369,15 @@
 }
 
 .@{class-prefix}-ui-design-card-preview {
+  position: relative;
   width: 100%;
   border: 1px solid var(--modal-border);
   border-radius: 10px;
   overflow: hidden;
   background: #f7f7f8;
+  // 单页布局：预览区填满卡片剩余高度，DesignRenderer 在此区域内滚动。
+  flex: 1;
+  min-height: 0;
 }
 
 .@{class-prefix}-ui-design-iframe {
@@ -415,8 +436,9 @@
   flex-direction: column;
   gap: 12px;
   margin-top: 4px;
-  padding: 16px 0 0;
-  border-top: 1px solid var(--modal-border);
+  padding: 16px;
+  border: none;
+  border-radius: 12px;
   background: var(--modal-surface);
 
   .ant-input {
@@ -532,4 +554,232 @@
     min-height: 0;
     overflow: hidden;
   }
+}
+// ---------- 页面模板选择弹窗 + 卡片 + 预览放大（逐页"选模板"） ----------
+.@{class-prefix}-ui-design-card-template-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  font-size: 12px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(22, 119, 255, 0.1);
+  color: #1677ff;
+}
+
+.@{class-prefix}-ui-design-template-picker-modal {
+  .ant-modal-body {
+    padding: 16px 20px;
+  }
+}
+
+.@{class-prefix}-ui-design-template-picker-hint {
+  display: block;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.@{class-prefix}-ui-design-template-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.@{class-prefix}-ui-design-template-card {
+  border: 1px solid rgba(5, 5, 5, 0.08);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+
+  &:hover {
+    border-color: #1677ff;
+    box-shadow: 0 4px 12px rgba(22, 119, 255, 0.15);
+    transform: translateY(-2px);
+  }
+}
+
+.@{class-prefix}-ui-design-template-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: #f5f5f5;
+  overflow: hidden;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+}
+
+.@{class-prefix}-ui-design-template-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.@{class-prefix}-ui-design-template-card-body {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.@{class-prefix}-ui-design-template-desc {
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+// ---------- 单页动作（选模板/换一换）run 期间：渲染区显示加载态 ----------
+.@{class-prefix}-ui-design-card-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  background: #f7f7f8;
+}
+
+.@{class-prefix}-ui-design-card-loading-text {
+  font-size: 13px;
+  color: #8c8c8c;
+}
+
+// ---------- 无设计稿时：渲染区显示居中引导卡（选模板/换一换入口） ----------
+.@{class-prefix}-ui-design-card-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  gap: 8px;
+  text-align: center;
+}
+
+.@{class-prefix}-ui-design-card-empty-icon {
+  font-size: 40px;
+  // 预览区背景固定为浅色 #f7f7f8，图标/文字不能用主题变量（深色主题下是浅色会看不清）。
+  color: #8c8c8c;
+  margin-bottom: 4px;
+}
+
+.@{class-prefix}-ui-design-card-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #262626;
+}
+
+.@{class-prefix}-ui-design-card-empty-hint {
+  font-size: 13px;
+  color: #8c8c8c;
+  margin-bottom: 12px;
+}
+
+.@{class-prefix}-ui-design-card-empty-actions {
+  display: flex;
+  gap: 12px;
+}
+
+// header 中"正在处理某页"提示：run 期间全局禁用时让用户理解为何按钮点不了。
+.@{class-prefix}-ui-design-processing-hint {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(250, 173, 20, 0.12);
+  color: #fa8c16;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+// ---------- 底部输入框斜杠提及 + 调整按钮 ----------
+.@{class-prefix}-ui-design-feedback-wrap {
+  position: relative;
+}
+
+.@{class-prefix}-ui-design-mention-popover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--modal-border-strong);
+  border-radius: 8px;
+  background: var(--modal-surface);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+  z-index: 10;
+  padding: 4px;
+}
+
+.@{class-prefix}-ui-design-mention-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--modal-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--modal-surface-hover);
+  }
+}
+
+// ---------- 输入框 + 圆形发送按钮（悬浮输入框右下角内侧） ----------
+.@{class-prefix}-ui-design-feedback-wrap {
+  position: relative;
+
+  // TextArea 右下角留出按钮空间，避免文字被按钮遮挡。
+  .ant-input {
+    padding-right: 48px;
+  }
+}
+
+.@{class-prefix}-ui-design-send-btn.ant-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+
+  &:disabled {
+    opacity: 0.4;
+    box-shadow: none;
+  }
+}
+
+// ---------- adjust 期间渲染区蒙层（保留旧设计稿，叠加 loading） ----------
+.@{class-prefix}-ui-design-card-adjust-mask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(2px);
+  z-index: 5;
 }

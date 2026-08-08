@@ -1,100 +1,94 @@
 import React, { useRef, useState } from 'react';
-import { ProTable, ProColumns, ProForm, ProFormText, ProFormDatePicker, ProFormDateRangePicker, ModalForm } from '@ant-design/pro-components';
-import { Button, Col, Form, FormInstance, Modal, Row, Space, message } from 'antd';
+import {
+  ProTable,
+  ProColumns,
+  ProForm,
+  ProFormText,
+  ProFormSelect,
+  ProFormDigit,
+  ProFormDatePicker,
+  ProFormDateRangePicker,
+  ModalForm,
+  ActionType,
+} from '@ant-design/pro-components';
+import { Button, Col, Form, FormInstance, Modal, Row, Space, Tag, message } from 'antd';
 import { ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
-/*
- * ╔══════════════════════════════════════════════════════════╗
- * ║  通用列表查询页面模板（骨架）                            ║
- * ║                                                        ║
- * ║  本模板提供标准后台列表页面的 UI 框架，包括：           ║
- * ║  · 搜索筛选表单                                         ║
- * ║  · ProTable 数据表格（分页 + 排序 + 行选择）            ║
- * ║  · 查看详情弹窗                                         ║
- * ║  · 编辑弹窗                                             ║
- * ║  · 单条删除确认                                         ║
- * ║  · 批量删除                                             ║
- * ║                                                        ║
- * ║  使用时请根据项目计划中的 api_contracts 填充以下内容：  ║
- * ║  ① 表格列定义 —— 列标题 + 数据字段名                   ║
- * ║  ② API 调用 —— 查询/修改/删除/批量删除接口             ║
- * ║  ③ 行数据类型 —— 根据接口响应 schema 定义              ║
- * ║  ④ 搜索字段 —— 哪些列支持筛选                          ║
- * ║  ⑤ 日期字段标记 —— 哪些列用日期组件渲染                ║
- * ╚══════════════════════════════════════════════════════════╝
- */
+// ============================================================
+// 行数据类型：报销单
+// ============================================================
+interface ReimbursementRow {
+  id: string;
+  code: string;
+  title: string;
+  applicant: string;
+  amount: number;
+  applyDate: string;
+  status: 'pending' | 'approved' | 'rejected' | 'processing';
+}
+
+type RowType = ReimbursementRow;
+
+// 报销单状态映射
+const STATUS_OPTIONS: { label: string; value: ReimbursementRow['status']; color: string }[] = [
+  { label: '待提交', value: 'pending', color: 'default' },
+  { label: '审核中', value: 'processing', color: 'processing' },
+  { label: '已通过', value: 'approved', color: 'success' },
+  { label: '已驳回', value: 'rejected', color: 'error' },
+];
+
+const statusMap = new Map(STATUS_OPTIONS.map((s) => [s.value, s]));
 
 // ============================================================
-// ① TODO: 根据 api_contracts 响应 schema 定义行数据类型
+// 内存 mock 数据
 // ============================================================
-type RowType = Record<string, unknown>;
-
-// ============================================================
-// ② TODO: 根据业务需求定义表格列
-// ============================================================
-// 示例格式（请替换为实际字段）：
-//   { title: '列标题', dataIndex: '字段名' }
-// 字段名应与接口响应中的字段名一致
-// 数值列可设置 valueType: 'money'，日期列设置 valueType: 'dateTime'
-const FIELD_DEFS: { title: string; dataIndex: string }[] = [
-  // TODO: 在此添加列定义，例如：
-  // { title: '编号', dataIndex: 'code' },
-  // { title: '名称', dataIndex: 'name' },
-  // { title: '金额', dataIndex: 'amount' },
-  // { title: '日期', dataIndex: 'date' },
-  // { title: '状态', dataIndex: 'status' },
+let MOCK_DATA: ReimbursementRow[] = [
+  { id: '1', code: 'BX-2026-0001', title: '北京客户拜访差旅费', applicant: '张伟', amount: 3580.5, applyDate: '2026-07-12', status: 'approved' },
+  { id: '2', code: 'BX-2026-0002', title: '部门季度团建费用', applicant: '李娜', amount: 8200, applyDate: '2026-07-15', status: 'processing' },
+  { id: '3', code: 'BX-2026-0003', title: '研发服务器采购', applicant: '王强', amount: 15600.8, applyDate: '2026-07-18', status: 'pending' },
+  { id: '4', code: 'BX-2026-0004', title: '市场推广物料制作', applicant: '刘洋', amount: 4300, applyDate: '2026-07-20', status: 'rejected' },
+  { id: '5', code: 'BX-2026-0005', title: '上海展会参展费用', applicant: '陈静', amount: 22800, applyDate: '2026-07-22', status: 'approved' },
+  { id: '6', code: 'BX-2026-0006', title: '员工培训课程费', applicant: '赵磊', amount: 6800, applyDate: '2026-07-25', status: 'processing' },
+  { id: '7', code: 'BX-2026-0007', title: '办公电脑采购', applicant: '孙芳', amount: 12400, applyDate: '2026-07-28', status: 'pending' },
+  { id: '8', code: 'BX-2026-0008', title: '客户接待餐费', applicant: '周杰', amount: 1280, applyDate: '2026-07-30', status: 'approved' },
+  { id: '9', code: 'BX-2026-0009', title: '打印机维修费', applicant: '吴敏', amount: 860, applyDate: '2026-08-01', status: 'rejected' },
+  { id: '10', code: 'BX-2026-0010', title: '广州分公司差旅', applicant: '郑华', amount: 5430.5, applyDate: '2026-08-03', status: 'processing' },
+  { id: '11', code: 'BX-2026-0011', title: '年度审计咨询费', applicant: '林涛', amount: 38000, applyDate: '2026-08-05', status: 'pending' },
+  { id: '12', code: 'BX-2026-0012', title: '团建活动场地租赁', applicant: '何丽', amount: 4500, applyDate: '2026-08-06', status: 'approved' },
+  { id: '13', code: 'BX-2026-0013', title: '软件订阅续费', applicant: '高峰', amount: 9800, applyDate: '2026-08-07', status: 'processing' },
 ];
 
 // ============================================================
-// ③ TODO: 标记日期类型字段（用于日期选择器和格式化）
+// mock 接口：操作内存数组
 // ============================================================
-const DATE_FIELDS: string[] = [
-  // TODO: 列出日期字段名，例如 'date', 'createdAt'
-];
-
-// ============================================================
-// ④ TODO: 根据 api_contracts 实现接口调用函数
-// ============================================================
-// 以下函数为占位，请替换为实际 API 调用：
-
-/** 查询列表（分页 + 筛选） */
-const fetchList = async (params: Record<string, unknown>): Promise<{ data: RowType[]; success: boolean; total: number }> => {
-  // TODO: 调用项目计划声明的列表查询接口
-  // 返回格式: { data: RowType[], success: boolean, total: number }
-  void params;
-  throw new Error('fetchList: 请替换为实际 API 调用');
+const updateRecord = (payload: Partial<ReimbursementRow> & { id: string }): { success: boolean } => {
+  const idx = MOCK_DATA.findIndex((r) => r.id === payload.id);
+  if (idx === -1) return { success: false };
+  MOCK_DATA[idx] = { ...MOCK_DATA[idx], ...payload };
+  return { success: true };
 };
 
-/** 修改记录 */
-const updateRecord = async (payload: Record<string, unknown>): Promise<{ success: boolean }> => {
-  // TODO: 调用项目计划声明的修改接口
-  void payload;
-  throw new Error('updateRecord: 请替换为实际 API 调用');
+const deleteRecord = (id: string): { success: boolean } => {
+  const before = MOCK_DATA.length;
+  MOCK_DATA = MOCK_DATA.filter((r) => r.id !== id);
+  return { success: MOCK_DATA.length < before };
 };
 
-/** 删除记录 */
-const deleteRecord = async (id: string): Promise<{ success: boolean }> => {
-  // TODO: 调用项目计划声明的删除接口
-  void id;
-  throw new Error('deleteRecord: 请替换为实际 API 调用');
-};
-
-/** 批量删除 */
-const batchDeleteRecords = async (ids: string[]): Promise<{ success: boolean; deleted: number }> => {
-  // TODO: 调用项目计划声明的批量删除接口
-  void ids;
-  throw new Error('batchDeleteRecords: 请替换为实际 API 调用');
+const batchDeleteRecords = (ids: string[]): { success: boolean; deleted: number } => {
+  const idSet = new Set(ids);
+  const before = MOCK_DATA.length;
+  MOCK_DATA = MOCK_DATA.filter((r) => !idSet.has(r.id));
+  return { success: true, deleted: before - MOCK_DATA.length };
 };
 
 // ============================================================
-// 以下为 UI 框架代码，无需修改
+// 弹窗与主组件
 // ============================================================
-
 type ModalType = 'detail' | 'edit' | null;
 
 // ---------- 查看详情弹窗 ----------
-type DetailModalProps = { open: boolean; record?: Record<string, unknown>; onClose: () => void };
+type DetailModalProps = { open: boolean; record?: ReimbursementRow; onClose: () => void };
 
 const DetailModal: React.FC<DetailModalProps> = ({ open, record, onClose }) => {
   return (
@@ -102,14 +96,27 @@ const DetailModal: React.FC<DetailModalProps> = ({ open, record, onClose }) => {
       onOpenChange={(v) => { if (!v) onClose(); }}
       modalProps={{ destroyOnClose: true, width: 720 }}
       submitter={{ resetButtonProps: { style: { display: 'none' } }, submitButtonProps: { style: { display: 'none' } } }}
-      initialValues={record}
+      initialValues={record ? { ...record } : undefined}
     >
       <Row gutter={[16, 0]}>
-        {FIELD_DEFS.map((f) => (
-          <Col span={12} key={f.dataIndex}>
-            <ProFormText name={f.dataIndex} label={f.title} disabled fieldProps={{ style: { width: '100%' } }} />
-          </Col>
-        ))}
+        <Col span={12}>
+          <ProFormText name="code" label="编号" disabled fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormText name="title" label="标题" disabled fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormText name="applicant" label="申请人" disabled fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormDigit name="amount" label="金额" disabled fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormDatePicker name="applyDate" label="申请日期" disabled fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormSelect name="status" label="状态" disabled options={STATUS_OPTIONS} fieldProps={{ style: { width: '100%' } }} />
+        </Col>
       </Row>
       <div style={{ textAlign: 'right', marginTop: 16 }}>
         <Button onClick={onClose}>关闭</Button>
@@ -119,19 +126,14 @@ const DetailModal: React.FC<DetailModalProps> = ({ open, record, onClose }) => {
 };
 
 // ---------- 修改弹窗 ----------
-type EditModalProps = { open: boolean; record?: Record<string, unknown>; onClose: () => void; onSaved: () => void };
+type EditModalProps = { open: boolean; record?: ReimbursementRow; onClose: () => void; onSaved: () => void };
 
 const EditModal: React.FC<EditModalProps> = ({ open, record, onClose, onSaved }) => {
-  // TODO: ⑤ 指定不可编辑的字段（如主键、编号）
-  const readonlyFields: string[] = [
-    // 例如: 'code', 'id'
-  ];
-
   return (
     <ModalForm title="修改记录" open={open}
       onOpenChange={(v) => { if (!v) onClose(); }}
       modalProps={{ destroyOnClose: true, width: 720 }}
-      initialValues={record}
+      initialValues={record ? { ...record } : undefined}
       submitter={{ searchConfig: { submitText: '确定', resetText: '取消' } }}
       onFinish={async (values) => {
         try {
@@ -147,19 +149,24 @@ const EditModal: React.FC<EditModalProps> = ({ open, record, onClose, onSaved })
       }}
     >
       <Row gutter={[16, 0]}>
-        {FIELD_DEFS.map((f) => {
-          const isReadonly = readonlyFields.includes(f.dataIndex);
-          const isDate = DATE_FIELDS.includes(f.dataIndex);
-          return (
-            <Col span={12} key={f.dataIndex}>
-              {isDate ? (
-                <ProFormDatePicker name={f.dataIndex} label={f.title} fieldProps={{ style: { width: '100%' } }} disabled={isReadonly} />
-              ) : (
-                <ProFormText name={f.dataIndex} label={f.title} placeholder="请输入内容" disabled={isReadonly} />
-              )}
-            </Col>
-          );
-        })}
+        <Col span={12}>
+          <ProFormText name="code" label="编号" disabled fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormText name="title" label="标题" placeholder="请输入标题" fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormText name="applicant" label="申请人" placeholder="请输入申请人" fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormDigit name="amount" label="金额" placeholder="请输入金额" min={0} fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormDatePicker name="applyDate" label="申请日期" fieldProps={{ style: { width: '100%' } }} />
+        </Col>
+        <Col span={12}>
+          <ProFormSelect name="status" label="状态" options={STATUS_OPTIONS} fieldProps={{ style: { width: '100%' } }} />
+        </Col>
       </Row>
     </ModalForm>
   );
@@ -168,20 +175,33 @@ const EditModal: React.FC<EditModalProps> = ({ open, record, onClose, onSaved })
 // ==================== 主组件 ====================
 const DefaultPage: React.FC = () => {
   const formRef = useRef<FormInstance>(null);
-  const tableRef = useRef<any>(null);
+  const tableRef = useRef<ActionType | undefined>(null);
 
-  const [modal, setModal] = useState<{ type: ModalType; record?: Record<string, unknown> }>({ type: null });
-  const [selection, setSelection] = useState<{ keys: React.Key[]; rows: Record<string, unknown>[] }>({ keys: [], rows: [] });
+  const [modal, setModal] = useState<{ type: ModalType; record?: ReimbursementRow }>({ type: null });
+  const [selection, setSelection] = useState<{ keys: React.Key[]; rows: ReimbursementRow[] }>({ keys: [], rows: [] });
   const [refreshing, setRefreshing] = useState(false);
 
-  const openModal = (type: Exclude<ModalType, null>, record?: Record<string, unknown>) => setModal({ type, record });
+  const openModal = (type: Exclude<ModalType, null>, record?: ReimbursementRow) => setModal({ type, record });
   const closeModal = () => setModal({ type: null });
   const clearSelection = () => setSelection({ keys: [], rows: [] });
 
-  const handleDelete = (record: Record<string, unknown>) => {
-    // TODO: ⑥ 指定记录的唯一标识字段 + 展示用的名称字段
-    const recordId = record.id as string;
-    const displayName = record.name ?? recordId;
+  const handleQuery = async () => {
+    try {
+      await formRef.current?.validateFields();
+    } catch {
+      // 校验失败仍用当前值查询
+    }
+    tableRef.current?.reload();
+  };
+
+  const handleReset = () => {
+    formRef.current?.resetFields();
+    tableRef.current?.reload();
+  };
+
+  const handleDelete = (record: ReimbursementRow) => {
+    const recordId = record.id;
+    const displayName = record.title ?? recordId;
 
     Modal.confirm({
       title: '确认删除',
@@ -223,21 +243,56 @@ const DefaultPage: React.FC = () => {
     });
   };
 
-  // ⑦ TODO: 根据 FIELD_DEFS 生成 ProTable 列配置
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      formRef.current?.resetFields();
+      clearSelection();
+      tableRef.current?.reload();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // ProTable 列配置
   const columns: ProColumns<RowType>[] = [
-    ...FIELD_DEFS.map((f) => ({
-      title: f.title,
-      dataIndex: f.dataIndex,
-      key: f.dataIndex,
-      // TODO: 根据字段类型调整 valueType 和 width
-      // 数值: valueType: 'money', width: 100
-      // 日期: valueType: 'dateTime', width: 160
-      // 文本: valueType: 'text', width: 120
-      width: 120,
-      ellipsis: true,
-    })),
+    { title: '编号', dataIndex: 'code', key: 'code', width: 140, ellipsis: true, copyable: true },
+    { title: '标题', dataIndex: 'title', key: 'title', width: 200, ellipsis: true },
+    { title: '申请人', dataIndex: 'applicant', key: 'applicant', width: 100 },
     {
-      title: '操作', key: 'operation', width: 220, fixed: 'right',
+      title: '金额',
+      dataIndex: 'amount',
+      key: 'amount',
+      width: 120,
+      valueType: 'money',
+      align: 'right',
+      sorter: (a, b) => a.amount - b.amount,
+    },
+    {
+      title: '申请日期',
+      dataIndex: 'applyDate',
+      key: 'applyDate',
+      width: 130,
+      valueType: 'date',
+      sorter: (a, b) => dayjs(a.applyDate).valueOf() - dayjs(b.applyDate).valueOf(),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (_, record) => {
+        const s = statusMap.get(record.status);
+        return s ? <Tag color={s.color}>{s.label}</Tag> : record.status;
+      },
+      filters: STATUS_OPTIONS.map((s) => ({ text: s.label, value: s.value })),
+      onFilter: (value, record) => record.status === value,
+    },
+    {
+      title: '操作',
+      key: 'operation',
+      width: 220,
+      fixed: 'right',
       render: (_, record) => (
         <>
           <Button type="link" size="small" onClick={() => openModal('detail', record)}>查看详情</Button>
@@ -250,23 +305,28 @@ const DefaultPage: React.FC = () => {
 
   // 搜索筛选表单
   const renderFilter = () => (
-    <ProForm formRef={formRef} layout="horizontal" submitter={false}
-      onFinish={async () => { tableRef.current?.reload(); }}>
+    <ProForm formRef={formRef} layout="horizontal" submitter={false}>
       <Row gutter={[16, 16]}>
-        {FIELD_DEFS.map((f) => (
-          <Col span={6} key={f.dataIndex}>
-            {DATE_FIELDS.includes(f.dataIndex) ? (
-              <ProFormDateRangePicker name={f.dataIndex} label={f.title} placeholder={['开始日期', '结束日期']} fieldProps={{ style: { width: '100%' } }} />
-            ) : (
-              <ProFormText name={f.dataIndex} label={f.title} placeholder="请输入内容" />
-            )}
-          </Col>
-        ))}
+        <Col span={6}>
+          <ProFormText name="code" label="编号" placeholder="请输入编号" />
+        </Col>
+        <Col span={6}>
+          <ProFormText name="title" label="标题" placeholder="请输入标题" />
+        </Col>
+        <Col span={6}>
+          <ProFormText name="applicant" label="申请人" placeholder="请输入申请人" />
+        </Col>
+        <Col span={6}>
+          <ProFormSelect name="status" label="状态" placeholder="请选择状态" options={STATUS_OPTIONS} allowClear />
+        </Col>
+        <Col span={12}>
+          <ProFormDateRangePicker name="applyDate" label="申请日期" placeholder={['开始日期', '结束日期']} fieldProps={{ style: { width: '100%' } }} />
+        </Col>
         <Col flex="none">
           <Form.Item label=" " colon={false}>
             <Space>
-              <Button type="primary" onClick={async () => { await formRef.current?.validateFields(); tableRef.current?.reload(); }}>查询</Button>
-              <Button onClick={() => { formRef.current?.resetFields(); tableRef.current?.reload(); }}>重置</Button>
+              <Button type="primary" onClick={handleQuery}>查询</Button>
+              <Button onClick={handleReset}>重置</Button>
             </Space>
           </Form.Item>
         </Col>
@@ -284,49 +344,37 @@ const DefaultPage: React.FC = () => {
     >
       批量删除
     </Button>,
-    <Button key="refresh" icon={<ReloadOutlined />} loading={refreshing} onClick={async () => { setRefreshing(true); try { await tableRef.current?.reloadAndRest?.(); } finally { setRefreshing(false); } }}>刷新</Button>,
+    <Button key="refresh" icon={<ReloadOutlined />} loading={refreshing} onClick={handleRefresh}>刷新</Button>,
   ];
+
+  // ProTable 走 request 返回内存 mock 数据。注意：scroll 不能设 y 值
+  // （calc(100vh - N) 在 DesignRenderer 的 iframe 里会算出 0/负值，导致表格体
+  // 高度为 0、行不可见）。只保留 x 横向滚动。
 
   return (
     <div style={{ padding: 24, overflow: 'hidden', minWidth: 0 }}>
       {renderFilter()}
       <ProTable<RowType>
-        actionRef={tableRef} columns={columns} rowKey="id"
+        actionRef={tableRef}
+        columns={columns}
+        rowKey="id"
+        request={async () => ({
+          data: MOCK_DATA,
+          success: true,
+          total: MOCK_DATA.length,
+        })}
         style={{ marginTop: 16 }}
-        request={async (params) => {
-          try {
-            const { current, pageSize, ...rest } = params;
-            const formValues = formRef.current?.getFieldsValue() || {};
-
-            // ⑧ TODO: 日期范围字段转换为接口参数格式（如 date → dateStart/dateEnd）
-            const apiParams: Record<string, unknown> = {};
-            Object.entries(formValues).forEach(([key, value]) => {
-              if (DATE_FIELDS.includes(key) && Array.isArray(value) && value.length === 2) {
-                if (value[0]) apiParams[key + 'Start'] = dayjs(value[0] as any).format('YYYY-MM-DD');
-                if (value[1]) apiParams[key + 'End'] = dayjs(value[1] as any).format('YYYY-MM-DD');
-              } else {
-                apiParams[key] = value;
-              }
-            });
-
-            const res = await fetchList({
-              page: current,
-              pageSize,
-              ...apiParams,
-              ...rest,
-            });
-            return { data: res.data, success: res.success, total: res.total };
-          } catch {
-            message.error('请求失败，请稍后重试');
-            return { data: [], success: false, total: 0 };
-          }
-        }}
-        pagination={{ defaultPageSize: 10, showSizeChanger: true, showQuickJumper: true, pageSizeOptions: ['10', '20', '50', '100'] }}
         search={false}
-        scroll={{ x: 'max-content', y: 'calc(100vh - 380px)' }}
+        scroll={{ x: 'max-content', y: 300 }}
+        pagination={{
+          defaultPageSize: 10,
+          showSizeChanger: true,
+          showQuickJumper: true,
+          pageSizeOptions: ['10', '20', '50', '100'],
+        }}
         rowSelection={{
           selectedRowKeys: selection.keys,
-          onChange: (keys, rows) => setSelection({ keys, rows: rows as Record<string, unknown>[] }),
+          onChange: (keys, rows) => setSelection({ keys, rows: rows as ReimbursementRow[] }),
         }}
         tableAlertRender={({ selectedRowKeys: selKeys }) =>
           selKeys.length > 0 ? (

@@ -20,6 +20,7 @@ import * as ReactDOMClient from 'react-dom/client'
 import * as antd from 'antd5'
 import * as antdIcons from '@ant-design/icons'
 import * as proComponents from '@ant-design/pro-components'
+import * as dayjs from 'dayjs'
 
 // 挂到全局，供编译后的设计稿代码消费。
 // 用一个命名空间对象收敛，避免污染 window 顶层过多。
@@ -29,7 +30,8 @@ const runtime = {
   ReactDOMClient,
   antd,
   antdIcons,
-  proComponents
+  proComponents,
+  dayjs
 } as const
 
 ;(globalThis as unknown as Record<string, unknown>).__DESIGN_RUNTIME__ = runtime

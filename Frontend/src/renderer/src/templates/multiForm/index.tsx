@@ -9,38 +9,6 @@ import {
 } from '@ant-design/pro-components'
 import { Button, Space, Form, message, Row, Col, Divider } from 'antd'
 
-/*
- * ╔══════════════════════════════════════════════════════════╗
- * ║  多分组表单页面模板（骨架）                              ║
- * ║                                                        ║
- * ║  本模板提供分组表单 UI 框架：                            ║
- * ║  · Divider 分隔的多个信息分组                           ║
- * ║  · ProFormList 动态列表项（可增删）                     ║
- * ║  · 表单验证规则                                         ║
- * ║  · 提交/重置按钮                                        ║
- * ║                                                        ║
- * ║  使用时请根据项目计划填充：                              ║
- * ║  ① 表单分组 —— 每个分组由 Divider + 字段组成           ║
- * ║  ② 每个分组的字段列表 —— 字段名、标签、类型、验证      ║
- * ║  ③ 动态列表项（ProFormList）的字段与验证                ║
- * ║  ④ 提交接口 —— 调用 api_contracts 中的创建/更新接口    ║
- * ║  ⑤ 编辑态 —— 如需回填数据，实现 initialValues 加载     ║
- * ╚══════════════════════════════════════════════════════════╝
- */
-
-// ============================================================
-// ① TODO: 定义表单字段（按分组编排）
-// ============================================================
-// 每个字段定义：
-//   name     —— 字段名（表单 key）
-//   label    —— 字段标签
-//   type     —— 'text' | 'date' | 'select'
-//   required —— 是否必填
-//   span     —— 栅格宽度（默认 12，即半行）
-//   options  —— select 时的选项 [{ label, value }]
-//   group    —— 所属分组标题
-//   placeholder —— 输入提示文字
-
 interface FieldDef {
   name: string;
   label: string;
@@ -53,15 +21,46 @@ interface FieldDef {
 }
 
 const FIELD_DEFS: FieldDef[] = [
-  // TODO: 在此添加字段定义，例如：
-  // { name: 'name', label: '名称', type: 'text', required: true, span: 12, group: '基本信息', placeholder: '请输入名称' },
-  // { name: 'date', label: '日期', type: 'date', required: true, span: 12, group: '基本信息' },
-  // { name: 'type', label: '类型', type: 'select', required: true, span: 12, group: '基本信息', options: [{ label: '类型A', value: 'A' }] },
+  // 基本信息
+  { name: 'caseNumber', label: '案件编号', type: 'text', required: true, span: 12, group: '基本信息', placeholder: '请输入案件编号' },
+  { name: 'registerDate', label: '登记日期', type: 'date', required: true, span: 12, group: '基本信息' },
+  { name: 'handler', label: '经办人', type: 'text', required: true, span: 12, group: '基本信息', placeholder: '请输入经办人姓名' },
+  {
+    name: 'caseSource', label: '案件来源', type: 'select', required: true, span: 12, group: '基本信息', placeholder: '请选择案件来源',
+    options: [
+      { label: '巡查发现', value: '巡查发现' },
+      { label: '群众举报', value: '群众举报' },
+      { label: '上级交办', value: '上级交办' },
+      { label: '部门移送', value: '部门移送' },
+    ],
+  },
+  // 案件信息
+  { name: 'caseTitle', label: '案件名称', type: 'text', required: true, span: 12, group: '案件信息', placeholder: '请输入案件名称' },
+  {
+    name: 'caseType', label: '案件类型', type: 'select', required: true, span: 12, group: '案件信息', placeholder: '请选择案件类型',
+    options: [
+      { label: '治安案件', value: '治安案件' },
+      { label: '刑事案件', value: '刑事案件' },
+      { label: '行政处罚', value: '行政处罚' },
+      { label: '民事纠纷', value: '民事纠纷' },
+    ],
+  },
+  { name: 'occurDate', label: '案发时间', type: 'date', required: true, span: 12, group: '案件信息' },
+  { name: 'caseLocation', label: '案发地点', type: 'text', required: true, span: 12, group: '案件信息', placeholder: '请输入案发地点' },
+  // 处理意见
+  {
+    name: 'opinionType', label: '处理方式', type: 'select', required: true, span: 12, group: '处理意见', placeholder: '请选择处理方式',
+    options: [
+      { label: '立案查处', value: '立案查处' },
+      { label: '责令整改', value: '责令整改' },
+      { label: '移送司法', value: '移送司法' },
+      { label: '警告教育', value: '警告教育' },
+    ],
+  },
+  { name: 'deadline', label: '办理期限', type: 'date', required: true, span: 12, group: '处理意见' },
+  { name: 'opinionDesc', label: '处理意见说明', type: 'text', required: false, span: 12, group: '处理意见', placeholder: '请输入处理意见说明' },
 ];
 
-// ============================================================
-// ② TODO: 动态列表项字段定义（ProFormList 内每一行的字段）
-// ============================================================
 interface ListItemFieldDef {
   name: string;
   label: string;
@@ -72,34 +71,35 @@ interface ListItemFieldDef {
   placeholder?: string;
 }
 
-// 动态列表的名称（表单 key 中 ProFormList 的 name）
 const LIST_ITEMS: { listName: string; groupTitle: string; itemLabel: string; addButtonText: string; fields: ListItemFieldDef[] }[] = [
-  // TODO: 在此添加动态列表定义，例如：
-  // {
-  //   listName: 'items',
-  //   groupTitle: '明细列表',
-  //   itemLabel: '明细',
-  //   addButtonText: '＋ 添加明细',
-  //   fields: [
-  //     { name: 'name', label: '名称', type: 'text', required: true, span: 12 },
-  //     { name: 'price', label: '价格', type: 'text', required: true, span: 12 },
-  //   ],
-  // },
+  {
+    listName: 'involvedItems',
+    groupTitle: '涉案物品明细',
+    itemLabel: '物品',
+    addButtonText: '＋ 添加物品',
+    fields: [
+      { name: 'itemName', label: '物品名称', type: 'text', required: true, span: 12, placeholder: '请输入物品名称' },
+      { name: 'quantity', label: '数量', type: 'text', required: true, span: 12, placeholder: '请输入数量' },
+      {
+        name: 'unit', label: '计量单位', type: 'select', required: true, span: 12, placeholder: '请选择单位',
+        options: [
+          { label: '个', value: '个' },
+          { label: '件', value: '件' },
+          { label: '台', value: '台' },
+          { label: '套', value: '套' },
+          { label: '千克', value: '千克' },
+        ],
+      },
+    ],
+  },
 ];
 
-// ============================================================
-// ③ TODO: 提交接口
-// ============================================================
-const submitForm = async (values: Record<string, unknown>): Promise<{ success: boolean }> => {
-  // TODO: 调用项目计划声明的创建或更新接口
-  // 根据是否为编辑态选择 POST 或 PUT
-  void values;
-  throw new Error('submitForm: 请替换为实际 API 调用');
-};
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-// ============================================================
-// 以下为 UI 框架代码，无需修改
-// ============================================================
+const submitForm = async (_values: Record<string, unknown>): Promise<{ success: boolean }> => {
+  await delay(800);
+  return { success: true };
+};
 
 const MultiForm: React.FC = () => {
   const [form] = Form.useForm();
@@ -128,7 +128,9 @@ const MultiForm: React.FC = () => {
   }
 
   const renderField = (f: FieldDef | ListItemFieldDef) => {
-    const rules = f.required ? [{ required: true, message: `请输入${f.label}` }] : undefined;
+    const rules = f.required
+      ? [{ required: true, message: f.type === 'text' ? `请输入${f.label}` : `请选择${f.label}` }]
+      : undefined;
 
     if (f.type === 'date') {
       return (
@@ -199,7 +201,7 @@ const MultiForm: React.FC = () => {
         {ungrouped.length > 0 && (
           <>
             <Divider style={{ color: '#8c8c8c', borderColor: '#d9d9d9', fontWeight: 500, fontSize: 16 }}>
-              {/* TODO: ④ 如需标题可在此修改 */}
+              其他信息
             </Divider>
             {renderFieldRows(ungrouped)}
           </>

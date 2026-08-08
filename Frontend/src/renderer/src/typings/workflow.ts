@@ -168,6 +168,7 @@ export type WorkflowClarificationAnswer =
   | WorkflowDetailReviewSubmission
   | WorkflowAcceptanceAdjustment
   | WorkflowRequirementSpecEdit
+  | Record<string, unknown>
 
 export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer>
 

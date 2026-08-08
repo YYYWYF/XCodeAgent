@@ -244,6 +244,9 @@ _ALLOWED_IMPORT_SOURCES = {
     "@ant-design/pro-components",
     "@ant-design/icons",
     "@ant-design/cssinjs",
+    # dayjs 是 antd5 的传递依赖，页面模板（commonTable/tabsTable）用它做日期格式化。
+    # 选模板作设计稿时模板代码原样落盘，校验需放行 dayjs，否则被当作禁用依赖拦截。
+    "dayjs",
 }
 
 # 常见禁用来源 → 修复指引。LLM 常误从这些库引路由/数据/导出功能。
@@ -360,6 +363,161 @@ def _build_repair_prompt(
         "--- END ERRORS ---\n\n"
         "Return the full corrected .tsx file now."
     )
+
+
+def _build_adjust_prompt(
+    page: dict[str, Any], page_key: str, prev_code: str, instruction: str
+) -> str:
+    """构造调整 prompt：把现有设计稿与用户调整指令回喂 LLM 让其定向修改。
+
+    仿 _build_repair_prompt 的"前次代码 + 修改要求"模式，但替换错误清单为
+    用户的自然语言调整指令。强调保留页面整体结构、仅按指令调整，仍遵循
+    antd-ui-design skill 规范（纯视觉、内联 Mock、Pro 组件）。
+    """
+
+    return (
+        "You previously generated a React + antd5 + @ant-design/pro-components "
+        ".tsx page for the page below. The user has reviewed it and requested "
+        "specific adjustments. Apply the adjustments and return the COMPLETE "
+        "updated .tsx file.\n\n"
+        "Output rules (same as initial generation):\n"
+        "- Return a single .tsx file's source code ONLY. No markdown fences, "
+        "no commentary.\n"
+        "- Keep the parts the user did not ask to change; only apply the "
+        "requested adjustments. Preserve the overall page structure, component "
+        "selection, and layout unless the instruction explicitly changes them.\n"
+        f"- The component name MUST be {page_key}, exported via "
+        "`export default`.\n"
+        "- Still follow the antd-ui-design skill: React + antd5 + "
+        "@ant-design/pro-components, inline static Mock data (8-15 rows), "
+        "ProTable uses `dataSource` not `request`, no API/useEffect/fetch, "
+        "no-op handlers, no layout shell.\n\n"
+        "--- PAGE TO DESIGN ---\n"
+        f"{_page_brief(page)}\n"
+        "--- END PAGE ---\n\n"
+        "--- CURRENT DESIGN CODE (to be adjusted) ---\n"
+        f"{prev_code}\n"
+        "--- END CURRENT CODE ---\n\n"
+        "--- USER ADJUSTMENT INSTRUCTION ---\n"
+        f"{instruction}\n"
+        "--- END INSTRUCTION ---\n\n"
+        "Return the full adjusted .tsx file now."
+    )
+
+
+def generate_adjusted_page_react_code(
+    page: dict[str, Any],
+    page_key: str,
+    project_dir: str,
+    prev_code: str,
+    instruction: str,
+) -> str:
+    """基于现有设计稿 + 用户调整指令调 LLM 重新生成，并校验+自动修复。
+
+    结构与 generate_page_react_code 一致，只是 prompt 换成调整版（前次代码 +
+    调整指令）。校验失败时回喂错误定向修复，最多重试 ui_design_max_retries 次。
+    全部失败抛 ValueError，由调用方标记 generation_failed。
+    """
+
+    settings = Settings.from_env()
+    model = create_chat_model(settings).bind(max_tokens=settings.ui_design_max_tokens)
+    page_id = str(page.get("pageId") or page.get("id") or "")
+    max_retries = max(0, settings.ui_design_max_retries)
+
+    prompt = _build_adjust_prompt(page, page_key, prev_code, instruction)
+    result = model.invoke(prompt)
+    content = _coerce_content_text(getattr(result, "content", ""))
+    code = _extract_tsx_code(content)
+    logger.info(
+        "ui_design_adjusted page_id=%s attempt=1 code_chars=%s",
+        page_id,
+        len(code),
+    )
+
+    ok, err = validate_page_code(project_dir, code)
+    attempt = 1
+    while not ok and attempt <= max_retries:
+        attempt += 1
+        logger.warning(
+            "ui_design_adjust_validate_failed page_id=%s attempt=%s err=%s",
+            page_id,
+            attempt - 1,
+            err[:200],
+        )
+        repair_prompt = _build_repair_prompt(page, page_key, code, [err])
+        result = model.invoke(repair_prompt)
+        content = _coerce_content_text(getattr(result, "content", ""))
+        code = _extract_tsx_code(content)
+        logger.info(
+            "ui_design_adjust_repaired page_id=%s attempt=%s code_chars=%s",
+            page_id,
+            attempt,
+            len(code),
+        )
+        ok, err = validate_page_code(project_dir, code)
+
+    if not ok:
+        raise ValueError(
+            f"ui_design adjust validation failed after {attempt} attempts: {err[:300]}"
+        )
+    return code
+
+
+def resolve_adjust_target_pages(
+    pages: list[dict[str, Any]], instruction: str
+) -> list[str]:
+    """让大模型根据调整指令 + 所有页面信息，判断需要调整哪些页面。
+
+    用户未通过 @页面名 显式指定目标时调用。返回需要调整的 pageId 列表。
+    模型返回 JSON 数组（pageId 字符串）；解析失败或返回空时返回空列表，
+    由调用方决定是否提示用户。
+    """
+
+    if not pages or not instruction.strip():
+        return []
+    settings = Settings.from_env()
+    model = create_chat_model(settings)
+    page_briefs = "\n".join(
+        f"- pageId: {p.get('pageId') or p.get('id') or ''}"
+        f" | name: {p.get('name') or ''}"
+        f" | path: {p.get('path') or '/'}"
+        f" | description: {p.get('description') or ''}"
+        for p in pages
+        if isinstance(p, dict)
+    )
+    prompt = (
+        "You are deciding which pages need UI design adjustments based on a "
+        "user's natural-language instruction.\n\n"
+        "Below is the list of pages in the application. Decide which pages the "
+        "user's instruction applies to. Return ONLY a JSON array of pageId "
+        "strings (the pageId values from the list below). No commentary, no "
+        "markdown fences.\n\n"
+        "If the instruction does not clearly apply to any page, return an empty "
+        "array []. If it applies to all pages, include all pageIds.\n\n"
+        "--- PAGES ---\n"
+        f"{page_briefs}\n"
+        "--- END PAGES ---\n\n"
+        f"--- USER INSTRUCTION ---\n{instruction}\n--- END INSTRUCTION ---\n\n"
+        "Return the JSON array now."
+    )
+    result = model.invoke(prompt)
+    content = _coerce_content_text(getattr(result, "content", "")).strip()
+    # 去掉可能的 markdown 围栏。
+    content = re.sub(r"^```(?:json)?\s*", "", content)
+    content = re.sub(r"\s*```$", "", content).strip()
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        logger.warning("resolve_adjust_target_pages parse_failed content=%s", content[:200])
+        return []
+    if not isinstance(parsed, list):
+        return []
+    valid_ids = {
+        str(p.get("pageId") or p.get("id") or "").strip()
+        for p in pages
+        if isinstance(p, dict)
+    }
+    return [str(pid).strip() for pid in parsed if str(pid).strip() in valid_ids]
 
 
 def generate_page_react_code(
@@ -551,6 +709,69 @@ def load_page_code(project_dir: str, page_key: str) -> str | None:
         legacy_target = pages_dir(project_dir) / legacy_key / "index.tsx"
         return _read_page_file(legacy_target)
     return None
+
+
+def delete_page_code(project_dir: str, page_key: str) -> None:
+    """删除单页已落盘设计稿，供"重新生成"绕过 load_page_code 的复用。
+
+    删除整个页面目录（index.tsx 及同目录其他文件）。目录不存在时静默返回，
+    与 load_page_code 的缺失语义一致。
+    """
+
+    target_dir = pages_dir(project_dir) / page_key
+    if not target_dir.exists():
+        return
+    try:
+        import shutil
+
+        shutil.rmtree(target_dir)
+    except OSError:
+        logger.warning("ui_design_delete_failed page_key=%s", page_key)
+
+
+# 页面模板在 Frontend 工程的源码目录，与前端 templateService 的 import.meta.glob
+# （../templates/*/manifest.json）对应。后端用 REPOSITORY_ROOT 定位 Frontend 工程。
+_TEMPLATES_DIR = REPOSITORY_ROOT / "Frontend" / "src" / "renderer" / "src" / "templates"
+
+
+def load_template_source(template_id: str) -> str:
+    """按 manifest.id 读取页面模板的 index.tsx 源码，供选模板作设计稿时直接落盘。
+
+    遍历 templates/*/manifest.json 匹配 id，返回对应目录下的 index.tsx 内容。
+    模板源码是成熟可运行的 Pro 组件页面，直接用作设计稿无需 LLM 生成或校验。
+    找不到模板时抛 ValueError，由调用方（ui_confirmation 节点）捕获标记失败。
+    """
+
+    template_id = str(template_id or "").strip()
+    if not template_id:
+        raise ValueError("load_template_source: template_id 为空。")
+    if not _TEMPLATES_DIR.is_dir():
+        raise ValueError(
+            f"load_template_source: 模板目录不存在：{_TEMPLATES_DIR}。"
+            "请确认 Frontend 工程的 src/renderer/src/templates 已就绪。"
+        )
+    for entry in _TEMPLATES_DIR.iterdir():
+        if not entry.is_dir():
+            continue
+        manifest_path = entry / "manifest.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(manifest.get("id") or "").strip() != template_id:
+            continue
+        index_path = entry / "index.tsx"
+        if not index_path.is_file():
+            raise ValueError(
+                f"load_template_source: 模板 {template_id} 缺少 index.tsx：{index_path}。"
+            )
+        return index_path.read_text(encoding="utf-8")
+    raise ValueError(
+        f"load_template_source: 未找到 id={template_id} 的页面模板，"
+        f"已扫描目录：{_TEMPLATES_DIR}。"
+    )
 
 
 def _read_page_file(target: Path) -> str | None:

@@ -1,5 +1,5 @@
 import { ReloadOutlined } from '@ant-design/icons'
-import { Button, message, Result, Steps } from 'antd'
+import { Button, message, Result, Spin, Steps } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ApplicationConfig,
@@ -212,6 +212,10 @@ export default function ApplicationPagePlanningModal({
   const originalRequest = useMemo(() => buildApplicationPlanningRequest(application), [application])
   const startedRef = useRef(false)
   const completedRef = useRef(false)
+  // 一旦进入过 UI 确认阶段就锁定：单页"选模板/换一换"run 期间 workflow 流式快照
+  // 可能短暂丢失 clarification/phase，导致 showingProgress 闪烁切回进度页白屏。
+  // 锁定后整个会话不再切回全屏进度页，逐页动作只在渲染区显示加载态。
+  const enteredUiConfirmationRef = useRef(false)
   const [workflow, setWorkflow] = useState<WorkflowRunPayload | undefined>(initialWorkflow)
   const [running, setRunning] = useState(false)
   const [preparingTemplate, setPreparingTemplate] = useState(false)
@@ -221,7 +225,28 @@ export default function ApplicationPagePlanningModal({
   )
   const progressCopy = workflowProgressCopy(workflow)
   const awaitingUserInput = planningWorkflowRequiresUserInput(workflow)
-  const showingProgress = !workflow || (running && !awaitingUserInput)
+  // 检测是否已进入 UI 确认阶段：一旦命中即锁定，避免 run 期间流式快照丢失导致回切进度页。
+  if (
+    !enteredUiConfirmationRef.current &&
+    planningWorkflowPhase(workflow) === 'ui_confirmation' &&
+    Boolean(
+      workflow?.summary?.clarification ||
+        workflow?.state?.clarification ||
+        workflow?.result?.clarification
+    )
+  ) {
+    enteredUiConfirmationRef.current = true
+  }
+  const inUiConfirmationStage = enteredUiConfirmationRef.current
+  const showingProgress =
+    !workflow || (running && !awaitingUserInput && !inUiConfirmationStage)
+  // run 中途流式快照可能短暂丢失 clarification，此时确认面板会返回 null 导致白屏。
+  // 有 workflow 但无 clarification 时显示加载态兜底，避免空白。
+  const hasClarification = Boolean(
+    workflow?.summary?.clarification ||
+      workflow?.state?.clarification ||
+      workflow?.result?.clarification
+  )
   // UI确认节点生成期间，流式展示已就绪的设计稿，避免干等到最后一次性出现。
   // 排除 ui_confirmation 已完成（用户一键确认全部设计稿后同 run 流转到 project_planning，
   // 但 project_planning 的 started 帧到达前可能短暂停留在 ui_confirmation completed 帧），
@@ -524,7 +549,7 @@ export default function ApplicationPagePlanningModal({
                   ) : null}
                 </div>
               ) : null}
-              {!showingProgress && workflow ? (
+              {!showingProgress && workflow && hasClarification ? (
                 <ApplicationPlanningQuestionPanel
                   datasourceType={application.datasource.type}
                   disabled={running}
@@ -534,6 +559,11 @@ export default function ApplicationPagePlanningModal({
                   rootPath={application.schema?.menus?.rootPath || '/'}
                   workflow={workflow}
                 />
+              ) : null}
+              {!showingProgress && workflow && !hasClarification ? (
+                <div className={cx('page-planning-loading')}>
+                  <Spin />
+                </div>
               ) : null}
             </section>
           )}

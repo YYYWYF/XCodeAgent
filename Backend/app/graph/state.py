@@ -60,6 +60,7 @@ class ProjectState(TypedDict, total=False):
     detail_review_submission: dict[str, Any]
     application_planning_confirmation: dict[str, Any]
     ui_designs: dict[str, Any]
+    ui_design_action: dict[str, Any]
     workspace_snapshot_summary: dict[str, Any]
     workspace_snapshot_path: str
     workspace_snapshot_hash: str

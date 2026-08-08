@@ -176,6 +176,64 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["resume_values"]["requirement_spec_feedback"], "")
 
+    def test_application_planning_extracts_ui_design_select_template_action(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowScope": "application_planning",
+                    "clarificationAnswers": {
+                        "ui_design_action": {
+                            "pageId": "order_list_page",
+                            "action": "select_template",
+                            "templateId": "commonTable",
+                        }
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["ui_design_action"],
+            {"pageId": "order_list_page", "action": "select_template", "templateId": "commonTable"},
+        )
+
+    def test_application_planning_extracts_ui_design_regenerate_action(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowScope": "application_planning",
+                    "clarificationAnswers": {
+                        "ui_design_action": {
+                            "pageId": "dashboard_page",
+                            "action": "regenerate",
+                        }
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["ui_design_action"],
+            {"pageId": "dashboard_page", "action": "regenerate"},
+        )
+
+    def test_application_planning_rejects_invalid_ui_design_action(self) -> None:
+        # select_template 缺 templateId、未知 action、缺 pageId 均视为无动作
+        for invalid in (
+            {"pageId": "p1", "action": "select_template"},
+            {"pageId": "p1", "action": "unknown"},
+            {"action": "regenerate"},
+        ):
+            inputs = workflow_run_inputs(
+                {
+                    "forwardedProps": {
+                        "workflowScope": "application_planning",
+                        "clarificationAnswers": {"ui_design_action": invalid},
+                    }
+                }
+            )
+            self.assertNotIn("ui_design_action", inputs["resume_values"])
+
     def test_main_workflow_ignores_edited_requirement_spec(self) -> None:
         inputs = workflow_run_inputs(
             {
