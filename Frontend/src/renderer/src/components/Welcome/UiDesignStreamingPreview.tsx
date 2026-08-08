@@ -4,7 +4,7 @@ import { Button, Modal, Typography } from 'antd'
 import { FullscreenOutlined } from '@ant-design/icons'
 import type { WorkflowRunPayload } from '../../typings'
 import { cx } from '../../utils'
-import DesignPreviewFrame from './DesignPreviewFrame'
+import DesignRenderer from '../DesignRenderer/DesignRenderer'
 import './UiDesignConfirmationPanel.less'
 
 const { Paragraph, Text } = Typography
@@ -17,6 +17,8 @@ type PageDesign = {
   html_path?: string
   html?: string
   code_path?: string
+  /** 设计稿 .tsx 源码（方案 B：DesignRenderer 直接消费此字段编译渲染）。 */
+  code?: string
   route_path?: string
   status?: string
 }
@@ -40,17 +42,6 @@ function readStreamingPages(workflow: WorkflowRunPayload): PageDesign[] {
   return []
 }
 
-// 从 workflow state/result 的 ui_designs.preview_origin 读取设计稿工程 dev server 地址。
-function readPreviewOrigin(workflow: WorkflowRunPayload): string | undefined {
-  for (const source of [workflow.state, workflow.result]) {
-    const uiDesigns = source?.ui_designs
-    if (!uiDesigns || typeof uiDesigns !== 'object') continue
-    const origin = (uiDesigns as Record<string, unknown>).preview_origin
-    if (typeof origin === 'string' && origin) return origin
-  }
-  return undefined
-}
-
 // 在 UI确认节点生成期间，流式展示已就绪的设计稿与未就绪骨架，
 // 让用户边等边看到逐页完成的设计稿，而不是干等到最后一次性出现。
 export default function UiDesignStreamingPreview({
@@ -58,7 +49,6 @@ export default function UiDesignStreamingPreview({
   total
 }: Props): ReactElement | null {
   const pages = useMemo(() => readStreamingPages(workflow), [workflow])
-  const previewOrigin = useMemo(() => readPreviewOrigin(workflow), [workflow])
   const [fullscreenPage, setFullscreenPage] = useState<PageDesign | null>(null)
   const readyCount = pages.length
   const totalCount = Math.max(total ?? 0, readyCount)
@@ -103,7 +93,7 @@ export default function UiDesignStreamingPreview({
                     <div className={cx('ui-design-card-actions')}>
                       <Button
                         className={cx('ui-design-action-btn')}
-                        disabled={!page.code_path}
+                        disabled={!page.code}
                         icon={<FullscreenOutlined />}
                         onClick={() => setFullscreenPage(page)}
                         title="全屏查看"
@@ -118,10 +108,9 @@ export default function UiDesignStreamingPreview({
                     </Paragraph>
                   ) : null}
                   <div className={cx('ui-design-card-preview')}>
-                    {page.code_path ? (
-                      <DesignPreviewFrame
-                        origin={previewOrigin}
-                        routePath={page.route_path}
+                    {page.code ? (
+                      <DesignRenderer
+                        code={page.code}
                         title={`设计稿-${page.name || pageId}`}
                       />
                     ) : (
@@ -165,11 +154,10 @@ export default function UiDesignStreamingPreview({
         width="90vw"
         wrapClassName={cx('ui-design-fullscreen-modal')}
       >
-        {fullscreenPage ? (
-          <DesignPreviewFrame
+        {fullscreenPage && fullscreenPage.code ? (
+          <DesignRenderer
+            code={fullscreenPage.code}
             fullscreen
-            origin={previewOrigin}
-            routePath={fullscreenPage.route_path}
             title={`设计稿-${fullscreenPage.name || fullscreenPage.pageId}`}
           />
         ) : null}

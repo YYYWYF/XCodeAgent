@@ -51,7 +51,7 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
 
     仿照 _page_template_instruction 的"read_file 读参考代码再生成"模式。设计稿是
     UI确认阶段生成并经用户确认的纯视觉 React+antd+pro-components mockup，落盘在
-    /.xcodeagent/ui-design/src/pages/<page_key>/index.tsx。前端 agent 处理某个
+    /.xcodeagent/ui-design/pages/<page_key>/index.tsx。前端 agent 处理某个
     page task 时（unit_id = page:<pageId>），按映射 read_file 对应设计稿，高保真
     还原其视觉结构，再把静态数据/无交互换成真实 API/数据层。
     """
@@ -72,7 +72,7 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
         entries.append(
             {
                 "pageId": page_id,
-                "designPath": f"/.xcodeagent/ui-design/src/pages/{page_key}/index.tsx",
+                "designPath": f"/.xcodeagent/ui-design/pages/{page_key}/index.tsx",
                 "name": str(page.get("name") or page_id),
             }
         )

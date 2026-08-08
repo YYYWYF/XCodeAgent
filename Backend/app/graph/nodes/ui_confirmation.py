@@ -1,10 +1,14 @@
 """UI确认节点：为需求 spec 中每个页面生成 React 设计稿代码并等待用户逐页确认。
 
-节点位于 requirements 与 project_planning 之间。首次进入时先从 GitHub 模板
-仓库 clone 设计稿工程到工作区 .xcodeagent/ui-design/ 并启动 dev server，再为
-每个页面调用 antd-ui-design 技能生成真实视觉的 React + antd 设计稿 .tsx，写入
-设计稿工程的 src/pages/<PageKey>/index.tsx 并注册到 BIZ_MENUS 菜单；随后返回
-ui_design_confirmation 待确认交互，用户逐页确认全部通过后才放行进入项目规划。
+节点位于 requirements 与 project_planning 之间。首次进入时准备设计稿落盘目录
+（工作区 .xcodeagent/ui-design/），再为每个页面调用 antd-ui-design 技能生成
+真实视觉的 React + antd5 设计稿 .tsx，写入 .xcodeagent/ui-design/pages/<PageKey>/
+index.tsx，并把源码内联到 ui_designs.pages[].code 供前端 DesignRenderer 编译渲染；
+随后返回 ui_design_confirmation 待确认交互，用户逐页确认全部通过后才放行进入
+项目规划。
+
+方案 B：不再 clone 模板工程、不再启动 dev server、不再注册 BIZ_MENUS——渲染由
+前端 DesignRenderer（同源 iframe + 预打包 antd5 runtime + sucrase 编译）完成。
 """
 
 from __future__ import annotations
@@ -26,8 +30,8 @@ from app.services.ui_design_generator import (
     generate_page_react_code,
     load_page_code,
     menu_path_for_page,
+    pages_dir,
     persist_page_code,
-    rewrite_menus,
     route_path_for_page,
 )
 from app.services.ui_design_project_setup import setup_ui_design_project
@@ -169,6 +173,9 @@ async def _generate_one_page(
         "menu_path": menu_path,
         "route_path": route_path,
         "code_path": "",
+        # 内联 .tsx 源码：方案 B 下前端 DesignRenderer 直接消费此字段编译渲染，
+        # 不再依赖独立 dev server。code_path 仍保留给后续还原链路。
+        "code": "",
         "status": "pending",
     }
     if not page_id or not project_dir:
@@ -176,9 +183,8 @@ async def _generate_one_page(
     # 已存在落盘设计稿直接复用，避免恢复时重复调用 LLM。
     existing = load_page_code(project_dir, page_key)
     if existing:
-        entry["code_path"] = str(
-            Path(project_dir) / "src" / "pages" / page_key / "index.tsx"
-        )
+        entry["code_path"] = str(pages_dir(project_dir) / page_key / "index.tsx")
+        entry["code"] = existing
         ready_pages.append(entry)
         _emit_progress(
             f"已加载现有设计稿：{entry['name']}（{len(ready_pages)}/{total}）",
@@ -204,6 +210,7 @@ async def _generate_one_page(
                 generate_page_react_code, page, page_key, project_dir
             )
             entry["code_path"] = persist_page_code(project_dir, page_key, code)
+            entry["code"] = code
             ready_pages.append(entry)
             _emit_progress(
                 f"设计稿已生成：{entry['name']}（{len(ready_pages)}/{total}）",
@@ -228,11 +235,11 @@ async def _generate_one_page(
 
 
 async def _build_initial_ui_designs(state: ProjectState) -> dict[str, Any]:
-    """准备设计稿工程并并发为每个页面生成 React 设计稿，返回初始 ui_designs 状态。
+    """准备设计稿目录并并发为每个页面生成 React 设计稿，返回初始 ui_designs 状态。
 
-    先 clone/更新 GitHub 模板并启动 dev server（流式推送准备进度），再并发
-    生成各页设计稿。每生成完一页即通过 LangGraph stream 推送带当前已生成页面
-    的进度，前端可流式展示。全部生成完成后重写 menus.ts 注册所有页面菜单。
+    方案 B：不再 clone 模板工程、不再启动 dev server。setup_ui_design_project
+    只确保 .xcodeagent/ui-design 目录存在。每生成完一页即通过 LangGraph stream
+    推送带当前已生成页面（含内联 code 源码）的进度，前端 DesignRenderer 流式渲染。
     """
 
     workspace = str(workspace_root(state))
@@ -240,22 +247,17 @@ async def _build_initial_ui_designs(state: ProjectState) -> dict[str, Any]:
     valid_pages = [page for page in pages if _page_id(page)]
     total = len(valid_pages)
 
-    # 准备设计稿工程：clone 模板 + 安装依赖 + 启动 dev server。
-    _emit_progress("正在准备设计稿工程（拉取模板并启动预览服务）", ready=0, total=total, pages=[])
+    # 准备设计稿落盘目录（方案 B：仅 mkdir，无 clone/install/launch）。
+    _emit_progress("正在准备设计稿目录", ready=0, total=total, pages=[])
     setup = await asyncio.to_thread(setup_ui_design_project, workspace)
     project_dir = str(setup.get("project_dir") or "")
-    preview_origin = str(setup.get("preview_origin") or "")
     if setup.get("status") != "ready":
         _emit_progress(
-            f"设计稿预览服务未就绪：{setup.get('message')}（代码仍会生成）",
+            f"设计稿目录未就绪：{setup.get('message')}（代码仍会生成）",
             ready=0, total=total, pages=[],
         )
     else:
-        _emit_progress(
-            f"设计稿工程已就绪，预览地址：{preview_origin}",
-            ready=0, total=total, pages=[],
-        )
-
+        _emit_progress("设计稿目录已就绪", ready=0, total=total, pages=[])
     _emit_progress(f"开始为 {total} 个页面生成设计稿", ready=0, total=total, pages=[])
     semaphore = asyncio.Semaphore(_UI_DESIGN_CONCURRENCY)
     used_keys: set[str] = {"DefaultPage"}
@@ -266,11 +268,6 @@ async def _build_initial_ui_designs(state: ProjectState) -> dict[str, Any]:
         for page in valid_pages
     ]
     page_entries = await asyncio.gather(*tasks)
-    # 全部页面生成完成后，重写设计稿工程菜单注册所有页面。
-    try:
-        rewrite_menus(project_dir, page_entries)
-    except Exception:
-        logger.exception("ui_design_menus_rewrite_failed project=%s", project_dir)
     _emit_progress(
         "全部页面设计稿已生成，等待逐页确认",
         ready=total,
@@ -280,7 +277,6 @@ async def _build_initial_ui_designs(state: ProjectState) -> dict[str, Any]:
     return {
         "confirmation_status": "pending_user_confirmation",
         "pages": page_entries,
-        "preview_origin": preview_origin,
     }
 
 

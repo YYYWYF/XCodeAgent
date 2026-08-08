@@ -636,9 +636,14 @@ def create_requirement_spec(
         if not flow["steps"] and str(flow.get("description") or "").strip():
             flow["steps"] = [str(flow["description"]).strip()]
     used_page_paths: set[str] = set()
+    route_root = str(spec.get("app_info", {}).get("route_root_path") or "").strip().rstrip("/")
     for page in spec["pages"]:
         pageId = str(page.get("pageId") or "")
-        page["path"] = _unique_page_path(str(page.get("path") or ""), pageId, used_page_paths)
+        path = str(page.get("path") or "")
+        # 去除 LLM 可能引入的重复 route_root_path 前缀，例如 /page/page/projects → /page/projects
+        if route_root and path.startswith(f"{route_root}/{route_root.lstrip('/')}"):
+            path = route_root + path[len(f"{route_root}/{route_root.lstrip('/')}"):] if path.startswith(f"{route_root}/{route_root.lstrip('/')}/") else route_root
+        page["path"] = _unique_page_path(path, pageId, used_page_paths)
 
     criteria = spec.get("acceptance_criteria")
     normalized_criteria = (

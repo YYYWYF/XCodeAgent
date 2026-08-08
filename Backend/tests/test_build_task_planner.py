@@ -342,7 +342,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(route_task["target_files"], ["frontend/src/constants/menus.ts"])
         self.assertEqual(route_task["dependencies"], ["page-layout"])
         self.assertIn("key: 'Dashboard'", route_task["description"])
-        self.assertIn("path: 'page'", route_task["description"])
+        self.assertIn("path: '/page/'", route_task["description"])
         self.assertIn("BIZ_MENUS 顶层数组", route_task["description"])
         self.assertNotIn("firstLevel.children", route_task["description"])
 
@@ -394,7 +394,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             menus.write_text(
                 """export const BIZ_MENUS = [{
   path: 'firstLevel',
-  children: [{ path: 'page', name: '概览页', key: 'DashboardPage' }]
+  children: [{ path: '/page/', name: '概览页', key: 'DashboardPage' }]
 }];""",
                 encoding="utf-8",
             )
@@ -489,7 +489,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             menus = Path(workspace) / "frontend/src/constants/menus.ts"
             menus.parent.mkdir(parents=True)
             menus.write_text(
-                "export const BIZ_MENUS = [{ path: 'home', name: '概览页', key: 'DashboardPage' }];",
+                "export const BIZ_MENUS = [{ path: '/page/home', name: '概览页', key: 'DashboardPage' }];",
                 encoding="utf-8",
             )
             plan = create_build_task_plan(
@@ -561,7 +561,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             menus.parent.mkdir(parents=True)
             menus.write_text(
                 "export const BIZ_MENUS = [{ children: "
-                "[{ path: 'page', name: '概览页', key: 'DashboardPage' }] }];",
+                "[{ path: '/page/', name: '概览页', key: 'DashboardPage' }] }];",
                 encoding="utf-8",
             )
             plan = create_build_task_plan(
@@ -662,10 +662,67 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(menu_task["target_files"], ["frontend/src/constants/menus.ts"])
         self.assertEqual(menu_task["change_scope"][0]["description"], "仅向 BIZ_MENUS 顶层数组追加当前页面菜单项。")
         self.assertIn("BIZ_MENUS 顶层数组", menu_task["description"])
-        self.assertIn("path: 'dashboard'", menu_task["description"])
-        self.assertNotIn("/page/dashboard", menu_task["description"])
+        self.assertIn("path: '/page/dashboard'", menu_task["description"])
         self.assertNotIn("firstLevel.children", menu_task["description"])
-        self.assertIn("path=dashboard", menu_task["acceptance_criteria"][2])
+        self.assertIn("path=/page/dashboard", menu_task["acceptance_criteria"][2])
+
+    def test_missing_page_entry_falls_back_to_target_page_key(self) -> None:
+        """模型漏在 change_scope 声明页面入口时，用 target.page_key 兜底补齐菜单登记。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "project_list_page",
+                        "name": "项目列表页",
+                        "path": "/page/project-list",
+                        "module_id": "project_management",
+                    }
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            page_file = Path(workspace) / "frontend/src/pages/ProjectListPage/index.tsx"
+            page_file.parent.mkdir(parents=True)
+            page_file.write_text("export default function ProjectListPage() {}", encoding="utf-8")
+            menus = Path(workspace) / "frontend/src/constants/menus.ts"
+            menus.parent.mkdir(parents=True)
+            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "task-api",
+                            "unit_id": "page:project_list_page",
+                            "owner": "frontend",
+                            "description": "实现项目列表 API",
+                            "change_scope": [
+                                {
+                                    "operation": "add",
+                                    "path": "frontend/src/apis/projectApi.ts",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                build_context={
+                    "target": {
+                        "type": "page",
+                        "id": "project_list_page",
+                        "page_key": "ProjectListPage",
+                    },
+                    "page_detail": {"page_name": "项目列表页", "path": "/page/project-list"},
+                    "required_unit_ids": ["page:project_list_page"],
+                },
+                workspace_root=workspace,
+            )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        route_task = tasks["page:project_list_page:route-menu-registration"]
+        self.assertIn("key: 'ProjectListPage'", route_task["description"])
+        self.assertIn("path: '/page/project-list'", route_task["description"])
 
     def test_v3_markdown_renders_units_and_task_graph(self) -> None:
         plan = create_build_task_plan(

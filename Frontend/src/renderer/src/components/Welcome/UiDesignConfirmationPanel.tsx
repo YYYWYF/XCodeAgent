@@ -15,7 +15,7 @@ import type {
   WorkflowRunPayload
 } from '../../typings'
 import { cx } from '../../utils'
-import DesignPreviewFrame from './DesignPreviewFrame'
+import DesignRenderer from '../DesignRenderer/DesignRenderer'
 import './UiDesignConfirmationPanel.less'
 
 const { Paragraph, Text } = Typography
@@ -29,6 +29,8 @@ type PageDesign = {
   html_path?: string
   html?: string
   code_path?: string
+  /** 设计稿 .tsx 源码（方案 B：DesignRenderer 直接消费此字段编译渲染）。 */
+  code?: string
   route_path?: string
   status?: string
 }
@@ -66,17 +68,6 @@ function readPages(clarification?: WorkflowClarification): PageDesign[] {
     : []
 }
 
-// 从 workflow state/result 的 ui_designs.preview_origin 读取设计稿工程 dev server 地址。
-function readPreviewOrigin(workflow: WorkflowRunPayload): string | undefined {
-  for (const source of [workflow.state, workflow.result]) {
-    const uiDesigns = source?.ui_designs
-    if (!uiDesigns || typeof uiDesigns !== 'object') continue
-    const origin = (uiDesigns as Record<string, unknown>).preview_origin
-    if (typeof origin === 'string' && origin) return origin
-  }
-  return undefined
-}
-
 // 在创建规划页面展示逐页设计稿，并收集用户的逐页/全部确认动作。
 export default function UiDesignConfirmationPanel({
   disabled,
@@ -85,7 +76,6 @@ export default function UiDesignConfirmationPanel({
 }: Props): ReactElement | null {
   const clarification = planningClarification(workflow)
   const pages = useMemo(() => readPages(clarification), [clarification])
-  const previewOrigin = useMemo(() => readPreviewOrigin(workflow), [workflow])
   // 本地逐页确认状态：已确认的 pageId 集合。后端权威状态以提交时的一句确认为准。
   const [confirmedPageIds, setConfirmedPageIds] = useState<Set<string>>(new Set())
   const [feedback, setFeedback] = useState('')
@@ -264,7 +254,7 @@ export default function UiDesignConfirmationPanel({
                       <div className={cx('ui-design-card-actions')}>
                         <Button
                           className={cx('ui-design-action-btn')}
-                          disabled={!page.code_path}
+                          disabled={!page.code}
                           icon={<FullscreenOutlined />}
                           onClick={() => setFullscreenPage(page)}
                           title="全屏查看"
@@ -308,10 +298,9 @@ export default function UiDesignConfirmationPanel({
                       </Paragraph>
                     ) : null}
                     <div className={cx('ui-design-card-preview')}>
-                      {page.code_path ? (
-                        <DesignPreviewFrame
-                          origin={previewOrigin}
-                          routePath={page.route_path}
+                      {page.code ? (
+                        <DesignRenderer
+                          code={page.code}
                           title={`设计稿-${page.name || pageId}`}
                         />
                       ) : (
@@ -372,11 +361,10 @@ export default function UiDesignConfirmationPanel({
         width="90vw"
         wrapClassName={cx('ui-design-fullscreen-modal')}
       >
-        {fullscreenPage ? (
-          <DesignPreviewFrame
+        {fullscreenPage && fullscreenPage.code ? (
+          <DesignRenderer
+            code={fullscreenPage.code}
             fullscreen
-            origin={previewOrigin}
-            routePath={fullscreenPage.route_path}
             title={`设计稿-${fullscreenPage.name || fullscreenPage.pageId}`}
           />
         ) : null}

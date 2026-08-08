@@ -1,0 +1,69 @@
+<!doctype html>
+<!--
+  DesignRenderer 的 iframe 容器文档。
+
+  为什么用独立静态 HTML 而非 srcdoc：主窗口 index.html 的 CSP 是
+  script-src 'self'（无 'unsafe-inline'），srcdoc iframe 会继承父 CSP，
+  导致 DesignRenderer 注入的 inline <script>（编译产物）被静默阻止。
+  改用独立 HTML 文件作为 iframe src，它有自己宽松的 CSP，不继承父窗口，
+  inline script 可正常执行。
+
+  通信：主窗口 postMessage 把编译后的 JS 代码发过来，本文档监听 message
+  事件，在 window 上下文执行，把默认导出组件挂到 window.__DESIGN_COMPONENT__，
+  再 postMessage 通知主窗口取回渲染。
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:* https://localhost:* ws://localhost:*;" />
+<style>
+  html,body{margin:0;padding:0;height:100%;}
+  #root{height:100%;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  // process shim：兜底 antd5 依赖里残留的 process.versions 等读取。
+  window.process = window.process || { env: { NODE_ENV: 'production' }, versions: {}, platform: 'browser' };
+</script>
+<script src="/design-runtime/antd5-runtime.js"></script>
+<script>
+  // 监听主窗口发来的编译产物，在本文档 window 上下文执行。
+  window.addEventListener('message', function (event) {
+    if (event.source !== window.parent) return;
+    var data = event.data || {};
+    if (data.type !== 'design-render') return;
+
+    // 清空上一次状态
+    window.__DESIGN_COMPONENT__ = undefined;
+    window.__DESIGN_ERROR__ = undefined;
+    window.__DESIGN_ERROR_STACK__ = undefined;
+
+    try {
+      // data.compiled 是 compileTsx 产物：声明 __design_exports__ 并把
+      // 默认导出挂到 window.__DESIGN_COMPONENT__。
+      (new Function(data.compiled))();
+      window.parent.postMessage({
+        type: 'design-rendered',
+        ok: typeof window.__DESIGN_COMPONENT__ === 'function',
+        componentType: typeof window.__DESIGN_COMPONENT__,
+        exportKeys: Object.keys(window.__design_exports__ || {})
+      }, '*');
+    } catch (e) {
+      window.parent.postMessage({
+        type: 'design-rendered',
+        ok: false,
+        error: (e && e.message) ? e.message : String(e),
+        stack: (e && e.stack) ? String(e.stack).slice(0, 1000) : ''
+      }, '*');
+    }
+  });
+
+  // 通知主窗口：iframe 已就绪，可以发 code 了。
+  window.parent.postMessage({ type: 'design-frame-ready' }, '*');
+</script>
+</body>
+</html>

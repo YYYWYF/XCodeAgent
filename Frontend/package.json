@@ -52,12 +52,14 @@
     "@ag-ui/client": "0.0.57",
     "@ag-ui/core": "0.0.57",
     "@ant-design/icons": "^5.0.1",
+    "@ant-design/pro-components": "^2.8.10",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "antd": "^4.24.8",
     "axios": "1.17.0",
     "clsx": "^2.1.1",
     "compressing": "1.10.3",
+    "dayjs": "^1.11.21",
     "electron-updater": "6.3.9",
     "fs-extra": "11.3.5",
     "highlight.js": "^11.11.1",
@@ -68,9 +70,7 @@
     "react-diff-view": "3.3.2",
     "react-dom": "18.2.0",
     "react-router": "^6.8.2",
-    "react-router-dom": "^6.8.2",
-    "@ant-design/pro-components": "^2.8.10",
-    "dayjs": "^1.11.21"
+    "react-router-dom": "^6.8.2"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
@@ -81,7 +81,9 @@
     "@types/react": "18.2.0",
     "@types/react-dom": "18.2.0",
     "@types/react-router-dom": "^5.3.3",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.7.0",
+    "antd5": "npm:antd@^5.24.0",
     "cross-env": "^10.1.0",
     "electron": "37.2.5",
     "electron-builder": "25.1.8",
@@ -92,9 +94,11 @@
     "eslint-plugin-react-refresh": "0.4.20",
     "less": "^4.6.4",
     "prettier": "3.6.2",
+    "sucrase": "^3.35.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.57.0",
-    "vite": "7.3.1"
+    "vite": "7.3.1",
+    "ws": "^8.21.3"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

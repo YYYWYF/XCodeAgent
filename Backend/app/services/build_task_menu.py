@@ -103,10 +103,19 @@ def ensure_page_route_registration_task(
         if (key := _page_key_from_entry_path(str(path)))
     }
     if len(page_keys) != 1:
-        raise ValueError(
-            f"Page {page_id} must resolve to exactly one frontend page entry before route registration."
+        # 兜底：模型常漏在 change_scope 声明页面入口（只写 API/组件）。
+        # 若 build_context.target.page_key 在磁盘上有对应页面目录，说明脚手架
+        # 已建好入口，用 target.page_key 补齐，避免因模型漏声明而阻塞任务拆分。
+        fallback_key = _resolve_fallback_page_key(
+            target, workspace_root, page_keys
         )
-    page_key = next(iter(page_keys))
+        if not fallback_key:
+            raise ValueError(
+                f"Page {page_id} must resolve to exactly one frontend page entry before route registration."
+            )
+        page_key = fallback_key
+    else:
+        page_key = next(iter(page_keys))
     page = _page_skeleton(project_plan, page_id)
     page_name = str(page.get("name") or _dict_value(build_context.get("page_detail")).get("page_name") or page_id)
     confirmed_path = str(page.get("path") or _dict_value(build_context.get("page_detail")).get("path") or "")
@@ -214,6 +223,29 @@ def _page_key_from_entry_path(path: str) -> str:
     return normalized[len(FRONTEND_PAGE_ENTRY_PREFIX) : -len("/index.tsx")]
 
 
+def _resolve_fallback_page_key(
+    target: dict[str, Any],
+    workspace_root: str | Path,
+    page_keys: set[str],
+) -> str:
+    """当任务未声明唯一页面入口时，用 target.page_key 兜底。
+
+    模型常漏在 change_scope/target_files 声明页面入口（只写 API 或子组件），
+    导致 page_keys 为空。若 build_context.target.page_key 在磁盘上有对应页面
+    目录（脚手架已建好入口），则用它兜底，避免因模型漏声明而阻塞任务拆分。
+
+    仅在 page_keys 为空时兜底；若模型声明了多个冲突 key，仍交由上层报错。
+    """
+
+    if page_keys:
+        return ""
+    candidate = str(target.get("page_key") or "").strip()
+    if not candidate:
+        return ""
+    entry = Path(workspace_root).expanduser() / f"{FRONTEND_PAGE_ENTRY_PREFIX}{candidate}/index.tsx"
+    return candidate if entry.is_file() else ""
+
+
 def _replace_task_page_path(
     task: dict[str, Any],
     *,
@@ -224,15 +256,22 @@ def _replace_task_page_path(
 ) -> dict[str, Any]:
     """同步替换任务内的页面路径与 PageKey，并把已存在入口操作改为 modify。"""
 
+    # PageKey 替换限定在标识符边界内，避免 planned_key 是 canonical_key 子串时
+    # 误伤（如 planned_key=ProjectList、canonical_key=ProjectListPage 时，
+    # 朴素 .replace 会把 ProjectListPage 里的 ProjectList 也替换成 ProjectListPagePage）。
+    key_pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(planned_key)}(?![A-Za-z0-9])")
+
     def replace_value(value: Any) -> Any:
         """递归替换任务结构中的精确路径和目录键。"""
 
         if isinstance(value, str):
-            return (
+            replaced = (
                 value.replace(f"/{planned_path}", canonical_path)
                 .replace(planned_path, canonical_path)
-                .replace(planned_key, canonical_key)
             )
+            if planned_key != canonical_key:
+                replaced = key_pattern.sub(canonical_key, replaced)
+            return replaced
         if isinstance(value, list):
             return [replace_value(item) for item in value]
         if isinstance(value, dict):

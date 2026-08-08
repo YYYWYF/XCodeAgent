@@ -20,6 +20,7 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.builtin_skills import read_builtin_skill_md
+from app.workspace.spec_documents import REPOSITORY_ROOT
 
 
 logger = logging.getLogger(__name__)
@@ -27,9 +28,9 @@ logger = logging.getLogger(__name__)
 
 UI_DESIGN_SKILL_NAME = "antd-ui-design"
 
-# 设计稿工程内页面与菜单的相对路径
-PAGES_RELATIVE_DIR = "src/pages"
-MENUS_RELATIVE_PATH = "src/constants/menus.ts"
+# 设计稿 .tsx 落盘的相对路径（方案 B：不再 clone 模板工程，.tsx 直接落到工作区
+# .xcodeagent/ui-design/pages/<PageKey>/index.tsx，由前端 DesignRenderer 编译渲染）。
+PAGES_RELATIVE_DIR = "pages"
 
 _FALLBACK_SKILL_NOTE = (
     "(antd-ui-design SKILL.md 未找到，请仍按以下规范生成：输出单个自包含 .tsx "
@@ -431,19 +432,23 @@ def generate_page_react_code(
 def _page_key_from_page_id(page_id: str) -> str:
     """从 pageId 派生 PascalCase 的 PageKey，用作目录名与菜单 key。
 
-    规则：去掉 _page 后缀 → 按 _ / - 分段 → 每段首字母大写拼接。
-    例：order_list_page → OrderList，dashboard_page → Dashboard，
-    login_page → Login，user_detail_page → UserDetail。
+    规则：按 _ / - / 空格分段 → 每段首字母大写拼接，保留所有段（含 page 后缀）。
+    例：order_list_page → OrderListPage，dashboard_page → DashboardPage，
+    login_page → LoginPage，user_detail_page → UserDetailPage。
+
+    与 build_context_resolver._page_key_from_page_id 和前端 templateApi.ts 的
+    pageKeyFromPageId 保持一致，避免任务拆分阶段看到两套不同的 PageKey。
     """
 
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(page_id or "page")).strip("-")
-    # 去掉末尾的 page 段
-    segments = [s for s in re.split(r"[-_]+", cleaned) if s]
-    if segments and segments[-1].lower() == "page":
-        segments = segments[:-1]
+    segments = [s for s in re.split(r"[-_\s]+", cleaned) if s]
     if not segments:
         return "Page"
-    return "".join(seg[:1].upper() + seg[1:].lower() for seg in segments)
+    pascal = "".join(seg[:1].upper() + seg[1:].lower() for seg in segments)
+    # 确保以字母开头
+    if not pascal[:1].isalpha():
+        pascal = "Page" + pascal
+    return pascal
 
 
 def derive_page_key(page: dict[str, Any], used_keys: set[str] | None = None) -> str:
@@ -516,11 +521,6 @@ def pages_dir(project_dir: str) -> Path:
     return Path(project_dir).expanduser().resolve() / PAGES_RELATIVE_DIR
 
 
-def menus_file(project_dir: str) -> Path:
-    """返回设计稿工程的菜单文件路径。"""
-
-    return Path(project_dir).expanduser().resolve() / MENUS_RELATIVE_PATH
-
 
 def persist_page_code(project_dir: str, page_key: str, code: str) -> str:
     """把单页 .tsx 原子写入设计稿工程，返回写入后的绝对路径。"""
@@ -535,9 +535,27 @@ def persist_page_code(project_dir: str, page_key: str, code: str) -> str:
 
 
 def load_page_code(project_dir: str, page_key: str) -> str | None:
-    """读取已落盘的单页 .tsx 代码，缺失时返回 None。"""
+    """读取已落盘的单页 .tsx 代码，缺失时返回 None。
+
+    兼容旧命名：统一 PageKey 命名前，设计稿目录用不带 Page 后缀的 key
+    （dashboard_page → Dashboard）。若新 key 目录不存在，回退查找旧 key 目录，
+    使已有工作区无需重新生成设计稿即可继续。
+    """
 
     target = pages_dir(project_dir) / page_key / "index.tsx"
+    code = _read_page_file(target)
+    if code is not None:
+        return code
+    legacy_key = _legacy_page_key(page_key)
+    if legacy_key and legacy_key != page_key:
+        legacy_target = pages_dir(project_dir) / legacy_key / "index.tsx"
+        return _read_page_file(legacy_target)
+    return None
+
+
+def _read_page_file(target: Path) -> str | None:
+    """读取单个 .tsx 文件，缺失或不可读时返回 None。"""
+
     if not target.is_file():
         return None
     try:
@@ -546,11 +564,34 @@ def load_page_code(project_dir: str, page_key: str) -> str | None:
         return None
 
 
-def _esbuild_main_path(project_dir: str) -> str | None:
-    """在设计稿工程的 pnpm .pnpm 目录下定位 esbuild 的 lib/main.js。"""
+def _legacy_page_key(page_key: str) -> str:
+    """返回旧命名约定下的 PageKey（去掉末尾 Page 段）。
 
-    root = Path(project_dir).expanduser().resolve()
-    pnpm_dir = root / "node_modules" / ".pnpm"
+    统一命名前的 _page_key_from_page_id 会去掉末尾 page 段
+    （DashboardPage → Dashboard）。这里反向推导，仅用于回退查找已落盘的旧目录。
+    """
+
+    if not page_key:
+        return ""
+    # PascalCase → snake_case 再去末尾 page 段，复用与旧实现等价的拆分
+    spaced = re.sub(r"(?<!^)(?=[A-Z])", "_", str(page_key)).lower()
+    segments = [s for s in spaced.split("_") if s]
+    if segments and segments[-1] == "page":
+        segments = segments[:-1]
+    if not segments:
+        return ""
+    return "".join(seg[:1].upper() + seg[1:] for seg in segments)
+
+
+def _esbuild_main_path() -> str | None:
+    """在 Frontend 工程的 pnpm .pnpm 目录下定位 esbuild 的 lib/main.js。
+
+    方案 B：设计稿不再 clone 模板工程（也就没有自己的 node_modules），
+    esbuild 改从主 Frontend 工程找——它是 vite 的间接依赖，.pnpm 下有
+    esbuild@*。REPOSITORY_ROOT 是 repo 根，Frontend 工程在其下。
+    """
+
+    pnpm_dir = REPOSITORY_ROOT / "Frontend" / "node_modules" / ".pnpm"
     if not pnpm_dir.is_dir():
         return None
     for entry in pnpm_dir.iterdir():
@@ -566,13 +607,14 @@ def validate_tsx(project_dir: str, code: str) -> tuple[bool, str]:
 
     返回 (是否通过, 错误信息)。esbuild 不可用时降级为跳过校验（通过），
     仅记录警告——避免因校验工具缺失阻断生成。
+
+    project_dir 参数保留以兼容调用方签名，但方案 B 下 esbuild 改从 Frontend
+    工程查找（见 _esbuild_main_path），不再依赖设计稿工程的 node_modules。
     """
 
-    main_path = _esbuild_main_path(project_dir)
+    main_path = _esbuild_main_path()
     if not main_path:
-        logger.warning(
-            "ui_design_validate_skip esbuild_not_found project=%s", project_dir
-        )
+        logger.warning("ui_design_validate_skip esbuild_not_found")
         return True, ""
     # 用 node -e 内联脚本调 esbuild.transform，通过 stdin 传代码避免命令行长度限制。
     # esbuild 主模块路径通过 process.argv[1] 传入（node -e 模式下 argv[1] 是首个用户参数）。
@@ -598,60 +640,3 @@ def validate_tsx(project_dir: str, code: str) -> tuple[bool, str]:
     if proc.returncode == 0:
         return True, ""
     return False, proc.stderr.strip() or "esbuild syntax error"
-
-
-def _format_menu_entry(menu_path: str, name: str, page_key: str) -> str:
-    """格式化单个 BIZ_MENUS 菜单项文本。"""
-
-    # 转义字符串里的单引号
-    safe_path = menu_path.replace("'", "\\'")
-    safe_name = str(name or page_key).replace("'", "\\'")
-    if _has_react_router_path_param(menu_path):
-        return (
-            f"  {{ path: '{safe_path}', name: '{safe_name}', "
-            f"key: '{page_key}', hideInMenu: true }}"
-        )
-    return f"  {{ path: '{safe_path}', name: '{safe_name}', key: '{page_key}' }}"
-
-
-def rewrite_menus(project_dir: str, pages: list[dict[str, Any]]) -> str:
-    """全量重写设计稿工程的 menus.ts，注册全部页面菜单。
-
-    pages 每项需含 menu_path / name / page_key。保留 DefaultPage 作为首项
-    避免默认路由 404。原子写入（tmp + replace）。返回写入路径。
-    """
-
-    target = menus_file(project_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    lines: list[str] = [
-        "import { Route } from '@/typings/workbench';",
-        "",
-        "// TODO 菜单类型跟随antd",
-        "export const BIZ_MENUS: Route[] = [",
-        "  {",
-        "    path: 'default', // 菜单点击后的跳转路径就是 /default",
-        "    name: '默认页面',",
-        "    key: 'DefaultPage' // 如果渲染的是特定页面，key必须存在，且与src/pages下面的page的引用地址保持一致，要让import Page from '@/pages/Page’是一个有效语句",
-        "  },",
-    ]
-    for page in pages:
-        menu_path = str(page.get("menu_path") or "")
-        name = str(page.get("name") or "")
-        page_key = str(page.get("page_key") or "")
-        if not menu_path or not page_key:
-            continue
-        lines.append(_format_menu_entry(menu_path, name, page_key) + ",")
-    lines.append("];")
-    lines.append("")
-    content = "\n".join(lines)
-
-    tmp = target.with_suffix(".ts.tmp")
-    tmp.write_text(content, encoding="utf-8")
-    tmp.replace(target)
-    logger.info(
-        "ui_design_menus_rewritten path=%s page_count=%s",
-        target,
-        len(pages),
-    )
-    return str(target)
