@@ -154,7 +154,7 @@ public class MyBatisPlusConfig {
 - `pom.xml` 包含 `mybatis-plus-boot-starter`、`mysql-connector-j`、`lombok`、`mapstruct`、`mapstruct-processor` 五个依赖（缺失才补充，已有不动）
 - `application.yml` 配置了 `spring.datasource.url` / `username` / `password`（缺失时先调用当前工作区绑定的 `get_mysql_config` 工具获取数据库连接信息再填充）
 - 存在 `MyBatisPlusConfig` 配置类并注册了 `PaginationInnerInterceptor`
-- 前置校验任务的 `acceptance_criteria` 使用以上验收；模块生成任务（阶段一至四整合为一个任务）的 `acceptance_criteria` 覆盖 11 个生成文件编译通过、REST 端点可用
+- 以上验收描述前置校验任务应达成的工程目标；所有后端任务输出中的 `acceptance_criteria` 与 `acceptance_checks` 均为空数组，由确定性编译器根据各任务 `change_scope` 生成工程验收点
 
 ---
 
@@ -188,7 +188,7 @@ public class MyBatisPlusConfig {
 
 ## 生成文件清单
 
-以表 `product`（字段：`id` bigint, `name` varchar, `price` decimal, `status` tinyint）为例，共 11 个文件。先生成并执行[前置校验任务](#生成前校验)（可单独生成），再生成**一个模块生成任务**（阶段一至四整合，任务内按 4 个阶段依次生成全部文件）：
+以表 `product`（字段：`id` bigint, `name` varchar, `price` decimal, `status` tinyint）为例，共 11 个文件。先生成并执行[前置校验任务](#生成前校验)（可单独生成），再为每个后端模块生成 **4 个按阶段拆分的独立任务**（阶段一对象类 → 阶段二仓储 → 阶段三 Service → 阶段四 Controller），前一阶段的预期目标写入下一阶段任务的 description 作为上下文：
 
 ```
 src/main/java/{basePackage}/
@@ -294,7 +294,7 @@ src/main/java/{basePackage}/
 
 ## 生成顺序
 
-先生成并执行**前置校验任务**（owner: backend，见[生成前校验](#生成前校验)，可单独生成）：检查并补齐 `pom.xml` 依赖、`application.yml` 数据源、`MyBatisPlusConfig` 配置类，缺什么补什么，依赖缺失时按默认版本号补充。通过后每个后端模块再生成**一个模块生成任务**，把**功能分 4 个阶段**的 11 个文件按顺序生成：先搭对象类（含转换器/汇编器），再落仓储，然后做业务服务，最后暴露接口。阶段内从底到上、逐层依赖下层，每个阶段产出的文件互相依赖完整；**4 个阶段整合为一个任务，阶段只是任务内的执行顺序，不再拆成 4 个独立任务**：
+先生成并执行**前置校验任务**（owner: backend，见[生成前校验](#生成前校验)，可单独生成）：检查并补齐 `pom.xml` 依赖、`application.yml` 数据源、`MyBatisPlusConfig` 配置类，缺什么补什么，依赖缺失时按默认版本号补充。通过后每个后端模块按 **4 个独立阶段任务**生成全部 11 个文件：先搭对象类（含转换器/汇编器），再落仓储，然后做业务服务，最后暴露接口。阶段内从底到上、逐层依赖下层，每个阶段产出的文件互相依赖完整；**阶段一至四各自是独立任务，按顺序串行依赖（阶段二依赖阶段一，阶段三依赖阶段二，阶段四依赖阶段三），且每个阶段的预期目标（产出文件、职责与接口约定）要写入下一个阶段任务的 description 作为执行上下文**：
 
 | 阶段 | 序号 | 文件 | 关键依赖 |
 |------|------|------|---------|
@@ -311,7 +311,7 @@ src/main/java/{basePackage}/
 | 三、Service | 10 | `applicaiton/{module}/service/{Name}ApplicationService.java` | Assembler + DTO + Repository |
 | 四、Controller | 11 | `adapter/web/{Name}Controller.java` | DTO + Service |
 
-> 阶段一至四的 11 个文件都在**同一个模块生成任务**内按顺序生成，不要为每个阶段单独建任务。
+> 阶段一至四分别为独立的后端任务：阶段一生成 5 个对象类文件，阶段二生成 4 个仓储文件，阶段三生成 ApplicationService，阶段四生成 Controller。任务按顺序串行依赖，每个阶段的预期目标写入下一阶段任务作为执行上下文。
 
 ### 基础变量对照表
 
