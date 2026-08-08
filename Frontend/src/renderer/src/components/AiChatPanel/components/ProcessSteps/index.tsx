@@ -21,20 +21,27 @@ import { cx } from '../../../../utils'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import DagGenerationProgress from './DagGenerationProgress'
 import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
+import ToolActivityChain from './ToolActivityChain'
 import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
 import './ProcessSteps.less'
 
 const { Text } = Typography
 
 type Props = {
+  conversation?: boolean
   loading: boolean
   steps: ProcessStepRecord[]
   waitingPrompt?: string
   waitingForInput?: boolean
 }
 
+type ProcessDisplayItem =
+  | { kind: 'step'; step: ProcessStepRecord }
+  | { kind: 'tool-chain'; steps: ProcessStepRecord[] }
+
 /** 渲染一条可折叠的 Agent 执行轨迹，并在测试步骤中保留结构化检查结果。 */
 export default function ProcessSteps({
+  conversation = false,
   loading,
   steps,
   waitingPrompt = '',
@@ -43,6 +50,10 @@ export default function ProcessSteps({
   const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
   const hasProjectPlanUpdate = steps.some((step) => Boolean(step.projectPlanUpdate))
   const hasWorkspaceInspection = steps.some((step) => Boolean(step.workspaceInspection))
+  const displayItems = buildProcessDisplayItems(steps, conversation)
+  const toolActivityCount = conversation
+    ? steps.filter((step) => isToolActivityStep(step)).length
+    : 0
   const [open, setOpen] = useState(
     loading || waitingForInput || hasProjectPlanUpdate || hasWorkspaceInspection
   )
@@ -79,41 +90,111 @@ export default function ProcessSteps({
         </span>
         <span className={cx('process-steps-heading')}>
           <Text strong>
-            {loading ? 'Agent 正在执行' : waitingForInput ? 'Agent 等待补充' : 'Agent 执行完成'}
+            {conversation
+              ? loading
+                ? '正在处理请求'
+                : waitingForInput
+                  ? '等待你的确认'
+                  : '请求处理完成'
+              : loading
+                ? 'Agent 正在执行'
+                : waitingForInput
+                  ? 'Agent 等待补充'
+                  : 'Agent 执行完成'}
           </Text>
           <Text type="secondary">
             {loading
-              ? currentStepLabel(steps)
+              ? currentStepLabel(steps, conversation)
               : waitingForInput
                 ? '请根据下方提示补充修改需求'
-                : `已归档 ${steps.length} 个步骤`}
+                : conversation
+                  ? toolActivityCount > 0
+                    ? `${toolActivityCount} 次工具调用 · 可展开查看调用链`
+                    : `已展示 ${steps.length} 个过程步骤`
+                  : `已归档 ${steps.length} 个步骤`}
           </Text>
         </span>
       </summary>
       <div className={cx('process-steps-list')}>
-        {steps.map((step, index) => (
-          <ProcessStep
-            isLast={index === steps.length - 1}
-            key={step.id}
-            settled={!loading}
-            step={step}
-            waitingForInput={waitingForInput}
-            waitingPrompt={waitingPrompt}
-          />
-        ))}
+        {displayItems.map((item, index) => {
+          if (item.kind === 'tool-chain') {
+            const latestStep = item.steps[item.steps.length - 1]
+            return (
+              <ToolActivityChain
+                count={item.steps.length}
+                isLast={index === displayItems.length - 1}
+                key="tool-activity-chain"
+                latestDetail={latestStep.detail}
+                latestIcon={stepIcon(latestStep, !loading)}
+                latestTitle={processStepTitle(latestStep, conversation, !loading)}
+              >
+                {item.steps.map((step, toolIndex) => (
+                  <ProcessStep
+                    conversation={conversation}
+                    isLast={toolIndex === item.steps.length - 1}
+                    key={step.id}
+                    settled={!loading}
+                    step={step}
+                    waitingForInput={waitingForInput}
+                    waitingPrompt={waitingPrompt}
+                  />
+                ))}
+              </ToolActivityChain>
+            )
+          }
+
+          return (
+            <ProcessStep
+              conversation={conversation}
+              isLast={index === displayItems.length - 1}
+              key={item.step.id}
+              settled={!loading}
+              step={item.step}
+              waitingForInput={waitingForInput}
+              waitingPrompt={waitingPrompt}
+            />
+          )
+        })}
       </div>
     </details>
   )
 }
 
+/** 为自由对话把连续工具步骤折叠成一个调用链，其余阶段保持原有时间线。 */
+function buildProcessDisplayItems(
+  steps: ProcessStepRecord[],
+  conversation: boolean
+): ProcessDisplayItem[] {
+  if (!conversation) return steps.map((step) => ({ kind: 'step', step }))
+
+  const toolSteps = steps.filter((step) => isToolActivityStep(step))
+  if (!toolSteps.length) return steps.map((step) => ({ kind: 'step', step }))
+
+  let toolChainAdded = false
+  const items: ProcessDisplayItem[] = []
+  for (const step of steps) {
+    if (isToolActivityStep(step)) {
+      if (!toolChainAdded) {
+        items.push({ kind: 'tool-chain', steps: toolSteps })
+        toolChainAdded = true
+      }
+      continue
+    }
+    items.push({ kind: 'step', step })
+  }
+  return items
+}
+
 /** 渲染单个 Agent 步骤，仅让包含实际详情的步骤具备展开交互。 */
 function ProcessStep({
+  conversation,
   isLast,
   settled,
   step,
   waitingForInput,
   waitingPrompt
 }: {
+  conversation: boolean
   isLast: boolean
   settled: boolean
   step: ProcessStepRecord
@@ -192,7 +273,7 @@ function ProcessStep({
   const summaryContent = (
     <>
       <span className={cx('process-step-icon')}>{stepIcon(step, settled)}</span>
-      <Text>{settled ? settledTitle(step.title) : step.title}</Text>
+      <Text>{processStepTitle(step, conversation, settled)}</Text>
     </>
   )
 
@@ -373,10 +454,54 @@ function IntegrationTestChecklist({
 }
 
 /** 返回当前执行步骤在总步骤中的位置与标题。 */
-function currentStepLabel(steps: ProcessStepRecord[]): string {
+function currentStepLabel(steps: ProcessStepRecord[], conversation: boolean): string {
+  const activeTool = [...steps]
+    .reverse()
+    .find((step) => isToolActivityStep(step) && step.status === 'running')
+  if (conversation && activeTool) {
+    const toolCount = steps.filter((step) => isToolActivityStep(step)).length
+    return `${processStepTitle(activeTool, true, false)} · 已记录 ${toolCount} 次调用`
+  }
+
   const activeIndex = steps.findIndex((step) => step.status === 'running')
   if (activeIndex < 0) return `正在准备 · ${steps.length} 个步骤`
-  return `第 ${activeIndex + 1} / ${steps.length} 步 · ${steps[activeIndex].title}`
+  return `第 ${activeIndex + 1} / ${steps.length} 步 · ${processStepTitle(steps[activeIndex], conversation, false)}`
+}
+
+/** 为自由对话把内部节点和工具步骤转换成用户可理解的实时状态。 */
+function processStepTitle(
+  step: ProcessStepRecord,
+  conversation: boolean,
+  settled: boolean
+): string {
+  if (!conversation) return settled ? settledTitle(step.title) : step.title
+  if (isToolActivityStep(step)) {
+    const action = step.kind === 'command' ? '执行' : '调用'
+    const noun = step.kind === 'command' ? '命令' : '工具'
+    if (step.status === 'failed') return `${action}失败 ${step.title} ${noun}`
+    return step.status === 'running' && !settled
+      ? `正在${action} ${step.title} ${noun}`
+      : `已${action} ${step.title} ${noun}`
+  }
+  const labels: Record<string, string> = {
+    classify_intent: '准备回答',
+    respond_conversation: '生成回答',
+    answer_workspace: '读取工作区并回答',
+    execute_frontend: '修改前端文件',
+    execute_backend: '修改后端文件',
+    execute_workspace: '修改工作区文件',
+    integration_test: '验证修改',
+    launch_project: '启动预览',
+    finalize_direct_modification: '整理结果'
+  }
+  const label =
+    labels[step.nodeName || ''] || step.title.replace(/^正在执行\s*/, '').replace(/^已完成\s*/, '')
+  return step.status === 'running' && !settled ? `正在${label}` : `已完成${label}`
+}
+
+/** 判断自由对话中需要合并展示的工具和命令步骤。 */
+function isToolActivityStep(step: ProcessStepRecord): boolean {
+  return step.kind === 'tool' || step.kind === 'command'
 }
 
 /** 渲染非结构化步骤的详情或执行结果。 */

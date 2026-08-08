@@ -102,6 +102,27 @@ def ensure_page_route_registration_task(
         for path in _task_page_entry_paths(task)
         if (key := _page_key_from_entry_path(str(path)))
     }
+    live_page_keys = _live_page_entry_keys(workspace_root, page_id)
+    if not page_keys and len(live_page_keys) == 1:
+        # 模型只负责描述页面改动；模板已经有唯一页面入口时，直接复用实时
+        # PageKey，避免把“模型漏写入口”误判成页面入口歧义。
+        page_keys = set(live_page_keys)
+    if not page_keys and not live_page_keys and page_task_ids:
+        # 已确认的 pageId 能确定唯一 PageKey；当模板入口尚未落盘且模型漏写入口
+        # 时，把标准入口补回现有页面任务，避免把可确定的工程缺口交给用户重试。
+        canonical_page_key = (
+            str(target.get("page_key") or "").strip()
+            or _page_key_from_page_id(page_id)
+        )
+        tasks, injected_page_key = _inject_canonical_page_entry(
+            tasks,
+            page_task_ids=page_task_ids,
+            page_id=page_id,
+            page_key=canonical_page_key,
+            workspace_root=workspace_root,
+        )
+        if injected_page_key:
+            page_keys = {injected_page_key}
     if len(page_keys) != 1:
         # 兜底：模型常漏在 change_scope 声明页面入口（只写 API/组件）。
         # 若 build_context.target.page_key 在磁盘上有对应页面目录，说明脚手架
@@ -175,11 +196,106 @@ def ensure_page_route_registration_task(
     return [*tasks, route_task]
 
 
+def _inject_canonical_page_entry(
+    tasks: list[dict[str, Any]],
+    *,
+    page_task_ids: list[str],
+    page_id: str,
+    page_key: str,
+    workspace_root: str | Path,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """把缺失的标准页面入口补到已有前端页面任务中。"""
+
+    page_task_id_set = {str(task_id) for task_id in page_task_ids if str(task_id)}
+    task_index = next(
+        (
+            index
+            for index, task in enumerate(tasks)
+            if str(task.get("id") or "") in page_task_id_set
+            and str(task.get("owner") or "") == "frontend"
+            and not _task_only_targets_menu(task)
+        ),
+        None,
+    )
+    if task_index is None or not page_key:
+        return tasks, None
+
+    canonical_path = f"{FRONTEND_PAGE_ENTRY_PREFIX}{page_key}/index.tsx"
+    entry_exists = (Path(workspace_root).expanduser() / canonical_path).is_file()
+    task = dict(tasks[task_index])
+    target_files = _dedupe_normalized_strings(
+        [*_task_target_files(task), canonical_path]
+    )
+    allowed_paths = _dedupe_normalized_strings(
+        [*_string_list(task.get("allowed_paths")), canonical_path]
+    )
+    change_scope = [
+        dict(item)
+        for item in task.get("change_scope", [])
+        if isinstance(item, dict)
+    ]
+    if not any(
+        str(item.get("path") or "").lstrip("/") == canonical_path
+        for item in change_scope
+    ):
+        change_scope.append(
+            {
+                "operation": "modify" if entry_exists else "add",
+                "path": canonical_path,
+                "description": "创建当前页面的标准入口文件。",
+            }
+        )
+    task["target_files"] = target_files
+    task["allowed_paths"] = allowed_paths
+    task["change_scope"] = change_scope
+    task["page_entry_reconciliation"] = {
+        "source": "build_context",
+        "page_id": page_id,
+        "canonical_path": canonical_path,
+        "reason": "model omitted page entry and no live entry existed",
+    }
+    updated_tasks = list(tasks)
+    updated_tasks[task_index] = task
+    return updated_tasks, page_key
+
+
+def _page_key_from_page_id(page_id: str) -> str:
+    """按页面标识推导与模板一致的 PascalCase 页面目录名。"""
+
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(page_id or "page")).strip("-")
+    segments = [segment for segment in re.split(r"[-_\s]+", cleaned) if segment]
+    if not segments:
+        return "Page"
+    page_key = "".join(
+        segment[:1].upper() + segment[1:].lower() for segment in segments
+    )
+    return page_key if page_key[:1].isalpha() else f"Page{page_key}"
+
+
 def _page_key_identity(value: str) -> str:
     """生成页面目录语义键，仅忽略大小写、分隔符和常见 Page 后缀。"""
 
     normalized = "".join(character.lower() for character in value if character.isalnum())
     return normalized[:-4] if normalized.endswith("page") else normalized
+
+
+def _live_page_entry_keys(
+    workspace_root: str | Path,
+    page_id: str,
+) -> list[str]:
+    """从实时工作区读取与目标 pageId 唯一对应的页面入口目录名。"""
+
+    pages_root = Path(workspace_root).expanduser() / FRONTEND_PAGE_ENTRY_PREFIX
+    if not pages_root.is_dir():
+        return []
+    target_identity = _page_key_identity(page_id)
+    return sorted(
+        path.name
+        for path in pages_root.iterdir()
+        if path.is_dir()
+        and (path / "index.tsx").is_file()
+        and _page_key_identity(path.name) == target_identity
+    )
 
 
 def _task_matches_page_unit(task: dict[str, Any], page_unit_id: str) -> bool:

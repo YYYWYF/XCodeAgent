@@ -47,6 +47,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 side_effect=lambda model, **kwargs: ("data_source", kwargs),
             ),
             patch(
+                "app.agents.registry.create_database_agent",
+                side_effect=lambda model, **kwargs: ("database", kwargs),
+            ),
+            patch(
                 "app.agents.registry.create_test_agent",
                 side_effect=lambda model, **kwargs: ("test", kwargs),
             ),
@@ -54,6 +58,14 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 "app.agents.registry.create_repair_planner_agent",
                 side_effect=lambda model, **kwargs: ("repair_planner", kwargs),
             ) as repair_planner_factory,
+            patch(
+                "app.agents.registry.create_small_task_agent",
+                side_effect=lambda model, **kwargs: ("small_task", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_workspace_assistant_agent",
+                side_effect=lambda model, **kwargs: ("workspace_assistant", kwargs),
+            ),
         ):
             first_bundle = registry.create_agent_bundle(first_workspace)
             first_bundle_again = registry.create_agent_bundle(first_workspace)
@@ -112,6 +124,10 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 side_effect=lambda model, **kwargs: ("data_source", kwargs),
             ),
             patch(
+                "app.agents.registry.create_database_agent",
+                side_effect=lambda model, **kwargs: ("database", kwargs),
+            ),
+            patch(
                 "app.agents.registry.create_test_agent",
                 side_effect=lambda model, **kwargs: ("test", kwargs),
             ),
@@ -121,6 +137,14 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                     "repair_planner",
                     kwargs,
                 ),
+            ),
+            patch(
+                "app.agents.registry.create_small_task_agent",
+                side_effect=lambda model, **kwargs: ("small_task", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_workspace_assistant_agent",
+                side_effect=lambda model, **kwargs: ("workspace_assistant", kwargs),
             ),
         ):
             first = registry.create_agent_bundle(workspace)
@@ -181,12 +205,24 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 side_effect=lambda model, **kwargs: ("data_source", kwargs),
             ),
             patch(
+                "app.agents.registry.create_database_agent",
+                side_effect=lambda model, **kwargs: ("database", kwargs),
+            ),
+            patch(
                 "app.agents.registry.create_test_agent",
                 side_effect=lambda model, **kwargs: ("test", kwargs),
             ),
             patch(
                 "app.agents.registry.create_repair_planner_agent",
                 side_effect=lambda model, **kwargs: ("repair", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_small_task_agent",
+                side_effect=lambda model, **kwargs: ("small_task", kwargs),
+            ),
+            patch(
+                "app.agents.registry.create_workspace_assistant_agent",
+                side_effect=lambda model, **kwargs: ("workspace_assistant", kwargs),
             ),
         ):
             first = registry.create_agent_bundle(workspace, ["beta", "alpha", "alpha"])
@@ -196,7 +232,14 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
         self.assertIs(first, reordered)
         self.assertIsNot(first, different)
         self.assertEqual(first.selected_skill_names, ("alpha", "beta"))
-        for agent in (first.frontend, first.data_source, first.test, first.repair_planner):
+        for agent in (
+            first.frontend,
+            first.data_source,
+            first.test,
+            first.repair_planner,
+            first.small_task,
+            first.workspace_assistant,
+        ):
             self.assertIn(
                 "complete alpha instructions",
                 agent[1]["required_user_skills_prompt"],

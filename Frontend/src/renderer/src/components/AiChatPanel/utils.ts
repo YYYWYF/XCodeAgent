@@ -251,12 +251,14 @@ export function workflowPreviewTarget(
   workflow: WorkflowRunPayload | undefined,
   live: boolean
 ): WorkflowPreviewTarget | undefined {
-  const directModificationCompleted =
-    workflow?.summary.phase === 'direct_modification' && workflow.summary.status === 'completed'
+  const conversationChangeCompleted =
+    workflow?.summary.phase === 'conversation' &&
+    workflow?.summary.intent === 'workspace_change' &&
+    workflow.summary.status === 'completed'
   const workflowLaunchReady =
     workflow?.summary.phase === 'launch_project' &&
     workflow.summary.status === 'requires_user_input'
-  if (!live || !workflow || (!workflowLaunchReady && !directModificationCompleted)) {
+  if (!live || !workflow || (!workflowLaunchReady && !conversationChangeCompleted)) {
     return undefined
   }
 

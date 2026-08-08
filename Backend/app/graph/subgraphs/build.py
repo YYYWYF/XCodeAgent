@@ -44,9 +44,13 @@ from app.services.build_tool_activity import (
 from app.services.build_scheduler import (
     mark_tasks_running,
     normalize_task_results,
+    ready_repair_task_ids,
+    reset_failed_tasks_for_retry,
     resolve_execution_slice,
+    retryable_failed_task_ids,
     select_ready_build_batch,
     summarize_build_runtime,
+    hydrate_missing_failed_results,
     verify_task_file_changes,
 )
 from app.workspace.code_changes import (
@@ -573,6 +577,7 @@ def _emit_build_progress(
             current_state.get("build_results", []),
             execution_slice["tasks"],
         ),
+        repair_task_plan=current_state.get("repair_task_plan"),
     )
     activities = active_tool_activities or {}
     execution_slice["tasks"] = [
@@ -659,6 +664,13 @@ def run_build_scheduler(
         list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
     )
     build_task_plan = replace_build_task_plan_tasks(build_task_plan, canonical_tasks)
+    state = {
+        **state,
+        "build_results": hydrate_missing_failed_results(
+            canonical_tasks,
+            list(state.get("build_results", [])),
+        ),
+    }
     incoming_repair_task_plan = state.get("repair_task_plan")
     request = str(state.get("request") or "")
     database_paused_tasks = [
@@ -680,6 +692,7 @@ def run_build_scheduler(
             paused_tasks=database_paused_tasks,
             build_task_plan=build_task_plan,
         )
+    retry_requested = bool(state.get("retry_failed_tasks"))
     scope_confirmation_pending = (
         isinstance(incoming_repair_task_plan, dict)
         and incoming_repair_task_plan.get("decision") == "requires_user_confirmation"
@@ -743,11 +756,36 @@ def run_build_scheduler(
             ],
             "timeline": ["build"],
         }
-    if (
-        isinstance(incoming_repair_task_plan, dict)
-        and incoming_repair_task_plan.get("tasks")
-        and incoming_repair_task_plan.get("decision", "repair") == "repair"
-    ):
+    retry_task_ids: set[str] = set()
+    recovery_mode = ""
+    recovery_task_ids: set[str] = set()
+    if retry_requested:
+        # 先在未追加修复任务的原始 DAG 上寻找瞬时失败；只有没有瞬时候选时，
+        # 才把已有的 ready RepairPlanner 计划作为本次恢复入口，避免重跑旧修复任务。
+        tasks = tasks_from_build_task_plan(build_task_plan)
+        retry_slice = resolve_execution_slice(
+            build_task_plan=build_task_plan,
+            tasks=tasks,
+            build_execution_scope=state.get("build_execution_scope"),
+        )
+        retry_task_ids = retryable_failed_task_ids(
+            retry_slice["tasks"],
+            list(state.get("build_results", [])),
+        )
+        if retry_task_ids:
+            tasks = reset_failed_tasks_for_retry(tasks, retry_task_ids)
+            build_task_plan = replace_build_task_plan_tasks(build_task_plan, tasks)
+            recovery_mode = "retry"
+        else:
+            recovery_task_ids = ready_repair_task_ids(incoming_repair_task_plan)
+            if recovery_task_ids:
+                build_task_plan = append_repair_tasks_to_build_plan(
+                    build_task_plan=build_task_plan,
+                    repair_task_plan=incoming_repair_task_plan,
+                    reset_existing_repair_tasks=True,
+                )
+                recovery_mode = "repair"
+    elif ready_repair_task_ids(incoming_repair_task_plan):
         build_task_plan = append_repair_tasks_to_build_plan(
             build_task_plan=build_task_plan,
             repair_task_plan=incoming_repair_task_plan,
@@ -783,6 +821,15 @@ def run_build_scheduler(
         build_execution_scope=build_execution_scope,
     )
     build_events: list[str] = []
+    if retry_requested:
+        if retry_task_ids:
+            build_events.append(f"scheduler:retry:{','.join(sorted(retry_task_ids))}")
+        elif recovery_task_ids:
+            build_events.append(
+                f"scheduler:retry:repair:{','.join(sorted(recovery_task_ids))}"
+            )
+        else:
+            build_events.append("scheduler:retry:no_candidates")
     all_code_change_sets: list[dict[str, Any]] = []
     repair_task_plan: dict[str, Any] = (
         incoming_repair_task_plan
@@ -1044,7 +1091,28 @@ def run_build_scheduler(
     build_summary = summarize_build_runtime(
         execution_slice["tasks"],
         _results_for_tasks(build_results, execution_slice["tasks"]),
+        repair_task_plan=repair_task_plan,
     )
+    if retry_requested:
+        build_summary.update(
+            {
+                "retry_requested": True,
+                "retry_task_ids": sorted(retry_task_ids),
+                "recovery_mode": recovery_mode or None,
+                "recovery_task_ids": sorted(
+                    recovery_task_ids or ready_repair_task_ids(repair_task_plan)
+                ),
+                **(
+                    {
+                        "retry_message": (
+                            "当前没有可重试的构建任务，请调整计划或使用修复方案。"
+                        )
+                    }
+                    if not retry_task_ids and not recovery_task_ids
+                    else {}
+                ),
+            }
+        )
     merged_code_changes = merge_code_change_sets(all_code_change_sets)
     workflow_status = (
         "completed"

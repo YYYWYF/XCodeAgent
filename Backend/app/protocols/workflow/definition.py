@@ -10,11 +10,13 @@ PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
     "detail_confirmation": "页面细节确认",
+    "project_planning": "项目规划",
     "inspect_workspace": "扫描工作区代码",
     "inspect_database_context": "数据库上下文检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
     "integration_test": "集成测试与质量门禁",
+    "small_task_repair": "局部修复任务执行",
     "launch_project": "启动本地预览",
     "acceptance": "用户验收",
     "finalize_project": "完成项目",
@@ -24,10 +26,12 @@ WORKFLOW_NODE_LABELS = {
 # 仅用于可视化层的兜底预测；实际节点路由始终以 LangGraph 为准。
 WORKFLOW_STATIC_NEXT_NODES = {
     "detail_confirmation": ["inspect_workspace"],
+    "project_planning": ["detail_confirmation"],
     "inspect_workspace": ["inspect_database_context", "prepare_build_tasks"],
     "inspect_database_context": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
     "build": ["integration_test"],
+    "small_task_repair": ["integration_test"],
     "acceptance": ["finalize_project"],
 }
 
@@ -50,13 +54,40 @@ def workflow_capabilities() -> dict[str, Any]:
         "name": "workflow-run",
         "endpoint": "/workflow/run",
         "transport": "ag-ui-sse",
+        "workflowActions": {
+            "requestField": "forwardedProps.workflowAction",
+            "values": {
+                "retry_failed_tasks": (
+                    "恢复当前 Build 切片中的失败任务：优先重试 retry 分类的瞬时失败；"
+                    "没有瞬时候选时，执行已生成且无需额外确认的 RepairPlanner 修复任务。"
+                )
+            },
+        },
+        "acceptanceAdjustments": {
+            "requestField": "clarificationAnswers.acceptance_adjustment",
+            "values": {
+                "local_fix": "仅修改当前已确认范围内的局部实现，不改变产品语义。",
+                "page_design_change": "重新生成页面详细设计并再次确认。",
+                "endpoint_change": "重新生成接口详细设计并再次确认。",
+                "data_source_change": "重新生成接口及数据来源相关详细设计并再次确认。",
+                "project_plan_change": "重新生成项目计划，确认后再生成页面/接口详细设计。",
+            },
+        },
         "skillSelection": {
             "requestField": "forwardedProps.selectedSkillNames",
             "stateField": "selectedSkillNames",
             "semantics": "selected-user-skills-are-force-loaded",
             "emptyBehavior": "all-enabled-user-skills-available-on-demand",
             "frontendBuiltinSkillsRetained": True,
-            "forcedAgents": ["frontend", "data_source", "database", "test", "repair_planner"],
+            "forcedAgents": [
+                "frontend",
+                "data_source",
+                "database",
+                "test",
+                "repair_planner",
+                "small_task",
+                "workspace_assistant",
+            ],
             "directChatModelNodesLoadSkills": False,
             "maxPromptBytes": 65536,
             "errors": [

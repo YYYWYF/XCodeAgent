@@ -1338,7 +1338,6 @@ export default function AiChatPanel({
             <MessageList
               applicationLifecycle={applicationLifecycle}
               codeChangeActionsDisabled={loading || workspaceBusy}
-              copy={copy}
               key={activeSession?.key || draftKey}
               loading={loading}
               lockedEndpoint={lockedEndpoint}

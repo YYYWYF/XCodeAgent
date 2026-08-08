@@ -189,6 +189,156 @@ def classify_task_result(result: dict[str, Any]) -> dict[str, str]:
     return {"action": "terminal_failure", "reason": category}
 
 
+def retryable_failed_task_ids(
+    tasks: list[dict[str, Any]],
+    build_results: list[dict[str, Any]],
+) -> set[str]:
+    """找出当前切片中最近一次结果属于 retry 分类的失败任务。"""
+
+    latest_results = _latest_task_results(build_results)
+    retryable_ids: set[str] = set()
+    for task in tasks:
+        task_id = str(task.get("id") or "").strip()
+        if not task_id or task.get("status") != "failed":
+            continue
+        result = latest_results.get(task_id)
+        if result is None:
+            failure_detail = task.get("failure_detail")
+            scheduler_decision = (
+                failure_detail.get("scheduler_decision")
+                if isinstance(failure_detail, dict)
+                else None
+            )
+            result = {
+                "status": "failed",
+                "failure_category": task.get("failure_category"),
+                "scheduler_decision": scheduler_decision,
+            }
+        decision = result.get("scheduler_decision")
+        action = decision.get("action") if isinstance(decision, dict) else ""
+        if action == "retry" or classify_task_result(result).get("action") == "retry":
+            retryable_ids.add(task_id)
+    return retryable_ids
+
+
+def reset_failed_tasks_for_retry(
+    tasks: list[dict[str, Any]],
+    task_ids: set[str],
+) -> list[dict[str, Any]]:
+    """只把指定的可重试失败任务恢复为 pending，并保留重试审计信息。"""
+
+    if not task_ids:
+        return tasks
+
+    now = datetime.now(UTC).isoformat()
+    reset_tasks: list[dict[str, Any]] = []
+    for task in tasks:
+        task_id = str(task.get("id") or "")
+        if task_id not in task_ids or task.get("status") != "failed":
+            reset_tasks.append(task)
+            continue
+        try:
+            retry_count = max(int(task.get("retry_count", 0) or 0), 0) + 1
+        except (TypeError, ValueError):
+            # 恢复快照来自客户端，非法重试计数不能阻断本次受控恢复。
+            retry_count = 1
+        scheduler = task.get("scheduler") if isinstance(task.get("scheduler"), dict) else {}
+        reset_task = dict(task)
+        reset_task.update(
+            {
+                "status": RUNNABLE_STATUS,
+                "retry_count": retry_count,
+                "scheduler": {
+                    **scheduler,
+                    "last_action": "retry_failed_tasks",
+                    "retry_count": retry_count,
+                    "retry_at": now,
+                },
+                "updated_by": "build-scheduler-retry",
+                "updated_at": now,
+            }
+        )
+        for field in (
+            "last_result_status",
+            "failure_category",
+            "failure_reason",
+            "failure_detail",
+        ):
+            reset_task.pop(field, None)
+        reset_tasks.append(reset_task)
+    return reset_tasks
+
+
+def _latest_task_results(build_results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """按结果流顺序保留每个任务的最后一次尝试，避免旧失败污染当前摘要。"""
+
+    latest: dict[str, dict[str, Any]] = {}
+    for result in build_results:
+        task_id = str(result.get("task_id") or "").strip()
+        if task_id:
+            latest[task_id] = result
+    return latest
+
+
+def hydrate_missing_failed_results(
+    tasks: list[dict[str, Any]],
+    build_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """从持久化任务状态补齐 checkpoint 中缺失的失败结果记录。"""
+
+    latest_results = _latest_task_results(build_results)
+    hydrated_results = list(build_results)
+    for task in tasks:
+        task_id = str(task.get("id") or "").strip()
+        if not task_id or task.get("status") != "failed" or task_id in latest_results:
+            continue
+        failure_detail = task.get("failure_detail")
+        detail = failure_detail if isinstance(failure_detail, dict) else {}
+        result = {
+            "task_id": task_id,
+            "owner": task.get("owner"),
+            "status": "failed",
+            "failure_category": task.get("failure_category") or "implementation_failure",
+            "failure_reason": task.get("failure_reason") or detail.get("failure_reason"),
+            "agent_note": task.get("failure_reason") or detail.get("agent_note"),
+            "changed_files": detail.get("changed_files", []),
+            "commands": detail.get("commands", []),
+        }
+        result["scheduler_decision"] = (
+            detail.get("scheduler_decision")
+            if isinstance(detail.get("scheduler_decision"), dict)
+            else classify_task_result(result)
+        )
+        hydrated_results.append(result)
+        latest_results[task_id] = result
+    return hydrated_results
+
+
+def ready_repair_task_ids(repair_task_plan: dict[str, Any] | None) -> set[str]:
+    """读取待执行修复计划中的未完成任务，作为失败恢复入口的候选。"""
+
+    if not isinstance(repair_task_plan, dict):
+        return set()
+    if repair_task_plan.get("decision", "repair") != "repair":
+        return set()
+    if repair_task_plan.get("status", "ready") in {
+        "terminal_failure",
+        "requires_user_confirmation",
+    }:
+        return set()
+    tasks = repair_task_plan.get("tasks")
+    if not isinstance(tasks, list):
+        return set()
+    return {
+        str(task.get("id"))
+        for task in tasks
+        if isinstance(task, dict)
+        and str(task.get("id") or "").strip()
+        and task.get("status", RUNNABLE_STATUS)
+        not in {"completed", "already_satisfied"}
+    }
+
+
 def verify_task_file_changes(
     *,
     results: list[dict[str, Any]],
@@ -312,26 +462,43 @@ def _path_matches_any(path: str, patterns: list[str]) -> bool:
 def summarize_build_runtime(
     tasks: list[dict[str, Any]],
     build_results: list[dict[str, Any]],
+    *,
+    repair_task_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """汇总当前执行切片内任务的运行状态。"""
+    """汇总当前执行切片内任务的运行状态和可用失败恢复入口。"""
 
     counts = defaultdict(int)
     for task in tasks:
         counts[str(task.get("status") or RUNNABLE_STATUS)] += 1
+    latest_results = _latest_task_results(build_results)
+    # 修复任务成功后父任务会被关闭为 completed；旧失败结果只作审计记录，不能再次触发 RepairPlanner。
+    active_failed_task_ids = {
+        str(task.get("id") or "")
+        for task in tasks
+        if task.get("status") == "failed"
+    }
     failed_results = [
-        result for result in build_results if result.get("status") == "failed"
+        result
+        for result in latest_results.values()
+        if result.get("status") == "failed"
+        and str(result.get("task_id") or "") in active_failed_task_ids
+    ]
+    retryable = [
+        result
+        for result in failed_results
+        if classify_task_result(result).get("action") == "retry"
     ]
     repairable = [
         result
         for result in failed_results
-        if (result.get("scheduler_decision") or {}).get("action") == "repair"
+        if classify_task_result(result).get("action") == "repair"
     ]
     confirmation = [
         result
         for result in failed_results
-        if (result.get("scheduler_decision") or {}).get("action")
-        == "requires_confirmation"
+        if classify_task_result(result).get("action") == "requires_confirmation"
     ]
+    repair_task_ids = sorted(ready_repair_task_ids(repair_task_plan))
     return {
         "total": len(tasks),
         "completed": counts["completed"] + counts.get("already_satisfied", 0),
@@ -340,8 +507,17 @@ def summarize_build_runtime(
         "running": counts["running"],
         "already_satisfied": counts.get("already_satisfied", 0),
         "results": len(build_results),
+        "retryable_failures": len(retryable),
+        "retryable_task_ids": sorted(
+            str(result.get("task_id"))
+            for result in retryable
+            if result.get("task_id")
+        ),
         "repairable_failures": len(repairable),
         "requires_confirmation": len(confirmation),
+        "recovery_available": bool(retryable or repair_task_ids),
+        "recovery_task_ids": repair_task_ids,
+        "retry_available": bool(retryable and not repairable and not confirmation),
         "status": _overall_status(tasks, repairable, confirmation),
     }
 

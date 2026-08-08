@@ -18,7 +18,15 @@ from app.workspace.virtual_paths import host_workspace_virtual_deny_patterns
 from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
 
-AgentWorkspaceMode = Literal["frontend", "data_source", "database", "test", "repair_planner"]
+AgentWorkspaceMode = Literal[
+    "frontend",
+    "data_source",
+    "database",
+    "test",
+    "repair_planner",
+    "small_task",
+    "workspace_assistant",
+]
 
 
 def resolve_workspace_root(workspace_root: str | None) -> Path | None:
@@ -109,7 +117,7 @@ def create_workspace_permissions(
             )
         )
     permissions.extend(skill_permissions)
-    if mode in {"database", "test", "repair_planner"}:
+    if mode in {"database", "test", "repair_planner", "workspace_assistant"}:
         permissions.extend(
             [
                 FilesystemPermission(operations=["read"], paths=["/**"], mode="allow"),

@@ -33,6 +33,27 @@ class WorkflowRequestTests(unittest.TestCase):
         )
         self.assertNotIn("selectedPageId", result["resume_values"])
 
+    def test_endpoint_scope_restores_detail_target_ids(self) -> None:
+        """正式 handoff 只提交 endpoint scope 时，后端仍应恢复详情确认所需的目标 ID。"""
+
+        result = workflow_run_inputs(
+            {
+                "request": "用户已确认，请进入正式工作流处理该需求。",
+                "forwardedProps": {
+                    "buildExecutionScope": {
+                        "type": "endpoint",
+                        "targetId": "orders.list",
+                        "apiContractId": "orders-api",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(result["resume_values"]["selected_api_contract_id"], "orders-api")
+        self.assertEqual(result["resume_values"]["selected_endpoint_id"], "orders.list")
+        self.assertEqual(result["resume_values"]["detail_target_type"], "endpoint")
+        self.assertNotIn("selectedPageId", result["resume_values"])
+
     def test_workbench_extracts_explicit_resume_execution_run_id(self) -> None:
         """继续执行应只把旧 runId 作为锁转移令牌，不依赖生命周期快照恢复 Graph。"""
 
@@ -348,6 +369,134 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["resume_from"], "project_planning")
 
+    def test_explicit_debug_resume_node_overrides_resume_snapshot(self) -> None:
+        """节点调试选择必须覆盖旧快照中的阻断节点。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "从指定节点继续执行 workflow 调试。",
+                "forwardedProps": {
+                    "resumeState": {
+                        "events": [
+                            {
+                                "nodeName": "build",
+                                "status": "requires_user_input",
+                            }
+                        ]
+                    },
+                    "workflowDebug": {
+                        "enabled": True,
+                        "resumeFrom": "prepare_build_tasks",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+
+    def test_debug_resume_exposes_flag_for_plan_adjustment_takeover(self) -> None:
+        """节点调试请求应向生命周期层声明这是用户明确选择的恢复动作。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "workflowDebug": {
+                    "enabled": True,
+                    "resumeFrom": "prepare_build_tasks",
+                }
+            }
+        )
+
+        self.assertTrue(inputs["workflow_debug_enabled"])
+
+    def test_acceptance_local_fix_routes_to_small_task_repair(self) -> None:
+        inputs = workflow_run_inputs(
+            {
+                "clarificationAnswers": {
+                    "page_acceptance": "changes_requested",
+                    "acceptance_adjustment": {
+                        "type": "local_fix",
+                        "feedback": "把页面右上角的按钮间距调大。",
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "small_task_repair")
+        self.assertEqual(
+            inputs["resume_values"]["acceptance_adjustment"],
+            {
+                "type": "local_fix",
+                "feedback": "把页面右上角的按钮间距调大。",
+            },
+        )
+
+    def test_acceptance_design_and_plan_changes_route_to_their_confirmation_nodes(self) -> None:
+        for adjustment_type, expected_node in (
+            ("page_design_change", "detail_confirmation"),
+            ("endpoint_change", "detail_confirmation"),
+            ("data_source_change", "detail_confirmation"),
+            ("project_plan_change", "project_planning"),
+        ):
+            with self.subTest(adjustment_type=adjustment_type):
+                inputs = workflow_run_inputs(
+                    {
+                        "clarificationAnswers": {
+                            "page_acceptance": "changes_requested",
+                            "acceptance_adjustment": {
+                                "type": adjustment_type,
+                                "feedback": "调整验收反馈对应的设计。",
+                            },
+                        }
+                    }
+                )
+                self.assertEqual(inputs["resume_from"], expected_node)
+
+    def test_acceptance_adjustment_rejects_unknown_types(self) -> None:
+        with self.assertRaises(ValueError):
+            workflow_run_inputs(
+                {
+                    "clarificationAnswers": {
+                        "page_acceptance": "changes_requested",
+                        "acceptance_adjustment": {
+                            "type": "unknown",
+                            "feedback": "不应被静默路由。",
+                        },
+                    }
+                }
+            )
+
+    def test_debug_resume_ignores_empty_acceptance_adjustment_snapshot(self) -> None:
+        """节点调试恢复不应把公开快照中的空验收调整误判为非法输入。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowDebug": {
+                        "enabled": True,
+                        "resumeFrom": "prepare_build_tasks",
+                    },
+                    "resumeState": {
+                        "runId": "previous-run",
+                        "state": {
+                            "acceptanceAdjustment": {},
+                            "selectedPageId": "pet_list_page",
+                            "buildExecutionScope": {
+                                "type": "page",
+                                "targetId": "pet_list_page",
+                            },
+                        },
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+        self.assertNotIn("acceptance_adjustment", inputs["resume_values"])
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "page", "targetId": "pet_list_page"},
+        )
+
     def test_merges_other_choice_input_as_a_requirement_supplement(self) -> None:
         inputs = workflow_run_inputs(
             {
@@ -463,7 +612,7 @@ class WorkflowRequestTests(unittest.TestCase):
             submission,
         )
 
-    def test_removed_project_planning_resume_preserves_plan_state(self) -> None:
+    def test_project_planning_resume_preserves_plan_state(self) -> None:
         inputs = workflow_run_inputs(
             {
                 "request": "正确，继续",
@@ -485,7 +634,7 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "")
+        self.assertEqual(inputs["resume_from"], "project_planning")
         self.assertEqual(inputs["resume_values"]["project_plan"], {"version": "0.1.0"})
         self.assertEqual(
             inputs["resume_values"]["requirement_spec"],
@@ -895,6 +1044,89 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["max_repair_iterations"], 3)
         self.assertEqual(inputs["resume_values"]["repair_task_plan"], {})
         self.assertEqual(inputs["resume_values"]["repair_tasks"], [])
+
+    def test_retry_failed_tasks_is_an_explicit_build_action(self) -> None:
+        """显式重试动作必须固定从 Build 恢复，并写入受控 Graph State。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowAction": "retry_failed_tasks",
+                    "resumeFrom": "integration_test",
+                }
+            }
+        )
+
+        self.assertEqual(inputs["workflow_action"], "retry_failed_tasks")
+        self.assertEqual(inputs["resume_from"], "build")
+        self.assertTrue(inputs["resume_values"]["retry_failed_tasks"])
+
+    def test_retry_restores_camel_case_repair_plan_from_public_state_snapshot(self) -> None:
+        """公开 StateSnapshot 的 camelCase 修复计划必须能回到 Build 恢复输入。"""
+
+        repair_plan = {
+            "status": "ready",
+            "decision": "repair",
+            "tasks": [{"id": "repair-page", "status": "pending"}],
+        }
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowAction": "retry_failed_tasks",
+                    "resumeState": {
+                        "state": {
+                            "buildSummary": {"repairable_failures": 1},
+                            "repairTaskPlan": repair_plan,
+                        }
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "build")
+        self.assertEqual(inputs["resume_values"]["repair_task_plan"], repair_plan)
+        self.assertEqual(inputs["resume_values"]["build_summary"], {"repairable_failures": 1})
+
+    def test_retry_loads_persisted_repair_plan_when_public_snapshot_is_incomplete(self) -> None:
+        """公开失败快照缺少修复计划时，重试必须恢复工作区中的 ready 计划。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            plans_dir = workspace / ".xcodeagent" / "plans"
+            plans_dir.mkdir(parents=True)
+            repair_plan = {
+                "status": "ready",
+                "decision": "repair",
+                "tasks": [{"id": "repair-page", "status": "pending"}],
+            }
+            (plans_dir / "repair-task-plan.json").write_text(
+                json.dumps(repair_plan),
+                encoding="utf-8",
+            )
+
+            inputs = workflow_run_inputs(
+                {
+                    "workspace": str(workspace),
+                    "forwardedProps": {
+                        "workflowAction": "retry_failed_tasks",
+                        "resumeState": {
+                            "state": {
+                                "buildSummary": {
+                                    "repairable_failures": 1,
+                                    "retry_available": False,
+                                }
+                            }
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_values"]["repair_task_plan"], repair_plan)
+        self.assertEqual(
+            inputs["resume_values"]["repair_task_plan_path"],
+            str(workspace / ".xcodeagent" / "plans" / "repair-task-plan.json"),
+        )
+        self.assertEqual(inputs["resume_values"]["repair_tasks"], repair_plan["tasks"])
 
 
 if __name__ == "__main__":

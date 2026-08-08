@@ -151,6 +151,20 @@ test('Workflow 会话把 RUN_ERROR 提升为可供初始化界面展示的异常
         { type: 'RUN_STARTED', threadId: 'thread-init', runId: 'run-init' },
         { type: 'TEXT_MESSAGE_START', messageId: 'message-init', role: 'assistant' },
         { type: 'TEXT_MESSAGE_END', messageId: 'message-init' },
+        {
+          type: 'CUSTOM',
+          name: 'workflow-run',
+          value: {
+            runId: 'run-init',
+            threadId: 'thread-init',
+            summary: {
+              status: 'failed',
+              phase: 'build',
+              buildSummary: { retry_available: true, retryable_failures: 1 }
+            },
+            events: []
+          }
+        },
         { type: 'RUN_ERROR', message: '模型请求超时，请稍后重试。', code: 'MODEL_TIMEOUT' }
       ])
   })
@@ -160,14 +174,21 @@ test('Workflow 会话把 RUN_ERROR 提升为可供初始化界面展示的异常
       'thread-init',
       'https://example.invalid/application-page-planning/run'
     )
-    await assert.rejects(
-      session.sendMessage('初始化应用', {
-        editorMode: 'frontend',
-        onContent: (content) => streamedContent.push(content)
-      }),
-      /模型请求超时，请稍后重试/
+    const run = session.sendMessage('初始化应用', {
+      editorMode: 'frontend',
+      onContent: (content) => streamedContent.push(content)
+    })
+    const error = await run.catch((caughtError) => caughtError)
+    assert.match(String(error), /模型请求超时，请稍后重试/)
+    assert.equal((error as { name?: string }).name, 'AgUiRunError')
+    assert.equal(
+      (error as { workflow?: { summary?: { phase?: string } } }).workflow?.summary?.phase,
+      'build'
     )
-    assert.equal(streamedContent.every((content) => content === ''), true)
+    assert.equal(
+      streamedContent.every((content) => content === ''),
+      true
+    )
   } finally {
     Object.assign(globalThis, { fetch: originalFetch })
   }

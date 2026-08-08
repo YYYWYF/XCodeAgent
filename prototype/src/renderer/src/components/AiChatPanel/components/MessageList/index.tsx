@@ -11,7 +11,6 @@ import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   ApplicationLifecycle,
-  EditorMode,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../../../typings'
@@ -44,7 +43,7 @@ import {
   processStepsForMessageDisplay,
   workflowMessageContentForDisplay
 } from '../../../../service/processStepHistory'
-import type { AgentChatMessage, ChatCopy, WorkspaceDocKey } from '../../types'
+import type { AgentChatMessage, WorkspaceDocKey } from '../../types'
 import { isDirectModificationWaitingForInput } from '../../directModificationMode'
 import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
@@ -75,7 +74,6 @@ function MessageAgentHeader({ agentKey }: { agentKey: WorkbenchPhase }): ReactEl
 type MessageListProps = {
   applicationLifecycle?: ApplicationLifecycle
   codeChangeActionsDisabled: boolean
-  copy: ChatCopy[EditorMode]
   loading: boolean
   messages: AgentChatMessage[]
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
@@ -103,7 +101,6 @@ type MessageListProps = {
 export default function MessageList({
   applicationLifecycle,
   codeChangeActionsDisabled,
-  copy,
   loading,
   messages,
   onDiscardArtifact,
@@ -222,7 +219,6 @@ export default function MessageList({
                 <RobotOutlined />
               </span>
               <Text strong>从一个想法开始</Text>
-              <Text type="secondary">{copy.empty}</Text>
             </div>
           ) : (
             messages.map((message) => {

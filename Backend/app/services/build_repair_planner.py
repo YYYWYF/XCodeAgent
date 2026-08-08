@@ -383,6 +383,7 @@ def append_repair_tasks_to_build_plan(
     *,
     build_task_plan: dict[str, Any],
     repair_task_plan: dict[str, Any],
+    reset_existing_repair_tasks: bool = False,
 ) -> dict[str, Any]:
     """把修复任务追加回全局 Build DAG，保留原任务所属 Unit。"""
 
@@ -396,6 +397,15 @@ def append_repair_tasks_to_build_plan(
 
     existing_tasks = tasks_from_build_task_plan(build_task_plan)
     existing_ids = {str(task["id"]) for task in existing_tasks}
+    incoming_by_id = {str(task["id"]): task for task in repair_tasks}
+    if reset_existing_repair_tasks:
+        existing_tasks = [
+            _reset_existing_repair_task(
+                task,
+                incoming_by_id.get(str(task.get("id"))),
+            )
+            for task in existing_tasks
+        ]
     next_tasks = [
         *existing_tasks,
         *[task for task in repair_tasks if str(task["id"]) not in existing_ids],
@@ -414,6 +424,52 @@ def append_repair_tasks_to_build_plan(
         "summary": summary,
         "repair_task_plan": repair_task_plan,
     }
+
+
+def _reset_existing_repair_task(
+    existing_task: dict[str, Any],
+    incoming_task: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """把显式恢复计划中残留的失败修复节点恢复为可调度状态。"""
+
+    if (
+        not incoming_task
+        or not _is_repair_task(existing_task)
+        or existing_task.get("status") in {"completed", "already_satisfied"}
+    ):
+        return existing_task
+
+    now = datetime.now(UTC).isoformat()
+    try:
+        retry_count = max(int(existing_task.get("retry_count", 0) or 0), 0) + 1
+    except (TypeError, ValueError):
+        retry_count = 1
+    reset_task = {
+        **existing_task,
+        **incoming_task,
+        "status": "pending",
+        "retry_count": retry_count,
+        "scheduler": {
+            **(
+                existing_task.get("scheduler")
+                if isinstance(existing_task.get("scheduler"), dict)
+                else {}
+            ),
+            "last_action": "retry_repair_task",
+            "retry_count": retry_count,
+            "retry_at": now,
+        },
+        "updated_by": "build-repair-recovery",
+        "updated_at": now,
+    }
+    for field in (
+        "last_result_status",
+        "failure_category",
+        "failure_reason",
+        "failure_detail",
+    ):
+        reset_task.pop(field, None)
+    return reset_task
 
 
 def close_repaired_parent_tasks(

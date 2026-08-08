@@ -7,6 +7,7 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 
 
 DIRECT_MODIFICATION_MODE_MARKER = "<xcodeagent-direct-modification-mode>"
+SMALL_TASK_MODE_MARKER = "<xcodeagent-small-task-mode>"
 
 _DIRECT_DISABLED_TOOLS = {"task", "write_todos"}
 
@@ -67,7 +68,7 @@ def _prepare_direct_model_request(request: ModelRequest) -> ModelRequest:
 
 
 def _is_direct_modification_messages(messages: Any) -> bool:
-    """通过快速 Prompt 的稳定标记识别当前 Agent 调用模式。"""
+    """通过快速或小任务 Prompt 的稳定标记识别受限 Agent 调用模式。"""
 
     for message in messages if isinstance(messages, list) else []:
         content = (
@@ -75,7 +76,10 @@ def _is_direct_modification_messages(messages: Any) -> bool:
             if isinstance(message, dict)
             else getattr(message, "content", "")
         )
-        if isinstance(content, str) and DIRECT_MODIFICATION_MODE_MARKER in content:
+        if isinstance(content, str) and any(
+            marker in content
+            for marker in (DIRECT_MODIFICATION_MODE_MARKER, SMALL_TASK_MODE_MARKER)
+        ):
             return True
     return False
 

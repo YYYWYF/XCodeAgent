@@ -15,9 +15,9 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertEqual(
             _workflow_next_nodes(
                 "integration_test",
-                {"quality_gate_passed": False, "integration_next_action": "repair_build"},
+                {"quality_gate_passed": False, "integration_next_action": "small_task_repair"},
             ),
-            ["build"],
+            ["small_task_repair"],
         )
 
     def test_failed_summary_explains_exhausted_budget_without_stale_preview(self) -> None:

@@ -17,11 +17,17 @@ import {
   readWorkspaceInspectionSnapshot
 } from '../src/renderer/src/service/agUiAgent'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
+import { ToolCallChain } from '../src/renderer/src/components/AiChatPanel/components/ToolCallCard'
 import {
-  isDirectModificationWaitingForInput,
-  shouldUseDirectModification
-} from '../src/renderer/src/components/AiChatPanel/directModificationMode'
-import { buildToolActivityPlacement } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
+  isConversationWaitingForInput,
+  shouldUseConversation
+} from '../src/renderer/src/components/AiChatPanel/conversationMode'
+import { workflowDebugBuildScope } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
+import {
+  buildToolActivityPlacement,
+  workflowOriginalRequest
+} from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
+import { workflowInteractionAvailability } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
   processStepsForDisplay,
   processStepsForMessageDisplay,
@@ -44,6 +50,23 @@ import {
   reconcileEnabledChatSkills
 } from '../src/renderer/src/components/SkillsPage/skillCatalog'
 import type { UserSkillCatalog } from '../src/renderer/src/typings'
+
+test('prepare_build_tasks 调试默认继承当前页面范围', () => {
+  const scope = workflowDebugBuildScope({
+    runId: 'run-page',
+    threadId: 'thread-page',
+    summary: {},
+    events: [],
+    state: {
+      buildExecutionScope: {
+        type: 'page',
+        targetId: 'pet_list_page'
+      }
+    }
+  })
+
+  assert.deepEqual(scope, { type: 'page', targetId: 'pet_list_page' })
+})
 
 const skillCatalog: UserSkillCatalog = {
   root: '~/.xcodeagent_dev/skills',
@@ -91,7 +114,8 @@ test('简单模式等待补充时直接展示问题并隐藏步骤标题和图�
     threadId: 'direct-thread',
     summary: {
       status: 'requires_user_input',
-      phase: 'direct_modification',
+      phase: 'conversation',
+      intent: 'needs_clarification',
       owner: 'unknown',
       message: '请说明要修改哪个页面或接口，以及期望结果。'
     },
@@ -100,7 +124,7 @@ test('简单模式等待补充时直接展示问题并隐藏步骤标题和图�
   const markup = renderToStaticMarkup(
     createElement(ProcessSteps, {
       loading: false,
-      waitingForInput: isDirectModificationWaitingForInput(workflow),
+      waitingForInput: isConversationWaitingForInput(workflow),
       waitingPrompt: workflow.summary.message,
       steps: [
         {
@@ -115,7 +139,7 @@ test('简单模式等待补充时直接展示问题并隐藏步骤标题和图�
     })
   )
 
-  assert.equal(isDirectModificationWaitingForInput(workflow), true)
+  assert.equal(isConversationWaitingForInput(workflow), true)
   assert.equal((markup.match(/ open=""/g) || []).length, 1)
   assert.match(markup, /Agent 等待补充/)
   assert.match(markup, /请根据下方提示补充修改需求/)
@@ -131,12 +155,13 @@ test('简单模式 requires_planning 不显示为等待补充', () => {
     threadId: 'direct-thread',
     summary: {
       status: 'requires_planning',
-      phase: 'direct_modification',
+      phase: 'conversation',
+      intent: 'formal_workflow',
       owner: 'unknown'
     },
     events: []
   }
-  const waitingForInput = isDirectModificationWaitingForInput(workflow)
+  const waitingForInput = isConversationWaitingForInput(workflow)
   const markup = renderToStaticMarkup(
     createElement(ProcessSteps, {
       loading: false,
@@ -165,15 +190,16 @@ test('简单模式等待补充后仍复用独立端点', () => {
     threadId: 'direct-thread',
     summary: {
       status: 'requires_user_input',
-      phase: 'direct_modification',
+      phase: 'conversation',
+      intent: 'needs_clarification',
       owner: 'unknown'
     },
     events: []
   }
 
-  assert.equal(shouldUseDirectModification(false, workflow, undefined), true)
+  assert.equal(shouldUseConversation(false, workflow, undefined), true)
   assert.equal(
-    shouldUseDirectModification(
+    shouldUseConversation(
       true,
       {
         ...workflow,
@@ -183,7 +209,30 @@ test('简单模式等待补充后仍复用独立端点', () => {
     ),
     false
   )
-  assert.equal(shouldUseDirectModification(true, workflow, { enabled: true }), false)
+  assert.equal(shouldUseConversation(true, workflow, { enabled: true }), false)
+})
+
+test('无目标自由对话默认使用独立快速修改端点', () => {
+  assert.equal(shouldUseConversation(true, undefined, undefined), true)
+})
+
+test('页面或 API 设计模式显式控制新消息的 Graph 路由', () => {
+  assert.equal(shouldUseConversation(true, undefined, undefined, 'design'), false)
+  assert.equal(shouldUseConversation(true, undefined, undefined, 'conversation'), true)
+  assert.equal(
+    shouldUseConversation(
+      true,
+      {
+        runId: 'conversation-pending',
+        threadId: 'conversation-thread',
+        summary: { status: 'requires_user_input', phase: 'conversation' },
+        events: []
+      },
+      undefined,
+      'design'
+    ),
+    true
+  )
 })
 
 test('技能选择按名称去空白去重并保留首次顺序', () => {
@@ -214,17 +263,35 @@ test('快速修改只在独立字段发送工作区和技能且不包含 target'
     editorMode: 'frontend',
     workspaceRoot: '/workspace',
     selectedSkillNames: ['alpha'],
-    directModification: true
+    conversation: true
   })
 
-  assert.deepEqual(forwardedProps.directModification, {
+  assert.deepEqual(forwardedProps.conversation, {
     workspaceRoot: '/workspace',
     selectedSkillNames: ['alpha']
   })
   assert.equal(
-    Object.hasOwn(forwardedProps.directModification as Record<string, unknown>, 'target'),
+    Object.hasOwn(forwardedProps.conversation as Record<string, unknown>, 'target'),
     false
   )
+})
+
+test('SmallTask handoff 只在确认续跑时携带原请求、路径和决定', () => {
+  const forwardedProps = buildWorkflowForwardedProps({
+    editorMode: 'frontend',
+    conversation: true,
+    originalRequest: '修复订单页筛选按钮',
+    conversationApprovedPaths: ['Frontend/src/pages/Orders.tsx'],
+    conversationHandoffDecision: 'approved'
+  })
+
+  assert.deepEqual(forwardedProps.conversation, {
+    workspaceRoot: undefined,
+    selectedSkillNames: undefined,
+    originalRequest: '修复订单页筛选按钮',
+    approvedPaths: ['Frontend/src/pages/Orders.tsx'],
+    handoffDecision: 'approved'
+  })
 })
 
 test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', async () => {
@@ -243,7 +310,8 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
       status: 'completed',
       summary: {
         status: 'completed',
-        phase: 'direct_modification',
+        phase: 'conversation',
+        intent: 'workspace_change',
         message: '快速修改完成',
         owner: 'frontend'
       },
@@ -274,11 +342,11 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
     const events = [
       { type: 'RUN_STARTED', threadId, runId },
       { type: 'TEXT_MESSAGE_START', messageId, role: 'assistant' },
-      { type: 'CUSTOM', name: 'direct-modification', value: runningValue },
-      { type: 'CUSTOM', name: 'direct-modification', value },
+      { type: 'CUSTOM', name: 'conversation', value: runningValue },
+      { type: 'CUSTOM', name: 'conversation', value },
       { type: 'TEXT_MESSAGE_CONTENT', messageId, delta: '快速修改完成' },
       { type: 'TEXT_MESSAGE_END', messageId },
-      { type: 'RUN_FINISHED', threadId, runId, result: { directModification: value } }
+      { type: 'RUN_FINISHED', threadId, runId, result: { conversation: value } }
     ]
     return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
       headers: { 'content-type': 'text/event-stream' },
@@ -287,14 +355,11 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
   }
 
   try {
-    const session = new AgUiChatSession(
-      'thread-direct',
-      'http://agent.test/direct-modification/run'
-    )
+    const session = new AgUiChatSession('thread-direct', 'http://agent.test/conversation/run')
     const result = await session.sendMessage('修改页面样式', {
       editorMode: 'frontend',
       workspaceRoot: '/workspace',
-      directModification: true,
+      conversation: true,
       onWorkflow: (workflow) => {
         workflowStatus = String(workflow.summary.status)
       },
@@ -303,7 +368,7 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
         processStepStatuses.push(String(steps[0]?.status))
       }
     })
-    assert.equal(result.workflow?.summary.phase, 'direct_modification')
+    assert.equal(result.workflow?.summary.phase, 'conversation')
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -313,11 +378,11 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
   assert.deepEqual(processStepStatuses, ['running', 'completed'])
 })
 
-test('简单模式运行时用最近工具活动替换当前动作详情并在完成后隐藏', () => {
+test('自由对话运行时展示实时步骤与工具活动', () => {
   const workflow = {
     runId: 'direct-run',
     threadId: 'direct-thread',
-    summary: { status: 'in_progress', owner: 'frontend' },
+    summary: { status: 'in_progress', phase: 'conversation', intent: 'workspace_change' },
     events: []
   }
   const steps = [
@@ -347,26 +412,48 @@ test('简单模式运行时用最近工具活动替换当前动作详情并在�
     }
   ]
 
-  const runningSteps = processStepsForMessageDisplay(steps, workflow, true)
-  const completedSteps = processStepsForMessageDisplay(steps, workflow, false)
+  const runningSteps = processStepsForMessageDisplay(steps, workflow)
+  const completedSteps = processStepsForMessageDisplay(steps, workflow)
   const markup = renderToStaticMarkup(
-    createElement(ProcessSteps, { loading: true, steps: runningSteps || [] })
+    createElement(ProcessSteps, {
+      conversation: true,
+      loading: true,
+      steps: runningSteps || []
+    })
   )
 
   assert.deepEqual(
     runningSteps?.map((step) => step.id),
-    ['direct:execute_frontend']
+    ['direct:execute_frontend', 'direct-tool:read-old', 'direct-tool:read-current']
   )
   assert.deepEqual(
     completedSteps?.map((step) => step.id),
-    ['direct:execute_frontend']
+    ['direct:execute_frontend', 'direct-tool:read-old', 'direct-tool:read-current']
   )
-  assert.doesNotMatch(markup, /read_file/)
-  assert.doesNotMatch(markup, /正在执行：执行前端修改/)
-  assert.match(markup, /正在读取文件：\/src\/App\.tsx/)
+  assert.match(markup, /正在处理请求/)
+  assert.match(markup, /正在调用 read_file 工具/)
+  assert.match(markup, /展开调用链/)
+  assert.match(markup, /已记录 2 次调用/)
+  assert.doesNotMatch(markup, /已调用 grep 工具/)
 })
 
-test('简单模式隐藏内部收尾步骤但主流程仍保留其稳定步骤', () => {
+test('标准 AG-UI 工具事件默认只展示最新调用', () => {
+  const markup = renderToStaticMarkup(
+    createElement(ToolCallChain, {
+      toolCalls: [
+        { id: 'tool-1', name: 'read_file', args: '{}', status: 'completed' },
+        { id: 'tool-2', name: 'write_file', args: '{}', status: 'running' }
+      ]
+    })
+  )
+
+  assert.match(markup, /调用 write_file 工具中/)
+  assert.match(markup, /展开调用链/)
+  assert.match(markup, /已记录 2 次工具调用/)
+  assert.doesNotMatch(markup, /已调用 read_file 工具/)
+})
+
+test('自由对话保留全部过程步骤，正式 Workflow 仍保留稳定步骤', () => {
   const steps = [
     {
       id: 'direct:launch_project',
@@ -390,7 +477,7 @@ test('简单模式隐藏内部收尾步骤但主流程仍保留其稳定步骤',
   const directWorkflow = {
     runId: 'direct-run',
     threadId: 'direct-thread',
-    summary: { status: 'completed', owner: 'frontend' },
+    summary: { status: 'completed', phase: 'conversation', intent: 'workspace_change' },
     events: []
   }
   const mainWorkflow = {
@@ -401,17 +488,38 @@ test('简单模式隐藏内部收尾步骤但主流程仍保留其稳定步骤',
   }
 
   assert.deepEqual(
-    processStepsForMessageDisplay(steps, directWorkflow, false)?.map((step) => step.id),
-    ['direct:launch_project']
-  )
-  assert.deepEqual(
-    processStepsForMessageDisplay(steps, directWorkflow, true)?.map((step) => step.id),
-    ['direct:launch_project']
-  )
-  assert.deepEqual(
-    processStepsForMessageDisplay(steps, mainWorkflow, false)?.map((step) => step.id),
+    processStepsForMessageDisplay(steps, directWorkflow)?.map((step) => step.id),
     ['direct:launch_project', 'direct:finalize_direct_modification']
   )
+  assert.deepEqual(
+    processStepsForMessageDisplay(steps, directWorkflow)?.map((step) => step.id),
+    ['direct:launch_project', 'direct:finalize_direct_modification']
+  )
+  assert.deepEqual(
+    processStepsForMessageDisplay(steps, mainWorkflow)?.map((step) => step.id),
+    ['direct:launch_project', 'direct:finalize_direct_modification']
+  )
+})
+
+test('简单模式转正式工作流前确认卡可提交并保留原始问题', () => {
+  const workflow = {
+    runId: 'direct-handoff-run',
+    threadId: 'direct-thread',
+    summary: {
+      status: 'requires_user_input',
+      phase: 'conversation',
+      intent: 'formal_workflow',
+      request: '创建一个订单管理系统',
+      clarification: {
+        mode: 'small_task_workflow_handoff',
+        status: 'requires_user_input'
+      }
+    },
+    events: []
+  }
+
+  assert.equal(workflowInteractionAvailability(workflow, undefined), 'active')
+  assert.equal(workflowOriginalRequest(workflow), '创建一个订单管理系统')
 })
 
 test('AG-UI 继续执行只发送旧 runId 作为资源锁转移令牌', () => {
@@ -421,6 +529,15 @@ test('AG-UI 继续执行只发送旧 runId 作为资源锁转移令牌', () => {
   })
 
   assert.equal(forwardedProps.resumeExecutionRunId, 'run-stopped')
+})
+
+test('AG-UI 重试失败任务发送显式工作流动作', () => {
+  const forwardedProps = buildWorkflowForwardedProps({
+    editorMode: 'frontend',
+    workflowAction: 'retry_failed_tasks'
+  })
+
+  assert.equal(forwardedProps.workflowAction, 'retry_failed_tasks')
 })
 
 test('AG-UI 连续请求只发送当前用户消息', async () => {
@@ -1252,6 +1369,27 @@ test('结构化步骤存在时隐藏重复 Workflow 摘要并保留真实回复'
       true
     ),
     ''
+  )
+})
+
+test('自由对话完成后仍保留与摘要相同的助手正文', () => {
+  const workflow = {
+    runId: 'conversation-summary',
+    threadId: 'conversation-thread',
+    summary: {
+      status: 'completed',
+      phase: 'conversation',
+      intent: 'casual_chat',
+      message: '我是 XCodeAgent。'
+    },
+    events: [],
+    state: {},
+    result: {}
+  }
+
+  assert.equal(
+    workflowMessageContentForDisplay('我是 XCodeAgent。', workflow, true),
+    '我是 XCodeAgent。'
   )
 })
 

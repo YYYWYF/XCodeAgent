@@ -515,50 +515,6 @@ function objectValue(value: unknown): Record<string, unknown> {
   return isRecord(value) ? (value as Record<string, unknown>) : {};
 }
 
-// 判断 endpoint 当前是否仍处于待用户决策的数据来源状态。
-function isNeedsUserConfirmationDataOrigin(value: unknown): boolean {
-  const origin = objectValue(value);
-  const effectiveSource = objectValue(origin.effective_source);
-  const effectiveKind = String(effectiveSource.kind || "");
-  const hasPendingDifference =
-    Array.isArray(origin.differences) &&
-    origin.differences.some(
-      (item) =>
-        isRecord(item) &&
-        String(item.resolution_kind || "") === "needs_user_confirmation",
-    );
-  return effectiveKind === "needs_user_confirmation" || hasPendingDifference;
-}
-
-// 判断详情确认是否还缺少数据来源决策，防止用户直接跳过未决数据库方案。
-function requiresDataOriginDecision(
-  target: WorkflowDetailReviewTarget,
-  changedDataOrigin: unknown,
-): boolean {
-  if (target.target_type !== "endpoint") return false;
-  if (!isNeedsUserConfirmationDataOrigin(target.data_origin)) return false;
-  return !isResolvedDataOrigin(changedDataOrigin);
-}
-
-// 校验前端提交的数据来源是否已经转为任务规划可识别的确定方案。
-function isResolvedDataOrigin(value: unknown): boolean {
-  const origin = objectValue(value);
-  const effectiveSource = objectValue(origin.effective_source);
-  const sourceType = String(origin.source_type || "");
-  const effectiveKind = String(effectiveSource.kind || "");
-  if (
-    sourceType === "database" &&
-    (effectiveKind === "mysql_new_table" || effectiveKind === "mysql_existing")
-  ) {
-    return Boolean(
-      effectiveSource.database &&
-        Array.isArray(effectiveSource.tables) &&
-        effectiveSource.tables.length > 0,
-    );
-  }
-  return false;
-}
-
 // 把结构化 endpoint 字段转换为便于用户编辑的 JSON 文本。
 function jsonSummary(value: unknown): string {
   return JSON.stringify(objectValue(value), null, 2);

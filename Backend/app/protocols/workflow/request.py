@@ -5,12 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.domain.acceptance_adjustment import (
+    acceptance_adjustment_resume_node,
+    normalize_acceptance_adjustment,
+)
 from app.services.execution_resource_scope import resolve_execution_resource_claims
 from app.services.frontend_page_tree import flatten_frontend_pages, frontend_page_ids
 
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
-from app.workspace.task_documents import load_build_task_plan_json
+from app.workspace.task_documents import (
+    load_build_task_plan_json,
+    load_repair_task_plan_json,
+)
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 from app.services.build_task_planner import tasks_from_build_task_plan
 from app.services.workspace_inspector import snapshot_hash
@@ -45,6 +52,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     clarification_answers = (
         payload.get("clarificationAnswers")
         or forwarded_props.get("clarificationAnswers")
+    )
+    small_task_handoff_submission = _small_task_handoff_submission(
+        clarification_answers
     )
     edited_requirement_spec = (
         _optional_dict(payload.get("editedRequirementSpec"))
@@ -88,22 +98,37 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_dict(forwarded_props.get("debugState"))
         or {}
     )
+    workflow_action = _supported_workflow_action(
+        _optional_text(payload.get("workflowAction"))
+        or _optional_text(payload.get("workflow_action"))
+        or _optional_text(forwarded_props.get("workflowAction"))
+        or _optional_text(forwarded_props.get("workflow_action"))
+    )
     workflow_scope = (
         _optional_text(payload.get("workflowScope"))
         or _optional_text(forwarded_props.get("workflowScope"))
     )
+    # 节点调试选择是用户本轮明确指定的恢复入口，优先于旧快照中的阻断节点。
+    explicit_resume_from = (
+        _optional_text(debug_state.get("resume_from"))
+        or _optional_text(debug_state.get("resumeFrom"))
+        or _optional_text(payload.get("resume_from"))
+        or _optional_text(payload.get("resumeFrom"))
+        or _optional_text(forwarded_props.get("resume_from"))
+        or _optional_text(forwarded_props.get("resumeFrom"))
+    )
     resume_from = _supported_resume_node(
-        (
-            _resume_from_state(resume_state, workflow_scope=workflow_scope)
-            or _optional_text(debug_state.get("resume_from"))
-            or _optional_text(debug_state.get("resumeFrom"))
-            or _optional_text(payload.get("resume_from"))
-            or _optional_text(payload.get("resumeFrom"))
-            or _optional_text(forwarded_props.get("resume_from"))
-            or _optional_text(forwarded_props.get("resumeFrom"))
-        ),
+        explicit_resume_from
+        or _resume_from_state(resume_state, workflow_scope=workflow_scope),
         workflow_scope=workflow_scope,
     )
+    if workflow_action == "retry_failed_tasks":
+        if workflow_scope == "application_planning":
+            raise ValueError("retry_failed_tasks 只适用于主工作流的 Build 阶段。")
+        # 显式重试动作拥有最高恢复优先级，不能被旧快照中的事件或自然语言推断覆盖。
+        resume_from = "build"
+    elif small_task_handoff_submission and workflow_scope != "application_planning":
+        resume_from = "small_task_repair"
     if not resume_from and _clarification_answers_to_text(clarification_answers):
         resume_from = (
             "requirements"
@@ -114,8 +139,17 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     detail_review_submission = _detail_review_submission(clarification_answers)
     acceptance_decision = _page_acceptance_decision(clarification_answers)
-    if acceptance_decision:
-        resume_from = "acceptance"
+    acceptance_adjustment = _acceptance_adjustment(clarification_answers)
+    if acceptance_decision and workflow_action != "retry_failed_tasks":
+        resume_from = (
+            "acceptance"
+            if acceptance_decision == "accepted"
+            else acceptance_adjustment_resume_node(acceptance_adjustment)
+        )
+    elif workflow_action == "retry_failed_tasks":
+        # 重试动作不能携带旧验收提交，避免一次请求同时触发两个互斥节点。
+        acceptance_decision = {}
+        acceptance_adjustment = None
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
         or _optional_text(payload.get("selected_page_id"))
@@ -157,6 +191,15 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("workspaceRoot"))
         or _optional_text(application.get("workspaceRoot"))
     )
+    if workflow_action == "retry_failed_tasks":
+        # 失败运行的公开快照可能只保留摘要；重试必须从工作区落盘计划补回真实修复候选。
+        resume_values_from_state = {
+            **resume_values_from_state,
+            **_persisted_retry_values(
+                workspace,
+                resume_values_from_state,
+            ),
+        }
     editor_mode = _supported_editor_mode(
         _optional_text(payload.get("editor_mode"))
         or _optional_text(payload.get("editorMode"))
@@ -185,6 +228,16 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selected_api_contract_id=selected_api_contract_id,
         selected_endpoint_id=selected_endpoint_id,
     )
+    # endpoint scope 是正式 handoff 的权威目标；即使客户端只发送了 scope，也要补回详情确认所需的显式 ID。
+    if build_execution_scope.get("type") == "endpoint":
+        selected_api_contract_id = selected_api_contract_id or _optional_text(
+            build_execution_scope.get("apiContractId")
+        )
+        selected_endpoint_id = selected_endpoint_id or _optional_text(
+            build_execution_scope.get("targetId")
+        )
+        detail_target_type = "endpoint"
+        selectedPageId = ""
     execution_resource_claims = (
         resolve_execution_resource_claims(
             project_plan_start_values.get("project_plan"),
@@ -203,6 +256,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **resume_values_from_state,
         **project_plan_start_values,
         **_debug_resume_values(debug_state, workspace=workspace),
+        "retry_failed_tasks": workflow_action == "retry_failed_tasks",
         "selected_skill_names": list(selected_skill_names),
         **(
             {"detail_review_submission": detail_review_submission}
@@ -210,6 +264,16 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
         **({"acceptance_decision": acceptance_decision} if acceptance_decision else {}),
+        **(
+            {"acceptance_adjustment": acceptance_adjustment}
+            if acceptance_adjustment
+            else {}
+        ),
+        **(
+            {"small_task_handoff_submission": small_task_handoff_submission}
+            if small_task_handoff_submission
+            else {}
+        ),
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
         **({"selected_api_contract_id": selected_api_contract_id} if selected_api_contract_id else {}),
         **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
@@ -261,6 +325,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(forwarded_props.get("cancel_run_id"))
         ),
         "request": request,
+        "workflow_action": workflow_action,
         "user_interaction_submission": user_interaction_submission,
         "resume_from": resume_from,
         "resume_values": resume_values,
@@ -280,6 +345,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "workspace": workspace,
         "editor_mode": editor_mode,
         "workflow_scope": workflow_scope,
+        "workflow_debug_enabled": bool(debug_state.get("enabled")),
         "thread_id": (
             _optional_text(payload.get("thread_id"))
             or _optional_text(payload.get("threadId"))
@@ -514,6 +580,12 @@ def _optional_text(value: Any) -> str:
     return str(value).strip() if value is not None and str(value).strip() else ""
 
 
+def _supported_workflow_action(value: str) -> str:
+    """限制主 Workflow 当前允许的显式控制动作，避免未知动作悄悄改变恢复路由。"""
+
+    return value if value in {"retry_failed_tasks"} else ""
+
+
 def _optional_dict(value: Any) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
@@ -587,11 +659,13 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
         if workflow_scope == "application_planning"
         else {
             "detail_confirmation",
+            "project_planning",
             "inspect_workspace",
             "inspect_database_context",
             "prepare_build_tasks",
             "build",
             "integration_test",
+            "small_task_repair",
             "launch_project",
             "acceptance",
             "finalize_project",
@@ -644,15 +718,50 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "repair_tasks",
         "repair_iteration",
         "max_repair_iterations",
+        "small_task_tasks",
+        "small_task_results",
+        "small_task_code_change_sets",
+        "small_task_handoff",
+        "small_task_handoff_submission",
+        "small_task_route",
+        "small_task_max_concurrency",
+        "integration_next_action",
         "clarification",
         "selected_skill_names",
         "workflow_scope",
+        "acceptance_adjustment",
     }
     resumed_values = {
         key: merged[key]
         for key in allowed_keys
         if key in merged and merged[key] is not None
     }
+    # 前端 StateSnapshot 使用 camelCase；恢复失败任务时必须把修复计划和构建结果
+    # 归一化回 Graph State，否则按钮虽然显示，点击后后端会丢失实际恢复候选。
+    camel_aliases = {
+        "build_task_plan": "buildTaskPlan",
+        "build_results": "buildResults",
+        "build_summary": "buildSummary",
+        "repair_task_plan": "repairTaskPlan",
+        "repair_tasks": "repairTasks",
+        "integration_next_action": "integrationNextAction",
+    }
+    for snake_key, camel_key in camel_aliases.items():
+        if snake_key not in resumed_values and merged.get(camel_key) is not None:
+            resumed_values[snake_key] = merged[camel_key]
+    raw_adjustment = resumed_values.get("acceptance_adjustment") or merged.get(
+        "acceptanceAdjustment"
+    )
+    # 公开 Workflow 快照会用空对象表示“尚未提交验收调整”；恢复其他节点时应视为缺省值。
+    empty_adjustment = raw_adjustment is None or raw_adjustment == {} or (
+        isinstance(raw_adjustment, str) and not raw_adjustment.strip()
+    )
+    if empty_adjustment:
+        resumed_values.pop("acceptance_adjustment", None)
+    else:
+        resumed_values["acceptance_adjustment"] = normalize_acceptance_adjustment(
+            raw_adjustment
+        ) or {}
     # 前端快照使用 camelCase；Graph State 只保留 snake_case，避免同一语义双字段流转。
     selected_api_contract_id = _optional_text(
         merged.get("selected_api_contract_id") or merged.get("selectedApiContractId")
@@ -710,6 +819,15 @@ def _project_plan_start_values(
             for page in normalized_pages
         ):
             normalized_pages.append(selected_page)
+            existing_page_tree = (
+                list(frontend_pages_tree)
+                if isinstance(frontend_pages_tree, list)
+                else []
+            )
+            project_plan = {
+                **project_plan,
+                "frontend_pages": [*existing_page_tree, selected_page],
+            }
         return {
             "project_plan": project_plan,
             "frontend_pages": normalized_pages,
@@ -841,6 +959,96 @@ def _debug_resume_values(
         )
 
     return values
+
+
+def _persisted_retry_values(
+    workspace: str,
+    resume_values: dict[str, Any],
+) -> dict[str, Any]:
+    """在重试快照不完整时恢复工作区中的 Build 与 Repair 计划。"""
+
+    workspace_root = Path(workspace).expanduser() if workspace else None
+    if workspace_root is None or not workspace_root.is_dir():
+        return {}
+
+    values: dict[str, Any] = {}
+    build_plan = _load_retry_plan(
+        resume_values,
+        workspace_root,
+        "build_task_plan",
+        "build_task_plan_path",
+        "build-task-plan.json",
+        load_build_task_plan_json,
+    )
+    if build_plan:
+        values["build_task_plan"] = build_plan
+        values["build_task_plan_path"] = str(
+            _retry_plan_path(
+                resume_values.get("build_task_plan_path"),
+                workspace_root,
+                "build-task-plan.json",
+            )
+        )
+        values["tasks"] = tasks_from_build_task_plan(build_plan)
+
+    repair_plan = _load_retry_plan(
+        resume_values,
+        workspace_root,
+        "repair_task_plan",
+        "repair_task_plan_path",
+        "repair-task-plan.json",
+        load_repair_task_plan_json,
+    )
+    if repair_plan:
+        values["repair_task_plan"] = repair_plan
+        values["repair_task_plan_path"] = str(
+            _retry_plan_path(
+                resume_values.get("repair_task_plan_path"),
+                workspace_root,
+                "repair-task-plan.json",
+            )
+        )
+        values["repair_tasks"] = list(repair_plan.get("tasks") or [])
+    return values
+
+
+def _load_retry_plan(
+    resume_values: dict[str, Any],
+    workspace_root: Path,
+    plan_key: str,
+    path_key: str,
+    default_name: str,
+    loader: Any,
+) -> dict[str, Any]:
+    """只在恢复态没有有效计划时读取对应的工作区 JSON 计划。"""
+
+    existing_plan = resume_values.get(plan_key)
+    if isinstance(existing_plan, dict) and existing_plan:
+        existing_tasks = existing_plan.get("tasks") or existing_plan.get("repair_tasks")
+        # repair 决策没有任务列表时仍是不完整快照，允许用落盘计划补齐；确认/终止计划不能被覆盖。
+        if plan_key != "repair_task_plan" or (
+            existing_plan.get("decision") != "repair" or existing_tasks
+        ):
+            return {}
+    path = _retry_plan_path(resume_values.get(path_key), workspace_root, default_name)
+    if not path.is_file():
+        return {}
+    try:
+        loaded = loader(path)
+    except (OSError, TypeError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _retry_plan_path(raw_path: Any, workspace_root: Path, default_name: str) -> Path:
+    """把快照中的计划路径解析为当前工作区内的绝对路径。"""
+
+    candidate = (
+        Path(str(raw_path)).expanduser()
+        if raw_path
+        else Path(".xcodeagent") / "plans" / default_name
+    )
+    return candidate if candidate.is_absolute() else workspace_root / candidate
 
 
 def _resolve_debug_workspace_snapshot_path(
@@ -999,6 +1207,51 @@ def _page_acceptance_decision(value: Any) -> str:
         return ""
     decision = _optional_text(value.get("page_acceptance"))
     return decision if decision in {"accepted", "changes_requested"} else ""
+
+
+def _acceptance_adjustment(value: Any) -> dict[str, str] | None:
+    """从结构化验收答案读取调整类型，并在协议边界完成校验。"""
+
+    if not isinstance(value, dict):
+        return None
+    raw_adjustment = value.get("acceptance_adjustment") or value.get(
+        "acceptanceAdjustment"
+    )
+    if raw_adjustment is None:
+        return None
+    return normalize_acceptance_adjustment(raw_adjustment)
+
+
+def _small_task_handoff_submission(value: Any) -> dict[str, str] | None:
+    """从小任务确认卡提取结构化批准动作，避免依赖自然语言路由。"""
+
+    if not isinstance(value, dict):
+        return None
+    answer = value.get("small_task_handoff")
+    selected: list[str] = []
+    if isinstance(answer, dict):
+        raw_selected = answer.get("selected")
+        selected = (
+            [str(item).strip().casefold() for item in raw_selected]
+            if isinstance(raw_selected, list)
+            else [str(raw_selected).strip().casefold()]
+        )
+    elif isinstance(answer, list):
+        selected = [str(item).strip().casefold() for item in answer]
+    elif answer is not None:
+        selected = [str(answer).strip().casefold()]
+    selected = [item for item in selected if item]
+    if any(
+        item in {"是", "yes", "approved", "approve", "同意", "确认", "批准"}
+        for item in selected
+    ):
+        return {"decision": "approved"}
+    if any(
+        item in {"否", "no", "rejected", "reject", "拒绝", "不同意"}
+        for item in selected
+    ):
+        return {"decision": "rejected"}
+    return None
 
 
 def _answer_to_text(value: Any) -> str:

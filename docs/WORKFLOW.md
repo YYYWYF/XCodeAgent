@@ -41,8 +41,9 @@ START
       │                         → finalize_project
       │                         → END
       ├─ 可自动修复 → RepairPlanner 生成 repair_task_plan
-      │              → build 执行 repair tasks
+      │              → small_task_repair 并行执行局部 repair tasks
       │              → integration_test 复测
+      │              → 复杂任务经用户确认后转入对应正式节点
       ├─ 需要用户确认 → END
       └─ 不可恢复失败 → handle_failure
                          → END
@@ -98,11 +99,11 @@ START
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
-当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。主 Graph 当前支持从 `detail_confirmation`、`inspect_workspace`、`inspect_database_context`、`prepare_build_tasks` 和后续执行节点续跑；首页独立规划 Graph 继续自行处理 `requirements` 与 `project_planning` 的恢复。
+当某个节点通过 `ask_user` 等机制进入 `requires_user_input` 状态时，前端不应硬编码续跑阶段。前端应提交上一轮 workflow payload 作为 `resumeState`，由后端根据 `resumeState.events/state/summary` 推断阻断节点，并设置内部 `resume_from`。主 Graph 支持从 `project_planning`、`detail_confirmation`、`inspect_workspace`、`inspect_database_context`、`prepare_build_tasks`、`small_task_repair` 和后续执行节点续跑；首页独立规划 Graph 继续自行处理 `requirements` 与 `project_planning` 的恢复。
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
-`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。定向 Build Context 以该已确认 ProjectPlan 的 `api_contracts` 为 endpoint 请求/响应权威来源；页面外置详情仍是页面任务的正式输入，但 endpoint 外置详情只作可选补充，缺失、未确认或失效时不得替代或否定 ProjectPlan 契约。集成测试失败后的修复不回到 `prepare_build_tasks`；包括 API 契约错误在内的失败都由 RepairPlanner 生成受限 repair tasks，然后回到 `build` 由 BuildScheduler 调度执行。
+`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。定向 Build Context 以该已确认 ProjectPlan 的 `api_contracts` 为 endpoint 请求/响应权威来源；页面外置详情仍是页面任务的正式输入，但 endpoint 外置详情只作可选补充，缺失、未确认或失效时不得替代或否定 ProjectPlan 契约。集成测试失败后的修复不回到 `build`：`integration_test` 只负责确定性检查、质量门禁和调用只读 RepairPlanner 生成任务包；局部任务统一进入 `small_task_repair`，由共享 SmallTask Agent 执行后再回到 `integration_test`。
 
 页面任务只继承 `frontend:*` 公共 Unit 和同页面 Unit 内部依赖，不把 `backend:endpoint:*` 或 `database:*` 编译成任务依赖。数据库前置任务完成后，BuildScheduler 可把依赖已满足且文件锁不重叠的 backend 与 page 任务放入同一批次，Build Subgraph 再按 owner 并发调用前后端 Agent；并发工作区快照按各自任务的 `change_scope/target_files/allowed_paths` 过滤后再归属，防止前端文件计入后端结果。API Contract 是并行期间的共同事实来源，`app:integration` 仍等待 endpoint 与 page 两边完成后统一验证。该设计沿用 learn-coding-agent 的契约先行、执行后验证循环，采用 OpenCode 的独立 owner/tool 执行边界，并让 Deep Agents 的专业 Agent 仅获得各自任务范围；每个 owner 仍只接收当前批次的紧凑任务与正式产物引用，符合 128k 上下文预算。
 
@@ -372,7 +373,7 @@ Build DAG 只注册具有 `change_scope`、`allowed_paths`、`target_files` 或�
 app-demo-prepare-build-tasks var/workspaces/demo-project/.xcodeagent/plans/project-plan.json
 ```
 
-本地调试某个节点时，使用前端 Chat Composer 的“Workflow 调试”面板选择开始节点，并填写已落盘 JSON 产物路径，避免每次从头生成需求文档。调试面板通过 AG-UI `forwardedProps.workflowDebug` 传入 `resumeFrom`、`requirementSpecPath`、`projectPlanPath`、`workspaceSnapshotPath` 和 `buildTaskPlanPath`。
+本地调试某个节点时，使用前端 Chat Composer 的“Workflow 调试”面板选择开始节点，并填写已落盘 JSON 产物路径，避免每次从头生成需求文档。调试面板通过 AG-UI `forwardedProps.workflowDebug` 传入 `resumeFrom`、`requirementSpecPath`、`projectPlanPath`、`workspaceSnapshotPath` 和 `buildTaskPlanPath`；工作台的失败任务恢复则使用独立的 `forwardedProps.workflowAction = retry_failed_tasks`，优先重试瞬时失败任务；若当前已有无需额外确认的 RepairPlanner 计划，则执行该修复任务集。恢复快照缺少计划时，协议适配器会从当前 workspace 的 `.xcodeagent/plans/build-task-plan.json` 与 `.xcodeagent/plans/repair-task-plan.json` 补回内部状态，不依赖自然语言或调试节点选择。
 
 如果要从已经生成的项目计划调试后续节点，可填写 `project-plan.json` 并把开始节点设置为 `detail_confirmation`、`inspect_workspace`、`inspect_database_context` 或 `prepare_build_tasks`。从 `prepare_build_tasks` 或后续节点续跑时，也可以填写 `.xcodeagent/cache/workspace-snapshots/<revision>.1.0.0.json` 复用已生成的工作区快照。调试续跑仍会遵守确认闸口；未确认的 `ProjectPlan` 不会进入代码生成。为兼容已有项目，调试目录解析仍能读取旧的 `specs/` 和 `plans/` 路径；新写入统一使用 `.xcodeagent/`。
 
@@ -410,7 +411,7 @@ scheduler loop:
 - Frontend/Data Source CodeRunner 通过 Deep Agent `messages + values` 主图及子图流捕获 `ls/read_file/glob/grep/write_file/edit_file/delete_file`；内置 `task` 委派后的子代理调用使用流命名空间隔离调用 ID，保证活动持续刷新。系统只把归一化中文文案和虚拟路径作为临时工具活动投影；文件内容、替换参数、工具结果、宿主机路径以及 `write_todos/task/execute` 不进入 UI；
 - 工具活动优先按 `allowed_paths`、`target_files`、`change_scope` 归属具体运行任务，无法精确命中时回退当前 owner 批次。它只存在于实时 `buildExecutionSlice.tasks[*].activeToolActivity`，新活动覆盖旧活动，批次结算后清除，不写入 BuildTaskPlan 或 Workflow 历史；
 - 调度器校验缺失或非法结果：合法 JSON 但遗漏已派发任务时记为 `runner_protocol_error`；发现字符串正文中的明显未转义双引号时只执行一次确定性修复；仍无法恢复的顶层报告记为可重试的 `invalid_structured_response`；
-- 失败结果先分类为 `retry`、`repair`、`requires_confirmation` 或 `terminal_failure`。`repair` 会触发 Build Repair Planner 生成受约束 repair task，并 append 到运行时 Build DAG；repair task 成功后调度器关闭原 failed task 并继续释放下游依赖。`requires_confirmation` 和 `terminal_failure` 仍会阻断构建并写入摘要。
+- 失败结果先分类为 `retry`、`repair`、`requires_confirmation` 或 `terminal_failure`。`repair` 会触发 Build Repair Planner 生成受约束 repair task，并 append 到运行时 Build DAG；repair task 成功后调度器关闭原 failed task 并继续释放下游依赖。`requires_confirmation` 和 `terminal_failure` 仍会阻断构建并写入摘要。收到显式 `retry_failed_tasks` 动作时，协议适配器先从公开快照或 workspace 落盘计划恢复内部 Build/Repair 计划，调度器再按当前切片最近一次结果恢复 `retry` 分类的失败任务为 `pending`；如果没有瞬时候选，则执行已有且无需额外确认的 RepairPlanner task，保留历史 `build_results` 和重试计数，再按原 DAG 继续执行。没有可重试任务且没有 ready 修复计划时才返回明确提示，不会静默重跑确认类或终止类失败。
 
 数据库任务的审批点在 SQL 计划生成之后、任何数据库写入之前。`database.execute` 审批绑定 `task_ids + database + latest schema_hash + plan_hash + statements` 指纹；用户批准后同一操作可在下一次调度中被一次性消费。如果 SQL、目标库、结构摘要或计划指纹变化，旧审批不再匹配，必须重新审批。高危规则包括删除字段、删除/批量修改数据、`DROP`、`TRUNCATE`、无 `WHERE` 的 `DELETE/UPDATE`、破坏性 `ALTER` 等。审批待定时调度器返回 `requires_user_input` / `agent_approval`，把本轮 running 数据库任务恢复为 `pending`，因此下游 Backend/Frontend Unit 不会释放。
 
@@ -424,7 +425,7 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 外层 `build` 使用确定性条件路由：仅 `build_summary.status == completed` 可进入 `integration_test`；`requires_confirmation` 以 `repair_scope_confirmation` 暂停并返回稳定 `planId`、精确 `requestedPaths` 和原因；阻塞、仍有 pending/failed、不可修复或终止失败全部进入 `handle_failure`。用户批准时只从原任务授权范围编译 repair task，拒绝则终止，不允许测试节点抢跑。
 
-因此失败处理不是统一“重跑”：可重试的 runner/tool/网络类失败可以由调度策略处理；实现、编译、测试、验收类失败进入 RepairPlanner；契约或计划边界类失败进入用户确认；不可恢复失败终止当前 build。
+因此失败处理不是统一“重跑”：可重试的 runner/tool/网络类失败只通过显式 AG-UI 恢复动作重试；实现、编译、测试、验收类失败进入 RepairPlanner，已有 ready 修复计划也可由同一恢复入口继续执行；契约或计划边界类失败进入用户确认；不可恢复失败终止当前 build。摘要中的 `recovery_available`、`recovery_task_ids` 和兼容保留的 `retry_available`/`retryable_task_ids` 是前端是否显示恢复入口及其失败提示的依据。
 
 专业代码生成 Agent 必须以 Deep Agent 形式存在，具备受控文件读写能力，并从已批准任务中读取 `allowed_paths`、依赖、验收标准和上下文。它们只执行任务，不负责更新计划文档、修改需求或重写任务 DAG。任务完成、失败、变更申请和计划一致性由 `BuildScheduler` 与确定性协调服务统一更新；需要修复规划时再调用独立 RepairPlanner Agent。
 
@@ -432,7 +433,7 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 ### Skill 与上下文预算
 
-当前一等 Deep Agent 是 Frontend Generation、Data Source Generation、Database Change、Test、RepairPlanner，不再声明或创建 Main DeepAgent。Frontend Generation Agent 通过 Deep Agents 原生 `skills` 参数按“内置、用户”顺序加载 Skill，用户同名 Skill 后加载并覆盖内置 Skill；Data Source、Database、Test、RepairPlanner Agent 只加载用户 Skill。Database Agent 的 workspace filesystem 权限为只读，不能编辑后端代码或任务文档；数据库写操作只能通过外层 `database.execute` 审批与执行服务完成。requirements、project_planning、detail_confirmation、prepare_build_tasks 等 direct ChatModel 节点不加载 Skill，也不绑定 workspace backend 或文件工具。
+当前一等 Deep Agent 是 Frontend Generation、Data Source Generation、Database Change、Test、RepairPlanner、SmallTask，不再声明或创建 Main DeepAgent。Frontend Generation Agent 通过 Deep Agents 原生 `skills` 参数按“内置、用户”顺序加载 Skill，用户同名 Skill 后加载并覆盖内置 Skill；Data Source、Database、Test、RepairPlanner、SmallTask Agent 只加载用户 Skill。Database Agent 的 workspace filesystem 权限为只读，不能编辑后端代码或任务文档；数据库写操作只能通过外层 `database.execute` 审批与执行服务完成。SmallTask Agent 只接收精确任务包和授权路径，不能使用任务编排工具，不执行数据库 schema/DDL 或正式工件修改。requirements、project_planning、detail_confirmation、prepare_build_tasks 等 direct ChatModel 节点不加载 Skill，也不绑定 workspace backend 或文件工具。
 
 内置 skill 的宿主目录在源码模式为 `Backend/app/builtin_skills/`，在 PyInstaller onedir 模式为后端资源目录 `_internal/app/builtin_skills/`。Agent 不接触宿主绝对路径，而是通过只读 CompositeBackend 路由 `/.xcodeagent/builtin-skills/` 发现和读取 skill；文件权限与 `delete_file` 都拒绝写入或删除该命名空间。Backend Python 是必需 skill 名称和文件的唯一事实来源：PyInstaller staging 和 Backend 启动执行完整性校验并在缺失时 fail fast；Electron 打包前和启动前只检查通用 `builtin_skills` 资源目录，不复制具体 skill 清单。
 
@@ -440,13 +441,13 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 Chat Composer 通过既有 `/skills/run` AG-UI 目录接口提供搜索和多选，只展示已开启用户技能，并在 `/workflow/run` 的 `forwardedProps.selectedSkillNames` 中发送稳定、去重的名称数组。该数组写入 `ProjectState.selected_skill_names`，在 RequirementSpec、ProjectPlan 确认以及 Build/Testing Subgraph 恢复时保持不变；恢复请求试图替换集合会返回 `selected_skill_conflict`。用户消息同时保存技能名称/描述快照，因此历史会话只展示当次发送的标签，不依赖当前目录是否仍存在。
 
-当 `selectedSkillNames` 非空时，Backend 会精确验证所有名称，只把已开启的所选技能完整目录复制到 `/.xcodeagent/user-skills/` 不可变只读快照；关闭或未选技能不可发现且虚拟路径不可读，显式选择关闭技能返回 `selected_skill_unavailable`。所选 `SKILL.md` 会由 Backend 在模型调用前完整读取，并以明确的 `<selected-skill>` 边界强制拼入 Frontend、Data Source、Test、RepairPlanner 四个 Deep Agent 的 system prompt；references、scripts、assets 仍只从筛选后的快照按需读取。direct ChatModel 节点仍不加载技能。空数组或字段缺失时，全部已开启用户技能只通过 SkillsMiddleware 按需发现，不强制注入正文。启停集合参与用户技能 revision，因此切换状态会产生新的 Agent bundle；进行中的单次模型调用不被强制中断。
+当 `selectedSkillNames` 非空时，Backend 会精确验证所有名称，只把已开启的所选技能完整目录复制到 `/.xcodeagent/user-skills/` 不可变只读快照；关闭或未选技能不可发现且虚拟路径不可读，显式选择关闭技能返回 `selected_skill_unavailable`。所选 `SKILL.md` 会由 Backend 在模型调用前完整读取，并以明确的 `<selected-skill>` 边界强制拼入 Frontend、Data Source、Database、Test、RepairPlanner、SmallTask、Workspace Assistant 七个 Deep Agent 的 system prompt；references、scripts、assets 仍只从筛选后的快照按需读取。无工具 ChatModel 节点仍不加载技能。空数组或字段缺失时，全部已开启用户技能只通过 SkillsMiddleware 按需发现，不强制注入正文。启停集合参与用户技能 revision，因此切换状态会产生新的 Agent bundle；进行中的单次模型调用不被强制中断。
 
 显式选择的 `SKILL.md` 正文按 UTF-8 总字节设置独立 64 KiB 上限，整体超限返回 `selected_skills_context_too_large`，不会截断指令；无效格式、不可用技能和恢复冲突分别返回 `invalid_selected_skills`、`selected_skill_unavailable`、`selected_skill_conflict`。技能指令不能扩大 filesystem permissions、任务 `allowed_paths`、已确认需求、API 契约、确认门禁或 Agent 角色边界。bundle 缓存键包含规范化技能集合、工作区、用户技能 revision 和 AGENTS.md revision；顺序不同但集合相同会复用，集合不同绝不复用。任务执行元数据记录 `requiredSkillsLoaded`，Workflow 开始事件记录选择名称和 snapshot revision。
 
 该设计映射到参考架构：learn-coding-agent 的紧凑“收集上下文—行动—验证”循环只读取当前任务需要的规范；OpenCode 风格把用户 Skill 作为显式可选、错误隔离的 Agent 能力；Deep Agents 继续使用原生 SkillsMiddleware、FilesystemBackend 和 CompositeBackend。为遵守 128k 上下文预算，默认模式只常驻技能元数据；只有用户显式选择的有限正文进入 system prompt，辅助资源和未选技能正文都不固定进入上下文。
 
-环境级 `~/.xcodeagent[_dev|_st|_uat]/AGENTS.md` 是四个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.xcodeagent/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
+环境级 `~/.xcodeagent[_dev|_st|_uat]/AGENTS.md` 是七个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.xcodeagent/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
 
 外层主 Graph 不关心单个生成任务的执行细节，只根据 Build Subgraph 的确定性终态路由；构建完整成功才进入 `integration_test`。
 
@@ -493,8 +494,9 @@ testing.START
 - `revision_requests`：返回给 RepairPlanner Agent 的结构化返修请求；
 - `repair_task_plan`：RepairPlanner Agent 基于失败证据生成的修复任务计划；
 - `repair_task_plan_path`：结构化修复任务计划 JSON 路径；
-- `repair_tasks`：可被重新分发给 Frontend/Data Source 等代码执行 Agent 的修复任务；
-- `integration_next_action`：外层 Graph 的下一步路由，取值为 `launch_project`、`repair_build`、`await_user_input` 或 `handle_failure`；
+- `repair_tasks`：RepairPlanner 生成、随后交给 SmallTask Agent 的受限局部修复任务；
+- `small_task_tasks` / `small_task_results`：SmallTask 执行器的任务状态、实际改动、验证和升级结果；
+- `integration_next_action`：外层 Graph 的下一步路由，取值为 `launch_project`、`small_task_repair`、`await_user_input` 或 `handle_failure`；
 - `repair_iteration` / `max_repair_iterations`：集成测试修复闭环预算。
 
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：
@@ -520,11 +522,12 @@ testing.START
 
 Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点，避免主流程过碎；但 `test_results` 里必须保留每个具体检查项的结构化证据。
 
-测试不通过时，Testing Subgraph 必须把失败项转成足够详细的 `revision_requests`，包括失败检查、命令、证据、建议 owner。随后由 RepairPlanner Agent 汇总生成 `repair_task_plan`，再由后续修复循环分发给对应代码修改 Agent：
+测试不通过时，Testing Subgraph 必须把失败项转成足够详细的 `revision_requests`，包括失败检查、命令、证据、建议 owner。随后由只读 RepairPlanner Agent 汇总生成 `repair_task_plan`，再由 SmallTask Agent 执行不改变产品语义的局部代码修复：
 
-- 前端检查失败 → Frontend Generation Agent；
-- 后端或 API 契约检查失败 → Data Source Generation Agent；
-- 前后端集成失败 → RepairPlanner Agent 先判断归因，再拆分给专业 Agent。
+- 前端检查失败 → RepairPlanner 生成带精确路径和验收标准的 SmallTask；
+- 后端实现检查失败 → RepairPlanner 生成带精确路径和验收标准的 SmallTask；
+- API 契约、数据库结构、正式工件、扩大文件范围或产品决策 → SmallTask 停止并请求用户确认，路由到对应正式 Workflow 节点；
+- 前后端集成失败 → RepairPlanner 先判断归因，再拆分为互不冲突的 SmallTask 批次。
 
 `revision_requests[*].failed_attempt` 使用统一格式返回给 RepairPlanner / 后续调度器，至少包含：
 
@@ -537,13 +540,13 @@ Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点�
 外层 Graph 根据 `integration_next_action` 路由：
 
 - `launch_project`：质量门禁通过，进入 `launch_project`，写入 `preview_url` 和 `acceptance_request`，本轮结束等待用户验收；
-- `repair_build`：RepairPlanner 返回可执行 repair tasks，回到 `build`，BuildScheduler 将 repair tasks append 到运行时 Build DAG 并只调度 pending 修复任务，完成后再次进入 `integration_test`；
+- `small_task_repair`：RepairPlanner 返回可执行 repair tasks，SmallTask 调度器按依赖、路径和资源锁选择最多 2 个（硬上限 3 个）互不冲突任务并行执行；任务完成后再次进入 `integration_test`，本路由不直接回到 `build`；
 - `await_user_input`：修复需要扩大范围、改变契约或做产品决策，本轮结束等待用户确认；
 - `handle_failure`：证据不足、修复预算耗尽或不可恢复失败，进入失败处理。
 
-为避免卡死，Graph State 记录 `repair_iteration` 和 `max_repair_iterations`。计数只在 repair task 被 BuildScheduler 真实派发时增加，生成计划、重复测试或继续执行旧任务都不消耗预算。调度开始时先用最新 `state.tasks` 重建 BuildTaskPlan，再追加 integration repair tasks，并只从该计划读取任务；repair task 必须携带当前 `build_execution_scope` 对应的 `unit_id` 和精确路径，确保能命中页面或数据源切片。超过预算后持久化 `terminal_failure` plan 并路由到 `handle_failure`。
+为避免卡死，Graph State 记录 `repair_iteration` 和 `max_repair_iterations`。计数只在 SmallTask 真实派发并完成一轮局部修复时增加，生成计划、重复测试或等待用户确认都不消耗预算。SmallTask 调度开始时只读取 RepairPlanner 生成的精确路径、依赖和验收标准，不重建主 Build DAG；每个任务都必须带 `allowed_paths`、`acceptance_criteria` 和失败证据引用。超过预算后持久化 `terminal_failure` plan 并路由到 `handle_failure`。
 
-AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `nodeName`、`attempt`、`iterationKind`、`buildExecutionSlice` 和 `dagGeneration`。`dagGeneration` 使用同一稳定步骤 ID 更新完整七阶段快照，阶段详情默认折叠且保留用户手动展开状态；完成或失败事件保留各阶段冻结的结构化产物、最终任务和安全产物摘要，供历史会话恢复。首次节点仍使用 `workflow:build` / `workflow:integration_test`，后续轮次使用 `workflow:build:2` 等唯一 ID，历史事件按 attempt 恢复为“首次构建 → 首次测试未通过 → 修复构建 → 复测”。构建进度卡由对应 build 步骤详情承载，不再在消息列表末尾重复渲染；任务卡默认折叠，运行任务的 `activeToolActivity` 在折叠 Header 下方显示，展开时只移动到详情底部。质量门禁失败显示 `failed`，等待确认显示 `requires_user_input`。
+AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `nodeName`、`attempt`、`iterationKind`、`buildExecutionSlice` 和 `dagGeneration`。`dagGeneration` 使用同一稳定步骤 ID 更新完整七阶段快照，阶段详情默认折叠且保留用户手动展开状态；完成或失败事件保留各阶段冻结的结构化产物、最终任务和安全产物摘要，供历史会话恢复。首次节点仍使用 `workflow:build` / `workflow:integration_test`，局部修复使用独立的 `workflow:small_task_repair`，复测使用 `workflow:integration_test:2` 等唯一 ID，历史事件按节点恢复为“首次构建 → 首次测试未通过 → 局部修复 → 复测”。构建进度卡由对应 build 步骤详情承载，不再在消息列表末尾重复渲染；任务卡默认折叠，运行任务的 `activeToolActivity` 在折叠 Header 下方显示，展开时只移动到详情底部。质量门禁失败显示 `failed`，等待确认显示 `requires_user_input`。
 
 该修复闭环沿用以下参考架构边界：learn-coding-agent 的执行—验证—修复紧凑循环覆盖代码、测试和 API 契约错误；OpenCode 风格的可恢复 session 状态持久化修复计数、计划和终止原因；Deep Agents 的 RepairPlanner 只接收结构化失败证据并生成受限任务。为满足 128k 上下文预算，不注入完整仓库、全量日志或会话历史。
 
@@ -595,11 +598,16 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 用户选择：
 
 - 通过：进入 `finalize_project`；
-- 页面或数据源调整：返回细节确认阶段；
-- 架构级调整：返回项目规划阶段；
+- 局部修复：进入 `small_task_repair`，只允许修改当前已确认范围内的文件；
+- 页面布局或交互调整：返回 `detail_confirmation`，重新生成并确认页面详细设计；
+- 接口行为或字段调整：返回 `detail_confirmation`，重新生成并确认 EndpointDetail；
+- 数据来源或数据库调整：返回 `detail_confirmation`，重新生成接口及数据来源相关详细设计；
+- 项目计划或架构调整：返回 `project_planning`，重新生成并确认 ProjectPlan，再进入细节确认；
 - 取消：停止任务和运行进程。
 
-当前实现应等待用户验收；只有用户明确接受后，`acceptance` 才设置 `accepted = true` 并进入 `finalize_project`。如果用户提出页面或数据源调整，后续应按调整类型回到 `detail_confirmation` 或生成受控修复任务；如果是架构级调整，则回到 `project_planning` 并重新经过确认闸口。
+前端通过 `clarificationAnswers.acceptance_adjustment` 提交 `type + feedback`，后端在协议边界校验类型并决定安全恢复节点。验收调整不再统一视为“重新调整执行计划”；只有局部修复可以直接进入受限 SmallTask，任何正式设计或计划版本变化都必须生成新版本并再次经过用户确认闸口。
+
+当前实现应等待用户验收；只有用户明确接受后，`acceptance` 才设置 `accepted = true` 并进入 `finalize_project`。如果用户提出局部、页面、接口、数据来源或架构调整，前端必须提交结构化 `acceptance_adjustment`，后端按类型回到 `small_task_repair`、`detail_confirmation` 或 `project_planning`，并对所有新生成的正式设计/计划版本重新执行确认闸口。
 
 ### `finalize_project`
 
@@ -678,7 +686,9 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 对需要扩大范围或改变契约的情况返回用户确认需求；
 - 只读工作区，不直接修改代码、计划、DAG 或调度状态。
 
-修复任务由 BuildScheduler 或后续修复循环重新派发给 Frontend/Data Source 等代码执行 Agent。
+修复任务由 `small_task_repair` 的共享 SmallTask Agent 执行。它只允许局部代码改动，不执行数据库 schema/DDL、不改正式 RequirementSpec/ProjectPlan、不改变已确认 API 契约，也不自行新增页面、接口或数据源；其成功结果回到 `integration_test` 复测。多个任务只有在依赖、目标路径和资源锁均不冲突时才并行；共享配置、路由、菜单和锁文件默认串行。
+
+SmallTask Agent 同时服务自由对话阶段。自由对话中的简单修改沿用同一 Agent；若它识别出扩大范围、正式契约/工件变化或产品决策，会先生成 AG-UI 确认卡，用户确认后在同一工作台界面启动新的正式主 Workflow，并从 `detail_confirmation`、`inspect_database_context`、`prepare_build_tasks` 或其他确定性节点继续。
 
 ## 目录职责
 
@@ -699,21 +709,21 @@ observability/  日志、Tracing、Metrics 和 Agent 运行诊断
 
 不得将确定性业务规则写进 Agent Prompt。可以用普通代码完成的校验、路由和状态转换应放在 `services/` 或 `graph/`。
 
-## 已设计目标的快速修改 Graph
+## 自由对话 Graph
 
-`POST /direct-modification/run` 是独立于 `/workflow/run` 的 AG-UI LangGraph。工作台仅在当前页面或 endpoint 已设计且正式计划不占用输入区时切换到该端点；请求不发送页面/API target，后端只接收当前用户消息、`workspaceRoot` 和 `selectedSkillNames`。公开事件名为 `direct-modification`，状态快照键为 `directModification`，thread checkpoint 使用 `direct-modification:<threadId>` 与主图隔离。
+`POST /conversation/run` 是独立于 `/workflow/run` 的 AG-UI LangGraph，不保留旧 `/direct-modification/run` 协议。工作台在无目标自由对话，或当前页面/endpoint 已设计且用户选择“自由协作”模式、正式计划不占用输入区时使用该端点；页面/API 输入区默认选择“设计修改”模式，显式模式只负责决定入口 Graph，不改变后续正式详情确认门禁。请求发送标准 AG-UI user message 和 `forwardedProps.conversation.workspaceRoot/selectedSkillNames`，不发送左侧页面/API target。公开事件名、状态快照键和 checkpoint thread 前缀均为 `conversation`。
 
-流程为 `classify_intent -> execute_frontend|execute_backend -> integration_test -> launch_project -> finalize_direct_modification`。分类输出 `frontend | backend | fullstack | unknown`；`fullstack` 固定先执行 Data Source Agent，再把接口路径、方法、请求/响应、真实改动文件和注意事项作为内存态 `backend_handoff` 交给 Frontend Agent。模糊输入停止并要求补充，只有大范围架构替换、数据迁移或无法安全局部决定的产品范围才返回 `requires_planning`，不能仅因为需求跨前后端而拒绝。
+入口顺序固定为 `scan_workspace_code -> classify_intent`。扫描节点先生成可缓存的只读 WorkspaceSnapshot 和代码图摘要；分类器只接收有界的技术栈、工程入口、页面、组件、API 路由、共享契约和示例符号，不接收源码正文或完整仓库。`classify_intent` 再输出五类意图：`casual_chat`、`workspace_question`、`workspace_change`、`formal_workflow`、`needs_clarification`。用户已经给出存在于扫描快照中的页面/组件和明确局部结果时，即使尚未定位到最终编辑文件，也必须进入 `workspace_change`，由执行 Agent 继续精确定位，不能在分类阶段重复询问修改位置。对身份询问、问候和通用解释，分类调用同时生成可直接展示的 `response`；若模型未返回可用 `response`，才回退到无工具 `respond_conversation` ChatModel。需要当前工程事实但不修改文件的问题进入只读 `answer_workspace` Agent；新应用、正式工件、确认过的契约、数据库迁移、广泛架构替换和无法安全局部决定的产品范围先展示确认卡，再由前端切换 `/workflow/run`；扫描后仍然缺少实质目标或预期结果的输入继续在同一 conversation thread 澄清。
 
-快速执行复用 `AgentBundle.frontend` 和 `AgentBundle.data_source`，但不复用正式生成 Prompt。`_frontend_direct_modification_prompt` 和 `_data_source_direct_modification_prompt` 不注入 RequirementSpec、ProjectPlan、BuildTaskPlan、approved tasks 或任务 DAG。前端写代码前必须完整读取 `/.xcodeagent/builtin-skills/code-block-template/SKILL.md` 和 `/.xcodeagent/builtin-skills/react-develop-specification/SKILL.md`；后端当前没有必读内置 Skill。Agent 的结构化文件清单不作为事实，最终 diff 来自工作区执行前后快照；无实际差异且未明确 `alreadySatisfied` 时按失败处理。
+`workspace_change` 继续区分 `frontend | backend | fullstack | workspace` owner。前后端代码复用共享 SmallTask Agent，`fullstack` 固定后端优先并以结构化 `backend_handoff` 交接给前端，随后复用独立集成测试和预览启动。`workspace` owner 只处理分类器明确返回的精确相对路径或窄 glob，用于普通文档、测试、脚本和仓库配置；它禁止 Frontend/Backend 产品代码、`.env`、数据库迁移和 `.xcodeagent` 正式工件，完成 Agent 内相称验证后直接收口，不强制启动应用预览。任何写分支最终文件清单仍以工作区前后快照为准，模型声明不能替代真实 diff。
 
-同一 Agent bundle 通过快速 Prompt 的稳定执行模式标记启用动态工具策略：主工作流仍保留 Deep Agents 的 `task` 和 `write_todos`，快速模式则只从模型工具列表移除这两个复杂编排工具，并禁止把定位或验证委派给默认 general-purpose 子 Agent。快速模式不再额外设置模型轮次、只读探索次数、LangGraph recursion、模型请求超时/重试、命令超时或总运行时长限制，而是继承共用 Agent、Provider 和工具的正常运行时配置。验证由当前 Agent 直接调用与实际改动范围相符的 `execute` 命令，并优先使用仓库声明的包管理器和脚本；不得使用 `| head`、`| tail`、`|| true`、`; true` 等会掩盖真实退出码的包装。只要所选检查的非零退出码或错误与本轮改动相关，Agent 就必须检查错误、修复实现并重新运行相关命令，持续执行“修改—检查—修复—复查”直到通过或确认真实阻塞；不能安全处理的既有/无关失败按 `failed` 返回准确证据。样式或纯文案改动如果没有相称的 Agent 层命令，可以在 `verification` 中记录原因，仍由后续独立 `integration_test` 执行最终质量门禁。
+前端、后端或 `fullstack` 的独立集成测试失败时，路由进入 `direct_modification_repair`：只读 RepairPlanner 接收测试报告、失败证据和本轮真实变更路径，生成受限 SmallTask，再回到 `integration_test` 复核。自由对话最多执行 3 轮真实局部修复；预算耗尽、证据不足、路径越权、数据库/正式工件/契约变更或需要扩大范围时停止，并保留失败证据或发出确认卡。该节点不直接回到 `build`，也不修改确认过的产品语义。
 
-快速 Agent 即使在模型或工具异常后退出，也会执行工作区 after-snapshot，把异常发生前已落盘的差异写入失败结果，继续支持审核和撤销。工具和命令活动只通过结构化 `direct-modification` 进度与 `directModification` 快照展示，不追加到 assistant 正文；正文只保留最终结果，避免大量文件读取文案淹没状态。
+权限在路由后收紧：所有消息只先经过确定性只读扫描；`casual_chat` 仅额外获得扫描摘要，不创建 Deep Agent、不加载可写 workspace backend、不获得工具；`workspace_question` 使用独立 Workspace Assistant，只允许渐进读取工作区和已选 Skill/AGENTS 记忆，显式拒绝写入、命令、task、todo 和 subagent；只有 `workspace_change` 才获取 workspace run lease 并调用具备受限写权限的 SmallTask Agent。工具活动和文本增量通过 `conversation` 自定义事件、AG-UI `TEXT_MESSAGE_CONTENT` 与快照传输；自由对话界面实时展示助手正文、当前节点和工具活动，避免在整个运行期间只显示笼统的“正在思考”。常规回复和只读回答仍跳过集成测试、项目启动和 diff 生成。
 
-快速模式复用既有 `integration_test` 节点，但以状态开关跳过正式 ProjectPlan API 契约校验并禁用 RepairPlanner。验证失败直接返回检查项和 `.xcodeagent/runtime/tests/` 日志引用；成功后复用 `launch_project`，包括现有 Maven 二次构建，再由快速 finalizer 清除正式验收/澄清字段并直接完成。代码 diff、撤销、流程步骤和预览继续使用现有消息组件。
+前端代码修改仍必须完整读取 `/.xcodeagent/builtin-skills/code-block-template/SKILL.md` 和 `/.xcodeagent/builtin-skills/react-develop-specification/SKILL.md`；后端当前没有必读内置 Skill。扫描快照中的页面、组件、API client、后端路由、模型和高价值工程配置路径作为分类/执行候选；读取顺序固定为本轮动态加入的精确文件、扫描命中的候选源码、最窄 `src` 源码根、必要的 package/build 元数据。SmallTask 文件后端拒绝读取或写入 `node_modules`、`dist`、`build`、`target`、`.next`、`.turbo`、缓存和虚拟环境目录；无路径 grep/glob 从当前任务的源码授权根开始，而不是遍历整个工作区。自由对话前端写入范围默认收紧为 `Frontend/src/**` 或 `frontend/src/**`，后端默认收紧为 `Backend|backend` 下的 `app/src/tests` 源码根。只要局部修改需要源码根之外的现有工作区文件，分类器就必须返回精确文件路径；后端不再按配置文件类型做白名单判断，而是在路径属于当前 owner、文件真实存在且未落入敏感/依赖/生成/迁移目录时，把任意文件类型动态并入本次运行的 `approvedPaths` 和优先读取候选。该授权不持久化、不接受目录或 glob，`.env`、凭据文件、lockfile、数据库 schema/migration 和 `.xcodeagent` 工件仍不可动态加入。快速执行禁用 `task`、`write_todos` 和默认通用子 Agent，继承共用 Provider 的正常超时/重试配置；写任务执行“读取相关上下文—修改—验证—修复—复查”循环，不得以管道截断或强制成功掩盖检查退出码。Agent 异常后仍执行 after-snapshot，保留异常前已落盘差异供审核和撤销。
 
-架构映射：learn-coding-agent 的“读取相关上下文—修改—验证”紧凑循环对应单轮快速执行；OpenCode 的会话与角色 Agent 模式对应稳定 thread、明确 frontend/data_source 边界和结构化跨端交接；Deep Agents 对应复用工具/文件系统/权限/Skill/AGENTS 记忆、渐进读取 Skill 和持久 checkpoint。XCodeAgent 有意采用后端优先的串行 fullstack 分支而非并行 subagent，因为前端需要消费本轮后端产生的真实契约。Graph State 只保留不超过 4000 字符的滚动摘要、结构化交接、diff 元数据和日志路径，不保存完整历史、源码或工具输出，符合 128k 上下文预算。
+参考架构映射在实现前已明确：learn-coding-agent 的“收集相关上下文—行动—验证”最小循环对应先生成只读工作区事实，再决定是否行动；OpenCode 在 session prompt 中显式绑定 worktree/path、角色和权限，对应 XCodeAgent 的扫描上下文、无工具 ChatModel、只读 Workspace Assistant 和受限 SmallTask 分层；Deep Agents 提供只读 workspace backend、Skill/AGENTS 记忆、权限和 checkpoint。XCodeAgent 的有意差异是使用确定性 conversation Graph 在模型分类前统一生成有界 WorkspaceSnapshot，而不是让主 Agent先自由调用探索工具；这样分类可以识别已有页面和组件，同时普通聊天仍不会获得 workspace lease 或写工具。Graph State 只保留不超过 4000 字符的滚动摘要、扫描引用、意图、结构化交接、diff 元数据和日志引用；分类 Prompt 中的扫描事实上限为 16000 字符，不保存全量历史、源码或工具输出，符合 128k 上下文预算。
 
 ## 上下文管理
 

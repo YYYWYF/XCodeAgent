@@ -65,6 +65,11 @@ function inferEndpointContextFromMessages(messages: ChatSessionMessage[]): {
   return {}
 }
 
+/** 判断会话是否为不绑定页面或 API 的自由对话。 */
+function isFreeChatSession(session: ChatSessionSummary): boolean {
+  return !session.pageId && !session.apiContractId && !session.endpointId
+}
+
 type UseChatSessionsParams = {
   application: ApplicationConfig
   editorMode: EditorMode
@@ -96,6 +101,7 @@ type UseChatSessionsResult = {
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
   handleSelectEndpoint: (apiContractId: string, endpointId: string) => Promise<void>
+  handleSelectFreeChat: () => Promise<void>
   handleSelectPage: (pageId: string) => Promise<void>
   loadingSessions: boolean
   messages: AgentChatMessage[]
@@ -289,6 +295,20 @@ export function useChatSessions({
     )
     if (existingSessionId) {
       await handleOpenSession(existingSessionId)
+      return
+    }
+
+    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    onCloseRightPanel()
+  }
+
+  /** 进入自由对话时恢复按更新时间排序的最近会话，不因点击入口重复新建。 */
+  const handleSelectFreeChat = async (): Promise<void> => {
+    if (loadingSessions) return
+    const freeSessions = sessionSummariesRef.current[editorMode].filter(isFreeChatSession)
+    const sessionToOpen = freeSessions[0]
+    if (sessionToOpen) {
+      await handleOpenSession(sessionToOpen.id)
       return
     }
 
@@ -557,6 +577,7 @@ export function useChatSessions({
     handleDeleteSession,
     handleOpenSession,
     handleSelectEndpoint,
+    handleSelectFreeChat,
     handleSelectPage,
     loadingSessions,
     messages,

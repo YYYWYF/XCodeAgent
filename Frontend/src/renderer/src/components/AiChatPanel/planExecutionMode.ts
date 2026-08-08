@@ -1,8 +1,10 @@
 import type {
   ApplicationLifecycle,
   WorkbenchExecution,
+  WorkflowAcceptanceAdjustmentType,
   WorkflowRunPayload
 } from '../../typings'
+import { isConversationWorkflow } from './conversationMode'
 
 export type PlanExecutionMode =
   | 'idle'
@@ -22,15 +24,27 @@ export type PagePlanExecutionContext = {
 
 export type WorkflowInteractionAvailability = 'active' | 'stale' | 'unavailable'
 
+/** 将验收调整类型映射到主 Workflow 的安全恢复节点。 */
+export function acceptanceAdjustmentResumeNode(
+  adjustmentType: WorkflowAcceptanceAdjustmentType
+): string {
+  if (adjustmentType === 'local_fix') return 'small_task_repair'
+  if (adjustmentType === 'project_plan_change') return 'project_planning'
+  return 'detail_confirmation'
+}
+
 /** 根据后端权威生命周期判断历史 Workflow 确认是否仍可提交。 */
 export function workflowInteractionAvailability(
   workflow: WorkflowRunPayload,
   lifecycle?: ApplicationLifecycle
 ): WorkflowInteractionAvailability {
+  // 快速修改没有正式计划生命周期；它的确认卡由当前对话直接承接。
+  if (isConversationWorkflow(workflow)) {
+    return workflow.summary.status === 'requires_user_input' ? 'active' : 'stale'
+  }
   if (!lifecycle) return 'unavailable'
 
-  const snapshotExecution =
-    workflowLifecycleSnapshot(workflow)?.activeExecutions?.[workflow.runId]
+  const snapshotExecution = workflowLifecycleSnapshot(workflow)?.activeExecutions?.[workflow.runId]
   const snapshotPending = snapshotExecution?.pendingInteraction
   const activeExecution = lifecycle.activeExecutions[workflow.runId]
   const activePending = activeExecution?.pendingInteraction
@@ -46,13 +60,10 @@ export function workflowInteractionAvailability(
 }
 
 /** 从 Workflow 的兼容投影位置读取提交交互所依据的生命周期快照。 */
-function workflowLifecycleSnapshot(
-  workflow: WorkflowRunPayload
-): ApplicationLifecycle | undefined {
+function workflowLifecycleSnapshot(workflow: WorkflowRunPayload): ApplicationLifecycle | undefined {
   const candidates = [workflow.state?.lifecycle, workflow.result?.lifecycle]
-  return candidates.find(
-    (candidate): candidate is ApplicationLifecycle =>
-      Boolean(candidate && typeof candidate === 'object')
+  return candidates.find((candidate): candidate is ApplicationLifecycle =>
+    Boolean(candidate && typeof candidate === 'object')
   )
 }
 
@@ -100,12 +111,12 @@ export function deriveDisplayedPlanExecutionMode(
   return 'idle'
 }
 
-/** 简单模式运行时保留原对话框，仅让正式计划执行占用底部控制栏。 */
+/** 自由对话期间隐藏计划控制栏，仅让正式 Workflow 占用底部控制栏。 */
 export function shouldRenderPlanExecutionDock(
   mode: PlanExecutionMode,
-  directModificationRunning: boolean
+  conversationActive: boolean
 ): mode is Exclude<PlanExecutionMode, 'idle'> {
-  return mode !== 'idle' && !directModificationRunning
+  return mode !== 'idle' && !conversationActive
 }
 
 /** 乐观更新指定计划执行的控制状态，不覆盖独立的创建生命周期状态。 */
@@ -152,6 +163,12 @@ export function planExecutionContextForPage(
   workflowIdentity?: { runId?: string; threadId?: string }
 ): PagePlanExecutionContext {
   const executions = Object.values(lifecycle?.activeExecutions || {})
+  const runIdentityExecution = workflowIdentity?.runId
+    ? lifecycle?.activeExecutions?.[workflowIdentity.runId]
+    : undefined
+  if (runIdentityExecution) {
+    return { execution: runIdentityExecution, dependencyLocked: false }
+  }
   const normalizedPageId = normalizePageId(pageId)
   const applicationExecution = executions.find((execution) => execution.scope === 'application')
   if (!normalizedPageId && applicationExecution) {
@@ -193,24 +210,28 @@ export function planExecutionContextForEndpoint(
   workflowIdentity?: { runId?: string; threadId?: string }
 ): PagePlanExecutionContext {
   const executions = Object.values(lifecycle?.activeExecutions || {})
+  const runIdentityExecution = workflowIdentity?.runId
+    ? lifecycle?.activeExecutions?.[workflowIdentity.runId]
+    : undefined
+  if (runIdentityExecution) {
+    return { execution: runIdentityExecution, dependencyLocked: false }
+  }
   const normalizedContractId = String(apiContractId || '').trim()
   const normalizedEndpointId = String(endpointId || '').trim()
   const resourceKey =
     normalizedContractId && normalizedEndpointId
       ? `endpoint:${normalizedContractId}:${normalizedEndpointId}`
       : ''
-  const endpointExecution = executions.find(
-    (execution) => {
-      if (execution.scope !== 'endpoint') return false
-      const endpointResourceKeys = (execution.resourceKeys || []).filter((key) =>
-        key.startsWith('endpoint:')
-      )
-      if (resourceKey && endpointResourceKeys.length) {
-        return endpointResourceKeys.includes(resourceKey)
-      }
-      return execution.targetId === normalizedEndpointId
+  const endpointExecution = executions.find((execution) => {
+    if (execution.scope !== 'endpoint') return false
+    const endpointResourceKeys = (execution.resourceKeys || []).filter((key) =>
+      key.startsWith('endpoint:')
+    )
+    if (resourceKey && endpointResourceKeys.length) {
+      return endpointResourceKeys.includes(resourceKey)
     }
-  )
+    return execution.targetId === normalizedEndpointId
+  })
   if (endpointExecution) {
     return { execution: endpointExecution, dependencyLocked: false }
   }
@@ -241,6 +262,7 @@ export function planExecutionPhaseLabel(phase?: string): string {
       prepare_build_tasks: '生成执行计划',
       build: '开发实现',
       integration_test: '集成测试',
+      small_task_repair: '执行局部修复任务',
       launch_project: '启动预览',
       acceptance: '预览验收',
       finalize_project: '完成交付'
@@ -265,6 +287,7 @@ export function workflowResumeNode(
     'prepare_build_tasks',
     'build',
     'integration_test',
+    'small_task_repair',
     'launch_project',
     'acceptance'
   ])
@@ -276,4 +299,79 @@ export function workflowResumeNode(
   const phase = String(workflow?.summary.phase || '')
   if (supported.has(phase)) return phase
   return executionPhase && supported.has(executionPhase) ? executionPhase : 'build'
+}
+
+/** 判断当前 Workflow 或生命周期 execution 是否存在可由显式动作恢复的 Build 失败。 */
+export function workflowCanRetryFailedTasks(
+  workflow?: WorkflowRunPayload,
+  execution?: WorkbenchExecution
+): boolean {
+  // 失败时生命周期是后端权威来源；即使历史 Workflow 快照尚未带回修复计划，也不能隐藏恢复入口。
+  if (execution?.status === 'failed' && execution.error?.recoverable === true) return true
+
+  const candidates: unknown[] = [
+    workflow?.summary?.buildSummary,
+    workflow?.summary?.build_summary,
+    workflow?.state?.buildSummary,
+    workflow?.state?.build_summary,
+    workflow?.result?.build_summary,
+    workflow?.result?.buildSummary
+  ]
+  const summary = candidates.find((candidate): candidate is Record<string, unknown> => {
+    if (!candidate || typeof candidate !== 'object') return false
+    return [
+      'recovery_available',
+      'recoveryAvailable',
+      'retry_available',
+      'retryAvailable',
+      'retryable_failures',
+      'retryableFailures'
+    ].some((key) => key in candidate)
+  })
+  if (!summary) return workflowHasReadyRepairPlan(workflow)
+  if (typeof summary.recovery_available === 'boolean') {
+    return summary.recovery_available || workflowHasReadyRepairPlan(workflow)
+  }
+  if (typeof summary.recoveryAvailable === 'boolean') {
+    return summary.recoveryAvailable || workflowHasReadyRepairPlan(workflow)
+  }
+  if (typeof summary.retry_available === 'boolean') {
+    return summary.retry_available || workflowHasReadyRepairPlan(workflow)
+  }
+  if (typeof summary.retryAvailable === 'boolean') {
+    return summary.retryAvailable || workflowHasReadyRepairPlan(workflow)
+  }
+  const retryable = Number(summary.retryable_failures ?? summary.retryableFailures ?? 0)
+  const repairable = Number(summary.repairable_failures ?? summary.repairableFailures ?? 0)
+  const confirmation = Number(summary.requires_confirmation ?? summary.requiresConfirmation ?? 0)
+  return (
+    workflowHasReadyRepairPlan(workflow) ||
+    (retryable > 0 && repairable === 0 && confirmation === 0)
+  )
+}
+
+/** 从 Workflow 快照识别已生成且仍有待执行任务的 RepairPlanner 计划。 */
+function workflowHasReadyRepairPlan(workflow?: WorkflowRunPayload): boolean {
+  const candidates: unknown[] = [
+    workflow?.summary?.repairTaskPlan,
+    workflow?.summary?.repair_task_plan,
+    workflow?.state?.repairTaskPlan,
+    workflow?.state?.repair_task_plan,
+    workflow?.result?.repairTaskPlan,
+    workflow?.result?.repair_task_plan
+  ]
+  return candidates.some((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return false
+    const plan = candidate as Record<string, unknown>
+    if (plan.decision && plan.decision !== 'repair') return false
+    if (plan.status && !['ready', 'pending', 'in_progress'].includes(String(plan.status))) {
+      return false
+    }
+    const tasks = Array.isArray(plan.tasks) ? plan.tasks : []
+    return tasks.some((task) => {
+      if (!task || typeof task !== 'object') return false
+      const status = String((task as Record<string, unknown>).status || 'pending')
+      return !['completed', 'already_satisfied'].includes(status)
+    })
+  })
 }

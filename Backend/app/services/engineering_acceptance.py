@@ -86,7 +86,7 @@ def migrate_legacy_repair_acceptance(
     }
     migrated: list[dict[str, Any]] = []
     for task in tasks:
-        if task.get("kind") != "repair" or task.get("repair_acceptance_version"):
+        if task.get("kind") != "repair":
             migrated.append(task)
             continue
         parent_id = str(_dict_value(task.get("repairs")).get("task_id") or "")
@@ -94,17 +94,23 @@ def migrate_legacy_repair_acceptance(
         if not parent_task:
             migrated.append(task)
             continue
-        repair_scope = _legacy_repair_scope(task, parent_task)
+        failure_reason = str(task.get("failure_reason") or "")
+        add_change_mismatch = (
+            task.get("status") == "failed"
+            and task.get("failure_category") == "acceptance_verification_failed"
+            and "预期差异类型 added" in failure_reason
+        )
+        if task.get("repair_acceptance_version") and not add_change_mismatch:
+            migrated.append(task)
+            continue
+        repair_scope = _legacy_repair_scope(task, parent_task) or _dict_items(
+            task.get("change_scope")
+        )
         candidate = compile_repair_engineering_acceptance(
             {**task, "change_scope": repair_scope},
             parent_task,
         )
-        failure_reason = str(task.get("failure_reason") or "")
-        if (
-            task.get("status") == "failed"
-            and task.get("failure_category") == "acceptance_verification_failed"
-            and "预期差异类型 added" in failure_reason
-        ):
+        if add_change_mismatch:
             candidate = {
                 **candidate,
                 "status": "pending",

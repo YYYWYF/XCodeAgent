@@ -28,5 +28,5 @@ export type RightPanelState =
 
 export type ChatCopy = Record<
   EditorMode,
-  { title: string; description: string; empty: string; placeholder: string; label: string }
+  { title: string; description: string; placeholder: string; label: string }
 >

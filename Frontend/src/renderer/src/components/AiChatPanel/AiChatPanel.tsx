@@ -46,11 +46,17 @@ import {
   type WorkflowPreviewTarget
 } from './utils'
 import {
+  isConversationWaitingForInput,
+  isConversationWorkflow,
+  type ChatInputMode
+} from './conversationMode'
+import {
   deriveDisplayedPlanExecutionMode,
   planExecutionShowsDebugResume,
   planExecutionContextForEndpoint,
   planExecutionContextForPage,
   shouldRenderPlanExecutionDock,
+  workflowCanRetryFailedTasks,
   workflowResumeNode,
   type PlanExecutionMode
 } from './planExecutionMode'
@@ -126,7 +132,9 @@ function workflowHasDetailReview(workflow: unknown): boolean {
 }
 
 /** 从当前消息历史里读取最后一个 Workflow，弥补 activeWorkflow 在运行结束瞬间的状态空窗。 */
-function latestMessageWorkflow(messages: Array<{ workflow?: unknown }>): unknown {
+function latestMessageWorkflow(
+  messages: Array<{ workflow?: WorkflowRunPayload }>
+): WorkflowRunPayload | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].workflow) return messages[index].workflow
   }
@@ -228,6 +236,10 @@ export default function AiChatPanel({
 }: Props): ReactElement {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
+  // 记录用户是否主动进入自由对话，用于切换工作台上下文和设计入口状态。
+  const [freeChatSelected, setFreeChatSelected] = useState(false)
+  // 按页面/API目标保留输入模式，切换会话时不让用户反复选择同一模式。
+  const [inputModes, setInputModes] = useState<Record<string, ChatInputMode>>({})
   const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
   const [generatingDetailTargetKey, setGeneratingDetailTargetKey] = useState('')
   const [previewError, setPreviewError] = useState('')
@@ -252,24 +264,30 @@ export default function AiChatPanel({
   const activePageId = activeDetailTarget.type === 'page' ? activeDetailTarget.pageId : ''
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
+  const inputModeKey = activeTargetKey || 'free-chat'
+  const inputMode: ChatInputMode =
+    inputModes[inputModeKey] || (activeDetailTarget.type === 'none' ? 'conversation' : 'design')
   const activePageOption = useMemo(
     () => developmentPlanningPages.find((page) => page.pageId === activePageId),
     [activePageId, developmentPlanningPages]
   )
   const activePreviewPath = activePageOption?.path || '/'
-  const directModificationEnabled = activeApiEndpoint
-    ? developmentPlanningApiContracts.some((contract) =>
-        contract.endpoints.some((endpoint, endpointIndex) => {
-          const endpointId = endpoint.id || String(endpointIndex + 1)
-          const apiContractId = endpoint.apiContractId || contract.id
-          return (
-            apiContractId === activeApiEndpoint.apiContractId &&
-            endpointId === activeApiEndpoint.endpointId &&
-            Boolean(endpoint.designed || endpoint.hasDetailPlan)
+  const conversationEnabled =
+    activeDetailTarget.type === 'none'
+      ? true
+      : activeApiEndpoint
+        ? developmentPlanningApiContracts.some((contract) =>
+            contract.endpoints.some((endpoint, endpointIndex) => {
+              const endpointId = endpoint.id || String(endpointIndex + 1)
+              const apiContractId = endpoint.apiContractId || contract.id
+              return (
+                apiContractId === activeApiEndpoint.apiContractId &&
+                endpointId === activeApiEndpoint.endpointId &&
+                Boolean(endpoint.designed || endpoint.hasDetailPlan)
+              )
+            })
           )
-        })
-      )
-    : Boolean(activePageOption?.designed || activePageOption?.hasDetailPlan)
+        : Boolean(activePageOption?.designed || activePageOption?.hasDetailPlan)
 
   /** 接收实时 launch 结果并复用手动预览入口打开右侧面板。 */
   const handlePreviewReady = useCallback(
@@ -310,6 +328,7 @@ export default function AiChatPanel({
     handleDeleteSession,
     handleOpenSession,
     handleSelectEndpoint,
+    handleSelectFreeChat,
     handleSelectPage,
     loadingSessions,
     messages,
@@ -329,7 +348,7 @@ export default function AiChatPanel({
 
   const {
     activeWorkflow,
-    directModificationRunning,
+    conversationRunning,
     error,
     handleAcceptPreview,
     handleAdjustPlan,
@@ -343,6 +362,7 @@ export default function AiChatPanel({
     handleStopGenerating,
     handleSubmitClarification,
     loading,
+    planEnded,
     sessionRunStates,
     stopping,
     workspaceBusy
@@ -369,7 +389,8 @@ export default function AiChatPanel({
     selectedSkills,
     selectedPageId: activePageOption?.pageId || activePageOption?.key,
     selectedPageLabel: activePageOption?.label,
-    directModificationEnabled,
+    conversationEnabled,
+    inputMode,
     setDraftByKey,
     setSelectedSkillsByKey,
     setSessionMessages
@@ -402,12 +423,15 @@ export default function AiChatPanel({
         workflowIdentity
       )
   const scopedExecution = targetExecutionContext.execution
-  const displayedPlanExecutionMode = deriveDisplayedPlanExecutionMode(
-    scopedExecution,
-    stopping ? 'stopping' : activeWorkflow?.summary.status,
-    loading,
-    Boolean(applicationLifecycle)
-  )
+  const displayedPlanExecutionMode = planEnded
+    ? 'idle'
+    : deriveDisplayedPlanExecutionMode(
+        scopedExecution,
+        stopping ? 'stopping' : activeWorkflow?.summary.status,
+        loading,
+        Boolean(applicationLifecycle)
+      )
+  const canRetryFailedTasks = workflowCanRetryFailedTasks(activeWorkflow, scopedExecution)
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
   const activePageTitle =
@@ -487,6 +511,8 @@ export default function AiChatPanel({
     activeApiEndpoint ? undefined : activePageOption?.taskSummary
   )
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
+  const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
+  const inputModeLocked = isConversationWaitingForInput(latestWorkflowForDisplay)
   const activeWorkflowPhase = String(
     activeWorkflow?.summary?.phase ||
       activeWorkflow?.result?.phase ||
@@ -525,10 +551,17 @@ export default function AiChatPanel({
     initialDetailDesignSelectionRequired &&
     !hasActiveDetailWorkflow &&
     !detailProgressVisible &&
-    !detailConfirmationWaitingReview
+    !detailConfirmationWaitingReview &&
+    !freeChatSelected
   const activeSessionUpdatedAt = sessions.find(
     (session) => session.id === activeSessionId
   )?.updatedAt
+
+  /** 切换当前页面或 API 会话的输入模式，不改变目标会话和历史消息。 */
+  const handleInputModeChange = (nextMode: ChatInputMode): void => {
+    if (inputModeLocked) return
+    setInputModes((current) => ({ ...current, [inputModeKey]: nextMode }))
+  }
 
   // 页面目录刷新时保留当前页面上下文；仅在清单稳定且当前页面失效时回退。
   useEffect(() => {
@@ -554,6 +587,7 @@ export default function AiChatPanel({
   useEffect(() => {
     const session = sessions.find((item) => item.id === activeSessionId)
     if (!session) return
+    setFreeChatSelected(!session.pageId && !session.apiContractId && !session.endpointId)
     if (session?.apiContractId && session.endpointId) {
       setActiveDetailTarget({
         type: 'endpoint',
@@ -637,11 +671,26 @@ export default function AiChatPanel({
 
   /** 新建普通对话时退出页面/API 目标上下文，避免后续消息被旧目标接管。 */
   const handleCreateChatSession = (): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
     setActiveView('chat')
+    setFreeChatSelected(true)
     setInteractingDetailTargetKey('')
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ type: 'none' })
     handleCreateSessionFromList()
+  }
+
+  /** 进入自由对话时只恢复最近会话，不隐式创建新会话。 */
+  const handleOpenFreeChat = (): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    setFreeChatSelected(true)
+    setInteractingDetailTargetKey('')
+    setGeneratingDetailTargetKey('')
+    setActiveDetailTarget({ type: 'none' })
+    handleSelectFreeChat().catch(() => undefined)
   }
 
   /** 在指定页面下新建独立会话，并立即切换到该页面。 */
@@ -649,6 +698,7 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
+    setFreeChatSelected(false)
     setInteractingDetailTargetKey(pageDetailTargetKey(pageId))
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ type: 'page', pageId })
@@ -660,6 +710,7 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
+    setFreeChatSelected(false)
     setInteractingDetailTargetKey(pageDetailTargetKey(page.pageId))
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ type: 'page', pageId: page.pageId })
@@ -671,6 +722,7 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
+    setFreeChatSelected(false)
     setInteractingDetailTargetKey(endpointDetailTargetKey(target.apiContractId, target.endpointId))
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ ...target, type: 'endpoint' })
@@ -686,6 +738,7 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
+    setFreeChatSelected(false)
     setInteractingDetailTargetKey(endpointDetailTargetKey(apiContractId, endpointId))
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({
@@ -707,13 +760,19 @@ export default function AiChatPanel({
       templateId?: string
       templateName?: string
       templateSourcePath?: string
-    },
+    }
   ): Promise<void> => {
+    setFreeChatSelected(false)
     const targetKey = pageDetailTargetKey(pageId)
     setInteractingDetailTargetKey(targetKey)
     setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
     setActiveDetailTarget({ type: 'page', pageId })
-    const started = await handleStartDetailConfirmation(pageId, pageLabel, hasDetailPlan, templateParams)
+    const started = await handleStartDetailConfirmation(
+      pageId,
+      pageLabel,
+      hasDetailPlan,
+      templateParams
+    )
     if (started) {
       onPlanningArtifactsRefresh()
     } else {
@@ -731,6 +790,7 @@ export default function AiChatPanel({
       endpointId?: string
     }
   ): Promise<void> => {
+    setFreeChatSelected(false)
     const targetKey = targetContext?.apiContractId
       ? endpointDetailTargetKey(
           targetContext.apiContractId,
@@ -777,6 +837,7 @@ export default function AiChatPanel({
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
+    setFreeChatSelected(false)
     if (targetType === 'endpoint' && targetContext?.apiContractId) {
       setActiveDetailTarget({
         type: 'endpoint',
@@ -789,8 +850,9 @@ export default function AiChatPanel({
         endpointDetailTargetKey(targetContext.apiContractId, targetContext.endpointId || targetId)
       )
       setGeneratingDetailTargetKey('')
-      handleSelectEndpoint(targetContext.apiContractId, targetContext.endpointId || targetId)
-        .catch(() => undefined)
+      handleSelectEndpoint(targetContext.apiContractId, targetContext.endpointId || targetId).catch(
+        () => undefined
+      )
     } else {
       setActiveDetailTarget({ type: 'page', pageId: targetId })
       setInteractingDetailTargetKey(pageDetailTargetKey(targetId))
@@ -825,15 +887,18 @@ export default function AiChatPanel({
         ? {
             templateId: targetContext.templateId,
             templateName: targetContext.templateName,
-            templateSourcePath: targetContext.templateSourcePath,
+            templateSourcePath: targetContext.templateSourcePath
           }
-        : undefined,
+        : undefined
     )
   }
 
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
     setActiveView('chat')
     const session = sessions.find((item) => item.id === sessionId)
+    setFreeChatSelected(
+      Boolean(session && !session.pageId && !session.apiContractId && !session.endpointId)
+    )
     setInteractingDetailTargetKey(sessionDetailTargetKey(session))
     setGeneratingDetailTargetKey('')
     if (session?.apiContractId && session.endpointId) {
@@ -906,13 +971,17 @@ export default function AiChatPanel({
           activeSessionId={activeSessionId}
           application={application}
           deletingSessionId={deletingSessionId}
+          freeChatActive={
+            freeChatSelected && activeView === 'chat' && activeDetailTarget.type === 'none'
+          }
           loadingSessions={loadingSessions}
           outlineLocked={detailTargetSelectionRequired}
-          onCreateSession={handleCreateChatSession}
+          onCreateFreeChatSession={handleCreateChatSession}
           onCreatePageSession={handleCreatePageSession}
           onCreateEndpointSession={handleCreateEndpointSession}
           onDeleteSession={handleDeleteSession}
           onApiEndpointSelect={handleApiEndpointSelect}
+          onOpenFreeChat={handleOpenFreeChat}
           onOpenSession={handleOpenChatSession}
           onPageSelect={handlePageSelect}
           onReturnWelcome={onReturnWelcome}
@@ -972,21 +1041,23 @@ export default function AiChatPanel({
           </div>
         ) : (
           <div className={cx('ai-chat-main')}>
-            <PageContextHeader
-              description={activeHeaderTarget.description}
-              isPageOpen={activeHeaderTarget.type === 'page' && rightPanel?.type === 'preview'}
-              keyFeatures={activeHeaderTarget.keyFeatures}
-              lastAnalyzedAt={activeSessionUpdatedAt}
-              onClosePage={handleClosePage}
-              onOpenFullscreenPage={handleOpenFullscreenPreview}
-              onOpenPage={handleOpenPage}
-              pagePath={activeHeaderTarget.path}
-              pageTitle={activeHeaderTarget.title}
-              previewAvailable={showPreviewActions && Boolean(runtimePreviewBaseUrl)}
-              status={activeHeaderStatus}
-              targetType={activeHeaderTarget.type}
-              theme={theme}
-            />
+            {activeDetailTarget.type !== 'none' ? (
+              <PageContextHeader
+                description={activeHeaderTarget.description}
+                isPageOpen={activeHeaderTarget.type === 'page' && rightPanel?.type === 'preview'}
+                keyFeatures={activeHeaderTarget.keyFeatures}
+                lastAnalyzedAt={activeSessionUpdatedAt}
+                onClosePage={handleClosePage}
+                onOpenFullscreenPage={handleOpenFullscreenPreview}
+                onOpenPage={handleOpenPage}
+                pagePath={activeHeaderTarget.path}
+                pageTitle={activeHeaderTarget.title}
+                previewAvailable={showPreviewActions && Boolean(runtimePreviewBaseUrl)}
+                status={activeHeaderStatus}
+                targetType={activeHeaderTarget.type}
+                theme={theme}
+              />
+            ) : null}
 
             {previewError && (
               <Alert
@@ -1000,7 +1071,7 @@ export default function AiChatPanel({
             <MessageList
               applicationLifecycle={applicationLifecycle}
               codeChangeActionsDisabled={loading || workspaceBusy}
-              copy={copy}
+              conversationRunning={conversationRunning}
               key={activeSession?.key || draftKey}
               loading={loading}
               messages={messages}
@@ -1010,10 +1081,7 @@ export default function AiChatPanel({
               revertingCodeChangeIds={revertingCodeChangeIds}
             />
 
-            {shouldRenderPlanExecutionDock(
-              displayedPlanExecutionMode,
-              directModificationRunning
-            ) ? (
+            {shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive) ? (
               <WorkspaceDebugDock
                 activeWorkflow={activeWorkflow}
                 copy={copy}
@@ -1027,12 +1095,15 @@ export default function AiChatPanel({
                 onStopGenerating={handleStopGenerating}
                 rightContent={
                   <PlanExecutionDock
+                    canRetryFailedTasks={canRetryFailedTasks}
                     dependencyLocked={targetExecutionContext.dependencyLocked}
                     error={scopedExecution?.error?.message || error}
                     execution={scopedExecution}
                     mode={displayedPlanExecutionMode}
                     onAccept={handleAcceptPreview}
-                    onAdjust={(feedback) => void handleAdjustPlan(feedback)}
+                    onAdjust={(feedback, adjustmentType) =>
+                      void handleAdjustPlan(feedback, adjustmentType)
+                    }
                     onConfirmInteraction={handleConfirmPlanInteraction}
                     onEnd={() => void handleEndPlan(scopedExecution?.runId)}
                     onOpenPreview={() => void handleOpenFullscreenPreview()}
@@ -1056,8 +1127,13 @@ export default function AiChatPanel({
                   copy={copy}
                   draft={draft}
                   error={error}
+                  inputMode={inputMode}
+                  inputModeDisabled={inputModeLocked}
                   loading={loading}
                   onDraftChange={(value) => setDraftByKey(draftKey, value)}
+                  onInputModeChange={
+                    activeDetailTarget.type === 'none' ? undefined : handleInputModeChange
+                  }
                   onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
                   onSend={handleSend}
                   onStopGenerating={handleStopGenerating}
@@ -1066,7 +1142,7 @@ export default function AiChatPanel({
                   workspaceBusy={workspaceBusy}
                   workspaceRoot={workspaceRoot}
                 />
-                {displayedPlanExecutionMode !== 'idle' ? (
+                {displayedPlanExecutionMode !== 'idle' && !conversationActive ? (
                   <WorkspaceDebugDock
                     activeWorkflow={activeWorkflow}
                     copy={copy}

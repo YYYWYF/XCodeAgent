@@ -376,6 +376,15 @@
       background: linear-gradient(135deg, var(--wb-accent-hover), var(--wb-accent)) !important;
       box-shadow: 0 10px 22px var(--wb-accent-soft);
     }
+
+    &.ant-btn-disabled,
+    &:disabled {
+      color: var(--wb-text-tertiary) !important;
+      background: var(--wb-surface-subtle) !important;
+      border-color: var(--wb-border) !important;
+      box-shadow: none;
+      cursor: not-allowed;
+    }
   }
 }
 

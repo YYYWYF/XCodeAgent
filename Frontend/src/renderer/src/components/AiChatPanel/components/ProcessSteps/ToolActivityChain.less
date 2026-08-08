@@ -1,0 +1,107 @@
+.@{class-prefix}-tool-activity-chain {
+  position: relative;
+  padding: 0 0 18px 28px;
+
+  &::before {
+    position: absolute;
+    top: 22px;
+    bottom: -2px;
+    left: 5px;
+    width: 1px;
+    content: '';
+    background: var(--wb-border-strong);
+  }
+
+  &.@{class-prefix}-last::before {
+    display: none;
+  }
+}
+
+.@{class-prefix}-tool-activity-chain-summary {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 24px;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-tool-activity-chain-icon {
+  position: absolute;
+  top: 50%;
+  left: -30px;
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 50%;
+  font-size: 8px;
+  transform: translateY(-50%);
+}
+
+.@{class-prefix}-tool-activity-chain-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+
+  > .ant-typography {
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    font-size: 13px;
+    line-height: 1.45;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > .ant-typography-strong {
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-tool-activity-chain-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  color: var(--wb-accent);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-accent-hover);
+    text-decoration: underline;
+    outline: none;
+  }
+}
+
+.@{class-prefix}-tool-activity-chain-body {
+  display: flex;
+  flex-direction: column;
+  padding-top: 10px;
+
+  .@{class-prefix}-process-step:last-child::before {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-tool-activity-chain-summary {
+    align-items: flex-start;
+  }
+
+  .@{class-prefix}-tool-activity-chain-toggle {
+    margin-top: 1px;
+  }
+}

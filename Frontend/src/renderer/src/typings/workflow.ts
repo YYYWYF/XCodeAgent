@@ -27,7 +27,27 @@ export type WorkflowSummary = {
   acceptanceRequest?: WorkflowAcceptanceRequest
   artifacts?: Record<string, string>
   clarification?: WorkflowClarification
+  acceptanceAdjustment?: WorkflowAcceptanceAdjustment
+  smallTaskTasks?: WorkflowSmallTask[]
+  smallTaskResults?: WorkflowSmallTaskResult[]
+  smallTaskHandoff?: WorkflowSmallTaskHandoff
+  buildSummary?: WorkflowBuildSummary
   lifecycle?: ApplicationLifecycle
+  [key: string]: unknown
+}
+
+export type WorkflowBuildSummary = {
+  status?: string
+  retryable_failures?: number
+  retryable_task_ids?: string[]
+  retry_available?: boolean
+  recovery_available?: boolean
+  recovery_task_ids?: string[]
+  recovery_mode?: 'retry' | 'repair' | string
+  retry_requested?: boolean
+  retry_message?: string
+  repairable_failures?: number
+  requires_confirmation?: number
   [key: string]: unknown
 }
 
@@ -45,6 +65,18 @@ export type WorkflowAcceptanceRequest = {
   preview_url?: string
   server?: Record<string, unknown>
   [key: string]: unknown
+}
+
+export type WorkflowAcceptanceAdjustmentType =
+  | 'local_fix'
+  | 'page_design_change'
+  | 'endpoint_change'
+  | 'data_source_change'
+  | 'project_plan_change'
+
+export type WorkflowAcceptanceAdjustment = {
+  type: WorkflowAcceptanceAdjustmentType
+  feedback: string
 }
 
 export type WorkflowClarificationQuestion = {
@@ -134,6 +166,7 @@ export type WorkflowClarificationAnswer =
   | string[]
   | WorkflowClarificationChoiceAnswer
   | WorkflowDetailReviewSubmission
+  | WorkflowAcceptanceAdjustment
   | WorkflowRequirementSpecEdit
 
 export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer>
@@ -165,6 +198,43 @@ export type WorkflowClarification = {
     summary?: string
     statements?: string[]
   }
+  [key: string]: unknown
+}
+
+export type WorkflowSmallTask = {
+  id?: string
+  taskId?: string
+  owner?: string
+  title?: string
+  description?: string
+  status?: string
+  allowedPaths?: string[]
+  targetFiles?: string[]
+  acceptanceCriteria?: string[]
+  dependencies?: string[]
+  [key: string]: unknown
+}
+
+export type WorkflowSmallTaskResult = {
+  taskId?: string
+  owner?: string
+  status?: string
+  summary?: string
+  changedFiles?: string[]
+  verification?: string[]
+  failureReason?: string | null
+  escalation?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type WorkflowSmallTaskHandoff = {
+  mode?: 'small_task_scope_confirmation' | 'small_task_workflow_handoff' | string
+  status?: string
+  reason?: string
+  requestedPaths?: string[]
+  requestedResources?: Array<Record<string, unknown>>
+  workflowIntent?: string
+  taskIds?: string[]
   [key: string]: unknown
 }
 
@@ -302,6 +372,8 @@ export type WorkflowRunPayload = {
   state?: Record<string, unknown>
   result?: Record<string, unknown>
 }
+
+export type WorkflowAction = 'retry_failed_tasks'
 
 export type WorkflowDebugOptions = {
   enabled: boolean

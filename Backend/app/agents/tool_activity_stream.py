@@ -13,6 +13,7 @@ from app.agents.tool_activity_projection import (
 
 ToolActivity = dict[str, Any]
 ToolActivityCallback = Callable[[ToolActivity], None]
+TextActivityCallback = Callable[[str], None]
 StreamNamespace = tuple[str, ...]
 
 
@@ -22,6 +23,7 @@ def invoke_agent_with_tool_activity(
     *,
     workspace: str | None,
     on_tool_activity: ToolActivityCallback | None = None,
+    on_text_delta: TextActivityCallback | None = None,
 ) -> str:
     """执行 Deep Agent，并在需要时把安全化的工作区工具活动实时回调给构建调度器。"""
 
@@ -55,6 +57,8 @@ def invoke_agent_with_tool_activity(
         if agent_text:
             text_chunks.setdefault(namespace, []).append(agent_text)
             text_orders[namespace] = order
+            if on_text_delta is not None:
+                on_text_delta(agent_text)
         _consume_tool_message(
             message,
             namespace=namespace,

@@ -44,8 +44,8 @@ from app.protocols.code_changes import (
     code_changes_capabilities,
 )
 from app.protocols.direct_modification import (
-    build_direct_modification_ag_ui_stream,
-    direct_modification_capabilities,
+    build_conversation_ag_ui_stream,
+    conversation_capabilities,
 )
 from app.config import Settings
 from app.services.agent_file_documents import ensure_agents_document
@@ -87,14 +87,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?|null)$",
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 class ApprovalActionRequest(BaseModel):
     scope: Literal["once", "operation"] = Field(default="once")
     reason: Optional[str] = Field(default=None)
@@ -127,7 +119,7 @@ async def health() -> dict[str, object]:
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
             "code_changes": code_changes_capabilities(),
-            "direct_modification": direct_modification_capabilities(),
+            "conversation": conversation_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -221,15 +213,15 @@ async def run_code_changes(
     )
 
 
-@app.post("/direct-modification/run")
-async def run_direct_modification(
+@app.post("/conversation/run")
+async def run_conversation(
     input_data: dict[str, Any] = Body(...),
     accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
-    """运行独立于正式规划工作流的快速代码修改 Graph。"""
+    """运行可回答常规问题、读取工作区或执行局部修改的自由对话 Graph。"""
 
     return StreamingResponse(
-        build_direct_modification_ag_ui_stream(payload=input_data, accept=accept),
+        build_conversation_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -372,3 +364,12 @@ def api_stop_project(request: ProjectLaunchRequest) -> dict[str, Any]:
     """停止指定工作区生成应用的前后端预览服务。"""
 
     return stop_project_preview(request.workspace)
+
+
+# CORS 必须包在整个 FastAPI 应用外层，确保路由构造或未处理异常生成的 500 响应也携带跨域头。
+app = CORSMiddleware(
+    app=app,
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?|null)$",
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

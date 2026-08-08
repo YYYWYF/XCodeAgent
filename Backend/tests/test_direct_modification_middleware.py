@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage
 from app.middleware.direct_modification import (
     DIRECT_MODIFICATION_MODE_MARKER,
     _ensure_required_model_tools,
+    SMALL_TASK_MODE_MARKER,
     _prepare_direct_model_request,
 )
 
@@ -77,6 +78,17 @@ class DirectModificationMiddlewareTests(unittest.TestCase):
         self.assertEqual(
             [tool.name for tool in prepared.tools],
             ["read_file", "execute"],
+        )
+
+    def test_small_task_mode_removes_complex_orchestration_tools(self) -> None:
+        """SmallTask Agent 同样不得调用任务编排和 todo 工具。"""
+
+        request = _request([HumanMessage(content=SMALL_TASK_MODE_MARKER)])
+        prepared = _prepare_direct_model_request(request)
+
+        self.assertEqual(
+            [tool.name for tool in prepared.tools],
+            ["read_file", "edit_file", "execute"],
         )
 
 

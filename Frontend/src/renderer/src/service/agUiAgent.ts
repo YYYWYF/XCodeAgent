@@ -10,6 +10,7 @@ import type {
   WorkflowConfirmationArtifact,
   WorkflowBuildExecutionScope,
   WorkflowDebugOptions,
+  WorkflowAction,
   WorkflowEvent,
   WorkflowProjectPlanUpdate,
   WorkflowRunPayload,
@@ -35,6 +36,7 @@ export type SendWorkflowMessageOptions = {
   selectedEndpointId?: string
   detailTargetType?: 'page' | 'endpoint'
   buildExecutionScope?: WorkflowBuildExecutionScope
+  workflowAction?: WorkflowAction
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
@@ -51,7 +53,9 @@ export type SendWorkflowMessageOptions = {
     name?: string
     sourcePath?: string
   }
-  directModification?: boolean
+  conversation?: boolean
+  conversationApprovedPaths?: string[]
+  conversationHandoffDecision?: 'approved' | 'rejected'
 }
 
 /** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能、控制和恢复字段。 */
@@ -72,6 +76,7 @@ export function buildWorkflowForwardedProps(
     selectedApiContractId: options.selectedApiContractId,
     selectedEndpointId: options.selectedEndpointId,
     detailTargetType: options.detailTargetType,
+    workflowAction: options.workflowAction,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
     buildExecutionScope:
@@ -83,10 +88,19 @@ export function buildWorkflowForwardedProps(
     planControlRunId: options.planControlRunId,
     resumeExecutionRunId: options.resumeExecutionRunId,
     pageTemplate: options.pageTemplate,
-    directModification: options.directModification
+    conversation: options.conversation
       ? {
           workspaceRoot: options.workspaceRoot,
-          selectedSkillNames: options.selectedSkillNames
+          selectedSkillNames: options.selectedSkillNames,
+          ...(options.originalRequest !== undefined
+            ? { originalRequest: options.originalRequest }
+            : {}),
+          ...(options.conversationApprovedPaths !== undefined
+            ? { approvedPaths: options.conversationApprovedPaths }
+            : {}),
+          ...(options.conversationHandoffDecision !== undefined
+            ? { handoffDecision: options.conversationHandoffDecision }
+            : {})
         }
       : undefined
   }
@@ -100,6 +114,31 @@ export type AgUiChatResult = {
   toolCalls: ToolCallRecord[]
   processSteps: ProcessStepRecord[]
   assistantMessage?: Message
+}
+
+export class AgUiRunError extends Error {
+  readonly code?: string
+  readonly workflow?: WorkflowRunPayload
+  readonly toolCalls: ToolCallRecord[]
+  readonly processSteps: ProcessStepRecord[]
+
+  /** 保存 AG-UI RUN_ERROR 携带的最终 Workflow 快照，供消息层持久化失败结果。 */
+  constructor(
+    message: string,
+    options: {
+      code?: string
+      workflow?: WorkflowRunPayload
+      toolCalls?: ToolCallRecord[]
+      processSteps?: ProcessStepRecord[]
+    } = {}
+  ) {
+    super(message)
+    this.name = 'AgUiRunError'
+    this.code = options.code
+    this.workflow = options.workflow
+    this.toolCalls = options.toolCalls || []
+    this.processSteps = options.processSteps || []
+  }
 }
 
 export type ToolCallRecord = {
@@ -334,20 +373,21 @@ export type ProcessStepRecord = {
   projectPlanUpdate?: WorkflowProjectPlanUpdate
 }
 
-/** 返回主工作流的 AG-UI 地址。 */
-export function getWorkflowUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
-  return agentBaseUrl
-    ? `${agentBaseUrl.replace(/\/$/, '')}/workflow/run`
-    : '/api/agent/workflow/run'
+const DEFAULT_AGENT_BASE_URL = 'http://127.0.0.1:8000'
+
+/** 解析桌面端注入的 Backend 地址，并为独立开发页面提供本地默认地址。 */
+function getAgentBaseUrl(): string {
+  return (window.xcodeAgent?.agentBaseUrl || DEFAULT_AGENT_BASE_URL).replace(/\/$/, '')
 }
 
-/** 返回独立快速修改 Graph 的 AG-UI 地址。 */
-export function getDirectModificationUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
-  return agentBaseUrl
-    ? `${agentBaseUrl.replace(/\/$/, '')}/direct-modification/run`
-    : '/api/agent/direct-modification/run'
+/** 返回主工作流的 AG-UI 地址。 */
+export function getWorkflowUrl(): string {
+  return `${getAgentBaseUrl()}/workflow/run`
+}
+
+/** 返回自由对话 Graph 的 AG-UI 地址。 */
+export function getConversationUrl(): string {
+  return `${getAgentBaseUrl()}/conversation/run`
 }
 
 export class AgUiChatSession {
@@ -396,7 +436,8 @@ export class AgUiChatSession {
     let workflow: WorkflowRunPayload | undefined
     let toolCalls: ToolCallRecord[] = []
     let processSteps: ProcessStepRecord[] = []
-    let runError: Error | undefined
+    let runErrorMessage = ''
+    let runErrorCode: string | undefined
     const emitToolCalls = (nextToolCalls: ToolCallRecord[]): void => {
       toolCalls = nextToolCalls
       options.onToolCalls?.(toolCalls)
@@ -421,7 +462,7 @@ export class AgUiChatSession {
             options.onWorkflow?.(workflow)
           }
         }
-        if (event.name === 'direct-modification') {
+        if (event.name === 'conversation') {
           workflow = readWorkflowPayload(event.value) ?? workflow
           const step = readProcessStep(objectValue(event.value).processStep)
           if (step) {
@@ -446,7 +487,8 @@ export class AgUiChatSession {
       },
       onRunErrorEvent: ({ event }) => {
         // RUN_ERROR 是运行失败终态；HttpAgent 不会自动 reject，需要在会话边界显式抛出。
-        runError = new Error(event.message || 'Workflow 运行失败，请重试。')
+        runErrorMessage = event.message || 'Workflow 运行失败，请重试。'
+        runErrorCode = event.code
       },
       onToolCallStartEvent: ({ event }) => {
         emitToolCalls(applyToolCallEvent(toolCalls, 'start', event))
@@ -486,7 +528,14 @@ export class AgUiChatSession {
         this.resolveActiveRunCompletion = undefined
       }
     }
-    if (runError) throw runError
+    if (runErrorMessage) {
+      throw new AgUiRunError(runErrorMessage, {
+        code: runErrorCode,
+        workflow,
+        toolCalls,
+        processSteps
+      })
+    }
     const assistantMessage = result.newMessages.find(
       (newMessage) => newMessage.role === 'assistant'
     )
@@ -1176,14 +1225,14 @@ function messageContentToText(content: Message['content'] | undefined): string {
 
 function readWorkflowFromState(snapshot: unknown): WorkflowRunPayload | undefined {
   if (!snapshot || typeof snapshot !== 'object') return undefined
-  const value = snapshot as { workflow?: unknown; directModification?: unknown }
-  return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.directModification)
+  const value = snapshot as { workflow?: unknown; conversation?: unknown }
+  return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.conversation)
 }
 
 function readResultWorkflow(result: unknown): WorkflowRunPayload | undefined {
   if (!result || typeof result !== 'object') return undefined
-  const value = result as { workflow?: unknown; directModification?: unknown }
-  return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.directModification)
+  const value = result as { workflow?: unknown; conversation?: unknown }
+  return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.conversation)
 }
 
 function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {

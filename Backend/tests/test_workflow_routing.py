@@ -9,6 +9,7 @@ from app.graph.workflow import (
     route_database_context_inspection,
     route_detail_confirmation,
     route_prepare_build_tasks,
+    route_project_planning,
     route_test_validation,
     route_workspace_inspection,
     route_workflow_start,
@@ -28,9 +29,21 @@ class WorkflowRoutingTests(unittest.TestCase):
             "detail_confirmation",
         )
 
-    def test_removed_planning_resume_starts_at_detail_confirmation(self) -> None:
+    def test_workflow_start_can_resume_from_project_planning(self) -> None:
         self.assertEqual(
             route_workflow_start({"resume_from": "project_planning"}),
+            "project_planning",
+        )
+
+    def test_project_planning_waits_for_confirmation(self) -> None:
+        self.assertEqual(
+            route_project_planning({"status": "requires_user_input"}),
+            "await_user_input",
+        )
+
+    def test_project_planning_continues_to_detail_confirmation(self) -> None:
+        self.assertEqual(
+            route_project_planning({"status": "completed"}),
             "detail_confirmation",
         )
 
@@ -142,15 +155,15 @@ class WorkflowRoutingTests(unittest.TestCase):
                     "handle_failure",
                 )
 
-    def test_integration_test_repair_plan_returns_to_build(self) -> None:
+    def test_integration_test_repair_plan_enters_small_task_agent(self) -> None:
         self.assertEqual(
             route_test_validation(
                 {
                     "quality_gate_passed": False,
-                    "integration_next_action": "repair_build",
+                    "integration_next_action": "small_task_repair",
                 }
             ),
-            "build",
+            "small_task_repair",
         )
 
     def test_integration_test_confirmation_waits_for_user(self) -> None:

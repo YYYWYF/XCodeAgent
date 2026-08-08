@@ -141,7 +141,7 @@ class IntegrationRepairFlowTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(result["integration_next_action"], "repair_build")
+        self.assertEqual(result["integration_next_action"], "small_task_repair")
         self.assertEqual(result["repair_iteration"], 0)
         self.assertEqual(result["repair_task_plan"], repair_plan)
         self.assertEqual(result["repair_tasks"], [repair_task])
@@ -176,7 +176,7 @@ class IntegrationRepairFlowTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(result["integration_next_action"], "repair_build")
+        self.assertEqual(result["integration_next_action"], "small_task_repair")
         self.assertEqual(result["repair_tasks"], [candidate])
         self.assertEqual(result["repair_task_plan"]["approvedPlanId"], "plan-1")
         self.assertNotIn("repair_iteration", result)

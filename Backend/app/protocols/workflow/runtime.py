@@ -686,6 +686,32 @@ def build_workflow_ag_ui_stream(
                             ),
                         )
                         continue
+                    if event_type == "small_task.tool_activity":
+                        activity = (
+                            progress.get("activity")
+                            if isinstance(progress.get("activity"), dict)
+                            else {}
+                        )
+                        activity_status = str(activity.get("status") or "running")
+                        if activity_status not in {"running", "completed", "failed"}:
+                            activity_status = "running"
+                        process_sequence += 1
+                        task_id = str(activity.get("taskId") or "")
+                        yield _process_frame(
+                            encoder,
+                            id=f"small-task-tool:{task_id or process_sequence}",
+                            kind="tool",
+                            status=activity_status,
+                            title=str(activity.get("tool") or "SmallTask 工作区工具"),
+                            detail=str(
+                                activity.get("message")
+                                or activity.get("path")
+                                or "SmallTask Agent 正在执行局部任务。"
+                            ),
+                            sequence=process_sequence,
+                            node_name="small_task_repair",
+                        )
+                        continue
                     if event_type == "llm.token":
                         yield encoder.encode(
                             CustomEvent(

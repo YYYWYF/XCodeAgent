@@ -112,7 +112,13 @@ def _verify_check(
 
     kind = str(check.get("kind") or "")
     if kind == "file_operation":
-        return _verify_file_operation(check, status=status, changes=changes, root=root)
+        return _verify_file_operation(
+            check,
+            task=task,
+            status=status,
+            changes=changes,
+            root=root,
+        )
     if kind == "repair_change":
         return _verify_repair_change(check, status=status, changes=changes, root=root)
     if kind == "scope_boundary":
@@ -127,6 +133,7 @@ def _verify_check(
 def _verify_file_operation(
     check: dict[str, Any],
     *,
+    task: dict[str, Any] | None = None,
     status: str,
     changes: dict[str, dict[str, Any]],
     root: Path | None,
@@ -147,9 +154,19 @@ def _verify_file_operation(
     if status == "completed":
         actual = changes.get(path)
         actual_type = str(actual.get("changeType") or "") if actual else ""
-        if actual_type != expected_change_type:
+        accepted_change_types = {expected_change_type}
+        if (
+            isinstance(task, dict)
+            and task.get("kind") == "repair"
+            and expected_change_type == "added"
+        ):
+            # 修复任务面对的是当前工作区；原任务声明 add，但文件可能已被失败尝试创建，
+            # 此时本轮正确行为是原地修改，不能再把 modified 判成验收失败。
+            accepted_change_types.add("modified")
+        if actual_type not in accepted_change_types:
+            accepted_text = " 或 ".join(sorted(accepted_change_types))
             return (
-                f"{path} 预期差异类型 {expected_change_type}，实际为 {actual_type or 'none'}。",
+                f"{path} 预期差异类型 {accepted_text}，实际为 {actual_type or 'none'}。",
                 f"工作区差异未覆盖预期 {operation} 操作。",
             )
     elif root is None:

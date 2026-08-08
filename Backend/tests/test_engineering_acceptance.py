@@ -136,6 +136,38 @@ class EngineeringAcceptanceTests(unittest.TestCase):
         self.assertTrue(any("service.get" in error for error in errors))
         self.assertTrue(any("Schema 字段" in error for error in errors))
 
+    def test_repair_add_check_accepts_modified_existing_file(self) -> None:
+        """修复已被失败尝试创建的文件时，added 检查应接受本轮 modified 差异。"""
+
+        task = {
+            "id": "repair:backend",
+            "kind": "repair",
+            "owner": "backend",
+            "acceptance_checks": [
+                {
+                    "id": "repair-file",
+                    "kind": "file_operation",
+                    "description": "修复后端文件。",
+                    "target_paths": ["backend/Pet.java"],
+                    "expected": {"operation": "add", "change_type": "added"},
+                }
+            ],
+            "acceptance_criteria": ["修复后端文件。"],
+        }
+
+        _, errors = verify_engineering_acceptance(
+            task=task,
+            status="completed",
+            code_change_set={
+                "files": [
+                    {"path": "backend/Pet.java", "changeType": "modified"}
+                ]
+            },
+            workspace_root=None,
+        )
+
+        self.assertFalse(errors)
+
     def test_backend_contract_binding_checks_spring_mapping_and_fields(self) -> None:
         """后端接口任务必须包含正式 Mapping、路径和请求响应字段。"""
 

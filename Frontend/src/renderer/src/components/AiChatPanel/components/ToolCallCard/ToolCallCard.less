@@ -10,6 +10,79 @@
   }
 }
 
+.@{class-prefix}-tool-call-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-tool-call-chain-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-tool-call-chain-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--wb-accent);
+}
+
+.@{class-prefix}-tool-call-chain-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+
+  > .ant-typography {
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > .ant-typography-strong {
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-tool-call-chain-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  color: var(--wb-accent);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-accent-hover);
+    text-decoration: underline;
+    outline: none;
+  }
+}
+
+.@{class-prefix}-tool-call-chain-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .@{class-prefix}-tool-call-summary {
   display: flex;
   min-width: 0;

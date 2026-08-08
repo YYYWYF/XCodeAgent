@@ -10,14 +10,13 @@ import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   ApplicationLifecycle,
-  EditorMode,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import CodeChangeCard from '../CodeChangeCard'
-import ToolCallCard from '../ToolCallCard'
+import { ToolCallChain } from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import WorkflowRunCard, {
   type ClarificationAnswers,
@@ -27,8 +26,8 @@ import {
   processStepsForMessageDisplay,
   workflowMessageContentForDisplay
 } from '../../../../service/processStepHistory'
-import type { AgentChatMessage, ChatCopy } from '../../types'
-import { isDirectModificationWaitingForInput } from '../../directModificationMode'
+import type { AgentChatMessage } from '../../types'
+import { isConversationWorkflow } from '../../conversationMode'
 import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
@@ -39,7 +38,7 @@ const { Text } = Typography
 type MessageListProps = {
   applicationLifecycle?: ApplicationLifecycle
   codeChangeActionsDisabled: boolean
-  copy: ChatCopy[EditorMode]
+  conversationRunning: boolean
   loading: boolean
   messages: AgentChatMessage[]
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
@@ -55,7 +54,7 @@ type MessageListProps = {
 export default function MessageList({
   applicationLifecycle,
   codeChangeActionsDisabled,
-  copy,
+  conversationRunning,
   loading,
   messages,
   onOpenCodeChangeFile,
@@ -162,27 +161,32 @@ export default function MessageList({
                 <RobotOutlined />
               </span>
               <Text strong>从一个想法开始</Text>
-              <Text type="secondary">{copy.empty}</Text>
             </div>
           ) : (
             messages.map((message) => {
               const messageLoading = message.id === activeAssistantMessageId
               const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
               const finalResult = workflowFinalResultPresentation(message.workflow)
+              const conversation =
+                (messageLoading && conversationRunning) || isConversationWorkflow(message.workflow)
               const visibleProcessSteps = processStepsForMessageDisplay(
                 message.processSteps,
-                message.workflow,
-                messageLoading
-              )
-              const waitingForDirectModificationInput = isDirectModificationWaitingForInput(
                 message.workflow
+              )
+              const hasConversationToolActivity = Boolean(
+                conversation &&
+                  visibleProcessSteps?.some(
+                    (step) => step.kind === 'tool' || step.kind === 'command'
+                  )
               )
               const requiresClarification =
                 message.workflow &&
                 workflowClarification(message.workflow)?.status === 'requires_user_input'
               const interactionAvailability =
                 message.workflow && requiresClarification
-                  ? workflowInteractionAvailability(message.workflow, applicationLifecycle)
+                  ? conversation
+                    ? 'active'
+                    : workflowInteractionAvailability(message.workflow, applicationLifecycle)
                   : 'stale'
               const visibleAssistantContent = workflowMessageContentForDisplay(
                 message.content,
@@ -203,16 +207,18 @@ export default function MessageList({
                       <>
                         {visibleProcessSteps && visibleProcessSteps.length > 0 && (
                           <ProcessSteps
+                            conversation={conversation}
                             loading={messageLoading}
                             steps={visibleProcessSteps}
-                            waitingForInput={waitingForDirectModificationInput}
-                            waitingPrompt={message.workflow?.summary.message}
                           />
                         )}
                         {messageLoading &&
-                          message.toolCalls?.map((toolCall) => (
-                            <ToolCallCard key={toolCall.id} toolCall={toolCall} />
-                          ))}
+                          message.toolCalls &&
+                          message.toolCalls.length > 0 &&
+                          // 自由对话已有安全化的过程步骤时只保留一份调用链，避免重复堆叠。
+                          !hasConversationToolActivity && (
+                            <ToolCallChain toolCalls={message.toolCalls} />
+                          )}
                         {!messageLoading && codeChanges && (
                           <div
                             className={cx('final-result-heading', finalResult.failed && 'failed')}
@@ -280,7 +286,9 @@ export default function MessageList({
           {loading && !hasStreamingProcess && (
             <div className={cx('ai-message', 'assistant', 'loading')}>
               <Spin size="small" />
-              <Text type="secondary">正在运行 Workflow...</Text>
+              <Text type="secondary">
+                {conversationRunning ? '正在运行...' : '正在运行 Workflow...'}
+              </Text>
             </div>
           )}
         </div>

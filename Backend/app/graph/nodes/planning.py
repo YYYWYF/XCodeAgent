@@ -244,6 +244,36 @@ def detail_confirmation(state: ProjectState) -> dict:
         **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
         **({"detail_target_type": detail_target_type} if detail_target_type else {}),
     }
+    acceptance_adjustment = state.get("acceptance_adjustment")
+    acceptance_adjustment_type = (
+        str(acceptance_adjustment.get("type") or "").strip()
+        if isinstance(acceptance_adjustment, dict)
+        else ""
+    )
+    has_detail_submission = isinstance(submission, dict) and bool(submission)
+    if (
+        acceptance_adjustment_type
+        in {"page_design_change", "endpoint_change", "data_source_change"}
+        and not has_detail_submission
+    ):
+        return _regenerate_acceptance_detail_plan(
+            state,
+            selectedPageId=selectedPageId,
+            selected_api_contract_id=selected_api_contract_id,
+            selected_endpoint_id=selected_endpoint_id,
+            detail_target_type=detail_target_type,
+            regenerate_endpoint_details=acceptance_adjustment_type
+            in {"endpoint_change", "data_source_change"},
+        )
+    if acceptance_adjustment_type == "project_plan_change" and not has_detail_submission:
+        return _regenerate_acceptance_detail_plan(
+            state,
+            selectedPageId=selectedPageId,
+            selected_api_contract_id=selected_api_contract_id,
+            selected_endpoint_id=selected_endpoint_id,
+            detail_target_type=detail_target_type,
+            regenerate_endpoint_details=True,
+        )
     if pending_plan and isinstance(submission, dict):
         edited_markdown = edited_project_plan_markdown(state, pending_plan)
         synchronized_plan = (
@@ -283,6 +313,7 @@ def detail_confirmation(state: ProjectState) -> dict:
                 *confirmed_plan.get("endpoint_detail_plans", []),
             ],
             "detail_review_submission": {},
+            "acceptance_adjustment": {},
             "timeline": ["detail_confirmation"],
         }
 
@@ -488,16 +519,22 @@ def detail_confirmation(state: ProjectState) -> dict:
             "timeline": ["detail_confirmation"],
         }
     try:
+        project_plan_pages = [
+            page
+            for page in flatten_frontend_pages(project_plan.get("frontend_pages", []))
+            if isinstance(page, dict)
+        ]
+        frontend_pages = project_plan_pages or state.get("frontend_pages")
         pending_plan = _generate_all_detail_plans(
             project_plan,
-            frontend_pages=state.get("frontend_pages"),
+            frontend_pages=frontend_pages,
             selectedPageId=selectedPageId or None,
             selected_api_contract_id=selected_api_contract_id or None,
             selected_endpoint_id=selected_endpoint_id or None,
             detail_target_type=detail_target_type or None,
             **_detail_workspace_options(state),
         )
-    except PageDependencyGapError as exc:
+    except (PageDependencyGapError, ValueError) as exc:
         return {
             "phase": "detail_confirmation",
             "status": "requires_user_input",
@@ -546,6 +583,116 @@ def detail_confirmation(state: ProjectState) -> dict:
     }
 
 
+def _regenerate_acceptance_detail_plan(
+    state: ProjectState,
+    *,
+    selectedPageId: str,
+    selected_api_contract_id: str,
+    selected_endpoint_id: str,
+    detail_target_type: str,
+    regenerate_endpoint_details: bool,
+) -> dict:
+    """根据验收反馈生成新的页面或接口详情版本，并重新停在确认门禁。"""
+
+    project_plan = state.get("project_plan")
+    adjustment = state.get("acceptance_adjustment")
+    feedback = (
+        str(adjustment.get("feedback") or "").strip()
+        if isinstance(adjustment, dict)
+        else ""
+    )
+    if not isinstance(project_plan, dict):
+        raise ValueError("验收调整缺少当前已确认的 ProjectPlan。")
+    if not selectedPageId and not selected_endpoint_id:
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "clarification": _project_plan_revision_required_payload(
+                "验收调整缺少当前页面或接口目标。"
+            ),
+            "timeline": ["detail_confirmation"],
+        }
+
+    try:
+        pending_plan = _generate_all_detail_plans(
+            project_plan,
+            frontend_pages=state.get("frontend_pages"),
+            selectedPageId=selectedPageId or None,
+            selected_api_contract_id=selected_api_contract_id or None,
+            selected_endpoint_id=selected_endpoint_id or None,
+            detail_target_type=detail_target_type or None,
+            workspace_root=_detail_workspace_options(state).get("workspace_root"),
+            user_request=feedback,
+            regenerate_endpoint_details=regenerate_endpoint_details,
+        )
+    except PageDependencyGapError as exc:
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "clarification": _project_plan_revision_required_payload(str(exc)),
+            "selectedPageId": selectedPageId or None,
+            "selected_api_contract_id": selected_api_contract_id or None,
+            "selected_endpoint_id": selected_endpoint_id or None,
+            "detail_target_type": detail_target_type or None,
+            "timeline": ["detail_confirmation"],
+        }
+
+    pending_plan["confirmation_status"] = "pending_user_confirmation"
+    project_plan_path = write_project_plan_document(state, pending_plan)
+    targets = _selected_detail_design_targets(
+        pending_plan,
+        selectedPageId,
+        selected_api_contract_id=selected_api_contract_id or None,
+        selected_endpoint_id=selected_endpoint_id or None,
+    )
+    selected_endpoint_state = {
+        **(
+            {"selected_api_contract_id": selected_api_contract_id}
+            if selected_api_contract_id
+            else {}
+        ),
+        **(
+            {"selected_endpoint_id": selected_endpoint_id}
+            if selected_endpoint_id
+            else {}
+        ),
+        **({"detail_target_type": detail_target_type} if detail_target_type else {}),
+    }
+    return {
+        "phase": "detail_confirmation",
+        "status": "requires_user_input",
+        "clarification": detail_review_payload(
+            pending_plan,
+            selectedPageId=selectedPageId or None,
+            selected_api_contract_id=selected_api_contract_id or None,
+            selected_endpoint_id=selected_endpoint_id or None,
+            detail_target_type=detail_target_type or None,
+        ),
+        "pending_project_plan": pending_plan,
+        "project_plan": project_plan,
+        "project_plan_path": project_plan_path,
+        "project_plan_json_path": _project_plan_json_path_for_state(state),
+        "detail_selection": {
+            "status": "requires_user_input",
+            "mode": "batch_review",
+            "selectedPageId": selectedPageId or None,
+            **selected_endpoint_state,
+            "targets": targets,
+        },
+        "selectedPageId": selectedPageId or None,
+        **selected_endpoint_state,
+        "detail_plans": _selected_detail_plans(
+            pending_plan,
+            selectedPageId,
+            selected_api_contract_id=selected_api_contract_id or None,
+            selected_endpoint_id=selected_endpoint_id or None,
+        ),
+        "timeline": ["detail_confirmation"],
+    }
+
+
 def _generate_all_detail_plans(
     project_plan: dict,
     *,
@@ -555,6 +702,8 @@ def _generate_all_detail_plans(
     selected_endpoint_id: str | None = None,
     detail_target_type: str | None = None,
     workspace_root: str | None = None,
+    user_request: str = "",
+    regenerate_endpoint_details: bool = False,
 ) -> dict:
     """为用户选中的页面或 endpoint 生成功能详细设计。"""
 
@@ -609,6 +758,7 @@ def _generate_all_detail_plans(
             selected_api_contract_id,
             selected_endpoint_id,
             workspace_root,
+            user_request=user_request,
         )
         updated_plan = {
             **updated_plan,
@@ -647,12 +797,13 @@ def _generate_all_detail_plans(
                 api_contract_id,
                 endpoint_id,
             )
-            if existing_detail is None:
+            if existing_detail is None or regenerate_endpoint_details:
                 updated_plan, existing_detail = _generate_endpoint_detail_plan(
                     updated_plan,
                     api_contract_id,
                     endpoint_id,
                     workspace_root,
+                    user_request=user_request,
                 )
             if str(existing_detail.get("status") or "") != "confirmed":
                 endpoint_review_details.append(existing_detail)
@@ -663,7 +814,16 @@ def _generate_all_detail_plans(
         if not pageId:
             continue
         page_context = extract_page_detail_context(updated_plan, pageId)
-        detail = design_page_with_chat_model(updated_plan, page_context)
+        # 普通初次设计保持旧调用形态；只有验收反馈存在时才把反馈注入页面设计模型。
+        detail = (
+            design_page_with_chat_model(
+                updated_plan,
+                page_context,
+                user_request=user_request,
+            )
+            if user_request
+            else design_page_with_chat_model(updated_plan, page_context)
+        )
         detail["status"] = "pending_user_confirmation"
         detail["approved"] = False
         updated_plan = attach_page_detail_plan(updated_plan, detail)
@@ -741,6 +901,7 @@ def _generate_endpoint_detail_plan(
     api_contract_id: str,
     endpoint_id: str,
     workspace_root: str | None = None,
+    user_request: str = "",
 ) -> tuple[dict, dict]:
     """复用独立 endpoint 设计链路生成详情并挂回 ProjectPlan 内存态。"""
 
@@ -785,7 +946,11 @@ def _generate_endpoint_detail_plan(
         method=endpoint_context.get("method"),
         path=endpoint_context.get("path"),
     )
-    detail = design_endpoint_with_chat_model(project_plan, endpoint_context, "")
+    detail = design_endpoint_with_chat_model(
+        project_plan,
+        endpoint_context,
+        user_request,
+    )
     _detail_progress(
         (
             "接口决策仍需用户确认，已暂停处理逻辑与验收标准组装。"

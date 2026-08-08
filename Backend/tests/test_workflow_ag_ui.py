@@ -475,7 +475,7 @@ class FakeDagGenerationProgressGraph:
 
 
 class FakeRepairLoopGraph:
-    """模拟 build → test failed → repair build → retest 的更新序列。"""
+    """模拟 build → test failed → small task repair → retest 的更新序列。"""
 
     async def astream(self, initial_state, *, config, stream_mode):
         build_slice = {
@@ -501,14 +501,15 @@ class FakeRepairLoopGraph:
             }
         }
         yield "updates", {
-            "build": {
-                "phase": "build",
+            "small_task_repair": {
+                "phase": "small_task_repair",
                 "status": "completed",
-                "build_summary": {"status": "completed", "completed": 2, "failed": 0},
-                "build_execution_slice": {
-                    **build_slice,
-                    "tasks": [{"id": "repair:orders-page", "kind": "repair", "status": "completed"}],
-                },
+                "small_task_results": [
+                    {"taskId": "repair:orders-page", "status": "completed"}
+                ],
+                "small_task_tasks": [
+                    {"id": "repair:orders-page", "kind": "repair", "status": "completed"}
+                ],
             }
         }
         yield "updates", {
@@ -527,7 +528,7 @@ class FakeRepairLoopGraph:
                 "phase": "launch_project",
                 "status": "completed",
                 "quality_gate_passed": True,
-                "timeline": ["build", "integration_test", "build", "integration_test"],
+                "timeline": ["build", "integration_test", "small_task_repair", "integration_test"],
             }
         )
 
@@ -1364,7 +1365,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         terminal_frames = [
             frame
             for frame in frames
-            if frame.get("nodeName") in {"build", "integration_test"}
+            if frame.get("nodeName") in {"build", "integration_test", "small_task_repair"}
             and frame.get("status") != "running"
         ]
 
@@ -1373,17 +1374,17 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             [
                 "workflow:build",
                 "workflow:integration_test",
-                "workflow:build:2",
+                "workflow:small_task_repair",
                 "workflow:integration_test:2",
             ],
         )
-        self.assertEqual([frame["attempt"] for frame in terminal_frames], [1, 1, 2, 2])
+        self.assertEqual([frame["attempt"] for frame in terminal_frames], [1, 1, 1, 2])
         self.assertEqual(
             [frame["iterationKind"] for frame in terminal_frames],
-            ["initial_build", "initial_test", "repair_build", "retest"],
+            ["initial_build", "initial_test", "initial", "retest"],
         )
         self.assertEqual(terminal_frames[1]["status"], "failed")
-        self.assertIn("buildExecutionSlice", terminal_frames[2])
+        self.assertNotIn("buildExecutionSlice", terminal_frames[2])
 
     def test_ephemeral_build_activity_updates_step_without_entering_workflow_history(self) -> None:
         """工具活动应实时更新构建卡，但不能写入 workflow-run 事件历史。"""

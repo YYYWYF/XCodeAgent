@@ -6,10 +6,13 @@ import {
   PauseCircleOutlined,
   RedoOutlined
 } from '@ant-design/icons'
-import { Button, Input, Modal, Popconfirm, Typography } from 'antd'
+import { Button, Input, Modal, Popconfirm, Select, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { WorkbenchExecution } from '../../../../typings'
+import type {
+  WorkbenchExecution,
+  WorkflowAcceptanceAdjustmentType
+} from '../../../../typings'
 import { cx } from '../../../../utils'
 import type { PlanExecutionMode } from '../../planExecutionMode'
 import { planExecutionPhaseLabel } from '../../planExecutionMode'
@@ -19,13 +22,14 @@ const { Text } = Typography
 const { TextArea } = Input
 
 type Props = {
+  canRetryFailedTasks?: boolean
   dependencyLocked?: boolean
   error?: string
   execution?: WorkbenchExecution
   mode: Exclude<PlanExecutionMode, 'idle'>
   ownerPageId?: string
   onAccept: () => Promise<boolean>
-  onAdjust: (feedback: string) => void
+  onAdjust: (feedback: string, adjustmentType: WorkflowAcceptanceAdjustmentType) => void
   onConfirmInteraction: (decision: 'reject' | 'once' | 'always') => void
   onEnd: () => void
   onOpenPreview: () => void
@@ -34,8 +38,20 @@ type Props = {
   onViewPlan: () => void
 }
 
+const ACCEPTANCE_ADJUSTMENT_OPTIONS: Array<{
+  label: string
+  value: WorkflowAcceptanceAdjustmentType
+}> = [
+  { label: '局部修复（不改变产品语义）', value: 'local_fix' },
+  { label: '页面布局或交互调整', value: 'page_design_change' },
+  { label: '接口行为或字段调整', value: 'endpoint_change' },
+  { label: '数据来源或数据库调整', value: 'data_source_change' },
+  { label: '项目计划或架构调整', value: 'project_plan_change' }
+]
+
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
 export default function PlanExecutionDock({
+  canRetryFailedTasks = false,
   dependencyLocked = false,
   error,
   execution,
@@ -54,6 +70,8 @@ export default function PlanExecutionDock({
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
   const [feedback, setFeedback] = useState('')
+  const [adjustmentType, setAdjustmentType] =
+    useState<WorkflowAcceptanceAdjustmentType>('local_fix')
   const pending = execution?.pendingInteraction
 
   useEffect(() => {
@@ -61,13 +79,14 @@ export default function PlanExecutionDock({
     setAcceptanceConfirmOpen(false)
     setAccepting(false)
     setFeedback('')
+    setAdjustmentType('local_fix')
   }, [mode, pending?.id])
 
   /** 提交受控计划调整意见，并保持空内容不可发送。 */
   const submitAdjustment = (): void => {
     const normalized = feedback.trim()
     if (!normalized) return
-    onAdjust(normalized)
+    onAdjust(normalized, adjustmentType)
   }
 
   /** 确认最终验收并等待 AG-UI 成功接收，失败时保留对话框供用户重试。 */
@@ -103,7 +122,13 @@ export default function PlanExecutionDock({
           <Text type="secondary">
             {dependencyLocked
               ? dependencyLockDescription(ownerPageId, execution?.phase)
-              : planModeDescription(mode, execution?.phase, pending?.payload, error)}
+              : planModeDescription(
+                  mode,
+                  execution?.phase,
+                  pending?.payload,
+                  error,
+                  canRetryFailedTasks
+                )}
           </Text>
         </div>
         {!dependencyLocked && (
@@ -159,9 +184,11 @@ export default function PlanExecutionDock({
             )}
             {(mode === 'failed' || mode === 'stopped') && (
               <>
-                <Button icon={<RedoOutlined />} onClick={onRetry} type="primary">
-                  {mode === 'failed' ? '重试失败任务' : '继续执行'}
-                </Button>
+                {(mode === 'stopped' || (mode === 'failed' && canRetryFailedTasks)) && (
+                  <Button icon={<RedoOutlined />} onClick={onRetry} type="primary">
+                    {mode === 'failed' ? '重试失败任务' : '继续执行'}
+                  </Button>
+                )}
                 <Button onClick={() => setAdjusting(true)}>调整计划</Button>
                 <Popconfirm
                   cancelText="取消"
@@ -206,6 +233,15 @@ export default function PlanExecutionDock({
 
       {!dependencyLocked && adjusting ? (
         <div className={cx('plan-execution-adjustment')}>
+          <div className={cx('plan-execution-adjustment-type')}>
+            <Text type="secondary">调整类型</Text>
+            <Select<WorkflowAcceptanceAdjustmentType>
+              aria-label="验收调整类型"
+              onChange={setAdjustmentType}
+              options={ACCEPTANCE_ADJUSTMENT_OPTIONS}
+              value={adjustmentType}
+            />
+          </div>
           <TextArea
             aria-label="计划调整意见"
             autoSize={{ minRows: 2, maxRows: 4 }}
@@ -267,9 +303,17 @@ function planModeDescription(
   mode: Exclude<PlanExecutionMode, 'idle'>,
   phase?: string,
   payload?: Record<string, unknown>,
-  error?: string
+  error?: string,
+  canRetryFailedTasks = false
 ): string {
-  if (mode === 'failed') return error || '可以重试失败任务、调整计划或结束。'
+  if (mode === 'failed') {
+    return (
+      error ||
+      (canRetryFailedTasks
+        ? '存在可恢复的失败任务或待执行修复任务。'
+        : '当前失败需要调整计划、确认修复范围或结束。')
+    )
+  }
   if (mode === 'awaiting_repair_confirmation') {
     return String(payload?.reason || payload?.message || '修复范围发生变化，确认后继续。')
   }

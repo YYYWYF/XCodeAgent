@@ -6,8 +6,12 @@ from pathlib import Path
 
 from app.services.build_scheduler import (
     classify_task_result,
+    hydrate_missing_failed_results,
     normalize_task_results,
+    reset_failed_tasks_for_retry,
+    retryable_failed_task_ids,
     select_ready_build_batch,
+    summarize_build_runtime,
     verify_task_file_changes,
 )
 
@@ -131,6 +135,106 @@ class BuildSchedulerTests(unittest.TestCase):
         )
 
         self.assertEqual(decision["action"], "retry")
+
+    def test_retries_only_failed_tasks_with_retry_classification(self) -> None:
+        """显式重试只恢复 runner/tool 类失败，不会重跑实现失败任务。"""
+
+        tasks = [
+            {
+                "id": "runner-task",
+                "status": "failed",
+                "failure_category": "runner_crash",
+            },
+            {
+                "id": "compile-task",
+                "status": "failed",
+                "failure_category": "compile_error",
+            },
+            {"id": "downstream", "status": "pending", "dependencies": ["runner-task"]},
+        ]
+        build_results = [
+            {
+                "task_id": "runner-task",
+                "status": "failed",
+                "failure_category": "runner_crash",
+            },
+            {
+                "task_id": "compile-task",
+                "status": "failed",
+                "failure_category": "compile_error",
+            },
+        ]
+
+        retry_ids = retryable_failed_task_ids(tasks, build_results)
+        reset = reset_failed_tasks_for_retry(tasks, retry_ids)
+
+        self.assertEqual(retry_ids, {"runner-task"})
+        self.assertEqual(reset[0]["status"], "pending")
+        self.assertEqual(reset[0]["scheduler"]["last_action"], "retry_failed_tasks")
+        self.assertEqual(reset[1]["status"], "failed")
+        summary = summarize_build_runtime(tasks, build_results)
+        self.assertEqual(summary["retryable_failures"], 1)
+        self.assertFalse(summary["retry_available"])
+
+    def test_repaired_parent_ignores_stale_failed_result(self) -> None:
+        """修复成功关闭父任务后，旧失败结果不应再次触发修复并阻塞下游。"""
+
+        tasks = [
+            {
+                "id": "api",
+                "status": "completed",
+                "completed_by_repair": True,
+                "dependencies": [],
+            },
+            {
+                "id": "repair:api:acceptance",
+                "kind": "repair",
+                "status": "completed",
+                "dependencies": [],
+            },
+            {"id": "page", "status": "pending", "dependencies": ["api"]},
+        ]
+        build_results = [
+            {
+                "task_id": "api",
+                "status": "failed",
+                "failure_category": "acceptance_verification_failed",
+            },
+            {"task_id": "repair:api:acceptance", "status": "completed"},
+        ]
+
+        summary = summarize_build_runtime(tasks, build_results)
+        selection = select_ready_build_batch(tasks)
+
+        self.assertEqual(summary["repairable_failures"], 0)
+        self.assertEqual(summary["status"], "in_progress")
+        self.assertEqual(selection["ready_task_ids"], ["page"])
+
+    def test_hydrates_failed_result_from_persisted_task_state(self) -> None:
+        """checkpoint 丢失结果流时，任务注册表仍能恢复修复分类所需的失败证据。"""
+
+        results = hydrate_missing_failed_results(
+            [
+                {
+                    "id": "backend-task",
+                    "owner": "backend",
+                    "status": "failed",
+                    "failure_category": "acceptance_verification_failed",
+                    "failure_reason": "缺少 Schema JSON 映射字段。",
+                    "failure_detail": {
+                        "scheduler_decision": {
+                            "action": "repair",
+                            "reason": "acceptance_verification_failed",
+                        }
+                    },
+                }
+            ],
+            [],
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["task_id"], "backend-task")
+        self.assertEqual(results[0]["scheduler_decision"]["action"], "repair")
 
     def test_already_satisfied_ignores_agent_claim_and_verifies_all_checks(self) -> None:
         """已满足必须由磁盘与工程检查证明，Agent 自报证据不参与裁决。"""

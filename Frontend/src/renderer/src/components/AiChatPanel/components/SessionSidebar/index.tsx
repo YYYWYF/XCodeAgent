@@ -9,6 +9,7 @@ import {
   LeftOutlined,
   LockOutlined,
   MoonOutlined,
+  PlusOutlined,
   RightOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -33,6 +34,7 @@ import { apiEndpointDisplayPath } from '../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
 import PageSessionHistory from './PageSessionHistory'
+import FreeChatHistory from './FreeChatHistory'
 import './SessionSidebar.less'
 
 const { Text } = Typography
@@ -63,6 +65,7 @@ type SessionSidebarProps = {
   apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
   deletingSessionId?: string
+  freeChatActive: boolean
   filesActive: boolean
   loadingSessions: boolean
   onCreateEndpointSession: (
@@ -70,9 +73,10 @@ type SessionSidebarProps = {
     endpointId: string,
     endpointLabel: string
   ) => Promise<void>
-  onCreateSession: () => void
+  onCreateFreeChatSession: () => void
   onCreatePageSession: (pageId: string, pageLabel: string) => Promise<void>
   onDeleteSession: (sessionId: string) => Promise<void>
+  onOpenFreeChat: () => void
   onOpenSession: (sessionId: string) => Promise<void>
   outlineLocked: boolean
   onApiEndpointSelect: (target: {
@@ -321,18 +325,25 @@ function apiEndpointSelectionKey(contractId: string, endpointId: string): string
   return `${contractId}:${endpointId}`
 }
 
+/** 判断会话是否属于没有页面或 API 归属的自由对话。 */
+function isFreeChatSession(session: ChatSessionSummary): boolean {
+  return !session.pageId && !session.apiContractId && !session.endpointId
+}
+
 /** 使用 ProjectPlan 页面清单组织工作台左侧大纲与快捷入口。 */
 export default function SessionSidebar({
   activeSessionId,
   apiContracts = [],
   application,
   deletingSessionId,
+  freeChatActive,
   filesActive,
   loadingSessions,
   onCreateEndpointSession,
-  onCreateSession,
+  onCreateFreeChatSession,
   onCreatePageSession,
   onDeleteSession,
+  onOpenFreeChat,
   onApiEndpointSelect,
   onOpenSession,
   onPageSelect,
@@ -411,6 +422,7 @@ export default function SessionSidebar({
     })
     return groupedSessions
   }, [sessions])
+  const freeChatSessions = useMemo(() => sessions.filter(isFreeChatSession), [sessions])
   const selectedKey = selectedApiEndpointKey
     ? ''
     : containsMenuKey(pageItems, selectedPageId)
@@ -795,14 +807,42 @@ export default function SessionSidebar({
       </fieldset>
 
       <nav className={cx('session-footer-nav')} aria-label="快捷入口">
-        <button onClick={onCreateSession} title="推荐任务" type="button">
+        <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
           <SidebarAssetIcon source={recommendedTasksIcon} />
           <span>推荐任务</span>
         </button>
-        <button onClick={onCreateSession} title="自由对话" type="button">
-          <SidebarAssetIcon source={freeChatIcon} />
-          <span>自由对话</span>
-        </button>
+        <div className={cx('free-chat-nav-row', freeChatActive && 'active')}>
+          <button
+            aria-current={freeChatActive ? 'page' : undefined}
+            className={cx('free-chat-nav-main')}
+            onClick={onOpenFreeChat}
+            title="自由对话"
+            type="button"
+          >
+            <SidebarAssetIcon source={freeChatIcon} />
+            <span>自由对话</span>
+          </button>
+          <FreeChatHistory
+            activeSessionId={activeSessionId}
+            deletingSessionId={deletingSessionId}
+            loadingSessions={loadingSessions}
+            onDeleteSession={onDeleteSession}
+            onOpenSession={onOpenSession}
+            sessionError={sessionError}
+            sessionRunStates={sessionRunStates}
+            sessions={freeChatSessions}
+            theme={theme}
+          />
+          <button
+            aria-label="新建自由对话"
+            className={cx('free-chat-new-session')}
+            onClick={onCreateFreeChatSession}
+            title="新建自由对话"
+            type="button"
+          >
+            <PlusOutlined />
+          </button>
+        </div>
         <button
           className={cx(skillsActive && 'active')}
           onClick={onShowSkills}

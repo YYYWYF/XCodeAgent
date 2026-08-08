@@ -12,20 +12,28 @@ from app.services.direct_modification import direct_state_message
 
 
 DIRECT_NODE_LABELS = {
-    "classify_intent": "识别修改意图",
+    "classify_intent": "识别对话意图",
     "scan_workspace_code": "扫描工作区代码",
+    "respond_conversation": "生成对话回复",
+    "answer_workspace": "读取工作区并回答",
     "execute_backend": "执行后端修改",
     "execute_frontend": "执行前端修改",
+    "execute_workspace": "执行工作区修改",
     "integration_test": "验证项目",
+    "direct_modification_repair": "自动修复局部代码",
     "launch_project": "启动本地预览",
     "finalize_direct_modification": "整理修改结果",
 }
 DIRECT_NODE_PERCENT = {
-    "classify_intent": 10,
-    "scan_workspace_code": 20,
+    "scan_workspace_code": 5,
+    "classify_intent": 20,
+    "respond_conversation": 80,
+    "answer_workspace": 80,
     "execute_backend": 40,
     "execute_frontend": 65,
+    "execute_workspace": 80,
     "integration_test": 80,
+    "direct_modification_repair": 90,
     "launch_project": 95,
     "finalize_direct_modification": 100,
 }
@@ -75,14 +83,22 @@ def direct_summary(state: dict[str, Any], *, status: str) -> dict[str, Any]:
     result = result if isinstance(result, dict) else {}
     return {
         "status": status,
-        "phase": str(state.get("phase") or "direct_modification"),
-        "message": direct_state_message(state) or str(result.get("summary") or "快速修改已结束。"),
+        "phase": str(state.get("phase") or "conversation"),
+        "message": direct_state_message(state) or str(result.get("summary") or "自由对话已结束。"),
+        "request": str(state.get("request") or ""),
         "previewUrl": state.get("preview_url") or result.get("previewUrl"),
         "launchResult": state.get("launch_result") or result.get("launchResult"),
-        # 快速澄清继续使用自由输入框，避免历史结构化确认卡在无 lifecycle 时重复提交。
-        "clarification": None,
+        "clarification": (
+            state.get("clarification")
+            if isinstance(state.get("clarification"), dict)
+            else None
+        ),
         "owner": state.get("direct_modification_owner"),
         "scope": state.get("direct_modification_scope"),
+        "intent": state.get("conversation_intent"),
+        "repairIteration": state.get("repair_iteration", 0),
+        "maxRepairIterations": state.get("max_repair_iterations", 3),
+        "integrationNextAction": state.get("integration_next_action"),
     }
 
 
@@ -90,18 +106,30 @@ def public_direct_state(state: dict[str, Any]) -> dict[str, Any]:
     """裁剪快速修改 Graph State，避免把会话摘要和内部上下文发送到界面。"""
 
     keys = (
+        "request",
         "phase",
         "status",
         "message",
+        "conversation_intent",
+        "conversation_response",
         "direct_modification_owner",
         "direct_modification_scope",
         "direct_modification_confidence",
         "direct_modification_reason",
+        "clarification",
         "direct_stage_results",
         "backend_handoff",
         "test_results",
         "test_report_path",
         "quality_gate_passed",
+        "repair_iteration",
+        "max_repair_iterations",
+        "repair_task_plan",
+        "repair_tasks",
+        "small_task_tasks",
+        "small_task_results",
+        "small_task_code_change_sets",
+        "integration_next_action",
         "preview_url",
         "launch_result",
         "code_changes",
@@ -129,7 +157,7 @@ def direct_node_event(
     status = direct_node_status(node_name, update)
     label = DIRECT_NODE_LABELS.get(node_name, node_name)
     return {
-        "type": "direct-modification.node.completed",
+        "type": "conversation.node.completed",
         "runId": run_id,
         "threadId": thread_id,
         "nodeName": node_name,
@@ -150,7 +178,7 @@ def direct_node_started_event(
 
     label = DIRECT_NODE_LABELS.get(node_name, node_name)
     return {
-        "type": "direct-modification.node.started",
+        "type": "conversation.node.started",
         "runId": run_id,
         "threadId": thread_id,
         "nodeName": node_name,

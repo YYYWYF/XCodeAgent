@@ -302,11 +302,12 @@ class BuildRepairPlannerTests(unittest.TestCase):
             "id": "repair:backend-create:legacy",
             "kind": "repair",
             "repairs": {"task_id": "backend-create"},
+            "repair_acceptance_version": "repair-acceptance.v2",
             "description": "Edit /backend/CreateDTO.java to add JSON mapping.",
             "status": "failed",
             "last_result_status": "failed",
             "failure_category": "acceptance_verification_failed",
-            "failure_reason": "Entity 预期差异类型 added，实际为 none。",
+            "failure_reason": "Entity 预期差异类型 added，实际为 modified。",
         }
 
         migrated = migrate_legacy_repair_acceptance([parent, legacy_repair])[1]

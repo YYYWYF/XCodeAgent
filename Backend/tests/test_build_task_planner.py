@@ -346,6 +346,125 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("BIZ_MENUS 顶层数组", route_task["description"])
         self.assertNotIn("firstLevel.children", route_task["description"])
 
+    def test_existing_page_entry_is_used_when_model_omits_page_path(self) -> None:
+        """模板已有唯一页面入口时，模型漏写入口路径不应阻断任务拆分。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "pet_list_page",
+                        "name": "宠物照片列表页",
+                        "path": "/page/home",
+                    }
+                ]
+            },
+        }
+        build_context = {
+            "target": {"type": "page", "id": "pet_list_page"},
+            "page_detail": {"page_name": "宠物照片列表页", "path": "/page/home"},
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            page_file = Path(workspace) / "frontend/src/pages/PetListPage/index.tsx"
+            page_file.parent.mkdir(parents=True)
+            page_file.write_text("export default function PetListPage() {}", encoding="utf-8")
+            menus = Path(workspace) / "frontend/src/constants/menus.ts"
+            menus.parent.mkdir(parents=True)
+            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
+
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "pet-data-view",
+                            "unit_id": "page:pet_list_page",
+                            "owner": "frontend",
+                            "description": "实现宠物列表内容",
+                            "change_scope": [
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/components/PetCard.tsx",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                build_context=build_context,
+                workspace_root=workspace,
+            )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        route_task = tasks["page:pet_list_page:route-menu-registration"]
+        self.assertIn("key: 'PetListPage'", route_task["description"])
+        self.assertEqual(route_task["dependencies"], ["pet-data-view"])
+
+    def test_missing_page_entry_is_injected_from_page_target(self) -> None:
+        """模板入口尚未落盘且模型漏写路径时，按 pageId 补回标准页面入口。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "pet_list_page",
+                        "name": "宠物照片列表页",
+                        "path": "/page/home",
+                    }
+                ]
+            },
+        }
+        build_context = {
+            "target": {"type": "page", "id": "pet_list_page"},
+            "page_detail": {"page_name": "宠物照片列表页", "path": "/page/home"},
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            menus = Path(workspace) / "frontend/src/constants/menus.ts"
+            menus.parent.mkdir(parents=True)
+            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
+
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "pet-data-view",
+                            "unit_id": "page:pet_list_page",
+                            "owner": "frontend",
+                            "description": "实现宠物列表内容",
+                            "change_scope": [
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/components/PetCard.tsx",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                build_context=build_context,
+                workspace_root=workspace,
+            )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        page_task = tasks["pet-data-view"]
+        route_task = tasks["page:pet_list_page:route-menu-registration"]
+        self.assertIn(
+            "frontend/src/pages/PetListPage/index.tsx",
+            page_task["target_files"],
+        )
+        self.assertIn(
+            {
+                "operation": "add",
+                "path": "frontend/src/pages/PetListPage/index.tsx",
+                "description": "创建当前页面的标准入口文件。",
+            },
+            page_task["change_scope"],
+        )
+        self.assertEqual(route_task["dependencies"], ["pet-data-view"])
+
     def test_scaffolded_menu_entry_marks_model_task_already_satisfied(self) -> None:
         """脚手架已注册精确菜单项时，模型菜单任务不得再次进入写执行器。"""
 

@@ -36,11 +36,13 @@ PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
     "detail_confirmation": "页面细节确认",
+    "project_planning": "项目规划",
     "inspect_workspace": "工作区快照检查",
     "inspect_database_context": "数据库上下文检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
     "integration_test": "集成测试与质量门禁",
+    "small_task_repair": "局部修复任务执行",
     "launch_project": "启动本地预览",
     "acceptance": "用户验收",
     "finalize_project": "完成项目",
@@ -49,10 +51,12 @@ WORKFLOW_NODE_LABELS = {
 
 WORKFLOW_STATIC_NEXT_NODES = {
     "detail_confirmation": ["inspect_workspace"],
+    "project_planning": ["detail_confirmation"],
     "inspect_workspace": ["inspect_database_context", "prepare_build_tasks"],
     "inspect_database_context": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
     "build": ["integration_test"],
+    "small_task_repair": ["integration_test"],
     "launch_project": ["acceptance"],
     "acceptance": ["finalize_project"],
 }
@@ -79,6 +83,16 @@ def workflow_capabilities() -> dict[str, Any]:
         ),
         "endpoint": "/workflow/run",
         "transport": "ag-ui-sse",
+        "acceptanceAdjustments": {
+            "requestField": "clarificationAnswers.acceptance_adjustment",
+            "values": {
+                "local_fix": "仅修改当前已确认范围内的局部实现，不改变产品语义。",
+                "page_design_change": "重新生成页面详细设计并再次确认。",
+                "endpoint_change": "重新生成接口详细设计并再次确认。",
+                "data_source_change": "重新生成接口及数据来源相关详细设计并再次确认。",
+                "project_plan_change": "重新生成项目计划，确认后再生成页面/接口详细设计。",
+            },
+        },
         "input": {
             "request": "Optional one-line user requirement for simple HTTP callers.",
             "message": "Optional alias for request.",
@@ -1008,6 +1022,8 @@ def _workflow_start_node(
         )
     if resume_from == "detail_confirmation":
         return "detail_confirmation"
+    if resume_from == "project_planning":
+        return "project_planning"
     if resume_from == "inspect_workspace":
         return "inspect_workspace"
     if resume_from == "inspect_database_context":
@@ -1018,6 +1034,8 @@ def _workflow_start_node(
         return "build"
     if resume_from == "integration_test":
         return "integration_test"
+    if resume_from == "small_task_repair":
+        return "small_task_repair"
     if resume_from == "launch_project":
         return "launch_project"
     if resume_from == "acceptance":
@@ -1031,15 +1049,21 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     """预测下一个可视化节点，实际执行仍以 LangGraph 路由为准。"""
 
     if node_name == "integration_test":
-        return (
-            ["launch_project"]
-            if update.get("quality_gate_passed")
-            else ["handle_failure"]
-        )
+        if update.get("quality_gate_passed"):
+            return ["launch_project"]
+        if update.get("integration_next_action") == "small_task_repair":
+            return ["small_task_repair"]
+        if update.get("integration_next_action") == "await_user_input":
+            return []
+        return ["handle_failure"]
     if node_name == "detail_confirmation":
         if update.get("status") == "requires_user_input":
             return []
         return ["inspect_workspace"]
+    if node_name == "project_planning":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["detail_confirmation"]
     if node_name == "inspect_workspace":
         if _database_context_next_required(update):
             return ["inspect_database_context"]

@@ -195,6 +195,329 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertIn("scheduler:dispatch:page", result["build_events"])
         self.assertEqual(runner_skill_sets, [["workflow-skill"], ["workflow-skill"]])
 
+    def test_explicit_retry_resets_runner_failure_and_releases_downstream(self) -> None:
+        """重试动作应恢复 runner 失败任务，并在成功后继续执行其下游任务。"""
+
+        calls: list[list[str]] = []
+        tasks = [
+            {
+                "id": "api",
+                "owner": "backend",
+                "status": "failed",
+                "failure_category": "runner_crash",
+                "dependencies": [],
+                "change_scope": [{"operation": "add", "path": "Backend/app/api.py"}],
+            },
+            {
+                "id": "page",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": ["api"],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Page.tsx"}],
+            },
+        ]
+        initial_results = [
+            {
+                "task_id": "api",
+                "owner": "backend",
+                "status": "failed",
+                "failure_category": "runner_crash",
+            }
+        ]
+
+        def complete_runner(**kwargs):
+            calls.append([str(task["id"]) for task in kwargs["tasks"]])
+            for task in kwargs["tasks"]:
+                change = task.get("change_scope", [{}])[0]
+                _write_workspace_file(kwargs.get("workspace"), str(change.get("path") or ""))
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": task["owner"],
+                    "status": "completed",
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_data_sources_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v3",
+                                "build_units": {
+                                    "application:root": {
+                                        "id": "application:root",
+                                        "kind": "application",
+                                        "task_ids": ["api", "page"],
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["application:root"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "build_results": initial_results,
+                        # 旧快照可能残留修复计划；显式重试不能把它重新派发。
+                        "repair_task_plan": {
+                            "decision": "repair",
+                            "tasks": [
+                                {
+                                    "id": "stale-repair",
+                                    "owner": "backend",
+                                    "status": "pending",
+                                    "dependencies": [],
+                                }
+                            ],
+                        },
+                        "retry_failed_tasks": True,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(result["build_summary"]["status"], "completed")
+        self.assertEqual(result["build_summary"]["retry_task_ids"], ["api"])
+        self.assertEqual(calls, [["api"], ["page"]])
+        self.assertIn("scheduler:retry:api", result["build_events"])
+        self.assertEqual([task["status"] for task in result["tasks"]], ["completed", "completed"])
+
+    def test_explicit_retry_reports_when_no_task_is_retryable(self) -> None:
+        """没有 retry 分类候选时应返回明确提示，而不是静默重跑或伪造成功。"""
+
+        tasks = [
+            {
+                "id": "contract-task",
+                "owner": "backend",
+                "status": "failed",
+                "failure_category": "runner_protocol_error",
+                "dependencies": [],
+            }
+        ]
+        with tempfile.TemporaryDirectory() as workspace:
+            result = run_build_scheduler(
+                {
+                    "workspace": workspace,
+                    "project_plan": {"version": "1.0.0"},
+                    "build_task_plan": replace_build_task_plan_tasks(
+                        {
+                            "schema_version": "build-dag.v3",
+                            "build_units": {
+                                "application:root": {
+                                    "id": "application:root",
+                                    "kind": "application",
+                                    "task_ids": ["contract-task"],
+                                }
+                            },
+                            "unit_graph": {"nodes": ["application:root"], "edges": []},
+                        },
+                        tasks,
+                    ),
+                    "build_results": [
+                        {
+                            "task_id": "contract-task",
+                            "owner": "backend",
+                            "status": "failed",
+                            "failure_category": "runner_protocol_error",
+                        }
+                    ],
+                    "retry_failed_tasks": True,
+                    "timeline": [],
+                }
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["build_summary"]["retry_task_ids"], [])
+        self.assertIn("当前没有可重试的构建任务", result["build_summary"]["retry_message"])
+        self.assertIn("scheduler:retry:no_candidates", result["build_events"])
+
+    def test_explicit_retry_executes_ready_repair_plan_when_original_failure_is_repairable(self) -> None:
+        """验收失败没有瞬时重试候选时，显式恢复应执行已有修复任务。"""
+
+        calls: list[list[str]] = []
+        tasks = [
+            {
+                "id": "page",
+                "owner": "frontend",
+                "status": "failed",
+                "failure_category": "acceptance_verification_failed",
+                "dependencies": [],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Page.tsx"}],
+            }
+        ]
+        repair_task = {
+            "id": "repair-page",
+            "kind": "repair",
+            "owner": "frontend",
+            "status": "pending",
+            "task_type": "frontend.code",
+            "dependencies": [],
+            "change_scope": [{"operation": "add", "path": "Frontend/src/Page.tsx"}],
+            "allowed_paths": ["Frontend/src/Page.tsx"],
+            "target_files": ["Frontend/src/Page.tsx"],
+            "repairs": {"task_id": "page", "result_task_id": "page"},
+        }
+
+        def complete_runner(**kwargs):
+            calls.append([str(task["id"]) for task in kwargs["tasks"]])
+            for task in kwargs["tasks"]:
+                _write_workspace_file(
+                    kwargs.get("workspace"),
+                    str(task.get("change_scope", [{}])[0].get("path") or ""),
+                )
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": task["owner"],
+                    "status": "completed",
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                side_effect=complete_runner,
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v3",
+                                "build_units": {
+                                    "application:root": {
+                                        "id": "application:root",
+                                        "kind": "application",
+                                        "task_ids": ["page"],
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["application:root"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "build_results": [
+                            {
+                                "task_id": "page",
+                                "owner": "frontend",
+                                "status": "failed",
+                                "failure_category": "acceptance_verification_failed",
+                            }
+                        ],
+                        "repair_task_plan": {
+                            "status": "ready",
+                            "decision": "repair",
+                            "tasks": [repair_task],
+                        },
+                        "retry_failed_tasks": True,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(calls, [["repair-page"]])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["build_summary"]["recovery_mode"], "repair")
+        self.assertIn("scheduler:retry:repair:repair-page", result["build_events"])
+
+    def test_explicit_retry_resets_stale_failed_repair_task_before_dispatch(self) -> None:
+        """恢复计划仍为 pending 时，必须重置 DAG 中同 ID 的旧失败修复节点。"""
+
+        calls: list[list[str]] = []
+        original_task = {
+            "id": "page",
+            "owner": "frontend",
+            "status": "failed",
+            "failure_category": "acceptance_verification_failed",
+            "dependencies": [],
+            "change_scope": [{"operation": "modify", "path": "Frontend/src/Page.tsx"}],
+        }
+        repair_task = {
+            "id": "repair-page",
+            "kind": "repair",
+            "owner": "frontend",
+            "status": "pending",
+            "task_type": "frontend.code",
+            "dependencies": [],
+            "change_scope": [{"operation": "modify", "path": "Frontend/src/Page.tsx"}],
+            "allowed_paths": ["Frontend/src/Page.tsx"],
+            "target_files": ["Frontend/src/Page.tsx"],
+            "repairs": {"task_id": "page", "result_task_id": "page"},
+        }
+        stale_repair_task = {
+            **repair_task,
+            "status": "failed",
+            "failure_category": "acceptance_verification_failed",
+            "failure_reason": "previous recovery attempt stopped before dispatch",
+        }
+
+        def complete_runner(**kwargs):
+            calls.append([str(task["id"]) for task in kwargs["tasks"]])
+            _write_workspace_file(kwargs.get("workspace"), "Frontend/src/Page.tsx")
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": task["owner"],
+                    "status": "completed",
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            baseline_path = os.path.join(workspace, "Frontend/src/Page.tsx")
+            os.makedirs(os.path.dirname(baseline_path), exist_ok=True)
+            with open(baseline_path, "w", encoding="utf-8") as file:
+                file.write("// existing baseline\n")
+            with patch(
+                "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                side_effect=complete_runner,
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v3",
+                                "unit_graph": {
+                                    "nodes": ["application:root"],
+                                    "edges": [],
+                                },
+                            },
+                            [original_task, stale_repair_task],
+                        ),
+                        "build_results": [
+                            {
+                                "task_id": "page",
+                                "owner": "frontend",
+                                "status": "failed",
+                                "failure_category": "acceptance_verification_failed",
+                            }
+                        ],
+                        "repair_task_plan": {
+                            "status": "ready",
+                            "decision": "repair",
+                            "tasks": [repair_task],
+                        },
+                        "retry_failed_tasks": True,
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(calls, [["repair-page"]])
+        self.assertIn("scheduler:dispatch:repair-page", result["build_events"])
+        self.assertEqual(result["status"], "completed")
+
     def test_database_owner_uses_database_runner_without_file_change_verification(self) -> None:
         """数据库任务由 database.deep_agent 执行，成功结果不要求工作区文件变更。"""
 
@@ -563,21 +886,25 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         ]
 
         def frontend_runner(**kwargs):
-            active_task = kwargs["tasks"][0]
-            active_path = active_task["allowed_paths"][0]
-            kwargs["on_tool_activity"](
-                {
-                    "callId": f"edit-{active_task['id']}",
+            for task in kwargs["tasks"]:
+                path = task["allowed_paths"][0]
+                activity = {
+                    "callId": f"edit-{task['id']}",
                     "tool": "edit_file",
                     "category": "write",
                     "status": "running",
-                    "message": f"正在编辑文件：/{active_path}",
-                    "path": f"/{active_path}",
+                    "message": f"正在编辑文件：/{path}",
+                    "path": f"/{path}",
                 }
-            )
-            for task in kwargs["tasks"]:
-                path = task["allowed_paths"][0]
+                kwargs["on_tool_activity"](activity)
                 _write_workspace_file(kwargs.get("workspace"), path)
+                kwargs["on_tool_activity"](
+                    {
+                        **activity,
+                        "status": "completed",
+                        "message": f"已编辑文件：/{path}",
+                    }
+                )
             return [
                 {"task_id": task["id"], "owner": task["owner"], "status": "completed"}
                 for task in kwargs["tasks"]

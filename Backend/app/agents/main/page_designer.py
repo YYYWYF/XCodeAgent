@@ -89,6 +89,7 @@ class PageDependencyGapError(ValueError):
 def _page_design_prompt(
     project_plan: dict[str, Any],
     page_context: dict[str, Any],
+    user_request: str = "",
 ) -> str:
     return (
         "You are the page-design model for an app-generation workflow.\n"
@@ -124,6 +125,7 @@ def _page_design_prompt(
         "Describe page data access through concrete API endpoints instead of underlying data sources. "
         "The page_context is the source of truth for the current page goal, layout, immutable references, "
         "related-page summaries, and selected endpoint contract context.\n\n"
+        f"Latest user feedback (apply only when it preserves the confirmed product scope):\n{user_request}\n\n"
         f"Current page context:\n{json.dumps(page_context, ensure_ascii=False)}"
     )
 
@@ -132,13 +134,14 @@ def _invoke_live_chat_model(
     project_plan: dict[str, Any],
     page_context: dict[str, Any],
     *,
+    user_request: str = "",
     settings: Settings | None = None,
 ) -> str:
     active_settings = settings or Settings.from_env()
     result = create_chat_model(active_settings).bind(
         max_tokens=active_settings.default_max_tokens
     ).invoke(
-        _page_design_prompt(project_plan, page_context)
+        _page_design_prompt(project_plan, page_context, user_request)
     )
     content = getattr(result, "content", result)
     return _coerce_content_text(content) or ""
@@ -154,6 +157,7 @@ def _fallback_model_note(error: Exception) -> str:
 def design_page_with_chat_model(
     project_plan: dict[str, Any],
     page_context: dict[str, Any],
+    user_request: str = "",
 ) -> dict[str, Any]:
     """Use a direct chat-model call to create a page detail plan."""
 
@@ -165,6 +169,7 @@ def design_page_with_chat_model(
             agent_note = _invoke_live_chat_model(
                 project_plan,
                 page_context,
+                user_request=user_request,
                 settings=settings,
             )
             break

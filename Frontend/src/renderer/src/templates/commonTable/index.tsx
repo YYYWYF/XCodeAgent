@@ -59,27 +59,31 @@ const DATE_FIELDS: string[] = [
 // 以下函数为占位，请替换为实际 API 调用：
 
 /** 查询列表（分页 + 筛选） */
-const fetchList = async (params: Record<string, unknown>): Promise<{ data: unknown[]; success: boolean; total: number }> => {
+const fetchList = async (params: Record<string, unknown>): Promise<{ data: RowType[]; success: boolean; total: number }> => {
   // TODO: 调用项目计划声明的列表查询接口
   // 返回格式: { data: RowType[], success: boolean, total: number }
+  void params;
   throw new Error('fetchList: 请替换为实际 API 调用');
 };
 
 /** 修改记录 */
 const updateRecord = async (payload: Record<string, unknown>): Promise<{ success: boolean }> => {
   // TODO: 调用项目计划声明的修改接口
+  void payload;
   throw new Error('updateRecord: 请替换为实际 API 调用');
 };
 
 /** 删除记录 */
 const deleteRecord = async (id: string): Promise<{ success: boolean }> => {
   // TODO: 调用项目计划声明的删除接口
+  void id;
   throw new Error('deleteRecord: 请替换为实际 API 调用');
 };
 
 /** 批量删除 */
 const batchDeleteRecords = async (ids: string[]): Promise<{ success: boolean; deleted: number }> => {
   // TODO: 调用项目计划声明的批量删除接口
+  void ids;
   throw new Error('batchDeleteRecords: 请替换为实际 API 调用');
 };
 

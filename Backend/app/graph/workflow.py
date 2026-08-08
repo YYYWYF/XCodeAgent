@@ -24,6 +24,8 @@ def route_workflow_start(state: ProjectState) -> str:
 
     if state.get("resume_from") == "detail_confirmation":
         return "detail_confirmation"
+    if state.get("resume_from") == "project_planning":
+        return "project_planning"
     if state.get("resume_from") == "inspect_workspace":
         return "inspect_workspace"
     if state.get("resume_from") == "inspect_database_context":
@@ -34,6 +36,8 @@ def route_workflow_start(state: ProjectState) -> str:
         return "build"
     if state.get("resume_from") == "integration_test":
         return "integration_test"
+    if state.get("resume_from") == "small_task_repair":
+        return "small_task_repair"
     if state.get("resume_from") == "launch_project":
         return "launch_project"
     if state.get("resume_from") == "acceptance":
@@ -44,16 +48,37 @@ def route_workflow_start(state: ProjectState) -> str:
 
 
 def route_test_validation(state: ProjectState) -> str:
-    """根据质量门禁和修复规划结果选择后续节点。"""
+    """根据质量门禁和小任务结果选择后续节点，修复不再回到 build。"""
 
     if state.get("quality_gate_passed"):
         return "launch_project"
     next_action = state.get("integration_next_action")
-    if next_action == "repair_build":
-        return "build"
+    if next_action == "small_task_repair":
+        return "small_task_repair"
     if next_action == "await_user_input":
         return "await_user_input"
     return "handle_failure"
+
+
+def route_small_task_result(state: ProjectState) -> str:
+    """根据 SmallTask Agent 的完成、升级或失败结果选择主图路由。"""
+
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
+    if state.get("status") == "failed":
+        return "handle_failure"
+    target = str(state.get("small_task_route") or "integration_test")
+    if target in {
+        "integration_test",
+        "detail_confirmation",
+        "project_planning",
+        "inspect_workspace",
+        "inspect_database_context",
+        "prepare_build_tasks",
+        "build",
+    }:
+        return target
+    return "integration_test"
 
 
 def route_build_result(state: ProjectState) -> str:
@@ -80,6 +105,16 @@ def route_detail_confirmation(state: ProjectState) -> str:
         if state.get("status") == "requires_user_input"
         else "inspect_workspace"
     )
+
+
+def route_project_planning(state: ProjectState) -> str:
+    """项目计划调整确认后重新进入页面细节确认，失败则停止在失败处理。"""
+
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
+    if state.get("status") == "failed":
+        return "handle_failure"
+    return "detail_confirmation"
 
 
 def route_workspace_inspection(state: ProjectState) -> str:
@@ -139,11 +174,13 @@ def build_graph(*, checkpointer):
     builder = StateGraph(ProjectState)
 
     builder.add_node("detail_confirmation", nodes.detail_confirmation)
+    builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
     builder.add_node("inspect_database_context", nodes.inspect_database_context)
     builder.add_node("prepare_build_tasks", nodes.prepare_build_tasks)
     builder.add_node("build", nodes.build)
     builder.add_node("integration_test", nodes.integration_test)
+    builder.add_node("small_task_repair", nodes.small_task_repair)
     builder.add_node("launch_project", nodes.launch_project)
     builder.add_node("acceptance", nodes.acceptance)
     builder.add_node("finalize_project", nodes.finalize_project)
@@ -154,11 +191,13 @@ def build_graph(*, checkpointer):
         route_workflow_start,
         {
             "detail_confirmation": "detail_confirmation",
+            "project_planning": "project_planning",
             "inspect_workspace": "inspect_workspace",
             "inspect_database_context": "inspect_database_context",
             "prepare_build_tasks": "prepare_build_tasks",
             "build": "build",
             "integration_test": "integration_test",
+            "small_task_repair": "small_task_repair",
             "launch_project": "launch_project",
             "acceptance": "acceptance",
             "finalize_project": "finalize_project",
@@ -170,6 +209,15 @@ def build_graph(*, checkpointer):
         {
             "inspect_workspace": "inspect_workspace",
             "await_user_input": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "project_planning",
+        route_project_planning,
+        {
+            "detail_confirmation": "detail_confirmation",
+            "await_user_input": END,
+            "handle_failure": "handle_failure",
         },
     )
     builder.add_conditional_edges(
@@ -210,6 +258,21 @@ def build_graph(*, checkpointer):
         route_test_validation,
         {
             "launch_project": "launch_project",
+            "small_task_repair": "small_task_repair",
+            "await_user_input": END,
+            "handle_failure": "handle_failure",
+        },
+    )
+    builder.add_conditional_edges(
+        "small_task_repair",
+        route_small_task_result,
+        {
+            "integration_test": "integration_test",
+            "detail_confirmation": "detail_confirmation",
+            "project_planning": "project_planning",
+            "inspect_workspace": "inspect_workspace",
+            "inspect_database_context": "inspect_database_context",
+            "prepare_build_tasks": "prepare_build_tasks",
             "build": "build",
             "await_user_input": END,
             "handle_failure": "handle_failure",

@@ -1089,6 +1089,11 @@ function stringList(value: unknown): string[] {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function workflowOriginalRequest(workflow: WorkflowRunPayload): string {
+  const summaryRequest = workflow.summary.request
+  if (typeof summaryRequest === "string" && summaryRequest.trim()) {
+    return summaryRequest.trim()
+  }
+
   for (const source of [workflow.result, workflow.state]) {
     const requirementSpec = objectValue(source?.requirement_spec);
     const sourceRequest = requirementSpec.source_request;

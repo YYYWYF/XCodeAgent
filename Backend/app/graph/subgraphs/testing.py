@@ -16,6 +16,7 @@ from app.services.api_contract_validation import validate_api_contract_consisten
 from app.services.integration_test_runner import report_check_progress, run_integration_checks
 from app.services.test_validation import evaluate_quality_gate
 from app.workspace.code_changes import code_change_state_update
+from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.test_documents import write_test_report_json
 from app.workspace.task_documents import write_repair_task_plan_json
 
@@ -277,7 +278,7 @@ def repair_planning(state: ProjectState) -> dict:
             return {
                 "repair_task_plan": approved_plan,
                 "repair_tasks": approved_tasks,
-                "integration_next_action": "repair_build" if approved_tasks else "handle_failure",
+                "integration_next_action": "small_task_repair" if approved_tasks else "handle_failure",
                 "clarification": {},
                 "test_events": ["repair_planning:scope_approved"],
             }
@@ -382,7 +383,7 @@ def _next_action_for_repair_plan(repair_task_plan: dict) -> str:
     if decision == "terminal_failure" or status == "terminal_failure":
         return "handle_failure"
     if repair_task_plan.get("tasks"):
-        return "repair_build"
+        return "small_task_repair"
     return "handle_failure"
 
 
@@ -411,6 +412,11 @@ _testing_subgraph = build_testing_subgraph()
 def integration_test(state: ProjectState) -> dict:
     """运行测试子图，并把内部检查的增量状态转发到主 Graph 流。"""
 
+    previous_small_task_changes = [
+        item
+        for item in state.get("small_task_code_change_sets", [])
+        if isinstance(item, dict)
+    ]
     result = _testing_subgraph.invoke(
         {
             **state,
@@ -439,6 +445,17 @@ def integration_test(state: ProjectState) -> dict:
         "repair_task_plan": result.get("repair_task_plan", {}),
         "repair_task_plan_path": result.get("repair_task_plan_path"),
         "repair_tasks": result.get("repair_tasks", []),
+        "small_task_tasks": result.get("repair_tasks", []),
+        "small_task_results": state.get("small_task_results", []),
+        "small_task_code_change_sets": [
+            *previous_small_task_changes,
+            *result.get("code_change_sets", []),
+        ],
+        "small_task_handoff": state.get("small_task_handoff", {}),
+        "small_task_handoff_submission": state.get("small_task_handoff_submission", {}),
+        "small_task_route": "small_task_repair"
+        if result.get("repair_tasks")
+        else result.get("integration_next_action", "handle_failure"),
         "repair_iteration": result.get("repair_iteration", state.get("repair_iteration", 0)),
         "max_repair_iterations": result.get(
             "max_repair_iterations", state.get("max_repair_iterations", 3)
@@ -447,7 +464,12 @@ def integration_test(state: ProjectState) -> dict:
             "integration_next_action",
             "launch_project" if result.get("quality_gate_passed", False) else "handle_failure",
         ),
-        "code_changes": result.get("code_changes", {}),
-        "code_change_sets": result.get("code_change_sets", []),
+        "code_changes": merge_code_change_sets(
+            [*previous_small_task_changes, *result.get("code_change_sets", [])]
+        ) or result.get("code_changes", {}),
+        "code_change_sets": [
+            *previous_small_task_changes,
+            *result.get("code_change_sets", []),
+        ],
         "timeline": ["integration_test"],
     }

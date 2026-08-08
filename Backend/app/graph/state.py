@@ -21,11 +21,16 @@ class ProjectState(TypedDict, total=False):
     request_complexity: str
     complexity_reason: str
     complexity_decision: dict[str, Any]
+    conversation_intent: str
+    conversation_response: str
     direct_modification_owner: str
     direct_modification_scope: str
     direct_modification_confidence: float
     direct_modification_reason: str
     direct_modification_summary: str
+    direct_modification_approved_paths: list[str]
+    direct_modification_handoff_decision: str
+    direct_modification_target_paths: list[str]
     direct_modification_result: dict[str, Any]
     direct_stage_results: dict[str, dict[str, Any]]
     direct_code_change_sets: list[dict[str, Any]]
@@ -72,6 +77,7 @@ class ProjectState(TypedDict, total=False):
     dag_generation_progress: dict[str, Any]
     build_task_plan_path: str
     build_task_dag_path: str
+    retry_failed_tasks: bool
     build_units: dict[str, dict[str, Any]]
     unit_graph: dict[str, Any]
     task_registry: dict[str, dict[str, Any]]
@@ -97,12 +103,20 @@ class ProjectState(TypedDict, total=False):
     repair_iteration: int
     max_repair_iterations: int
     integration_next_action: str
+    small_task_tasks: list[dict[str, Any]]
+    small_task_results: list[dict[str, Any]]
+    small_task_code_change_sets: list[dict[str, Any]]
+    small_task_handoff: dict[str, Any]
+    small_task_handoff_submission: dict[str, Any]
+    small_task_route: str
+    small_task_max_concurrency: int
     code_changes: dict[str, Any]
     code_change_sets: Annotated[list[dict[str, Any]], add]
     preview_url: str
     launch_result: dict[str, Any]
     acceptance_request: dict[str, Any]
     acceptance_decision: str
+    acceptance_adjustment: dict[str, Any]
     accepted: bool
     status: str
     timeline: Annotated[list[str], add]

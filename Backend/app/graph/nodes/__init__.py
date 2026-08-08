@@ -11,6 +11,7 @@ from app.graph.nodes.modification import direct_modification
 from app.graph.nodes.planning import detail_confirmation, project_planning
 from app.graph.nodes.requirements import requirements
 from app.graph.nodes.testing import integration_test, quality_gate
+from app.graph.nodes.small_task import small_task_repair
 from app.graph.nodes.ui_confirmation import ui_confirmation
 from app.graph.nodes.workspace_inspection import inspect_workspace, scan_workspace_code
 from app.graph.subgraphs import build
@@ -27,6 +28,7 @@ __all__ = [
     "inspect_workspace",
     "scan_workspace_code",
     "integration_test",
+    "small_task_repair",
     "launch_project",
     "prepare_build_tasks",
     "project_planning",

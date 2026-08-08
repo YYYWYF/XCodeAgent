@@ -91,13 +91,17 @@ class WorkspaceCodeGraphScanTests(unittest.TestCase):
         self.assertEqual(result.status, "skipped")
         self.assertIn("XCodeAgent", result.message)
 
-    def test_direct_classification_enters_scan_before_execution(self) -> None:
-        """快速修改的分类完成后必须先进入扫描节点。"""
+    def test_direct_scan_enters_classification_before_execution(self) -> None:
+        """快速修改必须先扫描，再分类并进入对应执行节点。"""
 
-        state = {"status": "in_progress", "direct_modification_owner": "frontend"}
-        self.assertEqual(direct_next_node_name("classify_intent", state), "scan_workspace_code")
+        scanned = {"status": "completed"}
+        classified = {"status": "in_progress", "direct_modification_owner": "frontend"}
         self.assertEqual(
-            direct_next_node_name("scan_workspace_code", state),
+            direct_next_node_name("scan_workspace_code", scanned),
+            "classify_intent",
+        )
+        self.assertEqual(
+            direct_next_node_name("classify_intent", classified),
             "execute_frontend",
         )
 
@@ -108,6 +112,7 @@ class WorkspaceCodeGraphScanTests(unittest.TestCase):
             [
                 "frontend/src/main.tsx",
                 "frontend/src/routes/index.tsx",
+                "frontend/vite.config.ts",
                 "backend/src/main/java/com/example/Application.java",
             ]
         )
@@ -116,6 +121,7 @@ class WorkspaceCodeGraphScanTests(unittest.TestCase):
             {
                 "frontend/src/main.tsx",
                 "frontend/src/routes/index.tsx",
+                "frontend/vite.config.ts",
                 "backend/src/main/java/com/example/Application.java",
             },
         )

@@ -15,12 +15,14 @@ import {
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
+  acceptanceAdjustmentResumeNode,
   planExecutionContextForEndpoint,
   planExecutionContextForPage,
   planExecutionForPage,
   planExecutionShowsDebugResume,
   shouldRenderPlanExecutionDock,
   withWorkflowExecutionStatus,
+  workflowCanRetryFailedTasks,
   workflowInteractionAvailability,
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
@@ -77,9 +79,9 @@ test('实时成功 launch 会生成可去重的预览目标', () => {
   assert.equal(target?.key, 'thread-1:run-1:http://127.0.0.1:3000')
 })
 
-test('快速修改完成并启动后直接生成预览目标', () => {
+test('自由对话代码修改完成并启动后直接生成预览目标', () => {
   const target = workflowPreviewTarget(
-    previewWorkflow({ phase: 'direct_modification', status: 'completed' }),
+    previewWorkflow({ phase: 'conversation', intent: 'workspace_change', status: 'completed' }),
     true
   )
 
@@ -101,6 +103,14 @@ test('页面验收在问题列表为空时仍生成结构化继续消息', () =>
     }),
     '已完成页面预览，确认验收通过并完成计划。'
   )
+})
+
+test('验收调整类型映射到对应的安全恢复节点', () => {
+  assert.equal(acceptanceAdjustmentResumeNode('local_fix'), 'small_task_repair')
+  assert.equal(acceptanceAdjustmentResumeNode('page_design_change'), 'detail_confirmation')
+  assert.equal(acceptanceAdjustmentResumeNode('endpoint_change'), 'detail_confirmation')
+  assert.equal(acceptanceAdjustmentResumeNode('data_source_change'), 'detail_confirmation')
+  assert.equal(acceptanceAdjustmentResumeNode('project_plan_change'), 'project_planning')
 })
 
 test('历史、失败、非启动阶段和缺少地址的 Workflow 不触发预览', () => {
@@ -127,10 +137,7 @@ test('页面预览使用当前启动端口和所选页面路由拼接真实地�
     composePreviewUrl('http://127.0.0.1:5178/old-path', '/orders/list'),
     'http://127.0.0.1:5178/orders/list'
   )
-  assert.equal(
-    composePreviewUrl('localhost:3000', 'dashboard'),
-    'http://localhost:3000/dashboard'
-  )
+  assert.equal(composePreviewUrl('localhost:3000', 'dashboard'), 'http://localhost:3000/dashboard')
 })
 
 test('缺少有效前端启动地址时不生成页面预览 URL', () => {
@@ -256,10 +263,7 @@ test('页面、接口、会话和 Workflow 使用一致的详情目标键', () =
     endpointDetailTargetKey('orders-api', 'list-orders'),
     'endpoint:orders-api:list-orders'
   )
-  assert.equal(
-    sessionDetailTargetKey({ pageId: 'page-orders' }),
-    'page:page-orders'
-  )
+  assert.equal(sessionDetailTargetKey({ pageId: 'page-orders' }), 'page:page-orders')
   assert.equal(
     workflowDetailTargetKey({
       state: { selectedPageId: 'page-orders' }
@@ -552,6 +556,82 @@ test('暂停后的调试窗口默认选中最近完成的可恢复节点', () =>
   assert.equal(workflowResumeNode(undefined, 'integration_test'), 'integration_test')
 })
 
+test('失败计划只为可恢复的 Build 失败显示恢复动作', () => {
+  assert.equal(
+    workflowCanRetryFailedTasks(
+      previewWorkflow({
+        status: 'failed',
+        phase: 'build',
+        buildSummary: { retry_available: true, retryable_failures: 1 }
+      })
+    ),
+    true
+  )
+  assert.equal(
+    workflowCanRetryFailedTasks(
+      previewWorkflow({
+        status: 'failed',
+        phase: 'build',
+        buildSummary: { retry_available: false, repairable_failures: 1 }
+      })
+    ),
+    false
+  )
+  assert.equal(
+    workflowCanRetryFailedTasks({
+      ...previewWorkflow({
+        status: 'failed',
+        phase: 'failed',
+        buildSummary: { retry_available: false }
+      }),
+      state: { buildSummary: { retry_available: true, retryable_failures: 1 } }
+    }),
+    false
+  )
+  assert.equal(
+    workflowCanRetryFailedTasks({
+      ...previewWorkflow({ status: 'failed', phase: 'failed' }),
+      state: { build_summary: { retry_available: true, retryable_failures: 1 } }
+    }),
+    true
+  )
+})
+
+test('验收失败已有修复计划时也显示失败恢复动作', () => {
+  assert.equal(
+    workflowCanRetryFailedTasks({
+      ...previewWorkflow({
+        status: 'failed',
+        phase: 'build',
+        buildSummary: { repairable_failures: 1, retry_available: false }
+      }),
+      state: {
+        repairTaskPlan: {
+          status: 'ready',
+          decision: 'repair',
+          tasks: [{ id: 'repair-page', status: 'pending' }]
+        }
+      }
+    }),
+    true
+  )
+})
+
+test('生命周期标记失败可恢复时即使 Workflow 快照不完整也显示恢复动作', () => {
+  assert.equal(
+    workflowCanRetryFailedTasks(previewWorkflow({ status: 'failed', phase: 'build' }), {
+      ...pageExecution(),
+      status: 'failed',
+      error: {
+        code: 'workbench_execution_failed',
+        message: '计划执行失败。',
+        recoverable: true
+      }
+    }),
+    true
+  )
+})
+
 test('节点调试恢复入口覆盖两种可恢复暂停态但不绕过结构化确认', () => {
   assert.equal(planExecutionShowsDebugResume('stopped'), true)
   assert.equal(planExecutionShowsDebugResume('awaiting_plan_adjustment'), true)
@@ -595,6 +675,34 @@ test('恢复运行按 Workflow 身份兜底且不会匹配另一个页面', () =
   )
 })
 
+test('同一页面多次运行时优先使用当前 Workflow 的执行状态', () => {
+  const failed = pageExecution({ runId: 'run-failed', status: 'failed' })
+  const awaiting = pageExecution({
+    runId: 'run-awaiting',
+    status: 'awaiting_user',
+    phase: 'launch_project',
+    pendingInteraction: {
+      id: 'acceptance-1',
+      type: 'page_acceptance',
+      basedOnRevision: 8,
+      payload: {},
+      artifactRefs: [],
+      createdAt: '2026-07-23T00:02:00Z'
+    }
+  })
+  const lifecycle = planLifecycle(failed)
+  lifecycle.activeRunId = awaiting.runId
+  lifecycle.activeExecutions[awaiting.runId] = awaiting
+
+  const matched = planExecutionForPage(lifecycle, 'orders', {
+    runId: awaiting.runId,
+    threadId: awaiting.threadId
+  })
+
+  assert.equal(matched?.runId, awaiting.runId)
+  assert.equal(derivePlanExecutionMode(matched), 'awaiting_acceptance')
+})
+
 test('接口执行按复合资源键恢复且不会串到同名 endpoint', () => {
   const execution = pageExecution({
     scope: 'endpoint',
@@ -604,19 +712,11 @@ test('接口执行按复合资源键恢复且不会串到同名 endpoint', () =>
   const lifecycle = planLifecycle(execution)
 
   assert.equal(
-    planExecutionContextForEndpoint(
-      lifecycle,
-      'orders-api',
-      'list-orders'
-    ).execution?.runId,
+    planExecutionContextForEndpoint(lifecycle, 'orders-api', 'list-orders').execution?.runId,
     execution.runId
   )
   assert.equal(
-    planExecutionContextForEndpoint(
-      lifecycle,
-      'customers-api',
-      'list-orders'
-    ).execution,
+    planExecutionContextForEndpoint(lifecycle, 'customers-api', 'list-orders').execution,
     undefined
   )
 })

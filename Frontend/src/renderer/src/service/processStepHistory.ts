@@ -1,5 +1,5 @@
 import type { WorkflowRunPayload } from '../typings'
-import { isDirectModificationWorkflow } from '../components/AiChatPanel/directModificationMode'
+import { isConversationWorkflow } from '../components/AiChatPanel/conversationMode'
 import {
   readDagGenerationSnapshot,
   readIntegrationTestChecks,
@@ -179,52 +179,19 @@ function completedWorkspaceInspection(
   }
 }
 
-/** 简单模式隐藏内部收尾步骤，并在运行时用最近工具活动替换所属 Workflow 动作详情。 */
+/** 为正式 Workflow 保留可读步骤，并在自由对话中隐藏快速修改内部执行轨迹。 */
 export function processStepsForMessageDisplay(
   steps: ProcessStepRecord[] | undefined,
-  workflow: WorkflowRunPayload | undefined,
-  loading: boolean
+  workflow: WorkflowRunPayload | undefined
 ): ProcessStepRecord[] | undefined {
   const displaySteps = processStepsForDisplay(steps, workflow)
   if (!displaySteps?.length) return displaySteps
 
-  const directModification = isDirectModificationWorkflow(workflow)
-  const stableSteps = displaySteps.filter(
-    (step) =>
-      step.kind !== 'tool' &&
-      step.kind !== 'command' &&
-      (!directModification || step.nodeName !== 'finalize_direct_modification')
-  )
-  if (!loading || !directModification) return stableSteps
+  // 自由对话需要展示工具和当前动作；正式 Workflow 则隐藏底层工具，避免重复渲染。
+  if (isConversationWorkflow(workflow)) return displaySteps
 
-  const latestToolStep = [...displaySteps]
-    .reverse()
-    .find((step) => step.kind === 'tool' || step.kind === 'command')
-  if (!latestToolStep) return stableSteps
-
-  const matchingWorkflowStep = [...stableSteps]
-    .reverse()
-    .find(
-      (step) =>
-        step.kind === 'workflow' &&
-        Boolean(latestToolStep.nodeName) &&
-        step.nodeName === latestToolStep.nodeName
-    )
-  const activeWorkflowStep = [...stableSteps]
-    .reverse()
-    .find((step) => step.kind === 'workflow' && step.status === 'running')
-  const targetStepId = matchingWorkflowStep?.id || activeWorkflowStep?.id
-  const toolDetail = latestToolStep.detail.trim() || latestToolStep.title.trim()
-  if (!targetStepId || !toolDetail) return stableSteps
-
-  return stableSteps.map((step) =>
-    step.id === targetStepId
-      ? {
-          ...step,
-          detail: toolDetail
-        }
-      : step
-  )
+  const stableSteps = displaySteps.filter((step) => step.kind !== 'tool' && step.kind !== 'command')
+  return stableSteps
 }
 
 /** 在已有结构化步骤时隐藏后端生成的重复 Workflow 摘要，同时保留真实回复内容。 */
@@ -235,6 +202,9 @@ export function workflowMessageContentForDisplay(
 ): string {
   const normalizedContent = content.trim()
   if (!normalizedContent || !hasProcessSteps) return content
+
+  // 自由对话的摘要就是助手正文，必须始终保留，避免过程步骤在结束时吞掉回复。
+  if (isConversationWorkflow(workflow)) return content
 
   const normalizedSummary = workflow?.summary.message?.trim()
   if (normalizedSummary && normalizedContent === normalizedSummary) return ''

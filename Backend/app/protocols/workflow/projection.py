@@ -51,6 +51,9 @@ def _workflow_progress_summary(
         "previewUrl": result.get("preview_url"),
         "buildSummary": result.get("build_summary", {}),
         "testSummary": {},
+        "smallTaskTasks": result.get("small_task_tasks", []),
+        "smallTaskResults": result.get("small_task_results", []),
+        "smallTaskHandoff": result.get("small_task_handoff", {}),
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
@@ -95,7 +98,9 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             return ["launch_project"]
         next_action = update.get("integration_next_action")
         if next_action == "repair_build":
-            return ["build"]
+            return ["small_task_repair"]
+        if next_action == "small_task_repair":
+            return ["small_task_repair"]
         if next_action == "await_user_input":
             return []
         return ["handle_failure"]
@@ -105,6 +110,10 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("workflow_scope") == "application_planning":
             return []
         return ["inspect_workspace"]
+    if node_name == "project_planning":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["detail_confirmation"]
     if node_name == "inspect_workspace":
         if _database_context_next_required(update):
             return ["inspect_database_context"]
@@ -386,6 +395,26 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "integrationNextAction": update.get("integration_next_action"),
                 "repairIteration": update.get("repair_iteration"),
                 "maxRepairIterations": update.get("max_repair_iterations"),
+            },
+        }
+    if node_name == "small_task_repair":
+        results = update.get("small_task_results")
+        results = results if isinstance(results, list) else []
+        tasks = update.get("small_task_tasks")
+        tasks = tasks if isinstance(tasks, list) else update.get("repair_tasks", [])
+        handoff = update.get("small_task_handoff")
+        handoff = handoff if isinstance(handoff, dict) else {}
+        return {
+            "message": (
+                str(update.get("message") or "")
+                or f"SmallTask Agent 已处理 {len(results)} 个结果，剩余任务={len(tasks)}"
+            ),
+            "data": {
+                "smallTaskTasks": tasks,
+                "smallTaskResults": results,
+                "smallTaskHandoff": handoff,
+                "smallTaskBatch": update.get("small_task_batch", {}),
+                "requiresUserInput": update.get("status") == "requires_user_input",
             },
         }
     if node_name == "launch_project":
@@ -814,6 +843,9 @@ def _workflow_summary(
                 else ""
             )
             message += f"{iteration_text} 终止原因：{terminal_reason}"
+        retry_message = build_summary.get("retry_message")
+        if retry_message:
+            message = str(retry_message)
     if result.get("preview_url") and status != "failed":
         message += f" 预览地址：{result.get('preview_url')}。"
 
@@ -832,6 +864,9 @@ def _workflow_summary(
         "integrationNextAction": result.get("integration_next_action"),
         "repairIteration": result.get("repair_iteration"),
         "maxRepairIterations": result.get("max_repair_iterations"),
+        "smallTaskTasks": result.get("small_task_tasks", []),
+        "smallTaskResults": result.get("small_task_results", []),
+        "smallTaskHandoff": result.get("small_task_handoff", {}),
         "buildSummary": build_summary,
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
@@ -861,6 +896,8 @@ def _workflow_user_input_message(
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
         "batch_review": "页面与数据源设计已生成，请确认后继续。",
         "detail_review": "页面与数据源设计已生成，请确认后继续。",
+        "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",
+        "small_task_workflow_handoff": "小任务需要确认后转入正式工作流。",
     }
     mode = str(clarification.get("mode") or "")
     return confirmation_labels.get(mode, "当前阶段需要你的确认后继续。")
@@ -894,6 +931,9 @@ def _workflow_visual_payload(
         "buildExecutionSlice": result.get("build_execution_slice"),
         "testReport": result.get("test_report", {}),
         "repairTaskPlan": result.get("repair_task_plan"),
+        "smallTaskTasks": result.get("small_task_tasks", []),
+        "smallTaskResults": result.get("small_task_results", []),
+        "smallTaskHandoff": result.get("small_task_handoff", {}),
         "clarification": result.get("clarification", {}),
         "project_plan": result.get("project_plan"),
         "pending_project_plan": result.get("pending_project_plan"),
@@ -905,6 +945,7 @@ def _workflow_visual_payload(
         "detailTargetType": result.get("detail_target_type"),
         "buildExecutionScope": result.get("build_execution_scope"),
         "selectedSkillNames": result.get("selected_skill_names", []),
+        "acceptanceAdjustment": result.get("acceptance_adjustment"),
         "lifecycle": result.get("lifecycle"),
         "ui_designs": result.get("ui_designs"),
         "workspaceInspectionProgress": result.get("workspace_scan_progress"),

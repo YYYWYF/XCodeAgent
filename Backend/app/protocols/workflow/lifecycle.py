@@ -82,6 +82,9 @@ def begin_workflow_lifecycle(
             thread_id=thread_id,
             scope=scope_type,
             target_id=target_id,
+            allow_plan_adjustment_debug=bool(
+                workflow_inputs.get("workflow_debug_enabled")
+            ),
         )
     submission_run_id = (
         str(submission.get("runId") or "")
@@ -109,16 +112,26 @@ def _validate_resumable_execution(
     thread_id: str,
     scope: str,
     target_id: str,
+    allow_plan_adjustment_debug: bool = False,
 ) -> None:
-    """只允许当前线程接替同一目标上已经停止或失败的旧执行。"""
+    """只允许当前线程接替同一目标上可恢复的旧执行。"""
 
     execution = lifecycle.active_executions.get(run_id)
     if execution is None:
         raise ApplicationLifecycleConflictError("要继续的工作台执行已不存在，请刷新后重试。")
-    if execution.status not in {
+    resumable_status = execution.status in {
         WorkbenchExecutionStatus.STOPPED,
         WorkbenchExecutionStatus.FAILED,
-    }:
+    }
+    # DAG 生成失败会把运行置为 awaiting_user/plan_adjustment；调试面板已经是
+    # 用户明确选择的重新起点，此时应允许它原子接管旧执行，但不能绕过其他确认类型。
+    debug_plan_adjustment = (
+        allow_plan_adjustment_debug
+        and execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type == PendingInteractionType.PLAN_ADJUSTMENT
+    )
+    if not resumable_status and not debug_plan_adjustment:
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
     if execution.thread_id != thread_id:
         raise ApplicationLifecycleConflictError("不能从其他对话接替工作台执行。")

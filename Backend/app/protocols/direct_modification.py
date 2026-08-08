@@ -1,4 +1,4 @@
-"""快速修改独立 LangGraph 的 AG-UI 协议适配器。"""
+"""自由对话独立 LangGraph 的 AG-UI 协议适配器。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from app.protocols.ag_ui_action_stream import (
     AgUiActionProgress,
     AgUiActionResult,
     ProgressReporter,
+    TextDeltaReporter,
     build_ag_ui_action_stream,
 )
 from app.protocols.direct_modification_projection import (
@@ -41,8 +42,8 @@ from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
-DIRECT_MODIFICATION_EVENT_NAME = "direct-modification"
-DIRECT_MODIFICATION_STATE_KEY = "directModification"
+CONVERSATION_EVENT_NAME = "conversation"
+CONVERSATION_STATE_KEY = "conversation"
 
 
 class DirectModificationInput(BaseModel):
@@ -56,19 +57,41 @@ class DirectModificationInput(BaseModel):
         alias="selectedSkillNames",
         max_length=64,
     )
+    original_request: str | None = Field(
+        default=None,
+        alias="originalRequest",
+        max_length=16_000,
+    )
+    approved_paths: list[str] = Field(
+        default_factory=list,
+        alias="approvedPaths",
+        max_length=100,
+    )
+    handoff_decision: str | None = Field(
+        default=None,
+        alias="handoffDecision",
+        max_length=32,
+    )
 
 
-def direct_modification_capabilities() -> dict[str, Any]:
-    """发布独立快速修改 Graph 的 AG-UI 能力元数据。"""
+def conversation_capabilities() -> dict[str, Any]:
+    """发布自由对话 Graph 的 AG-UI 能力元数据。"""
 
     return {
-        "name": "direct-modification",
-        "endpoint": "/direct-modification/run",
+        "name": "conversation",
+        "endpoint": "/conversation/run",
         "transport": "ag-ui-sse",
-        "actionField": "forwardedProps.directModification",
-        "customEventName": DIRECT_MODIFICATION_EVENT_NAME,
-        "stateSnapshotKey": DIRECT_MODIFICATION_STATE_KEY,
-        "owners": ["frontend", "backend", "fullstack", "unknown"],
+        "actionField": "forwardedProps.conversation",
+        "customEventName": CONVERSATION_EVENT_NAME,
+        "stateSnapshotKey": CONVERSATION_STATE_KEY,
+        "intents": [
+            "casual_chat",
+            "workspace_question",
+            "workspace_change",
+            "formal_workflow",
+            "needs_clarification",
+        ],
+        "owners": ["frontend", "backend", "fullstack", "workspace", "none", "unknown"],
         "statuses": [
             "in_progress",
             "completed",
@@ -79,6 +102,12 @@ def direct_modification_capabilities() -> dict[str, Any]:
         "workflowIndependent": True,
         "targetRequired": False,
         "conversationSummaryMaxChars": 4_000,
+        "automaticRepair": {
+            "enabled": True,
+            "node": "direct_modification_repair",
+            "maxIterations": 3,
+            "retryAfter": "integration_test",
+        },
         "executionPolicy": {
             "subagentsEnabled": False,
             "todoPlanningEnabled": False,
@@ -92,25 +121,25 @@ def direct_modification_capabilities() -> dict[str, Any]:
     }
 
 
-def direct_modification_input(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """从 AG-UI forwardedProps 读取快速修改参数。"""
+def conversation_input(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """从 AG-UI forwardedProps 读取自由对话参数。"""
 
     forwarded_props = payload.get("forwardedProps")
     if not isinstance(forwarded_props, dict):
         return None
-    value = forwarded_props.get("directModification")
+    value = forwarded_props.get("conversation")
     return value if isinstance(value, dict) else None
 
 
-def build_direct_modification_ag_ui_stream(
+def build_conversation_ag_ui_stream(
     *,
     payload: dict[str, Any],
     accept: str | None = None,
 ) -> AsyncIterator[str]:
-    """执行快速修改 Graph，并投射完整 AG-UI 生命周期和进度。"""
+    """执行自由对话 Graph，并投射完整 AG-UI 生命周期和进度。"""
 
     thread_id = str(payload.get("threadId") or uuid4())
-    run_id = str(payload.get("runId") or f"direct-modification-{uuid4().hex[:12]}")
+    run_id = str(payload.get("runId") or f"conversation-{uuid4().hex[:12]}")
     normalized_payload = {**payload, "threadId": thread_id, "runId": run_id}
     cancel_run_id = _cancel_run_id(normalized_payload)
     if cancel_run_id:
@@ -120,21 +149,36 @@ def build_direct_modification_ag_ui_stream(
             target_run_id=cancel_run_id,
             accept=accept,
         )
-    raw_input = direct_modification_input(normalized_payload)
+    raw_input = conversation_input(normalized_payload)
     if raw_input is None:
-        raise ValueError("缺少 forwardedProps.directModification。")
+        raise ValueError("缺少 forwardedProps.conversation。")
 
-    async def operation(report: ProgressReporter) -> AgUiActionResult:
+    streamed_text = False
+
+    async def operation(report: ProgressReporter, report_text: TextDeltaReporter) -> AgUiActionResult:
         """运行独立 Graph，并把节点、工具和测试进度送入 AG-UI 队列。"""
 
+        async def forward_text_delta(delta: str) -> None:
+            """转发已经从模型响应 JSON 中提取出的助手正文增量。"""
+
+            nonlocal streamed_text
+            if not delta:
+                return
+            streamed_text = True
+            await report_text(delta)
+
         request = DirectModificationInput.model_validate(raw_input)
-        user_request = _last_user_message(normalized_payload.get("messages"))
+        # 恢复澄清时同时保留上一轮原始需求和本轮最新回答；不能让 originalRequest 覆盖 AG-UI 最新用户消息。
+        user_request = _conversation_request(
+            original_request=request.original_request,
+            latest_user_request=_last_user_message(normalized_payload.get("messages")),
+        )
         if not user_request:
-            raise ValueError("快速修改请求必须包含一条用户消息。")
+            raise ValueError("自由对话请求必须包含一条用户消息。")
         validate_selected_user_skills(request.selected_skill_names)
         resolved_workspace = resolve_workspace_root(request.workspace_root)
         if resolved_workspace is None:
-            raise ValueError("快速修改请求必须提供有效的 workspaceRoot。")
+            raise ValueError("自由对话请求必须提供有效的 workspaceRoot。")
         workspace_root = str(resolved_workspace)
         await cleanup_workflow_checkpoints(workspace=workspace_root)
         active_graph = await direct_modification_graph_for_request(
@@ -152,24 +196,29 @@ def build_direct_modification_ag_ui_stream(
             "selected_skill_names": list(request.selected_skill_names),
             "active_thread_id": thread_id,
             "active_run_id": run_id,
+            "direct_modification_approved_paths": _safe_approved_paths(request.approved_paths),
+            "direct_modification_handoff_decision": str(request.handoff_decision or ""),
             "integration_contract_check_enabled": False,
             "integration_repair_enabled": False,
+            "repair_iteration": 0,
+            "max_repair_iterations": 3,
+            "repair_task_plan": {},
+            "repair_tasks": [],
+            "small_task_tasks": [],
+            "small_task_results": [],
+            "small_task_code_change_sets": [],
+            "small_task_handoff": {},
+            "small_task_handoff_submission": {},
+            "small_task_route": "",
             "timeline": [],
         }
         try:
-            lease = workspace_run_leases.acquire(
-                workspace_root=workspace_root,
-                project_id=None,
-                execution_scope={"type": "application", "targetId": "direct-modification"},
-                thread_id=thread_id,
-                run_id=run_id,
-            )
             config = {
                 "configurable": {
-                    "thread_id": f"direct-modification:{thread_id}",
+                    "thread_id": f"conversation:{thread_id}",
                 },
-                "run_name": "xcodeagent-direct-modification",
-                "tags": ["xcodeagent", "direct-modification"],
+                "run_name": "xcodeagent-conversation",
+                "tags": ["xcodeagent", "conversation"],
                 "metadata": {
                     "run_id": run_id,
                     "thread_id": thread_id,
@@ -179,7 +228,7 @@ def build_direct_modification_ag_ui_stream(
             }
             await _report_direct_node_started(
                 report,
-                node_name="classify_intent",
+                node_name="scan_workspace_code",
                 state=state_view,
                 events=events,
                 run_id=run_id,
@@ -197,6 +246,7 @@ def build_direct_modification_ag_ui_stream(
                         chunk=chunk,
                         state=state_view,
                         events=events,
+                        report_text=forward_text_delta,
                     )
                     continue
                 if not isinstance(chunk, dict):
@@ -205,6 +255,18 @@ def build_direct_modification_ag_ui_stream(
                     if not isinstance(update, dict):
                         continue
                     state_view.update(update)
+                    if (
+                        node_name == "classify_intent"
+                        and state_view.get("conversation_intent") == "workspace_change"
+                        and lease is None
+                    ):
+                        lease = workspace_run_leases.acquire(
+                            workspace_root=workspace_root,
+                            project_id=None,
+                            execution_scope={"type": "application", "targetId": "conversation"},
+                            thread_id=thread_id,
+                            run_id=run_id,
+                        )
                     event = direct_node_event(
                         node_name,
                         update=update,
@@ -240,7 +302,8 @@ def build_direct_modification_ag_ui_stream(
             final_payload = direct_final_payload(final_state, events=events)
             return AgUiActionResult(
                 data=final_payload,
-                message=str(final_payload["summary"]["message"]),
+                # 已经通过 TEXT_MESSAGE_CONTENT 增量送出的回复不能再次作为最终 delta 发送，避免正文重复。
+                message="" if streamed_text else str(final_payload["summary"]["message"]),
             )
         finally:
             if lease is not None:
@@ -249,19 +312,19 @@ def build_direct_modification_ag_ui_stream(
 
     return build_ag_ui_action_stream(
         payload=normalized_payload,
-        event_name=DIRECT_MODIFICATION_EVENT_NAME,
-        state_key=DIRECT_MODIFICATION_STATE_KEY,
-        run_id_prefix="direct-modification",
-        progress_operation=operation,
-        error_message_prefix="快速修改执行失败",
+        event_name=CONVERSATION_EVENT_NAME,
+        state_key=CONVERSATION_STATE_KEY,
+        run_id_prefix="conversation",
+        streaming_operation=operation,
+        error_message_prefix="自由对话执行失败",
         error_data=lambda _exc: {
             "summary": {
                 "status": "failed",
-                "phase": "direct_modification",
-                "message": "快速修改执行失败。",
+                "phase": "conversation",
+                "message": "自由对话执行失败。",
             },
             "events": [],
-            "state": {"status": "failed", "phase": "direct_modification"},
+            "state": {"status": "failed", "phase": "conversation"},
             "result": {"status": "failed"},
         },
         accept=accept,
@@ -308,6 +371,7 @@ async def _report_custom_progress(
     chunk: Any,
     state: dict[str, Any],
     events: list[dict[str, Any]],
+    report_text: TextDeltaReporter | None = None,
 ) -> None:
     """把 Graph custom stream 转换为工具或测试进度。"""
 
@@ -346,7 +410,12 @@ async def _report_custom_progress(
             )
         )
         return
-    if event_type == "direct_modification.tool_activity":
+    if event_type == "conversation.text_delta":
+        delta = str(progress.get("delta") or "")
+        if report_text is not None and delta:
+            await report_text(delta)
+        return
+    if event_type in {"direct_modification.tool_activity", "conversation.tool_activity"}:
         activity = progress.get("activity") if isinstance(progress.get("activity"), dict) else {}
         call_id = str(activity.get("callId") or uuid4().hex)
         status = str(activity.get("status") or "running")
@@ -412,6 +481,26 @@ def _last_user_message(messages: Any) -> str:
     return ""
 
 
+def _conversation_request(*, original_request: str | None, latest_user_request: str) -> str:
+    """合并自由对话恢复时的原始需求和本轮回答，确保分类器看到最新用户输入。"""
+
+    original = str(original_request or "").strip()
+    latest = str(latest_user_request or "").strip()
+    if not latest:
+        return original
+    if not original or original == latest:
+        return latest
+    return "\n".join(
+        [
+            "原始用户请求：",
+            original,
+            "",
+            "本轮用户补充：",
+            latest,
+        ]
+    ).strip()
+
+
 def _cancel_run_id(payload: dict[str, Any]) -> str:
     """读取复用当前端点发送的 AG-UI 取消目标。"""
 
@@ -419,3 +508,23 @@ def _cancel_run_id(payload: dict[str, Any]) -> str:
     if not isinstance(forwarded_props, dict):
         return ""
     return str(forwarded_props.get("cancelRunId") or "").strip()
+
+
+def _safe_approved_paths(values: Any) -> list[str]:
+    """裁剪自由对话确认的追加路径，阻止绝对路径、越界路径和敏感文件进入任务包。"""
+
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    for value in values[:100]:
+        path = str(value or "").strip().replace("\\", "/").lstrip("/")
+        parts = [part for part in path.split("/") if part]
+        if (
+            not path
+            or ".." in parts
+            or any(part.casefold() in {".env", ".xcodeagent"} for part in parts)
+        ):
+            continue
+        if path not in result:
+            result.append(path[:1_000])
+    return result

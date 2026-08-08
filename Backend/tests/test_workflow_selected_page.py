@@ -187,6 +187,60 @@ class WorkflowSelectedPageTests(unittest.TestCase):
         )
         self.assertEqual(result["detail_plans"][0]["pageId"], "weather-detail")
 
+    def test_acceptance_page_design_change_generates_a_new_pending_detail_version(self) -> None:
+        """验收中的页面调整必须带反馈重生成详情，并再次等待确认。"""
+
+        current_plan = {
+            "frontend_pages": [{"pageId": "inventory", "name": "库存页"}],
+            "api_contracts": [],
+            "data_sources": [],
+        }
+        generated_plan = {
+            **current_plan,
+            "page_detail_plans": [{"pageId": "inventory", "page_name": "库存页"}],
+            "endpoint_detail_plans": [],
+        }
+        with (
+            patch(
+                "app.graph.nodes.planning._generate_all_detail_plans",
+                return_value=generated_plan,
+            ) as generate_details,
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="/workspace/.xcodeagent/plans/project-plan.md",
+            ),
+        ):
+            result = detail_confirmation(
+                {
+                    "project_plan": current_plan,
+                    "frontend_pages": current_plan["frontend_pages"],
+                    "selectedPageId": "inventory",
+                    "detail_review_submission": {},
+                    "acceptance_adjustment": {
+                        "type": "page_design_change",
+                        "feedback": "把筛选区改成更紧凑的横向布局。",
+                    },
+                }
+            )
+
+        generate_details.assert_called_once_with(
+            current_plan,
+            frontend_pages=current_plan["frontend_pages"],
+            selectedPageId="inventory",
+            selected_api_contract_id=None,
+            selected_endpoint_id=None,
+            detail_target_type="page",
+            workspace_root=None,
+            user_request="把筛选区改成更紧凑的横向布局。",
+            regenerate_endpoint_details=False,
+        )
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["phase"], "detail_confirmation")
+        self.assertEqual(
+            result["pending_project_plan"]["confirmation_status"],
+            "pending_user_confirmation",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

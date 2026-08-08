@@ -6,19 +6,25 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from app.agents.direct_modification import (
     DirectModificationDecision,
+    _direct_modification_classifier_prompt,
+    _partial_json_response_value,
     _data_source_direct_modification_prompt,
     _frontend_direct_modification_prompt,
     _normalize_direct_modification_decision,
     classify_direct_modification_intent,
+    invoke_data_source_direct_modification,
+    invoke_frontend_direct_modification,
     parse_direct_modification_agent_result,
 )
 from app.graph.direct_modification_workflow import (
     _route_backend,
     _route_classification,
+    _route_direct_repair,
     _route_frontend,
     _route_integration_test,
     _route_scan_workspace,
@@ -28,20 +34,27 @@ from app.graph.nodes.direct_modification import (
     classify_direct_modification,
     execute_backend_direct_modification,
     execute_frontend_direct_modification,
+    execute_workspace_direct_modification,
     finalize_direct_modification,
+    respond_to_casual_conversation,
+    respond_to_workspace_question,
     run_direct_modification_integration_test,
 )
+from app.graph.nodes.direct_repair import direct_modification_repair
 from app.protocols.direct_modification import (
     _report_custom_progress,
-    build_direct_modification_ag_ui_stream,
-    direct_modification_capabilities,
-    direct_modification_input,
+    _conversation_request,
+    build_conversation_ag_ui_stream,
+    conversation_capabilities,
+    conversation_input,
 )
 from app.protocols.direct_modification_projection import (
+    direct_progress_payload,
     direct_node_process_step,
     direct_node_running_process_step,
     direct_node_started_event,
 )
+from app.services.direct_modification import validated_dynamic_workspace_paths
 from app.tools.execute import ExecuteInput
 
 
@@ -73,12 +86,53 @@ class DirectModificationPromptTests(unittest.TestCase):
         self.assertIn("repair the implementation", prompt)
         self.assertIn("rerun the relevant check", prompt)
         self.assertIn("Return status=completed only after", prompt)
+        self.assertIn("transient read/search/tool error is not by itself a task failure", prompt)
         self.assertIn("`| head`", prompt)
         self.assertNotIn("timeout=120", prompt)
         self.assertNotIn("at most one focused", prompt)
         self.assertNotIn("Approved frontend tasks", prompt)
         self.assertNotIn("ProjectPlan context", prompt)
         self.assertNotIn("BuildTaskPlan summary", prompt)
+
+    def test_frontend_direct_packet_prioritizes_source_candidates(self) -> None:
+        """前端快速修改只授权源码根，并优先传递扫描得到的业务源码。"""
+
+        with patch(
+            "app.agents.direct_modification.invoke_small_task_agent",
+            return_value='{"status":"already_satisfied"}',
+        ) as invoke:
+            invoke_frontend_direct_modification(
+                user_request="把宠物照片卡片宽度改成200px",
+                conversation_summary="",
+                backend_handoff=None,
+                candidate_files=[
+                    "frontend/src/pages/PetPhotoList/index.tsx",
+                    "frontend/node_modules/pkg/index.js",
+                ],
+                approved_paths=[
+                    "frontend/vite.config.ts",
+                    "frontend/node_modules/pkg/config.js",
+                ],
+                workspace="/workspace",
+                selected_skill_names=[],
+            )
+
+        packet = invoke.call_args.kwargs["packet"]
+        self.assertEqual(
+            packet["allowedPaths"],
+            [
+                "Frontend/src/**",
+                "frontend/src/**",
+                "frontend/vite.config.ts",
+            ],
+        )
+        self.assertEqual(
+            packet["candidateFiles"],
+            [
+                "frontend/vite.config.ts",
+                "frontend/src/pages/PetPhotoList/index.tsx",
+            ],
+        )
 
     def test_backend_prompt_has_no_required_builtin_skill(self) -> None:
         """后端 Prompt 保留执行约束，但不声明不存在的必读内置 Skill。"""
@@ -95,6 +149,39 @@ class DirectModificationPromptTests(unittest.TestCase):
         self.assertIn("rerun the relevant check", prompt)
         self.assertNotIn("/.xcodeagent/builtin-skills/", prompt)
         self.assertNotIn("Approved data-source tasks", prompt)
+
+    def test_backend_direct_packet_adds_only_approved_config_path(self) -> None:
+        """后端快速修改默认只写源码根，配置文件必须通过追加授权进入。"""
+
+        with patch(
+            "app.agents.direct_modification.invoke_small_task_agent",
+            return_value='{"status":"already_satisfied"}',
+        ) as invoke:
+            invoke_data_source_direct_modification(
+                user_request="更新 Maven 依赖配置",
+                conversation_summary="",
+                approved_paths=[
+                    "backend/pom.xml",
+                    "backend/node_modules/pkg/config.js",
+                ],
+                workspace="/workspace",
+                selected_skill_names=[],
+            )
+
+        packet = invoke.call_args.kwargs["packet"]
+        self.assertEqual(
+            packet["allowedPaths"],
+            [
+                "Backend/app/**",
+                "Backend/src/**",
+                "Backend/tests/**",
+                "backend/app/**",
+                "backend/src/**",
+                "backend/tests/**",
+                "backend/pom.xml",
+            ],
+        )
+        self.assertEqual(packet["candidateFiles"], ["backend/pom.xml"])
 
     def test_execute_tool_guidance_preserves_real_check_exit_code(self) -> None:
         """执行工具说明应阻止 Agent 用管道掩盖检查命令的退出码。"""
@@ -118,11 +205,11 @@ class DirectModificationPromptTests(unittest.TestCase):
         """未知归属、低置信度和无效分类字段都必须安全降级为等待补充。"""
 
         payloads = [
-            {"owner": "unknown", "scope": "direct", "confidence": 0.95},
-            {"owner": "frontend", "scope": "direct", "confidence": 0.64},
-            {"owner": "invalid", "scope": "direct", "confidence": 0.95},
-            {"owner": "frontend", "scope": "needs_clarification", "confidence": 0.95},
-            {"owner": "frontend", "scope": "invalid", "confidence": 0.95},
+            {"intent": "workspace_change", "owner": "unknown", "confidence": 0.95},
+            {"intent": "workspace_change", "owner": "frontend", "confidence": 0.64},
+            {"intent": "workspace_change", "owner": "invalid", "confidence": 0.95},
+            {"intent": "needs_clarification", "owner": "frontend", "confidence": 0.95},
+            {"intent": "invalid", "owner": "frontend", "confidence": 0.95},
             {},
         ]
 
@@ -137,8 +224,8 @@ class DirectModificationPromptTests(unittest.TestCase):
 
         decision = _normalize_direct_modification_decision(
             {
+                "intent": "needs_clarification",
                 "owner": "unknown",
-                "scope": "needs_clarification",
                 "confidence": 0.9,
                 "reason": "The request does not describe a change.",
                 "clarificationQuestion": (
@@ -152,6 +239,95 @@ class DirectModificationPromptTests(unittest.TestCase):
             decision.clarification_question,
             "请说明您想修改的具体内容，并补充修改位置和预期效果。",
         )
+
+    def test_classifier_prompt_requests_direct_casual_response(self) -> None:
+        """普通对话分类时应在同一次模型调用中产出可直接展示的回答。"""
+
+        prompt = _direct_modification_classifier_prompt(
+            user_request="你是谁",
+            conversation_summary="",
+            workspace_snapshot={
+                "workspace_revision": "revision-1",
+                "tech_stack": ["React"],
+                "frontend": {
+                    "pages": [
+                        {"path": "frontend/src/pages/PetPhotoList/index.tsx"}
+                    ],
+                    "components": [
+                        {
+                            "path": "frontend/src/pages/PetPhotoList/PetCard.tsx",
+                            "name": "PetCard",
+                        }
+                    ],
+                },
+            },
+        )
+
+        self.assertIn("answer the user's message directly in response", prompt)
+        self.assertIn('"response":"final answer only for casual_chat"', prompt)
+        self.assertIn("For every other intent, response must be an empty string", prompt)
+        self.assertIn("latest user supplement", prompt)
+        self.assertIn("do not ask the same clarification again", prompt)
+        self.assertIn("PetPhotoList", prompt)
+        self.assertIn("width 200px is a direct frontend workspace_change", prompt)
+        self.assertIn("every exact existing file required", prompt)
+        self.assertIn("not limited to known config-file types", prompt)
+
+    def test_dynamic_path_authorization_accepts_non_whitelisted_existing_file(self) -> None:
+        """动态授权不限制文件类型，但仍要求精确安全路径和磁盘存在性。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            config = root / "frontend" / "vite.config.ts"
+            config.parent.mkdir(parents=True)
+            config.write_text("export default {}\n", encoding="utf-8")
+            dependency_config = root / "frontend" / "node_modules" / "pkg" / "config.js"
+            dependency_config.parent.mkdir(parents=True)
+            dependency_config.write_text("module.exports = {}\n", encoding="utf-8")
+            env_file = root / "frontend" / ".env.local"
+            env_file.write_text("TOKEN=secret\n", encoding="utf-8")
+            custom_file = root / "frontend" / "tooling" / "custom.rules"
+            custom_file.parent.mkdir(parents=True)
+            custom_file.write_text("old-rule\n", encoding="utf-8")
+            lock_file = root / "frontend" / "package-lock.json"
+            lock_file.write_text("{}\n", encoding="utf-8")
+
+            approved = validated_dynamic_workspace_paths(
+                workspace=workspace,
+                request="请修改前端的自定义工具规则和 Vite 配置",
+                owner="frontend",
+                target_paths=[
+                    "frontend/tooling/custom.rules",
+                    "frontend/vite.config.ts",
+                    "frontend/node_modules/pkg/config.js",
+                    "frontend/.env.local",
+                    "frontend/missing.config.ts",
+                    "frontend/*.config.ts",
+                    "frontend/package-lock.json",
+                    "/frontend/vite.config.ts",
+                    "C:\\frontend\\vite.config.ts",
+                ],
+            )
+            read_only = validated_dynamic_workspace_paths(
+                workspace=workspace,
+                request="请解释一下这个工程",
+                owner="frontend",
+                target_paths=["frontend/vite.config.ts"],
+            )
+
+        self.assertEqual(
+            approved,
+            ["frontend/tooling/custom.rules", "frontend/vite.config.ts"],
+        )
+        self.assertEqual(read_only, [])
+
+    def test_classifier_stream_extracts_only_response_prefix(self) -> None:
+        """分类 JSON 流式生成时只向用户暴露 response，不泄露路由字段。"""
+
+        partial = '{"response":"你好，"intent":"casual_chat"}'
+
+        self.assertEqual(_partial_json_response_value(partial), "你好，")
+        self.assertNotIn("casual_chat", _partial_json_response_value(partial))
 
     def test_classifier_empty_request_and_model_error_request_clarification(self) -> None:
         """空输入或分类模型异常时都必须返回可见的兜底澄清问题。"""
@@ -172,10 +348,61 @@ class DirectModificationPromptTests(unittest.TestCase):
 class DirectModificationNodeTests(unittest.TestCase):
     """验证分类、Agent 执行、测试和收口节点的快速模式语义。"""
 
+    def test_classifier_receives_workspace_snapshot_created_by_scan(self) -> None:
+        """分类节点必须读取前置扫描快照，而不是只依赖用户文本。"""
+
+        captured: dict[str, object] = {}
+
+        def classify_with_snapshot(**kwargs: object) -> DirectModificationDecision:
+            """记录分类输入并返回明确的前端局部修改。"""
+
+            captured.update(kwargs)
+            return DirectModificationDecision(
+                intent="workspace_change",
+                owner="frontend",
+                scope="direct",
+                confidence=0.98,
+                reason="扫描结果中存在宠物照片列表页。",
+                clarification_question="",
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot_path = Path(directory) / "snapshot.json"
+            snapshot_path.write_text(
+                json.dumps(
+                    {
+                        "workspace_revision": "revision-1",
+                        "frontend": {
+                            "pages": [
+                                {"path": "frontend/src/pages/PetPhotoList/index.tsx"}
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "app.graph.nodes.direct_modification.classify_direct_modification_intent",
+                side_effect=classify_with_snapshot,
+            ):
+                update = classify_direct_modification(
+                    {
+                        "request": "把宠物照片列表页每个卡片宽度改成200px",
+                        "workspace_snapshot_path": str(snapshot_path),
+                    }
+                )
+
+        snapshot = captured["workspace_snapshot"]
+        self.assertIsInstance(snapshot, dict)
+        self.assertIn("PetPhotoList", json.dumps(snapshot))
+        self.assertEqual(update["direct_modification_owner"], "frontend")
+        self.assertEqual(_route_classification(update), "execute_frontend")
+
     def test_classifier_accepts_fullstack_direct_request(self) -> None:
         """跨端局部需求应继续执行后端阶段，而不是转正式工作流。"""
 
         decision = DirectModificationDecision(
+            intent="workspace_change",
             owner="fullstack",
             scope="direct",
             confidence=0.95,
@@ -192,14 +419,156 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(update["direct_modification_owner"], "fullstack")
         self.assertEqual(update["launch_result"], {})
         self.assertIs(update["quality_gate_passed"], False)
-        self.assertEqual(_route_classification(update), "scan_workspace_code")
-        self.assertEqual(_route_scan_workspace(update), "execute_backend")
+        self.assertEqual(_route_classification(update), "execute_backend")
+        self.assertEqual(_route_scan_workspace({"status": "completed"}), "classify_intent")
+
+    def test_classifier_promotes_valid_config_target_to_run_approval(self) -> None:
+        """分类器给出的现有安全配置路径应只在当前运行内加入追加授权。"""
+
+        decision = DirectModificationDecision(
+            intent="workspace_change",
+            owner="frontend",
+            scope="direct",
+            confidence=0.98,
+            reason="用户明确要求修改现有 Vite 配置。",
+            clarification_question="",
+            target_paths=("frontend/vite.config.ts",),
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            config = Path(workspace) / "frontend" / "vite.config.ts"
+            config.parent.mkdir(parents=True)
+            config.write_text("export default {}\n", encoding="utf-8")
+            with patch(
+                "app.graph.nodes.direct_modification.classify_direct_modification_intent",
+                return_value=decision,
+            ):
+                update = classify_direct_modification(
+                    {
+                        "request": "请修改 Vite 构建配置",
+                        "workspace": workspace,
+                    }
+                )
+
+        self.assertEqual(
+            update["direct_modification_approved_paths"],
+            ["frontend/vite.config.ts"],
+        )
+
+    def test_classifier_routes_identity_question_to_toolless_conversation(self) -> None:
+        """身份类常规问题应由分类调用直接回答，不再触发第二次模型调用。"""
+
+        decision = _normalize_direct_modification_decision(
+            {
+                "intent": "casual_chat",
+                "owner": "none",
+                "confidence": 0.99,
+                "reason": "用户在询问助手身份。",
+                "clarificationQuestion": "",
+                "response": "我是 XCodeAgent，可以协助开发和回答常规问题。",
+                "targetPaths": [],
+            }
+        )
+        with patch(
+            "app.graph.nodes.direct_modification.classify_direct_modification_intent",
+            return_value=decision,
+        ):
+            update = classify_direct_modification({"request": "你是谁"})
+
+        self.assertEqual(update["conversation_intent"], "casual_chat")
+        self.assertEqual(update["direct_modification_owner"], "none")
+        self.assertEqual(update["status"], "completed")
+        self.assertIn("XCodeAgent", update["conversation_response"])
+        self.assertEqual(_route_classification(update), "finalize")
+
+    def test_casual_conversation_bypasses_tests_and_launch(self) -> None:
+        """常规对话回复应直接完成，不生成代码差异、测试或预览状态。"""
+
+        with patch(
+            "app.graph.nodes.direct_modification.answer_casual_conversation",
+            return_value="我是 XCodeAgent，可以协助开发和回答常规问题。",
+        ):
+            answered = respond_to_casual_conversation(
+                {"request": "你是谁", "direct_modification_summary": ""}
+            )
+        finalized = finalize_direct_modification(
+            {
+                **answered,
+                "request": "你是谁",
+                "conversation_intent": "casual_chat",
+                "direct_stage_results": {},
+                "direct_code_change_sets": [],
+            }
+        )
+
+        self.assertEqual(finalized["status"], "completed")
+        self.assertEqual(finalized["phase"], "conversation")
+        self.assertIn("XCodeAgent", finalized["message"])
+        self.assertEqual(finalized["code_changes"], {})
+
+    def test_workspace_question_uses_read_only_answer_node(self) -> None:
+        """工程解释类问题应进入只读工作区节点并保留自然语言回复。"""
+
+        with patch(
+            "app.graph.nodes.direct_modification.answer_workspace_question",
+            return_value="该项目的前端使用 React 和 Vite。",
+        ) as answer:
+            update = respond_to_workspace_question(
+                {
+                    "request": "这个项目的前端栈是什么？",
+                    "workspace": "/workspace",
+                    "selected_skill_names": [],
+                }
+            )
+
+        self.assertEqual(update["status"], "completed")
+        self.assertEqual(update["conversation_response"], "该项目的前端使用 React 和 Vite。")
+        answer.assert_called_once()
+
+    def test_workspace_change_uses_precise_non_product_path(self) -> None:
+        """文档修改应限制在分类器给出的普通工作区路径并直接完成。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            target = Path(workspace) / "README.md"
+            target.write_text("old\n", encoding="utf-8")
+
+            def fake_invoke(**_kwargs) -> str:
+                """模拟 SmallTask 修改精确授权的文档路径。"""
+
+                target.write_text("new\n", encoding="utf-8")
+                return json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "更新 README",
+                        "changedFiles": ["README.md"],
+                        "verification": ["文档修改无需构建"],
+                        "alreadySatisfied": False,
+                        "failureReason": None,
+                    }
+                )
+
+            with patch(
+                "app.graph.nodes.direct_modification.invoke_workspace_direct_modification",
+                side_effect=fake_invoke,
+            ):
+                update = execute_workspace_direct_modification(
+                    {
+                        "request": "更新 README",
+                        "workspace": workspace,
+                        "direct_modification_target_paths": ["README.md"],
+                        "direct_stage_results": {},
+                        "direct_code_change_sets": [],
+                    }
+                )
+
+        self.assertEqual(update["status"], "completed")
+        self.assertEqual(update["direct_stage_results"]["workspace"]["changedFiles"], ["README.md"])
 
     def test_clarification_summary_is_finalized_once_and_reused_on_next_run(self) -> None:
         """等待轮只在收尾节点记录一次摘要，下一轮分类可读取旧请求和澄清问题。"""
 
         question = "请说明要修改哪个页面或接口，以及期望结果。"
         waiting_decision = DirectModificationDecision(
+            intent="needs_clarification",
             owner="unknown",
             scope="needs_clarification",
             confidence=0.2,
@@ -218,6 +587,13 @@ class DirectModificationNodeTests(unittest.TestCase):
         waiting_step = direct_node_process_step("classify_intent", filtered_classified)
         self.assertEqual(waiting_step["status"], "requires_user_input")
         self.assertEqual(waiting_step["detail"], question)
+        progress_payload = direct_progress_payload(
+            {"request": "sdf", **filtered_classified},
+            events=[],
+            process_step=waiting_step,
+        )
+        self.assertEqual(progress_payload["summary"]["request"], "sdf")
+        self.assertEqual(progress_payload["state"]["request"], "sdf")
 
         finalized = finalize_direct_modification({**filtered_classified, "request": "sdf"})
         self.assertEqual(finalized["message"], question)
@@ -232,6 +608,7 @@ class DirectModificationNodeTests(unittest.TestCase):
 
             captured.update(kwargs)
             return DirectModificationDecision(
+                intent="workspace_change",
                 owner="frontend",
                 scope="direct",
                 confidence=0.96,
@@ -256,8 +633,8 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(captured["conversation_summary"].count("用户：sdf"), 1)
         self.assertEqual(continued["status"], "in_progress")
         self.assertEqual(continued["clarification"], {})
-        self.assertEqual(_route_classification(continued), "scan_workspace_code")
-        self.assertEqual(_route_scan_workspace(continued), "execute_frontend")
+        self.assertEqual(_route_classification(continued), "execute_frontend")
+        self.assertEqual(_route_scan_workspace({"status": "completed"}), "classify_intent")
 
     def test_frontend_execution_uses_real_workspace_diff(self) -> None:
         """前端阶段以工作区快照为权威变更清单。"""
@@ -377,10 +754,42 @@ class DirectModificationNodeTests(unittest.TestCase):
                 )
 
         result = update["direct_stage_results"]["frontend"]
-        self.assertEqual(update["status"], "failed")
+        self.assertEqual(update["status"], "in_progress")
         self.assertEqual(result["changedFiles"], ["frontend/src/Page.tsx"])
         self.assertIn("TimeoutError", result["failureReason"])
+        self.assertIs(result["partialChanges"], True)
         self.assertEqual(update["code_changes"]["summary"]["files"], 1)
+
+    def test_final_acceptance_turns_recovered_stage_into_success(self) -> None:
+        """最终验收通过后，工具异常只保留为告警而不能覆盖任务成功。"""
+
+        finalized = finalize_direct_modification(
+            {
+                "request": "修改页面颜色",
+                "status": "completed",
+                "conversation_intent": "workspace_change",
+                "direct_modification_owner": "frontend",
+                "direct_modification_scope": "direct",
+                "direct_stage_results": {
+                    "frontend": {
+                        "status": "failed",
+                        "summary": "某次 read 工具调用失败，但文件已经写入。",
+                        "failureReason": "ReadError: path unavailable",
+                        "partialChanges": True,
+                    }
+                },
+                "direct_code_change_sets": [],
+                "quality_gate_passed": True,
+                "launch_result": {"status": "running"},
+            }
+        )
+
+        self.assertEqual(finalized["status"], "completed")
+        stage_result = finalized["direct_modification_result"]["stageResults"]["frontend"]
+        self.assertEqual(stage_result["status"], "completed")
+        self.assertIs(stage_result["recoveredFromToolFailure"], True)
+        self.assertIn("最终验收", stage_result["summary"])
+        self.assertIn("最终验收", finalized["message"])
 
     def test_integration_disables_contract_and_repair(self) -> None:
         """快速测试必须复用节点但关闭正式契约校验和 RepairPlanner。"""
@@ -409,6 +818,142 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertIs(captured_state["integration_repair_enabled"], False)
         self.assertEqual(update["status"], "failed")
         self.assertEqual(_route_integration_test(update), "finalize")
+
+    def test_failed_free_conversation_test_enters_bounded_repair_node(self) -> None:
+        """自由对话测试失败且有精确证据时应进入独立自动修复节点。"""
+
+        state = {
+            "status": "failed",
+            "quality_gate_passed": False,
+            "integration_next_action": "direct_modification_repair",
+            "repair_iteration": 0,
+            "max_repair_iterations": 3,
+        }
+
+        self.assertEqual(_route_integration_test(state), "direct_modification_repair")
+        self.assertEqual(
+            direct_next_node_name("integration_test", state),
+            "direct_modification_repair",
+        )
+
+    def test_direct_repair_executes_bounded_task_and_returns_to_test(self) -> None:
+        """自由对话修复应只使用实际变更文件，并在成功后回到集成测试。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            task_id = "repair:frontend_build"
+            plan = {
+                "version": "0.1.0",
+                "status": "ready",
+                "decision": "repair",
+                "tasks": [
+                    {
+                        "id": task_id,
+                        "owner": "frontend",
+                        "status": "pending",
+                        "allowed_paths": ["Frontend/src/App.tsx"],
+                        "target_files": ["Frontend/src/App.tsx"],
+                        "change_scope": [
+                            {"operation": "modify", "path": "Frontend/src/App.tsx"}
+                        ],
+                    }
+                ],
+            }
+            execution = {
+                "results": [
+                    {
+                        "taskId": task_id,
+                        "status": "completed",
+                        "summary": "修复完成",
+                        "changedFiles": ["Frontend/src/App.tsx"],
+                        "verification": ["pnpm build"],
+                        "alreadySatisfied": False,
+                        "failureReason": "",
+                        "escalation": {},
+                    }
+                ],
+                "codeChangeSets": [
+                    {
+                        "files": [
+                            {
+                                "path": "Frontend/src/App.tsx",
+                                "changeType": "modified",
+                            }
+                        ]
+                    }
+                ],
+                "unauthorizedPaths": [],
+            }
+            with (
+                patch(
+                    "app.graph.nodes.direct_repair.plan_repairs_with_repair_planner_agent",
+                    return_value=plan,
+                ) as planner,
+                patch(
+                    "app.graph.nodes.direct_repair.execute_small_task_batch",
+                    return_value=execution,
+                ) as executor,
+            ):
+                update = direct_modification_repair(
+                    {
+                        "workspace": workspace,
+                        "selected_skill_names": [],
+                        "test_report": {"passed": False},
+                        "revision_requests": [
+                            {
+                                "id": "revision:frontend_build",
+                                "owner": "frontend",
+                                "owners": ["frontend"],
+                                "reason": "前端构建失败",
+                                "failed_check": {
+                                    "id": "frontend_build",
+                                    "name": "前端构建检查",
+                                    "passed": False,
+                                    "evidence": "TS error",
+                                },
+                            }
+                        ],
+                        "direct_stage_results": {
+                            "frontend": {"changedFiles": ["Frontend/src/App.tsx"]}
+                        },
+                        "direct_code_change_sets": [],
+                        "small_task_results": [],
+                        "small_task_code_change_sets": [],
+                        "repair_iteration": 0,
+                        "max_repair_iterations": 3,
+                    }
+                )
+
+        planner.assert_called_once()
+        executor.assert_called_once()
+        self.assertEqual(update["status"], "in_progress")
+        self.assertEqual(update["repair_iteration"], 1)
+        self.assertEqual(update["integration_next_action"], "integration_test")
+        self.assertEqual(update["direct_code_change_sets"], execution["codeChangeSets"])
+        self.assertEqual(_route_direct_repair(update), "integration_test")
+
+    def test_direct_repair_stops_before_planner_when_budget_is_exhausted(self) -> None:
+        """达到三轮修复上限时不能再次调用 Planner 或 SmallTask。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.direct_repair.plan_repairs_with_repair_planner_agent"
+            ) as planner:
+                update = direct_modification_repair(
+                    {
+                        "workspace": workspace,
+                        "revision_requests": [{"id": "revision:frontend_build"}],
+                        "repair_iteration": 3,
+                        "max_repair_iterations": 3,
+                        "direct_code_change_sets": [],
+                        "small_task_results": [],
+                        "small_task_code_change_sets": [],
+                    }
+                )
+
+        planner.assert_not_called()
+        self.assertEqual(update["status"], "failed")
+        self.assertEqual(update["integration_next_action"], "handle_failure")
+        self.assertIn("3 轮上限", update["message"])
 
     def test_launch_success_is_finalized_without_acceptance_gate(self) -> None:
         """启动成功后快速通道直接完成并清除正式验收字段。"""
@@ -442,18 +987,18 @@ class DirectModificationNodeTests(unittest.TestCase):
     def test_progress_projection_uses_graph_route_for_next_running_step(self) -> None:
         """节点完成后必须沿真实路由立即投射下一节点的运行中状态。"""
 
-        state = {"status": "in_progress", "direct_modification_owner": "frontend"}
-        next_node = direct_next_node_name("classify_intent", state)
+        state = {"status": "completed"}
+        next_node = direct_next_node_name("scan_workspace_code", state)
         running_step = direct_node_running_process_step(str(next_node))
         completed_step = direct_node_process_step(
             "scan_workspace_code",
             {"status": "in_progress", "message": "代码扫描完成。"},
         )
 
-        self.assertEqual(next_node, "scan_workspace_code")
-        self.assertEqual(running_step["id"], completed_step["id"])
+        self.assertEqual(next_node, "classify_intent")
+        self.assertNotEqual(running_step["id"], completed_step["id"])
         self.assertEqual(running_step["status"], "running")
-        self.assertEqual(running_step["title"], "正在执行 扫描工作区代码")
+        self.assertEqual(running_step["title"], "正在执行 识别对话意图")
         self.assertEqual(completed_step["status"], "completed")
 
     def test_started_event_exposes_running_copy(self) -> None:
@@ -465,7 +1010,7 @@ class DirectModificationNodeTests(unittest.TestCase):
             thread_id="direct-thread",
         )
 
-        self.assertEqual(event["type"], "direct-modification.node.started")
+        self.assertEqual(event["type"], "conversation.node.started")
         self.assertEqual(event["status"], "running")
         self.assertEqual(event["message"], "正在执行：执行前端修改")
 
@@ -473,14 +1018,97 @@ class DirectModificationNodeTests(unittest.TestCase):
 class DirectModificationProtocolTests(unittest.TestCase):
     """验证快速修改公开 AG-UI 契约。"""
 
+    def test_clarification_resume_keeps_latest_user_answer(self) -> None:
+        """恢复澄清不能让上一轮 originalRequest 覆盖本轮回答。"""
+
+        request = _conversation_request(
+            original_request="请修改页面并创建一个新的配置文件。",
+            latest_user_request="创建到 Backend/app/config/new_feature.py。",
+        )
+
+        self.assertIn("请修改页面并创建一个新的配置文件。", request)
+        self.assertIn("创建到 Backend/app/config/new_feature.py。", request)
+        self.assertIn("本轮用户补充：", request)
+
+    def test_stream_passes_latest_answer_into_graph_state(self) -> None:
+        """实际 AG-UI 恢复流应把最新回答写入 Graph 输入，而不是只传旧问题。"""
+
+        captured_states: list[dict[str, Any]] = []
+        final_state = {
+            "phase": "conversation",
+            "status": "completed",
+            "message": "已收到补充信息。",
+            "conversation_intent": "casual_chat",
+            "direct_modification_owner": "none",
+            "direct_modification_scope": "respond",
+            "direct_modification_result": {"status": "completed", "summary": "已收到补充信息。"},
+        }
+
+        class FakeGraph:
+            """捕获协议层传入的首个 Graph 状态。"""
+
+            async def astream(self, initial_state, *_args, **_kwargs):
+                """发送最小终态，验证初始请求内容已经合并。"""
+
+                captured_states.append(initial_state)
+                yield "updates", {"finalize_direct_modification": final_state}
+
+            async def aget_state(self, _config):
+                """返回固定终态，完成 AG-UI 流程。"""
+
+                return SimpleNamespace(values=final_state)
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.protocols.direct_modification.direct_modification_graph_for_request",
+                    new=AsyncMock(return_value=FakeGraph()),
+                ),
+                patch(
+                    "app.protocols.direct_modification.cleanup_workflow_checkpoints",
+                    new=AsyncMock(return_value=0),
+                ),
+            ):
+                stream = build_conversation_ag_ui_stream(
+                    payload={
+                        "threadId": "clarification-thread",
+                        "runId": "clarification-run",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "创建到 Backend/app/config/new_feature.py，并用于单元测试。",
+                            }
+                        ],
+                        "forwardedProps": {
+                            "conversation": {
+                                "workspaceRoot": workspace,
+                                "selectedSkillNames": [],
+                                "originalRequest": "我想新增 test.tsx 文件。",
+                            }
+                        },
+                    }
+                )
+
+                async def collect() -> str:
+                    """消费恢复流，触发 Graph 输入捕获。"""
+
+                    return "".join([frame async for frame in stream])
+
+                asyncio.run(collect())
+
+        self.assertEqual(len(captured_states), 1)
+        request = captured_states[0]["request"]
+        self.assertIn("我想新增 test.tsx 文件。", request)
+        self.assertIn("创建到 Backend/app/config/new_feature.py，并用于单元测试。", request)
+
     def test_capabilities_publish_independent_targetless_endpoint(self) -> None:
         """健康检查应声明独立端点且请求不需要 target。"""
 
-        capability = direct_modification_capabilities()
+        capability = conversation_capabilities()
 
-        self.assertEqual(capability["endpoint"], "/direct-modification/run")
-        self.assertEqual(capability["customEventName"], "direct-modification")
-        self.assertEqual(capability["stateSnapshotKey"], "directModification")
+        self.assertEqual(capability["endpoint"], "/conversation/run")
+        self.assertEqual(capability["customEventName"], "conversation")
+        self.assertEqual(capability["stateSnapshotKey"], "conversation")
         self.assertIs(capability["targetRequired"], False)
         self.assertEqual(
             capability["executionPolicy"],
@@ -490,10 +1118,10 @@ class DirectModificationProtocolTests(unittest.TestCase):
     def test_input_reads_only_direct_modification_payload(self) -> None:
         """协议只读取嵌套业务字段，不要求页面或接口身份。"""
 
-        value = direct_modification_input(
+        value = conversation_input(
             {
                 "forwardedProps": {
-                    "directModification": {
+                    "conversation": {
                         "workspaceRoot": "/workspace",
                         "selectedSkillNames": [],
                     }
@@ -518,7 +1146,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
             _report_custom_progress(
                 report,
                 chunk={
-                    "type": "direct_modification.tool_activity",
+                    "type": "conversation.tool_activity",
                     "node_name": "execute_frontend",
                     "activity": {
                         "callId": "read-app",
@@ -540,11 +1168,40 @@ class DirectModificationProtocolTests(unittest.TestCase):
         self.assertEqual(process_step["title"], "read_file")
         self.assertEqual(process_step["detail"], "正在读取文件：/src/App.tsx")
 
+    def test_text_delta_projects_to_ag_ui_stream_without_process_noise(self) -> None:
+        """模型正文增量必须进入文本流，而不是伪装成“正在思考”进度。"""
+
+        reported = []
+        text_deltas = []
+
+        async def report(progress) -> None:
+            """收集文本增量对应的协议进度占位。"""
+
+            reported.append(progress)
+
+        async def report_text(delta: str) -> None:
+            """收集可直接展示给用户的助手正文。"""
+
+            text_deltas.append(delta)
+
+        asyncio.run(
+            _report_custom_progress(
+                report,
+                chunk={"type": "conversation.text_delta", "delta": "我是 XCodeAgent。"},
+                state={"status": "in_progress"},
+                events=[],
+                report_text=report_text,
+            )
+        )
+
+        self.assertEqual(text_deltas, ["我是 XCodeAgent。"])
+        self.assertEqual(reported, [])
+
     def test_stream_emits_complete_ag_ui_lifecycle(self) -> None:
         """独立 Graph 结果必须发送自定义事件、快照和正常完成事件。"""
 
         final_state = {
-            "phase": "direct_modification",
+            "phase": "conversation",
             "status": "completed",
             "message": "快速修改完成",
             "direct_modification_owner": "frontend",
@@ -563,18 +1220,9 @@ class DirectModificationProtocolTests(unittest.TestCase):
                 """发送一条完整前端快速修改路径，验证步骤开始和完成顺序。"""
 
                 yield "updates", {
-                    "classify_intent": {
-                        "phase": "classify_intent",
-                        "status": "in_progress",
-                        "message": "已识别前端修改。",
-                        "direct_modification_owner": "frontend",
-                        "direct_modification_scope": "direct",
-                    }
-                }
-                yield "updates", {
                     "scan_workspace_code": {
                         "phase": "scan_workspace_code",
-                        "status": "in_progress",
+                        "status": "completed",
                         "message": "代码扫描完成。",
                         "workspace_snapshot_summary": {
                             "code_graph": {
@@ -583,6 +1231,16 @@ class DirectModificationProtocolTests(unittest.TestCase):
                                 "message": "代码索引缓存已就绪。",
                             }
                         },
+                    }
+                }
+                yield "updates", {
+                    "classify_intent": {
+                        "phase": "classify_intent",
+                        "status": "in_progress",
+                        "message": "已识别前端修改。",
+                        "conversation_intent": "workspace_change",
+                        "direct_modification_owner": "frontend",
+                        "direct_modification_scope": "direct",
                     }
                 }
                 yield "updates", {
@@ -626,7 +1284,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
                     new=AsyncMock(return_value=0),
                 ),
             ):
-                stream = build_direct_modification_ag_ui_stream(
+                stream = build_conversation_ag_ui_stream(
                     payload={
                         "threadId": "direct-thread",
                         "runId": "direct-run",
@@ -634,7 +1292,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
                             {"id": "message-1", "role": "user", "content": "修改页面"}
                         ],
                         "forwardedProps": {
-                            "directModification": {
+                            "conversation": {
                                 "workspaceRoot": workspace,
                                 "selectedSkillNames": [],
                             }
@@ -649,12 +1307,11 @@ class DirectModificationProtocolTests(unittest.TestCase):
 
                 frames = asyncio.run(collect())
 
-        self.assertIn("direct-modification", frames)
-        self.assertIn("directModification", frames)
+        self.assertIn("conversation", frames)
         self.assertIn("RUN_STARTED", frames)
         self.assertIn("STATE_SNAPSHOT", frames)
         self.assertIn("RUN_FINISHED", frames)
-        self.assertIn("正在执行 识别修改意图", frames)
+        self.assertIn("正在执行 识别对话意图", frames)
         self.assertLess(
             frames.index("正在执行 执行前端修改"),
             frames.index("已完成 执行前端修改"),

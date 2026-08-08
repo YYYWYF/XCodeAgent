@@ -1,11 +1,147 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from app.utils.model_output import extract_json_object
 
 
 MAX_DIRECT_MODIFICATION_SUMMARY_CHARS = 4_000
+
+_DYNAMIC_PATH_ACTION_MARKERS = (
+    "改",
+    "修改",
+    "更改",
+    "更新",
+    "调整",
+    "配置",
+    "修复",
+    "重构",
+    "替换",
+    "写入",
+    "创建",
+    "添加",
+    "新增",
+    "删除",
+    "移除",
+    "安装",
+    "升级",
+    "降级",
+    "change",
+    "configure",
+    "edit",
+    "fix",
+    "modify",
+    "refactor",
+    "replace",
+    "update",
+    "write",
+    "create",
+    "add",
+    "remove",
+    "install",
+    "upgrade",
+    "downgrade",
+)
+_DYNAMIC_PATH_DENIED_PARTS = {
+    ".git",
+    ".xcodeagent",
+    ".next",
+    ".nuxt",
+    ".pnpm",
+    ".turbo",
+    ".venv",
+    "build",
+    "coverage",
+    "dist",
+    "migration",
+    "migrations",
+    "node_modules",
+    "schema",
+    "target",
+    "vendor",
+}
+_DYNAMIC_PATH_DENIED_NAMES = {
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    "bun.lock",
+    "bun.lockb",
+    "cargo.lock",
+    "composer.lock",
+    "gradle.lockfile",
+    "id_ed25519",
+    "id_rsa",
+    "package-lock.json",
+    "pipfile.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "yarn.lock",
+}
+
+
+def validated_dynamic_workspace_paths(
+    *,
+    workspace: str | None,
+    request: str,
+    owner: str,
+    target_paths: list[str] | tuple[str, ...],
+) -> list[str]:
+    """把当前修改需求所需的现有安全文件精确加入本轮追加授权。"""
+
+    if owner not in {"frontend", "backend", "fullstack"}:
+        return []
+    normalized_request = request.casefold()
+    if not any(marker in normalized_request for marker in _DYNAMIC_PATH_ACTION_MARKERS):
+        return []
+    root = Path(workspace or "").expanduser()
+    if not workspace or not root.is_dir():
+        return []
+    root = root.resolve()
+    approved: list[str] = []
+    for raw_path in target_paths:
+        raw_text = str(raw_path).strip()
+        if raw_text.startswith(("/", "\\")) or (
+            len(raw_text) >= 3
+            and raw_text[1] == ":"
+            and raw_text[2] in {"/", "\\"}
+        ):
+            continue
+        normalized = raw_text.replace("\\", "/").lstrip("/")
+        if not _is_safe_dynamic_path_candidate(normalized, owner=owner):
+            continue
+        candidate = (root / normalized).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file() and normalized not in approved:
+            approved.append(normalized)
+    return approved[:100]
+
+
+def _is_safe_dynamic_path_candidate(path: str, *, owner: str) -> bool:
+    """校验动态路径必须精确、归属正确且不触及敏感或生成目录。"""
+
+    if not path or any(character in path for character in "*?[]{}"):
+        return False
+    parts = [part for part in path.split("/") if part]
+    lowered_parts = [part.casefold() for part in parts]
+    if any(part in {".", ".."} for part in parts) or not lowered_parts:
+        return False
+    if any(part == ".env" or part.startswith(".env.") for part in lowered_parts):
+        return False
+    if lowered_parts[-1] in _DYNAMIC_PATH_DENIED_NAMES:
+        return False
+    if any(part in _DYNAMIC_PATH_DENIED_PARTS for part in lowered_parts):
+        return False
+    if owner == "frontend" and "frontend" not in lowered_parts:
+        return False
+    if owner == "backend" and "backend" not in lowered_parts:
+        return False
+    if owner == "fullstack" and not ({"frontend", "backend"} & set(lowered_parts)):
+        return False
+    return True
 
 
 def parse_direct_modification_agent_result(agent_note: str) -> dict[str, Any]:
@@ -16,7 +152,13 @@ def parse_direct_modification_agent_result(agent_note: str) -> dict[str, Any]:
     already_satisfied = bool(
         payload.get("alreadySatisfied") or status == "already_satisfied"
     )
-    if status not in {"completed", "failed", "already_satisfied"}:
+    if status not in {
+        "completed",
+        "failed",
+        "already_satisfied",
+        "requires_user_confirmation",
+        "requires_workflow",
+    }:
         status = "failed"
     summary = str(payload.get("summary") or "").strip()
     failure_reason = str(payload.get("failureReason") or "").strip()
@@ -31,6 +173,30 @@ def parse_direct_modification_agent_result(agent_note: str) -> dict[str, Any]:
         "alreadySatisfied": already_satisfied,
         "failureReason": failure_reason or None,
         "backendHandoff": _normalize_backend_handoff(payload.get("backendHandoff")),
+        "escalation": _normalize_escalation(payload.get("escalation")),
+        "agentNote": agent_note[-8_000:],
+    }
+
+
+def _normalize_escalation(value: Any) -> dict[str, Any]:
+    """裁剪共享小任务 Agent 的升级信息，供自由对话继续路由。"""
+
+    payload = value if isinstance(value, dict) else {}
+    return {
+        "reasonCode": str(
+            payload.get("reasonCode") or payload.get("reason_code") or ""
+        )[:120],
+        "reason": str(payload.get("reason") or "")[:2_000],
+        "requestedPaths": _string_list(
+            payload.get("requestedPaths") or payload.get("requested_paths"),
+            limit=100,
+        ),
+        "requestedResources": _bounded_json_value(
+            payload.get("requestedResources") or payload.get("requested_resources")
+        ),
+        "workflowIntent": str(
+            payload.get("workflowIntent") or payload.get("workflow_intent") or ""
+        )[:120],
     }
 
 
@@ -110,6 +276,7 @@ def validated_direct_stage_result(
         return {
             **normalized,
             "status": "failed",
+            "partialChanges": False,
             "failureReason": f"Agent 修改了职责目录之外的文件：{', '.join(invalid_paths)}",
         }
     if (
@@ -120,8 +287,12 @@ def validated_direct_stage_result(
         return {
             **normalized,
             "status": "failed",
+            "partialChanges": False,
             "failureReason": "Agent 报告完成，但工作区没有实际代码差异。",
         }
+    # 工具调用或模型自报失败不能覆盖已经落盘的授权范围内差异；后续节点仍需独立验收。
+    if normalized.get("status") == "failed" and changed_paths:
+        return {**normalized, "partialChanges": True}
     return normalized
 
 
@@ -129,6 +300,14 @@ def direct_path_matches_owner(path: str, owner: str) -> bool:
     """按虚拟工程目录判断一次代码变更是否属于当前 Agent。"""
 
     parts = [part.casefold() for part in path.replace("\\", "/").split("/") if part]
+    if owner == "workspace":
+        lowered = "/".join(parts)
+        return bool(parts) and not (
+            any(part == ".env" or part.startswith(".env.") for part in parts)
+            or ".xcodeagent/" in lowered
+            or "frontend" in parts
+            or "backend" in parts
+        )
     expected = "frontend" if owner == "frontend" else "backend"
     return expected in parts
 

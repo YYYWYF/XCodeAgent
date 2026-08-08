@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -22,12 +23,18 @@ class DeleteFileInput(BaseModel):
     )
 
 
-def create_delete_file_tool(workspace_root: str | None):
+def create_delete_file_tool(
+    workspace_root: str | None,
+    *,
+    path_guard: Callable[[str], bool] | None = None,
+):
+    """创建绑定工作区和可选动态路径授权的删除工具。"""
+
     @tool("delete_file", args_schema=DeleteFileInput)
     def delete_file(file_path: str) -> str:
         """Delete one regular file inside the selected workspaceRoot."""
 
-        result = _delete_workspace_file(workspace_root, file_path)
+        result = _delete_workspace_file(workspace_root, file_path, path_guard=path_guard)
         return json.dumps(result, ensure_ascii=False)
 
     return delete_file
@@ -36,6 +43,8 @@ def create_delete_file_tool(workspace_root: str | None):
 def _delete_workspace_file(
     workspace_root: str | None,
     file_path: str,
+    *,
+    path_guard: Callable[[str], bool] | None = None,
 ) -> dict[str, Any]:
     try:
         root = _resolve_workspace_root(workspace_root)
@@ -49,6 +58,8 @@ def _delete_workspace_file(
                 "file_path must be relative to the virtual workspace root '/'; "
                 "do not include workspaceRoot."
             )
+        if path_guard is not None and not path_guard(virtual_path):
+            raise ValueError("SmallTask Agent 无权删除该路径。")
         target = _resolve_virtual_path(root, virtual_path)
         _validate_delete_target(root, target)
         target.unlink()

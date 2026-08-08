@@ -9,7 +9,9 @@ from app.agents.data_source import create_data_source_agent
 from app.agents.frontend import create_frontend_agent
 from app.agents.model_factory import create_chat_model
 from app.agents.repair_planner import create_repair_planner_agent
+from app.agents.small_task import create_small_task_agent
 from app.agents.test import create_test_agent
+from app.agents.workspace_assistant import create_workspace_assistant_agent
 from app.agents.workspace_scope import resolve_workspace_root
 from app.config import Settings
 from app.services.agent_memory_runtime import (
@@ -36,6 +38,8 @@ class AgentBundle:
     database: Any
     test: Any
     repair_planner: Any
+    small_task: Any
+    workspace_assistant: Any
     selected_skill_names: tuple[str, ...] = ()
     user_skills_revision: str = ""
 
@@ -137,12 +141,28 @@ def _create_agent_bundle_for_workspace(
         agent_memory_backend=agent_memory.backend,
         required_user_skills_prompt=required_user_skills_prompt,
     )
+    small_task = create_small_task_agent(
+        chat_model,
+        workspace_root=workspace_root,
+        user_skills_backend=user_skills.backend,
+        agent_memory_backend=agent_memory.backend,
+        required_user_skills_prompt=required_user_skills_prompt,
+    )
+    workspace_assistant = create_workspace_assistant_agent(
+        chat_model,
+        workspace_root=workspace_root,
+        user_skills_backend=user_skills.backend,
+        agent_memory_backend=agent_memory.backend,
+        required_user_skills_prompt=required_user_skills_prompt,
+    )
     return AgentBundle(
         frontend=frontend,
         data_source=data_source,
         database=database,
         test=test,
         repair_planner=repair_planner,
+        small_task=small_task,
+        workspace_assistant=workspace_assistant,
         selected_skill_names=selected_skill_names,
         user_skills_revision=user_skills_revision,
     )
