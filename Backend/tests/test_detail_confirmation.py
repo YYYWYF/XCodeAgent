@@ -86,6 +86,10 @@ class DetailConfirmationTests(unittest.TestCase):
         prompt = model.bind.return_value.invoke.call_args.args[0]
         self.assertIn("step 1 of EndpointDetail design", prompt)
         self.assertNotIn("processing_logic", prompt)
+        self.assertIn(
+            "operation_refs is allowed only on database_change differences",
+            prompt,
+        )
         self.assertEqual(detail["endpoint_decision"]["operation_semantics"], decision["operation_semantics"])
         self.assertEqual(detail["design_stage"], "complete")
         self.assertTrue(detail["processing_logic"])

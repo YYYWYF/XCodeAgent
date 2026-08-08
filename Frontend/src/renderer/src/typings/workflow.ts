@@ -1,4 +1,5 @@
 import type { WorkspaceCodeChangeSet } from './codeChanges'
+import type { ToolApproval } from '../service/workspaceTools'
 
 export type WorkflowEvent = {
   type: string
@@ -159,6 +160,11 @@ export type WorkflowClarification = {
   selection_groups?: WorkflowClarificationSelectionGroup[]
   context?: Record<string, unknown>
   review?: WorkflowDetailReview
+  approval?: ToolApproval
+  database_change_plan?: {
+    summary?: string
+    statements?: string[]
+  }
   [key: string]: unknown
 }
 

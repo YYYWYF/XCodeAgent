@@ -322,6 +322,125 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual(result["clarification"]["approval"]["tool"], "database.execute")
         self.assertIn("scheduler:database_requires_approval", result["build_events"])
 
+    def test_database_approval_rejection_fails_paused_tasks_without_redispatch(self) -> None:
+        """用户拒绝高危数据库审批后，恢复构建应直接失败数据库任务而不是重新调度。"""
+
+        tasks = [
+            {
+                "id": "orders-db",
+                "unit_id": "database:orders",
+                "owner": "database",
+                "status": "pending",
+                "dependencies": [],
+                "task_type": "database.change",
+                "scheduler": {"paused_for": "database_approval"},
+            }
+        ]
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.subgraphs.build.generate_database_with_deep_agent",
+                side_effect=AssertionError("拒绝后不得重新调度数据库任务"),
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "request": "拒绝执行",
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v3",
+                                "build_units": {
+                                    "database:orders": {
+                                        "id": "database:orders",
+                                        "kind": "database",
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["database:orders"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "build_results": [],
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["build_summary"]["status"], "failed")
+        self.assertEqual(result["tasks"][0]["status"], "failed")
+        self.assertEqual(
+            result["tasks"][0]["scheduler"]["paused_for"],
+            "database_approval_rejected",
+        )
+        self.assertEqual(
+            result["build_results"][0]["failure_category"],
+            "database_approval_rejected",
+        )
+        self.assertIn("scheduler:database_approval_rejected", result["build_events"])
+
+    def test_database_approval_resume_reuses_approved_plan(self) -> None:
+        """批准恢复后必须复用已审批的数据库计划，避免重新生成导致审批指纹变化。"""
+
+        approved_plan = {
+            "summary": "创建 orders 表。",
+            "statements": ["CREATE TABLE orders (id BIGINT PRIMARY KEY)"],
+        }
+        tasks = [
+            {
+                "id": "orders-db",
+                "unit_id": "database:orders",
+                "owner": "database",
+                "status": "pending",
+                "dependencies": [],
+                "task_type": "database.change",
+                "scheduler": {"paused_for": "database_approval"},
+                "approved_database_change_plan": approved_plan,
+            }
+        ]
+        captured: dict = {}
+
+        def database_runner(**kwargs):
+            captured.update(kwargs)
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": "database",
+                    "status": "completed",
+                    "database_execution": {"status": "completed"},
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.subgraphs.build.generate_database_with_deep_agent",
+                side_effect=database_runner,
+            ):
+                result = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "request": "同意执行，仅本次",
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v3",
+                                "build_units": {
+                                    "database:orders": {
+                                        "id": "database:orders",
+                                        "kind": "database",
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["database:orders"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "build_results": [],
+                        "timeline": [],
+                    }
+                )
+
+        self.assertEqual(result["build_summary"]["status"], "completed")
+        self.assertEqual(captured["database_change_plan"], approved_plan)
+
     def test_build_scheduler_streams_task_progress_snapshots(self) -> None:
         """调度器应在任务运行和结果应用时输出当前执行切片。"""
 

@@ -562,10 +562,19 @@ def _endpoint_database_design_errors(
             errors.append(f"{field} has invalid resolution_kind {kind}")
 
     for operation_id in operation_index:
-        if operation_id not in referenced_operation_ids:
-            errors.append(
-                f"database operation {operation_id} is not referenced by a difference"
-            )
+        if operation_id in referenced_operation_ids:
+            continue
+        operation = operation_index[operation_id]
+        if (
+            effective_kind == "mysql_new_table"
+            and str(operation.get("operation") or "") == "create_table"
+        ):
+            # mysql_new_table 的来源类型本身声明整张新表，create_table 无需再被某个
+            # database_change 差异重复引用；字段级差异只描述取值方式（backend_adaptation）。
+            continue
+        errors.append(
+            f"database operation {operation_id} is not referenced by a difference"
+        )
 
     if source_type in {"static", "external_api"} and operations:
         errors.append(f"{source_type} data source cannot declare database operations")

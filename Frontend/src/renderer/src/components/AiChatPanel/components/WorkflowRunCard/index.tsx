@@ -22,6 +22,12 @@ import type {
 import { cx } from "../../../../utils";
 import { pageAcceptanceContinuationMessage } from '../../workflowContinuation';
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode';
+import AgentApprovalCard from '../AgentApprovalCard';
+import {
+  approveToolRequest,
+  rejectToolRequest,
+} from '../../../../service/workspaceTools';
+import type { ToolApproval } from '../../../../service/workspaceTools';
 import ConfirmationArtifact from './ConfirmationArtifact';
 import DetailReview from './DetailReview';
 import './WorkflowRunCard.less';
@@ -57,6 +63,10 @@ export default function WorkflowRunCard({
   const detailReview = clarification?.mode === 'detail_review'
     ? clarification.review
     : undefined;
+  const databaseApproval = workflowDatabaseApproval(clarification);
+  const databaseApprovalAnswerKey = clarificationQuestions[0]
+    ? clarificationQuestionKey(clarificationQuestions[0], 0)
+    : "database_approval";
   const confirmationItemCount = detailReview
     ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
     : clarificationQuestions.length;
@@ -153,6 +163,17 @@ export default function WorkflowRunCard({
               )}
               review={detailReview}
             />
+          ) : databaseApproval ? (
+            <DatabaseApprovalDecision
+              approval={databaseApproval.approval}
+              disabled={disabled}
+              onSubmit={(answer) =>
+                onSubmitClarification?.(workflow, {
+                  [databaseApprovalAnswerKey]: answer,
+                })
+              }
+              statements={databaseApproval.statements}
+            />
           ) : (
             <>
           {confirmationArtifact && (
@@ -197,6 +218,72 @@ export default function WorkflowRunCard({
         </div>
       )}
     </div>
+  );
+}
+
+function DatabaseApprovalDecision({
+  approval,
+  disabled,
+  onSubmit,
+  statements,
+}: {
+  approval: ToolApproval;
+  disabled?: boolean;
+  onSubmit: (answer: string) => void;
+  statements: string[];
+}): ReactElement {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  // 先落审批记录再恢复工作流：同意时携带审批授权，拒绝时标记拒绝并回传答案。
+  const decide = async (
+    action: "reject" | "once" | "operation",
+  ): Promise<void> => {
+    if (disabled || loading) return;
+    setLoading(true);
+    setError("");
+    try {
+      if (action === "reject") {
+        await rejectToolRequest(approval.id);
+        onSubmit("拒绝执行");
+        return;
+      }
+      await approveToolRequest(
+        approval.id,
+        action === "operation" ? "operation" : "once",
+      );
+      onSubmit(
+        action === "operation"
+          ? "同意执行，后续相同操作不再询问"
+          : "同意执行，仅本次",
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "数据库审批操作失败。",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <AgentApprovalCard
+        allowFeedback={false}
+        approval={approval}
+        loading={loading}
+        onApproveAlways={() => void decide("operation")}
+        onApproveOnce={() => void decide("once")}
+        onFeedback={() => undefined}
+        onReject={() => void decide("reject")}
+        statements={statements}
+      />
+      {error && (
+        <Text className={cx("workflow-database-approval-error")} type="danger">
+          {error}
+        </Text>
+      )}
+    </>
   );
 }
 
@@ -1116,6 +1203,28 @@ export function workflowClarification(
   }
 
   return undefined;
+}
+
+// 提取高危数据库审批载荷：必须是 agent_approval 模式且包含可执行的 SQL 语句。
+function workflowDatabaseApproval(
+  clarification?: WorkflowClarification,
+): { approval: ToolApproval; statements: string[] } | undefined {
+  if (!clarification || clarification.mode !== "agent_approval") return undefined;
+  const approval = clarification.approval;
+  if (!approval || typeof approval !== "object" || Array.isArray(approval)) {
+    return undefined;
+  }
+  const plan = clarification.database_change_plan;
+  const planRecord =
+    plan && typeof plan === "object" && !Array.isArray(plan)
+      ? (plan as Record<string, unknown>)
+      : {};
+  const rawStatements = planRecord.statements;
+  const statements = Array.isArray(rawStatements)
+    ? rawStatements.map(String).filter(Boolean)
+    : [];
+  if (statements.length === 0) return undefined;
+  return { approval: approval as ToolApproval, statements };
 }
 
 function workflowConfirmationArtifact(

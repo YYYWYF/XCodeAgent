@@ -87,6 +87,16 @@ def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
     return None
 
 
+def _approved_database_change_plan(tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """从审批暂停恢复的任务上读取已批准并待执行的数据库计划。"""
+
+    for task in tasks:
+        plan = task.get("approved_database_change_plan")
+        if isinstance(plan, dict) and plan:
+            return plan
+    return None
+
+
 def _group_tasks_by_owner(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """按任务 owner 分组，便于分别派发给对应专业 Agent。"""
 
@@ -200,6 +210,89 @@ def _database_approval_payload(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _database_approval_rejected_result(
+    *,
+    state: ProjectState,
+    tasks: list[dict[str, Any]],
+    paused_tasks: list[dict[str, Any]],
+    build_task_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """用户拒绝高危数据库审批后，把待审批数据库任务标记失败并结束本轮构建。"""
+
+    paused_ids = {str(task.get("id") or "") for task in paused_tasks}
+    rejected_results = [
+        {
+            "task_id": task["id"],
+            "owner": str(task.get("owner") or "database"),
+            "status": "failed",
+            "failure_category": "database_approval_rejected",
+            "failure_reason": "用户拒绝了高危数据库审批，数据库变更未执行。",
+            "agent_note": "用户拒绝了高危数据库审批，数据库变更未执行。",
+            "changed_files": [],
+            "commands": [],
+            "change_request": None,
+        }
+        for task in paused_tasks
+    ]
+    next_tasks = [
+        (
+            {
+                **task,
+                "status": "failed",
+                "scheduler": {
+                    **(
+                        task.get("scheduler")
+                        if isinstance(task.get("scheduler"), dict)
+                        else {}
+                    ),
+                    "paused_for": "database_approval_rejected",
+                },
+            }
+            if str(task.get("id") or "") in paused_ids
+            else task
+        )
+        for task in tasks
+    ]
+    build_results = [
+        *(
+            state.get("build_results")
+            if isinstance(state.get("build_results"), list)
+            else []
+        ),
+        *rejected_results,
+    ]
+    execution_slice = resolve_execution_slice(
+        build_task_plan=build_task_plan,
+        tasks=next_tasks,
+        build_execution_scope=state.get("build_execution_scope"),
+    )
+    build_summary = {
+        **summarize_build_runtime(
+            execution_slice["tasks"],
+            _results_for_tasks(build_results, execution_slice["tasks"]),
+        ),
+        "status": "failed",
+    }
+    return {
+        "phase": "build",
+        "status": "failed",
+        "tasks": next_tasks,
+        "build_task_plan": replace_build_task_plan_tasks(
+            build_task_plan,
+            next_tasks,
+        ),
+        "build_results": build_results,
+        "build_summary": build_summary,
+        "build_execution_scope": state.get("build_execution_scope"),
+        "build_execution_slice": execution_slice,
+        "clarification": {},
+        "database_approval_requests": [],
+        "database_change_plan": {},
+        "build_events": ["scheduler:database_approval_rejected"],
+        "timeline": ["build"],
+    }
+
+
 def _execute_ready_tasks(
     state: ProjectState,
     ready_tasks: list[dict[str, Any]],
@@ -300,6 +393,11 @@ def _execute_owner_tasks(
                 selected_skill_names=state.get("selected_skill_names"),
                 **({"page_template": state.get("page_template")} if owner == "frontend" else {}),
                 **({"ui_designs": state.get("ui_designs")} if owner == "frontend" else {}),
+                **(
+                    {"database_change_plan": _approved_database_change_plan(owner_tasks)}
+                    if owner == "database"
+                    else {}
+                ),
                 on_tool_activity=(
                     (
                         lambda activity: on_batch_tool_activity(owner_tasks, activity)
@@ -563,6 +661,25 @@ def run_build_scheduler(
     build_task_plan = replace_build_task_plan_tasks(build_task_plan, canonical_tasks)
     incoming_repair_task_plan = state.get("repair_task_plan")
     request = str(state.get("request") or "")
+    database_paused_tasks = [
+        task
+        for task in canonical_tasks
+        if isinstance(task, dict)
+        and task.get("status") == "pending"
+        and isinstance(task.get("scheduler"), dict)
+        and task.get("scheduler", {}).get("paused_for") == "database_approval"
+    ]
+    database_approval_rejected = bool(database_paused_tasks) and any(
+        signal in extract_confirmation_answer(request).replace(" ", "")
+        for signal in ("拒绝", "不同意", "不批准")
+    )
+    if database_approval_rejected:
+        return _database_approval_rejected_result(
+            state=state,
+            tasks=canonical_tasks,
+            paused_tasks=database_paused_tasks,
+            build_task_plan=build_task_plan,
+        )
     scope_confirmation_pending = (
         isinstance(incoming_repair_task_plan, dict)
         and incoming_repair_task_plan.get("decision") == "requires_user_confirmation"
@@ -755,6 +872,15 @@ def run_build_scheduler(
         database_approval = _database_approval_result(results)
         if database_approval is not None:
             paused_tasks = _reset_running_tasks_to_pending(running_tasks, ready_ids)
+            approved_plan = database_approval.get("database_change_plan") or {}
+            paused_tasks = [
+                (
+                    {**task, "approved_database_change_plan": approved_plan}
+                    if task.get("id") in ready_ids
+                    else task
+                )
+                for task in paused_tasks
+            ]
             current_state = {
                 **current_state,
                 "tasks": paused_tasks,

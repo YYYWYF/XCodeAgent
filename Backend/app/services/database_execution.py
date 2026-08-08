@@ -18,6 +18,7 @@ _HIGH_RISK_PATTERNS = (
     r"\bdrop\s+table\b",
     r"\bdrop\s+database\b",
     r"\btruncate\s+table\b",
+    r"\bcreate\s+table\b",
     r"\balter\s+table\b[\s\S]*\bdrop\s+(column\s+)?",
     r"\bdelete\s+from\b(?![\s\S]*\bwhere\b)",
     r"\bupdate\s+[\w`.\-]+\s+set\b(?![\s\S]*\bwhere\b)",

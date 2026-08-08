@@ -1292,15 +1292,23 @@ def _normalize_origin_differences(differences: Any) -> list[dict[str, Any]]:
         for item in differences:
             if isinstance(item, dict):
                 backend_adaptation = item.get("backend_adaptation")
+                resolution_kind = str(
+                    item.get("resolution_kind") or "needs_user_confirmation"
+                )
                 normalized.append(
                     {
                         "field": str(item.get("field") or item.get("name") or "待确认项"),
                         "expected": str(item.get("expected") or ""),
                         "actual": str(item.get("actual") or ""),
-                        "resolution_kind": str(
-                            item.get("resolution_kind") or "needs_user_confirmation"
+                        "resolution_kind": resolution_kind,
+                        # operation_refs 只对 database_change 有意义；backend_adaptation/
+                        # already_supported/needs_user_confirmation 一律清空，避免模型把
+                        # 建表操作错误挂到字段级差异上导致确认校验失败。
+                        "operation_refs": (
+                            _text_items(item.get("operation_refs"))
+                            if resolution_kind == "database_change"
+                            else []
                         ),
-                        "operation_refs": _text_items(item.get("operation_refs")),
                         "backend_adaptation": (
                             _normalize_backend_adaptation(backend_adaptation)
                             if isinstance(backend_adaptation, dict)

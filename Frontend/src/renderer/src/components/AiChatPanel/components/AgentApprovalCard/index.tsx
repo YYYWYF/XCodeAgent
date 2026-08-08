@@ -19,6 +19,9 @@ type Props = {
   onApproveAlways: () => void;
   onApproveOnce: () => void;
   onFeedback: (feedback: string) => void;
+  onReject?: () => void;
+  statements?: string[];
+  allowFeedback?: boolean;
 };
 
 const riskMeta = {
@@ -34,6 +37,9 @@ export default function AgentApprovalCard({
   onApproveAlways,
   onApproveOnce,
   onFeedback,
+  onReject,
+  statements = [],
+  allowFeedback = true,
 }: Props) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedback, setFeedback] = useState('');
@@ -78,27 +84,43 @@ export default function AgentApprovalCard({
         </ul>
       )}
 
-      {approval.details && <pre className={cx('agent-approval-details')}>{approval.details}</pre>}
+      {statements.length > 0 && (
+        <div className={cx('agent-approval-sql-block')}>
+          <Text type="secondary">将执行的 SQL</Text>
+          <pre className={cx('agent-approval-sql')}>{statements.join('\n')}</pre>
+        </div>
+      )}
+
+      {approval.details && statements.length === 0 && (
+        <pre className={cx('agent-approval-details')}>{approval.details}</pre>
+      )}
 
       {status === 'pending' && (
         <div className={cx('agent-approval-actions')}>
+          {onReject && (
+            <Button danger disabled={loading} loading={loading} onClick={onReject}>
+              拒绝
+            </Button>
+          )}
           <Button disabled={loading} loading={loading} onClick={onApproveOnce} type="primary">
             同意，仅本次
           </Button>
           <Button disabled={loading} onClick={onApproveAlways}>
             同意，后续相同命令不再询问
           </Button>
-          <Button
-            disabled={loading}
-            icon={<CommentOutlined />}
-            onClick={() => setFeedbackOpen((open) => !open)}
-          >
-            输入其他意见
-          </Button>
+          {allowFeedback && (
+            <Button
+              disabled={loading}
+              icon={<CommentOutlined />}
+              onClick={() => setFeedbackOpen((open) => !open)}
+            >
+              输入其他意见
+            </Button>
+          )}
         </div>
       )}
 
-      {feedbackOpen && status === 'pending' && (
+      {feedbackOpen && allowFeedback && status === 'pending' && (
         <div className={cx('agent-approval-feedback')}>
           <TextArea
             autoSize={{ minRows: 2, maxRows: 4 }}

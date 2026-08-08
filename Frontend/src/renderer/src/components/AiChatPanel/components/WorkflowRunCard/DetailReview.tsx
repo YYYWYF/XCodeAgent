@@ -8,7 +8,6 @@ import type {
   WorkflowDetailReviewTarget,
 } from "../../../../typings";
 import { cx } from "../../../../utils";
-import DataOriginDecisionField from "./DataOriginDecisionField";
 
 const { Panel } = Collapse;
 const { Text } = Typography;
@@ -40,9 +39,6 @@ export default function DetailReview({
   );
   const missingSelectedEndpointPlan = Boolean(
     review.summary?.missingSelectedEndpointPlan,
-  );
-  const hasPendingDataOriginDecision = targets.some((target) =>
-    requiresDataOriginDecision(target, changes[target.target_id]?.data_origin),
   );
 
   // 记录单个审核对象的字段改动，并保留同对象此前已编辑的内容。
@@ -172,8 +168,7 @@ export default function DetailReview({
             disabled ||
             missingSelectedPagePlan ||
             missingSelectedEndpointPlan ||
-            targets.length === 0 ||
-            hasPendingDataOriginDecision
+            targets.length === 0
           }
           icon={<CheckCircleOutlined />}
           onClick={confirm}
@@ -338,42 +333,25 @@ function EndpointReviewEditor({
   target,
 }: ReviewEditorProps): ReactElement {
   const dataOrigin = objectChange(changes.data_origin, target.data_origin);
-  const shouldResolveDataOrigin = isNeedsUserConfirmationDataOrigin(
-    target.data_origin,
-  );
   return (
-    <div
-      className={cx(
-        "workflow-detail-review-fields",
-        shouldResolveDataOrigin &&
-          "workflow-detail-review-fields-data-origin-pending",
-      )}
-    >
+    <div className={cx("workflow-detail-review-fields")}>
       <ReviewSummaryField
         disabled={disabled}
         label="一、数据用途（数据服务于什么）"
         onChange={(value) => onChange("data_usage", parseJsonObject(value))}
         value={jsonSummary(objectChange(changes.data_usage, target.data_usage))}
       />
-      {shouldResolveDataOrigin ? (
-        <DataOriginDecisionField
-          disabled={disabled}
-          onChange={(value) => onChange("data_origin", value)}
-          value={dataOrigin}
-        />
-      ) : (
-        <ReviewSummaryField
-          disabled={disabled}
-          label="二、数据来源"
-          onChange={(value) =>
-            onChange(
-              "data_origin",
-              parseDataOriginSummary(value, target.data_origin),
-            )
-          }
-          value={dataOriginSummary(dataOrigin)}
-        />
-      )}
+      <ReviewSummaryField
+        disabled={disabled}
+        label="二、数据来源"
+        onChange={(value) =>
+          onChange(
+            "data_origin",
+            parseDataOriginSummary(value, target.data_origin),
+          )
+        }
+        value={dataOriginSummary(dataOrigin)}
+      />
       <ReviewSummaryField
         disabled={disabled}
         label="接口行为决策（处理逻辑与验收标准的唯一来源）"

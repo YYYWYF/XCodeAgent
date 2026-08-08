@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 
 from app.services.database_execution import (
     _mysql_connection_config,
+    classify_database_plan_risk,
     create_database_execution_context,
     execute_database_plan,
 )
@@ -158,6 +159,28 @@ class DatabaseExecutionTests(unittest.TestCase):
         self.assertEqual(config_a["database"], "app_a_schema")
         self.assertEqual(config_b["host"], "app-b.mysql.local")
         self.assertEqual(config_b["database"], "app_b_schema")
+
+    def test_classify_database_plan_risk_marks_create_table_high(self) -> None:
+        """建表语句必须被识别为高危数据库计划。"""
+
+        risk = classify_database_plan_risk(
+            tasks=[{"id": "database-books", "risk": "low"}],
+            plan={
+                "statements": [
+                    "CREATE TABLE books (id bigint primary key, name varchar(255) not null)"
+                ]
+            },
+        )
+
+        self.assertEqual(risk["level"], "high")
+        self.assertTrue(
+            any("create" in reason and "table" in reason for reason in risk["reasons"])
+        )
+        low_risk = classify_database_plan_risk(
+            tasks=[],
+            plan={"statements": ["select id, name from books where id = 1"]},
+        )
+        self.assertEqual(low_risk["level"], "low")
 
     def test_execute_database_plan_uses_workspace_credentials(self) -> None:
         """实际 DDL 连接参数必须来自当前工作区，而不是 .env。"""
