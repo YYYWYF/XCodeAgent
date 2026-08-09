@@ -83,6 +83,25 @@ class ModelProviderConversionTests(unittest.TestCase):
 
         self.assertEqual(settings.model_provider, "openai")
 
+    def test_settings_load_ui_design_limits(self) -> None:
+        """验证 UI 设计稿生成限制可由环境变量覆盖。"""
+
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_BASE_URL": "https://example.com/v1",
+                "MODEL_API_KEY": "test-key",
+                "MODEL_NAME": "test-model",
+                "UI_DESIGN_MAX_TOKENS": "8192",
+                "UI_DESIGN_MAX_RETRIES": "3",
+            },
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        self.assertEqual(settings.ui_design_max_tokens, 8192)
+        self.assertEqual(settings.ui_design_max_retries, 3)
+
     def test_settings_reject_non_openai_provider(self) -> None:
         with patch.dict(
             os.environ,

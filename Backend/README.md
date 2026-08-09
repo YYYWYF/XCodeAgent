@@ -149,6 +149,8 @@ MODEL_NAME=moonshot-v1-8k
 AGENT_SYSTEM_PROMPT="You are a helpful local agent."
 AGENT_TEMPERATURE=0.2
 AGENT_MAX_TOKENS=2048
+UI_DESIGN_MAX_TOKENS=4096
+UI_DESIGN_MAX_RETRIES=2
 MODEL_TRUST_ENV=false
 MODEL_OUTPUT_LOG_ENABLED=false
 XCODEAGENT_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
@@ -157,6 +159,8 @@ LANGSMITH_TRACING=false
 LANGSMITH_API_KEY=replace-with-your-langsmith-key
 LANGSMITH_PROJECT=xcodeagent-workflow
 ```
+
+`UI_DESIGN_MAX_TOKENS` 控制单个 UI 设计稿模型调用的最大输出 token 数；`UI_DESIGN_MAX_RETRIES` 控制设计稿代码校验失败后的最大自动修复次数。
 
 `MODEL_OUTPUT_LOG_ENABLED=true` 会在模型生成时把文本输出流式打印到后端控制台，并在调用结束后打印工具调用概要，便于调试。
 

@@ -36,6 +36,8 @@ class Settings:
     )
     default_temperature: float = 0.2
     default_max_tokens: int = 2048
+    ui_design_max_tokens: int = 4096
+    ui_design_max_retries: int = 2
     checkpoint_db_path: str = ""  # populated in from_env
     checkpoint_retention_days: int = 30
     langsmith_tracing_enabled: bool = False
@@ -52,6 +54,8 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        """从环境变量加载并校验后端运行配置。"""
+
         base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL")
         model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
         if model_provider == "openai-compatible":
@@ -77,6 +81,8 @@ class Settings:
             ),
             default_temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
             default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "2048")),
+            ui_design_max_tokens=int(os.getenv("UI_DESIGN_MAX_TOKENS", "4096")),
+            ui_design_max_retries=int(os.getenv("UI_DESIGN_MAX_RETRIES", "2")),
             checkpoint_db_path=os.getenv("XCODEAGENT_CHECKPOINT_DB", ""),
             checkpoint_retention_days=int(
                 os.getenv("XCODEAGENT_CHECKPOINT_RETENTION_DAYS", "30")
