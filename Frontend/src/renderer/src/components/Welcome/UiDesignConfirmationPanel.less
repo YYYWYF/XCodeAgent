@@ -587,6 +587,7 @@
 }
 
 .@{class-prefix}-ui-design-template-card {
+  position: relative;
   border: 1px solid rgba(5, 5, 5, 0.08);
   border-radius: 8px;
   overflow: hidden;
@@ -594,9 +595,29 @@
   transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 
   &:hover {
-    border-color: #1677ff;
-    box-shadow: 0 4px 12px rgba(22, 119, 255, 0.15);
+    border-color: #722ed1;
+    box-shadow: 0 4px 12px rgba(114, 46, 209, 0.15);
     transform: translateY(-2px);
+  }
+
+  // 当前页面已选中的模板：紫色细边框 + 右上角"当前"角标。
+  &.@{class-prefix}-selected {
+    border-color: #722ed1;
+
+    &::after {
+      content: '当前';
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 3;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #722ed1;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.4;
+    }
   }
 }
 

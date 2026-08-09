@@ -237,6 +237,14 @@ export default function ApplicationPagePlanningModal({
   ) {
     enteredUiConfirmationRef.current = true
   }
+  // 已离开 UI 确认阶段（流转到 project_planning 等）：解除锁定，让进度页正常显示。
+  if (
+    enteredUiConfirmationRef.current &&
+    planningWorkflowPhase(workflow) &&
+    planningWorkflowPhase(workflow) !== 'ui_confirmation'
+  ) {
+    enteredUiConfirmationRef.current = false
+  }
   const inUiConfirmationStage = enteredUiConfirmationRef.current
   const showingProgress =
     !workflow || (running && !awaitingUserInput && !inUiConfirmationStage)

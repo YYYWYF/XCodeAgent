@@ -568,12 +568,17 @@ export default function UiDesignConfirmationPanel({
         wrapClassName={cx('ui-design-template-picker-modal')}
       >
         <div className={cx('ui-design-template-cards')}>
-          {templates.map((tpl) => {
+          {(() => {
+            // 当前选模板页面的已选模板 id（有 template_id 才回显，换一换/LLM 生成的无）。
+            const pickerPage = pages.find((p) => (p.pageId || '') === templatePickerFor)
+            const currentTemplateId = pickerPage?.template_id
+            return templates.map((tpl) => {
             const desc = tpl.manifest.description || ''
             const previewImg = tpl.manifest.previewImage
+            const isSelected = currentTemplateId === tpl.manifest.id
             return (
               <div
-                className={cx('ui-design-template-card')}
+                className={cx('ui-design-template-card', isSelected && 'selected')}
                 key={tpl.manifest.id}
                 onClick={() => confirmTemplatePick(tpl.manifest.id)}
               >
@@ -600,7 +605,8 @@ export default function UiDesignConfirmationPanel({
                 </div>
               </div>
             )
-          })}
+          })
+          })()}
         </div>
         <Text className={cx('ui-design-template-picker-hint')} type="secondary">
           点击模板即套用为该页设计稿，弹窗自动关闭。

@@ -1,10 +1,8 @@
 import {
   DatabaseOutlined,
-  FileTextOutlined,
   LockOutlined,
   PlayCircleOutlined,
   RocketOutlined,
-  ZoomInOutlined,
 } from "@ant-design/icons";
 import { Button, Radio, Skeleton, Typography } from "antd";
 import { useEffect, useMemo, useState } from "react";
@@ -16,8 +14,6 @@ import type {
   WorkflowEvent,
 } from "../../typings";
 import { cx } from "../../utils";
-import type { PageTemplate } from "../../service/templateService";
-import { getAvailableTemplates } from "../../service/templateService";
 import PageDesignProgress from "./PageDesignProgress";
 import "./DetailConfirmationPageSelector.less";
 
@@ -154,97 +150,6 @@ export default function DetailConfirmationPageSelector({
   workflowEvents,
 }: Props): JSX.Element {
   const [selectedTargetKey, setSelectedTargetKey] = useState("");
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | undefined>();
-  const [hoveredTemplateId, setHoveredTemplateId] = useState<string | undefined>();
-  const [previewingTemplate, setPreviewingTemplate] = useState<PageTemplate | undefined>();
-  const templates = useMemo(() => getAvailableTemplates(), []);
-
-  /** 组装当前选中模板的上下文，供 onStart 携带给后端学习模板源码。 */
-  const buildTemplateContext = (): {
-    templateId: string;
-    templateName: string;
-    templateSourcePath: string;
-  } | undefined => {
-    const selectedTemplate = templates.find(
-      (t) => t.manifest.id === selectedTemplateId,
-    );
-    return selectedTemplate
-      ? {
-        templateId: selectedTemplate.manifest.id,
-        templateName: selectedTemplate.manifest.name,
-        templateSourcePath: selectedTemplate.sourcePath,
-      }
-      : undefined;
-  };
-
-  /** 渲染页面模板卡片选择区（initial 与 locked 分支共用同一套 UI）。 */
-  const renderTemplateCards = (): JSX.Element => (
-    <div className={cx("detail-page-selector-template-cards")}>
-      {templates.map((tpl) => {
-        const isSelected = selectedTemplateId === tpl.manifest.id;
-        const desc = tpl.manifest.description || '';
-        const previewImg = tpl.manifest.previewImage;
-        return (
-          <div
-            key={tpl.manifest.id}
-            className={cx(
-              "detail-page-selector-template-card",
-              isSelected && "selected",
-            )}
-            onClick={() => {
-              setSelectedTemplateId(isSelected ? undefined : tpl.manifest.id);
-            }}
-          >
-            <div
-              className={cx("detail-page-selector-template-thumb")}
-              onMouseEnter={() => previewImg && setHoveredTemplateId(tpl.manifest.id)}
-              onMouseLeave={() => setHoveredTemplateId(undefined)}
-            >
-              {previewImg ? (
-                <img
-                  src={previewImg}
-                  alt={tpl.manifest.name}
-                  draggable={false}
-                />
-              ) : (
-                <div className={cx("detail-page-selector-template-thumb-empty")}>
-                  <FileTextOutlined />
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    暂无预览图
-                  </Text>
-                </div>
-              )}
-              {previewImg && hoveredTemplateId === tpl.manifest.id && (
-                <div
-                  className={cx("detail-page-selector-template-thumb-overlay")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setPreviewingTemplate(tpl);
-                  }}
-                >
-                  <ZoomInOutlined />
-                  <span>预览</span>
-                </div>
-              )}
-            </div>
-
-            <div className={cx("detail-page-selector-template-card-body")}>
-              <Text strong className={cx("detail-page-selector-template-card-name")}>
-                {tpl.manifest.name}
-              </Text>
-              <Text
-                type="secondary"
-                className={cx("detail-page-selector-template-desc")}
-                title={desc}
-              >
-                {desc}
-              </Text>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
   const endpointOptions = useMemo(() => {
     return apiContracts.flatMap((contract) => {
       return contract.endpoints.map((endpoint, endpointIndex) => {
@@ -346,9 +251,6 @@ export default function DetailConfirmationPageSelector({
       progressTargetType === "endpoint"
         ? progressEndpoint?.purpose || "补充接口用途、处理逻辑和数据来源设计。"
         : progressPage?.purpose;
-    // 仅页面目标支持选择页面模板，让后端 LLM 学习模板源码后再生成。
-    const lockedTemplateVisible =
-      progressTargetType === "page" && templates.length > 0;
     return (
       <section className={cx("detail-page-selector", "locked-mode")}>
         <div className={cx("detail-page-selector-backdrop")} />
@@ -356,7 +258,6 @@ export default function DetailConfirmationPageSelector({
           className={cx(
             "detail-page-selector-panel",
             "locked-panel",
-            lockedTemplateVisible && "with-template",
           )}
         >
           <span className={cx("detail-page-selector-lock-icon")}>
@@ -382,16 +283,6 @@ export default function DetailConfirmationPageSelector({
             <Text type="secondary">{lockedTargetPurpose}</Text>
           </div>
 
-          {lockedTemplateVisible && (
-            <section className={cx("detail-page-selector-locked-template")}>
-              <Text className={cx("detail-page-selector-section-title")} strong>
-                <FileTextOutlined style={{ marginRight: 6 }} />
-                选择页面模板（可选）
-              </Text>
-              {renderTemplateCards()}
-            </section>
-          )}
-
           <Button
             className={cx("detail-page-selector-action")}
             disabled={disabled}
@@ -409,7 +300,7 @@ export default function DetailConfirmationPageSelector({
                     apiContractId: progressEndpoint.apiContractId,
                     endpointId: progressEndpoint.endpointId,
                   }
-                  : buildTemplateContext(),
+                  : undefined,
               )
             }
             size="large"
@@ -528,36 +419,6 @@ export default function DetailConfirmationPageSelector({
           </Radio.Group>
         ) : (
           <Text type="secondary">项目计划中暂无可设计页面或接口。</Text>
-        )}
-
-        {/* ---------- 模板预览图全屏放大弹窗 ---------- */}
-        {previewingTemplate && previewingTemplate.manifest.previewImage && (
-          <div
-            className={cx("detail-page-selector-template-zoom-mask")}
-            onClick={() => setPreviewingTemplate(undefined)}
-          >
-            <div
-              className={cx("detail-page-selector-template-zoom-box")}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <img
-                src={previewingTemplate.manifest.previewImage}
-                alt={previewingTemplate.manifest.name}
-                draggable={false}
-              />
-              <div className={cx("detail-page-selector-template-zoom-caption")}>
-                <Text strong style={{ color: "#fff" }}>
-                  {previewingTemplate.manifest.name}
-                </Text>
-                <Text style={{ color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
-                  {previewingTemplate.manifest.description}
-                </Text>
-                <Text style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, marginTop: 4 }}>
-                  点击空白处关闭
-                </Text>
-              </div>
-            </div>
-          </div>
         )}
 
         <div className={cx("detail-page-selector-action-bar")}>
