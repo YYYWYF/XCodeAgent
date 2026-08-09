@@ -1101,9 +1101,7 @@ export default function AiChatPanel({
                     execution={scopedExecution}
                     mode={displayedPlanExecutionMode}
                     onAccept={handleAcceptPreview}
-                    onAdjust={(feedback, adjustmentType) =>
-                      void handleAdjustPlan(feedback, adjustmentType)
-                    }
+                    onAdjust={handleAdjustPlan}
                     onConfirmInteraction={handleConfirmPlanInteraction}
                     onEnd={() => void handleEndPlan(scopedExecution?.runId)}
                     onOpenPreview={() => void handleOpenFullscreenPreview()}

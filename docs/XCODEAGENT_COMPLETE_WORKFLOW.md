@@ -1,8 +1,9 @@
 # XCodeAgent 当前完整 Workflow 与数据流说明
 
-> 更新时间：2026-08-09（pull + stash 合并后）
+> 更新时间：2026-08-09（按当前工作区源码核对）
 > 事实来源：当前工作区代码，而不是历史设计稿。
-> 本文省略 AG-UI 传输、事件投影、消息流、前端进度卡等协议节点和边，只描述业务流程、LangGraph 节点、子图节点以及完成端到端应用交付所必需的图外业务动作。
+> 事实冲突时，以 Graph 声明与路由、协议适配器、前端实际调用链的顺序裁决；其他设计文档只作交叉参考。
+> 本文不逐帧展开 AG-UI 传输、事件投影、消息流和前端进度卡，但会保留入口、恢复边界和用户可达流程。
 
 ## 1. 文档范围与图例
 
@@ -14,16 +15,16 @@
 
 `START`、`END`、`await_user_input`、`ready_for_workbench`、分支菱形和纯 UI 选择框只作为控制标记，不作为需要单独 Prompt/输入输出卡片的业务节点。每个 LLM 节点的“当前提示词”字段记录当前 Prompt 的完整语义约束、准确源码函数和动态注入数据；Prompt 本身由运行时拼接，本文不复制会迅速失真的整段源代码字面量。
 
-本文不展开以下内容：
+本文不逐项展开以下内容：
 
 - AG-UI 的 `RUN_STARTED`、消息、状态快照、自定义事件、`RUN_FINISHED` 等传输节点和边。
-- React 组件挂载、IPC 细节、工具调用流式展示和生命周期事件投影。
+- React 组件内部状态、IPC 实现细节、工具调用逐帧展示和生命周期事件投影；第 2.1 节只说明用户真正可达的前端旅程。
 - `/health`、文档查询、技能管理、Agent 文件管理和底层 `/tools/*` 基础设施接口。
 - 每个 Agent 内部的单次 `read_file`、`edit_file`、`execute` 等工具调用循环。
 
 图中节点统一使用 `英文节点名 / 中文节点名`。实线表示业务控制流，边上的文字表示流转条件或主要数据；虚线表示持久化产物或引用关系。
 
-## 2. 全局端到端流程
+## 2. 新建应用到首次交付主链
 
 ```mermaid
 flowchart TD
@@ -45,6 +46,7 @@ flowchart TD
     subgraph P3["阶段三：目标详细设计"]
         D1["detail_confirmation / 页面或接口详细设计确认"]
         D2["project_planning / 项目计划调整确认"]
+        DW(["await_user_input / 依赖或计划缺口暂停"])
     end
 
     subgraph P4["阶段四：上下文与任务规划"]
@@ -56,7 +58,7 @@ flowchart TD
     subgraph P5["阶段五：构建执行"]
         B1["build / BuildScheduler 构建调度"]
         B2["database_agent / 数据库变更执行"]
-        B3["backend_agent / 后端代码生成"]
+        B3["data_source_agent / 后端数据源代码生成"]
         B4["frontend_agent / 前端代码生成"]
         B5["engineering_acceptance / 工程验收与结果归并"]
     end
@@ -73,8 +75,9 @@ flowchart TD
 
     subgraph P7["阶段七：启动、验收与完成"]
         L1["launch_project / 启动项目预览"]
-        L2["acceptance / 用户验收"]
-        L3(["finalize_project / 项目完成"])
+        L2["acceptance_request / 用户验收请求边界"]
+        L3["acceptance / 验收通过节点"]
+        L4(["finalize_project / 项目完成"])
         LF(["handle_failure / 失败终止"])
     end
 
@@ -88,7 +91,8 @@ flowchart TD
 
     T4 -->|"selectedPageId or selectedEndpointId"| D1
     D1 -->|"confirmed PageDetail / EndpointDetail"| C1
-    D1 -->|"dependency or plan gap"| D2
+    D1 -->|"dependency or plan gap；当前 run 结束"| DW
+    DW -->|"新请求显式进入计划修订"| D2
     D2 -->|"new confirmed ProjectPlan"| D1
     C1 -->|"database source required"| C2
     C1 -->|"static or external API"| C3
@@ -114,10 +118,34 @@ flowchart TD
 
     L1 -->|"preview_url + launch_result"| L2
     L2 -->|"accepted"| L3
+    L3 --> L4
     L2 -->|"local_fix"| Q7
     L2 -->|"page/endpoint/data-source change"| D1
     L2 -->|"project_plan_change"| D2
 ```
+
+### 2.1 当前前端用户旅程
+
+1. 欢迎页最多同时保留 3 个独立的新应用规划。每个应用拥有自己的 application、thread、lifecycle、Workflow 快照、停止处理器和模板任务；切换可见规划或返回首页只是隐藏界面，不会卸载仍在运行的规划或工作台。重启后可从应用索引和 lifecycle 恢复未完成初始化。
+2. 初始化依次经过 RequirementSpec、逐页 UI 设计和 ProjectPlan 三个确认门。RequirementSpec 支持结构化编辑和“保存草稿”，但保存不等于确认；ProjectPlan 当前通过反馈重新生成或显式确认，没有同等的前端结构化直改入口。
+3. ProjectPlan 确认后，前端拉取前后端模板、写页面占位和 `BIZ_MENUS`，再提交模板生成 lifecycle。当前可见规划完成后自动打开工作台；后台规划完成只提示用户从最近项目进入，并写入 `planningConfirmedAt` 作为永久工作台准入标记。
+4. 工作台进入时会先通过 `/api/projects/launch` 异步尝试启动“当前模板工程预览”。这是工作台预览初始化，不是主 Workflow 测试通过后的 `launch_project`，两次启动的时机和失败语义不同。
+5. 正式开发前先从 ProjectPlan 选择页面或具体 endpoint。页面设计可选 `commonTable`、`multiForm`、`tabsTable` 三种参考模板并预览，选择结果以 `pageTemplate={id,name,sourcePath}` 送入 `/workflow/run`；endpoint 使用 `detailTargetType=endpoint + selectedApiContractId + selectedEndpointId`。
+6. 页面和 endpoint 各自拥有会话、thread 和历史。目标输入默认走“设计修改”模式的 `/workflow/run`；已设计目标可切到“自由协作”模式的 `/conversation/run`。每条消息可选择当前启用的用户 Skill，选中列表随消息和会话快照传递。
+7. 正式运行期间只用 `PlanExecutionDock` 替换底部输入区，消息、流程步骤、侧栏和预览仍保留。Build Run 卡嵌在对应 Build 步骤内，展示 scope、任务状态、依赖、文件范围、验收项和失败证据；运行中任务可展示非持久化工具活动。
+8. Workflow `launch_project` 返回正式 `preview_url` 后打开右侧预览。用户可以验收通过，或提交 `local_fix/page_design_change/endpoint_change/data_source_change/project_plan_change`；调整请求在协议边界直接选择恢复节点，通常不先执行 `acceptance` 节点。
+
+### 2.2 业务入口与 AG-UI 边界
+
+| 入口                                    | 当前职责                                                                                              | 是否进入主开发 Graph                           |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `/application-page-planning/run`        | RequirementSpec、UI 设计、ProjectPlan 三阶段初始化规划；也承载只读恢复和 RequirementSpec 草稿保存动作 | 否，使用独立 application-planning Graph/thread |
+| `/application-lifecycle/run`            | 创建、读取 lifecycle，完成模板生成门禁                                                                | 否，独立确定性 AG-UI action                    |
+| `/application-development-planning/run` | 为 `selectedPageKey` 生成并确认编号任务清单                                                           | 否；当前前端未挂载，见第 5 节                  |
+| `/workflow/run`                         | 页面/endpoint 详细设计、Build、Testing、修复、正式预览和验收                                          | 是                                             |
+| `/conversation/run`                     | 无目标对话、工作区问答、自由协作和局部修改                                                            | 否，使用独立 conversation Graph/thread         |
+
+业务动作和正常 Workflow 轮次都投影完整 AG-UI run 生命周期。等待确认采用“当前 Graph 运行到 `END`，以 `requires_user_input` 完成本轮”，不是 LangGraph interrupt；用户提交新 HTTP run 后，服务端再合并同 thread checkpoint、磁盘 artifacts、受校验的客户端恢复值和显式恢复节点。未捕获的 Graph/模型异常发送 `RunErrorEvent`，不能与业务失败的 `RUN_FINISHED(status=failed)` 混为一谈。
 
 ## 3. 阶段一：新建应用规划 Graph
 
@@ -168,9 +196,10 @@ flowchart TD
 - **当前提示词**：`Backend/app/services/ui_design_generator.py::_build_ui_design_prompt`；失败时使用 `_build_repair_prompt`。提示词要求生成纯视觉 React + antd5 + `@ant-design/pro-components` 页面，使用静态 Mock 数据，不调用 API，不改变需求；输出单个完整 TSX 文件；组件名必须与 `page_key` 一致。
 - **输入**：已确认 `requirement_spec.pages`、页面 `pageId/name/path/description`、内置 `antd-ui-design` 技能全文、工作区 `.xcodeagent/ui-design` 落盘目录、可复用的已有页面设计代码。
 - **输出**：`.xcodeagent/ui-design/pages/<PageKey>/index.tsx`、内联源码 `ui_designs.pages[].code`、`code_path/page_key/menu_path/route_path/status`、`.xcodeagent/specs/ui-designs.json` 和确认状态；当前不生成独立设计稿菜单，也不再提供 `preview_origin`。
-- **校验规则**：代码必须非空、包含默认导出、没有未定义 JSX 组件、import 只能来自白名单，并通过从主 `Frontend/node_modules/.pnpm` 定位的 esbuild 做 TSX 语法校验；esbuild 缺失时仅跳过语法校验；其他校验失败按配置自动修复重试。页面最多 3 个并发生成，每页完成即经 `ui_confirmation.progress` 推送含内联代码的快照；所有页面必须显式确认后才能继续。
+- **生成预算**：每次单页生成或修复调用先执行 `ChatOpenAI.bind(max_tokens=settings.ui_design_max_tokens)`；`UI_DESIGN_MAX_TOKENS` 默认 `8192`。校验失败最多执行 `UI_DESIGN_MAX_RETRIES` 次定向修复，默认 `2`，即“首次生成 + 最多 2 次修复”共 3 次模型调用。它与底层请求重试 `MODEL_MAX_RETRIES` 是两个不同预算。
+- **校验规则**：代码必须非空、包含默认导出、没有未定义 JSX 组件、import 只能来自白名单，并通过从主 `Frontend/node_modules/.pnpm` 定位的 esbuild 做 TSX 语法校验；esbuild 缺失时仅跳过语法校验；其他校验失败按上述独立预算自动修复，耗尽后该页记录 `generation_failed`，不会把未通过校验的代码落成可用设计稿。页面最多 3 个并发生成，每页完成即经 `ui_confirmation.progress` 推送含内联代码的快照；所有页面必须显式确认后才能继续。
 - **渲染事实**：不再 clone UI 模板、执行 `pnpm install`、启动独立 Vite server 或注册 `BIZ_MENUS`。前端 `DesignRenderer` 用 Sucrase 把内联 TSX 转为 CJS，重写白名单模块引用，再把产物通过 `postMessage` 交给同源 `design-frame.html` iframe；iframe 使用随应用发布的 antd5/React/Pro Components IIFE runtime 挂载组件。生成中页面和最终确认页面复用同一渲染器，并支持全屏预览。
-- **依赖文件**：`graph/nodes/ui_confirmation.py`、`services/ui_design_generator.py`、`services/ui_design_project_setup.py`、`Frontend/src/renderer/src/components/DesignRenderer/*`、`Frontend/src/renderer/src/components/Welcome/UiDesignStreamingPreview.tsx`、`UiDesignConfirmationPanel.tsx`、`Frontend/src/renderer/public/design-runtime/*`、`Frontend/scripts/build-design-runtime.mjs`、`.xcodeagent/specs/ui-designs.json`。
+- **依赖文件**：`Backend/app/config.py`、`Backend/.env.example`、`graph/nodes/ui_confirmation.py`、`services/ui_design_generator.py`、`services/ui_design_project_setup.py`、`Frontend/src/renderer/src/components/DesignRenderer/*`、`Frontend/src/renderer/src/components/Welcome/UiDesignStreamingPreview.tsx`、`UiDesignConfirmationPanel.tsx`、`Frontend/src/renderer/public/design-runtime/*`、`Frontend/scripts/build-design-runtime.mjs`、`.xcodeagent/specs/ui-designs.json`。
 - **依赖节点**：上游 `requirements`；下游 `project_planning`；生成或确认失败时停在本节点。
 
 ### 3.3 `project_planning / 项目计划生成与确认`
@@ -209,7 +238,7 @@ flowchart LR
 - **类型**：前端确定性动作，通过 Electron 主进程执行 Git clone；无 LLM 提示词。
 - **输入**：`workspaceRoot`、`appName`、前端模板仓库、后端模板仓库。
 - **输出**：目标工作区下 `frontend/`、`backend/`；前端函数返回模板版本和时间。
-- **校验规则**：只校验应用名和项目路径非空；当前实现会吞掉 clone 异常并仍返回成功。
+- **校验规则**：只校验应用名和项目路径非空；Electron 主进程会对前端、后端各自最多尝试 3 次 shallow clone，并在成功后删除模板仓库的 `.git`。但 renderer 的 `fetchTemplateCode` 仍会吞掉最终 clone 异常并返回成功，因此重试并没有消除模板门禁假成功风险。
 - **依赖文件**：`Frontend/src/renderer/src/service/templateApi.ts`、Electron `workspace.cloneTemplate` 实现、两个模板 Git 仓库。
 - **依赖节点**：上游 `project_planning`；下游 `generate_application_template_files`。
 
@@ -217,8 +246,8 @@ flowchart LR
 
 - **类型**：前端确定性动作；无 LLM 提示词。
 - **输入**：确认后的 `ProjectPlan.frontend_pages` 菜单树、`route_root_path`、页面 `pageId/path/name`、模板工作区。
-- **输出**：`frontend/src/pages/<PageKey>/index.tsx` 占位页、`frontend/src/constants/menus.ts` 菜单树、`written[]`。
-- **校验规则**：PageKey 唯一；动态路由设置 `hideInMenu`；菜单路径相对化；当前在缺少页面、IPC 或写入结果为空时返回 `written: []` 而不是失败。
+- **输出**：`frontend/src/pages/<PageKey>/index.tsx` 占位页、`frontend/src/constants/menus.ts` 中被整体替换的 `BIZ_MENUS` 菜单树、`written[]`。
+- **校验规则**：PageKey 唯一；保留 ProjectPlan 菜单层级并把子路径相对化；动态路由设置 `hideInMenu`；叶子路径若因菜单/页面路由重合变为空，则回退 root-relative path。`menu_enabled=true` 时 ProjectPlan 生成/修复还会阻止首页型业务页占用裸 `/` 或裸 `route_root_path`。当前在缺少页面、IPC 或写入结果为空时返回 `written: []` 而不是失败。
 - **依赖文件**：`Frontend/src/renderer/src/service/templateApi.ts`、Electron `workspace.writeTemplatePages`、ProjectPlan JSON、前端模板目录。
 - **依赖节点**：上游 `clone_templates`；下游 `complete_template_generation`。
 
@@ -231,9 +260,9 @@ flowchart LR
 - **依赖文件**：`services/application_lifecycle.py`、`domain/application_lifecycle.py`、`.xcodeagent/application-lifecycle.json`、RequirementSpec JSON、ProjectPlan JSON。
 - **依赖节点**：上游 `generate_application_template_files`；成功进入工作台，失败回到模板重试。
 
-## 5. 独立的应用开发任务规划动作
+## 5. 已实现但当前前端未挂载的应用开发任务规划动作
 
-该流程使用独立业务动作，不进入主 LangGraph，也不是 BuildScheduler 实际执行的 Build DAG。
+该流程通过 `/application-development-planning/run` 使用独立 AG-UI 业务动作，不进入主 LangGraph，也不是 BuildScheduler 实际执行的 Build DAG。当前 `ApplicationDevelopmentPlanningGate` 组件没有被 `Frontend/src` 的任何页面导入或挂载，因此它不是现行用户主链：工作台详情确认会直接续入 `inspect_workspace → prepare_build_tasks → build`。本节记录已经存在但暂不可达的实现契约，避免把它误画成正式 Workflow 的必经门禁。
 
 ```mermaid
 flowchart TD
@@ -256,9 +285,9 @@ flowchart TD
 - **当前提示词**：`services/application_development_planning.py::_SYSTEM_PROMPT` 与 `generate_application_development_plan` 内动态 Human Prompt。要求只生成所选页面业务任务；不重建路由、请求层、导航和布局；`sharedModules=[]`；每个任务有 2–6 条可观察验收标准；输出唯一 JSON。
 - **输入**：`.xcodeagent/application.json` 的应用、菜单、API、数据源和认证摘要；`selectedPageKey`；最多 5 个回答。
 - **输出**：`questions` 或 `ApplicationDevelopmentPlan`，包括 `menuPlans/tasks/dependsOn/executionOrder`。
-- **校验规则**：Pydantic 字段限制；只能返回问题或计划之一；页面必须存在；任务 ID 唯一；依赖必须存在且无环；执行顺序必须覆盖全部任务并满足拓扑；功能必须被任务覆盖；任务初始状态为 `todo`；禁止 shared task/module。
+- **校验规则**：Pydantic 字段限制；只能返回问题或计划之一；页面必须存在；每个菜单最多 20 个任务；任务 ID 唯一；依赖必须存在且无环；`blocks` 由后端根据 `dependsOn` 反向推导；执行顺序必须覆盖全部任务并满足拓扑；功能必须被任务覆盖；每项含 2–6 条可观察验收标准；任务初始状态为 `todo`，持久化 schema 后续允许 `in_progress/completed`；禁止 shared task/module。
 - **依赖文件**：`services/application_development_planning.py`、`protocols/application_development_planning.py`、`.xcodeagent/application.json`、ProjectPlan 投影。
-- **依赖节点**：上游工作台页面选择；下游 `confirm_application_development_plan`。
+- **依赖节点**：当前无可达前端上游；若未来挂载，则从独立 `selectedPageKey` 页面选择进入，下游为 `confirm_application_development_plan`。不要与主 Workflow 的 `selectedPageId` 混用。
 
 ### 5.2 `confirm_application_development_plan / 确认并持久化开发计划`
 
@@ -303,8 +332,7 @@ flowchart TD
     S -->|"resume_from=finalize_project"| F
 
     D -->|"confirmed details"| W
-    D -->|"requires_user_input"| E
-    D -->|"plan dependency gap"| P
+    D -->|"requires_user_input，包括依赖或计划缺口"| E
     P -->|"confirmed revised plan"| D
     P -->|"requires_user_input"| E
     P -->|"failed"| X
@@ -344,10 +372,10 @@ flowchart TD
 - **类型**：页面/接口直接 ChatModel + 确定性详情组装、外置文档持久化和用户审核门禁。
 - **当前提示词**：页面使用 `agents/main/page_designer.py::_page_design_prompt`，要求只设计当前页面，不改 ProjectPlan 依赖和 API contract，输出布局、状态反馈、交互、导航、API 依赖和 response binding；接口使用 `_endpoint_decision_prompt`，要求只为一个 endpoint 决定 `data_origin`、字段映射、结构差异、数据库操作和操作语义，并严格匹配正式 schema。
 - **输入**：已确认 ProjectPlan、`selectedPageId` 或 `selectedApiContractId + selectedEndpointId`、已有 PageDetail/EndpointDetail、详情审核提交、用户反馈、数据库摘要（接口设计时可选）、验收调整。
-- **输出**：`pending_project_plan`、外置 PageDetail/EndpointDetail JSON、`detail_plans`、`detail_selection`、确认后更新的 `project_plan`。
-- **校验规则**：必须指定页面或 endpoint；页面/endpoint 必须存在且唯一；详情中的依赖只能来自 ProjectPlan；response binding 必须指向契约响应字段；数据库差异必须结构化；每次新生成或修订详情都重新进入确认门禁；确认提交按目标应用。
-- **依赖文件**：`graph/nodes/planning.py`、`agents/main/page_designer.py`、`services/page_detail_plan.py`、`services/detail_review.py`、`workspace/detail_design_documents.py`、`.xcodeagent/plans/pages/page--<pageId>.json`、`.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json`。
-- **依赖节点**：上游工作台选择、`project_planning`、验收调整或 `small_task_repair`；下游 `inspect_workspace`。
+- **输出**：`pending_project_plan`、外置 PageDetail/EndpointDetail Markdown + JSON、`detail_plans`、`detail_selection`、确认后更新的 `project_plan`；ProjectPlan JSON 只保留详情引用与 hash，不内联完整可编辑详情正文。
+- **校验规则**：必须指定页面或 endpoint；页面/endpoint 必须存在且唯一；详情中的依赖只能来自 ProjectPlan；response binding 必须指向契约响应字段；数据库差异必须结构化；每次新生成或修订详情都重新进入确认门禁；确认提交按目标应用。依赖或计划缺口只返回 `requires_user_input/project_plan_revision_required` 并结束当前 run，`route_detail_confirmation` 不会自动跳到 `project_planning`；需要由下一次请求显式选择计划修订入口。
+- **依赖文件**：`graph/nodes/planning.py`、`agents/main/page_designer.py`、`services/page_detail_plan.py`、`services/detail_review.py`、`workspace/detail_design_documents.py`、`.xcodeagent/plans/pages/page--<pageId>.md|json`、`.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.md|json`。
+- **依赖节点**：上游工作台选择、显式 `project_planning` 恢复、验收调整或 `small_task_repair`；只有确认成功才进入 `inspect_workspace`。
 
 ### 6.2 `inspect_workspace / 检查工作区`
 
@@ -379,7 +407,7 @@ flowchart TD
 
 ## 7. Build 节点内部流程
 
-`build` 当前不是一个额外 LangGraph 子图，而是单个 Graph 节点内部的循环调度器。
+外层主 Graph 只注册一个 `build` 节点；其实现位于 `graph/subgraphs/build.py`，内部由确定性 BuildScheduler 驱动循环调度，并没有再次编译一个独立 StateGraph。
 
 ```mermaid
 flowchart TD
@@ -391,7 +419,7 @@ flowchart TD
     B2["select_ready_build_batch / 选择就绪任务批次"]
     B3{"group_by_owner / 按 owner 分组"}
     DB["database_agent / 数据库变更 Agent"]
-    BE["backend_agent / 后端代码 Agent"]
+    BE["data_source_agent / 后端数据源 Agent"]
     FE["frontend_agent / 前端代码 Agent"]
     V["engineering_acceptance / 工程验收与结果归并"]
     RP["build_repair_planning / 构建失败修复规划"]
@@ -443,9 +471,9 @@ flowchart TD
 - **依赖文件**：`agents/database/agent.py`、`agents/database/generator.py`、`services/database_execution.py`、`services/database_schema_diff.py`、MySQL 工具。
 - **依赖节点**：上游 `build` 的 owner 分组；下游 `engineering_acceptance`。
 
-### 7.3 `backend_agent / 后端代码生成 Agent`
+### 7.3 `data_source_agent / 后端数据源代码生成 Agent`
 
-- **类型**：Data Source Deep Agent，拥有后端文件和受限命令工具。
+- **类型**：Agent registry 中的 Data Source Deep Agent；Build task owner 仍使用 `backend`，该 Agent 拥有后端文件和受限命令工具。
 - **当前提示词**：System Prompt 位于 `agents/data_source/agent.py`；执行 Prompt 位于 `agents/data_source/generator.py::_data_source_generation_prompt`。要求只执行批准任务和 allowed paths，严格服从 API contract，Spring Boot/MyBatis 模块必须使用内置技能，代码兼容 Java 8，不在本阶段运行项目级构建/测试。
 - **输入**：backend owner tasks、BuildTaskPlan 摘要、ProjectPlan API/data context、工作区和选定技能。
 - **输出**：每个 task 的结构化状态、摘要、changed files、failure/change request、真实 diff。
@@ -489,11 +517,13 @@ flowchart TD
 ```mermaid
 flowchart TD
     I["integration_test / 集成测试入口"]
-    A["actual_project_checks / 真实工程检查"]
-    C["api_contract_check / API 契约检查"]
-    T["test_agent_review / Test Agent 审阅"]
-    G["main_quality_gate / 主质量门禁"]
-    R["repair_planning / 测试修复规划"]
+    subgraph TS["真实 Testing Subgraph"]
+        A["actual_project_checks / 真实工程检查"]
+        C["api_contract_check / API 契约检查"]
+        T["test_agent_review / Test Agent 审阅"]
+        G["main_quality_gate / 主质量门禁"]
+        R["repair_planning / 测试修复规划"]
+    end
     S["small_task_repair / 局部修复"]
     L(["launch_project / 启动预览"])
     U(["await_user_input / 等待确认"])
@@ -510,6 +540,8 @@ flowchart TD
     R -->|"scope confirmation"| U
     R -->|"terminal failure/budget exhausted"| F
 ```
+
+`small_task_repair` 是主 Graph 节点，不属于 Testing Subgraph。子图只产生 `integration_next_action` 和 repair tasks；外层路由进入 SmallTask，修复成功后再重新调用整个 Testing Subgraph。正式测试失败没有 `integration_test → build` 直连边。
 
 ### 8.1 `integration_test / 集成测试入口`
 
@@ -583,22 +615,22 @@ flowchart TD
 flowchart TD
     L["launch_project / 启动项目预览"]
     P(["preview_ready / 预览就绪并暂停"])
+    LE(["launch_failed / 启动失败并结束本轮"])
     A["acceptance / 用户验收"]
     F["finalize_project / 项目完成"]
     S["small_task_repair / 局部验收修复"]
     D["detail_confirmation / 重新确认详细设计"]
     PP["project_planning / 重新确认项目计划"]
-    X["handle_failure / 失败终止"]
 
     L -->|"launch success"| P
-    L -->|"launch failed"| X
-    P -->|"page_acceptance=accepted"| A
+    L -->|"launch failed；主图仍直接 END"| LE
+    P -->|"新请求 decision=accepted"| A
     A -->|"accepted=true"| F
-    P -->|"local_fix + feedback"| S
-    P -->|"page_design_change"| D
-    P -->|"endpoint_change"| D
-    P -->|"data_source_change"| D
-    P -->|"project_plan_change"| PP
+    P -->|"新请求 local_fix；绕过 acceptance"| S
+    P -->|"新请求 page_design_change；绕过 acceptance"| D
+    P -->|"新请求 endpoint_change；绕过 acceptance"| D
+    P -->|"新请求 data_source_change；绕过 acceptance"| D
+    P -->|"新请求 project_plan_change；绕过 acceptance"| PP
 ```
 
 ### 9.1 `launch_project / 启动项目预览`
@@ -606,7 +638,7 @@ flowchart TD
 - **类型**：确定性进程启动；无 LLM 提示词。
 - **输入**：工作区、数据源类型、前后端项目结构和启动配置。
 - **输出**：`launch_result`、`preview_url`、`acceptance_request`。
-- **校验规则**：后端应用先启动并等待就绪，再启动前端；Static 可跳过后端；任一阶段失败返回 failed；成功后状态是 `requires_user_input`，不是项目完成。
+- **校验规则**：后端应用先启动并等待就绪，再启动前端；Static 可跳过后端；任一阶段失败返回 failed；成功后状态是 `requires_user_input`，不是项目完成。主 Graph 对 `launch_project` 使用无条件 `add_edge("launch_project", END)`，所以启动成功与失败都结束本轮，失败不会进入 `handle_failure`。
 - **依赖文件**：`graph/nodes/lifecycle.py`、`services/project_launcher.py`、`services/backend_project_launcher.py`、`services/frontend_project_launcher.py`、进程 registry。
 - **依赖节点**：上游质量门禁通过；下游在新一轮从 `acceptance` 或调整目标恢复。
 
@@ -614,10 +646,10 @@ flowchart TD
 
 - **类型**：确定性结构化决策节点；无 LLM 提示词。
 - **输入**：`acceptance_decision`；验收调整由请求边界规范化为 `acceptance_adjustment`。
-- **输出**：`accepted=true` 或继续等待/调整状态。
-- **校验规则**：只有结构化 `decision=accepted` 放行；普通文本不能冒充验收；调整类型只允许 `local_fix/page_design_change/endpoint_change/data_source_change/project_plan_change`，feedback 1–4000 字符。
+- **输出**：当前节点的主要有效输出是 `accepted=true`。
+- **校验规则**：只有结构化 `decision=accepted` 放行；普通文本不能冒充验收。`changes_requested` 在 `protocols/workflow/request.py` 先被规范化为 `acceptance_adjustment`，并直接恢复到 SmallTask、详情设计或项目规划，通常不会执行 `acceptance` 节点；调整类型只允许 `local_fix/page_design_change/endpoint_change/data_source_change/project_plan_change`，feedback 1–4000 字符。
 - **依赖文件**：`graph/nodes/lifecycle.py`、`domain/acceptance_adjustment.py`、`protocols/workflow/request.py`。
-- **依赖节点**：上游 `launch_project`；成功进入 `finalize_project`；调整分别路由到 SmallTask、详细设计或项目规划。
+- **依赖节点**：上游是预览后的新验收请求；accepted 进入 `finalize_project`。调整请求由协议适配器直接路由到 SmallTask、详细设计或项目规划。
 
 ### 9.3 `finalize_project / 项目完成`
 
@@ -631,11 +663,11 @@ flowchart TD
 ### 9.4 `handle_failure / 失败终止`
 
 - **类型**：确定性失败终态；无 LLM 提示词。
-- **输入**：任一阶段不可恢复失败及其已保存 evidence。
+- **输入**：被主 Graph 显式路由到本节点的 Build、Testing、SmallTask 或计划调整业务失败及其已保存 evidence。
 - **输出**：`phase=failed`、`status=failed`。
 - **校验规则**：不执行补偿或回滚；调用方依赖此前节点保存的失败原因、日志、DAG 和 diff。
 - **依赖文件**：`graph/nodes/lifecycle.py`、各阶段产物。
-- **依赖节点**：Build、Testing、SmallTask 或计划调整失败；下游 END。
+- **依赖节点**：Build、Testing、SmallTask 或计划调整的显式失败边；下游 END。未捕获异常由 Workflow runtime 发出 `RunErrorEvent` 并更新 lifecycle，`launch_project` 失败直接 END，二者都绕过本节点。
 
 ## 10. 自由对话与快速修改 Graph
 
@@ -659,7 +691,8 @@ flowchart TD
 
     S --> SCAN
     SCAN --> C
-    C -->|"casual_chat"| CHAT
+    C -->|"casual_chat 且 classifier 已给 response"| FINAL
+    C -->|"casual_chat 但 response 缺失"| CHAT
     C -->|"workspace_question"| QA
     C -->|"frontend"| FE
     C -->|"backend/fullstack"| BE
@@ -685,7 +718,7 @@ flowchart TD
 - **当前提示词**：System Prompt 和 `agents/direct_modification.py::_direct_modification_classifier_prompt`。要求基于前置扫描事实按结果分类 `casual_chat/workspace_question/workspace_change/formal_workflow/needs_clarification`，识别 owner，输出唯一 JSON；已存在页面/组件且结果明确的局部修改必须直接分类为 workspace change。局部修改需要默认源码根之外的任意现有文件时仍保留对应 owner，并输出精确文件路径作为本次授权候选，不受配置文件类型白名单限制，置信度不足时才保守澄清。
 - **输入**：当前消息、最多 4000 字符会话摘要、最多 16000 字符的页面/组件/入口/高价值配置/API 路由/共享契约/代码图扫描上下文、已有 handoff 决策。
 - **输出**：intent、owner、scope、confidence、reason、target paths、可选 casual response 或 clarification。
-- **校验规则**：confidence 必须不低于 0.65；workspace owner 必须有精确路径；前后端额外文件候选不检查文件类型，只在当前请求是修改意图、路径属于 owner、位于 workspace 内且文件真实存在时动态并入本次 `approvedPaths`；拒绝目录/glob、lockfile、`.env`/凭据文件、依赖/生成目录、schema/migration、`.xcodeagent` 和 `..`；正式 Workflow 需要用户确认后 handoff。
+- **校验规则**：confidence 必须不低于 0.65；workspace owner 必须有窄且可验证的相对路径范围；前后端额外文件候选不检查文件类型，只在当前请求是修改意图、路径属于 owner、位于 workspace 内且文件真实存在时动态并入本次 `approvedPaths`；拒绝宽目录范围、lockfile、`.env`/凭据文件、依赖/生成目录、schema/migration、`.xcodeagent` 和 `..`；正式 Workflow 需要用户确认后 handoff。classifier 若已为 `casual_chat` 返回自然语言 `response`，分类节点会直接完成并进入 finalize；只有缺少 response 时才调用 `respond_conversation` 兜底。
 - **依赖文件**：`agents/direct_modification.py`、`graph/nodes/direct_modification.py`、`services/direct_modification.py`。
 - **依赖节点**：上游 `scan_workspace_code`；下游对话、问答、frontend/backend/workspace 修改或 finalize。
 
@@ -790,9 +823,9 @@ flowchart LR
     RS[("RequirementSpec.md + json / 需求文档")]
     UI[("ui-designs.json + TSX / UI 设计稿")]
     PP[("ProjectPlan.md + json / 项目计划")]
-    DT[("PageDetail + EndpointDetail / 详细设计")]
+    DT[("PageDetail + EndpointDetail md/json / 详细设计")]
     WS[("WorkspaceSnapshot + CodeGraph / 工作区快照")]
-    DB[("database-context.v1 / 数据库上下文")]
+    DB["database-context.v1 / Graph State 与 Build Context"]
     DAG[("build-task-plan.json + BUILD_TASK_DAG.md / 构建任务图")]
     SRC[("frontend + backend + database / 工程实现")]
     TR[("test-report.json + logs / 测试报告")]
@@ -828,18 +861,27 @@ flowchart LR
 
 ### 当前事实源边界
 
-| 数据 | 当前权威来源 | 主要消费者 |
-| --- | --- | --- |
-| 初始化和工作台 execution 生命周期 | `.xcodeagent/application-lifecycle.json` | 首页、工作台运行状态、恢复校验 |
-| 需求正文 | `.xcodeagent/specs/requirement-spec.md`；JSON 为内部结构状态 | ProjectPlan 生成、创建规划恢复 |
-| UI 视觉参考 | `.xcodeagent/specs/ui-designs.json` + `.xcodeagent/ui-design/pages/<PageKey>/index.tsx`；确认/生成 UI 直接消费 `ui_designs.pages[].code` | `DesignRenderer`、Frontend Agent |
-| 项目语义和 API contract | `.xcodeagent/plans/project-plan.md|json` | Detail、Build、Testing |
-| 页面/接口可执行设计 | `.xcodeagent/plans/pages/*.json`、`plans/endpoints/*.json` | Build Context、Task Preparer |
-| 工作区事实 | `.xcodeagent/cache/` 下 WorkspaceSnapshot/代码图缓存 + 真实源码 | Task Preparer、Agent 导航 |
-| 数据库事实 | `database-context.v1` + 实时 MySQL 复查 | Task Preparer、Database Agent |
-| 构建 DAG | `.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md` | BuildScheduler、RepairPlanner |
-| 构建和测试结果 | Build results、`.xcodeagent/reports/test-report.json`、runtime logs | Quality Gate、RepairPlanner、UI |
-| 技术恢复状态 | `.xcodeagent/checkpoints/checkpoints.sqlite` | LangGraph resume |
+| 数据                              | 当前权威来源                                                                                                                             | 主要消费者                             |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ---------------------- |
+| 初始化和工作台 execution 生命周期 | `.xcodeagent/application-lifecycle.json`                                                                                                 | 首页、工作台运行状态、恢复校验         |
+| 需求正文                          | `.xcodeagent/specs/requirement-spec.md`；JSON 为内部结构状态                                                                             | ProjectPlan 生成、创建规划恢复         |
+| UI 视觉参考                       | `.xcodeagent/specs/ui-designs.json` + `.xcodeagent/ui-design/pages/<PageKey>/index.tsx`；确认/生成 UI 直接消费 `ui_designs.pages[].code` | `DesignRenderer`、Frontend Agent       |
+| 项目语义和 API contract           | `.xcodeagent/plans/project-plan.md                                                                                                       | json`                                  | Detail、Build、Testing |
+| 页面/接口可执行设计               | `.xcodeagent/plans/pages/*.md` + `*.json`、`plans/endpoints/*.md` + `*.json`；ProjectPlan JSON 只保留引用和 hash                         | 用户确认、Build Context、Task Preparer |
+| 工作区事实                        | `.xcodeagent/cache/` 下 WorkspaceSnapshot/代码图缓存 + 真实源码                                                                          | Task Preparer、Agent 导航              |
+| 数据库事实                        | Graph/checkpoint 中的 `database-context.v1`、嵌入 Build Context 的摘要 + 实时 MySQL 复查；当前没有独立 database-context artifact 文件    | Task Preparer、Database Agent          |
+| 构建 DAG                          | `.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md`                                                                            | BuildScheduler、RepairPlanner          |
+| 构建和测试结果                    | Build results、`.xcodeagent/reports/test-report.json`、runtime logs                                                                      | Quality Gate、RepairPlanner、UI        |
+| 技术恢复状态                      | `.xcodeagent/checkpoints/checkpoints.sqlite`                                                                                             | LangGraph resume                       |
+
+### 11.1 生命周期、确认与恢复边界
+
+- `.xcodeagent/application-lifecycle.json` 当前 `schemaVersion=1.2.0`，每次写入单调增加 `revision`。`initialization` 与 `activeExecutions` 是两套并列状态：前者描述新建应用，后者按 runId 描述工作台执行，不能互相覆盖。
+- `initialization.threadId` 只用于定位初始化 checkpoint；应用进入 `ready_for_workbench` 后清空。前端应用索引中的 `planningConfirmedAt` 一旦写入，就永久允许该应用进入工作台，后续页面设计状态不会撤销它。
+- 需要用户处理的工作台交互写入 `pendingInteraction={id,type,basedOnRevision,...}`。提交时协议层校验 interaction id 和 lifecycle revision，避免旧确认覆盖新状态。
+- `resourceLocks` 与 execution `resourceKeys` 当前只是可观测的资源声明，不执行跨 run 互斥；重叠资源允许并发，最新 writer 成为界面显示的 owner。单次 Build 内部的文件调度约束不能替代跨 run 隔离。
+- 对存在 lifecycle 的正式应用，主 Workflow 会校验 `ready_for_workbench` 并登记 execution；但为兼容旧工作区，生命周期文件完全缺失时 `begin_workflow_lifecycle()` 返回 `None`，Graph 仍可继续。因此 `ready_for_workbench` 是新应用前端主链门禁，不是当前后端的绝对拒绝条件。
+- `resumeExecutionRunId`/旧 runId 只作为同 thread、scope、target 的恢复令牌；真实 Graph State 仍来自当前 thread checkpoint。`stop/end` 可在不执行 Graph 的情况下停止或结束 execution，`cancelRunId` 用于取消当前运行任务；finalize 或显式 end 才清理该 run 拥有的资源登记。
 
 ## 12. 当前不合理之处与改进建议
 
@@ -869,7 +911,7 @@ UI 设计依赖页面树、API contract、权限和数据来源，但当前初�
 
 ### P1：存在两套“开发计划”
 
-用户确认的 `application.json.menus.developmentTasks` 不被主流程 `prepare_build_tasks` 消费；真正执行的是 Main Task Preparer 重新生成的 Build DAG。用户确认 A，系统执行 B。
+独立组件一旦挂载，用户确认的 `application.json.menus.developmentTasks` 仍不会被主流程 `prepare_build_tasks` 消费；真正执行的是 Main Task Preparer 重新生成的 Build DAG。当前组件尚未挂载，所以现状是“一套不可达 checklist 实现 + 一套真实 Build DAG”，挂载后则会变成“用户确认 A、系统执行 B”。
 
 **建议**：把用户确认计划定义为高层 Unit Plan，并确定性编译为 Build DAG；或把现有开发计划降级为非权威 checklist，取消“确认后执行”的语义。
 
@@ -909,6 +951,18 @@ UI 设计依赖页面树、API contract、权限和数据来源，但当前初�
 
 **建议**：客户端只提交 `threadId/executionId/interactionId/basedOnRevision/decision`；服务端从 checkpoint 和磁盘读取状态。任意节点跳转仅保留开发模式并由服务器配置开启。
 
+### P1：详情依赖缺口不会自动进入计划修订
+
+`detail_confirmation` 会把依赖或计划缺口投影为 `project_plan_revision_required`，但真实路由只有 `requires_user_input → END`，没有到 `project_planning` 的边。如果前端没有把后续交互明确转换成计划修订请求，用户可能在原详情节点反复重试。
+
+**建议**：把该确认载荷改为结构化 action，用户批准后由协议适配器确定性设置 `resume_from=project_planning`，并记录来源详情目标与 based-on revision。
+
+### P1：启动失败绕过统一失败节点
+
+主 Graph 对 `launch_project` 无条件连到 `END`；启动失败不会进入 `handle_failure`。未捕获异常也由 runtime 直接发 `RunErrorEvent`。这使业务失败、启动失败和异常失败分别由不同边界收尾。
+
+**建议**：保留 `RunErrorEvent` 作为协议异常语义，但为 launch 结果增加显式 `launch_failed` 路由或统一失败投影，确保 lifecycle、恢复按钮和失败证据一致。
+
 ### P2：SmallTask 成为通用阶段路由器
 
 `small_task_repair` 可以跳到 detail、project planning、workspace、database、task planning 和 build。节点同时承担局部修复、范围审批、正式流程升级和验收调整，容易形成不可预测的状态组合。
@@ -927,7 +981,98 @@ UI 设计依赖页面树、API contract、权限和数据来源，但当前初�
 
 **建议**：从 Graph definition 和 lifecycle enum 生成单一节点/阶段 manifest，文档 Mermaid、后端 capabilities 和前端阶段标签都从 manifest 投影，减少手工同步。
 
-## 13. 推荐的目标流程
+### P2：UI 确认恢复入口的事件投影仍有遗漏
+
+application-planning Graph 已支持 `resume_from=ui_confirmation`，请求校验也接受该值，但 `protocols/workflow/projection.py` 与兼容 `workflow_visualization.py` 的 `_workflow_start_node()` 只把 `requirements/project_planning` 识别为初始化展示入口。UI 确认恢复 run 的首个展示节点可能被错误投影成 requirements。
+
+**建议**：让 Graph definition、请求校验和两套可视化投影共用同一组 application-planning 节点常量，并为 UI resume 添加投影测试。
+
+## 13. 节点优化设计建议
+
+后续优化围绕权威产物、人工确认、确定性路由、有界并行、资源隔离和可恢复执行展开。节点是否拆分或并行，不按角色数量决定，而由输入依赖、写入范围、副作用和汇合条件决定。
+
+| 主题 | 推荐设计 | 设计约束 |
+| --- | --- | --- |
+| 正式产物确认 | RequirementSpec、UI Design、ProjectPlan、PageDetail/EndpointDetail 生成或修订后均进入显式确认门禁 | 保存草稿、回答澄清均不等于确认；下游只消费已确认 revision/hash。模板完成是确定性完整性门禁，不冒充用户确认。 |
+| 人工暂停与验收请求 | `await_user_input`、`acceptance_request` 保持为控制边界，不注册为普通 Agent 节点 | `await_user_input` 结束当前 Graph run；`acceptance_request` 是 `launch_project` 的结构化输出。两者不需要 Prompt，也不拥有独立业务产物。 |
+| UI 与详细设计 | 先确认 ProjectPlan，再按 artifact 依赖调度 UI、页面详情和接口详情 | 接口详情可按 endpoint 并行；页面详情若消费已确认 UI 结构则排在 UI 后。独立任务只能写各自 artifact，最终通过确定性 join/reconcile 汇合。 |
+| 工作区与数据库上下文 | `inspect_workspace` 先生成稳定 WorkspaceSnapshot，再推导是否需要 `inspect_database_context` | 只有不依赖工作区的纯数据库 schema scan 可以提前并行；DatabasePlanningContext 和 WorkspaceSnapshot 必须在 `prepare_build_tasks` 前汇合并校验版本。 |
+| Build DAG 并行 | BuildScheduler 只并行调度依赖满足、授权路径不冲突的 ready tasks | 不同 owner 可以并发；同一 owner 可批量处理。并发结果必须经过真实 diff 归属、工程验收和确定性合并。 |
+| 跨 Run 资源隔离 | 默认实行“一 workspace 一个写 execution”，只读会话保持并行 | 数据库 schema 变更和共享预览环境使用独占锁；代码任务需要跨 Run 并行时使用独立 Git worktree/分支，合并阶段串行。 |
+| Testing 拓扑 | 工程检查与 API 契约检查在无共享写副作用时并行，汇合后再执行 TestAgent 审阅和主质量门禁 | `test_agent_review` 必须消费完整确定性检查证据，`main_quality_gate` 必须等待审阅结果；四个阶段不能无依赖地同时启动。 |
+| 局部修复回测 | 根据 changed files、owner、contract 和失败 check ID 编译 affected-check manifest，只重跑受影响检查 | 局部检查通过后，进入 launch 前仍执行一次完整 required-check 门禁，避免增量回测漏掉跨模块回归。 |
+| 失败分类与终态 | 在上游节点或统一 deterministic failure classifier 中完成错误分类与恢复路由，`handle_failure` 只负责失败终态 | 分类至少覆盖缺少输入、可重试基础设施错误、代码/契约错误、正式流程升级、用户拒绝和不可恢复错误；路由结果只能是暂停、重试、修复、typed handoff 或终止。 |
+| 多角色协同 | 产品提出业务目标并确认业务产物，Orchestrator 根据已确认 artifact 调度 UI、技术、构建和测试角色 | 设计负责人确认视觉产物，技术负责人确认 ProjectPlan/API/高风险数据库变更，测试负责人维护质量门禁；产品不手工选择内部 Graph 节点。 |
+| 节点责任 | 每个节点设置一名直接负责人（DRI）、一名审核人和必要的业务/技术批准人 | 阶段可以多人协作，但节点不能用多个并列负责人替代最终责任。 |
+
+### 13.1 推荐的并行与资源隔离规则
+
+| 资源或任务                                              | 默认策略         | 放行条件                                                             |
+| ------------------------------------------------------- | ---------------- | -------------------------------------------------------------------- |
+| WorkspaceSnapshot、代码图、ProjectPlan/API 契约只读校验 | 可并行           | 固定读取同一 revision/hash，不写工作区。                             |
+| 同一 Build ready batch 的不同 owner                     | 可并行           | DAG 依赖满足，授权路径不冲突；沿用当前 scheduler 校验。              |
+| 同一 workspace 的多个正式写 Run                         | 串行             | 在引入独立 worktree/分支和确定性合并门禁前，只允许一个写 execution。 |
+| 数据库 schema 变更                                      | 独占             | 绑定 database、schema hash、plan hash 和审批；执行后复查并释放锁。   |
+| 项目依赖安装、构建缓存、预览端口和运行进程              | 串行或按环境隔离 | 使用明确的 environment key、端口分配和清理/超时策略。                |
+| 用户确认                                                | 乐观并发控制     | 提交 `interactionId + basedOnRevision`；旧版本确认必须拒绝。         |
+
+### 13.2 推荐的角色协同主链
+
+```text
+产品提出业务目标
+→ requirements 生成并确认 RequirementSpec
+→ project_planning 生成并由技术负责人/产品确认 ProjectPlan
+→ Orchestrator 按 artifact 依赖调度 UI 与页面/接口详细设计
+→ 设计或技术负责人确认相应正式产物
+→ 确定性编译 Build DAG
+→ 专业 Agent 在授权范围内执行
+→ 确定性检查汇合后由 TestAgent 审阅
+→ 质量门禁、预览和产品验收
+```
+
+Product、UI、Frontend、Backend、Database、Test 等角色是专业能力与审批责任，不应各自拥有一套可互相覆盖的 Graph State。跨角色只传 versioned artifact refs、结构化结果、失败证据和 typed handoff；实际节点选择由中央确定性路由完成。
+
+### 13.3 后续节点审计统一模板
+
+本文现有节点卡片已经覆盖类型、提示词、输入、输出、校验和依赖。后续逐节点优化时，统一补齐以下字段，避免只审 Prompt 而漏掉恢复、并发和副作用：
+
+```text
+节点名称 / node_id / 版本：
+节点类型：LLM / Deep Agent / 确定性逻辑 / 工具动作 / 人工确认 / 终态
+直接负责人（DRI）/ 审核人 / 批准人：
+
+目标与非目标：
+触发条件 / 前置条件：
+当前提示词及源码位置：
+
+输入：
+- artifact 文件 + 字段/JSON Pointer + 来源节点 + revision/hash
+- Graph State 字段 + schema 版本
+
+输出：
+- artifact 文件 + 字段 + schema 版本 + revision/hash
+- Graph State delta
+- AG-UI 自定义事件、状态快照和结构化 result/error
+
+成功与校验规则：
+硬依赖 / 可选依赖：
+可并行条件 / 冲突资源 / join 条件：
+副作用 / 授权范围 / 幂等键 / checkpoint：
+
+错误分类：
+- 缺少用户输入或正式产物
+- 可重试模型、工具、网络或进程错误
+- 代码、契约或质量错误
+- 需要扩大范围或升级正式 Workflow
+- 用户拒绝或不可恢复错误
+
+最大重试次数 / 退避 / 超时：
+成功路由 / 失败路由 / 修复后回测路由：
+用户确认载荷 / basedOnRevision：
+可观测 evidence / 日志和持久化路径：
+```
+
+## 14. 推荐的未实现目标流程
 
 ```mermaid
 flowchart TD
@@ -962,53 +1107,59 @@ flowchart TD
 4. 用户确认的计划就是 Build DAG 的输入，不再让第二个模型重新定义范围。
 5. 构建成功、运行成功、业务验收是三个不同门禁。
 6. 客户端不提交可覆盖服务端的完整恢复状态。
+7. `inspect_workspace` 先产出稳定 WorkspaceSnapshot；数据库上下文仅在不依赖该快照的扫描部分允许并行，最终在任务规划前汇合。
+8. Build 只并行调度依赖满足且写入范围不冲突的任务；跨 Run 写并行必须先具备 worktree/分支隔离和确定性合并门禁。
+9. 工程检查与契约检查可在消除共享写副作用后并行；TestAgent 和质量门禁位于检查结果的 join 之后。
+10. 局部修复优先执行 affected checks，但进入启动和验收前必须满足完整 required-check manifest。
+11. 产品发起业务目标并确认业务产物，Orchestrator 负责内部角色调度；每个节点只设一名 DRI。
 
-## 14. 主要代码索引
+## 15. 主要代码索引
 
-| 领域 | 入口文件 |
-| --- | --- |
-| 新建应用规划 Graph | `Backend/app/graph/application_planning_workflow.py` |
-| 主开发 Graph | `Backend/app/graph/workflow.py` |
-| 自由对话 Graph | `Backend/app/graph/direct_modification_workflow.py` |
-| 主状态 | `Backend/app/graph/state.py` |
-| RequirementSpec | `Backend/app/graph/nodes/requirements.py`、`Backend/app/agents/main/requirements_analyzer.py` |
-| UI 设计确认与直出渲染 | `Backend/app/graph/nodes/ui_confirmation.py`、`Backend/app/services/ui_design_generator.py`、`Frontend/src/renderer/src/components/DesignRenderer/`、`Frontend/src/renderer/public/design-runtime/` |
-| ProjectPlan/PageDetail/EndpointDetail | `Backend/app/graph/nodes/planning.py`、`Backend/app/agents/main/planner.py`、`page_designer.py` |
-| Workspace/Database Context | `Backend/app/graph/nodes/workspace_inspection.py`、`database_context.py` |
-| Build DAG | `Backend/app/graph/nodes/tasks.py`、`Backend/app/agents/main/task_preparer.py` |
-| BuildScheduler | `Backend/app/graph/subgraphs/build.py`、`Backend/app/services/build_scheduler.py` |
-| Testing Subgraph | `Backend/app/graph/subgraphs/testing.py` |
-| Integration checks/quality gate | `Backend/app/services/integration_test_runner.py`、`test_validation.py` |
-| SmallTask/Repair | `Backend/app/graph/nodes/small_task.py`、`direct_repair.py`、`Backend/app/agents/small_task/`、`repair_planner/` |
-| Launch/Acceptance | `Backend/app/graph/nodes/lifecycle.py`、`Backend/app/domain/acceptance_adjustment.py` |
-| Application lifecycle | `Backend/app/services/application_lifecycle.py`、`Backend/app/domain/application_lifecycle.py` |
-| 模板物化 | `Frontend/src/renderer/src/hooks/useApplicationTemplateGeneration.ts`、`Frontend/src/renderer/src/service/templateApi.ts` |
-| 独立开发任务规划 | `Backend/app/services/application_development_planning.py` |
+| 领域                                  | 入口文件                                                                                                                                                                                                                     |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 新建应用规划 Graph                    | `Backend/app/graph/application_planning_workflow.py`                                                                                                                                                                         |
+| 主开发 Graph                          | `Backend/app/graph/workflow.py`                                                                                                                                                                                              |
+| 自由对话 Graph                        | `Backend/app/graph/direct_modification_workflow.py`                                                                                                                                                                          |
+| 主状态                                | `Backend/app/graph/state.py`                                                                                                                                                                                                 |
+| RequirementSpec                       | `Backend/app/graph/nodes/requirements.py`、`Backend/app/agents/main/requirements_analyzer.py`                                                                                                                                |
+| UI 设计确认与直出渲染                 | `Backend/app/config.py`、`Backend/app/graph/nodes/ui_confirmation.py`、`Backend/app/services/ui_design_generator.py`、`Frontend/src/renderer/src/components/DesignRenderer/`、`Frontend/src/renderer/public/design-runtime/` |
+| ProjectPlan/PageDetail/EndpointDetail | `Backend/app/graph/nodes/planning.py`、`Backend/app/agents/main/planner.py`、`page_designer.py`                                                                                                                              |
+| Workspace/Database Context            | `Backend/app/graph/nodes/workspace_inspection.py`、`database_context.py`                                                                                                                                                     |
+| Build DAG                             | `Backend/app/graph/nodes/tasks.py`、`Backend/app/agents/main/task_preparer.py`                                                                                                                                               |
+| BuildScheduler                        | `Backend/app/graph/subgraphs/build.py`、`Backend/app/services/build_scheduler.py`                                                                                                                                            |
+| Testing Subgraph                      | `Backend/app/graph/subgraphs/testing.py`                                                                                                                                                                                     |
+| Integration checks/quality gate       | `Backend/app/services/integration_test_runner.py`、`test_validation.py`                                                                                                                                                      |
+| SmallTask/Repair                      | `Backend/app/graph/nodes/small_task.py`、`direct_repair.py`、`Backend/app/agents/small_task/`、`repair_planner/`                                                                                                             |
+| Launch/Acceptance                     | `Backend/app/graph/nodes/lifecycle.py`、`Backend/app/domain/acceptance_adjustment.py`、`Backend/app/protocols/workflow/request.py`                                                                                           |
+| Application lifecycle / recovery      | `Backend/app/services/application_lifecycle.py`、`Backend/app/domain/application_lifecycle.py`、`Backend/app/protocols/workflow/lifecycle.py`、`Backend/app/protocols/workflow/run_control.py`                               |
+| 模板物化                              | `Frontend/src/renderer/src/hooks/useApplicationTemplateGeneration.ts`、`Frontend/src/renderer/src/service/templateApi.ts`                                                                                                    |
+| 工作台目标选择与参考模板              | `Frontend/src/renderer/src/components/DetailConfirmationPageSelector/`、`Frontend/src/renderer/src/service/templateService.ts`、`Frontend/src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation.ts`          |
+| 独立开发任务规划（当前未挂载）        | `Backend/app/services/application_development_planning.py`、`Frontend/src/renderer/src/components/ApplicationDevelopmentPlanningGate/`                                                                                       |
 
-## 15. LLM Prompt 注册表
+## 16. LLM Prompt 注册表
 
-下表用于快速定位“当前真正执行的 Prompt”。一个节点同时存在 System Prompt 和运行时 Human/Task Prompt 时，两者都必须一起阅读；用户选择的技能说明会在 Agent bundle 创建时额外注入。
+下表用于快速定位“当前真正执行的 Prompt”。一个节点同时存在 System Prompt 和运行时 Human/Task Prompt 时，两者都必须一起阅读；用户选择的技能说明只会在七个 Deep Agent（frontend、data_source、database、test、repair_planner、small_task、workspace_assistant）的 bundle 创建时额外注入，直接 ChatModel 节点不加载这套用户 Skill。
 
-| 业务节点/执行阶段 | System Prompt 来源 | Human/Task Prompt 来源 | 主要动态注入 |
-| --- | --- | --- | --- |
-| `requirements` | 无独立 SystemMessage；直接使用单 Prompt | `agents/main/requirements_analyzer.py::_requirements_prompt` | request、existing RequirementSpec、datasource type |
-| `ui_confirmation` | 无独立 SystemMessage | `services/ui_design_generator.py::_build_ui_design_prompt`；失败用 `_build_repair_prompt` | page brief、PageKey、UI skill、可复用旧代码、校验错误；输出代码内联到 `ui_designs.pages[].code` 供 `DesignRenderer` 直出渲染 |
-| `project_planning` | 无独立 SystemMessage | `agents/main/planner.py::_planning_prompt` | RequirementSpec、existing plan、datasource type、route/menu policy |
-| `detail_confirmation` 页面 | 无独立 SystemMessage | `agents/main/page_designer.py::_page_design_prompt` | ProjectPlan page context、用户反馈 |
-| `detail_confirmation` endpoint | 无独立 SystemMessage | `agents/main/page_designer.py::_endpoint_decision_prompt` | endpoint contract/context、database context、用户反馈、固定输出 schema |
-| `prepare_build_tasks` | 无独立 SystemMessage | `agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt` | bounded WorkspaceSnapshot、TargetBuildContext、TaskPreparationContext、内联 backend skill |
-| `generate_application_development_plan` | `services/application_development_planning.py::_SYSTEM_PROMPT` | 同文件 `generate_application_development_plan` 内动态 `prompt` | application.json 摘要、selected page、澄清回答 |
-| `database_agent` | `agents/database/agent.py::create_database_agent` 内 `base_system_prompt` | `agents/database/generator.py::_database_generation_prompt` | database tasks、真实 schema/gaps、ProjectPlan contracts |
-| `backend_agent` | `agents/data_source/agent.py::create_data_source_agent` 内 `base_system_prompt` | `agents/data_source/generator.py::_data_source_generation_prompt` | approved tasks、BuildTaskPlan、ProjectPlan、skills |
-| `frontend_agent` | `agents/frontend/agent.py::create_frontend_agent` 内 `base_system_prompt` | `agents/frontend/generator.py::_frontend_generation_prompt` | approved tasks、ProjectPlan、PageTemplate、UI designs、skills |
-| `test_agent_review` | `agents/test/agent.py::create_test_agent` 内 `base_system_prompt` | `agents/test/validator.py::_test_validation_prompt` | deterministic checks、Build results、logs |
-| `build_repair_planning` | `agents/repair_planner/agent.py::create_repair_planner_agent` 内 `base_system_prompt` | `agents/repair_planner/planner.py::_build_failure_repair_prompt` | failed task、scope、acceptance、evidence、budget |
-| `repair_planning` | 同上 | `agents/repair_planner/planner.py::_test_repair_planning_prompt` | TestReport、revision requests、BuildTaskPlan |
-| `small_task_repair` | `agents/small_task/agent.py::create_small_task_agent` 内 `base_system_prompt` | `agents/small_task/runner.py::build_small_task_prompt` | bounded TaskPacket、allowedPaths、acceptance、failure evidence |
-| `classify_intent` | `agents/direct_modification.py::classify_direct_modification_intent` 内 SystemMessage | 同文件 `_direct_modification_classifier_prompt` | message、bounded conversation summary、bounded workspace scan context |
-| `respond_conversation` | `agents/direct_modification.py::answer_casual_conversation` 内 SystemMessage | 同函数 HumanMessage | message、bounded summary |
-| `answer_workspace` | `agents/workspace_assistant/agent.py::create_workspace_assistant_agent` 内 `base_system_prompt` | 同文件 `workspace_assistant_prompt` | question、bounded summary、workspace |
-| `execute_backend` | SmallTask System Prompt | SmallTask packet + `_data_source_direct_modification_prompt` legacy instructions | request、summary、approved backend paths |
-| `execute_frontend` | SmallTask System Prompt | SmallTask packet + `_frontend_direct_modification_prompt` legacy instructions | request、summary、backend handoff、approved frontend paths |
-| `execute_workspace` | SmallTask System Prompt | SmallTask packet + `_workspace_direct_modification_prompt` legacy instructions | request、summary、precise target paths |
-| `direct_modification_repair` | RepairPlanner + SmallTask System Prompts | Testing repair Prompt + SmallTask packet Prompt | TestReport、revision requests、original diff paths、iteration |
+| 业务节点/执行阶段                           | System Prompt 来源                                                                              | Human/Task Prompt 来源                                                                        | 主要动态注入                                                                                                                                                                                   |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `requirements`                              | 无独立 SystemMessage；直接使用单 Prompt                                                         | `agents/main/requirements_analyzer.py::_requirements_prompt`                                  | request、existing RequirementSpec、datasource type                                                                                                                                             |
+| `ui_confirmation`                           | 无独立 SystemMessage                                                                            | `services/ui_design_generator.py::_build_ui_design_prompt`；失败用 `_build_repair_prompt`     | page brief、PageKey、UI skill、可复用旧代码、校验错误；`UI_DESIGN_MAX_TOKENS` 默认 8192，`UI_DESIGN_MAX_RETRIES` 默认 2；输出代码内联到 `ui_designs.pages[].code` 供 `DesignRenderer` 直出渲染 |
+| `project_planning`                          | 无独立 SystemMessage                                                                            | `agents/main/planner.py::_planning_prompt`                                                    | RequirementSpec、existing plan、datasource type、route/menu policy                                                                                                                             |
+| `detail_confirmation` 页面                  | 无独立 SystemMessage                                                                            | `agents/main/page_designer.py::_page_design_prompt`                                           | ProjectPlan page context、用户反馈                                                                                                                                                             |
+| `detail_confirmation` endpoint              | 无独立 SystemMessage                                                                            | `agents/main/page_designer.py::_endpoint_decision_prompt`                                     | endpoint contract/context、database context、用户反馈、固定输出 schema                                                                                                                         |
+| `prepare_build_tasks`                       | 无独立 SystemMessage                                                                            | `agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt` | bounded WorkspaceSnapshot、TargetBuildContext、TaskPreparationContext、内联 backend skill                                                                                                      |
+| `generate_application_development_plan`     | `services/application_development_planning.py::_SYSTEM_PROMPT`                                  | 同文件 `generate_application_development_plan` 内动态 `prompt`                                | application.json 摘要、selected page、澄清回答                                                                                                                                                 |
+| `database_agent`                            | `agents/database/agent.py::create_database_agent` 内 `base_system_prompt`                       | `agents/database/generator.py::_database_generation_prompt`                                   | database tasks、真实 schema/gaps、ProjectPlan contracts                                                                                                                                        |
+| `data_source_agent`（task owner=`backend`） | `agents/data_source/agent.py::create_data_source_agent` 内 `base_system_prompt`                 | `agents/data_source/generator.py::_data_source_generation_prompt`                             | approved tasks、BuildTaskPlan、ProjectPlan、skills                                                                                                                                             |
+| `frontend_agent`                            | `agents/frontend/agent.py::create_frontend_agent` 内 `base_system_prompt`                       | `agents/frontend/generator.py::_frontend_generation_prompt`                                   | approved tasks、ProjectPlan、PageTemplate、UI designs、skills                                                                                                                                  |
+| `test_agent_review`                         | `agents/test/agent.py::create_test_agent` 内 `base_system_prompt`                               | `agents/test/validator.py::_test_validation_prompt`                                           | deterministic checks、Build results、logs                                                                                                                                                      |
+| `build_repair_planning`                     | `agents/repair_planner/agent.py::create_repair_planner_agent` 内 `base_system_prompt`           | `agents/repair_planner/planner.py::_build_failure_repair_prompt`                              | failed task、scope、acceptance、evidence、budget                                                                                                                                               |
+| `repair_planning`                           | 同上                                                                                            | `agents/repair_planner/planner.py::_test_repair_planning_prompt`                              | TestReport、revision requests、BuildTaskPlan                                                                                                                                                   |
+| `small_task_repair`                         | `agents/small_task/agent.py::create_small_task_agent` 内 `base_system_prompt`                   | `agents/small_task/runner.py::build_small_task_prompt`                                        | bounded TaskPacket、allowedPaths、acceptance、failure evidence                                                                                                                                 |
+| `classify_intent`                           | `agents/direct_modification.py::classify_direct_modification_intent` 内 SystemMessage           | 同文件 `_direct_modification_classifier_prompt`                                               | message、bounded conversation summary、bounded workspace scan context                                                                                                                          |
+| `respond_conversation`                      | `agents/direct_modification.py::answer_casual_conversation` 内 SystemMessage                    | 同函数 HumanMessage                                                                           | message、bounded summary                                                                                                                                                                       |
+| `answer_workspace`                          | `agents/workspace_assistant/agent.py::create_workspace_assistant_agent` 内 `base_system_prompt` | 同文件 `workspace_assistant_prompt`                                                           | question、bounded summary、workspace                                                                                                                                                           |
+| `execute_backend`                           | SmallTask System Prompt                                                                         | SmallTask packet + `_data_source_direct_modification_prompt` legacy instructions              | request、summary、approved backend paths                                                                                                                                                       |
+| `execute_frontend`                          | SmallTask System Prompt                                                                         | SmallTask packet + `_frontend_direct_modification_prompt` legacy instructions                 | request、summary、backend handoff、approved frontend paths                                                                                                                                     |
+| `execute_workspace`                         | SmallTask System Prompt                                                                         | SmallTask packet + `_workspace_direct_modification_prompt` legacy instructions                | request、summary、precise target paths                                                                                                                                                         |
+| `direct_modification_repair`                | RepairPlanner + SmallTask System Prompts                                                        | Testing repair Prompt + SmallTask packet Prompt                                               | TestReport、revision requests、original diff paths、iteration                                                                                                                                  |

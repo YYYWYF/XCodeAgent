@@ -29,7 +29,10 @@ type Props = {
   mode: Exclude<PlanExecutionMode, 'idle'>
   ownerPageId?: string
   onAccept: () => Promise<boolean>
-  onAdjust: (feedback: string, adjustmentType: WorkflowAcceptanceAdjustmentType) => void
+  onAdjust: (
+    feedback: string,
+    adjustmentType: WorkflowAcceptanceAdjustmentType
+  ) => Promise<boolean>
   onConfirmInteraction: (decision: 'reject' | 'once' | 'always') => void
   onEnd: () => void
   onOpenPreview: () => void
@@ -69,6 +72,7 @@ export default function PlanExecutionDock({
   const [adjusting, setAdjusting] = useState(false)
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
+  const [submittingAdjustment, setSubmittingAdjustment] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [adjustmentType, setAdjustmentType] =
     useState<WorkflowAcceptanceAdjustmentType>('local_fix')
@@ -78,15 +82,22 @@ export default function PlanExecutionDock({
     setAdjusting(false)
     setAcceptanceConfirmOpen(false)
     setAccepting(false)
+    setSubmittingAdjustment(false)
     setFeedback('')
     setAdjustmentType('local_fix')
   }, [mode, pending?.id])
 
-  /** 提交受控计划调整意见，并保持空内容不可发送。 */
-  const submitAdjustment = (): void => {
+  /** 提交受控计划调整意见，成功后关闭编辑框，失败时保留内容供重试。 */
+  const submitAdjustment = async (): Promise<void> => {
     const normalized = feedback.trim()
-    if (!normalized) return
-    onAdjust(normalized, adjustmentType)
+    if (!normalized || submittingAdjustment) return
+    setSubmittingAdjustment(true)
+    try {
+      const succeeded = await onAdjust(normalized, adjustmentType)
+      if (succeeded) setAdjusting(false)
+    } finally {
+      setSubmittingAdjustment(false)
+    }
   }
 
   /** 确认最终验收并等待 AG-UI 成功接收，失败时保留对话框供用户重试。 */
@@ -231,32 +242,50 @@ export default function PlanExecutionDock({
         </div>
       ) : null}
 
-      {!dependencyLocked && adjusting ? (
-        <div className={cx('plan-execution-adjustment')}>
+      <Modal
+        cancelButtonProps={{ disabled: submittingAdjustment }}
+        cancelText="取消"
+        centered
+        closable={!submittingAdjustment}
+        confirmLoading={submittingAdjustment}
+        destroyOnClose
+        keyboard={!submittingAdjustment}
+        maskClosable={!submittingAdjustment}
+        okButtonProps={{ disabled: !feedback.trim() }}
+        okText="提交修改"
+        onCancel={() => setAdjusting(false)}
+        onOk={() => void submitAdjustment()}
+        open={!dependencyLocked && adjusting}
+        title="提出验收修改"
+        wrapClassName={cx('plan-execution-modal')}
+      >
+        <div className={cx('plan-execution-adjustment-form')}>
+          <Text type="secondary">
+            选择修改范围并说明具体问题。提交后会回到对应工作流节点，修改完成后需要重新验收。
+          </Text>
           <div className={cx('plan-execution-adjustment-type')}>
-            <Text type="secondary">调整类型</Text>
+            <Text strong>修改类型</Text>
             <Select<WorkflowAcceptanceAdjustmentType>
               aria-label="验收调整类型"
+              disabled={submittingAdjustment}
               onChange={setAdjustmentType}
               options={ACCEPTANCE_ADJUSTMENT_OPTIONS}
               value={adjustmentType}
             />
           </div>
           <TextArea
-            aria-label="计划调整意见"
-            autoSize={{ minRows: 2, maxRows: 4 }}
-            placeholder="说明需要修改的内容，提交后会重新生成执行任务…"
+            aria-label="验收修改意见"
+            autoFocus
+            autoSize={{ minRows: 4, maxRows: 8 }}
+            disabled={submittingAdjustment}
+            maxLength={4000}
+            placeholder="请说明哪里不符合预期、希望改成什么样，以及必要的验收条件…"
+            showCount
             value={feedback}
             onChange={(event) => setFeedback(event.target.value)}
           />
-          <div>
-            <Button onClick={() => setAdjusting(false)}>取消</Button>
-            <Button disabled={!feedback.trim()} onClick={submitAdjustment} type="primary">
-              提交调整
-            </Button>
-          </div>
         </div>
-      ) : null}
+      </Modal>
 
       <Modal
         cancelButtonProps={{ disabled: accepting }}
@@ -271,6 +300,7 @@ export default function PlanExecutionDock({
         onOk={() => void confirmAcceptance()}
         open={acceptanceConfirmOpen}
         title="确认验收并完成？"
+        wrapClassName={cx('plan-execution-modal')}
       >
         <Text>确认后当前计划将完成并恢复自由输入，请确保已经检查页面预览。</Text>
       </Modal>

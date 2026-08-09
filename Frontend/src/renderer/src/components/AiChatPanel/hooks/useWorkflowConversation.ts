@@ -100,7 +100,7 @@ type UseWorkflowConversationResult = {
   handleAdjustPlan: (
     feedback: string,
     adjustmentType: WorkflowAcceptanceAdjustmentType
-  ) => Promise<void>
+  ) => Promise<boolean>
   handleEndPlan: (runId?: string) => Promise<void>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleRetryPlan: () => Promise<void>
@@ -874,9 +874,9 @@ export function useWorkflowConversation({
   const handleAdjustPlan = async (
     feedback: string,
     adjustmentType: WorkflowAcceptanceAdjustmentType
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const normalizedFeedback = feedback.trim()
-    if (!activeWorkflow || !normalizedFeedback || loading || workspaceBusy) return
+    if (!activeWorkflow || !normalizedFeedback || loading || workspaceBusy) return false
     const execution = planExecutionForPage(
       activeWorkflow.summary.lifecycle,
       activeSession?.pageId || selectedPageId,
@@ -884,7 +884,7 @@ export function useWorkflowConversation({
     )
     const resumeFrom = acceptanceAdjustmentResumeNode(adjustmentType)
     const endpointScope = workflowEndpointExecutionScope(activeWorkflow)
-    await sendWorkflowMessage(`调整执行计划：${normalizedFeedback}`, {
+    return sendWorkflowMessage(`调整执行计划：${normalizedFeedback}`, {
       clarificationAnswers: {
         page_acceptance: 'changes_requested',
         acceptance_adjustment: {
