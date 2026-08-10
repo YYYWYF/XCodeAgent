@@ -349,12 +349,24 @@ def build_workflow_ag_ui_stream(
                 attempt=first_node_attempt,
                 iteration_kind=first_node_iteration_kind,
             )
+            # node.started 帧在 UI 确认阶段（resume_from=ui_confirmation）复用 checkpoint
+            # 的 clarification/ui_designs，避免换一换等单页动作 run 起始帧把 clarification
+            # 投影为空导致前端短暂白屏（前端缓存可兜底，但直接带上更稳）。
+            # 仅限 UI 确认阶段：需求阶段提交后必须让 clarification 为空，使前端
+            # awaitingUserInput=false → showingProgress=true 切到进度页，否则会卡在
+            # 按钮禁用的确认面板不动。不修改共享 result，避免影响后续 updates 聚合。
+            started_result = dict(result)
+            if resume_from == "ui_confirmation":
+                if "clarification" not in started_result and initial_state.get("clarification") is not None:
+                    started_result["clarification"] = initial_state.get("clarification")
+                if "ui_designs" not in started_result and initial_state.get("ui_designs") is not None:
+                    started_result["ui_designs"] = initial_state.get("ui_designs")
             for frame in _workflow_ag_ui_frames(
                 encoder,
                 run_id=run_id,
                 thread_id=thread_id,
                 events=events,
-                result=result,
+                result=started_result,
             ):
                 yield frame
             process_sequence = 1
@@ -519,6 +531,19 @@ def build_workflow_ag_ui_stream(
                         )
                         # 把当前已生成的页面快照写进 ui_designs，前端在 loading 态
                         # 即可从 workflow state 边收边渲染已就绪的设计稿。
+                        # 保留 checkpoint 的 clarification（mode=ui_design_confirmation），
+                        # 仅把 pages 更新为当前已就绪快照、status 置 running，避免
+                        # 前端 ApplicationPlanningQuestionPanel 因 clarification 为空而
+                        # 走默认空表单分支白屏（换一换/多页调整 run 期间持续几十秒）。
+                        checkpoint_clarification = initial_state.get("clarification")
+                        if isinstance(checkpoint_clarification, dict):
+                            progress_clarification = {
+                                **checkpoint_clarification,
+                                "status": "running",
+                                "pages": ready_pages,
+                            }
+                        else:
+                            progress_clarification = {}
                         progress_state = {
                             **initial_state,
                             "phase": progress_node,
@@ -527,9 +552,7 @@ def build_workflow_ag_ui_stream(
                                 "confirmation_status": "generating",
                                 "pages": ready_pages,
                             },
-                            # 生成期间清空 clarification，避免前端误判为 requires_user_input
-                            # 而跳过流式预览、显示空白。
-                            "clarification": {},
+                            "clarification": progress_clarification,
                         }
                         _workflow_event(
                             events,

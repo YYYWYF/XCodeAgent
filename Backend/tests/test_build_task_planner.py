@@ -1417,6 +1417,97 @@ class BuildTaskPlannerTests(unittest.TestCase):
             ["a", "b", "c"],
         )
 
+    def test_change_scope_defaults_to_add_for_missing_file_and_modify_for_existing(self) -> None:
+        """未显式声明 operation 时，按磁盘存在性决定 add/modify，避免验收 modified/added 错配。"""
+
+        base_plan = {
+            "schema_version": "build-dag.v3",
+            "build_units": {
+                "frontend:api-client": {"id": "frontend:api-client", "kind": "application"},
+            },
+            "unit_graph": {
+                "nodes": ["frontend:api-client"],
+                "edges": [],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            # 模板工程已有的 API 文件（应判 modify）
+            existing = Path(workspace) / "frontend/src/apis/service.ts"
+            existing.parent.mkdir(parents=True)
+            existing.write_text("// service", encoding="utf-8")
+            # 业务 API 文件尚未生成（应判 add）
+            plan = create_build_task_plan(
+                {"version": "1.0.0"},
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "task-api",
+                            "unit_id": "frontend:api-client",
+                            "owner": "frontend",
+                            "description": "实现 API 模块",
+                            # 故意不写 operation，触发磁盘存在性兜底
+                            "change_scope": [
+                                {"path": "frontend/src/apis/service.ts"},
+                                {"path": "frontend/src/apis/userApi.ts"},
+                            ],
+                        }
+                    ]
+                },
+                base_build_task_plan=base_plan,
+                workspace_root=workspace,
+            )
+
+        task = plan["task_registry"]["task-api"]
+        scope = {item["path"]: item["operation"] for item in task["change_scope"]}
+        self.assertEqual(scope["frontend/src/apis/service.ts"], "modify")
+        self.assertEqual(scope["frontend/src/apis/userApi.ts"], "add")
+
+    def test_change_scope_explicit_operation_is_preserved(self) -> None:
+        """模型显式声明的 add/modify/delete 一律保留，不被磁盘存在性覆盖。"""
+
+        base_plan = {
+            "schema_version": "build-dag.v3",
+            "build_units": {
+                "frontend:api-client": {"id": "frontend:api-client", "kind": "application"},
+            },
+            "unit_graph": {
+                "nodes": ["frontend:api-client"],
+                "edges": [],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            existing = Path(workspace) / "frontend/src/apis/service.ts"
+            existing.parent.mkdir(parents=True)
+            existing.write_text("// service", encoding="utf-8")
+            plan = create_build_task_plan(
+                {"version": "1.0.0"},
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "task-api",
+                            "unit_id": "frontend:api-client",
+                            "owner": "frontend",
+                            "description": "实现 API 模块",
+                            "change_scope": [
+                                # 显式 add，即使文件已存在也保留 add
+                                {"operation": "add", "path": "frontend/src/apis/service.ts"},
+                                # 显式 modify，即使文件不存在也保留 modify
+                                {"operation": "modify", "path": "frontend/src/apis/missing.ts"},
+                            ],
+                        }
+                    ]
+                },
+                base_build_task_plan=base_plan,
+                workspace_root=workspace,
+            )
+
+        task = plan["task_registry"]["task-api"]
+        scope = {item["path"]: item["operation"] for item in task["change_scope"]}
+        self.assertEqual(scope["frontend/src/apis/service.ts"], "add")
+        self.assertEqual(scope["frontend/src/apis/missing.ts"], "modify")
+
 
 if __name__ == "__main__":
     unittest.main()

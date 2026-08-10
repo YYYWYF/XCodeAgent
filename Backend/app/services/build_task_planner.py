@@ -145,7 +145,37 @@ def _text(value: Any, default: str = "") -> str:
     return text or default
 
 
-def _change_scope(value: Any, target_files: list[str]) -> list[dict[str, str]]:
+def _default_operation_for_path(path: str, workspace_root: str | Path | None) -> str:
+    """未显式声明 operation 时，按磁盘是否已存在该文件决定 add/modify。
+
+    build-task-plan 的 change_scope 默认一律标 modify，但模板工程拉取后业务 API、
+    新增页面等文件并不存在；build 阶段实际产生 added 差异，与 modify 期望不符，
+    导致工程验收报"预期 modified 实际 added"。这里在缺省时按磁盘存在性兜底：
+    文件已存在 → modify，不存在 → add，使期望与实际差异类型对齐。
+    与 build_task_menu.ensure_page_route_registration_task 的
+    `modify if entry_exists else add` 同一约定。
+    """
+
+    if not workspace_root:
+        return "modify"
+    # 去掉前导 ./ 和虚拟绝对前缀 /，使路径相对工作区解析；与验收器
+    # _resolved_path_error 的 (root / path).resolve() + lstrip("./") 约定一致。
+    cleaned = path.strip().lstrip("./").lstrip("/")
+    if not cleaned:
+        return "modify"
+    try:
+        target = (Path(workspace_root).expanduser() / cleaned).resolve()
+    except (OSError, ValueError):
+        return "modify"
+    return "modify" if target.is_file() else "add"
+
+
+def _change_scope(
+    value: Any,
+    target_files: list[str],
+    *,
+    workspace_root: str | Path | None = None,
+) -> list[dict[str, str]]:
     operations = {"add", "modify", "delete"}
     result: list[dict[str, str]] = []
     if isinstance(value, list):
@@ -155,7 +185,9 @@ def _change_scope(value: Any, target_files: list[str]) -> list[dict[str, str]]:
                 if path:
                     result.append(
                         {
-                            "operation": "modify",
+                            "operation": _default_operation_for_path(
+                                path, workspace_root
+                            ),
                             "path": path,
                             "description": "按任务要求调整该文件。",
                         }
@@ -166,9 +198,15 @@ def _change_scope(value: Any, target_files: list[str]) -> list[dict[str, str]]:
             path = _text(item.get("path") or item.get("file"))
             if not path:
                 continue
-            operation = _text(item.get("operation"), "modify").lower()
-            if operation not in operations:
-                operation = "modify"
+            # 仅当模型未显式声明 operation 时按磁盘存在性兜底；显式 add/modify/delete
+            # 一律保留，避免覆盖模型对 delete 等语义的明确意图。
+            raw_operation = item.get("operation")
+            if raw_operation is None or str(raw_operation).strip() == "":
+                operation = _default_operation_for_path(path, workspace_root)
+            else:
+                operation = str(raw_operation).strip().lower()
+                if operation not in operations:
+                    operation = _default_operation_for_path(path, workspace_root)
             result.append(
                 {
                     "operation": operation,
@@ -179,7 +217,11 @@ def _change_scope(value: Any, target_files: list[str]) -> list[dict[str, str]]:
     if result:
         return result
     return [
-        {"operation": "modify", "path": path, "description": "按任务要求调整该文件。"}
+        {
+            "operation": _default_operation_for_path(path, workspace_root),
+            "path": path,
+            "description": "按任务要求调整该文件。",
+        }
         for path in target_files
     ]
 
@@ -248,7 +290,11 @@ def _workspace_analysis_from_snapshot(snapshot: dict[str, Any] | None) -> dict[s
     }
 
 
-def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
+def _normalize_agent_tasks(
+    raw_tasks: Any,
+    *,
+    workspace_root: str | Path | None = None,
+) -> list[dict[str, Any]]:
     """把模型返回的候选任务规整为 v3 叶子任务。"""
 
     if not isinstance(raw_tasks, list):
@@ -284,7 +330,11 @@ def _normalize_agent_tasks(raw_tasks: Any) -> list[dict[str, Any]]:
         )
         description = _text(item.get("description"), _text(item.get("title"), task_id))
         target_files = _string_list(item.get("target_files"))
-        change_scope = _change_scope(item.get("change_scope"), target_files)
+        change_scope = _change_scope(
+            item.get("change_scope"),
+            target_files,
+            workspace_root=workspace_root,
+        )
         # target_files 必须覆盖 change_scope 里的全部路径：模型常把页面入口
         # （frontend/src/pages/<Key>/index.tsx）只放在 change_scope 而漏进
         # target_files。下游 ensure_page_route_registration_task /
@@ -917,7 +967,7 @@ def create_build_task_plan(
     """将模型候选任务归一化并合并到已有全局 Unit 骨架。"""
 
     raw_tasks = _raw_agent_tasks(agent_plan)
-    proposed_tasks = _normalize_agent_tasks(raw_tasks)
+    proposed_tasks = _normalize_agent_tasks(raw_tasks, workspace_root=workspace_root)
     context = build_context or {}
     proposed_tasks = reconcile_live_page_paths(
         proposed_tasks,

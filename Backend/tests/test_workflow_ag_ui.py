@@ -653,6 +653,101 @@ class FakeBlockingGraph:
         return SimpleNamespace(values={})
 
 
+class FakeUiConfirmationProgressGraph:
+    """模拟换一换 run：先发 ui_confirmation.progress 自定义事件，再完成节点。"""
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        # 单页换一换生成期间推送进度（pages 为当前已就绪快照）。
+        yield "custom", {
+            "type": "ui_confirmation.progress",
+            "node_name": "ui_confirmation",
+            "message": "正在重新生成设计稿：首页",
+            "detail": {
+                "ready": 1,
+                "total": 2,
+                "pageId": "home_page",
+                "pages": [
+                    {
+                        "pageId": "home_page",
+                        "name": "首页",
+                        "code": "export default function HomePage() { return null }",
+                        "status": "pending",
+                    },
+                    {
+                        "pageId": "list_page",
+                        "name": "列表页",
+                        "code": "",
+                        "status": "pending",
+                    },
+                ],
+            },
+        }
+        # 节点完成：返回 requires_user_input + ui_design_confirmation。
+        yield "updates", {
+            "ui_confirmation": {
+                "phase": "ui_confirmation",
+                "status": "requires_user_input",
+                "ui_designs": {
+                    "confirmation_status": "pending_user_confirmation",
+                    "pages": [
+                        {
+                            "pageId": "home_page",
+                            "name": "首页",
+                            "code": "export default function HomePage() { return null }",
+                            "status": "confirmed",
+                        },
+                        {
+                            "pageId": "list_page",
+                            "name": "列表页",
+                            "code": "",
+                            "status": "pending",
+                        },
+                    ],
+                },
+                "clarification": {
+                    "mode": "ui_design_confirmation",
+                    "status": "requires_user_input",
+                    "questions": [],
+                    "pages": [
+                        {
+                            "pageId": "home_page",
+                            "name": "首页",
+                            "code": "export default function HomePage() { return null }",
+                            "status": "confirmed",
+                        },
+                        {
+                            "pageId": "list_page",
+                            "name": "列表页",
+                            "code": "",
+                            "status": "pending",
+                        },
+                    ],
+                },
+                "timeline": ["ui_confirmation"],
+            }
+        }
+
+    def get_state(self, config):
+        return SimpleNamespace(
+            values={
+                "phase": "ui_confirmation",
+                "status": "requires_user_input",
+                "clarification": {
+                    "mode": "ui_design_confirmation",
+                    "status": "requires_user_input",
+                    "pages": [
+                        {"pageId": "home_page", "name": "首页", "code": "x", "status": "confirmed"},
+                        {"pageId": "list_page", "name": "列表页", "code": "", "status": "pending"},
+                    ],
+                },
+                "timeline": ["ui_confirmation"],
+            }
+        )
+
+    async def aget_state(self, config):
+        return self.get_state(config)
+
+
 def _fake_code_change_set() -> dict:
     return {
         "id": "code-change-set:test",
@@ -1634,6 +1729,153 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("codeChangesSummary", payload)
         self.assertIn("data.json", payload)
         self.assertIn("file.write", payload)
+
+    def test_ui_confirmation_progress_preserves_checkpoint_clarification(self) -> None:
+        """换一换 run 期间的 ui_confirmation.progress 帧必须保留 checkpoint 的
+        clarification（mode=ui_design_confirmation + pages），不能清空为 {}，
+        否则前端 ApplicationPlanningQuestionPanel 走默认空表单分支白屏几十秒。"""
+
+        checkpoint_clarification = {
+            "mode": "ui_design_confirmation",
+            "status": "requires_user_input",
+            "questions": [],
+            "pages": [
+                {"pageId": "home_page", "name": "首页", "code": "old code", "status": "confirmed"},
+                {"pageId": "list_page", "name": "列表页", "code": "", "status": "pending"},
+            ],
+        }
+        graph = FakeUiConfirmationProgressGraph()
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-ui-progress",
+                    "runId": "run-ui-progress",
+                    "messages": [{"role": "user", "content": "换一换首页设计稿"}],
+                    "forwardedProps": {
+                        "workflowScope": "application_planning",
+                        "resumeFrom": "ui_confirmation",
+                        "resumeState": {
+                            "runId": "run-prev",
+                            "threadId": "thread-ui-progress",
+                            "summary": {
+                                "status": "requires_user_input",
+                                "phase": "ui_confirmation",
+                                "clarification": checkpoint_clarification,
+                            },
+                            "state": {
+                                "status": "requires_user_input",
+                                "phase": "ui_confirmation",
+                                "clarification": checkpoint_clarification,
+                            },
+                            "events": [
+                                {
+                                    "type": "workflow.node.completed",
+                                    "nodeName": "ui_confirmation",
+                                    "status": "requires_user_input",
+                                }
+                            ],
+                        },
+                    },
+                },
+                accept="text/event-stream",
+            )
+            return [frame async for frame in stream]
+
+        frames = asyncio.run(collect())
+        workflow_frames = _decode_workflow_run_frames(frames)
+        # 找到 progress 帧（status=running 且 clarification.mode 仍为 ui_design_confirmation）。
+        progress_frames = [
+            frame
+            for frame in workflow_frames
+            if frame.get("summary", {}).get("status") == "running"
+            and frame.get("summary", {}).get("phase") == "ui_confirmation"
+        ]
+        self.assertTrue(progress_frames, "应至少有一个 ui_confirmation 进度帧")
+        progress = progress_frames[0]
+        clarification = progress.get("summary", {}).get("clarification", {})
+        self.assertEqual(
+            clarification.get("mode"),
+            "ui_design_confirmation",
+            "进度帧必须保留 checkpoint 的 clarification.mode，不能清空",
+        )
+        self.assertTrue(
+            isinstance(clarification.get("pages"), list)
+            and len(clarification.get("pages", [])) > 0,
+            "进度帧必须保留 pages，前端据此渲染左侧页面列表",
+        )
+
+    def test_requirements_node_started_does_not_carry_checkpoint_clarification(self) -> None:
+        """需求阶段提交后 node.started 起始帧不能带上 checkpoint 的 clarification。
+
+        需求阶段 checkpoint 的 clarification.status=requires_user_input，若 node.started
+        帧带上它，前端 awaitingUserInput=true → showingProgress=false，会卡在按钮禁用的
+        确认面板不动（大模型在后台输出但页面无反应）。只有 UI 确认阶段（resume_from=
+        ui_confirmation）才允许带上。
+        """
+
+        checkpoint_clarification = {
+            "mode": "requirement_spec_confirmation",
+            "status": "requires_user_input",
+            "questions": [{"id": "user_roles", "question": "需要哪些角色？"}],
+        }
+        graph = FakeWorkflowGraph()
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-req-start",
+                    "runId": "run-req-start",
+                    "messages": [{"role": "user", "content": "补充角色信息后继续"}],
+                    "forwardedProps": {
+                        "workflowScope": "application_planning",
+                        "resumeFrom": "requirements",
+                        "resumeState": {
+                            "runId": "run-prev",
+                            "threadId": "thread-req-start",
+                            "summary": {
+                                "status": "requires_user_input",
+                                "phase": "requirements",
+                                "clarification": checkpoint_clarification,
+                            },
+                            "state": {
+                                "status": "requires_user_input",
+                                "phase": "requirements",
+                                "clarification": checkpoint_clarification,
+                            },
+                            "events": [
+                                {
+                                    "type": "workflow.node.completed",
+                                    "nodeName": "requirements",
+                                    "status": "requires_user_input",
+                                }
+                            ],
+                        },
+                    },
+                },
+                accept="text/event-stream",
+            )
+            return [frame async for frame in stream]
+
+        frames = asyncio.run(collect())
+        workflow_frames = _decode_workflow_run_frames(frames)
+        # node.started 帧：status=running 且 phase=requirements（FakeWorkflowGraph 首节点）。
+        started_frames = [
+            frame
+            for frame in workflow_frames
+            if frame.get("summary", {}).get("status") == "running"
+        ]
+        self.assertTrue(started_frames, "应至少有一个 node.started 起始帧")
+        for started in started_frames:
+            clarification = started.get("summary", {}).get("clarification", {})
+            self.assertNotEqual(
+                clarification.get("status"),
+                "requires_user_input",
+                "需求阶段 node.started 帧不能带 checkpoint 的 requires_user_input clarification，"
+                "否则前端卡在确认面板不切进度页",
+            )
 
 
 if __name__ == "__main__":

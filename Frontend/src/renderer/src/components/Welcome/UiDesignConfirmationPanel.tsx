@@ -272,10 +272,13 @@ export default function UiDesignConfirmationPanel({
     }
   }, [activePageId, pages])
 
-  // 后端 run 完成后 workflow 更新（pages 引用变化），清除单页动作加载态。
+  // 后端 run 完成后（disabled 解除）workflow 更新（pages 引用变化），清除单页动作加载态。
+  // run 期间 ui_confirmation.progress 事件会持续刷新 pages 引用，但此时 disabled 仍为 true，
+  // 不能清除 actionPageId，否则换一换/多页调整的加载态与"正在处理"提示会中途消失。
   useEffect(() => {
+    if (disabled) return
     setActionPageId(null)
-  }, [pages])
+  }, [pages, disabled])
 
   if (!clarification) return null
 
