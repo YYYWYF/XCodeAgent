@@ -11,6 +11,7 @@ import { normalizePersistentSessionMessage } from './sessionMessageNormalization
 import type { ApplicationMenuItem } from '../renderer/src/typings'
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { lstatIfPresent, removeDirectoryIfPresent } from './filesystem'
+import { readManagedWorkspaceApplication } from './managedWorkspace'
 import {
   clearAuthState,
   ensureXcodeAgentDataDir,
@@ -729,7 +730,10 @@ function setupApplicationStorageIpc(): void {
   })
 
   ipcMain.handle('applications:delete-project', async (_event, payload = {}) => {
-    await deleteProjectDirectory(payload.workspaceRoot)
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    await deleteProjectDirectory(workspaceRoot)
+    // 项目永久删除后同步清理环境级会话，避免同一路径重建时继承旧项目历史。
+    await removeDirectoryIfPresent(getWorkspaceSessionRoot(workspaceRoot))
     return { ok: true }
   })
 
@@ -1188,18 +1192,7 @@ function setupWorkspaceIpc(): void {
 
   ipcMain.handle('workspace:read-application', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
-    const applicationFile = getWorkspaceApplicationFile(workspaceRoot)
-    const rawValue = await fs.readFile(applicationFile, 'utf8')
-    const applicationConfig = JSON.parse(rawValue || '{}')
-
-    if (
-      !applicationConfig ||
-      typeof applicationConfig !== 'object' ||
-      Array.isArray(applicationConfig)
-    ) {
-      throw new Error('application.json must be an object')
-    }
-
+    const applicationConfig = await readManagedWorkspaceApplication(workspaceRoot)
     return { application: applicationConfig }
   })
 

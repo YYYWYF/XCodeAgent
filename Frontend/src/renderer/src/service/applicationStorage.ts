@@ -6,6 +6,7 @@ import type {
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption
 } from '../typings';
+import { clearWorkspaceChatSessionCache } from './chatSessions';
 
 const STORAGE_KEY = 'xcode-agent-applications';
 const LOCAL_FILE_API = '/api/local-applications';
@@ -136,6 +137,7 @@ export async function deleteStoredProject(workspaceRoot: string) {
     throw new Error('当前环境不支持删除本地项目目录');
   }
   await electronApplications.deleteProject({ workspaceRoot });
+  clearWorkspaceChatSessionCache(workspaceRoot);
 }
 
 // 请求桌面主进程仅删除工作区内由初始化计划生成的 .xcodeagent 目录。

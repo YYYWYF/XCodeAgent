@@ -65,10 +65,19 @@ export type SessionWorkspaceSummary = {
   latestTitle: string;
 };
 
+const CHAT_SESSION_EDITOR_MODES: EditorMode[] = ['frontend', 'backend'];
+
 type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>;
 
 function storageKey(workspaceRoot: string, editorMode: EditorMode): string {
   return `xcode-agent-sessions:${workspaceRoot}:${editorMode}`;
+}
+
+/** 清理指定工作区的浏览器兜底会话，桌面主进程中的正式会话由项目删除 IPC 负责。 */
+export function clearWorkspaceChatSessionCache(workspaceRoot: string): void {
+  CHAT_SESSION_EDITOR_MODES.forEach((editorMode) => {
+    window.localStorage.removeItem(storageKey(workspaceRoot, editorMode));
+  });
 }
 
 function getElectronInvoke(): ElectronInvoke | undefined {

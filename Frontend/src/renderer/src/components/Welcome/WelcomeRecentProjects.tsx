@@ -10,6 +10,7 @@ import {
 } from '../../service/applicationStorage'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
+import { useSessionRuntimeStore } from '../AiChatPanel/hooks/useSessionRuntimeStore'
 import './WelcomeModal.less'
 import './WelcomeRecentProjects.less'
 
@@ -34,6 +35,7 @@ function formatRecentTime(value: number): string {
 }
 
 export default function WelcomeRecentProjects({ onOpenApplication, theme }: Props): JSX.Element {
+  const { clearWorkspace } = useSessionRuntimeStore()
   const [applications, setApplications] = useState<ApplicationConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [applicationToDelete, setApplicationToDelete] = useState<ApplicationConfig>()
@@ -88,13 +90,18 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
         if (!applicationToDelete.workspaceRoot) {
           throw new Error('该项目没有可删除的本地目录')
         }
+        await clearWorkspace(applicationToDelete.workspaceRoot)
         await deleteStoredProject(applicationToDelete.workspaceRoot)
       }
       await removeStoredApplication(applicationToDelete.id)
       setApplications((current) =>
         current.filter((application) => application.id !== applicationToDelete.id)
       )
-      message.success(deleteMode === 'project' ? '本地项目及其首页索引已删除' : '项目已从首页移除')
+      message.success(
+        deleteMode === 'project'
+          ? '本地项目、聊天历史及首页索引已删除'
+          : '项目已从首页移除'
+      )
       setApplicationToDelete(undefined)
     } catch (error) {
       message.error(error instanceof Error ? error.message : '删除项目失败')
@@ -188,7 +195,7 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
             删除本地项目
             <span>
               永久删除 {applicationToDelete?.workspaceRoot || '项目目录'}{' '}
-              及其中所有文件，且无法恢复。
+              及其中所有文件，同时删除该项目的全部聊天历史，且无法恢复。
             </span>
           </Radio>
         </Radio.Group>
