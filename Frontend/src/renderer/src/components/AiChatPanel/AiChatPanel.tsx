@@ -76,6 +76,7 @@ type Props = {
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
   previewLaunchError: string
+  previewLaunchLoading: boolean
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
@@ -230,6 +231,7 @@ export default function AiChatPanel({
   onPlanningArtifactsRefresh,
   previewBaseUrl,
   previewLaunchError,
+  previewLaunchLoading,
   onReturnWelcome,
   onThemeChange,
   theme
@@ -1053,6 +1055,7 @@ export default function AiChatPanel({
                 pagePath={activeHeaderTarget.path}
                 pageTitle={activeHeaderTarget.title}
                 previewAvailable={showPreviewActions && Boolean(runtimePreviewBaseUrl)}
+                previewLaunchLoading={previewLaunchLoading}
                 status={activeHeaderStatus}
                 targetType={activeHeaderTarget.type}
                 theme={theme}

@@ -1,5 +1,4 @@
-import { Layout, notification } from 'antd'
-import { LoadingOutlined } from '@ant-design/icons'
+import { Layout } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { LeftPanel } from '../components'
 import {
@@ -59,6 +58,7 @@ function WorkbenchPage({
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [previewBaseUrl, setPreviewBaseUrl] = useState('')
   const [previewLaunchError, setPreviewLaunchError] = useState('')
+  const [previewLaunchLoading, setPreviewLaunchLoading] = useState(false)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const entryStartedAtRef = useRef(Date.now())
   const launchedWorkspaceRef = useRef<string>()
@@ -69,8 +69,7 @@ function WorkbenchPage({
 
   // 进入工作台时自动异步尝试启动项目预览（首次创建和重新进入均生效）
   useEffect(() => {
-    const workspacePath =
-      application.workspaceRoot || application.projectParentPath || ''
+    const workspacePath = application.workspaceRoot || application.projectParentPath || ''
     if (launchCleanupTimerRef.current !== undefined) {
       window.clearTimeout(launchCleanupTimerRef.current)
       launchCleanupTimerRef.current = undefined
@@ -78,6 +77,7 @@ function WorkbenchPage({
     launchCleanupPendingRef.current = false
     if (!workspacePath) {
       activeLaunchWorkspaceRef.current = ''
+      setPreviewLaunchLoading(false)
       return
     }
     activeLaunchWorkspaceRef.current = workspacePath
@@ -99,65 +99,50 @@ function WorkbenchPage({
     launchRunIdRef.current = launchRunId
     launchedWorkspaceRef.current = workspacePath
 
-    const loadingKey = `project-launch-${application.id}-${launchRunId}`
-    notification.open({
-      key: loadingKey,
-      message: '项目正在启动中',
-      description: '正在安装依赖并启动开发服务器，请稍候...',
-      placement: 'bottomRight',
-      duration: null,
-      icon: <LoadingOutlined />,
-      className: cx('project-launch-loading'),
-    })
+    setPreviewBaseUrl('')
+    setPreviewLaunchError('')
+    setPreviewLaunchLoading(true)
 
-    startProjectLaunch(workspacePath).then(result => {
-      const launchStillCurrent =
-        launchRunIdRef.current === launchRunId &&
-        activeLaunchWorkspaceRef.current === workspacePath &&
-        !launchCleanupPendingRef.current
-      notification.close(loadingKey)
-      if (!launchStillCurrent) {
-        if (result.status === 'running') {
-          void stopProjectPreview(workspacePath).finally(() => {
-            void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
-              workspaceRoot: workspacePath
+    startProjectLaunch(workspacePath)
+      .then((result) => {
+        const launchStillCurrent =
+          launchRunIdRef.current === launchRunId &&
+          activeLaunchWorkspaceRef.current === workspacePath &&
+          !launchCleanupPendingRef.current
+        if (!launchStillCurrent) {
+          if (result.status === 'running') {
+            void stopProjectPreview(workspacePath).finally(() => {
+              void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
+                workspaceRoot: workspacePath
+              })
             })
-          })
+          }
+          return
         }
-        return
-      }
-      if (result.status === 'running' && result.preview_url) {
-        void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot: workspacePath })
-        setPreviewBaseUrl(previewOrigin(result.preview_url))
-        setPreviewLaunchError('')
-        notification.success({
-          message: '项目预览已启动',
-          description: '可在预览面板中查看效果',
-          placement: 'bottomRight',
-          duration: 3,
-        })
-      } else {
-        const errorMsg = result.message || '未知错误'
+        setPreviewLaunchLoading(false)
+        if (result.status === 'running' && result.preview_url) {
+          void window.xcodeAgent?.projectPreview?.registerWorkspace({
+            workspaceRoot: workspacePath
+          })
+          setPreviewBaseUrl(previewOrigin(result.preview_url))
+          setPreviewLaunchError('')
+        } else {
+          const errorMsg = result.message || '未知错误'
+          setPreviewBaseUrl('')
+          setPreviewLaunchError(errorMsg)
+        }
+      })
+      .catch((err) => {
+        const launchStillCurrent =
+          launchRunIdRef.current === launchRunId &&
+          activeLaunchWorkspaceRef.current === workspacePath &&
+          !launchCleanupPendingRef.current
+        if (!launchStillCurrent) return
+        const errorMsg = err instanceof Error ? err.message : '网络请求失败'
         setPreviewBaseUrl('')
         setPreviewLaunchError(errorMsg)
-        notification.warning({
-          message: '项目预览启动失败',
-          description: `${errorMsg}，可在预览区查看详情`,
-          placement: 'bottomRight',
-          duration: 3,
-        })
-      }
-    }).catch(err => {
-      notification.close(loadingKey)
-      const launchStillCurrent =
-        launchRunIdRef.current === launchRunId &&
-        activeLaunchWorkspaceRef.current === workspacePath &&
-        !launchCleanupPendingRef.current
-      if (!launchStillCurrent) return
-      const errorMsg = err instanceof Error ? err.message : '网络请求失败'
-      setPreviewBaseUrl('')
-      setPreviewLaunchError(errorMsg)
-    })
+        setPreviewLaunchLoading(false)
+      })
     return () => {
       launchCleanupPendingRef.current = true
       launchCleanupTimerRef.current = window.setTimeout(() => {
@@ -288,6 +273,7 @@ function WorkbenchPage({
           onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
           previewBaseUrl={previewBaseUrl}
           previewLaunchError={previewLaunchError}
+          previewLaunchLoading={previewLaunchLoading}
           onApplicationLifecycleChange={onApplicationLifecycleChange}
           onReturnWelcome={onReturnWelcome}
           onThemeChange={handleThemeChange}

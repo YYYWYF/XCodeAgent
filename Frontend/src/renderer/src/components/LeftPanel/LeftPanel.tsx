@@ -28,6 +28,7 @@ type Props = {
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
   previewLaunchError: string
+  previewLaunchLoading: boolean
   onReturnWelcome: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
   theme: 'light' | 'dark'
@@ -48,6 +49,7 @@ export default function LeftPanel({
   onPlanningArtifactsRefresh,
   previewBaseUrl,
   previewLaunchError,
+  previewLaunchLoading,
   onReturnWelcome,
   onThemeChange,
   theme
@@ -70,6 +72,7 @@ export default function LeftPanel({
             onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}
             previewBaseUrl={previewBaseUrl}
             previewLaunchError={previewLaunchError}
+            previewLaunchLoading={previewLaunchLoading}
             onReturnWelcome={onReturnWelcome}
             onThemeChange={onThemeChange}
             theme={theme}
