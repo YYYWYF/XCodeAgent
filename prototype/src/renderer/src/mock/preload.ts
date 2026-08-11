@@ -41,9 +41,22 @@ import {
 import { mockApplicationInPlanning } from './mockHttpAgent'
 import { isEndpointDesigned, isPageDesigned } from './designState'
 
+const MOCK_APPLICATION_PREVIEW_URL = 'http://127.0.0.1:5190'
+
 // 模拟 ipcRenderer.invoke 的成功返回。
 const ok = <T>(data: T): Promise<T> => Promise.resolve(data)
 const noop = (): Promise<unknown> => Promise.resolve({})
+
+// 实时会话（页面/接口开发、审查）在走完时存到 window 内存。list/read 必须合并它们，
+// 否则切回开发阶段后大纲点页面/接口，静态 mock 会话找不到实时开发历史 → 会话丢失。
+function mockSavedSessions(workspaceRoot?: string): Array<Record<string, unknown>> {
+  const all = (window as unknown as { __mockSavedSessions?: Array<Record<string, unknown>> })
+    .__mockSavedSessions || []
+  if (!workspaceRoot) return all
+  return all.filter(
+    (session) => !session.workspaceRoot || session.workspaceRoot === workspaceRoot
+  )
+}
 
 // 根据工作区路径找到对应应用场景的 schema；找不到回退 pms-new。
 function findAppSchema(workspaceRoot?: string) {
@@ -51,8 +64,7 @@ function findAppSchema(workspaceRoot?: string) {
 }
 
 // 把运行时已确认设计的页面标记到规划产物，避免设计完成后仍显示未设计。
-// 注意：artifacts 里自带的 designed 状态（如 dev 镜像 my-projects）保留，
-// 只把 designState 中本会话内确认设计的页面额外标为 designed。
+// 注意：artifacts 里自带的 designed 状态保留，只把 designState 中本会话内确认设计的页面额外标为 designed。
 function withDesignedPages(artifacts: { pages: unknown[]; pageTree: unknown[]; apiContracts: unknown[] }) {
   const markPage = (page: any) =>
     isPageDesigned(page?.pageId || '')
@@ -78,6 +90,34 @@ function withDesignedPages(artifacts: { pages: unknown[]; pageTree: unknown[]; a
     pages: artifacts.pages.map(markPage),
     pageTree: artifacts.pageTree.map(markNode),
     apiContracts: artifacts.apiContracts.map(markEndpoint)
+  }
+}
+
+// 把共享的 v1.3 完成态规划产物还原为新应用/新迭代的待开发基线，再叠加本次运行已确认的任务。
+function asPendingPlanningArtifacts(artifacts: { pages: any[]; pageTree: any[]; apiContracts: any[] }) {
+  const resetPage = (page: any): any => ({
+    ...page,
+    designed: false,
+    hasDetailPlan: false,
+    detailPlanStatus: 'pending'
+  })
+  const resetNode = (node: any): any =>
+    node.children
+      ? { ...node, children: node.children.map(resetNode) }
+      : resetPage(node)
+  return {
+    ...artifacts,
+    pages: artifacts.pages.map(resetPage),
+    pageTree: artifacts.pageTree.map(resetNode),
+    apiContracts: artifacts.apiContracts.map((contract: any) => ({
+      ...contract,
+      endpoints: (contract.endpoints || []).map((endpoint: any) => ({
+        ...endpoint,
+        designed: false,
+        hasDetailPlan: false
+      }))
+    })),
+    hasPageDesigns: false
   }
 }
 
@@ -113,24 +153,31 @@ const xcodeAgent = {
     writeTemplatePages: (payload: unknown) => ok(payload),
     readApplication: ({ workspaceRoot }: { workspaceRoot?: string }) =>
       ok({ application: findAppSchema(workspaceRoot) }),
-    inspectPlanningArtifacts: ({ workspaceRoot }: { workspaceRoot?: string }) =>
-      ok(withDesignedPages(appDataByWorkspace(workspaceRoot).planningArtifacts))
+    inspectPlanningArtifacts: ({ workspaceRoot, applicationId, versionId }: { workspaceRoot?: string; applicationId?: string; versionId?: string }) => {
+      const artifacts = appDataByWorkspace(workspaceRoot).planningArtifacts
+      const isCompletedDemoVersion = applicationId === 'app-pms-new' && versionId === 'app-pms-new-v1-3'
+      return ok(withDesignedPages(isCompletedDemoVersion ? artifacts : asPendingPlanningArtifacts(artifacts as never)))
+    }
   },
   sessions: {
     // 各应用镜像的对话历史来自 mock-data/{pms-new,pms-design,pms-dev}/chat-sessions.ts。
     listWorkspaces: () => ok([]),
-    list: ({ workspaceRoot, editorMode }: { workspaceRoot?: string; editorMode?: string }) => {
+    list: ({ workspaceRoot, editorMode, applicationId }: { workspaceRoot?: string; editorMode?: string; applicationId?: string }) => {
       // 规划(设计)阶段的应用不返回已设计页会话，工作台只显示应用规划会话。
-      if (mockApplicationInPlanning(workspaceRoot || '')) return ok({ sessions: [] })
+      if (mockApplicationInPlanning(workspaceRoot || '', applicationId)) return ok({ sessions: [] })
       const sessions = appDataByWorkspace(workspaceRoot).chatSessions(
         workspaceRoot || '',
         (editorMode || 'frontend') as never
       ) as Array<{
         id: string; title: string; editorMode: string; threadId: string; pageId?: string
-        apiContractId?: string; endpointId?: string
+        apiContractId?: string; endpointId?: string; versionId?: string
         createdAt: number; updatedAt: number; messages: unknown[]
       }>
-      const summaries = sessions.map((s) => ({
+      // 合并走完的实时会话（页面/接口开发、审查），否则切回开发阶段后大纲点页面/接口，
+      // list 只返回静态 mock，实时开发会话（messageCount>0）找不到 → 会话历史丢失。
+      const saved = mockSavedSessions(workspaceRoot || '')
+      const merged = [...saved, ...sessions]
+      const summaries = merged.map((s) => ({
         id: s.id,
         title: s.title,
         editorMode: s.editorMode,
@@ -138,14 +185,17 @@ const xcodeAgent = {
         pageId: s.pageId,
         apiContractId: s.apiContractId,
         endpointId: s.endpointId,
+        versionId: s.versionId,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
-        messageCount: s.messages.length
+        messageCount: Array.isArray(s.messages) ? s.messages.length : 0
       }))
       return ok({ sessions: summaries })
     },
     read: ({ workspaceRoot, editorMode, sessionId }: { workspaceRoot?: string; editorMode?: string; sessionId?: string }) => {
       if (mockApplicationInPlanning(workspaceRoot || '')) return ok({ session: null })
+      const savedSession = mockSavedSessions(workspaceRoot || '').find((s) => s.id === sessionId)
+      if (savedSession) return ok({ session: savedSession })
       const sessions = appDataByWorkspace(workspaceRoot).chatSessions(
         workspaceRoot || '',
         (editorMode || 'frontend') as never
@@ -225,13 +275,12 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
     )
   }
   if (path.includes('project-launch') || path.includes('projects/launch') || path.includes('preview')) {
-    // 返回 running + 当前 origin：预览面板据此拼出 /dashboard 等路由，
-    // 由 vite.prototype.config 的 mock-preview-app 插件返回 mock 应用页。
+    // 返回独立的生成应用地址，预览面板再据此拼出具体业务页面路由。
     return Promise.resolve(
       new Response(
         JSON.stringify({
           status: path.includes('stop') ? 'stopped' : 'running',
-          preview_url: window.location.origin,
+          preview_url: MOCK_APPLICATION_PREVIEW_URL,
           message: 'mock 预览服务已就绪'
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }

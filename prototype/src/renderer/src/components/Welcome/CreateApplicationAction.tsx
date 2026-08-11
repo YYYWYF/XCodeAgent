@@ -11,6 +11,7 @@ import WelcomeModalTitle from './WelcomeModalTitle'
 import './ApplicationFormModal.less'
 import './WelcomeModal.less'
 import { saveApplication } from './applicationService'
+import { createInitialVersion } from '../../service/applicationVersions'
 import { initialApplicationDraft } from './constants'
 import { buildApplicationSchema, createApplicationId, formatError, pathBasename } from './utils'
 
@@ -96,9 +97,14 @@ export default function CreateApplicationAction({
       }
       await saveApplication(application)
       const lifecycle = await createApplicationLifecycle(application, planningThreadId)
+      // 注入初始版本 v1.0(迭代中) —— 版本概念从新建即建立,lifecycle 挂到 v1。
+      const initialVersion = createInitialVersion(application.id, lifecycle, Date.now())
+      application.versions = [initialVersion]
+      application.currentVersionId = initialVersion.id
+      await saveApplication(application)
 
       setModalOpen(false)
-      onOpenWorkbenchAfterCreate(application, lifecycle)
+      onOpenWorkbenchAfterCreate(application, initialVersion.lifecycle)
     } catch (error) {
       message.error(formatError(error, '创建应用失败'))
     } finally {

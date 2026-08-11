@@ -1,19 +1,17 @@
 [
   {
-    "id": "project-scope",
+    "id": "recheck-scope",
     "header": "业务范围",
     "type": "choice",
-    "question": "「武汉分行项目管理系统」需要覆盖哪些业务环节？",
+    "question": "「武汉分行需求回检系统」需要覆盖哪些业务环节？",
     "multiSelect": true,
     "required": true,
-    "presetAnswer": ["project-track", "recheck-report", "recheck-review"],
+    "presetAnswer": ["recheck-report"],
     "options": [
-      { "label": "项目立项与跟踪", "value": "project-track" },
       { "label": "需求回检填报", "value": "recheck-report" },
-      { "label": "回检审核", "value": "recheck-review" },
-      { "label": "整改复检", "value": "recheck-fix" }
+      { "label": "回检审核", "value": "recheck-review" }
     ],
-    "default_assumption": "默认覆盖 项目跟踪、回检填报、回检审核 三个环节"
+    "default_assumption": "默认覆盖 需求回检填报 一个环节"
   },
   {
     "id": "recheck-decision",
@@ -30,13 +28,12 @@
     "multiSelect": true,
     "required": true,
     "question": "系统涉及哪些角色？",
-    "presetAnswer": ["project-manager", "recheck-reporter", "recheck-reviewer"],
+    "presetAnswer": ["recheck-reporter", "recheck-reviewer"],
     "options": [
-      { "label": "项目经理", "value": "project-manager" },
       { "label": "回检填报人", "value": "recheck-reporter" },
       { "label": "回检审核人", "value": "recheck-reviewer" }
     ],
-    "default_assumption": "默认含项目经理、回检填报人、回检审核人三类角色"
+    "default_assumption": "默认含回检填报人、回检审核人两类角色"
   },
   {
     "id": "remark",
@@ -44,7 +41,7 @@
     "type": "text",
     "required": false,
     "question": "还有其他需要补充的业务约束或合规要求吗？（选填）",
-    "presetAnswer": "项目与回检数据统一存储于分行 MySQL，审批与操作留痕，满足审计要求。",
+    "presetAnswer": "回检数据统一存储于分行 MySQL，审批与操作留痕，满足审计要求。",
     "placeholder": "例如：需对接分行统一认证、数据留存审计等"
   }
 ]

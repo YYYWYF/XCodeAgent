@@ -125,7 +125,8 @@ export async function getApplicationLifecycle(
 
   const request = runApplicationLifecycleAction(threadId, {
     action: 'get',
-    workspaceRoot
+    workspaceRoot,
+    applicationId: application.id
   })
   lifecycleReadRequests.set(workspaceRoot, request)
   try {
@@ -148,6 +149,7 @@ export async function completeApplicationTemplateGeneration(
   return runApplicationLifecycleAction(threadId, {
     action: 'complete_template_generation',
     workspaceRoot: application.workspaceRoot,
+    applicationId: application.id,
     succeeded,
     errorMessage
   })

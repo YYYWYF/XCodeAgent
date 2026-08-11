@@ -1,9 +1,10 @@
 import { Fragment, useState } from 'react'
-import { Tag, Typography } from 'antd'
+import { Tag } from 'antd'
 import { DownOutlined, FolderOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
 import { PanelRight } from 'lucide-react'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
+import VersionActions from './VersionActions'
 import { useWorkbenchPhase } from '../context'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
@@ -13,7 +14,6 @@ import {
 } from '../workbenchPhase'
 import './WorkbenchTopBar.less'
 
-const { Text } = Typography
 const PHASE_ORDER: WorkbenchPhase[] = ['product', 'development', 'test']
 
 type Props = {
@@ -23,13 +23,18 @@ type Props = {
   onThemeChange: (theme: 'light' | 'dark') => void
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
+  activeVersionId?: string
   rightPanelOpen: boolean
   onToggleRightPanel: () => void
+  onPublishVersion: () => void
+  onRollbackVersion: (versionId: string) => void
+  onStartIteration: () => void
+  onVersionSelect: (versionId: string) => void
 }
 
 /**
  * 工作台顶部单条：左 = Logo(XCodeAgent)，分隔线后 = 应用卡 + 阶段横排 stepper，
- * 右侧 = 状态提示（当前 Agent + 跟随旅程）+ 主题切换（不相关功能放最右上角）。
+ * 右侧 = 状态提示 + 预览 + 主题切换 + 版本选择与发布。
  */
 export default function WorkbenchTopBar({
   application,
@@ -37,8 +42,14 @@ export default function WorkbenchTopBar({
   theme,
   onThemeChange,
   onReturnWelcome,
+  lifecycle,
+  activeVersionId,
   rightPanelOpen,
-  onToggleRightPanel
+  onToggleRightPanel,
+  onPublishVersion,
+  onRollbackVersion,
+  onStartIteration,
+  onVersionSelect
 }: Props): JSX.Element {
   const { phase, derivedPhase, manualOverride, switchPhase, agent } = useWorkbenchPhase()
   const following = manualOverride === null
@@ -139,6 +150,16 @@ export default function WorkbenchTopBar({
       >
         {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
       </button>
+
+      <VersionActions
+        activeVersionId={activeVersionId}
+        application={application}
+        lifecycle={lifecycle}
+        onPublish={onPublishVersion}
+        onRollback={onRollbackVersion}
+        onStartIteration={onStartIteration}
+        onVersionSelect={onVersionSelect}
+      />
 
       <PhaseSwitchConfirmModal
         fromPhase={derivedPhase}

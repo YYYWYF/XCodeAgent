@@ -357,8 +357,22 @@
   padding: 3px 0 8px;
 }
 
-.@{class-prefix}-outline-section-heading,
-.@{class-prefix}-api-group-title {
+.@{class-prefix}-application-overview-section {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-application-overview-row {
+  min-height: 52px;
+
+  .@{class-prefix}-outline-icon {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+}
+
+.@{class-prefix}-outline-section-heading {
   display: flex;
   width: 100%;
   height: 27px;
@@ -382,15 +396,13 @@
   }
 }
 
-.@{class-prefix}-outline-section-heading > .anticon:first-child,
-.@{class-prefix}-api-group-title > .anticon:first-child {
+.@{class-prefix}-outline-section-heading > .anticon:first-child {
   width: 10px;
   font-size: 9px;
   transition: transform 0.16s ease;
 }
 
-.@{class-prefix}-outline-section-heading,
-.@{class-prefix}-api-group-title {
+.@{class-prefix}-outline-section-heading {
   .@{class-prefix}-collapsed { transform: rotate(-90deg); }
 }
 
@@ -693,77 +705,8 @@
 
 .@{class-prefix}-api-section { padding-bottom: 14px; }
 
-.@{class-prefix}-api-group-title {
-  padding-left: 18px;
-  font-weight: 500;
-
-  code {
-    color: inherit;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 12px;
-    font-style: normal;
-  }
-}
-
-.@{class-prefix}-api-list {
-  position: relative;
-  margin-left: 23px;
-  padding-left: 17px;
-
-  &::before {
-    position: absolute;
-    top: 0;
-    bottom: 4px;
-    left: 0;
-    width: 1px;
-    content: '';
-    background: #e1e3ed;
-  }
-}
-
-.@{class-prefix}-api-row {
-  display: flex;
-  width: 100%;
-  height: 24px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 52px 0 4px;
-  color: #34405d;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  cursor: pointer;
-
-  &:hover,
-  &:focus-visible {
-    background: var(--outline-hover-bg);
-    outline: none;
-  }
-
-  &.@{class-prefix}-selected {
-    color: var(--outline-accent);
-    background: var(--outline-accent-soft);
-  }
-
-  code {
-    overflow: hidden;
-    color: inherit;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 10px;
-    font-style: normal;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-}
-
-.@{class-prefix}-api-node {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
+// API 区并入 outline 体系(outline-node/row/children),契约=folder、接口=leaf。
+// 接口的 method 标签替代页面 file 图标,是 API 区唯一差异点。
 .@{class-prefix}-api-method {
   display: inline-flex;
   width: 40px;
@@ -1132,51 +1075,6 @@
 
 .@{class-prefix}-doc-row-path {
   font-family: "SFMono-Regular", Consolas, Menlo, monospace;
-  font-size: 11px;
-  color: var(--wb-text-secondary, #8a9099);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* 审查阶段：审查清单（占位） */
-.@{class-prefix}-review-section {
-  margin-bottom: 4px;
-}
-
-.@{class-prefix}-review-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.@{class-prefix}-review-row {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-  width: 100%;
-  padding: 6px 10px 6px 26px;
-  color: var(--wb-text);
-  text-align: left;
-}
-
-.@{class-prefix}-review-row-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.@{class-prefix}-review-row-label {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.@{class-prefix}-review-row-desc {
   font-size: 11px;
   color: var(--wb-text-secondary, #8a9099);
   white-space: nowrap;

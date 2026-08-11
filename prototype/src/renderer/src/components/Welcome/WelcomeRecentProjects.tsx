@@ -9,6 +9,7 @@ import {
   removeStoredApplication
 } from '../../service/applicationStorage'
 import type { ApplicationConfig } from '../../typings'
+import { currentVersion } from '../../service/applicationVersions'
 import { cx } from '../../utils'
 import './WelcomeModal.less'
 import './WelcomeRecentProjects.less'
@@ -121,6 +122,7 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
         ) : applications.length > 0 ? (
           applications.map((application, index) => {
             const ProjectIcon = projectIcons[index % projectIcons.length]
+            const version = currentVersion(application)
             return (
               <div className={cx('welcome-project-row')} key={application.id}>
                 <button
@@ -132,13 +134,18 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
                     <ProjectIcon />
                   </span>
                   <span className={cx('welcome-project-main')}>
-                    <strong>{application.name}</strong>
+                    <span className={cx('welcome-project-title')}>
+                      <strong>{application.name}</strong>
+                      {version ? (
+                        <span className={cx('welcome-project-version')}>
+                          {version.versionLabel}
+                          {version.status === 'released' ? ' · 已发布' : ''}
+                        </span>
+                      ) : null}
+                    </span>
                     <code>
                       {application.workspaceRoot || application.projectDirectoryName || '本地应用'}
                     </code>
-                  </span>
-                  <span className={cx('welcome-project-description')}>
-                    {application.senario || '继续上一次开发会话'}
                   </span>
                   <time dateTime={new Date(application.createdAt).toISOString()}>
                     {formatRecentTime(application.createdAt)}

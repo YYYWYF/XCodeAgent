@@ -90,7 +90,7 @@
   width: 100%;
   min-width: 0;
   min-height: 76px;
-  grid-template-columns: 44px minmax(150px, 1.35fr) minmax(140px, 1fr) auto;
+  grid-template-columns: 44px minmax(150px, 1fr) auto;
   align-items: center;
   gap: 16px;
   padding: 12px 15px;
@@ -218,6 +218,21 @@
   display: grid;
   min-width: 0;
   gap: 5px;
+
+  .@{class-prefix}-welcome-project-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .@{class-prefix}-welcome-project-version {
+    flex: 0 0 auto;
+    color: #a391b6;
+    font-family: var(--ui-font-mono);
+    font-size: 12px;
+    font-weight: 400;
+  }
 
   strong {
     overflow: hidden;

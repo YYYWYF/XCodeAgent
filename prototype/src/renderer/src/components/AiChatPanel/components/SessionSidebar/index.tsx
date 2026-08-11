@@ -1,6 +1,4 @@
 import {
-  ApiOutlined,
-  AuditOutlined,
   CaretDownOutlined,
   DownOutlined,
   FileTextOutlined,
@@ -8,7 +6,6 @@ import {
   FolderOpenOutlined,
   FolderOutlined,
   LeftOutlined,
-  LockOutlined,
   RightOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -35,14 +32,6 @@ import PageSessionHistory from './PageSessionHistory'
 import './SessionSidebar.less'
 
 const { Text } = Typography
-
-// 审查阶段展示的审查清单维度（占位；后续接入真实代码审查 / 健康度检测节点）。
-const REVIEW_CHECKLIST = [
-  { id: 'code-style', label: '代码规范', status: '待审查', desc: '命名、结构与编码规范一致性' },
-  { id: 'health', label: '健康度检测', status: '待审查', desc: '依赖、重复率、复杂度与安全隐患' },
-  { id: 'plan-consistency', label: '规划一致性', status: '待审查', desc: '页面 / 接口实现与设计 spec 对齐' },
-  { id: 'delivery', label: '交付验收', status: '待验收', desc: '预览效果与需求验收标准核对' }
-]
 
 const COLLAPSED_SIDEBAR_WIDTH = 68
 const DEFAULT_SIDEBAR_WIDTH = 300
@@ -82,7 +71,6 @@ type SessionSidebarProps = {
   onCreatePageSession: (pageId: string, pageLabel: string) => Promise<void>
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
-  outlineLocked: boolean
   onApiEndpointSelect: (target: {
     apiContractId: string
     endpointId: string
@@ -210,7 +198,7 @@ function OutlineRow({
           emptyDescription="当前页面暂无历史会话"
           sessionError={sessionError}
           sessionRunStates={sessionRunStates}
-          sessions={sessions}
+          sessions={sessions.filter((session) => session.pageId === (item.pageKey || item.key))}
           targetLabel={item.label}
         />
       ) : null}
@@ -232,9 +220,7 @@ function OutlineRow({
               selectedKey={selectedKey}
               sessionError={sessionError}
               sessionRunStates={sessionRunStates}
-              sessions={sessions.filter(
-                (session) => session.pageId === (child.pageKey || child.key)
-              )}
+              sessions={sessions}
               visibleKeys={visibleKeys}
             />
           ))}
@@ -343,7 +329,6 @@ export default function SessionSidebar({
   onShowFiles,
   onShowSettings,
   onShowSkills,
-  outlineLocked,
   pages,
   pageTree,
   selectedApiEndpointKey,
@@ -355,7 +340,8 @@ export default function SessionSidebar({
   skillsActive
 }: SessionSidebarProps): ReactElement {
   const [outlineQuery, setOutlineQuery] = useState('')
-  const [collapsed, setCollapsed] = useState(true)
+  // 开发与审查阶段默认展开对话任务目录；设计阶段仍由 forceCollapsed 统一收起。
+  const [collapsed, setCollapsed] = useState(false)
   const [compactExpanded, setCompactExpanded] = useState(false)
   const [resizing, setResizing] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
@@ -388,16 +374,6 @@ export default function SessionSidebar({
     ),
     [pageTree, pages]
   )
-  const sessionsByPageId = useMemo(() => {
-    const groupedSessions = new Map<string, ChatSessionSummary[]>()
-    sessions.forEach((session) => {
-      if (!session.pageId) return
-      const pageSessions = groupedSessions.get(session.pageId) || []
-      pageSessions.push(session)
-      groupedSessions.set(session.pageId, pageSessions)
-    })
-    return groupedSessions
-  }, [sessions])
   const sessionsByEndpointKey = useMemo(() => {
     const groupedSessions = new Map<string, ChatSessionSummary[]>()
     sessions.forEach((session) => {
@@ -427,9 +403,8 @@ export default function SessionSidebar({
   // 阶段感知：需求文档归产品阶段，页面/接口归研发阶段。阶段只在顶部 ribbon 统一切换，
   // 这里只读阶段用于高亮，不在大纲里切阶段。
   const { phase } = useWorkbenchPhase()
-  // 大纲按阶段展示：设计阶段折叠成图标栏（forceCollapsed，文档在右侧）；开发阶段只显示 Pages + API。
+  // 目录按阶段展示：仅开发阶段展示页面与接口对话任务。
   const showDevSections = phase === 'development'
-  const showReviewSection = phase === 'test'
   const effectiveCollapsed = forceCollapsed
     ? true
     : compactLayout
@@ -533,7 +508,7 @@ export default function SessionSidebar({
         compactLayout && compactExpanded && 'compact-expanded',
         resizing && 'resizing'
       )}
-      aria-label="应用大纲"
+      aria-label="对话任务"
       style={
         {
           '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
@@ -569,17 +544,13 @@ export default function SessionSidebar({
         </div>
       ) : null}
       <Text className={cx('session-section-title')} strong>
-        应用大纲
+        对话任务
       </Text>
-      <fieldset
-        aria-disabled={outlineLocked}
-        aria-label={outlineLocked ? '页面大纲暂不可操作，API 仍可选择' : '应用大纲'}
-        className={cx('session-outline-lock-shell')}
-      >
+      <fieldset aria-label="对话任务" className={cx('session-outline-lock-shell')}>
         <div className={cx('session-outline-content')}>
           <Input
             allowClear
-            aria-label="搜索页面或 API"
+            aria-label="搜索对话任务"
             className={cx('session-search')}
             onChange={(event) => setOutlineQuery(event.target.value)}
             placeholder="搜索页面或 API"
@@ -610,7 +581,7 @@ export default function SessionSidebar({
                 type="button"
               >
                 <CaretDownOutlined className={cx(!pagesExpanded && 'collapsed')} />
-                <span>Pages</span>
+                <span>页面任务</span>
                 <span className={cx('outline-phase-tag', 'development')}>开发</span>
               </button>
               {pagesExpanded ? (
@@ -621,7 +592,6 @@ export default function SessionSidebar({
                       <OutlineRow
                         activeSessionId={activeSessionId}
                         deletingSessionId={deletingSessionId}
-                        disabled={outlineLocked}
                         item={item}
                         key={item.key}
                         level={0}
@@ -636,7 +606,7 @@ export default function SessionSidebar({
                         selectedKey={selectedKey}
                         sessionError={selectedKey === item.key ? sessionError : undefined}
                         sessionRunStates={sessionRunStates}
-                        sessions={sessionsByPageId.get(item.pageKey || item.key) || []}
+                        sessions={sessions}
                         visibleKeys={visibleKeys}
                       />
                     ))}
@@ -657,27 +627,42 @@ export default function SessionSidebar({
                 type="button"
               >
                 <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
-                <span>API</span>
+                <span>接口任务</span>
                 <span className={cx('outline-phase-tag', 'development')}>开发</span>
               </button>
               {apiExpanded ? (
-                <div className={cx('api-group')}>
+                <div className={cx('outline-tree')}>
                   {visibleApiContracts.map((contract) => {
                     const contractExpanded = !collapsedApiContractIds.has(contract.id)
+                    const endpointCount = contract.endpoints.length
                     return (
-                      <div key={contract.id}>
+                      <div className={cx('outline-node')} key={contract.id}>
                         <button
                           aria-expanded={contractExpanded}
-                          className={cx('api-group-title')}
+                          className={cx('outline-row')}
                           onClick={() => handleApiContractToggle(contract.id)}
+                          style={{ '--outline-level': 0 } as React.CSSProperties}
                           type="button"
                         >
-                          <CaretDownOutlined className={cx(!contractExpanded && 'collapsed')} />
-                          <ApiOutlined />
-                          <code>{contract.label}</code>
+                          <span className={cx('outline-caret')}>
+                            <CaretDownOutlined className={cx(!contractExpanded && 'collapsed')} />
+                          </span>
+                          <span className={cx('outline-icon')}>
+                            {contractExpanded ? <FolderOpenOutlined /> : <FolderOutlined />}
+                          </span>
+                          <span className={cx('outline-copy')}>
+                            <span className={cx('outline-label-row')}>
+                              <span className={cx('outline-label')}>
+                                <code>{contract.label}</code>
+                              </span>
+                              <span className={cx('outline-menu-count')}>
+                                {endpointCount} 个接口
+                              </span>
+                            </span>
+                          </span>
                         </button>
                         {contractExpanded ? (
-                          <div className={cx('api-list')}>
+                          <div className={cx('outline-children')}>
                             {contract.endpoints.map((endpoint, endpointIndex) => {
                               const endpointId = endpoint.id || String(endpointIndex + 1)
                               const apiContractId = endpoint.apiContractId || contract.id
@@ -692,13 +677,13 @@ export default function SessionSidebar({
                               )
                               const endpointSessions = sessionsByEndpointKey.get(endpointKey) || []
                               return (
-                                <div className={cx('api-node')} key={endpointKey}>
+                                <div className={cx('outline-node')} key={endpointKey}>
                                   <button
                                     aria-current={
                                       selectedApiEndpointKey === endpointKey ? 'true' : undefined
                                     }
                                     className={cx(
-                                      'api-row',
+                                      'outline-row',
                                       selectedApiEndpointKey === endpointKey && 'selected'
                                     )}
                                     onClick={() =>
@@ -709,25 +694,35 @@ export default function SessionSidebar({
                                         label: endpointLabel
                                       })
                                     }
+                                    style={{ '--outline-level': 1 } as React.CSSProperties}
                                     title={endpoint.summary}
                                     type="button"
                                   >
-                                    <span
-                                      className={cx(
-                                        'api-method',
-                                        endpoint.method.toLocaleLowerCase()
-                                      )}
-                                    >
-                                      {endpoint.method}
+                                    <span className={cx('outline-caret')} />
+                                    <span className={cx('outline-icon')}>
+                                      <span
+                                        className={cx(
+                                          'api-method',
+                                          endpoint.method.toLocaleLowerCase()
+                                        )}
+                                      >
+                                        {endpoint.method}
+                                      </span>
                                     </span>
-                                    <code>{displayPath}</code>
-                                    <span
-                                      className={cx(
-                                        'outline-design-status',
-                                        endpointDesigned ? 'designed' : 'undesign'
-                                      )}
-                                    >
-                                      {endpointDesigned ? '已设计' : '待设计'}
+                                    <span className={cx('outline-copy')}>
+                                      <span className={cx('outline-label-row')}>
+                                        <span className={cx('outline-label')}>
+                                          <code>{displayPath}</code>
+                                        </span>
+                                        <span
+                                          className={cx(
+                                            'outline-design-status',
+                                            endpointDesigned ? 'designed' : 'undesign'
+                                          )}
+                                        >
+                                          {endpointDesigned ? '已设计' : '待设计'}
+                                        </span>
+                                      </span>
                                     </span>
                                   </button>
                                   <PageSessionHistory
@@ -772,34 +767,8 @@ export default function SessionSidebar({
             </section>
               </>
             ) : null}
-            {showReviewSection ? (
-              <section className={cx('outline-section', 'review-section')}>
-                <div className={cx('outline-section-heading')}>
-                  <AuditOutlined />
-                  <span>审查清单</span>
-                  <span className={cx('outline-phase-tag', 'test')}>审查</span>
-                </div>
-                <div className={cx('review-list')}>
-                  {REVIEW_CHECKLIST.map((item) => (
-                    <div key={item.id} className={cx('review-row')}>
-                      <div className={cx('review-row-main')}>
-                        <span className={cx('review-row-label')}>{item.label}</span>
-                        <span className={cx('outline-design-status', 'undesign')}>{item.status}</span>
-                      </div>
-                      <span className={cx('review-row-desc')}>{item.desc}</span>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ) : null}
           </div>
         </div>
-        {outlineLocked ? (
-          <div className={cx('session-outline-lock')}>
-            <LockOutlined />
-            <Text>完成首次设计后解锁</Text>
-          </div>
-        ) : null}
       </fieldset>
 
       <nav className={cx('session-footer-nav')} aria-label="快捷入口">

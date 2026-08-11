@@ -58,6 +58,20 @@
   }
 }
 
+/* 审查报告只读展示，保留 Markdown 原始结构但不呈现编辑器语义。 */
+.@{class-prefix}-doc-panel-viewer {
+  min-height: 100%;
+  margin: 0;
+  padding: 28px 32px;
+  color: var(--wb-text, #1f2329);
+  background: transparent;
+  font-family: "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .@{class-prefix}-doc-panel.@{class-prefix}-editing .@{class-prefix}-doc-panel-stage {
   padding: 16px 18px;
 }

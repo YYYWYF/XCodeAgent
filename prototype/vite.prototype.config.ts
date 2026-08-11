@@ -1,28 +1,37 @@
 // 浏览器原型的 Vite 配置：UI 层复用真实 renderer，数据来自 mock 数据层（mock-data/ 与 src/renderer/src/mock/）。
 // dev:prototype = `vite --config vite.prototype.config.ts`，从 prototype/ 根运行，故用 process.cwd()。
 import { readFileSync } from 'fs'
+import { createServer } from 'http'
 import { resolve } from 'path'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import styleConfig from './src/renderer/src/config/style.json'
 
 const rootDir = process.cwd()
+const MOCK_APPLICATION_HOST = '127.0.0.1'
+const MOCK_APPLICATION_PORT = 5190
 
-// 拦截“被生成应用”的页面路由，返回 mock 应用页（模拟已启动的开发服务器）。
-function mockPreviewAppPlugin() {
-  const previewHtml = readFileSync(resolve(rootDir, 'mock-data/preview-app.html'), 'utf-8')
-  const appPages = ['/my-projects', '/my-rechecks', '/recheck-review']
+// 在独立端口运行“被生成应用”，避免预览地址误指向 XCodeAgent 原型自身。
+function mockPreviewAppPlugin(): Plugin {
+  const previewHtmlPath = resolve(rootDir, 'mock-data/preview-app.html')
   return {
     name: 'mock-preview-app',
-    configureServer(server) {
-      server.middlewares.use((req, res, next) => {
-        const path = (req.url || '').split('?')[0]
-        if (appPages.includes(path)) {
-          res.setHeader('Content-Type', 'text/html; charset=utf-8')
-          res.end(previewHtml)
+    configureServer(server): void {
+      const previewServer = createServer((request, response): void => {
+        const path = (request.url || '/').split('?')[0]
+        if (path === '/' || path === '/my-rechecks') {
+          response.statusCode = 200
+          response.setHeader('Content-Type', 'text/html; charset=utf-8')
+          response.end(readFileSync(previewHtmlPath, 'utf-8'))
           return
         }
-        next()
+        response.statusCode = 404
+        response.setHeader('Content-Type', 'text/plain; charset=utf-8')
+        response.end('Mock application route not found')
+      })
+      previewServer.listen(MOCK_APPLICATION_PORT, MOCK_APPLICATION_HOST)
+      server.httpServer?.once('close', (): void => {
+        previewServer.close()
       })
     }
   }

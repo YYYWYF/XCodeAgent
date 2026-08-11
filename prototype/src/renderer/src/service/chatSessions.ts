@@ -34,6 +34,7 @@ export type ChatSessionRecord = {
   endpointId?: string;
   endpointLabel?: string;
   pageId?: string;
+  versionId?: string;
   workspaceRoot: string;
   messages: ChatSessionMessage[];
   createdAt: number;
@@ -49,6 +50,7 @@ export type ChatSessionSummary = {
   endpointId?: string;
   endpointLabel?: string;
   pageId?: string;
+  versionId?: string;
   createdAt: number;
   updatedAt: number;
   messageCount: number;
@@ -204,6 +206,7 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
       endpointContext?.endpointLabel ||
       inferEndpointLabelFromTitle(session.title),
     pageId: normalizePageId(session.pageId) || inferPageIdFromMessages(session.messages),
+    versionId: normalizeEndpointField(session.versionId),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
     createdAt: Number(session.createdAt || Date.now()),
@@ -221,6 +224,7 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     endpointId: session.endpointId,
     endpointLabel: session.endpointLabel,
     pageId: session.pageId,
+    versionId: session.versionId,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
@@ -240,6 +244,7 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       endpointId: normalizeEndpointField(item.endpointId),
       endpointLabel: normalizeEndpointField(item.endpointLabel),
       pageId: normalizePageId(item.pageId),
+      versionId: normalizeEndpointField(item.versionId),
       createdAt: Number(item.createdAt || Date.now()),
       updatedAt: Number(item.updatedAt || Date.now()),
       messageCount: Number(item.messageCount || 0),
@@ -397,11 +402,15 @@ export async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]
   }
 }
 
-export async function listChatSessions(workspaceRoot: string, editorMode: EditorMode) {
+export async function listChatSessions(
+  workspaceRoot: string,
+  editorMode: EditorMode,
+  applicationId?: string,
+) {
   const sessionApi = window.xcodeAgent?.sessions;
   if (sessionApi) {
     try {
-      const result = await sessionApi.list({ workspaceRoot, editorMode });
+      const result = await sessionApi.list({ workspaceRoot, editorMode, applicationId });
       return normalizeSummaries(result.sessions).sort((a, b) => b.updatedAt - a.updatedAt);
     } catch (error) {
       console.warn(error);

@@ -1,8 +1,8 @@
 import {
   BugOutlined,
   FileSearchOutlined,
+  PauseCircleOutlined,
   SendOutlined,
-  StopOutlined,
   ToolOutlined
 } from '@ant-design/icons'
 import { Alert, Button, Input, Select, Tag, Tooltip, Typography } from 'antd'
@@ -56,6 +56,8 @@ type ChatComposerProps = {
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
   onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   onStopGenerating: () => void
+  readOnly?: boolean
+  readOnlyMessage?: string
   stopping: boolean
   selectedSkills: ChatMessageSkill[]
   workspaceBusy: boolean
@@ -74,6 +76,8 @@ export default function ChatComposer({
   onSelectedSkillsChange,
   onSend,
   onStopGenerating,
+  readOnly = false,
+  readOnlyMessage = '当前内容只读',
   stopping,
   selectedSkills,
   workspaceBusy,
@@ -129,7 +133,7 @@ export default function ChatComposer({
     <div className={cx('ai-chat-composer', debugOnly && 'debug-only')}>
       <div className={cx('ai-chat-composer-column')}>
         {error && <Alert message={error} showIcon type="error" />}
-        <div className={cx('ai-chat-composer-frame')}>
+        <div className={cx('ai-chat-composer-frame', (loading || readOnly) && 'is-disabled')}>
           <div className={cx('composer-inline-input')}>
             {!debugOnly && selectedSkills.length > 0 && (
               <div className={cx('composer-selected-skills')}>
@@ -155,6 +159,7 @@ export default function ChatComposer({
                 aria-label={`${copy.title}输出内容`}
                 autoSize={{ minRows: 1, maxRows: 6 }}
                 bordered={false}
+                readOnly={readOnly || loading}
                 placeholder={copy.placeholder}
                 value={draft}
                 onChange={(event) => onDraftChange(event.target.value)}
@@ -235,7 +240,7 @@ export default function ChatComposer({
             ) : (
               <div className={cx('composer-toolbar')}>
                 <ResourceSkillMenu
-                  disabled={loading || workspaceBusy}
+                  disabled={loading || workspaceBusy || readOnly}
                   onSelectedSkillsChange={onSelectedSkillsChange}
                   selectedSkills={selectedSkills}
                 />
@@ -247,7 +252,7 @@ export default function ChatComposer({
                     aria-label="Workflow 调试"
                     aria-pressed={debugEnabled}
                     className={cx('composer-tool-button', debugEnabled && 'active')}
-                    disabled={loading}
+                    disabled={loading || readOnly}
                     icon={<BugOutlined />}
                     onClick={() => setDebugEnabled((current) => !current)}
                     shape="circle"
@@ -276,25 +281,36 @@ export default function ChatComposer({
                 其他会话正在执行
               </Text>
             )}
-            {loading ? (
+            {readOnly ? (
+              <Text className={cx('workspace-busy-label')} type="secondary">
+                {readOnlyMessage}
+              </Text>
+            ) : null}
+            {loading && !readOnly ? (
               <Button
                 aria-label={stopping ? '正在停止' : '停止生成'}
-                className={cx('composer-send-button')}
+                className={cx('composer-send-button', 'is-abort')}
                 danger
                 disabled={stopping}
-                icon={<StopOutlined />}
+                icon={<PauseCircleOutlined />}
                 onClick={onStopGenerating}
-                shape="circle"
                 title={stopping ? '正在停止...' : '停止生成'}
+              />
+            ) : readOnly ? (
+              <Button
+                aria-label="对话已锁定"
+                className={cx('composer-send-button')}
+                disabled
+                icon={<SendOutlined />}
+                title={readOnlyMessage}
               />
             ) : (
               <Button
                 aria-label={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
                 className={cx('composer-send-button')}
-                disabled={!canSend || workspaceBusy}
+                disabled={!canSend || workspaceBusy || readOnly}
                 icon={<SendOutlined />}
                 onClick={handleSend}
-                shape="circle"
                 title={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
                 type="primary"
               />

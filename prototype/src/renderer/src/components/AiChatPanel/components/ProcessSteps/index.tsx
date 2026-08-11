@@ -16,6 +16,7 @@ import type { IntegrationTestCheckRecord, ProcessStepRecord } from '../../../../
 import { cx } from '../../../../utils'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import DagGenerationProgress from './DagGenerationProgress'
+import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
 import './ProcessSteps.less'
 
 const { Text } = Typography
@@ -105,23 +106,43 @@ function ProcessStep({
   const hasChecks = Boolean(step.checks?.length)
   const hasBuildRun = Boolean(step.buildExecutionSlice)
   const hasDagGeneration = Boolean(step.dagGeneration)
+  const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
-  const expandable = hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration
+  const expandable =
+    hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration || hasWorkspaceInspection
   const awaitingInput = waitingForInput && step.status === 'requires_user_input'
   const [open, setOpen] = useState(
     expandable &&
-      (step.status === 'running' || awaitingInput || hasChecks || hasBuildRun || hasDagGeneration)
+      (step.status === 'running' ||
+        awaitingInput ||
+        hasChecks ||
+        hasBuildRun ||
+        hasDagGeneration ||
+        hasWorkspaceInspection)
   )
 
   useEffect(() => {
     if (
       expandable &&
-      (step.status === 'running' || awaitingInput || hasChecks || hasBuildRun || hasDagGeneration)
+      (step.status === 'running' ||
+        awaitingInput ||
+        hasChecks ||
+        hasBuildRun ||
+        hasDagGeneration ||
+        hasWorkspaceInspection)
     ) {
       setOpen(true)
     }
-  }, [awaitingInput, expandable, hasBuildRun, hasChecks, hasDagGeneration, step.status])
+  }, [
+    awaitingInput,
+    expandable,
+    hasBuildRun,
+    hasChecks,
+    hasDagGeneration,
+    hasWorkspaceInspection,
+    step.status
+  ])
 
   const className = cx(
     'process-step',
@@ -131,6 +152,7 @@ function ProcessStep({
     hasChecks && 'has-checks',
     hasBuildRun && 'has-build-run',
     hasDagGeneration && 'has-dag-generation',
+    hasWorkspaceInspection && 'has-workspace-inspection',
     isLast && 'last'
   )
   const summaryContent = (
@@ -170,7 +192,7 @@ function ProcessStep({
     >
       <summary className={cx('process-step-summary')}>{summaryContent}</summary>
       <div className={cx('process-step-detail')}>
-        {!hasChecks && !hasDagGeneration && step.detail && (
+        {!hasChecks && !hasDagGeneration && !hasWorkspaceInspection && step.detail && (
           <DetailBlock
             label={step.kind === 'reasoning' ? '思考内容' : '动作详情'}
             value={step.detail}
@@ -178,6 +200,9 @@ function ProcessStep({
         )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
         {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
+        {step.workspaceInspection && (
+          <WorkspaceInspectionPanel snapshot={step.workspaceInspection} />
+        )}
         {step.buildExecutionSlice && (
           <BuildExecutionRunCard executionSlice={step.buildExecutionSlice} status={step.status} />
         )}

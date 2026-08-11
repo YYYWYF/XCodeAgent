@@ -6,6 +6,7 @@ import type { ApplicationLifecycle } from '../typings'
 // 模拟后端按工作区持久化的生命周期（appId 与阶段随动作演进）。
 // create → 进行中（收集需求）；complete_template_generation → 就绪；get → 返回已存状态。
 const lifecycleStore = new Map<string, { appId: string; appName: string; stage: string; status: string; threadId?: string }>()
+const createdLifecycleStore = new Map<string, { appId: string; appName: string; stage: string; status: string; threadId?: string }>()
 
 // 预置镜像应用的初始生命周期：pms-design → 设计(collecting_requirement)、pms-dev → 开发(ready_for_workbench)。
 // 这样 mockApplicationInPlanning 能按 workspace 区分设计期/开发期，sessions 与阶段自动分流。
@@ -39,18 +40,19 @@ const PLANNING_STAGES = new Set([
 ])
 
 /** 工作区应用是否仍处于规划(设计)阶段——规划期的应用不返回已设计页会话。 */
-export function mockApplicationInPlanning(workspaceRoot: string): boolean {
-  const stored = lifecycleStore.get(workspaceRoot)
+export function mockApplicationInPlanning(workspaceRoot: string, applicationId?: string): boolean {
+  const stored = (applicationId && createdLifecycleStore.get(applicationId)) || lifecycleStore.get(workspaceRoot)
   return Boolean(stored && PLANNING_STAGES.has(stored.stage))
 }
 
 // 构造 lifecycle 动作的统一响应信封。
 function lifecyclePayload(threadId: string, action: Record<string, unknown>): Record<string, unknown> {
   const workspaceRoot = String(action.workspaceRoot || '')
+  const requestedApplicationId = String(action.applicationId || '')
   const actionApplication = action.application as { id?: string; appName?: string } | undefined
 
   if (action.action === 'create' && actionApplication?.id) {
-    lifecycleStore.set(workspaceRoot, {
+    createdLifecycleStore.set(actionApplication.id, {
       appId: actionApplication.id,
       appName: actionApplication.appName || '应用',
       stage: 'collecting_requirement',
@@ -58,13 +60,16 @@ function lifecyclePayload(threadId: string, action: Record<string, unknown>): Re
       threadId
     })
   } else if (action.action === 'complete_template_generation') {
-    const current = lifecycleStore.get(workspaceRoot)
+    const current = createdLifecycleStore.get(requestedApplicationId) || lifecycleStore.get(workspaceRoot)
     if (current) {
-      lifecycleStore.set(workspaceRoot, { ...current, stage: 'ready_for_workbench', status: 'completed' })
+      const next = { ...current, stage: 'ready_for_workbench', status: 'completed' }
+      if (createdLifecycleStore.has(current.appId)) createdLifecycleStore.set(current.appId, next)
+      else lifecycleStore.set(workspaceRoot, next)
     }
   }
 
-  const stored = lifecycleStore.get(workspaceRoot)
+  const lifecycleApplicationId = requestedApplicationId || actionApplication?.id || ''
+  const stored = createdLifecycleStore.get(lifecycleApplicationId) || lifecycleStore.get(workspaceRoot)
   const scenario = appDataByWorkspace(workspaceRoot)
   const app = stored
     ? { id: stored.appId, name: stored.appName }
@@ -96,7 +101,9 @@ function lifecyclePayload(threadId: string, action: Record<string, unknown>): Re
     status: 'completed',
     action: action.action,
     lifecycle: {
-      ...scenario.lifecycle,
+      ...(createdLifecycleStore.has(app.id)
+        ? { schemaVersion: '1.2.0', updatedAt: new Date().toISOString(), activeExecutions: {} }
+        : scenario.lifecycle),
       application: app,
       revision: (scenario.lifecycle.revision || 0) + 1,
       initialization

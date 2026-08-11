@@ -1,5 +1,5 @@
-import { Layout, notification } from 'antd'
-import { LoadingOutlined } from '@ant-design/icons'
+import { Layout, Modal, notification } from 'antd'
+import { LoadingOutlined, RocketOutlined, CheckCircleFilled, PlusOutlined, HistoryOutlined } from '@ant-design/icons'
 import { useEffect, useRef, useState } from 'react'
 import { LeftPanel } from '../components'
 import WorkbenchTopBar from '../components/WorkbenchTopBar'
@@ -9,6 +9,14 @@ import {
   loadWorkspaceApplicationConfig
 } from '../service/applicationStorage'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
+import { latestApplicationLifecycle } from '../hooks/useApplicationLifecycleStore'
+import {
+  createIterationVersion,
+  createRollbackVersion,
+  currentVersion,
+  findVersion,
+  isVersionReleasable
+} from '../service/applicationVersions'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -36,6 +44,18 @@ type WorkbenchEntryStage = 'loading' | 'leaving' | 'ready'
 const WORKBENCH_ENTRY_MIN_VISIBLE_MS = 520
 const WORKBENCH_ENTRY_FADE_MS = 280
 
+// 新迭代版本的初始 lifecycle(回到 collecting_requirement,走完整旅程)。
+function makeInitialLifecycle(appId: string, appName: string): ApplicationLifecycle {
+  return {
+    schemaVersion: '1.2.0',
+    application: { id: appId, name: appName },
+    updatedAt: new Date().toISOString(),
+    revision: 1,
+    initialization: { stage: 'collecting_requirement', status: 'running' },
+    activeExecutions: {}
+  } as ApplicationLifecycle
+}
+
 // 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
 function WorkbenchPage({
   application,
@@ -47,6 +67,8 @@ function WorkbenchPage({
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
   const [workspaceApplication, setWorkspaceApplication] = useState(application)
+  const [viewingVersionId, setViewingVersionId] = useState(application.currentVersionId || '')
+  const [rollbackTargetId, setRollbackTargetId] = useState('')
   const [developmentPlanningPagesLoaded, setDevelopmentPlanningPagesLoaded] = useState(false)
   const [hasPageDesigns, setHasPageDesigns] = useState(false)
   const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<
@@ -62,6 +84,9 @@ function WorkbenchPage({
   const [previewBaseUrl, setPreviewBaseUrl] = useState('')
   const [previewLaunchError, setPreviewLaunchError] = useState('')
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
+  const [publishModalOpen, setPublishModalOpen] = useState(false)
+  const [iterationModalOpen, setIterationModalOpen] = useState(false)
+  const autoPublishShownRef = useRef(false)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const entryStartedAtRef = useRef(Date.now())
   const launchedWorkspaceRef = useRef<string>()
@@ -186,16 +211,20 @@ function WorkbenchPage({
       try {
         const applicationConfig = await loadWorkspaceApplicationConfig(application.workspaceRoot)
         if (!active) return
-        setWorkspaceApplication({
-          ...application,
+        setWorkspaceApplication((prev) => ({
+          ...prev,
           ...applicationConfig,
-          schema: { ...application.schema, ...applicationConfig }
-        })
+          schema: { ...prev.schema, ...applicationConfig }
+        }))
       } catch (error) {
         console.warn('读取工作区 application.json 失败，继续使用已保存应用配置。', error)
       }
       try {
-        const inspection = await inspectWorkspacePlanningArtifacts(application.workspaceRoot)
+        const inspection = await inspectWorkspacePlanningArtifacts(
+          application.workspaceRoot,
+          application.id,
+          application.currentVersionId
+        )
         if (!active) return
         setDevelopmentPlanningPages(inspection.pages)
         setDevelopmentPlanningPageTree(Array.isArray(inspection.pageTree) ? inspection.pageTree : [])
@@ -218,15 +247,16 @@ function WorkbenchPage({
       }
     }
 
-    // 首次进入由初始状态承载加载门禁；后续刷新保留当前内容，避免工作台反复清空闪烁。
-    setWorkspaceApplication(application)
+    // 切应用由 AppEntryPage key={application.id} re-mount + useState 初始承载；
+    // 这里不再 setWorkspaceApplication(application) —— planningRefreshRevision 变化（设计/开发/审查后刷新）
+    // 会重跑本 effect，若用 application prop 覆盖会把发布后的 released 态盖回 iterating。
     void syncWorkspaceFiles()
     window.addEventListener('focus', syncWorkspaceFiles)
     return () => {
       active = false
       window.removeEventListener('focus', syncWorkspaceFiles)
     }
-  }, [application, planningRefreshRevision])
+  }, [application.id, application.workspaceRoot, planningRefreshRevision])
 
   useEffect(() => {
     let active = true
@@ -234,7 +264,7 @@ function WorkbenchPage({
     if (!workspaceRoot) return
 
     // 每次进入一个工作区只做一次冷启动校准；后续状态由 Workflow AG-UI 事件实时合并。
-    getApplicationLifecycle({ workspaceRoot })
+    getApplicationLifecycle({ workspaceRoot, id: application.id })
       .then((lifecycle) => {
         if (active) onApplicationLifecycleChange(lifecycle)
       })
@@ -270,6 +300,179 @@ function WorkbenchPage({
     setWorkspaceApplication(updatedApplication)
   }
 
+  // 版本级 lifecycle:阶段推导跟随当前版本(切版本/发起迭代 = 切 lifecycle)。
+  // 当前版本快照在新建/迭代时冻结(初始 collecting_requirement),设计旅程的实时推进
+  // (ready_for_workbench / launch_project)只更新应用级 lifecycle。版本 snapshot 不随
+  // 磁盘 reload 更新,因此这里在渲染时按 revision 取新,保证阶段推导读得到实时状态。
+  const activeVersionId = workspaceApplication.currentVersionId || ''
+  const viewedApplication = {
+    ...workspaceApplication,
+    currentVersionId: viewingVersionId || activeVersionId
+  }
+  const viewedVersion = currentVersion(viewedApplication)
+  const isViewingActiveVersion = viewedVersion?.id === activeVersionId
+  const versionLifecycle =
+    isViewingActiveVersion && viewedVersion?.lifecycle && applicationLifecycle
+      ? latestApplicationLifecycle(
+          viewedVersion.lifecycle,
+          applicationLifecycle
+        )
+      : viewedVersion?.lifecycle || applicationLifecycle
+  const releaseVersion = isViewingActiveVersion ? viewedVersion : undefined
+
+  const versionReleasable = Boolean(
+    releaseVersion &&
+      versionLifecycle &&
+      releaseVersion.status === 'iterating' &&
+      isVersionReleasable({ ...releaseVersion, lifecycle: versionLifecycle })
+  )
+
+  // 发布弹框：审查通过(finalize completed)后自动弹出(仅首次)，也由顶栏发布按钮手动打开。
+  useEffect(() => {
+    if (versionReleasable && !autoPublishShownRef.current) {
+      autoPublishShownRef.current = true
+      setPublishModalOpen(true)
+    }
+  }, [versionReleasable])
+
+  // 发布：当前迭代版本锁定为已发布历史(只读里程碑)。发布走确认弹框(等同顶栏发布按钮)。
+  const confirmPublishVersion = (): void => {
+    if (!versionReleasable) return
+    setPublishModalOpen(true)
+  }
+  const handlePublishConfirm = (): void => {
+    setPublishModalOpen(false)
+    const publishedLabel = releaseVersion?.versionLabel || '当前版本'
+    setWorkspaceApplication((prev) => {
+      const versions = (prev.versions || []).map((v) =>
+        v.id === prev.currentVersionId
+          ? {
+              ...v,
+              status: 'released' as const,
+              releasedAt: Date.now(),
+              snapshot: { pageIds: prev.pages }
+            }
+          : v
+      )
+      return { ...prev, versions }
+    })
+    notification.success({
+      message: '版本已发布',
+      description: `${publishedLabel} 已锁定为已发布历史，可发起新迭代继续开发。`,
+      placement: 'bottomRight',
+      duration: 4
+    })
+  }
+
+  /** 只切换工作台查看上下文，不改变当前单向版本头。 */
+  const handleVersionSelect = (versionId: string): void => {
+    if (!findVersion(workspaceApplication, versionId)) return
+    setViewingVersionId(versionId)
+    setRightPanelOpen(true)
+  }
+
+  /** 基于 historicalVersion 迭代：派生新顺序版本，lifecycle 重置回需求收集（进设计阶段），
+   *  版本链以 currentHead 为父、restoredFromVersionId 标记内容来源，历史版本保持只读。 */
+  const handleRollbackConfirm = (): void => {
+    const restoredVersion = findVersion(workspaceApplication, rollbackTargetId)
+    const currentHead = findVersion(workspaceApplication, activeVersionId)
+    if (!restoredVersion || !currentHead || restoredVersion.id === currentHead.id) {
+      setRollbackTargetId('')
+      return
+    }
+    const resetRevision = (applicationLifecycle?.revision ?? 0) + 1
+    const initialLifecycle = {
+      ...makeInitialLifecycle(application.id, application.name),
+      revision: resetRevision
+    }
+    const next = {
+      ...createRollbackVersion(
+        workspaceApplication.id,
+        currentHead,
+        restoredVersion,
+        Date.now()
+      ),
+      lifecycle: initialLifecycle
+    }
+    setWorkspaceApplication((current) => ({
+      ...current,
+      versions: [...(current.versions || []), next],
+      currentVersionId: next.id
+    }))
+    setViewingVersionId(next.id)
+    setRollbackTargetId('')
+    autoPublishShownRef.current = false
+    onApplicationLifecycleChange(initialLifecycle)
+    // 与发起新迭代一致：重置页面/接口开发任务，从设计阶段（迭代引导词）开始。
+    setDevelopmentPlanningPages((pages) => pages.map((page) => ({
+      ...page,
+      designed: false,
+      hasDetailPlan: false,
+      detailPlanStatus: 'pending'
+    })))
+    setDevelopmentPlanningApiContracts((contracts) => contracts.map((contract) => ({
+      ...contract,
+      endpoints: contract.endpoints.map((endpoint) => ({
+        ...endpoint,
+        designed: false,
+        hasDetailPlan: false
+      }))
+    })))
+    setHasPageDesigns(false)
+  }
+
+  // 确认发起新迭代后派生顺序版本，并清空本版本的任务完成态与对话上下文。
+  const handleStartIterationConfirm = (): void => {
+    const resetRevision = (applicationLifecycle?.revision ?? 0) + 1
+    const initialLifecycle = {
+      ...makeInitialLifecycle(application.id, application.name),
+      revision: resetRevision
+    }
+    const parent = findVersion(workspaceApplication, activeVersionId)
+    if (!parent) return
+    const next = createIterationVersion(
+      workspaceApplication.id,
+      parent,
+      initialLifecycle,
+      Date.now()
+    )
+    setWorkspaceApplication((current) => ({
+      ...current,
+      versions: [...(current.versions || []), next],
+      currentVersionId: next.id
+    }))
+    setViewingVersionId(next.id)
+    setIterationModalOpen(false)
+    setDevelopmentPlanningPages((pages) => pages.map((page) => ({
+      ...page,
+      designed: false,
+      hasDetailPlan: false,
+      detailPlanStatus: 'pending'
+    })))
+    setDevelopmentPlanningPageTree((tree) => {
+      // 递归重置页面树叶节点，确保新版本从开发任务的未完成态开始。
+      const resetNode = (node: DevelopmentPlanningPageTreeNode): DevelopmentPlanningPageTreeNode => ({
+        ...node,
+        ...(node.children?.length
+          ? { children: node.children.map(resetNode) }
+          : { designed: false, hasDetailPlan: false, detailPlanStatus: 'pending' })
+      })
+      return tree.map(resetNode)
+    })
+    setDevelopmentPlanningApiContracts((contracts) => contracts.map((contract) => ({
+      ...contract,
+      endpoints: contract.endpoints.map((endpoint) => ({
+        ...endpoint,
+        designed: false,
+        hasDetailPlan: false
+      }))
+    })))
+    setHasPageDesigns(false)
+    autoPublishShownRef.current = false
+    // 应用级 lifecycle 同步重置为新迭代初始态,避免版本 lifecycle 合并把上一版本的完成态盖回来。
+    onApplicationLifecycleChange(initialLifecycle)
+  }
+
   // 页面或接口设计运行结束后重新读取规划目录，以持久化结果更新大纲状态。
   const handlePlanningArtifactsRefresh = (): void => {
     setPlanningRefreshRevision((current) => current + 1)
@@ -279,26 +482,32 @@ function WorkbenchPage({
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       {developmentPlanningPagesLoaded ? (
         <WorkbenchPhaseProvider
+          key={viewedVersion?.id || workspaceApplication.id}
           applicationId={workspaceApplication.id}
-          lifecycle={applicationLifecycle}
+          lifecycle={versionLifecycle}
         >
           <div className={cx('workbench-shell-column')}>
             <WorkbenchTopBar
-              application={workspaceApplication}
+              activeVersionId={activeVersionId}
+              application={viewedApplication}
               workspaceRoot={
                 workspaceApplication.workspaceRoot || workspaceApplication.projectParentPath || ''
               }
               theme={theme}
               onThemeChange={handleThemeChange}
               onReturnWelcome={onReturnWelcome}
-              lifecycle={applicationLifecycle}
+              lifecycle={versionLifecycle}
               rightPanelOpen={rightPanelOpen}
               onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
+              onPublishVersion={confirmPublishVersion}
+              onRollbackVersion={setRollbackTargetId}
+              onStartIteration={() => setIterationModalOpen(true)}
+              onVersionSelect={handleVersionSelect}
             />
             <div className={cx('workbench-shell-body')}>
               <LeftPanel
-            application={workspaceApplication}
-            applicationLifecycle={applicationLifecycle}
+            application={viewedApplication}
+            applicationLifecycle={versionLifecycle}
             developmentPlanningReady={developmentPlanningPagesLoaded}
             hasPageDesigns={hasPageDesigns}
             developmentPlanningPages={developmentPlanningPages}
@@ -313,10 +522,173 @@ function WorkbenchPage({
             theme={theme}
             rightPanelOpen={rightPanelOpen}
             onRightPanelOpenChange={setRightPanelOpen}
+            versionViewKey={viewedVersion?.id || ''}
+            versionReadOnly={!isViewingActiveVersion || viewedVersion?.status === 'released'}
+            versionPreviewOnly={!isViewingActiveVersion}
           />
             </div>
           </div>
         </WorkbenchPhaseProvider>
+      ) : null}
+
+      {releaseVersion && publishModalOpen ? (
+        <Modal
+          centered
+          className={cx('workbench-publish-modal')}
+          closable
+          footer={null}
+          onCancel={() => setPublishModalOpen(false)}
+          open
+          width={420}
+        >
+          <div className={cx('workbench-publish-modal-inner')}>
+            <header className={cx('workbench-publish-modal-header')}>
+              <span className={cx('workbench-publish-modal-icon')} aria-hidden="true">
+                <RocketOutlined />
+              </span>
+              <span className={cx('workbench-publish-modal-title')}>
+                <strong>发布当前版本</strong>
+                <small>审查通过，应用已就绪</small>
+              </span>
+            </header>
+            <div className={cx('workbench-publish-modal-body')}>
+              <p className={cx('workbench-publish-modal-lead')}>
+                确认发布
+                <strong className={cx('workbench-publish-modal-version')}>
+                  {releaseVersion.versionLabel}
+                </strong>
+                ？发布后该版本将锁定为已发布历史，后续改动需发起新迭代。
+              </p>
+              <div className={cx('workbench-publish-modal-meta')}>
+                <CheckCircleFilled aria-hidden="true" /> 代码审查与规范检测已通过
+              </div>
+            </div>
+            <footer className={cx('workbench-publish-modal-footer')}>
+              <button
+                className={cx('workbench-publish-modal-cancel')}
+                type="button"
+                onClick={() => setPublishModalOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                className={cx('workbench-publish-modal-confirm')}
+                type="button"
+                onClick={handlePublishConfirm}
+              >
+                <RocketOutlined aria-hidden="true" /> 确认发布
+              </button>
+            </footer>
+          </div>
+        </Modal>
+      ) : null}
+
+      {viewedVersion && iterationModalOpen ? (
+        <Modal
+          centered
+          className={cx('workbench-publish-modal')}
+          closable
+          footer={null}
+          onCancel={() => setIterationModalOpen(false)}
+          open
+          width={420}
+        >
+          <div className={cx('workbench-publish-modal-inner')}>
+            <header className={cx('workbench-publish-modal-header')}>
+              <span className={cx('workbench-publish-modal-icon', 'is-iteration')} aria-hidden="true">
+                <PlusOutlined />
+              </span>
+              <span className={cx('workbench-publish-modal-title')}>
+                <strong>发起新迭代</strong>
+                <small>创建新版本并重新进入设计阶段</small>
+              </span>
+            </header>
+            <div className={cx('workbench-publish-modal-body')}>
+              <p className={cx('workbench-publish-modal-lead')}>
+                将基于 <strong className={cx('workbench-publish-modal-version')}>{viewedVersion.versionLabel}</strong>
+                创建 v{viewedVersion.major}.{viewedVersion.minor + 1}。新版本会从设计阶段开始，使用全新的对话记录。
+              </p>
+              <div className={cx('workbench-publish-modal-meta')}>
+                <CheckCircleFilled aria-hidden="true" /> 已发布版本保持锁定，可随时切换查看
+              </div>
+            </div>
+            <footer className={cx('workbench-publish-modal-footer')}>
+              <button
+                className={cx('workbench-publish-modal-cancel')}
+                type="button"
+                onClick={() => setIterationModalOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                className={cx('workbench-publish-modal-confirm')}
+                type="button"
+                onClick={handleStartIterationConfirm}
+              >
+                <PlusOutlined aria-hidden="true" /> 确认发起
+              </button>
+            </footer>
+          </div>
+        </Modal>
+      ) : null}
+
+      {rollbackTargetId ? (
+        <Modal
+          centered
+          className={cx('workbench-publish-modal')}
+          closable
+          footer={null}
+          onCancel={() => setRollbackTargetId('')}
+          open
+          width={420}
+        >
+          <div className={cx('workbench-publish-modal-inner')}>
+            <header className={cx('workbench-publish-modal-header')}>
+              <span className={cx('workbench-publish-modal-icon', 'is-rollback')} aria-hidden="true">
+                <HistoryOutlined />
+              </span>
+              <span className={cx('workbench-publish-modal-title')}>
+                <strong>基于此版本迭代</strong>
+                <small>以历史版本为基础生成新迭代版本</small>
+              </span>
+            </header>
+            <div className={cx('workbench-publish-modal-body')}>
+              <p className={cx('workbench-publish-modal-lead')}>
+                将基于{' '}
+                <strong className={cx('workbench-publish-modal-version')}>
+                  {findVersion(workspaceApplication, rollbackTargetId)?.versionLabel || '所选版本'}
+                </strong>
+                {' '}的内容生成新迭代版本{' '}
+                <strong className={cx('workbench-publish-modal-version')}>
+                  {(() => {
+                    const head = findVersion(workspaceApplication, activeVersionId)
+                    return head ? `v${head.major}.${head.minor + 1}` : '新版本'
+                  })()}
+                </strong>
+                ，以该历史版本为基础继续开发。原有版本保持只读、可随时切换查看，不会被覆盖。
+              </p>
+              <div className={cx('workbench-publish-modal-meta')}>
+                <CheckCircleFilled aria-hidden="true" /> 历史版本保持只读，可随时切换查看
+              </div>
+            </div>
+            <footer className={cx('workbench-publish-modal-footer')}>
+              <button
+                className={cx('workbench-publish-modal-cancel')}
+                type="button"
+                onClick={() => setRollbackTargetId('')}
+              >
+                取消
+              </button>
+              <button
+                className={cx('workbench-publish-modal-confirm')}
+                type="button"
+                onClick={handleRollbackConfirm}
+              >
+                <HistoryOutlined aria-hidden="true" /> 确认迭代
+              </button>
+            </footer>
+          </div>
+        </Modal>
       ) : null}
 
       {entryStage !== 'ready' ? (

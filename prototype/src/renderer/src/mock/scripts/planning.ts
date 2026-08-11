@@ -171,9 +171,54 @@ export async function replayPlanning(
     return clarificationPayload(threadId, appName, clarificationQuestions)
   }
 
+  // 新迭代（由父版本派生）：只问「本次迭代补充什么需求」，提交后直接进开发，
+  // 不重复新应用的完整需求确认/项目计划流程（基于上一版本增量）。
+  // 判定用 parentVersionId（createIterationVersion 置）；lifecycle.revision 不准 ——
+  // 演示态 makeCompleteLifecycle revision=5，但仍是单次新建，不能据此判迭代。
+  const currentVersionForIteration = options.application?.versions?.find(
+    (v) => v.id === options.application?.currentVersionId
+  )
+  const isIterationVersion = Boolean(currentVersionForIteration?.parentVersionId)
+  if (isIterationVersion) {
+    // 用户已在下方输入框回复迭代需求（resume 存在）→ 直接进开发。
+    if (resume) {
+      onContent?.('迭代需求已收到，进入开发阶段，开始页面与接口的增量设计。')
+      await delay(300)
+      const confirmation = wf(
+        threadId,
+        'ready_for_workbench',
+        'completed',
+        {
+          application_planning_confirmation: {
+            confirmedAt: new Date().toISOString(),
+            directories: { specs: 'specs', plans: 'plans' },
+            artifacts: {}
+          }
+        },
+        {
+          result: {
+            application_planning_confirmation: {
+              confirmedAt: new Date().toISOString(),
+              directories: { specs: 'specs', plans: 'plans' },
+              artifacts: {}
+            }
+          }
+        }
+      )
+      onWorkflow?.(confirmation)
+      return confirmation
+    }
+    // 起点：一句引导词即可，用户在下方输入框描述迭代需求（无确认卡片）。
+    onContent?.('新迭代已创建。请在下方输入框描述本次迭代要补充或调整的需求，Agent 会基于上一版已完成的内容增量开发。')
+    await delay(300)
+    const intro = wf(threadId, 'requirements', 'requires_user_input', {})
+    onWorkflow?.(intro)
+    return intro
+  }
+
   // 无 resumeState：冷启动，先进度再澄清。
   if (!resume) {
-    onContent?.('正在解析应用场景…\n正在识别核心角色：项目经理 / 回检填报人 / 回检审核人…')
+    onContent?.('正在解析应用场景…\n正在识别核心角色：回检填报人 / 回检审核人…')
     await delay(350)
     onWorkflow?.(wf(threadId, 'requirements', 'running', {}, { summary: { phase: 'requirements', status: 'running', message: '正在分析需求并生成需求文档…' } }))
     onContent?.('正在生成需求文档大纲：目标 · 角色 · 页面 · 流程 · 验收标准…')

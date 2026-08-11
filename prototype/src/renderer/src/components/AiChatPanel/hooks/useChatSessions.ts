@@ -18,7 +18,6 @@ import type { AgentChatMessage } from '../types'
 import {
   createSessionIdentity,
   pendingDraftKey,
-  selectableEndpointSessionId,
   sessionIdentityFromSummary,
   sessionRuntimeKey,
   type SessionIdentity
@@ -68,7 +67,6 @@ function inferEndpointContextFromMessages(messages: ChatSessionMessage[]): {
 type UseChatSessionsParams = {
   application: ApplicationConfig
   editorMode: EditorMode
-  onCloseRightPanel: () => void
 }
 
 type UseChatSessionsResult = {
@@ -78,6 +76,7 @@ type UseChatSessionsResult = {
   deletingSessionId?: string
   draft: string
   draftKey: string
+  createReviewSession: () => Promise<SessionIdentity>
   createEndpointSession: (
     apiContractId: string,
     endpointId: string,
@@ -111,8 +110,7 @@ type UseChatSessionsResult = {
 
 export function useChatSessions({
   application,
-  editorMode,
-  onCloseRightPanel
+  editorMode
 }: UseChatSessionsParams): UseChatSessionsResult {
   const [sessionSummaries, setSessionSummaries] = useState<
     Record<EditorMode, ChatSessionSummary[]>
@@ -150,7 +148,7 @@ export function useChatSessions({
   useEffect(() => {
     loadSessionsForMode(editorMode)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [application.workspaceRoot, editorMode])
+  }, [application.currentVersionId, application.workspaceRoot, editorMode])
 
   const workspaceRoot = application.workspaceRoot || ''
   const sessions = sessionSummaries[editorMode]
@@ -199,7 +197,13 @@ export function useChatSessions({
     setSessionLoadingModes((current) => ({ ...current, [mode]: true }))
     setSessionErrors((current) => ({ ...current, [mode]: undefined }))
     try {
-      const nextSessions = await listChatSessions(application.workspaceRoot, mode)
+      const allSessions = await listChatSessions(application.workspaceRoot, mode, application.id)
+      // 新版本只恢复明确属于该版本的会话；无版本字段的旧会话仅供无版本应用兼容使用。
+      const nextSessions = allSessions.filter((session) =>
+        application.currentVersionId
+          ? session.versionId === application.currentVersionId
+          : !session.versionId
+      )
       sessionSummariesRef.current = {
         ...sessionSummariesRef.current,
         [mode]: nextSessions
@@ -243,7 +247,6 @@ export function useChatSessions({
     }
 
     setActiveSessionIds((current) => ({ ...current, [mode]: sessionId }))
-    onCloseRightPanel()
   }
 
   const handleOpenSession = async (sessionId: string): Promise<void> => {
@@ -285,24 +288,31 @@ export function useChatSessions({
     }
 
     setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
-    onCloseRightPanel()
   }
 
-  /** 切换接口时仅恢复已有且有消息的会话，否则清空旧页面会话以显示当前接口挡板。 */
+  /** 切换接口时恢复已有会话(优先 messageCount>0，回退内存消息)，避免切回后历史丢失。 */
   const handleSelectEndpoint = async (apiContractId: string, endpointId: string): Promise<void> => {
     if (loadingSessions) return
-    const existingSessionId = selectableEndpointSessionId(
-      sessionSummariesRef.current[editorMode],
-      apiContractId,
-      endpointId
+    const normalizedApi = apiContractId.trim()
+    const normalizedEp = endpointId.trim()
+    if (!normalizedApi || !normalizedEp) return
+    const epSessions = sessionSummariesRef.current[editorMode].filter(
+      (session) => session.apiContractId === normalizedApi && session.endpointId === normalizedEp
     )
-    if (existingSessionId) {
-      await handleOpenSession(existingSessionId)
+    // summary messageCount 可能滞后(persist 时机/竞态)，回退内存消息判断，
+    // 确保切回开发后接口历史不丢（对齐 handleSelectPage 的回退策略）。
+    const existingSession =
+      epSessions.find((session) => session.messageCount > 0) ||
+      epSessions.find((session) => {
+        const runtimeKey = sessionRuntimeKey(workspaceRoot, editorMode, session.id)
+        return getSessionMessages(runtimeKey).length > 0
+      })
+    if (existingSession) {
+      await handleOpenSession(existingSession.id)
       return
     }
 
     setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
-    onCloseRightPanel()
   }
 
   /** 创建普通会话或带页面归属的独立设计会话。 */
@@ -313,7 +323,8 @@ export function useChatSessions({
       apiContractId: string
       endpointId: string
       endpointLabel: string
-    }
+    },
+    customTitle?: string
   ): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
       throw new Error('创建会话前需要选择工作目录。')
@@ -334,17 +345,20 @@ export function useChatSessions({
     })
     const session: ChatSessionRecord = {
       id: sessionId,
-      title: endpointContext
-        ? `接口新会话：${endpointContext.endpointLabel}`
-        : pageLabel
-          ? `页面新会话：${pageLabel}`
-          : '新对话',
+      title:
+        customTitle ||
+        (endpointContext
+          ? `接口新会话：${endpointContext.endpointLabel}`
+          : pageLabel
+            ? `页面新会话：${pageLabel}`
+            : '新对话'),
       editorMode,
       threadId: identity.threadId,
       apiContractId: identity.apiContractId,
       endpointId: identity.endpointId,
       endpointLabel: identity.endpointLabel,
       pageId: identity.pageId,
+      versionId: application.currentVersionId,
       workspaceRoot: application.workspaceRoot,
       messages: [],
       createdAt: now,
@@ -354,7 +368,6 @@ export function useChatSessions({
     registerSession(identity, [], agUiSession)
     setDraftByKey(identity.key, '')
     setActiveSessionIds((current) => ({ ...current, [editorMode]: session.id }))
-    onCloseRightPanel()
 
     const summary = await saveChatSession(session)
     replaceSessionSummary(editorMode, summary)
@@ -434,6 +447,27 @@ export function useChatSessions({
     } finally {
       delete pageSessionPromisesRef.current[promiseKey]
     }
+  }
+
+  /** 创建或复用唯一的应用级代码审查会话。 */
+  const createReviewSession = async (): Promise<SessionIdentity> => {
+    const REVIEW_TITLE = '代码审查'
+    const existingReview = sessionSummariesRef.current[editorMode].find(
+      (session) =>
+        !session.pageId &&
+        !session.apiContractId &&
+        !session.endpointId &&
+        (session.title || '').includes(REVIEW_TITLE)
+    )
+    if (existingReview) {
+      await openChatSession(editorMode, existingReview.id)
+      const key = sessionRuntimeKey(workspaceRoot, editorMode, existingReview.id)
+      const identity =
+        getIdentity(key) ||
+        sessionIdentityFromSummary(existingReview, editorMode, workspaceRoot)
+      if (identity) return identity
+    }
+    return createNewSession(undefined, undefined, undefined, REVIEW_TITLE)
   }
 
   /** 按 API endpoint 恢复既有会话，首次进入该接口时创建独立 session 与 thread。 */
@@ -540,6 +574,7 @@ export function useChatSessions({
       endpointLabel:
         input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint.endpointLabel,
       pageId: input.pageId || existingSummary?.pageId,
+      versionId: application.currentVersionId,
       workspaceRoot: application.workspaceRoot,
       messages: input.messages,
       createdAt: existingSummary?.createdAt || now,
@@ -553,6 +588,7 @@ export function useChatSessions({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    createReviewSession,
     createEndpointSession,
     createPageSession,
     deletingSessionId,

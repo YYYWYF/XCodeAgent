@@ -13,6 +13,7 @@ type Props = {
   title?: string
   generating?: boolean
   docName?: string
+  readOnly?: boolean
   /** 保存编辑草稿（对应 IDE Ctrl+S）。 */
   onSaveEdit?: (draft: string) => void
 }
@@ -24,7 +25,8 @@ export default function DocPanel({
   title,
   generating,
   docName,
-  onSaveEdit
+  onSaveEdit,
+  readOnly = false
 }: Props): ReactElement {
   const [internalDraft, setInternalDraft] = useState(content || '')
   // 内容变化（新文档生成/切换）→ 同步草稿（保持编辑态，不跳视图）。
@@ -49,7 +51,7 @@ export default function DocPanel({
     <div className={cx('doc-panel')}>
       <header className={cx('doc-panel-toolbar')}>
         <div className={cx('doc-panel-path')}>{title || '文档'}</div>
-        {ready && !generating && (
+        {ready && !generating && !readOnly && (
           <div className={cx('doc-panel-edit-actions')}>
             <Text className={cx('doc-panel-dirty-hint')} type="secondary">
               {dirty ? '有未保存的修改' : '已保存'}
@@ -69,6 +71,10 @@ export default function DocPanel({
           <div className={cx('doc-panel-generating')}>
             <RichLoading bare title={`正在生成${docName || '文档'}…`} />
           </div>
+        ) : ready && readOnly ? (
+          <pre aria-label="审查报告内容" className={cx('doc-panel-viewer')}>
+            {content}
+          </pre>
         ) : ready ? (
           <textarea
             aria-label="编辑文档"

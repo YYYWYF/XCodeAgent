@@ -164,7 +164,9 @@ export async function loadWorkspaceApplicationConfig(
 
 // 检查正式规划产物，并返回 ProjectPlan 页面大纲及 pages 目录设计状态。
 export async function inspectWorkspacePlanningArtifacts(
-  workspaceRoot: string
+  workspaceRoot: string,
+  applicationId?: string,
+  versionId?: string
 ): Promise<{
   ready: boolean;
   hasPageDesigns: boolean;
@@ -178,5 +180,5 @@ export async function inspectWorkspacePlanningArtifacts(
   if (!workspaceApi?.inspectPlanningArtifacts) {
     throw new Error('当前环境不支持检查工作区规划产物');
   }
-  return workspaceApi.inspectPlanningArtifacts({ workspaceRoot });
+  return workspaceApi.inspectPlanningArtifacts({ workspaceRoot, applicationId, versionId });
 }
