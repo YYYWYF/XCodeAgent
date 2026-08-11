@@ -150,17 +150,17 @@ EndpointDetail 在单个 endpoint 设计链路内部固定分为两步，不新�
 - 用户角色；
 - 功能模块；
 - 页面清单；
-- 数据源清单；
+- 实体清单；
 - 业务流程；
 - 验收标准；
 - 待确认问题；
 - 默认假设。
 
-当前实现通过 `agents/main/requirements_analyzer.py` 直接调用 `create_chat_model()`，并只绑定通用 `tools/ask_user.py`。该边界不创建 Main DeepAgent，不加载 workspace backend，也不暴露 `task`、Frontend/Data Source/Test subagent 或文件读写工具。需求分析提示词明确要求覆盖应用信息、用户角色、功能模块、页面清单、数据源清单、业务流程和验收标准；若模型判断信息缺失、模糊或不适合假设，应生成 `ask_user` tool call，由后端解析为 1-4 个待确认问题。
+当前实现通过 `agents/main/requirements_analyzer.py` 直接调用 `create_chat_model()`，并只绑定通用 `tools/ask_user.py`。该边界不创建 Main DeepAgent，不加载 workspace backend，也不暴露 `task`、Frontend/Data Source/Test subagent 或文件读写工具。需求分析提示词明确要求覆盖应用信息、用户角色、功能模块、页面清单、实体清单、业务流程和验收标准；实体只携带展示信息（名称/说明），不选择数据源，数据源类型在项目规划阶段按实体决定；若模型判断信息缺失、模糊或不适合假设，应生成 `ask_user` tool call，由后端解析为 1-4 个待确认问题。
 
 `ask_user` 是通用的人机确认工具，不包含 requirements 专用问题规则。后续项目计划、单页面设计、数据源确认等阶段需要用户输入时，也应复用该工具，由对应 Agent 根据上下文决定问题内容。
 
-当 requirements direct ChatModel 边界判断需求不清晰时，必须先一次性审视所有关键产物所需信息：应用信息、角色、模块、页面清单、数据源清单、支撑 API 契约的业务信息、业务流程和验收标准。它将所有无法安全推断的缺口合并为一次 1-4 题的 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和本轮结构化答案；后端据此推断续跑节点并生成扁平的当前请求，不重复嵌套完整会话。模型基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
+当 requirements direct ChatModel 边界判断需求不清晰时，必须先一次性审视所有关键产物所需信息：应用信息、角色、模块、页面清单、实体清单、支撑 API 契约的业务信息、业务流程和验收标准。它将所有无法安全推断的缺口合并为一次 1-4 题的 `clarification.status = requires_user_input`，Graph 在该节点后结束本轮运行并等待用户回答。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和本轮结构化答案；后端据此推断续跑节点并生成扁平的当前请求，不重复嵌套完整会话。模型基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
 
 无论初始需求是否需要澄清，只要 `requirements` 生成或更新了需求文档，就必须进入 `requirement_spec_confirmation`，要求用户明确确认文档是否正确。澄清问题的回答只用于补充需求，不能等同于对生成后文档的确认；只有用户确认当前版本后，节点才输出 `status = completed` 并继续进入 `project_planning`。若用户补充后仍存在重要缺口，模型可以再次发起一次集中澄清。用户提出修改意见时，需要重新生成文档，并再次经过确认。
 
@@ -215,7 +215,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 ProjectPlan 同样以 Markdown 作为用户确认入口。确认前若 Markdown 被直接编辑，节点先将改动同步到内部 ProjectPlan JSON，并执行 API 契约、页面清单和数据源一致性校验；同步成功后才允许确认并进入后续节点。AG-UI 产物列表只展示 Markdown 等用户可读文件，所有 JSON 路径和 JSON 任务文件都属于内部工作流状态，不向用户呈现为可编辑产物。
 
-API 契约在此阶段作为前后端共享的唯一字段事实来源生成。为保持简约和可扩展，每个 contract 只包含资源级 `schemas`、稳定 endpoint id、HTTP method、path、参数、请求/响应 schema 引用、错误码和权限要求。`data_sources` 只能保存 `schema_refs`，不得复制字段；ProjectPlan 不生成页面与数据源/API 的绑定关系。页面详细设计只能通过 `api_dependencies` 和 `response_bindings` 引用已声明 endpoint 与响应字段。`detail_confirmation` 若发现字段或接口缺口，应提出 ProjectPlan 调整并经过确认，不能自行补字段或发明独立接口。
+API 契约在此阶段作为前后端共享的唯一字段事实来源生成。为保持简约和可扩展，每个 contract 只包含资源级 `schemas`、稳定 endpoint id、HTTP method、path、参数、请求/响应 schema 引用、错误码、权限要求和 `entity_ids`（关联的业务实体 id 数组，可关联多个实体）。契约的唯一权威绑定是实体；`data_source_id` 由系统按首实体所在数据源自动推导，模型不得自行发明数据源 id。`data_sources` 只能保存 `schema_refs`，不得复制字段；ProjectPlan 不生成页面与数据源/API 的绑定关系。页面详细设计只能通过 `api_dependencies` 和 `response_bindings` 引用已声明 endpoint 与响应字段。`detail_confirmation` 若发现字段或接口缺口，应提出 ProjectPlan 调整并经过确认，不能自行补字段或发明独立接口。
 
 `ProjectPlan` 至少包含：
 
@@ -224,7 +224,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - `architecture`：前端、后端、数据和测试策略；
 - `api_contracts`：唯一的业务字段 Schema、资源 endpoint 和输入输出 Schema 引用；
 - `frontend_pages`：菜单树与页面叶子混合结构；菜单节点至少包含 `name`、`unique_path`、`children`，页面叶子保留 `pageId`、名称、路由、描述、模块归属、状态、权限及 `references`；
-- `data_sources`：数据源类型、实体、`schema_refs` 和 Seed 策略，不重复保存字段；
+- `entities`：ProjectPlan 顶层只保留实体列表，实体优先。每个实体包含 id、名称、说明、带类型的字段定义（snake_case 字段名 + 语义类型 text/long_text/number/decimal/date/datetime/enum/boolean）以及 `data_source`（仅为三种类型字符串之一：database/external_api/static，默认 database；数据源没有 id 或 name 概念）；`data_sources` 不单独持久化，按实体 `data_source` 类型确定性推导。需求层（RequirementSpec）的实体字段只是“需要展示的实体信息”（名称、说明，不生成字段名与类型，也不选择数据源）；项目规划层为每个实体选择数据源类型（可混合三种类型）。API 契约以 `entity_ids` 数组绑定实体（可多实体），`data_source_id` 由系统按首实体数据源类型推导，MySQL 列类型/约束/关系不写入用户可见工件；
 - `permission_model`：角色、页面访问规则、操作权限和默认权限策略；
 - `risks`：后续细节确认阶段需要消化的风险和待细化点。
 
@@ -247,7 +247,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 页面初版设计结合 `frontend_pages`、`api_contracts`、`data_sources`、`permission_model` 和业务流程，覆盖页面目标、页面布局设计、页面交互设计、API 依赖、响应字段绑定、页面跳转与依赖、权限与操作可见性、页面验收标准。`detail_confirmation` 在调用 `page_designer` 前逐项检查当前页面声明的 `endpoint_dependencies`：缺少正式 EndpointDetail 时复用独立 endpoint 设计链路补生成，并把待确认的 EndpointDetail 与 PageDetail 放入同一轮审核；已有正式详情不重复生成。`page_designer` 只读取这些 EndpointDetail 的接口标识、状态、数据来源类型、Schema 引用和处理逻辑摘要，不接收完整 EndpointDetail 正文。`PageDetail.api_dependencies` 是页面详细设计确认后的实际 API 依赖。页面详细设计面向页面实现视角，页面数据访问必须直接引用具体 API/Endpoint，而不是把底层数据源作为主要确认对象。布局设计只描述信息组织、区域职责、主要内容呈现、操作入口位置和响应式/信息密度策略；loading、empty、error、success、confirm、validation 等反馈属于交互设计，不作为布局区域。页面的 endpoint、Schema 和 `response_bindings` 在审阅界面只读；用户不能在详情层新增字段或接口。需要修改契约时必须返回 `project_planning`，更新 ProjectPlan 后重新确认。
 
-接口详细设计是 `detail_confirmation` 的 endpoint 内部分支，不新增独立主 Graph 节点。该分支先定位接口契约、分析请求参数、确认数据来源，再设计返回格式、处理逻辑和接口验收标准。确认数据来源时，如果当前 endpoint 关联的数据源是 MySQL/数据库，且 `XCODEAGENT_ENDPOINT_DATABASE_CONTEXT_ENABLED` 显式开启，后端会调用绑定当前工作区的 `get_mysql_table_info` 获取库表信息，并将结果提取概括为 `endpoint_context.database_context` 后输入 endpoint 详细设计模型；模型只能使用该摘要作为现有数据库参考，不接收原始全量工具输出、应用配置或明文密码。连接字段来自 `workspaceRoot/.xcodeagent/application.json` 的 `datasource.db.plantMode`；Renderer 持久化前使用 `/health` 公钥加密 `pwd`，后端只在本次查询内存中解密。EndpointDetail 不兼容旧的自由文本数据库决策：每个差异必须显式选择 `already_supported/database_change/backend_adaptation/needs_user_confirmation`，数据库变更必须引用完整 `database_operations`；`database_context` 完成后模型必须直接给出数据库设计——目标表已存在时使用 `mysql_existing` 并提供字段映射与增列/改列 `database_operations`，目标表缺失或数据库不存在时使用 `mysql_new_table` 并直接设计完整 `create_table` 操作；只有 `database_context` 不可用（跳过或失败）且来源确实无法判断时才进入 `needs_user_confirmation`；`operation_refs` 只允许出现在 `database_change` 差异上，`mysql_new_table` 的 `create_table` 由来源类型本身声明、不要求额外字段差异重复引用，也不能产生可执行操作。
+接口详细设计是 `detail_confirmation` 的 endpoint 内部分支，不新增独立主 Graph 节点。该分支先定位接口契约、分析请求参数、确认数据来源，再设计返回格式、处理逻辑和接口验收标准。确认数据来源时，如果当前 endpoint 关联的数据源是 MySQL/数据库，且 `XCODEAGENT_ENDPOINT_DATABASE_CONTEXT_ENABLED` 显式开启，后端会调用绑定当前工作区的 `get_mysql_table_info` 获取库表信息，并将结果提取概括为 `endpoint_context.database_context` 后输入 endpoint 详细设计模型；模型只能使用该摘要作为现有数据库参考，不接收原始全量工具输出、应用配置或明文密码。连接字段来自 `workspaceRoot/.xcodeagent/application.json` 的 `datasource.db.plantMode`；Renderer 持久化前使用 `/health` 公钥加密 `pwd`，后端只在本次查询内存中解密。已确认的实体字段是数据库操作的唯一权威字段来源：`create_table` 必须使用实体 id 派生表名（snake_case）且只定义实体字段和隐式 `id`，`add_column/alter_*` 只能引用实体字段或 `id`；操作中出现实体未定义字段时确定性校验失败，按既有规则回到 ProjectPlan 修订并重新确认。EndpointDetail 不兼容旧的自由文本数据库决策：每个差异必须显式选择 `already_supported/database_change/backend_adaptation/needs_user_confirmation`，数据库变更必须引用完整 `database_operations`；`database_context` 完成后模型必须直接给出数据库设计——目标表已存在时使用 `mysql_existing` 并提供字段映射与增列/改列 `database_operations`，目标表缺失或数据库不存在时使用 `mysql_new_table` 并直接设计完整 `create_table` 操作；只有 `database_context` 不可用（跳过或失败）且来源确实无法判断时才进入 `needs_user_confirmation`；`operation_refs` 只允许出现在 `database_change` 差异上，`mysql_new_table` 的 `create_table` 由来源类型本身声明、不要求额外字段差异重复引用，也不能产生可执行操作。
 
 批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`；详细设计文件和轻量 ProjectPlan 索引一起持久化，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
@@ -314,7 +314,7 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已�
 
 代码图不参与 DAG 任务生成。进入 `build` 后，Frontend Agent 与承载 backend task 的 DataSource Agent 才按 `task_id` 使用绑定当前 `workspaceRoot` 的 `code_graph_context`：已有目标文件优先查询 `file_summary`，未知业务符号优先查询 `search_symbols`，命中后再按需查询引用、影响和相关测试。只有 `status=ready` 且 `matches/relations/relatedTests/impactedFiles` 至少一项非空的结果才作为导航；空结果、异常或不可用状态会立即降级为任务 `target_files/allowed_paths/change_scope` 内的文件搜索和真实源码读取，不会令任务失败或扩大写入授权。代码图始终不是源码事实，修改前必须读取当前文件。
 
-任务规划模型输入中的 `database_planning_context` 只来自前置 `inspect_database_context` 节点：当当前 endpoint scope 或页面/API scope 内存在 `EndpointDetail.data_origin` 明确指向数据库的接口时，前置节点已经调用 `get_mysql_table_info` 读取真实库表事实，并生成 `schema_version=database-context.v1` 的上下文；`prepare_build_tasks` 再把该上下文与 EndpointDetail、API Contract 一起放入 `TaskPreparationContext.executable_details`。模型必须把 `actual_schema` 作为唯一真实数据库结构来源，把结构化操作编译出的 `resolution_items/gaps/task_intents` 作为拆分依据：只有真实 Schema Diff 仍存在的 `database_change` gap 才能生成 database task，且任务必须携带对应 `task_intent.database_scope`；`backend_adaptation` 只能生成 backend task；`needs_user_confirmation` 不得被转成半截 build task。外部 API scope 不携带数据库上下文，也不得生成 database Unit 或 database task。
+任务规划模型输入中的 `database_planning_context` 只来自前置 `inspect_database_context` 节点：当当前 endpoint scope 或页面/API scope 内存在 `EndpointDetail.data_origin` 明确指向数据库的接口时，前置节点已经调用 `get_mysql_table_info` 读取真实库表事实，并生成 `schema_version=database-context.v1` 的上下文；`required_schema` 以范围内数据库数据源的已确认实体定义编译为目标表基线（实体 id → snake_case 表名、语义类型 → 固定 MySQL 类型映射、隐式 `id BIGINT AUTO_INCREMENT` 主键），再与 EndpointDetail 的结构化操作合并。`prepare_build_tasks` 再把该上下文与 EndpointDetail、API Contract 一起放入 `TaskPreparationContext.executable_details`。模型必须把 `actual_schema` 作为唯一真实数据库结构来源，把结构化操作编译出的 `resolution_items/gaps/task_intents` 作为拆分依据：只有真实 Schema Diff 仍存在的 `database_change` gap 才能生成 database task，且任务必须携带对应 `task_intent.database_scope`；`backend_adaptation` 只能生成 backend task；`needs_user_confirmation` 不得被转成半截 build task。外部 API scope 不携带数据库上下文，也不得生成 database Unit 或 database task。
 
 任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：`owner=database` 的任务必须挂在 `database:*` Unit，`task_type` 只能是 `database.change`、`database.seed` 或 `database.verify`，必须声明非空 `database_scope`，不得包含 Java/TypeScript/Python/样式等代码文件路径；高危数据库操作如删表、删字段、删除数据、truncate 必须声明 `approval.required=true`。Backend task 不得声明 `database_scope` 或 `database.*` task_type；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。违反这些规则时 `task_graph.validation.is_valid=false`，`prepare_build_tasks` 不会进入 Build。
 

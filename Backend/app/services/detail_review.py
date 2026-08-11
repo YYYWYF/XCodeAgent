@@ -9,6 +9,7 @@ from app.services.api_contracts import (
     normalize_page_api_dependencies,
     normalize_response_bindings,
 )
+from app.services.entity_definitions import plan_data_sources
 from app.services.frontend_page_tree import update_frontend_page_leaves
 from app.services.page_detail_plan import (
     apply_endpoint_datasource_policy,
@@ -283,7 +284,7 @@ def _repair_page_contract_fields(project_plan: dict[str, Any]) -> None:
     contracts = project_plan.get("api_contracts", [])
     data_source_ids = [
         str(source.get("id"))
-        for source in project_plan.get("data_sources", [])
+        for source in plan_data_sources(project_plan)
         if isinstance(source, dict) and source.get("id")
     ]
     for detail in project_plan.get("page_detail_plans", []):

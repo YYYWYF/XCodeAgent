@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.services.data_source_policy import (
     DataSourcePolicyError,
+    application_has_database_config,
     apply_authoritative_datasource_type,
     datasource_type_from_artifact,
     ensure_requirements_datasource_type,
@@ -44,6 +45,37 @@ class DataSourcePolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             self._write_application(workspace, "static")
             self.assertEqual(read_application_datasource_type(workspace), "static")
+
+    def test_application_has_database_config_detects_filled_connection(self) -> None:
+        """填写完整 plantMode 时认为已配置数据库，缺省字段则视为未配置。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            self._write_application(workspace, "database")
+            self.assertFalse(application_has_database_config(workspace))
+            application_dir = Path(workspace) / ".xcodeagent"
+            application_dir.joinpath("application.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "datasource": {
+                            "type": "database",
+                            "db": {
+                                "useBuiltin": False,
+                                "plantMode": {
+                                    "domain": "127.0.0.1",
+                                    "port": 3306,
+                                    "userName": "root",
+                                    "pwd": "secret",
+                                    "schema": "demo",
+                                },
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            self.assertTrue(application_has_database_config(workspace))
 
     def test_rejects_legacy_datasource_values_without_normalization(self) -> None:
         """旧枚举值直接失败，不做 DataBase、Api 或 mock 兼容转换。"""
@@ -86,14 +118,14 @@ class DataSourcePolicyTests(unittest.TestCase):
         self.assertEqual(spec["data_sources"][0]["type"], "mock")
 
     def test_requirement_builder_does_not_infer_type_from_request(self) -> None:
-        """Static 应用即使需求文本提到数据库，也只能生成 static 类型。"""
+        """需求阶段只生成实体，不生成数据源与类型。"""
 
         spec = create_requirement_spec(
             "需要数据库字段和订单查询",
             datasource_type="static",
         )
-        self.assertTrue(spec["data_sources"])
-        self.assertTrue(all(source["type"] == "static" for source in spec["data_sources"]))
+        self.assertTrue(spec["entities"])
+        self.assertNotIn("data_sources", spec)
         self.assertNotIn("mock", json.dumps(spec, ensure_ascii=False))
 
     def test_requirement_builder_rejects_legacy_type_instead_of_writing_it(self) -> None:
@@ -102,13 +134,21 @@ class DataSourcePolicyTests(unittest.TestCase):
         with self.assertRaises(DataSourcePolicyError):
             create_requirement_spec("创建订单系统", datasource_type="mock")  # type: ignore[arg-type]
 
-    def test_formal_artifact_rejects_mixed_or_legacy_types(self) -> None:
-        """ProjectPlan 等正式工件不能混用类型，也不能读取 mock。"""
+    def test_formal_artifact_allows_mixed_types_and_rejects_legacy(self) -> None:
+        """正式工件允许混合类型（默认按后端处理），但拒绝 mock 等旧类型。"""
 
-        with self.assertRaises(DataSourcePolicyError):
+        self.assertEqual(
             datasource_type_from_artifact(
                 {"data_sources": [{"type": "database"}, {"type": "static"}]}
-            )
+            ),
+            "database",
+        )
+        self.assertEqual(
+            datasource_type_from_artifact(
+                {"data_sources": [{"type": "external_api"}]}
+            ),
+            "database",
+        )
         with self.assertRaises(DataSourcePolicyError):
             datasource_type_from_artifact({"data_sources": [{"type": "mock"}]})
 

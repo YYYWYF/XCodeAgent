@@ -10,6 +10,7 @@ from app.agents.tool_activity_stream import (
 )
 from app.config import Settings
 from app.services.build_result_coordinator import create_agent_task_results
+from app.services.entity_definitions import plan_data_sources
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
@@ -124,8 +125,7 @@ def _frontend_generation_prompt(
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
     frontend_root = "frontend"
     # Static 的正式实现来源固定为前端内存数据模块，不兼容旧 mock 类型。
-    raw_data_sources = project_plan.get("data_sources")
-    data_source_list = raw_data_sources if isinstance(raw_data_sources, list) else []
+    data_source_list = plan_data_sources(project_plan)
     has_static_data_source = any(
         isinstance(source, dict)
         and str(source.get("type") or "") == "static"
@@ -133,7 +133,7 @@ def _frontend_generation_prompt(
     )
     data_source_instruction = (
         "## CRITICAL: Data source is STATIC with effective_source=frontend_mock\n"
-        "The ProjectPlan data_sources for this page declare type=static. Implement the approved "
+        "The data source for this page's entities declares type=static. Implement the approved "
         "API contracts as a frontend in-memory data-access module. This page MUST "
         "use **in-memory mock functions** for all data — do NOT call real backend APIs, do NOT "
         "use `service.get('/api/...')`, and do NOT configure a real backend proxy in vite.config.ts. "

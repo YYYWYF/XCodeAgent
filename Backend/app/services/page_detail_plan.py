@@ -9,6 +9,12 @@ from app.services.api_contracts import (
     normalize_page_api_dependencies,
     normalize_response_bindings,
 )
+from app.services.entity_definitions import database_operation_field_errors
+from app.services.entity_definitions import (
+    contract_data_source_id,
+    entity_table_name,
+    plan_data_sources,
+)
 from app.services.frontend_page_tree import (
     find_frontend_page,
     flatten_frontend_pages,
@@ -648,11 +654,11 @@ def extract_endpoint_detail_context(
     )
     if not endpoint:
         raise ValueError(f"API 契约 {api_contract_id} 中不存在接口：{endpoint_id}")
-    data_source_id = str(contract.get("data_source_id") or api_contract_id)
+    data_source_id = contract_data_source_id(project_plan, contract) or api_contract_id
     data_source = next(
         (
             source
-            for source in _dict_items(project_plan.get("data_sources"))
+            for source in plan_data_sources(project_plan)
             if str(source.get("id") or "") == data_source_id
         ),
         {},
@@ -841,6 +847,11 @@ def compose_endpoint_detail_from_decision(
         endpoint_decision.get("data_origin"),
     )
     validate_endpoint_decision(endpoint_decision)
+    _validate_endpoint_operations_against_entities(
+        project_plan,
+        endpoint_context,
+        endpoint_decision,
+    )
     detail_plan = create_endpoint_detail_plan(
         project_plan,
         endpoint_context,
@@ -849,6 +860,39 @@ def compose_endpoint_detail_from_decision(
     detail_plan["endpoint_decision"] = _normalize_endpoint_decision(endpoint_decision)
     refresh_endpoint_detail_from_decision(detail_plan)
     return detail_plan
+
+
+def _validate_endpoint_operations_against_entities(
+    project_plan: dict[str, Any],
+    endpoint_context: dict[str, Any],
+    endpoint_decision: dict[str, Any],
+) -> None:
+    """校验数据库操作字段与已确认实体一致，冲突时回退到 ProjectPlan 修订。"""
+
+    data_source_id = str(endpoint_context.get("data_source_id") or "")
+    entities = (
+        endpoint_context.get("data_source")
+        if isinstance(endpoint_context.get("data_source"), dict)
+        else {}
+    ).get("entities")
+    if entities is None:
+        entities = next(
+            (
+                source.get("entities")
+                for source in plan_data_sources(project_plan)
+                if str(source.get("id") or "") == data_source_id
+            ),
+            [],
+        )
+    operation_errors = database_operation_field_errors(
+        entities,
+        endpoint_decision.get("data_origin"),
+    )
+    if operation_errors:
+        raise ValueError(
+            "接口数据库操作与已确认实体定义不一致，需要修订 ProjectPlan 后重新确认：\n"
+            + "\n".join(f"- {error}" for error in operation_errors)
+        )
 
 
 def refresh_endpoint_detail_from_decision(detail_plan: dict[str, Any]) -> None:
@@ -1080,7 +1124,7 @@ def _default_endpoint_data_origin(
     data_source = next(
         (
             source
-            for source in _dict_items(project_plan.get("data_sources"))
+            for source in plan_data_sources(project_plan)
             if str(source.get("id") or "") == data_source_id
         ),
         {},
@@ -1107,9 +1151,9 @@ def _default_endpoint_data_origin(
             "database": "MySQL8" if source_type == "database" else None,
             "tables": _normalize_origin_tables(
                 data_source.get("tables")
-                or data_source.get("entities")
                 or data_source.get("table_names")
-            ),
+            )
+            or _entity_origin_table_names(data_source.get("entities")),
             "provider": data_source.get("provider") if source_type == "external_api" else None,
             "endpoint": data_source.get("endpoint") if source_type == "external_api" else None,
             "method": data_source.get("method") if source_type == "external_api" else None,
@@ -1131,6 +1175,22 @@ def _default_endpoint_data_origin(
         "database_operations": [],
         "notes": ["仅展示当前有效来源；无关来源分支已省略。"],
     }
+
+
+def _entity_origin_table_names(value: Any) -> list[str]:
+    """把实体定义投影为目标表名：对象用 snake_case(id)，旧字符串保持原样。"""
+
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            entity_id = str(item.get("id") or "").strip()
+            if entity_id:
+                names.append(entity_table_name(entity_id))
+        elif str(item).strip():
+            names.append(str(item).strip())
+    return names
 
 
 def normalize_endpoint_data_origin(value: Any) -> dict[str, Any]:

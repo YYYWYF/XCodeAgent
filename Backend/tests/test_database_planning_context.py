@@ -38,11 +38,18 @@ def _project_plan(method: str = "POST") -> dict:
     return {
         "version": "plan-v1",
         "confirmation_status": "confirmed",
-        "data_sources": [{"id": "orders", "name": "订单库", "type": "database"}],
+        "entities": [
+            {
+                "id": "Order",
+                "name": "订单",
+                "fields": [],
+                "data_source": "database",
+            }
+        ],
         "api_contracts": [
             {
                 "id": "orders-api",
-                "data_source_id": "orders",
+                "entity_ids": ["Order"],
                 "schemas": {
                     "OrderCreate": {
                         "type": "object",
@@ -76,23 +83,23 @@ def _build_context(endpoint_id: str = "orders.create") -> dict:
         },
         "endpoint_ids": [endpoint_id],
         "api_contract_ids": ["orders-api"],
-        "data_source_ids": ["orders"],
+        "data_source_ids": ["database"],
         "required_unit_ids": [
-            "database:orders",
+            "database:database",
             "backend:endpoint:orders-api:orders.create",
         ],
         "direct_endpoint_details": [
             {
                 "api_contract_id": "orders-api",
                 "endpoint_id": endpoint_id,
-                "data_source_id": "orders",
+                "data_source_id": "database",
                 "method": "POST",
                 "path": "/orders",
                 "data_origin": {
                     "source_type": "database",
                     "effective_source": {
                         "kind": "mysql_existing",
-                        "data_source_id": "orders",
+                        "data_source_id": "database",
                         "database": "sales",
                         "tables": ["orders"],
                     },
@@ -155,11 +162,18 @@ def _summary_project_plan() -> dict:
     return {
         "version": "plan-v1",
         "confirmation_status": "confirmed",
-        "data_sources": [{"id": "core_management_source", "type": "database"}],
+        "entities": [
+            {
+                "id": "Core",
+                "name": "Core",
+                "fields": [],
+                "data_source": "database",
+            }
+        ],
         "api_contracts": [
             {
                 "id": "core_management_api",
-                "data_source_id": "core_management_source",
+                "data_source_id": "database",
                 "schemas": {
                     "CoreManagementSummary": {
                         "type": "object",
@@ -196,12 +210,12 @@ def _summary_build_context() -> dict:
         },
         "endpoint_ids": ["core_management.summary"],
         "api_contract_ids": ["core_management_api"],
-        "data_source_ids": ["core_management_source"],
+        "data_source_ids": ["database"],
         "direct_endpoint_details": [
             {
                 "api_contract_id": "core_management_api",
                 "endpoint_id": "core_management.summary",
-                "data_source_id": "core_management_source",
+                "data_source_id": "database",
                 "method": "GET",
                 "path": "/api/core-management/summary",
                 "data_origin": {
@@ -591,8 +605,8 @@ class DatabaseContextV1Tests(unittest.TestCase):
         self.assertFalse(requirement["required"])
         self.assertEqual(requirement["status"], "not_required")
 
-    def test_external_api_endpoint_scope_is_rejected_while_disabled(self) -> None:
-        """外部 API 尚未启用时不得进入构建范围。"""
+    def test_external_api_endpoint_scope_is_resolved_and_not_database(self) -> None:
+        """外部 API 数据源可进入构建范围，但不触发数据库上下文。"""
 
         with tempfile.TemporaryDirectory() as tmpdir:
             detail_path = Path(tmpdir) / "endpoint.json"
@@ -617,19 +631,22 @@ class DatabaseContextV1Tests(unittest.TestCase):
                 encoding="utf-8",
             )
             plan = _project_plan()
-            plan["data_sources"][0]["type"] = "external_api"
+            plan["entities"][0]["data_source"] = "external_api"
             plan["api_contracts"][0]["endpoints"][0]["detail_design"] = {
                 "status": "confirmed",
                 "json_path": str(detail_path),
             }
 
-            with self.assertRaisesRegex(ValueError, "external_api"):
-                resolve_target_build_context(
-                    plan,
-                    target_type="endpoint",
-                    target_id="orders.create",
-                    api_contract_id="orders-api",
-                )
+            context = resolve_target_build_context(
+                plan,
+                target_type="endpoint",
+                target_id="orders.create",
+                api_contract_id="orders-api",
+            )
+            self.assertEqual(context["data_source_ids"], ["external_api"])
+            requirement = database_context_requirement(plan, context)
+            self.assertFalse(requirement["required"])
+            self.assertEqual(requirement["status"], "not_required")
 
     def test_task_preparation_view_includes_new_database_context(self) -> None:
         """任务规划模型输入包含新版数据库上下文和已确认接口详情。"""

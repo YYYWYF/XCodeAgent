@@ -838,6 +838,10 @@ def validate_tsx(project_dir: str, code: str) -> tuple[bool, str]:
         logger.warning("ui_design_validate_skip esbuild_not_found")
         return True, ""
     # 用 node -e 内联脚本调 esbuild.transform，通过 stdin 传代码避免命令行长度限制。
+    # stdin 必须显式使用 UTF-8 编码：中文 Windows 上 text=True 默认按区域代码页（GBK）编码
+    # 输入，而 GBK 无法编码 LLM Mock 数据里常见的半角 ¥（U+00A5），会抛 UnicodeEncodeError
+    # 使整轮页面设计稿生成中断。errors="replace" 防止子进程输出不可解码时再抛解码异常；
+    # UTF-8 能编码所有字符，输入侧始终安全。
     # esbuild 主模块路径通过 process.argv[1] 传入（node -e 模式下 argv[1] 是首个用户参数）。
     script = (
         "const esbuild=require(process.argv[1]);"
@@ -853,9 +857,11 @@ def validate_tsx(project_dir: str, code: str) -> tuple[bool, str]:
             input=code,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
-    except (subprocess.SubprocessError, OSError) as exc:
+    except (subprocess.SubprocessError, OSError, UnicodeError) as exc:
         logger.warning("ui_design_validate_error %s", exc)
         return True, ""
     if proc.returncode == 0:

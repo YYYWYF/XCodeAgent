@@ -36,8 +36,12 @@ class DetailConfirmationTests(unittest.TestCase):
         """endpoint 模型只生成决策对象，正式详情由确定性第二步完成。"""
 
         project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
-        project_plan["data_sources"] = [
-            {**source, "type": "static"} for source in project_plan["data_sources"]
+        project_plan["entities"] = [
+            {
+                **entity,
+                "data_source": "static",
+            }
+            for entity in project_plan["entities"]
         ]
         page_context = extract_page_detail_context(
             project_plan,
@@ -153,8 +157,12 @@ class DetailConfirmationTests(unittest.TestCase):
         """闭合决策的处理逻辑与验收标准必须由同一基数和结果规则投影。"""
 
         project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
-        project_plan["data_sources"] = [
-            {**source, "type": "static"} for source in project_plan["data_sources"]
+        project_plan["entities"] = [
+            {
+                **entity,
+                "data_source": "static",
+            }
+            for entity in project_plan["entities"]
         ]
         page_context = extract_page_detail_context(
             project_plan,
@@ -303,12 +311,15 @@ class DetailConfirmationTests(unittest.TestCase):
             project_plan,
             "inventory_management_list_page",
         )
+        contract = project_plan["api_contracts"][0]
+        contract_id = contract["id"]
+        endpoint_id = contract["endpoints"][0]["id"]
         page_context["references"]["endpoint_dependencies"] = [
             {
-                "api_contract_id": "inventory_management_source_api",
-                "endpoint_id": "inventory_management_source_api.list",
+                "api_contract_id": contract_id,
+                "endpoint_id": endpoint_id,
                 "method": "GET",
-                "url": "/api/inventory-management",
+                "url": contract["base_path"],
                 "usage": "page_load",
                 "required": True,
             }
@@ -318,7 +329,7 @@ class DetailConfirmationTests(unittest.TestCase):
 
         self.assertEqual(
             [item["endpoint_id"] for item in page_detail["api_dependencies"]],
-            ["inventory_management_source_api.list"],
+            [endpoint_id],
         )
         self.assertEqual(
             page_detail["endpoint_dependencies"],
@@ -412,8 +423,12 @@ class DetailConfirmationTests(unittest.TestCase):
 
     def test_detail_review_applies_page_patch_and_confirms_once(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建库存系统"))
-        project_plan["data_sources"] = [
-            {**source, "type": "static"} for source in project_plan["data_sources"]
+        project_plan["entities"] = [
+            {
+                **entity,
+                "data_source": "static",
+            }
+            for entity in project_plan["entities"]
         ]
         page_context = extract_page_detail_context(
             project_plan,

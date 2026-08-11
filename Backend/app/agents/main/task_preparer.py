@@ -361,7 +361,7 @@ def _bounded_prompt_value(value: Any, *, limit: int) -> Any:
 
 
 def _task_preparation_datasource_type(project_plan: dict[str, Any]) -> str:
-    """从任务准备投影读取唯一正式数据源类型。"""
+    """从任务准备投影读取数据源类型集合：全 static 走前端分支，其余走后端分支。"""
 
     skeleton = project_plan.get("application_skeleton")
     sources = skeleton.get("data_sources") if isinstance(skeleton, dict) else None
@@ -370,9 +370,13 @@ def _task_preparation_datasource_type(project_plan: dict[str, Any]) -> str:
         for source in sources or []
         if isinstance(source, dict)
     }
-    if len(source_types) != 1 or next(iter(source_types)) not in {"database", "static"}:
-        raise ValueError("任务准备上下文必须包含唯一的 database 或 static 数据源类型。")
-    return next(iter(source_types))
+    if not source_types:
+        raise ValueError("任务准备上下文缺少数据源类型。")
+    if not source_types <= {"database", "static", "external_api"}:
+        raise ValueError("任务准备上下文包含非法数据源类型。")
+    if source_types <= {"static"}:
+        return "static"
+    return "database"
 
 
 def _static_task_preparation_prompt(

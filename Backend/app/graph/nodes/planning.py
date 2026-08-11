@@ -26,6 +26,7 @@ from app.services.frontend_page_tree import (
 )
 from app.services.database_context import prepare_endpoint_database_context
 from app.services.data_source_policy import (
+    application_has_database_config,
     apply_authoritative_datasource_type,
     read_application_datasource_type,
 )
@@ -92,12 +93,17 @@ def _detail_progress(message: str, **detail: object) -> None:
 def project_planning(state: ProjectState) -> dict:
     """生成或确认 ProjectPlan，并始终执行应用数据源权威策略。"""
 
-    datasource_type = read_application_datasource_type(workspace_from_state(state))
+    workspace = workspace_from_state(state)
+    datasource_type = read_application_datasource_type(workspace)
+    # 实体默认数据源类型由创建时是否填写数据库连接决定：已填写默认 database，否则默认 static。
+    default_datasource_type = (
+        "database" if application_has_database_config(workspace) else "static"
+    )
     existing_plan = state.get("project_plan")
     if isinstance(existing_plan, dict):
         existing_plan = apply_project_plan_datasource_policy(
             existing_plan,
-            datasource_type,
+            default_datasource_type,
         )
     if (
         isinstance(existing_plan, dict)
@@ -125,7 +131,7 @@ def project_planning(state: ProjectState) -> dict:
                 existing_plan,
                 state.get("requirement_spec", {}),
                 edited_markdown,
-                datasource_type,
+                default_datasource_type,
             )
             if edited_markdown is not None
             else existing_plan
@@ -134,19 +140,19 @@ def project_planning(state: ProjectState) -> dict:
             **apply_project_plan_feedback(
                 synchronized_plan,
                 state.get("request", ""),
-                datasource_type,
+                default_datasource_type,
             ),
             "confirmation_status": "confirmed",
         }
         validation_errors = _project_plan_validation_errors(
             project_plan,
-            datasource_type,
+            default_datasource_type,
         )
         if validation_errors:
             repaired_plan, remaining_errors = _repair_project_plan_validation_errors(
                 project_plan,
                 validation_errors,
-                datasource_type,
+                default_datasource_type,
             )
             repaired_path = write_project_plan_document(state, repaired_plan)
             return {
@@ -176,7 +182,7 @@ def project_planning(state: ProjectState) -> dict:
 
     requirement_spec = apply_authoritative_datasource_type(
         state["requirement_spec"],
-        datasource_type,
+        default_datasource_type,
     )
     if state.get("project_plan") and state.get("request"):
         requirement_spec = {
@@ -190,24 +196,24 @@ def project_planning(state: ProjectState) -> dict:
             if existing_plan
             else {}
         ),
-        datasource_type=datasource_type,
+        datasource_type=default_datasource_type,
         on_token=_planning_token_callback,
     )
     project_plan = apply_project_plan_feedback(
         project_plan,
         state.get("request", ""),
-        datasource_type,
+        default_datasource_type,
     )
     project_plan["confirmation_status"] = "pending_user_confirmation"
     validation_errors = _project_plan_validation_errors(
         project_plan,
-        datasource_type,
+        default_datasource_type,
     )
     if validation_errors:
         project_plan, validation_errors = _repair_project_plan_validation_errors(
             project_plan,
             validation_errors,
-            datasource_type,
+            default_datasource_type,
         )
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = (

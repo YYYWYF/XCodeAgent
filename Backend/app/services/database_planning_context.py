@@ -14,7 +14,9 @@ from app.services.database_schema_summary import (
     dict_items,
     inspect_mysql_schema,
     target_summary,
+    text_items,
 )
+from app.services.entity_definitions import contract_data_source_id, plan_data_sources
 
 _DATABASE_ORIGIN_KINDS = {"mysql_existing", "mysql_new_table"}
 
@@ -35,8 +37,14 @@ def prepare_database_planning_context(
 
     probe_target = _probe_target(targets)
     summary = inspect_mysql_schema(probe_target, workspace_root)
+    data_sources = plan_data_sources(project_plan)
+    new_table_entity_ids = _new_table_entity_ids(project_plan, targets)
     if summary.get("status") == "connection_failed":
-        required_schema = derive_required_database_schema(targets)
+        required_schema = derive_required_database_schema(
+            targets,
+            data_sources=data_sources,
+            new_table_entity_ids=new_table_entity_ids,
+        )
         return {
             "schema_version": "database-context.v1",
             "status": "connection_failed",
@@ -52,7 +60,11 @@ def prepare_database_planning_context(
         }
 
     actual_schema = _actual_schema_from_summary(summary)
-    required_schema = derive_required_database_schema(targets)
+    required_schema = derive_required_database_schema(
+        targets,
+        data_sources=data_sources,
+        new_table_entity_ids=new_table_entity_ids,
+    )
     gaps = diff_database_schema(
         actual_schema=actual_schema,
         required_schema=required_schema,
@@ -71,6 +83,28 @@ def prepare_database_planning_context(
         "summary": _planning_human_summary(actual_schema, gaps),
         "targets": [target_summary(target) for target in targets],
     }
+
+
+def _new_table_entity_ids(
+    project_plan: dict[str, Any],
+    targets: list[dict[str, Any]],
+) -> set[str]:
+    """收集 mysql_new_table 目标契约引用的实体，仅这些实体参与建表编译。"""
+
+    contract_entities = {
+        str(contract.get("id") or ""): text_items(contract.get("entity_ids"))
+        for contract in dict_items(project_plan.get("api_contracts"))
+    }
+    result: set[str] = set()
+    for target in targets:
+        detail = target.get("endpoint_detail")
+        detail = detail if isinstance(detail, dict) else {}
+        if endpoint_detail_origin_kind(detail) != "mysql_new_table":
+            continue
+        result.update(
+            contract_entities.get(str(target.get("api_contract_id") or ""), [])
+        )
+    return result
 
 
 def database_context_requirement(
@@ -179,7 +213,7 @@ def _endpoint_targets(
                 ).upper(),
                 "path": str(endpoint.get("path") or detail.get("path") or ""),
                 "summary": str(endpoint.get("summary") or detail.get("summary") or ""),
-                "data_source_id": str(contract.get("data_source_id") or ""),
+                "data_source_id": contract_data_source_id(project_plan, contract),
                 "data_source": _target_data_source(data_source, detail),
                 "api_contract": _contract_summary(contract, endpoint_ids),
                 "endpoint_detail": detail,
@@ -219,11 +253,11 @@ def _data_source_for_contract(
 ) -> dict[str, Any]:
     """按 API Contract 的 data_source_id 读取 ProjectPlan 数据源声明。"""
 
-    data_source_id = str(contract.get("data_source_id") or "")
+    data_source_id = contract_data_source_id(project_plan, contract)
     return next(
         (
             item
-            for item in dict_items(project_plan.get("data_sources"))
+            for item in plan_data_sources(project_plan)
             if str(item.get("id") or "") == data_source_id
         ),
         {},

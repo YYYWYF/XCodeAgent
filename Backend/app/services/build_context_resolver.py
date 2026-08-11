@@ -8,7 +8,26 @@ from pathlib import Path
 from typing import Any
 
 from app.services.database_planning_context import endpoint_detail_uses_database
+from app.services.entity_definitions import contract_data_source_id, plan_data_sources
 from app.services.frontend_page_tree import find_frontend_page
+
+
+def _endpoint_source_id(
+    project_plan: dict[str, Any],
+    endpoint: dict[str, Any],
+) -> str:
+    """按 endpoint 所属契约的 entity_ids 反查数据源 id。"""
+
+    contract_id = str(endpoint.get("api_contract_id") or "")
+    contract = next(
+        (
+            item
+            for item in _dict_items(project_plan.get("api_contracts"))
+            if str(item.get("id") or "") == contract_id
+        ),
+        {},
+    )
+    return contract_data_source_id(project_plan, contract)
 
 
 def _page_key_from_page_id(page_id: str) -> str:
@@ -73,7 +92,7 @@ def _page_context(
         endpoint = endpoint_index.get(endpoint_id)
         if endpoint is None:
             raise ValueError(f"Page {page_id} references unknown endpoint {endpoint_id}.")
-        source_id = str(endpoint.get("data_source_id") or "")
+        source_id = _endpoint_source_id(project_plan, endpoint)
         if not source_id:
             raise ValueError(f"Endpoint {endpoint_id} does not declare a data source.")
         if source_id not in source_ids:
@@ -89,7 +108,7 @@ def _page_context(
     database_source_ids: list[str] = []
     static_source_ids: list[str] = []
     for source_id in source_ids:
-        source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
+        source = _required_item(plan_data_sources(project_plan), "id", source_id, "data source")
         if _source_type(source) == "static":
             static_source_ids.append(source_id)
     for endpoint_id in endpoint_ids:
@@ -107,7 +126,7 @@ def _page_context(
         )
         endpoint_details.append(detail)
         endpoint_refs.append(_artifact_ref(endpoint.get("detail_design"), endpoint_id))
-        source_id = str(endpoint.get("data_source_id") or "")
+        source_id = _endpoint_source_id(project_plan, endpoint)
         if endpoint_detail_uses_database(detail) and source_id not in database_source_ids:
             database_source_ids.append(source_id)
 
@@ -149,11 +168,11 @@ def _data_source_context(
 ) -> dict[str, Any]:
     """以 ProjectPlan 契约解析数据单元，并按需补充已有 endpoint 详情。"""
 
-    source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
+    source = _required_item(plan_data_sources(project_plan), "id", source_id, "data source")
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = [
         endpoint_id for endpoint_id, endpoint in endpoint_index.items()
-        if endpoint.get("data_source_id") == source_id
+        if _endpoint_source_id(project_plan, endpoint) == source_id
         and "\0" not in endpoint_id
     ]
     endpoint_details = []
@@ -200,13 +219,13 @@ def _endpoint_context(
     if endpoint is None:
         target_label = f"{contract_id}/{endpoint_id}" if contract_id else endpoint_id
         raise ValueError(f"ProjectPlan does not contain endpoint {target_label}.")
-    source_id = str(endpoint.get("data_source_id") or "")
+    source_id = _endpoint_source_id(project_plan, endpoint)
     contract_id = str(endpoint.get("api_contract_id") or "")
     if not source_id:
         raise ValueError(f"Endpoint {endpoint_id} does not declare a data source.")
     if not contract_id:
         raise ValueError(f"Endpoint {endpoint_id} does not declare an API contract.")
-    source = _required_item(project_plan.get("data_sources"), "id", source_id, "data source")
+    source = _required_item(plan_data_sources(project_plan), "id", source_id, "data source")
     detail = _load_external_detail(
         endpoint.get("detail_design"),
         "EndpointDetail",
@@ -294,8 +313,6 @@ def _source_type(source: dict[str, Any]) -> str:
     source_type = str(source.get("type") or "")
     if source_type not in {"database", "static", "external_api"}:
         raise ValueError("ProjectPlan data source type must be database, static, or external_api.")
-    if source_type == "external_api":
-        raise ValueError("external_api data source is not enabled in the current build workflow.")
     return source_type
 
 
@@ -403,7 +420,6 @@ def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:
         for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
             endpoint_id = str(endpoint.get("id") or endpoint_index + 1)
             indexed_endpoint = {
-                "data_source_id": str(contract.get("data_source_id") or ""),
                 "api_contract_id": contract_id,
                 "detail_design": endpoint.get("detail_design"),
             }

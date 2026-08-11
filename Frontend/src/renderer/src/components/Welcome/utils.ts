@@ -64,7 +64,8 @@ export function buildDatasourceConfig(
   >
   const database = databaseDraft.db
   if (!database) {
-    throw new Error('请选择数据库类型。')
+    // 创建应用时数据库连接配置非必填；未填写时省略 db。
+    return { type: DatasourceEnum.DB }
   }
   if (database.useBuiltin === true) {
     return {
@@ -73,12 +74,17 @@ export function buildDatasourceConfig(
     }
   }
   if (database.useBuiltin !== false) {
-    throw new Error('请选择模拟数据库或外部数据库。')
+    return { type: DatasourceEnum.DB }
   }
 
   if (database.connectionMode === 'dbid') {
     const dbidMode = database.dbidMode
-    if (!dbidMode) throw new Error('外部数据库必须填写 DBID 连接信息。')
+    if (
+      !dbidMode ||
+      !_hasConnectionFields(dbidMode, ['dbid', 'domain', 'port', 'userName', 'schema'])
+    ) {
+      return { type: DatasourceEnum.DB }
+    }
     return {
       type: DatasourceEnum.DB,
       db: {
@@ -94,11 +100,16 @@ export function buildDatasourceConfig(
     }
   }
   if (database.connectionMode !== 'plant') {
-    throw new Error('请选择数据库连接方案。')
+    return { type: DatasourceEnum.DB }
   }
 
   const plantMode = database.plantMode
-  if (!plantMode) throw new Error('外部数据库必须填写账号密码连接信息。')
+  if (
+    !plantMode ||
+    !_hasConnectionFields(plantMode, ['domain', 'port', 'userName', 'pwd', 'schema'])
+  ) {
+    return { type: DatasourceEnum.DB }
+  }
   return {
     type: DatasourceEnum.DB,
     db: {
@@ -112,6 +123,16 @@ export function buildDatasourceConfig(
       }
     }
   }
+}
+
+/** 判断外部数据库连接方案是否填写了任意连接字段。 */
+function _hasConnectionFields(value: Record<string, unknown>, keys: string[]): boolean {
+  return keys.some(
+    (key) =>
+      value[key] !== undefined &&
+      value[key] !== null &&
+      String(value[key]).trim() !== ''
+  )
 }
 
 // 把新建应用表单转换为可写入 application.json 的初始配置。

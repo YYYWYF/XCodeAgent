@@ -10,11 +10,19 @@ class ApiContractValidationTests(unittest.TestCase):
         """页面只声明 endpoint 依赖时，校验器应通过 ProjectPlan 契约解析数据源。"""
 
         project_plan = {
-            "data_sources": [{"id": "orders", "schema_refs": []}],
+            "entities": [
+                {
+                    "id": "Order",
+                    "name": "Order",
+                    "fields": [],
+                    "data_source": "database",
+                }
+            ],
             "api_contracts": [
                 {
                     "id": "orders-api",
-                    "data_source_id": "orders",
+                    "entity_ids": ["Order"],
+                    "data_source_id": "database",
                     "schemas": {"OrderList": {"type": "object"}},
                     "endpoints": [
                         {
@@ -42,7 +50,7 @@ class ApiContractValidationTests(unittest.TestCase):
         """endpoint 引用保留为页面唯一依赖时，未知 endpoint 仍必须被阻止。"""
 
         project_plan = {
-            "data_sources": [],
+            "entities": [],
             "api_contracts": [],
             "page_detail_plans": [
                 {

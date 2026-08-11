@@ -57,7 +57,14 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 "user_roles": [{"id": "user", "name": "普通用户", "description": "使用系统"}],
                 "feature_modules": [{"id": "people", "name": "人员管理", "description": "人员列表", "priority": "must"}],
                 "pages": [{"pageId": "people_list", "name": "人员列表", "path": "/", "module_id": "people", "description": "唯一页面"}],
-                "data_sources": [{"id": "people_source", "name": "人员数据", "type": "database", "entities": ["Person"], "description": "人员信息"}],
+                "entities": [
+                    {
+                        "id": "Person",
+                        "name": "人员",
+                        "description": "人员信息",
+                        "fields": [{"label": "姓名", "description": "人员姓名。"}],
+                    }
+                ],
                 "business_flows": [{"id": "browse_people", "name": "浏览人员", "steps": ["打开列表"]}],
                 "acceptance_criteria": ["列表可以展示人员信息"],
                 "assumptions": [],
@@ -154,10 +161,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     }
                 )
 
-        self.assertTrue(result["requirement_spec"]["data_sources"])
-        self.assertTrue(
-            all(source["type"] == "static" for source in result["requirement_spec"]["data_sources"])
-        )
+        self.assertTrue(result["requirement_spec"]["entities"])
+        self.assertNotIn("data_sources", result["requirement_spec"])
 
     def test_confirmed_requirement_spec_continues_to_planning(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
@@ -320,15 +325,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     "description": "查看仓储运营指标。",
                 }
             ],
-            "data_sources": [
-                {
-                    **spec["data_sources"][0],
-                    "id": "tampered_source_id",
-                    "type": "mock",
-                    "entities": ["Warehouse"],
-                },
-                *spec["data_sources"][1:],
-            ],
+            "entities": spec["entities"],
         }
 
         with tempfile.TemporaryDirectory() as workspace:
@@ -353,18 +350,39 @@ class RequirementsConfirmationTests(unittest.TestCase):
 
         self.assertIn("# 仓储运营中心需求 Spec", markdown)
         self.assertIn("仓储总览", markdown)
-        self.assertEqual(
-            saved["requirementSpec"]["data_sources"][0]["id"],
-            spec["data_sources"][0]["id"],
-        )
-        self.assertEqual(saved["requirementSpec"]["data_sources"][0]["type"], "database")
-        self.assertEqual(
-            saved["requirementSpec"]["data_sources"][0]["entities"],
-            spec["data_sources"][0]["entities"],
-        )
+        self.assertEqual(saved["requirementSpec"]["entities"], spec["entities"])
         self.assertEqual(saved["requirementSpec"]["confirmation_status"], "pending_user_confirmation")
         self.assertEqual(internal_json["confirmation_status"], "pending_user_confirmation")
         self.assertEqual(saved["artifact"]["content"], markdown)
+
+    def test_summary_editor_can_modify_entity_display_fields(self) -> None:
+        """需求确认编辑器可修改实体展示信息，稳定 id 与隐藏结构仍保留。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        spec["confirmation_status"] = "pending_user_confirmation"
+        edited = {
+            **spec,
+            "entities": ["Warehouse"],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            state = {"workspace": workspace}
+            write_requirement_spec_document(state, spec)
+            _write_application_config(workspace)
+            saved = save_requirement_spec_draft(
+                SaveRequirementSpecDraftRequest.model_validate(
+                    {
+                        "action": "save",
+                        "workspaceRoot": workspace,
+                        "spec": edited,
+                    }
+                )
+            )
+
+        saved_entities = saved["requirementSpec"]["entities"]
+        self.assertEqual([entity["id"] for entity in saved_entities], ["Warehouse"])
+        # 需求层实体字段仍只保留展示信息，不生成字段名与类型。
+        self.assertEqual(saved_entities[0]["fields"], [])
 
     def test_generated_spec_requires_confirmation_after_clarification(self) -> None:
         existing_spec = create_requirement_spec("创建一个库存管理系统")
@@ -554,15 +572,10 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 spec["app_info"]["name"],
                 "仓储管理应用",
             )
-            edited_markdown = edited_markdown.replace("（database）", "（mock）")
             markdown_path.write_text(edited_markdown, encoding="utf-8")
             synchronized = {
                 **spec,
                 "app_info": {**spec["app_info"], "name": "仓储管理应用"},
-                "data_sources": [
-                    {**spec["data_sources"][0], "type": "mock"},
-                    *spec["data_sources"][1:],
-                ],
             }
 
             with patch(
@@ -591,10 +604,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
         )
         self.assertEqual(result["requirement_spec"]["app_info"]["name"], "仓储管理应用")
         self.assertEqual(internal_json["app_info"]["name"], "仓储管理应用")
-        self.assertEqual(internal_json["data_sources"][0]["type"], "database")
-        self.assertNotEqual(preserved_markdown, edited_markdown)
-        self.assertIn("（database）", preserved_markdown)
         self.assertIn("仓储管理应用", preserved_markdown)
+        self.assertIn("实体清单", preserved_markdown)
 
 
 if __name__ == "__main__":

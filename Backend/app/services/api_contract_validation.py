@@ -8,26 +8,58 @@ from app.services.api_contracts import (
     response_field_paths,
 )
 from app.services.api_schema_refs import normalize_local_schema_ref
+from app.services.entity_definitions import (
+    contract_data_source_id,
+    normalize_entities,
+    plan_data_sources,
+)
+
+
+def _string_items(value: Any) -> list[str]:
+    """把未知值收窄为去重后的非空字符串列表。"""
+
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]:
     """校验项目计划中的 API 契约、数据源和页面字段引用是否闭合。"""
 
     contracts = dict_items(project_plan.get("api_contracts"))
-    data_sources = dict_items(project_plan.get("data_sources"))
+    data_sources = plan_data_sources(project_plan)
     errors: list[str] = []
     endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     schema_refs: set[str] = set()
     data_source_ids = {
         str(source.get("id")) for source in data_sources if source.get("id")
     }
+    entity_ids_set = {
+        str(entity.get("id") or "")
+        for source in data_sources
+        for entity in normalize_entities(source.get("entities"))
+        if entity.get("id")
+    }
     if data_sources and not contracts:
         errors.append("ProjectPlan defines data sources but api_contracts is empty.")
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
-        data_source_id = str(contract.get("data_source_id") or "")
+        entity_ids_list = _string_items(contract.get("entity_ids"))
+        data_source_id = contract_data_source_id(project_plan, contract)
         if not contract_id:
             errors.append("API contract does not define id.")
+        if data_sources and not entity_ids_list and not data_source_id:
+            errors.append(f"API contract {contract_id} does not define entity_ids.")
+        for entity_id in entity_ids_list:
+            if entity_ids_set and entity_id not in entity_ids_set:
+                errors.append(
+                    f"API contract {contract_id} references unknown entity {entity_id}."
+                )
         if data_source_ids and not data_source_id:
             errors.append(f"API contract {contract_id} does not define data_source_id.")
         elif data_source_id and data_source_id not in data_source_ids:
@@ -140,7 +172,7 @@ def _validate_data_sources(
     schema_refs: set[str],
     errors: list[str],
 ) -> None:
-    for source in project_plan.get("data_sources", []):
+    for source in plan_data_sources(project_plan):
         if source.get("schema"):
             errors.append(f"Data source {source.get('id')} duplicates contract fields in schema.")
         for ref in source.get("schema_refs", []):

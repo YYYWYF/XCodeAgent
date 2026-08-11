@@ -48,8 +48,8 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
         },
     )
     for contract_id, endpoint_id, source_id in (
-        ("orders-api", "orders.list", "orders"),
-        ("customers-api", "customers.list", "customers"),
+        ("orders-api", "orders.list", "database"),
+        ("customers-api", "customers.list", "database"),
     ):
         _write_json(
             workspace
@@ -78,14 +78,24 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
                 "references": {"permissions": ["admin"]},
             },
         ],
-        "data_sources": [
-            {"id": "orders", "type": "database"},
-            {"id": "customers", "type": "database"},
+        "entities": [
+            {
+                "id": "Order",
+                "name": "Order",
+                "fields": [],
+                "data_source": "database",
+            },
+            {
+                "id": "Customer",
+                "name": "Customer",
+                "fields": [],
+                "data_source": "database",
+            },
         ],
         "api_contracts": [
             {
                 "id": "orders-api",
-                "data_source_id": "orders",
+                "entity_ids": ["Order"],
                 "endpoints": [
                     {
                         "id": "orders.list",
@@ -97,7 +107,7 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
             },
             {
                 "id": "customers-api",
-                "data_source_id": "customers",
+                "entity_ids": ["Customer"],
                 "endpoints": [
                     {
                         "id": "customers.list",
@@ -129,7 +139,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
 
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
         self.assertEqual(context["api_contract_ids"], ["orders-api"])
-        self.assertEqual(context["data_source_ids"], ["orders"])
+        self.assertEqual(context["data_source_ids"], ["database"])
         self.assertEqual(context["page_detail"]["pageId"], "orders")
         self.assertEqual(
             [detail["endpoint_id"] for detail in context["direct_endpoint_details"]],
@@ -140,8 +150,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
             ["orders.list"],
         )
         self.assertEqual(context["required_endpoint_ids"], ["orders.list"])
-        self.assertIn("database:orders", context["required_unit_ids"])
-        self.assertNotIn("database:customers", context["required_unit_ids"])
+        self.assertIn("database:database", context["required_unit_ids"])
         self.assertIn(
             "backend:endpoint:orders-api:orders.list",
             context["required_unit_ids"],
@@ -153,7 +162,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             plan, plan_path = _project_plan(Path(workspace))
-            plan["api_contracts"][1]["data_source_id"] = "orders"
+            plan["api_contracts"][1]["data_source_id"] = "database"
             plan["api_contracts"][0]["schemas"] = {
                 "Order": {"type": "object", "properties": {}}
             }
@@ -164,11 +173,6 @@ class PageBuildContextResolverTests(unittest.TestCase):
                     "response_schema_ref": "Order",
                 }
             )
-            plan["data_sources"][0]["schema_refs"] = [
-                "orders-api#/schemas/Order",
-                "customers-api#/schemas/Customer",
-            ]
-
             context = resolve_target_build_context(
                 plan,
                 target_type="page",
@@ -177,15 +181,11 @@ class PageBuildContextResolverTests(unittest.TestCase):
             )
             validation_plan = _scoped_contract_validation_plan(plan, context)
 
-        self.assertEqual(context["data_source_ids"], ["orders"])
+        self.assertEqual(context["data_source_ids"], ["database"])
         self.assertEqual(context["api_contract_ids"], ["orders-api"])
         self.assertEqual(
             [contract["id"] for contract in validation_plan["api_contracts"]],
             ["orders-api"],
-        )
-        self.assertEqual(
-            validation_plan["data_sources"][0]["schema_refs"],
-            ["orders-api#/schemas/Order"],
         )
         self.assertEqual(
             [
@@ -210,7 +210,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 {
                     "api_contract_id": "orders-api",
                     "endpoint_id": "orders.list",
-                    "data_source_id": "orders",
+                    "data_source_id": "database",
                     "status": "confirmed",
                     "data_origin": {
                         "source_type": "database",
@@ -244,17 +244,17 @@ class PageBuildContextResolverTests(unittest.TestCase):
             context = resolve_target_build_context(
                 plan,
                 target_type="data_source",
-                target_id="orders",
+                target_id="database",
                 project_plan_path=plan_path,
             )
 
         self.assertIsNone(context["page_detail"])
-        self.assertEqual(context["endpoint_ids"], ["orders.list"])
+        self.assertEqual(context["endpoint_ids"], ["orders.list", "customers.list"])
         self.assertEqual(
             [detail["endpoint_id"] for detail in context["direct_endpoint_details"]],
-            ["orders.list"],
+            ["orders.list", "customers.list"],
         )
-        self.assertEqual(context["required_unit_ids"], ["database:orders"])
+        self.assertEqual(context["required_unit_ids"], ["database:database"])
 
     def test_page_context_rejects_missing_required_endpoint_detail(self) -> None:
         """页面 requiredEndpoint 缺少独立详情时必须返回可定位错误。"""
@@ -284,7 +284,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 {
                     "api_contract_id": "orders-api",
                     "endpoint_id": "orders.list",
-                    "data_source_id": "orders",
+                    "data_source_id": "database",
                     "status": "confirmed",
                     "interface_design": {"route": "GET /orders"},
                     "data_origin": {
@@ -310,7 +310,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertEqual(context["direct_endpoint_details"][0]["endpoint_id"], "orders.list")
         self.assertEqual(
             context["required_unit_ids"],
-            ["backend:bootstrap", "database:orders", "backend:endpoint:orders-api:orders.list"],
+            ["backend:bootstrap", "database:database", "backend:endpoint:orders-api:orders.list"],
         )
 
     def test_static_page_context_only_requires_frontend_data_module(self) -> None:
@@ -319,8 +319,12 @@ class PageBuildContextResolverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             workspace_path = Path(workspace)
             plan, plan_path = _project_plan(workspace_path)
-            plan["data_sources"] = [
-                {**source, "type": "static"} for source in plan["data_sources"]
+            plan["entities"] = [
+                {
+                    **entity,
+                    "data_source": "static",
+                }
+                for entity in plan["entities"]
             ]
             detail_path = workspace_path / ".xcodeagent/plans/endpoints/endpoint--orders-api--orders.list.json"
             detail = json.loads(detail_path.read_text(encoding="utf-8"))
@@ -337,7 +341,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 project_plan_path=plan_path,
             )
 
-        self.assertIn("frontend:data:orders", context["required_unit_ids"])
+        self.assertIn("frontend:data:static", context["required_unit_ids"])
         self.assertNotIn("backend:bootstrap", context["required_unit_ids"])
         self.assertFalse(any(unit.startswith("database:") for unit in context["required_unit_ids"]))
         self.assertFalse(any(unit.startswith("backend:endpoint:") for unit in context["required_unit_ids"]))

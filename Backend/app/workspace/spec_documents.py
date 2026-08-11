@@ -28,6 +28,34 @@ def _bullet_items(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
+def _entity_markdown(entity: Any) -> str:
+    """把单个实体渲染为 Markdown 列表项和字段表，兼容旧字符串实体。"""
+
+    if not isinstance(entity, dict):
+        return f"- 实体 {entity}"
+    entity_id = str(entity.get("id") or entity.get("name") or "实体")
+    entity_name = str(entity.get("name") or entity_id)
+    description = str(entity.get("description") or "")
+    lines = [f"- 实体 `{entity_id}` {entity_name}"]
+    if description:
+        lines.append(f"  - 说明：{description}")
+    fields = entity.get("fields")
+    if not isinstance(fields, list) or not fields:
+        return "\n".join(lines)
+    lines.append("  - 需要展示的信息：")
+    lines.append("    | 名称 | 说明 |")
+    lines.append("    | --- | --- |")
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        field_label = str(field.get("label") or field.get("name") or "")
+        field_description = str(field.get("description") or "")
+        lines.append(
+            f"    | {field_label} | {field_description} |"
+        )
+    return "\n".join(lines)
+
+
 def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     """把 RequirementSpec 渲染为用户可编辑的 Markdown 文档。"""
 
@@ -44,13 +72,21 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
         for page in spec.get("pages", [])
         if isinstance(page, dict)
     )
-    data_sources = "\n".join(
-        f"- `{source.get('id', 'source')}` {source.get('name', '业务数据源')}"
-        f"（{source.get('type', 'database')}）：{source.get('description', '待补充数据源说明')}"
-        f"{'；实体：' + '、'.join(str(item) for item in source.get('entities', [])) if source.get('entities') else ''}"
-        for source in spec.get("data_sources", [])
-        if isinstance(source, dict)
-    )
+    entities = spec.get("entities")
+    if not isinstance(entities, list):
+        # 旧版 spec 兼容：从 data_sources[].entities 拍平展示。
+        entities = [
+            entity
+            for source in spec.get("data_sources", [])
+            if isinstance(source, dict)
+            for entity in (source.get("entities") if isinstance(source.get("entities"), list) else [])
+        ]
+    entity_blocks = [
+        _entity_markdown(entity)
+        for entity in entities
+        if isinstance(entity, (dict, str)) and str(entity).strip()
+    ]
+    entities_markdown = "\n".join(entity_blocks) or "- 暂无实体"
     roles = "\n".join(
         f"- `{role.get('id', 'user')}` {role.get('name', '用户')}："
         f"{role.get('description', '使用应用。')}"
@@ -97,9 +133,9 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 
 {pages}
 
-## 数据源清单
+## 实体清单
 
-{data_sources}
+{entities_markdown}
 
 ## 业务流程
 

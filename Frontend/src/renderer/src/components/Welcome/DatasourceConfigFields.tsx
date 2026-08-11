@@ -1,8 +1,10 @@
 import { DatabaseOutlined } from '@ant-design/icons'
 import { Form, Input, InputNumber, Radio } from 'antd'
 import type { FormInstance, RadioChangeEvent } from 'antd'
-import { DatasourceEnum, type ApplicationDraft, type DatasourceConnectionMode } from '../../typings'
-import { datasourceTypeOptions } from './constants'
+import {
+  type ApplicationDraft,
+  type DatasourceConnectionMode
+} from '../../typings'
 import { cx } from '../../utils'
 
 type Props = {
@@ -23,10 +25,6 @@ function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Elem
         label="数据库地址"
         name={['datasource', 'db', configKey, 'domain']}
         preserve={false}
-        rules={[
-          { required: true, message: '请输入数据库地址' },
-          { whitespace: true, message: '数据库地址不能只包含空格' }
-        ]}
       >
         <Input placeholder="例如：127.0.0.1" />
       </Form.Item>
@@ -35,7 +33,6 @@ function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Elem
         name={['datasource', 'db', configKey, 'port']}
         preserve={false}
         rules={[
-          { required: true, message: '请输入数据库端口' },
           {
             type: 'number',
             min: 1,
@@ -57,10 +54,6 @@ function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Elem
           label="DBID"
           name={['datasource', 'db', 'dbidMode', 'dbid']}
           preserve={false}
-          rules={[
-            { required: true, message: '请输入DBID' },
-            { whitespace: true, message: 'DBID不能只包含空格' }
-          ]}
         >
           <Input placeholder="请输入DBID" />
         </Form.Item>
@@ -69,10 +62,6 @@ function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Elem
         label="用户名"
         name={['datasource', 'db', configKey, 'userName']}
         preserve={false}
-        rules={[
-          { required: true, message: '请输入数据库用户名' },
-          { whitespace: true, message: '数据库用户名不能只包含空格' }
-        ]}
       >
         <Input placeholder="请输入数据库用户名" />
       </Form.Item>
@@ -81,10 +70,6 @@ function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Elem
           label="密码"
           name={['datasource', 'db', 'plantMode', 'pwd']}
           preserve={false}
-          rules={[
-            { required: true, message: '请输入数据库密码' },
-            { whitespace: true, message: '数据库密码不能只包含空格' }
-          ]}
         >
           <Input.Password autoComplete="new-password" placeholder="请输入数据库密码" />
         </Form.Item>
@@ -93,10 +78,6 @@ function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Elem
         label="Schema"
         name={['datasource', 'db', configKey, 'schema']}
         preserve={false}
-        rules={[
-          { required: true, message: '请输入数据库Schema' },
-          { whitespace: true, message: '数据库Schema不能只包含空格' }
-        ]}
       >
         <Input placeholder="请输入数据库Schema" />
       </Form.Item>
@@ -104,35 +85,13 @@ function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Elem
   )
 }
 
-/** 清除数据库草稿和校验状态，保证 Static 不残留数据库字段。 */
-function clearDatabaseDraft(form: FormInstance<ApplicationDraft>): void {
-  form.resetFields([['datasource', 'db']])
-  form.setFieldValue(['datasource', 'db'], undefined)
-}
-
-/** 渲染新建应用的数据源选择，并确保正式配置只保留受支持的连接方式。 */
+/** 渲染数据库连接配置；创建应用不选数据源类型，实体数据源类型在项目规划阶段按实体选择。 */
 export default function DatasourceConfigFields({ form }: Props): JSX.Element {
-  const datasourceType =
-    (Form.useWatch(['datasource', 'type'], form) as DatasourceEnum | undefined) ?? DatasourceEnum.DB
   const useBuiltin =
     (Form.useWatch(['datasource', 'db', 'useBuiltin'], form) as boolean | undefined) ?? false
   const connectionMode = Form.useWatch(['datasource', 'db', 'connectionMode'], form) as
     | DatasourceConnectionMode
     | undefined
-
-  /** 切换数据源类型 */
-  const handleDatasourceTypeChange = (event: RadioChangeEvent): void => {
-    const nextType = event.target.value as DatasourceEnum
-
-    form.setFieldValue(['datasource', 'type'], nextType)
-    clearDatabaseDraft(form)
-    if (nextType === DatasourceEnum.DB) {
-      form.setFieldValue(['datasource', 'db'], {
-        useBuiltin: false,
-        connectionMode: 'plant'
-      })
-    }
-  }
 
   /** 切换模拟或外部数据库时清除不再适用的连接草稿。 */
   const handleDatabaseTypeChange = (event: RadioChangeEvent): void => {
@@ -160,49 +119,27 @@ export default function DatasourceConfigFields({ form }: Props): JSX.Element {
         <span className={cx('application-form-section-text')}>数据源配置</span>
       </div>
 
-      <Form.Item label="数据源类型" name={['datasource', 'type']}>
-        <Radio.Group
-          buttonStyle="solid"
-          className={cx('datasource-type-picker')}
-          onChange={handleDatasourceTypeChange}
-        >
-          {datasourceTypeOptions.map((option) => (
-            <Radio.Button disabled={option.disabled} key={option.value} value={option.value}>
-              <span className={cx('datasource-type-option')}>
-                <span className={cx('datasource-type-label')}>{option.label}</span>
-                <span className={cx('datasource-type-description')}>{option.description}</span>
-              </span>
-            </Radio.Button>
-          ))}
+      <Form.Item label="数据库类型" name={['datasource', 'db', 'useBuiltin']} preserve={false}>
+        <Radio.Group buttonStyle="solid" onChange={handleDatabaseTypeChange}>
+          <Radio.Button value={true}>模拟数据库</Radio.Button>
+          <Radio.Button value={false}>外部数据库</Radio.Button>
         </Radio.Group>
       </Form.Item>
 
-      {datasourceType === DatasourceEnum.DB ? (
+      {!useBuiltin ? (
         <>
-          <Form.Item label="数据库类型" name={['datasource', 'db', 'useBuiltin']} preserve={false}>
-            <Radio.Group buttonStyle="solid" onChange={handleDatabaseTypeChange}>
-              <Radio.Button value={true}>模拟数据库</Radio.Button>
-              <Radio.Button value={false}>外部数据库</Radio.Button>
+          <Form.Item
+            label="数据库连接方案"
+            name={['datasource', 'db', 'connectionMode']}
+            preserve={false}
+          >
+            <Radio.Group buttonStyle="solid" onChange={handleConnectionModeChange}>
+              <Radio.Button value="dbid">通过DBID连接</Radio.Button>
+              <Radio.Button value="plant">通过账号密码连接</Radio.Button>
             </Radio.Group>
           </Form.Item>
 
-          {!useBuiltin ? (
-            <>
-              <Form.Item
-                label="数据库连接方案"
-                name={['datasource', 'db', 'connectionMode']}
-                preserve={false}
-                rules={[{ required: true, message: '请选择数据库连接方案' }]}
-              >
-                <Radio.Group buttonStyle="solid" onChange={handleConnectionModeChange}>
-                  <Radio.Button value="dbid">通过DBID连接</Radio.Button>
-                  <Radio.Button value="plant">通过账号密码连接</Radio.Button>
-                </Radio.Group>
-              </Form.Item>
-
-              {connectionMode ? <ExternalDatabaseFields mode={connectionMode} /> : null}
-            </>
-          ) : null}
+          {connectionMode ? <ExternalDatabaseFields mode={connectionMode} /> : null}
         </>
       ) : null}
     </section>

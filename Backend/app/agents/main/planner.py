@@ -29,7 +29,7 @@ BACKEND_TECH_STACK_REQUIREMENT = (
     "or any alternative backend/database/cache stack."
 )
 STATIC_DATA_SOURCE_REQUIREMENT = (
-    "The authoritative application data source type is static. ProjectPlan data_sources must use "
+    "The authoritative application data source type is static. Every entity's data_source must use "
     "type=static exactly and must never emit mock. Model api_contracts as a frontend in-memory mock "
     "data-access boundary; they preserve schemas, operations, endpoint ids, methods and paths for "
     "frontend planning, but do not represent a real HTTP backend. Do not declare MySQL, Redis, "
@@ -108,9 +108,13 @@ def _planning_prompt(
         "- project_acceptance_criteria: whole-requirement acceptance criteria for project completion\n"
         "- architecture: frontend, backend, data, testing\n"
         "- api_contracts: the only source of business field definitions. Every item must use exactly "
-        "{id, data_source_id, resource, base_path, authentication, schemas, endpoints}. id and "
-        "data_source_id are required non-empty strings; data_source_id must equal one declared "
-        "data_sources[].id. Always use the key id, never contract_id or contractId. Each contract "
+        "{id, entity_ids, resource, base_path, authentication, schemas, endpoints}. id and "
+        "entity_ids are required; entity_ids is a non-empty array of RequirementSpec entity ids "
+        "and is the only contract binding (one contract may involve multiple entities, for "
+        "example an order contract references the order, customer and product entities). Never "
+        "emit data_source_id: contracts bind entities only and the system derives the data source "
+        "type from each entity. Always use the key id, never "
+        "contract_id or contractId. Each contract "
         "contains compact JSON-Schema-like schemas and endpoints. Endpoints contain stable id, method, path, summary, "
         "parameters [{name, in, required, schema}], request_schema_ref, response_schema_ref, "
         "error_codes, and authentication. CRITICAL schema placement rule: every schema referenced by "
@@ -125,7 +129,7 @@ def _planning_prompt(
         "to the RequirementSpec:\n"
         "{\n"
         '  "id": "inventory_api",\n'
-        '  "data_source_id": "inventory_source",\n'
+        '  "entity_ids": ["Inventory"],\n'
         '  "resource": "InventoryItem",\n'
         '  "base_path": "/api/inventory",\n'
         '  "authentication": {"required": true, "roles": ["admin", "user"]},\n'
@@ -167,8 +171,15 @@ def _planning_prompt(
         "Dynamic/detail pages with path parameters are hidden routable pages and do not count as visible menu leaves when deciding whether a parent menu is needed. "
         "Do not emit duplicate root permissions, endpoint_dependencies, navigation_targets, data_dependencies, "
         "or states fields\n"
-        "- data_sources: copy id, name, description, entities and type from RequirementSpec exactly; "
-        "only add planning fields such as schema_refs and seed strategy; never duplicate fields\n"
+        "- entities: RequirementSpec has top-level entities (id/name/description and display-only "
+        "fields with label/description only). Here, keep entities top-level and set each entity's "
+        "data_source to exactly one type string: database (default), static, or external_api. There "
+        "is no data source id or name concept; data sources are only these three types. Do NOT emit "
+        "a top-level data_sources field. Keep entity ids stable. Generate the concrete field "
+        "definitions for every entity: add a snake_case field name and a semantic type from the fixed "
+        "whitelist text/long_text/number/decimal/date/datetime/enum/boolean, plus required and "
+        "enum_values for enum fields. Field names must match the entity's business meaning (for "
+        "example the Book entity uses title, author, isbn); never duplicate fields.\n"
         "- permission_model: roles, page access, operation permissions\n"
         "- risks: planning risks and items to refine later\n\n"
         "API contracts are the canonical backend/frontend boundary. The first generated ProjectPlan must "
@@ -176,8 +187,8 @@ def _planning_prompt(
         "page operations, feature modules, business flows and acceptance criteria. Do not emit generic "
         "full CRUD for every data source; include only operations required by the business plan.\n"
         "already satisfy the following non-negotiable dependency contract:\n"
-        "0. If data_sources is non-empty, api_contracts must also be non-empty and every data source must "
-        "be represented by at least one contract.\n"
+        "0. If entities is non-empty, api_contracts must also be non-empty and every entity must be "
+        "represented by at least one contract (contracts bind entity_ids).\n"
         "1. Every page leaf inside frontend_pages has a non-empty and globally unique pageId.\n"
         "2. Every page leaf inside frontend_pages has a non-empty and globally unique path.\n"
         "2.1 Every non-empty menu node unique_path is globally unique among menu nodes.\n"
@@ -319,7 +330,7 @@ def revise_project_plan_with_chat_model(
             [],
         ),
         "pages": _plan_pages_for_repair(existing_plan),
-        "data_sources": existing_plan.get("data_sources", []),
+        "entities": existing_plan.get("entities", []),
         "business_flows": existing_plan.get("business_flows", []),
         "acceptance_criteria": existing_plan.get("acceptance_criteria", []),
         "planning_adjustment_request": user_feedback,

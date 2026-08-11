@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.data_source_policy import CANONICAL_DATASOURCE_TYPES
+from app.services.entity_definitions import plan_data_sources
 from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
 
 
@@ -292,30 +293,69 @@ def _data_sources(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
     """把 ProjectPlan 数据源规范为 application.json 的稳定驼峰结构。"""
 
     result = []
-    for source in _dict_items(project_plan.get("data_sources")):
+    for source in plan_data_sources(project_plan):
         source_type = str(source.get("type") or "")
         if source_type not in CANONICAL_DATASOURCE_TYPES:
             raise ValueError(
                 f"ProjectPlan 数据源 {source.get('id') or 'unknown'} 使用了无效类型。"
             )
         schema_refs = _text_items(source.get("schema_refs"))
-        entities = _text_items(source.get("entities"))
+        raw_entities = source.get("entities")
+        entity_items = raw_entities if isinstance(raw_entities, list) else []
         result.append({
             "id": str(source.get("id") or f"data-source-{len(result) + 1}"),
             "name": str(source.get("name") or source.get("id") or "数据源"),
             "description": str(source.get("description") or ""),
             "type": source_type,
             "entities": [
-                {
-                    "name": name,
-                    "schemaRef": schema_refs[index] if index < len(schema_refs) else (schema_refs[0] if schema_refs else name),
-                }
-                for index, name in enumerate(entities)
+                _projected_entity(item, index, schema_refs)
+                for index, item in enumerate(entity_items)
             ],
             "relations": [],
             "seedStrategy": str(source.get("seed_strategy") or "由实现阶段确定"),
         })
     return result
+
+
+def _projected_entity(
+    item: Any,
+    index: int,
+    schema_refs: list[str],
+) -> dict[str, Any]:
+    """把实体对象或旧字符串投影为稳定的 {name, schemaRef} 并附带字段摘要。"""
+
+    if isinstance(item, dict):
+        name = str(item.get("name") or item.get("id") or f"Entity{index + 1}")
+        description = str(item.get("description") or "")
+        fields = item.get("fields")
+        field_summary = [
+            {
+                "name": str(field.get("name") or ""),
+                "label": str(field.get("label") or field.get("name") or ""),
+                "type": str(field.get("type") or "text"),
+                "required": bool(field.get("required")),
+                "description": str(field.get("description") or ""),
+            }
+            for field in fields
+            if isinstance(field, dict) and str(field.get("name") or "").strip()
+        ] if isinstance(fields, list) else []
+    else:
+        name = str(item or f"Entity{index + 1}")
+        description = ""
+        field_summary = []
+    projected: dict[str, Any] = {
+        "name": name,
+        "schemaRef": (
+            schema_refs[index]
+            if index < len(schema_refs)
+            else (schema_refs[0] if schema_refs else name)
+        ),
+    }
+    if description:
+        projected["description"] = description
+    if field_summary:
+        projected["fields"] = field_summary
+    return projected
 
 
 def project_plan_application_payload(project_plan: dict[str, Any]) -> dict[str, Any]:

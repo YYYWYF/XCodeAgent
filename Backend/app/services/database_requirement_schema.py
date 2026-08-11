@@ -4,11 +4,20 @@ from hashlib import sha256
 import json
 from typing import Any
 
+from app.services.entity_definitions import (
+    entity_mysql_target_table,
+    entity_table_name,
+    normalize_entities,
+)
 from app.services.database_schema_summary import dict_items, text_items
 
 
-def derive_required_database_schema(targets: list[dict[str, Any]]) -> dict[str, Any]:
-    """从已确认接口详情和 API Contract 推导目标数据库结构与处理建议。"""
+def derive_required_database_schema(
+    targets: list[dict[str, Any]],
+    data_sources: list[dict[str, Any]] | None = None,
+    new_table_entity_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """从已确认接口详情、实体定义和 API Contract 推导目标数据库结构。"""
 
     tables: dict[str, dict[str, Any]] = {}
     resolution_items: list[dict[str, Any]] = []
@@ -47,6 +56,16 @@ def derive_required_database_schema(targets: list[dict[str, Any]]) -> dict[str, 
             _merge_mapping_columns(table, data_origin, table_name)
         _merge_database_operations(tables, operations, target)
         resolution_items.extend(_structured_resolution_items(data_origin, target))
+    if isinstance(data_sources, list):
+        in_scope_source_ids = {
+            str(target.get("data_source_id") or "") for target in targets
+        }
+        _merge_entity_target_tables(
+            tables,
+            data_sources,
+            in_scope_source_ids,
+            new_table_entity_ids,
+        )
     normalized_tables = [_normalize_table(table) for table in tables.values()]
     payload = {
         "database": database,
@@ -57,6 +76,56 @@ def derive_required_database_schema(targets: list[dict[str, Any]]) -> dict[str, 
         **payload,
         "schema_hash": _stable_hash(payload),
     }
+
+
+def _merge_entity_target_tables(
+    tables: dict[str, dict[str, Any]],
+    data_sources: list[dict[str, Any]],
+    in_scope_source_ids: set[str],
+    new_table_entity_ids: set[str],
+) -> None:
+    """把建表目标的实体定义编译为目标表基线，操作列保持优先。"""
+
+    for source in data_sources:
+        source_id = str(source.get("id") or "")
+        if source_id not in in_scope_source_ids:
+            continue
+        if str(source.get("type") or "") != "database":
+            continue
+        for entity in normalize_entities(source.get("entities"), with_types=True):
+            entity_id = str(entity.get("id") or "")
+            if not entity_id:
+                continue
+            if new_table_entity_ids is not None and entity_id not in new_table_entity_ids:
+                continue
+            table_name = entity_table_name(entity_id)
+            entity_table = entity_mysql_target_table(entity)
+            table = _required_table(tables, table_name)
+            table.setdefault("comment", entity_table.get("comment") or "")
+            table.setdefault("primary_key", entity_table.get("primary_key") or [])
+            table["source_refs"].append(
+                {
+                    "source": "entity_definition",
+                    "data_source_id": source_id,
+                    "entity_id": entity_id,
+                }
+            )
+            for column in entity_table.get("columns", []):
+                column_name = str(column.get("name") or "")
+                if not column_name or column_name in table["columns"]:
+                    continue
+                table["columns"][column_name] = {
+                    **column,
+                    "source": "entity_definition",
+                    "source_evidence": entity_table,
+                    "source_refs": [
+                        {
+                            "source": "entity_definition",
+                            "data_source_id": source_id,
+                            "entity_id": entity_id,
+                        }
+                    ],
+                }
 
 
 def _target_table_names(target: dict[str, Any]) -> list[str]:

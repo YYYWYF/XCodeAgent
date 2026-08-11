@@ -22,17 +22,20 @@ def _sync_prompt(
     edited_markdown: str,
     datasource_type: DatasourceType = "database",
 ) -> str:
-    """构建 Markdown 同步提示，并在 RequirementSpec 阶段固定数据源类型。"""
+    """构建 Markdown 同步提示：需求只同步实体，规划按数据源类型同步。"""
 
     datasource_instruction = (
-        f"For RequirementSpec data_sources, the authoritative application type is {datasource_type}. "
-        f"Keep every data_sources[].type exactly {datasource_type}; the user cannot change this field, "
-        "and the legacy type mock must never be emitted.\n\n"
+        "For RequirementSpec, entities are top-level items with id, name, description, and "
+        "display-only fields (label and description). Do NOT generate field names, field types, or "
+        "any data_sources; data source selection happens at project planning. The legacy type mock "
+        "must never be emitted.\n\n"
         if artifact_name == "RequirementSpec"
         else (
-            f"For ProjectPlan data_sources, the authoritative application type is {datasource_type}. "
-            f"Keep every data_sources[].type exactly {datasource_type}; user Markdown cannot change "
-            "the type or its architecture implementation boundary. Preserve data source ids and "
+            "For ProjectPlan, entities are top-level items and each entity's data_source is exactly "
+            "one type string (database/static/external_api); there is no data source id or name. "
+            "data_sources must not be emitted as a top-level field. User Markdown may change an "
+            "entity's data source type, but the architecture implementation boundary stays enforced "
+            "(static entities must not carry MySQL/MyBatis implementation). Preserve entity ids and "
             "contract references, and never emit mock.\n\n"
         )
     )

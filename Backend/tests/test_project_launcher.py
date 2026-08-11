@@ -1043,9 +1043,9 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertNotIn("_process", result["backend"])
 
     def test_preview_rejects_missing_or_disabled_datasource_config(self) -> None:
-        """缺少应用配置或使用 external_api 时不得启动任何项目进程。"""
+        """缺少应用配置时不得启动任何项目进程。"""
 
-        for datasource_type in (None, "external_api"):
+        for datasource_type in (None,):
             with self.subTest(datasource_type=datasource_type), tempfile.TemporaryDirectory() as workspace:
                 if datasource_type is not None:
                     self._write_application(workspace, datasource_type)

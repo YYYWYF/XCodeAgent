@@ -103,21 +103,31 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "detail_design": {"status": "confirmed", "json_path": "pages/customers.json"},
                 },
             ],
-            "data_sources": [
-                {"id": "orders", "type": "database", "detail_design": {"status": "confirmed", "json_path": "data/orders.json"}},
-                {"id": "customers", "type": "database", "detail_design": {"status": "confirmed", "json_path": "data/customers.json"}},
+            "entities": [
+                {
+                    "id": "Order",
+                    "name": "Order",
+                    "fields": [],
+                    "data_source": "database",
+                },
+                {
+                    "id": "Customer",
+                    "name": "Customer",
+                    "fields": [],
+                    "data_source": "database",
+                },
             ],
             "api_contracts": [
-                {"id": "orders-api", "data_source_id": "orders", "endpoints": [{"id": "orders.list"}]},
-                {"id": "customers-api", "data_source_id": "customers", "endpoints": [{"id": "customers.list"}]},
+                {"id": "orders-api", "entity_ids": ["Order"], "data_source_id": "database", "endpoints": [{"id": "orders.list"}]},
+                {"id": "customers-api", "entity_ids": ["Customer"], "data_source_id": "database", "endpoints": [{"id": "customers.list"}]},
             ],
             "page_detail_plans": [
                 {"pageId": "orders", "references": {"endpoint_dependencies": [{"endpoint_id": "orders.list"}]}},
                 {"pageId": "customers", "references": {"endpoint_dependencies": [{"endpoint_id": "customers.list"}]}},
             ],
             "data_source_detail_plans": [
-                {"data_source_id": "orders"},
-                {"data_source_id": "customers"},
+                {"data_source_id": "database"},
+                {"data_source_id": "database"},
             ],
         }
         agent_plan = create_build_task_plan(
@@ -186,7 +196,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         )
         self.assertEqual(
             [source["id"] for source in executable_details["data_sources"]],
-            ["orders"],
+            ["database"],
         )
         self.assertEqual(
             [
@@ -272,16 +282,21 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "detail_design": {"status": "pending", "json_path": "pages/dashboard.json"},
                 },
             ],
-            "data_sources": [
-                {"id": "orders", "type": "database", "detail_design": {"status": "confirmed", "json_path": "data/orders.json"}},
+            "entities": [
+                {
+                    "id": "Order",
+                    "name": "Order",
+                    "fields": [],
+                    "data_source": "database",
+                }
             ],
             "api_contracts": [
-                {"id": "orders-api", "data_source_id": "orders", "endpoints": [{"id": "orders.list"}]},
+                {"id": "orders-api", "entity_ids": ["Order"], "data_source_id": "database", "endpoints": [{"id": "orders.list"}]},
             ],
             "page_detail_plans": [
                 {"pageId": "orders", "references": {"endpoint_dependencies": [{"endpoint_id": "orders.list"}]}},
             ],
-            "data_source_detail_plans": [{"data_source_id": "orders"}],
+            "data_source_detail_plans": [{"data_source_id": "database"}],
         }
         agent_plan = create_build_task_plan(
             project_plan,
@@ -345,20 +360,19 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     },
                 }
             ],
-            "data_sources": [
+            "entities": [
                 {
-                    "id": "orders",
-                    "type": "database",
-                    "detail_design": {
-                        "status": "confirmed",
-                        "json_path": "data/orders.json",
-                    },
+                    "id": "Order",
+                    "name": "Order",
+                    "fields": [],
+                    "data_source": "database",
                 }
             ],
             "api_contracts": [
                 {
                     "id": "orders-api",
-                    "data_source_id": "orders",
+                    "entity_ids": ["Order"],
+                    "data_source_id": "database",
                     "endpoints": [{"id": "orders.list"}],
                 }
             ],
@@ -370,7 +384,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     },
                 }
             ],
-            "data_source_detail_plans": [{"data_source_id": "orders"}],
+            "data_source_detail_plans": [{"data_source_id": "database"}],
         }
         base_plan = ensure_build_unit_skeleton(project_plan, {}, {})
         base_plan = replace_build_task_plan_tasks(
@@ -468,20 +482,19 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     },
                 },
             ],
-            "data_sources": [
+            "entities": [
                 {
-                    "id": "orders",
-                    "type": "database",
-                    "detail_design": {
-                        "status": "confirmed",
-                        "json_path": "data/orders.json",
-                    },
+                    "id": "Order",
+                    "name": "Order",
+                    "fields": [],
+                    "data_source": "database",
                 }
             ],
             "api_contracts": [
                 {
                     "id": "orders-api",
-                    "data_source_id": "orders",
+                    "entity_ids": ["Order"],
+                    "data_source_id": "database",
                     "endpoints": [{"id": "orders.list"}],
                 }
             ],
@@ -499,7 +512,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     },
                 },
             ],
-            "data_source_detail_plans": [{"data_source_id": "orders"}],
+            "data_source_detail_plans": [{"data_source_id": "database"}],
         }
         first_agent_plan = create_build_task_plan(
             project_plan,
@@ -752,7 +765,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
     def test_prepare_build_tasks_blocks_inconsistent_api_contract(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
         project_plan["confirmation_status"] = "confirmed"
-        project_plan["data_sources"][0]["schema"] = {"field": "not allowed"}
+        project_plan["api_contracts"][0]["entity_ids"] = ["Unknown"]
 
         with patch(
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",

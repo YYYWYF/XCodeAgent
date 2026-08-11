@@ -39,11 +39,19 @@ class DetailReviewTests(unittest.TestCase):
         plan = {
             "frontend_pages": [],
             "page_detail_plans": [],
-            "data_sources": [{"id": "user_source", "type": "static"}],
+            "entities": [
+                {
+                    "id": "User",
+                    "name": "User",
+                    "fields": [],
+                    "data_source": "static",
+                }
+            ],
             "api_contracts": [
                 {
                     "id": "user_api",
-                    "data_source_id": "user_source",
+                    "entity_ids": ["User"],
+                    "data_source_id": "static",
                     "schemas": {
                         "UserResponse": {"type": "object", "properties": {}}
                     },
@@ -61,7 +69,7 @@ class DetailReviewTests(unittest.TestCase):
                 {
                     "api_contract_id": "user_api",
                     "endpoint_id": "user_api.delete",
-                    "data_source_id": "user_source",
+                    "data_source_id": "static",
                     "method": "DELETE",
                     "path": "/users/{id}",
                     "data_origin": pending_origin,
@@ -183,11 +191,19 @@ class DetailReviewTests(unittest.TestCase):
         plan = {
             "frontend_pages": [],
             "page_detail_plans": [],
-            "data_sources": [{"id": "user_source", "type": "database"}],
+            "entities": [
+                {
+                    "id": "User",
+                    "name": "User",
+                    "fields": [],
+                    "data_source": "database",
+                }
+            ],
             "api_contracts": [
                 {
                     "id": "user_api",
-                    "data_source_id": "user_source",
+                    "entity_ids": ["User"],
+                    "data_source_id": "database",
                     "schemas": {
                         "UserRolesResponse": {"type": "object", "properties": {}}
                     },
@@ -205,7 +221,7 @@ class DetailReviewTests(unittest.TestCase):
                 {
                     "api_contract_id": "user_api",
                     "endpoint_id": "user-roles",
-                    "data_source_id": "user_source",
+                    "data_source_id": "database",
                     "data_origin": {
                         "source_type": "database",
                         "effective_source": {
@@ -230,11 +246,19 @@ class DetailReviewTests(unittest.TestCase):
         plan = {
             "frontend_pages": [],
             "page_detail_plans": [],
-            "data_sources": [{"id": "user_source", "type": "database"}],
+            "entities": [
+                {
+                    "id": "User",
+                    "name": "User",
+                    "fields": [],
+                    "data_source": "database",
+                }
+            ],
             "api_contracts": [
                 {
                     "id": "user_api",
-                    "data_source_id": "user_source",
+                    "entity_ids": ["User"],
+                    "data_source_id": "database",
                     "schemas": {
                         "UserRolesResponse": {"type": "object", "properties": {}}
                     },
@@ -252,7 +276,7 @@ class DetailReviewTests(unittest.TestCase):
                 {
                     "api_contract_id": "user_api",
                     "endpoint_id": "user-roles",
-                    "data_source_id": "user_source",
+                    "data_source_id": "database",
                     "data_origin": {
                         "source_type": "database",
                         "effective_source": {

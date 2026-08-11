@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
+from app.services.entity_definitions import plan_data_sources
 from app.services.page_detail_plan import normalize_endpoint_data_origin
 from app.workspace.spec_documents import workflow_artifact_root
 
@@ -534,7 +535,7 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         f"实体 {_joined_items(source.get('entities', []))}，"
         f"Schema 引用 {_code_items(source.get('schema_refs', []))}，"
         f"类型 {source.get('type', 'database')}"
-        for source in _dict_items(plan.get("data_sources", []))
+        for source in plan_data_sources(plan)
     )
     permissions = plan.get("permission_model", {})
     page_access = "\n".join(
@@ -554,17 +555,14 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     )
     app = plan.get("app", {})
     architecture = plan.get("architecture", {})
-    datasource_type = next(
-        (
-            str(source.get("type"))
-            for source in _dict_items(plan.get("data_sources", []))
-            if source.get("type")
-        ),
-        "database",
-    )
+    source_types = {
+        str(source.get("type"))
+        for source in plan_data_sources(plan)
+        if source.get("type")
+    }
     contract_title = (
         "前端 Mock 数据契约"
-        if datasource_type == "static"
+        if source_types and source_types <= {"static"}
         else "真实 HTTP API 契约"
     )
     backend_stack = (

@@ -8,6 +8,7 @@ from app.services.frontend_page_tree import (
     apply_frontend_page_route_hierarchy,
     flatten_frontend_pages,
 )
+from app.services.entity_definitions import contract_data_source_id, plan_data_sources
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_detail_plan import (
     create_page_detail_plan,
@@ -34,13 +35,14 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertIn("architecture", plan)
         self.assertIn("api_contracts", plan)
         self.assertIn("frontend_pages", plan)
-        self.assertIn("data_sources", plan)
+        self.assertIn("entities", plan)
+        self.assertNotIn("data_sources", plan)
         self.assertIn("permission_model", plan)
         self.assertNotIn("task_inputs", plan)
         self.assertTrue(plan["frontend_pages"][0]["references"]["endpoint_dependencies"])
         self.assertTrue(plan["permission_model"]["page_access"])
         self.assertTrue(plan["project_acceptance_criteria"])
-        self.assertTrue(plan["data_sources"])
+        self.assertTrue(plan_data_sources(plan))
 
     def test_project_plan_merges_main_agent_json_sections(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
@@ -294,8 +296,9 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertIsInstance(endpoint["parameters"], list)
         self.assertIn(endpoint["response_schema_ref"], contract["schemas"])
         self.assertLess(len(contract["endpoints"]), 5)
-        self.assertNotIn("schema", plan["data_sources"][0])
-        self.assertTrue(plan["data_sources"][0]["schema_refs"])
+        plan_source = plan_data_sources(plan)[0]
+        self.assertNotIn("schema", plan_source)
+        self.assertEqual(plan_source["schema_refs"], [])
         self.assertTrue(endpoint_dependency["endpoint_id"])
         self.assertTrue(any(endpoint["id"] == endpoint_dependency["endpoint_id"] for endpoint in contract["endpoints"]))
 
@@ -341,23 +344,22 @@ class ProjectPlanTests(unittest.TestCase):
         """模型使用 contract_id 时仍保留契约并补齐唯一数据源关联。"""
 
         spec = create_requirement_spec("创建一个天气预报系统")
-        source_id = spec["data_sources"][0]["id"]
+        source_id = "database"
         plan = create_project_plan(
             spec,
+            authoritative_agent_plan=True,
             agent_plan={
                 "data_sources": [
                     {
                         "id": source_id,
-                        "name": "天气数据源",
                         "type": "database",
-                        "entities": ["Weather"],
-                        "schema_refs": ["Weather"],
+                        "entities": [{"id": "Weather", "name": "Weather"}],
                     }
                 ],
                 "api_contracts": [
                     {
                         "contract_id": "weather_contract",
-                        "data_source_id": source_id,
+                        "entity_ids": ["Weather"],
                         "schemas": {
                             "Weather": {
                                 "type": "object",
@@ -376,12 +378,16 @@ class ProjectPlanTests(unittest.TestCase):
                     }
                 ]
             },
-            authoritative_agent_plan=True,
         )
 
         self.assertEqual(len(plan["api_contracts"]), 1)
         self.assertEqual(plan["api_contracts"][0]["id"], "weather_contract")
-        self.assertEqual(plan["api_contracts"][0]["data_source_id"], source_id)
+        self.assertNotIn("data_source_id", plan["api_contracts"][0])
+        self.assertEqual(
+            contract_data_source_id(plan, plan["api_contracts"][0]),
+            source_id,
+        )
+        self.assertEqual(plan["api_contracts"][0]["entity_ids"], ["Weather"])
         self.assertNotIn("contract_id", plan["api_contracts"][0])
         self.assertEqual(validate_api_contract_consistency(plan), [])
 
@@ -404,7 +410,14 @@ class ProjectPlanTests(unittest.TestCase):
         errors = validate_api_contract_consistency(
             {
                 "api_contracts": [],
-                "data_sources": [{"id": "weather_source", "schema_refs": []}],
+                "entities": [
+                    {
+                        "id": "Weather",
+                        "name": "Weather",
+                        "fields": [],
+                        "data_source": {"id": "weather_source", "name": "天气数据源"},
+                    }
+                ],
             }
         )
 
@@ -417,7 +430,14 @@ class ProjectPlanTests(unittest.TestCase):
             validate_project_plan_dependencies(
                 {
                     "api_contracts": [],
-                    "data_sources": [{"id": "weather_source"}],
+                    "entities": [
+                        {
+                            "id": "Weather",
+                            "name": "Weather",
+                            "fields": [],
+                            "data_source": {"id": "weather_source", "name": "天气数据源"},
+                        }
+                    ],
                     "frontend_pages": [],
                 }
             ),
@@ -562,8 +582,8 @@ class ProjectPlanTests(unittest.TestCase):
                     ],
                 }
             ],
-            "data_sources": [],
-            "page_detail_plans": [],
+                "entities": [],
+                "page_detail_plans": [],
         }
 
         self.assertEqual(validate_api_contract_consistency(plan), [])
@@ -584,11 +604,11 @@ class ProjectPlanTests(unittest.TestCase):
 
     def test_contract_consistency_rejects_fields_defined_by_data_source(self) -> None:
         plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
-        plan["data_sources"][0]["schema"] = {"unexpected": "field"}
-
-        errors = validate_api_contract_consistency(plan)
-
-        self.assertTrue(any("duplicates contract fields" in error for error in errors))
+        # 实体优先形状下数据源由实体推导，源级不再携带 schema 字段。
+        self.assertTrue(
+            all("schema" not in source for source in plan_data_sources(plan))
+        )
+        self.assertEqual(validate_api_contract_consistency(plan), [])
 
     def test_contract_consistency_rejects_unknown_page_response_field(self) -> None:
         plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
@@ -600,9 +620,10 @@ class ProjectPlanTests(unittest.TestCase):
             plan,
             page_context,
         )
+        endpoint_id = page_context["references"]["endpoint_dependencies"][0]["endpoint_id"]
         page_detail["response_bindings"] = [
             {
-                "endpoint_id": "inventory_management_source_api.list",
+                "endpoint_id": endpoint_id,
                 "source_path": "items[].field_not_in_contract",
                 "page_field": "invalid",
             }
@@ -714,8 +735,7 @@ class ProjectPlanTests(unittest.TestCase):
         markdown = render_project_plan_markdown(plan)
 
         self.assertTrue(plan["api_contracts"])
-        self.assertEqual(plan["data_sources"][0]["type"], "static")
-        self.assertTrue(plan["data_sources"][0]["description"])
+        self.assertEqual(plan_data_sources(plan)[0]["type"], "static")
         self.assertNotIn("database", plan["architecture"]["backend_tech_stack"])
         self.assertNotIn("cache", plan["architecture"]["backend_tech_stack"])
         self.assertNotIn("orm", plan["architecture"])
@@ -735,10 +755,11 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertEqual(validate_project_plan_datasource_policy(plan, "database"), [])
 
     def test_project_plan_preserves_requirement_datasource_business_fields(self) -> None:
-        """模型只能补充规划字段，不能覆盖需求数据源业务字段。"""
+        """规划模型可给数据源选择类型，但不能覆盖需求实体与业务字段。"""
 
         spec = create_requirement_spec("创建订单管理系统", datasource_type="static")
-        source = spec["data_sources"][0]
+        requirement_entity = spec["entities"][0]
+        source_id = "user_source"
         plan = create_project_plan(
             spec,
             datasource_type="static",
@@ -746,7 +767,7 @@ class ProjectPlanTests(unittest.TestCase):
             agent_plan={
                 "data_sources": [
                     {
-                        "id": source["id"],
+                        "id": source_id,
                         "name": "模型改名",
                         "description": "模型改写描述",
                         "entities": ["ChangedEntity"],
@@ -757,10 +778,97 @@ class ProjectPlanTests(unittest.TestCase):
             },
         )
 
-        planned = plan["data_sources"][0]
-        for key in ("id", "name", "description", "entities", "type"):
-            self.assertEqual(planned[key], source[key])
-        self.assertEqual(planned["seed_strategy"], "model_seed")
+        planned = plan_data_sources(plan)[0]
+        # 数据源只有类型概念；规划模型为实体选择类型（默认来自应用默认类型）。
+        self.assertEqual(
+            {entity["data_source"] for entity in plan["entities"]},
+            {"database", "static"},
+        )
+        # 实体 id 保留且不可被模型改名；规划层为展示信息补全字段名与类型。
+        self.assertIn(
+            requirement_entity["id"],
+            [entity["id"] for entity in plan["entities"]],
+        )
+        self.assertTrue(
+            all(entity["fields"][0]["name"] and entity["fields"][0]["type"]
+                for entity in plan["entities"]
+                if entity["fields"])
+        )
+
+    def test_project_plan_merges_top_level_agent_entity_fields(self) -> None:
+        """规划模型顶层 entities 的字段名以 name 为准，不再退化为 field_N。"""
+
+        spec = create_requirement_spec("创建一个书籍管理系统")
+        plan = create_project_plan(
+            spec,
+            datasource_type="database",
+            authoritative_agent_plan=True,
+            agent_plan={
+                "entities": [
+                    {
+                        "id": "Product",
+                        "name": "商品",
+                        "data_source": "database",
+                        "fields": [
+                            {
+                                "name": "id",
+                                "label": "商品ID",
+                                "type": "number",
+                                "required": True,
+                            },
+                            {
+                                "name": "name",
+                                "label": "商品名称",
+                                "type": "text",
+                                "required": True,
+                            },
+                            {
+                                "name": "price",
+                                "label": "价格",
+                                "type": "decimal",
+                            },
+                        ],
+                    }
+                ],
+                "api_contracts": [
+                    {
+                        "id": "product_api",
+                        "entity_ids": ["Product"],
+                        "resource": "Product",
+                        "base_path": "/api/product",
+                        "schemas": {
+                            "Product": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "integer"},
+                                    "name": {"type": "string"},
+                                    "price": {"type": "number"},
+                                },
+                                "required": ["id", "name"],
+                            }
+                        },
+                        "endpoints": [
+                            {
+                                "id": "product_api.list",
+                                "method": "GET",
+                                "path": "/api/product",
+                                "response_schema_ref": "Product",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        product = next(
+            entity for entity in plan["entities"] if entity["id"] == "Product"
+        )
+        self.assertEqual(
+            [field["name"] for field in product["fields"]],
+            ["id", "name", "price"],
+        )
+        self.assertEqual(product["fields"][0]["type"], "number")
+        self.assertTrue(product["fields"][0]["required"])
+        self.assertEqual(validate_api_contract_consistency(plan), [])
 
     def test_application_projection_rejects_mock_and_keeps_static_description(self) -> None:
         """application.json 投影只写正式类型并保留数据源描述。"""
@@ -769,13 +877,10 @@ class ProjectPlanTests(unittest.TestCase):
         plan = create_project_plan(spec, datasource_type="static")
         payload = project_plan_application_payload(plan)
         self.assertEqual(payload["dataSources"][0]["type"], "static")
-        self.assertEqual(
-            payload["dataSources"][0]["description"],
-            plan["data_sources"][0]["description"],
-        )
-        plan["data_sources"][0]["type"] = "mock"
-        with self.assertRaises(ValueError):
-            project_plan_application_payload(plan)
+        plan["entities"][0]["data_source"] = "mock"
+        # 非法类型在实体归一化时回退默认 database；投影只写正式类型，不落盘 mock。
+        projected = project_plan_application_payload(plan)
+        self.assertEqual(projected["dataSources"][0]["type"], "database")
 
 
 if __name__ == "__main__":

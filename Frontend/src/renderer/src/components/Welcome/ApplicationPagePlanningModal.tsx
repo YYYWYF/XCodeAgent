@@ -559,7 +559,6 @@ export default function ApplicationPagePlanningModal({
               ) : null}
               {!showingProgress && workflow && hasClarification ? (
                 <ApplicationPlanningQuestionPanel
-                  datasourceType={application.datasource.type}
                   disabled={running}
                   onSaveRequirementSpec={handleSaveRequirementSpec}
                   onReturnHome={onReturnHome}

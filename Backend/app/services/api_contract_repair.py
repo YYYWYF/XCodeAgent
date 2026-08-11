@@ -96,16 +96,23 @@ def _repair_data_source_schema_refs(
         if dsid:
             source_contract[dsid] = contract
 
-    for source in plan.get("data_sources") or []:
-        if not isinstance(source, dict):
+    repaired_source_ids: set[str] = set()
+    for entity in plan.get("entities") or []:
+        if not isinstance(entity, dict):
             continue
-        dsid = str(source.get("id") or "")
+        data_source = entity.get("data_source")
+        if not isinstance(data_source, dict):
+            # 类型化数据源下实体 data_source 只是类型字符串，无源级 schema_refs 可修复。
+            continue
+        dsid = str(data_source.get("id") or "")
+        if not dsid or dsid in repaired_source_ids:
+            continue
         contract = source_contract.get(dsid)
         if contract is None:
             continue
         cid = str(contract.get("id") or "")
         valid = contract_schemas.get(cid, set())
-        refs = source.get("schema_refs")
+        refs = data_source.get("schema_refs")
         if not isinstance(refs, list):
             continue
         new_refs: list[str] = []
@@ -127,7 +134,8 @@ def _repair_data_source_schema_refs(
             else:
                 changed = True  # 丢弃指向其他契约或不存在的引用
         if changed:
-            source["schema_refs"] = new_refs
+            data_source["schema_refs"] = new_refs
+            repaired_source_ids.add(dsid)
             repairs.append(f"Rebuilt schema_refs for data source {dsid}.")
 
 

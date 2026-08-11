@@ -8,6 +8,7 @@ from app.graph.nodes.confirmation import (
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.entity_definitions import contract_data_source_id, plan_data_sources
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.build_task_progress import (
     build_task_artifacts,
@@ -621,7 +622,7 @@ def _skeleton_data_sources(project_plan: dict) -> list[dict]:
                 else None
             ),
         }
-        for source in project_plan.get("data_sources", [])
+        for source in plan_data_sources(project_plan)
         if isinstance(source, dict)
     ]
 
@@ -632,7 +633,7 @@ def _skeleton_api_contracts(project_plan: dict) -> list[dict]:
     return [
         {
             "id": contract.get("id"),
-            "data_source_id": contract.get("data_source_id"),
+            "entity_ids": contract.get("entity_ids"),
             "resource": contract.get("resource"),
             "base_path": contract.get("base_path"),
             "endpoint_ids": [
@@ -661,14 +662,14 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
         ),
         "data_sources": [
             _scoped_data_source(source, contract_ids)
-            for source in project_plan.get("data_sources", [])
+            for source in plan_data_sources(project_plan)
             if isinstance(source, dict) and str(source.get("id") or "") in source_ids
         ],
         "api_contracts": [
             _scoped_api_contract(contract, endpoint_ids)
             for contract in project_plan.get("api_contracts", [])
             if isinstance(contract, dict)
-            and str(contract.get("data_source_id") or "") in source_ids
+            and contract_data_source_id(project_plan, contract) in source_ids
             and (
                 not contract_ids
                 or str(contract.get("id") or "") in contract_ids
@@ -750,23 +751,40 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
                     },
                 }
             )
+    scoped_sources = [
+        _scoped_data_source(source, contract_ids)
+        for source in plan_data_sources(project_plan)
+        if isinstance(source, dict) and str(source.get("id") or "") in source_ids
+    ]
+    scoped_contracts = [
+        contract
+        for contract in project_plan.get("api_contracts", [])
+        if isinstance(contract, dict)
+        and contract_data_source_id(project_plan, contract) in source_ids
+        and (not contract_ids or str(contract.get("id") or "") in contract_ids)
+    ]
     return {
         **project_plan,
         "frontend_pages": pages,
-        "data_sources": [
-            _scoped_data_source(source, contract_ids)
-            for source in project_plan.get("data_sources", [])
-            if isinstance(source, dict) and str(source.get("id") or "") in source_ids
+        "data_sources": scoped_sources,
+        "entities": [
+            {
+                **entity,
+                "data_source": {
+                    **(
+                        entity.get("data_source")
+                        if isinstance(entity.get("data_source"), dict)
+                        else {}
+                    ),
+                    "schema_refs": source["schema_refs"],
+                },
+            }
+            for source in scoped_sources
+            for entity in source.get("entities") or []
         ],
         "api_contracts": [
             _scoped_api_contract(contract, endpoint_ids)
-            for contract in project_plan.get("api_contracts", [])
-            if isinstance(contract, dict)
-            and str(contract.get("data_source_id") or "") in source_ids
-            and (
-                not contract_ids
-                or str(contract.get("id") or "") in contract_ids
-            )
+            for contract in scoped_contracts
         ],
         "page_detail_plans": (
             [build_context["page_detail"]] if build_context.get("page_detail") else []

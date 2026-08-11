@@ -1,21 +1,21 @@
 .@{class-prefix}-project-plan-confirmation-shell {
-  --project-plan-bg: light-dark(#f6f5fb, #171522);
-  --project-plan-surface: light-dark(#ffffff, #211e2f);
-  --project-plan-surface-soft: light-dark(#faf9fd, #28243a);
-  --project-plan-canvas: light-dark(#f3f1f8, #1b1828);
-  --project-plan-border: light-dark(#e8e5f0, #3a354d);
-  --project-plan-border-strong: light-dark(#d8d1e7, #51496b);
-  --project-plan-text: light-dark(#292638, #f5f1ff);
-  --project-plan-text-soft: light-dark(#746d86, #b7aecb);
-  --project-plan-purple: light-dark(#7356d8, #a98ff7);
-  --project-plan-purple-soft: light-dark(#f0ecff, #352c56);
-  --project-plan-purple-line: light-dark(#cfc3f7, #62518f);
-  --project-plan-storage: light-dark(#557fae, #8eb9ea);
-  --project-plan-storage-surface: light-dark(#eef5fd, #24384e);
-  --project-plan-entity: light-dark(#4d8f72, #82cda8);
-  --project-plan-entity-surface: light-dark(#edf8f2, #203d32);
-  --project-plan-api: light-dark(#bd7044, #f2a77c);
-  --project-plan-api-surface: light-dark(#fff4ed, #4a2e23);
+  --project-plan-bg: #f6f5fb;
+  --project-plan-surface: #ffffff;
+  --project-plan-surface-soft: #faf9fd;
+  --project-plan-canvas: #f3f1f8;
+  --project-plan-border: #e8e5f0;
+  --project-plan-border-strong: #d8d1e7;
+  --project-plan-text: #292638;
+  --project-plan-text-soft: #746d86;
+  --project-plan-purple: #7356d8;
+  --project-plan-purple-soft: #f0ecff;
+  --project-plan-purple-line: #cfc3f7;
+  --project-plan-storage: #557fae;
+  --project-plan-storage-surface: #eef5fd;
+  --project-plan-entity: #4d8f72;
+  --project-plan-entity-surface: #edf8f2;
+  --project-plan-api: #bd7044;
+  --project-plan-api-surface: #fff4ed;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   width: 100%;
@@ -24,7 +24,29 @@
   overflow: hidden;
   color: var(--project-plan-text);
   background: var(--project-plan-bg);
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+// 深色主题覆盖：跟随应用主题（theme-dark），仅在应用切换深色主题时生效
+.@{class-prefix}-theme-dark .@{class-prefix}-project-plan-confirmation-shell {
+  --project-plan-bg: #171522;
+  --project-plan-surface: #211e2f;
+  --project-plan-surface-soft: #28243a;
+  --project-plan-canvas: #1b1828;
+  --project-plan-border: #3a354d;
+  --project-plan-border-strong: #51496b;
+  --project-plan-text: #f5f1ff;
+  --project-plan-text-soft: #b7aecb;
+  --project-plan-purple: #a98ff7;
+  --project-plan-purple-soft: #352c56;
+  --project-plan-purple-line: #62518f;
+  --project-plan-storage: #8eb9ea;
+  --project-plan-storage-surface: #24384e;
+  --project-plan-entity: #82cda8;
+  --project-plan-entity-surface: #203d32;
+  --project-plan-api: #f2a77c;
+  --project-plan-api-surface: #4a2e23;
+  color-scheme: dark;
 }
 
 .@{class-prefix}-project-plan-confirmation-topbar {
@@ -411,24 +433,44 @@
 }
 
 .@{class-prefix}-project-plan-summary {
-  --project-plan-surface: light-dark(#ffffff, #211e2f);
-  --project-plan-surface-soft: light-dark(#faf9fd, #28243a);
-  --project-plan-canvas: light-dark(#f3f1f8, #1b1828);
-  --project-plan-border: light-dark(#e8e5f0, #3a354d);
-  --project-plan-border-strong: light-dark(#d8d1e7, #51496b);
-  --project-plan-text: light-dark(#292638, #f5f1ff);
-  --project-plan-text-soft: light-dark(#746d86, #b7aecb);
-  --project-plan-purple: light-dark(#7356d8, #a98ff7);
-  --project-plan-purple-soft: light-dark(#f0ecff, #352c56);
-  --project-plan-purple-line: light-dark(#cfc3f7, #62518f);
-  --project-plan-storage: light-dark(#557fae, #8eb9ea);
-  --project-plan-storage-surface: light-dark(#eef5fd, #24384e);
-  --project-plan-entity: light-dark(#4d8f72, #82cda8);
-  --project-plan-entity-surface: light-dark(#edf8f2, #203d32);
-  --project-plan-api: light-dark(#bd7044, #f2a77c);
-  --project-plan-api-surface: light-dark(#fff4ed, #4a2e23);
+  --project-plan-surface: #ffffff;
+  --project-plan-surface-soft: #faf9fd;
+  --project-plan-canvas: #f3f1f8;
+  --project-plan-border: #e8e5f0;
+  --project-plan-border-strong: #d8d1e7;
+  --project-plan-text: #292638;
+  --project-plan-text-soft: #746d86;
+  --project-plan-purple: #7356d8;
+  --project-plan-purple-soft: #f0ecff;
+  --project-plan-purple-line: #cfc3f7;
+  --project-plan-storage: #557fae;
+  --project-plan-storage-surface: #eef5fd;
+  --project-plan-entity: #4d8f72;
+  --project-plan-entity-surface: #edf8f2;
+  --project-plan-api: #bd7044;
+  --project-plan-api-surface: #fff4ed;
   display: grid;
   gap: 18px;
+}
+
+// 摘要卡片独立作用域同样跟随应用主题，保证脱离确认壳层展示时颜色一致
+.@{class-prefix}-theme-dark .@{class-prefix}-project-plan-summary {
+  --project-plan-surface: #211e2f;
+  --project-plan-surface-soft: #28243a;
+  --project-plan-canvas: #1b1828;
+  --project-plan-border: #3a354d;
+  --project-plan-border-strong: #51496b;
+  --project-plan-text: #f5f1ff;
+  --project-plan-text-soft: #b7aecb;
+  --project-plan-purple: #a98ff7;
+  --project-plan-purple-soft: #352c56;
+  --project-plan-purple-line: #62518f;
+  --project-plan-storage: #8eb9ea;
+  --project-plan-storage-surface: #24384e;
+  --project-plan-entity: #82cda8;
+  --project-plan-entity-surface: #203d32;
+  --project-plan-api: #f2a77c;
+  --project-plan-api-surface: #4a2e23;
 }
 
 .@{class-prefix}-project-plan-summary-hero {
@@ -1061,6 +1103,127 @@
   }
 }
 
+.@{class-prefix}-project-plan-summary-entity-fields {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  margin-top: 3px;
+}
+
+.@{class-prefix}-project-plan-summary-entity-fields-head,
+.@{class-prefix}-project-plan-summary-entity-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 6px;
+  align-items: center;
+}
+
+.@{class-prefix}-project-plan-summary-entity-fields-head {
+  padding-bottom: 2px;
+
+  .ant-typography {
+    color: var(--project-plan-text-soft);
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-entity-field {
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--project-plan-surface);
+
+  .ant-typography {
+    overflow: hidden;
+    color: var(--project-plan-text);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ant-typography:first-child {
+    color: var(--project-plan-text);
+    font-size: 12px;
+  }
+
+  code {
+    overflow: hidden;
+    color: var(--project-plan-purple);
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ant-typography-secondary {
+    color: var(--project-plan-text-soft);
+  }
+}
+
+.@{class-prefix}-project-plan-summary-entity-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--project-plan-border);
+  border-radius: 9px;
+  background: var(--project-plan-surface);
+}
+
+.@{class-prefix}-project-plan-summary-entity-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+
+  > div {
+    flex: 1;
+    min-width: 0;
+  }
+
+  > .ant-typography:first-child {
+    overflow: hidden;
+    color: var(--project-plan-text);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  p.ant-typography {
+    margin: 2px 0 0;
+    color: var(--project-plan-text-soft);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  > .ant-tag {
+    flex: none;
+    margin: 0;
+    border-color: var(--project-plan-purple-line);
+    border-radius: 5px;
+    color: var(--project-plan-purple);
+    background: var(--project-plan-purple-soft);
+    font-size: 11px;
+  }
+}
+
+.@{class-prefix}-project-plan-summary-entity-card-icon {
+  display: grid;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  place-items: center;
+  color: var(--project-plan-purple);
+  background: var(--project-plan-purple-soft);
+}
+
+.@{class-prefix}-project-plan-summary-entity-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
 .@{class-prefix}-project-plan-summary-data-source-api {
   display: flex;
   align-items: center;
@@ -1284,6 +1447,12 @@
   }
 }
 
+@media (max-width: 760px) {
+  .@{class-prefix}-project-plan-summary-entity-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 520px) {
   .@{class-prefix}-project-plan-confirmation-topbar {
     padding: 0 14px;
@@ -1327,5 +1496,9 @@
     .ant-typography {
       grid-column: 2;
     }
+  }
+
+  .@{class-prefix}-project-plan-summary-entity-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

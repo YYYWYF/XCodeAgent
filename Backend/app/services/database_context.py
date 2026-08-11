@@ -9,6 +9,7 @@ from app.services.database_schema_summary import (
     is_database_data_source,
     target_summary,
 )
+from app.services.entity_definitions import plan_data_sources
 
 ENDPOINT_DATABASE_CONTEXT_ENV = "XCODEAGENT_ENDPOINT_DATABASE_CONTEXT_ENABLED"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -55,7 +56,7 @@ def _endpoint_target(
     data_source = next(
         (
             item
-            for item in dict_items(project_plan.get("data_sources"))
+            for item in plan_data_sources(project_plan)
             if str(item.get("id") or "") == data_source_id
         ),
         {},

@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
-from app.services.data_source_policy import DatasourceType, apply_authoritative_datasource_type
+from app.services.data_source_policy import DatasourceType
 from app.services.requirement_spec import (
     create_requirement_spec,
     merge_clarification_answers_into_spec,
@@ -61,11 +61,12 @@ def _requirements_prompt(
         "Analyze the user's application request and decide whether the requirement is clear enough "
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 用户角色, 功能模块, "
-        "页面清单, 数据源清单, 业务流程, 验收标准.\n"
-        f"The authoritative application datasource type is {datasource_type}. Every data_sources item "
-        f"MUST use exactly type={datasource_type}. The type is read-only policy data: do not infer it "
-        "from user wording, do not change it, and never emit the legacy type mock. Generate only the "
-        "business data-source name, description, and entity list.\n"
+        "页面清单, 实体清单, 业务流程, 验收标准.\n"
+        "This stage only generates business entities. Each entity has a stable id, name, description, "
+        "and fields that are display-only business information (label and description only). Do NOT "
+        "generate field names, field types, data sources, or any database/external-api/static choice "
+        "here; the data source for each entity is decided in the project-planning stage (database by "
+        "default). Never emit data_sources or the legacy type mock.\n"
         f"{clarification_policy}"
         f"{followup_policy}"
         "When asking, questions can be choice, text, or yesno. For every choice question, first decide "
@@ -76,8 +77,8 @@ def _requirements_prompt(
         "continue planning until the user answers.\n"
         "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
         "without markdown fences or commentary. It must include app_info, user_roles, "
-        "feature_modules, pages, data_sources, business_flows, acceptance_criteria, and assumptions. "
-        "Every role, module, data source, and flow must have a stable id. Every page must have a "
+        "feature_modules, pages, entities, business_flows, acceptance_criteria, and assumptions. "
+        "Every role, module, entity, and flow must have a stable id. Every page must have a "
         "stable pageId, name, unique path, module_id, and description. Use '/' only for the single "
         "home/dashboard page; all other pages must have business routes derived from their pageId, "
         "such as '/employees-list' or '/onboarding-form'. Never return multiple pages with path '/'. "
@@ -160,8 +161,6 @@ def analyze_requirements_with_chat_model(
     )
     if _is_clarification_followup(existing_spec):
         spec = merge_clarification_answers_into_spec(spec, request)
-        # 澄清答案可能新增或复写数据源，合并后再次恢复 application.json 的权威类型。
-        spec = apply_authoritative_datasource_type(spec, datasource_type)
     clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
     spec["assumptions"] = clarification["assumptions"]
