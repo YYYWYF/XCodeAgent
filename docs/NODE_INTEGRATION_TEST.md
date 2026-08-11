@@ -4,10 +4,6 @@
 
 - 节点名称：集成测试节点
 - 主图 `node_id`：`integration_test`
-- 主图注册位置：`Backend/app/graph/workflow.py:182`
-- 外层节点实现：`Backend/app/graph/subgraphs/testing.py:412`
-- 内部子图构建：`Backend/app/graph/subgraphs/testing.py:390`
-- Graph State：`Backend/app/graph/state.py:5`
 - 节点类型：**Testing Subgraph 包装节点**，不是单一的纯确定性节点
 - 内部组成：3 个确定性节点、1 个 Test Deep Agent 审阅节点、1 个“确定性约束 + RepairPlanner Deep Agent”修复规划节点
 
@@ -1102,32 +1098,7 @@ flowchart TD
     V --> W["Workflow runtime: workflow.run.failed + RunErrorEvent"]
 ```
 
-## 13. 结论
 
-`integration_test` 的核心架构方向是清晰的：真实命令和契约校验负责事实，Test Agent 负责解释，确定性质量门负责 pass/fail，RepairPlanner 只决定失败处理策略，最终修复任务再由确定性代码限制到当前 build slice 的授权范围。
-
-但按当前代码，它应准确描述为“**有限检查覆盖的测试/质量/修复规划子图**”，而不是完整意义上的全量集成测试节点。最需要后续确认或修正的部分是：实际检查覆盖、`data_source` owner 与授权 owner 的字段契约、RepairPlanner 非 JSON 回退策略，以及确认恢复的稳定性。
-
-## 14. 主要源码索引
-
-- `Backend/app/graph/subgraphs/testing.py`
-- `Backend/app/graph/workflow.py`
-- `Backend/app/graph/state.py`
-- `Backend/app/services/integration_test_runner.py`
-- `Backend/app/services/api_contract_validation.py`
-- `Backend/app/services/test_validation.py`
-- `Backend/app/agents/test/agent.py`
-- `Backend/app/agents/test/validator.py`
-- `Backend/app/agents/repair_planner/agent.py`
-- `Backend/app/agents/repair_planner/planner.py`
-- `Backend/app/graph/nodes/small_task.py`
-- `Backend/app/workspace/test_documents.py`
-- `Backend/app/workspace/task_documents.py`
-- `Backend/app/protocols/workflow/runtime.py`
-- `Backend/tests/test_testing_subgraph_events.py`
-- `Backend/tests/test_integration_repair_flow.py`
-- `Backend/tests/test_integration_test_runner.py`
-- `Backend/tests/test_workflow_routing.py`
 
 ## 14. 优化点
 
@@ -1154,6 +1125,7 @@ flowchart TD
 
 
 3. **API契约的检查应该移动到detail_confirmation节点内**
+
 这个节点在pending_plan = _generate_all_detail_plans(...)生成了如下数据结构
 {
   "api_contracts": [],
