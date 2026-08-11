@@ -33,3 +33,19 @@ export async function removeDirectoryIfPresent(targetPath: string): Promise<void
     throw error
   }
 }
+
+/** 将存在的路径移入系统回收站；目标已不存在时按幂等成功处理。 */
+export async function movePathToTrashIfPresent(
+  targetPath: string,
+  trashItem: (path: string) => Promise<void>
+): Promise<void> {
+  if (!(await lstatIfPresent(targetPath))) return
+
+  try {
+    await trashItem(targetPath)
+  } catch (error) {
+    // 路径可能在检查后被其他进程移除，此时仍视为目标已经清理完成。
+    if (isFileSystemNotFoundError(error)) return
+    throw error
+  }
+}

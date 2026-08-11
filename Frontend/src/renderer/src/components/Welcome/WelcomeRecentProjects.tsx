@@ -81,25 +81,27 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
     setDeleteMode('index')
   }
 
-  // 根据用户选项移除首页索引，必要时先由主进程安全删除真实目录。
-  const confirmDelete = async (): Promise<void> => {
-    if (!applicationToDelete) return
+  // 根据已确认的删除方式移除首页索引，必要时先由主进程安全转移真实目录。
+  const confirmDelete = async (
+    application: ApplicationConfig,
+    confirmedDeleteMode: DeleteMode
+  ): Promise<void> => {
     setDeleting(true)
     try {
-      if (deleteMode === 'project') {
-        if (!applicationToDelete.workspaceRoot) {
+      if (confirmedDeleteMode === 'project') {
+        if (!application.workspaceRoot) {
           throw new Error('该项目没有可删除的本地目录')
         }
-        await clearWorkspace(applicationToDelete.workspaceRoot)
-        await deleteStoredProject(applicationToDelete.workspaceRoot)
+        await clearWorkspace(application.workspaceRoot)
+        await deleteStoredProject(application.workspaceRoot)
       }
-      await removeStoredApplication(applicationToDelete.id)
+      await removeStoredApplication(application.id)
       setApplications((current) =>
-        current.filter((application) => application.id !== applicationToDelete.id)
+        current.filter((candidate) => candidate.id !== application.id)
       )
       message.success(
-        deleteMode === 'project'
-          ? '本地项目、聊天历史及首页索引已删除'
+        confirmedDeleteMode === 'project'
+          ? '本地项目和聊天历史已移至系统回收站，首页索引已移除'
           : '项目已从首页移除'
       )
       setApplicationToDelete(undefined)
@@ -108,6 +110,39 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
     } finally {
       setDeleting(false)
     }
+  }
+
+  // 删除真实目录前展示完整路径并要求二次确认，索引移除仍保持单次确认。
+  const requestDelete = (): void => {
+    if (!applicationToDelete) return
+    if (deleteMode === 'index') {
+      void confirmDelete(applicationToDelete, 'index')
+      return
+    }
+
+    const workspaceRoot = applicationToDelete.workspaceRoot
+    if (!workspaceRoot) {
+      message.error('该项目没有可删除的本地目录')
+      return
+    }
+
+    const application = applicationToDelete
+    Modal.confirm({
+      cancelText: '取消',
+      centered: true,
+      content: (
+        <div className={cx('welcome-project-delete-confirmation')}>
+          <p>此操作会删除整个文件夹及其中的所有文件：</p>
+          <code>{workspaceRoot}</code>
+          <p>文件会移到系统回收站，同时移走该项目的聊天历史并删除首页索引。</p>
+        </div>
+      ),
+      okButtonProps: { danger: true },
+      okText: '确认移到回收站',
+      onOk: () => confirmDelete(application, 'project'),
+      title: `再次确认删除「${application.name}」？`,
+      wrapClassName: cx('welcome-modal', `theme-${theme}`)
+    })
   }
 
   const projectDirectoryCanBeDeleted = Boolean(
@@ -176,9 +211,9 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
         className={cx('welcome-modal', 'welcome-project-delete-modal', `theme-${theme}`)}
         confirmLoading={deleting}
         okButtonProps={{ danger: deleteMode === 'project' }}
-        okText={deleteMode === 'project' ? '删除本地项目' : '移除索引'}
+        okText={deleteMode === 'project' ? '继续' : '移除索引'}
         onCancel={() => !deleting && setApplicationToDelete(undefined)}
-        onOk={() => void confirmDelete()}
+        onOk={requestDelete}
         open={Boolean(applicationToDelete)}
         title={`删除「${applicationToDelete?.name || ''}」`}
       >
@@ -192,10 +227,10 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
             <span>保留本地项目目录和其中的所有文件。</span>
           </Radio>
           <Radio disabled={!projectDirectoryCanBeDeleted} value="project">
-            删除本地项目
+            移到系统回收站
             <span>
-              永久删除 {applicationToDelete?.workspaceRoot || '项目目录'}{' '}
-              及其中所有文件，同时删除该项目的全部聊天历史，且无法恢复。
+              将 {applicationToDelete?.workspaceRoot || '项目目录'} 及其中所有文件移到系统回收站，
+              同时移走该项目的全部聊天历史；清空回收站前仍可找回文件。
             </span>
           </Radio>
         </Radio.Group>

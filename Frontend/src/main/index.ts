@@ -10,7 +10,11 @@ import { getBackendBaseUrl, startBackendService, stopBackendService } from './ba
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import type { ApplicationMenuItem } from '../renderer/src/typings'
 import { setupApplicationSettingsIpc } from './applicationSettings'
-import { lstatIfPresent, removeDirectoryIfPresent } from './filesystem'
+import {
+  lstatIfPresent,
+  movePathToTrashIfPresent,
+  removeDirectoryIfPresent
+} from './filesystem'
 import { readManagedWorkspaceApplication } from './managedWorkspace'
 import {
   clearAuthState,
@@ -651,8 +655,8 @@ async function writeApplications(applications: unknown): Promise<void> {
   await fs.writeFile(applicationsFile, `${JSON.stringify(applications, null, 2)}\n`, 'utf8')
 }
 
-/** 仅删除带有 XCodeAgent 项目标识的安全工作区目录。 */
-async function deleteProjectDirectory(workspaceRoot: unknown): Promise<void> {
+/** 仅将带有 XCodeAgent 项目标识的安全工作区目录移入系统回收站。 */
+async function trashProjectDirectory(workspaceRoot: unknown): Promise<void> {
   const projectRoot = resolveWorkspaceRoot(workspaceRoot)
   const protectedRoots = new Set(
     [
@@ -679,7 +683,7 @@ async function deleteProjectDirectory(workspaceRoot: unknown): Promise<void> {
     throw new Error('该目录不是由 XCodeAgent 管理的项目，不能直接删除')
   }
 
-  await removeDirectoryIfPresent(projectRoot)
+  await movePathToTrashIfPresent(projectRoot, (targetPath) => shell.trashItem(targetPath))
 }
 
 /** 仅删除受控工作区内部由 XCodeAgent 生成的规划与运行目录。 */
@@ -731,9 +735,11 @@ function setupApplicationStorageIpc(): void {
 
   ipcMain.handle('applications:delete-project', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
-    await deleteProjectDirectory(workspaceRoot)
-    // 项目永久删除后同步清理环境级会话，避免同一路径重建时继承旧项目历史。
-    await removeDirectoryIfPresent(getWorkspaceSessionRoot(workspaceRoot))
+    await trashProjectDirectory(workspaceRoot)
+    // 项目移入回收站后同步转移环境级会话，避免同一路径重建时继承旧项目历史。
+    await movePathToTrashIfPresent(getWorkspaceSessionRoot(workspaceRoot), (targetPath) =>
+      shell.trashItem(targetPath)
+    )
     return { ok: true }
   })
 
