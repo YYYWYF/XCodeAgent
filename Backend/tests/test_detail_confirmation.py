@@ -17,6 +17,7 @@ from app.services.page_detail_plan import (
 )
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
+from tests.entity_design_test_utils import confirm_entity_designs
 
 
 def _endpoint_context_for_dependency(project_plan: dict, dependency: dict) -> dict:
@@ -32,17 +33,43 @@ def _endpoint_context_for_dependency(project_plan: dict, dependency: dict) -> di
 
 
 class DetailConfirmationTests(unittest.TestCase):
+    def test_entity_detail_confirmation_generates_entity_detail(self) -> None:
+        """选择实体目标时生成实体详细设计并停在 entity_review 确认门禁。"""
+
+        project_plan = create_project_plan(create_requirement_spec("创建商品管理系统"))
+        entity_id = project_plan["entities"][0]["id"]
+
+        result = detail_confirmation(
+            {
+                "request": "开始实体详细设计",
+                "project_plan": project_plan,
+                "selected_entity_id": entity_id,
+                "detail_target_type": "entity",
+                "timeline": [],
+            }
+        )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["detail_selection"]["mode"], "entity_review")
+        self.assertEqual(
+            [item["target_id"] for item in result["clarification"]["review"]["entities"]],
+            [entity_id],
+        )
+        pending = result["pending_project_plan"]
+        self.assertEqual(
+            pending["detail_confirmation_summary"]["mode"],
+            "entity_review",
+        )
+        self.assertEqual(
+            [detail["entity_id"] for detail in pending["entity_detail_plans"]],
+            [entity_id],
+        )
+
     def test_endpoint_designer_generates_decision_then_composes_detail(self) -> None:
         """endpoint 模型只生成决策对象，正式详情由确定性第二步完成。"""
 
         project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
-        project_plan["entities"] = [
-            {
-                **entity,
-                "data_source": "static",
-            }
-            for entity in project_plan["entities"]
-        ]
+        project_plan = confirm_entity_designs(project_plan, source_type="static")
         page_context = extract_page_detail_context(
             project_plan,
             project_plan["frontend_pages"][0]["pageId"],
@@ -102,6 +129,7 @@ class DetailConfirmationTests(unittest.TestCase):
         """第一步仍有未决差异时，不应提前生成处理逻辑和验收承诺。"""
 
         project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
+        project_plan = confirm_entity_designs(project_plan, source_type="database")
         page_context = extract_page_detail_context(
             project_plan,
             project_plan["frontend_pages"][0]["pageId"],
@@ -157,13 +185,7 @@ class DetailConfirmationTests(unittest.TestCase):
         """闭合决策的处理逻辑与验收标准必须由同一基数和结果规则投影。"""
 
         project_plan = create_project_plan(create_requirement_spec("创建人员管理系统"))
-        project_plan["entities"] = [
-            {
-                **entity,
-                "data_source": "static",
-            }
-            for entity in project_plan["entities"]
-        ]
+        project_plan = confirm_entity_designs(project_plan, source_type="static")
         page_context = extract_page_detail_context(
             project_plan,
             project_plan["frontend_pages"][0]["pageId"],
@@ -224,6 +246,7 @@ class DetailConfirmationTests(unittest.TestCase):
         project_plan = create_project_plan(
             create_requirement_spec("创建一个库存管理系统")
         )
+        project_plan = confirm_entity_designs(project_plan, source_type="database")
         page_context = extract_page_detail_context(
             project_plan,
             "inventory_management_list_page",
@@ -342,6 +365,7 @@ class DetailConfirmationTests(unittest.TestCase):
         project_plan = create_project_plan(
             create_requirement_spec("创建一个库存管理系统")
         )
+        project_plan = confirm_entity_designs(project_plan, source_type="database")
         with patch(
             "app.graph.nodes.planning.design_page_with_chat_model",
             side_effect=create_page_detail_plan,
@@ -390,6 +414,7 @@ class DetailConfirmationTests(unittest.TestCase):
         """页面设计应复用已设计 endpoint，并把未确认详情纳入同轮审核。"""
 
         project_plan = create_project_plan(create_requirement_spec("创建库存管理系统"))
+        project_plan = confirm_entity_designs(project_plan, source_type="database")
         selected_page = project_plan["frontend_pages"][1]
         page_context = extract_page_detail_context(project_plan, selected_page["pageId"])
         endpoint_detail = create_endpoint_detail_plan(
@@ -423,13 +448,7 @@ class DetailConfirmationTests(unittest.TestCase):
 
     def test_detail_review_applies_page_patch_and_confirms_once(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建库存系统"))
-        project_plan["entities"] = [
-            {
-                **entity,
-                "data_source": "static",
-            }
-            for entity in project_plan["entities"]
-        ]
+        project_plan = confirm_entity_designs(project_plan, source_type="static")
         page_context = extract_page_detail_context(
             project_plan,
             project_plan["frontend_pages"][0]["pageId"],

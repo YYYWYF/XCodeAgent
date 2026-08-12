@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
-from app.services.entity_definitions import plan_data_sources
+from app.services.entity_definitions import data_source_type_label, plan_data_sources
 from app.services.page_detail_plan import normalize_endpoint_data_origin
 from app.workspace.spec_documents import workflow_artifact_root
 
@@ -375,6 +375,106 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
     )
 
 
+def render_entity_detail_markdown(detail: dict[str, Any]) -> str:
+    """渲染单个实体详细设计的独立 Markdown 文档。"""
+
+    entity_name = str(detail.get("entity_name") or detail.get("entity_id") or "未命名实体")
+    entity_id = str(detail.get("entity_id") or "unknown")
+    data_source_type = str(detail.get("data_source_type") or "")
+    fields = _dict_items(detail.get("fields"))
+    field_lines = (
+        "\n".join(
+            f"| `{field.get('name', '')}` | {field.get('label', '')} | "
+            f"{field.get('type', 'text')} | {'必填' if field.get('required') else '可选'} | "
+            f"`{field.get('column_type', '')}` | {field.get('description', '')} |"
+            for field in fields
+        )
+        if fields
+        else "| - | - | - | - | - | - |"
+    )
+    table_design = (
+        detail.get("table_design")
+        if isinstance(detail.get("table_design"), dict)
+        else {}
+    )
+    columns = _dict_items(table_design.get("columns"))
+    column_lines = "\n".join(
+        f"- `{column.get('name', '')}` {column.get('type', '')} "
+        f"{'非空' if not column.get('nullable') else '可空'}：{column.get('comment', '')}"
+        for column in columns
+    )
+    relationships = _dict_items(detail.get("relationships"))
+    return "\n".join(
+        [
+            f"# 实体详细设计：{entity_name}（`{entity_id}`）",
+            "",
+            "## 一、实体基本信息",
+            "",
+            f"- 实体 ID：`{entity_id}`",
+            f"- 实体名称：{entity_name}",
+            f"- 实体说明：{detail.get('description') or '待补充'}",
+            f"- 所属模块：`{detail.get('module_id') or '未归属'}`",
+            f"- 数据源：{data_source_type_label(data_source_type)}"
+            f"（`{detail.get('data_source_id') or data_source_type}`）",
+            f"- 确认状态：{_status_label(detail.get('status', 'draft'))}",
+            "",
+            "## 二、字段设计",
+            "",
+            "| 字段名 | 展示名称 | 语义类型 | 必填 | 列类型 | 说明 |",
+            "| --- | --- | --- | --- | --- | --- |",
+            field_lines,
+            "",
+            "## 三、目标表结构",
+            "",
+            (
+                "\n".join(
+                    [
+                        f"- 表名：`{table_design.get('name', '未生成')}`",
+                        f"- 表注释：{table_design.get('comment', '') or '未生成'}",
+                        f"- 主键：{_code_items(table_design.get('primary_key', []), empty='未生成')}",
+                        "",
+                        "列清单：",
+                        column_lines or "- 未生成",
+                    ]
+                )
+                if table_design
+                else f"- 数据源类型为 {data_source_type_label(data_source_type)}，不生成数据库表。"
+            ),
+            "",
+            "## 四、业务规则",
+            "",
+            _bullet_items(
+                [
+                    f"{rule.get('name', '业务规则')}：{rule.get('description', '')}"
+                    for rule in _dict_items(detail.get("business_rules"))
+                ]
+            )
+            or "- 暂无业务规则",
+            "",
+            "## 五、关系设计",
+            "",
+            (
+                "\n".join(
+                    f"- `{rel.get('relation_type', '关系')}`："
+                    f"{rel.get('target_entity_id', '')}，{rel.get('description', '')}"
+                    for rel in relationships
+                )
+                if relationships
+                else "- 本轮项目计划未声明实体关系，按无关系处理。"
+            ),
+            "",
+            "## 六、验收标准",
+            "",
+            _bullet_items(detail.get("acceptance_criteria", [])) or "- 待补充实体验收标准",
+            "",
+            "## 七、风险与待确认事项",
+            "",
+            _bullet_items(detail.get("risks", [])) or "- 暂无明确风险",
+            "",
+        ]
+    )
+
+
 def _endpoint_source_label(data_origin: dict[str, Any]) -> str:
     """将 EndpointDetail 正式来源转换为用户可读标签。"""
 
@@ -553,6 +653,12 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         for page in flatten_frontend_pages(plan.get("frontend_pages", []))
         if isinstance(page.get("detail_design"), dict)
     )
+    entity_details = "\n".join(
+        f"- {entity.get('name', entity.get('id', '未命名实体'))}："
+        f"{entity.get('detail_design', {}).get('markdown_path', '尚未生成独立详细设计')}"
+        for entity in _dict_items(plan.get("entities"))
+        if isinstance(entity.get("detail_design"), dict)
+    )
     app = plan.get("app", {})
     architecture = plan.get("architecture", {})
     source_types = {
@@ -643,6 +749,10 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 ## 页面详细设计
 
 {page_details or "- 尚未确认页面详细设计"}
+
+## 实体详细设计
+
+{entity_details or "- 尚未确认实体详细设计"}
 
 ## 风险与待细化点
 

@@ -654,7 +654,12 @@ def extract_endpoint_detail_context(
     )
     if not endpoint:
         raise ValueError(f"API 契约 {api_contract_id} 中不存在接口：{endpoint_id}")
-    data_source_id = contract_data_source_id(project_plan, contract) or api_contract_id
+    data_source_id = contract_data_source_id(project_plan, contract)
+    if not data_source_id:
+        raise ValueError(
+            f"接口 {endpoint_id} 关联的实体尚未完成实体设计，"
+            "请先在实体设计阶段选择并确认数据源，再设计接口。"
+        )
     data_source = next(
         (
             source

@@ -14,8 +14,7 @@ from app.graph.nodes.confirmation import (
 from app.graph.state import ProjectState
 from app.services.data_source_policy import (
     apply_authoritative_datasource_type,
-    ensure_requirements_datasource_type,
-    read_application_datasource_type,
+    datasource_type_from_artifact,
 )
 from app.services.requirement_spec import apply_requirement_spec_editor_changes
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload, clear_clarification
@@ -46,9 +45,10 @@ def _llm_token_callback(token: str) -> None:
 def requirements(state: ProjectState) -> dict:
     """生成、修订或确认 RequirementSpec，并始终执行应用数据源策略保护。"""
 
-    # 每次进入需求节点都从 application.json 读取类型，避免 checkpoint 或模型输出改变数据源大类。
-    datasource_type = ensure_requirements_datasource_type(
-        read_application_datasource_type(workspace_root(state))
+    # 应用级不再有数据源类型；需求阶段只保留实体字段展示信息，数据源由实体设计决定。
+    datasource_type = datasource_type_from_artifact(
+        state.get("requirement_spec") if isinstance(state.get("requirement_spec"), dict) else {},
+        fallback="database",
     )
     existing_spec = state.get("requirement_spec")
     if isinstance(existing_spec, dict):

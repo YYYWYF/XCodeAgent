@@ -29,6 +29,7 @@ const dataSourceTypeLabels: Record<string, string> = {
 }
 
 type ProjectPlanEntity = {
+  id: string
   name: string
   description: string
   dataSourceType: string
@@ -117,6 +118,7 @@ function projectPlanEntities(value: unknown): ProjectPlanEntity[] {
         const record = item as Record<string, unknown>
         const rawDataSource = record.data_source
         return {
+          id: fieldText(record.id) || fieldText(record.name),
           name: fieldText(record.name) || fieldText(record.id),
           description: fieldText(record.description),
           dataSourceType:
@@ -128,13 +130,14 @@ function projectPlanEntities(value: unknown): ProjectPlanEntity[] {
       }
       if (typeof item === 'string') {
         return {
+          id: stringRecordField(item, 'id') || item.trim(),
           name: stringRecordField(item, 'name') || item.trim(),
           description: stringRecordField(item, 'description'),
           dataSourceType: '',
           fields: []
         }
       }
-      return { name: '', description: '', dataSourceType: '', fields: [] }
+      return { id: '', name: '', description: '', dataSourceType: '', fields: [] }
     })
     .filter((item) => item.name || item.description || item.fields.length)
 }
@@ -246,15 +249,16 @@ function EntityItem({
         </span>
         <div>
           <Text strong>{entity.name || `实体 ${index + 1}`}</Text>
+          {entity.id ? (
+            <code>{entity.id}</code>
+          ) : null}
           {entity.description ? (
             <Paragraph type="secondary">{entity.description}</Paragraph>
           ) : (
             <Text type="secondary">暂无实体描述</Text>
           )}
         </div>
-        {entity.dataSourceType ? (
-          <Tag>{dataSourceTypeText(entity.dataSourceType)}</Tag>
-        ) : null}
+        <Tag>{entity.dataSourceType ? dataSourceTypeText(entity.dataSourceType) : '待实体设计'}</Tag>
       </header>
       {entity.fields.length ? (
         <div className={cx('project-plan-summary-entity-fields')}>

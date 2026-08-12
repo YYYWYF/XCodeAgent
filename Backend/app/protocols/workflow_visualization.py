@@ -1498,6 +1498,7 @@ def _workflow_visual_payload(
         "selectedPageId": result.get("selectedPageId"),
         "selectedApiContractId": result.get("selected_api_contract_id"),
         "selectedEndpointId": result.get("selected_endpoint_id"),
+        "selectedEntityId": result.get("selected_entity_id"),
         "detailTargetType": result.get("detail_target_type"),
         "buildExecutionScope": result.get("build_execution_scope"),
     }

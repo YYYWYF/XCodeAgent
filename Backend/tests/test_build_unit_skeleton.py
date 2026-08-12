@@ -6,12 +6,13 @@ from app.services.build_unit_skeleton import (
     apply_target_unit_dependencies,
     ensure_build_unit_skeleton,
 )
+from tests.entity_design_test_utils import confirm_entity_designs
 
 
 def _project_plan() -> dict:
-    """构造包含两页和两个数据源的最小确认项目计划。"""
+    """构造包含两页和实体设计已确认为数据库的最小确认项目计划。"""
 
-    return {
+    plan = {
         "version": "plan-v1",
         "architecture": {"frontend": "React", "backend": "FastAPI"},
         "permission_model": {},
@@ -36,13 +37,11 @@ def _project_plan() -> dict:
                 "id": "Order",
                 "name": "Order",
                 "fields": [],
-                "data_source": "database",
             },
             {
                 "id": "Customer",
                 "name": "Customer",
                 "fields": [],
-                "data_source": "database",
             },
         ],
         "api_contracts": [
@@ -58,6 +57,7 @@ def _project_plan() -> dict:
             },
         ],
     }
+    return confirm_entity_designs(plan, source_type="database")
 
 
 class BuildUnitSkeletonTests(unittest.TestCase):
@@ -71,19 +71,16 @@ class BuildUnitSkeletonTests(unittest.TestCase):
                     "id": "Order",
                     "name": "Order",
                     "fields": [],
-                    "data_source": "database",
                 },
                 {
                     "id": "Customer",
                     "name": "Customer",
                     "fields": [],
-                    "data_source": "static",
                 },
                 {
                     "id": "Weather",
                     "name": "Weather",
                     "fields": [],
-                    "data_source": "external_api",
                 },
             ],
             "api_contracts": [
@@ -127,6 +124,21 @@ class BuildUnitSkeletonTests(unittest.TestCase):
                 },
             ],
         }
+        project_plan = confirm_entity_designs(
+            project_plan,
+            source_type="database",
+            entity_ids=["Order"],
+        )
+        project_plan = confirm_entity_designs(
+            project_plan,
+            source_type="static",
+            entity_ids=["Customer"],
+        )
+        project_plan = confirm_entity_designs(
+            project_plan,
+            source_type="external_api",
+            entity_ids=["Weather"],
+        )
 
         plan = ensure_build_unit_skeleton(project_plan, {})
         units = plan["build_units"]
@@ -216,13 +228,7 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         """Static 骨架只建立前端内存数据模块到页面的依赖。"""
 
         project_plan = _project_plan()
-        project_plan["entities"] = [
-            {
-                **entity,
-                "data_source": "static",
-            }
-            for entity in project_plan["entities"]
-        ]
+        project_plan = confirm_entity_designs(project_plan, source_type="static")
         plan = ensure_build_unit_skeleton(project_plan, {})
 
         self.assertIn("frontend:data:static", plan["build_units"])

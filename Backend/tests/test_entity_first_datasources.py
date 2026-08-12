@@ -3,12 +3,14 @@ from __future__ import annotations
 import unittest
 
 from app.agents.main.task_preparer import _task_preparation_datasource_type
+from tests.entity_design_test_utils import confirm_entity_designs
 from app.services.entity_definitions import (
     contract_data_source_id,
     entity_ids,
     plan_data_sources,
 )
 from app.services.project_plan import (
+    apply_project_plan_datasource_policy,
     create_project_plan,
     validate_project_plan_datasource_policy,
 )
@@ -31,24 +33,24 @@ class EntityFirstDatasourceTests(unittest.TestCase):
         self.assertTrue(module_entity["fields"])
         self.assertNotIn("type", module_entity["fields"][0])
 
-    def test_plan_groups_entities_into_sources_with_default_type(self) -> None:
-        """规划阶段实体按数据源类型聚合，类型默认 database。"""
+    def test_plan_entities_do_not_carry_data_source(self) -> None:
+        """规划阶段实体不生成 data_source，数据源清单为空直到实体设计确认。"""
 
         spec = create_requirement_spec("创建一个书籍管理系统")
         plan = create_project_plan(spec, datasource_type="database")
         self.assertNotIn("data_sources", plan)
         sources = plan_data_sources(plan)
+        self.assertEqual(sources, [])
+        self.assertTrue(all("data_source" not in entity for entity in plan["entities"]))
         self.assertEqual(
             entity_ids(spec["entities"]),
-            [entity_id for source in sources for entity_id in entity_ids(source["entities"])],
+            entity_ids(plan["entities"]),
         )
-        self.assertTrue(all(source["type"] == "database" for source in sources))
-        self.assertTrue(all(entity["data_source"] == "database" for entity in plan["entities"]))
         self.assertEqual(plan["architecture"]["backend_tech_stack"]["database"], "MySQL8")
-        self.assertEqual(validate_project_plan_datasource_policy(plan, "database"), [])
+        self.assertEqual(validate_project_plan_datasource_policy(plan), [])
 
-    def test_plan_accepts_mixed_per_source_types(self) -> None:
-        """规划模型可给不同实体选择数据库/静态/外部 API，架构按源聚合。"""
+    def test_entity_design_confirmation_resolves_mixed_sources(self) -> None:
+        """数据源由实体设计确认决定，可混合数据库/静态/外部 API 并按源聚合。"""
 
         spec = create_requirement_spec("创建一个书籍管理系统")
         user_entity = next(entity for entity in spec["entities"] if entity["id"] == "User")
@@ -59,27 +61,28 @@ class EntityFirstDatasourceTests(unittest.TestCase):
         plan = create_project_plan(
             spec,
             datasource_type="database",
-            authoritative_agent_plan=True,
-            agent_plan={
-                "data_sources": [
-                    {"id": "database", "type": "database", "entities": [user_entity]},
-                    {"id": "static", "type": "static", "entities": [role_entity]},
-                    {"id": "external_api", "type": "external_api", "entities": [core_entity]},
-                ]
-            },
+        )
+        plan = confirm_entity_designs(
+            plan,
+            source_type="database",
+            entity_ids=[user_entity["id"]],
+        )
+        plan = confirm_entity_designs(plan, source_type="static", entity_ids=[role_entity["id"]])
+        plan = confirm_entity_designs(
+            plan,
+            source_type="external_api",
+            entity_ids=[core_entity["id"]],
         )
         types = {source["type"] for source in plan_data_sources(plan)}
         self.assertEqual(types, {"database", "static", "external_api"})
-        self.assertEqual(
-            {entity["data_source"] for entity in plan["entities"]},
-            {"database", "static", "external_api"},
-        )
-        self.assertEqual(validate_project_plan_datasource_policy(plan, "database"), [])
+        self.assertTrue(all("data_source" not in entity for entity in plan["entities"]))
+        self.assertEqual(validate_project_plan_datasource_policy(plan), [])
+        plan = apply_project_plan_datasource_policy(plan)
         self.assertIn("MySQL8", plan["architecture"]["backend_tech_stack"]["database"])
         self.assertIn("前端内存", plan["architecture"]["frontend"])
 
-    def test_plan_normalizes_invalid_source_type_to_default(self) -> None:
-        """规划把 mock 等非法类型归一为应用默认类型，不落盘非法值。"""
+    def test_plan_ignores_model_declared_data_sources(self) -> None:
+        """模型输出 data_sources 时规划不落盘 data_source，实体保持待实体设计。"""
 
         spec = create_requirement_spec("创建一个书籍管理系统")
         plan = create_project_plan(
@@ -88,8 +91,10 @@ class EntityFirstDatasourceTests(unittest.TestCase):
                 "data_sources": [{"id": "user_source", "type": "mock"}]
             },
         )
-        self.assertEqual(plan_data_sources(plan)[0]["type"], "database")
-        self.assertEqual(validate_project_plan_datasource_policy(plan, "database"), [])
+        self.assertNotIn("data_sources", plan)
+        self.assertEqual(plan_data_sources(plan), [])
+        self.assertTrue(all("data_source" not in entity for entity in plan["entities"]))
+        self.assertEqual(validate_project_plan_datasource_policy(plan), [])
 
     def test_task_preparation_supports_mixed_types(self) -> None:
         """任务准备类型检测支持混合源：全 static 走前端，其余走后端。"""
@@ -119,46 +124,12 @@ class EntityFirstDatasourceTests(unittest.TestCase):
             "database",
         )
 
-    def test_plan_derives_data_source_type_from_entity(self) -> None:
-        """契约绑定实体，data_source_id 由实体数据源类型推导。"""
+    def test_plan_derives_data_source_type_from_entity_design(self) -> None:
+        """契约绑定实体，data_source_id 由已确认实体设计的数据源类型推导。"""
 
         spec = create_requirement_spec("创建一个产品管理系统")
-        plan = create_project_plan(
-            spec,
-            datasource_type="database",
-            authoritative_agent_plan=True,
-            agent_plan={
-                "data_sources": [
-                    {
-                        "id": "database",
-                        "type": "database",
-                        "entities": [{"id": "Product", "name": "产品"}],
-                    }
-                ],
-                "api_contracts": [
-                    {
-                        "id": "product_api",
-                        "entity_ids": ["Product"],
-                        "resource": "Product",
-                        "base_path": "/api/product",
-                        "schemas": {
-                            "Product": {
-                                "type": "object",
-                                "properties": {"id": {"type": "string"}},
-                            }
-                        },
-                        "endpoints": [
-                            {
-                                "id": "product_api.list",
-                                "method": "GET",
-                                "path": "/api/product",
-                                "response_schema_ref": "Product",
-                            }
-                        ],
-                    }
-                ],
-            },
-        )
+        plan = create_project_plan(spec, datasource_type="database")
+        plan = confirm_entity_designs(plan, source_type="database", entity_ids=["Core"])
         sources = plan_data_sources(plan)
         source_ids = {source["id"] for source in sources}
         self.assertIn("database", source_ids)
@@ -168,18 +139,19 @@ class EntityFirstDatasourceTests(unittest.TestCase):
             if source["id"] == "database"
         )
         self.assertEqual(product_source["type"], "database")
-        contract = plan["api_contracts"][0]
-        self.assertEqual(contract["entity_ids"], ["Product"])
+        contract = next(
+            contract
+            for contract in plan["api_contracts"]
+            if contract.get("id") == "core_api"
+        )
+        self.assertEqual(contract["entity_ids"], ["Core"])
         self.assertNotIn("data_source_id", contract)
         self.assertEqual(contract_data_source_id(plan, contract), "database")
-        self.assertEqual(plan["entities"][0]["data_source"], "database")
-        self.assertEqual(
-            validate_project_plan_datasource_policy(plan, "database"),
-            [],
-        )
+        self.assertNotIn("data_source", next(e for e in plan["entities"] if e["id"] == "Core"))
+        self.assertEqual(validate_project_plan_datasource_policy(plan), [])
 
     def test_missing_contract_source_is_auto_added(self) -> None:
-        """契约绑定未分配数据源的实体时，按默认类型自动补源，不再报未知数据源。"""
+        """契约绑定实体清单外的实体时补空壳实体（无 data_source），确认实体设计后解析来源。"""
 
         plan = create_project_plan(
             create_requirement_spec("创建一个产品管理系统"),
@@ -207,6 +179,10 @@ class EntityFirstDatasourceTests(unittest.TestCase):
                 ]
             },
         )
+        product_entity = next(entity for entity in plan["entities"] if entity["id"] == "Product")
+        self.assertNotIn("data_source", product_entity)
+        self.assertEqual(plan_data_sources(plan), [])
+        plan = confirm_entity_designs(plan, source_type="static", entity_ids=["Product"])
         product_sources = [
             source
             for source in plan_data_sources(plan)
@@ -218,10 +194,7 @@ class EntityFirstDatasourceTests(unittest.TestCase):
             contract_data_source_id(plan, plan["api_contracts"][0]),
             product_sources[0]["id"],
         )
-        self.assertEqual(
-            validate_project_plan_datasource_policy(plan, "static"),
-            [],
-        )
+        self.assertEqual(validate_project_plan_datasource_policy(plan), [])
 
 
 if __name__ == "__main__":

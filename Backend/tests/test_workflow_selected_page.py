@@ -229,6 +229,7 @@ class WorkflowSelectedPageTests(unittest.TestCase):
             selectedPageId="inventory",
             selected_api_contract_id=None,
             selected_endpoint_id=None,
+            selected_entity_id=None,
             detail_target_type="page",
             workspace_root=None,
             user_request="把筛选区改成更紧凑的横向布局。",

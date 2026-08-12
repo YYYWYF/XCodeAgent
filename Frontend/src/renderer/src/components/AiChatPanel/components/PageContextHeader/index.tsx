@@ -2,6 +2,7 @@ import {
   ApiOutlined,
   CheckOutlined,
   ClockCircleOutlined,
+  DatabaseOutlined,
   EllipsisOutlined,
   ExpandOutlined,
   ExportOutlined,
@@ -34,7 +35,7 @@ type PageContextHeaderProps = {
   previewAvailable: boolean
   previewLaunchLoading: boolean
   status: PageContextStatus
-  targetType?: 'page' | 'api'
+  targetType?: 'page' | 'api' | 'entity'
   theme: 'light' | 'dark'
 }
 
@@ -58,7 +59,7 @@ function normalizeDisplayPath(value: string): string {
 
 /** 将完整状态句拆成适合紧凑元数据布局的标签和值。 */
 function splitStatusDetail(detail: string): { label: string; value: string } {
-  const designMatch = detail.match(/^(页面设计|API 设计)(已完成|尚未完成)$/)
+  const designMatch = detail.match(/^(页面设计|API 设计|实体设计)(已完成|尚未完成)$/)
   if (designMatch) return { label: designMatch[1], value: designMatch[2] }
 
   const taskMatch = detail.match(/^(开发任务)\s+(.+)$/)
@@ -99,7 +100,13 @@ export default function PageContextHeader({
     <div className={cx('page-context-detail')}>
       <header className={cx('page-context-detail-hero')}>
         <span className={cx('page-context-detail-icon')} aria-hidden="true">
-          {targetType === 'api' ? <ApiOutlined /> : <FileTextOutlined />}
+          {targetType === 'api' ? (
+            <ApiOutlined />
+          ) : targetType === 'entity' ? (
+            <DatabaseOutlined />
+          ) : (
+            <FileTextOutlined />
+          )}
         </span>
         <div className={cx('page-context-detail-heading')}>
           <Text className={cx('page-context-detail-title')} strong title={pageTitle}>
@@ -168,7 +175,13 @@ export default function PageContextHeader({
   return (
     <section
       className={cx('page-context-header')}
-      aria-label={targetType === 'api' ? '当前 API 信息' : '当前页面信息'}
+      aria-label={
+        targetType === 'api'
+          ? '当前 API 信息'
+          : targetType === 'entity'
+            ? '当前实体信息'
+            : '当前页面信息'
+      }
     >
       <Popover
         content={detailContent}
@@ -177,12 +190,20 @@ export default function PageContextHeader({
         trigger="click"
       >
         <button
-          aria-label={`查看${targetType === 'api' ? ' API' : '页面'}详情：${pageTitle}`}
+          aria-label={`查看${
+            targetType === 'api' ? ' API' : targetType === 'entity' ? '实体' : '页面'
+          }详情：${pageTitle}`}
           className={cx('page-context-primary')}
           type="button"
         >
           <span className={cx('page-context-icon')} aria-hidden="true">
-            {targetType === 'api' ? <ApiOutlined /> : <FileTextOutlined />}
+            {targetType === 'api' ? (
+              <ApiOutlined />
+            ) : targetType === 'entity' ? (
+              <DatabaseOutlined />
+            ) : (
+              <FileTextOutlined />
+            )}
           </span>
           <span className={cx('page-context-identity')}>
             <Text className={cx('page-context-title')} strong title={pageTitle}>

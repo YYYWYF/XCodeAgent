@@ -102,9 +102,17 @@ export type WorkflowClarificationChoiceAnswer = {
 }
 
 export type WorkflowDetailReviewTarget = {
-  target_type: 'page' | 'endpoint'
+  target_type: 'page' | 'endpoint' | 'entity'
   target_id: string
   name?: string
+  entity_id?: string
+  description?: string
+  module_id?: string
+  data_source_type?: string
+  fields?: Array<Record<string, unknown>>
+  table_design?: Record<string, unknown>
+  business_rules?: Array<Record<string, unknown>>
+  relationships?: Array<Record<string, unknown>>
   path?: string
   page_goal?: string
   basic_layout?: Record<string, unknown>
@@ -136,23 +144,27 @@ export type WorkflowDetailReviewTarget = {
 export type WorkflowDetailReview = {
   pages?: WorkflowDetailReviewTarget[]
   endpoints?: WorkflowDetailReviewTarget[]
+  entities?: WorkflowDetailReviewTarget[]
   summary?: {
     page_count?: number
     endpoint_count?: number
+    entity_count?: number
     api_contract_count?: number
     missingSelectedPagePlan?: boolean
     missingSelectedEndpointPlan?: boolean
+    missingSelectedEntityPlan?: boolean
     selectedPageId?: string
     selectedApiContractId?: string
     selectedEndpointId?: string
-    detailTargetType?: 'page' | 'endpoint'
+    selectedEntityId?: string
+    detailTargetType?: 'page' | 'endpoint' | 'entity'
   }
 }
 
 export type WorkflowDetailReviewSubmission = {
   review_status: 'confirmed'
   target_changes: Array<{
-    target_type: 'page' | 'endpoint'
+    target_type: 'page' | 'endpoint' | 'entity'
     target_id: string
     changes: Record<string, unknown>
   }>

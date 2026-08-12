@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   WorkflowEvent,
@@ -19,16 +20,17 @@ import "./DetailConfirmationPageSelector.less";
 
 const { Text, Title } = Typography;
 
-type DetailTargetType = "page" | "endpoint";
+type DetailTargetType = "page" | "endpoint" | "entity";
 
 type Props = {
   apiContracts?: DevelopmentPlanningApiContract[];
   disabled: boolean;
+  entities?: DevelopmentPlanningEntityOption[];
   generating?: boolean;
   loading: boolean;
   mode?: "initial" | "locked";
   onStart: (
-    targetType: "page" | "endpoint",
+    targetType: "page" | "endpoint" | "entity",
     targetId: string,
     targetLabel: string,
     hasDetailPlan: boolean,
@@ -51,6 +53,12 @@ type Props = {
     hasDetailPlan?: boolean;
     label: string;
     path?: string;
+    purpose?: string;
+  };
+  selectedEntity?: {
+    entityId: string;
+    hasDetailPlan?: boolean;
+    label: string;
     purpose?: string;
   };
   selectedPage?: DevelopmentPlanningPageOption;
@@ -77,6 +85,7 @@ function targetSelectionKey(type: DetailTargetType, id: string): string {
 
 /** 从单选值解析当前目标类型。 */
 function targetTypeFromSelection(value: string): DetailTargetType {
+  if (value.startsWith("entity:")) return "entity";
   return value.startsWith("endpoint:") ? "endpoint" : "page";
 }
 
@@ -139,6 +148,7 @@ function renderPageTreeOptions(
 export default function DetailConfirmationPageSelector({
   apiContracts = [],
   disabled,
+  entities = [],
   generating = false,
   loading,
   mode = "initial",
@@ -146,10 +156,17 @@ export default function DetailConfirmationPageSelector({
   pages,
   pageTree = [],
   selectedEndpoint: progressEndpoint,
+  selectedEntity: progressEntity,
   selectedPage: progressPage,
   workflowEvents,
 }: Props): JSX.Element {
   const [selectedTargetKey, setSelectedTargetKey] = useState("");
+  const entityOptions = useMemo(() => {
+    return entities.map((entity) => ({
+      entityKey: targetSelectionKey("entity", entity.id),
+      ...entity
+    }))
+  }, [entities])
   const endpointOptions = useMemo(() => {
     return apiContracts.flatMap((contract) => {
       return contract.endpoints.map((endpoint, endpointIndex) => {
@@ -187,32 +204,48 @@ export default function DetailConfirmationPageSelector({
       ),
     [endpointOptions, selectedTargetKey],
   );
+  const selectedEntity = useMemo(
+    () =>
+      entityOptions.find(
+        (source) => source.entityKey === selectedTargetKey,
+      ),
+    [entityOptions, selectedTargetKey],
+  );
   const selectedTargetType = selectedTargetKey
     ? targetTypeFromSelection(selectedTargetKey)
     : undefined;
   const selectedTarget =
-    selectedTargetType === "endpoint" ? selectedEndpoint : selectedPage;
+    selectedTargetType === "entity"
+      ? selectedEntity
+      : selectedTargetType === "endpoint"
+        ? selectedEndpoint
+        : selectedPage;
   const selectedTargetId =
-    selectedTargetType === "endpoint"
-      ? selectedEndpoint?.endpointId
-      : selectedPage?.pageId;
+    selectedTargetType === "entity"
+      ? selectedEntity?.id
+      : selectedTargetType === "endpoint"
+        ? selectedEndpoint?.endpointId
+        : selectedPage?.pageId;
 
   // 页面/API 清单刷新后只保留用户显式选择；生成过程中不清空当前目标，避免进度页被产物刷新打断。
   useEffect(() => {
     if (generating) return;
     const pageKeys = pages.map((page) => targetSelectionKey("page", page.pageId));
     const endpointKeys = endpointOptions.map((endpoint) => endpoint.endpointKey);
-    const availableKeys = [...pageKeys, ...endpointKeys];
+    const entityKeys = entityOptions.map((entity) => entity.entityKey);
+    const availableKeys = [...pageKeys, ...endpointKeys, ...entityKeys];
     if (!selectedTargetKey || availableKeys.includes(selectedTargetKey)) return;
     setSelectedTargetKey("");
-  }, [endpointOptions, generating, pages, selectedTargetKey]);
+  }, [endpointOptions, entityOptions, generating, pages, selectedTargetKey]);
 
-  const progressTarget = progressEndpoint || progressPage;
-  const progressTargetType: DetailTargetType | undefined = progressEndpoint
-    ? "endpoint"
-    : progressPage
-      ? "page"
-      : undefined;
+  const progressTarget = progressEntity || progressEndpoint || progressPage;
+  const progressTargetType: DetailTargetType | undefined = progressEntity
+    ? "entity"
+    : progressEndpoint
+      ? "endpoint"
+      : progressPage
+        ? "page"
+        : undefined;
 
   if (generating && progressTarget && progressTargetType) {
     return (
@@ -240,17 +273,23 @@ export default function DetailConfirmationPageSelector({
 
   if (mode === "locked" && progressTarget && progressTargetType) {
     const lockedTargetId =
-      progressTargetType === "endpoint"
-        ? progressEndpoint?.endpointId
-        : progressPage?.pageId;
+      progressTargetType === "entity"
+        ? progressEntity?.entityId
+        : progressTargetType === "endpoint"
+          ? progressEndpoint?.endpointId
+          : progressPage?.pageId;
     const lockedTargetPath =
-      progressTargetType === "endpoint"
-        ? progressEndpoint?.path || progressEndpoint?.label
-        : progressPage?.path;
+      progressTargetType === "entity"
+        ? progressEntity?.purpose || progressEntity?.label
+        : progressTargetType === "endpoint"
+          ? progressEndpoint?.path || progressEndpoint?.label
+          : progressPage?.path;
     const lockedTargetPurpose =
-      progressTargetType === "endpoint"
-        ? progressEndpoint?.purpose || "补充接口用途、处理逻辑和数据来源设计。"
-        : progressPage?.purpose;
+      progressTargetType === "entity"
+        ? progressEntity?.purpose || "补充实体字段、表结构与业务规则设计。"
+        : progressTargetType === "endpoint"
+          ? progressEndpoint?.purpose || "补充接口用途、处理逻辑和数据来源设计。"
+          : progressPage?.purpose;
     return (
       <section className={cx("detail-page-selector", "locked-mode")}>
         <div className={cx("detail-page-selector-backdrop")} />
@@ -271,9 +310,11 @@ export default function DetailConfirmationPageSelector({
             className={cx("detail-page-selector-locked-copy")}
             type="secondary"
           >
-            {progressTargetType === "endpoint"
-              ? "为避免接口实现跳过契约细化，请先生成该接口的用途、处理逻辑与数据来源设计。"
-              : "为避免自由对话跳过页面设计，请先生成该页面的布局、状态、交互与验收标准。"}
+            {progressTargetType === "entity"
+              ? "为避免实现阶段发明字段，请先生成该实体的字段、表结构与业务规则设计。"
+              : progressTargetType === "endpoint"
+                ? "为避免接口实现跳过契约细化，请先生成该接口的用途、处理逻辑与数据来源设计。"
+                : "为避免自由对话跳过页面设计，请先生成该页面的布局、状态、交互与验收标准。"}
           </Text>
           <div className={cx("detail-page-selector-target")}>
             <div>
@@ -295,7 +336,9 @@ export default function DetailConfirmationPageSelector({
                 lockedTargetId,
                 progressTarget.label,
                 Boolean(progressTarget.hasDetailPlan),
-                progressTargetType === "endpoint" && progressEndpoint
+                progressTargetType === "entity"
+                  ? undefined
+                  : progressTargetType === "endpoint" && progressEndpoint
                   ? {
                     apiContractId: progressEndpoint.apiContractId,
                     endpointId: progressEndpoint.endpointId,
@@ -332,16 +375,15 @@ export default function DetailConfirmationPageSelector({
           </Text>
           <Title level={2}>选择要开始设计的对象</Title>
           <Text type="secondary">
-            页面和 API
-            接口目录来自项目计划。你可以自行选择先开始页面设计，还是接口设计。
+            页面、API 接口和实体目录来自项目计划。你可以自行选择先开始页面设计、接口设计或实体设计。
           </Text>
         </header>
 
         {loading ? (
           <Skeleton active paragraph={{ rows: 4 }} title={false} />
-        ) : pages.length || endpointOptions.length ? (
+        ) : pages.length || endpointOptions.length || entityOptions.length ? (
           <Radio.Group
-            aria-label="选择要开始设计的页面或接口"
+            aria-label="选择要开始设计的页面、接口或实体"
             className={cx("detail-page-selector-target-choice")}
             onChange={(event) => setSelectedTargetKey(String(event.target.value))}
             value={selectedTargetKey || undefined}
@@ -415,10 +457,44 @@ export default function DetailConfirmationPageSelector({
                   </Text>
                 )}
               </section>
+
+              <section className={cx("detail-page-selector-target-section")}>
+                <Text className={cx("detail-page-selector-section-title")} strong>
+                  选择要开始设计的实体
+                </Text>
+                {entityOptions.length ? (
+                  <div className={cx("detail-page-selector-options")}>
+                    {entityOptions.map((entity) => (
+                      <Radio.Button
+                        key={entity.id}
+                        value={entity.entityKey}
+                      >
+                        <span className={cx("detail-page-selector-name")}>
+                          <DatabaseOutlined />
+                          <span className={cx("detail-page-selector-entity-label")}>
+                            {entity.label}
+                          </span>
+                          {entity.id ? `（${entity.id}）` : ""}
+                        </span>
+                        <span className={cx("detail-page-selector-purpose")}>
+                          {entity.purpose}
+                        </span>
+                      </Radio.Button>
+                    ))}
+                  </div>
+                ) : (
+                  <Text
+                    className={cx("detail-page-selector-empty")}
+                    type="secondary"
+                  >
+                    项目计划中暂无可设计实体。
+                  </Text>
+                )}
+              </section>
             </div>
           </Radio.Group>
         ) : (
-          <Text type="secondary">项目计划中暂无可设计页面或接口。</Text>
+          <Text type="secondary">项目计划中暂无可设计页面、接口或实体。</Text>
         )}
 
         <div className={cx("detail-page-selector-action-bar")}>
@@ -436,7 +512,9 @@ export default function DetailConfirmationPageSelector({
                 selectedTargetId,
                 selectedTarget.label,
                 Boolean(selectedTarget.hasDetailPlan),
-                selectedTargetType === "endpoint" && selectedEndpoint
+                selectedTargetType === "entity"
+                  ? undefined
+                  : selectedTargetType === "endpoint" && selectedEndpoint
                   ? {
                     apiContractId: selectedEndpoint.apiContractId,
                     endpointId: selectedEndpoint.rawEndpointId,

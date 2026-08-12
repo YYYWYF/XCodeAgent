@@ -3,6 +3,7 @@ import type {
   ApplicationSchemaConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption
 } from '../typings';
@@ -175,6 +176,7 @@ export async function inspectWorkspacePlanningArtifacts(
   pages: DevelopmentPlanningPageOption[];
   pageTree: DevelopmentPlanningPageTreeNode[];
   apiContracts: DevelopmentPlanningApiContract[];
+  entities: DevelopmentPlanningEntityOption[];
 }> {
   const workspaceApi = window.xcodeAgent?.workspace;
   if (!workspaceApi?.inspectPlanningArtifacts) {

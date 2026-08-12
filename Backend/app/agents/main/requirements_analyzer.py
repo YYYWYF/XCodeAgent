@@ -22,7 +22,7 @@ def _requirements_prompt(
     existing_spec: dict[str, Any] | None = None,
     datasource_type: DatasourceType = "database",
 ) -> str:
-    """构建需求模型提示，并注入只读的应用数据源类型。"""
+    """构建需求模型提示；数据源不属于需求与应用级，由实体设计阶段选择。"""
 
     revision_context = (
         "Revise the existing RequirementSpec using the latest user feedback. "
@@ -65,8 +65,8 @@ def _requirements_prompt(
         "This stage only generates business entities. Each entity has a stable id, name, description, "
         "and fields that are display-only business information (label and description only). Do NOT "
         "generate field names, field types, data sources, or any database/external-api/static choice "
-        "here; the data source for each entity is decided in the project-planning stage (database by "
-        "default). Never emit data_sources or the legacy type mock.\n"
+        "here or in the project-planning stage; the data source for each entity is decided and "
+        "confirmed in the entity-design stage. Never emit data_sources or the legacy type mock.\n"
         f"{clarification_policy}"
         f"{followup_policy}"
         "When asking, questions can be choice, text, or yesno. For every choice question, first decide "

@@ -156,7 +156,7 @@ EndpointDetail 在单个 endpoint 设计链路内部固定分为两步，不新�
 - 待确认问题；
 - 默认假设。
 
-当前实现通过 `agents/main/requirements_analyzer.py` 直接调用 `create_chat_model()`，并只绑定通用 `tools/ask_user.py`。该边界不创建 Main DeepAgent，不加载 workspace backend，也不暴露 `task`、Frontend/Data Source/Test subagent 或文件读写工具。需求分析提示词明确要求覆盖应用信息、用户角色、功能模块、页面清单、实体清单、业务流程和验收标准；实体只携带展示信息（名称/说明），不选择数据源，数据源类型在项目规划阶段按实体决定；若模型判断信息缺失、模糊或不适合假设，应生成 `ask_user` tool call，由后端解析为 1-4 个待确认问题。
+当前实现通过 `agents/main/requirements_analyzer.py` 直接调用 `create_chat_model()`，并只绑定通用 `tools/ask_user.py`。该边界不创建 Main DeepAgent，不加载 workspace backend，也不暴露 `task`、Frontend/Data Source/Test subagent 或文件读写工具。需求分析提示词明确要求覆盖应用信息、用户角色、功能模块、页面清单、实体清单、业务流程和验收标准；实体只携带展示信息（名称/说明），不选择数据源；数据源只属于实体，在实体设计阶段选择并确认；若模型判断信息缺失、模糊或不适合假设，应生成 `ask_user` tool call，由后端解析为 1-4 个待确认问题。
 
 `ask_user` 是通用的人机确认工具，不包含 requirements 专用问题规则。后续项目计划、单页面设计、数据源确认等阶段需要用户输入时，也应复用该工具，由对应 Agent 根据上下文决定问题内容。
 
@@ -224,7 +224,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - `architecture`：前端、后端、数据和测试策略；
 - `api_contracts`：唯一的业务字段 Schema、资源 endpoint 和输入输出 Schema 引用；
 - `frontend_pages`：菜单树与页面叶子混合结构；菜单节点至少包含 `name`、`unique_path`、`children`，页面叶子保留 `pageId`、名称、路由、描述、模块归属、状态、权限及 `references`；
-- `entities`：ProjectPlan 顶层只保留实体列表，实体优先。每个实体包含 id、名称、说明、带类型的字段定义（snake_case 字段名 + 语义类型 text/long_text/number/decimal/date/datetime/enum/boolean）以及 `data_source`（仅为三种类型字符串之一：database/external_api/static，默认 database；数据源没有 id 或 name 概念）；`data_sources` 不单独持久化，按实体 `data_source` 类型确定性推导。需求层（RequirementSpec）的实体字段只是“需要展示的实体信息”（名称、说明，不生成字段名与类型，也不选择数据源）；项目规划层为每个实体选择数据源类型（可混合三种类型）。API 契约以 `entity_ids` 数组绑定实体（可多实体），`data_source_id` 由系统按首实体数据源类型推导，MySQL 列类型/约束/关系不写入用户可见工件；
+- `entities`：ProjectPlan 顶层只保留实体列表，实体优先。每个实体包含 id、名称、说明、带类型的字段定义（snake_case 字段名 + 语义类型 text/long_text/number/decimal/date/datetime/enum/boolean），**不生成 `data_source`**——数据源只属于实体，由实体设计阶段选择并确认后写入 `entity_detail_plans`；`data_sources` 不单独持久化，按已确认实体设计的数据源类型确定性推导。需求层（RequirementSpec）的实体字段只是“需要展示的实体信息”（名称、说明，不生成字段名与类型，也不选择数据源）；项目规划层不选择数据源。API 契约以 `entity_ids` 数组绑定实体（可多实体），`data_source_id` 由系统按已确认实体设计的数据源类型推导，MySQL 列类型/约束/关系不写入用户可见工件；
 - `permission_model`：角色、页面访问规则、操作权限和默认权限策略；
 - `risks`：后续细节确认阶段需要消化的风险和待细化点。
 
@@ -239,7 +239,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 用户只展开需要调整的对象，按页面目标、布局、交互、权限、关系、校验和 Seed 等模板字段修改；
 - 核对数据模型、关系、校验规则和 API 映射；如需字段变更则返回 ProjectPlan 契约调整；
 - 未修改时允许一键确认全部设计；
-- 将确认后的页面详细设计写入 `.xcodeagent/plans/pages/`，EndpointDetail 写入 `.xcodeagent/plans/endpoints/`；`ProjectPlan` 只保存每个产物的路径、状态、哈希和生成依赖，作为单页面生成的唯一索引入口。
+- 将确认后的页面详细设计写入 `.xcodeagent/plans/pages/`，EndpointDetail 写入 `.xcodeagent/plans/endpoints/`，实体详细设计写入 `.xcodeagent/plans/entities/`；`ProjectPlan` 只保存每个产物的路径、状态、哈希和生成依赖，作为单页面生成的唯一索引入口。
 
 该阶段由只读规划逻辑和 page-design 专用 ChatModel 负责，不由代码生成 Agent 负责。
 
@@ -249,9 +249,11 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 
 接口详细设计是 `detail_confirmation` 的 endpoint 内部分支，不新增独立主 Graph 节点。该分支先定位接口契约、分析请求参数、确认数据来源，再设计返回格式、处理逻辑和接口验收标准。确认数据来源时，如果当前 endpoint 关联的数据源是 MySQL/数据库，且 `XCODEAGENT_ENDPOINT_DATABASE_CONTEXT_ENABLED` 显式开启，后端会调用绑定当前工作区的 `get_mysql_table_info` 获取库表信息，并将结果提取概括为 `endpoint_context.database_context` 后输入 endpoint 详细设计模型；模型只能使用该摘要作为现有数据库参考，不接收原始全量工具输出、应用配置或明文密码。连接字段来自 `workspaceRoot/.xcodeagent/application.json` 的 `datasource.db.plantMode`；Renderer 持久化前使用 `/health` 公钥加密 `pwd`，后端只在本次查询内存中解密。已确认的实体字段是数据库操作的唯一权威字段来源：`create_table` 必须使用实体 id 派生表名（snake_case）且只定义实体字段和隐式 `id`，`add_column/alter_*` 只能引用实体字段或 `id`；操作中出现实体未定义字段时确定性校验失败，按既有规则回到 ProjectPlan 修订并重新确认。EndpointDetail 不兼容旧的自由文本数据库决策：每个差异必须显式选择 `already_supported/database_change/backend_adaptation/needs_user_confirmation`，数据库变更必须引用完整 `database_operations`；`database_context` 完成后模型必须直接给出数据库设计——目标表已存在时使用 `mysql_existing` 并提供字段映射与增列/改列 `database_operations`，目标表缺失或数据库不存在时使用 `mysql_new_table` 并直接设计完整 `create_table` 操作；只有 `database_context` 不可用（跳过或失败）且来源确实无法判断时才进入 `needs_user_confirmation`；`operation_refs` 只允许出现在 `database_change` 差异上，`mysql_new_table` 的 `create_table` 由来源类型本身声明、不要求额外字段差异重复引用，也不能产生可执行操作。
 
+实体详细设计是 `detail_confirmation` 的 entity 内部分支，同样不新增独立主 Graph 节点。该分支以 `selectedEntityId` + `detailTargetType=entity` 为入口，从已确认 `ProjectPlan.entities` 中定位实体，并确定性组装 EntityDetail：规范化字段（语义类型、必填、枚举、MySQL 列类型）、目标表结构（database 类型时编译 `entity_mysql_target_table`）、业务规则（主键自增、必填/枚举约束、编码字段唯一索引）、关系设计（本轮计划未声明关系按无处理）、验收标准与风险。实体设计停在 `entity_review` 确认门禁，确认后才把 `entities[].detail_status` 提升为 `confirmed` 并外置到 `.xcodeagent/plans/entities/entity--<entityId>.json/.md`。实体字段由 ProjectPlan 契约控制，审核阶段不可修改字段定义；需要新增或改名时回到 `project_planning` 修订并重新确认。
+
 批量初版设计生成后统一进入一次整体确认。用户提交的页面/数据源修改是对当前可见模板字段的最终确认，后端不得在提交后继续生成用户未审阅的新内容。确认成功后 `pending_project_plan` 才提升为正式 `project_plan`；详细设计文件和轻量 ProjectPlan 索引一起持久化，随后才允许进入 `prepare_build_tasks` 和后续代码生成。
 
-正式 `project-plan.json` 不内嵌 `page_detail_plans` 或 `endpoint_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面叶子的 `pageId` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；菜单节点本身不参与页面唯一性或任务执行校验。后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`，并为每个依赖记录独立 EndpointDetail 的 JSON/Markdown 路径、状态和哈希；页面文件不复制 EndpointDetail 的 `data_origin`、`interface_design` 或 `processing_logic` 正文。持久化时必须先写 `.xcodeagent/plans/endpoints/`，再写 `.xcodeagent/plans/pages/`，任何页面 endpoint 依赖缺少独立详情索引都应直接失败。页面设计模型不得新增、删除或替换这些引用。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与 EndpointDetail，不得重新加载全部页面详情；模型发现 ProjectPlan 缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
+正式 `project-plan.json` 不内嵌 `page_detail_plans`、`endpoint_detail_plans` 或 `entity_detail_plans` 正文。项目规划模型在首次生成时必须完成页面依赖自检：每个页面叶子的 `pageId` 和 `path` 全局唯一，数据型页面声明已存在的 `endpoint_dependencies`，跳转目标属于 `frontend_pages`；菜单节点本身不参与页面唯一性或任务执行校验。后端只从 endpoint 反查数据源，不接受第二份自由维护的 `data_dependencies`。页面详情只原样投射 `permissions`、`endpoint_dependencies` 和 `navigation_targets` 到 `references`，并为每个依赖记录独立 EndpointDetail 的 JSON/Markdown 路径、状态和哈希；实体详情在 `entities[].detail_design` 记录相同的轻量索引。页面文件不复制 EndpointDetail 的 `data_origin`、`interface_design` 或 `processing_logic` 正文。持久化时必须先写 `.xcodeagent/plans/endpoints/`，再写 `.xcodeagent/plans/pages/`（实体详情独立写 `.xcodeagent/plans/entities/`），任何页面 endpoint 依赖缺少独立详情索引都应直接失败。页面设计模型不得新增、删除或替换这些引用。后续单页面任务生成必须从 endpoint id 反查 API contract、Schema 与 EndpointDetail，不得重新加载全部页面详情；模型发现 ProjectPlan 缺少接口或跳转时，必须停止并要求回到 ProjectPlan 修订、重新确认。
 
 当前等待/续跑机制仍是显式状态推断而非 LangGraph 原生 `interrupt`。SQLite checkpointer 负责持久化每个 `thread_id` 的主 Graph 状态；后续若切换到 checkpointer + command resume，应保留同样的状态边界：Graph 节点只恢复阻断节点需要的 ProjectPlan 和 detail review 小型结构化状态，不把完整会话历史重新塞回上下文。
 

@@ -976,8 +976,8 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertTrue(cleanup["pid_file_preserved"])
         self.assertEqual(preserved_pid, "222")
 
-    def test_static_preview_starts_frontend_only_even_when_backend_exists(self) -> None:
-        """Static 必须跳过后端发现、启动和数据库凭据链路。"""
+    def test_preview_starts_frontend_only_when_backend_project_missing(self) -> None:
+        """未识别到后端 Maven 工程时只启动前端，不再读取应用级数据源类型。"""
 
         frontend_result = {
             "status": "running",
@@ -985,13 +985,12 @@ class ProjectLauncherTests(unittest.TestCase):
             "server": {"pid": 123},
         }
         with tempfile.TemporaryDirectory() as workspace:
-            self._write_application(workspace, "static")
             with (
-                patch("app.services.project_launcher.find_backend_project_root") as find_backend,
-                patch("app.services.project_launcher.launch_backend_project") as launch_backend,
                 patch(
-                    "app.services.backend_project_launcher.resolve_application_mysql_config"
-                ) as resolve_credentials,
+                    "app.services.project_launcher.find_backend_project_root",
+                    return_value=None,
+                ) as find_backend,
+                patch("app.services.project_launcher.launch_backend_project") as launch_backend,
                 patch(
                     "app.services.project_launcher.launch_frontend_project",
                     return_value=frontend_result,
@@ -1000,11 +999,10 @@ class ProjectLauncherTests(unittest.TestCase):
                 result = launch_project_preview(workspace)
 
         self.assertEqual(result["status"], "running")
-        self.assertEqual(result["datasource_type"], "static")
-        self.assertEqual(result["backend"]["reason"], "static_frontend_only")
-        find_backend.assert_not_called()
+        self.assertIsNone(result["datasource_type"])
+        self.assertEqual(result["backend"]["reason"], "backend_project_missing")
+        find_backend.assert_called_once()
         launch_backend.assert_not_called()
-        resolve_credentials.assert_not_called()
         launch_frontend.assert_called_once()
 
     def test_database_preview_starts_backend_then_frontend(self) -> None:
@@ -1013,7 +1011,6 @@ class ProjectLauncherTests(unittest.TestCase):
         calls: list[str] = []
         backend_process = MagicMock(pid=321)
         with tempfile.TemporaryDirectory() as workspace:
-            self._write_application(workspace, "database")
             root = Path(workspace).resolve()
             with (
                 patch(
@@ -1038,26 +1035,34 @@ class ProjectLauncherTests(unittest.TestCase):
                 result = launch_project_preview(workspace)
 
         self.assertEqual(result["status"], "running")
-        self.assertEqual(result["datasource_type"], "database")
+        self.assertIsNone(result["datasource_type"])
         self.assertEqual(calls, ["backend", "frontend"])
         self.assertNotIn("_process", result["backend"])
 
     def test_preview_rejects_missing_or_disabled_datasource_config(self) -> None:
-        """缺少应用配置时不得启动任何项目进程。"""
+        """缺少应用级数据源配置时仍按工程结构启动预览（数据源只属于实体设计）。"""
 
-        for datasource_type in (None,):
-            with self.subTest(datasource_type=datasource_type), tempfile.TemporaryDirectory() as workspace:
-                if datasource_type is not None:
-                    self._write_application(workspace, datasource_type)
-                with (
-                    patch("app.services.project_launcher.launch_backend_project") as backend,
-                    patch("app.services.project_launcher.launch_frontend_project") as frontend,
-                ):
-                    result = launch_project_preview(workspace)
-                self.assertEqual(result["status"], "failed")
-                self.assertEqual(result["failed_stage"], "datasource_policy")
-                backend.assert_not_called()
-                frontend.assert_not_called()
+        frontend_result = {
+            "status": "running",
+            "preview_url": "http://127.0.0.1:80",
+            "server": {"pid": 123},
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.services.project_launcher.find_backend_project_root",
+                    return_value=None,
+                ),
+                patch("app.services.project_launcher.launch_backend_project") as backend,
+                patch(
+                    "app.services.project_launcher.launch_frontend_project",
+                    return_value=frontend_result,
+                ) as frontend,
+            ):
+                result = launch_project_preview(workspace)
+        self.assertEqual(result["status"], "running")
+        backend.assert_not_called()
+        frontend.assert_called_once()
 
     def test_launch_project_returns_acceptance_request_after_successful_launch(self) -> None:
         frontend_result = {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.services.detail_review import apply_detail_review_submission
+from tests.entity_design_test_utils import confirm_entity_designs
 from app.services.page_detail_plan import (
     create_page_detail_plan,
     extract_page_detail_context,
@@ -44,14 +45,12 @@ class DetailReviewTests(unittest.TestCase):
                     "id": "User",
                     "name": "User",
                     "fields": [],
-                    "data_source": "static",
                 }
             ],
             "api_contracts": [
                 {
                     "id": "user_api",
                     "entity_ids": ["User"],
-                    "data_source_id": "static",
                     "schemas": {
                         "UserResponse": {"type": "object", "properties": {}}
                     },
@@ -92,6 +91,7 @@ class DetailReviewTests(unittest.TestCase):
                 }
             ],
         }
+        plan = confirm_entity_designs(plan, source_type="static")
         resolved_origin = {
             "source_type": "static",
             "effective_source": {"kind": "frontend_mock", "description": "内存数据"},
@@ -196,14 +196,12 @@ class DetailReviewTests(unittest.TestCase):
                     "id": "User",
                     "name": "User",
                     "fields": [],
-                    "data_source": "database",
                 }
             ],
             "api_contracts": [
                 {
                     "id": "user_api",
                     "entity_ids": ["User"],
-                    "data_source_id": "database",
                     "schemas": {
                         "UserRolesResponse": {"type": "object", "properties": {}}
                     },
@@ -232,6 +230,7 @@ class DetailReviewTests(unittest.TestCase):
                 }
             ],
         }
+        plan = confirm_entity_designs(plan, source_type="database")
 
         with self.assertRaisesRegex(ValueError, "still needs user confirmation"):
             apply_detail_review_submission(
@@ -251,14 +250,12 @@ class DetailReviewTests(unittest.TestCase):
                     "id": "User",
                     "name": "User",
                     "fields": [],
-                    "data_source": "database",
                 }
             ],
             "api_contracts": [
                 {
                     "id": "user_api",
                     "entity_ids": ["User"],
-                    "data_source_id": "database",
                     "schemas": {
                         "UserRolesResponse": {"type": "object", "properties": {}}
                     },
@@ -287,6 +284,7 @@ class DetailReviewTests(unittest.TestCase):
                 }
             ],
         }
+        plan = confirm_entity_designs(plan, source_type="database")
 
         result = apply_detail_review_submission(
             plan,

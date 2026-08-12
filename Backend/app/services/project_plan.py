@@ -113,18 +113,27 @@ def _architecture_for_sources(
 
 def apply_project_plan_datasource_policy(
     project_plan: dict[str, Any],
-    datasource_type: DatasourceType,
+    datasource_type: DatasourceType | None = None,
 ) -> dict[str, Any]:
-    """恢复每源合法类型，并按源类型集合聚合架构实现边界。"""
+    """按已确认实体设计的数据源集合聚合架构边界。
 
-    effective_type = ensure_enabled_datasource_type(datasource_type)
-    projected = apply_authoritative_datasource_type(project_plan, effective_type)
+    应用级不再有数据源类型；实体设计确认前数据源清单为空时，
+    架构使用通用 Java8 + Springboot 默认边界。
+    """
+
+    projected = deepcopy(project_plan)
     architecture = (
         dict(projected.get("architecture"))
         if isinstance(projected.get("architecture"), dict)
         else {}
     )
     data_sources = plan_data_sources(projected)
+    if not data_sources:
+        # 实体设计确认前保留计划生成时的架构边界，避免用默认值覆盖静态/数据库架构。
+        architecture.pop("orm", None)
+        architecture.pop("migration", None)
+        projected["architecture"] = architecture
+        return projected
     policy = _architecture_for_sources(data_sources)
     source_types = {
         str(source.get("type") or "") for source in data_sources
@@ -136,7 +145,7 @@ def apply_project_plan_datasource_policy(
         return projected
     for key in ("backend", "data", "backend_tech_stack", "data_contract"):
         architecture[key] = policy[key]
-    architecture.setdefault("frontend", policy["frontend"])
+    architecture["frontend"] = policy["frontend"]
     architecture.setdefault("testing", policy["testing"])
     projected["architecture"] = architecture
     return projected
@@ -398,27 +407,22 @@ def _ensure_contract_sources(
     project_plan: dict[str, Any],
     default_type: str | None = None,
 ) -> dict[str, Any]:
-    """以实体为契约唯一绑定：补齐实体数据源类型，并推导契约 data_source_id。"""
+    """以实体为契约唯一绑定：计划阶段不生成 data_source，契约数据源由实体设计反查。"""
 
+    del default_type
     updated = deepcopy(project_plan)
     entities = _dict_items(updated.get("entities"))
     contracts = _dict_items(updated.get("api_contracts"))
     if not contracts:
         return updated
     entity_to_source: dict[str, str] = {}
-    source_types: set[str] = set()
     for entity in entities:
         entity_id = str(entity.get("id") or "")
-        source_type = normalize_data_source_type(entity.get("data_source"))
-        if entity_id:
-            entity_to_source[entity_id] = source_type
-        if source_type:
-            source_types.add(source_type)
-    inferred_default = (
-        default_type
-        if default_type in CANONICAL_DATASOURCE_TYPES
-        else ("database" if source_types & {"database", "external_api"} else "static")
-    )
+        raw_source = entity.get("data_source")
+        if entity_id and raw_source is not None and str(raw_source).strip():
+            source_type = normalize_data_source_type(raw_source)
+            if source_type:
+                entity_to_source[entity_id] = source_type
     added_entities: list[dict[str, Any]] = []
     for contract in contracts:
         entity_ids_list = _string_items(contract.get("entity_ids"))
@@ -427,16 +431,16 @@ def _ensure_contract_sources(
         resolved_entity_ids: list[str] = []
         for entity_id in entity_ids_list:
             if entity_id not in entity_to_source:
-                entity_to_source[entity_id] = inferred_default
-                added_entities.append(
-                    {
-                        "id": entity_id,
-                        "name": entity_id,
-                        "description": "",
-                        "fields": [],
-                        "data_source": inferred_default,
-                    }
-                )
+                entity_to_source.setdefault(entity_id, "")
+                if not any(str(item.get("id") or "") == entity_id for item in entities):
+                    added_entities.append(
+                        {
+                            "id": entity_id,
+                            "name": entity_id,
+                            "description": "",
+                            "fields": [],
+                        }
+                    )
             resolved_entity_ids.append(entity_id)
         contract["entity_ids"] = resolved_entity_ids
     if added_entities:
@@ -981,14 +985,11 @@ def _planned_data_sources(
 def _entities_from_sources(
     data_sources: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """把规划数据源列表转换为顶层实体列表，实体内嵌 data_source 类型。"""
+    """把规划数据源列表转换为顶层实体列表；计划阶段不写入 data_source。"""
 
     entities: list[dict[str, Any]] = []
     for source in data_sources:
-        source_type = str(source.get("type") or "database")
         for entity in normalize_entities(source.get("entities"), with_types=True):
-            entity = dict(entity)
-            entity["data_source"] = source_type
             entities.append(entity)
     return entities
 
@@ -1069,14 +1070,24 @@ def apply_project_plan_feedback(
 
 def validate_project_plan_datasource_policy(
     project_plan: dict[str, Any],
-    datasource_type: DatasourceType,
+    datasource_type: DatasourceType | None = None,
 ) -> list[str]:
-    """按源校验 ProjectPlan 数据源类型、契约引用和架构实现边界。"""
+    """按源校验 ProjectPlan 数据源类型、契约引用和架构实现边界。
 
-    ensure_enabled_datasource_type(datasource_type)
+    计划阶段实体不携带 data_source；实体设计确认前数据源清单为空时，
+    契约数据源引用校验延后到实体设计阶段，不在此处误报。
+    """
+
+    del datasource_type
     errors: list[str] = []
     sources = plan_data_sources(project_plan)
     source_ids = {str(source.get("id") or "") for source in sources}
+    designed_entity_ids = {
+        str(entity.get("id") or "")
+        for source in sources
+        for entity in normalize_entities(source.get("entities"))
+        if str(entity.get("id") or "").strip()
+    }
     for source in sources:
         source_type = str(source.get("type") or "").strip()
         if source_type not in CANONICAL_DATASOURCE_TYPES:
@@ -1085,6 +1096,12 @@ def validate_project_plan_datasource_policy(
                 f"{source_type or '空'}。"
             )
     for contract in _dict_items(project_plan.get("api_contracts")):
+        contract_entity_ids = set(_string_items(contract.get("entity_ids")))
+        if not sources or not contract_entity_ids:
+            continue
+        # 实体尚未完成实体设计时允许契约暂缺数据源，实体设计确认后再校验。
+        if not contract_entity_ids <= designed_entity_ids:
+            continue
         resolved_source_id = contract_data_source_id(project_plan, contract)
         if not resolved_source_id or resolved_source_id not in source_ids:
             errors.append(

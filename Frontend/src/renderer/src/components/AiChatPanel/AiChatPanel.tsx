@@ -7,6 +7,7 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   ApplicationDevelopmentTask,
@@ -41,6 +42,7 @@ import {
   requiresEndpointDetailDesign,
   requiresInitialDetailDesignSelection,
   requiresPageDetailDesign,
+  requiresEntityDetailDesign,
   sessionDetailTargetKey,
   workflowDetailTargetKey,
   type WorkflowPreviewTarget
@@ -70,6 +72,7 @@ type Props = {
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
+  developmentPlanningEntities: DevelopmentPlanningEntityOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -95,6 +98,7 @@ type ActiveDetailTarget =
   | { type: 'none' }
   | { type: 'page'; pageId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
+  | { type: 'entity'; entityId: string; label: string }
 
 /** 为页面或接口生成稳定的前端目标键，隔离各目标的临时交互状态。 */
 function detailTargetKey(target: ActiveDetailTarget): string {
@@ -102,6 +106,7 @@ function detailTargetKey(target: ActiveDetailTarget): string {
   if (target.type === 'endpoint') {
     return endpointDetailTargetKey(target.apiContractId, target.endpointId)
   }
+  if (target.type === 'entity') return `entity:${target.entityId}`
   return ''
 }
 
@@ -160,10 +165,15 @@ function pageContextStatus(
   designed: boolean,
   tasks: ApplicationDevelopmentTask[],
   mode: PlanExecutionMode,
-  targetType: 'page' | 'api',
+  targetType: 'page' | 'api' | 'entity',
   taskSummary?: DevelopmentPlanningPageOption['taskSummary']
 ): PageContextStatus {
-  const targetLabel = targetType === 'api' ? 'API 设计' : '页面设计'
+  const targetLabel =
+    targetType === 'entity'
+      ? '实体设计'
+      : targetType === 'api'
+        ? 'API 设计'
+        : '页面设计'
   const totalTasks = taskSummary?.total || tasks.length
   const completedTasks =
     taskSummary?.completed ?? tasks.filter((task) => task.status === 'completed').length
@@ -225,6 +235,7 @@ export default function AiChatPanel({
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
+  developmentPlanningEntities,
   editorMode,
   onApplicationUpdate,
   onApplicationLifecycleChange,
@@ -360,6 +371,7 @@ export default function AiChatPanel({
     handleStopPlan,
     handleSend,
     handleStartEndpointDetailConfirmation,
+    handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,
@@ -388,6 +400,7 @@ export default function AiChatPanel({
     selectedApiContractId: activeApiEndpoint?.apiContractId,
     selectedEndpointId: activeApiEndpoint?.endpointId,
     selectedEndpointLabel: activeApiEndpoint?.label,
+    selectedEntityId: activeDetailTarget.type === 'entity' ? activeDetailTarget.entityId : undefined,
     selectedSkills,
     selectedPageId: activePageOption?.pageId || activePageOption?.key,
     selectedPageLabel: activePageOption?.label,
@@ -460,6 +473,21 @@ export default function AiChatPanel({
     }
     return undefined
   }, [activeApiEndpoint, developmentPlanningApiContracts])
+  const activeEntityOption = useMemo(() => {
+    if (activeDetailTarget.type !== 'entity') return undefined
+    return (
+      developmentPlanningEntities.find(
+        (entity) => entity.id === activeDetailTarget.entityId
+      ) || {
+        id: activeDetailTarget.entityId,
+        label: activeDetailTarget.label,
+        purpose: '',
+        dataSourceType: '',
+        designed: false,
+        hasDetailPlan: false
+      }
+    )
+  }, [activeDetailTarget, developmentPlanningEntities])
   const activeEndpointSelectorTarget = activeApiEndpoint
     ? {
         ...activeApiEndpoint,
@@ -471,7 +499,23 @@ export default function AiChatPanel({
         purpose: activeApiEndpointOption?.endpoint.summary
       }
     : undefined
-  const activeHeaderTarget = activeApiEndpoint
+  const activeHeaderTarget = activeDetailTarget.type === 'entity'
+    ? {
+        type: 'entity' as const,
+        title: activeDetailTarget.label,
+        path: activeDetailTarget.entityId,
+        description:
+          activeEntityOption?.purpose ||
+          activeDetailTarget.label ||
+          '当前实体详细设计',
+        keyFeatures: [
+          `实体 ID：${activeDetailTarget.entityId}`,
+          activeEntityOption?.designed || activeEntityOption?.hasDetailPlan
+            ? '状态：已设计'
+            : '状态：待设计'
+        ]
+      }
+    : activeApiEndpoint
     ? {
         type: 'api' as const,
         title: activeApiEndpoint.label,
@@ -499,18 +543,28 @@ export default function AiChatPanel({
         keyFeatures: activePage?.keyFeatures || []
       }
   const activeHeaderStatus = pageContextStatus(
-    activeApiEndpoint
-      ? Boolean(
-          activeApiEndpointOption?.endpoint.designed ||
-            activeApiEndpointOption?.endpoint.hasDetailPlan
-        )
-      : Boolean(
-          activePageOption?.designed || activePageOption?.hasDetailPlan || activePage?.design
-        ),
-    activeApiEndpoint ? [] : activePage?.developmentTasks || [],
+    activeDetailTarget.type === 'entity'
+      ? Boolean(activeEntityOption?.designed || activeEntityOption?.hasDetailPlan)
+      : activeApiEndpoint
+        ? Boolean(
+            activeApiEndpointOption?.endpoint.designed ||
+              activeApiEndpointOption?.endpoint.hasDetailPlan
+          )
+        : Boolean(
+            activePageOption?.designed || activePageOption?.hasDetailPlan || activePage?.design
+          ),
+    activeDetailTarget.type === 'entity'
+      ? []
+      : activeApiEndpoint
+        ? []
+        : activePage?.developmentTasks || [],
     displayedPlanExecutionMode,
     activeHeaderTarget.type,
-    activeApiEndpoint ? undefined : activePageOption?.taskSummary
+    activeDetailTarget.type === 'entity'
+      ? undefined
+      : activeApiEndpoint
+        ? undefined
+        : activePageOption?.taskSummary
   )
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
@@ -571,6 +625,7 @@ export default function AiChatPanel({
     if (detailTargetSelectionRequired) return
     setActiveDetailTarget((currentTarget) => {
       if (currentTarget.type === 'endpoint') return currentTarget
+      if (currentTarget.type === 'entity') return currentTarget
       if (currentTarget.type === 'none') return currentTarget
       const currentPageId = currentTarget.pageId
       if (developmentPlanningPages.length === 0) return currentTarget
@@ -731,6 +786,17 @@ export default function AiChatPanel({
     handleSelectEndpoint(target.apiContractId, target.endpointId).catch(() => undefined)
   }
 
+  /** 从应用大纲切换实体；实体与页面/API 目标互斥，因此会清空当前页面和接口选中态。 */
+  const handleEntitySelect = (entity: DevelopmentPlanningEntityOption): void => {
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    setFreeChatSelected(false)
+    setInteractingDetailTargetKey(`entity:${entity.id}`)
+    setGeneratingDetailTargetKey('')
+    setActiveDetailTarget({ type: 'entity', entityId: entity.id, label: entity.label })
+  }
+
   /** 为当前 API endpoint 新建一条独立会话历史。 */
   const handleCreateEndpointSession = async (
     apiContractId: string,
@@ -827,7 +893,7 @@ export default function AiChatPanel({
 
   /** 从 initial 模式选择目标后仅定位目标，不启动 workfllow，让 locked mode 弹出模板选择。 */
   const handleInitialDetailTargetSelect = async (
-    targetType: 'page' | 'endpoint',
+    targetType: 'page' | 'endpoint' | 'entity',
     targetId: string,
     targetLabel: string,
     _hasDetailPlan: boolean,
@@ -840,7 +906,11 @@ export default function AiChatPanel({
     setRightPanel(undefined)
     setActiveView('chat')
     setFreeChatSelected(false)
-    if (targetType === 'endpoint' && targetContext?.apiContractId) {
+    if (targetType === 'entity') {
+      setActiveDetailTarget({ type: 'entity', entityId: targetId, label: targetLabel })
+      setInteractingDetailTargetKey(`entity:${targetId}`)
+      setGeneratingDetailTargetKey('')
+    } else if (targetType === 'endpoint' && targetContext?.apiContractId) {
       setActiveDetailTarget({
         type: 'endpoint',
         apiContractId: targetContext.apiContractId,
@@ -865,7 +935,7 @@ export default function AiChatPanel({
 
   /** 根据弹框里选择的目标类型启动页面或接口详细设计。 */
   const handleStartDetailDesign = async (
-    targetType: 'page' | 'endpoint',
+    targetType: 'page' | 'endpoint' | 'entity',
     targetId: string,
     targetLabel: string,
     hasDetailPlan: boolean,
@@ -879,6 +949,24 @@ export default function AiChatPanel({
   ): Promise<void> => {
     if (targetType === 'endpoint') {
       await handleStartEndpointDesign(targetId, targetLabel, hasDetailPlan, targetContext)
+      return
+    }
+    if (targetType === 'entity') {
+      setFreeChatSelected(false)
+      const targetKey = `entity:${targetId}`
+      setInteractingDetailTargetKey(targetKey)
+      setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
+      setActiveDetailTarget({ type: 'entity', entityId: targetId, label: targetLabel })
+      const started = await handleStartEntityDetailConfirmation({
+        entityId: targetId,
+        entityLabel: targetLabel,
+        hasDetailPlan
+      })
+      if (started) {
+        onPlanningArtifactsRefresh()
+      } else {
+        setGeneratingDetailTargetKey((current) => (current === targetKey ? '' : current))
+      }
       return
     }
     await handleStartPageDesign(
@@ -982,6 +1070,7 @@ export default function AiChatPanel({
           onCreatePageSession={handleCreatePageSession}
           onCreateEndpointSession={handleCreateEndpointSession}
           onDeleteSession={handleDeleteSession}
+          onEntitySelect={handleEntitySelect}
           onApiEndpointSelect={handleApiEndpointSelect}
           onOpenFreeChat={handleOpenFreeChat}
           onOpenSession={handleOpenChatSession}
@@ -994,7 +1083,9 @@ export default function AiChatPanel({
           pages={developmentPlanningPages}
           pageTree={developmentPlanningPageTree}
           apiContracts={developmentPlanningApiContracts}
+          entities={developmentPlanningEntities}
           selectedApiEndpointKey={activeApiEndpoint?.endpointKey || ''}
+          selectedEntityId={activeDetailTarget.type === 'entity' ? activeDetailTarget.entityId : ''}
           selectedPageId={activePageId}
           filesActive={activeView === 'files'}
           sessionError={sessionError}
@@ -1017,6 +1108,7 @@ export default function AiChatPanel({
             <DetailConfirmationPageSelector
               apiContracts={developmentPlanningApiContracts}
               disabled={loading || workspaceBusy}
+              entities={developmentPlanningEntities}
               generating
               loading={false}
               onStart={handleStartDetailDesign}
@@ -1032,6 +1124,7 @@ export default function AiChatPanel({
             <DetailConfirmationPageSelector
               apiContracts={developmentPlanningApiContracts}
               disabled={loading || workspaceBusy}
+              entities={developmentPlanningEntities}
               generating={loading}
               loading={!developmentPlanningReady}
               onStart={handleInitialDetailTargetSelect}
@@ -1160,16 +1253,28 @@ export default function AiChatPanel({
             )}
 
             {(requiresPageDetailDesign(activePageOption) ||
-              requiresEndpointDetailDesign(activeApiEndpointOption?.endpoint)) &&
+              requiresEndpointDetailDesign(activeApiEndpointOption?.endpoint) ||
+              requiresEntityDetailDesign(activeEntityOption)) &&
             displayedPlanExecutionMode === 'idle' &&
             !detailConfirmationWaitingReview ? (
               <DetailConfirmationPageSelector
                 disabled={loading || workspaceBusy}
+                entities={developmentPlanningEntities}
                 generating={false}
                 loading={false}
                 mode="locked"
                 onStart={handleStartDetailDesign}
                 pages={developmentPlanningPages}
+                selectedEntity={
+                  activeDetailTarget.type === 'entity'
+                    ? {
+                        entityId: activeDetailTarget.entityId,
+                        label: activeDetailTarget.label,
+                        hasDetailPlan: Boolean(activeEntityOption?.hasDetailPlan),
+                        purpose: activeEntityOption?.purpose
+                      }
+                    : undefined
+                }
                 selectedEndpoint={activeEndpointSelectorTarget}
                 selectedPage={activePageOption}
                 workflowEvents={activeWorkflow?.events}

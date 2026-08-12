@@ -164,6 +164,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("selected_endpoint_id"))
         or _optional_text(resume_values_from_state.get("selected_endpoint_id"))
     )
+    selected_entity_id = (
+        _optional_text(payload.get("selectedEntityId"))
+        or _optional_text(payload.get("selected_entity_id"))
+        or _optional_text(forwarded_props.get("selectedEntityId"))
+        or _optional_text(forwarded_props.get("selected_entity_id"))
+        or _optional_text(resume_values_from_state.get("selected_entity_id"))
+    )
     page_template = _optional_dict(
         payload.get("pageTemplate")
         or forwarded_props.get("pageTemplate")
@@ -178,6 +185,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     # endpoint 详细设计和页面详细设计互斥；本次明确选择接口时，不允许恢复态里的旧页面 ID 回流。
     if detail_target_type == "endpoint" or selected_endpoint_id:
         selectedPageId = ""
+    # 实体详细设计与页面/接口互斥；本次明确选择实体时，不允许旧页面或旧接口 ID 回流。
+    if detail_target_type == "entity" or selected_entity_id:
+        selectedPageId = ""
+        selected_endpoint_id = ""
+        selected_api_contract_id = ""
     workspace = (
         _optional_text(payload.get("workspace"))
         or _optional_text(payload.get("workspaceRoot"))
@@ -271,6 +283,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
         **({"selected_api_contract_id": selected_api_contract_id} if selected_api_contract_id else {}),
         **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
+        **({"selected_entity_id": selected_entity_id} if selected_entity_id else {}),
         **({"detail_target_type": detail_target_type} if detail_target_type else {}),
         **({"page_template": page_template} if page_template else {}),
         "build_execution_scope": build_execution_scope,
@@ -595,9 +608,9 @@ def _supported_editor_mode(value: str) -> str:
 
 
 def _supported_detail_target_type(value: str) -> str:
-    """校验详细设计目标类型；批次 A 仅开放页面与 endpoint 两种新语义。"""
+    """校验详细设计目标类型；页面、endpoint 与实体三种目标均可选。"""
 
-    return value if value in {"page", "endpoint"} else ""
+    return value if value in {"page", "endpoint", "entity"} else ""
 
 
 def _resume_from_state(
@@ -687,6 +700,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "selectedPageId",
         "selected_api_contract_id",
         "selected_endpoint_id",
+        "selected_entity_id",
         "detail_target_type",
         "page_spec_draft",
         "data_source_spec_draft",
@@ -764,6 +778,9 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     selected_endpoint_id = _optional_text(
         merged.get("selected_endpoint_id") or merged.get("selectedEndpointId")
     )
+    selected_entity_id = _optional_text(
+        merged.get("selected_entity_id") or merged.get("selectedEntityId")
+    )
     detail_target_type = _supported_detail_target_type(
         _optional_text(merged.get("detail_target_type") or merged.get("detailTargetType"))
     )
@@ -771,6 +788,8 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         resumed_values["selected_api_contract_id"] = selected_api_contract_id
     if selected_endpoint_id:
         resumed_values["selected_endpoint_id"] = selected_endpoint_id
+    if selected_entity_id:
+        resumed_values["selected_entity_id"] = selected_entity_id
     if detail_target_type:
         resumed_values["detail_target_type"] = detail_target_type
     return resumed_values

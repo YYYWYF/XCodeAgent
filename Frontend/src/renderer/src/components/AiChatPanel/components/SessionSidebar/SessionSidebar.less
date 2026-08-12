@@ -782,6 +782,72 @@
   &.@{class-prefix}-delete { color: #c33b35; background: #ffe8e7; }
 }
 
+.@{class-prefix}-entity-section { padding-bottom: 14px; }
+
+.@{class-prefix}-entity-group {
+  position: relative;
+  margin-left: 11px;
+  padding-left: 17px;
+
+  &::before {
+    position: absolute;
+    top: 0;
+    bottom: 4px;
+    left: 0;
+    width: 1px;
+    content: '';
+    background: #e1e3ed;
+  }
+}
+
+.@{class-prefix}-entity-row {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 52px 2px 4px;
+  color: #34405d;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--outline-hover-bg);
+    outline: none;
+  }
+
+  &.@{class-prefix}-selected {
+    color: var(--outline-accent);
+    background: var(--outline-accent-soft);
+  }
+}
+
+.@{class-prefix}-entity-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--outline-accent);
+  font-size: 12px;
+}
+
+.@{class-prefix}-entity-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.@{class-prefix}-entity-meta {
+  overflow: hidden;
+  color: #7c8498;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .@{class-prefix}-session-footer-nav {
   flex: 0 0 auto;
   margin: 0 -18px;
@@ -1201,6 +1267,7 @@
   .@{class-prefix}-api-group-title,
   .@{class-prefix}-outline-row,
   .@{class-prefix}-api-row,
+  .@{class-prefix}-entity-row,
   .@{class-prefix}-session-footer-nav button,
   .@{class-prefix}-session-user { color: #d9dce5; }
 
@@ -1213,10 +1280,12 @@
   }
 
   .@{class-prefix}-outline-children::before,
-  .@{class-prefix}-api-list::before { background: #303646; }
+  .@{class-prefix}-api-list::before,
+  .@{class-prefix}-entity-group::before { background: #303646; }
   .@{class-prefix}-outline-empty { color: #858c9d; }
   .@{class-prefix}-outline-meta,
-  .@{class-prefix}-outline-menu-count { color: #8f96a8; }
+  .@{class-prefix}-outline-menu-count,
+  .@{class-prefix}-entity-meta { color: #8f96a8; }
   .@{class-prefix}-outline-design-status {
     color: #c3adff;
     background: rgba(167, 130, 255, 0.13);

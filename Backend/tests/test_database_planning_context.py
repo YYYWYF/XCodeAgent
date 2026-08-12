@@ -16,6 +16,7 @@ from app.services.database_planning_context import (
     database_context_requirement,
     prepare_database_planning_context,
 )
+from tests.entity_design_test_utils import confirm_entity_designs
 
 
 _TEST_WORKSPACE_ROOT = "/workspace-a"
@@ -33,9 +34,9 @@ def _workspace_tool(tool: SimpleNamespace):
 
 
 def _project_plan(method: str = "POST") -> dict:
-    """构造包含 MySQL 数据源和单接口契约的测试 ProjectPlan。"""
+    """构造实体设计已确认为数据库、含单接口契约的测试 ProjectPlan。"""
 
-    return {
+    plan = {
         "version": "plan-v1",
         "confirmation_status": "confirmed",
         "entities": [
@@ -43,7 +44,6 @@ def _project_plan(method: str = "POST") -> dict:
                 "id": "Order",
                 "name": "订单",
                 "fields": [],
-                "data_source": "database",
             }
         ],
         "api_contracts": [
@@ -70,6 +70,7 @@ def _project_plan(method: str = "POST") -> dict:
             }
         ],
     }
+    return confirm_entity_designs(plan, source_type="database")
 
 
 def _build_context(endpoint_id: str = "orders.create") -> dict:
@@ -631,7 +632,11 @@ class DatabaseContextV1Tests(unittest.TestCase):
                 encoding="utf-8",
             )
             plan = _project_plan()
-            plan["entities"][0]["data_source"] = "external_api"
+            plan = confirm_entity_designs(
+                plan,
+                source_type="external_api",
+                entity_ids=["Order"],
+            )
             plan["api_contracts"][0]["endpoints"][0]["detail_design"] = {
                 "status": "confirmed",
                 "json_path": str(detail_path),

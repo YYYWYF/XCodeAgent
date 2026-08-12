@@ -96,6 +96,16 @@ type WorkbenchApiContract = {
   }>
 }
 
+type WorkbenchEntityOption = {
+  id: string
+  label: string
+  purpose: string
+  dataSourceType: string
+  designed: boolean
+  detailPlanStatus?: string
+  hasDetailPlan: boolean
+}
+
 /** 将 API 路径统一为带前导斜杠的目录形式。 */
 function normalizeApiPath(value: unknown, fallback = '/api'): string {
   const text = String(value || '').trim()
@@ -170,6 +180,23 @@ async function endpointDetailPlanExists(
     'plans',
     'endpoints',
     `${detailFileStem(`${apiContractId}--${endpointId}`, 'endpoint--')}.json`
+  )
+  try {
+    const content = await fs.readFile(detailPath, 'utf8')
+    return Boolean(content.trim())
+  } catch {
+    return false
+  }
+}
+
+/** 检查选中实体是否已经存在外置详情 JSON。 */
+async function entityDetailPlanExists(workspaceRoot: string, entityId: string): Promise<boolean> {
+  const detailPath = path.join(
+    workspaceRoot,
+    '.xcodeagent',
+    'plans',
+    'entities',
+    `${detailFileStem(entityId, 'entity--')}.json`
   )
   try {
     const content = await fs.readFile(detailPath, 'utf8')
@@ -299,6 +326,58 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
     groupedContracts.set(basePath, group)
   })
   return [...groupedContracts.values()]
+}
+
+/** 从 ProjectPlan.entities 生成工作台实体大纲选项。 */
+function projectPlanEntities(value: unknown): WorkbenchEntityOption[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return recordItems((value as Record<string, unknown>).entities).map((record, index) => {
+    const id = String(record.id || `entity-${index + 1}`).trim()
+    const detailDesign =
+      record.detail_design &&
+      typeof record.detail_design === 'object' &&
+      !Array.isArray(record.detail_design)
+        ? (record.detail_design as Record<string, unknown>)
+        : {}
+    const rawDataSource = record.data_source
+    const dataSourceType =
+      typeof rawDataSource === 'string'
+        ? rawDataSource
+        : rawDataSource &&
+            typeof rawDataSource === 'object' &&
+            !Array.isArray(rawDataSource)
+          ? String((rawDataSource as Record<string, unknown>).type || '')
+          : ''
+    return {
+      id,
+      label: normalizeWorkbenchNodeLabel(record.name, id),
+      purpose: normalizeWorkbenchNodeLabel(
+        record.description || record.name,
+        `实体 ${index + 1}`
+      ),
+      dataSourceType,
+      designed: Boolean(detailDesign.json_path || record.detail_plan_id),
+      detailPlanStatus: String(detailDesign.status || record.detail_status || ''),
+      hasDetailPlan: Boolean(detailDesign.json_path || record.detail_plan_id)
+    }
+  })
+}
+
+/** 只根据外置实体详情文件补充每个实体的设计状态。 */
+async function mergeWorkbenchEntityStatus(
+  workspaceRoot: string,
+  entities: WorkbenchEntityOption[]
+): Promise<WorkbenchEntityOption[]> {
+  return Promise.all(
+    entities.map(async (entity) => {
+      const hasDetailPlan = await entityDetailPlanExists(workspaceRoot, entity.id)
+      return {
+        ...entity,
+        designed: hasDetailPlan,
+        hasDetailPlan
+      }
+    })
+  )
 }
 
 /** 只根据外置页面详情文件补充每个页面的设计状态。 */
@@ -472,6 +551,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   pages: WorkbenchPageOption[]
   pageTree: WorkbenchPageTreeNode[]
   apiContracts: WorkbenchApiContract[]
+  entities: WorkbenchEntityOption[]
 }> {
   const artifactRoot = path.join(workspaceRoot, '.xcodeagent')
   const artifacts = [
@@ -484,6 +564,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   let plannedPages = new Map<string, Record<string, unknown>>()
   let pageTree: WorkbenchPageTreeNode[] = []
   let apiContracts: WorkbenchApiContract[] = []
+  let entities: WorkbenchEntityOption[] = []
   let projectPlanLoaded = false
 
   for (const artifact of artifacts) {
@@ -528,6 +609,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
       plannedPages = projectPlanPages(projectPlan)
       pageTree = projectPlanPageTree(projectPlan)
       apiContracts = projectPlanApiContracts(projectPlan)
+      entities = projectPlanEntities(projectPlan)
       projectPlanLoaded = true
       break
     } catch (error: unknown) {
@@ -549,6 +631,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   )
   const pagesById = new Map(pages.map((page) => [page.pageId, page]))
   apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
+  entities = await mergeWorkbenchEntityStatus(workspaceRoot, entities)
   const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
 
   return {
@@ -558,7 +641,8 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     invalid,
     pages,
     pageTree: mergeWorkbenchPageTreeStatus(pageTree, pagesById),
-    apiContracts
+    apiContracts,
+    entities
   }
 }
 

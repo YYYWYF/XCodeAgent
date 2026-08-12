@@ -34,7 +34,8 @@ export type SendWorkflowMessageOptions = {
   selectedPageId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint'
+  selectedEntityId?: string
+  detailTargetType?: 'page' | 'endpoint' | 'entity'
   buildExecutionScope?: WorkflowBuildExecutionScope
   workflowAction?: WorkflowAction
   workflowDebug?: WorkflowDebugOptions
@@ -75,6 +76,7 @@ export function buildWorkflowForwardedProps(
     selectedPageId: options.selectedPageId,
     selectedApiContractId: options.selectedApiContractId,
     selectedEndpointId: options.selectedEndpointId,
+    selectedEntityId: options.selectedEntityId,
     detailTargetType: options.detailTargetType,
     workflowAction: options.workflowAction,
     workflowDebug: options.workflowDebug,

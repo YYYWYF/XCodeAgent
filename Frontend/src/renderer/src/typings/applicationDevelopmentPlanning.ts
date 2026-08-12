@@ -57,6 +57,15 @@ export type DevelopmentPlanningApiContract = {
   dataSourceIds?: string[]
   endpoints: DevelopmentPlanningApiEndpoint[]
 }
+export type DevelopmentPlanningEntityOption = {
+  id: string
+  label: string
+  purpose: string
+  dataSourceType: string
+  detailPlanStatus?: string
+  hasDetailPlan: boolean
+  designed: boolean
+}
 export type MenuDevelopmentPlan = {
   menuKey: string
   menuLabel: string

@@ -1,6 +1,7 @@
 import { MIN_ASSISTANT_PANEL_WIDTH, MIN_RIGHT_PANEL_WIDTH, SPLIT_HANDLE_WIDTH } from './constants'
 import type {
   DevelopmentPlanningApiEndpoint,
+  DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeFile,
@@ -287,4 +288,11 @@ export function requiresEndpointDetailDesign(
   endpoint: DevelopmentPlanningApiEndpoint | undefined
 ): boolean {
   return Boolean(endpoint && !endpoint.designed && !endpoint.hasDetailPlan)
+}
+
+/** 以当前实体的落盘详情状态判断是否需要锁定对话区。 */
+export function requiresEntityDetailDesign(
+  entity: DevelopmentPlanningEntityOption | undefined
+): boolean {
+  return Boolean(entity && !entity.designed && !entity.hasDetailPlan)
 }

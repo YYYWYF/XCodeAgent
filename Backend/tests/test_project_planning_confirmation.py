@@ -8,9 +8,14 @@ from unittest.mock import ANY, patch
 
 from app.graph.nodes.planning import project_planning as run_project_planning
 from app.services.entity_definitions import plan_data_sources
-from app.services.project_plan import apply_project_plan_feedback, create_project_plan
+from app.services.project_plan import (
+    apply_project_plan_datasource_policy,
+    apply_project_plan_feedback,
+    create_project_plan,
+)
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import write_project_plan_document
+from tests.entity_design_test_utils import confirm_entity_designs
 
 
 def project_planning(state: dict) -> dict:
@@ -65,11 +70,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                     }
                 )
 
-        planner.assert_called_once_with(
-            spec,
-            datasource_type="database",
-            on_token=ANY,
-        )
+        planner.assert_called_once_with(spec, on_token=ANY)
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["mode"], "project_plan_confirmation")
         self.assertEqual(
@@ -293,6 +294,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
             "回答：人员列表页依赖数据源/api/database",
             "static",
         )
+        updated = confirm_entity_designs(updated, source_type="static")
 
         page = updated["frontend_pages"][0]
         dependency = updated["page_data_dependencies"][0]
@@ -374,15 +376,12 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         self.assertEqual(dependency["data_source_ids"], [])
         self.assertEqual(dependency["api_contract_ids"], [])
         self.assertEqual(dependency["endpoint_dependencies"], [])
-        self.assertEqual(plan_data_sources(result["project_plan"])[0]["type"], "static")
-        self.assertNotIn(
-            "database",
-            result["project_plan"]["architecture"]["backend_tech_stack"],
-        )
-        self.assertNotIn(
-            "cache",
-            result["project_plan"]["architecture"]["backend_tech_stack"],
-        )
+        self.assertEqual(plan_data_sources(result["project_plan"]), [])
+        result_plan = confirm_entity_designs(result["project_plan"], source_type="static")
+        result_plan = apply_project_plan_datasource_policy(result_plan)
+        self.assertEqual(plan_data_sources(result_plan)[0]["type"], "static")
+        self.assertNotIn("database", result_plan["architecture"]["backend_tech_stack"])
+        self.assertNotIn("cache", result_plan["architecture"]["backend_tech_stack"])
         self.assertNotIn("task_inputs", result["project_plan"])
 
     def test_project_plan_confirmation_ignores_question_text_negative_words(self) -> None:
@@ -431,13 +430,11 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                 **plan,
                 "app": {**plan["app"], "name": "仓储计划应用"},
                 "entities": [
-                    {
-                        **entity,
-                        "data_source": "static",
-                    }
+                    entity
                     for entity in plan["entities"]
                 ],
             }
+            synchronized = confirm_entity_designs(synchronized, source_type="static")
 
             with patch(
                 "app.graph.nodes.planning.sync_project_plan_from_markdown",
@@ -463,7 +460,6 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
             plan,
             spec,
             edited_markdown,
-            "database",
         )
         self.assertEqual(result["project_plan"]["app"]["name"], "仓储计划应用")
         self.assertTrue(
@@ -474,7 +470,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         )
         self.assertEqual(internal_json["app"]["name"], "仓储计划应用")
         self.assertIn("仓储计划应用", preserved_markdown)
-        self.assertIn("类型 static", preserved_markdown)
+        self.assertIn("实体详细设计", preserved_markdown)
         self.assertIn("状态：已确认", preserved_markdown)
 
 

@@ -28,12 +28,12 @@ BACKEND_TECH_STACK_REQUIREMENT = (
     "and api/data planning must not choose Node.js, Python, Go, PostgreSQL, SQLite, MongoDB, "
     "or any alternative backend/database/cache stack."
 )
-STATIC_DATA_SOURCE_REQUIREMENT = (
-    "The authoritative application data source type is static. Every entity's data_source must use "
-    "type=static exactly and must never emit mock. Model api_contracts as a frontend in-memory mock "
-    "data-access boundary; they preserve schemas, operations, endpoint ids, methods and paths for "
-    "frontend planning, but do not represent a real HTTP backend. Do not declare MySQL, Redis, "
-    "MyBatis, database migrations, database operations, or backend business endpoints."
+DATASOURCE_PENDING_REQUIREMENT = (
+    "The application has no app-level data source type. Do NOT emit data_source on any entity and "
+    "do NOT emit a data_sources section in ProjectPlan; every entity's data source is decided and "
+    "confirmed later during the entity-design stage. API contracts still bind entity_ids and keep "
+    "schemas, operations, endpoint ids, methods and paths. Keep the default Java8 + Springboot + "
+    "MySQL8 + Redis architecture boundary in ProjectPlan.architecture."
 )
 
 
@@ -42,17 +42,10 @@ def _planning_prompt(
     existing_plan: dict[str, Any] | None = None,
     datasource_type: DatasourceType | None = None,
 ) -> str:
-    """构造带权威数据源类型和契约实现边界的项目规划提示。"""
+    """构造项目规划提示；数据源不属于应用级，实体数据源由实体设计阶段决定。"""
 
-    effective_type = (
-        ensure_enabled_datasource_type(datasource_type)
-        if datasource_type is not None
-        else datasource_type_from_artifact(requirement_spec, fallback="database")
-    )
     datasource_requirement = (
-        STATIC_DATA_SOURCE_REQUIREMENT
-        if effective_type == "static"
-        else BACKEND_TECH_STACK_REQUIREMENT
+        f"{DATASOURCE_PENDING_REQUIREMENT}\n{BACKEND_TECH_STACK_REQUIREMENT}"
     )
     revision_context = (
         "Update the existing ProjectPlan using planning_adjustment_request from the RequirementSpec. "
@@ -68,9 +61,8 @@ def _planning_prompt(
         "do not delegate tasks, and do not generate or modify code.\n"
         "Create a project-level planning document from the RequirementSpec.\n"
         f"{datasource_requirement}\n"
-        f"The authoritative data source type is {effective_type}. Preserve every RequirementSpec "
-        "data source id, name, description, entities and type exactly. Never change the type based "
-        "on requirements or revision feedback.\n"
+        "Never assign, infer, or persist a data source type on entities or as a top-level "
+        "data_sources section; entities stay source-free until the entity-design stage.\n"
         "If RequirementSpec.app_info.route_root_path is present and non-empty, treat it as the fixed page root route prefix. "
         "All emitted page paths and all non-empty menu unique_path values must stay under that root prefix.\n"
         "If RequirementSpec.app_info.menu_enabled is true, the application uses menus. In that case, no business page may use the bare root route "

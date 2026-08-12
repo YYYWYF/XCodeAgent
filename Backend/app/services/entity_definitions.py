@@ -121,18 +121,39 @@ def data_source_type_label(source_type: str) -> str:
 
 
 def plan_data_sources(project_plan: Any) -> list[dict[str, Any]]:
-    """从实体数据源类型推导数据源列表（按类型聚合，无独立数据源 id/name）。"""
+    """从已确认实体设计推导数据源列表。
+
+    计划阶段实体不再生成 data_source，数据源在实体设计阶段选择并确认；
+    尚未设计的实体不出现在数据源清单中，契约数据源由已确认实体设计反查。
+    """
+
+    entity_to_type: dict[str, str] = {}
+    entities: list[dict[str, Any]] = []
+    if isinstance(project_plan, dict):
+        for detail in project_plan.get("entity_detail_plans") or []:
+            if not isinstance(detail, dict):
+                continue
+            entity_id = str(detail.get("entity_id") or "").strip()
+            if not entity_id:
+                continue
+            if str(detail.get("status") or "") != "confirmed":
+                continue
+            source_type = normalize_data_source_type(
+                detail.get("data_source_type") or detail.get("data_source_id")
+            )
+            if source_type:
+                entity_to_type.setdefault(entity_id, source_type)
+        for entity in project_plan.get("entities") or []:
+            if isinstance(entity, dict):
+                entities.append(entity)
 
     sources: dict[str, dict[str, Any]] = {}
     order: list[str] = []
-    for entity in (
-        project_plan.get("entities") or []
-        if isinstance(project_plan, dict)
-        else []
-    ):
-        if not isinstance(entity, dict):
+    for entity in entities:
+        entity_id = str(entity.get("id") or "").strip()
+        source_type = entity_to_type.get(entity_id)
+        if not source_type:
             continue
-        source_type = normalize_data_source_type(entity.get("data_source"))
         if source_type not in sources:
             sources[source_type] = {
                 "id": source_type,
@@ -263,9 +284,8 @@ def normalize_entity(
     module_id = str(value.get("module_id") or "").strip()
     if module_id:
         normalized["module_id"] = module_id
-    data_source_type = normalize_data_source_type(value.get("data_source"))
-    if data_source_type:
-        normalized["data_source"] = data_source_type
+    # 计划阶段实体不携带 data_source；数据源在实体设计阶段选择并确认。
+    normalized.pop("data_source", None)
     return normalized
 
 
@@ -317,30 +337,18 @@ def merge_entities(
             continue
         fields = item.get("fields") if item.get("fields") else stable.get("fields", [])
         merged.append(
-                dict(
-                    {
-                        "id": str(stable.get("id") or item.get("id") or ""),
-                        "name": item.get("name") or stable.get("name") or "",
-                        "description": item.get("description")
-                        or stable.get("description")
-                        or "",
-                        "fields": fields,
-                    },
-                    **(
-                        {"module_id": item.get("module_id") or stable.get("module_id")}
-                        if item.get("module_id") or stable.get("module_id")
-                        else {}
-                    ),
-                    **(
-                        {
-                            "data_source": item.get("data_source")
-                            or stable.get("data_source")
-                        }
-                        if item.get("data_source") or stable.get("data_source")
-                        else {}
-                    ),
-                )
-            )
+            {
+                "id": str(stable.get("id") or item.get("id") or ""),
+                "name": item.get("name") or stable.get("name") or "",
+                "description": item.get("description") or stable.get("description") or "",
+                "fields": fields,
+                **(
+                    {"module_id": item.get("module_id") or stable.get("module_id")}
+                    if item.get("module_id") or stable.get("module_id")
+                    else {}
+                ),
+            }
+        )
     return merged
 
 

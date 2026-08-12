@@ -3,6 +3,10 @@ from __future__ import annotations
 import unittest
 
 from app.services.database_requirement_schema import derive_required_database_schema
+from app.services.entity_detail_plan import (
+    attach_entity_detail_plan,
+    create_entity_detail_plan,
+)
 from app.services.entity_definitions import (
     database_operation_field_errors,
     entity_json_schema,
@@ -368,10 +372,12 @@ class EntityDefinitionTests(unittest.TestCase):
         markdown = render_requirement_spec_markdown(spec)
         self.assertIn("| 名称 | 说明 |", markdown)
         plan = create_project_plan(spec)
-        plan_source = plan_data_sources(plan)[0]
-        self.assertIsInstance(plan_source["entities"][0], dict)
-        self.assertTrue(plan_source["entities"][0]["fields"])
-        plan_field = plan_source["entities"][0]["fields"][0]
+        self.assertEqual(plan_data_sources(plan), [])
+        plan_entity = plan["entities"][0]
+        self.assertIsInstance(plan_entity, dict)
+        self.assertNotIn("data_source", plan_entity)
+        self.assertTrue(plan_entity["fields"])
+        plan_field = plan_entity["fields"][0]
         self.assertTrue(plan_field["name"])
         self.assertTrue(plan_field["type"])
         self.assertTrue(plan["api_contracts"])
@@ -380,7 +386,7 @@ class EntityDefinitionTests(unittest.TestCase):
         self.assertIn("id", entity_schema["properties"])
 
     def test_default_data_origin_projects_entity_table_names(self) -> None:
-        """实体对象投影为目标表名时使用 snake_case(id)，避免中文标签进来源。"""
+        """已确认实体设计把实体对象投影为目标表名时使用 snake_case(id)。"""
 
         project_plan = {
             "entities": [
@@ -388,10 +394,16 @@ class EntityDefinitionTests(unittest.TestCase):
                     "id": "Book",
                     "name": "书籍数据源",
                     "fields": [{"name": "title", "type": "text"}],
-                    "data_source": "database",
                 }
             ]
         }
+        detail = create_entity_detail_plan(
+            project_plan,
+            project_plan["entities"][0],
+            default_datasource_type="database",
+        )
+        detail["status"] = "confirmed"
+        project_plan = attach_entity_detail_plan(project_plan, detail)
         origin = _default_endpoint_data_origin(project_plan, "database")
         self.assertEqual(origin["effective_source"]["tables"], ["book"])
 

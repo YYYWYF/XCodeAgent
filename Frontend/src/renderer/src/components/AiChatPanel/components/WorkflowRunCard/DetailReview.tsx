@@ -1,5 +1,5 @@
 import { CheckCircleOutlined, DatabaseOutlined } from "@ant-design/icons";
-import { Alert, Button, Collapse, Input, Tag, Typography } from "antd";
+import { Alert, Button, Collapse, Input, Select, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
 import type {
@@ -27,7 +27,11 @@ export default function DetailReview({
   review,
 }: DetailReviewProps): ReactElement {
   const targets = useMemo(
-    () => [...(review.pages || []), ...(review.endpoints || [])],
+    () => [
+      ...(review.pages || []),
+      ...(review.endpoints || []),
+      ...(review.entities || []),
+    ],
     [review],
   );
   const [changes, setChanges] = useState<
@@ -39,6 +43,9 @@ export default function DetailReview({
   );
   const missingSelectedEndpointPlan = Boolean(
     review.summary?.missingSelectedEndpointPlan,
+  );
+  const missingSelectedEntityPlan = Boolean(
+    review.summary?.missingSelectedEntityPlan,
   );
 
   // 记录单个审核对象的字段改动，并保留同对象此前已编辑的内容。
@@ -89,15 +96,24 @@ export default function DetailReview({
           <Tag>
             API 契约 <strong>{review.summary?.api_contract_count || 0}</strong>
           </Tag>
+          <Tag>
+            实体 <strong>{review.summary?.entity_count || 0}</strong>
+          </Tag>
         </div>
       </div>
       {missingSelectedPagePlan ||
       missingSelectedEndpointPlan ||
+      missingSelectedEntityPlan ||
       targets.length === 0 ? (
         <Alert
           message={
             message ||
-            `目标 ${review.summary?.selectedEndpointId || review.summary?.selectedPageId || ""} 还没有生成细节设计，请先生成该目标的 plan。`
+            `目标 ${
+              review.summary?.selectedEntityId ||
+              review.summary?.selectedEndpointId ||
+              review.summary?.selectedPageId ||
+              ""
+            } 还没有生成细节设计，请先生成该目标的 plan。`
           }
           showIcon
           type="warning"
@@ -143,6 +159,13 @@ export default function DetailReview({
                   onChange={(field, value) => updateField(target, field, value)}
                   target={target}
                 />
+              ) : target.target_type === "entity" ? (
+                <EntityReviewEditor
+                  changes={changes[target.target_id] || {}}
+                  disabled={disabled}
+                  onChange={(field, value) => updateField(target, field, value)}
+                  target={target}
+                />
               ) : (
                 <></>
               )}
@@ -168,6 +191,7 @@ export default function DetailReview({
             disabled ||
             missingSelectedPagePlan ||
             missingSelectedEndpointPlan ||
+            missingSelectedEntityPlan ||
             targets.length === 0
           }
           icon={<CheckCircleOutlined />}
@@ -188,6 +212,7 @@ function targetKindLabel(
 ): string {
   if (targetType === "page") return "页面";
   if (targetType === "endpoint") return "接口";
+  if (targetType === "entity") return "实体";
   return "对象";
 }
 
@@ -377,6 +402,78 @@ function EndpointReviewEditor({
         label="验收标准（由接口行为决策自动生成）"
         onChange={() => undefined}
         value={target.acceptance_criteria || []}
+      />
+    </div>
+  );
+}
+
+// 渲染单个实体详细设计的审核输入项，字段定义由 ProjectPlan 契约控制不可编辑。
+function EntityReviewEditor({
+  changes,
+  disabled,
+  onChange,
+  target,
+}: ReviewEditorProps): ReactElement {
+  const fields = recordItems(target.fields);
+  return (
+    <div className={cx("workflow-detail-review-fields")}>
+      <label className={cx("workflow-detail-review-field", "workflow-detail-review-field-compact")}>
+        <Text type="secondary">数据源类型（在实体设计阶段选择并确认）</Text>
+        <Select
+          disabled={disabled}
+          onChange={(value) => onChange("data_source_type", value)}
+          options={[
+            { label: "数据库", value: "database" },
+            { label: "外部 API", value: "external_api" },
+            { label: "静态数据", value: "static" }
+          ]}
+          value={stringChange(changes.data_source_type, target.data_source_type) || undefined}
+        />
+      </label>
+      <Text type="secondary">
+        字段清单（由项目计划契约控制，如需调整请回到项目计划修订）
+      </Text>
+      <div className={cx("workflow-detail-review-entity-fields")}>
+        {fields.length > 0
+          ? fields.map((field, index) => (
+              <Tag key={index}>
+                {String(field.label || field.name || "")}
+                {field.required ? "（必填）" : ""}
+              </Tag>
+            ))
+          : "暂无字段"}
+      </div>
+      <ReviewSummaryField
+        disabled={disabled}
+        label="业务规则"
+        onChange={(value) =>
+          onChange("business_rules", parseEntityRuleSummary(value))
+        }
+        value={entityRuleSummary(
+          recordListChange(changes.business_rules, target.business_rules),
+        )}
+      />
+      <ReviewSummaryField
+        disabled={disabled}
+        label="关系设计"
+        onChange={(value) =>
+          onChange("relationships", parseRelationshipSummary(value))
+        }
+        value={relationshipSummary(
+          recordListChange(changes.relationships, target.relationships),
+        )}
+      />
+      <ReviewListField
+        disabled={disabled}
+        label="验收标准"
+        onChange={(value) => onChange("acceptance_criteria", value)}
+        value={listChange(changes.acceptance_criteria, target.acceptance_criteria)}
+      />
+      <ReviewListField
+        disabled={disabled}
+        label="风险与待确认事项"
+        onChange={(value) => onChange("risks", value)}
+        value={listChange(changes.risks, target.risks)}
       />
     </div>
   );
@@ -912,6 +1009,54 @@ function parseOperationVisibilitySummary(
             .filter(Boolean)
         : [],
       unauthorized_behavior: unauthorized || "隐藏操作入口或展示无权限提示",
+    };
+  });
+}
+
+// 渲染实体业务规则，保持规则名称与说明两列信息。
+function entityRuleSummary(value: unknown): string {
+  const lines = recordItems(value).map((item) => {
+    const name = String(item.name || "业务规则");
+    const description = String(item.description || "");
+    return description ? `${name}：${description}` : name;
+  });
+  return lines.join("\n") || "无";
+}
+
+// 解析用户编辑后的业务规则摘要为后端可接收的结构化规则列表。
+function parseEntityRuleSummary(value: string): Array<Record<string, unknown>> {
+  return summaryLines(value).map((line) => {
+    const [name, description] = splitPair(line, "：");
+    return {
+      rule_type: "custom",
+      name: name || "业务规则",
+      description: description || line || "",
+    };
+  });
+}
+
+// 渲染实体关系设计，保持关系类型与目标实体两列信息。
+function relationshipSummary(value: unknown): string {
+  const lines = recordItems(value).map((item) => {
+    const relationType = String(item.relation_type || "关系");
+    const target = String(item.target_entity_id || "待补充目标实体");
+    const description = String(item.description || "");
+    return description
+      ? `${relationType}：${target}；${description}`
+      : `${relationType}：${target}`;
+  });
+  return lines.join("\n") || "无";
+}
+
+// 解析用户编辑后的关系设计摘要为结构化关系列表。
+function parseRelationshipSummary(value: string): Array<Record<string, unknown>> {
+  return summaryLines(value).map((line) => {
+    const [relationType, detail] = splitPair(line, "：");
+    const [target, description] = splitPair(detail, "；");
+    return {
+      relation_type: relationType || "关系",
+      target_entity_id: target || "待补充目标实体",
+      description: description || "",
     };
   });
 }

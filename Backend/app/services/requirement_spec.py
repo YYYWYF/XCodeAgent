@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services.data_source_policy import (
     DatasourceType,
     apply_authoritative_datasource_type,
+    datasource_type_from_artifact,
     ensure_requirements_datasource_type,
-    read_application_datasource_type,
 )
 from app.services.entity_definitions import (
     merge_entities,
@@ -869,9 +869,8 @@ def save_requirement_spec_draft(
     workspace = Path(request.workspace_root).expanduser().resolve()
     if not workspace.is_dir():
         raise ValueError("需求文档工作区不存在或不是目录。")
-    datasource_type = ensure_requirements_datasource_type(
-        read_application_datasource_type(workspace)
-    )
+    # 应用级不再有数据源类型；数据源由实体设计阶段选择，需求草稿保存不再读取 application.json。
+    datasource_type = datasource_type_from_artifact({}, fallback="database")
 
     state: dict[str, Any] = {"workspace": str(workspace)}
     json_path = requirement_spec_json_path(state)

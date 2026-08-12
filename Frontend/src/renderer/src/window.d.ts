@@ -96,6 +96,15 @@ declare global {
               designed?: boolean
             }>
           }>
+          entities: Array<{
+            id: string
+            label: string
+            purpose: string
+            dataSourceType: string
+            detailPlanStatus?: string
+            hasDetailPlan: boolean
+            designed: boolean
+          }>
         }>
       }
       sessions?: {

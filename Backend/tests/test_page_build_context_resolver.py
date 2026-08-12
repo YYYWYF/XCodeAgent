@@ -8,6 +8,7 @@ from pathlib import Path
 from app.graph.nodes.tasks import _scoped_contract_validation_plan
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.build_context_resolver import resolve_target_build_context
+from tests.entity_design_test_utils import confirm_entity_designs
 
 
 def _detail_ref(path: str, *, status: str = "confirmed") -> dict:
@@ -83,13 +84,11 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
                 "id": "Order",
                 "name": "Order",
                 "fields": [],
-                "data_source": "database",
             },
             {
                 "id": "Customer",
                 "name": "Customer",
                 "fields": [],
-                "data_source": "database",
             },
         ],
         "api_contracts": [
@@ -119,6 +118,7 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
             },
         ],
     }
+    plan = confirm_entity_designs(plan, source_type="database")
     _write_json(plan_path, plan)
     return plan, plan_path
 
@@ -319,13 +319,8 @@ class PageBuildContextResolverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             workspace_path = Path(workspace)
             plan, plan_path = _project_plan(workspace_path)
-            plan["entities"] = [
-                {
-                    **entity,
-                    "data_source": "static",
-                }
-                for entity in plan["entities"]
-            ]
+            plan = confirm_entity_designs(plan, source_type="static")
+            _write_json(plan_path, plan)
             detail_path = workspace_path / ".xcodeagent/plans/endpoints/endpoint--orders-api--orders.list.json"
             detail = json.loads(detail_path.read_text(encoding="utf-8"))
             detail["data_origin"] = {

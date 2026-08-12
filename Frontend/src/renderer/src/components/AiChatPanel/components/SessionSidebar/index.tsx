@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   CaretDownOutlined,
+  DatabaseOutlined,
   DownOutlined,
   FileTextOutlined,
   FilterOutlined,
@@ -26,6 +27,7 @@ import type {
   ApplicationConfig,
   ApplicationMenuItem,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption
 } from '../../../../typings'
@@ -85,6 +87,7 @@ type SessionSidebarProps = {
     endpointKey: string
     label: string
   }) => void
+  onEntitySelect: (entity: DevelopmentPlanningEntityOption) => void
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   onReturnWelcome: () => void
   onShowFiles: () => void
@@ -93,7 +96,9 @@ type SessionSidebarProps = {
   onThemeChange: (theme: 'light' | 'dark') => void
   pages: DevelopmentPlanningPageOption[]
   pageTree: DevelopmentPlanningPageTreeNode[]
+  entities: DevelopmentPlanningEntityOption[]
   selectedApiEndpointKey: string
+  selectedEntityId: string
   selectedPageId: string
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
@@ -336,6 +341,7 @@ export default function SessionSidebar({
   apiContracts = [],
   application,
   deletingSessionId,
+  entities = [],
   freeChatActive,
   filesActive,
   loadingSessions,
@@ -345,6 +351,7 @@ export default function SessionSidebar({
   onDeleteSession,
   onOpenFreeChat,
   onApiEndpointSelect,
+  onEntitySelect,
   onOpenSession,
   onPageSelect,
   onReturnWelcome,
@@ -356,6 +363,7 @@ export default function SessionSidebar({
   pages,
   pageTree,
   selectedApiEndpointKey,
+  selectedEntityId,
   selectedPageId,
   sessionError,
   sessionRunStates,
@@ -372,6 +380,7 @@ export default function SessionSidebar({
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apiExpanded, setApiExpanded] = useState(true)
+  const [entitiesExpanded, setEntitiesExpanded] = useState(true)
   const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(
     () => new Set()
   )
@@ -453,6 +462,16 @@ export default function SessionSidebar({
       return endpoints.length > 0 ? [{ ...contract, endpoints }] : []
     })
   }, [apiContracts, outlineQuery])
+  const visibleEntities = useMemo(() => {
+    const query = outlineQuery.trim().toLocaleLowerCase()
+    if (!query) return entities
+    return entities.filter(
+      (entity) =>
+        entity.id.toLocaleLowerCase().includes(query) ||
+        entity.label.toLocaleLowerCase().includes(query) ||
+        entity.purpose.toLocaleLowerCase().includes(query)
+    )
+  }, [entities, outlineQuery])
 
   useEffect(() => {
     if (!compactLayout) setCompactExpanded(false)
@@ -603,16 +622,16 @@ export default function SessionSidebar({
       </Text>
       <fieldset
         aria-disabled={outlineLocked}
-        aria-label={outlineLocked ? '页面大纲暂不可操作，API 仍可选择' : '应用大纲'}
+        aria-label={outlineLocked ? '页面大纲暂不可操作，API 与实体仍可选择' : '应用大纲'}
         className={cx('session-outline-lock-shell')}
       >
         <div className={cx('session-outline-content')}>
           <Input
             allowClear
-            aria-label="搜索页面或 API"
+            aria-label="搜索页面、API 或实体"
             className={cx('session-search')}
             onChange={(event) => setOutlineQuery(event.target.value)}
-            placeholder="搜索页面或 API"
+            placeholder="搜索页面、API 或实体"
             prefix={<SearchOutlined />}
             value={outlineQuery}
           />
@@ -791,6 +810,65 @@ export default function SessionSidebar({
                   {visibleApiContracts.length === 0 ? (
                     <div className={cx('outline-empty')}>
                       project_plan.json 的 api_contracts 中暂无接口
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+
+            <section className={cx('outline-section', 'entity-section')}>
+              <button
+                aria-expanded={entitiesExpanded}
+                className={cx('outline-section-heading')}
+                onClick={() => setEntitiesExpanded((current) => !current)}
+                type="button"
+              >
+                <CaretDownOutlined className={cx(!entitiesExpanded && 'collapsed')} />
+                <span>Entities</span>
+              </button>
+              {entitiesExpanded ? (
+                <div className={cx('entity-group')}>
+                  {visibleEntities.map((entity) => {
+                    const entityKey = entity.id
+                    const entityDesigned = Boolean(entity.designed || entity.hasDetailPlan)
+                    return (
+                      <div className={cx('entity-node')} key={entityKey}>
+                        <button
+                          aria-current={selectedEntityId === entityKey ? 'true' : undefined}
+                          className={cx(
+                            'entity-row',
+                            selectedEntityId === entityKey && 'selected'
+                          )}
+                          onClick={() => onEntitySelect(entity)}
+                          title={entity.purpose}
+                          type="button"
+                        >
+                          <span className={cx('entity-icon')}>
+                            <DatabaseOutlined />
+                          </span>
+                          <span className={cx('entity-copy')}>
+                            <span className={cx('outline-label-row')}>
+                              <span className={cx('outline-label')}>{entity.label}</span>
+                              <span
+                                className={cx(
+                                  'outline-design-status',
+                                  entityDesigned ? 'designed' : 'undesign'
+                                )}
+                              >
+                                {entityDesigned ? '已设计' : '待设计'}
+                              </span>
+                            </span>
+                            <span className={cx('entity-meta')}>
+                              {entity.id}
+                            </span>
+                          </span>
+                        </button>
+                      </div>
+                    )
+                  })}
+                  {visibleEntities.length === 0 ? (
+                    <div className={cx('outline-empty')}>
+                      project_plan.json 的 entities 中暂无实体
                     </div>
                   ) : null}
                 </div>

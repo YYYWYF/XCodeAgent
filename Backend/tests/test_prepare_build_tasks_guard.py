@@ -16,6 +16,7 @@ from app.services.build_task_planner import (
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
+from tests.entity_design_test_utils import confirm_entity_designs
 
 
 def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
@@ -86,6 +87,20 @@ def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
     return str(plan_path)
 
 
+def _with_confirmed_designs(plan: dict, *, source_type: str = "database") -> dict:
+    """去掉计划级 data_source 残留并把实体标记为已确认设计，供构建任务测试使用。"""
+
+    updated = deepcopy(plan)
+    updated.pop("data_source_detail_plans", None)
+    for entity in updated.get("entities") or []:
+        if isinstance(entity, dict):
+            entity.pop("data_source", None)
+    for contract in updated.get("api_contracts") or []:
+        if isinstance(contract, dict):
+            contract.pop("data_source_id", None)
+    return confirm_entity_designs(updated, source_type=source_type)
+
+
 class PrepareBuildTasksGuardTests(unittest.TestCase):
     def test_page_scope_prepares_only_direct_units_and_context(self) -> None:
         """页面 scope 只编译当前页面、直接数据源和必要公共 Unit 的叶子任务。"""
@@ -130,6 +145,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 {"data_source_id": "database"},
             ],
         }
+        project_plan = _with_confirmed_designs(project_plan)
         agent_plan = create_build_task_plan(
             project_plan,
             agent_plan={
@@ -298,6 +314,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ],
             "data_source_detail_plans": [{"data_source_id": "database"}],
         }
+        project_plan = _with_confirmed_designs(project_plan)
         agent_plan = create_build_task_plan(
             project_plan,
             agent_plan={
@@ -386,6 +403,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ],
             "data_source_detail_plans": [{"data_source_id": "database"}],
         }
+        project_plan = _with_confirmed_designs(project_plan)
         base_plan = ensure_build_unit_skeleton(project_plan, {}, {})
         base_plan = replace_build_task_plan_tasks(
             base_plan,
@@ -514,6 +532,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ],
             "data_source_detail_plans": [{"data_source_id": "database"}],
         }
+        project_plan = _with_confirmed_designs(project_plan)
         first_agent_plan = create_build_task_plan(
             project_plan,
             agent_plan={

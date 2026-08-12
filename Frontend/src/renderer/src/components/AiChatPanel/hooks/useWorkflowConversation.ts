@@ -69,6 +69,7 @@ type UseWorkflowConversationParams = {
   selectedApiContractId?: string
   selectedEndpointId?: string
   selectedEndpointLabel?: string
+  selectedEntityId?: string
   selectedPageId?: string
   selectedPageLabel?: string
   conversationEnabled: boolean
@@ -120,6 +121,11 @@ type UseWorkflowConversationResult = {
     apiContractId?: string
     endpointId: string
     endpointLabel: string
+    hasDetailPlan?: boolean
+  }) => Promise<boolean>
+  handleStartEntityDetailConfirmation: (target: {
+    entityId: string
+    entityLabel: string
     hasDetailPlan?: boolean
   }) => Promise<boolean>
   handleStopGenerating: () => void
@@ -224,6 +230,7 @@ export function useWorkflowConversation({
   selectedApiContractId,
   selectedEndpointId,
   selectedEndpointLabel,
+  selectedEntityId,
   selectedPageId,
   selectedPageLabel,
   conversationEnabled,
@@ -301,7 +308,9 @@ export function useWorkflowConversation({
     const sessionIdentity =
       isConversationWorkflow(activeWorkflow) && matchingActiveSession
         ? matchingActiveSession
-        : selectedApiContractId && selectedEndpointId
+        : selectedEntityId
+          ? await ensureActiveSession()
+          : selectedApiContractId && selectedEndpointId
           ? await ensureEndpointSession(
               selectedApiContractId,
               selectedEndpointId,
@@ -312,7 +321,12 @@ export function useWorkflowConversation({
             : await ensureActiveSession()
     await sendWorkflowMessage(message, {
       clearDraft: true,
-      detailTargetType: selectedApiContractId && selectedEndpointId ? 'endpoint' : undefined,
+      detailTargetType: selectedEntityId
+        ? 'entity'
+        : selectedApiContractId && selectedEndpointId
+          ? 'endpoint'
+          : undefined,
+      selectedEntityId,
       selectedApiContractId,
       selectedEndpointId,
       buildExecutionScope:
@@ -324,7 +338,10 @@ export function useWorkflowConversation({
             }
           : undefined,
       selectedSkills,
-      selectedPageId: selectedApiContractId && selectedEndpointId ? '' : selectedPageId,
+      selectedPageId:
+        selectedEntityId || (selectedApiContractId && selectedEndpointId)
+          ? ''
+          : selectedPageId,
       sessionIdentity,
       titleFrom: message,
       workflowDebug,
@@ -356,8 +373,9 @@ export function useWorkflowConversation({
       selectedPageId?: string
       selectedApiContractId?: string
       selectedEndpointId?: string
+      selectedEntityId?: string
       endpointLabel?: string
-      detailTargetType?: 'page' | 'endpoint'
+      detailTargetType?: 'page' | 'endpoint' | 'entity'
       sessionIdentity?: SessionIdentity
       pageTemplate?: {
         id?: string
@@ -507,6 +525,7 @@ export function useWorkflowConversation({
           options && 'selectedPageId' in options ? options.selectedPageId : identity.pageId,
         selectedApiContractId: options?.selectedApiContractId,
         selectedEndpointId: options?.selectedEndpointId,
+        selectedEntityId: options?.selectedEntityId,
         detailTargetType: options?.detailTargetType,
         buildExecutionScope: options?.buildExecutionScope,
         workflowAction: options?.workflowAction,
@@ -802,6 +821,28 @@ export function useWorkflowConversation({
     )
   }
 
+  /** 以用户选择的实体作为主 Workflow 细节设计起点，复用普通工作台会话。 */
+  const handleStartEntityDetailConfirmation = async (target: {
+    entityId: string
+    entityLabel: string
+    hasDetailPlan?: boolean
+  }): Promise<boolean> => {
+    if (!target.entityId || loading || workspaceBusy) return false
+    const identity = await ensureActiveSession()
+    return sendWorkflowMessage(
+      `${target.hasDetailPlan ? '查看已生成实体计划' : '开始设计实体'}：${target.entityLabel}`,
+      {
+        selectedEntityId: target.entityId,
+        selectedPageId: '',
+        selectedApiContractId: '',
+        selectedEndpointId: '',
+        detailTargetType: 'entity',
+        sessionIdentity: identity,
+        titleFrom: `${target.hasDetailPlan ? '确认实体' : '设计实体'}：${target.entityLabel}`
+      }
+    )
+  }
+
   const handleStopGenerating = (): void => {
     const runningIdentity = activeRun?.identity
     if (!runningIdentity || !loading || stopping) return
@@ -1002,6 +1043,7 @@ export function useWorkflowConversation({
     handleStopPlan,
     handleSend,
     handleStartEndpointDetailConfirmation,
+    handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,

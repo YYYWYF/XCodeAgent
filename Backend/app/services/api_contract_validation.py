@@ -41,8 +41,7 @@ def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]
     }
     entity_ids_set = {
         str(entity.get("id") or "")
-        for source in data_sources
-        for entity in normalize_entities(source.get("entities"))
+        for entity in normalize_entities(project_plan.get("entities"))
         if entity.get("id")
     }
     if data_sources and not contracts:
@@ -60,9 +59,9 @@ def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]
                 errors.append(
                     f"API contract {contract_id} references unknown entity {entity_id}."
                 )
-        if data_source_ids and not data_source_id:
-            errors.append(f"API contract {contract_id} does not define data_source_id.")
-        elif data_source_id and data_source_id not in data_source_ids:
+        # 数据源只属于实体设计：未完成实体设计的契约允许暂缺 data_source_id，
+        # 由接口详细设计入口强制先完成实体设计；已解析来源必须落在数据源清单内。
+        if data_source_id and data_source_id not in data_source_ids:
             errors.append(
                 f"API contract {contract_id} references unknown data source {data_source_id}."
             )
