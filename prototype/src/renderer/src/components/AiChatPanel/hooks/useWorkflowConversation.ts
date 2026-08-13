@@ -26,6 +26,7 @@ import {
   type ClarificationAnswers
 } from '../components/WorkflowRunCard'
 import type { AgentChatMessage } from '../types'
+import type { RelatedEndpointContext } from './useChatSessions'
 import {
   beginOptimisticSkillSend,
   rollbackSkillSelection,
@@ -81,7 +82,11 @@ type UseWorkflowConversationParams = {
     endpointId: string,
     endpointLabel: string
   ) => Promise<SessionIdentity>
-  ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
+  ensurePageSession: (
+    pageId: string,
+    pageLabel: string,
+    endpointContext?: RelatedEndpointContext
+  ) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -113,6 +118,7 @@ type UseWorkflowConversationResult = {
       templateName?: string
       templateSourcePath?: string
     },
+    relatedEndpoint?: RelatedEndpointContext
   ) => Promise<boolean>
   handleStartEndpointDetailConfirmation: (target: {
     apiContractId?: string
@@ -144,10 +150,18 @@ function workflowSelectedPageId(workflow: WorkflowRunPayload): string | undefine
 function workflowEndpointExecutionScope(
   workflow: WorkflowRunPayload
 ): WorkflowBuildExecutionScope | undefined {
-  const stateApiContractId = workflow.state?.selected_api_contract_id || workflow.state?.selectedApiContractId
-  const resultApiContractId = workflow.result?.selected_api_contract_id || workflow.result?.selectedApiContractId
+  const detailTargetType = String(
+    workflow.state?.detailTargetType || workflow.result?.detailTargetType || ''
+  ).trim()
+  // 页面任务可以携带依赖接口身份，但仍由页面工作流一次交付，不能误分流到独立接口工作流。
+  if (detailTargetType && detailTargetType !== 'endpoint') return undefined
+  const stateApiContractId =
+    workflow.state?.selected_api_contract_id || workflow.state?.selectedApiContractId
+  const resultApiContractId =
+    workflow.result?.selected_api_contract_id || workflow.result?.selectedApiContractId
   const stateEndpointId = workflow.state?.selected_endpoint_id || workflow.state?.selectedEndpointId
-  const resultEndpointId = workflow.result?.selected_endpoint_id || workflow.result?.selectedEndpointId
+  const resultEndpointId =
+    workflow.result?.selected_endpoint_id || workflow.result?.selectedEndpointId
   const apiContractId = String(stateApiContractId || resultApiContractId || '').trim()
   const endpointId = String(stateEndpointId || resultEndpointId || '').trim()
   return apiContractId && endpointId
@@ -274,7 +288,12 @@ export function useWorkflowConversation({
       selectedSkills,
       selectedPageId: selectedApiContractId && selectedEndpointId ? '' : selectedPageId,
       sessionIdentity,
-      titleFrom: message,
+      titleFrom:
+        designPhase && !selectedApiContractId && !selectedEndpointId
+          ? '应用设计'
+          : autoStartReview
+            ? '代码审查'
+            : message,
       workflowDebug,
       directModification: shouldUseDirectModification(
         directModificationEnabled,
@@ -287,8 +306,8 @@ export function useWorkflowConversation({
           : autoStartApplicationAcceptance
             ? 'application_acceptance'
             : autoStartReview
-            ? 'application_review'
-            : undefined
+              ? 'application_review'
+              : undefined
     })
   }
 
@@ -438,7 +457,8 @@ export function useWorkflowConversation({
         endpointId: identity.endpointId,
         endpointLabel: identity.endpointLabel,
         pageId: identity.pageId,
-        titleFrom: options?.titleFrom || trimmedMessage
+        titleFrom: options?.titleFrom || trimmedMessage,
+        materialize: false
       })
       const {
         answer: rawAnswer,
@@ -453,9 +473,7 @@ export function useWorkflowConversation({
         onApplicationLifecycle: onApplicationLifecycleChange,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
         selectedPageId:
-          options && 'selectedPageId' in options
-            ? options.selectedPageId
-            : identity.pageId,
+          options && 'selectedPageId' in options ? options.selectedPageId : identity.pageId,
         selectedApiContractId: options?.selectedApiContractId,
         selectedEndpointId: options?.selectedEndpointId,
         detailTargetType: options?.detailTargetType,
@@ -493,7 +511,7 @@ export function useWorkflowConversation({
       const answer = stopped ? stoppedAnswer(streamedContent || rawAnswer) : rawAnswer.trim()
       const finalWorkflow = stopped
         ? withWorkflowExecutionStatus(workflow ?? streamedWorkflow, 'stopped')
-        : workflow ?? streamedWorkflow
+        : (workflow ?? streamedWorkflow)
       const completedMessages = updateAssistantMessage(
         answer || 'Workflow 已返回，但内容为空。',
         finalWorkflow,
@@ -535,7 +553,8 @@ export function useWorkflowConversation({
           apiContractId: identity.apiContractId,
           endpointId: identity.endpointId,
           endpointLabel: identity.endpointLabel,
-          pageId: identity.pageId
+          pageId: identity.pageId,
+          materialize: false
         })
         return false
       }
@@ -589,7 +608,8 @@ export function useWorkflowConversation({
     if (
       !directModification &&
       workflowInteractionAvailability(workflow, applicationLifecycle) !== 'active'
-    ) return false
+    )
+      return false
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
     if (!continuationMessage || loading || workspaceBusy) return false
     const originalRequest = workflowOriginalRequest(workflow)
@@ -609,13 +629,14 @@ export function useWorkflowConversation({
       directModification,
       // 设计阶段的需求/计划确认必须继续走 application_design 剧本，否则会被默认路由到
       // replayWorkbench，导致提交确认后不推进规划节点。
-      workflowScope: designPhase && !directModification
-        ? 'application_design'
-        : applicationAcceptanceResume
-          ? 'application_acceptance'
-          : reviewResume
-            ? 'application_review'
-            : undefined
+      workflowScope:
+        designPhase && !directModification
+          ? 'application_design'
+          : applicationAcceptanceResume
+            ? 'application_acceptance'
+            : reviewResume
+              ? 'application_review'
+              : undefined
     })
   }
 
@@ -629,28 +650,31 @@ export function useWorkflowConversation({
       templateName?: string
       templateSourcePath?: string
     },
+    relatedEndpoint?: RelatedEndpointContext
   ): Promise<boolean> => {
     if (!selectedPageId || loading || workspaceBusy) return false
-    const identity = await ensurePageSession(selectedPageId, pageLabel)
+    const identity = await ensurePageSession(selectedPageId, pageLabel, relatedEndpoint)
     return sendWorkflowMessage(
-      `${hasDetailPlan ? '查看已生成页面计划' : '开始设计页面'}：${pageLabel}${
-        templateParams?.templateName ? `，使用模板「${templateParams.templateName}」` : ''
-      }`,
+      `${hasDetailPlan ? '继续实现' : '开始实现'}：${pageLabel}${
+        relatedEndpoint ? `（包含 ${relatedEndpoint.endpointLabel}）` : ''
+      }${templateParams?.templateName ? `，使用模板「${templateParams.templateName}」` : ''}`,
       {
         selectedPageId,
+        selectedApiContractId: relatedEndpoint?.apiContractId,
+        selectedEndpointId: relatedEndpoint?.endpointId,
         detailTargetType: 'page',
         sessionIdentity: identity,
-        titleFrom: `${hasDetailPlan ? '确认页面' : '设计页面'}：${pageLabel}`,
+        titleFrom: `实现${pageLabel}`,
         ...(templateParams?.templateSourcePath
           ? {
               pageTemplate: {
                 id: templateParams.templateId,
                 name: templateParams.templateName,
-                sourcePath: templateParams.templateSourcePath,
-              },
+                sourcePath: templateParams.templateSourcePath
+              }
             }
-          : {}),
-      },
+          : {})
+      }
     )
   }
 
@@ -668,7 +692,7 @@ export function useWorkflowConversation({
       target.endpointLabel
     )
     return sendWorkflowMessage(
-      `${target.hasDetailPlan ? '查看已生成接口计划' : '开始设计接口'}：${target.endpointLabel}`,
+      `${target.hasDetailPlan ? '继续实现接口' : '开始实现接口'}：${target.endpointLabel}`,
       {
         selectedApiContractId: target.apiContractId,
         selectedEndpointId: target.endpointId,
@@ -681,7 +705,7 @@ export function useWorkflowConversation({
         },
         endpointLabel: target.endpointLabel,
         sessionIdentity: identity,
-        titleFrom: `${target.hasDetailPlan ? '确认接口' : '设计接口'}：${target.endpointLabel}`
+        titleFrom: `实现${target.endpointLabel}`
       }
     )
   }

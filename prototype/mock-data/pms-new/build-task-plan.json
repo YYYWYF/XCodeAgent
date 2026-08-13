@@ -5,27 +5,69 @@
   "generated_at": "2026-08-05T10:00:00Z",
   "source_project_plan_version": "1.0.0",
   "summary": {
-    "total": 6,
-    "frontend": 4,
+    "total": 2,
+    "frontend": 2,
     "backend": 1,
-    "database": 1,
-    "pending": 6,
+    "database": 0,
+    "pending": 2,
     "running": 0,
     "completed": 0,
     "failed": 0,
     "already_satisfied": 0
   },
   "build_units": [
-    { "id": "application:root", "kind": "application", "label": "全局布局与基础设施", "status": "pending", "depends_on_unit_ids": [], "task_ids": ["t-scaffold", "t-db-init", "t-layout", "t-routes"] },
-    { "id": "page:my-rechecks", "kind": "page", "label": "我的回检", "status": "pending", "depends_on_unit_ids": ["application:root"], "task_ids": ["t-page-my-rechecks"] },
-    { "id": "backend:rechecks", "kind": "backend", "label": "需求回检 API", "status": "pending", "depends_on_unit_ids": ["application:root"], "task_ids": ["t-api-my-rechecks"] }
+    {
+      "id": "page:recheck-introduction",
+      "kind": "page",
+      "label": "回检介绍",
+      "status": "pending",
+      "depends_on_unit_ids": [],
+      "task_ids": ["task-introduction"]
+    },
+    {
+      "id": "page:my-rechecks",
+      "kind": "page",
+      "label": "我的回检",
+      "status": "pending",
+      "depends_on_unit_ids": [],
+      "task_ids": ["task-recheck-query"]
+    },
+    {
+      "id": "endpoint:rechecks:ep-my-rechecks",
+      "kind": "endpoint",
+      "label": "GET /api/rechecks/my",
+      "status": "pending",
+      "depends_on_unit_ids": [],
+      "task_ids": ["task-recheck-query"]
+    }
   ],
   "task_registry": [
-    { "id": "t-scaffold", "owner": "frontend", "task_type": "frontend.code", "title": "搭建项目脚手架并初始化技术栈", "unit_id": "application:root", "status": "pending", "dependencies": [], "target_files": ["frontend/package.json", "frontend/vite.config.ts", "frontend/src/main.tsx"], "risk": "low", "acceptance_criteria": ["项目可启动，构建无报错", "基础路由占位可访问"] },
-    { "id": "t-db-init", "owner": "database", "task_type": "database.change", "title": "配置 MySQL 数据源与基础数据字典（回检状态）", "unit_id": "application:root", "status": "pending", "dependencies": [], "target_files": ["backend/src/main/resources/application.yml", "backend/src/main/resources/db/migration"], "risk": "medium", "acceptance_criteria": ["数据源连接校验通过", "回检状态字典已初始化"] },
-    { "id": "t-layout", "owner": "frontend", "task_type": "frontend.code", "title": "实现侧边导航与整体布局（PC 管理端模板）", "unit_id": "application:root", "status": "pending", "dependencies": ["t-scaffold"], "target_files": ["frontend/src/layouts/BasicLayout.tsx", "frontend/src/components/SideMenu.tsx"], "risk": "low", "acceptance_criteria": ["侧边导航可展开/收起", "顶栏标题与主题渲染正常"] },
-    { "id": "t-routes", "owner": "frontend", "task_type": "frontend.code", "title": "配置路由与菜单，挂载我的回检页面到侧边导航", "unit_id": "application:root", "status": "pending", "dependencies": ["t-layout"], "target_files": ["frontend/src/router.tsx", "frontend/src/menus.ts"], "risk": "low", "acceptance_criteria": ["我的回检路由已注册", "菜单点击跳转正确"] },
-    { "id": "t-page-my-rechecks", "owner": "frontend", "task_type": "frontend.code", "title": "生成页面：我的回检", "unit_id": "page:my-rechecks", "status": "pending", "dependencies": ["t-routes"], "target_files": ["frontend/src/pages/my-rechecks/index.tsx"], "risk": "low", "acceptance_criteria": ["回检单提交表单", "已提交回检状态跟踪"] },
-    { "id": "t-api-my-rechecks", "owner": "backend", "task_type": "backend.code", "title": "实现 GET /api/rechecks/my", "unit_id": "backend:rechecks", "status": "pending", "dependencies": ["t-db-init"], "target_files": ["backend/src/main/java/.../RecheckController.java"], "risk": "low", "acceptance_criteria": ["按当前用户分页返回回检单"] }
+    {
+      "id": "task-introduction",
+      "owner": "frontend",
+      "task_type": "frontend.code",
+      "title": "实现回检介绍页",
+      "unit_id": "page:recheck-introduction",
+      "status": "pending",
+      "dependencies": [],
+      "target_files": ["frontend/src/pages/recheck-introduction/index.tsx"],
+      "risk": "low",
+      "acceptance_criteria": ["无需接口即可完整展示", "可进入我的回检页面"]
+    },
+    {
+      "id": "task-recheck-query",
+      "owner": "fullstack",
+      "task_type": "fullstack.code",
+      "title": "实现回检查询与列表展示",
+      "unit_id": "page:my-rechecks",
+      "status": "pending",
+      "dependencies": [],
+      "target_files": [
+        "frontend/src/pages/my-rechecks/index.tsx",
+        "backend/src/main/java/com/xcodeagent/rechecks/RechecksController.java"
+      ],
+      "risk": "medium",
+      "acceptance_criteria": ["查询接口仅返回当前用户数据", "页面筛选与列表使用真实接口", "页面与接口联调通过"]
+    }
   ]
 }

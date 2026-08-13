@@ -1,4 +1,23 @@
 {
+  "recheck-introduction": {
+    "target_type": "page",
+    "target_id": "recheck-introduction",
+    "name": "回检介绍",
+    "path": "/recheck-introduction",
+    "page_goal": "向业务人员说明需求回检的适用场景、处理流程和使用方式。",
+    "basic_layout": {
+      "overall": "顶部说明回检价值，下方按步骤展示填报、审核、整改与归档流程。",
+      "regions": [
+        { "name": "介绍区", "responsibility": "说明需求回检的目标与适用范围" },
+        { "name": "流程区", "responsibility": "展示四步回检流程和操作说明" }
+      ]
+    },
+    "interactions": ["点击开始回检进入我的回检页面"],
+    "state_feedback": [],
+    "api_dependencies": [],
+    "response_bindings": [],
+    "acceptance_criteria": ["无需接口即可完整展示", "流程说明清晰", "入口可跳转到我的回检"]
+  },
   "my-rechecks": {
     "target_type": "page",
     "target_id": "my-rechecks",

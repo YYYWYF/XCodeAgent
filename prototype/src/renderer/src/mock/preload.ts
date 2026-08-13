@@ -93,6 +93,34 @@ function withDesignedPages(artifacts: { pages: unknown[]; pageTree: unknown[]; a
   }
 }
 
+/** 合并静态剧本与本轮实时会话；实时消息优先，但必须继承静态剧本补充的跨产物归属。 */
+function mergeMockSessions(
+  scriptedSessions: Array<Record<string, unknown>>,
+  savedSessions: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> {
+  const scriptedById = new Map(
+    scriptedSessions.map((session) => [String(session.id || ''), session] as const)
+  )
+  const savedIds = new Set(savedSessions.map((session) => String(session.id || '')))
+  const enrichedSaved = savedSessions.map((saved) => {
+    const scripted = scriptedById.get(String(saved.id || ''))
+    if (!scripted) return saved
+    return {
+      ...scripted,
+      ...saved,
+      pageId: saved.pageId || scripted.pageId,
+      apiContractId: saved.apiContractId || scripted.apiContractId,
+      endpointId: saved.endpointId || scripted.endpointId,
+      endpointLabel: saved.endpointLabel || scripted.endpointLabel,
+      versionId: saved.versionId || scripted.versionId
+    }
+  })
+  return [
+    ...enrichedSaved,
+    ...scriptedSessions.filter((session) => !savedIds.has(String(session.id || '')))
+  ]
+}
+
 // 把共享的 v1.3 完成态规划产物还原为新应用/新迭代的待开发基线，再叠加本次运行已确认的任务。
 function asPendingPlanningArtifacts(artifacts: { pages: any[]; pageTree: any[]; apiContracts: any[] }) {
   const resetPage = (page: any): any => ({
@@ -176,7 +204,7 @@ const xcodeAgent = {
       // 合并走完的实时会话（页面/接口开发、审查），否则切回开发阶段后大纲点页面/接口，
       // list 只返回静态 mock，实时开发会话（messageCount>0）找不到 → 会话历史丢失。
       const saved = mockSavedSessions(workspaceRoot || '')
-      const merged = [...saved, ...sessions]
+      const merged = mergeMockSessions(sessions, saved)
       const summaries = merged.map((s) => ({
         id: s.id,
         title: s.title,
@@ -194,13 +222,12 @@ const xcodeAgent = {
     },
     read: ({ workspaceRoot, editorMode, sessionId }: { workspaceRoot?: string; editorMode?: string; sessionId?: string }) => {
       if (mockApplicationInPlanning(workspaceRoot || '')) return ok({ session: null })
-      const savedSession = mockSavedSessions(workspaceRoot || '').find((s) => s.id === sessionId)
-      if (savedSession) return ok({ session: savedSession })
       const sessions = appDataByWorkspace(workspaceRoot).chatSessions(
         workspaceRoot || '',
         (editorMode || 'frontend') as never
-      ) as Array<{ id: string }>
-      const session = sessions.find((s) => s.id === sessionId)
+      ) as Array<Record<string, unknown>>
+      const savedSessions = mockSavedSessions(workspaceRoot || '')
+      const session = mergeMockSessions(sessions, savedSessions).find((s) => s.id === sessionId)
       return ok({ session: session || null })
     },
     save: (payload: { session?: unknown }) => {

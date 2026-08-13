@@ -28,6 +28,8 @@ type WorkbenchPhaseContextValue = {
   agent: WorkbenchAgentIdentity;
   /** 阶段门禁：某对象当前是否可编辑。 */
   canEdit: (objectType: EditableObjectType) => boolean;
+  /** 已生成版本锁死后，阶段只展示旅程位置，不再承担 Agent 调度。 */
+  locked: boolean;
 };
 
 const WorkbenchPhaseContext = createContext<WorkbenchPhaseContextValue | null>(null);
@@ -39,12 +41,14 @@ const WorkbenchPhaseContext = createContext<WorkbenchPhaseContextValue | null>(n
 export function WorkbenchPhaseProvider({
   applicationId,
   lifecycle,
+  locked = false,
   children
 }: {
   applicationId: string;
   lifecycle?: ApplicationLifecycle;
+  locked?: boolean;
   children: ReactNode;
-}) {
+}): JSX.Element {
   const derivedPhase = deriveWorkbenchPhase(lifecycle);
   // 多应用切换时各自保留独立的覆盖值，避免互相串用。
   const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>({});
@@ -56,18 +60,23 @@ export function WorkbenchPhaseProvider({
       phase,
       derivedPhase,
       manualOverride,
-      switchPhase: (next) =>
-        setOverrides((current) => ({ ...current, [applicationId]: next ?? null })),
+      switchPhase: (next) => {
+        if (locked) return;
+        setOverrides((current) => ({ ...current, [applicationId]: next ?? null }));
+      },
       agent: WORKBENCH_PHASE_AGENTS[phase],
-      canEdit: (objectType) => isObjectEditableInPhase(objectType, phase)
+      canEdit: (objectType) => !locked && isObjectEditableInPhase(objectType, phase),
+      locked
     };
-  }, [applicationId, manualOverride, derivedPhase]);
+  }, [applicationId, manualOverride, derivedPhase, locked]);
 
   return (
     <WorkbenchPhaseContext.Provider value={value}>{children}</WorkbenchPhaseContext.Provider>
   );
 }
 
+// Provider 与 Hook 共同构成一个上下文模块，保留同文件导出以避免拆散其唯一公共入口。
+// eslint-disable-next-line react-refresh/only-export-components
 export function useWorkbenchPhase(): WorkbenchPhaseContextValue {
   const context = useContext(WorkbenchPhaseContext);
   // 尽早暴露 Provider 遗漏问题，避免组件读到静默的默认阶段。

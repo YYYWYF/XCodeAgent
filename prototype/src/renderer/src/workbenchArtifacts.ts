@@ -508,7 +508,7 @@ export function buildLineDiff(oldText: string, newText: string, path: string): s
 export function buildReviewReport(): string {
   return `# 代码审查报告
 
-> 审查范围：全部页面与接口模块 · 审查项：代码规范 / 安全 / 健康度 · 结论：**通过，可发布**
+> 审查范围：全部页面与接口模块 · 审查项：代码规范 / 安全 / 健康度 · 结论：**通过，可生成版本**
 
 ## 总览
 

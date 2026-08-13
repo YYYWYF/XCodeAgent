@@ -21,6 +21,7 @@
     }
   ],
   "pages": [
+    { "pageId": "recheck-introduction", "name": "回检介绍", "path": "/recheck-introduction", "description": "静态介绍需求回检场景与处理流程" },
     { "pageId": "my-rechecks", "name": "我的回检", "path": "/my-rechecks", "description": "回检填报" }
   ],
   "business_flows": [
@@ -35,6 +36,7 @@
     }
   ],
   "acceptance_criteria": [
+    "回检介绍无需接口即可完整展示",
     "可提交回检单并跟踪状态"
   ],
   "assumptions": [

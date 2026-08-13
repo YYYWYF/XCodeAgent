@@ -1,12 +1,13 @@
-import { Button, Dropdown, Menu } from 'antd'
+import { useState, type ReactNode } from 'react'
+import { Button, Dropdown } from 'antd'
 import {
+  CloudUploadOutlined,
   DownOutlined,
   HistoryOutlined,
   LockOutlined,
-  PlusOutlined,
-  RocketOutlined
+  PlusOutlined
 } from '@ant-design/icons'
-import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle, ApplicationVersion } from '../typings'
 import {
   currentVersion,
   findVersion,
@@ -18,17 +19,24 @@ import './VersionActions.less'
 
 type Props = {
   application: ApplicationConfig
-  /** 合并后的实时 lifecycle：发布判定用实时验收态，而非版本快照。 */
+  /** 合并后的实时 lifecycle：生成版本判定用实时验收态，而非版本快照。 */
   lifecycle?: ApplicationLifecycle
   activeVersionId?: string
   onPublish: () => void
   onRollback: (versionId: string) => void
   onStartIteration: () => void
   onVersionSelect: (versionId: string) => void
+  previewAction: ReactNode
+}
+
+function statusLabelFor(version: ApplicationVersion, isActive: boolean): string {
+  if (isActive) return version.status === 'released' ? '最新版本' : '当前迭代'
+  return version.status === 'released' ? '已生成版本' : '已保存'
 }
 
 /**
- * 工作台版本选择与发布操作区；查看历史版本不会改变当前单向版本头。
+ * 工作台版本选择与生成版本操作区；查看历史版本不会改变当前单向版本头。
+ * 下拉面板单列：每个版本直显完整日志，选中即切换，无额外 hover 面板。
  */
 export default function VersionActions({
   application,
@@ -37,8 +45,10 @@ export default function VersionActions({
   onPublish,
   onRollback,
   onStartIteration,
-  onVersionSelect
+  onVersionSelect,
+  previewAction
 }: Props): JSX.Element | null {
+  const [menuOpen, setMenuOpen] = useState(false)
   const viewedVersion = currentVersion(application)
   if (!viewedVersion) return null
 
@@ -46,41 +56,57 @@ export default function VersionActions({
   const activeVersion = findVersion(application, activeVersionId || '') || allVersions.at(-1)
   const isViewingActiveVersion = viewedVersion.id === activeVersion?.id
   const editable = isViewingActiveVersion && isVersionEditable(viewedVersion)
-  // 发布判定用实时 lifecycle（合并后），避免版本快照冻结验收态。
+  // 生成版本判定用实时 lifecycle（合并后），避免版本快照冻结验收态。
   const releasable = isVersionReleasable({
     ...viewedVersion,
     lifecycle: lifecycle || viewedVersion.lifecycle
   })
-  const versionMenu = (
-    <Menu
-      onClick={({ key }) => onVersionSelect(String(key))}
-      selectedKeys={[viewedVersion.id]}
-    >
+
+  const versionPanel = (
+    <div className={cx('version-dropdown')}>
       {[...allVersions].reverse().map((version) => {
-        const isActive = version.id === activeVersion?.id
-        const statusLabel = isActive
-          ? version.status === 'released'
-            ? '最新已发布'
-            : '当前迭代'
-          : version.status === 'released'
-            ? '已发布'
-            : '已保存'
+        // 高亮跟随当前查看版本(viewedVersion);状态标签跟随当前工作版本(activeVersion)。
+        const isViewing = version.id === viewedVersion.id
+        const isWorking = version.id === activeVersion?.id
         return (
-          <Menu.Item key={version.id}>
-            <span className={cx('version-menu-item', version.status === 'released' && 'is-released')}>
+          <button
+            key={version.id}
+            type="button"
+            className={cx(
+              'version-dropdown-item',
+              isViewing && 'is-active',
+              version.status === 'released' && 'is-released'
+            )}
+            onClick={() => {
+              setMenuOpen(false)
+              onVersionSelect(version.id)
+            }}
+          >
+            <span className={cx('version-dropdown-item-head')}>
               {version.status === 'released' ? <LockOutlined /> : null}
               <span className={cx('version-menu-label')}>{version.versionLabel}</span>
-              <span className={cx('version-menu-status')}>{statusLabel}</span>
+              <span className={cx('version-menu-status')}>
+                {statusLabelFor(version, isWorking)}
+              </span>
             </span>
-          </Menu.Item>
+            {version.description ? (
+              <span className={cx('version-dropdown-item-log')}>{version.description}</span>
+            ) : null}
+          </button>
         )
       })}
-    </Menu>
+    </div>
   )
 
   return (
     <div className={cx('workbench-version-actions')}>
-      <Dropdown overlay={versionMenu} placement="bottomRight" trigger={['click']}>
+      <Dropdown
+        visible={menuOpen}
+        onVisibleChange={setMenuOpen}
+        overlay={versionPanel}
+        placement="bottomRight"
+        trigger={['click']}
+      >
         <button
           aria-label={`切换版本，当前 ${viewedVersion.versionLabel}`}
           className={cx(
@@ -94,6 +120,8 @@ export default function VersionActions({
           <DownOutlined className={cx('workbench-version-caret')} />
         </button>
       </Dropdown>
+
+      {previewAction}
 
       {!isViewingActiveVersion ? (
         <Button
@@ -112,11 +140,11 @@ export default function VersionActions({
           size="small"
           type="primary"
           disabled={!releasable}
-          icon={<RocketOutlined />}
+          icon={<CloudUploadOutlined />}
           onClick={onPublish}
-          title={releasable ? '发布当前版本' : '完成代码审查后可发布'}
+          title={releasable ? '生成版本' : '完成代码审查后可生成版本'}
         >
-          发布
+          生成版本
         </Button>
       ) : null}
 

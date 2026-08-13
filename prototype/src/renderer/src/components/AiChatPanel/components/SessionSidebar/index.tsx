@@ -1,448 +1,573 @@
 import {
+  AppstoreOutlined,
+  ApiOutlined,
   CaretDownOutlined,
+  CodeOutlined,
+  DeleteOutlined,
   DownOutlined,
+  EllipsisOutlined,
+  EditOutlined,
   FileTextOutlined,
-  FilterOutlined,
-  FolderOpenOutlined,
   FolderOutlined,
   LeftOutlined,
+  LockOutlined,
+  MessageOutlined,
+  PlusOutlined,
   RightOutlined,
-  SearchOutlined,
   SettingOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
-import { Input, Switch, Typography } from 'antd'
+import { Dropdown, Menu, Popconfirm, Segmented, Typography } from 'antd'
 import type { CSSProperties, ReactElement } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useWorkbenchPhase } from '../../../../context'
-import freeChatIcon from '../../../../assets/icons/free-chat.svg'
-import recommendedTasksIcon from '../../../../assets/icons/recommended-tasks.svg'
+import { useMemo, useState } from 'react'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
+import type { WorkspaceDocKey } from '../../types'
 import type {
-  ApplicationMenuItem,
   DevelopmentPlanningApiContract,
-  DevelopmentPlanningPageTreeNode,
-  DevelopmentPlanningPageOption
+  DevelopmentPlanningPageOption,
+  DevelopmentPlanningPageTreeNode
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { apiEndpointDisplayPath } from '../../utils'
+import {
+  artifactIdsForSession,
+  documentArtifactId,
+  endpointArtifactId,
+  pageArtifactId
+} from '../../../../workbenchDomain'
+import type { WorkbenchArtifactAccess } from '../../../../workbenchDomain'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
-import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
-import PageSessionHistory from './PageSessionHistory'
 import './SessionSidebar.less'
 
 const { Text } = Typography
-
 const COLLAPSED_SIDEBAR_WIDTH = 68
-const DEFAULT_SIDEBAR_WIDTH = 300
-const MIN_SIDEBAR_WIDTH = 240
-const MAX_SIDEBAR_WIDTH = 420
-const COLLAPSE_DRAG_THRESHOLD = 140
+const DEFAULT_SIDEBAR_WIDTH = 248
 
-type SidebarAssetIconProps = {
-  source: string
+type NavigationView = 'tasks' | 'artifacts'
+type ArtifactFilter = 'all' | 'page' | 'endpoint' | 'model'
+type ArtifactStatus = 'not-started' | 'in-progress' | 'completed'
+type WorkbenchDocumentKey = WorkspaceDocKey | 'code-review'
+
+type DesignArtifactItem = {
+  available: boolean
+  key: WorkbenchDocumentKey
+  label: string
+  path: string
+  status: ArtifactStatus
 }
 
-/** 将集中管理的 SVG 资源渲染为可继承菜单状态颜色的图标。 */
-function SidebarAssetIcon({ source }: SidebarAssetIconProps): ReactElement {
-  return (
-    <span
-      aria-hidden="true"
-      className={cx('session-footer-icon')}
-      style={{ '--session-footer-icon-source': `url("${source}")` } as CSSProperties}
-    />
-  )
+type ArtifactMenuProps = {
+  canCreate: boolean
+  label: string
+  lockMessage?: string
+  onCreateTask: () => void
+  onOpenSession: (sessionId: string) => Promise<void>
+  sessions: ChatSessionSummary[]
 }
 
 type SessionSidebarProps = {
   activeSessionId?: string
   apiContracts: DevelopmentPlanningApiContract[]
+  applicationName: string
+  artifactAccessById: Record<string, WorkbenchArtifactAccess>
+  designArtifacts: DesignArtifactItem[]
   deletingSessionId?: string
-  /** 设计阶段强制折叠：大纲无意义，收成 68px 图标栏，禁止展开。 */
-  forceCollapsed?: boolean
   filesActive: boolean
-  loadingSessions: boolean
-  onCreateEndpointSession: (
-    apiContractId: string,
-    endpointId: string,
-    endpointLabel: string
-  ) => Promise<void>
-  onCreateSession: () => void
-  onCreatePageSession: (pageId: string, pageLabel: string) => Promise<void>
-  onDeleteSession: (sessionId: string) => Promise<void>
-  onOpenSession: (sessionId: string) => Promise<void>
+  fixedOpen?: boolean
+  readOnly?: boolean
   onApiEndpointSelect: (target: {
     apiContractId: string
     endpointId: string
     endpointKey: string
     label: string
   }) => void
+  onCreateEndpointTask: (target: {
+    apiContractId: string
+    endpointId: string
+    endpointLabel: string
+  }) => void
+  onCreatePageTask: (page: DevelopmentPlanningPageOption) => void
+  onCreateSession: () => void
+  onCreateDocumentTask: (key: WorkbenchDocumentKey) => void
+  onDeleteSession: (sessionId: string) => Promise<void>
+  onDesignArtifactSelect: (key: WorkbenchDocumentKey) => void
+  onOpenSession: (sessionId: string) => Promise<void>
+  onRenameSession: (sessionId: string, title: string) => Promise<void>
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   onShowFiles: () => void
   onShowSettings: () => void
   onShowSkills: () => void
   pages: DevelopmentPlanningPageOption[]
+  pageEndpointRelations: Record<string, string[]>
   pageTree: DevelopmentPlanningPageTreeNode[]
   selectedApiEndpointKey: string
+  selectedDesignArtifactKey?: WorkbenchDocumentKey
   selectedPageId: string
-  sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
   settingsActive: boolean
+  showDevelopmentTasks: boolean
   skillsActive: boolean
+  theme: 'light' | 'dark'
 }
 
-type OutlineRowProps = {
-  activeSessionId?: string
-  deletingSessionId?: string
-  disabled?: boolean
-  item: ApplicationMenuItem
-  level: number
-  loadingSessions: boolean
-  onCreatePageSession: (pageId: string, pageLabel: string) => Promise<void>
-  onDeleteSession: (sessionId: string) => Promise<void>
-  onOpenSession: (sessionId: string) => Promise<void>
-  onSelect: (key: string) => void
-  selectedKey: string
-  sessionError?: string
+/** 根据真实完成状态和关联对话计算导航圆点状态。 */
+function artifactStatus(
+  completed: boolean,
+  sessions: ChatSessionSummary[],
   sessionRunStates: Record<string, SessionRunStatus>
-  sessions: ChatSessionSummary[]
-  visibleKeys: Set<string>
+): ArtifactStatus {
+  if (completed) return 'completed'
+  return sessions.some((session) => session.messageCount > 0 || sessionRunStates[session.id])
+    ? 'in-progress'
+    : 'not-started'
 }
 
-/** 递归统计当前目录节点下的页面数量，用于目录标签展示。 */
-function outlineLeafCount(item: ApplicationMenuItem): number {
-  if (item.type !== 'menu') return 1
-  return (item.children || []).reduce((total, child) => total + outlineLeafCount(child), 0)
+/** 判断会话是否关联指定页面，兼容当前单页面会话契约。 */
+function sessionMatchesPage(
+  session: ChatSessionSummary,
+  pageId: string,
+  pageEndpointRelations: Record<string, string[]>
+): boolean {
+  return artifactIdsForSession(session, pageEndpointRelations).includes(pageArtifactId(pageId))
 }
 
-/** 渲染单个页面目录节点，并展示其详细设计状态。 */
-function OutlineRow({
+/** 判断会话是否关联指定接口，并兼容旧页面会话按产物关系反查依赖接口。 */
+function sessionMatchesEndpoint(
+  session: ChatSessionSummary,
+  apiContractId: string,
+  endpointId: string,
+  pageEndpointRelations: Record<string, string[]>
+): boolean {
+  return artifactIdsForSession(session, pageEndpointRelations).includes(
+    endpointArtifactId(apiContractId, endpointId)
+  )
+}
+
+/** 文档产物复用对应阶段的应用级默认对话。 */
+function sessionsForDocument(
+  sessions: ChatSessionSummary[],
+  key: WorkbenchDocumentKey
+): ChatSessionSummary[] {
+  return sessions.filter((session) =>
+    artifactIdsForSession(session).includes(documentArtifactId(key))
+  )
+}
+
+/** 渲染产物右侧菜单，相关对话直接平铺，并保留创建新任务入口。 */
+function ArtifactMenu({
+  canCreate,
+  label,
+  lockMessage,
+  onCreateTask,
+  onOpenSession,
+  sessions
+}: ArtifactMenuProps): ReactElement {
+  const orderedSessions = [...sessions].sort(
+    (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)
+  )
+  return (
+    <Menu
+      className={cx('artifact-conversation-menu')}
+      onClick={({ key, domEvent }) => {
+        domEvent.stopPropagation()
+        if (key === 'new') onCreateTask()
+        else void onOpenSession(String(key).replace(/^session:/, ''))
+      }}
+    >
+      {orderedSessions.length > 0 ? (
+        <Menu.ItemGroup title="相关对话">
+          {orderedSessions.map((session, index) => (
+            <Menu.Item key={`session:${session.id}`} icon={<MessageOutlined />}>
+              {session.title}
+              {index === 0 ? ' · 默认' : ''}
+            </Menu.Item>
+          ))}
+        </Menu.ItemGroup>
+      ) : (
+        <Menu.Item disabled key="empty">
+          暂无相关对话
+        </Menu.Item>
+      )}
+      <Menu.Divider />
+      <Menu.Item disabled={!canCreate} key="new" icon={<PlusOutlined />}>
+        {canCreate ? `基于“${label}”新建对话` : lockMessage || '当前版本只读'}
+      </Menu.Item>
+    </Menu>
+  )
+}
+
+/** 渲染对话视图：最近对话保持单行，只按关联产物类型过滤。 */
+/** 渲染最近对话、类型筛选及对话级重命名和删除操作。 */
+function TaskNavigation({
   activeSessionId,
   deletingSessionId,
-  disabled = false,
-  item,
-  level,
-  loadingSessions,
-  onCreatePageSession,
+  filter,
+  onCreateSession,
   onDeleteSession,
+  onFilterChange,
   onOpenSession,
-  onSelect,
-  selectedKey,
-  sessionError,
-  sessionRunStates,
-  sessions,
-  visibleKeys
-}: OutlineRowProps): ReactElement {
-  const [expanded, setExpanded] = useState(true)
-  const children = item.children?.filter((child) => visibleKeys.has(child.key)) || []
-  const isFolder = item.type === 'menu' || children.length > 0
-  const selected = selectedKey === item.key
-  const designed = Boolean(item.designed)
-  const childPageCount = isFolder ? outlineLeafCount(item) : 0
+  onRenameSession,
+  readOnly,
+  sessions
+}: {
+  activeSessionId?: string
+  deletingSessionId?: string
+  filter: ArtifactFilter
+  onCreateSession: () => void
+  onDeleteSession: (sessionId: string) => Promise<void>
+  onFilterChange: (filter: ArtifactFilter) => void
+  onOpenSession: (sessionId: string) => Promise<void>
+  onRenameSession: (sessionId: string, title: string) => Promise<void>
+  readOnly: boolean
+  sessions: ChatSessionSummary[]
+}): ReactElement {
+  const [editingSessionId, setEditingSessionId] = useState('')
+  const [editingTitle, setEditingTitle] = useState('')
+  const visibleSessions = sessions.filter((session) => {
+    if (filter === 'page') return Boolean(session.pageId)
+    if (filter === 'endpoint') return Boolean(session.endpointId)
+    if (filter === 'model') return false
+    return true
+  })
+
+  /** 提交有效的新名称；空名称回退为原名称，避免生成无标题目录项。 */
+  const commitRename = async (session: ChatSessionSummary): Promise<void> => {
+    const normalizedTitle = editingTitle.trim()
+    setEditingSessionId('')
+    setEditingTitle('')
+    if (!normalizedTitle || normalizedTitle === session.title) return
+    await onRenameSession(session.id, normalizedTitle)
+  }
 
   return (
-    <div className={cx('outline-node')}>
+    <section className={cx('task-navigation')}>
+      <header>
+        <Text strong>最近对话</Text>
+        <button aria-label="新建对话" disabled={readOnly} onClick={onCreateSession} type="button">
+          <PlusOutlined />
+        </button>
+      </header>
+      <Segmented
+        aria-label="产物类型筛选"
+        block
+        onChange={(value) => onFilterChange(value as ArtifactFilter)}
+        options={[
+          { label: '全部', value: 'all' },
+          { label: '页面', value: 'page' },
+          { label: '接口', value: 'endpoint' },
+          { label: '模型', value: 'model' }
+        ]}
+        size="small"
+        value={filter}
+      />
+      <div className={cx('task-conversation-list')}>
+        {visibleSessions.map((session) => (
+          <div className={cx('task-conversation-shell')} key={session.id}>
+            {editingSessionId === session.id ? (
+              <div
+                className={cx(
+                  'task-conversation-row',
+                  'editing',
+                  activeSessionId === session.id && 'selected'
+                )}
+              >
+                <MessageOutlined />
+                <input
+                  aria-label="对话名称"
+                  autoFocus
+                  maxLength={40}
+                  onBlur={() => void commitRename(session)}
+                  onChange={(event) => setEditingTitle(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') event.currentTarget.blur()
+                    if (event.key === 'Escape') {
+                      setEditingSessionId('')
+                      setEditingTitle('')
+                    }
+                  }}
+                  value={editingTitle}
+                />
+              </div>
+            ) : (
+              <button
+                className={cx(
+                  'task-conversation-row',
+                  activeSessionId === session.id && 'selected'
+                )}
+                onClick={() => void onOpenSession(session.id)}
+                title={session.title}
+                type="button"
+              >
+                <MessageOutlined />
+                <span>{session.title || '新对话'}</span>
+              </button>
+            )}
+            <button
+              aria-label={`重命名${session.title}`}
+              className={cx('task-conversation-rename')}
+              disabled={readOnly}
+              onClick={() => {
+                setEditingSessionId(session.id)
+                setEditingTitle(session.title)
+              }}
+              type="button"
+            >
+              <EditOutlined />
+            </button>
+            <Popconfirm
+              cancelText="取消"
+              okText="删除"
+              onConfirm={() => onDeleteSession(session.id)}
+              placement="right"
+              title="删除这个对话？"
+            >
+              <button
+                aria-label={`删除${session.title}`}
+                className={cx('task-conversation-delete')}
+                disabled={readOnly || deletingSessionId === session.id}
+                type="button"
+              >
+                <DeleteOutlined />
+              </button>
+            </Popconfirm>
+          </div>
+        ))}
+        {visibleSessions.length === 0 ? (
+          <button
+            className={cx('task-conversation-empty')}
+            disabled={readOnly}
+            onClick={onCreateSession}
+            type="button"
+          >
+            {readOnly ? '该版本的对话记录只读' : '当前筛选下暂无对话，创建一个新对话'}
+          </button>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+/** 递归统计菜单节点下页面总数和已完成数。 */
+function pageTreeProgress(node: DevelopmentPlanningPageTreeNode): {
+  completed: number
+  total: number
+} {
+  if (node.type === 'page') {
+    return { completed: node.designed || node.hasDetailPlan ? 1 : 0, total: 1 }
+  }
+  return (node.children || []).reduce(
+    (result, child) => {
+      const progress = pageTreeProgress(child)
+      return {
+        completed: result.completed + progress.completed,
+        total: result.total + progress.total
+      }
+    },
+    { completed: 0, total: 0 }
+  )
+}
+
+/** 递归渲染页面菜单树，菜单节点只组织层级，页面叶子承载产物操作。 */
+function PageArtifactNode({
+  artifactAccessById,
+  artifactsAvailable,
+  depth,
+  node,
+  onCreatePageTask,
+  onOpenSession,
+  onPageSelect,
+  pagesById,
+  pageEndpointRelations,
+  readOnly,
+  selectedPageId,
+  sessionRunStates,
+  sessions,
+  theme
+}: {
+  artifactAccessById: Record<string, WorkbenchArtifactAccess>
+  artifactsAvailable: boolean
+  depth: number
+  node: DevelopmentPlanningPageTreeNode
+  onCreatePageTask: (page: DevelopmentPlanningPageOption) => void
+  onOpenSession: (sessionId: string) => Promise<void>
+  onPageSelect: (page: DevelopmentPlanningPageOption) => void
+  pagesById: Map<string, DevelopmentPlanningPageOption>
+  pageEndpointRelations: Record<string, string[]>
+  readOnly: boolean
+  selectedPageId: string
+  sessionRunStates: Record<string, SessionRunStatus>
+  sessions: ChatSessionSummary[]
+  theme: 'light' | 'dark'
+}): ReactElement | null {
+  const [expanded, setExpanded] = useState(true)
+  if (node.type === 'menu') {
+    const progress = pageTreeProgress(node)
+    return (
+      <div className={cx('artifact-tree-node')}>
+        <button
+          aria-expanded={expanded}
+          className={cx('artifact-branch-row')}
+          onClick={() => setExpanded((value) => !value)}
+          style={{ paddingLeft: 8 + depth * 14 }}
+          type="button"
+        >
+          <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
+          <FolderOutlined />
+          <span>{node.label}</span>
+          <small>
+            {progress.completed}/{progress.total}
+          </small>
+        </button>
+        {expanded ? (
+          <div className={cx('artifact-tree-children')}>
+            {(node.children || []).map((child) => (
+              <PageArtifactNode
+                artifactAccessById={artifactAccessById}
+                artifactsAvailable={artifactsAvailable}
+                depth={depth + 1}
+                key={child.key}
+                node={child}
+                onCreatePageTask={onCreatePageTask}
+                onOpenSession={onOpenSession}
+                onPageSelect={onPageSelect}
+                pagesById={pagesById}
+                pageEndpointRelations={pageEndpointRelations}
+                readOnly={readOnly}
+                selectedPageId={selectedPageId}
+                sessionRunStates={sessionRunStates}
+                sessions={sessions}
+                theme={theme}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
+  const pageId = node.pageId || node.key
+  const page = pagesById.get(pageId)
+  if (!page) return null
+  const access = artifactAccessById[pageArtifactId(pageId)]
+  const related = sessions.filter((session) =>
+    sessionMatchesPage(session, pageId, pageEndpointRelations)
+  )
+  const status = artifactStatus(
+    Boolean(page.designed || page.hasDetailPlan),
+    related,
+    sessionRunStates
+  )
+  return (
+    <div className={cx('artifact-row-shell')}>
       <button
-        aria-current={selected ? 'page' : undefined}
-        aria-expanded={isFolder ? expanded : undefined}
-        className={cx('outline-row', selected && 'selected')}
-        disabled={disabled && !isFolder}
-        onClick={() => {
-          if (isFolder) setExpanded((current) => !current)
-          else if (disabled) return
-          else onSelect(item.key)
-        }}
-        style={{ '--outline-level': level } as React.CSSProperties}
+        className={cx(
+          'artifact-row',
+          selectedPageId === pageId && 'selected',
+          access?.mode === 'read' && 'read-only'
+        )}
+        onClick={() => onPageSelect(page)}
+        disabled={!artifactsAvailable || access?.mode === 'unavailable'}
+        style={{ paddingLeft: 8 + depth * 14 }}
+        title={`${page.label} · ${page.path}${access?.message ? ` · ${access.message}` : ''}`}
         type="button"
       >
-        <span className={cx('outline-caret')}>
-          {isFolder ? <CaretDownOutlined className={cx(!expanded && 'collapsed')} /> : null}
-        </span>
-        <span className={cx('outline-icon')}>
-          {isFolder
-            ? expanded
-              ? <FolderOpenOutlined />
-              : <FolderOutlined />
-            : <FileTextOutlined />}
-        </span>
-        <span className={cx('outline-copy')}>
-          <span className={cx('outline-label-row')}>
-            <span className={cx('outline-label')}>{item.label}</span>
-            {isFolder ? (
-              <span className={cx('outline-menu-count')}>
-                {childPageCount} 个页面
-              </span>
-            ) : (
-              <span className={cx('outline-design-status', designed ? 'designed' : 'undesign')}>
-                {designed ? '已设计' : '待设计'}
-              </span>
-            )}
-          </span>
-          {item.path ? (
-            <span className={cx('outline-meta')}>
-              {item.path}
-            </span>
-          ) : null}
-        </span>
+        <span aria-label={status} className={cx('artifact-status-dot', status)} />
+        <FileTextOutlined />
+        <span>{page.label}</span>
+        {access?.mode === 'read' ? <LockOutlined className={cx('artifact-lock-icon')} /> : null}
       </button>
-      {!isFolder && !disabled ? (
-        <PageSessionHistory
-          activeSessionId={activeSessionId}
-          deletingSessionId={deletingSessionId}
-          loadingSessions={loadingSessions}
-          onCreateSession={() => onCreatePageSession(item.pageKey || item.key, item.label)}
-          onDeleteSession={onDeleteSession}
-          onOpenSession={onOpenSession}
-          deleteTitle="删除这个页面会话？"
-          emptyDescription="当前页面暂无历史会话"
-          sessionError={sessionError}
-          sessionRunStates={sessionRunStates}
-          sessions={sessions.filter((session) => session.pageId === (item.pageKey || item.key))}
-          targetLabel={item.label}
-        />
-      ) : null}
-      {isFolder && expanded && children.length > 0 ? (
-        <div className={cx('outline-children')}>
-          {children.map((child) => (
-            <OutlineRow
-              activeSessionId={activeSessionId}
-              deletingSessionId={deletingSessionId}
-              disabled={disabled}
-              item={child}
-              key={child.key}
-              level={level + 1}
-              loadingSessions={loadingSessions}
-              onCreatePageSession={onCreatePageSession}
-              onDeleteSession={onDeleteSession}
-              onOpenSession={onOpenSession}
-              onSelect={onSelect}
-              selectedKey={selectedKey}
-              sessionError={sessionError}
-              sessionRunStates={sessionRunStates}
-              sessions={sessions}
-              visibleKeys={visibleKeys}
-            />
-          ))}
-        </div>
-      ) : null}
+      <Dropdown
+        disabled={!artifactsAvailable || access?.mode === 'unavailable'}
+        overlay={
+          <ArtifactMenu
+            canCreate={!readOnly}
+            label={page.label}
+            lockMessage={access?.message}
+            onCreateTask={() => onCreatePageTask(page)}
+            onOpenSession={onOpenSession}
+            sessions={related}
+          />
+        }
+        overlayClassName={cx('artifact-conversation-overlay', theme)}
+        placement="bottomLeft"
+        trigger={['click']}
+      >
+        <button aria-label={`${page.label}操作`} className={cx('artifact-more')} type="button">
+          <EllipsisOutlined />
+        </button>
+      </Dropdown>
     </div>
   )
 }
 
-/** 把页面树节点递归转换为侧栏复用的菜单项结构。 */
-function pageTreeItems(nodes: DevelopmentPlanningPageTreeNode[]): ApplicationMenuItem[] {
-  const items: ApplicationMenuItem[] = []
-  nodes.forEach((node) => {
-    if (node.type === 'menu') {
-      const children = pageTreeItems(node.children || [])
-      if (children.length === 0) return
-      items.push({
-        key: node.key,
-        path: node.uniquePath || node.path || node.key,
-        label: node.label,
-        type: 'menu',
-        children
-      })
-      return
-    }
-    const pageKey = node.pageId || node.key
-    if (!pageKey) return
-    items.push({
-      key: pageKey,
-      pageKey,
-      path: node.path,
-      label: node.label,
-      type: 'page',
-      purpose: node.purpose,
-      keyFeatures: [],
-      designed: Boolean(node.designed),
-      detailPlanStatus: node.detailPlanStatus,
-      hasDetailPlan: node.hasDetailPlan
-    })
-  })
-  return items
-}
-
-function collectVisibleKeys(items: ApplicationMenuItem[], query: string): Set<string> {
-  const visible = new Set<string>()
-  const normalizedQuery = query.trim().toLocaleLowerCase()
-
-  const visit = (item: ApplicationMenuItem): boolean => {
-    let childMatches = false
-    item.children?.forEach((child) => {
-      if (visit(child)) childMatches = true
-    })
-    const selfMatches = !normalizedQuery || item.label.toLocaleLowerCase().includes(normalizedQuery)
-    if (selfMatches || childMatches) visible.add(item.key)
-    return selfMatches || childMatches
-  }
-
-  items.forEach(visit)
-  return visible
-}
-
-function collectRelatedKeys(items: ApplicationMenuItem[], selectedKey: string): Set<string> {
-  const related = new Set<string>()
-  const addDescendants = (item: ApplicationMenuItem): void => {
-    related.add(item.key)
-    item.children?.forEach(addDescendants)
-  }
-  const visit = (item: ApplicationMenuItem, ancestors: string[]): boolean => {
-    if (item.key === selectedKey) {
-      ancestors.forEach((key) => related.add(key))
-      addDescendants(item)
-      return true
-    }
-    return item.children?.some((child) => visit(child, [...ancestors, item.key])) || false
-  }
-
-  if (!selectedKey) items.forEach(addDescendants)
-  else items.some((item) => visit(item, []))
-  return related
-}
-
-function containsMenuKey(items: ApplicationMenuItem[], key: string): boolean {
-  return items.some((item) => item.key === key || containsMenuKey(item.children || [], key))
-}
-
-/** 生成 API endpoint 在左侧大纲中的稳定选中键。 */
-function apiEndpointSelectionKey(contractId: string, endpointId: string): string {
-  return `${contractId}:${endpointId}`
-}
-
-/** 使用 ProjectPlan 页面清单组织工作台左侧大纲与快捷入口。 */
-export default function SessionSidebar({
-  activeSessionId,
-  apiContracts = [],
-  deletingSessionId,
-  filesActive,
-  forceCollapsed = false,
-  loadingSessions,
-  onCreateEndpointSession,
-  onCreateSession,
-  onCreatePageSession,
-  onDeleteSession,
-  onApiEndpointSelect,
-  onOpenSession,
-  onPageSelect,
-  onShowFiles,
-  onShowSettings,
-  onShowSkills,
-  pages,
-  pageTree,
-  selectedApiEndpointKey,
-  selectedPageId,
-  sessionError,
-  sessionRunStates,
-  sessions,
-  settingsActive,
-  skillsActive
-}: SessionSidebarProps): ReactElement {
-  const [outlineQuery, setOutlineQuery] = useState('')
-  // 开发与审查阶段默认展开对话任务目录；设计阶段仍由 forceCollapsed 统一收起。
-  const [collapsed, setCollapsed] = useState(false)
-  const [compactExpanded, setCompactExpanded] = useState(false)
-  const [resizing, setResizing] = useState(false)
-  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
+/** 渲染以应用为根的完整产物树，页面和接口分别保留业务分组。 */
+function ArtifactNavigation(
+  props: Pick<
+    SessionSidebarProps,
+    | 'apiContracts'
+    | 'applicationName'
+    | 'artifactAccessById'
+    | 'designArtifacts'
+    | 'onApiEndpointSelect'
+    | 'onCreateEndpointTask'
+    | 'onCreateDocumentTask'
+    | 'onCreatePageTask'
+    | 'onDesignArtifactSelect'
+    | 'onOpenSession'
+    | 'onPageSelect'
+    | 'pages'
+    | 'pageEndpointRelations'
+    | 'pageTree'
+    | 'selectedApiEndpointKey'
+    | 'selectedDesignArtifactKey'
+    | 'selectedPageId'
+    | 'sessionRunStates'
+    | 'sessions'
+    | 'showDevelopmentTasks'
+    | 'readOnly'
+    | 'theme'
+  >
+): ReactElement {
+  const [applicationExpanded, setApplicationExpanded] = useState(true)
   const [pagesExpanded, setPagesExpanded] = useState(true)
-  const [apiExpanded, setApiExpanded] = useState(true)
-  const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(
-    () => new Set()
+  const [apisExpanded, setApisExpanded] = useState(true)
+  const [modelsExpanded, setModelsExpanded] = useState(false)
+  const [expandedContracts, setExpandedContracts] = useState<Set<string>>(
+    () => new Set(props.apiContracts.map((contract) => contract.id))
   )
-  const [onlyRelated, setOnlyRelated] = useState(false)
   const pagesById = useMemo(
-    () => new Map(pages.map((page) => [page.pageId, page])),
-    [pages]
+    () => new Map(props.pages.map((page) => [page.pageId, page])),
+    [props.pages]
   )
-  const pageItems = useMemo<ApplicationMenuItem[]>(
-    () => (
-      pageTree.length > 0
-        ? pageTreeItems(pageTree)
-        : pages.map((page) => ({
-            key: page.pageId,
-            pageKey: page.pageId,
-            path: page.path,
-            label: page.label,
-            type: 'page',
-            purpose: page.purpose,
-            keyFeatures: [],
-            designed: page.designed,
-            detailPlanStatus: page.detailPlanStatus,
-            hasDetailPlan: page.hasDetailPlan
-          }))
-    ),
-    [pageTree, pages]
+  const pageNodes =
+    props.pageTree.length > 0
+      ? props.pageTree
+      : props.pages.map((page) => ({ ...page, type: 'page' as const }))
+  const completedPages = props.pages.filter((page) => page.designed || page.hasDetailPlan).length
+  const endpointTotal = props.apiContracts.reduce(
+    (sum, contract) => sum + contract.endpoints.length,
+    0
   )
-  const sessionsByEndpointKey = useMemo(() => {
-    const groupedSessions = new Map<string, ChatSessionSummary[]>()
-    sessions.forEach((session) => {
-      const apiContractId = session.apiContractId
-      const endpointId = session.endpointId
-      if (!apiContractId || !endpointId) return
-      const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
-      const endpointSessions = groupedSessions.get(endpointKey) || []
-      endpointSessions.push(session)
-      groupedSessions.set(endpointKey, endpointSessions)
-    })
-    return groupedSessions
-  }, [sessions])
-  const selectedKey = selectedApiEndpointKey
-    ? ''
-    : containsMenuKey(pageItems, selectedPageId)
-      ? selectedPageId
-      : ''
-  const visibleKeys = useMemo(() => {
-    const matchingKeys = collectVisibleKeys(pageItems, outlineQuery)
-    if (!onlyRelated) return matchingKeys
-    const relatedKeys = collectRelatedKeys(pageItems, selectedKey)
-    if (relatedKeys.size === 0) return matchingKeys
-    return new Set([...matchingKeys].filter((key) => relatedKeys.has(key)))
-  }, [onlyRelated, outlineQuery, pageItems, selectedKey])
-  const compactLayout = useCompactWorkbench()
-  // 阶段感知：需求文档归产品阶段，页面/接口归研发阶段。阶段只在顶部 ribbon 统一切换，
-  // 这里只读阶段用于高亮，不在大纲里切阶段。
-  const { phase } = useWorkbenchPhase()
-  // 目录按阶段展示：仅开发阶段展示页面与接口对话任务。
-  const showDevSections = phase === 'development'
-  const effectiveCollapsed = forceCollapsed
-    ? true
-    : compactLayout
-      ? !compactExpanded
-      : collapsed
+  const completedEndpoints = props.apiContracts.reduce(
+    (sum, contract) =>
+      sum +
+      contract.endpoints.filter((endpoint) => endpoint.designed || endpoint.hasDetailPlan).length,
+    0
+  )
+  const completedDocuments = props.designArtifacts.filter(
+    (artifact) => artifact.status === 'completed'
+  ).length
+  // 页面、接口和模型只有在项目计划确认保存后才进入正式产物树。
+  const developmentArtifactsKnown = props.showDevelopmentTasks
+  const completedTotal = completedDocuments + completedPages + completedEndpoints
+  const artifactTotal =
+    props.designArtifacts.length +
+    (developmentArtifactsKnown ? props.pages.length + endpointTotal : 0)
 
-  // 进入开发阶段时自动展开大纲（配合「自动选中第一个待设计页面」），一次即可，之后可自由折叠。
-  const prevPhaseRef = useRef(phase)
-  useEffect(() => {
-    if (prevPhaseRef.current !== phase && phase === 'development') {
-      setCollapsed(false)
-    }
-    prevPhaseRef.current = phase
-  }, [phase])
-  const visibleApiContracts = useMemo(() => {
-    const query = outlineQuery.trim().toLocaleLowerCase()
-    if (!query) return apiContracts
-    return apiContracts.flatMap((contract) => {
-      const contractMatches = contract.label.toLocaleLowerCase().includes(query)
-      const endpoints = contractMatches
-        ? contract.endpoints
-        : contract.endpoints.filter(
-            (endpoint) =>
-              endpoint.method.toLocaleLowerCase().includes(query) ||
-              endpoint.path.toLocaleLowerCase().includes(query) ||
-              endpoint.summary.toLocaleLowerCase().includes(query)
-          )
-      return endpoints.length > 0 ? [{ ...contract, endpoints }] : []
-    })
-  }, [apiContracts, outlineQuery])
-
-  useEffect(() => {
-    if (!compactLayout) setCompactExpanded(false)
-  }, [compactLayout])
-
-  /** 独立切换一个 API contract 分组，避免多个资源同时收起或展开。 */
-  const handleApiContractToggle = (contractId: string): void => {
-    setCollapsedApiContractIds((current) => {
+  /** 单独切换一个接口分组，不影响其他契约树节点。 */
+  const toggleContract = (contractId: string): void => {
+    setExpandedContracts((current) => {
       const next = new Set(current)
       if (next.has(contractId)) next.delete(contractId)
       else next.add(contractId)
@@ -450,305 +575,253 @@ export default function SessionSidebar({
     })
   }
 
-  /** 在常规宽度下启动侧栏拖动调整，窄屏覆盖层保持固定宽度。 */
-  const handleResizeStart = (event: React.MouseEvent<HTMLDivElement>): void => {
-    if (compactLayout || forceCollapsed) return
-    event.preventDefault()
-    const sidebarLeft = event.currentTarget.parentElement?.getBoundingClientRect().left || 0
-    setResizing(true)
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-
-    const handleMouseMove = (moveEvent: MouseEvent): void => {
-      const nextWidth = moveEvent.clientX - sidebarLeft
-      if (nextWidth <= COLLAPSE_DRAG_THRESHOLD) {
-        setCollapsed(true)
-        return
-      }
-
-      setCollapsed(false)
-      setSidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, nextWidth)))
-    }
-    const handleMouseUp = (): void => {
-      setResizing(false)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-  }
-
-  /** 支持键盘调整常规侧栏宽度，并在到达最小值后收起。 */
-  const handleResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (compactLayout || forceCollapsed) return
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-    event.preventDefault()
-    if (event.key === 'ArrowLeft' && sidebarWidth <= MIN_SIDEBAR_WIDTH) {
-      setCollapsed(true)
-      return
-    }
-    setCollapsed(false)
-    setSidebarWidth((current) =>
-      Math.min(
-        MAX_SIDEBAR_WIDTH,
-        Math.max(MIN_SIDEBAR_WIDTH, current + (event.key === 'ArrowLeft' ? -16 : 16))
-      )
-    )
-  }
-
   return (
-    <aside
-      className={cx(
-        'session-sidebar',
-        effectiveCollapsed && 'collapsed',
-        compactLayout && 'compact-layout',
-        compactLayout && compactExpanded && 'compact-expanded',
-        resizing && 'resizing'
-      )}
-      aria-label="对话任务"
-      style={
-        {
-          '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
-        } as React.CSSProperties
-      }
-    >
-      {!forceCollapsed ? (
-        <div
-          aria-label="调整左侧菜单宽度"
-          aria-orientation="vertical"
-          aria-valuemax={MAX_SIDEBAR_WIDTH}
-          aria-valuemin={COLLAPSED_SIDEBAR_WIDTH}
-          aria-valuenow={effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}
-          className={cx('session-resize-handle')}
-          onKeyDown={handleResizeKeyDown}
-          onMouseDown={handleResizeStart}
-          role="separator"
-          tabIndex={0}
-        >
-          <button
-            aria-label={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
-            className={cx('session-collapse-button')}
-            onClick={() => {
-              if (compactLayout) setCompactExpanded((current) => !current)
-              else setCollapsed((current) => !current)
-            }}
-            onMouseDown={(event) => event.stopPropagation()}
-            title={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
-            type="button"
-          >
-            {effectiveCollapsed ? <RightOutlined /> : <LeftOutlined />}
-          </button>
-        </div>
-      ) : null}
-      <Text className={cx('session-section-title')} strong>
-        对话任务
-      </Text>
-      <fieldset aria-label="对话任务" className={cx('session-outline-lock-shell')}>
-        <div className={cx('session-outline-content')}>
-          <Input
-            allowClear
-            aria-label="搜索对话任务"
-            className={cx('session-search')}
-            onChange={(event) => setOutlineQuery(event.target.value)}
-            placeholder="搜索页面或 API"
-            prefix={<SearchOutlined />}
-            value={outlineQuery}
-          />
-          <div className={cx('session-filter-row')}>
-            <span>
-              <FilterOutlined />
-              只显示与当前选中相关
-            </span>
-            <Switch
-              aria-label="只显示与当前选中相关"
-              checked={onlyRelated}
-              onChange={setOnlyRelated}
-              size="small"
-            />
+    <section className={cx('artifact-navigation', 'artifact-tree')}>
+      <button
+        aria-expanded={applicationExpanded}
+        className={cx('artifact-root-row')}
+        onClick={() => setApplicationExpanded((value) => !value)}
+        type="button"
+      >
+        <CaretDownOutlined className={cx(!applicationExpanded && 'collapsed')} />
+        <AppstoreOutlined />
+        <strong>{props.applicationName}</strong>
+        <small>
+          {completedTotal}/{artifactTotal}
+        </small>
+      </button>
+      {applicationExpanded ? (
+        <div className={cx('artifact-root-children')}>
+          <div className={cx('artifact-section-row', 'static')}>
+            <FileTextOutlined />
+            <span>文档</span>
+            <small>
+              {completedDocuments}/{props.designArtifacts.length}
+            </small>
+          </div>
+          <div className={cx('artifact-tree-children', 'section-children')}>
+            {props.designArtifacts.map((artifact) => {
+              const related = sessionsForDocument(props.sessions, artifact.key)
+              const access = props.artifactAccessById[documentArtifactId(artifact.key)]
+              return (
+                <div className={cx('artifact-row-shell')} key={artifact.key}>
+                  <button
+                    className={cx(
+                      'artifact-row',
+                      props.selectedDesignArtifactKey === artifact.key && 'selected',
+                      access?.mode === 'read' && 'read-only'
+                    )}
+                    disabled={!artifact.available || access?.mode === 'unavailable'}
+                    onClick={() => props.onDesignArtifactSelect(artifact.key)}
+                    style={{ paddingLeft: 22 }}
+                    title={`${artifact.label} · ${artifact.path}${access?.message ? ` · ${access.message}` : ''}`}
+                    type="button"
+                  >
+                    <span
+                      aria-label={artifact.status}
+                      className={cx('artifact-status-dot', artifact.status)}
+                    />
+                    <FileTextOutlined />
+                    <span>{artifact.label}</span>
+                    {access?.mode === 'read' ? (
+                      <LockOutlined className={cx('artifact-lock-icon')} />
+                    ) : null}
+                  </button>
+                  <Dropdown
+                    disabled={!artifact.available || access?.mode === 'unavailable'}
+                    overlay={
+                      <ArtifactMenu
+                        canCreate={!props.readOnly}
+                        label={artifact.label}
+                        lockMessage={access?.message}
+                        onCreateTask={() => props.onCreateDocumentTask(artifact.key)}
+                        onOpenSession={props.onOpenSession}
+                        sessions={related}
+                      />
+                    }
+                    overlayClassName={cx('artifact-conversation-overlay', props.theme)}
+                    placement="bottomLeft"
+                    trigger={['click']}
+                  >
+                    <button
+                      aria-label={`${artifact.label}操作`}
+                      className={cx('artifact-more')}
+                      type="button"
+                    >
+                      <EllipsisOutlined />
+                    </button>
+                  </Dropdown>
+                </div>
+              )
+            })}
           </div>
 
-          <div className={cx('session-outline-scroll')}>
-            {showDevSections ? (
-              <>
-              <section className={cx('outline-section')}>
+          {developmentArtifactsKnown ? (
+            <>
               <button
                 aria-expanded={pagesExpanded}
-                className={cx('outline-section-heading')}
-                onClick={() => setPagesExpanded((current) => !current)}
+                className={cx('artifact-section-row')}
+                onClick={() => setPagesExpanded((value) => !value)}
                 type="button"
               >
                 <CaretDownOutlined className={cx(!pagesExpanded && 'collapsed')} />
-                <span>页面任务</span>
-                <span className={cx('outline-phase-tag', 'development')}>开发</span>
+                <span>页面</span>
+                <small>
+                  {completedPages}/{props.pages.length}
+                </small>
               </button>
               {pagesExpanded ? (
-                <div className={cx('outline-tree')}>
-                  {pageItems
-                    .filter((item) => visibleKeys.has(item.key))
-                    .map((item) => (
-                      <OutlineRow
-                        activeSessionId={activeSessionId}
-                        deletingSessionId={deletingSessionId}
-                        item={item}
-                        key={item.key}
-                        level={0}
-                        loadingSessions={loadingSessions}
-                        onCreatePageSession={onCreatePageSession}
-                        onDeleteSession={onDeleteSession}
-                        onOpenSession={onOpenSession}
-                        onSelect={(key) => {
-                          const selectedPage = pagesById.get(key)
-                          if (selectedPage) onPageSelect(selectedPage)
-                        }}
-                        selectedKey={selectedKey}
-                        sessionError={selectedKey === item.key ? sessionError : undefined}
-                        sessionRunStates={sessionRunStates}
-                        sessions={sessions}
-                        visibleKeys={visibleKeys}
-                      />
-                    ))}
-                  {pageItems.length === 0 ? (
-                    <div className={cx('outline-empty')}>
-                      project_plan.json 的 frontend_pages 中暂无页面
-                    </div>
-                  ) : null}
+                <div className={cx('artifact-tree-children', 'section-children')}>
+                  {pageNodes.map((node) => (
+                    <PageArtifactNode
+                      artifactAccessById={props.artifactAccessById}
+                      artifactsAvailable={props.showDevelopmentTasks}
+                      depth={1}
+                      key={node.key}
+                      node={node}
+                      onCreatePageTask={props.onCreatePageTask}
+                      onOpenSession={props.onOpenSession}
+                      onPageSelect={props.onPageSelect}
+                      pagesById={pagesById}
+                      pageEndpointRelations={props.pageEndpointRelations}
+                      readOnly={Boolean(props.readOnly)}
+                      selectedPageId={props.selectedPageId}
+                      sessionRunStates={props.sessionRunStates}
+                      sessions={props.sessions}
+                      theme={props.theme}
+                    />
+                  ))}
                 </div>
               ) : null}
-            </section>
 
-            <section className={cx('outline-section', 'api-section')}>
               <button
-                aria-expanded={apiExpanded}
-                className={cx('outline-section-heading')}
-                onClick={() => setApiExpanded((current) => !current)}
+                aria-expanded={apisExpanded}
+                className={cx('artifact-section-row')}
+                onClick={() => setApisExpanded((value) => !value)}
                 type="button"
               >
-                <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
-                <span>接口任务</span>
-                <span className={cx('outline-phase-tag', 'development')}>开发</span>
+                <CaretDownOutlined className={cx(!apisExpanded && 'collapsed')} />
+                <span>接口</span>
+                <small>
+                  {completedEndpoints}/{endpointTotal}
+                </small>
               </button>
-              {apiExpanded ? (
-                <div className={cx('outline-tree')}>
-                  {visibleApiContracts.map((contract) => {
-                    const contractExpanded = !collapsedApiContractIds.has(contract.id)
-                    const endpointCount = contract.endpoints.length
+              {apisExpanded ? (
+                <div className={cx('artifact-tree-children', 'section-children')}>
+                  {props.apiContracts.map((contract) => {
+                    const expanded = expandedContracts.has(contract.id)
+                    const completed = contract.endpoints.filter(
+                      (endpoint) => endpoint.designed || endpoint.hasDetailPlan
+                    ).length
                     return (
-                      <div className={cx('outline-node')} key={contract.id}>
+                      <div className={cx('artifact-tree-node')} key={contract.id}>
                         <button
-                          aria-expanded={contractExpanded}
-                          className={cx('outline-row')}
-                          onClick={() => handleApiContractToggle(contract.id)}
-                          style={{ '--outline-level': 0 } as React.CSSProperties}
+                          aria-expanded={expanded}
+                          className={cx('artifact-branch-row')}
+                          onClick={() => toggleContract(contract.id)}
+                          style={{ paddingLeft: 22 }}
                           type="button"
                         >
-                          <span className={cx('outline-caret')}>
-                            <CaretDownOutlined className={cx(!contractExpanded && 'collapsed')} />
-                          </span>
-                          <span className={cx('outline-icon')}>
-                            {contractExpanded ? <FolderOpenOutlined /> : <FolderOutlined />}
-                          </span>
-                          <span className={cx('outline-copy')}>
-                            <span className={cx('outline-label-row')}>
-                              <span className={cx('outline-label')}>
-                                <code>{contract.label}</code>
-                              </span>
-                              <span className={cx('outline-menu-count')}>
-                                {endpointCount} 个接口
-                              </span>
-                            </span>
-                          </span>
+                          <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
+                          <FolderOutlined />
+                          <span>{contract.label}</span>
+                          <small>
+                            {completed}/{contract.endpoints.length}
+                          </small>
                         </button>
-                        {contractExpanded ? (
-                          <div className={cx('outline-children')}>
-                            {contract.endpoints.map((endpoint, endpointIndex) => {
-                              const endpointId = endpoint.id || String(endpointIndex + 1)
+                        {expanded ? (
+                          <div className={cx('artifact-tree-children')}>
+                            {contract.endpoints.map((endpoint, index) => {
+                              const endpointId = endpoint.id || String(index + 1)
                               const apiContractId = endpoint.apiContractId || contract.id
-                              const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
-                              const displayPath = apiEndpointDisplayPath(
-                                endpoint.path,
-                                contract.label
+                              const endpointKey = `${apiContractId}:${endpointId}`
+                              const path = apiEndpointDisplayPath(endpoint.path, contract.label)
+                              const label = `${endpoint.method} ${path}`
+                              const related = props.sessions.filter((session) =>
+                                sessionMatchesEndpoint(
+                                  session,
+                                  apiContractId,
+                                  endpointId,
+                                  props.pageEndpointRelations
+                                )
                               )
-                              const endpointLabel = `${endpoint.method} ${displayPath}`.trim()
-                              const endpointDesigned = Boolean(
-                                endpoint.designed || endpoint.hasDetailPlan
+                              const status = artifactStatus(
+                                Boolean(endpoint.designed || endpoint.hasDetailPlan),
+                                related,
+                                props.sessionRunStates
                               )
-                              const endpointSessions = sessionsByEndpointKey.get(endpointKey) || []
+                              const access =
+                                props.artifactAccessById[
+                                  endpointArtifactId(apiContractId, endpointId)
+                                ]
                               return (
-                                <div className={cx('outline-node')} key={endpointKey}>
+                                <div className={cx('artifact-row-shell')} key={endpointKey}>
                                   <button
-                                    aria-current={
-                                      selectedApiEndpointKey === endpointKey ? 'true' : undefined
-                                    }
                                     className={cx(
-                                      'outline-row',
-                                      selectedApiEndpointKey === endpointKey && 'selected'
+                                      'artifact-row',
+                                      props.selectedApiEndpointKey === endpointKey && 'selected',
+                                      access?.mode === 'read' && 'read-only'
                                     )}
                                     onClick={() =>
-                                      onApiEndpointSelect({
+                                      props.onApiEndpointSelect({
                                         apiContractId,
                                         endpointId,
                                         endpointKey,
-                                        label: endpointLabel
+                                        label
                                       })
                                     }
-                                    style={{ '--outline-level': 1 } as React.CSSProperties}
-                                    title={endpoint.summary}
+                                    disabled={
+                                      !props.showDevelopmentTasks || access?.mode === 'unavailable'
+                                    }
+                                    style={{ paddingLeft: 36 }}
+                                    title={`${label}${access?.message ? ` · ${access.message}` : ''}`}
                                     type="button"
                                   >
-                                    <span className={cx('outline-caret')} />
-                                    <span className={cx('outline-icon')}>
-                                      <span
-                                        className={cx(
-                                          'api-method',
-                                          endpoint.method.toLocaleLowerCase()
-                                        )}
-                                      >
-                                        {endpoint.method}
-                                      </span>
-                                    </span>
-                                    <span className={cx('outline-copy')}>
-                                      <span className={cx('outline-label-row')}>
-                                        <span className={cx('outline-label')}>
-                                          <code>{displayPath}</code>
-                                        </span>
-                                        <span
-                                          className={cx(
-                                            'outline-design-status',
-                                            endpointDesigned ? 'designed' : 'undesign'
-                                          )}
-                                        >
-                                          {endpointDesigned ? '已设计' : '待设计'}
-                                        </span>
-                                      </span>
-                                    </span>
+                                    <span
+                                      aria-label={status}
+                                      className={cx('artifact-status-dot', status)}
+                                    />
+                                    <ApiOutlined />
+                                    <code>{label}</code>
+                                    {access?.mode === 'read' ? (
+                                      <LockOutlined className={cx('artifact-lock-icon')} />
+                                    ) : null}
                                   </button>
-                                  <PageSessionHistory
-                                    activeSessionId={activeSessionId}
-                                    deletingSessionId={deletingSessionId}
-                                    deleteTitle="删除这个接口会话？"
-                                    emptyDescription="当前接口暂无历史会话"
-                                    loadingSessions={loadingSessions}
-                                    onCreateSession={() =>
-                                      onCreateEndpointSession(
-                                        apiContractId,
-                                        endpointId,
-                                        endpointLabel
-                                      )
+                                  <Dropdown
+                                    disabled={
+                                      !props.showDevelopmentTasks || access?.mode === 'unavailable'
                                     }
-                                    onDeleteSession={onDeleteSession}
-                                    onOpenSession={onOpenSession}
-                                    sessionError={
-                                      selectedApiEndpointKey === endpointKey
-                                        ? sessionError
-                                        : undefined
+                                    overlay={
+                                      <ArtifactMenu
+                                        canCreate={!props.readOnly}
+                                        label={label}
+                                        lockMessage={access?.message}
+                                        onCreateTask={() =>
+                                          props.onCreateEndpointTask({
+                                            apiContractId,
+                                            endpointId,
+                                            endpointLabel: label
+                                          })
+                                        }
+                                        onOpenSession={props.onOpenSession}
+                                        sessions={related}
+                                      />
                                     }
-                                    sessionRunStates={sessionRunStates}
-                                    sessions={endpointSessions}
-                                    targetLabel={endpointLabel}
-                                  />
+                                    overlayClassName={cx(
+                                      'artifact-conversation-overlay',
+                                      props.theme
+                                    )}
+                                    placement="bottomLeft"
+                                    trigger={['click']}
+                                  >
+                                    <button
+                                      aria-label={`${label}操作`}
+                                      className={cx('artifact-more')}
+                                      type="button"
+                                    >
+                                      <EllipsisOutlined />
+                                    </button>
+                                  </Dropdown>
                                 </div>
                               )
                             })}
@@ -757,29 +830,148 @@ export default function SessionSidebar({
                       </div>
                     )
                   })}
-                  {visibleApiContracts.length === 0 ? (
-                    <div className={cx('outline-empty')}>
-                      project_plan.json 的 api_contracts 中暂无接口
-                    </div>
-                  ) : null}
                 </div>
               ) : null}
-            </section>
-              </>
-            ) : null}
-          </div>
-        </div>
-      </fieldset>
 
-      <nav className={cx('session-footer-nav')} aria-label="快捷入口">
-        <button onClick={onCreateSession} title="推荐任务" type="button">
-          <SidebarAssetIcon source={recommendedTasksIcon} />
-          <span>推荐任务</span>
+              <button
+                aria-expanded={modelsExpanded}
+                className={cx('artifact-section-row')}
+                onClick={() => setModelsExpanded((value) => !value)}
+                type="button"
+              >
+                <CaretDownOutlined className={cx(!modelsExpanded && 'collapsed')} />
+                <span>模型</span>
+                <small>0/0</small>
+              </button>
+              {modelsExpanded ? (
+                <div className={cx('artifact-empty')}>
+                  <CodeOutlined /> 当前版本暂无模型实体
+                </div>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+/** 在同一窄侧栏中切换最近对话与应用产物两种工作视角。 */
+export default function SessionSidebar(props: SessionSidebarProps): ReactElement {
+  const {
+    activeSessionId,
+    deletingSessionId,
+    filesActive,
+    fixedOpen = false,
+    onCreateSession,
+    onDeleteSession,
+    onShowFiles,
+    onShowSettings,
+    onShowSkills,
+    readOnly = false,
+    sessions,
+    settingsActive,
+    skillsActive
+  } = props
+  const [collapsed, setCollapsed] = useState(false)
+  const [filter, setFilter] = useState<ArtifactFilter>('all')
+  const [view, setView] = useState<NavigationView>('artifacts')
+
+  const orderedSessions = useMemo(
+    () => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt),
+    [sessions]
+  )
+  const effectiveCollapsed = fixedOpen ? false : collapsed
+
+  /** 从产物菜单打开对话时同步切入对话视图，避免内容已切换但目录仍停留在产物树。 */
+  const handleOpenArtifactSession = async (sessionId: string): Promise<void> => {
+    setView('tasks')
+    await props.onOpenSession(sessionId)
+  }
+
+  /** 从产物菜单新建对话时同步切入对话视图，保持导航与中间会话一致。 */
+  const handleCreateArtifactConversation = (create: () => void): void => {
+    setView('tasks')
+    create()
+  }
+
+  return (
+    <aside
+      aria-label="工作台导航"
+      className={cx('session-sidebar', effectiveCollapsed && 'collapsed')}
+      style={
+        {
+          '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : DEFAULT_SIDEBAR_WIDTH}px`
+        } as CSSProperties
+      }
+    >
+      {!fixedOpen ? (
+        <button
+          aria-label={effectiveCollapsed ? '展开左侧菜单' : '收起左侧菜单'}
+          className={cx('session-collapse-button', 'standalone')}
+          onClick={() => setCollapsed((value) => !value)}
+          type="button"
+        >
+          {effectiveCollapsed ? <RightOutlined /> : <LeftOutlined />}
         </button>
-        <button onClick={onCreateSession} title="自由对话" type="button">
-          <SidebarAssetIcon source={freeChatIcon} />
-          <span>自由对话</span>
+      ) : null}
+
+      <Segmented
+        aria-label="导航视图"
+        block
+        className={cx('navigation-view-switch')}
+        onChange={(value) => setView(value as NavigationView)}
+        options={[
+          { label: '产物', value: 'artifacts' },
+          { label: '对话', value: 'tasks' }
+        ]}
+        value={view}
+      />
+
+      <div className={cx('session-outline-scroll')}>
+        {view === 'tasks' ? (
+          <TaskNavigation
+            activeSessionId={activeSessionId}
+            deletingSessionId={deletingSessionId}
+            filter={filter}
+            onCreateSession={onCreateSession}
+            onDeleteSession={onDeleteSession}
+            onFilterChange={setFilter}
+            onOpenSession={props.onOpenSession}
+            onRenameSession={props.onRenameSession}
+            readOnly={readOnly}
+            sessions={orderedSessions}
+          />
+        ) : (
+          <ArtifactNavigation
+            {...props}
+            onCreateDocumentTask={(key) =>
+              handleCreateArtifactConversation(() => props.onCreateDocumentTask(key))
+            }
+            onCreateEndpointTask={(target) =>
+              handleCreateArtifactConversation(() => props.onCreateEndpointTask(target))
+            }
+            onCreatePageTask={(page) =>
+              handleCreateArtifactConversation(() => props.onCreatePageTask(page))
+            }
+            onOpenSession={handleOpenArtifactSession}
+            sessions={orderedSessions}
+          />
+        )}
+      </div>
+
+      <div className={cx('session-settings-shell')}>
+        <button
+          className={cx('session-settings-entry', settingsActive && 'active')}
+          onClick={onShowSettings}
+          type="button"
+        >
+          <SettingOutlined />
+          <span>应用配置</span>
         </button>
+      </div>
+
+      <nav aria-label="快捷入口" className={cx('session-footer-nav')}>
         <button
           className={cx(skillsActive && 'active')}
           onClick={onShowSkills}
@@ -798,17 +990,7 @@ export default function SessionSidebar({
           <FolderOutlined />
           <span>文件</span>
         </button>
-        <button
-          className={cx(settingsActive && 'active')}
-          onClick={onShowSettings}
-          title="设置"
-          type="button"
-        >
-          <SettingOutlined />
-          <span>设置</span>
-        </button>
       </nav>
-
       <button className={cx('session-user')} type="button">
         <span className={cx('session-user-avatar')}>S</span>
         <span className={cx('session-user-name')}>Steve Jobs</span>

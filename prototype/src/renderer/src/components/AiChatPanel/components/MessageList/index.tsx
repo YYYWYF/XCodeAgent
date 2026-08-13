@@ -72,8 +72,12 @@ function MessageAgentHeader({ agentKey }: { agentKey: WorkbenchPhase }): ReactEl
 }
 
 type MessageListProps = {
+  /** 当前查看任务所属阶段；查看历史任务时可与应用当前阶段不同。 */
+  agentPhase?: WorkbenchPhase
   applicationLifecycle?: ApplicationLifecycle
   codeChangeActionsDisabled: boolean
+  /** 版本或历史阶段锁定时，所有会改变产物的卡片动作同时禁用。 */
+  interactionsDisabled?: boolean
   loading: boolean
   messages: AgentChatMessage[]
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
@@ -99,8 +103,10 @@ type MessageListProps = {
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
+  agentPhase,
   applicationLifecycle,
   codeChangeActionsDisabled,
+  interactionsDisabled = false,
   loading,
   messages,
   onDiscardArtifact,
@@ -236,7 +242,7 @@ export default function MessageList({
               // 一段对话只对应当前阶段的一个 Agent：无论历史消息源自哪个节点 phase，
               // 统一以当前阶段为准（设计=产品Agent、开发=研发Agent、审查=审查Agent），
               // 避免同一对话里混出现多个 Agent。
-              const messageAgentKey: WorkbenchPhase = currentPhase
+              const messageAgentKey: WorkbenchPhase = agentPhase || currentPhase
               const requiresClarification =
                 message.workflow &&
                 workflowClarification(message.workflow)?.status === 'requires_user_input'
@@ -331,7 +337,11 @@ export default function MessageList({
                         )}
                         {message.workflow && requiresClarification && (
                           <WorkflowRunCard
-                            disabled={loading || interactionAvailability !== 'active'}
+                            disabled={
+                              interactionsDisabled ||
+                              loading ||
+                              interactionAvailability !== 'active'
+                            }
                             interactionAvailability={interactionAvailability}
                             onDiscard={onDiscardArtifact}
                             onSubmitClarification={onSubmitClarification}
@@ -385,7 +395,7 @@ export default function MessageList({
               <div className={cx('ai-message-content')}>
                 <MessageAgentHeader agentKey="development" />
                 <DetailConfirmationPageSelector
-                  disabled={loading}
+                  disabled={loading || interactionsDisabled}
                   onStart={onStartDetailDesign}
                   selectedEndpoint={lockedEndpoint}
                   selectedPage={lockedPage}

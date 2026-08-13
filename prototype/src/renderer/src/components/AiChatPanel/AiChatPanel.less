@@ -233,3 +233,34 @@
   overflow: auto;
   padding: 12px 14px;
 }
+
+.@{class-prefix}-application-preview-workspace {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-historical-task-notice {
+  display: flex;
+  min-height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  background: var(--wb-surface-subtle);
+  border-bottom: 1px solid var(--wb-border);
+
+  button {
+    padding: 0;
+    color: var(--wb-accent);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+  }
+}

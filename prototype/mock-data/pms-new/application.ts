@@ -1,4 +1,4 @@
-// 武汉分行需求回检系统 · 新建应用参考配置（主旅程数据源，单模块：需求回检）。
+// 武汉分行需求回检系统 · 新建应用参考配置（两个页面与一个查询接口）。
 import type { ApplicationConfig, ApplicationSchemaConfig } from '../../src/renderer/src/typings'
 import { makeCompleteLifecycle } from './lifecycle'
 
@@ -7,11 +7,21 @@ export const PMS_MENU_ITEMS = [
     key: 'rechecks',
     type: 'menu',
     label: '需求回检',
-    children: [{ key: 'my-rechecks', type: 'page', label: '我的回检', path: '/my-rechecks' }]
+    children: [
+      {
+        key: 'recheck-introduction',
+        type: 'page',
+        label: '回检介绍',
+        path: '/recheck-introduction'
+      },
+      { key: 'my-rechecks', type: 'page', label: '我的回检', path: '/my-rechecks' }
+    ]
   }
 ] as unknown as ApplicationSchemaConfig['menus']['items']
 
-export function makeSchema(overrides: Partial<ApplicationSchemaConfig> = {}): ApplicationSchemaConfig {
+export function makeSchema(
+  overrides: Partial<ApplicationSchemaConfig> = {}
+): ApplicationSchemaConfig {
   return {
     appName: '武汉分行需求回检系统',
     appIcon: 'ProjectOutlined',
@@ -21,7 +31,11 @@ export function makeSchema(overrides: Partial<ApplicationSchemaConfig> = {}): Ap
     theme: { primaryColor: '#6b3cf0' },
     datasource: {
       type: 'DataBase',
-      db: { useBuiltin: false, connectionMode: 'plant', plantMode: { domain: '', port: '', userName: '', pwd: '', schema: '' } }
+      db: {
+        useBuiltin: false,
+        connectionMode: 'plant',
+        plantMode: { domain: '', port: '', userName: '', pwd: '', schema: '' }
+      }
     },
     env: ['dev'],
     menus: { enable: true, rootPath: '/page', homeMenuKey: 'my-rechecks', items: PMS_MENU_ITEMS },
@@ -30,7 +44,16 @@ export function makeSchema(overrides: Partial<ApplicationSchemaConfig> = {}): Ap
     track: { enable: false, uploadId: '', apiHost: '', method: 'post' },
     apiTrack: { enable: false, businessId: '', traceBaggage: '', apiTrackHost: '' },
     environment: { dev: [], prod: [] },
-    database: { connectionMode: 'dbid', schema: '', devDbid: '', prodDbid: '', host: '', port: '', username: '', password: '' },
+    database: {
+      connectionMode: 'dbid',
+      schema: '',
+      devDbid: '',
+      prodDbid: '',
+      host: '',
+      port: '',
+      username: '',
+      password: ''
+    },
     ...overrides
   } as ApplicationSchemaConfig
 }
@@ -46,8 +69,8 @@ export const pmsNewApplication: ApplicationConfig = {
   source: 'new',
   enableAuth: false,
   enableTracking: false,
-  pages: ['/my-rechecks'],
-  defaultPage: '/my-rechecks',
+  pages: ['/recheck-introduction', '/my-rechecks'],
+  defaultPage: '/recheck-introduction',
   schema: makeSchema(),
   planningConfirmedAt: Date.now(),
   createdAt: Date.now(),
@@ -62,8 +85,9 @@ export const pmsNewApplication: ApplicationConfig = {
       createdAt: Date.now() - 7 * 86400000,
       releasedAt: Date.now() - 2 * 86400000,
       lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统'),
+      description: '首版上线,支持个人回检记录查询。',
       snapshot: {
-        pageIds: ['/my-rechecks'],
+        pageIds: ['/recheck-introduction', '/my-rechecks'],
         requirementSummary: '首版上线个人回检记录查询。'
       }
     },
@@ -77,8 +101,9 @@ export const pmsNewApplication: ApplicationConfig = {
       createdAt: Date.now() - 5 * 86400000,
       releasedAt: Date.now() - 4 * 86400000,
       lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统'),
+      description: '新增状态筛选和待办统计。',
       snapshot: {
-        pageIds: ['/my-rechecks'],
+        pageIds: ['/recheck-introduction', '/my-rechecks'],
         requirementSummary: '新增状态筛选和待办统计。'
       }
     },
@@ -92,8 +117,9 @@ export const pmsNewApplication: ApplicationConfig = {
       createdAt: Date.now() - 3 * 86400000,
       releasedAt: Date.now() - 2 * 86400000,
       lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统'),
+      description: '新增在线提交回检单。',
       snapshot: {
-        pageIds: ['/my-rechecks'],
+        pageIds: ['/recheck-introduction', '/my-rechecks'],
         requirementSummary: '新增在线提交回检单。'
       }
     },
@@ -107,9 +133,10 @@ export const pmsNewApplication: ApplicationConfig = {
       createdAt: Date.now() - 86400000,
       releasedAt: Date.now() - 3600000,
       lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统'),
+      description: '新增关键词检索、紧急程度、更新时间列和台账导出。',
       snapshot: {
-        pageIds: ['/my-rechecks'],
-        requirementSummary: '新增关键词检索、紧急程度和台账导出。'
+        pageIds: ['/recheck-introduction', '/my-rechecks'],
+        requirementSummary: '新增关键词检索、紧急程度、更新时间列和台账导出。'
       }
     }
   ],

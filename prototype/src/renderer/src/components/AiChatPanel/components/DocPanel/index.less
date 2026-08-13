@@ -58,18 +58,123 @@
   }
 }
 
-/* 审查报告只读展示，保留 Markdown 原始结构但不呈现编辑器语义。 */
+/* 只读文档按 Markdown 阅读页呈现，编辑态仍保留原始源码。 */
 .@{class-prefix}-doc-panel-viewer {
+  width: min(100%, 780px);
   min-height: 100%;
-  margin: 0;
-  padding: 28px 32px;
+  margin: 0 auto;
+  padding: 32px 38px 48px;
   color: var(--wb-text, #1f2329);
   background: transparent;
-  font-family: "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
-  font-size: 13px;
-  line-height: 1.75;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.8;
+
+  h1,
+  h2,
+  h3 {
+    color: var(--wb-text, #1f2329);
+    font-weight: 650;
+    line-height: 1.35;
+  }
+
+  h1 {
+    margin: 0 0 24px;
+    font-size: 25px;
+  }
+
+  h2 {
+    margin: 34px 0 12px;
+    padding-bottom: 8px;
+    font-size: 19px;
+    border-bottom: 1px solid var(--wb-border, #eef0f3);
+  }
+
+  h3 {
+    margin: 25px 0 8px;
+    font-size: 16px;
+  }
+
+  p,
+  ul,
+  ol,
+  blockquote,
+  pre {
+    margin: 0 0 16px;
+  }
+
+  ul,
+  ol {
+    padding-left: 24px;
+  }
+
+  li + li {
+    margin-top: 4px;
+  }
+
+  code {
+    padding: 2px 5px;
+    color: var(--wb-accent, #6b3cf0);
+    font-family: "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
+    font-size: 0.9em;
+    background: var(--wb-accent-soft, #f0ebff);
+    border-radius: 4px;
+  }
+
+  .@{class-prefix}-markdown-code-block {
+    overflow: auto;
+    padding: 16px 18px;
+    color: var(--wb-text, #1f2329);
+    background: var(--wb-surface-subtle, #f7f8fa);
+    border: 1px solid var(--wb-border, #eef0f3);
+    border-radius: 7px;
+
+    code {
+      padding: 0;
+      color: inherit;
+      background: transparent;
+    }
+  }
+
+  blockquote {
+    padding: 10px 14px;
+    color: var(--wb-text-secondary, #6f7685);
+    background: var(--wb-surface-subtle, #f7f8fa);
+    border-left: 1px solid var(--wb-accent, #6b3cf0);
+  }
+
+  a {
+    color: var(--wb-accent, #6b3cf0);
+    text-underline-offset: 3px;
+  }
+
+  hr {
+    margin: 28px 0;
+    border: 0;
+    border-top: 1px solid var(--wb-border, #eef0f3);
+  }
+}
+
+.@{class-prefix}-markdown-table-scroll {
+  margin: 0 0 18px;
+  overflow-x: auto;
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  th,
+  td {
+    padding: 9px 11px;
+    text-align: left;
+    border: 1px solid var(--wb-border, #eef0f3);
+  }
+
+  th {
+    background: var(--wb-surface-subtle, #f7f8fa);
+    font-weight: 600;
+  }
 }
 
 .@{class-prefix}-doc-panel.@{class-prefix}-editing .@{class-prefix}-doc-panel-stage {

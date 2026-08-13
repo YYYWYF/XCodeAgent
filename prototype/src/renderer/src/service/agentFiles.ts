@@ -1,51 +1,23 @@
-import { randomUUID } from '@ag-ui/client'
-import type { AgentSubscriber } from '@ag-ui/client'
-import type { Message } from '@ag-ui/core'
 import type { AgentFile, AgentFileDocument } from '../typings'
-import { createAgUiHttpAgent } from './authentication'
+import { runAgUiAction, type AgUiPayloadEnvelope } from './agUiClient'
 
-type AgentFilesAction = 'get' | 'save'
-
-type AgentFilesAgUiPayload = {
-  schemaVersion: 1
-  runId: string
-  threadId: string
+type AgentFilesAgUiPayload = AgUiPayloadEnvelope & {
   status: 'completed' | 'failed'
-  action?: AgentFilesAction
+  action?: 'get' | 'save'
   root?: string
   document?: AgentFileDocument
   error?: { type?: string; message?: string }
 }
+
+const AGENT_FILES_STATUS_LIST = ['completed', 'failed'] as const
+const AGENT_FILES_EVENT = 'agent-files'
+const AGENT_FILES_KEY = 'agentFiles'
 
 function getAgentFilesUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/agent-files/run`
     : '/api/agent/agent-files/run'
-}
-
-function readAgentFilesPayload(value: unknown): AgentFilesAgUiPayload | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const payload = value as Partial<AgentFilesAgUiPayload>
-  if (
-    payload.schemaVersion !== 1 ||
-    typeof payload.runId !== 'string' ||
-    typeof payload.threadId !== 'string' ||
-    !['completed', 'failed'].includes(String(payload.status))
-  ) {
-    return undefined
-  }
-  return payload as AgentFilesAgUiPayload
-}
-
-function readAgentFilesFromState(value: unknown): AgentFilesAgUiPayload | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  return readAgentFilesPayload((value as { agentFiles?: unknown }).agentFiles)
-}
-
-function readAgentFilesFromResult(value: unknown): AgentFilesAgUiPayload | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  return readAgentFilesPayload((value as { agentFiles?: unknown }).agentFiles)
 }
 
 function isDocument(value: unknown): value is AgentFileDocument {
@@ -68,33 +40,16 @@ async function runAgentFiles(
   input: Record<string, unknown>,
   messageContent: string
 ): Promise<AgentFilesAgUiPayload> {
-  const threadId = randomUUID()
-  const agent = createAgUiHttpAgent({ url: getAgentFilesUrl(), threadId })
-  const message: Message = {
-    id: randomUUID(),
-    role: 'user',
-    content: messageContent
-  }
-  agent.addMessage(message)
-
-  let agentFiles: AgentFilesAgUiPayload | undefined
-  const subscriber: AgentSubscriber = {
-    onCustomEvent: ({ event }) => {
-      if (event.name === 'agent-files') {
-        agentFiles = readAgentFilesPayload(event.value) ?? agentFiles
-      }
-    },
-    onStateSnapshotEvent: ({ event }) => {
-      agentFiles = readAgentFilesFromState(event.snapshot) ?? agentFiles
-    }
-  }
-  const result = await agent.runAgent({ forwardedProps: { agentFiles: input } }, subscriber)
-  agentFiles = readAgentFilesFromResult(result.result) ?? agentFiles
-  if (!agentFiles) throw new Error('文件接口没有返回有效的 AG-UI 状态。')
-  if (agentFiles.status === 'failed') {
-    throw new Error(agentFiles.error?.message || '文件操作失败。')
-  }
-  return agentFiles
+  return runAgUiAction<AgentFilesAgUiPayload>({
+    url: getAgentFilesUrl(),
+    message: messageContent,
+    eventName: AGENT_FILES_EVENT,
+    stateKey: AGENT_FILES_KEY,
+    forwardedProps: { [AGENT_FILES_KEY]: input },
+    statusList: AGENT_FILES_STATUS_LIST,
+    emptyMessage: '文件接口没有返回有效的 AG-UI 状态。',
+    failedMessage: '文件操作失败。'
+  })
 }
 
 function responseToAgentFile(response: AgentFilesAgUiPayload): AgentFile {

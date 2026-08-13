@@ -1,17 +1,14 @@
 import { Fragment, useState } from 'react'
 import { Tag } from 'antd'
-import { DownOutlined, FolderOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
-import { PanelRight } from 'lucide-react'
+import { AppstoreOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
+import { MonitorPlay, PanelRight } from 'lucide-react'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import VersionActions from './VersionActions'
 import { useWorkbenchPhase } from '../context'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
-import {
-  WORKBENCH_PHASE_AGENTS,
-  type WorkbenchPhase
-} from '../workbenchPhase'
+import { WORKBENCH_PHASE_AGENTS, type WorkbenchPhase } from '../workbenchPhase'
 import './WorkbenchTopBar.less'
 
 const PHASE_ORDER: WorkbenchPhase[] = ['product', 'development', 'test']
@@ -24,6 +21,8 @@ type Props = {
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
   activeVersionId?: string
+  applicationPreviewMode: boolean
+  onApplicationPreviewModeChange: (open: boolean) => void
   rightPanelOpen: boolean
   onToggleRightPanel: () => void
   onPublishVersion: () => void
@@ -44,6 +43,8 @@ export default function WorkbenchTopBar({
   onReturnWelcome,
   lifecycle,
   activeVersionId,
+  applicationPreviewMode,
+  onApplicationPreviewModeChange,
   rightPanelOpen,
   onToggleRightPanel,
   onPublishVersion,
@@ -51,12 +52,13 @@ export default function WorkbenchTopBar({
   onStartIteration,
   onVersionSelect
 }: Props): JSX.Element {
-  const { phase, derivedPhase, manualOverride, switchPhase, agent } = useWorkbenchPhase()
+  const { phase, derivedPhase, locked, manualOverride, switchPhase } = useWorkbenchPhase()
   const following = manualOverride === null
-  // 回退切阶段（切到旅程上游 = 增量迭代）需二次确认；向前推进 / 同级直接切。
+  // 回到前序阶段会改变当前执行状态，需要确认；向后续阶段推进不额外打断。
   const [confirmPhase, setConfirmPhase] = useState<WorkbenchPhase | null>(null)
   const handlePhaseClick = (phaseKey: WorkbenchPhase): void => {
-    if (PHASE_ORDER.indexOf(phaseKey) < PHASE_ORDER.indexOf(derivedPhase)) {
+    if (locked || phaseKey === phase) return
+    if (PHASE_ORDER.indexOf(phaseKey) < PHASE_ORDER.indexOf(phase)) {
       setConfirmPhase(phaseKey)
       return
     }
@@ -76,18 +78,14 @@ export default function WorkbenchTopBar({
 
       <span className={cx('workbench-topbar-divider')} aria-hidden="true" />
 
-      <button
-        className={cx('workbench-topbar-app')}
-        onClick={onReturnWelcome}
-        title={workspaceRoot}
-        type="button"
-      >
-        <FolderOutlined />
+      <div className={cx('workbench-topbar-app')} title={workspaceRoot}>
+        <AppstoreOutlined />
         <span className={cx('workbench-topbar-app-name')}>{application.name}</span>
-        <DownOutlined rotate={-90} />
-      </button>
-
-      <div className={cx('workbench-topbar-phase')}>
+      </div>
+      <div
+        className={cx('workbench-topbar-phase', locked && 'locked')}
+        title={locked ? '该版本已生成，阶段和 Agent 调度均已锁定' : undefined}
+      >
         <div className={cx('workbench-topbar-stepper')} role="tablist" aria-label="阶段">
           {PHASE_ORDER.map((phaseKey, idx) => {
             const isActive = phase === phaseKey
@@ -108,7 +106,7 @@ export default function WorkbenchTopBar({
                     isActive && 'active',
                     reached && !isActive && 'reached'
                   )}
-                  disabled={!reached}
+                  disabled={locked || !reached}
                   onClick={() => handlePhaseClick(phaseKey)}
                 >
                   <span className={cx('workbench-topbar-phase-dot')} aria-hidden="true" />
@@ -118,26 +116,29 @@ export default function WorkbenchTopBar({
             )
           })}
         </div>
-      </div>
-
-      <div className={cx('workbench-topbar-tail')}>
-        <span className={cx('workbench-topbar-agent')}>{agent.role}</span>
         <Tag
           className={cx('workbench-topbar-follow')}
           color={following ? undefined : 'processing'}
-          onClick={following ? undefined : () => switchPhase(null)}
+          onClick={locked || following ? undefined : () => switchPhase(null)}
         >
-          {following ? '跟随旅程' : '恢复自动'}
+          {locked ? '版本已锁定' : following ? '跟随旅程' : '恢复自动'}
         </Tag>
       </div>
 
       <button
-        className={cx('workbench-topbar-preview-toggle', rightPanelOpen && 'active')}
-        onClick={onToggleRightPanel}
-        title={rightPanelOpen ? '隐藏右侧预览' : '显示右侧预览'}
-        type="button"
-        aria-label="切换右侧预览"
+        aria-label={rightPanelOpen ? '收起右侧面板' : '展开右侧面板'}
         aria-pressed={rightPanelOpen}
+        className={cx('workbench-topbar-panel-toggle', rightPanelOpen && 'active')}
+        disabled={applicationPreviewMode}
+        onClick={onToggleRightPanel}
+        title={
+          applicationPreviewMode
+            ? '应用预览模式不使用任务面板'
+            : rightPanelOpen
+              ? '收起右侧面板'
+              : '展开右侧面板'
+        }
+        type="button"
       >
         <PanelRight size={14} />
       </button>
@@ -159,10 +160,23 @@ export default function WorkbenchTopBar({
         onRollback={onRollbackVersion}
         onStartIteration={onStartIteration}
         onVersionSelect={onVersionSelect}
+        previewAction={
+          <button
+            aria-label={applicationPreviewMode ? '返回任务工作区' : '预览应用'}
+            aria-pressed={applicationPreviewMode}
+            className={cx('workbench-topbar-preview-toggle', applicationPreviewMode && 'active')}
+            onClick={() => onApplicationPreviewModeChange(!applicationPreviewMode)}
+            title={applicationPreviewMode ? '返回任务工作区' : '预览完整应用'}
+            type="button"
+          >
+            <MonitorPlay size={14} />
+            <span>{applicationPreviewMode ? '返回任务' : '预览应用'}</span>
+          </button>
+        }
       />
 
       <PhaseSwitchConfirmModal
-        fromPhase={derivedPhase}
+        fromPhase={phase}
         onCancel={() => setConfirmPhase(null)}
         onConfirm={(next) => {
           switchPhase(next)

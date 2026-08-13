@@ -194,7 +194,7 @@
   min-height: 0;
 }
 
-/* 发布弹框：审查通过自动弹出，风格对齐 PhaseSwitchConfirmModal（头部渐变 + body + footer）。 */
+/* 生成版本弹框：审查通过自动弹出，风格对齐 PhaseSwitchConfirmModal（头部渐变 + body + footer）。 */
 .@{class-prefix}-workbench-publish-modal .ant-modal-content {
   padding: 0;
   overflow: hidden;
@@ -353,4 +353,97 @@
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* 生成版本弹框:提醒区 + 描述输入 + 进度态。 */
+.@{class-prefix}-workbench-generate-reminder {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  background: var(--wb-surface-hover, #f0ecfb);
+  border: 1px solid color-mix(in srgb, var(--wb-accent, #6b3cf0) 22%, var(--wb-border, #d8e0ea));
+  border-radius: 10px;
+
+  .@{class-prefix}-workbench-generate-reminder-title {
+    margin: 0 0 8px;
+    color: var(--wb-text-primary, #2f2638);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    li {
+      position: relative;
+      margin: 0 0 6px;
+      padding-left: 16px;
+      color: var(--wb-text-secondary, #5a5267);
+      font-size: 12px;
+      line-height: 1.6;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+
+      &::before {
+        content: '';
+        position: absolute;
+        top: 9px;
+        left: 2px;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--wb-accent, #6b3cf0);
+      }
+    }
+  }
+}
+
+.@{class-prefix}-workbench-generate-field {
+  margin-bottom: 4px;
+
+  .@{class-prefix}-workbench-generate-field-label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--wb-text-primary, #2f2638);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .@{class-prefix}-workbench-generate-required {
+    margin-right: 3px;
+    color: #ff4d4f;
+  }
+}
+
+.@{class-prefix}-workbench-generate-progress {
+  padding: 4px 0;
+
+  .ant-steps {
+    margin-top: 14px;
+  }
+}
+
+/* 切换版本加载:弹框挡板 —— 半透明全屏压暗 + 居中不透明卡片挡住其背后内容,
+   卡内 RichLoading bare 圆动画(bare 无边框矩形)。模拟把代码 checkout 到目标版本。 */
+.@{class-prefix}-workbench-version-switching-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 18, 24, 0.5);
+}
+
+.@{class-prefix}-workbench-version-switching-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 300px;
+  padding: 34px 44px;
+  background: var(--wb-canvas);
+  border-radius: 16px;
+  box-shadow: 0 20px 56px rgba(15, 18, 24, 0.3);
 }

@@ -19,6 +19,7 @@ const { TextArea } = Input;
 
 /** detail_review 确认卡精简为授权行（参考设计阶段产物授权）：设计产物在右侧文档区查看/编辑，
  * 对话区只保留「已生成 + 确认保存」。 */
+/** 在历史消息中概括本轮已确认的页面、接口及 API 契约产物。 */
 export function DetailReviewAuthBar({
   detailReview,
   disabled,
@@ -31,11 +32,12 @@ export function DetailReviewAuthBar({
   const page = detailReview.pages?.[0];
   const summary = detailReview.summary;
   const label = page?.name || summary?.selectedPageId || "目标";
+  const hasRelatedEndpoint = Boolean(summary?.endpoint_count);
   return (
     <div className={cx("artifact-auth-bar")}>
       <span className={cx("artifact-auth-status")}>
         <CheckCircleOutlined aria-hidden="true" />
-        「{label}」页面需求文档已生成
+        「{label}」{hasRelatedEndpoint ? "页面与依赖接口设计" : "页面需求文档"}已生成
         {summary
           ? `（页面 ${summary.page_count} · 接口 ${summary.endpoint_count} · API 契约 ${summary.api_contract_count}）`
           : ""}

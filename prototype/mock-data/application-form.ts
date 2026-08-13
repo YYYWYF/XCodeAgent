@@ -1,6 +1,9 @@
+import type { ApplicationDraft } from '@renderer/typings'
+
 // 演示案例数据：新建应用表单的预填字段。
 // 换演示案例时替换这里，新建应用弹框会自动带上新案例的基础信息。
-export const applicationFormPrefill = {
+// menus 由 constants.ts 的 initialApplicationDraft 主体独占，避免 spread 与字面量同名（TS2783）。
+export const applicationFormPrefill: Partial<ApplicationDraft> = {
   appName: '武汉分行需求回检系统',
   appIcon: 'ProjectOutlined',
   senario: '需求回检填报与审核',
@@ -8,7 +11,6 @@ export const applicationFormPrefill = {
   terminal: 'PC',
   layout: { type: 'side', useHeader: true, useFooter: false },
   theme: { primaryColor: '#6b3cf0' },
-  menus: { enable: true, rootPath: '/page' },
   datasource: {
     type: 'None',
     db: {

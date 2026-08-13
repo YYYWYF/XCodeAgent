@@ -8,6 +8,26 @@
   container-type: inline-size;
 }
 
+.@{class-prefix}-browser-preview-panel.@{class-prefix}-application-mode {
+  .@{class-prefix}-browser-preview-toolbar {
+    min-height: 42px;
+    justify-content: flex-end;
+    padding: 5px 12px;
+  }
+
+  .@{class-prefix}-browser-preview-stage {
+    padding: 0;
+  }
+
+  .@{class-prefix}-browser-preview-viewport {
+    width: 100%;
+    max-width: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
 .@{class-prefix}-browser-preview-toolbar {
   display: grid;
   min-height: 58px;

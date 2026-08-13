@@ -4,6 +4,7 @@ import { applicationFormPrefill } from '@mock-data/application-form'
 /** 可选应用图标。value 为图标组件名，用于持久化与还原；label 为中文说明。 */
 export const applicationIconOptions: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'AppstoreOutlined', label: '应用商店' },
+  { value: 'ProjectOutlined', label: '项目' },
   { value: 'DesktopOutlined', label: '桌面' },
   { value: 'DashboardOutlined', label: '仪表盘' },
   { value: 'ShopOutlined', label: '商城' },

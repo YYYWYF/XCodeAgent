@@ -1,16 +1,31 @@
-import { CloseOutlined } from '@ant-design/icons'
+import {
+  CloseOutlined,
+  CodeOutlined,
+  FileMarkdownOutlined,
+  GlobalOutlined
+} from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import type { WorkspaceDocKey } from '../../types'
 import './RightPanelTabs.less'
 
 /** 工作区 tab 键：预览/源码/文档/过程 + 设计阶段的三份产物文档（需求文档/项目计划/构建任务）。 */
-export type WorkspaceTabKey = 'preview' | 'page-preview' | 'source' | 'doc' | 'process' | WorkspaceDocKey
+export type WorkspaceTabKey =
+  | 'preview'
+  | 'page-preview'
+  | 'source'
+  | 'doc'
+  | 'page-source'
+  | 'endpoint-source'
+  | 'detail-doc'
+  | 'process'
+  | WorkspaceDocKey
 
 export type WorkspaceTab = {
   key: WorkspaceTabKey
   label: string
   available: boolean
+  icon?: 'browser' | 'code' | 'document'
 }
 
 type Props = {
@@ -22,6 +37,14 @@ type Props = {
 
 /** 右侧工作区的 tab 条：预览 / 源码 / 文档 / 过程。不可用的 tab 灰显。 */
 export default function RightPanelTabs({ tabs, active, onChange, onClose }: Props): ReactElement {
+  /** 按窗口内容类型返回统一线性图标。 */
+  const renderIcon = (icon?: WorkspaceTab['icon']): ReactElement | null => {
+    if (icon === 'browser') return <GlobalOutlined />
+    if (icon === 'code') return <CodeOutlined />
+    if (icon === 'document') return <FileMarkdownOutlined />
+    return null
+  }
+
   return (
     <header className={cx('workspace-tabs')}>
       <div className={cx('workspace-tabs-list')}>
@@ -34,6 +57,7 @@ export default function RightPanelTabs({ tabs, active, onChange, onClose }: Prop
             title={tab.available ? tab.label : `${tab.label}（暂无内容）`}
             onClick={() => onChange(tab.key)}
           >
+            {renderIcon(tab.icon)}
             {tab.label}
           </button>
         ))}

@@ -19,7 +19,7 @@ function mockPreviewAppPlugin(): Plugin {
     configureServer(server): void {
       const previewServer = createServer((request, response): void => {
         const path = (request.url || '/').split('?')[0]
-        if (path === '/' || path === '/my-rechecks') {
+        if (path === '/' || path === '/recheck-introduction' || path === '/my-rechecks') {
           response.statusCode = 200
           response.setHeader('Content-Type', 'text/html; charset=utf-8')
           response.end(readFileSync(previewHtmlPath, 'utf-8'))
@@ -29,9 +29,19 @@ function mockPreviewAppPlugin(): Plugin {
         response.setHeader('Content-Type', 'text/plain; charset=utf-8')
         response.end('Mock application route not found')
       })
+      // 热重载或异常退出后预览端口可能仍由上一进程提供服务；复用它，避免拖垮工作台本身。
+      previewServer.on('error', (error: NodeJS.ErrnoException): void => {
+        if (error.code === 'EADDRINUSE') {
+          server.config.logger.info(
+            `预览应用已运行在 http://${MOCK_APPLICATION_HOST}:${MOCK_APPLICATION_PORT}`
+          )
+          return
+        }
+        server.config.logger.error(`预览应用启动失败：${error.message}`)
+      })
       previewServer.listen(MOCK_APPLICATION_PORT, MOCK_APPLICATION_HOST)
       server.httpServer?.once('close', (): void => {
-        previewServer.close()
+        if (previewServer.listening) previewServer.close()
       })
     }
   }

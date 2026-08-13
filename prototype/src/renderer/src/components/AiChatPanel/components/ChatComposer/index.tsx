@@ -18,7 +18,7 @@ import type {
 import { cx } from '../../../../utils'
 import { skillsAfterEmptyBackspace } from '../../skillSelection'
 import type { ChatCopy } from '../../types'
-import ResourceSkillMenu from './ResourceSkillMenu'
+import ResourceSkillMenu, { type ComposerArtifactResource } from './ResourceSkillMenu'
 import './ChatComposer.less'
 
 const { Text } = Typography
@@ -46,6 +46,7 @@ const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; lab
 
 type ChatComposerProps = {
   activeWorkflow?: WorkflowRunPayload
+  artifactResources?: ComposerArtifactResource[]
   copy: ChatCopy[EditorMode]
   debugOnly?: boolean
   draft: string
@@ -66,6 +67,7 @@ type ChatComposerProps = {
 
 export default function ChatComposer({
   activeWorkflow,
+  artifactResources,
   copy,
   debugOnly = false,
   draft,
@@ -240,6 +242,7 @@ export default function ChatComposer({
             ) : (
               <div className={cx('composer-toolbar')}>
                 <ResourceSkillMenu
+                  artifactResources={artifactResources}
                   disabled={loading || workspaceBusy || readOnly}
                   onSelectedSkillsChange={onSelectedSkillsChange}
                   selectedSkills={selectedSkills}

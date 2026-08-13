@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import RichLoading from '../DesignProgress/RichLoading'
+import MarkdownPreview from './MarkdownPreview'
 import './index.less'
 
 const { Text } = Typography
@@ -72,9 +73,7 @@ export default function DocPanel({
             <RichLoading bare title={`正在生成${docName || '文档'}…`} />
           </div>
         ) : ready && readOnly ? (
-          <pre aria-label="审查报告内容" className={cx('doc-panel-viewer')}>
-            {content}
-          </pre>
+          <MarkdownPreview content={content || ''} />
         ) : ready ? (
           <textarea
             aria-label="编辑文档"

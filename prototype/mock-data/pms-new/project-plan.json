@@ -1,5 +1,5 @@
 {
-  "summary": "本方案基于确认的《武汉分行需求回检系统》需求，规划一套面向 PC 端、侧边导航形态的需求回检管理应用，只包含需求回检一个模块、我的回检一个页面，覆盖回检填报→审核→整改闭环。后端基于 MySQL 数据源按契约方式提供回检查询/提交等 API 端点；前端采用 React + Ant Design 构建 PC 管理端。构建执行时先落地全局布局与侧边导航菜单模板，再生成我的回检页面，随后实现各契约 API，最后进行前后端联调与整体测试。",
+  "summary": "本方案规划回检介绍、我的回检两个页面和一个查询接口。回检介绍为无接口依赖的静态页面；我的回检与 GET /api/rechecks/my 由同一个开发任务完成并联调。",
   "tech_stack": {
     "frontend": "React 18 + TypeScript + Ant Design 4 + Vite",
     "backend": "Spring Boot 3 + MyBatis-Plus",
@@ -11,20 +11,45 @@
       "type": "menu",
       "label": "需求回检",
       "children": [
-        { "key": "my-rechecks", "type": "page", "label": "我的回检", "path": "/my-rechecks", "pageId": "my-rechecks" }
+        {
+          "key": "recheck-introduction",
+          "type": "page",
+          "label": "回检介绍",
+          "path": "/recheck-introduction",
+          "pageId": "recheck-introduction"
+        },
+        {
+          "key": "my-rechecks",
+          "type": "page",
+          "label": "我的回检",
+          "path": "/my-rechecks",
+          "pageId": "my-rechecks"
+        }
       ]
     }
   ],
   "apis": [
-    { "contract": "需求回检", "method": "GET", "path": "/api/rechecks/my", "summary": "我的回检单分页查询" }
+    {
+      "contract": "需求回检",
+      "method": "GET",
+      "path": "/api/rechecks/my",
+      "summary": "我的回检单分页查询"
+    }
   ],
   "execution_order": [
-    { "order": 1, "task": "搭建项目脚手架并初始化技术栈（React/Spring/MySQL）", "target": "项目初始化" },
+    {
+      "order": 1,
+      "task": "搭建项目脚手架并初始化技术栈（React/Spring/MySQL）",
+      "target": "项目初始化"
+    },
     { "order": 2, "task": "配置 MySQL 数据源与基础数据（回检状态字典）", "target": "数据源初始化" },
     { "order": 3, "task": "实现侧边导航与整体布局（PC 管理端模板）", "target": "全局布局" },
-    { "order": 4, "task": "配置路由，将我的回检页面挂载到侧边导航", "target": "路由配置" },
-    { "order": 5, "task": "生成我的回检页面", "target": "页面生成" },
-    { "order": 6, "task": "实现各契约 API（回检查询）", "target": "API 实现" },
-    { "order": 7, "task": "前后端联调与整体测试", "target": "集成测试" }
+    { "order": 4, "task": "实现回检介绍静态页面", "target": "回检介绍" },
+    {
+      "order": 5,
+      "task": "实现我的回检页面与查询接口",
+      "target": "我的回检 + GET /api/rechecks/my"
+    },
+    { "order": 6, "task": "执行页面与接口联调及整体测试", "target": "集成测试" }
   ]
 }

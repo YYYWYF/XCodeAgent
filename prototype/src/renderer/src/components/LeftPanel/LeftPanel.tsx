@@ -30,6 +30,8 @@ type Props = {
   previewLaunchError: string
   rightPanelOpen: boolean
   onRightPanelOpenChange: (open: boolean) => void
+  applicationPreviewMode: boolean
+  onApplicationPreviewModeChange: (open: boolean) => void
   theme: 'light' | 'dark'
   versionReadOnly: boolean
   versionPreviewOnly: boolean
@@ -53,6 +55,8 @@ export default function LeftPanel({
   previewLaunchError,
   rightPanelOpen,
   onRightPanelOpenChange,
+  applicationPreviewMode,
+  onApplicationPreviewModeChange,
   theme,
   versionReadOnly,
   versionPreviewOnly,
@@ -80,6 +84,8 @@ export default function LeftPanel({
             theme={theme}
             rightPanelOpen={rightPanelOpen}
             onRightPanelOpenChange={onRightPanelOpenChange}
+            applicationPreviewMode={applicationPreviewMode}
+            onApplicationPreviewModeChange={onApplicationPreviewModeChange}
             versionReadOnly={versionReadOnly}
             versionPreviewOnly={versionPreviewOnly}
             versionViewKey={versionViewKey}

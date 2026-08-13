@@ -1,5 +1,6 @@
 import { AppstoreOutlined, CodeOutlined, DeleteOutlined, GlobalOutlined } from '@ant-design/icons'
 import { Button, message, Modal, Radio } from 'antd'
+import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import {
   canOpenApplicationWorkbench,
@@ -15,6 +16,7 @@ import './WelcomeModal.less'
 import './WelcomeRecentProjects.less'
 
 type Props = {
+  headerAction?: ReactNode
   onOpenApplication: (application: ApplicationConfig) => void
   theme: 'dark' | 'light'
 }
@@ -34,7 +36,11 @@ function formatRecentTime(value: number): string {
   return days < 30 ? `${days} 天前` : new Intl.DateTimeFormat('zh-CN').format(value)
 }
 
-export default function WelcomeRecentProjects({ onOpenApplication, theme }: Props): JSX.Element {
+export default function WelcomeRecentProjects({
+  headerAction,
+  onOpenApplication,
+  theme
+}: Props): JSX.Element {
   const [applications, setApplications] = useState<ApplicationConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [applicationToDelete, setApplicationToDelete] = useState<ApplicationConfig>()
@@ -112,6 +118,7 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
     <section className={cx('welcome-recents')} aria-labelledby="welcome-recents-title">
       <div className={cx('welcome-section-heading')}>
         <h2 id="welcome-recents-title">最近项目</h2>
+        {headerAction}
       </div>
 
       <div className={cx('welcome-project-list')}>
@@ -139,7 +146,7 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
                       {version ? (
                         <span className={cx('welcome-project-version')}>
                           {version.versionLabel}
-                          {version.status === 'released' ? ' · 已发布' : ''}
+                          {version.status === 'released' ? ' · 已生成版本' : ''}
                         </span>
                       ) : null}
                     </span>

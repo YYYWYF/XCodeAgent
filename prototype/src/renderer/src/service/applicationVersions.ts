@@ -58,8 +58,8 @@ export function bumpVersionLabel(parent: {
 }
 
 /**
- * 可发布判定:当前迭代版本且代码审查流程已经完成。
- * 页面与接口开发完成后直接进入应用级审查，finalize_project 完成即可发布。
+ * 可生成版本判定:当前迭代版本且代码审查流程已经完成。
+ * 页面与接口开发完成后直接进入应用级审查，finalize_project 完成即可生成版本。
  */
 export function isVersionReleasable(v?: ApplicationVersion): boolean {
   if (!v || v.status !== 'iterating') return false
