@@ -33,6 +33,7 @@ import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
+import { useCodeAnalysis } from './hooks/useCodeAnalysis'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import { chatCopy } from './constants'
 import {
@@ -395,9 +396,24 @@ export default function AiChatPanel({
     setSelectedSkillsByKey,
     setSessionMessages
   })
+  const codeAnalysis = useCodeAnalysis({
+    disabled: loading || workspaceBusy,
+    ensureActiveSession,
+    getSessionMessages,
+    persistSession,
+    setSessionMessages,
+    workspaceRoot: application.workspaceRoot || ''
+  })
+  const interactionLoading = loading || codeAnalysis.running
+  const interactionStopping = stopping || codeAnalysis.stopping
+  /** 停止当前唯一运行中的 Workflow 或代码审查请求。 */
+  const handleStopCurrentRun = (): void => {
+    if (codeAnalysis.running) codeAnalysis.stop()
+    else handleStopGenerating()
+  }
   const { requestCodeChangeRevert, revertingCodeChangeIds } = useCodeChangeRevert({
     activeSession,
-    disabled: loading || workspaceBusy,
+    disabled: interactionLoading || workspaceBusy,
     getSessionMessages,
     persistSession,
     rightPanel,
@@ -1070,15 +1086,18 @@ export default function AiChatPanel({
 
             <MessageList
               applicationLifecycle={applicationLifecycle}
-              codeChangeActionsDisabled={loading || workspaceBusy}
+              codeAnalysisActionsDisabled={interactionLoading || workspaceBusy}
+              codeChangeActionsDisabled={interactionLoading || workspaceBusy}
               conversationRunning={conversationRunning}
               key={activeSession?.key || draftKey}
-              loading={loading}
+              loading={interactionLoading}
               messages={messages}
               onOpenCodeChangeFile={handleOpenCodeChangeFile}
               onRevertCodeChanges={requestCodeChangeRevert}
+              onRetryCodeAnalysis={() => void codeAnalysis.start()}
               onSubmitClarification={handleSubmitWorkflowClarification}
               revertingCodeChangeIds={revertingCodeChangeIds}
+              workspaceRoot={application.workspaceRoot || ''}
             />
 
             {shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive) ? (
@@ -1122,23 +1141,25 @@ export default function AiChatPanel({
               <>
                 <ChatComposer
                   activeWorkflow={activeWorkflow}
+                  codeAnalysisRunning={codeAnalysis.running}
                   copy={copy}
                   draft={draft}
                   error={error}
                   inputMode={inputMode}
                   inputModeDisabled={inputModeLocked}
-                  loading={loading}
+                  loading={interactionLoading}
                   onDraftChange={(value) => setDraftByKey(draftKey, value)}
                   onInputModeChange={
                     activeDetailTarget.type === 'none' ? undefined : handleInputModeChange
                   }
                   onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
                   onSend={handleSend}
-                  onStopGenerating={handleStopGenerating}
-                  stopping={stopping}
+                  onStartCodeAnalysis={() => void codeAnalysis.start()}
+                  onStopGenerating={handleStopCurrentRun}
+                  stopping={interactionStopping}
                   selectedSkills={selectedSkills}
                   workspaceBusy={workspaceBusy}
-                  workspaceRoot={workspaceRoot}
+                  workspaceRoot={application.workspaceRoot || ''}
                 />
                 {displayedPlanExecutionMode !== 'idle' && !conversationActive ? (
                   <WorkspaceDebugDock

@@ -43,6 +43,10 @@ from app.protocols.code_changes import (
     build_code_changes_ag_ui_stream,
     code_changes_capabilities,
 )
+from app.protocols.code_analysis import (
+    build_code_analysis_ag_ui_stream,
+    code_analysis_capabilities,
+)
 from app.protocols.direct_modification import (
     build_conversation_ag_ui_stream,
     conversation_capabilities,
@@ -119,6 +123,7 @@ async def health() -> dict[str, object]:
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
             "code_changes": code_changes_capabilities(),
+            "code_analysis": code_analysis_capabilities(),
             "conversation": conversation_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
@@ -208,6 +213,20 @@ async def run_code_changes(
 
     return StreamingResponse(
         build_code_changes_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/code-analysis/run")
+async def run_code_analysis(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流运行或读取前端代码审查。"""
+
+    return StreamingResponse(
+        build_code_analysis_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

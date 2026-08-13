@@ -17,6 +17,8 @@ _VISIBLE_TOOL_CATEGORIES = {
     "execute": "execute",
     "task": "agent",
     "write_todos": "plan",
+    "load_mayun_frontend_code_review_skill": "skill",
+    "save_code_audit_report": "write",
 }
 
 
@@ -102,6 +104,10 @@ def _tool_activity_message(
         return "正在委派 Agent 子任务"
     if tool_name == "write_todos":
         return "正在更新任务清单"
+    if tool_name == "load_mayun_frontend_code_review_skill":
+        return "正在加载前端代码审查规范"
+    if tool_name == "save_code_audit_report":
+        return "正在保存前端代码审查报告"
     return f"正在删除文件：{target}"
 
 

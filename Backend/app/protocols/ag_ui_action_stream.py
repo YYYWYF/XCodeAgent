@@ -119,57 +119,63 @@ def build_ag_ui_action_stream(
                     if streaming_operation
                     else progress_operation(report)  # type: ignore[misc]
                 )
-                while not operation_task.done() or not event_queue.empty():
-                    if event_queue.empty():
-                        progress_task = asyncio.create_task(event_queue.get())
-                        done, _pending = await asyncio.wait(
-                            {operation_task, progress_task},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        if progress_task not in done:
-                            progress_task.cancel()
-                            with suppress(asyncio.CancelledError):
-                                await progress_task
+                try:
+                    while not operation_task.done() or not event_queue.empty():
+                        if event_queue.empty():
+                            progress_task = asyncio.create_task(event_queue.get())
+                            done, _pending = await asyncio.wait(
+                                {operation_task, progress_task},
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            if progress_task not in done:
+                                progress_task.cancel()
+                                with suppress(asyncio.CancelledError):
+                                    await progress_task
+                                continue
+                            stream_event = progress_task.result()
+                        else:
+                            stream_event = event_queue.get_nowait()
+
+                        if isinstance(stream_event, AgUiActionTextDelta):
+                            yield encoder.encode(
+                                TextMessageContentEvent(
+                                    messageId=message_id,
+                                    delta=stream_event.delta,
+                                )
+                            )
                             continue
-                        stream_event = progress_task.result()
-                    else:
-                        stream_event = event_queue.get_nowait()
 
-                    if isinstance(stream_event, AgUiActionTextDelta):
+                        progress_payload: dict[str, Any] = {
+                            "schemaVersion": 1,
+                            "runId": run_id,
+                            "threadId": thread_id,
+                            "status": "in_progress",
+                            "progress": {
+                                "stage": stream_event.stage,
+                                "message": stream_event.message,
+                                "detail": stream_event.detail,
+                                "percent": max(0, min(stream_event.percent, 100)),
+                            },
+                            **(stream_event.data or {}),
+                        }
+                        safe_progress = jsonable_encoder(progress_payload)
+                        yield encoder.encode(CustomEvent(name=event_name, value=safe_progress))
                         yield encoder.encode(
-                            TextMessageContentEvent(
-                                messageId=message_id,
-                                delta=stream_event.delta,
-                            )
+                            StateSnapshotEvent(snapshot={state_key: safe_progress})
                         )
-                        continue
-
-                    progress_payload: dict[str, Any] = {
-                        "schemaVersion": 1,
-                        "runId": run_id,
-                        "threadId": thread_id,
-                        "status": "in_progress",
-                        "progress": {
-                            "stage": stream_event.stage,
-                            "message": stream_event.message,
-                            "detail": stream_event.detail,
-                            "percent": max(0, min(stream_event.percent, 100)),
-                        },
-                        **(stream_event.data or {}),
-                    }
-                    safe_progress = jsonable_encoder(progress_payload)
-                    yield encoder.encode(CustomEvent(name=event_name, value=safe_progress))
-                    yield encoder.encode(
-                        StateSnapshotEvent(snapshot={state_key: safe_progress})
-                    )
-                    if not streaming_operation and emit_progress_text:
-                        yield encoder.encode(
-                            TextMessageContentEvent(
-                                messageId=message_id,
-                                delta=f"{stream_event.message}\n",
+                        if not streaming_operation and emit_progress_text:
+                            yield encoder.encode(
+                                TextMessageContentEvent(
+                                    messageId=message_id,
+                                    delta=f"{stream_event.message}\n",
+                                )
                             )
-                        )
-                result = await operation_task
+                    result = await operation_task
+                finally:
+                    if not operation_task.done():
+                        operation_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await operation_task
             else:
                 result = await operation()  # type: ignore[misc]
             response_payload: dict[str, Any] = {

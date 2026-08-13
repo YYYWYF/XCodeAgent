@@ -15,6 +15,7 @@ REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
 CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
 SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME = "springboot-mybatis-generate"
 UI_DESIGN_SKILL_NAME = "antd-ui-design"
+MAYUN_FRONTEND_CODE_REVIEW_SKILL_NAME = "mayun-frontend-code-review"
 
 _REACT_DEV_SPEC_REFERENCE_FILES = [
     "references/00-framework-intro.md",
@@ -38,6 +39,11 @@ REQUIRED_BUILTIN_SKILL_FILES = {
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
     SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME: ["SKILL.md"],
     UI_DESIGN_SKILL_NAME: ["SKILL.md"],
+    MAYUN_FRONTEND_CODE_REVIEW_SKILL_NAME: [
+        "SKILL.md",
+        "references/security_checks.md",
+        "references/report_template.md",
+    ],
 }
 
 

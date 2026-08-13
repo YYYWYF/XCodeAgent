@@ -16,6 +16,7 @@ import type {
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import CodeChangeCard from '../CodeChangeCard'
+import CodeAnalysisCard from '../CodeAnalysisCard'
 import { ToolCallChain } from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import WorkflowRunCard, {
@@ -37,6 +38,7 @@ const { Text } = Typography
 
 type MessageListProps = {
   applicationLifecycle?: ApplicationLifecycle
+  codeAnalysisActionsDisabled: boolean
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
   loading: boolean
@@ -47,20 +49,25 @@ type MessageListProps = {
     answers: ClarificationAnswers
   ) => Promise<void>
   onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
+  onRetryCodeAnalysis: () => void
   revertingCodeChangeIds: ReadonlySet<string>
+  workspaceRoot: string
 }
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
   applicationLifecycle,
+  codeAnalysisActionsDisabled,
   codeChangeActionsDisabled,
   conversationRunning,
   loading,
   messages,
   onOpenCodeChangeFile,
+  onRetryCodeAnalysis,
   onRevertCodeChanges,
   revertingCodeChangeIds,
-  onSubmitClarification
+  onSubmitClarification,
+  workspaceRoot
 }: MessageListProps): ReactElement {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
@@ -70,7 +77,9 @@ export default function MessageList({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const hasStreamingProcess = messages.some(
-    (message) => message.id === activeAssistantMessageId && Boolean(message.processSteps?.length)
+    (message) =>
+      message.id === activeAssistantMessageId &&
+      (Boolean(message.processSteps?.length) || message.codeAnalysis?.status === 'in_progress')
   )
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
@@ -242,6 +251,14 @@ export default function MessageList({
                           >
                             <MarkdownContent content={visibleAssistantContent} />
                           </div>
+                        )}
+                        {message.codeAnalysis && (
+                          <CodeAnalysisCard
+                            analysis={message.codeAnalysis}
+                            disabled={codeAnalysisActionsDisabled}
+                            onRetry={onRetryCodeAnalysis}
+                            workspaceRoot={workspaceRoot}
+                          />
                         )}
                         {message.workflow && requiresClarification && (
                           <WorkflowRunCard

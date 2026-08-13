@@ -7,6 +7,7 @@ import type {
   WorkflowBuildExecutionSlice,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet,
+  CodeAnalysisResult,
 } from '../typings';
 import { readDagGenerationSnapshot } from './agUiAgent';
 import type { ProcessStepRecord, ToolCallRecord } from './agUiAgent';
@@ -20,6 +21,7 @@ export type ChatSessionMessage = {
   approval?: AgentApprovalRequest;
   approvalStatus?: AgentApprovalStatus;
   codeChanges?: WorkspaceCodeChangeSet;
+  codeAnalysis?: CodeAnalysisResult;
   workflow?: WorkflowRunPayload;
   toolCalls?: ToolCallRecord[];
   processSteps?: ProcessStepRecord[];
@@ -107,6 +109,10 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
       codeChanges:
         item.codeChanges && typeof item.codeChanges === 'object'
           ? (item.codeChanges as WorkspaceCodeChangeSet)
+          : undefined,
+      codeAnalysis:
+        item.codeAnalysis && typeof item.codeAnalysis === 'object'
+          ? (item.codeAnalysis as CodeAnalysisResult)
           : undefined,
       workflow:
         item.workflow && typeof item.workflow === 'object'

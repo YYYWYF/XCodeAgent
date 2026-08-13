@@ -1,0 +1,84 @@
+.@{class-prefix}-code-analysis-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 14px 16px;
+  color: var(--wb-text);
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-left: 3px solid var(--wb-accent);
+  border-radius: 9px;
+
+  &.@{class-prefix}-failed {
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border-strong);
+  }
+
+  .ant-progress-bg {
+    background: var(--wb-accent);
+  }
+
+  .ant-tag {
+    color: var(--wb-text-secondary);
+    background: var(--wb-canvas);
+    border-color: var(--wb-accent-border);
+  }
+}
+
+.@{class-prefix}-code-analysis-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.@{class-prefix}-code-analysis-icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-code-analysis-title {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.@{class-prefix}-code-analysis-activity,
+.@{class-prefix}-code-analysis-path {
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-code-analysis-statistics,
+.@{class-prefix}-code-analysis-severity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.@{class-prefix}-code-analysis-report-toggle.ant-btn-text {
+  align-self: flex-start;
+  color: var(--wb-accent);
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-accent-hover);
+    background: var(--wb-accent-soft);
+  }
+}
+
+.@{class-prefix}-code-analysis-report {
+  max-height: 520px;
+  overflow: auto;
+  padding: 14px;
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+}

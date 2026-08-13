@@ -19,6 +19,10 @@ class BuiltinSkillsTests(unittest.TestCase):
             builtin_skills.REACT_DEV_SPEC_SKILL_NAME,
             builtin_skills.available_builtin_skills(root),
         )
+        self.assertIn(
+            builtin_skills.MAYUN_FRONTEND_CODE_REVIEW_SKILL_NAME,
+            builtin_skills.available_builtin_skills(root),
+        )
         summaries = builtin_skills.list_builtin_skills(root)
         self.assertTrue(all(skill.description for skill in summaries))
         self.assertTrue(

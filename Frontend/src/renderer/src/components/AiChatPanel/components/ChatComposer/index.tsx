@@ -2,6 +2,7 @@ import {
   BugOutlined,
   FileSearchOutlined,
   SendOutlined,
+  SafetyCertificateOutlined,
   StopOutlined,
   ToolOutlined
 } from '@ant-design/icons'
@@ -60,15 +61,18 @@ type ChatComposerProps = {
   onInputModeChange?: (mode: ChatInputMode) => void
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
   onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
+  onStartCodeAnalysis?: () => void
   onStopGenerating: () => void
   stopping: boolean
   selectedSkills: ChatMessageSkill[]
   workspaceBusy: boolean
   workspaceRoot: string
+  codeAnalysisRunning?: boolean
 }
 
 export default function ChatComposer({
   activeWorkflow,
+  codeAnalysisRunning = false,
   inputMode = 'conversation',
   inputModeDisabled = false,
   copy,
@@ -81,6 +85,7 @@ export default function ChatComposer({
   onInputModeChange,
   onSelectedSkillsChange,
   onSend,
+  onStartCodeAnalysis,
   onStopGenerating,
   stopping,
   selectedSkills,
@@ -91,11 +96,10 @@ export default function ChatComposer({
   const [debugEnabled, setDebugEnabled] = useState(debugOnly)
   const [traceOpen, setTraceOpen] = useState(false)
   const [resumeFrom, setResumeFrom] = useState(initialResumeFrom)
-  const [buildScopeType, setBuildScopeType] =
-    useState<WorkflowBuildExecutionScope['type']>(initialBuildScope.type)
-  const [buildScopeTargetId, setBuildScopeTargetId] = useState(
-    initialBuildScope.targetId || ''
+  const [buildScopeType, setBuildScopeType] = useState<WorkflowBuildExecutionScope['type']>(
+    initialBuildScope.type
   )
+  const [buildScopeTargetId, setBuildScopeTargetId] = useState(initialBuildScope.targetId || '')
   const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
   const isBuildTaskDebug = debugEnabled && resumeFrom === 'prepare_build_tasks'
   const hasBuildScopeTarget = buildScopeType === 'application' || Boolean(buildScopeTargetId.trim())
@@ -166,6 +170,7 @@ export default function ChatComposer({
                 aria-label={`${copy.title}输出内容`}
                 autoSize={{ minRows: 1, maxRows: 6 }}
                 bordered={false}
+                disabled={loading || workspaceBusy}
                 placeholder={copy.placeholder}
                 value={draft}
                 onChange={(event) => onDraftChange(event.target.value)}
@@ -264,6 +269,24 @@ export default function ChatComposer({
                   onSelectedSkillsChange={onSelectedSkillsChange}
                   selectedSkills={selectedSkills}
                 />
+                {onStartCodeAnalysis && (
+                  <Tooltip overlayClassName={cx('composer-tool-tooltip')} title="前端代码扫描">
+                    <Button
+                      aria-label="前端代码扫描"
+                      aria-pressed={codeAnalysisRunning}
+                      className={cx(
+                        'composer-tool-button',
+                        'code-analysis',
+                        codeAnalysisRunning && 'active'
+                      )}
+                      disabled={loading || workspaceBusy || !workspaceRoot}
+                      icon={<SafetyCertificateOutlined />}
+                      onClick={onStartCodeAnalysis}
+                      shape="circle"
+                      type="text"
+                    />
+                  </Tooltip>
+                )}
                 <Tooltip
                   overlayClassName={cx('composer-tool-tooltip')}
                   title={debugEnabled ? '关闭 Workflow 调试' : 'Workflow 调试'}

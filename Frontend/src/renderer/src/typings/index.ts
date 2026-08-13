@@ -3,6 +3,7 @@ export * from './agentFiles';
 export * from './application';
 export * from './applicationDevelopmentPlanning';
 export * from './codeChanges';
+export * from './codeAnalysis';
 export * from './developmentContract';
 export * from './pagePlanning';
 export * from './userSkills';

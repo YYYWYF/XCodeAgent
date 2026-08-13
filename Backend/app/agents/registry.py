@@ -12,6 +12,7 @@ from app.agents.repair_planner import create_repair_planner_agent
 from app.agents.small_task import create_small_task_agent
 from app.agents.test import create_test_agent
 from app.agents.workspace_assistant import create_workspace_assistant_agent
+from app.agents.code_analyze import create_code_analyze_agent
 from app.agents.workspace_scope import resolve_workspace_root
 from app.config import Settings
 from app.services.agent_memory_runtime import (
@@ -42,6 +43,14 @@ class AgentBundle:
     workspace_assistant: Any
     selected_skill_names: tuple[str, ...] = ()
     user_skills_revision: str = ""
+
+
+@dataclass(frozen=True)
+class _CodeAnalyzeRuntime:
+    """缓存代码审查 Agent 可安全复用的模型和只读记忆快照。"""
+
+    model: Any
+    agent_memory_backend: Any
 
 
 def create_agent_bundle(
@@ -172,6 +181,52 @@ def clear_agent_bundle_cache() -> None:
     """清理所有按工作区和技能集合缓存的 Agent bundle。"""
 
     _create_agent_bundle_for_workspace.cache_clear()
+    _create_code_analyze_runtime.cache_clear()
+
+
+def create_code_analyze_agent_for_workspace(
+    *,
+    workspace_root: str,
+    source_roots: tuple[str, ...],
+    tools: list[object],
+) -> Any:
+    """使用稳定 AGENTS.md 快照创建一次请求作用域的代码审查 Agent。"""
+
+    for _attempt in range(_MAX_SNAPSHOT_ATTEMPTS):
+        agent_memory_revision = get_agent_memory_runtime_revision()
+        try:
+            runtime = _create_code_analyze_runtime(
+                workspace_root,
+                agent_memory_revision,
+            )
+        except AgentMemorySnapshotChangedError:
+            continue
+        if get_agent_memory_runtime_revision() != agent_memory_revision:
+            continue
+        return create_code_analyze_agent(
+            runtime.model,
+            workspace_root,
+            source_roots=source_roots,
+            agent_memory_backend=runtime.agent_memory_backend,
+            tools=tools,
+        )
+    raise RuntimeError("AGENTS.md 持续变化，无法创建稳定的代码审查 Agent 快照。")
+
+
+@lru_cache(maxsize=16)
+def _create_code_analyze_runtime(
+    workspace_key: str,
+    agent_memory_revision: str,
+) -> _CodeAnalyzeRuntime:
+    """按工作区和记忆版本缓存 codeAnalyzeAgent 的无状态运行基础。"""
+
+    del workspace_key
+    settings = Settings.from_env()
+    agent_memory = create_agent_memory_runtime_snapshot(agent_memory_revision)
+    return _CodeAnalyzeRuntime(
+        model=create_chat_model(settings),
+        agent_memory_backend=agent_memory.backend,
+    )
 
 
 def _normalize_selected_skill_key(

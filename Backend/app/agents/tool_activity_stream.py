@@ -14,7 +14,12 @@ from app.agents.tool_activity_projection import (
 ToolActivity = dict[str, Any]
 ToolActivityCallback = Callable[[ToolActivity], None]
 TextActivityCallback = Callable[[str], None]
+CancellationCallback = Callable[[], bool]
 StreamNamespace = tuple[str, ...]
+
+
+class AgentInvocationCancelled(RuntimeError):
+    """表示调用方已停止当前 Agent 流。"""
 
 
 def invoke_agent_with_tool_activity(
@@ -24,10 +29,13 @@ def invoke_agent_with_tool_activity(
     workspace: str | None,
     on_tool_activity: ToolActivityCallback | None = None,
     on_text_delta: TextActivityCallback | None = None,
+    cancellation_requested: CancellationCallback | None = None,
 ) -> str:
     """执行 Deep Agent，并在需要时把安全化的工作区工具活动实时回调给构建调度器。"""
 
-    if on_tool_activity is None:
+    if cancellation_requested is not None and cancellation_requested():
+        raise AgentInvocationCancelled("Agent 运行已取消。")
+    if on_tool_activity is None and on_text_delta is None and cancellation_requested is None:
         result = agent.invoke(payload)
         return last_agent_text(result)
 
@@ -43,6 +51,11 @@ def invoke_agent_with_tool_activity(
         subgraphs=True,
     )
     for order, streamed in enumerate(stream):
+        if cancellation_requested is not None and cancellation_requested():
+            close_stream = getattr(stream, "close", None)
+            if callable(close_stream):
+                close_stream()
+            raise AgentInvocationCancelled("Agent 运行已取消。")
         stream_part = _parse_stream_part(streamed)
         if stream_part is None:
             continue
@@ -66,7 +79,7 @@ def invoke_agent_with_tool_activity(
             calls=calls,
             chunk_args=chunk_args,
             chunk_ids=chunk_ids,
-            on_tool_activity=on_tool_activity,
+            on_tool_activity=on_tool_activity or (lambda _activity: None),
         )
     return _streamed_agent_text(
         streamed_states=streamed_states,

@@ -5,6 +5,7 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../typings'
+import type { CodeAnalysisResult } from '../../typings'
 
 export type AgentChatMessage = {
   id: number
@@ -13,6 +14,7 @@ export type AgentChatMessage = {
   skills?: ChatMessageSkill[]
   workflow?: WorkflowRunPayload
   codeChanges?: WorkspaceCodeChangeSet
+  codeAnalysis?: CodeAnalysisResult
   toolCalls?: ToolCallRecord[]
   processSteps?: ProcessStepRecord[]
   createdAt: number

@@ -146,6 +146,12 @@
     &::placeholder {
       color: var(--wb-text-tertiary);
     }
+
+    &[disabled] {
+      color: var(--wb-text-tertiary);
+      background: transparent;
+      cursor: not-allowed;
+    }
   }
 }
 
@@ -267,6 +273,22 @@
 
 .@{class-prefix}-composer-resource-button.ant-btn .anticon {
   font-size: 21px;
+}
+
+.@{class-prefix}-composer-tool-button.@{class-prefix}-code-analysis.ant-btn {
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+
+  &[disabled],
+  &[disabled]:hover,
+  &[disabled]:focus {
+    color: var(--wb-text-tertiary);
+    background: transparent;
+    cursor: not-allowed;
+  }
 }
 
 .@{class-prefix}-composer-tool-tooltip {
