@@ -35,7 +35,6 @@ class ProjectState(TypedDict, total=False):
     direct_stage_results: dict[str, dict[str, Any]]
     direct_code_change_sets: list[dict[str, Any]]
     backend_handoff: dict[str, Any]
-    integration_contract_check_enabled: bool
     integration_repair_enabled: bool
     requirement_spec: dict[str, Any]
     edited_requirement_spec: dict[str, Any]
@@ -92,7 +91,6 @@ class ProjectState(TypedDict, total=False):
     build_events: Annotated[list[str], add]
     test_results: list[dict[str, Any]]
     test_events: Annotated[list[str], add]
-    test_agent_review: dict[str, Any]
     test_report: dict[str, Any]
     test_report_path: str
     quality_gate_passed: bool

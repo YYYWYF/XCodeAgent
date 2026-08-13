@@ -193,9 +193,9 @@ class WorkspaceScopeTests(unittest.TestCase):
                 "allow",
             )
 
-    def test_test_agent_permissions_deny_writes(self) -> None:
+    def test_repair_planner_permissions_deny_writes(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
-            permissions = create_workspace_permissions(workspace, mode="test")
+            permissions = create_workspace_permissions(workspace, mode="repair_planner")
 
             self.assertEqual(_check_fs_permission(permissions, "read", "/data.json"), "allow")
             self.assertEqual(_check_fs_permission(permissions, "write", "/data.json"), "deny")

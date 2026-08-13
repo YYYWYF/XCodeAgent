@@ -8,12 +8,10 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.repair_planner import plan_repairs_with_repair_planner_agent
-from app.agents.test.validator import summarize_tests_with_deep_agent
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.graph.state import ProjectState
-from app.services.api_contract_validation import validate_api_contract_consistency
-from app.services.integration_test_runner import report_check_progress, run_integration_checks
+from app.services.integration_test_runner import run_integration_checks
 from app.services.test_validation import evaluate_quality_gate
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.code_changes import merge_code_change_sets
@@ -23,15 +21,6 @@ from app.workspace.task_documents import write_repair_task_plan_json
 
 INTEGRATION_TEST_PROGRESS_REPORTER_KEY = "integration_test_progress_reporter"
 IntegrationTestProgressReporter = Callable[[dict[str, Any]], None]
-
-
-def _build_is_clean(state: ProjectState) -> bool:
-    summary = state.get("build_summary", {})
-    return int(summary.get("failed", 0)) == 0 and int(summary.get("pending", 0)) == 0
-
-
-def _append_check(state: ProjectState, check: dict) -> list[dict]:
-    return [*state.get("test_results", []), check]
 
 
 def _progress_reporter(config: RunnableConfig | None) -> IntegrationTestProgressReporter | None:
@@ -94,118 +83,10 @@ def actual_project_checks(
     }
 
 
-def api_contract_check(
-    state: ProjectState,
-    config: RunnableConfig,
-) -> dict:
-    """校验正式 ProjectPlan 契约，并区分计划错误与未完成构建。"""
-
-    reporter = _progress_reporter(config)
-    if state.get("integration_contract_check_enabled") is False:
-        check = {
-            "id": "api_contract",
-            "name": "API 契约有效",
-            "layer": "contract",
-            "language": None,
-            "passed": True,
-            "skipped": True,
-            "required": False,
-            "command": "project-plan-contract-validation",
-            "evidence": "快速修改模式未依赖 ProjectPlan，已跳过正式 API 契约校验。",
-            "failure_category": None,
-            "execution": {
-                "tool": "deterministic_validator",
-                "argv": ["project-plan-contract-validation"],
-                "cwd": ".",
-                "returncode": 0,
-                "timed_out": False,
-                "stdout_log": None,
-                "stderr_log": None,
-            },
-        }
-        report_check_progress(reporter, status="skipped", check=check)
-        return {
-            "test_results": _append_check(state, check),
-            "test_events": ["api_contract:skipped"],
-        }
-    report_check_progress(
-        reporter,
-        status="running",
-        check={
-            "id": "api_contract",
-            "name": "API 契约有效",
-            "required": True,
-            "skipped": False,
-            "evidence": "正在校验 API 契约。",
-        },
-    )
-    errors = validate_api_contract_consistency(state.get("project_plan", {}))
-    passed = _build_is_clean(state) and not errors
-    check = {
-        "id": "api_contract",
-        "name": "API 契约有效",
-        "layer": "contract",
-        "language": None,
-        "passed": passed,
-        "skipped": False,
-        "required": True,
-        "command": "project-plan-contract-validation",
-        "evidence": (
-            "API contract schemas, data-source refs, endpoint dependencies, and page field bindings are consistent."
-            if passed
-            else "; ".join(errors)
-            or f"Build summary is not clean: {state.get('build_summary', {})}"
-        ),
-        "failure_category": (
-            None
-            if passed
-            else "contract_mismatch"
-            if errors
-            else "build_incomplete"
-        ),
-        "execution": {
-            "tool": "deterministic_validator",
-            "argv": ["project-plan-contract-validation"],
-            "cwd": ".",
-            "returncode": 0 if passed else 1,
-            "timed_out": False,
-            "stdout_log": None,
-            "stderr_log": None,
-        },
-    }
-    report_check_progress(reporter, status="passed" if passed else "failed", check=check)
-    return {
-        "test_results": _append_check(state, check),
-        "test_events": ["api_contract"],
-    }
-
-
-def test_agent_review(state: ProjectState) -> dict:
-    workspace = workspace_from_state(state)
-    captured = capture_agent_file_changes(
-        workspace=workspace,
-        source_tool="test.deep_agent",
-        action=lambda: summarize_tests_with_deep_agent(
-            test_results=state.get("test_results", []),
-            build_results=state.get("build_results", []),
-            workspace=workspace,
-            selected_skill_names=state.get("selected_skill_names"),
-        ),
-    )
-    return {
-        **code_change_state_update(captured.code_change_set),
-        "test_agent_review": captured.value,
-        "test_events": ["test_agent_review"],
-    }
-
-
 def main_quality_gate(state: ProjectState) -> dict:
-    review = state.get("test_agent_review", {})
     report = evaluate_quality_gate(
         test_results=state.get("test_results", []),
-        agent_note=review.get("agent_note", "Test Agent completed without a note."),
     )
-    report["reviewed_by"] = review.get("reviewed_by")
     report_path = write_test_report_json(state, report)
     return {
         "phase": "integration_test",
@@ -391,15 +272,11 @@ def build_testing_subgraph():
     builder = StateGraph(ProjectState)
 
     builder.add_node("actual_project_checks", actual_project_checks)
-    builder.add_node("api_contract_check", api_contract_check)
-    builder.add_node("test_agent_review", test_agent_review)
     builder.add_node("main_quality_gate", main_quality_gate)
     builder.add_node("repair_planning", repair_planning)
 
     builder.add_edge(START, "actual_project_checks")
-    builder.add_edge("actual_project_checks", "api_contract_check")
-    builder.add_edge("api_contract_check", "test_agent_review")
-    builder.add_edge("test_agent_review", "main_quality_gate")
+    builder.add_edge("actual_project_checks", "main_quality_gate")
     builder.add_edge("main_quality_gate", "repair_planning")
     builder.add_edge("repair_planning", END)
 
@@ -436,7 +313,6 @@ def integration_test(state: ProjectState) -> dict:
         "phase": "integration_test",
         "test_results": result.get("test_results", []),
         "test_events": result.get("test_events", []),
-        "test_agent_review": result.get("test_agent_review", {}),
         "test_report": result.get("test_report", {}),
         "test_report_path": result.get("test_report_path"),
         "quality_gate_passed": result.get("quality_gate_passed", False),

@@ -15,7 +15,6 @@ REQUIRED_TEST_CHECKS = [
     ("backend_build", "后端 Java 构建检查"),
     ("backend_static_check", "后端静态检查通过"),
     ("backend_unit_tests", "后端单元测试通过"),
-    ("api_contract", "API 契约有效"),
     ("joint_integration", "前后端集成测试通过"),
 ]
 
@@ -95,7 +94,7 @@ def _revision_owner(check_id: str) -> str:
 def _revision_owners(check_id: str) -> list[str]:
     if check_id.startswith("frontend_"):
         return ["frontend"]
-    if check_id.startswith("backend_") or check_id == "api_contract":
+    if check_id.startswith("backend_"):
         return ["data_source"]
     return ["frontend", "data_source"]
 
@@ -103,7 +102,6 @@ def _revision_owners(check_id: str) -> list[str]:
 def evaluate_quality_gate(
     *,
     test_results: list[dict[str, Any]],
-    agent_note: str,
 ) -> dict[str, Any]:
     passed = all(result["passed"] for result in test_results)
     revision_requests = create_revision_requests(test_results)
@@ -124,7 +122,6 @@ def evaluate_quality_gate(
         "generated_at": datetime.now(UTC).isoformat(),
         "passed": passed,
         "checks": test_results,
-        "agent_note": agent_note,
         "summary": {
             "total": len(test_results),
             "passed": len([result for result in test_results if result["passed"]]),

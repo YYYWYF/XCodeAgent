@@ -6,73 +6,11 @@ from unittest.mock import patch
 from app.agents.repair_planner.planner import (
     plan_repairs_with_repair_planner_agent,
 )
-from app.graph.subgraphs.testing import api_contract_check, repair_planning
+from app.graph.subgraphs.testing import repair_planning
 from app.workspace.code_changes import CapturedWorkspaceChanges
 
 
 class IntegrationRepairFlowTests(unittest.TestCase):
-    def test_contract_mismatch_overrides_model_confirmation_decision(self) -> None:
-        """验证模型建议确认时，契约错误仍确定性生成数据源修复任务。"""
-
-        revision_request = {
-            "id": "revision:api_contract",
-            "owner": "backend",
-            "owners": ["backend"],
-            "reason": "API 契约有效",
-            "evidence": "API contract api does not define data_source_id.",
-            "failed_check": {
-                "id": "api_contract",
-                "name": "API 契约有效",
-                "failure_category": "contract_mismatch",
-            },
-        }
-        with patch(
-            "app.agents.repair_planner.planner._invoke_repair_planner_agent",
-            return_value=(
-                '{"decision":"requires_user_confirmation",'
-                '"reason":"change contract"}'
-            ),
-        ):
-            result = plan_repairs_with_repair_planner_agent(
-                test_report={"generated_at": "2026-07-20T00:00:00Z"},
-                revision_requests=[revision_request],
-                build_execution_scope={"type": "page", "targetId": "orders"},
-                scoped_tasks=[
-                    {
-                        "id": "orders-api",
-                        "owner": "backend",
-                        "unit_id": "database:orders",
-                        "allowed_paths": ["apps/demo/backend/orders.py"],
-                    }
-                ],
-            )
-
-        self.assertEqual(result["decision"], "repair")
-        self.assertEqual(result["status"], "ready")
-        self.assertEqual(len(result["tasks"]), 1)
-        self.assertEqual(result["tasks"][0]["owner"], "backend")
-        self.assertEqual(result["tasks"][0]["unit_id"], "database:orders")
-        self.assertEqual(
-            result["tasks"][0]["allowed_paths"],
-            ["apps/demo/backend/orders.py"],
-        )
-
-    def test_dirty_build_is_not_classified_as_project_plan_mismatch(self) -> None:
-        """验证仅构建未完成时不会误触发 ProjectPlan 契约修订。"""
-
-        with patch(
-            "app.graph.subgraphs.testing.validate_api_contract_consistency",
-            return_value=[],
-        ):
-            result = api_contract_check(
-                {"build_summary": {"failed": 1, "pending": 0}},
-                {},
-            )
-
-        failed_check = result["test_results"][0]
-        self.assertFalse(failed_check["passed"])
-        self.assertEqual(failed_check["failure_category"], "build_incomplete")
-
     def test_budget_exhaustion_persists_terminal_plan(self) -> None:
         """验证修复预算耗尽时会持久化最新终止计划和计数。"""
 
@@ -101,17 +39,17 @@ class IntegrationRepairFlowTests(unittest.TestCase):
         writer.assert_called_once()
         planner.assert_not_called()
 
-    def test_contract_mismatch_generates_repair_task(self) -> None:
-        """验证 API 契约错误交给 RepairPlanner 生成可执行修复任务。"""
+    def test_failed_command_generates_repair_task(self) -> None:
+        """验证真实命令失败会交给 RepairPlanner 生成可执行修复任务。"""
 
         revision_request = {
-            "id": "revision:api_contract",
-            "evidence": "API contract api does not define data_source_id.",
-            "failed_check": {"failure_category": "contract_mismatch"},
+            "id": "revision:frontend_build",
+            "evidence": "TypeScript compilation failed.",
+            "failed_check": {"id": "frontend_build", "failure_category": "compile_error"},
         }
         repair_task = {
-            "id": "repair:api_contract:data_source",
-            "owner": "backend",
+            "id": "repair:frontend_build:frontend",
+            "owner": "frontend",
             "status": "pending",
         }
         repair_plan = {

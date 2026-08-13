@@ -266,7 +266,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - 权限与操作可见性：页面访问角色、按钮/危险操作可见性和无权限行为；
 - 页面级验收标准。
 
-`prepare_build_tasks` 生成任务 DAG 前必须执行确定性的 API 契约一致性检查，并在 `integration_test.api_contract_check` 再次执行：数据源不得包含独立 `schema`；所有 schema/endpoint 引用必须存在；页面 `response_bindings.source_path` 必须来自所依赖 endpoint 的响应 Schema；写接口必须声明请求 Schema，非删除接口必须声明响应 Schema。任何错误都会阻止任务拆分或令质量门禁失败。
+`prepare_build_tasks` 生成任务 DAG 前必须执行确定性的 API 契约一致性检查：数据源不得包含独立 `schema`；所有 schema/endpoint 引用必须存在；页面 `response_bindings.source_path` 必须来自所依赖 endpoint 的响应 Schema；写接口必须声明请求 Schema，非删除接口必须声明响应 Schema。任何错误都会在任务拆分前阻止构建；`integration_test` 不重复校验已经确认并通过任务准备门禁的 ProjectPlan。
 
 ### `inspect_workspace`
 
@@ -441,13 +441,13 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 Chat Composer 通过既有 `/skills/run` AG-UI 目录接口提供搜索和多选，只展示已开启用户技能，并在 `/workflow/run` 的 `forwardedProps.selectedSkillNames` 中发送稳定、去重的名称数组。该数组写入 `ProjectState.selected_skill_names`，在 RequirementSpec、ProjectPlan 确认以及 Build/Testing Subgraph 恢复时保持不变；恢复请求试图替换集合会返回 `selected_skill_conflict`。用户消息同时保存技能名称/描述快照，因此历史会话只展示当次发送的标签，不依赖当前目录是否仍存在。
 
-当 `selectedSkillNames` 非空时，Backend 会精确验证所有名称，只把已开启的所选技能完整目录复制到 `/.xcodeagent/user-skills/` 不可变只读快照；关闭或未选技能不可发现且虚拟路径不可读，显式选择关闭技能返回 `selected_skill_unavailable`。所选 `SKILL.md` 会由 Backend 在模型调用前完整读取，并以明确的 `<selected-skill>` 边界强制拼入 Frontend、Data Source、Database、Test、RepairPlanner、SmallTask、Workspace Assistant 七个 Deep Agent 的 system prompt；references、scripts、assets 仍只从筛选后的快照按需读取。无工具 ChatModel 节点仍不加载技能。空数组或字段缺失时，全部已开启用户技能只通过 SkillsMiddleware 按需发现，不强制注入正文。启停集合参与用户技能 revision，因此切换状态会产生新的 Agent bundle；进行中的单次模型调用不被强制中断。
+当 `selectedSkillNames` 非空时，Backend 会精确验证所有名称，只把已开启的所选技能完整目录复制到 `/.xcodeagent/user-skills/` 不可变只读快照；关闭或未选技能不可发现且虚拟路径不可读，显式选择关闭技能返回 `selected_skill_unavailable`。所选 `SKILL.md` 会由 Backend 在模型调用前完整读取，并以明确的 `<selected-skill>` 边界强制拼入 Frontend、Data Source、Database、RepairPlanner、SmallTask、Workspace Assistant 六个 Deep Agent 的 system prompt；references、scripts、assets 仍只从筛选后的快照按需读取。无工具 ChatModel 节点仍不加载技能。空数组或字段缺失时，全部已开启用户技能只通过 SkillsMiddleware 按需发现，不强制注入正文。启停集合参与用户技能 revision，因此切换状态会产生新的 Agent bundle；进行中的单次模型调用不被强制中断。
 
 显式选择的 `SKILL.md` 正文按 UTF-8 总字节设置独立 64 KiB 上限，整体超限返回 `selected_skills_context_too_large`，不会截断指令；无效格式、不可用技能和恢复冲突分别返回 `invalid_selected_skills`、`selected_skill_unavailable`、`selected_skill_conflict`。技能指令不能扩大 filesystem permissions、任务 `allowed_paths`、已确认需求、API 契约、确认门禁或 Agent 角色边界。bundle 缓存键包含规范化技能集合、工作区、用户技能 revision 和 AGENTS.md revision；顺序不同但集合相同会复用，集合不同绝不复用。任务执行元数据记录 `requiredSkillsLoaded`，Workflow 开始事件记录选择名称和 snapshot revision。
 
 该设计映射到参考架构：learn-coding-agent 的紧凑“收集上下文—行动—验证”循环只读取当前任务需要的规范；OpenCode 风格把用户 Skill 作为显式可选、错误隔离的 Agent 能力；Deep Agents 继续使用原生 SkillsMiddleware、FilesystemBackend 和 CompositeBackend。为遵守 128k 上下文预算，默认模式只常驻技能元数据；只有用户显式选择的有限正文进入 system prompt，辅助资源和未选技能正文都不固定进入上下文。
 
-环境级 `~/.xcodeagent[_dev|_st|_uat]/AGENTS.md` 是七个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.xcodeagent/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
+环境级 `~/.xcodeagent[_dev|_st|_uat]/AGENTS.md` 是六个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.xcodeagent/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
 
 外层主 Graph 不关心单个生成任务的执行细节，只根据 Build Subgraph 的确定性终态路由；构建完整成功才进入 `integration_test`。
 
@@ -455,39 +455,31 @@ Chat Composer 通过既有 `/skills/run` AG-UI 目录接口提供搜索和多选
 
 `integration_test` 在外层主 Graph 中表现为一个节点，但内部应实现为 Testing Subgraph，并合并原 `quality_gate` 的职责。
 
-测试命令和质量判定应以确定性结果为准，不应让大模型凭空判断是否通过。Test Deep Agent 的职责是审阅确定性证据、生成测试摘要和返修建议；确定性规则负责更新 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，需要生成修复计划时调用独立 RepairPlanner Agent。
+测试命令和质量判定完全以确定性结果为准。确定性规则负责更新 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`；只有门禁失败且启用自动修复时才调用独立 RepairPlanner Agent。
 
 Testing Subgraph 的最小内部结构：
 
 ```text
 testing.START
   → actual_project_checks
-  → api_contract_check
-  → test_agent_review
   → main_quality_gate
   → repair_planning
   → testing.END
 ```
 
-`main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；API 契约错误作为 `contract_mismatch` 证据传给 RepairPlanner，并确定性覆盖模型可能返回的确认决策，生成 Data Source 修复任务。质量门禁通过时跳过修复计划并输出 `integration_next_action = launch_project`。
+`main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；质量门禁通过时跳过修复计划并输出 `integration_next_action = launch_project`。
 
-质量门禁至少应覆盖：
+当前质量门禁覆盖：
 
 - 前端 TypeScript 依赖安装；
 - 前端 TypeScript 构建；
-- 前端 lint；
 - 前端 typecheck；
-- 前端单元测试；
-- 后端 Java 构建；
-- 后端 Java 静态检查；
-- 后端 Java 单元测试；
-- API 契约有效；
-- 前后端集成测试通过。
+- 后端 Java 构建。
 
 输出至少包含：
 
 - `test_results`：每项测试的通过状态、命令和证据；
-- `test_report`：测试汇总、Test Agent 审阅说明和质量门禁结果；
+- `test_report`：确定性测试汇总和质量门禁结果；
 - `test_report_path`：结构化测试报告 JSON 路径；
 - `quality_gate_passed`：是否允许进入启动和验收；
 - `needs_revision`：是否需要返回修改；
@@ -501,9 +493,9 @@ testing.START
 
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：
 
-- 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm`、`yarn` 或 `npm`，执行 install、build、lint、typecheck、unit test 和 integration scripts；
-- 后端：优先复用当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`），也支持通过当前 Python 解释器执行 `-m pytest`；
-- 未声明的可选检查（lint、typecheck、unit/integration 等）会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。
+- 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm` 或 `yarn`，执行 install、可选 `tsc` script 和必需 build script；
+- 后端：仅识别当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`）并执行 `clean install`；不探测 Python 工程或执行 pytest；
+- 未声明可选 `tsc` script 时会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。Lint、前端单测和 E2E 当前不生成检查项。
 
 任务编译和执行还必须遵守以下确定性边界：
 
@@ -663,16 +655,6 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 真实数据库摘要和 DDL 执行都使用绑定当前 `workspaceRoot` 的应用级 `application.json` 数据源配置；后端只在本次操作内存中解密 `plantMode.pwd`，未绑定工作区的兼容入口直接失败，不回退到 Backend 服务的 `.env`；
 - 高危 SQL 计划必须先创建 `database.execute` 审批，请求批准的是计划指纹而不是自然语言任务；
 - 只有低风险或已审批的同指纹计划才交给确定性执行服务事务执行，并以数据库执行证据完成任务。
-
-### Test Agent
-
-目录：`agents/test/`
-
-职责：
-
-- 审阅确定性集成测试证据；
-- 输出结构化测试报告和缺陷；
-- 只负责发现问题，不直接修改业务代码。
 
 ### RepairPlanner Agent
 
