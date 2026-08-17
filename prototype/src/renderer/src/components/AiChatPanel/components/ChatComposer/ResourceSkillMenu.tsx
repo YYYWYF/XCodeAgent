@@ -15,16 +15,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { requestUserSkills } from '../../../../service/userSkills'
 import type { ChatMessageSkill, UserSkill } from '../../../../typings'
 import { cx } from '../../../../utils'
-import {
-  enabledUserSkills,
-  reconcileEnabledChatSkills
-} from '../../../SkillsPage/skillCatalog'
+import { enabledUserSkills, reconcileEnabledChatSkills } from '../../../SkillsPage/skillCatalog'
 
 const { Text } = Typography
 
 type ResourceSkillMenuProps = {
   artifactResources?: ComposerArtifactResource[]
   disabled: boolean
+  onArtifactAttach?: (artifactId: string) => Promise<void>
   selectedSkills: ChatMessageSkill[]
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
 }
@@ -32,6 +30,7 @@ type ResourceSkillMenuProps = {
 export type ComposerArtifactResource = {
   accessMessage: string
   accessMode: 'unavailable' | 'read' | 'write'
+  attached: boolean
   id: string
   name: string
   path: string
@@ -47,6 +46,7 @@ function getResourcePopupContainer(triggerNode: HTMLElement): HTMLElement {
 export default function ResourceSkillMenu({
   artifactResources = [],
   disabled,
+  onArtifactAttach,
   selectedSkills,
   onSelectedSkillsChange
 }: ResourceSkillMenuProps): ReactElement {
@@ -132,13 +132,17 @@ export default function ResourceSkillMenu({
   }
 
   /** 把可用产物加入当前上下文；只读产物可引用但不会获得编辑权。 */
-  const handleToggleArtifact = (artifact: ComposerArtifactResource): void => {
+  const handleToggleArtifact = async (artifact: ComposerArtifactResource): Promise<void> => {
     if (artifact.accessMode === 'unavailable') return
+    const selected = selectedArtifactIds.includes(artifact.id)
     setSelectedArtifactIds((current) =>
-      current.includes(artifact.id)
+      selected
         ? current.filter((artifactId) => artifactId !== artifact.id)
         : [...current, artifact.id]
     )
+    if (!selected && artifact.accessMode === 'write' && !artifact.attached) {
+      await onArtifactAttach?.(artifact.id)
+    }
   }
 
   const content = (
@@ -242,7 +246,7 @@ export default function ResourceSkillMenu({
                     )}
                     disabled={artifact.accessMode === 'unavailable'}
                     key={artifact.id}
-                    onClick={() => handleToggleArtifact(artifact)}
+                    onClick={() => void handleToggleArtifact(artifact)}
                     title={artifact.accessMessage}
                     type="button"
                   >
@@ -251,15 +255,19 @@ export default function ResourceSkillMenu({
                     </span>
                     <span className={cx('composer-artifact-copy')}>
                       <Text>{artifact.name}</Text>
-                      <Text code type="secondary">{artifact.path}</Text>
+                      <Text code type="secondary">
+                        {artifact.path}
+                      </Text>
                     </span>
                     <span className={cx('composer-artifact-access', artifact.accessMode)}>
                       {locked ? <LockOutlined /> : <CheckOutlined />}
-                      {artifact.accessMode === 'write'
-                        ? '可编辑'
-                        : artifact.accessMode === 'read'
-                          ? '只读'
-                          : '未生成'}
+                      {artifact.attached
+                        ? '已关联'
+                        : artifact.accessMode === 'write'
+                          ? '可编辑'
+                          : artifact.accessMode === 'read'
+                            ? '只读'
+                            : '未生成'}
                     </span>
                   </button>
                 )

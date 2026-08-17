@@ -510,16 +510,21 @@
     background: var(--wb-accent-soft);
   }
 
+  &.@{class-prefix}-not-started:not(.@{class-prefix}-selected) {
+    color: var(--wb-text-tertiary);
+  }
+
+  &.@{class-prefix}-in-progress:not(.@{class-prefix}-selected) {
+    color: var(--wb-text);
+  }
+
+  &.@{class-prefix}-completed:not(.@{class-prefix}-selected) {
+    color: var(--wb-text-secondary);
+  }
+
   &.@{class-prefix}-read-only:not(:disabled) {
     color: var(--wb-text-secondary);
   }
-}
-
-.@{class-prefix}-artifact-lock-icon {
-  flex: 0 0 auto;
-  margin-left: auto;
-  color: var(--wb-text-tertiary);
-  font-size: 10px;
 }
 
 .@{class-prefix}-temporary-chat-empty {
@@ -1422,6 +1427,40 @@
   }
 }
 
+.@{class-prefix}-sidebar-phase-index {
+  display: inline-flex;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-text-secondary);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 5px;
+
+  &.@{class-prefix}-stage-1 {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent-border);
+  }
+
+  &.@{class-prefix}-stage-2 {
+    color: #7652d7;
+    background: rgba(118, 82, 215, 0.09);
+    border-color: rgba(118, 82, 215, 0.2);
+  }
+
+  &.@{class-prefix}-stage-3 {
+    color: #a76508;
+    background: rgba(211, 132, 20, 0.1);
+    border-color: rgba(211, 132, 20, 0.22);
+  }
+}
+
 .@{class-prefix}-task-conversation-delete,
 .@{class-prefix}-task-conversation-rename {
   position: absolute;
@@ -1625,15 +1664,15 @@
   border-radius: 6px;
   cursor: pointer;
 
-  > span:last-child,
-  > code {
+  > .@{class-prefix}-artifact-label {
     overflow: hidden;
     min-width: 0;
+    flex: 1;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  > code {
+  > code.@{class-prefix}-artifact-label {
     color: inherit;
     font-size: 10px;
   }
@@ -1663,6 +1702,7 @@
   width: 7px;
   height: 7px;
   flex: 0 0 7px;
+  margin-left: auto;
   background: #b4b9c7;
   border-radius: 50%;
 
@@ -1759,6 +1799,16 @@
   }
   .@{class-prefix}-artifact-status-dot {
     background: #666e80;
+  }
+  .@{class-prefix}-sidebar-phase-index.@{class-prefix}-stage-2 {
+    color: #bda9ff;
+    background: rgba(150, 115, 255, 0.13);
+    border-color: rgba(177, 150, 255, 0.25);
+  }
+  .@{class-prefix}-sidebar-phase-index.@{class-prefix}-stage-3 {
+    color: #e2ad5c;
+    background: rgba(224, 160, 65, 0.13);
+    border-color: rgba(224, 160, 65, 0.25);
   }
   .@{class-prefix}-artifact-conversation-menu.ant-dropdown-menu {
     --wb-surface: #171d29;

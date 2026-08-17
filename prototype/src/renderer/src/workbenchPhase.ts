@@ -101,15 +101,10 @@ const DEVELOPMENT_PHASE_NODES = new Set([
 
 /**
  * 审查阶段的工作流节点 phase（非功能检查：代码审查 / 规范检测 / 健康度）。
- * 所有页面/接口模块开发完成后自动进入审查阶段(code_review),审查通过即发布。
+ * 所有页面/接口模块开发完成并经用户确认后进入审查阶段(code_review),审查通过即发布。
  * 集成测试归开发阶段：开发以页面 / 接口为单元，集成测试是开发对话链的一环。
  */
-const TEST_PHASE_NODES = new Set([
-  'code_review',
-  'lint_check',
-  'security_scan',
-  'health_check'
-])
+const TEST_PHASE_NODES = new Set(['code_review', 'lint_check', 'security_scan', 'health_check'])
 
 const TERMINAL_EXECUTION_STATUSES = new Set(['completed', 'stopped', 'failed'])
 
@@ -142,7 +137,7 @@ export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): Workbenc
   if (activeIn(DEVELOPMENT_PHASE_NODES)) return 'development'
 
   // 应用级审查完成（code_review/finalize completed）→ 保持审查阶段直到发布。
-  // 审查 = 非功能检查，所有页面/接口模块开发完成后自动进入审查阶段。
+  // 审查 = 非功能检查，所有页面/接口模块完成且用户确认后进入审查阶段。
   const appReviewed = executions.some(
     (execution) =>
       execution.scope === 'application' &&

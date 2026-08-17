@@ -1046,11 +1046,11 @@ async function replayEndpointWorkbench(
     })
     await delay(300)
 
-    // integration_test 通过 → 接口模块开发完成。全部模块完成标记在构建链走完后置位，
-    // 确保审查自动触发发生在用户看清节点流程之后(不会在构建链中途切走)。
+    // integration_test 通过 → 接口模块开发完成。完成标记在构建链走完后置位，
+    // 确保用户看清节点流程后，再由工作台询问是否进入审查。
     markEndpointDesigned(meta.apiContractId, meta.endpointId)
     onContent?.(
-      `「${meta.label}」开发完成(集成测试通过)。\n所有页面与接口开发完成后,将自动进入审查阶段。`
+      `「${meta.label}」开发完成（集成测试通过）。\n全部开发产物完成后，可确认进入审查阶段。`
     )
     return endpointWf(
       threadId,
@@ -1657,17 +1657,17 @@ export async function replayWorkbench(
     await delay(300)
 
     // integration_test 通过 → 页面模块开发完成。完成标记在构建链走完后置位，
-    // 确保审查自动触发发生在用户看清节点流程之后(不会在构建链中途切走)。
+    // 确保用户看清节点流程后，再由工作台询问是否进入审查。
     markPageDesigned(page.id)
     if (page.id === 'my-rechecks') {
       // “我的回检”以页面为任务入口，但同一工作流同时交付其查询接口，不创建额外接口对话。
       markEndpointDesigned('rechecks', 'ep-my-rechecks')
       onContent?.(
-        '“我的回检”页面、GET /api/rechecks/my 查询接口与联调验证均已完成。\n所有产物完成后，将自动进入审查阶段。'
+        '“我的回检”页面、GET /api/rechecks/my 查询接口与联调验证均已完成。\n全部开发产物已完成，请确认是否进入审查阶段。'
       )
     } else {
       onContent?.(
-        `「${page.label}」开发完成(集成测试通过)。\n所有页面与接口开发完成后,将自动进入审查阶段。`
+        `「${page.label}」开发完成（集成测试通过）。\n全部开发产物完成后，可确认进入审查阶段。`
       )
     }
     return emit(

@@ -27,6 +27,7 @@ export type WorkbenchSessionArtifactClaim = {
 }
 
 export type WorkbenchSessionArtifactIdentity = {
+  artifactIds?: readonly string[]
   apiContractId?: string
   endpointId?: string
   pageId?: string
@@ -43,7 +44,9 @@ export type WorkbenchArtifactAccess = {
 const PHASE_ORDER: WorkbenchPhase[] = ['product', 'development', 'test']
 
 /** 生成设计文档产物的稳定领域标识。 */
-export function documentArtifactId(key: 'requirement-spec' | 'project-plan' | 'code-review'): string {
+export function documentArtifactId(
+  key: 'requirement-spec' | 'project-plan' | 'code-review'
+): string {
   return `document:${key}`
 }
 
@@ -58,21 +61,13 @@ export function endpointArtifactId(apiContractId: string, endpointId: string): s
 }
 
 /**
- * 把当前会话契约转换为统一的产物集合；页面依赖接口时两个产物属于同一对话。
- * 标题推断只用于兼容应用级设计/审查历史，会话的页面和接口字段仍是权威来源。
+ * 把当前会话显式声明转换为统一产物集合；artifactIds 支持一条对话拥有任意多个产物。
+ * pageId/API 字段和标题推断只用于兼容旧会话，不再按静态计划依赖提前扩张编辑范围。
  */
-export function artifactIdsForSession(
-  session: WorkbenchSessionArtifactIdentity,
-  pageEndpointRelations: Record<string, string[]> = {}
-): string[] {
-  const artifactIds = new Set<string>()
+export function artifactIdsForSession(session: WorkbenchSessionArtifactIdentity): string[] {
+  const artifactIds = new Set((session.artifactIds || []).filter(Boolean))
   if (session.pageId) {
     artifactIds.add(pageArtifactId(session.pageId))
-    pageEndpointRelations[session.pageId]?.forEach((endpointKey) => {
-      const separator = endpointKey.indexOf(':')
-      if (separator <= 0) return
-      artifactIds.add(endpointArtifactId(endpointKey.slice(0, separator), endpointKey.slice(separator + 1)))
-    })
   }
   if (session.apiContractId && session.endpointId) {
     artifactIds.add(endpointArtifactId(session.apiContractId, session.endpointId))
@@ -98,7 +93,8 @@ export function resolveArtifactOwners(
 ): Record<string, string> {
   const owners: Record<string, string> = {}
   const orderedClaims = [...claims].sort(
-    (left, right) => left.createdAt - right.createdAt || left.sessionId.localeCompare(right.sessionId)
+    (left, right) =>
+      left.createdAt - right.createdAt || left.sessionId.localeCompare(right.sessionId)
   )
   orderedClaims.forEach((claim) => {
     claim.artifactIds.forEach((artifactId) => {
@@ -120,7 +116,8 @@ export function resolveArtifactAccess(input: {
   reachedPhase: WorkbenchPhase
   versionLocked: boolean
 }): WorkbenchArtifactAccess {
-  const { artifact, currentPhase, currentSessionId, ownerSessionId, reachedPhase, versionLocked } = input
+  const { artifact, currentPhase, currentSessionId, ownerSessionId, reachedPhase, versionLocked } =
+    input
   if (!artifact.available || compareWorkbenchPhases(artifact.phase, reachedPhase) > 0) {
     return {
       mode: 'unavailable',

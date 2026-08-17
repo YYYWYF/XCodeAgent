@@ -54,6 +54,7 @@ type ChatComposerProps = {
   initialResumeFrom?: string
   loading: boolean
   onDraftChange: (value: string) => void
+  onArtifactAttach?: (artifactId: string) => Promise<void>
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
   onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   onStopGenerating: () => void
@@ -75,6 +76,7 @@ export default function ChatComposer({
   initialResumeFrom = 'detail_confirmation',
   loading,
   onDraftChange,
+  onArtifactAttach,
   onSelectedSkillsChange,
   onSend,
   onStopGenerating,
@@ -244,6 +246,7 @@ export default function ChatComposer({
                 <ResourceSkillMenu
                   artifactResources={artifactResources}
                   disabled={loading || workspaceBusy || readOnly}
+                  onArtifactAttach={onArtifactAttach}
                   onSelectedSkillsChange={onSelectedSkillsChange}
                   selectedSkills={selectedSkills}
                 />

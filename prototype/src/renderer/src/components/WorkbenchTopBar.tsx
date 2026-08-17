@@ -109,7 +109,9 @@ export default function WorkbenchTopBar({
                   disabled={locked || !reached}
                   onClick={() => handlePhaseClick(phaseKey)}
                 >
-                  <span className={cx('workbench-topbar-phase-dot')} aria-hidden="true" />
+                  <span className={cx('workbench-topbar-phase-index')} aria-hidden="true">
+                    {idx + 1}
+                  </span>
                   {WORKBENCH_PHASE_AGENTS[phaseKey].label}阶段
                 </button>
               </Fragment>

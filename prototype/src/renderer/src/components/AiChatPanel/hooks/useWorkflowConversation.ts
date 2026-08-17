@@ -71,7 +71,7 @@ type UseWorkflowConversationParams = {
   autoStartDesign?: boolean
   /** 所有页面/接口模块开发完成 → 自动进入应用概览验收。 */
   autoStartApplicationAcceptance?: boolean
-  /** 应用验收通过 → 自动进入审查阶段（应用级非功能检查会话）。 */
+  /** 用户确认开发产物全部完成后，进入审查阶段并创建应用级非功能检查会话。 */
   autoStartReview?: boolean
   editorMode: EditorMode
   ensureActiveSession: () => Promise<SessionIdentity>
@@ -449,6 +449,7 @@ export function useWorkflowConversation({
 
     try {
       await persistSession({
+        artifactIds: identity.artifactIds,
         editorMode: identity.editorMode,
         messages: nextMessages,
         sessionId: identity.sessionId,
@@ -526,6 +527,7 @@ export function useWorkflowConversation({
       }
 
       await persistSession({
+        artifactIds: identity.artifactIds,
         editorMode: identity.editorMode,
         messages: completedMessages,
         sessionId: identity.sessionId,
@@ -546,6 +548,7 @@ export function useWorkflowConversation({
           setSelectedSkillsByKey(identity.key, rollbackSkillSelection(options.selectedSkills))
         }
         await persistSession({
+          artifactIds: identity.artifactIds,
           editorMode: identity.editorMode,
           messages: previousMessages,
           sessionId: identity.sessionId,
@@ -574,6 +577,7 @@ export function useWorkflowConversation({
           }))
         }
         await persistSession({
+          artifactIds: identity.artifactIds,
           editorMode: identity.editorMode,
           messages: completedMessages,
           sessionId: identity.sessionId,
@@ -871,11 +875,15 @@ export function useWorkflowConversation({
     return () => window.clearTimeout(timer)
   }, [autoStartApplicationAcceptance, loading, workspaceBusy])
 
-  // 所有页面与接口完成 → 自动进入审查阶段：Agent 主动发起应用级非功能检查会话。
-  // 同样用 ref 防 StrictMode 双调；审查一旦发起就置位，避免生命周期抖动时反复触发。
+  // 用户在开发完成弹框确认后进入审查阶段：Agent 主动发起应用级非功能检查会话。
+  // 用 ref 防 StrictMode 双调；离开触发态后复位，以支持下一版本再次进入审查。
   // 延迟 1.2s：mark 在 integration_test 完成后置位(构建链已跑完)，persist 在 sendMessage
   // resolve 后已落盘，这里只让 UI 把最后一个模块的节点流程渲染出来再切审查。
   const autoStartReviewRef = useRef(false)
+  // 确认信号撤销时重置一次性门闩，下一版本仍可按同一流程进入审查。
+  useEffect(() => {
+    if (!autoStartReview) autoStartReviewRef.current = false
+  }, [autoStartReview])
   useEffect(() => {
     if (!autoStartReview || autoStartReviewRef.current) return
     if (loading || workspaceBusy) return

@@ -26,6 +26,7 @@ export type ChatSessionMessage = {
 }
 
 export type ChatSessionRecord = {
+  artifactIds?: string[]
   id: string
   title: string
   editorMode: EditorMode
@@ -42,6 +43,7 @@ export type ChatSessionRecord = {
 }
 
 export type ChatSessionSummary = {
+  artifactIds?: string[]
   id: string
   title: string
   editorMode: EditorMode
@@ -68,7 +70,8 @@ export type SessionWorkspaceSummary = {
 
 type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>
 
-function storageKey(workspaceRoot: string, editorMode: EditorMode) {
+/** 生成浏览器降级存储中的工作区会话键。 */
+function storageKey(workspaceRoot: string, editorMode: EditorMode): string {
   return `xcode-agent-sessions:${workspaceRoot}:${editorMode}`
 }
 
@@ -191,6 +194,9 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
   if (!session.id || !session.editorMode || !session.threadId) return null
   const endpointContext = inferEndpointContextFromMessages(session.messages)
   return {
+    artifactIds: Array.isArray(session.artifactIds)
+      ? [...new Set(session.artifactIds.map(String).filter(Boolean))]
+      : undefined,
     id: String(session.id),
     title: String(session.title || '新对话'),
     editorMode: session.editorMode,
@@ -212,6 +218,7 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
 
 function toSummary(session: ChatSessionRecord): ChatSessionSummary {
   return {
+    artifactIds: session.artifactIds,
     id: session.id,
     title: session.title,
     editorMode: session.editorMode,
@@ -234,6 +241,9 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       Boolean(item && typeof item === 'object')
     )
     .map((item) => ({
+      artifactIds: Array.isArray(item.artifactIds)
+        ? [...new Set(item.artifactIds.map(String).filter(Boolean))]
+        : undefined,
       id: String(item.id || ''),
       title: String(item.title || '新对话'),
       editorMode: item.editorMode || 'frontend',
@@ -347,7 +357,8 @@ function normalizeSessionWorkspaces(value: unknown): SessionWorkspaceSummary[] {
     .sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt)
 }
 
-function readFallbackSessions(workspaceRoot: string, editorMode: EditorMode) {
+/** 从浏览器本地存储读取并规范化会话记录。 */
+function readFallbackSessions(workspaceRoot: string, editorMode: EditorMode): ChatSessionRecord[] {
   try {
     const rawValue = window.localStorage.getItem(storageKey(workspaceRoot, editorMode))
     if (!rawValue) return []
@@ -362,20 +373,23 @@ function readFallbackSessions(workspaceRoot: string, editorMode: EditorMode) {
   }
 }
 
+/** 把规范化会话写入浏览器降级存储。 */
 function writeFallbackSessions(
   workspaceRoot: string,
   editorMode: EditorMode,
   sessions: ChatSessionRecord[]
-) {
+): void {
   window.localStorage.setItem(storageKey(workspaceRoot, editorMode), JSON.stringify(sessions))
 }
 
-export function createChatSessionId() {
+/** 创建不会与既有会话冲突的本地标识。 */
+export function createChatSessionId(): string {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID()
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-export function createChatSessionTitle(content: string) {
+/** 从首条用户输入生成紧凑的会话标题。 */
+export function createChatSessionTitle(content: string): string {
   const title = content.trim().replace(/\s+/g, ' ')
   if (!title) return '新对话'
   return title.length > 28 ? `${title.slice(0, 28)}...` : title
@@ -405,11 +419,12 @@ export async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]
   }
 }
 
+/** 列出指定应用版本在当前编辑模式下的会话摘要。 */
 export async function listChatSessions(
   workspaceRoot: string,
   editorMode: EditorMode,
   applicationId?: string
-) {
+): Promise<ChatSessionSummary[]> {
   const sessionApi = window.xcodeAgent?.sessions
   if (sessionApi) {
     try {
@@ -425,11 +440,12 @@ export async function listChatSessions(
     .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+/** 读取一条完整会话，并兼容浏览器降级存储。 */
 export async function readChatSession(
   workspaceRoot: string,
   editorMode: EditorMode,
   sessionId: string
-) {
+): Promise<ChatSessionRecord> {
   const sessionApi = window.xcodeAgent?.sessions
   if (sessionApi) {
     try {
@@ -449,7 +465,8 @@ export async function readChatSession(
   return session
 }
 
-export async function saveChatSession(session: ChatSessionRecord) {
+/** 保存会话并返回用于导航展示的最新摘要。 */
+export async function saveChatSession(session: ChatSessionRecord): Promise<ChatSessionSummary> {
   const sessionApi = window.xcodeAgent?.sessions
   if (sessionApi) {
     try {
@@ -471,11 +488,12 @@ export async function saveChatSession(session: ChatSessionRecord) {
   return toSummary(session)
 }
 
+/** 删除指定会话，优先调用桌面端持久化能力。 */
 export async function deleteChatSession(
   workspaceRoot: string,
   editorMode: EditorMode,
   sessionId: string
-) {
+): Promise<void> {
   const sessionApi = window.xcodeAgent?.sessions
   if (sessionApi) {
     await sessionApi.delete({ workspaceRoot, editorMode, sessionId })

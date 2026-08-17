@@ -48,7 +48,6 @@
   color: var(--wb-text-secondary);
   font-size: 12px;
   flex: 0 0 auto;
-
 }
 
 .@{class-prefix}-workbench-topbar-app-name {
@@ -132,12 +131,29 @@
   }
 }
 
-.@{class-prefix}-workbench-topbar-phase-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.75;
+.@{class-prefix}-workbench-topbar-phase-index {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  background: var(--wb-surface-subtle);
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  opacity: 0.78;
+}
+
+.@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-active
+  .@{class-prefix}-workbench-topbar-phase-index {
+  color: var(--wb-accent);
+  background: #fff;
+  border-color: #fff;
+  opacity: 1;
 }
 
 .@{class-prefix}-workbench-topbar-node {

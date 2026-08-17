@@ -198,7 +198,7 @@ const xcodeAgent = {
         (editorMode || 'frontend') as never
       ) as Array<{
         id: string; title: string; editorMode: string; threadId: string; pageId?: string
-        apiContractId?: string; endpointId?: string; versionId?: string
+        artifactIds?: string[]; apiContractId?: string; endpointId?: string; versionId?: string
         createdAt: number; updatedAt: number; messages: unknown[]
       }>
       // 合并走完的实时会话（页面/接口开发、审查），否则切回开发阶段后大纲点页面/接口，
@@ -210,6 +210,7 @@ const xcodeAgent = {
         title: s.title,
         editorMode: s.editorMode,
         threadId: s.threadId,
+        artifactIds: s.artifactIds,
         pageId: s.pageId,
         apiContractId: s.apiContractId,
         endpointId: s.endpointId,

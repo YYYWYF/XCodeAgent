@@ -44,13 +44,20 @@ import {
   resolveArtifactAccess,
   resolveArtifactOwners,
   type WorkbenchArtifact,
-  type WorkbenchArtifactAccess
+  type WorkbenchArtifactAccess,
+  type WorkbenchArtifactStatus
 } from '../../workbenchDomain'
 import RightPanelTabs, {
   type WorkspaceTab,
   type WorkspaceTabKey
 } from './components/RightPanelTabs'
 import SessionSidebar from './components/SessionSidebar'
+import DevelopmentConversationModal, {
+  DevelopmentArtifactConversationConfirmModal,
+  DevelopmentStageCompleteModal,
+  type DevelopmentConversationTarget,
+  type DevelopmentConversationTreeNode
+} from './components/DevelopmentConversationModal'
 import PageContextHeader, { type ConversationArtifact } from './components/PageContextHeader'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
@@ -66,7 +73,6 @@ import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
   requiresEndpointDetailDesign,
-  requiresInitialDetailDesignSelection,
   requiresPageDetailDesign,
   sessionDetailTargetKey,
   workflowDetailTargetKey,
@@ -363,9 +369,14 @@ export default function AiChatPanel({
     Partial<Record<WorkspaceDocKey, string>>
   >({})
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
+  const [developmentConversationModalOpen, setDevelopmentConversationModalOpen] = useState(false)
+  const [pendingDevelopmentConversationTarget, setPendingDevelopmentConversationTarget] =
+    useState<DevelopmentConversationTarget>()
+  const [developmentCompleteModalOpen, setDevelopmentCompleteModalOpen] = useState(false)
+  const [reviewTransitionRequested, setReviewTransitionRequested] = useState(false)
   const activeDetailTargetRef = useRef<ActiveDetailTarget>(activeDetailTarget)
   const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
-  const [generatingDetailTargetKey, setGeneratingDetailTargetKey] = useState('')
+  const [, setGeneratingDetailTargetKey] = useState('')
   const [previewError, setPreviewError] = useState('')
   const [elementInspectionActive, setElementInspectionActive] = useState(false)
   const [runtimePreviewBaseUrl, setRuntimePreviewBaseUrl] = useState(() =>
@@ -390,20 +401,130 @@ export default function AiChatPanel({
     }),
     [scenario.designedPageDesigns, scenario.pageDesigns]
   )
-  const pageEndpointRelations = useMemo(() => {
-    const relations: Record<string, string[]> = {}
-    developmentPlanningPages.forEach((page) => {
-      const endpoint = resolvePageRelatedEndpoint(
-        page.pageId,
-        pageDesignCatalog,
-        developmentPlanningApiContracts
-      )
-      if (endpoint) {
-        relations[page.pageId] = [`${endpoint.apiContractId}:${endpoint.endpointId}`]
+  const developmentConversationTree = useMemo<DevelopmentConversationTreeNode>(() => {
+    const pageTargets = new Map(
+      developmentPlanningPages.map((page) => {
+        const relatedEndpoint = resolvePageRelatedEndpoint(
+          page.pageId,
+          pageDesignCatalog,
+          developmentPlanningApiContracts
+        )
+        const target: DevelopmentConversationTarget = {
+          description: page.purpose,
+          id: `page:${page.pageId}`,
+          kind: 'page' as const,
+          label: page.label,
+          pageId: page.pageId,
+          path: page.path,
+          relatedArtifactLabel: relatedEndpoint?.endpointLabel
+        }
+        return [page.pageId, target] as const
+      })
+    )
+
+    /** 保留项目计划中的菜单层级，并把可开发页面挂到对应叶子节点。 */
+    const mapPageNode = (
+      node: DevelopmentPlanningPageTreeNode
+    ): DevelopmentConversationTreeNode | undefined => {
+      if (node.type === 'menu') {
+        const children = (node.children || [])
+          .map(mapPageNode)
+          .filter((child): child is DevelopmentConversationTreeNode => Boolean(child))
+        if (children.length === 0) return undefined
+        return {
+          children,
+          id: `page-group:${node.key}`,
+          kind: 'group',
+          label: node.label
+        }
       }
-    })
-    return relations
-  }, [developmentPlanningApiContracts, developmentPlanningPages, pageDesignCatalog])
+      const target = pageTargets.get(node.pageId || node.key)
+      return target
+        ? {
+            id: target.id,
+            kind: 'page',
+            label: target.label,
+            target
+          }
+        : undefined
+    }
+
+    const pageNodes = developmentPlanningPageTree
+      .map(mapPageNode)
+      .filter((node): node is DevelopmentConversationTreeNode => Boolean(node))
+    const fallbackPageNodes = [...pageTargets.values()].map((target) => ({
+      id: target.id,
+      kind: 'page' as const,
+      label: target.label,
+      target
+    }))
+    const endpointGroups = developmentPlanningApiContracts
+      .map((contract) => {
+        const children = contract.endpoints.map((endpoint, endpointIndex) => {
+          const apiContractId = endpoint.apiContractId || contract.id
+          const endpointId = endpoint.id || String(endpointIndex + 1)
+          const target: DevelopmentConversationTarget = {
+            apiContractId,
+            description: endpoint.summary,
+            endpointId,
+            id: `endpoint:${apiContractId}:${endpointId}`,
+            kind: 'endpoint' as const,
+            label: `${endpoint.method} ${endpoint.path}`,
+            path: endpoint.path
+          }
+          return {
+            id: target.id,
+            kind: 'endpoint' as const,
+            label: target.label,
+            target
+          }
+        })
+        return {
+          children,
+          id: `endpoint-group:${contract.id}`,
+          kind: 'group' as const,
+          label: contract.label
+        }
+      })
+      .filter((group) => group.children.length > 0)
+
+    const rootGroups: DevelopmentConversationTreeNode[] = []
+    if (pageNodes.length > 0 || fallbackPageNodes.length > 0) {
+      rootGroups.push({
+        children: pageNodes.length > 0 ? pageNodes : fallbackPageNodes,
+        id: 'development-pages',
+        kind: 'group',
+        label: '页面'
+      })
+    }
+    if (endpointGroups.length > 0) {
+      rootGroups.push({
+        children: endpointGroups,
+        id: 'development-endpoints',
+        kind: 'group',
+        label: '接口'
+      })
+    }
+    return {
+      children: rootGroups,
+      id: 'development-application',
+      kind: 'application',
+      label: application.name
+    }
+  }, [
+    application.name,
+    developmentPlanningApiContracts,
+    developmentPlanningPageTree,
+    developmentPlanningPages,
+    pageDesignCatalog
+  ])
+  const developmentConversationTargetCount = useMemo(() => {
+    /** 递归统计可被选中的页面与接口叶子。 */
+    const countTargets = (node: DevelopmentConversationTreeNode): number =>
+      (node.target ? 1 : 0) +
+      (node.children || []).reduce((sum, child) => sum + countTargets(child), 0)
+    return countTargets(developmentConversationTree)
+  }, [developmentConversationTree])
   // 设计阶段：右侧工作区只显示「文档」tab（spec 文档），预览/源码为开发阶段产物。
   const isDesignPhase = activeWorkbenchPhase === 'product'
   // 审查阶段：应用级单会话，左侧大纲折叠(参照设计阶段)。
@@ -411,7 +532,7 @@ export default function AiChatPanel({
   const displayIsDesignPhase = viewingTaskPhase === 'product'
   const displayIsReviewPhase = viewingTaskPhase === 'test'
   const viewingHistoricalStage = viewingTaskPhase !== activeWorkbenchPhase
-  // 所有模块(页面+接口)开发完成后直接进入审查阶段。
+  // 所有模块(页面+接口)开发完成后仅提示用户确认，由用户决定是否进入审查阶段。
   // 判定用 designState 的运行时标记(实时可靠)，不用 WorkbenchPage 的 pages.designed state(刷新时序不稳)。
   const launchScenario = appDataByWorkspace(application.workspaceRoot)
   const planningPages = (launchScenario.planningArtifacts.pages || []) as Array<{ pageId?: string }>
@@ -481,6 +602,8 @@ export default function AiChatPanel({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    attachArtifactsToActiveSession,
+    clearActiveSession,
     createEndpointSession,
     createPageSession,
     createReviewSession,
@@ -490,7 +613,6 @@ export default function AiChatPanel({
     ensureActiveSession,
     ensureEndpointSession,
     ensurePageSession,
-    ensurePlannedPageSession,
     getSessionMessages,
     handleCreateSessionFromList,
     handleDeleteSession,
@@ -560,7 +682,10 @@ export default function AiChatPanel({
     directModificationEnabled,
     designPhase: isDesignPhase,
     autoStartDesign: isInitialPlanningPhase(applicationLifecycle),
-    autoStartReview: activeWorkbenchPhase === 'development' && allDevelopmentModulesComplete,
+    autoStartReview:
+      activeWorkbenchPhase === 'development' &&
+      allDevelopmentModulesComplete &&
+      reviewTransitionRequested,
     setDraftByKey,
     setSelectedSkillsByKey,
     setSessionMessages
@@ -848,10 +973,72 @@ export default function AiChatPanel({
   useEffect(() => {
     if (isDevelopmentCatalogConfirmed(designStage)) setDevelopmentCatalogUnlocked(true)
   }, [designStage])
+  const hasDevelopmentConversation = sessions.some(
+    (session) => Boolean(session.pageId) || Boolean(session.endpointId)
+  )
+  const developmentPromptVersionRef = useRef('')
+  useEffect(() => {
+    if (activeWorkbenchPhase !== 'development') {
+      developmentPromptVersionRef.current = ''
+      setDevelopmentConversationModalOpen(false)
+      return
+    }
+    if (
+      versionReadOnly ||
+      hasPageDesigns ||
+      hasDevelopmentConversation ||
+      !developmentPlanningReady ||
+      !developmentCatalogUnlocked ||
+      developmentConversationTargetCount === 0
+    ) {
+      if (hasDevelopmentConversation) setDevelopmentConversationModalOpen(false)
+      return
+    }
+    if (developmentPromptVersionRef.current === versionViewKey) return
+    developmentPromptVersionRef.current = versionViewKey
+    clearActiveSession()
+    setActiveDetailTarget({ type: 'none' })
+    setDevelopmentConversationModalOpen(true)
+  }, [
+    activeWorkbenchPhase,
+    clearActiveSession,
+    developmentCatalogUnlocked,
+    developmentConversationTargetCount,
+    developmentPlanningReady,
+    hasDevelopmentConversation,
+    hasPageDesigns,
+    versionReadOnly,
+    versionViewKey
+  ])
+  const developmentCompletionPromptRef = useRef('')
+  useEffect(() => {
+    if (activeWorkbenchPhase !== 'development') {
+      developmentCompletionPromptRef.current = ''
+      setDevelopmentCompleteModalOpen(false)
+      setReviewTransitionRequested(false)
+      return
+    }
+    if (versionReadOnly || !allDevelopmentModulesComplete || reviewTransitionRequested) return
+    const promptKey = `${versionViewKey}:development-complete`
+    if (developmentCompletionPromptRef.current === promptKey) return
+    developmentCompletionPromptRef.current = promptKey
+    setDevelopmentCompleteModalOpen(true)
+  }, [
+    activeWorkbenchPhase,
+    allDevelopmentModulesComplete,
+    reviewTransitionRequested,
+    versionReadOnly,
+    versionViewKey
+  ])
+  const activeDesignSessionSummary = activeSession
+    ? sessions.find((session) => session.id === activeSession.sessionId)
+    : undefined
+  // 首个设计会话由首页动作创建；用户消息、Agent 消息或运行态任一出现都代表产物已开始。
   const designConversationStarted = Boolean(
     displayIsDesignPhase &&
       activeSession &&
-      (messages.some((message) => message.role === 'user') ||
+      (messages.some((message) => message.role === 'user' || message.role === 'assistant') ||
+        (activeDesignSessionSummary?.messageCount || 0) > 0 ||
         sessionRunStates[activeSession.sessionId])
   )
   const [stableDesignStatuses, setStableDesignStatuses] = useState(() => ({
@@ -877,12 +1064,76 @@ export default function AiChatPanel({
     setStableDesignAvailability((current) => ({
       'requirement-spec':
         current['requirement-spec'] ||
+        designConversationStarted ||
         designStageReached(designStage, DESIGN_DOC_THRESHOLDS['requirement-spec']),
       'project-plan':
         current['project-plan'] ||
         designStageReached(designStage, DESIGN_DOC_THRESHOLDS['project-plan'])
     }))
   }, [designConversationStarted, designStage])
+  const [developmentStatusState, setDevelopmentStatusState] = useState<{
+    statuses: Record<string, WorkbenchArtifactStatus>
+    versionKey: string
+  }>(() => ({ statuses: {}, versionKey: versionViewKey }))
+  useEffect(() => {
+    const claimedArtifactIds = new Set(
+      sessions.flatMap((session) => artifactIdsForSession(session))
+    )
+    setDevelopmentStatusState((current) => {
+      const currentStatuses = current.versionKey === versionViewKey ? current.statuses : {}
+      const nextStatuses = { ...currentStatuses }
+      developmentPlanningPages.forEach((page) => {
+        const artifactId = pageArtifactId(page.pageId)
+        const observed: WorkbenchArtifactStatus =
+          page.designed || page.hasDetailPlan || isPageDesigned(page.pageId)
+            ? 'completed'
+            : claimedArtifactIds.has(artifactId)
+              ? 'in-progress'
+              : 'not-started'
+        nextStatuses[artifactId] = advanceArtifactStatus(
+          currentStatuses[artifactId] || 'not-started',
+          observed
+        )
+      })
+      developmentPlanningApiContracts.forEach((contract) => {
+        contract.endpoints.forEach((endpoint, endpointIndex) => {
+          const apiContractId = endpoint.apiContractId || contract.id
+          const endpointId = endpoint.id || String(endpointIndex + 1)
+          const artifactId = endpointArtifactId(apiContractId, endpointId)
+          const observed: WorkbenchArtifactStatus =
+            endpoint.designed ||
+            endpoint.hasDetailPlan ||
+            isEndpointDesigned(apiContractId, endpointId)
+              ? 'completed'
+              : claimedArtifactIds.has(artifactId)
+                ? 'in-progress'
+                : 'not-started'
+          nextStatuses[artifactId] = advanceArtifactStatus(
+            currentStatuses[artifactId] || 'not-started',
+            observed
+          )
+        })
+      })
+      return { statuses: nextStatuses, versionKey: versionViewKey }
+    })
+  }, [developmentPlanningApiContracts, developmentPlanningPages, sessions, versionViewKey])
+  const developmentArtifactStatusById =
+    developmentStatusState.versionKey === versionViewKey ? developmentStatusState.statuses : {}
+
+  /** 主动推进已获对话授权的开发产物，状态合并函数保证不会发生视觉倒退。 */
+  const markDevelopmentArtifactsInProgress = (artifactIds: string[]): void => {
+    setDevelopmentStatusState((current) => {
+      const currentStatuses = current.versionKey === versionViewKey ? current.statuses : {}
+      const nextStatuses = { ...currentStatuses }
+      artifactIds.forEach((artifactId) => {
+        nextStatuses[artifactId] = advanceArtifactStatus(
+          currentStatuses[artifactId] || 'not-started',
+          'in-progress'
+        )
+      })
+      return { statuses: nextStatuses, versionKey: versionViewKey }
+    })
+  }
   const designDocs = (
     [
       {
@@ -1234,16 +1485,7 @@ export default function AiChatPanel({
           name: page.label,
           path: page.path,
           phase: 'development' as const,
-          status:
-            page.designed || page.hasDetailPlan
-              ? ('completed' as const)
-              : sessions.some(
-                    (session) =>
-                      session.pageId === page.pageId &&
-                      (session.messageCount > 0 || sessionRunStates[session.id])
-                  )
-                ? ('in-progress' as const)
-                : ('not-started' as const),
+          status: developmentArtifactStatusById[pageArtifactId(page.pageId)] || 'not-started',
           type: 'page' as const,
           available: true
         }))
@@ -1259,17 +1501,8 @@ export default function AiChatPanel({
               path: endpoint.path,
               phase: 'development' as const,
               status:
-                endpoint.designed || endpoint.hasDetailPlan
-                  ? ('completed' as const)
-                  : sessions.some(
-                        (session) =>
-                          (session.messageCount > 0 || sessionRunStates[session.id]) &&
-                          artifactIdsForSession(session, pageEndpointRelations).includes(
-                            endpointArtifactId(apiContractId, endpointId)
-                          )
-                      )
-                    ? ('in-progress' as const)
-                    : ('not-started' as const),
+                developmentArtifactStatusById[endpointArtifactId(apiContractId, endpointId)] ||
+                'not-started',
               type: 'endpoint' as const,
               available: true
             }
@@ -1289,7 +1522,7 @@ export default function AiChatPanel({
   ]
   const artifactOwners = resolveArtifactOwners(
     sessions.map((session) => ({
-      artifactIds: artifactIdsForSession(session, pageEndpointRelations),
+      artifactIds: artifactIdsForSession(session),
       createdAt: session.createdAt,
       sessionId: session.id
     }))
@@ -1307,19 +1540,20 @@ export default function AiChatPanel({
       })
     ])
   ) as Record<string, WorkbenchArtifactAccess>
+  const activeSessionSummary = sessions.find((session) => session.id === activeSessionId)
+  const activeSessionArtifactIds = activeSessionSummary
+    ? artifactIdsForSession(activeSessionSummary)
+    : []
   const composerArtifactResources = artifactCatalog.map((artifact) => ({
     accessMessage: artifactAccessById[artifact.id].message,
     accessMode: artifactAccessById[artifact.id].mode,
+    attached: activeSessionArtifactIds.includes(artifact.id),
     id: artifact.id,
     name: artifact.name,
     path: artifact.path,
     type: artifact.type
   }))
   const artifactById = new Map(artifactCatalog.map((artifact) => [artifact.id, artifact]))
-  const activeSessionSummary = sessions.find((session) => session.id === activeSessionId)
-  const activeSessionArtifactIds = activeSessionSummary
-    ? artifactIdsForSession(activeSessionSummary, pageEndpointRelations)
-    : []
   const conversationArtifacts: ConversationArtifact[] = (
     activeSessionArtifactIds.length > 0
       ? activeSessionArtifactIds
@@ -1402,28 +1636,9 @@ export default function AiChatPanel({
           purpose: activeApiEndpointOption?.endpoint.summary
         }
       : undefined
-  const detailProgressVisible =
-    loading &&
-    activeWorkflowMatchesTarget &&
-    (generatingDetailTargetKey === activeTargetKey ||
-      activeWorkflowPhase === 'detail_confirmation') &&
-    developmentPlanningReady &&
-    Boolean(activeApiEndpoint || activePageOption) &&
-    !detailConfirmationWaitingReview
-  const initialDetailDesignSelectionRequired = requiresInitialDetailDesignSelection(hasPageDesigns)
-  const hasActiveDetailWorkflow =
-    interactingDetailTargetKey === activeTargetKey &&
-    Boolean(activeApiEndpoint || activePageOption || activeSession || latestWorkflowForDisplay)
-  const detailTargetSelectionRequired =
-    developmentPlanningReady &&
-    initialDetailDesignSelectionRequired &&
-    !hasActiveDetailWorkflow &&
-    !detailProgressVisible &&
-    !detailConfirmationWaitingReview
   // 页面目录刷新时保留当前页面上下文；仅在清单稳定且当前页面失效时回退。
   useEffect(() => {
     if (activeApiEndpoint) return
-    if (detailTargetSelectionRequired) return
     setActiveDetailTarget((currentTarget) => {
       if (currentTarget.type === 'endpoint') return currentTarget
       if (currentTarget.type === 'none') return currentTarget
@@ -1438,7 +1653,7 @@ export default function AiChatPanel({
         ''
       return fallbackPageId ? { type: 'page', pageId: fallbackPageId } : { type: 'none' }
     })
-  }, [activeApiEndpoint, developmentPlanningPages, detailTargetSelectionRequired])
+  }, [activeApiEndpoint, developmentPlanningPages])
 
   // 打开历史页面或接口会话时同步目标上下文，避免标题与消息归属不一致。
   useEffect(() => {
@@ -1525,25 +1740,22 @@ export default function AiChatPanel({
     handleCreateSessionFromList()
   }
 
-  /** 从产物菜单为页面创建任务对话，并同步进入该页面工作上下文。 */
-  const handleCreatePageTask = (page: DevelopmentPlanningPageOption): void => {
+  /** 为已获授权的页面产物创建正式对话，不提前声明尚未由工作流发现的接口依赖。 */
+  const createPageConversation = async (page: DevelopmentPlanningPageOption): Promise<void> => {
     onApplicationPreviewModeChange(false)
     setViewingTaskPhase('development')
     setActiveView('chat')
     setActiveDetailTarget({ type: 'page', pageId: page.pageId })
-    void createPageSession(
-      page.pageId,
-      page.label,
-      resolvePageRelatedEndpoint(page.pageId, pageDesignCatalog, developmentPlanningApiContracts)
-    )
+    await createPageSession(page.pageId, page.label)
+    markDevelopmentArtifactsInProgress([pageArtifactId(page.pageId)])
   }
 
-  /** 从产物菜单为接口创建任务对话，并同步进入该接口工作上下文。 */
-  const handleCreateEndpointTask = (target: {
+  /** 为已获授权的接口产物创建正式对话，并立即推进该接口为进行中。 */
+  const createEndpointConversation = async (target: {
     apiContractId: string
     endpointId: string
     endpointLabel: string
-  }): void => {
+  }): Promise<void> => {
     onApplicationPreviewModeChange(false)
     setViewingTaskPhase('development')
     setActiveView('chat')
@@ -1554,7 +1766,83 @@ export default function AiChatPanel({
       endpointKey: `${target.apiContractId}:${target.endpointId}`,
       label: target.endpointLabel
     })
-    void createEndpointSession(target.apiContractId, target.endpointId, target.endpointLabel)
+    await createEndpointSession(target.apiContractId, target.endpointId, target.endpointLabel)
+    markDevelopmentArtifactsInProgress([
+      endpointArtifactId(target.apiContractId, target.endpointId)
+    ])
+  }
+
+  /** 点击未开始页面时仅请求授权，确认前不创建会话也不改变产物状态。 */
+  const handleCreatePageTask = (page: DevelopmentPlanningPageOption): void => {
+    setPendingDevelopmentConversationTarget({
+      description: page.purpose,
+      id: `page:${page.pageId}`,
+      kind: 'page',
+      label: page.label,
+      pageId: page.pageId,
+      path: page.path
+    })
+  }
+
+  /** 点击未开始接口时仅请求授权，确认前不创建会话也不改变产物状态。 */
+  const handleCreateEndpointTask = (target: {
+    apiContractId: string
+    endpointId: string
+    endpointLabel: string
+  }): void => {
+    const endpoint = developmentPlanningApiContracts
+      .find((contract) => contract.id === target.apiContractId)
+      ?.endpoints.find((item) => item.id === target.endpointId)
+    setPendingDevelopmentConversationTarget({
+      apiContractId: target.apiContractId,
+      description: endpoint?.summary,
+      endpointId: target.endpointId,
+      id: `endpoint:${target.apiContractId}:${target.endpointId}`,
+      kind: 'endpoint',
+      label: target.endpointLabel,
+      path: endpoint?.path || target.endpointLabel.replace(/^\S+\s+/, '')
+    })
+  }
+
+  /** 把首次开发弹框选择解析回计划产物，并复用统一的产物对话创建入口。 */
+  const handleCreateInitialDevelopmentConversation = async (
+    target: DevelopmentConversationTarget
+  ): Promise<void> => {
+    if (target.kind === 'page') {
+      const pageId = target.pageId || target.id.replace(/^page:/, '')
+      const page = developmentPlanningPages.find((item) => item.pageId === pageId)
+      if (!page) return
+      await createPageConversation(page)
+    } else {
+      const apiContractId = target.apiContractId || ''
+      const endpointId = target.endpointId || ''
+      if (!apiContractId || !endpointId) return
+      await createEndpointConversation({
+        apiContractId,
+        endpointId,
+        endpointLabel: target.label
+      })
+    }
+    setDevelopmentConversationModalOpen(false)
+  }
+
+  /** 确认单个产物的授权弹窗，并复用首次开发选择的统一创建流程。 */
+  const handleConfirmArtifactConversation = async (): Promise<void> => {
+    if (!pendingDevelopmentConversationTarget) return
+    await handleCreateInitialDevelopmentConversation(pendingDevelopmentConversationTarget)
+    setPendingDevelopmentConversationTarget(undefined)
+  }
+
+  /** 将输入框中明确添加的可写产物归入当前对话，并推进为进行中。 */
+  const handleAttachArtifactToConversation = async (artifactId: string): Promise<void> => {
+    await attachArtifactsToActiveSession([artifactId])
+    markDevelopmentArtifactsInProgress([artifactId])
+  }
+
+  /** 用户确认后才授权工作流创建审查对话并推进阶段。 */
+  const handleConfirmDevelopmentComplete = (): void => {
+    setDevelopmentCompleteModalOpen(false)
+    setReviewTransitionRequested(true)
   }
 
   /** 从应用大纲切换页面；没有消息历史时仅展示空白上下文，不提前创建会话。 */
@@ -1591,44 +1879,6 @@ export default function AiChatPanel({
     }
     handleSelectPage(page.pageId).catch(() => undefined)
   }
-
-  // 进入开发阶段且未选中任何目标时，自动落到第一个待设计页面（空白任务起点），
-  // 对话区下方出现 locked「开始详细设计」卡。每次进入开发阶段只触发一次。
-  const autoSelectDevPageRef = useRef(false)
-  if (activeWorkbenchPhase !== 'development') autoSelectDevPageRef.current = false
-  useEffect(() => {
-    if (isDesignPhase || activeWorkbenchPhase !== 'development') return
-    if (autoSelectDevPageRef.current) return
-    if (activeApiEndpoint) return
-    if (activeDetailTarget.type !== 'none') return
-    if (developmentPlanningPages.length === 0) return
-    const firstUndesigned =
-      developmentPlanningPages.find((page) => !page.designed && !page.hasDetailPlan) ||
-      developmentPlanningPages[0]
-    if (!firstUndesigned) return
-    autoSelectDevPageRef.current = true
-    setPreviewError('')
-    setActiveView('chat')
-    setInteractingDetailTargetKey(pageDetailTargetKey(firstUndesigned.pageId))
-    setGeneratingDetailTargetKey('')
-    setActiveDetailTarget({ type: 'page', pageId: firstUndesigned.pageId })
-    const relatedEndpoint = resolvePageRelatedEndpoint(
-      firstUndesigned.pageId,
-      pageDesignCatalog,
-      developmentPlanningApiContracts
-    )
-    // 计划里的首个正式开发对话预先落目录；用户发送后再把关联产物推进为进行中。
-    void ensurePlannedPageSession(firstUndesigned.pageId, firstUndesigned.label, relatedEndpoint)
-  }, [
-    activeWorkbenchPhase,
-    isDesignPhase,
-    activeDetailTarget.type,
-    activeApiEndpoint,
-    developmentPlanningPages,
-    developmentPlanningApiContracts,
-    ensurePlannedPageSession,
-    pageDesignCatalog
-  ])
 
   // 锁定目标作为对话历史消息注入（含模板选择交互）：进开发选中待设计页面时，
   // 向该页面 session 追加一条 detailBlocker assistant 消息，点「开始详细设计」后该消息
@@ -1701,11 +1951,18 @@ export default function AiChatPanel({
         handleOpenChatSession(reviewSession.id).catch(() => undefined)
       }
     } else if (activeWorkbenchPhase === 'development') {
-      // 开发阶段：若当前停在设计会话，切到首个页面会话（或保持已选页面）。
+      // 开发阶段只恢复用户已显式创建的开发对话；没有时保持空白，等待首次产物选择。
       const active = sessions.find((session) => session.id === activeSessionId)
       if (active && !active.pageId && !active.endpointId) {
-        const pageSession = sessions.find((session) => session.pageId && session.messageCount > 0)
-        if (pageSession) handleOpenChatSession(pageSession.id).catch(() => undefined)
+        const developmentSession = sessions.find(
+          (session) => Boolean(session.pageId) || Boolean(session.endpointId)
+        )
+        if (developmentSession) {
+          handleOpenChatSession(developmentSession.id).catch(() => undefined)
+        } else {
+          clearActiveSession()
+          setActiveDetailTarget({ type: 'none' })
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1766,65 +2023,6 @@ export default function AiChatPanel({
     handleSelectEndpoint(target.apiContractId, target.endpointId).catch(() => undefined)
   }
 
-  /** 统计开发产物完成数；完成当前产物后自动推进到首个未开始产物。 */
-  const completedDevelopmentArtifactCount =
-    developmentPlanningPages.filter((page) => page.designed || page.hasDetailPlan).length +
-    developmentPlanningApiContracts.reduce(
-      (total, contract) =>
-        total +
-        contract.endpoints.filter((endpoint) => endpoint.designed || endpoint.hasDetailPlan).length,
-      0
-    )
-  const completionProgressRef = useRef({ versionKey: '', count: 0 })
-  useEffect(() => {
-    const previous = completionProgressRef.current
-    completionProgressRef.current = {
-      versionKey: versionViewKey,
-      count: completedDevelopmentArtifactCount
-    }
-    if (
-      previous.versionKey !== versionViewKey ||
-      activeWorkbenchPhase !== 'development' ||
-      completedDevelopmentArtifactCount <= previous.count
-    ) {
-      return
-    }
-
-    const activeArtifactCompleted = activePageOption
-      ? Boolean(activePageOption.designed || activePageOption.hasDetailPlan)
-      : activeApiEndpointOption
-        ? Boolean(
-            activeApiEndpointOption.endpoint.designed ||
-              activeApiEndpointOption.endpoint.hasDetailPlan
-          )
-        : false
-    if (!activeArtifactCompleted) return
-
-    const nextPage = developmentPlanningPages.find((page) => !page.designed && !page.hasDetailPlan)
-    if (nextPage) {
-      handlePageSelect(nextPage)
-      return
-    }
-    for (const contract of developmentPlanningApiContracts) {
-      const endpointIndex = contract.endpoints.findIndex(
-        (endpoint) => !endpoint.designed && !endpoint.hasDetailPlan
-      )
-      if (endpointIndex < 0) continue
-      const endpoint = contract.endpoints[endpointIndex]
-      const endpointId = endpoint.id || String(endpointIndex + 1)
-      const apiContractId = endpoint.apiContractId || contract.id
-      handleApiEndpointSelect({
-        apiContractId,
-        endpointId,
-        endpointKey: `${apiContractId}:${endpointId}`,
-        label: `${endpoint.method} ${endpoint.path}`
-      })
-      return
-    }
-    // 完成数增长时只推进一次，避免状态回放反复抢占用户当前选择。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [completedDevelopmentArtifactCount, versionViewKey])
-
   const handleStartPageDesign = async (
     pageId: string,
     pageLabel: string,
@@ -1852,6 +2050,11 @@ export default function AiChatPanel({
       relatedEndpoint
     )
     if (started) {
+      if (relatedEndpoint) {
+        markDevelopmentArtifactsInProgress([
+          endpointArtifactId(relatedEndpoint.apiContractId, relatedEndpoint.endpointId)
+        ])
+      }
       onPlanningArtifactsRefresh()
     } else {
       setGeneratingDetailTargetKey((current) => (current === targetKey ? '' : current))
@@ -1982,7 +2185,8 @@ export default function AiChatPanel({
 
   const showRightPanel =
     !applicationPreviewMode && activeView === 'chat' && rightPanelOpen && Boolean(rightPanel)
-  const showDevelopmentTasks = developmentPlanningReady && developmentCatalogUnlocked
+  // 项目计划一经确认，开发目录即保持可用；刷新期间不再用瞬时 planningReady 灰化产物。
+  const showDevelopmentTasks = developmentCatalogUnlocked
   const activeEditableArtifactId = displayIsDesignPhase
     ? activeDesignDocKey
       ? documentArtifactId(activeDesignDocKey)
@@ -2013,6 +2217,28 @@ export default function AiChatPanel({
       ref={panelRef}
       style={panelStyle}
     >
+      <DevelopmentConversationModal
+        onCancel={() => setDevelopmentConversationModalOpen(false)}
+        onConfirm={handleCreateInitialDevelopmentConversation}
+        open={developmentConversationModalOpen}
+        tree={developmentConversationTree}
+      />
+      <DevelopmentArtifactConversationConfirmModal
+        onCancel={() => setPendingDevelopmentConversationTarget(undefined)}
+        onConfirm={handleConfirmArtifactConversation}
+        open={Boolean(pendingDevelopmentConversationTarget)}
+        target={pendingDevelopmentConversationTarget}
+      />
+      <DevelopmentStageCompleteModal
+        endpointCount={planningContracts.reduce(
+          (total, contract) => total + contract.endpoints.length,
+          0
+        )}
+        onCancel={() => setDevelopmentCompleteModalOpen(false)}
+        onConfirm={handleConfirmDevelopmentComplete}
+        open={developmentCompleteModalOpen}
+        pageCount={planningPages.length}
+      />
       {applicationPreviewMode ? (
         <main className={cx('application-preview-workspace')}>
           <BrowserPreviewPanel
@@ -2072,7 +2298,7 @@ export default function AiChatPanel({
             onShowSettings={handleShowSettings}
             onShowSkills={handleShowSkills}
             pages={developmentPlanningPages}
-            pageEndpointRelations={pageEndpointRelations}
+            artifactStatusById={developmentArtifactStatusById}
             pageTree={developmentPlanningPageTree}
             readOnly={versionReadOnly}
             selectedApiEndpointKey={
@@ -2097,7 +2323,6 @@ export default function AiChatPanel({
               activePageId ||
               (activeDetailTarget.type === 'none' ? activeSession?.pageId || '' : '')
             }
-            sessionRunStates={sessionRunStates}
             sessions={sessions}
             showDevelopmentTasks={showDevelopmentTasks}
             skillsActive={activeView === 'skills'}
@@ -2184,6 +2409,7 @@ export default function AiChatPanel({
                   error={error}
                   loading={loading}
                   onDraftChange={(value) => setDraftByKey(draftKey, value)}
+                  onArtifactAttach={handleAttachArtifactToConversation}
                   onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
                   onSend={handleSend}
                   onStopGenerating={handleStopGenerating}

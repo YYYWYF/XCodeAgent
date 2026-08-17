@@ -14,6 +14,7 @@ import {
   type ChatSessionSummary
 } from '../../../service/chatSessions'
 import type { ApplicationConfig, ChatMessageSkill, EditorMode } from '../../../typings'
+import { artifactIdsForSession, endpointArtifactId, pageArtifactId } from '../../../workbenchDomain'
 import type { AgentChatMessage } from '../types'
 import {
   createSessionIdentity,
@@ -25,6 +26,7 @@ import {
 import { useSessionRuntimeStore } from './useSessionRuntimeStore'
 
 export type PersistSessionInput = {
+  artifactIds?: string[]
   editorMode: EditorMode
   messages: ChatSessionMessage[]
   sessionId: string
@@ -80,6 +82,8 @@ type UseChatSessionsResult = {
   activeSession?: SessionIdentity
   activeSessionId?: string
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
+  attachArtifactsToActiveSession: (artifactIds: string[]) => Promise<void>
+  clearActiveSession: () => void
   deletingSessionId?: string
   draft: string
   draftKey: string
@@ -101,11 +105,6 @@ type UseChatSessionsResult = {
     endpointLabel: string
   ) => Promise<SessionIdentity>
   ensurePageSession: (
-    pageId: string,
-    pageLabel: string,
-    endpointContext?: RelatedEndpointContext
-  ) => Promise<SessionIdentity>
-  ensurePlannedPageSession: (
     pageId: string,
     pageLabel: string,
     endpointContext?: RelatedEndpointContext
@@ -257,6 +256,7 @@ export function useChatSessions({
     if (!agUiSessionsRef.current[key]) {
       const session = await readChatSession(application.workspaceRoot, mode, sessionId)
       const identity = createSessionIdentity({
+        artifactIds: session.artifactIds,
         workspaceRoot: application.workspaceRoot,
         editorMode: mode,
         sessionId: session.id,
@@ -286,6 +286,11 @@ export function useChatSessions({
     } finally {
       setSessionLoadingModes((current) => ({ ...current, [editorMode]: false }))
     }
+  }
+
+  /** 清空当前选中的会话，让阶段入口可以展示尚未建立任务上下文的空白态。 */
+  const clearActiveSession = (): void => {
+    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
   }
 
   /** 切换页面时仅恢复已有且有消息的会话，空白页面等待首次发送后再创建会话。 */
@@ -354,7 +359,14 @@ export function useChatSessions({
     const now = Date.now()
     const sessionId = createChatSessionId()
     const agUiSession = new AgUiChatSession()
+    const initialArtifactIds = [
+      ...(pageId ? [pageArtifactId(pageId)] : []),
+      ...(endpointContext
+        ? [endpointArtifactId(endpointContext.apiContractId, endpointContext.endpointId)]
+        : [])
+    ]
     const identity = createSessionIdentity({
+      artifactIds: initialArtifactIds,
       workspaceRoot: application.workspaceRoot,
       editorMode,
       sessionId,
@@ -365,6 +377,7 @@ export function useChatSessions({
       pageId
     })
     const session: ChatSessionRecord = {
+      artifactIds: initialArtifactIds,
       id: sessionId,
       title:
         customTitle ||
@@ -391,7 +404,7 @@ export function useChatSessions({
     setActiveSessionIds((current) => ({ ...current, [editorMode]: session.id }))
 
     if (materializeImmediately) {
-      // 计划指定的首个正式开发对话需要预先进入目录，但仍要等用户发送后才推进产物状态。
+      // 用户从产物入口显式创建的对话立即进入目录，并由该会话取得产物写锁。
       const summary = await saveChatSession(session)
       replaceSessionSummary(editorMode, summary)
     } else {
@@ -409,7 +422,7 @@ export function useChatSessions({
     return createNewSession()
   }
 
-  /** 为指定页面显式创建会话，并可一并登记该页面任务负责的依赖接口。 */
+  /** 为指定页面显式创建正式会话，并可一并登记该页面任务负责的依赖接口。 */
   const createPageSession = async (
     pageId: string,
     pageLabel: string,
@@ -417,20 +430,28 @@ export function useChatSessions({
   ): Promise<SessionIdentity> => {
     const normalizedPageId = pageId.trim()
     if (!normalizedPageId) throw new Error('页面标识不能为空。')
+    const promiseKey = `${editorMode}:${normalizedPageId}`
+    const pendingPromise = pageSessionPromisesRef.current[promiseKey]
+    if (pendingPromise) return pendingPromise
+    const sessionPromise = createNewSession(
+      normalizedPageId,
+      pageLabel,
+      endpointContext,
+      `实现${pageLabel}`,
+      true
+    )
+    pageSessionPromisesRef.current[promiseKey] = sessionPromise
     try {
-      return await createNewSession(
-        normalizedPageId,
-        pageLabel,
-        endpointContext,
-        `实现${pageLabel}`
-      )
+      return await sessionPromise
     } catch (caughtError) {
       reportSessionError(caughtError)
       throw caughtError
+    } finally {
+      delete pageSessionPromisesRef.current[promiseKey]
     }
   }
 
-  /** 为指定 API endpoint 显式创建一个新的独立会话和 AG-UI thread。 */
+  /** 为指定 API endpoint 显式创建一个新的正式会话和 AG-UI thread。 */
   const createEndpointSession = async (
     apiContractId: string,
     endpointId: string,
@@ -442,11 +463,17 @@ export function useChatSessions({
       throw new Error('接口标识不能为空。')
     }
     try {
-      return await createNewSession(undefined, undefined, {
-        apiContractId: normalizedApiContractId,
-        endpointId: normalizedEndpointId,
-        endpointLabel
-      })
+      return await createNewSession(
+        undefined,
+        undefined,
+        {
+          apiContractId: normalizedApiContractId,
+          endpointId: normalizedEndpointId,
+          endpointLabel
+        },
+        undefined,
+        true
+      )
     } catch (caughtError) {
       reportSessionError(caughtError)
       throw caughtError
@@ -477,6 +504,12 @@ export function useChatSessions({
         if (identity) {
           if (!endpointContext) return identity
           const enrichedIdentity = createSessionIdentity({
+            artifactIds: [
+              ...new Set([
+                ...(identity.artifactIds || artifactIdsForSession(identity)),
+                endpointArtifactId(endpointContext.apiContractId, endpointContext.endpointId)
+              ])
+            ],
             workspaceRoot: identity.workspaceRoot,
             editorMode: identity.editorMode,
             sessionId: identity.sessionId,
@@ -501,27 +534,6 @@ export function useChatSessions({
     } finally {
       delete pageSessionPromisesRef.current[promiseKey]
     }
-  }
-
-  /** 为计划中的首个开发产物预建正式默认对话，不发送消息也不提前推进产物状态。 */
-  const ensurePlannedPageSession = async (
-    pageId: string,
-    pageLabel: string,
-    endpointContext?: RelatedEndpointContext
-  ): Promise<SessionIdentity> => {
-    const normalizedPageId = pageId.trim()
-    if (!normalizedPageId) throw new Error('页面标识不能为空。')
-    const existingSession = sessionSummariesRef.current[editorMode].find(
-      (session) => session.pageId === normalizedPageId
-    )
-    if (existingSession) {
-      await openChatSession(editorMode, existingSession.id)
-      const key = sessionRuntimeKey(workspaceRoot, editorMode, existingSession.id)
-      const identity =
-        getIdentity(key) || sessionIdentityFromSummary(existingSession, editorMode, workspaceRoot)
-      if (identity) return identity
-    }
-    return createNewSession(normalizedPageId, pageLabel, endpointContext, `实现${pageLabel}`, true)
   }
 
   /** 创建或复用唯一的应用级代码审查会话。 */
@@ -632,6 +644,34 @@ export function useChatSessions({
     replaceSessionSummary(editorMode, summary)
   }
 
+  /** 把用户在输入框中明确选择的产物加入当前对话，并持久化多产物归属。 */
+  const attachArtifactsToActiveSession = async (artifactIds: string[]): Promise<void> => {
+    if (!activeSession || !application.workspaceRoot || artifactIds.length === 0) return
+    const current = await readChatSession(
+      application.workspaceRoot,
+      activeSession.editorMode,
+      activeSession.sessionId
+    )
+    const nextArtifactIds = [
+      ...new Set([
+        ...artifactIdsForSession(current),
+        ...(activeSession.artifactIds || []),
+        ...artifactIds.filter(Boolean)
+      ])
+    ]
+    const enrichedIdentity = createSessionIdentity({
+      ...activeSession,
+      artifactIds: nextArtifactIds
+    })
+    registerSession(enrichedIdentity, getSessionMessages(activeSession.key))
+    const summary = await saveChatSession({
+      ...current,
+      artifactIds: nextArtifactIds,
+      updatedAt: Date.now()
+    })
+    replaceSessionSummary(activeSession.editorMode, summary)
+  }
+
   /** 保存正式对话；草稿会话可通过 materialize=false 延迟首次落盘。 */
   const persistSession = async (input: PersistSessionInput): Promise<void> => {
     if (!application.workspaceRoot) return
@@ -643,6 +683,16 @@ export function useChatSessions({
     const inferredEndpoint = inferEndpointContextFromMessages(input.messages)
     const now = Date.now()
     const session: ChatSessionRecord = {
+      artifactIds: [
+        ...new Set([
+          ...(input.artifactIds || []),
+          ...(existingSummary?.artifactIds || []),
+          ...(input.pageId ? [pageArtifactId(input.pageId)] : []),
+          ...(input.apiContractId && input.endpointId
+            ? [endpointArtifactId(input.apiContractId, input.endpointId)]
+            : [])
+        ])
+      ],
       id: input.sessionId,
       title:
         input.titleFrom &&
@@ -679,6 +729,8 @@ export function useChatSessions({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    attachArtifactsToActiveSession,
+    clearActiveSession,
     createReviewSession,
     createEndpointSession,
     createPageSession,
@@ -688,7 +740,6 @@ export function useChatSessions({
     ensureActiveSession,
     ensureEndpointSession,
     ensurePageSession,
-    ensurePlannedPageSession,
     getSessionMessages,
     handleCreateSessionFromList,
     handleDeleteSession,
