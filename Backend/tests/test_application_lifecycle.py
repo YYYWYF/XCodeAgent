@@ -29,6 +29,7 @@ from app.services.application_lifecycle import (
     update_workbench_execution,
     write_application_lifecycle,
 )
+from app.services.application_template_generation import prepare_application_template_generation
 
 
 class ApplicationLifecycleTests(unittest.TestCase):
@@ -233,6 +234,10 @@ class ApplicationLifecycleTests(unittest.TestCase):
                         "skipped" if path.name == "ui-designs.json" else "confirmed"
                     )
                 }
+                if path.name == "product-plan.json":
+                    payload.update({"schema_version": "product-plan.v4", "pages": []})
+                if path.name == "ui-designs.json":
+                    payload.update({"schema_version": "ui-manifest.v3", "pages": []})
                 if path.name == "technical-plan.json":
                     payload["artifact_type"] = "technical-plan"
                 path.write_text(
@@ -273,6 +278,25 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
             assert failed.error is not None
             self.assertEqual(failed.error.code, "application_template_generation_failed")
+
+            (workspace / "frontend/src/constants").mkdir(parents=True)
+            (workspace / "frontend/package.json").write_text("{}", encoding="utf-8")
+            (workspace / "frontend/src/constants/menus.ts").write_text(
+                "export const BIZ_MENUS = []\n", encoding="utf-8"
+            )
+            (workspace / "backend").mkdir()
+            (workspace / "backend/pom.xml").write_text("<project />", encoding="utf-8")
+            prepare_application_template_generation(
+                workspace,
+                {
+                    "status": "succeeded",
+                    "failedTargets": [],
+                    "targets": {
+                        "frontend": {"status": "succeeded", "attempt": 0},
+                        "backend": {"status": "succeeded", "attempt": 0},
+                    },
+                },
+            )
 
             ready = complete_application_template_generation(directory, succeeded=True)
             self.assertEqual(

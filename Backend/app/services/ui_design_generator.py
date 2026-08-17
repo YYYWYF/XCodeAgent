@@ -732,8 +732,8 @@ def _page_key_from_page_id(page_id: str) -> str:
     例：order_list_page → OrderListPage，dashboard_page → DashboardPage，
     login_page → LoginPage，user_detail_page → UserDetailPage。
 
-    与 build_context_resolver._page_key_from_page_id 和前端 templateApi.ts 的
-    pageKeyFromPageId 保持一致，避免任务拆分阶段看到两套不同的 PageKey。
+    与 build_context_resolver 和 frontend_scaffold 的共享调用保持一致，
+    避免 UI 确认、模板初始化和任务拆分阶段看到不同的 PageKey。
     """
 
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(page_id or "page")).strip("-")

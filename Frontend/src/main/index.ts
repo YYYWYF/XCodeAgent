@@ -8,7 +8,6 @@ import icon from '../../resources/icon.png?asset'
 import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
-import type { ApplicationMenuItem } from '../renderer/src/typings'
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import {
   lstatIfPresent,
@@ -1204,38 +1203,74 @@ function setupWorkspaceIpc(): void {
     }
   })
 
-  /** 抽取的 git clone 函数，用于 clone 单个仓库到指定子目录中。 */
-  async function cloneGitRepo(templateUrl: string, projectPath: string, targetDirName: string): Promise<void> {
-    const targetDir = path.join(projectPath, targetDirName)
-    // 确保父目录存在；targetDir 本身不能预先存在（git clone 要求目标为空或不存在）
-    await fs.mkdir(path.dirname(targetDir), { recursive: true })
-    // 若 targetDir 已存在且非空，先清空，避免 git clone 报错
-    try {
-      const entries = await fs.readdir(targetDir)
-      if (entries.length > 0) {
-        await fs.rm(targetDir, { recursive: true, force: true })
-      }
-    } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException
-      if (errnoException?.code !== 'ENOENT') throw error
+  type TemplateCloneTargetResult = {
+    status: 'succeeded' | 'failed' | 'pending'
+    attempt: number
+    path: string
+    error?: string
+  }
+
+  /** 判断模板目录是否包含可识别的工程入口文件。 */
+  async function isTemplateDirectoryReady(targetDir: string, targetDirName: string): Promise<boolean> {
+    const markers = targetDirName === 'frontend'
+      ? ['package.json']
+      : ['pom.xml', 'build.gradle', 'build.gradle.kts']
+    for (const marker of markers) {
+      if (await lstatIfPresent(path.join(targetDir, marker))) return true
     }
-    // 执行 git clone，用 execFile 避免 shell 注入；超时 120s。
-    // GitHub 网络不稳定时 clone 可能中途断开（curl 18 transfer closed），
-    // 失败后清理半成品并重试，最多 3 次。
+    return false
+  }
+
+  /** 拉取单个模板仓库；已有有效目录直接复用，失败时最多尝试三次。 */
+  async function cloneGitRepo(
+    templateUrl: string,
+    projectPath: string,
+    targetDirName: string
+  ): Promise<TemplateCloneTargetResult> {
+    const targetDir = path.join(projectPath, targetDirName)
+    await fs.mkdir(path.dirname(targetDir), { recursive: true })
+
+    if (await isTemplateDirectoryReady(targetDir, targetDirName)) {
+      return { status: 'succeeded', attempt: 0, path: targetDir }
+    }
+
+    const existing = await lstatIfPresent(targetDir)
+    if (existing) {
+      const entries = existing.isDirectory() ? await fs.readdir(targetDir) : ['occupied']
+      if (entries.length > 0) {
+        return {
+          status: 'failed',
+          attempt: 0,
+          path: targetDir,
+          error: `${targetDirName} 目录已存在但不是可识别的模板工程，为避免覆盖现有文件已停止下载。`
+        }
+      }
+    }
+
     let cloneError: Error | null = null
     for (let attempt = 1; attempt <= 3; attempt += 1) {
-      // 每次重试前清理可能存在的半成品目录
       try {
-        await fs.rm(targetDir, { recursive: true, force: true })
-      } catch {
-        // 忽略清理失败
+        await removeDirectoryIfPresent(targetDir)
+      } catch (error) {
+        cloneError = error instanceof Error ? error : new Error(String(error))
+        if (attempt === 3) break
+        continue
       }
       try {
         await new Promise<void>((resolve, reject) => {
           execFile(
             'git',
             ['clone', '--depth', '1', templateUrl, targetDir],
-            { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
+            {
+              timeout: 120000,
+              maxBuffer: 10 * 1024 * 1024,
+              windowsHide: true,
+              env: {
+                ...process.env,
+                GIT_TERMINAL_PROMPT: '0',
+                GCM_INTERACTIVE: 'Never'
+              }
+            },
             (error, _stdout, stderr) => {
               if (error) {
                 reject(new Error(`git clone 失败：${error.message}${stderr ? `\n${stderr}` : ''}`))
@@ -1245,19 +1280,28 @@ function setupWorkspaceIpc(): void {
             }
           )
         })
+        if (!(await isTemplateDirectoryReady(targetDir, targetDirName))) {
+          throw new Error(`git clone 完成，但 ${targetDirName} 模板缺少工程入口文件。`)
+        }
         cloneError = null
-        break
+        await removeDirectoryIfPresent(path.join(targetDir, '.git'))
+        return { status: 'succeeded', attempt, path: targetDir }
       } catch (error) {
         cloneError = error instanceof Error ? error : new Error(String(error))
-        // 最后一次失败才真正抛出，否则继续重试
       }
     }
-    if (cloneError) throw cloneError
-    // 删除 clone 下来的 .git 目录，模板工程不需要保留版本历史
+
     try {
-      await fs.rm(path.join(targetDir, '.git'), { recursive: true, force: true })
-    } catch {
-      // 忽略 .git 删除失败
+      await removeDirectoryIfPresent(targetDir)
+    } catch (cleanupError) {
+      const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+      cloneError = new Error(`${cloneError?.message || '模板下载失败'}；清理半成品失败：${cleanupMessage}`)
+    }
+    return {
+      status: 'failed',
+      attempt: 3,
+      path: targetDir,
+      error: cloneError?.message || `${targetDirName} 模板下载失败。`
     }
   }
 
@@ -1280,205 +1324,25 @@ function setupWorkspaceIpc(): void {
 
     const projectPath = path.resolve(payload.projectPath)
 
-    // 克隆前端模板
-    await cloneGitRepo(frontendUrl, projectPath, 'frontend')
-    // 克隆后端模板
-    await cloneGitRepo(backendUrl, projectPath, 'backend')
-
-    return { ok: true }
-  })
-
-  // 在模板工程 frontend/src/pages/ 下追加规划出的页面文件。
-  // 每个页面生成一个目录 <PageKey>/index.tsx，内容为临时占位代码。
-  ipcMain.handle('workspace:write-template-pages', async (_event, payload = {}) => {
-    if (typeof payload.projectPath !== 'string' || !payload.projectPath.trim()) {
-      throw new Error('projectPath must be a non-empty string')
-    }
-    if (typeof payload.appName !== 'string' || !payload.appName.trim()) {
-      throw new Error('appName must be a non-empty string')
-    }
-    if (!Array.isArray(payload.pages)) {
-      throw new Error('pages must be an array')
-    }
-    if (!Array.isArray(payload.menuItems)) {
-      throw new Error('menuItems must be an array')
-    }
-
-    const projectPath = path.resolve(payload.projectPath)
-    // 路径：项目位置/frontend/src/pages（直接平铺到根目录）
-    const pagesDir = path.join(projectPath, 'frontend', 'src', 'pages')
-
-    await fs.mkdir(pagesDir, { recursive: true })
-
-    const written: Array<{ pageKey: string; path: string }> = []
-    for (const page of payload.pages) {
-      const pageKey = typeof page?.pageKey === 'string' ? page.pageKey.trim() : ''
-      if (!pageKey) continue
-      // pageKey 仅允许字母、数字、下划线、连字符，防目录穿越
-      if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(pageKey)) {
-        throw new Error(`非法 pageKey: ${pageKey}`)
-      }
-      const pageDir = path.join(pagesDir, pageKey)
-      await fs.mkdir(pageDir, { recursive: true })
-      const filePath = path.join(pageDir, 'index.tsx')
-      const componentName = pageKey.replace(/(^|[-_])([A-Za-z])/g, (_m, _s, c) => c.toUpperCase())
-      const content = `// ${page?.name ? page.name : pageKey} 页面（临时占位，待 Agent 生成真实内容）
-export default function ${componentName}() {
-  return <div>hello agent!</div>
-}
-`
-      await fs.writeFile(filePath, content, 'utf8')
-      written.push({ pageKey, path: filePath })
-    }
-
-    // 按当前计划 pages 的结构整体覆盖 menus.ts 中的 BIZ_MENUS。
-    const menusPath = path.join(
-      projectPath,
-      'frontend',
-      'src',
-      'constants',
-      'menus.ts'
+    const frontend = await cloneGitRepo(frontendUrl, projectPath, 'frontend')
+    const backend = frontend.status === 'failed'
+      ? {
+          status: 'pending' as const,
+          attempt: 0,
+          path: path.join(projectPath, 'backend'),
+          error: '前端模板下载失败，后端模板尚未开始下载。'
+        }
+      : await cloneGitRepo(backendUrl, projectPath, 'backend')
+    const failedTargets = (['frontend', 'backend'] as const).filter(
+      (target) => ({ frontend, backend })[target].status === 'failed'
     )
-    try {
-      await replaceBizMenusInTemplate(menusPath, payload.menuItems)
-    } catch (error) {
-      // menus.ts 注入失败不阻塞页面生成，仅记录
-      console.error('[write-template-pages] 注入 menus.ts 失败:', error)
-    }
-
     return {
-      ok: true,
-      pagesDir,
-      written
+      ok: failedTargets.length === 0,
+      status: failedTargets.length === 0 ? 'succeeded' : 'failed',
+      failedTargets,
+      targets: { frontend, backend }
     }
   })
-}
-
-/** 校验模板菜单树节点，避免把非法结构写入模板工程。 */
-function normalizeTemplateMenuItems(value: unknown): ApplicationMenuItem[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap<ApplicationMenuItem>((item) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
-    const record = item as Record<string, unknown>
-    const children = normalizeTemplateMenuItems(record.children)
-    const pathValue = typeof record.path === 'string' ? record.path.trim() : ''
-    const nameValue = typeof record.name === 'string' ? record.name.trim() : ''
-    const keyValue = typeof record.key === 'string' ? record.key.trim() : ''
-    const targetValue = typeof record.target === 'string' ? record.target.trim() : ''
-    if (!children.length && !keyValue) return []
-    const normalized: ApplicationMenuItem = {}
-    if (pathValue) normalized.path = pathValue
-    if (nameValue) normalized.name = nameValue
-    if (keyValue) normalized.key = keyValue
-    if (hasReactRouterPathParam(pathValue) || record.hideInMenu === true) {
-      normalized.hideInMenu = true
-    }
-    if ('icon' in record) normalized.icon = record.icon
-    if (targetValue) normalized.target = targetValue
-    if (children.length) normalized.children = children
-    return [normalized]
-  })
-}
-
-/** 判断菜单 path 是否包含 React Router 动态路径参数。 */
-function hasReactRouterPathParam(rawPath: unknown): boolean {
-  const value = String(rawPath ?? '').trim()
-  if (!value) return false
-  return value
-    .split(/[?#]/, 1)[0]
-    .split('/')
-    .some((segment) => /^:[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(segment))
-}
-
-/** 将模板菜单树序列化为 TypeScript 对象字面量片段。 */
-function serializeTemplateMenuItems(
-  items: ApplicationMenuItem[],
-  indent = '      '
-): string {
-  if (items.length === 0) return `${indent.slice(0, -2)}[]`
-  const childIndent = `${indent}  `
-  const entryIndent = `${indent.slice(0, -2)}`
-  return `[\n${items
-    .map((item) => {
-      const fields: string[] = []
-      if (item.path) fields.push(`${childIndent}path: ${JSON.stringify(item.path)},`)
-      if (item.name) fields.push(`${childIndent}name: ${JSON.stringify(item.name)},`)
-      if (item.key) fields.push(`${childIndent}key: ${JSON.stringify(item.key)},`)
-      if (item.hideInMenu === true) fields.push(`${childIndent}hideInMenu: true,`)
-      if (typeof item.icon === 'string') {
-        fields.push(`${childIndent}icon: ${JSON.stringify(item.icon)},`)
-      }
-      if (item.target) fields.push(`${childIndent}target: ${JSON.stringify(item.target)},`)
-      if (item.children?.length) {
-        fields.push(
-          `${childIndent}children: ${serializeTemplateMenuItems(item.children, `${childIndent}  `)},`
-        )
-      }
-      return `${entryIndent}{\n${fields.join('\n')}\n${entryIndent}}`
-    })
-    .join(',\n')}\n${entryIndent}]`
-}
-
-/** 整体替换 menus.ts 中的 BIZ_MENUS，直接写入规划生成的菜单树。 */
-async function replaceBizMenusInTemplate(
-  menusPath: string,
-  menuItemsPayload: unknown
-): Promise<void> {
-  let content: string
-  try {
-    content = await fs.readFile(menusPath, 'utf8')
-  } catch {
-    // menus.ts 不存在则跳过
-    return
-  }
-
-  const bizMenusMatch = content.match(/export\s+const\s+BIZ_MENUS\b/)
-  if (!bizMenusMatch || bizMenusMatch.index === undefined) return
-
-  const declarationStart = bizMenusMatch.index + bizMenusMatch[0].length
-  const assignIndex = content.indexOf('=', declarationStart)
-  if (assignIndex === -1) return
-  const menusOpen = content.indexOf('[', assignIndex)
-  if (menusOpen === -1) return
-  let depth = 1
-  let i = menusOpen + 1
-  let inString: string | null = null
-  while (i < content.length && depth > 0) {
-    const ch = content[i]
-    if (inString) {
-      if (ch === '\\') {
-        i += 2
-        continue
-      }
-      if (ch === inString) inString = null
-      i += 1
-      continue
-    }
-    // 识别 // 注释，跳过到行尾
-    if (ch === '/' && content[i + 1] === '/') {
-      const nl = content.indexOf('\n', i)
-      i = nl === -1 ? content.length : nl + 1
-      continue
-    }
-    if (ch === "'" || ch === '"' || ch === '`') {
-      inString = ch
-    } else if (ch === '[' || ch === '{' || ch === '(') {
-      depth += 1
-    } else if (ch === ']' || ch === '}' || ch === ')') {
-      depth -= 1
-      if (depth === 0) break
-    }
-    i += 1
-  }
-  if (depth !== 0) return // 没找到匹配的闭合括号
-
-  const menusClose = i // 指向 BIZ_MENUS 的闭合 ]
-
-  const normalizedMenuItems = normalizeTemplateMenuItems(menuItemsPayload)
-  const serializedChildren = serializeTemplateMenuItems(normalizedMenuItems)
-  const newContent =
-    content.slice(0, menusOpen) + serializedChildren + content.slice(menusClose + 1)
-  await fs.writeFile(menusPath, newContent, 'utf8')
 }
 
 function setupSessionStorageIpc(): void {

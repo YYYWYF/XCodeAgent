@@ -7,8 +7,8 @@ import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlan
 import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
-import { canOpenApplicationWorkbench } from '../service/applicationStorage'
 import { stopProjectPreview } from '../service/projectLaunch'
+import { ensureApplicationTemplateReadiness } from '../service/templateApi'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -200,14 +200,28 @@ function AppEntryContent(): JSX.Element {
       // "进入开发"按钮时此标志为空，应进设计阶段回显历史卡片，而非直接进开发。
       const enterDevConfirmed =
         window.localStorage.getItem(`xcodeagent:enter-dev-confirmed:${application.id}`) === '1'
-      if (canOpenApplicationWorkbench(application) && enterDevConfirmed) {
-        // 从历史列表打开且用户已确认进入开发：直接进工作台开发阶段。
-        planningController.dismissPlanning(application.id)
+      if (application.source !== 'new') {
+        // 已有工作区不属于新建应用模板生命周期，保持原有直接打开语义。
         await openWorkbench(application)
         return
       }
       try {
-        const lifecycle = await getApplicationLifecycle(application)
+        let lifecycle = await getApplicationLifecycle(application)
+        const templateStage = lifecycle.initialization.stage
+        if (
+          application.source === 'new' &&
+          [
+            'generating_application_template_files',
+            'application_template_generation_failed',
+            'ready_for_workbench'
+          ].includes(templateStage)
+        ) {
+          const templateThreadId =
+            lifecycle.initialization.threadId ||
+            application.planningThreadId ||
+            `template-generation:${application.id}`
+          lifecycle = await ensureApplicationTemplateReadiness(application, templateThreadId)
+        }
         const readyForWorkbench =
           lifecycle?.initialization?.stage === 'ready_for_workbench'
         if (readyForWorkbench && enterDevConfirmed) {
@@ -242,7 +256,9 @@ function AppEntryContent(): JSX.Element {
           return
         }
       } catch (error) {
-        console.warn('读取应用生命周期失败', error)
+        console.warn('读取或校验应用 readiness 失败', error)
+        message.error(error instanceof Error ? error.message : '应用 readiness 校验失败')
+        return
       }
       const activePlanning = planningController.activePlannings.find(
         (planning) => planning.application.id === application.id
