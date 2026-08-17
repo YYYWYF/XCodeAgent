@@ -1,4 +1,4 @@
-.@{class-prefix}-workspace-history-summary {
+.@{class-prefix}-workspace-history-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -6,9 +6,19 @@
   color: var(--modal-text-secondary);
   font-size: 13px;
 
+  > div {
+    display: grid;
+    gap: 2px;
+  }
+
   strong {
     color: var(--modal-text);
     font-weight: 600;
+  }
+
+  .ant-btn {
+    height: 36px;
+    border-radius: 7px;
   }
 }
 
@@ -116,9 +126,30 @@
 }
 
 @media (max-width: 720px) {
+  .@{class-prefix}-workspace-history-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+
+    .ant-btn {
+      width: 100%;
+    }
+  }
+
   .@{class-prefix}-workspace-history-item.ant-list-item {
     align-items: flex-start;
     flex-direction: column;
+
+    .ant-list-item-main {
+      display: block;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .ant-list-item-meta {
+      width: 100%;
+      align-items: flex-start;
+    }
 
     .ant-list-item-action {
       width: 100%;

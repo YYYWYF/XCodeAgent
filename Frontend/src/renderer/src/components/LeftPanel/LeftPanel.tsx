@@ -30,6 +30,7 @@ type Props = {
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
   previewLaunchError: string
+  previewLaunchLoading: boolean
   onReturnWelcome: () => void
   onSubmitPlanningClarification: (
     workflow: WorkflowRunPayload,
@@ -67,6 +68,7 @@ export default function LeftPanel({
   onPlanningArtifactsRefresh,
   previewBaseUrl,
   previewLaunchError,
+  previewLaunchLoading,
   onReturnWelcome,
   onSubmitPlanningClarification,
   onThemeChange,
@@ -97,6 +99,7 @@ export default function LeftPanel({
             onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}
             previewBaseUrl={previewBaseUrl}
             previewLaunchError={previewLaunchError}
+            previewLaunchLoading={previewLaunchLoading}
             onReturnWelcome={onReturnWelcome}
             onSubmitPlanningClarification={onSubmitPlanningClarification}
             onThemeChange={onThemeChange}

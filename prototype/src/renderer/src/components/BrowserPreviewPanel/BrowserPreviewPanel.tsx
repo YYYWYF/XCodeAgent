@@ -32,6 +32,7 @@ const { Text } = Typography
 type PreviewViewport = 'desktop' | 'tablet' | 'mobile'
 
 type Props = {
+  applicationMode?: boolean
   application: ApplicationConfig
   requestKey?: string
   requestedUrl?: string
@@ -57,6 +58,7 @@ function menuPreviewPages(items: ApplicationMenuItem[]): PreviewPageOption[] {
 
 /** 展示可由 Workflow 目标地址驱动的内嵌浏览器预览。 */
 export default function BrowserPreviewPanel({
+  applicationMode = false,
   application,
   requestKey,
   requestedUrl,
@@ -158,84 +160,102 @@ export default function BrowserPreviewPanel({
   }
 
   return (
-    <section className={cx('browser-preview-panel')}>
+    <section className={cx('browser-preview-panel', applicationMode && 'application-mode')}>
       <header className={cx('browser-preview-toolbar')}>
-        <div className={cx('browser-navigation')}>
-          <Tooltip title="后退">
-            <Button
-              aria-label="后退"
-              disabled={navigation.index === 0}
-              icon={<ArrowLeftOutlined />}
-              onClick={() =>
-                setNavigation((current) => ({
-                  ...current,
-                  index: Math.max(0, current.index - 1)
-                }))
-              }
-              type="text"
-            />
+        {!applicationMode ? (
+          <div className={cx('browser-navigation')}>
+            <Tooltip title="后退">
+              <Button
+                aria-label="后退"
+                disabled={navigation.index === 0}
+                icon={<ArrowLeftOutlined />}
+                onClick={() =>
+                  setNavigation((current) => ({
+                    ...current,
+                    index: Math.max(0, current.index - 1)
+                  }))
+                }
+                type="text"
+              />
+            </Tooltip>
+            <Tooltip title="前进">
+              <Button
+                aria-label="前进"
+                disabled={navigation.index >= navigation.history.length - 1}
+                icon={<ArrowRightOutlined />}
+                onClick={() =>
+                  setNavigation((current) => ({
+                    ...current,
+                    index: Math.min(current.history.length - 1, current.index + 1)
+                  }))
+                }
+                type="text"
+              />
+            </Tooltip>
+            <Tooltip title="刷新">
+              <Button
+                aria-label="刷新"
+                icon={<ReloadOutlined />}
+                onClick={() => setRefreshKey((key) => key + 1)}
+                type="text"
+              />
+            </Tooltip>
+          </div>
+        ) : null}
+        {!applicationMode ? (
+          <Input.Search
+            aria-label="预览地址"
+            className={cx('browser-address-input')}
+            enterButton="访问"
+            onChange={(event) => setDraftUrl(event.target.value)}
+            onSearch={navigateTo}
+            value={draftUrl}
+          />
+        ) : null}
+        {!applicationMode ? (
+          <Tooltip
+            title={
+              elementInspector.active
+                ? '退出元素审查'
+                : elementInspector.ready
+                  ? '审查预览页面中的元素'
+                  : '当前预览页面尚未准备好元素审查'
+            }
+          >
+            <span className={cx('browser-inspector-button-shell')}>
+              <Button
+                aria-label={elementInspector.active ? '退出审查' : '审查元素'}
+                aria-pressed={elementInspector.active}
+                className={cx('browser-inspector-button')}
+                disabled={!elementInspector.ready && !elementInspector.active}
+                icon={<AimOutlined />}
+                onClick={elementInspector.toggle}
+                type="primary"
+              >
+                {elementInspector.active ? '退出审查' : '审查元素'}
+              </Button>
+            </span>
           </Tooltip>
-          <Tooltip title="前进">
+        ) : null}
+        {!applicationMode ? (
+          <Select
+            aria-label="页面"
+            className={cx('browser-page-select')}
+            options={pageOptions}
+            value={selectedPage}
+            onChange={handlePageChange}
+          />
+        ) : null}
+        {applicationMode ? (
+          <Tooltip title="刷新应用预览">
             <Button
-              aria-label="前进"
-              disabled={navigation.index >= navigation.history.length - 1}
-              icon={<ArrowRightOutlined />}
-              onClick={() =>
-                setNavigation((current) => ({
-                  ...current,
-                  index: Math.min(current.history.length - 1, current.index + 1)
-                }))
-              }
-              type="text"
-            />
-          </Tooltip>
-          <Tooltip title="刷新">
-            <Button
-              aria-label="刷新"
+              aria-label="刷新应用预览"
               icon={<ReloadOutlined />}
               onClick={() => setRefreshKey((key) => key + 1)}
               type="text"
             />
           </Tooltip>
-        </div>
-        <Input.Search
-          aria-label="预览地址"
-          className={cx('browser-address-input')}
-          enterButton="访问"
-          onChange={(event) => setDraftUrl(event.target.value)}
-          onSearch={navigateTo}
-          value={draftUrl}
-        />
-        <Tooltip
-          title={
-            elementInspector.active
-              ? '退出元素审查'
-              : elementInspector.ready
-                ? '审查预览页面中的元素'
-                : '当前预览页面尚未准备好元素审查'
-          }
-        >
-          <span className={cx('browser-inspector-button-shell')}>
-            <Button
-              aria-label={elementInspector.active ? '退出审查' : '审查元素'}
-              aria-pressed={elementInspector.active}
-              className={cx('browser-inspector-button')}
-              disabled={!elementInspector.ready && !elementInspector.active}
-              icon={<AimOutlined />}
-              onClick={elementInspector.toggle}
-              type="primary"
-            >
-              {elementInspector.active ? '退出审查' : '审查元素'}
-            </Button>
-          </span>
-        </Tooltip>
-        <Select
-          aria-label="页面"
-          className={cx('browser-page-select')}
-          options={pageOptions}
-          value={selectedPage}
-          onChange={handlePageChange}
-        />
+        ) : null}
         <Segmented
           aria-label="视口"
           className={cx('browser-viewport-switcher')}

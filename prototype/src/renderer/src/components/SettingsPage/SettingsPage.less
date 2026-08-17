@@ -9,8 +9,19 @@
   min-height: 0;
   color: var(--wb-text);
   background:
-    radial-gradient(circle at 80% 8%, var(--wb-accent-soft), transparent 28%),
-    var(--wb-canvas);
+    radial-gradient(circle at 80% 8%, var(--wb-accent-soft), transparent 28%), var(--wb-canvas);
+  animation: xcodeagent-settings-drawer-enter 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes xcodeagent-settings-drawer-enter {
+  from {
+    opacity: 0.96;
+    transform: translateX(22px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .@{class-prefix}-settings-page-header {
@@ -24,7 +35,7 @@
 .@{class-prefix}-settings-page-title-line {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 
   h4.ant-typography {
     margin: 0;
@@ -76,6 +87,28 @@
   }
 }
 
+.@{class-prefix}-settings-close-btn.ant-btn {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-text-secondary);
+  border-radius: 8px;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .@{class-prefix}-settings-page {
+    animation: none;
+  }
+}
+
 .@{class-prefix}-settings-page-body {
   display: flex;
   flex: 1;
@@ -112,7 +145,7 @@
     border-radius: 8px;
     font-size: 13px;
     color: var(--wb-text-secondary);
-    transition: all .2s ease;
+    transition: all 0.2s ease;
 
     &:hover {
       color: var(--wb-text);
@@ -151,7 +184,7 @@
     font-size: 14px;
     flex-shrink: 0;
     opacity: 0.7;
-    transition: opacity .2s ease;
+    transition: opacity 0.2s ease;
   }
 }
 
@@ -192,7 +225,9 @@
   border-radius: 12px;
   background: var(--wb-elevated);
   overflow: hidden;
-  transition: opacity .2s ease, box-shadow .2s ease;
+  transition:
+    opacity 0.2s ease,
+    box-shadow 0.2s ease;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 
   &:hover {
@@ -276,7 +311,9 @@
     flex-direction: column;
     align-items: center;
     border-radius: 6px;
-    transition: border-color .2s ease, background .2s ease;
+    transition:
+      border-color 0.2s ease,
+      background 0.2s ease;
 
     &::before {
       display: none !important;
@@ -365,14 +402,22 @@
 
   &--dev {
     background: rgba(82, 196, 26, 0.08);
-    &::before { background: #52c41a; }
-    .ant-typography { color: #389e0d; }
+    &::before {
+      background: #52c41a;
+    }
+    .ant-typography {
+      color: #389e0d;
+    }
   }
 
   &--prod {
     background: rgba(255, 77, 79, 0.08);
-    &::before { background: #ff4d4f; }
-    .ant-typography { color: #cf1322; }
+    &::before {
+      background: #ff4d4f;
+    }
+    .ant-typography {
+      color: #cf1322;
+    }
   }
 
   .ant-typography {
@@ -495,7 +540,9 @@
   border-radius: 10px;
   background: var(--wb-elevated);
   cursor: pointer;
-  transition: border-color .2s ease, box-shadow .2s ease;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
   display: flex;
   align-items: flex-start;
   gap: 12px;

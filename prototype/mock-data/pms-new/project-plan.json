@@ -1,5 +1,5 @@
 {
-  "summary": "本方案基于确认的《武汉分行项目管理系统》需求，规划一套面向 PC 端、侧边导航形态的项目管理与需求回检协同系统。整体划分为项目管理、需求回检两大模块，共 3 个页面，覆盖项目立项→执行→验收、需求回检提交→审核→整改两条核心流程。后端基于 MySQL 数据源按契约方式提供项目查询/创建、回检查询/提交/审核等 API 端点；前端采用 React + Ant Design 构建 PC 管理端。构建执行时先落地全局布局与侧边导航菜单模板，再按页面顺序逐个生成，随后实现各契约 API，最后进行前后端联调与整体测试。",
+  "summary": "本方案规划回检介绍、我的回检两个页面和一个查询接口。回检介绍为无接口依赖的静态页面；我的回检与 GET /api/rechecks/my 由同一个开发任务完成并联调。",
   "tech_stack": {
     "frontend": "React 18 + TypeScript + Ant Design 4 + Vite",
     "backend": "Spring Boot 3 + MyBatis-Plus",
@@ -7,38 +7,49 @@
   },
   "menu_tree": [
     {
-      "key": "projects",
-      "type": "menu",
-      "label": "项目管理",
-      "children": [
-        { "key": "my-projects", "type": "page", "label": "我的项目", "path": "/my-projects", "pageId": "my-projects" }
-      ]
-    },
-    {
       "key": "rechecks",
       "type": "menu",
       "label": "需求回检",
       "children": [
-        { "key": "my-rechecks", "type": "page", "label": "我的回检", "path": "/my-rechecks", "pageId": "my-rechecks" },
-        { "key": "recheck-review", "type": "page", "label": "回检审核", "path": "/recheck-review", "pageId": "recheck-review" }
+        {
+          "key": "recheck-introduction",
+          "type": "page",
+          "label": "回检介绍",
+          "path": "/recheck-introduction",
+          "pageId": "recheck-introduction"
+        },
+        {
+          "key": "my-rechecks",
+          "type": "page",
+          "label": "我的回检",
+          "path": "/my-rechecks",
+          "pageId": "my-rechecks"
+        }
       ]
     }
   ],
   "apis": [
-    { "contract": "项目管理", "method": "GET", "path": "/api/projects/my", "summary": "我的项目分页查询（按状态/关键字筛选）" },
-    { "contract": "项目管理", "method": "POST", "path": "/api/projects", "summary": "创建项目（含基础信息与负责人）" },
-    { "contract": "需求回检", "method": "GET", "path": "/api/rechecks/my", "summary": "我的回检单分页查询" },
-    { "contract": "需求回检", "method": "POST", "path": "/api/rechecks", "summary": "提交需求回检单" },
-    { "contract": "需求回检", "method": "GET", "path": "/api/rechecks/pending", "summary": "待审核回检单列表" },
-    { "contract": "需求回检", "method": "PUT", "path": "/api/rechecks/{id}/review", "summary": "审核回检单（通过/驳回）" }
+    {
+      "contract": "需求回检",
+      "method": "GET",
+      "path": "/api/rechecks/my",
+      "summary": "我的回检单分页查询"
+    }
   ],
   "execution_order": [
-    { "order": 1, "task": "搭建项目脚手架并初始化技术栈（React/Spring/MySQL）", "target": "项目初始化" },
-    { "order": 2, "task": "配置 MySQL 数据源与基础数据（项目状态/回检状态字典）", "target": "数据源初始化" },
+    {
+      "order": 1,
+      "task": "搭建项目脚手架并初始化技术栈（React/Spring/MySQL）",
+      "target": "项目初始化"
+    },
+    { "order": 2, "task": "配置 MySQL 数据源与基础数据（回检状态字典）", "target": "数据源初始化" },
     { "order": 3, "task": "实现侧边导航与整体布局（PC 管理端模板）", "target": "全局布局" },
-    { "order": 4, "task": "配置路由，将 3 个页面挂载到侧边导航", "target": "路由配置" },
-    { "order": 5, "task": "逐个生成 3 个页面（我的项目 → 我的回检 → 回检审核）", "target": "页面生成" },
-    { "order": 6, "task": "实现各契约 API（项目查询/创建、回检查询/提交/审核）", "target": "API 实现" },
-    { "order": 7, "task": "前后端联调与整体测试", "target": "集成测试" }
+    { "order": 4, "task": "实现回检介绍静态页面", "target": "回检介绍" },
+    {
+      "order": 5,
+      "task": "实现我的回检页面与查询接口",
+      "target": "我的回检 + GET /api/rechecks/my"
+    },
+    { "order": 6, "task": "执行页面与接口联调及整体测试", "target": "集成测试" }
   ]
 }

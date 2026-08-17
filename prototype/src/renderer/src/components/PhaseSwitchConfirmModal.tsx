@@ -33,6 +33,8 @@ const POINTS = [
   }
 ]
 
+const PHASE_ORDER: WorkbenchPhase[] = ['product', 'development', 'test']
+
 /**
  * 强制回退切阶段（增量迭代）的二次确认弹框。
  * 仅在切到旅程上游阶段时由 WorkbenchTopBar 弹出；向前推进 / 恢复自动不弹。
@@ -46,6 +48,7 @@ export default function PhaseSwitchConfirmModal({
 }: Props): ReactElement {
   const toAgent = WORKBENCH_PHASE_AGENTS[toPhase ?? 'product']
   const fromAgent = WORKBENCH_PHASE_AGENTS[fromPhase]
+  const returningUpstream = PHASE_ORDER.indexOf(toPhase ?? fromPhase) < PHASE_ORDER.indexOf(fromPhase)
   return (
     <Modal
       closable={false}
@@ -64,13 +67,13 @@ export default function PhaseSwitchConfirmModal({
           </span>
           <span className={cx('phase-switch-confirm-title')}>
             <strong>切换到{toAgent.label}阶段？</strong>
-            <small>这将进入增量迭代模式</small>
+            <small>{returningUpstream ? '这将返回上游继续调整' : '这将改变当前执行阶段'}</small>
           </span>
         </header>
 
         <div className={cx('phase-switch-confirm-body')}>
           <p className={cx('phase-switch-confirm-lead')}>
-            当前旅程在<strong>{fromAgent.label}</strong>阶段。切回<strong>{toAgent.label}</strong>阶段通常用于调整上游产物，随后重新进入下游构建。
+            当前应用在<strong>{fromAgent.label}</strong>阶段。确认后将进入<strong>{toAgent.label}</strong>阶段；查看其它阶段的历史任务请使用左侧任务目录。
           </p>
           <ul className={cx('phase-switch-confirm-points')}>
             {POINTS.map((point) => (
@@ -89,7 +92,7 @@ export default function PhaseSwitchConfirmModal({
 
         <footer className={cx('phase-switch-confirm-footer')}>
           <Button onClick={onCancel}>取消</Button>
-          <Button danger onClick={() => toPhase && onConfirm(toPhase)} type="primary">
+          <Button danger={returningUpstream} onClick={() => toPhase && onConfirm(toPhase)} type="primary">
             确认切换
           </Button>
         </footer>

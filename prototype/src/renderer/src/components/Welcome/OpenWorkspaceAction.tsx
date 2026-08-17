@@ -27,6 +27,7 @@ import {
 const { Text } = Typography
 
 type Props = {
+  compact?: boolean
   onOpenApplication: (application: ApplicationConfig) => void
   theme: 'dark' | 'light'
 }
@@ -35,7 +36,7 @@ type WorkspaceHistoryEntry = SessionWorkspaceSummary & {
   application?: ApplicationConfig
 }
 
-export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props): JSX.Element {
+export default function OpenWorkspaceAction({ compact, onOpenApplication, theme }: Props): JSX.Element {
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [workspaceHistory, setWorkspaceHistory] = useState<WorkspaceHistoryEntry[]>([])
@@ -126,16 +127,27 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
 
   return (
     <>
-      <WelcomeActionCard
-        buttonIcon={<FolderOpenOutlined />}
-        buttonLabel="打开工作目录"
-        description="从已保存项目或历史会话中选择工作目录，继续之前的工作。"
-        icon={<FolderOpenOutlined />}
-        iconVariant="folder"
-        loading={loadingHistory}
-        onClick={handleOpenHistory}
-        title="打开工作目录"
-      />
+      {compact ? (
+        <Button
+          className={cx('welcome-view-all')}
+          loading={loadingHistory}
+          onClick={handleOpenHistory}
+          type="text"
+        >
+          查看全部
+        </Button>
+      ) : (
+        <WelcomeActionCard
+          buttonIcon={<FolderOpenOutlined />}
+          buttonLabel="打开工作目录"
+          description="从已保存项目或历史会话中选择工作目录，继续之前的工作。"
+          icon={<FolderOpenOutlined />}
+          iconVariant="folder"
+          loading={loadingHistory}
+          onClick={handleOpenHistory}
+          title="打开工作目录"
+        />
+      )}
 
       <Modal
         destroyOnClose
@@ -144,9 +156,13 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
         open={historyOpen}
         title={
           <WelcomeModalTitle
-            description="从已保存项目和最近会话中选择一个工作目录"
+            description={
+              compact
+                ? '查看已保存的应用并继续之前的工作'
+                : '从已保存项目和最近会话中选择一个工作目录'
+            }
             icon={<FolderOpenOutlined />}
-            title="打开工作目录"
+            title={compact ? '全部项目' : '打开工作目录'}
           />
         }
         width={820}

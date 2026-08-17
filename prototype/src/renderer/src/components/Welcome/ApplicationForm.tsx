@@ -3,6 +3,7 @@ import {
   BankOutlined,
   BgColorsOutlined,
   CloudOutlined,
+  DatabaseOutlined,
   DashboardOutlined,
   DesktopOutlined,
   FolderOpenOutlined,
@@ -18,14 +19,15 @@ import {
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import { Button, Form, Input, Radio, Switch } from 'antd'
+import { Button, Form, Input, message, Radio, Switch, Typography } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactNode } from 'react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
 import {
   applicationIconOptions,
+  datasourceTypeOptions,
   initialApplicationDraft,
   terminalLabels,
   trackMethodOptions
@@ -33,6 +35,7 @@ import {
 import { TabHintInput, TabHintAutoComplete } from './components/TabHintInput'
 
 const { TextArea } = Input
+const { Text } = Typography
 
 const iconComponents: Record<string, typeof AppstoreOutlined> = {
   AppstoreOutlined,
@@ -72,6 +75,39 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? false
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
   const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#2c68ff'
+  const datasourceType = Form.useWatch(['datasource', 'type'], form) ?? 'None'
+  const dbUseBuiltin = Form.useWatch(['datasource', 'db', 'useBuiltin'], form) ?? false
+  const dbConnectionMode = Form.useWatch(['datasource', 'db', 'connectionMode'], form) ?? 'plant'
+  const datasourceIsDatabase = datasourceType === 'DataBase'
+  const datasourceShowPlantFields =
+    datasourceIsDatabase && !dbUseBuiltin && dbConnectionMode === 'plant'
+  const datasourceDescription = datasourceTypeOptions.find(
+    (option) => option.value === datasourceType
+  )?.description
+
+  // 未开放选项（外部 API / 平台内置数据库 / DBID 连接）不使用 disabled，
+  // 改为视觉灰化 + 点击提示开发中并回退到可用值，避免「鼠标禁用」的挫败感。
+  useEffect(() => {
+    if (datasourceType === 'API') {
+      message.info('外部 API 接入开发中，暂不可选')
+      form.setFieldValue(['datasource', 'type'], 'DataBase')
+    }
+  }, [datasourceType, form])
+
+  useEffect(() => {
+    if (dbUseBuiltin) {
+      message.info('平台内置数据库开发中，暂不可选')
+      form.setFieldValue(['datasource', 'db', 'useBuiltin'], false)
+    }
+  }, [dbUseBuiltin, form])
+
+  useEffect(() => {
+    if (dbConnectionMode === 'dbid') {
+      message.info('通过 DBID 连接开发中，暂不可选')
+      form.setFieldValue(['datasource', 'db', 'connectionMode'], 'plant')
+    }
+  }, [dbConnectionMode, form])
+
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
     const keyword = trackMethodSearch.trim().toLowerCase()
@@ -126,6 +162,9 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             rules={[{ required: true, message: '请输入应用名称' }]}
           >
             <Input />
+          </Form.Item>
+          <Form.Item label="版本号" extra="系统自动生成,首个版本">
+            <Input value="v1.0" disabled className={cx('application-form-version-readonly')} />
           </Form.Item>
           <Form.Item label="终端类型" name="terminal">
             <Radio.Group>
@@ -282,6 +321,92 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
         >
           <TabHintInput form={form} fieldName={['menus', 'rootPath']} placeholder="请输入页面根路由" />
         </Form.Item>
+      </section>
+
+      <section
+        className={cx(
+          'application-form-section',
+          'application-form-section--full'
+        )}
+      >
+        <SectionTitle icon={<DatabaseOutlined />}>数据源</SectionTitle>
+        <Form.Item label="数据源类型" name={['datasource', 'type']}>
+          <Radio.Group buttonStyle="solid">
+            {datasourceTypeOptions.map((option) => (
+              <Radio.Button
+                className={option.disabled ? cx('datasource-pending-option') : undefined}
+                key={option.value}
+                value={option.value}
+              >
+                {option.label}
+              </Radio.Button>
+            ))}
+          </Radio.Group>
+        </Form.Item>
+        {datasourceDescription ? (
+          <Text className={cx('datasource-type-hint')} type="secondary">
+            {datasourceDescription}
+          </Text>
+        ) : null}
+        {datasourceIsDatabase ? (
+          <>
+            <Form.Item label="数据库类型" name={['datasource', 'db', 'useBuiltin']}>
+              <Radio.Group buttonStyle="solid">
+                <Radio.Button className={cx('datasource-pending-option')} value={true}>
+                  平台内置数据库
+                </Radio.Button>
+                <Radio.Button value={false}>外部数据库</Radio.Button>
+              </Radio.Group>
+            </Form.Item>
+            <Form.Item label="连接方案" name={['datasource', 'db', 'connectionMode']}>
+              <Radio.Group buttonStyle="solid">
+                <Radio.Button className={cx('datasource-pending-option')} value="dbid">
+                  通过 DBID 连接
+                </Radio.Button>
+                <Radio.Button value="plant">通过账号密码连接</Radio.Button>
+              </Radio.Group>
+            </Form.Item>
+            {datasourceShowPlantFields ? (
+              <div className={cx('datasource-db-grid')}>
+                <Form.Item
+                  label="数据库地址"
+                  name={['datasource', 'db', 'plantMode', 'domain']}
+                  rules={[{ required: true, whitespace: true, message: '请填写数据库地址' }]}
+                >
+                  <Input />
+                </Form.Item>
+                <Form.Item
+                  label="端口"
+                  name={['datasource', 'db', 'plantMode', 'port']}
+                  rules={[{ required: true, message: '请填写端口' }]}
+                >
+                  <Input />
+                </Form.Item>
+                <Form.Item
+                  label="用户名"
+                  name={['datasource', 'db', 'plantMode', 'userName']}
+                  rules={[{ required: true, whitespace: true, message: '请填写用户名' }]}
+                >
+                  <Input />
+                </Form.Item>
+                <Form.Item
+                  label="密码"
+                  name={['datasource', 'db', 'plantMode', 'pwd']}
+                  rules={[{ required: true, whitespace: true, message: '请填写密码' }]}
+                >
+                  <Input.Password />
+                </Form.Item>
+                <Form.Item
+                  label="Schema"
+                  name={['datasource', 'db', 'plantMode', 'schema']}
+                  rules={[{ required: true, whitespace: true, message: '请填写 Schema' }]}
+                >
+                  <Input />
+                </Form.Item>
+              </div>
+            ) : null}
+          </>
+        ) : null}
       </section>
 
       <section className={cx('application-form-section', 'application-form-section--full')}>

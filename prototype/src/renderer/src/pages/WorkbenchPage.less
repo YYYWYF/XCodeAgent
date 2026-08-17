@@ -193,3 +193,257 @@
   min-width: 0;
   min-height: 0;
 }
+
+/* 生成版本弹框：审查通过自动弹出，风格对齐 PhaseSwitchConfirmModal（头部渐变 + body + footer）。 */
+.@{class-prefix}-workbench-publish-modal .ant-modal-content {
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  box-shadow: 0 18px 48px rgba(40, 24, 90, 0.22);
+}
+
+.@{class-prefix}-workbench-publish-modal .ant-modal-body {
+  padding: 0;
+}
+
+.@{class-prefix}-workbench-publish-modal-inner {
+  display: flex;
+  flex-direction: column;
+  animation: xa-publish-modal-in 0.22s ease-out;
+}
+
+.@{class-prefix}-workbench-publish-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 24px 20px;
+  color: #fff;
+  background: linear-gradient(135deg, #6b3cf0 0%, #3f6cf5 60%, #2bb673 130%);
+}
+
+.@{class-prefix}-workbench-publish-modal-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  font-size: 22px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+}
+
+.@{class-prefix}-workbench-publish-modal-icon.@{class-prefix}-is-iteration {
+  background: linear-gradient(135deg, rgba(107, 60, 240, 0.16), rgba(63, 108, 245, 0.12));
+}
+
+.@{class-prefix}-workbench-publish-modal-icon.@{class-prefix}-is-rollback {
+  background: linear-gradient(135deg, rgba(250, 140, 22, 0.18), rgba(245, 108, 63, 0.12));
+}
+
+.@{class-prefix}-workbench-publish-modal-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  strong {
+    font-size: 17px;
+    font-weight: 600;
+  }
+
+  small {
+    font-size: 12px;
+    opacity: 0.85;
+  }
+}
+
+.@{class-prefix}-workbench-publish-modal-body {
+  padding: 18px 24px 8px;
+}
+
+.@{class-prefix}-workbench-publish-modal-lead {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--wb-text);
+}
+
+.@{class-prefix}-workbench-publish-modal-version {
+  margin: 0 4px;
+  font-family: var(--ui-font-mono);
+  font-weight: 600;
+  color: var(--wb-accent);
+}
+
+.@{class-prefix}-workbench-publish-modal-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: #1c8a4d;
+  border-radius: 10px;
+  background: var(--wb-surface-subtle);
+
+  svg {
+    font-size: 14px;
+    color: #1c8a4d;
+  }
+}
+
+.@{class-prefix}-workbench-publish-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 24px 20px;
+}
+
+.@{class-prefix}-workbench-publish-modal-cancel {
+  height: 36px;
+  padding: 0 18px;
+  font-size: 13px;
+  color: var(--wb-text-secondary);
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-canvas);
+  cursor: pointer;
+  transition: background 120ms ease;
+
+  &:hover {
+    background: var(--wb-border-soft);
+  }
+}
+
+.@{class-prefix}-workbench-publish-modal-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6b3cf0 0%, #3f6cf5 100%);
+  box-shadow: 0 6px 18px rgba(107, 60, 240, 0.45);
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease;
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(107, 60, 240, 0.55);
+  }
+
+  &:active {
+    transform: translateY(0);
+  }
+}
+
+@keyframes xa-publish-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 生成版本弹框:提醒区 + 描述输入 + 进度态。 */
+.@{class-prefix}-workbench-generate-reminder {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  background: var(--wb-surface-hover, #f0ecfb);
+  border: 1px solid color-mix(in srgb, var(--wb-accent, #6b3cf0) 22%, var(--wb-border, #d8e0ea));
+  border-radius: 10px;
+
+  .@{class-prefix}-workbench-generate-reminder-title {
+    margin: 0 0 8px;
+    color: var(--wb-text-primary, #2f2638);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    li {
+      position: relative;
+      margin: 0 0 6px;
+      padding-left: 16px;
+      color: var(--wb-text-secondary, #5a5267);
+      font-size: 12px;
+      line-height: 1.6;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+
+      &::before {
+        content: '';
+        position: absolute;
+        top: 9px;
+        left: 2px;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--wb-accent, #6b3cf0);
+      }
+    }
+  }
+}
+
+.@{class-prefix}-workbench-generate-field {
+  margin-bottom: 4px;
+
+  .@{class-prefix}-workbench-generate-field-label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--wb-text-primary, #2f2638);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .@{class-prefix}-workbench-generate-required {
+    margin-right: 3px;
+    color: #ff4d4f;
+  }
+}
+
+.@{class-prefix}-workbench-generate-progress {
+  padding: 4px 0;
+
+  .ant-steps {
+    margin-top: 14px;
+  }
+}
+
+/* 切换版本加载:弹框挡板 —— 半透明全屏压暗 + 居中不透明卡片挡住其背后内容,
+   卡内 RichLoading bare 圆动画(bare 无边框矩形)。模拟把代码 checkout 到目标版本。 */
+.@{class-prefix}-workbench-version-switching-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 18, 24, 0.5);
+}
+
+.@{class-prefix}-workbench-version-switching-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 300px;
+  padding: 34px 44px;
+  background: var(--wb-canvas);
+  border-radius: 16px;
+  box-shadow: 0 20px 56px rgba(15, 18, 24, 0.3);
+}

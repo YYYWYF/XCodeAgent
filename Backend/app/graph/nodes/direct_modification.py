@@ -72,7 +72,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         "direct_modification_target_paths": list(decision.target_paths),
         "direct_modification_approved_paths": approved_paths,
         "backend_handoff": {},
-        "integration_contract_check_enabled": False,
         "integration_repair_enabled": False,
         "repair_iteration": max(0, int(state.get("repair_iteration", 0) or 0)),
         "max_repair_iterations": max(1, int(state.get("max_repair_iterations", 3) or 3)),
@@ -401,7 +400,6 @@ def run_direct_modification_integration_test(state: ProjectState) -> dict[str, A
     result = integration_test(
         {
             **state,
-            "integration_contract_check_enabled": False,
             "integration_repair_enabled": False,
             "repair_iteration": repair_iteration,
             "max_repair_iterations": max_repair_iterations,

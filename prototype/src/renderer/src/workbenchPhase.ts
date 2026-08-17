@@ -35,7 +35,7 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     key: 'test',
     label: '审查',
     role: '审查 Agent',
-    responsibility: '代码审查、规范检测与交付验收'
+    responsibility: '代码审查、规范检测等非功能检查(功能验收已前置完成)'
   }
 }
 
@@ -94,14 +94,17 @@ const DEVELOPMENT_PHASE_NODES = new Set([
   'prepare_build_tasks',
   'build',
   'integration_test',
-  'launch_project'
+  'launch_project',
+  'acceptance',
+  'finalize_project'
 ])
 
 /**
- * 审查阶段的工作流节点 phase（交付验收 → 完成交付；后续加代码审查 / 健康度节点）。
+ * 审查阶段的工作流节点 phase（非功能检查：代码审查 / 规范检测 / 健康度）。
+ * 所有页面/接口模块开发完成并经用户确认后进入审查阶段(code_review),审查通过即发布。
  * 集成测试归开发阶段：开发以页面 / 接口为单元，集成测试是开发对话链的一环。
  */
-const TEST_PHASE_NODES = new Set(['acceptance', 'finalize_project'])
+const TEST_PHASE_NODES = new Set(['code_review', 'lint_check', 'security_scan', 'health_check'])
 
 const TERMINAL_EXECUTION_STATUSES = new Set(['completed', 'stopped', 'failed'])
 
@@ -133,6 +136,16 @@ export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): Workbenc
   if (activeIn(TEST_PHASE_NODES)) return 'test'
   if (activeIn(DEVELOPMENT_PHASE_NODES)) return 'development'
 
+  // 应用级审查完成（code_review/finalize completed）→ 保持审查阶段直到发布。
+  // 审查 = 非功能检查，所有页面/接口模块完成且用户确认后进入审查阶段。
+  const appReviewed = executions.some(
+    (execution) =>
+      execution.scope === 'application' &&
+      (execution.phase === 'code_review' || execution.phase === 'finalize_project') &&
+      execution.status === 'completed'
+  )
+  if (appReviewed) return 'test'
+
   // 已进工作台但当前空闲：默认研发（准备做详细设计/构建；增量迭代也从这里切回产品）。
   return 'development'
 }
@@ -161,6 +174,10 @@ const EXECUTION_PHASE_LABELS: Record<string, string> = {
   integration_test: '集成测试',
   launch_project: '启动预览',
   acceptance: '预览验收',
+  code_review: '代码审查',
+  lint_check: '代码规范检测',
+  security_scan: '安全扫描',
+  health_check: '健康度评估',
   finalize_project: '完成交付'
 }
 

@@ -32,6 +32,7 @@ type PageContextHeaderProps = {
   pagePath: string
   pageTitle: string
   previewAvailable: boolean
+  previewLaunchLoading: boolean
   status: PageContextStatus
   targetType?: 'page' | 'api'
   theme: 'light' | 'dark'
@@ -81,6 +82,7 @@ export default function PageContextHeader({
   pagePath,
   pageTitle,
   previewAvailable,
+  previewLaunchLoading,
   status,
   targetType = 'page',
   theme
@@ -202,12 +204,13 @@ export default function PageContextHeader({
           <>
             <Button
               className={cx('page-context-open-button')}
-              disabled={!canPreviewPage}
+              disabled={!canPreviewPage || previewLaunchLoading}
               icon={isPageOpen ? <CloseOutlined /> : <ExportOutlined />}
+              loading={previewLaunchLoading}
               onClick={handleTogglePage}
               type="primary"
             >
-              {isPageOpen ? '关闭预览' : '预览页面'}
+              {previewLaunchLoading ? '项目启动' : isPageOpen ? '关闭预览' : '预览页面'}
             </Button>
             <Dropdown
               disabled={!canPreviewPage}

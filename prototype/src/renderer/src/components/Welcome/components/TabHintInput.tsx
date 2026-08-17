@@ -38,31 +38,6 @@ export function TabHintInput({ placeholder, className, form, fieldName, ...props
 }
 
 /**
- * 带 Tab 键填充提示的 TextArea 组件
- *
- * 在 placeholder 后添加 "按 Tab 采用" 提示，
- * 用户按 Tab 键可快速填充 placeholder 内容到输入框。
- */
-export function TabHintTextArea({
-  placeholder,
-  className,
-  form,
-  fieldName,
-  ...props
-}: React.ComponentProps<typeof Input.TextArea> & { form: FormInstance; fieldName: string | string[] }) {
-  const handleKeyDown = useTabToFillPlaceholder(form, fieldName)
-
-  return (
-    <Input.TextArea
-      {...props}
-      className={cx('tab-hint-input', className)}
-      placeholder={buildTabHintPlaceholder(placeholder)}
-      onKeyDown={handleKeyDown}
-    />
-  )
-}
-
-/**
  * 带 Tab 键填充提示的 AutoComplete 组件
  *
  * 在 placeholder 后添加 "按 Tab 采用" 提示，

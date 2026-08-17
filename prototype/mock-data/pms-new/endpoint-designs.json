@@ -1,1 +1,53 @@
-{}
+{
+  "ep-my-rechecks": {
+    "target_type": "endpoint",
+    "target_id": "rechecks:ep-my-rechecks",
+    "name": "我的回检单分页查询",
+    "api_contract_id": "rechecks",
+    "endpoint_id": "ep-my-rechecks",
+    "data_source_id": "wh-branch-db",
+    "method": "GET",
+    "path": "/api/rechecks/my",
+    "summary": "按当前填报人与状态筛选，分页返回我的回检单。",
+    "data_usage": {
+      "served_pages": ["我的回检"],
+      "purpose": "支撑「我的回检」页的回检单分页列表。",
+      "data_scope": "读操作",
+      "read_pattern": "分页 + 状态筛选"
+    },
+    "data_origin": {
+      "source_type": "mysql_existing",
+      "effective_source": { "kind": "mysql_existing", "database": "wh_branch", "tables": ["recheck"] },
+      "field_mappings": [
+        { "target_field": "recheck_no", "source": "recheck.recheck_no" },
+        { "target_field": "status", "source": "recheck.status" }
+      ],
+      "notes": ["按当前填报人过滤回检单。"]
+    },
+    "interface_design": {
+      "request": {
+        "method": "GET",
+        "query_parameters": [
+          { "name": "status", "in": "query", "required": false, "schema": "string（待审核/已通过/已驳回）" },
+          { "name": "page", "in": "query", "required": false, "schema": "integer" },
+          { "name": "size", "in": "query", "required": false, "schema": "integer" }
+        ]
+      },
+      "response_format": {
+        "status_code": 200,
+        "schema": "{ code, data: { list, total }, message }",
+        "errors": ["400 参数错误", "500 服务异常"]
+      }
+    },
+    "processing_logic": [
+      "解析状态与分页参数",
+      "按当前填报人过滤后分页查询 recheck 表",
+      "统计总数并返回列表"
+    ],
+    "acceptance_criteria": [
+      "仅返回当前填报人的回检单",
+      "按状态筛选生效",
+      "分页返回且 total 准确"
+    ]
+  }
+}

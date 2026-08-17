@@ -90,7 +90,7 @@ const LIST_ITEMS: { listName: string; groupTitle: string; itemLabel: string; add
 // ============================================================
 // ③ TODO: 提交接口
 // ============================================================
-const submitForm = async (values: Record<string, unknown>): Promise<{ success: boolean }> => {
+const submitForm = async (_values: Record<string, unknown>): Promise<{ success: boolean }> => {
   // TODO: 调用项目计划声明的创建或更新接口
   // 根据是否为编辑态选择 POST 或 PUT
   throw new Error('submitForm: 请替换为实际 API 调用');
@@ -127,7 +127,6 @@ const MultiForm: React.FC = () => {
   }
 
   const renderField = (f: FieldDef | ListItemFieldDef) => {
-    const span = f.span ?? 12;
     const rules = f.required ? [{ required: true, message: `请输入${f.label}` }] : undefined;
 
     if (f.type === 'date') {

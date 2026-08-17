@@ -1,8 +1,10 @@
 import {
   ApiOutlined,
-  CheckOutlined,
-  ClockCircleOutlined,
-  FileTextOutlined
+  DownOutlined,
+  FileMarkdownOutlined,
+  FileTextOutlined,
+  LockOutlined,
+  UnlockOutlined
 } from '@ant-design/icons'
 import { Popover, Typography } from 'antd'
 import type { ReactElement } from 'react'
@@ -11,159 +13,110 @@ import './PageContextHeader.less'
 
 const { Text } = Typography
 
-export type PageContextStatus = {
-  details: string[]
-  label: string
-  tone: 'neutral' | 'active' | 'warning' | 'success' | 'error'
+export type ConversationArtifact = {
+  accessMessage?: string
+  accessMode?: 'unavailable' | 'read' | 'write'
+  id: string
+  name: string
+  path: string
+  status: '未开始' | '进行中' | '已完成'
+  type: 'page' | 'endpoint' | 'document'
 }
 
 type PageContextHeaderProps = {
-  description: string
-  keyFeatures: string[]
-  lastAnalyzedAt?: number
-  pagePath: string
-  pageTitle: string
-  status: PageContextStatus
-  targetType?: 'page' | 'api'
-  theme: 'light' | 'dark'
+  artifacts: ConversationArtifact[]
+  conversationTitle: string
+  historical?: boolean
 }
 
-/** 将最近分析时间转换为适合信息卡展示的相对时间。 */
-function formatAnalysisAge(value?: number): string {
-  if (!value) return '尚未分析'
-  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - value) / 60_000))
-  if (elapsedMinutes < 1) return '刚刚'
-  if (elapsedMinutes < 60) return `${elapsedMinutes} 分钟前`
-  const elapsedHours = Math.floor(elapsedMinutes / 60)
-  if (elapsedHours < 24) return `${elapsedHours} 小时前`
-  return `${Math.floor(elapsedHours / 24)} 天前`
+/** 将产物状态映射为稳定的样式名称。 */
+function artifactStatusClass(status: ConversationArtifact['status']): string {
+  if (status === '已完成') return 'completed'
+  if (status === '进行中') return 'in-progress'
+  return 'not-started'
 }
 
-/** 统一页面路由或 API 路径的展示格式，确保以斜杠开头。 */
-function normalizeDisplayPath(value: string): string {
-  const normalizedValue = value.trim()
-  if (!normalizedValue) return '/'
-  return normalizedValue.startsWith('/') ? normalizedValue : `/${normalizedValue}`
-}
-
-/** 将完整状态句拆成适合紧凑元数据布局的标签和值。 */
-function splitStatusDetail(detail: string): { label: string; value: string } {
-  const designMatch = detail.match(/^(页面设计|API 设计)(已完成|尚未完成)$/)
-  if (designMatch) return { label: designMatch[1], value: designMatch[2] }
-
-  const taskMatch = detail.match(/^(开发任务)\s+(.+)$/)
-  if (taskMatch) return { label: taskMatch[1], value: taskMatch[2] }
-
-  const planMatch = detail.match(/^(开发计划)(暂未拆分)$/)
-  if (planMatch) return { label: planMatch[1], value: planMatch[2] }
-
-  return { label: '当前进度', value: detail }
-}
-
-/** 渲染当前页面或 API endpoint 的名称、路径、说明与操作。 */
+/** 对话顶部仅常驻对话名称，点击后通过浮层查看关联产物详情。 */
 export default function PageContextHeader({
-  description,
-  keyFeatures,
-  lastAnalyzedAt,
-  pagePath,
-  pageTitle,
-  status,
-  targetType = 'page',
-  theme
+  artifacts,
+  conversationTitle,
+  historical = false
 }: PageContextHeaderProps): ReactElement {
-  const detailContent = (
-    <div className={cx('page-context-detail')}>
-      <header className={cx('page-context-detail-hero')}>
-        <span className={cx('page-context-detail-icon')} aria-hidden="true">
-          {targetType === 'api' ? <ApiOutlined /> : <FileTextOutlined />}
-        </span>
-        <div className={cx('page-context-detail-heading')}>
-          <Text className={cx('page-context-detail-title')} strong title={pageTitle}>
-            {pageTitle}
-          </Text>
-          <Text className={cx('page-context-detail-path')} title={normalizeDisplayPath(pagePath)}>
-            {normalizeDisplayPath(pagePath)}
-          </Text>
-        </div>
-        <span className={cx('page-context-detail-badge', `is-${status.tone}`)}>
-          <i aria-hidden="true" />
-          {status.label}
-        </span>
+  const artifactDetails = (
+    <div className={cx('conversation-artifact-popover')}>
+      <header>
+        <Text strong>关联产物</Text>
+        <span>{artifacts.length}</span>
       </header>
-
-      <div className={cx('page-context-detail-body')}>
-        <section className={cx('page-context-detail-summary')}>
-          <Text>{description}</Text>
-        </section>
-
-        <dl className={cx('page-context-detail-metadata')}>
-          {status.details.map((detail) => {
-            const item = splitStatusDetail(detail)
-            return (
-              <div key={detail}>
-                <dt>{item.label}</dt>
-                <dd>{item.value}</dd>
-              </div>
-            )
-          })}
-        </dl>
-
-        {keyFeatures.length > 0 ? (
-          <section className={cx('page-context-detail-section')}>
-            <Text className={cx('page-context-detail-label')}>主要功能</Text>
-            <ul className={cx('page-context-detail-features')}>
-              {keyFeatures.map((feature) => (
-                <li key={feature}>
-                  <CheckOutlined aria-hidden="true" />
-                  <span>{feature}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
+      <div className={cx('artifact-context-list')}>
+        {artifacts.length > 0 ? (
+          artifacts.map((artifact) => (
+            <div className={cx('artifact-context-row')} key={artifact.id}>
+              <span aria-hidden="true" className={cx('artifact-context-icon')}>
+                {artifact.type === 'endpoint' ? (
+                  <ApiOutlined />
+                ) : artifact.type === 'document' ? (
+                  <FileMarkdownOutlined />
+                ) : (
+                  <FileTextOutlined />
+                )}
+              </span>
+              <Text className={cx('artifact-context-name')} strong title={artifact.name}>
+                {artifact.name}
+              </Text>
+              <Text className={cx('artifact-context-path')} code title={artifact.path}>
+                {artifact.path}
+              </Text>
+              <span className={cx('artifact-context-status', artifactStatusClass(artifact.status))}>
+                <i aria-hidden="true" />
+                {artifact.status}
+              </span>
+              <span
+                className={cx('artifact-context-access', artifact.accessMode || 'read')}
+                title={artifact.accessMessage}
+              >
+                {artifact.accessMode === 'write' ? <UnlockOutlined /> : <LockOutlined />}
+                {artifact.accessMode === 'write' ? '可编辑' : '只读'}
+              </span>
+            </div>
+          ))
+        ) : (
+          <div className={cx('artifact-context-empty')}>
+            引用或修改文件后，产物会自动关联到当前对话。
+          </div>
+        )}
       </div>
-
-      <footer>
-        <ClockCircleOutlined aria-hidden="true" />
-        <Text>{lastAnalyzedAt ? `${formatAnalysisAge(lastAnalyzedAt)}分析` : '尚未分析'}</Text>
-      </footer>
     </div>
   )
-  const pathText = normalizeDisplayPath(pagePath)
 
   return (
     <section
-      className={cx('page-context-header')}
-      aria-label={targetType === 'api' ? '当前 API 信息' : '当前页面信息'}
+      aria-label="当前对话"
+      className={cx('page-context-header', 'conversation-context-header')}
     >
       <Popover
-        content={detailContent}
-        overlayClassName={cx('page-context-popover', theme === 'dark' && 'dark')}
+        content={artifactDetails}
+        getPopupContainer={(trigger) => trigger.parentElement || trigger}
+        overlayClassName={cx('conversation-artifact-popover-overlay')}
         placement="bottomLeft"
         trigger="click"
       >
-        <button
-          aria-label={`查看${targetType === 'api' ? ' API' : '页面'}详情：${pageTitle}`}
-          className={cx('page-context-primary')}
-          type="button"
-        >
-          <span className={cx('page-context-icon')} aria-hidden="true">
-            {targetType === 'api' ? <ApiOutlined /> : <FileTextOutlined />}
-          </span>
-          <span className={cx('page-context-identity')}>
-            <Text className={cx('page-context-title')} strong title={pageTitle}>
-              {pageTitle}
-            </Text>
-            <Text className={cx('page-context-path')} title={pathText}>
-              {pathText}
-            </Text>
-          </span>
-          <span className={cx('page-context-status', `is-${status.tone}`)}>
-            <i aria-hidden="true" />
-            <Text>{status.label}</Text>
-          </span>
+        <button className={cx('conversation-context-trigger')} type="button">
+          <MessageTitle title={conversationTitle} />
+          <span className={cx('conversation-artifact-count')}>{artifacts.length} 个产物</span>
+          <DownOutlined />
         </button>
       </Popover>
+      {historical ? <span className={cx('conversation-history-label')}>历史任务</span> : null}
     </section>
+  )
+}
+
+/** 让较长的对话标题保持单行截断。 */
+function MessageTitle({ title }: { title: string }): ReactElement {
+  return (
+    <Text strong title={title}>
+      {title || '新对话'}
+    </Text>
   )
 }

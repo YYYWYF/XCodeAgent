@@ -1,4 +1,4 @@
-import { FolderOpenOutlined } from '@ant-design/icons'
+import { FolderAddOutlined, FolderOpenOutlined } from '@ant-design/icons'
 import { Button, Empty, List, message, Modal, Space, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import {
@@ -6,17 +6,18 @@ import {
   listSessionWorkspaces,
   type SessionWorkspaceSummary
 } from '../../service/chatSessions'
-import { loadStoredApplications } from '../../service/applicationStorage'
-import type { ApplicationConfig } from '../../typings'
+import {
+  loadStoredApplications,
+  loadWorkspaceApplicationConfig
+} from '../../service/applicationStorage'
+import type { ApplicationConfig, ApplicationSchemaConfig } from '../../typings'
 import { cx } from '../../utils'
 import WelcomeActionCard from './WelcomeActionCard'
 import WelcomeModalTitle from './WelcomeModalTitle'
 import { saveAndOpenApplication } from './applicationService'
-import { initialApplicationDraft } from './constants'
 import './WelcomeModal.less'
 import './WorkspaceHistoryModal.less'
 import {
-  buildApplicationSchema,
   createApplicationId,
   formatError,
   formatHistoryTime,
@@ -32,7 +33,36 @@ type Props = {
 }
 
 type WorkspaceHistoryEntry = SessionWorkspaceSummary & {
-  application?: ApplicationConfig
+  application: ApplicationConfig
+}
+
+/** 将工作区内的正式 application.json 恢复为可写入首页索引的应用记录。 */
+function applicationFromWorkspace(
+  schema: ApplicationSchemaConfig,
+  workspaceRoot: string
+): ApplicationConfig {
+  const workspaceName = pathBasename(workspaceRoot)
+  const applicationName = schema.appName.trim() || workspaceName
+  return {
+    ...schema,
+    id: createApplicationId(),
+    name: applicationName,
+    workspaceRoot,
+    projectParentPath: pathDirname(workspaceRoot),
+    projectDirectoryName: workspaceName,
+    source: 'existing-workspace',
+    audience: 'developer',
+    enableAuth: Boolean(schema.auth?.enable),
+    enableTracking: Boolean(schema.track?.enable || schema.apiTrack?.enable),
+    legacyTheme: 'light',
+    legacyLayout: 'login-admin',
+    enableTabs: false,
+    pages: ['工作台'],
+    defaultPage: '工作台',
+    hasDynamicRoutes: false,
+    schema,
+    createdAt: Date.now()
+  }
 }
 
 export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props): JSX.Element {
@@ -40,6 +70,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [workspaceHistory, setWorkspaceHistory] = useState<WorkspaceHistoryEntry[]>([])
   const [openingWorkspaceRoot, setOpeningWorkspaceRoot] = useState<string>()
+  const [addingWorkspace, setAddingWorkspace] = useState(false)
 
   const handleOpenHistory = async (): Promise<void> => {
     setLoadingHistory(true)
@@ -66,6 +97,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
 
       sessionWorkspaces.forEach((workspace) => {
         const existing = entries.get(workspace.workspaceRoot)
+        if (!existing) return
         entries.set(workspace.workspaceRoot, { ...existing, ...workspace })
       })
 
@@ -83,39 +115,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
   const openWorkspace = async (workspace: WorkspaceHistoryEntry): Promise<void> => {
     setOpeningWorkspaceRoot(workspace.workspaceRoot)
     try {
-      if (workspace.application) {
-        onOpenApplication(workspace.application)
-        setHistoryOpen(false)
-        return
-      }
-
-      const workspaceName = workspace.name || pathBasename(workspace.workspaceRoot)
-      const schema = buildApplicationSchema({
-        ...initialApplicationDraft,
-        appName: workspaceName,
-        projectPath: workspace.workspaceRoot
-      })
-      const application: ApplicationConfig = {
-        ...schema,
-        id: createApplicationId(),
-        name: workspaceName,
-        workspaceRoot: workspace.workspaceRoot,
-        projectParentPath: pathDirname(workspace.workspaceRoot),
-        projectDirectoryName: workspaceName,
-        source: 'existing-workspace',
-        audience: 'developer',
-        enableAuth: schema.auth.enable,
-        enableTracking: schema.track.enable || schema.apiTrack.enable,
-        legacyTheme: 'light',
-        legacyLayout: 'login-admin',
-        enableTabs: false,
-        pages: ['工作台'],
-        defaultPage: '工作台',
-        hasDynamicRoutes: false,
-        schema,
-        createdAt: Date.now()
-      }
-      await saveAndOpenApplication(application, onOpenApplication)
+      onOpenApplication(workspace.application)
       setHistoryOpen(false)
     } catch (error) {
       message.error(formatError(error, '打开历史工作目录失败'))
@@ -124,12 +124,47 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
     }
   }
 
+  /** 选择并添加受 XCodeAgent 管理的本地项目；已有索引时直接使用原记录。 */
+  const addLocalWorkspace = async (): Promise<void> => {
+    const workspaceApi = window.xcodeAgent?.workspace
+    if (!workspaceApi?.selectDirectory) {
+      message.warning('当前环境不能打开系统目录选择器，请在桌面客户端中使用。')
+      return
+    }
+
+    setAddingWorkspace(true)
+    try {
+      const selected = await workspaceApi.selectDirectory({ title: '选择要添加的 XCodeAgent 项目' })
+      if (selected.canceled || !selected.path) return
+
+      const applications = await loadStoredApplications()
+      const indexedApplication = applications.find(
+        (application) => application.workspaceRoot === selected.path
+      )
+      if (indexedApplication) {
+        onOpenApplication(indexedApplication)
+        setHistoryOpen(false)
+        return
+      }
+
+      const schema = await loadWorkspaceApplicationConfig(selected.path)
+      const application = applicationFromWorkspace(schema, selected.path)
+      await saveAndOpenApplication(application, onOpenApplication)
+      setHistoryOpen(false)
+      message.success('本地项目已添加到首页索引')
+    } catch (error) {
+      message.error(formatError(error, '添加本地项目失败'))
+    } finally {
+      setAddingWorkspace(false)
+    }
+  }
+
   return (
     <>
       <WelcomeActionCard
         buttonIcon={<FolderOpenOutlined />}
         buttonLabel="打开工作目录"
-        description="从已保存项目或历史会话中选择工作目录，继续之前的工作。"
+        description="打开已保存项目，或添加带 .xcodeagent 目录的本地项目。"
         icon={<FolderOpenOutlined />}
         iconVariant="folder"
         loading={loadingHistory}
@@ -144,7 +179,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
         open={historyOpen}
         title={
           <WelcomeModalTitle
-            description="从已保存项目和最近会话中选择一个工作目录"
+            description="仅已保存项目可直接打开，也可从本地文件夹添加"
             icon={<FolderOpenOutlined />}
             title="打开工作目录"
           />
@@ -152,18 +187,28 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
         width={820}
         wrapClassName={cx('welcome-modal', 'open-workspace-modal', `theme-${theme}`)}
       >
+        <div className={cx('workspace-history-toolbar')}>
+          <div>
+            <strong>已保存项目</strong>
+            <span>{workspaceHistory.length} 个项目</span>
+          </div>
+          <Button
+            icon={<FolderAddOutlined />}
+            loading={addingWorkspace}
+            onClick={addLocalWorkspace}
+            type="primary"
+          >
+            添加本地项目
+          </Button>
+        </div>
         {workspaceHistory.length === 0 ? (
           <Empty
             className={cx('workspace-history-empty')}
-            description="暂无历史工作目录"
+            description="暂无已保存项目，请从本地文件夹添加"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         ) : (
           <>
-            <div className={cx('workspace-history-summary')}>
-              <strong>最近使用</strong>
-              <span>{workspaceHistory.length} 个工作目录</span>
-            </div>
             <List
               className={cx('workspace-history-list')}
               dataSource={workspaceHistory}

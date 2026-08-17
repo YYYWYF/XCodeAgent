@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react'
 import type { FormInstance } from 'antd'
 import type { ActionType, ProColumns } from '@ant-design/pro-components'
-import { ProForm, ProFormDateRangePicker, ProFormSelect, ProFormText, ProTable, ModalForm } from '@ant-design/pro-components'
+import { ProForm, ProFormDateRangePicker, ProFormText, ProTable, ModalForm } from '@ant-design/pro-components'
 import { Button, Form, Modal, Row, Col, Space, Tabs, message } from 'antd'
 import { ReloadOutlined, DeleteOutlined } from '@ant-design/icons'
 
@@ -67,17 +67,17 @@ const TAB_DEFS: TabDef[] = [
 //   update(key, payload) → { success }
 //   delete(key, id) → { success }
 
-const fetchTabList = async (tabKey: string, params: Record<string, unknown>): Promise<{ data: unknown[]; success: boolean; total: number }> => {
+const fetchTabList = async (tabKey: string, _params: Record<string, unknown>): Promise<{ data: RowType[]; success: boolean; total: number }> => {
   // TODO: 根据 tabKey 调用对应的列表查询接口
   throw new Error(`fetchTabList(${tabKey}): 请替换为实际 API 调用`);
 };
 
-const updateTabRecord = async (tabKey: string, payload: Record<string, unknown>): Promise<{ success: boolean }> => {
+const updateTabRecord = async (tabKey: string, _payload: Record<string, unknown>): Promise<{ success: boolean }> => {
   // TODO: 根据 tabKey 调用对应的修改接口
   throw new Error(`updateTabRecord(${tabKey}): 请替换为实际 API 调用`);
 };
 
-const deleteTabRecord = async (tabKey: string, id: string): Promise<{ success: boolean }> => {
+const deleteTabRecord = async (tabKey: string, _id: string): Promise<{ success: boolean }> => {
   // TODO: 根据 tabKey 调用对应的删除接口
   throw new Error(`deleteTabRecord(${tabKey}): 请替换为实际 API 调用`);
 };

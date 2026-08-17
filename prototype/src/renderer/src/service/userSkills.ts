@@ -1,6 +1,3 @@
-import { randomUUID } from '@ag-ui/client'
-import type { AgentSubscriber } from '@ag-ui/client'
-import type { Message } from '@ag-ui/core'
 import type {
   BuiltinSkill,
   UserSkill,
@@ -8,12 +5,9 @@ import type {
   UserSkillDocument,
   UserSkillIssue
 } from '../typings'
-import { createAgUiHttpAgent } from './authentication'
+import { runAgUiAction, type AgUiPayloadEnvelope } from './agUiClient'
 
-type SkillCatalogAgUiPayload = {
-  schemaVersion: 1
-  runId: string
-  threadId: string
+type SkillCatalogAgUiPayload = AgUiPayloadEnvelope & {
   status: 'completed' | 'failed'
   action?: 'list' | 'get' | 'save' | 'create' | 'delete' | 'import' | 'set-enabled'
   root?: string
@@ -29,71 +23,31 @@ type SkillCatalogAgUiPayload = {
   error?: { type?: string; message?: string }
 }
 
+const SKILL_STATUS_LIST = ['completed', 'failed'] as const
+const SKILL_CATALOG_EVENT = 'skill-catalog'
+const SKILL_CATALOG_KEY = 'skillCatalog'
+
 function getSkillCatalogUrl(): string {
   /** 根据桌面运行时配置解析技能 AG-UI 地址。 */
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
   return agentBaseUrl ? `${agentBaseUrl.replace(/\/$/, '')}/skills/run` : '/api/agent/skills/run'
 }
 
-function readSkillCatalogPayload(value: unknown): SkillCatalogAgUiPayload | undefined {
-  /** 严格读取技能动作返回的公共状态结构。 */
-  if (!value || typeof value !== 'object') return undefined
-  const payload = value as Partial<SkillCatalogAgUiPayload>
-  if (
-    payload.schemaVersion !== 1 ||
-    typeof payload.runId !== 'string' ||
-    typeof payload.threadId !== 'string' ||
-    !['completed', 'failed'].includes(String(payload.status))
-  ) {
-    return undefined
-  }
-  return payload as SkillCatalogAgUiPayload
-}
-
-function readSkillCatalogFromState(value: unknown): SkillCatalogAgUiPayload | undefined {
-  /** 从 AG-UI STATE_SNAPSHOT 中提取技能目录状态。 */
-  if (!value || typeof value !== 'object') return undefined
-  return readSkillCatalogPayload((value as { skillCatalog?: unknown }).skillCatalog)
-}
-
-function readSkillCatalogFromResult(value: unknown): SkillCatalogAgUiPayload | undefined {
-  /** 从 AG-UI 最终结果中提取技能目录状态。 */
-  if (!value || typeof value !== 'object') return undefined
-  return readSkillCatalogPayload((value as { skillCatalog?: unknown }).skillCatalog)
-}
-
 async function runSkillCatalogAgent(
   input: Record<string, unknown>,
   messageContent: string
 ): Promise<SkillCatalogAgUiPayload> {
-  /** 运行一次独立技能动作并统一合并事件、快照和最终结果。 */
-  const threadId = randomUUID()
-  const agent = createAgUiHttpAgent({ url: getSkillCatalogUrl(), threadId })
-  const message: Message = {
-    id: randomUUID(),
-    role: 'user',
-    content: messageContent
-  }
-  agent.addMessage(message)
-
-  let catalog: SkillCatalogAgUiPayload | undefined
-  const subscriber: AgentSubscriber = {
-    onCustomEvent: ({ event }) => {
-      if (event.name === 'skill-catalog') {
-        catalog = readSkillCatalogPayload(event.value) ?? catalog
-      }
-    },
-    onStateSnapshotEvent: ({ event }) => {
-      catalog = readSkillCatalogFromState(event.snapshot) ?? catalog
-    }
-  }
-  const result = await agent.runAgent({ forwardedProps: { skillCatalog: input } }, subscriber)
-  catalog = readSkillCatalogFromResult(result.result) ?? catalog
-  if (!catalog) throw new Error('技能接口没有返回有效的 AG-UI 状态。')
-  if (catalog.status === 'failed') {
-    throw new Error(catalog.error?.message || '技能操作失败。')
-  }
-  return catalog
+  /** 运行一次独立技能动作，payload 合并/校验/失败抛错统一由 runAgUiAction 处理。 */
+  return runAgUiAction<SkillCatalogAgUiPayload>({
+    url: getSkillCatalogUrl(),
+    message: messageContent,
+    eventName: SKILL_CATALOG_EVENT,
+    stateKey: SKILL_CATALOG_KEY,
+    forwardedProps: { [SKILL_CATALOG_KEY]: input },
+    statusList: SKILL_STATUS_LIST,
+    emptyMessage: '技能接口没有返回有效的 AG-UI 状态。',
+    failedMessage: '技能操作失败。'
+  })
 }
 
 export async function requestUserSkills(): Promise<UserSkillCatalog> {

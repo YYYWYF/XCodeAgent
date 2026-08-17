@@ -2,6 +2,17 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+
+  // 禁用输入框(如版本号):无 hover/focus,明显灰化,与可用输入框拉开差距。
+  .ant-input[disabled],
+  .ant-input[disabled]:hover,
+  .ant-input[disabled]:focus {
+    background: #f0f0f0 !important;
+    border-color: #e3e3e3 !important;
+    color: rgba(0, 0, 0, 0.35) !important;
+    cursor: not-allowed;
+    box-shadow: none !important;
+  }
 }
 
 .@{class-prefix}-application-form-section {
@@ -208,6 +219,30 @@
   line-height: 1;
 }
 
+.@{class-prefix}-datasource-type-hint {
+  display: block;
+  margin: -8px 0 16px;
+  font-size: 12px;
+  color: var(--modal-text-secondary);
+}
+
+.@{class-prefix}-datasource-db-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+
+  .ant-form-item:last-child {
+    grid-column: 1 / -1;
+    margin-bottom: 16px;
+  }
+}
+
+// 未开发完的选项：视觉灰化提示，但不禁用鼠标，点击会有「开发中」提示。
+.ant-radio-button-wrapper.@{class-prefix}-datasource-pending-option {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .@{class-prefix}-application-form-scenario {
   textarea {
     resize: vertical !important;
@@ -272,6 +307,10 @@
   }
 
   .@{class-prefix}-application-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .@{class-prefix}-datasource-db-grid {
     grid-template-columns: 1fr;
   }
 }

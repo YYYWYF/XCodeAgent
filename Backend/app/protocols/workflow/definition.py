@@ -83,7 +83,6 @@ def workflow_capabilities() -> dict[str, Any]:
                 "frontend",
                 "data_source",
                 "database",
-                "test",
                 "repair_planner",
                 "small_task",
                 "workspace_assistant",

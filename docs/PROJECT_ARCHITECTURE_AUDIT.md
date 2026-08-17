@@ -26,7 +26,7 @@ XCodeAgent 已经形成了合理的桌面端编码 Agent 骨架：Electron 负�
 - React 工作台、AiChatPanel、AG-UI client、消息与 Workflow 渲染；
 - FastAPI 路由、AG-UI 协议适配、工作区工具和审批；
 - LangGraph 主流程、Build/Testing Subgraph、Graph State 与恢复；
-- 直接 ChatModel、Main/Frontend/Data Source/Test Deep Agent；
+- 直接 ChatModel、Main/Frontend/Data Source/RepairPlanner Deep Agent；
 - workspace 沙箱、代码变更捕获、业务产物、run persistence 与 observability；
 - 依赖版本、现有测试和文档一致性。
 
@@ -152,7 +152,7 @@ flowchart TD
 
 - workspace root 解析与 virtual path；
 - 敏感文件拒绝；
-- Test Agent 全局只读；
+- RepairPlanner Agent 全局只读；
 - workspace 级并发 lease；
 - 高风险工具审批；
 - Agent 前后 workspace diff 捕获。
@@ -221,7 +221,7 @@ Frontend/Data Source/Main Agent 的 filesystem permission 对非 Test 模式允�
 | 需求/计划直接模型 | 无 workspace | 无 | 无 |
 | task preparation/scout | task 所需上下文或全项目 | 拒绝 | 只读安全命令 |
 | Frontend/Data Source task | 依赖上下文 + workspace | 仅 `change_scope` allowlist | 仅验证命令 allowlist |
-| Test Agent | 全项目 | 拒绝 | 测试命令 allowlist |
+| RepairPlanner Agent | 失败相关上下文 | 拒绝 | 拒绝 |
 | repair task | 缺陷相关上下文 | 修复任务 allowlist | 必需验证命令 |
 
 工具层必须再次校验，不能只让 Agent 自觉遵守。

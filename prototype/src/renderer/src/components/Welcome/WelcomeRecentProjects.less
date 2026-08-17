@@ -1,32 +1,47 @@
 .@{class-prefix}-welcome-recents {
-  margin-top: 82px;
+  min-width: 0;
+  margin-top: 0;
 }
 
 .@{class-prefix}-welcome-section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
+  padding: 0 8px 0 16px;
 
   h2 {
     margin: 0;
-    color: #f4edff;
-    font-size: 17px;
-    font-weight: 500;
+    color: #eee7f7;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .@{class-prefix}-welcome-view-all.ant-btn {
+    height: 30px;
+    padding: 0 4px;
+    color: #bda8d2;
+
+    &:hover,
+    &:focus {
+      color: #ffffff;
+      background: transparent;
+    }
   }
 }
 
 .@{class-prefix}-welcome-project-list {
   display: grid;
-  max-height: 258px;
+  max-height: 210px;
   align-content: start;
-  gap: 12px;
-  padding-right: 3px;
+  gap: 10px;
+  padding-right: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
   scrollbar-color: rgba(151, 117, 187, 0.42) transparent;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
   scrollbar-width: thin;
 
   &::-webkit-scrollbar {
@@ -46,15 +61,16 @@
 .@{class-prefix}-welcome-project-row {
   display: grid;
   width: 100%;
-  min-height: 78px;
+  min-height: 76px;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   padding: 0 8px 0 0;
   color: #d4c8e4;
   text-align: left;
-  border: 1px solid #362448;
-  border-radius: 8px;
-  background: rgba(25, 14, 40, 0.84);
+  border: 1px solid rgba(151, 120, 181, 0.2);
+  border-radius: 12px;
+  background: rgba(25, 15, 39, 0.66);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.1);
   transition:
     border-color 160ms ease,
     background 160ms ease,
@@ -62,9 +78,9 @@
 
   &:hover,
   &:focus-within {
-    border-color: #5d477e;
-    background: rgba(39, 22, 59, 0.96);
-    transform: translateX(2px);
+    border-color: rgba(167, 139, 250, 0.44);
+    background: rgba(38, 23, 57, 0.9);
+    transform: translateY(-1px);
   }
 
   &.@{class-prefix}-loading {
@@ -90,7 +106,7 @@
   width: 100%;
   min-width: 0;
   min-height: 76px;
-  grid-template-columns: 44px minmax(150px, 1.35fr) minmax(140px, 1fr) auto;
+  grid-template-columns: 44px minmax(150px, 1fr) auto;
   align-items: center;
   gap: 16px;
   padding: 12px 15px;
@@ -184,7 +200,6 @@
       background: var(--modal-text-secondary);
     }
   }
-
 }
 
 .@{class-prefix}-welcome-project-delete-hint {
@@ -201,7 +216,8 @@
   justify-content: center;
   color: #a78bfa;
   font-size: 22px;
-  border-radius: 7px;
+  border: 1px solid rgba(167, 139, 250, 0.16);
+  border-radius: 10px;
   background: rgba(124, 58, 237, 0.2);
 
   &.@{class-prefix}-tone-1 {
@@ -218,6 +234,21 @@
   display: grid;
   min-width: 0;
   gap: 5px;
+
+  .@{class-prefix}-welcome-project-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .@{class-prefix}-welcome-project-version {
+    flex: 0 0 auto;
+    color: #a391b6;
+    font-family: var(--ui-font-mono);
+    font-size: 12px;
+    font-weight: 400;
+  }
 
   strong {
     overflow: hidden;
@@ -256,7 +287,6 @@
   border-radius: 8px;
   background: rgba(24, 13, 38, 0.58);
 }
-
 @keyframes welcome-loading {
   to {
     background-position: -220% 0;
@@ -271,11 +301,5 @@
     .@{class-prefix}-welcome-project-open {
       grid-template-columns: 44px 1fr auto;
     }
-  }
-}
-
-@media (max-width: 1120px) {
-  .@{class-prefix}-welcome-recents {
-    margin-top: 56px;
   }
 }

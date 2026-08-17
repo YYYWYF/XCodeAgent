@@ -63,7 +63,11 @@ declare global {
           written: Array<{ pageKey: string; path: string }>
         }>
         readApplication: (payload: { workspaceRoot: string }) => Promise<{ application?: unknown }>
-        inspectPlanningArtifacts: (payload: { workspaceRoot: string }) => Promise<{
+        inspectPlanningArtifacts: (payload: {
+          workspaceRoot: string
+          applicationId?: string
+          versionId?: string
+        }) => Promise<{
           ready: boolean
           hasPageDesigns: boolean
           missing: string[]
@@ -108,6 +112,7 @@ declare global {
         list: (payload: {
           workspaceRoot: string
           editorMode: 'frontend' | 'backend'
+          applicationId?: string
         }) => Promise<{ sessions?: unknown }>
         read: (payload: {
           workspaceRoot: string

@@ -180,7 +180,77 @@ export function buildPageSource(design: PageDesign, pageId: string): { filePath:
   return { filePath: `frontend/src/pages/${pageId}/index.tsx`, content }
 }
 
-/** 拼一份页面设计文档（无 page-designs 数据时的回退），作为「文档」tab 兜底。 */
+/** 从接口设计生成真实感的 Java Controller 源码（对齐 build-task-plan 的 target_files）。 */
+export function buildEndpointSource(
+  design: Record<string, any>
+): { filePath: string; content: string } {
+  const method = String(design.method || 'GET').toUpperCase()
+  const path = String(design.path || '/api/resource')
+  const summary = String(design.summary || design.name || '接口')
+  // /api/rechecks/my → Rechecks;取 path 首段资源名做 Controller 类名。
+  const resource = path.split('/').filter(Boolean).find((seg) => seg !== 'api') || 'Resource'
+  const className = `${pascalCase(resource)}Controller`
+  const packageName = resource.toLowerCase()
+
+  const iface = (design.interface_design || {}) as Record<string, any>
+  const request = (iface.request || {}) as Record<string, any>
+  const queryParams = (request.query_parameters || []) as Array<Record<string, any>>
+  const response = (iface.response_format || {}) as Record<string, any>
+  const logic = (design.processing_logic || []) as string[]
+
+  const methodLower = method.toLowerCase()
+  const mapping = method === 'GET' ? 'GetMapping' : method === 'POST' ? 'PostMapping' : method === 'PUT' ? 'PutMapping' : method === 'DELETE' ? 'DeleteMapping' : 'RequestMapping'
+
+  const paramsSig = queryParams
+    .map((p) => `@RequestParam(required = ${Boolean(p.required)}) String ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')}`)
+    .join(', ')
+  const paramComments = queryParams.length
+    ? queryParams.map((p) => `   * @param ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')} ${p.schema || ''}`).join('\n')
+    : ''
+  const logicComments = logic.length
+    ? logic.map((l) => `     * ${l}`).join('\n')
+    : '     * 按业务规则处理请求'
+
+  const lines = [
+    `package com.xcodeagent.${packageName}.controller;`,
+    ``,
+    `import org.springframework.web.bind.annotation.*;`,
+    `import com.xcodeagent.common.api.ApiResponse;`,
+    `import org.springframework.web.validation.annotation.Validated;`,
+    ``,
+    `/**`,
+    ` * 由 XCodeAgent 生成 · ${summary} · ${method} ${path}`,
+    ` */`,
+    `@RestController`,
+    `@RequestMapping("/api/${packageName}")`,
+    `@Validated`,
+    `public class ${className} {`,
+    ``,
+    `  /**`,
+    `   * ${summary}。`,
+    paramComments,
+    `   * @return ${response.schema ? JSON.stringify(response.schema) : 'ApiResponse'}`,
+    `   */`,
+    `  @${mapping}("${path.replace(/^\/api\/[^/]+/, '')}")`,
+    `  public ApiResponse<Object> ${methodLower}${className.replace('Controller', '')}(${paramsSig}) {`,
+    logicComments,
+    `    return ApiResponse.success(null);`,
+    `  }`,
+    `}`,
+    ``
+  ]
+  // 合并连续空行为单行,避免文档空洞。
+  const content = lines
+    .filter((line, i) => !(line === '' && lines[i - 1] === ''))
+    .join('\n')
+
+  return {
+    filePath: `backend/src/main/java/com/xcodeagent/${packageName}/controller/${className}.java`,
+    content
+  }
+}
+
+
 export function buildPageDocFallback(pageLabel: string, path: string, purpose: string): string {
   return [
     `# ${pageLabel} 页面设计`,
@@ -432,4 +502,43 @@ export function buildLineDiff(oldText: string, newText: string, path: string): s
   if (out.length === 0) return ''
   const body = out.join('\n')
   return `--- a/${path}\n+++ b/${path}\n@@ -1,${oldLines.length} +1,${newLines.length} @@\n${body}`
+}
+
+/** 审查阶段右侧面板的代码审查报告(非功能检查:规范 / 安全 / 健康度)。 */
+export function buildReviewReport(): string {
+  return `# 代码审查报告
+
+> 审查范围：全部页面与接口模块 · 审查项：代码规范 / 安全 / 健康度 · 结论：**通过，可生成版本**
+
+## 总览
+
+| 审查项 | 结果 |
+| --- | --- |
+| 代码规范 | ✅ 通过 |
+| 安全检查 | ✅ 通过 |
+| 健康度 | ✅ 通过 |
+
+## 代码规范
+
+- 命名规范符合团队约定
+- 无冗余 / 重复代码
+- 注释覆盖率达标
+
+## 安全检查
+
+- 无硬编码密钥与凭证
+- 输入参数校验完整
+- 越权访问风险已覆盖
+
+## 健康度
+
+- 圈复杂度：正常
+- 重复率：0.8%
+- 单测覆盖：82%
+
+## 模块清单
+
+- 页面：我的回检
+- 接口：GET /api/rechecks/my
+`
 }

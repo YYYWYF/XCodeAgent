@@ -23,6 +23,19 @@ export function sessionRuntimeKey(
   return JSON.stringify([workspaceRoot, editorMode, sessionId])
 }
 
+/** 判断运行态键是否属于指定工作区，用于项目移入回收站时清理全部会话内存。 */
+export function sessionRuntimeKeyBelongsToWorkspace(
+  sessionKey: string,
+  workspaceRoot: string
+): boolean {
+  try {
+    const value: unknown = JSON.parse(sessionKey)
+    return Array.isArray(value) && value[0] === workspaceRoot
+  } catch {
+    return false
+  }
+}
+
 export function createSessionIdentity(input: {
   workspaceRoot: string
   editorMode: EditorMode

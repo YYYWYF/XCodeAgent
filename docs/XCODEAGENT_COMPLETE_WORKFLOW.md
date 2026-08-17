@@ -66,11 +66,9 @@ flowchart TD
     subgraph P6["阶段六：测试与修复"]
         Q1["integration_test / 集成测试入口"]
         Q2["actual_project_checks / 真实工程检查"]
-        Q3["api_contract_check / API 契约检查"]
-        Q4["test_agent_review / Test Agent 审阅"]
-        Q5["main_quality_gate / 确定性质量门禁"]
-        Q6["repair_planning / 修复计划生成"]
-        Q7["small_task_repair / 局部修复执行"]
+        Q3["main_quality_gate / 确定性质量门禁"]
+        Q4["repair_planning / 修复计划生成"]
+        Q5["small_task_repair / 局部修复执行"]
     end
 
     subgraph P7["阶段七：启动、验收与完成"]
@@ -109,17 +107,17 @@ flowchart TD
     B5 -->|"requires confirmation"| B1
     B5 -->|"unrecoverable"| LF
 
-    Q1 --> Q2 --> Q3 --> Q4 --> Q5 --> Q6
-    Q6 -->|"quality gate passed"| L1
-    Q6 -->|"bounded repair tasks"| Q7
-    Q7 -->|"code changes"| Q1
-    Q6 -->|"confirmation required"| Q6
-    Q6 -->|"terminal failure"| LF
+    Q1 --> Q2 --> Q3 --> Q4
+    Q4 -->|"quality gate passed"| L1
+    Q4 -->|"bounded repair tasks"| Q5
+    Q5 -->|"code changes"| Q1
+    Q4 -->|"confirmation required"| Q4
+    Q4 -->|"terminal failure"| LF
 
     L1 -->|"preview_url + launch_result"| L2
     L2 -->|"accepted"| L3
     L3 --> L4
-    L2 -->|"local_fix"| Q7
+    L2 -->|"local_fix"| Q5
     L2 -->|"page/endpoint/data-source change"| D1
     L2 -->|"project_plan_change"| D2
 ```
@@ -519,8 +517,6 @@ flowchart TD
     I["integration_test / 集成测试入口"]
     subgraph TS["真实 Testing Subgraph"]
         A["actual_project_checks / 真实工程检查"]
-        C["api_contract_check / API 契约检查"]
-        T["test_agent_review / Test Agent 审阅"]
         G["main_quality_gate / 主质量门禁"]
         R["repair_planning / 测试修复规划"]
     end
@@ -530,9 +526,7 @@ flowchart TD
     F(["handle_failure / 失败"])
 
     I --> A
-    A -->|"command results + logs"| C
-    C -->|"contract result"| T
-    T -->|"agent note"| G
+    A -->|"command results + logs"| G
     G -->|"test report + revision requests"| R
     R -->|"passed"| L
     R -->|"bounded repair tasks"| S
@@ -546,60 +540,41 @@ flowchart TD
 ### 8.1 `integration_test / 集成测试入口`
 
 - **类型**：Testing Subgraph 包装节点；自身无 LLM 提示词。
-- **输入**：Build summary/results、ProjectPlan、工作区、修复迭代、contract/repair 开关。
+- **输入**：工作区、修复迭代和 repair 开关。
 - **输出**：`test_results`、`test_report`、`quality_gate_passed`、`revision_requests`、repair plan/tasks、`integration_next_action`。
 - **校验规则**：每次进入清空本轮 test results；保留此前 SmallTask diff；Testing Subgraph 的结果决定主图路由。
 - **依赖文件**：`graph/subgraphs/testing.py`、`workspace/test_documents.py`、`workspace/task_documents.py`。
-- **依赖节点**：上游 `build` 或 `small_task_repair`；内部依次执行以下五个子图节点。
+- **依赖节点**：上游 `build` 或 `small_task_repair`；内部依次执行以下三个子图节点。
 
 ### 8.2 `actual_project_checks / 真实工程检查`
 
 - **类型**：确定性命令执行；无 LLM 提示词。
-- **输入**：工作区、`.xcodeagent/application.json` 数据源类型、前端 package、后端 Maven/Python 项目结构。
+- **输入**：工作区、`.xcodeagent/application.json` 数据源类型、前端 package 和后端 Maven 项目结构。
 - **输出**：逐项 `test_results`、stdout/stderr 日志和 command evidence。
 - **校验规则**：前端执行包管理器 `install`、可选 `tsc` script、必需 `build`；非 Static 应用执行后端检查；Maven 当前运行 `clean install`；每个命令 180 秒超时；required 缺失视为失败。
-- **依赖文件**：`services/integration_test_runner.py`、项目 `package.json`/lockfile、`pom.xml`/Maven wrapper 或 pytest 配置、`.xcodeagent/runtime/tests/`。
-- **依赖节点**：上游 `integration_test`；下游 `api_contract_check`。
+- **依赖文件**：`services/integration_test_runner.py`、项目 `package.json`/lockfile、`pom.xml`/Maven wrapper、`.xcodeagent/runtime/tests/`。
+- **依赖节点**：上游 `integration_test`；下游 `main_quality_gate`。
 
-### 8.3 `api_contract_check / API 契约检查`
-
-- **类型**：确定性 contract validator；无 LLM 提示词。
-- **输入**：ProjectPlan API contracts、Build summary、`integration_contract_check_enabled`。
-- **输出**：`api_contract` check result、contract errors/evidence。
-- **校验规则**：主流程要求 Build clean 且 API contract consistency 无错误；快速修改流程显式跳过该检查。
-- **依赖文件**：`graph/subgraphs/testing.py`、`services/api_contract_validation.py`。
-- **依赖节点**：上游 `actual_project_checks`；下游 `test_agent_review`。
-
-### 8.4 `test_agent_review / Test Agent 审阅`
-
-- **类型**：只读 Test Deep Agent。
-- **当前提示词**：System Prompt 位于 `agents/test/agent.py`，执行 Prompt 位于 `agents/test/validator.py::_test_validation_prompt`。要求只依据确定性命令结果、日志和 Build evidence，不猜测；失败时给 Main Agent 支持证据的 revision request 说明。
-- **输入**：`test_results`、`build_results`、日志路径、选定技能。
-- **输出**：`test_agent_review.agent_note` 和 reviewer metadata。
-- **校验规则**：Agent 无文件写工具；Agent 结论不能覆盖确定性 check 的 passed/failed。
-- **依赖文件**：`agents/test/agent.py`、`agents/test/validator.py`、测试日志。
-- **依赖节点**：上游 `api_contract_check`；下游 `main_quality_gate`。
-
-### 8.5 `main_quality_gate / 主质量门禁`
+### 8.3 `main_quality_gate / 主质量门禁`
 
 - **类型**：确定性 gate；无 LLM 提示词。
-- **输入**：全部 test results、Test Agent note。
+- **输入**：全部确定性 test results。
 - **输出**：`.xcodeagent/reports/test-report.json`、`quality_gate_passed`、`needs_revision`、`revision_requests`。
 - **校验规则**：当前实现使用 `all(result["passed"] for result in test_results)`；所有失败 check 编译为 revision request；required check ID 仅记录在报告中，没有反向校验是否完整出现。
 - **依赖文件**：`services/test_validation.py`、`workspace/test_documents.py`。
-- **依赖节点**：上游 `test_agent_review`；下游 `repair_planning`。
+- **依赖节点**：上游 `actual_project_checks`；下游 `repair_planning`。
 
-### 8.6 `repair_planning / 测试修复规划`
+### 8.4 `repair_planning / 测试修复规划`
 
 - **类型**：只读 RepairPlanner Deep Agent + 确定性 repair task 编译。
-- **当前提示词**：`agents/repair_planner/planner.py::_test_repair_planning_prompt`。要求基于测试证据选择 `repair`、`requires_user_confirmation` 或 `terminal_failure`；不得改变已确认需求、详情和 API contract；contract mismatch 强制走实现修复。
+- **当前提示词**：`agents/repair_planner/planner.py::_test_repair_planning_prompt`。要求基于真实命令证据选择 `repair`、`requires_user_confirmation` 或 `terminal_failure`；不得改变已确认需求、详情和 API contract。
 - **输入**：TestReport、revision requests、当前 BuildTaskPlan、执行切片、修复轮次。
 - **输出**：`repair_task_plan`、`repair_tasks`、requested paths/resources、`integration_next_action`。
 - **校验规则**：最多默认 3 轮；候选路径从当前执行切片继承；范围扩大需要确认；证据不足、拒绝或预算耗尽终止。
 - **依赖文件**：`agents/repair_planner/*`、`services/test_validation.py`、`workspace/task_documents.py`。
 - **依赖节点**：上游 `main_quality_gate`；通过进入 `launch_project`，可修复进入 `small_task_repair`。
 
-### 8.7 `small_task_repair / SmallTask 局部修复`
+### 8.5 `small_task_repair / SmallTask 局部修复`
 
 - **类型**：SmallTask Deep Agent 批量执行器 + 确定性 scope/handoff 路由。
 - **当前提示词**：System Prompt 位于 `agents/small_task/agent.py`；任务 Prompt 位于 `agents/small_task/runner.py::build_small_task_prompt`。要求一次只执行一个 bounded packet；按 `candidateFiles -> 最窄源码根 -> 必要配置元数据` 顺序读取；禁止读取安装依赖、缓存和构建产物；只修改 `allowedPaths`；禁止正式工作流产物、数据库 DDL 和新产品范围；返回固定 JSON；超出范围返回 confirmation 或 workflow handoff。
@@ -999,7 +974,7 @@ application-planning Graph 已支持 `resume_from=ui_confirmation`，请求校�
 | 工作区与数据库上下文 | `inspect_workspace` 先生成稳定 WorkspaceSnapshot，再推导是否需要 `inspect_database_context` | 只有不依赖工作区的纯数据库 schema scan 可以提前并行；DatabasePlanningContext 和 WorkspaceSnapshot 必须在 `prepare_build_tasks` 前汇合并校验版本。 |
 | Build DAG 并行 | BuildScheduler 只并行调度依赖满足、授权路径不冲突的 ready tasks | 不同 owner 可以并发；同一 owner 可批量处理。并发结果必须经过真实 diff 归属、工程验收和确定性合并。 |
 | 跨 Run 资源隔离 | 默认实行“一 workspace 一个写 execution”，只读会话保持并行 | 数据库 schema 变更和共享预览环境使用独占锁；代码任务需要跨 Run 并行时使用独立 Git worktree/分支，合并阶段串行。 |
-| Testing 拓扑 | 工程检查与 API 契约检查在无共享写副作用时并行，汇合后再执行 TestAgent 审阅和主质量门禁 | `test_agent_review` 必须消费完整确定性检查证据，`main_quality_gate` 必须等待审阅结果；四个阶段不能无依赖地同时启动。 |
+| Testing 拓扑 | 工程检查完成后直接执行确定性质量门禁，失败时才进入 RepairPlanner | API 契约在任务准备前校验；Testing 不重复校验，也不引入模型审阅硬依赖。 |
 | 局部修复回测 | 根据 changed files、owner、contract 和失败 check ID 编译 affected-check manifest，只重跑受影响检查 | 局部检查通过后，进入 launch 前仍执行一次完整 required-check 门禁，避免增量回测漏掉跨模块回归。 |
 | 失败分类与终态 | 在上游节点或统一 deterministic failure classifier 中完成错误分类与恢复路由，`handle_failure` 只负责失败终态 | 分类至少覆盖缺少输入、可重试基础设施错误、代码/契约错误、正式流程升级、用户拒绝和不可恢复错误；路由结果只能是暂停、重试、修复、typed handoff 或终止。 |
 | 多角色协同 | 产品提出业务目标并确认业务产物，Orchestrator 根据已确认 artifact 调度 UI、技术、构建和测试角色 | 设计负责人确认视觉产物，技术负责人确认 ProjectPlan/API/高风险数据库变更，测试负责人维护质量门禁；产品不手工选择内部 Graph 节点。 |
@@ -1138,7 +1113,7 @@ flowchart TD
 
 ## 16. LLM Prompt 注册表
 
-下表用于快速定位“当前真正执行的 Prompt”。一个节点同时存在 System Prompt 和运行时 Human/Task Prompt 时，两者都必须一起阅读；用户选择的技能说明只会在七个 Deep Agent（frontend、data_source、database、test、repair_planner、small_task、workspace_assistant）的 bundle 创建时额外注入，直接 ChatModel 节点不加载这套用户 Skill。
+下表用于快速定位“当前真正执行的 Prompt”。一个节点同时存在 System Prompt 和运行时 Human/Task Prompt 时，两者都必须一起阅读；用户选择的技能说明只会在六个 Deep Agent（frontend、data_source、database、repair_planner、small_task、workspace_assistant）的 bundle 创建时额外注入，直接 ChatModel 节点不加载这套用户 Skill。
 
 | 业务节点/执行阶段                           | System Prompt 来源                                                                              | Human/Task Prompt 来源                                                                        | 主要动态注入                                                                                                                                                                                   |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1152,7 +1127,6 @@ flowchart TD
 | `database_agent`                            | `agents/database/agent.py::create_database_agent` 内 `base_system_prompt`                       | `agents/database/generator.py::_database_generation_prompt`                                   | database tasks、真实 schema/gaps、ProjectPlan contracts                                                                                                                                        |
 | `data_source_agent`（task owner=`backend`） | `agents/data_source/agent.py::create_data_source_agent` 内 `base_system_prompt`                 | `agents/data_source/generator.py::_data_source_generation_prompt`                             | approved tasks、BuildTaskPlan、ProjectPlan、skills                                                                                                                                             |
 | `frontend_agent`                            | `agents/frontend/agent.py::create_frontend_agent` 内 `base_system_prompt`                       | `agents/frontend/generator.py::_frontend_generation_prompt`                                   | approved tasks、ProjectPlan、PageTemplate、UI designs、skills                                                                                                                                  |
-| `test_agent_review`                         | `agents/test/agent.py::create_test_agent` 内 `base_system_prompt`                               | `agents/test/validator.py::_test_validation_prompt`                                           | deterministic checks、Build results、logs                                                                                                                                                      |
 | `build_repair_planning`                     | `agents/repair_planner/agent.py::create_repair_planner_agent` 内 `base_system_prompt`           | `agents/repair_planner/planner.py::_build_failure_repair_prompt`                              | failed task、scope、acceptance、evidence、budget                                                                                                                                               |
 | `repair_planning`                           | 同上                                                                                            | `agents/repair_planner/planner.py::_test_repair_planning_prompt`                              | TestReport、revision requests、BuildTaskPlan                                                                                                                                                   |
 | `small_task_repair`                         | `agents/small_task/agent.py::create_small_task_agent` 内 `base_system_prompt`                   | `agents/small_task/runner.py::build_small_task_prompt`                                        | bounded TaskPacket、allowedPaths、acceptance、failure evidence                                                                                                                                 |

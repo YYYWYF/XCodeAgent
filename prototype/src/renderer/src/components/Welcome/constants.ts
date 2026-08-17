@@ -4,6 +4,7 @@ import { applicationFormPrefill } from '@mock-data/application-form'
 /** 可选应用图标。value 为图标组件名，用于持久化与还原；label 为中文说明。 */
 export const applicationIconOptions: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'AppstoreOutlined', label: '应用商店' },
+  { value: 'ProjectOutlined', label: '项目' },
   { value: 'DesktopOutlined', label: '桌面' },
   { value: 'DashboardOutlined', label: '仪表盘' },
   { value: 'ShopOutlined', label: '商城' },
@@ -29,8 +30,10 @@ export const initialApplicationDraft: ApplicationDraft = {
   layout: { type: 'side', useHeader: true, useFooter: false },
   theme: { primaryColor: '#2c68ff' },
   datasource: {
-    type: '',
+    type: 'None',
     db: {
+      useBuiltin: false,
+      connectionMode: 'plant',
       plantMode: { domain: '', port: '', userName: '', pwd: '', schema: '' }
     }
   },
@@ -64,4 +67,21 @@ export const trackMethodOptions: Array<{ value: string; label: string }> = [
   { value: 'post', label: 'post' },
   { value: 'get', label: 'get' },
   { value: 'put', label: 'put' }
+]
+
+/** 数据源类型选项（对齐真实产品：外部 API 暂未开放，静态数据仅测试用）。 */
+export const datasourceTypeOptions: Array<{
+  value: 'DataBase' | 'API' | 'None'
+  label: string
+  description: string
+  disabled?: boolean
+}> = [
+  { value: 'DataBase', label: '数据库', description: '连接数据库进行增删改查。' },
+  {
+    value: 'API',
+    label: '外部 API',
+    description: '直接对接外部 API（暂未开放）。',
+    disabled: true
+  },
+  { value: 'None', label: '静态数据', description: '前端直接生成静态模拟数据，仅测试用。' }
 ]

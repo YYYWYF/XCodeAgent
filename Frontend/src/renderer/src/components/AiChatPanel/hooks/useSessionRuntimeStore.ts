@@ -3,11 +3,15 @@ import { createContext, createElement, useContext, useRef, useState } from 'reac
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import type { ChatMessageSkill } from '../../../typings'
 import type { AgentChatMessage } from '../types'
-import type { SessionIdentity } from './sessionRuntime'
+import {
+  sessionRuntimeKeyBelongsToWorkspace,
+  type SessionIdentity
+} from './sessionRuntime'
 
 export type SessionRuntimeStore = {
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
+  clearWorkspace: (workspaceRoot: string) => Promise<void>
   draftForKey: (sessionKey: string) => string
   ensureAgent: (identity: SessionIdentity) => AgUiChatSession
   getIdentity: (sessionKey: string) => SessionIdentity | undefined
@@ -109,8 +113,36 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setSelectedSkillsBySession((current) => omitKey(current, sessionKey))
   }
 
+  /** 停止并清理指定工作区的全部会话运行态，确保删除项目后不残留消息或草稿。 */
+  const clearWorkspace = async (workspaceRoot: string): Promise<void> => {
+    const sessionKeys = new Set([
+      ...Object.keys(agUiSessionsRef.current),
+      ...Object.keys(identitiesRef.current),
+      ...Object.keys(messagesRef.current),
+      ...runningSessionsRef.current.keys()
+    ])
+    const workspaceKeys = [...sessionKeys].filter((sessionKey) =>
+      sessionRuntimeKeyBelongsToWorkspace(sessionKey, workspaceRoot)
+    )
+    const activeAgents = workspaceKeys
+      .map((sessionKey) => agUiSessionsRef.current[sessionKey])
+      .filter((agent): agent is AgUiChatSession => Boolean(agent))
+
+    await Promise.allSettled(activeAgents.map((agent) => agent.stop()))
+    workspaceKeys.forEach((sessionKey) => {
+      delete agUiSessionsRef.current[sessionKey]
+      delete identitiesRef.current[sessionKey]
+      delete messagesRef.current[sessionKey]
+      runningSessionsRef.current.delete(sessionKey)
+    })
+    setMessagesBySession((current) => omitWorkspaceKeys(current, workspaceRoot))
+    setDrafts((current) => omitWorkspaceKeys(current, workspaceRoot))
+    setSelectedSkillsBySession((current) => omitWorkspaceKeys(current, workspaceRoot))
+  }
+
   return {
     agUiSessionsRef,
+    clearWorkspace,
     draftForKey: (sessionKey) => drafts[sessionKey] || '',
     ensureAgent,
     getIdentity: (sessionKey) => identitiesRef.current[sessionKey],
@@ -124,6 +156,15 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setSelectedSkillsByKey,
     setSessionMessages
   }
+}
+
+/** 返回移除指定工作区全部会话键后的新对象，覆盖已注册会话和未发送草稿。 */
+function omitWorkspaceKeys<T>(record: Record<string, T>, workspaceRoot: string): Record<string, T> {
+  return Object.fromEntries(
+    Object.entries(record).filter(
+      ([sessionKey]) => !sessionRuntimeKeyBelongsToWorkspace(sessionKey, workspaceRoot)
+    )
+  )
 }
 
 /** 返回移除指定键后的新对象，避免直接修改 React 状态。 */

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { DevelopmentContract } from './developmentContract';
+import type { ApplicationLifecycle } from './workflow';
 
 export type ApplicationTerminal = 'PC' | 'Mobile';
 export type ApplicationLayoutType = '' | 'side' | 'top' | 'mix';
@@ -46,6 +47,8 @@ export interface ApplicationSchemaConfig {
   datasource: {
     type: ApplicationDatasourceType;
     db: {
+      useBuiltin: boolean;
+      connectionMode: 'dbid' | 'plant';
       plantMode: {
         domain: string;
         port: number | string;
@@ -286,6 +289,57 @@ export interface ApplicationDataSourceDefinition {
   seedStrategy: string;
 }
 
+/**
+ * 应用版本状态:iterating=当前迭代中(可改);released=已生成版本里程碑(锁定只读)。
+ * 单线里程碑模型:versions 是链式只读归档,无分叉。
+ */
+export type ApplicationVersionStatus = 'iterating' | 'released';
+
+/**
+ * 应用版本。每个版本自带私有 lifecycle(旅程按版本隔离)。
+ * 新建应用自动产生 v1.0(iterating);生成版本后锁定为 released;发起新迭代派生下一版本。
+ */
+export interface ApplicationVersion {
+  id: string;
+  /** 人类可读版本号,如 v1.0 / v1.1。 */
+  versionLabel: string;
+  major: number;
+  minor: number;
+  status: ApplicationVersionStatus;
+  /** 派生自哪个版本(首个为 undefined)。单线链式。 */
+  parentVersionId?: string;
+  /** 回退版本记录其内容来源，版本链仍以前一最新版本为父节点保持单向递增。 */
+  restoredFromVersionId?: string;
+  /** 版本创建时间(迭代发起时刻)。 */
+  createdAt: number;
+  /** 生成版本时间(status 转 released 时写)。 */
+  releasedAt?: number;
+  /** 版本开发日志(类似码云提交记录,记录本版本开发了什么;生成版本时用户输入)。 */
+  description?: string;
+  /** 生成版本时打的码云提交与 Tag(模拟值,生成完成写)。 */
+  gitRef?: {
+    commitSha: string;
+    tag: string;
+    committedAt: number;
+  };
+  /** 版本私有生命周期。旅程阶段由它推导。 */
+  lifecycle: ApplicationLifecycle;
+  /** 生成版本时冻结的资产快照(已生成版本回看用)。 */
+  artifactSummary?: {
+    pageIds?: string[];
+    endpointIds?: string[];
+    requirementSummary?: string;
+    /** 生成的可部署脚本产物标识(本平台仅产出代码与脚本,不提供运行环境)。 */
+    deployableScript?: string;
+  };
+  /** 发布时冻结的内容快照(已发布版本回看用)。 */
+  snapshot?: {
+    pageIds?: string[];
+    endpointIds?: string[];
+    requirementSummary?: string;
+  };
+}
+
 export interface ApplicationConfig extends ApplicationSchemaConfig {
   id: string;
   name: string;
@@ -307,6 +361,10 @@ export interface ApplicationConfig extends ApplicationSchemaConfig {
   requirementPlan?: RequirementDevelopmentPlan;
   planningConfirmedAt?: number;
   createdAt: number;
+  /** 应用所有版本里程碑,按时间正序。 */
+  versions?: ApplicationVersion[];
+  /** 当前迭代版本指针。 */
+  currentVersionId?: string;
 }
 
 export interface ApplicationDraft {

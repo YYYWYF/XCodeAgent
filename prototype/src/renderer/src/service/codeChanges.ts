@@ -1,13 +1,7 @@
-import { randomUUID } from '@ag-ui/client'
-import type { AgentSubscriber } from '@ag-ui/client'
-import type { Message } from '@ag-ui/core'
 import type { WorkspaceCodeChangeSet } from '../typings'
-import { createAgUiHttpAgent } from './authentication'
+import { runAgUiAction, type AgUiPayloadEnvelope } from './agUiClient'
 
-type CodeChangesActionPayload = {
-  schemaVersion: 1
-  runId: string
-  threadId: string
+type CodeChangesActionPayload = AgUiPayloadEnvelope & {
   status: 'completed' | 'failed'
   action?: 'revert'
   changeSetId?: string
@@ -23,6 +17,10 @@ export type RevertedCodeChanges = {
   revertedAt: string
 }
 
+const CODE_CHANGES_STATUS_LIST = ['completed', 'failed'] as const
+const CODE_CHANGES_EVENT = 'code-changes'
+const CODE_CHANGES_ACTION_KEY = 'codeChangesAction'
+
 /** 返回代码变更 AG-UI 操作地址。 */
 function getCodeChangesUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
@@ -31,75 +29,27 @@ function getCodeChangesUrl(): string {
     : '/api/agent/code-changes/run'
 }
 
-/** 从未知值中读取已完成的代码变更操作状态。 */
-function readCodeChangesAction(value: unknown): CodeChangesActionPayload | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const payload = value as Partial<CodeChangesActionPayload>
-  if (
-    payload.schemaVersion !== 1 ||
-    typeof payload.runId !== 'string' ||
-    typeof payload.threadId !== 'string' ||
-    !['completed', 'failed'].includes(String(payload.status))
-  ) {
-    return undefined
-  }
-  return payload as CodeChangesActionPayload
-}
-
-/** 从 AG-UI 状态快照中读取代码变更操作。 */
-function readCodeChangesActionFromState(value: unknown): CodeChangesActionPayload | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  return readCodeChangesAction((value as { codeChangesAction?: unknown }).codeChangesAction)
-}
-
-/** 从 AG-UI 最终结果中读取代码变更操作。 */
-function readCodeChangesActionFromResult(value: unknown): CodeChangesActionPayload | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  return readCodeChangesAction((value as { codeChangesAction?: unknown }).codeChangesAction)
-}
-
-/** 通过独立 AG-UI 流精确撤销指定历史代码变更集。 */
+/** 通过独立 AG-UI 流精确撤销指定历史代码变更集。payload 合并/校验/失败抛错由 runAgUiAction 处理。 */
 export async function revertWorkspaceCodeChanges(
   codeChanges: WorkspaceCodeChangeSet
 ): Promise<RevertedCodeChanges> {
-  const threadId = randomUUID()
-  const agent = createAgUiHttpAgent({ url: getCodeChangesUrl(), threadId })
-  const message: Message = {
-    id: randomUUID(),
-    role: 'user',
-    content: `撤销代码变更集 ${codeChanges.id}。`
-  }
-  agent.addMessage(message)
-
-  let actionResult: CodeChangesActionPayload | undefined
-  const subscriber: AgentSubscriber = {
-    onCustomEvent: ({ event }) => {
-      if (event.name === 'code-changes') {
-        actionResult = readCodeChangesAction(event.value) ?? actionResult
+  const actionResult = await runAgUiAction<CodeChangesActionPayload>({
+    url: getCodeChangesUrl(),
+    message: `撤销代码变更集 ${codeChanges.id}。`,
+    eventName: CODE_CHANGES_EVENT,
+    stateKey: CODE_CHANGES_ACTION_KEY,
+    forwardedProps: {
+      [CODE_CHANGES_ACTION_KEY]: {
+        action: 'revert',
+        confirmed: true,
+        workspaceRoot: codeChanges.workspaceRoot,
+        changeSet: codeChanges
       }
     },
-    onStateSnapshotEvent: ({ event }) => {
-      actionResult = readCodeChangesActionFromState(event.snapshot) ?? actionResult
-    }
-  }
-  const result = await agent.runAgent(
-    {
-      forwardedProps: {
-        codeChangesAction: {
-          action: 'revert',
-          confirmed: true,
-          workspaceRoot: codeChanges.workspaceRoot,
-          changeSet: codeChanges
-        }
-      }
-    },
-    subscriber
-  )
-  actionResult = readCodeChangesActionFromResult(result.result) ?? actionResult
-  if (!actionResult) throw new Error('撤销接口没有返回有效的 AG-UI 状态。')
-  if (actionResult.status === 'failed') {
-    throw new Error(actionResult.error?.message || '撤销代码变更失败。')
-  }
+    statusList: CODE_CHANGES_STATUS_LIST,
+    emptyMessage: '撤销接口没有返回有效的 AG-UI 状态。',
+    failedMessage: '撤销代码变更失败。'
+  })
   if (
     actionResult.changeSetId !== codeChanges.id ||
     !Array.isArray(actionResult.revertedPaths) ||

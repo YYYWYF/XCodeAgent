@@ -1,5 +1,6 @@
 import { AppstoreOutlined, CodeOutlined, DeleteOutlined, GlobalOutlined } from '@ant-design/icons'
 import { Button, message, Modal, Radio } from 'antd'
+import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import {
   canOpenApplicationWorkbench,
@@ -9,11 +10,13 @@ import {
   removeStoredApplication
 } from '../../service/applicationStorage'
 import type { ApplicationConfig } from '../../typings'
+import { currentVersion } from '../../service/applicationVersions'
 import { cx } from '../../utils'
 import './WelcomeModal.less'
 import './WelcomeRecentProjects.less'
 
 type Props = {
+  headerAction?: ReactNode
   onOpenApplication: (application: ApplicationConfig) => void
   theme: 'dark' | 'light'
 }
@@ -33,7 +36,11 @@ function formatRecentTime(value: number): string {
   return days < 30 ? `${days} 天前` : new Intl.DateTimeFormat('zh-CN').format(value)
 }
 
-export default function WelcomeRecentProjects({ onOpenApplication, theme }: Props): JSX.Element {
+export default function WelcomeRecentProjects({
+  headerAction,
+  onOpenApplication,
+  theme
+}: Props): JSX.Element {
   const [applications, setApplications] = useState<ApplicationConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [applicationToDelete, setApplicationToDelete] = useState<ApplicationConfig>()
@@ -111,6 +118,7 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
     <section className={cx('welcome-recents')} aria-labelledby="welcome-recents-title">
       <div className={cx('welcome-section-heading')}>
         <h2 id="welcome-recents-title">最近项目</h2>
+        {headerAction}
       </div>
 
       <div className={cx('welcome-project-list')}>
@@ -121,6 +129,7 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
         ) : applications.length > 0 ? (
           applications.map((application, index) => {
             const ProjectIcon = projectIcons[index % projectIcons.length]
+            const version = currentVersion(application)
             return (
               <div className={cx('welcome-project-row')} key={application.id}>
                 <button
@@ -132,13 +141,18 @@ export default function WelcomeRecentProjects({ onOpenApplication, theme }: Prop
                     <ProjectIcon />
                   </span>
                   <span className={cx('welcome-project-main')}>
-                    <strong>{application.name}</strong>
+                    <span className={cx('welcome-project-title')}>
+                      <strong>{application.name}</strong>
+                      {version ? (
+                        <span className={cx('welcome-project-version')}>
+                          {version.versionLabel}
+                          {version.status === 'released' ? ' · 已生成版本' : ''}
+                        </span>
+                      ) : null}
+                    </span>
                     <code>
                       {application.workspaceRoot || application.projectDirectoryName || '本地应用'}
                     </code>
-                  </span>
-                  <span className={cx('welcome-project-description')}>
-                    {application.senario || '继续上一次开发会话'}
                   </span>
                   <time dateTime={new Date(application.createdAt).toISOString()}>
                     {formatRecentTime(application.createdAt)}
