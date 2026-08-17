@@ -438,6 +438,9 @@ export class AgUiChatSession {
     let processSteps: ProcessStepRecord[] = []
     let runErrorMessage = ''
     let runErrorCode: string | undefined
+    // 累积后端 llm.token custom event 的流式 token（需求分析/项目规划节点通过
+    // _llm_token_callback 发送），转发到 onContent，让工作台对话区实时展示规划文本。
+    let llmTokenAccumulator = ''
     const emitToolCalls = (nextToolCalls: ToolCallRecord[]): void => {
       toolCalls = nextToolCalls
       options.onToolCalls?.(toolCalls)
@@ -470,6 +473,20 @@ export class AgUiChatSession {
             options.onProcessSteps?.(processSteps)
           }
           if (workflow) options.onWorkflow?.(workflow)
+        }
+        if (event.name === 'llm.token') {
+          // 后端规划节点通过 _llm_token_callback 发送 llm.token custom event。
+          // 仅处理 project_planning 节点的 token（项目规划文本），不处理 requirements
+          // 节点（输出原始 JSON，展示为 Markdown 会很乱）。累积 token 后转发到 onContent，
+          // 让工作台对话区实时展示项目规划流式文本。
+          const node = (event.value as { node?: string } | null)?.node || ''
+          if (node === 'project_planning') {
+            const token = (event.value as { token?: string } | null)?.token || ''
+            if (token) {
+              llmTokenAccumulator += token
+              options.onContent?.(llmTokenAccumulator)
+            }
+          }
         }
       },
       onStateSnapshotEvent: ({ event }) => {

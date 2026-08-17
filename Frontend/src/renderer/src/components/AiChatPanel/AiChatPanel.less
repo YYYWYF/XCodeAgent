@@ -33,8 +33,8 @@
 
 .@{class-prefix}-embedded-preview-open {
   .@{class-prefix}-ai-chat-assistant {
-    flex: 0 0 var(--assistant-panel-width, 660px);
-    width: var(--assistant-panel-width, 660px);
+    flex: 0 0 var(--assistant-panel-width, 66.6667%);
+    width: var(--assistant-panel-width, 66.6667%);
     border-right: 0;
   }
 }
@@ -149,6 +149,17 @@
   min-height: 0;
   overflow: hidden;
   background: var(--wb-canvas);
+  display: flex;
+  flex-direction: column;
+  // 底部留白对齐左侧对话区输入框的底部间距（ChatComposer padding-bottom: 24px）
+  padding-bottom: 24px;
+  box-sizing: border-box;
+}
+
+.@{class-prefix}-workspace-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .@{class-prefix}-diff-detail-pane {
@@ -212,5 +223,128 @@
   .@{class-prefix}-diff-detail-pane {
     width: 100%;
     flex-basis: auto;
+  }
+}
+
+// 设计阶段中间对话区：规划进度展示（只读流式）。
+.ai-chat-design-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 24px;
+  height: 100%;
+  overflow-y: auto;
+
+  &-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    h4 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+  }
+
+  &-status {
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 10px;
+    background: var(--wb-control, rgba(0, 0, 0, 0.06));
+    color: var(--wb-text-secondary, #65666a);
+
+    &.running {
+      background: var(--wb-accent-soft, rgba(107, 60, 240, 0.07));
+      color: var(--wb-accent, #6b3cf0);
+    }
+  }
+
+  &-message {
+    margin: 0;
+    color: var(--wb-text-secondary, #65666a);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  &-events {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &-event {
+    display: flex;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--wb-surface-subtle, rgba(0, 0, 0, 0.025));
+    font-size: 13px;
+
+    &-type {
+      flex-shrink: 0;
+      color: var(--wb-text-tertiary, #909196);
+      font-size: 11px;
+      text-transform: uppercase;
+      min-width: 64px;
+    }
+
+    &-message {
+      color: var(--wb-text, #202124);
+    }
+  }
+
+  &-empty {
+    margin: 0;
+    color: var(--wb-text-tertiary, #909196);
+    font-size: 13px;
+  }
+}
+
+.@{class-prefix}-enter-development-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px 16px;
+  margin: 8px 0;
+  border-radius: 10px;
+  background: var(--wb-surface-subtle, #f7f8fa);
+  border: 1px solid var(--wb-border, #eef0f3);
+}
+
+.@{class-prefix}-enter-development-gate-hint {
+  color: var(--wb-text-secondary, #8a9099);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+  max-width: 420px;
+}
+
+.@{class-prefix}-enter-development-gate-btn.ant-btn {
+  height: 44px;
+  padding: 0 32px;
+  font-size: 15px;
+  font-weight: 500;
+  border-radius: 8px;
+}
+
+.@{class-prefix}-detail-progress-card {
+  width: 100%;
+  max-width: 1080px;
+  margin: 8px auto;
+  padding: 0 38px;
+  box-sizing: border-box;
+
+  // 内层 PageDesignProgress 自带卡片样式（外层不再包裹卡片）
+  .@{class-prefix}-detail-page-progress {
+    padding: 18px 20px;
+    border: 1px solid var(--wb-border-strong, #e5e7eb);
+    border-radius: 14px;
+    background: var(--wb-surface-subtle, #f7f8fa);
+    box-shadow: 0 14px 30px rgba(45, 30, 104, 0.04);
   }
 }

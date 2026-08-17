@@ -5,9 +5,9 @@ import {
   LoadingOutlined,
   PauseCircleOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Checkbox, Collapse, Input, Progress, Radio, Tag, Typography } from "antd";
+import { Alert, Button, Checkbox, Collapse, Input, Modal, Progress, Radio, Tag, Typography } from "antd";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   WorkflowBuildExecutionSlice,
   WorkflowBuildExecutionTask,
@@ -19,6 +19,7 @@ import type {
   WorkflowConfirmationArtifact,
   WorkflowRunPayload,
 } from "../../../../typings";
+import type { DatasourceEnum } from "../../../../typings";
 import { cx } from "../../../../utils";
 import { pageAcceptanceContinuationMessage } from '../../workflowContinuation';
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode';
@@ -30,12 +31,21 @@ import {
 import type { ToolApproval } from '../../../../service/workspaceTools';
 import ConfirmationArtifact from './ConfirmationArtifact';
 import DetailReview from './DetailReview';
+import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel';
+import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary';
+import RequirementSpecEditor from '../../../Welcome/RequirementSpecEditor';
 import './WorkflowRunCard.less';
 
 const { Text } = Typography;
 const { TextArea } = Input;
 
 const OTHER_OPTION_VALUE = '__other__';
+
+// 设计阶段产物确认卡 mode → 文档信息（驱动产物确认行渲染）。
+const ARTIFACT_CONFIRMATION_MAP: Record<string, { title: string; summary: string }> = {
+  requirement_spec_confirmation: { title: '需求文档', summary: '需求文档已生成，请确认内容。' },
+  project_plan_confirmation: { title: '项目计划', summary: '项目计划已生成，确认后生成构建任务清单。' },
+};
 
 export type ClarificationAnswers = WorkflowClarificationAnswers;
 
@@ -45,7 +55,25 @@ type WorkflowRunCardProps = {
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
+    editedRequirementSpec?: Record<string, unknown>,
   ) => void;
+  /** UI 设计稿确认：当前选中页 id（与右侧预览面板联动）。 */
+  uiDesignActivePageId?: string;
+  /** UI 设计稿确认：选中页变化时通知外部（联动右侧预览）。 */
+  onUiDesignActivePageChange?: (pageId: string) => void;
+  /** UI 设计稿确认：当前正在执行单页动作的 pageId（联动右侧加载态）。 */
+  uiDesignActionPageId?: string | null;
+  /** UI 设计稿确认：单页动作页变化时通知外部。 */
+  onUiDesignActionPageIdChange?: (pageId: string | null) => void;
+  /** 需求文档确认：保存编辑草稿（重写 Markdown+JSON），返回更新后的 spec。 */
+  onSaveRequirementSpec?: (
+    workflow: WorkflowRunPayload,
+    spec: Record<string, unknown>
+  ) => Promise<Record<string, unknown> | undefined>;
+  /** 需求文档确认：数据源类型（驱动编辑器数据源字段渲染）。 */
+  datasourceType?: DatasourceEnum;
+  /** 需求文档确认：菜单根路径（驱动编辑器页面路由前缀）。 */
+  rootPath?: string;
   workflow: WorkflowRunPayload;
 };
 
@@ -53,6 +81,13 @@ export default function WorkflowRunCard({
   disabled,
   interactionAvailability,
   onSubmitClarification,
+  uiDesignActivePageId,
+  onUiDesignActivePageChange,
+  uiDesignActionPageId,
+  onUiDesignActionPageIdChange,
+  onSaveRequirementSpec,
+  datasourceType,
+  rootPath,
   workflow,
 }: WorkflowRunCardProps): ReactElement {
   const status = String(workflow.summary.status || "unknown");
@@ -64,14 +99,36 @@ export default function WorkflowRunCard({
     ? clarification.review
     : undefined;
   const databaseApproval = workflowDatabaseApproval(clarification);
+  // 产物确认（需求文档/项目计划）：展示"已生成 + 放弃/确认保存"行，不走通用表单。
+  const artifactConfirmation = clarification?.mode
+    ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
+    : undefined;
+  // UI 确认阶段：clarification.mode 或 summary.phase 判定。换一换/选模板期间流式快照
+  // 可能短暂丢失 clarification.mode，用 phase=ui_confirmation 兜底，避免卡片闪烁切换。
+  const uiDesignConfirmation =
+    clarification?.mode === 'ui_design_confirmation' ||
+    workflow.summary?.phase === 'ui_confirmation';
+  // 项目规划生成中：phase=project_planning 且 status=running，展示加载态 + 流式文本。
+  const projectPlanningRunning =
+    workflow.summary?.phase === 'project_planning' && status === 'running';
+  // 项目计划确认：从 workflow.state/result.project_plan 读取结构化计划，供 ProjectPlanSummary 展示。
+  const projectPlanObject = readProjectPlan(workflow);
+  // 产物确认答案键：根据 clarification.mode 动态选择，避免 project_plan_confirmation 误发 requirement_spec_confirmation。
+  const artifactAnswerKey = clarification?.mode === 'project_plan_confirmation'
+    ? 'project_plan_confirmation'
+    : 'requirement_spec_confirmation';
   const databaseApprovalAnswerKey = clarificationQuestions[0]
     ? clarificationQuestionKey(clarificationQuestions[0], 0)
     : "database_approval";
   const confirmationItemCount = detailReview
     ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
-    : clarificationQuestions.length;
+    : uiDesignConfirmation
+      ? ((clarification as unknown as Record<string, unknown>).pages as unknown[] | undefined)?.length || clarificationQuestions.length
+      : clarificationQuestions.length;
   const requiresConfirmation = clarification?.status === "requires_user_input";
-  const [answers, setAnswers] = useState<ClarificationAnswers>({});
+  const [answers, setAnswers] = useState<ClarificationAnswers>(() =>
+    loadClarificationDraft(workflow.threadId, clarificationQuestions),
+  );
   const canSubmitClarification =
     clarification?.status === "requires_user_input" &&
     clarificationQuestions.length > 0 &&
@@ -82,11 +139,27 @@ export default function WorkflowRunCard({
       ),
     );
   const updateAnswer = (key: string, value: WorkflowClarificationAnswer): void => {
-    setAnswers((currentAnswers) => ({
-      ...currentAnswers,
-      [key]: value,
-    }));
+    setAnswers((currentAnswers) => {
+      const nextAnswers = { ...currentAnswers, [key]: value };
+      saveClarificationDraft(workflow.threadId, clarificationQuestions, nextAnswers);
+      return nextAnswers;
+    });
   };
+
+  // 惰性初始化只在首次挂载执行一次；若挂载时 clarificationQuestions 尚未就绪（流式快照
+  // 先到 running 后到 requires_user_input），answers 会初始化为空。这里在 questions 就绪
+  // 且用户尚未填写时从 localStorage 补读草稿，覆盖恢复场景的时序竞态。
+  const clarificationFingerprint = clarificationQuestions
+    .map((question, index) => clarificationQuestionKey(question, index))
+    .join("|");
+  useEffect(() => {
+    if (clarificationQuestions.length === 0) return;
+    setAnswers((current) => {
+      if (current && Object.keys(current).length > 0) return current;
+      return loadClarificationDraft(workflow.threadId, clarificationQuestions);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflow.threadId, clarificationFingerprint]);
 
   return (
     <div
@@ -106,12 +179,18 @@ export default function WorkflowRunCard({
           {workflowStatusText(status)}
         </Tag>
       </div>
-      {workflow.summary.message && (
+      {workflow.summary.message && !uiDesignConfirmation && !artifactConfirmation && (
         <div className={cx("workflow-run-message")}>
           <Text>{String(workflow.summary.message)}</Text>
         </div>
       )}
-      {Object.keys(artifacts).length > 0 && (
+      {projectPlanningRunning ? (
+        <div className={cx("workflow-run-progress")}>
+          <LoadingOutlined aria-hidden="true" />
+          <Text type="secondary">正在生成项目计划…</Text>
+        </div>
+      ) : null}
+      {Object.keys(artifacts).length > 0 && artifactConfirmation && (
         <div className={cx("workflow-artifacts")}>
           <div className={cx("workflow-section-heading")}>
             <Text type="secondary">已生成产物</Text>
@@ -174,6 +253,45 @@ export default function WorkflowRunCard({
               }
               statements={databaseApproval.statements}
             />
+          ) : artifactConfirmation && requiresConfirmation ? (
+            clarification?.mode === 'requirement_spec_confirmation' ? (
+              <RequirementSpecConfirmationCard
+                artifact={confirmationArtifact}
+                datasourceType={datasourceType}
+                disabled={Boolean(disabled)}
+                onSaveRequirementSpec={onSaveRequirementSpec}
+                onSubmit={(editedSpec, feedback) =>
+                  onSubmitClarification?.(workflow, {
+                    requirement_spec_confirmation: feedback || '正确，继续规划',
+                  }, editedSpec)
+                }
+                requiresConfirmation={requiresConfirmation}
+                rootPath={rootPath}
+                workflow={workflow}
+              />
+            ) : (
+            <ProjectPlanConfirmationCard
+              disabled={Boolean(disabled)}
+              onAbandon={() => onSubmitClarification?.(workflow, { [artifactAnswerKey]: '需要修改，请重新生成' })}
+              onConfirm={() => onSubmitClarification?.(workflow, { [artifactAnswerKey]: '正确，继续' })}
+              plan={projectPlanObject}
+              requiresConfirmation={requiresConfirmation}
+              title={artifactConfirmation?.title || '项目计划'}
+            />
+            )
+          ) : uiDesignConfirmation ? (
+            <UiDesignConfirmationPanel
+              disabled={disabled || interactionAvailability !== 'active' || status === 'running' || Boolean(uiDesignActionPageId)}
+              onSubmit={(currentWorkflow, answers) =>
+                onSubmitClarification?.(currentWorkflow, answers)
+              }
+              showPreview={false}
+              activePageId={uiDesignActivePageId}
+              onActivePageChange={onUiDesignActivePageChange}
+              actionPageId={uiDesignActionPageId}
+              onActionPageIdChange={onUiDesignActionPageIdChange}
+              workflow={workflow}
+            />
           ) : (
             <>
           {confirmationArtifact && (
@@ -206,8 +324,13 @@ export default function WorkflowRunCard({
           ))}
           {clarification?.status === "requires_user_input" && (
             <Button
+              className={cx("clarification-confirm-btn")}
               disabled={disabled || !canSubmitClarification}
-              onClick={() => onSubmitClarification?.(workflow, answers)}
+              onClick={() => {
+                clearClarificationDraft(workflow.threadId, clarificationQuestions);
+                onSubmitClarification?.(workflow, answers);
+              }}
+              size="large"
               type="primary"
             >
               确认并继续
@@ -219,6 +342,206 @@ export default function WorkflowRunCard({
       )}
     </div>
   );
+}
+
+/** 从 Workflow 公开状态中读取 RequirementSpec 结构化数据。 */
+function readRequirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
+  for (const source of [workflow.result, workflow.state]) {
+    const value = source?.requirement_spec
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
+/**
+ * 需求文档确认卡片：展示已生成状态 + 修改（弹窗结构化编辑器）+ 确认并继续规划。
+ * 右侧需求文档只读；点「修改」打开 Modal 编辑页面/数据源/角色/流程，保存后同步给后端，
+ * 再点「确认并继续规划」时大模型拿到最新需求文档。
+ */
+function RequirementSpecConfirmationCard({
+  datasourceType,
+  disabled,
+  onSaveRequirementSpec,
+  onSubmit,
+  requiresConfirmation,
+  rootPath,
+  workflow,
+}: {
+  artifact?: WorkflowConfirmationArtifact
+  datasourceType?: DatasourceEnum
+  disabled: boolean
+  onSaveRequirementSpec?: (
+    workflow: WorkflowRunPayload,
+    spec: Record<string, unknown>
+  ) => Promise<Record<string, unknown> | undefined>
+  onSubmit: (editedSpec?: Record<string, unknown>, feedback?: string) => void
+  requiresConfirmation: boolean
+  rootPath?: string
+  workflow: WorkflowRunPayload
+}): ReactElement {
+  const spec = readRequirementSpec(workflow)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<Record<string, unknown> | undefined>()
+  const [saving, setSaving] = useState(false)
+  const canEdit = Boolean(spec) && Boolean(onSaveRequirementSpec) && Boolean(datasourceType)
+
+  const startEditing = (): void => {
+    if (!spec) return
+    // 每次打开都从当前 spec 重新克隆草稿，丢弃上次未保存的编辑，
+    // 保证取消后重开看到的是原始内容，而非上次编辑后的内容。
+    setDraft(JSON.parse(JSON.stringify(spec)) as Record<string, unknown>)
+    setEditing(true)
+  }
+
+  const cancelEditing = (): void => {
+    setEditing(false)
+    setDraft(undefined)
+  }
+
+  const saveAndClose = async (): Promise<void> => {
+    if (!draft || saving) return
+    setSaving(true)
+    try {
+      await onSaveRequirementSpec?.(workflow, draft)
+      // 保存后丢弃草稿，下次重开从后端 inject 的最新 spec 重新克隆。
+      setDraft(undefined)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // 确认时把最新 spec（弹窗保存后 inject 更新到 workflow）作为 editedSpec 传给后端。
+  const latestSpec =
+    (workflow.state?.requirement_spec as Record<string, unknown> | undefined) ??
+    (workflow.result?.requirement_spec as Record<string, unknown> | undefined)
+
+  return (
+    <div className={cx("requirement-spec-confirmation-card")}>
+      <div className={cx("artifact-auth-bar-footer")}>
+        <span className={cx("artifact-auth-status")}>
+          <CheckCircleOutlined aria-hidden="true" />
+          需求文档已生成
+        </span>
+        <span className={cx("artifact-auth-actions")}>
+          {canEdit ? (
+            <Button
+              className={cx("requirement-spec-edit-btn")}
+              disabled={disabled}
+              onClick={startEditing}
+            >
+              修改
+            </Button>
+          ) : null}
+          <Button
+            disabled={disabled || !requiresConfirmation}
+            onClick={() => onSubmit(latestSpec, undefined)}
+            type="primary"
+          >
+            确认并继续规划
+          </Button>
+        </span>
+      </div>
+      <Modal
+        cancelText="取消"
+        centered
+        className={cx("requirement-spec-edit-modal")}
+        footer={
+          <div className={cx("requirement-spec-edit-modal-actions")}>
+            <Button onClick={cancelEditing}>取消</Button>
+            <Button
+              loading={saving}
+              onClick={() => void saveAndClose()}
+              type="primary"
+            >
+              保存并退出编辑
+            </Button>
+          </div>
+        }
+        onCancel={cancelEditing}
+        open={editing}
+        title="修改需求文档"
+        width={920}
+        destroyOnClose
+      >
+        {draft && datasourceType ? (
+          <RequirementSpecEditor
+            datasourceType={datasourceType}
+            onChange={setDraft}
+            rootPath={rootPath || '/'}
+            spec={draft}
+          />
+        ) : null}
+      </Modal>
+    </div>
+  )
+}
+
+/** 项目计划确认卡片：展示已生成状态 + 查看项目计划书（弹窗只读）+ 放弃/确认保存。 */
+function ProjectPlanConfirmationCard({
+  disabled,
+  onAbandon,
+  onConfirm,
+  plan,
+  requiresConfirmation,
+  title,
+}: {
+  disabled: boolean
+  onAbandon: () => void
+  onConfirm: () => void
+  plan?: Record<string, unknown>
+  requiresConfirmation: boolean
+  title: string
+}): ReactElement {
+  const [viewing, setViewing] = useState(false)
+  return (
+    <div className={cx("artifact-auth-bar", "project-plan-confirmation-card")}>
+      <div className={cx("artifact-auth-bar-footer")}>
+        <span className={cx("artifact-auth-status")}>
+          <CheckCircleOutlined aria-hidden="true" />
+          {title}已生成
+        </span>
+        <span className={cx("artifact-auth-actions")}>
+          {plan ? (
+            <Button
+              className={cx("requirement-spec-edit-btn")}
+              onClick={() => setViewing(true)}
+            >
+              查看项目计划书
+            </Button>
+          ) : null}
+          <Button
+            disabled={disabled}
+            onClick={onAbandon}
+          >
+            放弃
+          </Button>
+          <Button
+            disabled={disabled || !requiresConfirmation}
+            onClick={onConfirm}
+            type="primary"
+          >
+            确认保存
+          </Button>
+        </span>
+      </div>
+      <Modal
+        cancelText="关闭"
+        centered
+        className={cx("requirement-spec-edit-modal")}
+        footer={null}
+        onCancel={() => setViewing(false)}
+        open={viewing}
+        title="项目计划书"
+        width={920}
+        destroyOnClose
+      >
+        {plan ? <ProjectPlanSummary plan={plan} /> : null}
+      </Modal>
+    </div>
+  )
 }
 
 function DatabaseApprovalDecision({
@@ -1039,6 +1362,68 @@ function clarificationQuestionKey(
   return question.id || question.header || question.question || String(index);
 }
 
+// 澄清表单草稿本地持久化：恢复（从历史"查看计划"回到待确认阶段）时回填用户已填的答案。
+// 后端 clarification 只存问题+选项不存答案，刷新/恢复后 useState({}) 会丢，用 localStorage 兜底。
+// key = xcodeagent:clarification-draft:{threadId}:{本轮问题指纹}，指纹随问题变化，新一轮自然读不到旧答案。
+const CLARIFICATION_DRAFT_PREFIX = 'xcodeagent:clarification-draft';
+
+function clarificationDraftKey(
+  threadId: string,
+  questions: WorkflowClarificationQuestion[],
+): string {
+  if (!threadId || questions.length === 0) return '';
+  const fingerprint = questions
+    .map((question, index) => clarificationQuestionKey(question, index))
+    .join('|');
+  return `${CLARIFICATION_DRAFT_PREFIX}:${threadId}:${fingerprint}`;
+}
+
+function loadClarificationDraft(
+  threadId: string,
+  questions: WorkflowClarificationQuestion[],
+): ClarificationAnswers {
+  const key = clarificationDraftKey(threadId, questions);
+  if (!key) return {};
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as ClarificationAnswers)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveClarificationDraft(
+  threadId: string,
+  questions: WorkflowClarificationQuestion[],
+  answers: ClarificationAnswers,
+): void {
+  const key = clarificationDraftKey(threadId, questions);
+  if (!key) return;
+  if (!answers || Object.keys(answers).length === 0) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(answers));
+  } catch {
+    // quota 超限或隐私模式禁用 localStorage 时静默放弃，不影响填表。
+  }
+}
+
+function clearClarificationDraft(
+  threadId: string,
+  questions: WorkflowClarificationQuestion[],
+): void {
+  const key = clarificationDraftKey(threadId, questions);
+  if (!key) return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // 静默忽略。
+  }
+}
+
 function clarificationAnswerComplete(
   question: WorkflowClarificationQuestion,
   value: WorkflowClarificationAnswer | undefined,
@@ -1169,6 +1554,18 @@ function clarificationAnswerText(value: WorkflowClarificationAnswer | undefined)
 }
 
 // 从 Workflow payload 的多个位置读取待确认载荷，兼容流式快照、最终结果和自定义事件。
+// 从 workflow.state/result.project_plan 读取结构化项目计划，供 ProjectPlanSummary 展示。
+function readProjectPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
+  for (const source of [workflow.result, workflow.state]) {
+    const value = source?.project_plan
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
 export function workflowClarification(
   workflow: WorkflowRunPayload,
 ): WorkflowClarification | undefined {

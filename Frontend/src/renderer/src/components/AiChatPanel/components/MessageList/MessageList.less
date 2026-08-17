@@ -198,6 +198,52 @@
   white-space: pre-wrap;
 }
 
+.@{class-prefix}-ai-message-loading-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+
+  .ant-typography {
+    color: var(--wb-text-secondary, #8a9099);
+    font-size: 13px;
+  }
+}
+
+.@{class-prefix}-ai-message-agent {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.@{class-prefix}-ai-message-agent-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 14px;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+
+.@{class-prefix}-ai-message-agent.@{class-prefix}-product .@{class-prefix}-ai-message-agent-avatar {
+  background: linear-gradient(135deg, #a97aff, #6b3cf0);
+}
+
+.@{class-prefix}-ai-message-agent.@{class-prefix}-development .@{class-prefix}-ai-message-agent-avatar {
+  background: linear-gradient(135deg, #4dabf7, #1f7aeb);
+}
+
+.@{class-prefix}-ai-message-agent-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wb-text-secondary, #8a9099);
+}
+
 .@{class-prefix}-message-skill-labels {
   display: flex;
   max-width: 100%;

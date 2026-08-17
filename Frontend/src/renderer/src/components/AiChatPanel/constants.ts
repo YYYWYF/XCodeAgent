@@ -1,9 +1,11 @@
 import type { ChatCopy } from './types'
 
-export const DEFAULT_ASSISTANT_PANEL_WIDTH = 660
+// 左右分栏按比例分配，适配不同屏幕尺寸：左侧对话区默认占 2/3。
+export const DEFAULT_ASSISTANT_PANEL_RATIO = 2 / 3
+export const MIN_ASSISTANT_PANEL_RATIO = 0.3
+export const MIN_RIGHT_PANEL_RATIO = 0.2
+// diff 面板首次打开时按固定目标宽度（px）初始化，内容宽度需求稳定。
 export const DEFAULT_DIFF_PANEL_WIDTH = 500
-export const MIN_ASSISTANT_PANEL_WIDTH = 520
-export const MIN_RIGHT_PANEL_WIDTH = 380
 export const SPLIT_HANDLE_WIDTH = 10
 
 export const chatCopy: ChatCopy = {

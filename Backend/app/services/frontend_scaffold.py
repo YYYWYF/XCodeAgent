@@ -28,7 +28,19 @@ import { Route } from '@/typings/workbench';
 export const BIZ_MENUS: Route[] = [
 """
 
-_HELLO_AGENT = "hello agent!"
+
+def _placeholder_page_source(page_name: str, page_key: str) -> str:
+    """生成合法的 TSX 占位组件源码，避免 Vite/Babel 解析失败导致预览报错。"""
+
+    component_name = "".join(
+        part.capitalize() for part in page_key.replace("-", "_").split("_") if part
+    ) or "PlaceholderPage"
+    return (
+        f"// {page_name or page_key} 页面（临时占位，待 Agent 生成真实内容）\n"
+        f"export default function {component_name}() {{\n"
+        f"  return <div>hello agent!</div>;\n"
+        f"}}\n"
+    )
 
 
 def scaffold_frontend_pages(workspace_root: str, project_plan: dict[str, Any]) -> dict[str, Any]:
@@ -104,7 +116,10 @@ def _create_page_directories(
                 # 已有 index.tsx 不覆盖（可能是 build 阶段生成的代码）
                 created.append(str(tsx_path.relative_to(frontend_dir)))
                 continue
-            tsx_path.write_text(_HELLO_AGENT, encoding="utf-8")
+            tsx_path.write_text(
+                _placeholder_page_source(page.get("name", ""), key),
+                encoding="utf-8",
+            )
         except OSError:
             logger.exception("scaffold_page_write_failed path=%s", tsx_path)
             continue

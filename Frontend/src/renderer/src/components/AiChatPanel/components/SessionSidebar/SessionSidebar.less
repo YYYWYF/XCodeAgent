@@ -784,9 +784,12 @@
 
 .@{class-prefix}-session-footer-nav {
   flex: 0 0 auto;
-  margin: 0 -18px;
-  padding: 12px 18px 4px;
-  border-top: 1px solid var(--outline-line);
+  margin: 0 -18px 8px;
+  padding: 4px 18px 12px;
+  border-bottom: 1px solid var(--outline-line);
+  // 展开态：功能菜单贴底部（应用大纲在上）。折叠态由下方 collapsed 规则覆盖为顶部。
+  order: 2;
+  margin-top: auto;
 
   .@{class-prefix}-free-chat-nav-row {
     display: flex;
@@ -1103,6 +1106,14 @@
   .@{class-prefix}-session-user-name,
   .@{class-prefix}-session-user > .anticon:last-child {
     display: none;
+  }
+
+  // 折叠态：功能菜单贴顶部（应用大纲已隐藏），取消底部贴边与分隔线。
+  .@{class-prefix}-session-footer-nav {
+    order: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    border-bottom: none;
   }
 
   .@{class-prefix}-free-chat-history-trigger,

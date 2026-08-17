@@ -1,12 +1,12 @@
 import {
   ArrowUpOutlined,
   CheckOutlined,
-  FullscreenOutlined,
+  EyeOutlined,
   InboxOutlined,
   LayoutOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
-import { Button, Input, Modal, Spin, Typography } from 'antd'
+import { Button, Input, Modal, Spin, Tag, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
@@ -45,6 +45,17 @@ type Props = {
     answers: WorkflowClarificationAnswers
   ) => void
   workflow: WorkflowRunPayload
+  /** 受控当前选中页 id（可选，用于与右侧设计稿预览面板联动）。 */
+  activePageId?: string
+  /** 选中页变化时通知外部（联动右侧预览）。 */
+  onActivePageChange?: (pageId: string) => void
+  /** 当前正在执行单页动作（选模板/换一换）的 pageId，用于右侧预览显示加载态。 */
+  actionPageId?: string | null
+  /** 单页动作页变化时通知外部（联动右侧加载态）。 */
+  onActionPageIdChange?: (pageId: string | null) => void
+  /** 是否在卡片内渲染设计稿预览（DesignRenderer）。
+   *  工作台 MessageList 卡片设 false，预览由右侧"UI设计稿"tab 承接。 */
+  showPreview?: boolean
 }
 
 // 从公开 Workflow 载荷中读取当前规划阶段的待确认内容。
@@ -75,12 +86,27 @@ function readPages(clarification?: WorkflowClarification): PageDesign[] {
 export default function UiDesignConfirmationPanel({
   disabled,
   onSubmit,
-  workflow
+  workflow,
+  activePageId: controlledActivePageId,
+  onActivePageChange,
+  actionPageId: controlledActionPageId,
+  onActionPageIdChange,
+  showPreview = true
 }: Props): ReactElement | null {
   const clarification = planningClarification(workflow)
   const pages = useMemo(() => readPages(clarification), [clarification])
   const [feedback, setFeedback] = useState('')
-  const [activePageId, setActivePageId] = useState<string>('')
+  const [internalActivePageId, setInternalActivePageId] = useState<string>('')
+  // 受控模式（外部传入 activePageId）优先，否则用内部状态。
+  const activePageId = controlledActivePageId ?? internalActivePageId
+  const setActivePageId = useCallback(
+    (next: string | ((prev: string) => string)) => {
+      const resolved = typeof next === 'function' ? next(activePageId) : next
+      if (onActivePageChange) onActivePageChange(resolved)
+      else setInternalActivePageId(resolved)
+    },
+    [activePageId, onActivePageChange]
+  )
   // 全屏查看的设计稿页面（null=关闭）。
   const [fullscreenPage, setFullscreenPage] = useState<PageDesign | null>(null)
   // 页面模板列表（与 DetailConfirmationPageSelector 共用同一份 templateService）。
@@ -88,7 +114,17 @@ export default function UiDesignConfirmationPanel({
   // 正在为哪个页面挑选模板（pageId，null=关闭模板选择弹窗）。
   const [templatePickerFor, setTemplatePickerFor] = useState<string | null>(null)
   // 正在执行单页动作（选模板/换一换）的 pageId：该页渲染区显示加载态，run 完成后清除。
-  const [actionPageId, setActionPageId] = useState<string | null>(null)
+  // 受控模式（外部传入）优先，否则用内部状态；变化时通知外部联动右侧加载态。
+  const [internalActionPageId, setInternalActionPageId] = useState<string | null>(null)
+  const actionPageId = controlledActionPageId ?? internalActionPageId
+  const setActionPageId = useCallback(
+    (next: string | null | ((prev: string | null) => string | null)) => {
+      const resolved = typeof next === 'function' ? next(actionPageId) : next
+      if (onActionPageIdChange) onActionPageIdChange(resolved)
+      else setInternalActionPageId(resolved)
+    },
+    [actionPageId, onActionPageIdChange]
+  )
   // 斜杠提及：输入框输入 / 后弹出页面列表浮层。
   const [mentionOpen, setMentionOpen] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
@@ -124,20 +160,25 @@ export default function UiDesignConfirmationPanel({
   const confirmAll = (): void => {
     // 提交一句明确的全部确认信号，后端 _user_confirmed_all_designs 据此放行项目规划。
     const message = feedback.trim() || '确认全部设计稿'
+    console.log('[ui-design-confirm] confirmAll clicked, submitting ui_design_confirmation=', message, 'workflow.runId=', workflow.runId, 'workflow.phase=', workflow.summary?.phase)
     onSubmit(workflow, { ui_design_confirmation: message })
   }
 
   // 逐页"选模板"或"重新生成"即时提交：后端 ui_confirmation 节点收到 ui_design_action
   // 后只更新该页设计稿并重放确认卡，不推进到项目规划。提交后该页需重新确认。
+  // 同时联动右侧"UI设计稿"tab：切到该页，让渲染区显示生成加载态。
+  // 选模板是同步完成（直接用模板代码，不调 LLM），不设 actionPageId 加载态；
+  // 换一换走 LLM 生成，需要加载态。
   const submitPageAction = useCallback(
     (pageId: string, action: 'select_template' | 'regenerate', templateId?: string): void => {
       const payload: Record<string, unknown> = { pageId, action }
       if (templateId) payload.templateId = templateId
-      setActionPageId(pageId)
+      if (action === 'regenerate') setActionPageId(pageId)
+      onActivePageChange?.(pageId)
       onSubmit(workflow, { ui_design_action: payload })
       setTemplatePickerFor(null)
     },
-    [onSubmit, workflow]
+    [onActivePageChange, onSubmit, workflow]
   )
 
   // 从输入框文本解析 @页面名 提及，映射回 pageId。
@@ -291,26 +332,26 @@ export default function UiDesignConfirmationPanel({
         <div className={cx('ui-design-header-copy')}>
           <h4>确认UI设计稿</h4>
           <p>
-            为每个页面选择模板或换一换生成设计稿，全部完成后进入项目规划。
+            选择模板或换一换生成设计稿，全部确认后进入项目规划。
           </p>
+          {disabled && actionPageId ? (
+            <span className={cx('ui-design-processing-hint')}>
+              {actionPageId === 'adjust'
+                ? '正在调整设计稿，请稍候…'
+                : `正在处理「${pages.find((p) => (p.pageId || '') === actionPageId)?.name || actionPageId}」，请稍候…`}
+            </span>
+          ) : null}
         </div>
         {pages.length > 0 ? (
           <span className={cx('ui-design-progress-badge')}>
             {confirmedCount} / {pages.length}
           </span>
         ) : null}
-        {disabled && actionPageId ? (
-          <span className={cx('ui-design-processing-hint')}>
-            {actionPageId === 'adjust'
-              ? '正在调整设计稿，请稍候…'
-              : `正在处理「${pages.find((p) => (p.pageId || '') === actionPageId)?.name || actionPageId}」，请稍候…`}
-          </span>
-        ) : null}
       </header>
 
       {pages.length === 0 ? (
         <Paragraph type="secondary">暂无可展示的页面设计稿。</Paragraph>
-      ) : (
+      ) : showPreview ? (
         <>
           <div className={cx('ui-design-body')}>
             <aside className={cx('ui-design-anchor')}>
@@ -391,11 +432,11 @@ export default function UiDesignConfirmationPanel({
                         <Button
                           className={cx('ui-design-action-btn')}
                           disabled={!page.code || actionPageId === pageId || (disabled && actionPageId === 'adjust')}
-                          icon={<FullscreenOutlined />}
-                          onClick={() => setFullscreenPage(page)}
-                          title={actionPageId === pageId ? '正在生成设计稿' : '全屏查看'}
+                          icon={<EyeOutlined />}
+                          onClick={() => setActivePageId(pageId)}
+                          title={actionPageId === pageId ? '正在生成设计稿' : '在右侧查看设计稿'}
                         >
-                          放大
+                          查看设计稿
                         </Button>
                         <Button
                           className={cx('ui-design-action-btn')}
@@ -411,9 +452,9 @@ export default function UiDesignConfirmationPanel({
                           disabled={disabled}
                           icon={<ReloadOutlined />}
                           onClick={() => submitPageAction(pageId, 'regenerate')}
-                          title="生成本页设计稿"
+                          title={page.code ? '重新生成本页设计稿' : '生成本页设计稿'}
                         >
-                          换一换
+                          {page.code ? '换一换' : '生成'}
                         </Button>
                       </div>
                     </div>
@@ -422,6 +463,7 @@ export default function UiDesignConfirmationPanel({
                         {page.description}
                       </Paragraph>
                     ) : null}
+                    {showPreview ? (
                     <div className={cx('ui-design-card-preview')}>
                       {actionPageId === pageId ? (
                         <div className={cx('ui-design-card-loading')}>
@@ -467,13 +509,96 @@ export default function UiDesignConfirmationPanel({
                         </div>
                       )}
                     </div>
+                    ) : null}
                   </div>
                 )
               })()}
             </div>
           </div>
+        </>
+      ) : (
+        // 工作台 MessageList 卡片模式：页面列表，每行一个页面 + 操作按钮。
+        // 设计稿预览由右侧"UI设计稿"tab 承接，卡片内不渲染预览/放大。
+        <div className={cx('ui-design-page-list')}>
+          {pages.map((page, index) => {
+            const pageId = page.pageId || `page-${index + 1}`
+            const confirmed = isPageConfirmed(page)
+            const acting = actionPageId === pageId
+            return (
+              <div
+                className={cx(
+                  'ui-design-page-row',
+                  confirmed && 'is-confirmed',
+                  acting && 'is-acting'
+                )}
+                key={pageId}
+              >
+                <div className={cx('ui-design-page-row-meta')}>
+                  <span className={cx('ui-design-page-row-index')}>
+                    {confirmed ? <CheckOutlined /> : index + 1}
+                  </span>
+                  <div className={cx('ui-design-page-row-title')}>
+                    <Text className={cx('ui-design-page-row-name')} strong>{page.name || pageId}</Text>
+                    {page.path ? (
+                      <Text className={cx('ui-design-page-row-path')} code>
+                        {page.path}
+                      </Text>
+                    ) : null}
+                    {page.template_id ? (
+                      <Text className={cx('ui-design-page-row-template')} type="secondary">
+                        <LayoutOutlined /> {templates.find((t) => t.manifest.id === page.template_id)?.manifest.name || page.template_id}
+                      </Text>
+                    ) : null}
+                  </div>
+                  {acting ? (
+                    <Tag className={cx('ui-design-page-row-status', 'is-generating')}>生成中</Tag>
+                  ) : confirmed ? (
+                    <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已确认</Tag>
+                  ) : page.code ? (
+                    <Tag className={cx('ui-design-page-row-status', 'is-pending')}>待确认</Tag>
+                  ) : (
+                    <Tag className={cx('ui-design-page-row-status', 'is-empty')}>未生成</Tag>
+                  )}
+                </div>
+                <div className={cx('ui-design-page-row-actions')}>
+                  <Button
+                    className={cx('ui-design-action-btn')}
+                    disabled={!page.code || acting || (disabled && actionPageId === 'adjust')}
+                    icon={<EyeOutlined />}
+                    onClick={() => {
+                      setActivePageId(pageId)
+                      onActivePageChange?.(pageId)
+                    }}
+                    title={acting ? '正在生成设计稿' : '在右侧查看设计稿'}
+                  >
+                    查看设计稿
+                  </Button>
+                  <Button
+                    className={cx('ui-design-action-btn')}
+                    disabled={disabled || templates.length === 0}
+                    icon={<LayoutOutlined />}
+                    onClick={() => setTemplatePickerFor(pageId)}
+                    title={templates.length === 0 ? '暂无可用页面模板' : '选择页面模板作为本页设计稿'}
+                  >
+                    选模板
+                  </Button>
+                  <Button
+                    className={cx('ui-design-action-btn')}
+                    disabled={disabled}
+                    icon={<ReloadOutlined />}
+                    onClick={() => submitPageAction(pageId, 'regenerate')}
+                    title={page.code ? '重新生成本页设计稿' : '生成本页设计稿'}
+                  >
+                    {page.code ? '换一换' : '生成'}
+                  </Button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
-          <div className={cx('ui-design-confirm-footer')}>
+      <div className={cx('ui-design-confirm-footer')}>
             <div className={cx('ui-design-feedback-wrap')}>
               <TextArea
                 autoSize={{ minRows: 2, maxRows: 4 }}
@@ -538,8 +663,6 @@ export default function UiDesignConfirmationPanel({
               </div>
             </div>
           </div>
-        </>
-      )}
 
       <Modal
         bodyStyle={{ padding: 0 }}

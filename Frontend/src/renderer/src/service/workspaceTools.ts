@@ -78,6 +78,31 @@ export type ReadWorkspaceFileResult = {
   content: string
 }
 
+export type WorkspaceTreeNode = {
+  path: string
+  name: string
+  kind: 'directory' | 'file' | 'symlink' | 'other' | 'truncated'
+  size?: number | null
+  modified?: string
+  children?: WorkspaceTreeNode[]
+}
+
+export type WorkspaceTreeRequest = {
+  workspace_root?: string
+  path?: string
+  max_depth?: number
+  include_hidden?: boolean
+  limit?: number
+}
+
+export type WorkspaceTreeResult = {
+  tool: 'workspace.tree'
+  workspace?: { root: string; name: string; writable: boolean }
+  path: string
+  tree: WorkspaceTreeNode
+  truncated: boolean
+}
+
 function getAgentBaseUrl(): string {
   const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
   return agentBaseUrl ? agentBaseUrl.replace(/\/$/, '') : '/api/agent'
@@ -114,6 +139,15 @@ export function readWorkspaceFile(
   request: ReadWorkspaceFileRequest
 ): Promise<ReadWorkspaceFileResult> {
   return requestJson<ReadWorkspaceFileResult>('/tools/file/read', {
+    method: 'POST',
+    body: JSON.stringify(request)
+  })
+}
+
+export function readWorkspaceTree(
+  request: WorkspaceTreeRequest
+): Promise<WorkspaceTreeResult> {
+  return requestJson<WorkspaceTreeResult>('/tools/workspace/tree', {
     method: 'POST',
     body: JSON.stringify(request)
   })

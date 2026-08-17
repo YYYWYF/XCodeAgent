@@ -1,0 +1,141 @@
+.@{class-prefix}-phase-switch-confirm-modal {
+  .ant-modal-content {
+    padding: 0;
+    overflow: hidden;
+    border-radius: 16px;
+    box-shadow: 0 18px 48px rgba(40, 24, 90, 0.22);
+  }
+  .ant-modal-body {
+    padding: 0;
+  }
+}
+
+.@{class-prefix}-phase-switch-confirm {
+  display: flex;
+  flex-direction: column;
+  animation: xa-phase-confirm-in 0.22s ease-out;
+}
+
+.@{class-prefix}-phase-switch-confirm-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 24px 20px;
+  color: #fff;
+  background: linear-gradient(135deg, #6b3cf0 0%, #8a6be0 55%, #c47a00 130%);
+}
+
+.@{class-prefix}-phase-switch-confirm-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 22px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+}
+
+.@{class-prefix}-phase-switch-confirm-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  strong {
+    font-size: 17px;
+    font-weight: 600;
+  }
+  small {
+    font-size: 12px;
+    opacity: 0.85;
+  }
+}
+
+.@{class-prefix}-phase-switch-confirm-body {
+  padding: 18px 24px 8px;
+}
+
+.@{class-prefix}-phase-switch-confirm-lead {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--wb-text);
+
+  strong {
+    color: var(--wb-accent);
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-phase-switch-confirm-points {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--wb-surface-subtle);
+    animation: xa-phase-confirm-in 0.3s ease-out backwards;
+
+    &:nth-child(2) {
+      animation-delay: 0.05s;
+    }
+    &:nth-child(3) {
+      animation-delay: 0.1s;
+    }
+  }
+}
+
+.@{class-prefix}-phase-switch-confirm-point-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+}
+
+.@{class-prefix}-phase-switch-confirm-point-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--wb-text-secondary);
+
+  strong {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-phase-switch-confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 24px 20px;
+}
+
+@keyframes xa-phase-confirm-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

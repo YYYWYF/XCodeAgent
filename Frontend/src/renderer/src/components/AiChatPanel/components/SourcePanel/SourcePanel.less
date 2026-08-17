@@ -1,0 +1,232 @@
+.@{class-prefix}-source-panel {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--wb-canvas);
+}
+
+// 左栏：目录树
+.@{class-prefix}-source-panel-tree {
+  display: flex;
+  flex: 0 0 220px;
+  flex-direction: column;
+  width: 220px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--wb-surface-subtle);
+  border-right: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-source-panel-tree-loading,
+.@{class-prefix}-source-panel-tree-empty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.@{class-prefix}-source-tree {
+  padding: 8px 0;
+  margin: 0;
+  list-style: none;
+}
+
+.@{class-prefix}-source-tree-children {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.@{class-prefix}-source-tree-node {
+  display: block;
+}
+
+.@{class-prefix}-source-tree-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms ease, color 120ms ease;
+
+  > .anticon {
+    flex: 0 0 auto;
+    font-size: 13px;
+    color: var(--wb-text-tertiary);
+  }
+
+  &.@{class-prefix}-is-dir {
+    color: var(--wb-text);
+    font-weight: 500;
+
+    > .anticon {
+      color: var(--wb-accent);
+    }
+  }
+
+  &:hover {
+    background: var(--wb-surface-hover);
+  }
+
+  &.@{class-prefix}-is-selected {
+    background: var(--wb-accent-soft);
+    color: var(--wb-accent);
+
+    > .anticon {
+      color: var(--wb-accent);
+    }
+  }
+}
+
+.@{class-prefix}-source-tree-leaf-spacer {
+  display: inline-block;
+  width: 13px; // 对齐目录的折叠箭头宽度
+  flex: 0 0 13px;
+}
+
+.@{class-prefix}-source-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 右栏：代码查看器
+.@{class-prefix}-source-panel-viewer {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.@{class-prefix}-source-panel-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--wb-border);
+  background: var(--wb-surface-subtle);
+
+  .ant-typography {
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-source-panel-truncated.ant-typography {
+  font-size: 11px;
+}
+
+.@{class-prefix}-source-panel-viewer-loading,
+.@{class-prefix}-source-panel-viewer-empty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.@{class-prefix}-source-panel-pre {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  color: var(--wb-text);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+
+  code.hljs {
+    background: transparent;
+    padding: 0;
+
+    .hljs-keyword,
+    .hljs-selector-tag,
+    .hljs-literal {
+      color: #d73a49;
+    }
+
+    .hljs-string,
+    .hljs-regexp,
+    .hljs-addition {
+      color: #032f62;
+    }
+
+    .hljs-comment,
+    .hljs-quote {
+      color: #6a737d;
+      font-style: italic;
+    }
+
+    .hljs-title,
+    .hljs-function .hljs-title {
+      color: #6f42c1;
+    }
+
+    .hljs-number,
+    .hljs-symbol {
+      color: #005cc5;
+    }
+
+    .hljs-tag,
+    .hljs-name,
+    .hljs-attribute {
+      color: #22863a;
+    }
+  }
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] .@{class-prefix}-source-panel-pre code.hljs {
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal {
+    color: #ff7b72;
+  }
+
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-addition {
+    color: #a5d6ff;
+  }
+
+  .hljs-comment,
+  .hljs-quote {
+    color: #8b949e;
+  }
+
+  .hljs-title,
+  .hljs-function .hljs-title {
+    color: #d2a8ff;
+  }
+
+  .hljs-number,
+  .hljs-symbol {
+    color: #79c0ff;
+  }
+
+  .hljs-tag,
+  .hljs-name,
+  .hljs-attribute {
+    color: #7ee787;
+  }
+}
