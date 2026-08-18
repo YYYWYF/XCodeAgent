@@ -596,6 +596,77 @@
   gap: 5px;
   padding-top: 8px;
   border-top: 1px solid var(--wb-border);
+
+  // antd4 的 .ant-checkbox-wrapper/.ant-radio-wrapper 默认 align-items: baseline，
+  // 且 .ant-checkbox/.ant-radio 自带 top: 0.2em 配合 baseline 下移；文案行高较大时
+  // 勾选框会显得偏下。这里改用 center 对齐并重置 top，让勾选框与文案垂直居中。
+  .@{class-prefix}-workflow-clarification-option.ant-checkbox-wrapper,
+  .@{class-prefix}-workflow-clarification-option.ant-radio-wrapper {
+    align-items: center !important;
+    line-height: 22px;
+
+    > .ant-checkbox,
+    > .ant-radio {
+      top: 0;
+    }
+  }
+}
+
+// Tooltip 通过 Portal 挂到 body，用 overlayClassName 限定作用域，
+// 确保箭头与内容块配色一致，不依赖全局 body:has 选择器是否命中。
+.@{class-prefix}-workflow-clarification-option-tooltip {
+  &.ant-tooltip-placement-top,
+  &.ant-tooltip-placement-topLeft,
+  &.ant-tooltip-placement-topRight {
+    padding-bottom: 2px;
+  }
+
+  .ant-tooltip-inner {
+    min-height: 24px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 18px;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  // antd4.24 的箭头底色由 --antd-arrow-background-color 变量驱动，
+  // 作用于 .ant-tooltip-arrow-content::before 伪元素。重置该变量
+  // 才能让箭头与 inner 同色；直接覆盖 background 不作用于伪元素。
+  .ant-tooltip-arrow-content {
+    --antd-arrow-background-color: #ffffff;
+  }
+}
+
+// 暗色主题下浮层配色：通过 workbench-shell 的 data-theme 切换箭头与内容块底色，
+// 与全局浮层覆盖保持一致。
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
+  .@{class-prefix}-workflow-clarification-option-tooltip {
+    .ant-tooltip-inner {
+      color: #f2f2f2;
+      background: #28282b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .ant-tooltip-arrow-content {
+      --antd-arrow-background-color: #28282b;
+    }
+  }
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
+  .@{class-prefix}-workflow-clarification-option-tooltip {
+    .ant-tooltip-inner {
+      color: #202124;
+      background: #ffffff;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .ant-tooltip-arrow-content {
+      --antd-arrow-background-color: #ffffff;
+    }
+  }
 }
 
 .@{class-prefix}-workflow-clarification-context {

@@ -5,7 +5,7 @@ import {
   LoadingOutlined,
   PauseCircleOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Checkbox, Collapse, Input, Modal, Progress, Radio, Tag, Typography } from "antd";
+import { Alert, Button, Checkbox, Collapse, Input, Modal, Progress, Radio, Tag, Tooltip, Typography } from "antd";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 import type {
@@ -1300,10 +1300,11 @@ function ClarificationQuestionControl({
     .map((option) => ({
       label: option.label || "",
       value: option.value || option.label || "",
+      description: option.description || "",
     }));
   const optionsWithOther =
     question.allowOther !== false && !options.some((option) => option.value === OTHER_OPTION_VALUE)
-      ? [...options, { label: "其他", value: OTHER_OPTION_VALUE }]
+      ? [...options, { label: "其他", value: OTHER_OPTION_VALUE, description: "" }]
       : options;
   const selectedValues = selectedAnswerValues(value);
   const otherSelected = selectedValues.includes(OTHER_OPTION_VALUE);
@@ -1339,9 +1340,24 @@ function ClarificationQuestionControl({
           <Checkbox.Group
             disabled={disabled}
             onChange={(checkedValues) => setSelectedValues(checkedValues.map(String))}
-            options={optionsWithOther}
             value={selectedValues}
-          />
+          >
+            {optionsWithOther.map((option) => (
+              <Checkbox key={option.value} value={option.value} className={cx("workflow-clarification-option")}>
+                {option.description ? (
+                  <Tooltip
+                    title={option.description}
+                    placement="top"
+                    overlayClassName={cx("workflow-clarification-option-tooltip")}
+                  >
+                    <span>{option.label}</span>
+                  </Tooltip>
+                ) : (
+                  <span>{option.label}</span>
+                )}
+              </Checkbox>
+            ))}
+          </Checkbox.Group>
           {otherSelected && <OtherInput disabled={disabled} onChange={setOtherValue} value={otherValue} />}
         </>
       );
@@ -1355,8 +1371,18 @@ function ClarificationQuestionControl({
           value={selectedValues[0]}
         >
           {optionsWithOther.map((option) => (
-            <Radio key={option.value} value={option.value}>
-              {option.label}
+            <Radio key={option.value} value={option.value} className={cx("workflow-clarification-option")}>
+              {option.description ? (
+                <Tooltip
+                  title={option.description}
+                  placement="top"
+                  overlayClassName={cx("workflow-clarification-option-tooltip")}
+                >
+                  <span>{option.label}</span>
+                </Tooltip>
+              ) : (
+                <span>{option.label}</span>
+              )}
             </Radio>
           ))}
         </Radio.Group>
