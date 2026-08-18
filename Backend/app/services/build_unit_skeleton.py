@@ -7,8 +7,8 @@ from hashlib import sha256
 import json
 from typing import Any
 
-from app.services.frontend_page_tree import flatten_frontend_pages
 from app.services.entity_definitions import plan_data_sources
+from app.services.frontend_page_tree import project_plan_page_records
 
 
 PUBLIC_UNIT_IDS = (
@@ -171,7 +171,7 @@ def _build_units(
     )
     unit_ids.extend(
         f"page:{page_id}"
-        for page_id in _ids(flatten_frontend_pages(project_plan.get("frontend_pages")), "pageId")
+        for page_id in _ids(project_plan_page_records(project_plan), "pageId")
     )
     return {
         unit_id: _unit_definition(
@@ -243,7 +243,12 @@ def _unit_graph(
         )
         for contract in contracts
     }
-    page_details_by_id = {
+    page_contracts_by_id = {
+        str(contract.get("pageId") or contract.get("id")): contract
+        for contract in _dict_items(project_plan.get("page_implementation_contracts"))
+        if contract.get("pageId") or contract.get("id")
+    }
+    legacy_page_details_by_id = {
         str(detail.get("pageId") or detail.get("id")): detail
         for detail in _dict_items(project_plan.get("page_detail_plans"))
         if detail.get("pageId") or detail.get("id")
@@ -273,7 +278,7 @@ def _unit_graph(
             edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
             edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
 
-    for page in flatten_frontend_pages(project_plan.get("frontend_pages")):
+    for page in project_plan_page_records(project_plan):
         page_id = str(page.get("pageId") or "")
         if not page_id:
             continue
@@ -291,7 +296,7 @@ def _unit_graph(
             )
         dependency_source = _page_dependency_source(
             page,
-            page_details_by_id.get(page_id),
+            page_contracts_by_id.get(page_id) or legacy_page_details_by_id.get(page_id),
         )
         endpoint_unit_ids = _page_endpoint_unit_ids(dependency_source, contracts)
         static_endpoint_unit_ids = [
@@ -330,10 +335,26 @@ def _page_dependency_source(
     page: dict[str, Any],
     page_detail: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """优先用已确认 PageDetail 的 endpoint 引用补齐页面 Unit 依赖来源。"""
+    """优先用页面实现契约或旧 PageDetail 的 endpoint 引用补齐页面 Unit 依赖。"""
 
     if not isinstance(page_detail, dict):
         return page
+    required_endpoint_ids = [
+        str(endpoint_id or "").strip()
+        for endpoint_id in page_detail.get("requiredEndpointIds") or []
+        if str(endpoint_id or "").strip()
+    ]
+    if required_endpoint_ids:
+        references = page.get("references") if isinstance(page.get("references"), dict) else {}
+        return {
+            **page,
+            "references": {
+                **references,
+                "endpoint_dependencies": [
+                    {"endpoint_id": endpoint_id} for endpoint_id in required_endpoint_ids
+                ],
+            },
+        }
     detail_references = page_detail.get("references")
     if not isinstance(detail_references, dict):
         return page
@@ -347,11 +368,11 @@ def _skeleton_fingerprint(
     """为 Unit 骨架输入生成稳定指纹，供后续页面请求复用。"""
 
     payload = {
-        "skeleton_policy": "source-aware-endpoint-detail-v2",
+        "skeleton_policy": "page-implementation-contract-v3",
         "project_plan_version": project_plan.get("version"),
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),
-        "frontend_pages": project_plan.get("frontend_pages"),
+        "pages": project_plan_page_records(project_plan),
         "data_sources": plan_data_sources(project_plan),
         "api_contracts": project_plan.get("api_contracts"),
         "workspace_revision": (workspace_snapshot or {}).get("workspace_revision"),

@@ -6,7 +6,7 @@ import {
   LayoutOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
-import { Button, Input, Modal, Spin, Tag, Typography } from 'antd'
+import { Alert, Button, Input, Modal, Spin, Tag, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
@@ -32,6 +32,9 @@ type PageDesign = {
   code_path?: string
   /** 设计稿 .tsx 源码（方案 B：DesignRenderer 直接消费此字段编译渲染）。 */
   code?: string
+  /** 仅用于隔离设计稿预览，不是 ProductPlan 正式路由。 */
+  preview_path?: string
+  /** 旧 UI Manifest 兼容字段。 */
   route_path?: string
   status?: string
   /** 用户为本页选中的页面模板 id（后端 ui_confirmation 节点回传），用于回显"已选模板"。 */
@@ -95,6 +98,11 @@ export default function UiDesignConfirmationPanel({
 }: Props): ReactElement | null {
   const clarification = planningClarification(workflow)
   const pages = useMemo(() => readPages(clarification), [clarification])
+  // 最终确认被后端事实校验拒绝时，直接展示确定性错误而不是只停留在当前页面。
+  const validationErrors = useMemo(() => {
+    const value = clarification?.validation_errors
+    return Array.isArray(value) ? value.map(String).filter(Boolean) : []
+  }, [clarification])
   const [feedback, setFeedback] = useState('')
   const [internalActivePageId, setInternalActivePageId] = useState<string>('')
   // 受控模式（外部传入 activePageId）优先，否则用内部状态。
@@ -158,14 +166,20 @@ export default function UiDesignConfirmationPanel({
   }, [workflow.events, actionPageId])
 
   const confirmAll = (): void => {
-    // 提交一句明确的全部确认信号，后端 _user_confirmed_all_designs 据此放行项目规划。
+    // 提交一句明确的全部确认信号，后端 _user_confirmed_all_designs 据此进入技术规划。
     const message = feedback.trim() || '确认全部设计稿'
     console.log('[ui-design-confirm] confirmAll clicked, submitting ui_design_confirmation=', message, 'workflow.runId=', workflow.runId, 'workflow.phase=', workflow.summary?.phase)
     onSubmit(workflow, { ui_design_confirmation: message })
   }
 
+  // 用户明确选择跳过 UI 设计时，提交结构化动作并直接进入技术规划。
+  const skipUiDesign = (): void => {
+    if (disabled) return
+    onSubmit(workflow, { ui_design_action: { action: 'skip' } })
+  }
+
   // 逐页"选模板"或"重新生成"即时提交：后端 ui_confirmation 节点收到 ui_design_action
-  // 后只更新该页设计稿并重放确认卡，不推进到项目规划。提交后该页需重新确认。
+  // 后只更新该页设计稿并重放确认卡，不推进到技术规划。提交后该页需重新确认。
   // 同时联动右侧"UI设计稿"tab：切到该页，让渲染区显示生成加载态。
   // 选模板是同步完成（直接用模板代码，不调 LLM），不设 actionPageId 加载态；
   // 换一换走 LLM 生成，需要加载态。
@@ -332,7 +346,7 @@ export default function UiDesignConfirmationPanel({
         <div className={cx('ui-design-header-copy')}>
           <h4>确认UI设计稿</h4>
           <p>
-            选择模板或换一换生成设计稿，全部确认后进入项目规划。
+            如需视觉参考可选择模板或换一换生成设计稿，也可以跳过，直接进入技术规划。
           </p>
           {disabled && actionPageId ? (
             <span className={cx('ui-design-processing-hint')}>
@@ -348,6 +362,17 @@ export default function UiDesignConfirmationPanel({
           </span>
         ) : null}
       </header>
+
+      {validationErrors.length > 0 ? (
+        <Alert
+          description={validationErrors.map((error) => (
+            <div key={error}>{error}</div>
+          ))}
+          message="设计稿未通过产品事实一致性校验"
+          showIcon
+          type="error"
+        />
+      ) : null}
 
       {pages.length === 0 ? (
         <Paragraph type="secondary">暂无可展示的页面设计稿。</Paragraph>
@@ -647,10 +672,18 @@ export default function UiDesignConfirmationPanel({
                 {adjustProgress
                   ? `正在调整设计稿（第 ${adjustProgress.ready}/${adjustProgress.total} 页）…`
                   : allConfirmed
-                    ? '所有页面设计稿已确认，可以进入项目规划。'
-                    : `请为每个页面选模板或换一换生成设计稿（已完成 ${confirmedCount}/${pages.length}）。`}
+                    ? '所有页面设计稿已确认，可以进入技术规划。'
+                    : `可为每个页面选模板或换一换生成设计稿，也可以直接跳过（已完成 ${confirmedCount}/${pages.length}）。`}
               </Text>
               <div className={cx('ui-design-confirm-actions')}>
+                <Button
+                  className={cx('ui-design-skip-btn')}
+                  disabled={disabled}
+                  onClick={skipUiDesign}
+                  size="large"
+                >
+                  跳过 UI 设计
+                </Button>
                 <Button
                   className={cx('ui-design-confirm-all-btn')}
                   disabled={disabled || !allConfirmed}
@@ -658,7 +691,7 @@ export default function UiDesignConfirmationPanel({
                   size="large"
                   type="primary"
                 >
-                  进入项目规划
+                  进入技术规划
                 </Button>
               </div>
             </div>

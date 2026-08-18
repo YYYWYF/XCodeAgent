@@ -99,6 +99,8 @@ def direct_summary(state: dict[str, Any], *, status: str) -> dict[str, Any]:
         "repairIteration": state.get("repair_iteration", 0),
         "maxRepairIterations": state.get("max_repair_iterations", 3),
         "integrationNextAction": state.get("integration_next_action"),
+        "changeId": state.get("change_id") or None,
+        "target": state.get("change_target") or None,
     }
 
 
@@ -107,6 +109,8 @@ def public_direct_state(state: dict[str, Any]) -> dict[str, Any]:
 
     keys = (
         "request",
+        "change_id",
+        "change_target",
         "phase",
         "status",
         "message",

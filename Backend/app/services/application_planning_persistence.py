@@ -9,7 +9,9 @@ from typing import Any
 
 from app.services.data_source_policy import CANONICAL_DATASOURCE_TYPES
 from app.services.entity_definitions import plan_data_sources
-from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
+from app.services.frontend_page_tree import is_menu_node, project_plan_page_records
+from app.services.product_plan import require_current_product_plan
+from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:
@@ -50,13 +52,37 @@ def _page_key_from_page_id(page_id: str) -> str:
 
 
 def _page_detail_map(project_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """按页面 id 索引已确认的页面详细设计。"""
+    """按页面 id 索引当前 TechnicalPlan 的运行时实现契约。"""
 
-    return {
-        str(item["pageId"]): item
-        for item in _dict_items(project_plan.get("page_detail_plans"))
+    implementation_contracts = {
+        str(item["pageId"]): {
+            "permissions": [
+                binding.get("roleId")
+                for binding in _dict_items(item.get("permissionBindings"))
+                if binding.get("roleId") and binding.get("access") == "allow"
+            ],
+            "acceptance_criteria": _text_items(item.get("productAcceptance")),
+            "response_bindings": item.get("responseBindings", []),
+            "page_navigation": item.get("navigationBindings", []),
+            "operation_interactions": [
+                {
+                    "id": binding.get("actionId"),
+                    "action": binding.get("actionId"),
+                    "binding_type": binding.get("bindingType"),
+                    "endpoint_id": binding.get("endpointId"),
+                    "target_page_id": binding.get("targetPageId"),
+                    "local_effect": binding.get("localEffect"),
+                    "external_target": binding.get("externalTarget"),
+                    "steps": binding.get("steps", []),
+                }
+                for binding in _dict_items(item.get("actionBindings"))
+                if binding.get("actionId")
+            ],
+        }
+        for item in _dict_items(project_plan.get("page_implementation_contracts"))
         if item.get("pageId")
     }
+    return implementation_contracts
 
 
 def _layout(detail: dict[str, Any]) -> dict[str, Any]:
@@ -127,8 +153,18 @@ def _interactions(detail: dict[str, Any]) -> list[dict[str, Any]]:
             "name": name,
             "trigger": str(item.get("trigger") or "用户操作"),
             "userAction": str(item.get("user_action") or item.get("trigger") or name),
-            "systemResponse": str(item.get("behavior") or item.get("system_response") or "更新页面反馈。"),
+            "systemResponse": str(
+                item.get("behavior")
+                or item.get("system_response")
+                or item.get("local_effect")
+                or "按已确认技术绑定执行操作。"
+            ),
+            **({"bindingType": str(item["binding_type"])} if item.get("binding_type") else {}),
             **({"endpointId": str(item["endpoint_id"])} if item.get("endpoint_id") else {}),
+            **({"targetMenuKey": str(item["target_page_id"])} if item.get("target_page_id") else {}),
+            **({"localEffect": str(item["local_effect"])} if item.get("local_effect") else {}),
+            **({"externalTarget": str(item["external_target"])} if item.get("external_target") else {}),
+            **({"steps": [dict(step) for step in _dict_items(item.get("steps"))]} if item.get("steps") else {}),
         })
     for index, item in enumerate(_dict_items(detail.get("page_navigation")), start=1):
         target = str(item.get("targetPageId") or "")
@@ -213,7 +249,7 @@ def _menu_tree_items(
     nodes: Any,
     details: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """递归把 ProjectPlan.frontend_pages 菜单树投射为 application.json 菜单结构。"""
+    """递归把当前计划 pages 投射为 application.json 菜单结构。"""
 
     items: list[dict[str, Any]] = []
     for node in _dict_items(nodes):
@@ -241,7 +277,7 @@ def _menu_tree_items(
 def _home_menu_key(project_plan: dict[str, Any]) -> str:
     """优先选择树中的首个页面叶子作为 homeMenuKey。"""
 
-    pages = flatten_frontend_pages(project_plan.get("frontend_pages"))
+    pages = project_plan_page_records(project_plan)
     if not pages:
         return ""
     first_page = pages[0]
@@ -252,7 +288,7 @@ def _menus(project_plan: dict[str, Any]) -> dict[str, Any]:
     """把 ProjectPlan 页面清单和详细设计投射为菜单。"""
 
     details = _page_detail_map(project_plan)
-    items = _menu_tree_items(project_plan.get("frontend_pages"), details)
+    items = _menu_tree_items(project_plan_page_records(project_plan), details)
     if not items:
         raise ValueError("已确认的项目计划中没有可写入的页面清单。")
     return {"homeMenuKey": _home_menu_key(project_plan) or items[0]["key"], "items": items}
@@ -377,8 +413,9 @@ def _document_descriptor(
     label: str,
     artifact_format: str,
     expected_directory: str,
+    accepted_confirmation_statuses: tuple[str, ...] = ("confirmed",),
 ) -> dict[str, str]:
-    """校验规划产物位于指定目录，并生成相对路径与内容摘要。"""
+    """校验规划产物位于指定目录、状态合法，并生成相对路径与内容摘要。"""
 
     candidate = Path(str(value or "")).expanduser()
     document = (candidate if candidate.is_absolute() else workspace / candidate).resolve()
@@ -395,8 +432,14 @@ def _document_descriptor(
         raise ValueError(f"{label} 不能为空：{document}")
     if artifact_format == "json":
         parsed = json.loads(content)
-        if not isinstance(parsed, dict) or parsed.get("confirmation_status") != "confirmed":
-            raise ValueError(f"{label} 必须是已确认的 JSON 对象：{document}")
+        if (
+            not isinstance(parsed, dict)
+            or parsed.get("confirmation_status") not in accepted_confirmation_statuses
+        ):
+            if accepted_confirmation_statuses == ("confirmed",):
+                raise ValueError(f"{label} 必须是已确认的 JSON 对象：{document}")
+            allowed_statuses = "、".join(accepted_confirmation_statuses)
+            raise ValueError(f"{label} 必须是状态为 {allowed_statuses} 的 JSON 对象：{document}")
     return {
         "format": artifact_format,
         "path": relative_path.as_posix(),
@@ -405,16 +448,32 @@ def _document_descriptor(
 
 
 def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, Any]:
-    """校验两步规划状态，并只返回 specs/plans 中正式产物的索引。"""
+    """校验需求、产品、UI、技术四阶段正式产物并返回索引，UI允许明确跳过。"""
 
     requirement_spec = state.get("requirement_spec")
-    project_plan = state.get("project_plan")
+    product_plan = state.get("product_plan")
+    technical_plan = state.get("technical_plan")
     if not isinstance(requirement_spec, dict) or requirement_spec.get("confirmation_status") != "confirmed":
         raise ValueError("需求文档必须经用户确认后才能进入工作区。")
-    if not isinstance(project_plan, dict) or project_plan.get("confirmation_status") != "confirmed":
-        raise ValueError("项目计划必须经用户确认后才能进入工作区。")
+    ui_designs = state.get("ui_designs")
+    if (
+        not isinstance(technical_plan, dict)
+        or technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE
+        or technical_plan.get("confirmation_status") != "confirmed"
+    ):
+        raise ValueError("技术规划必须经开发角色确认后才能进入工作区。")
+    product_plan = require_current_product_plan(product_plan, requirement_spec)
+    if not isinstance(product_plan, dict) or product_plan.get("confirmation_status") != "confirmed":
+        raise ValueError("产品规划必须经产品角色确认后才能进入工作区。")
+    if (
+        not isinstance(ui_designs, dict)
+        or ui_designs.get("confirmation_status") not in {"confirmed", "skipped"}
+    ):
+        raise ValueError("UI 设计稿必须经产品角色确认或明确跳过后才能进入工作区。")
     requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))
-    project_plan_markdown = Path(str(state.get("project_plan_path") or ""))
+    product_plan_markdown = Path(str(state.get("product_plan_path") or ""))
+    technical_plan_markdown = Path(str(state.get("technical_plan_path") or ""))
+    ui_design_json = workspace / ".xcodeagent" / "specs" / "ui-designs.json"
     return {
         "requirementSpec": {
             "markdown": _document_descriptor(
@@ -428,14 +487,36 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
                 ".xcodeagent/specs",
             ),
         },
-        "projectPlan": {
+        "productPlan": {
             "markdown": _document_descriptor(
-                workspace, project_plan_markdown, "项目计划", "markdown", ".xcodeagent/plans"
+                workspace, product_plan_markdown, "产品规划", "markdown", ".xcodeagent/plans"
             ),
             "json": _document_descriptor(
                 workspace,
-                state.get("project_plan_json_path") or project_plan_markdown.with_suffix(".json"),
-                "项目计划内部数据",
+                state.get("product_plan_json_path") or product_plan_markdown.with_suffix(".json"),
+                "产品规划内部数据",
+                "json",
+                ".xcodeagent/plans",
+            ),
+        },
+        "uiDesigns": {
+            "json": _document_descriptor(
+                workspace,
+                ui_design_json,
+                "UI 设计索引",
+                "json",
+                ".xcodeagent/specs",
+                accepted_confirmation_statuses=("confirmed", "skipped"),
+            ),
+        },
+        "technicalPlan": {
+            "markdown": _document_descriptor(
+                workspace, technical_plan_markdown, "技术规划", "markdown", ".xcodeagent/plans"
+            ),
+            "json": _document_descriptor(
+                workspace,
+                state.get("technical_plan_json_path") or technical_plan_markdown.with_suffix(".json"),
+                "技术规划内部数据",
                 "json",
                 ".xcodeagent/plans",
             ),

@@ -23,6 +23,11 @@ class FakeChatModel:
         self.bound_tools = list(tools)
         return self
 
+    def bind(self, **_kwargs: object) -> FakeChatModel:
+        """模拟聊天模型参数绑定并返回自身。"""
+
+        return self
+
     def invoke(self, prompt: str) -> AIMessage:
         self.prompts.append(prompt)
         return self.message
@@ -82,7 +87,7 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
             ],
         )
         fake_model = FakeChatModel(message)
-        settings = SimpleNamespace(model_name="test-model")
+        settings = SimpleNamespace(model_name="test-model", default_max_tokens=1024)
 
         with (
             patch(
@@ -120,7 +125,7 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
         fake_model = FakeChatModel(
             AIMessage(content='{"requirements_overview": {"summary": "ok"}}')
         )
-        settings = SimpleNamespace(model_name="test-model")
+        settings = SimpleNamespace(model_name="test-model", default_max_tokens=1024)
         spec = create_requirement_spec("创建一个库存管理系统")
 
         with (
@@ -140,14 +145,14 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
         create_model.assert_called_once_with(settings)
         bundle_factory.assert_not_called()
         self.assertIsNone(fake_model.bound_tools)
-        self.assertIn("project-planning model", fake_model.prompts[0])
+        self.assertIn("technical-planning model", fake_model.prompts[0])
         self.assertEqual(result["planning_source"], "direct_chat_model")
         self.assertEqual(result["planned_by"]["agent"], "chat-model")
         self.assertEqual(result["planned_by"]["mode"], "direct")
 
     def test_page_design_uses_direct_model_without_tools(self) -> None:
         fake_model = FakeChatModel(AIMessage(content="Design the confirmed page."))
-        settings = SimpleNamespace(model_name="test-model")
+        settings = SimpleNamespace(model_name="test-model", default_max_tokens=1024)
         project_plan = create_project_plan(
             create_requirement_spec("创建一个库存管理系统")
         )

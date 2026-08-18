@@ -8,9 +8,7 @@ from pathlib import Path
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.page_dependencies import validate_project_plan_dependencies
-from app.services.scoped_contract_validation import (
-    scoped_contract_validation_plan,
-)
+from app.graph.nodes.tasks import _scoped_contract_validation_plan
 from tests.entity_design_test_utils import confirm_entity_designs
 
 
@@ -134,6 +132,36 @@ class PageBuildContextResolverTests(unittest.TestCase):
         ):
             self.assertNotIn(key, context)
 
+    def test_page_context_uses_implementation_contract_without_page_detail(self) -> None:
+        """新版 TechnicalPlan 应直接用页面实现契约解析接口，不要求 PageDetail 文件。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            plan["page_implementation_contracts"] = [
+                {
+                    "schema_version": "page-implementation-contract.v1",
+                    "pageId": "orders",
+                    "uiDesignRef": {"path": ".xcodeagent/ui-design/pages/Orders/index.tsx"},
+                    "requiredEndpointIds": ["orders.list"],
+                }
+            ]
+            plan["frontend_pages"][0].pop("detail_design", None)
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+
+        self.assertIsNone(context["page_detail"])
+        self.assertEqual(
+            context["page_implementation_contract"]["pageId"],
+            "orders",
+        )
+        self.assertEqual(context["required_endpoint_ids"], ["orders.list"])
+
     def test_page_context_requires_and_loads_endpoint_details(self) -> None:
         """页面 scope 必须加载 requiredEndpoints 对应的独立 EndpointDetail。"""
 
@@ -191,7 +219,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 target_id="orders",
                 project_plan_path=plan_path,
             )
-            validation_plan = scoped_contract_validation_plan(plan, context)
+            validation_plan = _scoped_contract_validation_plan(plan, context)
 
         self.assertEqual(context["entity_ids"], ["Order"])
         self._assert_no_source_or_contract_fields(context)
@@ -245,33 +273,19 @@ class PageBuildContextResolverTests(unittest.TestCase):
             ["orders.list"],
         )
 
-    def test_data_source_context_loads_available_endpoint_detail(self) -> None:
-        """数据源 scope 保持原逻辑，并加载可用的独立 EndpointDetail。"""
+    def test_data_source_context_is_rejected_after_entity_source_migration(self) -> None:
+        """数据源归属迁移到实体设计后，不再接受独立 data_source 构建 scope。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan, plan_path = _project_plan(Path(workspace))
 
-            context = resolve_target_build_context(
-                plan,
-                target_type="data_source",
-                target_id="database",
-                project_plan_path=plan_path,
-            )
-
-        self.assertIsNone(context["page_detail"])
-        self.assertEqual(context["endpoint_ids"], ["orders.list", "customers.list"])
-        self.assertEqual(
-            [detail["endpoint_id"] for detail in context["direct_endpoint_details"]],
-            ["orders.list", "customers.list"],
-        )
-        self.assertEqual(
-            context["required_unit_ids"],
-            [
-                "backend:bootstrap",
-                "backend:endpoint:orders-api:orders.list",
-                "backend:endpoint:customers-api:customers.list",
-            ],
-        )
+            with self.assertRaisesRegex(ValueError, "Unsupported build target type"):
+                resolve_target_build_context(
+                    plan,
+                    target_type="data_source",
+                    target_id="database",
+                    project_plan_path=plan_path,
+                )
 
     def test_page_context_rejects_missing_required_endpoint_detail(self) -> None:
         """页面 requiredEndpoint 缺少独立详情时必须返回可定位错误。"""

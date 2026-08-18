@@ -52,13 +52,23 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
 
     仿照 _page_template_instruction 的"read_file 读参考代码再生成"模式。设计稿是
     UI确认阶段生成并经用户确认的纯视觉 React+antd+pro-components mockup，落盘在
-    /.xcodeagent/ui-design/pages/<page_key>/index.tsx。前端 agent 处理某个
+    /.xcodeagent/ui-design/pages/<page_key>/index.tsx；若 UI 阶段被明确跳过，则返回
+    基于 ProductPlan、TechnicalPlan 和模板技能的无设计稿实现指令。前端 agent 处理某个
     page task 时（unit_id = page:<pageId>），按映射 read_file 对应设计稿，高保真
     还原其视觉结构，再把静态数据/无交互换成真实 API/数据层。
     """
 
     if not isinstance(ui_designs, dict):
         return ""
+    if ui_designs.get("confirmation_status") == "skipped":
+        return (
+            "## UI Design Reference\n"
+            "The user explicitly skipped UI design generation. No React visual reference is "
+            "available. Generate each page from the ProductPlan, TechnicalPlan, compiled page "
+            "implementation contract, and the code-block-template skill. Do not block or fail "
+            "the task because a design file is absent; preserve the declared product actions, "
+            "routes, permissions, endpoint bindings, and local behavior.\n\n"
+        )
     pages = ui_designs.get("pages")
     if not isinstance(pages, list) or not pages:
         return ""
@@ -97,9 +107,13 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
         "pattern from the code-block-template skill when ProjectPlan.data_sources declares "
         "type=static with effective_source=frontend_mock. Never ship the design's raw visual "
         "sample array as the runtime data source.\n"
-        "- Buttons and forms in the design have no-op onClick / onFinish. You MUST wire them "
-        "to real API calls (create / update / delete) per the task's endpoint_ids and "
-        "api_contracts.\n"
+        "- Elements marked `data-preview-only=\"true\"` are UI-review tooling (for example a "
+        "state switcher), not product UI. Omit them from the runtime page.\n"
+        "- Implement only the ProductPlan actions identified by `data-action-id`. Follow the "
+        "confirmed, deterministically compiled PageImplementationContract actionBindings exactly: endpoint actions call the "
+        "declared endpoint, navigation actions route to the declared page, and local/external/sequence "
+        "actions use the upstream ProductPlan/UiManifest behavior. Never guess that every control needs an API "
+        "or reinterpret a non-endpoint behavior as a TechnicalPlan decision.\n"
         "- The design has no route params. Add React Router params (e.g. :id) and "
         "useSearchParams per the page's path and navigation requirements.\n"
         "- Keep the design's Pro component choices and layout intact; only swap the data "

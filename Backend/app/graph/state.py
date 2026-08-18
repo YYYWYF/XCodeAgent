@@ -12,6 +12,8 @@ class ProjectState(TypedDict, total=False):
     application_name: str
     active_thread_id: str
     active_run_id: str
+    change_id: str
+    change_target: dict[str, Any]
     user_interaction_submission: bool
     lifecycle: dict[str, Any]
     lifecycle_interaction_submission: dict[str, Any]
@@ -34,6 +36,7 @@ class ProjectState(TypedDict, total=False):
     direct_modification_result: dict[str, Any]
     direct_stage_results: dict[str, dict[str, Any]]
     direct_code_change_sets: list[dict[str, Any]]
+    unit_test_generation_enabled: bool
     backend_handoff: dict[str, Any]
     integration_repair_enabled: bool
     requirement_spec: dict[str, Any]
@@ -41,8 +44,15 @@ class ProjectState(TypedDict, total=False):
     requirement_spec_feedback: str
     requirement_spec_path: str
     requirement_spec_json_path: str
+    product_plan: dict[str, Any]
+    product_plan_path: str
+    product_plan_json_path: str
     clarification: dict[str, Any]
+    technical_plan: dict[str, Any]
+    technical_plan_path: str
+    technical_plan_json_path: str
     project_plan: dict[str, Any]
+    pages: list[dict[str, Any]]
     frontend_pages: list[dict[str, Any]]
     pending_project_plan: dict[str, Any]
     project_plan_path: str
@@ -90,6 +100,17 @@ class ProjectState(TypedDict, total=False):
     build_results: list[dict[str, Any]]
     build_summary: dict[str, Any]
     build_events: Annotated[list[str], add]
+    test_generation_input_code_changes: dict[str, Any]
+    test_generation_input_code_change_sets: list[dict[str, Any]]
+    unit_test_generation_context: dict[str, Any]
+    unit_test_generation: dict[str, Any]
+    unit_test_affected_layers: list[str]
+    unit_test_mapping_path: str | None
+    unit_test_code_change_sets: list[dict[str, Any]]
+    unit_test_generation_code_change_sets: list[dict[str, Any]]
+    unit_test_decision: str
+    unit_test_build_checks_completed: bool
+    unit_test_build_results: list[dict[str, Any]]
     test_results: list[dict[str, Any]]
     test_events: Annotated[list[str], add]
     test_report: dict[str, Any]

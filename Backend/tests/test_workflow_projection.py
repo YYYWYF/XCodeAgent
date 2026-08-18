@@ -89,6 +89,10 @@ class WorkflowProjectionTests(unittest.TestCase):
                 "status": "requires_user_input",
                 "preview_url": "http://127.0.0.1:3000",
                 "acceptance_request": {"status": "requires_user_input"},
+                "clarification": {
+                    "mode": "page_acceptance",
+                    "status": "requires_user_input",
+                },
             },
             [],
         )
@@ -97,6 +101,31 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:3000", summary["message"])
         self.assertNotIn("Workflow", summary["message"])
         self.assertNotIn("待确认问题 0", summary["message"])
+
+    def test_unit_test_confirmation_ignores_stale_preview_state(self) -> None:
+        """重试集成测试时单测确认必须覆盖 checkpoint 中的旧预览提示。"""
+
+        summary = _workflow_summary(
+            {
+                "phase": "integration_test",
+                "status": "requires_user_input",
+                "preview_url": "http://127.0.0.1:3000",
+                "acceptance_request": {"status": "requires_user_input"},
+                "clarification": {
+                    "mode": "unit_test_confirmation",
+                    "status": "requires_user_input",
+                    "questions": [{"id": "unit_test_confirmation"}],
+                },
+            },
+            [],
+        )
+
+        self.assertIn("构建检查已完成", summary["message"])
+        self.assertNotIn("项目预览已就绪", summary["message"])
+        self.assertNotIn("预览地址", summary["message"])
+        self.assertIsNone(summary["previewUrl"])
+        self.assertIsNone(summary["launchResult"])
+        self.assertIsNone(summary["acceptanceRequest"])
 
     def test_clarification_summary_reports_real_question_count(self) -> None:
         """验证确有澄清问题时使用面向用户的数量提示。"""

@@ -29,7 +29,7 @@ from app.services.detail_review import (
     detail_review_payload,
 )
 from app.services.frontend_page_tree import (
-    flatten_frontend_pages,
+    project_plan_page_records,
     update_frontend_page_leaves,
 )
 from app.services.entity_design import (
@@ -49,9 +49,16 @@ from app.services.entity_detail_plan import (
 from app.services.project_plan import (
     apply_project_plan_datasource_policy,
     apply_project_plan_feedback,
+    TECHNICAL_PLAN_ARTIFACT_TYPE,
     validate_project_plan_datasource_policy,
 )
+from app.services.product_plan import require_current_product_plan
 from app.services.page_dependencies import validate_project_plan_dependencies
+from app.services.page_implementation_contract import (
+    attach_page_implementation_contracts,
+    materialize_technical_plan_runtime,
+    validate_page_implementation_contracts,
+)
 from app.services.page_detail_plan import (
     attach_endpoint_detail_plan,
     attach_page_detail_plan,
@@ -61,13 +68,17 @@ from app.services.page_detail_plan import (
 )
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
+    edited_technical_plan_markdown,
     edited_project_plan_markdown,
     project_plan_json_path,
+    technical_plan_json_path,
+    write_technical_plan_document,
     write_project_plan_document,
 )
 
 
 logger = logging.getLogger("uvicorn.error")
+_TECHNICAL_PLAN_GENERATION_ATTEMPTS = 3
 
 
 class EntityDesignRequiredError(ValueError):
@@ -100,6 +111,165 @@ def _planning_token_callback(token: str) -> None:
     writer({"type": "llm.token", "token": token, "node": "project_planning"})
 
 
+def _planning_phase(state: ProjectState) -> str:
+    """区分创建流程的开发技术规划与主工作流项目规划阶段。"""
+
+    return (
+        "technical_planning"
+        if state.get("workflow_scope") == "application_planning"
+        else "project_planning"
+    )
+
+
+def _technical_ui_manifest(value: object) -> dict:
+    """移除 UI TSX 正文，只向技术规划模型提供路径、哈希和控件索引。"""
+
+    designs = value if isinstance(value, dict) else {}
+    pages = designs.get("pages") if isinstance(designs.get("pages"), list) else []
+    return {
+        "schema_version": designs.get("schema_version"),
+        "confirmation_status": designs.get("confirmation_status"),
+        "product_plan_sha256": designs.get("product_plan_sha256"),
+        "pages": [
+            {
+                key: page.get(key)
+                for key in (
+                    "pageId",
+                    "page_key",
+                    "preview_path",
+                    "code_path",
+                    "code_sha256",
+                    "bindings",
+                    "verification",
+                    "status",
+                )
+                if page.get(key) is not None
+            }
+            for page in pages
+            if isinstance(page, dict)
+        ],
+    }
+
+
+def _technical_planning_requirement_spec(
+    state: ProjectState,
+    requirement_spec: dict,
+) -> dict:
+    """把已确认 ProductPlan 与 UI manifest 注入开发技术规划输入。"""
+
+    if state.get("workflow_scope") != "application_planning":
+        return requirement_spec
+    product_plan = state.get("product_plan")
+    ui_designs = state.get("ui_designs")
+    if not isinstance(product_plan, dict) or product_plan.get("confirmation_status") != "confirmed":
+        raise ValueError("TechnicalPlan 必须基于已确认 ProductPlan 生成。")
+    if not isinstance(ui_designs, dict) or ui_designs.get("confirmation_status") not in {
+        "confirmed",
+        "skipped",
+    }:
+        raise ValueError("TechnicalPlan 必须基于已确认或已跳过的 UI 设计阶段生成。")
+    return {
+        **requirement_spec,
+        "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
+        "confirmed_product_plan": product_plan,
+        "confirmed_ui_design_manifest": _technical_ui_manifest(ui_designs),
+    }
+
+
+def _attach_technical_plan_contracts(
+    state: ProjectState,
+    plan: dict,
+) -> dict:
+    """为当前 TechnicalPlan 写入上游哈希；实现契约只在运行时编译。"""
+
+    if state.get("workflow_scope") != "application_planning":
+        return plan
+    product_plan = state.get("product_plan")
+    ui_designs = state.get("ui_designs")
+    if not isinstance(product_plan, dict) or not isinstance(ui_designs, dict):
+        raise ValueError("TechnicalPlan 缺少 ProductPlan 或 UiDesign 输入。")
+    return attach_page_implementation_contracts(plan, product_plan, ui_designs)
+
+
+def _technical_plan_contract_errors(
+    state: ProjectState,
+    plan: dict,
+) -> list[str]:
+    """校验 TechnicalPlan 页面实现契约，并保留错误供模型自动修复。"""
+
+    if state.get("workflow_scope") != "application_planning":
+        return []
+    product_plan = state.get("product_plan")
+    ui_designs = state.get("ui_designs")
+    if not isinstance(product_plan, dict) or not isinstance(ui_designs, dict):
+        return ["TechnicalPlan 缺少 ProductPlan 或 UiDesign 输入。"]
+    return validate_page_implementation_contracts(plan, product_plan, ui_designs)
+
+
+def _planning_artifact_fields(
+    state: ProjectState,
+    plan: dict,
+    project_plan_path: str,
+) -> dict:
+    """写入 TechnicalPlan 正式副本并返回新旧状态字段。"""
+
+    if state.get("workflow_scope") != "application_planning":
+        return {}
+    technical_path, technical_json_path = write_technical_plan_document(state, plan)
+    return {
+        "technical_plan": plan,
+        "technical_plan_path": technical_path,
+        "technical_plan_json_path": technical_json_path,
+        "project_plan_path": project_plan_path,
+    }
+
+
+def _planning_confirmation_payload(state: ProjectState, plan: dict) -> dict:
+    """按业务范围返回产品可见或开发可见的计划确认载荷。"""
+
+    if state.get("workflow_scope") == "application_planning":
+        return _technical_plan_confirmation_payload(plan)
+    return _project_plan_confirmation_payload(plan)
+
+
+def _technical_plan_confirmation_payload(technical_plan: dict) -> dict:
+    """构造只面向开发审核的 TechnicalPlan 确认载荷。"""
+
+    payload = build_ask_user_payload(
+        [
+            AskUserQuestion(
+                header="技术规划确认",
+                question=(
+                    "请由开发角色确认技术架构、API、Schema、工程设计和页面 endpoint 引用。"
+                    "正确时回复“确认技术规划，继续”；需要调整时直接写出技术修改意见。"
+                ),
+                type="text",
+                placeholder="例如：确认技术规划，继续 / 为订单列表补充分页接口。",
+            )
+        ]
+    )
+    payload["mode"] = "technical_plan_confirmation"
+    payload["message"] = "请由开发角色确认技术规划后再进入工作区。"
+    payload["plan_summary"] = technical_plan.get("artifact_type", "technical-plan")
+    return payload
+
+
+def _planning_confirmed_payload(state: ProjectState, plan: dict) -> dict:
+    """按业务范围返回计划已确认载荷。"""
+
+    if state.get("workflow_scope") == "application_planning":
+        return {
+            "mode": "technical_plan_confirmation",
+            "status": "clear",
+            "question_schema": "gemini_cli.ask_user.v1",
+            "questions": [],
+            "assumptions": [],
+            "message": "技术规划已由开发角色确认，可以进入工作区。",
+            "plan_summary": plan.get("artifact_type", "technical-plan"),
+        }
+    return _project_plan_confirmed_payload(plan)
+
+
 def _detail_progress(message: str, **detail: object) -> None:
     """向 LangGraph custom stream 和后端日志同步发送细节设计进度。"""
 
@@ -120,9 +290,21 @@ def _detail_progress(message: str, **detail: object) -> None:
 
 
 def project_planning(state: ProjectState) -> dict:
-    """生成或确认 ProjectPlan；数据源不再属于应用级，由实体设计阶段选择。"""
+    """生成或确认 ProjectPlan/TechnicalPlan，并保留独立实体设计边界。"""
 
-    existing_plan = state.get("project_plan")
+    phase = _planning_phase(state)
+    if state.get("workflow_scope") == "application_planning":
+        requirement_spec = state.get("requirement_spec")
+        if not isinstance(requirement_spec, dict):
+            raise ValueError("TechnicalPlan 必须读取已确认的 RequirementSpec。")
+        product_plan = require_current_product_plan(state.get("product_plan"), requirement_spec)
+        if product_plan.get("confirmation_status") != "confirmed":
+            raise ValueError("TechnicalPlan 必须基于已确认 ProductPlan 生成。")
+    existing_plan = (
+        state.get("technical_plan")
+        if state.get("workflow_scope") == "application_planning"
+        else state.get("project_plan")
+    )
     if isinstance(existing_plan, dict):
         existing_plan = apply_project_plan_datasource_policy(existing_plan)
     if (
@@ -130,21 +312,36 @@ def project_planning(state: ProjectState) -> dict:
         and existing_plan.get("confirmation_status") == "pending_user_confirmation"
         and not _has_explicit_user_submission(state)
     ):
+        pending_errors: list[str] = []
+        if phase == "technical_planning":
+            existing_plan = _attach_technical_plan_contracts(state, existing_plan)
+            pending_errors = _project_plan_validation_errors(
+                existing_plan,
+                state,
+            )
         return {
-            "phase": "project_planning",
+            "phase": phase,
             "status": "requires_user_input",
             "project_plan": existing_plan,
+            **({"technical_plan": existing_plan} if phase == "technical_planning" else {}),
             "project_plan_path": state.get("project_plan_path", ""),
             "project_plan_json_path": state.get("project_plan_json_path", ""),
-            "clarification": _project_plan_confirmation_payload(existing_plan),
-            "timeline": ["project_planning"],
+            "technical_plan_path": state.get("technical_plan_path", ""),
+            "technical_plan_json_path": state.get("technical_plan_json_path", ""),
+            "clarification": (
+                _project_plan_dependency_error_payload(pending_errors)
+                if pending_errors
+                else _planning_confirmation_payload(state, existing_plan)
+            ),
+            "timeline": [phase],
         }
-    if state.get("project_plan") and _user_confirmed_project_plan(
+    if existing_plan and _user_confirmed_project_plan(
         state.get("request", "")
     ):
-        edited_markdown = edited_project_plan_markdown(
-            state,
-            existing_plan,
+        edited_markdown = (
+            edited_technical_plan_markdown(state, existing_plan)
+            if phase == "technical_planning"
+            else edited_project_plan_markdown(state, existing_plan)
         )
         synchronized_plan = (
             sync_project_plan_from_markdown(
@@ -162,40 +359,49 @@ def project_planning(state: ProjectState) -> dict:
             ),
             "confirmation_status": "confirmed",
         }
-        validation_errors = _project_plan_validation_errors(project_plan)
+        project_plan = _attach_technical_plan_contracts(state, project_plan)
+        validation_errors = _project_plan_validation_errors(
+            project_plan,
+            state,
+        )
         if validation_errors:
             repaired_plan, remaining_errors = _repair_project_plan_validation_errors(
                 project_plan,
                 validation_errors,
+                state=state,
+                repair_attempts=_TECHNICAL_PLAN_GENERATION_ATTEMPTS,
             )
             repaired_path = write_project_plan_document(state, repaired_plan)
             return {
-                "phase": "project_planning",
+                "phase": phase,
                 "status": "requires_user_input",
                 "project_plan": repaired_plan,
                 "project_plan_path": repaired_path,
                 "project_plan_json_path": _project_plan_json_path_for_state(state),
+                **_planning_artifact_fields(state, repaired_plan, repaired_path),
                 "clarification": (
                     _project_plan_dependency_error_payload(remaining_errors)
                     if remaining_errors
-                    else _project_plan_confirmation_payload(repaired_plan)
+                    else _planning_confirmation_payload(state, repaired_plan)
                 ),
-                "timeline": ["project_planning"],
+                "timeline": [phase],
             }
         # 完整重写 Markdown，确保手动篡改的数据源类型和实现边界也被恢复。
         project_plan_path = write_project_plan_document(state, project_plan)
         return {
-            "phase": "project_planning",
+            "phase": phase,
             "status": "completed",
             "project_plan": project_plan,
             "project_plan_path": project_plan_path,
             "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "clarification": _project_plan_confirmed_payload(project_plan),
-            "timeline": ["project_planning"],
+            **_planning_artifact_fields(state, project_plan, project_plan_path),
+            "clarification": _planning_confirmed_payload(state, project_plan),
+            "timeline": [phase],
         }
 
     requirement_spec = state["requirement_spec"]
-    if state.get("project_plan") and state.get("request"):
+    requirement_spec = _technical_planning_requirement_spec(state, requirement_spec)
+    if existing_plan and state.get("request"):
         requirement_spec = {
             **requirement_spec,
             "planning_adjustment_request": state["request"],
@@ -213,33 +419,44 @@ def project_planning(state: ProjectState) -> dict:
         project_plan,
         state.get("request", ""),
     )
+    project_plan = _attach_technical_plan_contracts(state, project_plan)
     project_plan["confirmation_status"] = "pending_user_confirmation"
-    validation_errors = _project_plan_validation_errors(project_plan)
+    validation_errors = _project_plan_validation_errors(
+        project_plan,
+        state,
+    )
     if validation_errors:
         project_plan, validation_errors = _repair_project_plan_validation_errors(
             project_plan,
             validation_errors,
+            state=state,
+            repair_attempts=(
+                _TECHNICAL_PLAN_GENERATION_ATTEMPTS - 1
+                if phase == "technical_planning"
+                else 1
+            ),
         )
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = (
         _project_plan_dependency_error_payload(validation_errors)
         if validation_errors
-        else _project_plan_confirmation_payload(project_plan)
+        else _planning_confirmation_payload(state, project_plan)
     )
 
     return {
-        "phase": "project_planning",
+        "phase": phase,
         "status": "requires_user_input",
         "project_plan": project_plan,
         "project_plan_path": project_plan_path,
         "project_plan_json_path": _project_plan_json_path_for_state(state),
+        **_planning_artifact_fields(state, project_plan, project_plan_path),
         "clarification": clarification,
-        "timeline": ["project_planning"],
+        "timeline": [phase],
     }
 
 
 def detail_confirmation(state: ProjectState) -> dict:
-    """基于完整 ProjectPlan 和初始页面功能概览生成批量细节确认（页面/接口/实体）。"""
+    """按页面批量确认缺失接口详情，并保留显式接口/实体独立详设。"""
 
     pending_plan = state.get("pending_project_plan")
     submission = state.get("detail_review_submission")
@@ -275,6 +492,8 @@ def detail_confirmation(state: ProjectState) -> dict:
         if detail_target_type == "endpoint" or selected_endpoint_id
         else "batch_review"
     )
+    if selectedPageId and detail_target_type == "page" and not selected_entity_id:
+        return _page_endpoint_confirmation(state, selectedPageId)
     acceptance_adjustment = state.get("acceptance_adjustment")
     acceptance_adjustment_type = (
         str(acceptance_adjustment.get("type") or "").strip()
@@ -450,7 +669,7 @@ def detail_confirmation(state: ProjectState) -> dict:
             try:
                 review_plan = _generate_all_detail_plans(
                     source_plan,
-                    frontend_pages=state.get("frontend_pages"),
+                    frontend_pages=state.get("pages") or state.get("frontend_pages"),
                     selectedPageId=selectedPageId,
                     enforce_entity_gate=True,
                     **_detail_workspace_options(state),
@@ -813,12 +1032,8 @@ def detail_confirmation(state: ProjectState) -> dict:
             "timeline": ["detail_confirmation"],
         }
     try:
-        project_plan_pages = [
-            page
-            for page in flatten_frontend_pages(project_plan.get("frontend_pages", []))
-            if isinstance(page, dict)
-        ]
-        frontend_pages = project_plan_pages or state.get("frontend_pages")
+        project_plan_pages = project_plan_page_records(project_plan)
+        frontend_pages = project_plan_pages or state.get("pages") or state.get("frontend_pages")
         pending_plan = _generate_all_detail_plans(
             project_plan,
             frontend_pages=frontend_pages,
@@ -896,6 +1111,159 @@ def detail_confirmation(state: ProjectState) -> dict:
     }
 
 
+def _page_endpoint_confirmation(state: ProjectState, selected_page_id: str) -> dict:
+    """按页面实现契约批量生成并确认缺失接口详情，不再生成 PageDetail。"""
+
+    pending_plan = state.get("pending_project_plan")
+    submission = state.get("detail_review_submission")
+    if isinstance(pending_plan, dict) and isinstance(submission, dict) and submission:
+        confirmed_plan = apply_detail_review_submission(
+            pending_plan,
+            submission,
+            selectedPageId=selected_page_id,
+        )
+        project_plan_path = write_project_plan_document(state, confirmed_plan)
+        return {
+            "phase": "detail_confirmation",
+            "status": "completed",
+            "project_plan": confirmed_plan,
+            "pending_project_plan": {},
+            "project_plan_path": project_plan_path,
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
+            "clarification": _page_contract_ready_payload(selected_page_id),
+            "detail_selection": {"status": "completed", "mode": "endpoint_batch", "targets": []},
+            "selectedPageId": selected_page_id,
+            "detail_target_type": "page",
+            "detail_plans": list(confirmed_plan.get("endpoint_detail_plans") or []),
+            "detail_review_submission": {},
+            "acceptance_adjustment": {},
+            "timeline": ["detail_confirmation"],
+        }
+
+    detail_selection = state.get("detail_selection")
+    pending_selected_page_id = (
+        str(detail_selection.get("selectedPageId") or "")
+        if isinstance(detail_selection, dict)
+        else ""
+    )
+    if isinstance(pending_plan, dict) and pending_selected_page_id == selected_page_id:
+        return _page_endpoint_review_result(
+            state,
+            pending_plan,
+            selected_page_id,
+            state.get("project_plan_path"),
+        )
+
+    project_plan = state.get("project_plan")
+    if not isinstance(project_plan, dict):
+        raise ValueError("页面开发需要已确认的 TechnicalPlan。")
+    try:
+        generated_plan = _generate_all_detail_plans(
+            project_plan,
+            frontend_pages=project_plan_page_records(project_plan),
+            selectedPageId=selected_page_id,
+            detail_target_type="page",
+            enforce_entity_gate=True,
+            **_detail_workspace_options(state),
+        )
+    except EntityDesignRequiredError as exc:
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "clarification": _entity_design_required_payload(exc),
+            "selectedPageId": selected_page_id,
+            "timeline": ["detail_confirmation"],
+        }
+    except (PageDependencyGapError, ValueError) as exc:
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "clarification": _project_plan_revision_required_payload(str(exc)),
+            "selectedPageId": selected_page_id,
+            "timeline": ["detail_confirmation"],
+        }
+    pending_details = list(generated_plan.get("endpoint_detail_plans") or [])
+    if not pending_details:
+        return {
+            "phase": "detail_confirmation",
+            "status": "completed",
+            "project_plan": project_plan,
+            "pending_project_plan": {},
+            "project_plan_path": state.get("project_plan_path"),
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
+            "clarification": _page_contract_ready_payload(selected_page_id),
+            "detail_selection": {"status": "completed", "mode": "page_contract", "targets": []},
+            "selectedPageId": selected_page_id,
+            "detail_target_type": "page",
+            "detail_plans": [],
+            "timeline": ["detail_confirmation"],
+        }
+    generated_plan["confirmation_status"] = "pending_user_confirmation"
+    project_plan_path = write_project_plan_document(state, generated_plan)
+    return _page_endpoint_review_result(
+        state,
+        generated_plan,
+        selected_page_id,
+        project_plan_path,
+    )
+
+
+def _page_endpoint_review_result(
+    state: ProjectState,
+    pending_plan: dict,
+    selected_page_id: str,
+    project_plan_path: str | None,
+) -> dict:
+    """构造页面依赖接口的批量确认结果。"""
+
+    return {
+        "phase": "detail_confirmation",
+        "status": "requires_user_input",
+        "clarification": detail_review_payload(
+            pending_plan,
+            selectedPageId=selected_page_id,
+            detail_target_type="endpoint_batch",
+        ),
+        "pending_project_plan": pending_plan,
+        "project_plan": state.get("project_plan"),
+        "project_plan_path": project_plan_path,
+        "project_plan_json_path": _project_plan_json_path_for_state(state),
+        "detail_selection": {
+            "status": "requires_user_input",
+            "mode": "endpoint_batch",
+            "selectedPageId": selected_page_id,
+            "targets": [
+                {
+                    "id": f"{detail.get('api_contract_id')}:{detail.get('endpoint_id')}",
+                    "type": "endpoint",
+                    "label": f"接口：{detail.get('method')} {detail.get('path')}",
+                    "name": detail.get("name") or detail.get("endpoint_id"),
+                }
+                for detail in pending_plan.get("endpoint_detail_plans", [])
+                if isinstance(detail, dict)
+            ],
+        },
+        "selectedPageId": selected_page_id,
+        "detail_target_type": "page",
+        "detail_plans": list(pending_plan.get("endpoint_detail_plans") or []),
+        "timeline": ["detail_confirmation"],
+    }
+
+
+def _page_contract_ready_payload(selected_page_id: str) -> dict:
+    """说明页面实现契约及接口详情已满足开发前置条件。"""
+
+    return {
+        "mode": "page_implementation_ready",
+        "status": "clear",
+        "question_schema": "gemini_cli.ask_user.v1",
+        "questions": [],
+        "message": f"页面 `{selected_page_id}` 的实现契约和接口详情已就绪，可以进入开发。",
+    }
+
+
 def _regenerate_acceptance_detail_plan(
     state: ProjectState,
     *,
@@ -931,7 +1299,7 @@ def _regenerate_acceptance_detail_plan(
     try:
         pending_plan = _generate_all_detail_plans(
             project_plan,
-            frontend_pages=state.get("frontend_pages"),
+            frontend_pages=state.get("pages") or state.get("frontend_pages"),
             selectedPageId=selectedPageId or None,
             selected_api_contract_id=selected_api_contract_id or None,
             selected_endpoint_id=selected_endpoint_id or None,
@@ -1039,12 +1407,12 @@ def _generate_all_detail_plans(
     regenerate_endpoint_details: bool = False,
     enforce_entity_gate: bool = False,
 ) -> dict:
-    """为用户选中的页面、endpoint 或实体生成功能详细设计。"""
+    """为页面依赖接口、显式 endpoint 或实体生成对应详细设计。"""
 
-    project_pages = project_plan.get("frontend_pages", [])
+    project_pages = project_plan_page_records(project_plan)
     normalized_project_page_leaves = [
         _normalize_detail_page(page)
-        for page in flatten_frontend_pages(project_pages)
+        for page in project_pages
         if isinstance(page, dict)
     ]
     normalized_project_pages = update_frontend_page_leaves(
@@ -1055,10 +1423,11 @@ def _generate_all_detail_plans(
             if str(page.get("pageId") or page.get("id") or "").strip()
         },
     )
+    page_field = "pages" if project_plan.get("artifact_type") == "technical-plan" else "frontend_pages"
     updated_plan = (
         project_plan
         if normalized_project_pages == project_pages
-        else {**project_plan, "frontend_pages": normalized_project_pages}
+        else {**project_plan, page_field: normalized_project_pages}
     )
     source_pages = (
         frontend_pages
@@ -1078,7 +1447,7 @@ def _generate_all_detail_plans(
         ]
         if not pages:
             raise ValueError(f"项目计划中不存在页面：{selectedPageId}")
-        # 单页设计只清理页面正文；已有 EndpointDetail 仍需用于判断缺口和生成页面摘要。
+        # 新流程不生成页面正文；已有 EndpointDetail 只用于判断当前页面的接口缺口。
         updated_plan = {
             **updated_plan,
             "page_detail_plans": [],
@@ -1180,45 +1549,16 @@ def _generate_all_detail_plans(
                 endpoint_review_details.append(existing_detail)
                 endpoint_review_keys.add(detail_key)
 
-    for page in pages:
-        pageId = page.get("pageId") if isinstance(page, dict) else None
-        if not pageId:
-            continue
-        page_context = extract_page_detail_context(updated_plan, pageId)
-        # 普通初次设计保持旧调用形态；只有验收反馈存在时才把反馈注入页面设计模型。
-        detail = (
-            design_page_with_chat_model(
-                updated_plan,
-                page_context,
-                user_request=user_request,
-            )
-            if user_request
-            else design_page_with_chat_model(updated_plan, page_context)
-        )
-        detail["status"] = "pending_user_confirmation"
-        detail["approved"] = False
-        updated_plan = attach_page_detail_plan(updated_plan, detail)
-
-    # 页面审核只携带本轮需要共同确认的 EndpointDetail；已确认详情仍通过独立文件引用复用。
+    # 页面选择只携带需要共同确认的 EndpointDetail；视觉和产品语义由上游正式产物负责。
     updated_plan["endpoint_detail_plans"] = endpoint_review_details
 
     updated_plan["detail_confirmation_summary"] = {
         "confirmed_pages": 0,
         "confirmed_endpoints": 0,
-        "total_pages": len(pages),
+        "total_pages": 0,
         "total_endpoints": len(endpoint_review_details),
         "mode": "batch_review",
     }
-    selectedPageIds = {
-        str(page.get("pageId")) for page in pages if isinstance(page, dict) and page.get("pageId")
-    }
-    updated_plan["frontend_pages"] = update_frontend_page_leaves(
-        updated_plan.get("frontend_pages"),
-        {
-            page_id: {"detail_status": "pending_user_confirmation"}
-            for page_id in selectedPageIds
-        },
-    )
     return updated_plan
 
 
@@ -2278,6 +2618,8 @@ def _selected_detail_design_targets(
 
 
 def _project_plan_json_path_for_state(state: ProjectState) -> str:
+    if state.get("workflow_scope") == "application_planning":
+        return str(state.get("technical_plan_json_path") or technical_plan_json_path(state))
     return str(state.get("project_plan_json_path") or project_plan_json_path(state))
 
 
@@ -2341,22 +2683,116 @@ def _project_plan_dependency_error_summary(errors: list[str]) -> str:
 
 def _project_plan_validation_errors(
     project_plan: dict,
+    state: ProjectState | None = None,
 ) -> list[str]:
-    """汇总 ProjectPlan 页面依赖和 API 契约闭合性错误。"""
+    """汇总 ProjectPlan 通用错误及创建流程的 TechnicalPlan 页面契约错误。"""
 
+    validation_plan = project_plan
+    if (
+        state is not None
+        and state.get("workflow_scope") == "application_planning"
+        and project_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE
+        and isinstance(state.get("requirement_spec"), dict)
+        and isinstance(state.get("product_plan"), dict)
+        and isinstance(state.get("ui_designs"), dict)
+    ):
+        validation_plan = materialize_technical_plan_runtime(
+            project_plan,
+            state["requirement_spec"],
+            state["product_plan"],
+            state["ui_designs"],
+        )
     errors = [
-        *validate_project_plan_dependencies(project_plan),
-        *validate_api_contract_consistency(project_plan),
-        *validate_project_plan_datasource_policy(project_plan),
+        *validate_project_plan_dependencies(validation_plan),
+        *validate_api_contract_consistency(validation_plan),
+        *validate_project_plan_datasource_policy(validation_plan),
     ]
+    if state is not None:
+        errors.extend(_technical_plan_contract_errors(state, project_plan))
     return errors
+
+
+def _technical_plan_retry_feedback(errors: list[str]) -> str:
+    """把页面契约等确定性错误压缩成 TechnicalPlan 自动修复指令。"""
+
+    diagnostics = "\n".join(f"- {error}" for error in errors[:12])
+    return (
+        "系统 TechnicalPlan 一致性校验未通过。请基于已确认的 ProductPlan 与 UiManifest，"
+        "在本次重新生成中返回完整 TechnicalPlan 并修复下列问题；不得猜测或省略业务 action/step，"
+        "每个 endpointId 必须同时存在于 api_contracts 和对应页面 endpoint_dependencies。"
+        "不要要求用户重试，也不要解释校验过程：\n"
+        f"{diagnostics}"
+    )
+
+
+def _repair_technical_plan_validation_errors(
+    state: ProjectState,
+    project_plan: dict,
+    errors: list[str],
+    *,
+    repair_attempts: int,
+) -> tuple[dict, list[str]]:
+    """保留已确认上游上下文，对 TechnicalPlan 执行有界生成、编译和复验循环。"""
+
+    requirement_spec = state.get("requirement_spec")
+    if not isinstance(requirement_spec, dict):
+        return project_plan, ["TechnicalPlan 必须读取已确认的 RequirementSpec。"]
+    technical_requirement = _technical_planning_requirement_spec(
+        state,
+        requirement_spec,
+    )
+    current_plan = project_plan
+    remaining_errors = errors
+    for attempt in range(1, max(repair_attempts, 0) + 1):
+        feedback = _technical_plan_retry_feedback(remaining_errors)
+        logger.warning(
+            "technical_plan_validation_retry: attempt=%s/%s errors=%s",
+            attempt,
+            repair_attempts,
+            remaining_errors,
+        )
+        try:
+            repaired = plan_project_with_chat_model(
+                {
+                    **technical_requirement,
+                    "planning_adjustment_request": feedback,
+                },
+                existing_plan=current_plan,
+                on_token=_planning_token_callback,
+            )
+            repaired = apply_project_plan_feedback(
+                repaired,
+                feedback,
+            )
+            current_plan = _attach_technical_plan_contracts(state, repaired)
+            current_plan["confirmation_status"] = "pending_user_confirmation"
+            remaining_errors = _project_plan_validation_errors(
+                current_plan,
+                state,
+            )
+        except ValueError as exc:
+            remaining_errors = [str(exc)]
+        if not remaining_errors:
+            return current_plan, []
+    return current_plan, remaining_errors
 
 
 def _repair_project_plan_validation_errors(
     project_plan: dict,
     errors: list[str],
+    *,
+    state: ProjectState | None = None,
+    repair_attempts: int = 1,
 ) -> tuple[dict, list[str]]:
-    """把确定性校验错误回灌给规划模型，最多自动修订一次完整计划。"""
+    """按流程类型把确定性错误回灌给规划模型，并限制自动修订次数。"""
+
+    if state is not None and state.get("workflow_scope") == "application_planning":
+        return _repair_technical_plan_validation_errors(
+            state,
+            project_plan,
+            errors,
+            repair_attempts=repair_attempts,
+        )
 
     feedback = "系统计划一致性校验失败，请在本次重新生成中完整修复以下问题：\n" + "\n".join(
         f"- {error}" for error in errors
@@ -2367,7 +2803,7 @@ def _repair_project_plan_validation_errors(
         on_token=_planning_token_callback,
     )
     repaired["confirmation_status"] = "pending_user_confirmation"
-    return repaired, _project_plan_validation_errors(repaired)
+    return repaired, _project_plan_validation_errors(repaired, state)
 
 
 def _project_plan_revision_required_payload(reason: str) -> dict:

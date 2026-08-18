@@ -29,6 +29,7 @@ from app.services.application_lifecycle import (
     update_workbench_execution,
     write_application_lifecycle,
 )
+from app.services.application_template_generation import prepare_application_template_generation
 
 
 class ApplicationLifecycleTests(unittest.TestCase):
@@ -63,9 +64,19 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
                 ApplicationLifecycleStatus.AWAITING_USER,
             ),
-            (ApplicationLifecycleStage.GENERATING_PROJECT_PLAN, ApplicationLifecycleStatus.RUNNING),
+            (ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN, ApplicationLifecycleStatus.RUNNING),
             (
-                ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                ApplicationLifecycleStatus.AWAITING_USER,
+            ),
+            (ApplicationLifecycleStage.GENERATING_UI_DESIGNS, ApplicationLifecycleStatus.RUNNING),
+            (
+                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStatus.AWAITING_USER,
+            ),
+            (ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN, ApplicationLifecycleStatus.RUNNING),
+            (
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
                 ApplicationLifecycleStatus.AWAITING_USER,
             ),
             (
@@ -91,7 +102,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
         targets = [
             ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
             ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-            ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
         ]
         for target_stage in targets:
             with self.subTest(stage=target_stage), tempfile.TemporaryDirectory() as directory:
@@ -106,8 +117,12 @@ class ApplicationLifecycleTests(unittest.TestCase):
                     ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
                     ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
                     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-                    ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
-                    ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+                    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+                    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                    ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                    ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                    ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                    ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
                 ]
                 for stage in route:
                     state = transition_application_lifecycle(
@@ -200,7 +215,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
             self.assertEqual(sorted(results), ["conflict", "written"])
 
     def test_template_generation_failure_retry_and_success_are_persisted(self) -> None:
-        """应用模板文件生成失败应阻止工作台，重试成功后才进入 ready。"""
+        """应用模板文件生成失败应阻止工作台，重试成功且 UI 可跳过后才进入 ready。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -210,10 +225,23 @@ class ApplicationLifecycleTests(unittest.TestCase):
             plans.mkdir(parents=True)
             for path in (
                 specs / "requirement-spec.json",
-                plans / "project-plan.json",
+                plans / "product-plan.json",
+                specs / "ui-designs.json",
+                plans / "technical-plan.json",
             ):
+                payload = {
+                    "confirmation_status": (
+                        "skipped" if path.name == "ui-designs.json" else "confirmed"
+                    )
+                }
+                if path.name == "product-plan.json":
+                    payload.update({"schema_version": "product-plan.v4", "pages": []})
+                if path.name == "ui-designs.json":
+                    payload.update({"schema_version": "ui-manifest.v3", "pages": []})
+                if path.name == "technical-plan.json":
+                    payload["artifact_type"] = "technical-plan"
                 path.write_text(
-                    json.dumps({"confirmation_status": "confirmed"}),
+                    json.dumps(payload),
                     encoding="utf-8",
                 )
             state = create_application_lifecycle(
@@ -223,8 +251,12 @@ class ApplicationLifecycleTests(unittest.TestCase):
             route = [
                 ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
                 ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-                ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
-                ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+                ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
                 ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
             ]
             for stage in route:
@@ -246,6 +278,25 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
             assert failed.error is not None
             self.assertEqual(failed.error.code, "application_template_generation_failed")
+
+            (workspace / "frontend/src/constants").mkdir(parents=True)
+            (workspace / "frontend/package.json").write_text("{}", encoding="utf-8")
+            (workspace / "frontend/src/constants/menus.ts").write_text(
+                "export const BIZ_MENUS = []\n", encoding="utf-8"
+            )
+            (workspace / "backend").mkdir()
+            (workspace / "backend/pom.xml").write_text("<project />", encoding="utf-8")
+            prepare_application_template_generation(
+                workspace,
+                {
+                    "status": "succeeded",
+                    "failedTargets": [],
+                    "targets": {
+                        "frontend": {"status": "succeeded", "attempt": 0},
+                        "backend": {"status": "succeeded", "attempt": 0},
+                    },
+                },
+            )
 
             ready = complete_application_template_generation(directory, succeeded=True)
             self.assertEqual(
@@ -321,10 +372,10 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            plan_path = workspace / ".xcodeagent/plans/project-plan.json"
+            plan_path = workspace / ".xcodeagent/plans/technical-plan.json"
             plan_path.parent.mkdir(parents=True)
             plan_path.write_text(
-                json.dumps({"frontend_pages": [{"id": "dashboard"}]}),
+                json.dumps({"artifact_type": "technical-plan", "pages": [{"pageId": "dashboard"}]}),
                 encoding="utf-8",
             )
             state = create_application_lifecycle(
@@ -343,14 +394,21 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
             state = transition_application_lifecycle(
                 state,
-                stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+                stage=ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
                 status=ApplicationLifecycleStatus.RUNNING,
             )
             state = transition_application_lifecycle(
                 state,
-                stage=ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+                stage=ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
                 status=ApplicationLifecycleStatus.AWAITING_USER,
             )
+            for stage, status in (
+                (ApplicationLifecycleStage.GENERATING_UI_DESIGNS, ApplicationLifecycleStatus.RUNNING),
+                (ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION, ApplicationLifecycleStatus.AWAITING_USER),
+                (ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN, ApplicationLifecycleStatus.RUNNING),
+                (ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION, ApplicationLifecycleStatus.AWAITING_USER),
+            ):
+                state = transition_application_lifecycle(state, stage=stage, status=status)
             state = transition_application_lifecycle(
                 state,
                 stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,

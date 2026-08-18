@@ -204,7 +204,6 @@ export function useActiveApplicationPlannings({
   const { generateApplicationTemplateFiles, waitForTemplateGeneration, generatingAppIds } =
     useApplicationTemplateGeneration({
       commitPlannings,
-      dismissPlanning,
       hidePlanning,
       getVisiblePlanningId,
       onOpenWorkbench

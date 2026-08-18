@@ -46,7 +46,6 @@ const ACCEPTANCE_ADJUSTMENT_OPTIONS: Array<{
   value: WorkflowAcceptanceAdjustmentType
 }> = [
   { label: '局部修复（不改变产品语义）', value: 'local_fix' },
-  { label: '页面布局或交互调整', value: 'page_design_change' },
   { label: '接口行为或字段调整', value: 'endpoint_change' },
   { label: '数据来源或数据库调整', value: 'data_source_change' },
   { label: '项目计划或架构调整', value: 'project_plan_change' }

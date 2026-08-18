@@ -2,9 +2,9 @@
 
 ## 1. 文档状态
 
-- 方案状态：最终设计，待实现。
+- 方案状态：已实现（零测试文件放行版本）。
 - 适用范围：XCodeAgent Backend 的 Testing Subgraph，重点为 `integration_test` 节点。
-- 目标项目示例：`~/Documents/xc2/frontend` 与 `~/Documents/xc2/backend`。
+- 目标项目示例：`~/Documents/xc10/frontend` 与 `~/Documents/xc10/backend`。
 - 核心目标：根据本次代码修改、当前源码、既有测试和 `.xcodeagent` 项目产物，生成或同步前后端单元测试，并在 `actual_project_checks` 阶段执行真实测试；失败时进入 SmallTaskAgent 修复闭环。
 
 ## 2. 目标与边界
@@ -18,7 +18,7 @@
 3. 测试文件不存在时创建，已存在时原地更新或追加；源码逻辑变化时同步修改对应测试。
 4. 对生成结果做确定性校验，禁止 Agent 越权修改生产代码或测试配置。
 5. 在 `actual_project_checks` 中独立执行前端 Jest 和后端 Maven 单元测试。
-6. 安装、类型检查、构建或单元测试失败时，统一派发给 SmallTaskAgent 修复并重新验证。
+6. 安装、类型检查、构建或单元测试失败时，统一派发给 SmallTaskAgent 修复并重新验证；本轮没有对应测试文件时，单元测试检查以 `passed=true, skipped=true` 放行。
 
 本方案不新增新的公开 API、AG-UI 传输协议或主工作流节点，只增强 Testing Subgraph 内部流程。
 
@@ -196,10 +196,10 @@ TestGenerationAgent 不提供命令执行工具。
 
 原因是测试生成任务属于单次执行状态，直接保存在 Graph State 即可；新增计划和清单会与现有 BuildTask、代码变更记录和测试报告形成重复事实源。
 
-仅建议新增可重建缓存：
+仅新增可重建缓存：
 
 ```text
-.xcodeagent/cache/test-mappings.json
+.xcodeagent/cache/unit-test-mappings.json
 ```
 
 它只保存源码与测试的稳定映射，不保存源码或测试正文。建议字段：
@@ -225,7 +225,7 @@ TestGenerationAgent 不提供命令执行工具。
 
 查找既有测试的优先级为：
 
-1. `test-mappings.json`。
+1. `unit-test-mappings.json`。
 2. 代码图中的 `related_tests`。
 3. 扫描测试文件 import 与被测符号。
 4. 根据约定的路径和文件名推导。

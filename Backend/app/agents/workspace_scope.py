@@ -24,6 +24,7 @@ AgentWorkspaceMode = Literal[
     "database",
     "repair_planner",
     "small_task",
+    "test_generation",
     "workspace_assistant",
 ]
 
@@ -120,6 +121,29 @@ def create_workspace_permissions(
         permissions.extend(
             [
                 FilesystemPermission(operations=["read"], paths=["/**"], mode="allow"),
+                FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
+            ]
+        )
+        return permissions
+
+    if mode == "test_generation":
+        permissions.extend(
+            [
+                FilesystemPermission(operations=["read"], paths=["/**"], mode="allow"),
+                FilesystemPermission(
+                    operations=["write"],
+                    paths=[
+                        "/frontend/tests",
+                        "/frontend/tests/**",
+                        "/Frontend/tests",
+                        "/Frontend/tests/**",
+                        "/backend/src/test/java",
+                        "/backend/src/test/java/**",
+                        "/Backend/src/test/java",
+                        "/Backend/src/test/java/**",
+                    ],
+                    mode="allow",
+                ),
                 FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
             ]
         )

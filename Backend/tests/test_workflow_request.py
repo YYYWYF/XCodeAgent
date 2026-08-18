@@ -217,6 +217,22 @@ class WorkflowRequestTests(unittest.TestCase):
             {"pageId": "dashboard_page", "action": "regenerate"},
         )
 
+    def test_application_planning_extracts_ui_design_skip_action(self) -> None:
+        """跳过 UI 设计动作应通过当前 Workflow 输入解析器保留下来。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "forwardedProps": {
+                    "workflowScope": "application_planning",
+                    "clarificationAnswers": {
+                        "ui_design_action": {"action": "skip"},
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(inputs["resume_values"]["ui_design_action"], {"action": "skip"})
+
     def test_application_planning_rejects_invalid_ui_design_action(self) -> None:
         # select_template 缺 templateId、未知 action、缺 pageId 均视为无动作
         for invalid in (
@@ -375,6 +391,29 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertFalse(inputs["user_interaction_submission"])
 
+    def test_unit_test_confirmation_is_forwarded_as_resume_decision(self) -> None:
+        """单元测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "clarificationAnswers": {
+                    "unit_test_confirmation": {
+                        "selected": "skip",
+                    }
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "integration_test",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "integration_test")
+        self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
+        self.assertTrue(inputs["user_interaction_submission"])
+
     def test_removed_requirements_resume_falls_back_to_main_start(self) -> None:
         inputs = workflow_run_inputs(
             {
@@ -407,7 +446,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertNotIn("原始需求：\n请基于原始需求", inputs["request"])
         self.assertIn("回答：库管员", inputs["request"])
 
-    def test_application_planning_keeps_its_two_resume_nodes(self) -> None:
+    def test_application_planning_accepts_only_current_resume_nodes(self) -> None:
         inputs = workflow_run_inputs(
             {
                 "request": "正确，继续",
@@ -416,7 +455,7 @@ class WorkflowRequestTests(unittest.TestCase):
                     "resumeState": {
                         "events": [
                             {
-                                "nodeName": "project_planning",
+                                "nodeName": "technical_planning",
                                 "status": "requires_user_input",
                             }
                         ]
@@ -425,7 +464,7 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(inputs["resume_from"], "project_planning")
+        self.assertEqual(inputs["resume_from"], "technical_planning")
 
     def test_explicit_debug_resume_node_overrides_resume_snapshot(self) -> None:
         """节点调试选择必须覆盖旧快照中的阻断节点。"""
@@ -490,7 +529,7 @@ class WorkflowRequestTests(unittest.TestCase):
 
     def test_acceptance_design_and_plan_changes_route_to_their_confirmation_nodes(self) -> None:
         for adjustment_type, expected_node in (
-            ("page_design_change", "detail_confirmation"),
+            ("page_design_change", "project_planning"),
             ("endpoint_change", "detail_confirmation"),
             ("data_source_change", "detail_confirmation"),
             ("project_plan_change", "project_planning"),
@@ -699,7 +738,7 @@ class WorkflowRequestTests(unittest.TestCase):
             {"version": "0.1.0"},
         )
 
-    def test_loads_project_plan_and_frontend_pages_for_normal_start(self) -> None:
+    def test_does_not_load_project_plan_as_technical_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             plans_dir = workspace / "plans"
@@ -726,13 +765,104 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(inputs["resume_values"]["project_plan"], project_plan)
+        self.assertNotIn("project_plan", inputs.get("resume_values", {}))
+        self.assertNotIn("frontend_pages", inputs.get("resume_values", {}))
+
+    def test_materializes_compact_technical_plan_for_main_workflow(self) -> None:
+        """主 Workflow 应按需合并当前上游产物，而不改写正式 TechnicalPlan。"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            plans_dir = workspace / ".xcodeagent" / "plans"
+            specs_dir = workspace / ".xcodeagent" / "specs"
+            plans_dir.mkdir(parents=True)
+            specs_dir.mkdir(parents=True)
+            technical_plan = {
+                "artifact_type": "technical-plan",
+                "confirmation_status": "confirmed",
+                "architecture": {},
+                "engineering_design": {},
+                "api_contracts": [],
+                "pages": [
+                    {
+                        "pageId": "inventory_page",
+                        "references": {
+                            "endpoint_dependencies": [],
+                            "action_implementations": [],
+                        },
+                    }
+                ],
+            }
+            requirement_spec = {
+                "confirmation_status": "confirmed",
+                "app_info": {"name": "库存应用", "summary": "管理库存"},
+                "user_roles": [],
+                "feature_modules": [],
+                "business_flows": [],
+                "acceptance_criteria": [],
+                "data_sources": [],
+                "pages": [{"pageId": "inventory_page"}],
+            }
+            product_plan = {
+                "schema_version": "product-plan.v4",
+                "confirmation_status": "confirmed",
+                "app": {"name": "库存应用", "summary": "管理库存"},
+                "business_flows": [],
+                "product_acceptance_criteria": [],
+                "pages": [
+                    {
+                        "pageId": "inventory_page",
+                        "name": "库存页面",
+                        "path": "/inventory",
+                        "module_id": "inventory",
+                        "description": "管理库存",
+                        "actions": [],
+                        "allowed_roles": [],
+                        "navigation_targets": [],
+                        "acceptance_criteria": [],
+                    }
+                ],
+            }
+            ui_designs = {
+                "schema_version": "ui-manifest.v3",
+                "confirmation_status": "confirmed",
+                "pages": [
+                    {
+                        "pageId": "inventory_page",
+                        "code_path": ".xcodeagent/ui-design/pages/Inventory/index.tsx",
+                        "code_sha256": "a" * 64,
+                    }
+                ],
+            }
+            for path, value in (
+                (plans_dir / "technical-plan.json", technical_plan),
+                (plans_dir / "product-plan.json", product_plan),
+                (specs_dir / "requirement-spec.json", requirement_spec),
+                (specs_dir / "ui-designs.json", ui_designs),
+            ):
+                path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+
+            inputs = workflow_run_inputs(
+                {
+                    "request": "开始开发",
+                    "forwardedProps": {"workspaceRoot": str(workspace)},
+                }
+            )
+
+        self.assertNotIn(
+            "page_implementation_contracts",
+            inputs["resume_values"]["technical_plan"],
+        )
         self.assertEqual(
-            inputs["resume_values"]["frontend_pages"],
-            project_plan["frontend_pages"],
+            inputs["resume_values"]["project_plan"]["pages"][0]["name"],
+            "库存页面",
+        )
+        self.assertEqual(
+            inputs["resume_values"]["project_plan"]["page_implementation_contracts"][0]["pageId"],
+            "inventory_page",
         )
 
-    def test_selected_requirement_page_is_added_for_detail_design(self) -> None:
+    def test_selected_requirement_page_does_not_bypass_technical_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             plans_dir = workspace / ".xcodeagent" / "plans"
@@ -765,14 +895,8 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(
-            inputs["resume_values"]["frontend_pages"],
-            [requirement_page],
-        )
-        self.assertEqual(
-            inputs["resume_values"]["project_plan"]["frontend_pages"],
-            [requirement_page],
-        )
+        self.assertNotIn("project_plan", inputs.get("resume_values", {}))
+        self.assertNotIn("frontend_pages", inputs.get("resume_values", {}))
 
     def test_forwards_selected_page_id_to_detail_confirmation_state(self) -> None:
         inputs = workflow_run_inputs(
@@ -885,8 +1009,8 @@ class WorkflowRequestTests(unittest.TestCase):
             {"type": "page", "targetId": "personnel-list"},
         )
 
-    def test_selected_page_uses_canonical_project_plan_page_id(self) -> None:
-        """最新 ProjectPlan 有正式 pageId 时，应纠正旧页面别名并生成页面范围。"""
+    def test_selected_page_does_not_read_project_plan_fallback(self) -> None:
+        """只存在 project-plan.json 时，不应把它当作当前 TechnicalPlan。"""
 
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -930,11 +1054,8 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(inputs["resume_values"]["selectedPageId"], "page-personnel-list")
-        self.assertEqual(
-            inputs["resume_values"]["build_execution_scope"],
-            {"type": "page", "targetId": "page-personnel-list"},
-        )
+        self.assertNotIn("project_plan", inputs.get("resume_values", {}))
+        self.assertNotIn("frontend_pages", inputs.get("resume_values", {}))
 
     def test_infers_prepare_build_tasks_resume_for_plan_confirmation_guard(self) -> None:
         inputs = workflow_run_inputs(

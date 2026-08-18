@@ -16,13 +16,13 @@ function recordItems(value: unknown): Array<Record<string, unknown>> {
     : []
 }
 
-/** 判断当前 frontend_pages 节点是否为菜单目录节点。 */
+/** 判断当前计划页面节点是否为菜单目录节点。 */
 function isMenuNode(record: Record<string, unknown>): boolean {
   const pageId = String(record.pageId || record.id || '').trim()
   return Array.isArray(record.children) && !pageId
 }
 
-/** 把 ProjectPlan.frontend_pages 递归转换为前端确认界面可复用的树节点。 */
+/** 把当前计划 pages 递归转换为前端确认界面可复用的树节点。 */
 export function projectPlanPageTreeNodes(value: unknown): DevelopmentPlanningPageTreeNode[] {
   const nodes: DevelopmentPlanningPageTreeNode[] = []
   recordItems(value).forEach((record, index) => {

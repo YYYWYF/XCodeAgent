@@ -361,6 +361,10 @@ def build_workflow_ag_ui_stream(
                     started_result["clarification"] = initial_state.get("clarification")
                 if "ui_designs" not in started_result and initial_state.get("ui_designs") is not None:
                     started_result["ui_designs"] = initial_state.get("ui_designs")
+            elif workflow_scope == "application_planning":
+                # 需求、产品和技术阶段的 node.started 只表示本轮开始，不能把上一轮
+                # 的待确认载荷带进 running 快照，否则前端会继续显示旧确认面板。
+                started_result.pop("clarification", None)
             for frame in _workflow_ag_ui_frames(
                 encoder,
                 run_id=run_id,
@@ -537,10 +541,31 @@ def build_workflow_ag_ui_stream(
                         # 走默认空表单分支白屏（换一换/多页调整 run 期间持续几十秒）。
                         checkpoint_clarification = initial_state.get("clarification")
                         if isinstance(checkpoint_clarification, dict):
+                            checkpoint_pages = checkpoint_clarification.get("pages")
+                            checkpoint_pages = (
+                                checkpoint_pages
+                                if isinstance(checkpoint_pages, list)
+                                else []
+                            )
+                            presentation_by_id = {
+                                str(page.get("pageId") or ""): page
+                                for page in checkpoint_pages
+                                if isinstance(page, dict)
+                            }
+                            presented_pages = [
+                                {
+                                    **presentation_by_id.get(
+                                        str(page.get("pageId") or ""), {}
+                                    ),
+                                    **page,
+                                }
+                                for page in ready_pages
+                                if isinstance(page, dict)
+                            ]
                             progress_clarification = {
                                 **checkpoint_clarification,
                                 "status": "running",
-                                "pages": ready_pages,
+                                "pages": presented_pages,
                             }
                         else:
                             progress_clarification = {}
@@ -880,6 +905,10 @@ def build_workflow_ag_ui_stream(
                     for next_node in _workflow_next_nodes(node_name, update):
                         next_attempt = _next_node_attempt(node_attempts, next_node)
                         next_iteration_kind = _iteration_kind(next_node, next_attempt)
+                        next_started_result = dict(update)
+                        if workflow_scope == "application_planning" and next_node != "ui_confirmation":
+                            # 下一阶段开始帧不能复用上一阶段的待确认载荷，避免旧面板遮住新阶段进度。
+                            next_started_result.pop("clarification", None)
                         next_event = _workflow_event(
                             events,
                             "workflow.node.started",
@@ -897,7 +926,7 @@ def build_workflow_ag_ui_stream(
                             run_id=run_id,
                             thread_id=thread_id,
                             events=events,
-                            result=update,
+                            result=next_started_result,
                         ):
                             yield frame
                         process_sequence += 1

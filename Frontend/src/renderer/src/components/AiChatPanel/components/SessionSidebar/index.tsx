@@ -715,7 +715,7 @@ export default function SessionSidebar({
                     ))}
                   {pageItems.length === 0 ? (
                     <div className={cx('outline-empty')}>
-                      project_plan.json 的 frontend_pages 中暂无页面
+                      当前计划 pages 中暂无页面
                     </div>
                   ) : null}
                 </div>

@@ -33,6 +33,10 @@ from app.domain.application_lifecycle import (
     WorkbenchExecutionStatus,
     utc_now,
 )
+from app.services.application_template_generation import (
+    ApplicationTemplateGenerationError,
+    validate_application_template_generation,
+)
 
 
 APPLICATION_LIFECYCLE_RELATIVE_PATH = Path(".xcodeagent/application-lifecycle.json")
@@ -68,28 +72,35 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
     ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
     },
     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+    },
+    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN: {
+        ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+    },
+    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION: {
+        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+        ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
     },
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS: {
         ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
     },
     ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION: {
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
     },
-    ApplicationLifecycleStage.GENERATING_PROJECT_PLAN: {
-        ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+    ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN: {
+        ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
     },
-    ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION: {
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+    ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION: {
+        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
         ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
     },
     ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES: {
@@ -99,7 +110,9 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
     ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED: {
         ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
     },
-    ApplicationLifecycleStage.READY_FOR_WORKBENCH: set(),
+    ApplicationLifecycleStage.READY_FOR_WORKBENCH: {
+        ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+    },
 }
 
 
@@ -770,17 +783,21 @@ def complete_application_template_generation(
     error_message: str | None = None,
     active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
-    """校验正式文档后把应用模板文件生成结果落为 ready 或显式失败。"""
+    """校验正式产物、manifest 和真实文件后把模板生成结果落为 ready 或失败。"""
 
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
-    if current.initialization.stage == ApplicationLifecycleStage.READY_FOR_WORKBENCH and succeeded:
-        return current
+    if current.initialization.stage == ApplicationLifecycleStage.READY_FOR_WORKBENCH:
+        current = persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            status=ApplicationLifecycleStatus.RUNNING,
+            active_run_id=active_run_id,
+        )
     if (
         current.initialization.stage
         == ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED
-        and succeeded
     ):
         current = persist_application_lifecycle_transition(
             workspace,
@@ -798,21 +815,33 @@ def complete_application_template_generation(
     requirement_status = _artifact_confirmation_status(
         Path(workspace) / ".xcodeagent/specs/requirement-spec.json"
     )
-    plan_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/plans/project-plan.json"
+    product_plan_status = _artifact_confirmation_status(
+        Path(workspace) / ".xcodeagent/plans/product-plan.json"
     )
-    if succeeded and (requirement_status != "confirmed" or plan_status != "confirmed"):
+    ui_design_status = _artifact_confirmation_status(
+        Path(workspace) / ".xcodeagent/specs/ui-designs.json"
+    )
+    technical_plan_status = _artifact_confirmation_status(
+        Path(workspace) / ".xcodeagent/plans/technical-plan.json",
+        expected_artifact_type="technical-plan",
+    )
+    # UI 阶段可以是用户明确跳过，其余正式产物仍必须处于 confirmed。
+    artifacts_confirmed = (
+        requirement_status == "confirmed"
+        and product_plan_status == "confirmed"
+        and ui_design_status in {"confirmed", "skipped"}
+        and technical_plan_status == "confirmed"
+    )
+    if succeeded and not artifacts_confirmed:
         succeeded = False
-        error_message = "正式需求文档或项目计划未确认，不能进入工作台。"
+        error_message = "需求、产品、技术正式产物必须确认，UI 设计稿必须确认或明确跳过，才能进入工作台。"
     if succeeded:
-        # 进入工作台前，按项目计划声明的 API 契约预生成 API 骨架文件到 frontend/src/apis/。
-        # 这样 build 阶段对这些文件的变更类型是 modified（而非 added），与 build-task-plan
-        # 的 change_scope(operation=modify) 一致，避免工程验收报"预期 modified 实际 added"。
         try:
-            _preload_api_skeletons(workspace)
-        except Exception:
-            # 预生成失败不阻断进入工作台：build 阶段仍可新建文件，只是验收可能报 added。
-            pass
+            validate_application_template_generation(workspace)
+        except ApplicationTemplateGenerationError as exc:
+            succeeded = False
+            error_message = str(exc)
+    if succeeded:
         return persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
@@ -830,6 +859,33 @@ def complete_application_template_generation(
             recoverable=True,
             occurredAt=utc_now(),
         ),
+    )
+
+
+def begin_application_template_generation(
+    workspace: str | Path,
+    *,
+    active_run_id: str | None = None,
+) -> ApplicationLifecycle:
+    """让首次生成、失败重试或再次进入统一处于模板生成中阶段。"""
+
+    current = load_application_lifecycle(workspace)
+    if current is None:
+        raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
+    if current.initialization.stage == ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES:
+        return current
+    if current.initialization.stage not in {
+        ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
+        ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+    }:
+        raise ApplicationLifecycleConflictError(
+            f"当前阶段 {current.initialization.stage.value} 不能开始模板增量初始化。"
+        )
+    return persist_application_lifecycle_transition(
+        workspace,
+        stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+        status=ApplicationLifecycleStatus.RUNNING,
+        active_run_id=active_run_id,
     )
 
 
@@ -855,14 +911,23 @@ def _pending_interaction(
     )
 
 
-def _artifact_confirmation_status(path: Path) -> str | None:
-    """严格读取正式 JSON 的 confirmation_status；损坏时返回显式异常状态。"""
+def _artifact_confirmation_status(
+    path: Path,
+    *,
+    expected_artifact_type: str | None = None,
+) -> str | None:
+    """严格读取当前正式 JSON 的确认状态和可选产物类型。"""
 
     if not path.is_file():
         return None
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
+        return "invalid"
+    if expected_artifact_type and (
+        not isinstance(value, dict)
+        or value.get("artifact_type") != expected_artifact_type
+    ):
         return "invalid"
     confirmation_status = value.get("confirmation_status") if isinstance(value, dict) else None
     return confirmation_status if isinstance(confirmation_status, str) else "invalid"
@@ -896,148 +961,3 @@ def _fsync_directory(directory: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
-
-def _camel_case(value: str) -> str:
-    """把 snake/kebab/Pascal/空格分隔的标识符转为 camelCase。
-
-    例：User → user；InventoryManagement → inventoryManagement；
-    user_source → userSource；inventory-management → inventoryManagement。
-    先按 _/-/空格 分段，再对每段按大写边界拆分（InventoryManagement →
-    Inventory + Management），最后首段小写、其余段首字母大写拼接。
-    """
-
-    cleaned = str(value or "").strip()
-    if not cleaned:
-        return ""
-    raw_parts = [p for p in cleaned.replace("-", "_").replace(" ", "_").split("_") if p]
-    parts: list[str] = []
-    for segment in raw_parts:
-        # 按大写边界拆 PascalCase：InventoryManagement → Inventory, Management
-        # 连续大写（如 URL）作为一段，避免拆成 U,R,L。
-        current = ""
-        for ch in segment:
-            if ch.isupper() and current and not current[-1].isupper():
-                parts.append(current)
-                current = ch
-            else:
-                current += ch
-        if current:
-            parts.append(current)
-    if not parts:
-        return ""
-    return parts[0].lower() + "".join(p[:1].upper() + p[1:].lower() for p in parts[1:])
-
-
-def _api_module_candidates(contract: dict[str, Any]) -> list[str]:
-    """派生 build 阶段可能写入的 API 模块文件名候选（去重，保序）。
-
-    build-task-plan 与前端生成 agent 都按 `src/apis/<biz>Api.ts` 约定命名，但 <biz>
-    由模型从契约的 resource / base_path / id 自行推断，无确定性映射。这里按模型
-    最可能的取值顺序生成候选，预生成骨架命中其中之一即可让差异类型落在 modified。
-    """
-
-    candidates: list[str] = []
-
-    # 1) resource（PascalCase 业务实体名）→ camelCase + Api.ts，模型最常用
-    resource = str(contract.get("resource") or "").strip()
-    if resource:
-        biz = _camel_case(resource)
-        if biz:
-            candidates.append(f"{biz}Api.ts")
-
-    # 2) base_path 末段（/api/inventory-management → inventoryManagement）
-    base_path = str(contract.get("base_path") or "").strip()
-    if base_path:
-        last = base_path.rstrip("/").rsplit("/", 1)[-1]
-        if last:
-            biz = _camel_case(last)
-            if biz:
-                candidates.append(f"{biz}Api.ts")
-
-    # 3) id 去掉末尾 _api 后转 camelCase（user_source_api → userSourceApi）
-    contract_id = str(contract.get("id") or "").strip()
-    if contract_id:
-        tail = contract_id
-        if tail.lower().endswith("_api"):
-            tail = tail[: -len("_api")]
-        biz = _camel_case(tail)
-        if biz:
-            candidates.append(f"{biz}Api.ts")
-
-    # 去重保序
-    seen: set[str] = set()
-    unique: list[str] = []
-    for name in candidates:
-        if name and name not in seen:
-            seen.add(name)
-            unique.append(name)
-    return unique or ["api.ts"]
-
-
-def _preload_api_skeletons(workspace: str | Path) -> None:
-    """按项目计划声明的 API 契约，预生成 API 骨架文件到 frontend/src/apis/。
-
-    只在文件不存在时写入（不覆盖已有文件）。骨架内容是一个带契约注释的空模块，
-    让 build 阶段对这些文件的变更是 modified 而非 added，与 build-task-plan 的
-    change_scope(operation=modify) 对齐，避免工程验收报"预期 modified 实际 added"。
-
-    每个契约按 resource/base_path/id 派生多个候选文件名（模型命名非确定性），
-    全部预生成，确保命中其中之一；未被命中的候选是空 export，不影响构建。
-    """
-
-    workspace_path = Path(str(workspace)).expanduser().resolve()
-    plan_path = workspace_path / ".xcodeagent" / "plans" / "project-plan.json"
-    if not plan_path.is_file():
-        return
-    try:
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    if not isinstance(plan, dict):
-        return
-    contracts = plan.get("api_contracts")
-    if not isinstance(contracts, list):
-        return
-
-    apis_dir = workspace_path / "frontend" / "src" / "apis"
-    # 模板工程拉取后该目录应已存在；缺失则跳过（不强行创建，避免目录结构异常）。
-    if not apis_dir.is_dir():
-        return
-
-    for contract in contracts:
-        if not isinstance(contract, dict):
-            continue
-        contract_id = str(contract.get("id") or "").strip()
-        if not contract_id:
-            continue
-        endpoints = contract.get("endpoints") if isinstance(contract.get("endpoints"), list) else []
-        ep_lines: list[str] = []
-        for ep in endpoints:
-            if not isinstance(ep, dict):
-                continue
-            ep_lines.append(
-                f" *  - {ep.get('id', '')} | {ep.get('method', '')} {ep.get('path', '')}"
-            )
-        ep_block = "\n".join(ep_lines) if ep_lines else " *  (无端点)"
-        label = contract.get("label") or contract_id
-        for filename in _api_module_candidates(contract):
-            target = apis_dir / filename
-            if target.exists():
-                continue  # 不覆盖已有文件（模板自带或已生成）
-            skeleton = (
-                f"/**\n"
-                f" * {label} 数据访问模块（骨架）。\n"
-                f" * 由项目规划预生成，build 阶段填充具体实现。\n"
-                f" *\n"
-                f" * 绑定契约：{contract_id}\n"
-                f"{ep_block}\n"
-                f" */\n"
-                f"\n"
-                f"// build 阶段将在此实现接口调用或前端 Mock 数据访问函数。\n"
-                f"export default {{}};\n"
-            )
-            try:
-                target.write_text(skeleton, encoding="utf-8")
-            except OSError:
-                pass

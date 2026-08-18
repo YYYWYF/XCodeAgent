@@ -142,14 +142,9 @@ function EditorField({ children, label }: { children: ReactNode; label: string }
   )
 }
 
-// 以结构化表单编辑概览中的应用、页面、角色、流程和数据源。
-export default function RequirementSpecEditor({
-  onChange,
-  rootPath,
-  spec
-}: Props): ReactElement {
+// 以结构化表单编辑产品确认范围内的应用、页面、角色和流程。
+export default function RequirementSpecEditor({ onChange, rootPath, spec }: Props): ReactElement {
   const appInfo = asRecord(spec.app_info)
-
   // 只更新应用定位字段，保留内部规划元数据。
   const updateApp = (field: string, value: string): void => {
     onChange({ ...spec, app_info: { ...appInfo, [field]: value } })
@@ -183,11 +178,7 @@ export default function RequirementSpecEditor({
   }
 
   // 更新单个实体字段。
-  const updateEntity = (
-    entityIndex: number,
-    key: keyof EditableEntity,
-    value: unknown
-  ): void => {
+  const updateEntity = (entityIndex: number, key: keyof EditableEntity, value: unknown): void => {
     const entities = editorEntities(spec.entities)
     const nextEntities = entities.map((entity, itemIndex) =>
       itemIndex === entityIndex ? { ...entity, [key]: value } : entity
@@ -216,10 +207,7 @@ export default function RequirementSpecEditor({
     const entities = editorEntities(spec.entities)
     const entity = entities[entityIndex]
     if (!entity) return
-    updateEntity(entityIndex, 'fields', [
-      ...entity.fields,
-      { label: '新信息', description: '' }
-    ])
+    updateEntity(entityIndex, 'fields', [...entity.fields, { label: '新信息', description: '' }])
   }
 
   // 删除实体下的指定展示信息项。
@@ -240,8 +228,8 @@ export default function RequirementSpecEditor({
     onChange({
       ...spec,
       entities: [
-      ...entities,
-      { id: draftId('entity'), name: '新实体', description: '', fields: [] }
+        ...entities,
+        { id: draftId('entity'), name: '新实体', description: '', fields: [] }
       ]
     })
   }
@@ -397,12 +385,7 @@ export default function RequirementSpecEditor({
           />
         ))}
       </EditorSection>
-
-      <EditorSection
-        icon={<DatabaseOutlined />}
-        onAdd={addEntity}
-        title="实体"
-      >
+      <EditorSection icon={<DatabaseOutlined />} onAdd={addEntity} title="实体">
         {editorEntities(spec.entities).map((entity, entityIndex) => (
           <EditorItem
             key={entity.id || `entity-${entityIndex}`}
@@ -410,9 +393,7 @@ export default function RequirementSpecEditor({
           >
             <EditorField label="实体名称">
               <Input
-                onChange={(event) =>
-                  updateEntity(entityIndex, 'name', event.target.value)
-                }
+                onChange={(event) => updateEntity(entityIndex, 'name', event.target.value)}
                 placeholder="请输入实体名称"
                 value={entity.name}
               />
@@ -420,9 +401,7 @@ export default function RequirementSpecEditor({
             <EditorField label="实体说明">
               <TextArea
                 autoSize={{ minRows: 2, maxRows: 4 }}
-                onChange={(event) =>
-                  updateEntity(entityIndex, 'description', event.target.value)
-                }
+                onChange={(event) => updateEntity(entityIndex, 'description', event.target.value)}
                 placeholder="请输入实体说明"
                 value={entity.description}
               />
@@ -440,9 +419,7 @@ export default function RequirementSpecEditor({
                 </Button>
               </div>
               <div className={cx('requirement-editor-entity-table')}>
-                <div
-                  className={cx('requirement-editor-entity-table-row', 'is-head')}
-                >
+                <div className={cx('requirement-editor-entity-table-row', 'is-head')}>
                   <Text strong>名称</Text>
                   <Text strong>说明</Text>
                   <span />
@@ -454,12 +431,7 @@ export default function RequirementSpecEditor({
                   >
                     <Input
                       onChange={(event) =>
-                        updateEntityField(
-                          entityIndex,
-                          fieldIndex,
-                          'label',
-                          event.target.value
-                        )
+                        updateEntityField(entityIndex, fieldIndex, 'label', event.target.value)
                       }
                       placeholder="例如 书名"
                       value={field.label}

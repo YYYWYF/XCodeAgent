@@ -7,7 +7,7 @@ from app.graph.nodes.planning import _generate_all_detail_plans, detail_confirma
 
 
 class WorkflowSelectedPageTests(unittest.TestCase):
-    """验证页面选择只启动对应页面的细节设计。"""
+    """验证页面选择只解析实现契约并补齐对应接口详情。"""
 
     def test_generates_detail_for_selected_frontend_page_only(self) -> None:
         project_plan = {
@@ -17,29 +17,17 @@ class WorkflowSelectedPageTests(unittest.TestCase):
             ],
             "data_sources": [],
         }
-        with (
-            patch(
-                "app.graph.nodes.planning.extract_page_detail_context",
-                return_value={"pageId": "inventory"},
-            ) as extract_context,
-            patch(
-                "app.graph.nodes.planning.design_page_with_chat_model",
-                return_value={"pageId": "inventory"},
-            ) as design_page,
-            patch(
-                "app.graph.nodes.planning.attach_page_detail_plan",
-                side_effect=lambda plan, detail: plan,
-            ),
-        ):
+        with patch(
+            "app.graph.nodes.planning.design_page_with_chat_model",
+        ) as design_page:
             result = _generate_all_detail_plans(
                 project_plan,
                 frontend_pages=project_plan["frontend_pages"],
                 selectedPageId="inventory",
             )
 
-        self.assertEqual(extract_context.call_args.args[1], "inventory")
-        design_page.assert_called_once()
-        self.assertEqual(result["detail_confirmation_summary"]["total_pages"], 1)
+        design_page.assert_not_called()
+        self.assertEqual(result["detail_confirmation_summary"]["total_pages"], 0)
 
     def test_generates_selected_page_when_formal_plan_uses_id(self) -> None:
         project_plan = {
@@ -49,34 +37,17 @@ class WorkflowSelectedPageTests(unittest.TestCase):
             ],
             "data_sources": [],
         }
-        with (
-            patch(
-                "app.graph.nodes.planning.extract_page_detail_context",
-                return_value={"pageId": "inventory"},
-            ) as extract_context,
-            patch(
-                "app.graph.nodes.planning.design_page_with_chat_model",
-                return_value={"pageId": "inventory"},
-            ) as design_page,
-            patch(
-                "app.graph.nodes.planning.attach_page_detail_plan",
-                side_effect=lambda plan, detail: plan,
-            ),
-        ):
+        with patch(
+            "app.graph.nodes.planning.design_page_with_chat_model",
+        ) as design_page:
             result = _generate_all_detail_plans(
                 project_plan,
                 frontend_pages=project_plan["frontend_pages"],
                 selectedPageId="inventory",
             )
 
-        normalized_plan = extract_context.call_args_list[-1].args[0]
-        self.assertEqual(
-            [page["pageId"] for page in normalized_plan["frontend_pages"]],
-            ["dashboard", "inventory"],
-        )
-        self.assertEqual(extract_context.call_args_list[-1].args[1], "inventory")
-        design_page.assert_called_once()
-        self.assertEqual(result["detail_confirmation_summary"]["total_pages"], 1)
+        design_page.assert_not_called()
+        self.assertEqual(result["detail_confirmation_summary"]["total_pages"], 0)
 
     def test_detail_confirmation_reviews_generated_formal_id_page(self) -> None:
         project_plan = {
@@ -119,18 +90,9 @@ class WorkflowSelectedPageTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(result["status"], "requires_user_input")
-        self.assertEqual(
-            result["clarification"]["review"]["summary"]["selectedPageId"],
-            "inventory",
-        )
-        self.assertFalse(
-            result["clarification"]["review"]["summary"]["missingSelectedPagePlan"]
-        )
-        self.assertEqual(
-            result["clarification"]["review"]["pages"][0]["target_id"],
-            "inventory",
-        )
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["clarification"]["mode"], "page_implementation_ready")
+        self.assertEqual(result["detail_plans"], [])
 
     def test_stale_pending_plan_generates_newly_selected_page(self) -> None:
         """旧会话待确认计划缺少当前页时，应从最新正式计划补生成而不是返回空审核。"""
@@ -146,16 +108,21 @@ class WorkflowSelectedPageTests(unittest.TestCase):
         }
         generated_plan = {
             **current_plan,
-            "page_detail_plans": [
+            "endpoint_detail_plans": [
                 {
-                    "id": "page_detail:weather-detail",
-                    "pageId": "weather-detail",
-                    "page_name": "天气详情",
-                    "path": "/weather-detail",
-                    "data_sources": [],
+                    "api_contract_id": "weather-api",
+                    "endpoint_id": "weather.detail",
+                    "method": "GET",
+                    "path": "/api/weather",
+                    "data_origin": {
+                        "source_type": "external_api",
+                        "effective_source": {
+                            "kind": "third_party",
+                            "provider": "weather-provider",
+                        },
+                    },
                 }
             ],
-            "data_source_detail_plans": [],
         }
         with (
             patch(
@@ -182,34 +149,23 @@ class WorkflowSelectedPageTests(unittest.TestCase):
             frontend_pages=current_plan["frontend_pages"],
             selectedPageId="weather-detail",
             enforce_entity_gate=True,
+            detail_target_type="page",
         )
-        self.assertFalse(
-            result["clarification"]["review"]["summary"]["missingSelectedPagePlan"]
-        )
-        self.assertEqual(result["detail_plans"][0]["pageId"], "weather-detail")
+        self.assertEqual(result["detail_plans"][0]["endpoint_id"], "weather.detail")
 
-    def test_acceptance_page_design_change_generates_a_new_pending_detail_version(self) -> None:
-        """验收中的页面调整必须带反馈重生成详情，并再次等待确认。"""
+    def test_acceptance_page_design_change_does_not_regenerate_page_detail(self) -> None:
+        """兼容验收页面调整输入时也不得重新生成 PageDetail。"""
 
         current_plan = {
             "frontend_pages": [{"pageId": "inventory", "name": "库存页"}],
             "api_contracts": [],
             "data_sources": [],
         }
-        generated_plan = {
-            **current_plan,
-            "page_detail_plans": [{"pageId": "inventory", "page_name": "库存页"}],
-            "endpoint_detail_plans": [],
-        }
         with (
             patch(
                 "app.graph.nodes.planning._generate_all_detail_plans",
-                return_value=generated_plan,
+                return_value=current_plan,
             ) as generate_details,
-            patch(
-                "app.graph.nodes.planning.write_project_plan_document",
-                return_value="/workspace/.xcodeagent/plans/project-plan.md",
-            ),
         ):
             result = detail_confirmation(
                 {
@@ -228,20 +184,12 @@ class WorkflowSelectedPageTests(unittest.TestCase):
             current_plan,
             frontend_pages=current_plan["frontend_pages"],
             selectedPageId="inventory",
-            selected_api_contract_id=None,
-            selected_endpoint_id=None,
-            selected_entity_id=None,
             detail_target_type="page",
-            workspace_root=None,
-            user_request="把筛选区改成更紧凑的横向布局。",
-            regenerate_endpoint_details=False,
+            enforce_entity_gate=True,
         )
-        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["status"], "completed")
         self.assertEqual(result["phase"], "detail_confirmation")
-        self.assertEqual(
-            result["pending_project_plan"]["confirmation_status"],
-            "pending_user_confirmation",
-        )
+        self.assertEqual(result["clarification"]["mode"], "page_implementation_ready")
 
 
 if __name__ == "__main__":

@@ -2,9 +2,9 @@ export {}
 
 import type { ElectronAPI } from '@electron-toolkit/preload'
 import type {
-  ApplicationMenuItem,
   ApplicationSchemaConfig,
-  DevelopmentPlanningPageTreeNode
+  DevelopmentPlanningPageTreeNode,
+  TemplateDownloadResult
 } from './typings'
 
 declare global {
@@ -46,17 +46,7 @@ declare global {
           appName: string
           frontendTemplateUrl?: string
           backendTemplateUrl?: string
-        }) => Promise<{ ok?: boolean }>
-        writeTemplatePages: (payload: {
-          projectPath: string
-          appName: string
-          pages: Array<{ pageKey: string; name?: string }>
-          menuItems: ApplicationMenuItem[]
-        }) => Promise<{
-          ok?: boolean
-          pagesDir: string
-          written: Array<{ pageKey: string; path: string }>
-        }>
+        }) => Promise<TemplateDownloadResult>
         readApplication: (payload: { workspaceRoot: string }) => Promise<{ application?: unknown }>
         inspectPlanningArtifacts: (payload: { workspaceRoot: string }) => Promise<{
           ready: boolean

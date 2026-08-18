@@ -55,6 +55,16 @@ export type SendWorkflowMessageOptions = {
     sourcePath?: string
   }
   conversation?: boolean
+  conversationTarget?:
+    | {
+        type: 'page'
+        pageId: string
+      }
+    | {
+        type: 'endpoint'
+        apiContractId: string
+        endpointId: string
+      }
   conversationApprovedPaths?: string[]
   conversationHandoffDecision?: 'approved' | 'rejected'
 }
@@ -94,6 +104,9 @@ export function buildWorkflowForwardedProps(
       ? {
           workspaceRoot: options.workspaceRoot,
           selectedSkillNames: options.selectedSkillNames,
+          ...(options.conversationTarget !== undefined
+            ? { target: options.conversationTarget }
+            : {}),
           ...(options.originalRequest !== undefined
             ? { originalRequest: options.originalRequest }
             : {}),
@@ -157,6 +170,8 @@ export type IntegrationTestCheckRecord = {
   status: 'running' | 'passed' | 'skipped' | 'failed'
   required: boolean
   evidence?: string
+  passedTests?: number
+  totalTests?: number
 }
 
 export type DagGenerationStageRecord = {
@@ -478,11 +493,10 @@ export class AgUiChatSession {
         }
         if (event.name === 'llm.token') {
           // 后端规划节点通过 _llm_token_callback 发送 llm.token custom event。
-          // 仅处理 project_planning 节点的 token（项目规划文本），不处理 requirements
-          // 节点（输出原始 JSON，展示为 Markdown 会很乱）。累积 token 后转发到 onContent，
-          // 让工作台对话区实时展示项目规划流式文本。
+          // 规划节点的原始 JSON 不直接展示在需求确认卡中；产品/项目规划 token
+          // 仍用于工作台运行中的进度反馈，技术规划同样沿用该流式通道。
           const node = (event.value as { node?: string } | null)?.node || ''
-          if (node === 'project_planning') {
+          if (['product_planning', 'project_planning', 'technical_planning'].includes(node)) {
             const token = (event.value as { token?: string } | null)?.token || ''
             if (token) {
               llmTokenAccumulator += token
@@ -1134,12 +1148,16 @@ export function readIntegrationTestChecks(
     if (!id || !name || seenIds.has(id)) continue
     seenIds.add(id)
     const evidence = stringValue(check.evidence).slice(0, 1_000)
+    const passedTests = optionalNonNegativeInteger(check.passedTests ?? check.passed_tests)
+    const totalTests = optionalNonNegativeInteger(check.totalTests ?? check.total_tests)
     checks.push({
       id,
       name,
       status: status as IntegrationTestCheckRecord['status'],
       required: check.required === true,
-      ...(evidence ? { evidence } : {})
+      ...(evidence ? { evidence } : {}),
+      ...(passedTests !== undefined ? { passedTests } : {}),
+      ...(totalTests !== undefined ? { totalTests } : {})
     })
   }
   return checks.length > 0 ? checks : undefined
@@ -1322,7 +1340,7 @@ function emitWorkflowLifecycle(
 function readConfirmationArtifact(value: unknown): WorkflowConfirmationArtifact | undefined {
   if (!value || typeof value !== 'object') return undefined
   const artifact = value as Partial<WorkflowConfirmationArtifact>
-  if (!['requirement_spec', 'project_plan'].includes(String(artifact.id))) return undefined
+  if (!['requirement_spec', 'product_plan', 'technical_plan', 'project_plan'].includes(String(artifact.id))) return undefined
   if (artifact.format !== 'markdown') return undefined
   if (
     typeof artifact.name !== 'string' ||

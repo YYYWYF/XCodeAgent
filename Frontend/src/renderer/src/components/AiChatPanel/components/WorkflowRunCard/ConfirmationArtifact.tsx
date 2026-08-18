@@ -13,7 +13,13 @@ type ConfirmationArtifactProps = {
 export default function ConfirmationArtifact({
   artifact
 }: ConfirmationArtifactProps): ReactElement {
-  const title = artifact.id === 'requirement_spec' ? '需求文档' : '项目计划'
+  const title = artifact.id === 'requirement_spec'
+    ? '需求文档'
+    : artifact.id === 'product_plan'
+      ? '产品规划'
+      : artifact.id === 'technical_plan'
+        ? '技术规划'
+        : '项目计划'
 
   return (
     <section className={cx('workflow-confirmation-artifact')}>

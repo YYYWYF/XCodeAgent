@@ -234,13 +234,7 @@ function dataSourceTypeText(value: unknown): string {
 }
 
 // 渲染单个实体卡片，展示实体字段与绑定的数据源类型。
-function EntityItem({
-  entity,
-  index
-}: {
-  entity: ProjectPlanEntity
-  index: number
-}): ReactElement {
+function EntityItem({ entity, index }: { entity: ProjectPlanEntity; index: number }): ReactElement {
   return (
     <article className={cx('project-plan-summary-entity-card')}>
       <header className={cx('project-plan-summary-entity-card-header')}>
@@ -249,16 +243,16 @@ function EntityItem({
         </span>
         <div>
           <Text strong>{entity.name || `实体 ${index + 1}`}</Text>
-          {entity.id ? (
-            <code>{entity.id}</code>
-          ) : null}
+          {entity.id ? <code>{entity.id}</code> : null}
           {entity.description ? (
             <Paragraph type="secondary">{entity.description}</Paragraph>
           ) : (
             <Text type="secondary">暂无实体描述</Text>
           )}
         </div>
-        <Tag>{entity.dataSourceType ? dataSourceTypeText(entity.dataSourceType) : '待实体设计'}</Tag>
+        <Tag>
+          {entity.dataSourceType ? dataSourceTypeText(entity.dataSourceType) : '待实体设计'}
+        </Tag>
       </header>
       {entity.fields.length ? (
         <div className={cx('project-plan-summary-entity-fields')}>
@@ -347,9 +341,12 @@ export default function ProjectPlanSummary({ plan }: Props): ReactElement {
   )
   const businessFlows = businessFlowDetails.map((flow) => flow.name)
   const apiContracts = recordItems(plan.api_contracts)
-  const pageTree = projectPlanPageTreeNodes(plan.frontend_pages)
+  const pageTree = projectPlanPageTreeNodes(
+    plan.artifact_type === 'technical-plan' ? plan.pages : plan.frontend_pages
+  )
   const entities = projectPlanEntities(plan.entities)
-  const datasourceType = entities[0]?.dataSourceType || ''
+  const dataSources = recordItems(plan.data_sources)
+  const datasourceType = entities[0]?.dataSourceType || fieldText(dataSources[0]?.type, 'database')
   const isStaticDatasource = datasourceType === 'static'
   const permissionModel = asRecord(plan.permission_model)
   const permissionRoles = recordItems(permissionModel.roles)

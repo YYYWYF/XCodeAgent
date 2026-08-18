@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.main import requirements_analyzer
 from app.graph.application_planning_workflow import (
-    _project_planning,
+    _technical_planning,
     _requirements,
     _route_requirements,
     _route_start,
@@ -23,6 +23,7 @@ from app.protocols.application_page_planning import (
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.requirement_spec import create_requirement_spec
+from app.services.product_plan import create_product_plan
 from app.workspace.spec_documents import write_requirement_spec_document
 
 
@@ -38,62 +39,49 @@ def _write_application_config(workspace: Path, datasource_type: str = "database"
 
 
 def _confirmed_state(workspace: Path) -> dict[str, object]:
-    """构造包含已确认 RequirementSpec、ProjectPlan 和 API 契约的最小状态。"""
+    """构造包含四阶段当前正式产物的最小状态。"""
 
     requirement_path = workspace / ".xcodeagent" / "specs" / "requirement-spec.md"
-    project_plan_path = workspace / ".xcodeagent" / "plans" / "project-plan.md"
+    product_plan_path = workspace / ".xcodeagent" / "plans" / "product-plan.md"
+    technical_plan_path = workspace / ".xcodeagent" / "plans" / "technical-plan.md"
     requirement_path.parent.mkdir(parents=True, exist_ok=True)
-    project_plan_path.parent.mkdir(parents=True, exist_ok=True)
+    product_plan_path.parent.mkdir(parents=True, exist_ok=True)
     requirement_path.write_text("# RequirementSpec\n\n任务中心需求。\n", encoding="utf-8")
-    project_plan_path.write_text("# ProjectPlan\n\n任务中心计划。\n", encoding="utf-8")
+    product_plan_path.write_text("# ProductPlan\n\n任务中心产品规划。\n", encoding="utf-8")
+    technical_plan_path.write_text("# TechnicalPlan\n\n任务中心技术规划。\n", encoding="utf-8")
+    requirement_spec = create_requirement_spec("创建任务中心")
+    requirement_spec["confirmation_status"] = "confirmed"
+    product_plan = create_product_plan(requirement_spec)
+    product_plan["confirmation_status"] = "confirmed"
+    technical_plan = {
+        "artifact_type": "technical-plan",
+        "confirmation_status": "confirmed",
+        "architecture": {},
+        "engineering_design": {"module_boundaries": [], "data_models": []},
+        "api_contracts": [],
+        "pages": [],
+    }
     state = {
         "workspace": str(workspace),
         "requirement_spec_path": str(requirement_path),
-        "project_plan_path": str(project_plan_path),
-        "requirement_spec": {
-            "confirmation_status": "confirmed",
-            "summary": "任务中心需求。",
-            "app_info": {"name": "任务中心"},
-        },
-        "project_plan": {
-            "confirmation_status": "confirmed",
-            "frontend_pages": [{
-                "id": "tasks",
-                "name": "任务列表",
-                "path": "/tasks",
-                "description": "查看并完成任务。",
-                "permissions": ["user"],
-            }],
-            "api_contracts": [{
-                "id": "tasks",
-                "base_path": "/api/tasks",
-                "authentication": {"required": True, "roles": ["user"]},
-                "schemas": {"Task": {"type": "object"}},
-                "endpoints": [{
-                    "id": "tasks.update",
-                    "method": "PATCH",
-                    "path": "/api/tasks/{id}",
-                    "summary": "完成任务",
-                    "request_schema_ref": "Task",
-                    "response_schema_ref": "Task",
-                    "error_codes": ["NOT_FOUND"],
-                }],
-            }],
-            "data_sources": [{
-                "id": "tasks_source",
-                "name": "任务数据",
-                "type": "db",
-                "entities": ["Task"],
-                "schema_refs": ["Task"],
-                "seed_strategy": "demo_records",
-            }],
-        },
+        "product_plan_path": str(product_plan_path),
+        "technical_plan_path": str(technical_plan_path),
+        "requirement_spec": requirement_spec,
+        "product_plan": product_plan,
+        "ui_designs": {"confirmation_status": "confirmed", "pages": []},
+        "technical_plan": technical_plan,
     }
     requirement_path.with_suffix(".json").write_text(
         json.dumps(state["requirement_spec"], ensure_ascii=False), encoding="utf-8"
     )
-    project_plan_path.with_suffix(".json").write_text(
-        json.dumps(state["project_plan"], ensure_ascii=False), encoding="utf-8"
+    product_plan_path.with_suffix(".json").write_text(
+        json.dumps(state["product_plan"], ensure_ascii=False), encoding="utf-8"
+    )
+    (workspace / ".xcodeagent" / "specs" / "ui-designs.json").write_text(
+        json.dumps(state["ui_designs"], ensure_ascii=False), encoding="utf-8"
+    )
+    technical_plan_path.with_suffix(".json").write_text(
+        json.dumps(state["technical_plan"], ensure_ascii=False), encoding="utf-8"
     )
     return state
 
@@ -317,11 +305,13 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(result["clarification"]["questions"][0]["header"], "角色")
         self.assertEqual(result["clarification"]["questions"][0]["question"], "主要使用者是谁？")
 
-    def test_routes_only_cover_two_planning_nodes(self) -> None:
-        """独立创建 Graph 应从 requirements 启动并在确认门禁等待。"""
+    def test_routes_cover_four_planning_stages(self) -> None:
+        """独立创建 Graph 应支持需求、产品、UI 和技术四阶段恢复。"""
 
         self.assertEqual(_route_start({}), "requirements")
-        self.assertEqual(_route_start({"resume_from": "project_planning"}), "project_planning")
+        self.assertEqual(_route_start({"resume_from": "project_planning"}), "requirements")
+        self.assertEqual(_route_start({"resume_from": "product_planning"}), "product_planning")
+        self.assertEqual(_route_start({"resume_from": "ui_confirmation"}), "ui_confirmation")
         self.assertEqual(_route_start({"resume_from": "detail_confirmation"}), "requirements")
         self.assertEqual(
             _route_requirements({"clarification": {"status": "requires_user_input"}}),
@@ -443,47 +433,67 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 ".xcodeagent/specs/requirement-spec.md",
             )
             self.assertEqual(
-                confirmation["artifacts"]["projectPlan"]["json"]["path"],
-                ".xcodeagent/plans/project-plan.json",
+                confirmation["artifacts"]["technicalPlan"]["json"]["path"],
+                ".xcodeagent/plans/technical-plan.json",
             )
-            self.assertEqual(len(confirmation["artifacts"]["projectPlan"]["markdown"]["sha256"]), 64)
+            self.assertEqual(len(confirmation["artifacts"]["technicalPlan"]["markdown"]["sha256"]), 64)
             self.assertEqual(set(confirmation), {"confirmedAt", "directories", "artifacts"})
 
-    def test_project_planning_confirmation_validates_without_detail_node(self) -> None:
-        """第二步确认完成时应直接校验目录产物，不再调用细节确认节点。"""
+    def test_technical_planning_confirmation_validates_without_detail_node(self) -> None:
+        """技术规划确认完成时应直接校验四阶段正式产物。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             state = _confirmed_state(workspace)
             update = {
-                "phase": "project_planning",
+                "phase": "technical_planning",
                 "status": "completed",
-                "project_plan": state["project_plan"],
-                "project_plan_path": state["project_plan_path"],
+                "technical_plan": state["technical_plan"],
+                "technical_plan_path": state["technical_plan_path"],
             }
 
             with patch(
                 "app.graph.application_planning_workflow.nodes.project_planning",
                 return_value=update,
             ) as project_planning:
-                result = _project_planning(state)
+                result = _technical_planning({**state, "workflow_scope": "application_planning"})
 
-            project_planning.assert_called_once_with(state)
+            project_planning.assert_called_once_with({**state, "workflow_scope": "application_planning"})
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["workflow_scope"], "application_planning")
             self.assertIn("application_planning_confirmation", result)
 
     def test_artifact_gate_rejects_unconfirmed_plan_json(self) -> None:
-        """plans 中未确认的 ProjectPlan JSON 不得通过工作区入口门禁。"""
+        """plans 中未确认的 TechnicalPlan JSON 不得通过工作区入口门禁。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             state = _confirmed_state(workspace)
-            plan_json = workspace / ".xcodeagent" / "plans" / "project-plan.json"
+            plan_json = workspace / ".xcodeagent" / "plans" / "technical-plan.json"
             plan_json.write_text(json.dumps({"confirmation_status": "pending_user_confirmation"}), encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "必须是已确认的 JSON 对象"):
                 confirm_application_planning_artifacts(state)
+
+    def test_artifact_gate_accepts_explicitly_skipped_ui_design(self) -> None:
+        """工作区入口应接受用户明确跳过后的 UI Manifest。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = _confirmed_state(workspace)
+            skipped = {"confirmation_status": "skipped", "pages": []}
+            state["ui_designs"] = skipped
+            (workspace / ".xcodeagent" / "specs" / "ui-designs.json").write_text(
+                json.dumps(skipped),
+                encoding="utf-8",
+            )
+
+            confirmation = confirm_application_planning_artifacts(state)
+
+        self.assertEqual(
+            confirmation["artifacts"]["uiDesigns"]["json"]["path"],
+            ".xcodeagent/specs/ui-designs.json",
+        )
 
     def test_capability_exposes_workflow_visualization_contract(self) -> None:
         """页面规划端点应声明标准 Workflow 事件和两阶段。"""
@@ -496,12 +506,14 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         )
         self.assertEqual(
             capability["phases"],
-            ["requirements", "ui_confirmation", "project_planning"],
+            ["requirements", "product_planning", "ui_confirmation", "technical_planning"],
         )
         self.assertEqual(
             capability["confirmationArtifacts"],
-            ["requirement_spec", "ui_designs", "project_plan"],
+            ["requirement_spec", "product_plan", "ui_designs", "technical_plan"],
         )
+        self.assertEqual(capability["artifactSchemas"]["ui_designs"], "ui-manifest.v3")
+        self.assertIn("skip", capability["uiDesignActions"])
         self.assertEqual(
             capability["editableArtifacts"]["requirement_spec"]["actions"],
             ["save"],

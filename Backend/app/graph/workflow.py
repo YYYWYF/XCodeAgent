@@ -6,7 +6,6 @@ from app.persistence.checkpoints import (
     workflow_checkpoint_db_path,
     workflow_checkpointer,
 )
-from app.services.frontend_scaffold import scaffold_frontend_pages
 
 
 def route_workflow_start(state: ProjectState) -> str:
@@ -40,13 +39,14 @@ def route_workflow_start(state: ProjectState) -> str:
 def route_test_validation(state: ProjectState) -> str:
     """根据质量门禁和小任务结果选择后续节点，修复不再回到 build。"""
 
+    next_action = state.get("integration_next_action")
+    # 用户确认门必须优先于上一轮遗留的质量门结果，否则重试测试时会越过确认直接启动预览。
+    if state.get("status") == "requires_user_input" or next_action == "await_user_input":
+        return "await_user_input"
     if state.get("quality_gate_passed"):
         return "launch_project"
-    next_action = state.get("integration_next_action")
     if next_action == "small_task_repair":
         return "small_task_repair"
-    if next_action == "await_user_input":
-        return "await_user_input"
     return "handle_failure"
 
 

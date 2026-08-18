@@ -72,7 +72,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
   const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? true
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? false
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
-  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#2c68ff'
+  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
     const keyword = trackMethodSearch.trim().toLowerCase()
@@ -97,7 +97,11 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
     >
       <section className={cx('application-form-section', 'application-form-section--full')}>
         <SectionTitle icon={<FolderOpenOutlined />}>项目位置</SectionTitle>
-        <Form.Item label="项目创建在哪个文件夹下？" required>
+        <Form.Item
+          extra="请输入一个新的项目目录，或选择一个空目录；已有 XCodeAgent 应用目录不能复用。"
+          label="新应用项目目录"
+          required
+        >
           <Input.Group compact>
             <Form.Item
               name="projectPath"
@@ -310,7 +314,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
               />
             </div>
             <Input
-              placeholder="请输入主题色色值，如：#2c68ff"
+              placeholder="请输入主题色色值，如：#6b3cf0"
               style={{ flex: 1 }}
               value={themePrimaryColor || ''}
               onChange={(e) => {

@@ -20,7 +20,7 @@ type Props = {
 // 将未知值安全收窄为可读取的对象。
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : undefined
 }
 
@@ -49,7 +49,7 @@ function itemText(value: unknown, keys: string[]): string {
 // 将字符串数组或对象名称统一为可展示标签。
 function itemLabels(value: unknown): string[] {
   return asArray(value)
-    .map((item) => typeof item === 'string' ? item : itemText(item, ['name', 'label']))
+    .map((item) => (typeof item === 'string' ? item : itemText(item, ['name', 'label'])))
     .filter(Boolean)
 }
 
@@ -106,7 +106,6 @@ function sourceEntities(value: unknown): SourceEntity[] {
     })
     .filter((item): item is SourceEntity => Boolean(item))
 }
-
 // 渲染带图标和标题的需求概览分区。
 function SummarySection({
   children,
@@ -149,7 +148,9 @@ function SummaryItem({
       {description ? <Paragraph type="secondary">{description}</Paragraph> : null}
       {labels?.length ? (
         <div className={cx('requirement-summary-tags')}>
-          {labels.map((label) => <Tag key={label}>{label}</Tag>)}
+          {labels.map((label) => (
+            <Tag key={label}>{label}</Tag>
+          ))}
         </div>
       ) : null}
     </article>
@@ -161,9 +162,7 @@ function EntityCard({ entity }: { entity: SourceEntity }): ReactElement {
   return (
     <article className={cx('requirement-summary-entity')}>
       <Text strong>{entity.name}</Text>
-      {entity.description ? (
-        <Paragraph type="secondary">{entity.description}</Paragraph>
-      ) : null}
+      {entity.description ? <Paragraph type="secondary">{entity.description}</Paragraph> : null}
       {entity.fields.length ? (
         <div className={cx('requirement-summary-entity-fields')}>
           <div className={cx('requirement-summary-entity-fields-head')}>
@@ -244,9 +243,14 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
             {flows.map((item, index) => {
               const steps = asArray(asRecord(item)?.steps)
               return (
-                <article className={cx('requirement-summary-flow')} key={itemText(item, ['id', 'name']) || `flow-${index}`}>
+                <article
+                  className={cx('requirement-summary-flow')}
+                  key={itemText(item, ['id', 'name']) || `flow-${index}`}
+                >
                   <Text strong>{itemText(item, ['name']) || `流程 ${index + 1}`}</Text>
-                  {itemText(item, ['description']) ? <Text type="secondary">{itemText(item, ['description'])}</Text> : null}
+                  {itemText(item, ['description']) ? (
+                    <Text type="secondary">{itemText(item, ['description'])}</Text>
+                  ) : null}
                   <ol>
                     {steps.map((step, stepIndex) => (
                       <li key={itemText(step, ['step_id']) || `step-${stepIndex}`}>
@@ -274,7 +278,12 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
       {assumptions.length ? (
         <SummarySection icon={<FlagOutlined />} title="规划假设">
           <div className={cx('requirement-summary-notes')}>
-            {assumptions.map((item) => <Text key={item}><FileTextOutlined />{item}</Text>)}
+            {assumptions.map((item) => (
+              <Text key={item}>
+                <FileTextOutlined />
+                {item}
+              </Text>
+            ))}
           </div>
         </SummarySection>
       ) : null}

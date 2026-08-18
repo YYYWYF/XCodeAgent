@@ -392,7 +392,7 @@ export type WorkflowSmallTaskHandoff = {
 }
 
 export type WorkflowConfirmationArtifact = {
-  id: 'requirement_spec' | 'project_plan'
+  id: 'requirement_spec' | 'product_plan' | 'technical_plan' | 'project_plan'
   name: string
   path: string
   format: 'markdown'
@@ -427,13 +427,32 @@ export type ApplicationLifecycleStage =
   | 'awaiting_requirement_clarification'
   | 'generating_requirement_spec'
   | 'awaiting_requirement_confirmation'
+  | 'generating_product_plan'
+  | 'awaiting_product_plan_confirmation'
   | 'generating_ui_designs'
   | 'awaiting_ui_design_confirmation'
-  | 'generating_project_plan'
-  | 'awaiting_project_plan_confirmation'
+  | 'generating_technical_plan'
+  | 'awaiting_technical_plan_confirmation'
   | 'generating_application_template_files'
   | 'application_template_generation_failed'
   | 'ready_for_workbench'
+
+export type TemplateDownloadTargetResult = {
+  status: 'succeeded' | 'failed' | 'pending'
+  attempt: number
+  path: string
+  error?: string
+}
+
+export type TemplateDownloadResult = {
+  ok: boolean
+  status: 'succeeded' | 'failed'
+  failedTargets: Array<'frontend' | 'backend'>
+  targets: {
+    frontend: TemplateDownloadTargetResult
+    backend: TemplateDownloadTargetResult
+  }
+}
 
 export type WorkbenchExecutionStatus =
   | 'running'

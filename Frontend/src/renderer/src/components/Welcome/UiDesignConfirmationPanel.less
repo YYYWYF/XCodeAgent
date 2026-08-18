@@ -104,6 +104,28 @@
   flex-wrap: wrap;
 }
 
+// 跳过按钮使用现有主题变量，保证浅色与深色主题下都保持清晰可读。
+.@{class-prefix}-ui-design-skip-btn.ant-btn {
+  height: 42px;
+  padding: 0 18px;
+  border-radius: 10px;
+  color: var(--modal-text, var(--wb-text, inherit));
+  border-color: var(--modal-border-strong, var(--wb-border, #d9d9d9));
+  background: transparent;
+
+  &:hover:not(:disabled) {
+    color: var(--wb-accent, var(--modal-accent, #6b3cf0));
+    border-color: var(--wb-accent, var(--modal-accent, #6b3cf0));
+    background: var(--modal-surface-hover, var(--wb-surface-hover, rgba(107, 60, 240, 0.08)));
+  }
+
+  &:disabled {
+    color: var(--modal-text-secondary, var(--wb-text-secondary, rgba(0, 0, 0, 0.45)));
+    border-color: var(--modal-border-strong, var(--wb-border, #d9d9d9));
+    background: transparent;
+  }
+}
+
 .@{class-prefix}-ui-design-anchor-summary.ant-typography {
   font-size: 12px;
   text-align: center;
@@ -948,4 +970,3 @@
   gap: 6px;
   flex-shrink: 0;
 }
-

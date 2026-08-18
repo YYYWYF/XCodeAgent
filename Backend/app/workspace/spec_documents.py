@@ -7,14 +7,14 @@ from typing import Any
 
 WORKFLOW_ARTIFACT_DIR = ".xcodeagent"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-WORKSPACES_BASE = Path(__file__).resolve().parents[4]
+WORKSPACES_BASE = REPOSITORY_ROOT
 
 
 def workspace_root(state: dict[str, Any]) -> Path:
     workspace = state.get("workspace") or state.get("workspace_path")
     if workspace:
         path = Path(workspace)
-        return path if path.is_absolute() else WORKSPACES_BASE / path
+        return path.resolve() if path.is_absolute() else WORKSPACES_BASE / path
 
     project_id = state.get("project_id") or "demo-project"
     return WORKSPACES_BASE / "var" / "workspaces" / str(project_id)
@@ -72,15 +72,7 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
         for page in spec.get("pages", [])
         if isinstance(page, dict)
     )
-    entities = spec.get("entities")
-    if not isinstance(entities, list):
-        # 旧版 spec 兼容：从 data_sources[].entities 拍平展示。
-        entities = [
-            entity
-            for source in spec.get("data_sources", [])
-            if isinstance(source, dict)
-            for entity in (source.get("entities") if isinstance(source.get("entities"), list) else [])
-        ]
+    entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
     entity_blocks = [
         _entity_markdown(entity)
         for entity in entities
@@ -104,11 +96,8 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     questions = "\n".join(
         f"- [{question.get('id') or question.get('header') or 'ask_user'}] "
         f"{question.get('question', '请补充需求细节。')}"
-        f"{' 默认：' + question['default_assumption'] if question.get('default_assumption') else ''}"
         for question in spec.get("clarification_questions", [])
     )
-    assumptions = _bullet_items(spec.get("assumptions", [])) or "- 暂无"
-
     app_info = spec.get("app_info", {})
 
     return f"""# {app_info.get('name', '未命名应用')}需求 Spec
@@ -141,17 +130,9 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 
 {flows}
 
-## 验收标准
-
-{_bullet_items(spec.get('acceptance_criteria', []))}
-
 ## 待确认问题
 
 {questions or "- 暂无"}
-
-## 默认假设
-
-{assumptions}
 """
 
 
@@ -245,24 +226,47 @@ def ui_designs_json_path(state: dict[str, Any]) -> Path:
 
 
 def write_ui_designs_json(state: dict[str, Any], ui_designs: dict[str, Any]) -> str:
-    """把 ui_designs 状态（含 pageId→page_key 映射）落盘，供主 workflow build 阶段读取。"""
+    """把不含 TSX 正文和 ProductPlan 事实副本的 UI Manifest 落盘。"""
+
+    from app.services.ui_design_manifest import persisted_ui_manifest
 
     path = ui_designs_json_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(ui_designs, ensure_ascii=False, indent=2),
+        json.dumps(persisted_ui_manifest(ui_designs), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return str(path)
 
 
 def load_ui_designs_json(path: str | Path) -> dict[str, Any]:
-    """读取已落盘的 ui_designs 索引，缺失或损坏时返回空 dict 降级。"""
+    """读取 UI Manifest，并从受控设计目录恢复仅供运行时预览的 TSX。"""
 
     resolved = Path(path)
     if not resolved.is_file():
         return {}
     try:
-        return json.loads(resolved.read_text(encoding="utf-8"))
+        manifest = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    if not isinstance(manifest, dict):
+        return {}
+    ui_root = (resolved.parent.parent / "ui-design").resolve()
+    pages = manifest.get("pages")
+    if not isinstance(pages, list):
+        return manifest
+    hydrated_pages: list[dict[str, Any]] = []
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        hydrated = dict(page)
+        code_path = Path(str(page.get("code_path") or ""))
+        try:
+            candidate = code_path.expanduser().resolve()
+            candidate.relative_to(ui_root)
+            if candidate.is_file() and candidate.stat().st_size <= 2_000_000:
+                hydrated["code"] = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeError, ValueError):
+            pass
+        hydrated_pages.append(hydrated)
+    return {**manifest, "pages": hydrated_pages}

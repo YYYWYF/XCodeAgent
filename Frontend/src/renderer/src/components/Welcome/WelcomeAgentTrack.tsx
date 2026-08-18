@@ -12,7 +12,7 @@ import './WelcomeAgentTrack.less'
 
 const stages = [
   { icon: <MessageOutlined />, label: '需求确认' },
-  { icon: <ProfileOutlined />, label: '项目规划' },
+  { icon: <ProfileOutlined />, label: '产品规划' },
   { icon: <CodeOutlined />, label: '编码' },
   { icon: <SafetyCertificateOutlined />, label: '验证' }
 ]

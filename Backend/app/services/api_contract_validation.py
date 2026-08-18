@@ -148,7 +148,10 @@ def _validate_page_api_dependencies(
     endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]],
     errors: list[str],
 ) -> None:
-    for page_detail in project_plan.get("page_detail_plans", []):
+    page_contracts = project_plan.get("page_implementation_contracts") or project_plan.get(
+        "page_detail_plans", []
+    )
+    for page_detail in page_contracts:
         for endpoint_id in _page_endpoint_ids(page_detail):
             if endpoint_id not in endpoint_index:
                 errors.append(
@@ -161,9 +164,13 @@ def _validate_page_bindings(
     contracts: list[dict[str, Any]],
     errors: list[str],
 ) -> None:
-    for page_detail in project_plan.get("page_detail_plans", []):
+    page_contracts = project_plan.get("page_implementation_contracts") or project_plan.get(
+        "page_detail_plans", []
+    )
+    for page_detail in page_contracts:
         endpoint_ids = set(_page_endpoint_ids(page_detail))
-        for binding in dict_items(page_detail.get("response_bindings")):
+        bindings = page_detail.get("responseBindings") or page_detail.get("response_bindings")
+        for binding in dict_items(bindings):
             endpoint_id = str(binding.get("endpoint_id") or "")
             source_path = normalize_response_path(binding.get("source_path"))
             if endpoint_id not in endpoint_ids:
@@ -193,6 +200,10 @@ def _page_endpoint_ids(page_detail: dict[str, Any]) -> list[str]:
         *dict_items(page_detail.get("api_dependencies")),
     ]
     endpoint_ids: list[str] = []
+    for endpoint_id in page_detail.get("requiredEndpointIds") or []:
+        normalized = str(endpoint_id or "").strip()
+        if normalized and normalized not in endpoint_ids:
+            endpoint_ids.append(normalized)
     for dependency in dependencies:
         endpoint_id = str(dependency.get("endpoint_id") or "")
         if endpoint_id and endpoint_id not in endpoint_ids:

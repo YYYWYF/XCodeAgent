@@ -127,15 +127,28 @@ def integration_test_checks(value: Any) -> list[dict[str, Any]]:
                 status = "passed"
             else:
                 status = "failed"
-        checks.append(
-            {
-                "id": check_id,
-                "name": str(raw_check.get("name") or check_id),
-                "status": status,
-                "required": bool(raw_check.get("required")),
-                "evidence": str(raw_check.get("evidence") or "")[:1_000],
-            }
-        )
+        normalized_check = {
+            "id": check_id,
+            "name": str(raw_check.get("name") or check_id),
+            "status": status,
+            "required": bool(raw_check.get("required")),
+            "evidence": str(raw_check.get("evidence") or "")[:1_000],
+        }
+        passed_tests = raw_check.get("passed_tests", raw_check.get("passedTests"))
+        total_tests = raw_check.get("total_tests", raw_check.get("totalTests"))
+        if (
+            isinstance(passed_tests, int)
+            and not isinstance(passed_tests, bool)
+            and passed_tests >= 0
+        ):
+            normalized_check["passed_tests"] = passed_tests
+        if (
+            isinstance(total_tests, int)
+            and not isinstance(total_tests, bool)
+            and total_tests >= 0
+        ):
+            normalized_check["total_tests"] = total_tests
+        checks.append(normalized_check)
     return checks
 
 

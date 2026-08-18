@@ -73,6 +73,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         "direct_modification_approved_paths": approved_paths,
         "backend_handoff": {},
         "integration_repair_enabled": False,
+        "unit_test_generation_enabled": False,
         "repair_iteration": max(0, int(state.get("repair_iteration", 0) or 0)),
         "max_repair_iterations": max(1, int(state.get("max_repair_iterations", 3) or 3)),
         "repair_task_plan": {},
@@ -162,18 +163,24 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
 
 
 def _workspace_snapshot_for_classification(state: ProjectState) -> dict[str, Any]:
-    """读取扫描节点刚生成的完整快照，读取失败时退回安全摘要。"""
+    """读取扫描节点刚生成的完整快照，并附带当前页面或接口目标。"""
 
+    snapshot: dict[str, Any] = {}
     snapshot_path = str(state.get("workspace_snapshot_path") or "").strip()
     if snapshot_path:
         try:
-            snapshot = load_workspace_snapshot_json(snapshot_path)
-            if isinstance(snapshot, dict):
-                return snapshot
+            loaded_snapshot = load_workspace_snapshot_json(snapshot_path)
+            if isinstance(loaded_snapshot, dict):
+                snapshot = loaded_snapshot
         except (OSError, ValueError, TypeError):
             pass
-    summary = state.get("workspace_snapshot_summary")
-    return summary if isinstance(summary, dict) else {}
+    if not snapshot:
+        summary = state.get("workspace_snapshot_summary")
+        snapshot = summary if isinstance(summary, dict) else {}
+    target = state.get("change_target")
+    if not isinstance(target, dict) or not target:
+        return snapshot
+    return {**snapshot, "currentTarget": target}
 
 
 def _direct_source_candidates(
@@ -401,6 +408,7 @@ def run_direct_modification_integration_test(state: ProjectState) -> dict[str, A
         {
             **state,
             "integration_repair_enabled": False,
+            "unit_test_generation_enabled": False,
             "repair_iteration": repair_iteration,
             "max_repair_iterations": max_repair_iterations,
         }

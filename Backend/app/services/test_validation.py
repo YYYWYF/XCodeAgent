@@ -92,11 +92,13 @@ def _revision_owner(check_id: str) -> str:
 
 
 def _revision_owners(check_id: str) -> list[str]:
+    """把检查项映射为构建和 SmallTask 调度器使用的稳定 owner。"""
+
     if check_id.startswith("frontend_"):
         return ["frontend"]
     if check_id.startswith("backend_"):
-        return ["data_source"]
-    return ["frontend", "data_source"]
+        return ["backend"]
+    return ["frontend", "backend"]
 
 
 def evaluate_quality_gate(

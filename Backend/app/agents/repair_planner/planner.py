@@ -26,6 +26,12 @@ def _test_repair_planning_prompt(
         "workflow state. Base the plan on stdout_tail/stderr_tail or readable virtual "
         "workspace logs. If evidence is unavailable, choose terminal_failure rather "
         "than guessing a root cause.\n\n"
+        "For frontend Jest or backend JUnit/Surefire failures, explicitly classify the "
+        "failure as test-code (mock, fixture, async wait, expectation, discovery), "
+        "production-code behavior, or toolchain before choosing repair. The scoped task "
+        "may include only the exact generated test files and their mapped production "
+        "sources. Never delete a valid test, weaken an assertion, or add skip/disabled "
+        "markers.\n\n"
         "Return only one JSON object using this contract:\n"
         "{\n"
         '  "decision": "repair" | "requires_user_confirmation" | "terminal_failure",\n'

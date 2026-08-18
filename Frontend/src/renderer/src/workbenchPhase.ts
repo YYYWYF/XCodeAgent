@@ -23,7 +23,7 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     key: 'product',
     label: '设计',
     role: '产品 Agent',
-    responsibility: '定 WHAT：需求文档、项目计划'
+    responsibility: '定 WHAT：需求文档、产品规划、UI 设计和技术规划'
   },
   development: {
     key: 'development',

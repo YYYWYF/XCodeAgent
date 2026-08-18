@@ -3,8 +3,8 @@
 设计稿是一段自包含的 .tsx（React + antd5 + @ant-design/pro-components），
 由 LLM 按 antd-ui-design SKILL.md 规范生成，写入可运行的设计稿工程
 UiDesignProject 的 src/pages/<PageKey>/index.tsx，并把页面注册到该工程的
-BIZ_MENUS 菜单。代码使用内联静态 Mock 数据，不接入 API/路由/权限/真实交互，
-仅呈现视觉 UI 效果。
+BIZ_MENUS 菜单。代码使用内联静态 Mock 数据，不接入 API；通过本地状态表达
+已确认的筛选、弹窗、表单和页面状态，作为可交互的产品 UI 原型。
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.builtin_skills import read_builtin_skill_md
+from app.services.ui_design_manifest import validate_ui_design_code
 from app.workspace.spec_documents import REPOSITORY_ROOT
 
 
@@ -38,7 +40,7 @@ _FALLBACK_SKILL_NOTE = (
     "@ant-design/pro-components 导入、基础组件从 antd 导入、图标从 "
     "@ant-design/icons 导入；用内联静态 Mock 数据数组（8-15 条），ProTable 用 "
     "dataSource 不用 request；禁 API/useEffect/fetch/axios/mockjs/xlsx；不包 "
-    "ProLayout/PageContainer 布局外壳；按钮 onClick/onFinish 给 no-op；只返回 "
+    "ProLayout/PageContainer 布局外壳；用 React 本地状态实现筛选、弹窗和表单交互；只返回 "
     "tsx 代码不包 markdown 围栏。)"
 )
 
@@ -57,7 +59,7 @@ def _ui_design_skill_document() -> str:
 
 
 def _page_brief(page: dict[str, Any]) -> str:
-    """把单个页面信息组织成 prompt 友好的简述。"""
+    """把 ProductPlan 单页语义组织成 prompt 友好的设计输入。"""
 
     page_id = str(page.get("pageId") or page.get("id") or "").strip()
     name = str(page.get("name") or "").strip()
@@ -73,6 +75,32 @@ def _page_brief(page: dict[str, Any]) -> str:
         lines.append(f"- module_id: {module_id}")
     if description:
         lines.append(f"- description: {description}")
+    goal = str(page.get("goal") or "").strip()
+    if goal:
+        lines.append(f"- product goal: {goal}")
+    information_items = page.get("information_items")
+    if isinstance(information_items, list) and information_items:
+        lines.append(
+            "- required information items: "
+            + json.dumps(information_items, ensure_ascii=False)
+        )
+    actions = page.get("actions")
+    if isinstance(actions, list) and actions:
+        lines.append("- approved product actions: " + json.dumps(actions, ensure_ascii=False))
+    state_requirements = page.get("state_requirements")
+    if isinstance(state_requirements, dict) and state_requirements:
+        lines.append(
+            "- required product states: "
+            + json.dumps(state_requirements, ensure_ascii=False)
+        )
+    for key, label in (
+        ("navigation_targets", "approved navigation target pageIds"),
+        ("allowed_roles", "approved product roles"),
+        ("acceptance_criteria", "product acceptance criteria"),
+    ):
+        value = page.get(key)
+        if isinstance(value, list) and value:
+            lines.append(f"- {label}: " + json.dumps(value, ensure_ascii=False))
     return "\n".join(lines)
 
 
@@ -95,19 +123,63 @@ def _build_ui_design_prompt(page: dict[str, Any], page_key: str) -> str:
         "content in at most a <div style={{ padding: 24 }}>.\n"
         "- Use inline static Mock data (8-15 rows). ProTable MUST use `dataSource`, "
         "NEVER `request`. No API calls, no useEffect/fetch/axios, no mockjs/xlsx.\n"
-        "- Buttons/forms may render but handlers are no-op (() => {}).\n"
+        "- Implement declared local interactions with React state and Mock data: filters update visible "
+        "results, dialogs/drawers open and close, tabs switch, forms validate, and confirmation flows can "
+        "complete locally. Cross-page controls may remain non-navigating in the isolated preview.\n"
+        "- Render success, loading, empty, error, and validation states with a compact in-page preview "
+        "switcher when those states cannot naturally be reached from the main interaction.\n"
+        "- Use Ant Design theme tokens and responsive layout rules; the page must remain readable in light "
+        "and dark themes and at wide/compact PC widths. Do not introduce standalone hard-coded brand colors.\n"
         "- Infer the page type from the page name and description (no components "
         "field is provided): list/search → ProTable, detail → ProDescriptions, "
         "dashboard/overview → ProCard + Statistic, login → centered Card + ProForm, "
         "tabs → ProCard tabs, card list → ProList. Default to ProTable when unsure.\n"
         "- Adapt the columns/fields/mock data to THIS page's purpose. Do NOT copy "
         "the skill's order-list example verbatim.\n\n"
-        "--- PAGE TO DESIGN ---\n"
+        + _product_fact_boundary_rules()
+        + "--- PAGE TO DESIGN ---\n"
         f"{_page_brief(page)}\n"
         "--- END PAGE ---\n\n"
         "--- INJECTED antd-ui-design SKILL.md (content inlined) ---\n"
         + skill_document
         + "\n--- END INJECTED SKILL.md ---\n"
+    )
+
+
+def _product_fact_boundary_rules() -> str:
+    """返回 UI 生成与调整共用的产品事实边界约束。"""
+
+    return (
+        "--- PRODUCT FACT BOUNDARY (MANDATORY) ---\n"
+        "- ProductPlan is the ONLY source of product facts. Page names, routes, roles, states, "
+        "information items, actions, navigation targets, metrics, filters, fields, and business "
+        "labels are immutable. Never add, rename, remove, broaden, or reinterpret them.\n"
+        "- You may decide visual layout, component composition, spacing, hierarchy, typography, "
+        "responsive arrangement, theme-token usage, and the visual presentation of declared states.\n"
+        "- Mock rows may provide example VALUES only for fields explicitly named by a declared "
+        "information item. Do not invent additional metrics, counters, metadata fields, buttons, "
+        "links, tabs, filters, calls to action, or business sections.\n"
+        "- Render every declared action. Each interactive JSX opening tag that implements it must "
+        "carry static `data-action-id=\"<actionId>\"` and static "
+        "`data-control-id=\"<actionId>-control\"` (use a numeric suffix for another distinct source "
+        "control). Never emit an undeclared data-action-id.\n"
+        "- When an action's behavior.type is `interface`, the implementing JSX opening tag must also "
+        "carry static `data-ui-effect` with a concise product-readable description of the actual local "
+        "interaction, such as `打开订单筛选抽屉` or `切换到异常订单 Tab`. This UI effect is owned by "
+        "UiDesign and must not mention endpoints, HTTP, schemas, or backend implementation.\n"
+        "- For every `interface` step inside a sequence behavior, the implementing JSX opening tag must carry "
+        "the parent `data-action-id`, static `data-action-step-id=\"<stepId>\"`, and its own static "
+        "`data-ui-effect`. Multiple interface steps in one sequence must be tagged separately.\n"
+        "- Render every declared information item. Put static "
+        "`data-information-item-id=\"<itemId>\"` and static "
+        "`data-control-id=\"<itemId>-display\"` on the business display component itself. Never emit "
+        "an undeclared data-information-item-id.\n"
+        "- Any control used solely to switch prototype states must carry "
+        "`data-preview-only=\"true\"`; it is review tooling, not product UI. Do not create any other "
+        "preview-only business-looking control or content.\n"
+        "- Cross-page action handlers may stay local/no-op in the isolated preview, but their "
+        "visible intent and data-action-id must still match ProductPlan exactly.\n"
+        "--- END PRODUCT FACT BOUNDARY ---\n"
     )
 
 
@@ -132,6 +204,33 @@ def _extract_tsx_code(text: str) -> str:
             start = i
             break
     return "\n".join(lines[start:]).strip() or stripped
+
+
+def _invoke_ui_design_model(
+    model: Any,
+    prompt: str,
+    *,
+    page_id: str,
+    max_retries: int,
+) -> Any:
+    """对无副作用的 UI 模型调用做外层瞬时异常重试。"""
+
+    attempts = max(1, max_retries + 1)
+    for attempt in range(1, attempts + 1):
+        try:
+            return model.invoke(prompt)
+        except Exception as exc:
+            if attempt >= attempts:
+                raise
+            logger.warning(
+                "ui_design_model_invoke_failed page_id=%s attempt=%s/%s error=%s",
+                page_id,
+                attempt,
+                attempts,
+                str(exc)[:200],
+            )
+            time.sleep(min(0.5 * attempt, 2.0))
+    raise RuntimeError("UI 设计模型调用未返回结果。")
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +389,11 @@ def _find_forbidden_imports(code: str) -> list[str]:
     return sorted(sources)
 
 
-def validate_page_code(project_dir: str, code: str) -> tuple[bool, str]:
+def validate_page_code(
+    project_dir: str,
+    code: str,
+    page: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
     """对单页设计稿代码做完整校验：非空 + 未定义引用 + 禁用依赖 + esbuild 语法。
 
     返回 (是否通过, 错误信息)。错误信息为人类可读的修复指引，供回喂 LLM
@@ -332,6 +435,14 @@ def validate_page_code(project_dir: str, code: str) -> tuple[bool, str]:
             "@ant-design/pro-components、基础组件从 antd、图标从 "
             "@ant-design/icons 导入）。",
         )
+    if isinstance(page, dict):
+        contract_errors = validate_ui_design_code(page, code)
+        if contract_errors:
+            return (
+                False,
+                "UI 设计稿越过或遗漏了 ProductPlan 产品事实边界：\n"
+                + "\n".join(f"- {item}" for item in contract_errors),
+            )
     # 语法校验放最后：前三项是 LLM 高频错误，esbuild 查不出。
     return validate_tsx(project_dir, code)
 
@@ -352,7 +463,8 @@ def _build_repair_prompt(
         "- Keep the parts that were correct; only fix the reported problems.\n"
         f"- The component name MUST be {page_key}, exported via "
         "`export default`.\n\n"
-        "--- PAGE TO DESIGN ---\n"
+        + _product_fact_boundary_rules()
+        + "--- PAGE TO DESIGN ---\n"
         f"{_page_brief(page)}\n"
         "--- END PAGE ---\n\n"
         "--- PREVIOUS CODE (has bugs) ---\n"
@@ -391,8 +503,9 @@ def _build_adjust_prompt(
         "- Still follow the antd-ui-design skill: React + antd5 + "
         "@ant-design/pro-components, inline static Mock data (8-15 rows), "
         "ProTable uses `dataSource` not `request`, no API/useEffect/fetch, "
-        "no-op handlers, no layout shell.\n\n"
-        "--- PAGE TO DESIGN ---\n"
+        "local-state handlers only, no layout shell.\n\n"
+        + _product_fact_boundary_rules()
+        + "--- PAGE TO DESIGN ---\n"
         f"{_page_brief(page)}\n"
         "--- END PAGE ---\n\n"
         "--- CURRENT DESIGN CODE (to be adjusted) ---\n"
@@ -425,7 +538,12 @@ def generate_adjusted_page_react_code(
     max_retries = max(0, settings.ui_design_max_retries)
 
     prompt = _build_adjust_prompt(page, page_key, prev_code, instruction)
-    result = model.invoke(prompt)
+    result = _invoke_ui_design_model(
+        model,
+        prompt,
+        page_id=page_id,
+        max_retries=max_retries,
+    )
     content = _coerce_content_text(getattr(result, "content", ""))
     code = _extract_tsx_code(content)
     logger.info(
@@ -434,7 +552,7 @@ def generate_adjusted_page_react_code(
         len(code),
     )
 
-    ok, err = validate_page_code(project_dir, code)
+    ok, err = validate_page_code(project_dir, code, page)
     attempt = 1
     while not ok and attempt <= max_retries:
         attempt += 1
@@ -445,7 +563,12 @@ def generate_adjusted_page_react_code(
             err[:200],
         )
         repair_prompt = _build_repair_prompt(page, page_key, code, [err])
-        result = model.invoke(repair_prompt)
+        result = _invoke_ui_design_model(
+            model,
+            repair_prompt,
+            page_id=page_id,
+            max_retries=max_retries,
+        )
         content = _coerce_content_text(getattr(result, "content", ""))
         code = _extract_tsx_code(content)
         logger.info(
@@ -454,7 +577,7 @@ def generate_adjusted_page_react_code(
             attempt,
             len(code),
         )
-        ok, err = validate_page_code(project_dir, code)
+        ok, err = validate_page_code(project_dir, code, page)
 
     if not ok:
         raise ValueError(
@@ -500,7 +623,12 @@ def resolve_adjust_target_pages(
         f"--- USER INSTRUCTION ---\n{instruction}\n--- END INSTRUCTION ---\n\n"
         "Return the JSON array now."
     )
-    result = model.invoke(prompt)
+    result = _invoke_ui_design_model(
+        model,
+        prompt,
+        page_id="adjust-target-resolution",
+        max_retries=max(0, settings.ui_design_max_retries),
+    )
     content = _coerce_content_text(getattr(result, "content", "")).strip()
     # 去掉可能的 markdown 围栏。
     content = re.sub(r"^```(?:json)?\s*", "", content)
@@ -541,7 +669,12 @@ def generate_page_react_code(
 
     # 首次生成
     prompt = _build_ui_design_prompt(page, page_key)
-    result = model.invoke(prompt)
+    result = _invoke_ui_design_model(
+        model,
+        prompt,
+        page_id=page_id,
+        max_retries=max_retries,
+    )
     content = _coerce_content_text(getattr(result, "content", ""))
     code = _extract_tsx_code(content)
     logger.info(
@@ -552,7 +685,7 @@ def generate_page_react_code(
     )
 
     # 校验 + 自动修复重试闭环
-    ok, err = validate_page_code(project_dir, code)
+    ok, err = validate_page_code(project_dir, code, page)
     attempt = 1
     while not ok and attempt <= max_retries:
         attempt += 1
@@ -563,7 +696,12 @@ def generate_page_react_code(
             err[:200],
         )
         repair_prompt = _build_repair_prompt(page, page_key, code, [err])
-        result = model.invoke(repair_prompt)
+        result = _invoke_ui_design_model(
+            model,
+            repair_prompt,
+            page_id=page_id,
+            max_retries=max_retries,
+        )
         content = _coerce_content_text(getattr(result, "content", ""))
         code = _extract_tsx_code(content)
         logger.info(
@@ -572,7 +710,7 @@ def generate_page_react_code(
             attempt,
             len(code),
         )
-        ok, err = validate_page_code(project_dir, code)
+        ok, err = validate_page_code(project_dir, code, page)
 
     if not ok:
         # 全部重试仍失败：抛出，由节点标记 generation_failed，不写白屏代码。
@@ -594,8 +732,8 @@ def _page_key_from_page_id(page_id: str) -> str:
     例：order_list_page → OrderListPage，dashboard_page → DashboardPage，
     login_page → LoginPage，user_detail_page → UserDetailPage。
 
-    与 build_context_resolver._page_key_from_page_id 和前端 templateApi.ts 的
-    pageKeyFromPageId 保持一致，避免任务拆分阶段看到两套不同的 PageKey。
+    与 build_context_resolver 和 frontend_scaffold 的共享调用保持一致，
+    避免 UI 确认、模板初始化和任务拆分阶段看到不同的 PageKey。
     """
 
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(page_id or "page")).strip("-")

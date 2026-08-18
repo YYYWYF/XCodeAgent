@@ -85,6 +85,25 @@ class ProjectPlanTests(unittest.TestCase):
             ["库存管理系统核心流程通过端到端验收。"],
         )
 
+    def test_project_acceptance_excludes_xcodeagent_workflow_gates(self) -> None:
+        """ProjectPlan 产品验收不得混入 XCodeAgent 测试和流程门禁。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        plan = create_project_plan(
+            spec,
+            agent_plan={
+                "project_acceptance_criteria": [
+                    "集成测试和质量门禁通过后才进入用户验收。",
+                    "仓库管理员可以查看库存并完成库存调整。",
+                ]
+            },
+        )
+
+        self.assertEqual(
+            plan["project_acceptance_criteria"],
+            ["仓库管理员可以查看库存并完成库存调整。"],
+        )
+
     def test_authoritative_agent_plan_cannot_replace_requirement_pages(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         only_page = {

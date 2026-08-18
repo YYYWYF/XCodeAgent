@@ -1,6 +1,6 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
-import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle, TemplateDownloadResult } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 
 type ApplicationLifecyclePayload = {
@@ -8,7 +8,7 @@ type ApplicationLifecyclePayload = {
   runId: string
   threadId: string
   status: 'completed' | 'failed'
-  action?: 'create' | 'get' | 'complete_template_generation'
+  action?: 'create' | 'get' | 'prepare_template_generation' | 'complete_template_generation'
   lifecycle?: ApplicationLifecycle
   error?: { message?: string }
 }
@@ -135,6 +135,20 @@ export async function getApplicationLifecycle(
       lifecycleReadRequests.delete(workspaceRoot)
     }
   }
+}
+
+// 把模板下载明细提交给后端，并执行页面与菜单的增量初始化。
+export async function prepareApplicationTemplateGeneration(
+  application: ApplicationConfig,
+  threadId: string,
+  downloadResult: TemplateDownloadResult
+): Promise<ApplicationLifecycle> {
+  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
+  return runApplicationLifecycleAction(threadId, {
+    action: 'prepare_template_generation',
+    workspaceRoot: application.workspaceRoot,
+    downloadResult
+  })
 }
 
 // 把应用模板文件的真实生成结果提交给后端，由状态机决定 ready 或 failed。
