@@ -491,13 +491,6 @@ export default function AiChatPanel({
           available: technicalPlanDocAvailable || Boolean(designDocFileContent['technical-plan']) || planningPhase === 'technical_planning'
         },
         {
-          key: 'build-task-plan' as WorkspaceDocKey,
-          title: '构建任务',
-          path: 'plans/build-task-plan.json',
-          content: '',
-          available: false
-        },
-        {
           key: 'ui-design' as WorkspaceDocKey,
           title: 'UI设计稿',
           path: 'specs/ui-designs',
