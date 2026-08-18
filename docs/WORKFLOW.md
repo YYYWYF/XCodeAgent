@@ -464,6 +464,9 @@ Testing Subgraph 的最小内部结构：
 
 ```text
 testing.START
+  → collect_unit_test_targets
+  → generate_or_update_unit_tests
+  → validate_generated_unit_tests
   → actual_project_checks
   → main_quality_gate
   → repair_planning
@@ -478,6 +481,9 @@ testing.START
 - 前端 TypeScript 构建；
 - 前端 typecheck；
 - 后端 Java 构建。
+- 前端和后端单元测试生成校验，以及存在对应测试文件时的 Jest/Surefire 单元测试。
+
+单元测试生成是正式 Workflow 中的尽力而为阶段：本轮没有对应测试文件、生成 Agent 无输出或 Agent 初始化失败时，生成和单测检查均以 `passed=true, skipped=true` 记录，不阻断门禁；已有或已生成的测试文件必须执行，编译、用例或业务代码失败仍进入 RepairPlanner → SmallTask 修复闭环。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。
 
 输出至少包含：
 
@@ -493,12 +499,13 @@ testing.START
 - `small_task_tasks` / `small_task_results`：SmallTask 执行器的任务状态、实际改动、验证和升级结果；
 - `integration_next_action`：外层 Graph 的下一步路由，取值为 `launch_project`、`small_task_repair`、`await_user_input` 或 `handle_failure`；
 - `repair_iteration` / `max_repair_iterations`：集成测试修复闭环预算。
+- `unit_test_generation_context`、`unit_test_generation`、`unit_test_mapping_path`：本轮源码目标、生成/同步结果、warning、校验和可重建映射缓存；`unit_test_code_change_sets` 与 `unit_test_generation_code_change_sets` 保存实际测试文件差异（后者为生成阶段别名）。
 
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：
 
-- 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm` 或 `yarn`，执行 install、可选 `tsc` script 和必需 build script；
-- 后端：仅识别当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`）并执行 `clean install`；不探测 Python 工程或执行 pytest；
-- 未声明可选 `tsc` script 时会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。Lint、前端单测和 E2E 当前不生成检查项。
+- 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm` 或 `yarn`，执行 install、可选 `tsc` script、build，并在有对应测试文件时优先执行 `test:unit`、否则执行 `test`；
+- 后端：仅识别当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`），先执行 `-B -Dmaven.test.skip=true clean install`，确认构建通过且存在对应 `*Test.java` 后再执行 `-B -DfailIfNoTests=true test`；不探测 Python 工程或执行 pytest；
+- 未声明可选 `tsc` script 时会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。没有对应单测文件时不执行 Jest/Maven test，并以明确原因跳过；不执行 E2E。
 
 任务编译和执行还必须遵守以下确定性边界：
 
@@ -700,7 +707,7 @@ observability/  日志、Tracing、Metrics 和 Agent 运行诊断
 
 入口顺序固定为 `scan_workspace_code -> classify_intent`。扫描节点先生成可缓存的只读 WorkspaceSnapshot 和代码图摘要；分类器只接收有界的技术栈、工程入口、页面、组件、API 路由、共享契约和示例符号，不接收源码正文或完整仓库。`classify_intent` 再输出五类意图：`casual_chat`、`workspace_question`、`workspace_change`、`formal_workflow`、`needs_clarification`。用户已经给出存在于扫描快照中的页面/组件和明确局部结果时，即使尚未定位到最终编辑文件，也必须进入 `workspace_change`，由执行 Agent 继续精确定位，不能在分类阶段重复询问修改位置。对身份询问、问候和通用解释，分类调用同时生成可直接展示的 `response`；若模型未返回可用 `response`，才回退到无工具 `respond_conversation` ChatModel。需要当前工程事实但不修改文件的问题进入只读 `answer_workspace` Agent；新应用、正式工件、确认过的契约、数据库迁移、广泛架构替换和无法安全局部决定的产品范围先展示确认卡，再由前端切换 `/workflow/run`；扫描后仍然缺少实质目标或预期结果的输入继续在同一 conversation thread 澄清。
 
-`workspace_change` 继续区分 `frontend | backend | fullstack | workspace` owner。前后端代码复用共享 SmallTask Agent，`fullstack` 固定后端优先并以结构化 `backend_handoff` 交接给前端，随后复用独立集成测试和预览启动。`workspace` owner 只处理分类器明确返回的精确相对路径或窄 glob，用于普通文档、测试、脚本和仓库配置；它禁止 Frontend/Backend 产品代码、`.env`、数据库迁移和 `.xcodeagent` 正式工件，完成 Agent 内相称验证后直接收口，不强制启动应用预览。任何写分支最终文件清单仍以工作区前后快照为准，模型声明不能替代真实 diff。
+`workspace_change` 继续区分 `frontend | backend | fullstack | workspace` owner。前后端代码复用共享 SmallTask Agent，`fullstack` 固定后端优先并以结构化 `backend_handoff` 交接给前端，随后复用独立集成测试和预览启动。快速修改流程显式关闭 `unit_test_generation_enabled`，不生成或执行本轮新增单元测试；正式 Workflow 才启用测试收集与生成。`workspace` owner 只处理分类器明确返回的精确相对路径或窄 glob，用于普通文档、测试、脚本和仓库配置；它禁止 Frontend/Backend 产品代码、`.env`、数据库迁移和 `.xcodeagent` 正式工件，完成 Agent 内相称验证后直接收口，不强制启动应用预览。任何写分支最终文件清单仍以工作区前后快照为准，模型声明不能替代真实 diff。
 
 前端、后端或 `fullstack` 的独立集成测试失败时，路由进入 `direct_modification_repair`：只读 RepairPlanner 接收测试报告、失败证据和本轮真实变更路径，生成受限 SmallTask，再回到 `integration_test` 复核。自由对话最多执行 3 轮真实局部修复；预算耗尽、证据不足、路径越权、数据库/正式工件/契约变更或需要扩大范围时停止，并保留失败证据或发出确认卡。该节点不直接回到 `build`，也不修改确认过的产品语义。
 

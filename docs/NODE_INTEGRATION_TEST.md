@@ -5,7 +5,10 @@
 `integration_test` 是主 Graph 中的 Testing Subgraph 包装节点。当前内部拓扑为：
 
 ```text
-actual_project_checks
+collect_unit_test_targets
+  -> generate_or_update_unit_tests
+  -> validate_generated_unit_tests
+  -> actual_project_checks
   -> main_quality_gate
   -> repair_planning
 ```
@@ -16,7 +19,9 @@ actual_project_checks
 2. 根据命令结果执行确定性质量门禁并生成返修请求；
 3. 门禁失败时调用只读 RepairPlanner，生成受限 SmallTask 修复任务。
 
-API 契约一致性由 ProjectPlan 确认和 `prepare_build_tasks` 前置门禁负责，Testing Subgraph 不重复校验。节点没有 Test Agent，也不探测 Python 工程或执行 pytest。
+正式 Workflow 在真实差异清空前保存本轮源码和变更集，收集业务源码后尽力生成/同步单元测试。快速修改流程显式关闭该阶段。测试生成 Agent 只能写 `frontend/tests/*.test.ts(x)` 与 `backend/src/test/java/**/*.java`；生成文件总数最多 5 个，映射缓存位于工作区 `.xcodeagent/cache/unit-test-mappings.json`。
+
+API 契约一致性由 ProjectPlan 确认和 `prepare_build_tasks` 前置门禁负责，Testing Subgraph 不重复校验。测试生成失败但没有产生测试文件时只保留 warning 并以 `passed/skipped` 放行；已经存在或已经生成的对应测试必须执行，测试编译、用例和业务代码失败仍创建 revision request。不探测 Python 工程或执行 pytest。
 
 ## 2. 主图入口与出口
 
@@ -58,8 +63,10 @@ API 契约一致性由 ProjectPlan 确认和 `prepare_build_tasks` 前置门禁�
 | `frontend_install` | true | `<package-manager> install` |
 | `frontend_typecheck` | false | 存在 `scripts.tsc` 时执行 `<package-manager> run tsc` |
 | `frontend_build` | true | 执行 `<package-manager> run build` |
+| `frontend_unit_tests` | 按对应测试文件 | 有 `frontend/tests/*.test.ts(x)` 时优先执行 `test:unit`，否则执行 `test`；无对应文件则 passed/skipped |
+| `frontend_test_generation` / `backend_test_generation` | 按目标 | 生成/校验阶段按受影响端记录；没有测试文件时 passed/skipped |
 
-未找到前端 `package.json` 时生成 required failure；可选 `tsc` script 缺失时生成 passed/skipped 结果。当前节点不执行 lint、前端单元测试或 E2E。
+未找到前端 `package.json` 时生成 required failure；可选 `tsc` script 缺失时生成 passed/skipped 结果。测试文件不存在时不调用 Jest，避免当前 Jest “No tests found”造成假失败；E2E 不执行。
 
 ### 3.2 后端发现与检查
 
@@ -69,13 +76,14 @@ API 契约一致性由 ProjectPlan 确认和 `prepare_build_tasks` 前置门禁�
 2. `backend/pom.xml`
 3. `Backend/pom.xml`
 
-发现 Maven 工程后优先使用当前平台的 `mvnw` 或 `mvnw.cmd`，否则使用全局 `mvn`，并执行：
+发现 Maven 工程后优先使用当前平台的 `mvnw` 或 `mvnw.cmd`，否则使用全局 `mvn`，并拆分执行：
 
 ```text
-<maven-command> clean install
+<maven-command> -B -Dmaven.test.skip=true clean install
+<maven-command> -B -DfailIfNoTests=true test  # 仅存在对应 *Test.java 且构建成功时
 ```
 
-未找到 Maven 工程时生成可选、passed/skipped 的 `backend_build`。`pyproject.toml`、`pytest.ini`、`setup.cfg` 或 Python 测试目录不会改变判断，也不会触发解释器探测或 `python -m pytest`。
+未找到 Maven 工程时生成可选、passed/skipped 的 `backend_build` 和 `backend_unit_tests`。没有对应 `src/test/java/**/*Test.java` 时不调用 Maven test。`pyproject.toml`、`pytest.ini`、`setup.cfg` 或 Python 测试目录不会改变判断，也不会触发解释器探测或 `python -m pytest`。
 
 ### 3.3 命令证据
 
@@ -154,12 +162,18 @@ RepairPlanner 只能选择：
 | `build_task_plan` / `build_execution_scope` / `build_execution_slice` | 提供修复上下文和精确授权范围 |
 | `selected_skill_names` | 失败时注入 RepairPlanner 的用户技能快照 |
 | `small_task_code_change_sets` | 合并历史修复变更审计 |
+| `unit_test_generation_enabled` | 正式 Workflow 默认开启；快速修改流程关闭 |
+| `test_generation_input_code_changes` / `test_generation_input_code_change_sets` | 清空子图差异状态前固化的真实业务差异 |
+| `unit_test_generation_context` / `unit_test_generation` | 受影响源码、生成状态、测试文件、warning 和校验结果 |
+| `unit_test_affected_layers` | 控制只执行本次受影响端的单元测试 |
+| `unit_test_mapping_path` / `unit_test_code_change_sets` / `unit_test_generation_code_change_sets` | 映射缓存路径和实际测试文件变更集；后者是生成阶段的稳定别名 |
 
 `project_plan`、`build_results` 和 `build_summary.failed/pending` 不参与本节点门禁。API 契约已经在进入 Build 前校验。
 
 ### 6.2 核心输出
 
 - `test_results` / `test_events`
+- `unit_test_generation` / `unit_test_generation_context` / `unit_test_mapping_path`
 - `test_report` / `test_report_path`
 - `quality_gate_passed` / `needs_revision`
 - `revision_requests`
@@ -184,15 +198,16 @@ RepairPlanner 只能选择：
 ## 8. 架构边界
 
 - 对应 learn-coding-agent 的“收集事实—执行—验证”循环：真实命令是验证事实源；
-- 对应 OpenCode 的角色分离：只在需要规划修复时调用只读 Agent；
-- 对应 Deep Agents 的按需能力：成功路径不创建无必要的审阅 Agent；
+- 对应 OpenCode 的角色分离：测试生成 Agent 只写测试目录，RepairPlanner 仍只读且只在失败时调用；
+- 对应 Deep Agents 的按需能力：没有业务目标时不调用生成 Agent，生成异常且没有测试文件时保持可恢复放行；
 - Graph State 只保存紧凑结构化结果和日志引用，避免把完整工具输出或仓库内容放入 128k 上下文。
 
 ## 9. 回归测试重点
 
-- 成功子图事件顺序为工程检查、质量门禁、修复规划跳过，且 RepairPlanner 不被调用；
+- 成功子图事件顺序包含目标收集、测试生成/校验、工程检查、质量门禁和修复规划跳过，且 RepairPlanner 不被调用；
 - API contract 服务仍在 ProjectPlan 与 `prepare_build_tasks` 测试中受到保护，但 Testing 不产生 `api_contract` check；
 - Python 项目标记不会触发任何后端命令；
-- Maven、Static、包管理器缺失、命令超时和日志引用保持原行为；
+- Maven 两段命令、零测试跳过、Static、包管理器缺失、命令超时和日志引用保持原行为；
+- 前端-only、后端-only、混合变更与 CSS-only 目标筛选、最多 5 个测试文件、映射缓存命中和快速修改关闭生成均有回归覆盖；
 - 失败命令仍能生成 revision request、受限 RepairTask 和复测路由；
-- Agent registry、技能和 AGENTS.md memory 只覆盖剩余六个 Deep Agent。
+- Agent registry 额外注册只写测试目录的 TestGeneration Agent；技能和 AGENTS.md memory 仍以只读挂载提供。

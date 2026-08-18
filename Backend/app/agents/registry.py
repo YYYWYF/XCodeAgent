@@ -10,6 +10,7 @@ from app.agents.frontend import create_frontend_agent
 from app.agents.model_factory import create_chat_model
 from app.agents.repair_planner import create_repair_planner_agent
 from app.agents.small_task import create_small_task_agent
+from app.agents.test_generation import create_test_generation_agent
 from app.agents.workspace_assistant import create_workspace_assistant_agent
 from app.agents.workspace_scope import resolve_workspace_root
 from app.config import Settings
@@ -40,6 +41,7 @@ class AgentBundle:
     workspace_assistant: Any
     selected_skill_names: tuple[str, ...] = ()
     user_skills_revision: str = ""
+    test_generation: Any = None
 
 
 def create_agent_bundle(
@@ -139,6 +141,18 @@ def _create_agent_bundle_for_workspace(
         agent_memory_backend=agent_memory.backend,
         required_user_skills_prompt=required_user_skills_prompt,
     )
+    try:
+        test_generation = create_test_generation_agent(
+            chat_model,
+            workspace_root=workspace_root,
+            user_skills_backend=user_skills.backend,
+            agent_memory_backend=agent_memory.backend,
+            required_user_skills_prompt=required_user_skills_prompt,
+        )
+    except Exception as exc:
+        # 测试生成是尽力而为；模型或 Agent 初始化失败不应阻断主工程检查。
+        logger.warning("TestGeneration Agent 初始化失败，将按零测试文件继续：%s", exc)
+        test_generation = None
     workspace_assistant = create_workspace_assistant_agent(
         chat_model,
         workspace_root=workspace_root,
@@ -152,6 +166,7 @@ def _create_agent_bundle_for_workspace(
         database=database,
         repair_planner=repair_planner,
         small_task=small_task,
+        test_generation=test_generation,
         workspace_assistant=workspace_assistant,
         selected_skill_names=selected_skill_names,
         user_skills_revision=user_skills_revision,

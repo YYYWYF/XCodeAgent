@@ -36,6 +36,7 @@ class ProjectState(TypedDict, total=False):
     direct_modification_result: dict[str, Any]
     direct_stage_results: dict[str, dict[str, Any]]
     direct_code_change_sets: list[dict[str, Any]]
+    unit_test_generation_enabled: bool
     backend_handoff: dict[str, Any]
     integration_repair_enabled: bool
     requirement_spec: dict[str, Any]
@@ -98,6 +99,14 @@ class ProjectState(TypedDict, total=False):
     build_results: list[dict[str, Any]]
     build_summary: dict[str, Any]
     build_events: Annotated[list[str], add]
+    test_generation_input_code_changes: dict[str, Any]
+    test_generation_input_code_change_sets: list[dict[str, Any]]
+    unit_test_generation_context: dict[str, Any]
+    unit_test_generation: dict[str, Any]
+    unit_test_affected_layers: list[str]
+    unit_test_mapping_path: str | None
+    unit_test_code_change_sets: list[dict[str, Any]]
+    unit_test_generation_code_change_sets: list[dict[str, Any]]
     test_results: list[dict[str, Any]]
     test_events: Annotated[list[str], add]
     test_report: dict[str, Any]

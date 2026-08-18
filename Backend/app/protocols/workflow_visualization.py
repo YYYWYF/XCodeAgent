@@ -1302,6 +1302,11 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {
                 "testReport": report,
                 "testEvents": update.get("test_events", []),
+                "unitTestGeneration": update.get("unit_test_generation", {}),
+                "unitTestGenerationContext": update.get(
+                    "unit_test_generation_context", {}
+                ),
+                "unitTestMappingPath": update.get("unit_test_mapping_path"),
                 "qualityGatePassed": update.get("quality_gate_passed"),
                 "needsRevision": update.get("needs_revision"),
                 "revisionRequests": update.get("revision_requests", []),
