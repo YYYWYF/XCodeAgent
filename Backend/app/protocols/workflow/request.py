@@ -143,6 +143,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     acceptance_decision = _page_acceptance_decision(clarification_answers)
     acceptance_adjustment = _acceptance_adjustment(clarification_answers)
     ui_design_action = _ui_design_action(clarification_answers)
+    unit_test_decision = _unit_test_decision(clarification_answers)
     if acceptance_adjustment:
         resume_from = acceptance_adjustment_resume_node(acceptance_adjustment)
     elif acceptance_decision:
@@ -270,6 +271,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **(
             {"small_task_handoff_submission": small_task_handoff_submission}
             if small_task_handoff_submission
+            else {}
+        ),
+        **(
+            {"unit_test_decision": unit_test_decision}
+            if unit_test_decision
             else {}
         ),
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
@@ -742,6 +748,11 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "small_task_route",
         "small_task_max_concurrency",
         "integration_next_action",
+        "unit_test_decision",
+        "unit_test_build_checks_completed",
+        "unit_test_build_results",
+        "unit_test_generation_context",
+        "unit_test_affected_layers",
         "clarification",
         "selected_skill_names",
         "workflow_scope",
@@ -762,6 +773,11 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "repair_task_plan": "repairTaskPlan",
         "repair_tasks": "repairTasks",
         "integration_next_action": "integrationNextAction",
+        "unit_test_decision": "unitTestDecision",
+        "unit_test_build_checks_completed": "unitTestBuildChecksCompleted",
+        "unit_test_build_results": "unitTestBuildResults",
+        "unit_test_generation_context": "unitTestGenerationContext",
+        "unit_test_affected_layers": "unitTestAffectedLayers",
     }
     for snake_key, camel_key in camel_aliases.items():
         if snake_key not in resumed_values and merged.get(camel_key) is not None:
@@ -1225,6 +1241,23 @@ def _clarification_answers_to_text(value: Any) -> str:
         return "\n".join(lines)
 
     return _answer_to_text(value)
+
+
+def _unit_test_decision(value: Any) -> str:
+    """从结构化确认答案提取单元测试的 skip/run 决策。"""
+
+    if not isinstance(value, dict):
+        return ""
+    answer = value.get("unit_test_confirmation")
+    if isinstance(answer, dict) and "selected" in answer:
+        selected = answer.get("selected")
+        answer = selected[0] if isinstance(selected, list) and selected else selected
+    normalized = str(answer or "").strip().casefold()
+    if normalized in {"skip", "是", "yes", "true", "跳过"}:
+        return "skip"
+    if normalized in {"run", "否", "no", "false", "继续"}:
+        return "run"
+    return ""
 
 
 def _page_acceptance_decision(value: Any) -> str:

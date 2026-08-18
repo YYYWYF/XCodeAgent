@@ -98,6 +98,7 @@ export default function WorkflowRunCard({
     ? clarification.review
     : undefined;
   const databaseApproval = workflowDatabaseApproval(clarification);
+  const unitTestConfirmation = clarification?.mode === 'unit_test_confirmation';
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -186,7 +187,7 @@ export default function WorkflowRunCard({
           {workflowStatusText(status)}
         </Tag>
       </div>
-      {workflow.summary.message && !uiDesignConfirmation && !artifactConfirmation && (
+      {workflow.summary.message && !uiDesignConfirmation && !artifactConfirmation && !unitTestConfirmation && (
         <div className={cx("workflow-run-message")}>
           <Text>{String(workflow.summary.message)}</Text>
         </div>
@@ -245,7 +246,17 @@ export default function WorkflowRunCard({
               type="info"
             />
           )}
-          {detailReview ? (
+          {unitTestConfirmation && requiresConfirmation ? (
+            <UnitTestConfirmationPanel
+              disabled={disabled || interactionAvailability !== 'active'}
+              message={clarification?.message}
+              onSubmit={(decision) =>
+                onSubmitClarification?.(workflow, {
+                  unit_test_confirmation: decision,
+                })
+              }
+            />
+          ) : detailReview ? (
             <DetailReview
               disabled={disabled}
               message={clarification?.message}
@@ -1402,6 +1413,39 @@ function ClarificationQuestionControl({
   );
 }
 
+/** 构建检查完成后提供跳过或继续单元测试的双按钮确认面板。 */
+function UnitTestConfirmationPanel({
+  disabled,
+  message,
+  onSubmit,
+}: {
+  disabled?: boolean;
+  message?: string;
+  onSubmit: (decision: 'skip' | 'run') => void;
+}): ReactElement {
+  return (
+    <div className={cx("workflow-unit-test-confirmation")}>
+      <Text>{message || '构建检查已完成。是否跳过单元测试？'}</Text>
+      <div className={cx("workflow-unit-test-confirmation-actions")}>
+        <Button
+          disabled={disabled}
+          onClick={() => onSubmit('skip')}
+          type="default"
+        >
+          是，跳过单元测试
+        </Button>
+        <Button
+          disabled={disabled}
+          onClick={() => onSubmit('run')}
+          type="primary"
+        >
+          否，继续执行
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function OtherInput({
   disabled,
   onChange,
@@ -1658,17 +1702,12 @@ function readTechnicalPlan(workflow: WorkflowRunPayload): Record<string, unknown
 export function workflowClarification(
   workflow: WorkflowRunPayload,
 ): WorkflowClarification | undefined {
-  const fromSummary = workflow.summary.clarification;
-  if (fromSummary && typeof fromSummary === "object") return fromSummary;
-
-  const stateClarification = workflow.state?.clarification;
-  if (stateClarification && typeof stateClarification === "object") {
-    return stateClarification as WorkflowClarification;
-  }
-
-  const resultClarification = workflow.result?.clarification;
-  if (resultClarification && typeof resultClarification === "object") {
-    return resultClarification as WorkflowClarification;
+  for (const candidate of [
+    workflow.summary.clarification,
+    workflow.state?.clarification,
+    workflow.result?.clarification,
+  ]) {
+    if (isUsableWorkflowClarification(candidate)) return candidate;
   }
 
   const clarificationEvent = workflow.events
@@ -1688,12 +1727,24 @@ export function workflowClarification(
   ) {
     const clarification = (eventClarification as { clarification?: unknown })
       .clarification;
-    if (clarification && typeof clarification === "object") {
-      return clarification as WorkflowClarification;
-    }
+    if (isUsableWorkflowClarification(clarification)) return clarification;
   }
 
   return undefined;
+}
+
+/** 判断确认载荷是否包含可渲染语义，避免空对象遮蔽后续真实载荷。 */
+function isUsableWorkflowClarification(
+  value: unknown,
+): value is WorkflowClarification {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const clarification = value as WorkflowClarification;
+  return Boolean(
+    clarification.mode ||
+      clarification.status ||
+      clarification.message ||
+      (Array.isArray(clarification.questions) && clarification.questions.length > 0),
+  );
 }
 
 // 提取高危数据库审批载荷：必须是 agent_approval 模式且包含可执行的 SQL 语句。

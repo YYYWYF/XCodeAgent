@@ -37,7 +37,11 @@ import {
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage } from '../../types'
 import { isConversationWorkflow } from '../../conversationMode'
-import { workflowCodeChanges, workflowFinalResultPresentation } from '../../utils'
+import {
+  workflowCodeChanges,
+  workflowFinalResultPresentation,
+  workflowShouldShowCodeChanges
+} from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import './MessageList.less'
@@ -239,6 +243,9 @@ export default function MessageList({
               console.log('[msg-debug] id=', message.id, 'content=', JSON.stringify(message.content).slice(0, 50), 'hasWorkflow=', Boolean(message.workflow), 'phase=', message.workflow?.summary?.phase, 'clarStatus=', message.workflow ? workflowClarification(message.workflow)?.status : undefined, 'planningLoading=', message.planningLoading)
               const messageLoading = message.id === activeAssistantMessageId
               const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
+              const visibleCodeChanges = workflowShouldShowCodeChanges(message.workflow)
+                ? codeChanges
+                : undefined
               const finalResult = workflowFinalResultPresentation(message.workflow)
               const conversation =
                 (messageLoading && conversationRunning) || isConversationWorkflow(message.workflow)
@@ -358,7 +365,7 @@ export default function MessageList({
                           !hasConversationToolActivity && (
                             <ToolCallChain toolCalls={message.toolCalls} />
                           )}
-                        {!messageLoading && codeChanges && (
+                        {!messageLoading && visibleCodeChanges && (
                           <div
                             className={cx('final-result-heading', finalResult.failed && 'failed')}
                           >
@@ -377,7 +384,7 @@ export default function MessageList({
                         )}
                         {effectiveAssistantContent && (
                           <div
-                            className={cx(!messageLoading && codeChanges && 'final-result-content')}
+                            className={cx(!messageLoading && visibleCodeChanges && 'final-result-content')}
                           >
                             <MarkdownContent content={effectiveAssistantContent} />
                           </div>
@@ -396,27 +403,30 @@ export default function MessageList({
                             workflow={message.workflow!}
                           />
                         )}
-                        {!messageLoading && codeChanges && (
+                        {!messageLoading && visibleCodeChanges && (
                           <CodeChangeCard
-                            codeChanges={codeChanges}
+                            codeChanges={visibleCodeChanges}
                             loading={messageLoading}
                             onApproveAll={() => undefined}
-                            onOpenFile={(path) => onOpenCodeChangeFile(codeChanges, path)}
-                            onRevert={() => onRevertCodeChanges(message.id, codeChanges)}
+                            onOpenFile={(path) => onOpenCodeChangeFile(visibleCodeChanges, path)}
+                            onRevert={() => onRevertCodeChanges(message.id, visibleCodeChanges)}
                             revertDisabled={codeChangeActionsDisabled}
-                            reverting={revertingCodeChangeIds.has(codeChanges.id)}
+                            reverting={revertingCodeChangeIds.has(visibleCodeChanges.id)}
                           />
                         )}
                         {!messageLoading &&
-                          codeChanges &&
+                          visibleCodeChanges &&
                           message.workflow &&
                           message.id === latestVersionReminderMessageId && (
                             <VersionCommitReminder
-                              codeChanges={codeChanges}
+                              codeChanges={visibleCodeChanges}
                               disabled={codeChangeActionsDisabled}
                               onReview={() =>
-                                codeChanges.files[0] &&
-                                onOpenCodeChangeFile(codeChanges, codeChanges.files[0].path)
+                                visibleCodeChanges.files[0] &&
+                                onOpenCodeChangeFile(
+                                  visibleCodeChanges,
+                                  visibleCodeChanges.files[0].path
+                                )
                               }
                               workflow={message.workflow}
                             />

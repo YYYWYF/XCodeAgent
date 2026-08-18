@@ -25,6 +25,21 @@ IntegrationTestProgressReporter = Callable[[dict[str, Any]], None]
 _FRONTEND_SOURCE_SUFFIXES = {".js", ".jsx", ".ts", ".tsx"}
 _BACKEND_SOURCE_SUFFIXES = {".java"}
 _TEST_GENERATION_STATUSES = {"completed", "skipped", "failed"}
+_UNIT_TEST_DECISIONS = {"skip", "run"}
+_MAX_TEST_DIFF_ENTRIES = 20
+_MAX_TEST_DIFF_CHARS = 12_000
+_MAX_SINGLE_TEST_DIFF_CHARS = 6_000
+_INTEGRATION_CHECK_ORDER = (
+    "frontend_install",
+    "frontend_typecheck",
+    "frontend_build",
+    "backend_build",
+    "backend_static_check",
+    "frontend_test_generation",
+    "backend_test_generation",
+    "frontend_unit_tests",
+    "backend_unit_tests",
+)
 
 
 def _progress_reporter(config: RunnableConfig | None) -> IntegrationTestProgressReporter | None:
@@ -64,11 +79,139 @@ def _check_progress_snapshot_writer() -> IntegrationTestProgressReporter:
         writer(
             {
                 "type": "integration_test.checks",
-                "checks": list(checks.values()),
+                "checks": _ordered_integration_checks(list(checks.values())),
             }
         )
 
     return report
+
+
+def _ordered_integration_checks(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按构建、测试生成、单元测试的稳定顺序排列检查，同时保留未知检查的原顺序。"""
+
+    positions = {
+        check_id: index for index, check_id in enumerate(_INTEGRATION_CHECK_ORDER)
+    }
+    return [
+        check
+        for _, check in sorted(
+            enumerate(checks),
+            key=lambda item: (
+                positions.get(
+                    str(item[1].get("id") or ""),
+                    len(_INTEGRATION_CHECK_ORDER),
+                ),
+                item[0],
+            ),
+        )
+    ]
+
+
+def _generation_progress_check(
+    layer: str,
+    *,
+    evidence: str,
+    required: bool,
+) -> dict[str, Any]:
+    """构造可在生成阶段提前展示的逐层单元测试生成检查。"""
+
+    layer_label = "前端" if layer == "frontend" else "后端"
+    return {
+        "id": f"{layer}_test_generation",
+        "name": f"{layer_label}单元测试生成检查",
+        "required": required,
+        "evidence": evidence,
+    }
+
+
+def _report_generation_progress(
+    reporter: IntegrationTestProgressReporter | None,
+    *,
+    check: dict[str, Any],
+    status: str,
+) -> None:
+    """安全发布测试生成检查进度，展示通道异常不得中断测试流程。"""
+
+    if reporter is None:
+        return
+    try:
+        reporter({"check": check, "status": status})
+    except Exception:
+        return
+
+
+def _unit_test_decision(state: ProjectState | dict[str, Any]) -> str:
+    """读取并规范化用户对单元测试的 skip/run 决策。"""
+
+    raw_decision = state.get("unit_test_decision")
+    if isinstance(raw_decision, dict) and "selected" in raw_decision:
+        selected = raw_decision.get("selected")
+        raw_decision = (
+            selected[0]
+            if isinstance(selected, list) and selected
+            else selected
+        )
+    normalized = str(raw_decision or "").strip().casefold()
+    if normalized in {"skip", "是", "yes", "true", "跳过"}:
+        return "skip"
+    if normalized in {"run", "否", "no", "false", "继续"}:
+        return "run"
+    return ""
+
+
+def _unit_test_confirmation_payload() -> dict[str, Any]:
+    """构造构建完成后的单元测试可选确认载荷。"""
+
+    return {
+        "mode": "unit_test_confirmation",
+        "status": "requires_user_input",
+        "message": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
+        "questions": [
+            {
+                "id": "unit_test_confirmation",
+                "header": "单元测试",
+                "question": "是否跳过单元测试？",
+                "type": "choice",
+                "allowOther": False,
+                "options": [
+                    {
+                        "label": "是，跳过单元测试",
+                        "value": "skip",
+                        "description": "不生成、不执行单元测试。",
+                    },
+                    {
+                        "label": "否，继续执行",
+                        "value": "run",
+                        "description": "继续生成并执行单元测试。",
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def _progress_status_for_result(check: dict[str, Any]) -> str:
+    """把最终检查结果转换为实时矩阵可识别的状态。"""
+
+    if check.get("skipped") and check.get("passed"):
+        return "skipped"
+    return "passed" if check.get("passed") else "failed"
+
+
+def _report_result_snapshot(
+    reporter: IntegrationTestProgressReporter | None,
+    checks: list[dict[str, Any]],
+) -> None:
+    """恢复已完成的构建检查快照，避免确认恢复时矩阵短暂丢失。"""
+
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        _report_generation_progress(
+            reporter,
+            check=check,
+            status=_progress_status_for_result(check),
+        )
 
 
 def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
@@ -85,6 +228,16 @@ def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
             },
             "unit_test_affected_layers": [],
             "test_events": ["unit_test_targets:disabled"],
+        }
+    previous_context = state.get("unit_test_generation_context")
+    previous_context = previous_context if isinstance(previous_context, dict) else {}
+    if state.get("unit_test_build_checks_completed") and previous_context:
+        return {
+            "unit_test_generation_context": previous_context,
+            "unit_test_affected_layers": _string_list(
+                previous_context.get("affected_layers"), limit=2
+            ),
+            "test_events": ["unit_test_targets:reused_after_build"],
         }
 
     source_paths: list[str] = []
@@ -145,8 +298,6 @@ def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
         for path in changed_paths
         if _test_file_layer(path) in {"frontend", "backend"}
     ]
-    previous_context = state.get("unit_test_generation_context")
-    previous_context = previous_context if isinstance(previous_context, dict) else {}
     if not source_paths and existing_test_files:
         source_paths = _string_list(previous_context.get("source_files"), limit=100)
         affected_layers = list(
@@ -165,6 +316,7 @@ def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
     context = {
         "enabled": True,
         "source_files": source_paths,
+        "code_diff": _bounded_test_generation_diff(change_sets, source_paths),
         "affected_layers": affected_layers,
         "has_targets": bool(source_paths),
         "existing_test_files": existing_test_files,
@@ -197,11 +349,30 @@ def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
     }
 
 
-def generate_unit_tests(state: ProjectState) -> dict[str, Any]:
+def generate_unit_tests(
+    state: ProjectState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
     """调用专用 TestGeneration Agent，并把异常降级为零测试的可审计跳过结果。"""
 
     context = state.get("unit_test_generation_context")
     context = context if isinstance(context, dict) else {}
+    context_layers = [
+        layer
+        for layer in _string_list(context.get("affected_layers"), limit=2)
+        if layer in {"frontend", "backend"}
+    ]
+    reporter = _progress_reporter(config)
+    for layer in context_layers:
+        _report_generation_progress(
+            reporter,
+            check=_generation_progress_check(
+                layer,
+                evidence="正在调用 TestGeneration Agent 生成或更新受影响的单元测试文件。",
+                required=True,
+            ),
+            status="running",
+        )
     if context.get("enabled") is False:
         result = _skipped_generation_result("快速修改流程未启用单元测试生成。")
     elif not context.get("has_targets") and context.get("existing_test_files"):
@@ -229,11 +400,6 @@ def generate_unit_tests(state: ProjectState) -> dict[str, Any]:
                 f"TestGeneration Agent 执行异常，按零个测试文件继续：{type(exc).__name__}: {exc}"
             )
     normalized = _normalize_generation_result(result, context=context)
-    context_layers = [
-        layer
-        for layer in _string_list(context.get("affected_layers"), limit=2)
-        if layer in {"frontend", "backend"}
-    ]
     if context_layers:
         normalized["affected_layers"] = context_layers
     skipped_candidates = _string_list(context.get("skipped_candidates"), limit=20)
@@ -264,7 +430,10 @@ def generate_unit_tests(state: ProjectState) -> dict[str, Any]:
     }
 
 
-def validate_generated_unit_tests(state: ProjectState) -> dict[str, Any]:
+def validate_generated_unit_tests(
+    state: ProjectState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
     """把测试生成结果转换为质量门可消费的逐层结构化检查。"""
 
     generation = state.get("unit_test_generation")
@@ -341,6 +510,20 @@ def validate_generated_unit_tests(state: ProjectState) -> dict[str, Any]:
         }
         for layer in layers
     ]
+    reporter = _progress_reporter(config)
+    for check in checks:
+        progress_status = (
+            "skipped"
+            if check["skipped"]
+            else "passed"
+            if check["passed"]
+            else "failed"
+        )
+        _report_generation_progress(
+            reporter,
+            check=check,
+            status=progress_status,
+        )
     return {
         "test_results": [*state.get("test_results", []), *checks],
         "test_events": [check["id"] for check in checks],
@@ -580,6 +763,74 @@ def _is_behavioral_change(file_item: dict[str, Any]) -> bool:
     )
 
 
+def _bounded_test_generation_diff(
+    change_sets: list[dict[str, Any]],
+    source_paths: list[str],
+) -> dict[str, Any]:
+    """提取本轮目标源码的真实 diff，并按条目与字符预算裁剪测试上下文。"""
+
+    target_paths = set(source_paths)
+    change_set_ids = list(
+        dict.fromkeys(
+            str(change_set.get("id") or "").strip()
+            for change_set in change_sets
+            if str(change_set.get("id") or "").strip()
+        )
+    )[:20]
+    files: list[dict[str, Any]] = []
+    seen_entries: set[tuple[str, str, str]] = set()
+    remaining_chars = _MAX_TEST_DIFF_CHARS
+    for change_set in change_sets:
+        raw_files = change_set.get("files")
+        if not isinstance(raw_files, list):
+            continue
+        for item in raw_files:
+            if not isinstance(item, dict):
+                continue
+            path = _normalized_workspace_path(item.get("path"))
+            diff = item.get("diff")
+            if (
+                path not in target_paths
+                or not isinstance(diff, str)
+                or not diff.strip()
+            ):
+                continue
+            signature = (path, str(item.get("changeType") or ""), diff)
+            if signature in seen_entries:
+                continue
+            seen_entries.add(signature)
+            excerpt_limit = min(remaining_chars, _MAX_SINGLE_TEST_DIFF_CHARS)
+            if excerpt_limit <= 0 or len(files) >= _MAX_TEST_DIFF_ENTRIES:
+                break
+            excerpt = diff[:excerpt_limit]
+            files.append(
+                {
+                    "path": path,
+                    "changeType": str(item.get("changeType") or "modified"),
+                    "additions": item.get("additions", 0),
+                    "deletions": item.get("deletions", 0),
+                    "diff": excerpt,
+                    "truncated": bool(item.get("truncated")) or len(diff) > len(excerpt),
+                }
+            )
+            remaining_chars -= len(excerpt)
+        if remaining_chars <= 0 or len(files) >= _MAX_TEST_DIFF_ENTRIES:
+            break
+    return {
+        "change_set_ids": change_set_ids,
+        "files": files,
+        "summary": {
+            "files": len({item["path"] for item in files}),
+            "diff_entries": len(files),
+            "truncated": (
+                any(bool(item["truncated"]) for item in files)
+                or remaining_chars <= 0
+                or len(files) >= _MAX_TEST_DIFF_ENTRIES
+            ),
+        },
+    }
+
+
 def _normalized_workspace_path(value: Any) -> str:
     """规范化工作区相对路径并拒绝上跳路径。"""
 
@@ -599,18 +850,186 @@ def _string_list(value: Any, *, limit: int) -> list[str]:
     )[:limit]
 
 
+def build_project_checks(
+    state: ProjectState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """先执行依赖、类型和构建检查，为后续测试生成建立完成门。"""
+
+    reporter = _progress_reporter(config)
+    decision = _unit_test_decision(state)
+    cached_results = state.get("unit_test_build_results")
+    if (
+        state.get("unit_test_build_checks_completed")
+        and decision
+        and isinstance(cached_results, list)
+        and cached_results
+    ):
+        cached_results = _ordered_integration_checks(
+            [item for item in cached_results if isinstance(item, dict)]
+        )
+        _report_result_snapshot(reporter, cached_results)
+        return {
+            "test_results": cached_results,
+            "unit_test_build_results": cached_results,
+            "unit_test_build_checks_completed": True,
+            "test_events": ["unit_test_build:reused_after_confirmation"],
+        }
+
+    result = run_integration_checks(
+        state,
+        on_progress=reporter,
+        phase="build",
+    )
+    test_results = _ordered_integration_checks(
+        [
+            *state.get("test_results", []),
+            *result.get("test_results", []),
+        ]
+    )
+    return {
+        "test_results": test_results,
+        "unit_test_build_results": test_results,
+        "unit_test_build_checks_completed": True,
+        "test_events": result.get("test_events", []),
+    }
+
+
+def unit_test_confirmation(state: ProjectState) -> dict[str, Any]:
+    """在构建检查完成后暂停，等待用户选择是否执行可选单元测试。"""
+
+    if state.get("unit_test_generation_enabled") is False:
+        return {
+            "status": "in_progress",
+            "clarification": {},
+            "unit_test_decision": "skip",
+            "integration_next_action": "skip_unit_tests",
+            "test_events": ["unit_test_confirmation:auto_skipped_disabled"],
+        }
+    decision = _unit_test_decision(state)
+    if decision in _UNIT_TEST_DECISIONS:
+        return {
+            "status": "in_progress",
+            "clarification": {},
+            "unit_test_decision": decision,
+            "integration_next_action": (
+                "skip_unit_tests" if decision == "skip" else "run_unit_tests"
+            ),
+            "test_events": [f"unit_test_confirmation:{decision}"],
+        }
+    return {
+        "status": "requires_user_input",
+        "clarification": _unit_test_confirmation_payload(),
+        "integration_next_action": "await_user_input",
+        "test_events": ["unit_test_confirmation:requires_user_input"],
+    }
+
+
+def _route_unit_test_confirmation(state: ProjectState) -> str:
+    """根据用户确认结果选择跳过、继续或暂停测试子图。"""
+
+    decision = _unit_test_decision(state)
+    if decision == "skip":
+        return "skip_unit_tests"
+    if decision == "run":
+        return "generate_unit_tests"
+    return "await_user_input"
+
+
+def _unit_test_layers(state: ProjectState) -> list[str]:
+    """读取本轮受影响的前后端层，供单元测试确认和跳过结果复用。"""
+
+    context = state.get("unit_test_generation_context")
+    context = context if isinstance(context, dict) else {}
+    layers = _string_list(
+        context.get("affected_layers") or state.get("unit_test_affected_layers"),
+        limit=2,
+    )
+    return [layer for layer in layers if layer in {"frontend", "backend"}]
+
+
+def _skipped_unit_test_check(
+    *,
+    layer: str,
+    check_type: str,
+) -> dict[str, Any]:
+    """构造用户主动跳过时的单元测试生成或执行检查结果。"""
+
+    layer_label = "前端" if layer == "frontend" else "后端"
+    if check_type == "generation":
+        check_id = f"{layer}_test_generation"
+        name = f"{layer_label}单元测试生成检查"
+    else:
+        check_id = f"{layer}_unit_tests"
+        name = f"{layer_label}单元测试"
+    return {
+        "id": check_id,
+        "name": name,
+        "layer": layer,
+        "language": "typescript" if layer == "frontend" else "java",
+        "passed": True,
+        "skipped": True,
+        "required": False,
+        "command": None,
+        "evidence": "用户选择跳过单元测试，本轮不生成、不执行单元测试。",
+        "failure_category": None,
+        "execution": {
+            "tool": "none",
+            "argv": [],
+            "cwd": ".",
+            "returncode": None,
+            "timed_out": False,
+            "stdout_log": None,
+            "stderr_log": None,
+        },
+    }
+
+
+def skip_unit_tests(
+    state: ProjectState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """记录用户主动跳过的生成和单元测试检查，并直接进入质量门禁。"""
+
+    checks = [
+        _skipped_unit_test_check(layer=layer, check_type=check_type)
+        for layer in _unit_test_layers(state)
+        for check_type in ("generation", "unit")
+    ]
+    reporter = _progress_reporter(config)
+    for check in checks:
+        _report_generation_progress(reporter, check=check, status="skipped")
+    return {
+        "test_results": _ordered_integration_checks(
+            [*state.get("test_results", []), *checks]
+        ),
+        "unit_test_decision": "skip",
+        "test_events": [
+            "unit_test_generation:skipped_by_user",
+            "unit_tests:skipped_by_user",
+        ],
+    }
+
+
 def actual_project_checks(
     state: ProjectState,
     config: RunnableConfig,
 ) -> dict:
-    """执行真实项目检查，并把每项命令的进度交给外层工作流流式展示。"""
+    """在测试生成完成后执行前后端单元测试并流式展示命令状态。"""
 
-    result = run_integration_checks(state, on_progress=_progress_reporter(config))
-    return {
-        "test_results": [
+    result = run_integration_checks(
+        state,
+        on_progress=_progress_reporter(config),
+        phase="unit",
+    )
+    test_results = _ordered_integration_checks(
+        [
             *state.get("test_results", []),
             *result.get("test_results", []),
-        ],
+        ]
+    )
+    return {
+        "test_results": test_results,
         "test_events": result.get("test_events", []),
     }
 
@@ -887,6 +1306,9 @@ def build_testing_subgraph():
     builder = StateGraph(ProjectState)
 
     builder.add_node("collect_unit_test_targets", collect_unit_test_targets)
+    builder.add_node("build_project_checks", build_project_checks)
+    builder.add_node("unit_test_confirmation", unit_test_confirmation)
+    builder.add_node("skip_unit_tests", skip_unit_tests)
     builder.add_node("generate_unit_tests", generate_unit_tests)
     builder.add_node("validate_generated_unit_tests", validate_generated_unit_tests)
     builder.add_node("actual_project_checks", actual_project_checks)
@@ -894,7 +1316,18 @@ def build_testing_subgraph():
     builder.add_node("repair_planning", repair_planning)
 
     builder.add_edge(START, "collect_unit_test_targets")
-    builder.add_edge("collect_unit_test_targets", "generate_unit_tests")
+    builder.add_edge("collect_unit_test_targets", "build_project_checks")
+    builder.add_edge("build_project_checks", "unit_test_confirmation")
+    builder.add_conditional_edges(
+        "unit_test_confirmation",
+        _route_unit_test_confirmation,
+        {
+            "skip_unit_tests": "skip_unit_tests",
+            "generate_unit_tests": "generate_unit_tests",
+            "await_user_input": END,
+        },
+    )
+    builder.add_edge("skip_unit_tests", "main_quality_gate")
     builder.add_edge("generate_unit_tests", "validate_generated_unit_tests")
     builder.add_edge("validate_generated_unit_tests", "actual_project_checks")
     builder.add_edge("actual_project_checks", "main_quality_gate")
@@ -938,6 +1371,16 @@ def integration_test(state: ProjectState) -> dict:
             for item in input_code_change_sets
         }.values()
     )
+    decision = _unit_test_decision(state)
+    reuse_build_checks = bool(
+        state.get("unit_test_build_checks_completed")
+        and decision in _UNIT_TEST_DECISIONS
+    )
+    cached_build_results = (
+        state.get("unit_test_build_results")
+        if isinstance(state.get("unit_test_build_results"), list)
+        else []
+    )
     result = _testing_subgraph.invoke(
         {
             **state,
@@ -947,7 +1390,27 @@ def integration_test(state: ProjectState) -> dict:
                 "unit_test_generation_enabled", True
             ),
             "unit_test_code_change_sets": previous_test_changes,
-            "test_results": [],
+            "test_results": cached_build_results if reuse_build_checks else [],
+            "unit_test_build_results": cached_build_results if reuse_build_checks else [],
+            "unit_test_build_checks_completed": reuse_build_checks,
+            # 每轮测试必须从未决状态开始，避免重试时沿用上一轮质量门结果越过确认节点。
+            "test_report": {},
+            "test_report_path": None,
+            "quality_gate_passed": False,
+            "needs_revision": False,
+            "revision_requests": [],
+            "repair_task_plan": {},
+            "repair_task_plan_path": None,
+            "repair_tasks": [],
+            "integration_next_action": "",
+            "clarification": {},
+            # 集成测试位于启动预览之前；重试该节点时必须清空上一轮启动与验收状态，
+            # 否则投影层会把单元测试确认误识别成项目预览验收。
+            "preview_url": "",
+            "launch_result": {},
+            "acceptance_request": {},
+            "acceptance_decision": "",
+            "accepted": False,
             "test_events": [],
             "code_changes": {},
             "code_change_sets": [],
@@ -972,13 +1435,37 @@ def integration_test(state: ProjectState) -> dict:
         item for item in result.get("code_change_sets", []) if isinstance(item, dict)
     ]
     new_code_change_sets = [*new_test_changes, *repair_planner_changes]
+    waiting_for_unit_test_decision = (
+        result.get("status") == "requires_user_input"
+        and result.get("integration_next_action") == "await_user_input"
+        and isinstance(result.get("clarification"), dict)
+        and result.get("clarification", {}).get("mode") == "unit_test_confirmation"
+    )
+    quality_gate_passed = (
+        False
+        if waiting_for_unit_test_decision
+        else bool(result.get("quality_gate_passed", False))
+    )
+    terminal_status = (
+        "requires_user_input"
+        if waiting_for_unit_test_decision
+        else "completed"
+        if quality_gate_passed
+        else "failed"
+    )
     return {
         "phase": "integration_test",
+        "status": terminal_status,
+        "clarification": (
+            result.get("clarification", {})
+            if waiting_for_unit_test_decision
+            else {}
+        ),
         "test_results": result.get("test_results", []),
         "test_events": result.get("test_events", []),
         "test_report": result.get("test_report", {}),
         "test_report_path": result.get("test_report_path"),
-        "quality_gate_passed": result.get("quality_gate_passed", False),
+        "quality_gate_passed": quality_gate_passed,
         "needs_revision": result.get("needs_revision", False),
         "revision_requests": result.get("revision_requests", []),
         "repair_task_plan": result.get("repair_task_plan", {}),
@@ -987,6 +1474,19 @@ def integration_test(state: ProjectState) -> dict:
         "unit_test_generation_context": result.get("unit_test_generation_context", {}),
         "unit_test_generation": result.get("unit_test_generation", {}),
         "unit_test_affected_layers": result.get("unit_test_affected_layers", []),
+        "unit_test_decision": (
+            "" if not waiting_for_unit_test_decision else decision
+        ),
+        "unit_test_build_checks_completed": (
+            bool(result.get("unit_test_build_checks_completed"))
+            if waiting_for_unit_test_decision
+            else False
+        ),
+        "unit_test_build_results": (
+            result.get("unit_test_build_results", [])
+            if waiting_for_unit_test_decision
+            else []
+        ),
         "unit_test_mapping_path": result.get("unit_test_mapping_path"),
         "unit_test_code_change_sets": current_test_changes,
         "unit_test_generation_code_change_sets": current_test_changes,
@@ -1009,6 +1509,12 @@ def integration_test(state: ProjectState) -> dict:
             "integration_next_action",
             "launch_project" if result.get("quality_gate_passed", False) else "handle_failure",
         ),
+        # 集成测试的公开更新也要显式覆盖 checkpoint 中的旧预览字段。
+        "preview_url": "",
+        "launch_result": {},
+        "acceptance_request": {},
+        "acceptance_decision": "",
+        "accepted": False,
         "code_changes": merge_code_change_sets(
             [
                 *([input_code_changes] if input_code_changes else []),

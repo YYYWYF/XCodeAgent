@@ -23,7 +23,7 @@ import {
   shouldUseConversation
 } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import { workflowDebugBuildScope } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
-import {
+import WorkflowRunCard, {
   buildToolActivityPlacement,
   workflowOriginalRequest
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
@@ -41,7 +41,8 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/constants'
 import {
   splitWorkspacePath,
-  workspaceCodeChangeDisplayPath
+  workspaceCodeChangeDisplayPath,
+  workflowShouldShowCodeChanges
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import {
   DEFAULT_SKILL_CATEGORY,
@@ -49,7 +50,10 @@ import {
   filterCatalogSkills,
   reconcileEnabledChatSkills
 } from '../src/renderer/src/components/SkillsPage/skillCatalog'
-import type { UserSkillCatalog } from '../src/renderer/src/typings'
+import type {
+  UserSkillCatalog,
+  WorkflowRunPayload
+} from '../src/renderer/src/typings'
 
 test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   const scope = workflowDebugBuildScope({
@@ -1296,6 +1300,100 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
   assert.match(markup, /已通过/)
   assert.match(markup, /已跳过/)
   assert.doesNotMatch(markup, /<pre>[^<]*已完成 2\/2 项，通过 1 项，跳过 1 项/)
+})
+
+test('单元测试生成期间展示运行中的集成检查矩阵', () => {
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: true,
+      steps: [
+        {
+          id: 'workflow:integration_test',
+          kind: 'workflow',
+          status: 'running',
+          title: '正在执行 集成测试与质量门禁',
+          detail: '正在生成单元测试。',
+          sequence: 1,
+          checks: [
+            {
+              id: 'frontend_test_generation',
+              name: '前端单元测试生成检查',
+              status: 'running',
+              required: true,
+              evidence: '正在调用 TestGeneration Agent 生成或更新受影响的单元测试文件。'
+            }
+          ]
+        }
+      ]
+    })
+  )
+
+  assert.match(markup, /集成检查矩阵/)
+  assert.match(markup, /前端单元测试生成检查/)
+  assert.match(markup, /正在调用 TestGeneration Agent/)
+  assert.match(markup, /检查中/)
+  assert.match(markup, /aria-busy="true"/)
+  assert.match(markup, /anticon-spin/)
+})
+
+test('构建完成后展示单元测试跳过确认按钮', () => {
+  const markup = renderToStaticMarkup(
+    createElement(WorkflowRunCard, {
+      interactionAvailability: 'active',
+      workflow: {
+        runId: 'run-unit-test-confirmation',
+        threadId: 'thread-unit-test-confirmation',
+        summary: {
+          status: 'requires_user_input',
+          phase: 'integration_test',
+          message: '项目预览已就绪，请确认是否符合预期。 预览地址：http://127.0.0.1:3000。',
+          clarification: {}
+        },
+        result: {
+          clarification: {
+            mode: 'unit_test_confirmation',
+            status: 'requires_user_input',
+            message: '构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？',
+            questions: [
+              {
+                id: 'unit_test_confirmation',
+                header: '单元测试',
+                question: '是否跳过单元测试？',
+                type: 'choice',
+                options: [
+                  { label: '是，跳过单元测试', value: 'skip' },
+                  { label: '否，继续执行', value: 'run' }
+                ]
+              }
+            ]
+          }
+        },
+        events: []
+      }
+    })
+  )
+
+  assert.match(markup, /是否跳过单元测试？/)
+  assert.match(markup, /是，跳过单元测试/)
+  assert.match(markup, /否，继续执行/)
+  assert.match(markup, /待确认事项/)
+  assert.doesNotMatch(markup, /项目预览已就绪/)
+  assert.doesNotMatch(markup, /127\.0\.0\.1:3000/)
+})
+
+test('正式工作流只在启动预览后展示代码差异', () => {
+  const workflow = (phase: string): WorkflowRunPayload => ({
+    runId: `run-${phase}`,
+    threadId: 'thread-code-changes',
+    summary: { status: 'completed', phase },
+    events: []
+  })
+
+  assert.equal(workflowShouldShowCodeChanges(workflow('integration_test')), false)
+  assert.equal(workflowShouldShowCodeChanges(workflow('launch_project')), true)
+  assert.equal(workflowShouldShowCodeChanges(workflow('acceptance')), true)
+  assert.equal(workflowShouldShowCodeChanges(workflow('completed')), true)
+  assert.equal(workflowShouldShowCodeChanges(workflow('conversation')), true)
 })
 
 test('没有详情的步骤保持静态且只有验证步骤可以展开', () => {

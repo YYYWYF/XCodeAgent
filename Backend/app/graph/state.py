@@ -107,6 +107,9 @@ class ProjectState(TypedDict, total=False):
     unit_test_mapping_path: str | None
     unit_test_code_change_sets: list[dict[str, Any]]
     unit_test_generation_code_change_sets: list[dict[str, Any]]
+    unit_test_decision: str
+    unit_test_build_checks_completed: bool
+    unit_test_build_results: list[dict[str, Any]]
     test_results: list[dict[str, Any]]
     test_events: Annotated[list[str], add]
     test_report: dict[str, Any]

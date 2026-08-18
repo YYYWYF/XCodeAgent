@@ -518,6 +518,27 @@
   background: var(--wb-surface);
 }
 
+.@{class-prefix}-workflow-unit-test-confirmation {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-workflow-unit-test-confirmation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  .ant-btn {
+    min-height: 38px;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+}
+
 @media (max-width: 720px) {
   .@{class-prefix}-workflow-build-progress-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));

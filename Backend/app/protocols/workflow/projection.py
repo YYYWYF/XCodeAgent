@@ -38,17 +38,20 @@ def _workflow_progress_summary(
     )
     code_changes = _workflow_code_changes(result)
 
+    phase = started_node or result.get("phase") or node.get("id")
     return {
         "status": last_event.get("status") or result.get("status") or "running",
         # 下一节点刚开始时，result 仍属于上一节点，必须优先展示正在执行的节点。
-        "phase": started_node or result.get("phase") or node.get("id"),
+        "phase": phase,
         "message": last_event.get("message") or "Workflow is running.",
         "completedNodeCount": len(completed_nodes),
         "failedEventCount": len(failed_events),
         "timeline": result.get("timeline", []),
         "qualityGatePassed": result.get("quality_gate_passed"),
         "needsRevision": result.get("needs_revision"),
-        "previewUrl": result.get("preview_url"),
+        "previewUrl": (
+            result.get("preview_url") if _preview_visible_for_phase(phase) else None
+        ),
         "buildSummary": result.get("build_summary", {}),
         "testSummary": {},
         "smallTaskTasks": result.get("small_task_tasks", []),
@@ -64,6 +67,12 @@ def _workflow_progress_summary(
 
 def _workflow_node_label(node_name: str) -> str:
     return WORKFLOW_NODE_LABELS.get(node_name, node_name)
+
+
+def _preview_visible_for_phase(phase: Any) -> bool:
+    """仅允许启动预览及其后续阶段向前端公开预览相关状态。"""
+
+    return str(phase or "") in {"launch_project", "acceptance", "completed"}
 
 
 def _workflow_start_node(
@@ -412,8 +421,14 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             if report_path and not str(report_path).lower().endswith(".json")
             else ""
         )
+        clarification = update.get("clarification")
+        clarification_message = (
+            str(clarification.get("message") or "")
+            if isinstance(clarification, dict)
+            else ""
+        )
         return {
-            "message": (
+            "message": clarification_message or (
                 f"通过={report.get('passed') if isinstance(report, dict) else None}，"
                 f"检查={summary.get('passed', 0)}/{summary.get('total', 0)}"
                 f"{report_suffix}"
@@ -884,7 +899,9 @@ def _workflow_summary(
         retry_message = build_summary.get("retry_message")
         if retry_message:
             message = str(retry_message)
-    if result.get("preview_url") and status != "failed":
+    # 只有启动预览及其后续阶段可以公开预览地址，避免重试集成测试时泄漏旧值。
+    preview_visible = _preview_visible_for_phase(result.get("phase"))
+    if preview_visible and result.get("preview_url") and status != "failed":
         message += f" 预览地址：{result.get('preview_url')}。"
 
     return {
@@ -896,9 +913,11 @@ def _workflow_summary(
         "timeline": result.get("timeline", []),
         "qualityGatePassed": result.get("quality_gate_passed"),
         "needsRevision": result.get("needs_revision"),
-        "previewUrl": result.get("preview_url"),
-        "launchResult": result.get("launch_result"),
-        "acceptanceRequest": result.get("acceptance_request"),
+        "previewUrl": result.get("preview_url") if preview_visible else None,
+        "launchResult": result.get("launch_result") if preview_visible else None,
+        "acceptanceRequest": (
+            result.get("acceptance_request") if preview_visible else None
+        ),
         "integrationNextAction": result.get("integration_next_action"),
         "repairIteration": result.get("repair_iteration"),
         "maxRepairIterations": result.get("max_repair_iterations"),
@@ -921,13 +940,13 @@ def _workflow_user_input_message(
     """按实际门禁类型生成面向用户的等待提示，避免把验收误写成待补充问题。"""
 
     acceptance_request = result.get("acceptance_request")
-    if isinstance(acceptance_request, dict):
+    clarification_mode = str(clarification.get("mode") or "")
+    if (
+        clarification_mode == "page_acceptance"
+        and isinstance(acceptance_request, dict)
+        and acceptance_request
+    ):
         return "项目预览已就绪，请确认是否符合预期。"
-
-    questions = clarification.get("questions")
-    question_count = len(questions) if isinstance(questions, list) else 0
-    if question_count > 0:
-        return f"还有 {question_count} 个问题需要补充，完成后将继续执行。"
 
     confirmation_labels = {
         "requirement_spec_confirmation": "需求文档已生成，请确认后继续。",
@@ -936,9 +955,17 @@ def _workflow_user_input_message(
         "detail_review": "页面与数据源设计已生成，请确认后继续。",
         "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",
         "small_task_workflow_handoff": "小任务需要确认后转入正式工作流。",
+        "unit_test_confirmation": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
     }
-    mode = str(clarification.get("mode") or "")
-    return confirmation_labels.get(mode, "当前阶段需要你的确认后继续。")
+    if clarification_mode in confirmation_labels:
+        return confirmation_labels[clarification_mode]
+
+    questions = clarification.get("questions")
+    question_count = len(questions) if isinstance(questions, list) else 0
+    if question_count > 0:
+        return f"还有 {question_count} 个问题需要补充，完成后将继续执行。"
+
+    return "当前阶段需要你的确认后继续。"
 
 
 def _workflow_visual_payload(

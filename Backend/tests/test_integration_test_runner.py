@@ -179,6 +179,84 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             ],
         )
 
+    def test_build_and_unit_phases_do_not_repeat_frontend_build(self) -> None:
+        """构建阶段完成后进入单测阶段时不得重复安装或构建。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "frontend"
+            tests = frontend / "tests"
+            tests.mkdir(parents=True)
+            (frontend / "package.json").write_text(
+                '{"scripts":{"build":"vite build","test:unit":"jest --runInBand"}}',
+                encoding="utf-8",
+            )
+            (frontend / "pnpm-lock.yaml").write_text(
+                "lockfileVersion: '9.0'",
+                encoding="utf-8",
+            )
+            application_dir = Path(workspace) / ".xcodeagent"
+            application_dir.mkdir()
+            (application_dir / "application.json").write_text(
+                '{"datasource":{"type":"static"}}',
+                encoding="utf-8",
+            )
+            test_path = "frontend/tests/page-orders.test.tsx"
+            (tests / "page-orders.test.tsx").write_text(
+                "test('renders', () => expect(true).toBe(true));",
+                encoding="utf-8",
+            )
+            calls: list[list[str]] = []
+
+            def fake_run(argv, **kwargs):
+                """记录两个阶段的前端命令并统一模拟成功。"""
+
+                calls.append(argv)
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with (
+                patch(
+                    "app.services.integration_test_runner.shutil.which",
+                    side_effect=lambda name: name,
+                ),
+                patch(
+                    "app.services.integration_test_runner.subprocess.run",
+                    side_effect=fake_run,
+                ),
+            ):
+                build_result = run_integration_checks(
+                    {
+                        "workspace": workspace,
+                        "unit_test_affected_layers": ["frontend"],
+                    },
+                    phase="build",
+                )
+                unit_result = run_integration_checks(
+                    {
+                        "workspace": workspace,
+                        "unit_test_affected_layers": ["frontend"],
+                        "unit_test_generation": {"test_files": [test_path]},
+                        "test_results": build_result["test_results"],
+                    },
+                    phase="unit",
+                )
+
+        self.assertEqual(
+            [item["id"] for item in build_result["test_results"]],
+            ["frontend_install", "frontend_typecheck", "frontend_build"],
+        )
+        self.assertEqual(
+            [item["id"] for item in unit_result["test_results"]],
+            ["frontend_unit_tests"],
+        )
+        self.assertEqual(
+            calls,
+            [
+                ["pnpm", "install"],
+                ["pnpm", "run", "build"],
+                ["pnpm", "run", "test:unit"],
+            ],
+        )
+
     def test_affected_layers_skip_existing_frontend_unit_tests(self) -> None:
         """验证受影响层未包含 frontend 时不执行已有的前端测试。"""
 

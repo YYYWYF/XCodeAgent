@@ -41,7 +41,7 @@ def generate_or_update_unit_tests_with_agent(
     try:
         from app.agents import create_agent_bundle
 
-        prompt = _build_prompt(state, context)
+        prompt = _build_prompt(context)
 
         def invoke() -> str:
             """执行一次无命令权限的测试 Agent 调用。"""
@@ -210,9 +210,19 @@ def generate_or_update_unit_tests_with_agent(
     warnings = [*_string_list(payload.get("warnings"), limit=20), *warnings]
     if captured.error:
         warnings.append(f"Agent 异常：{type(captured.error).__name__}: {captured.error}")
+    summary = str(
+        payload.get("summary")
+        or (
+            f"TestGeneration Agent 执行异常：{type(captured.error).__name__}"
+            if captured.error
+            else "已生成或更新测试文件。"
+            if test_files
+            else "没有生成测试文件。"
+        )
+    )[:2_000]
     return {
         "status": status,
-        "summary": str(payload.get("summary") or ("已生成或更新测试文件。" if test_files else "没有生成测试文件。"))[:2_000],
+        "summary": summary,
         "affected_layers": _layers_for_sources(source_files),
         "test_files": test_files[:MAX_TEST_FILES],
         "warnings": warnings,
@@ -222,11 +232,12 @@ def generate_or_update_unit_tests_with_agent(
     }
 
 
-def _build_prompt(state: dict[str, Any], context: dict[str, Any]) -> str:
+def _build_prompt(context: dict[str, Any]) -> str:
     """构造有界测试生成上下文，避免注入完整仓库和会话历史。"""
 
     references = {
         "source_files": context.get("source_files", [])[:100],
+        "code_diff": context.get("code_diff", {}),
         "existing_test_files": context.get("existing_test_files", [])[:5],
         "project_plan_path": context.get("project_plan_path"),
         "project_plan_json_path": context.get("project_plan_json_path"),
@@ -243,7 +254,6 @@ def _build_prompt(state: dict[str, Any], context: dict[str, Any]) -> str:
         ),
         "build_execution_scope": context.get("build_execution_scope", {}),
         "build_execution_slice": context.get("build_execution_slice", {}),
-        "code_changes": state.get("test_generation_input_code_changes", {}),
     }
     return (
         "Generate or update unit tests for this bounded change. Read the referenced files "
@@ -491,13 +501,14 @@ def _sha256(path: Path) -> str:
 
 
 def _internal_artifact_snapshot(workspace: str) -> dict[str, str]:
-    """单独快照被通用 diff 忽略的 `.xcodeagent`，阻断正式工件越权写入。"""
+    """快照 `.xcodeagent` 正式工件，并忽略 LangGraph 自有 checkpoint 写入。"""
 
     root = Path(workspace).expanduser().resolve() / ".xcodeagent"
     snapshot: dict[str, str] = {}
     if not root.is_dir():
         return snapshot
-    for dirpath, _dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(name for name in dirnames if name != "checkpoints")
         for filename in filenames:
             path = Path(dirpath) / filename
             try:
@@ -510,11 +521,11 @@ def _internal_artifact_snapshot(workspace: str) -> dict[str, str]:
 
 
 def _workspace_security_snapshot(workspace: str) -> dict[str, str]:
-    """快照普通与敏感配置文件，补足通用代码 diff 的忽略范围。"""
+    """快照普通与敏感配置文件；内部工件由专用快照负责。"""
 
     root = Path(workspace).expanduser().resolve()
     snapshot: dict[str, str] = {}
-    ignored_dirs = {".git", "node_modules", ".venv"}
+    ignored_dirs = {".git", ".xcodeagent", "node_modules", ".venv"}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(
             name

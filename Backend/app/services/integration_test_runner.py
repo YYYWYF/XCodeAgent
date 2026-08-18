@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.services.data_source_policy import read_application_datasource_type
 from app.utils.subprocess_output import subprocess_output_text
@@ -18,6 +18,7 @@ from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 COMMAND_TIMEOUT_SECONDS = 180
 COMMAND_OUTPUT_SUMMARY_LIMIT = 4_000
 CheckProgressCallback = Callable[[dict[str, Any]], None]
+IntegrationCheckPhase = Literal["all", "build", "unit"]
 
 
 @dataclass(frozen=True)
@@ -32,8 +33,12 @@ def run_integration_checks(
     state: dict[str, Any],
     *,
     on_progress: CheckProgressCallback | None = None,
+    phase: IntegrationCheckPhase = "all",
 ) -> dict[str, Any]:
-    """按应用数据源类型执行必要集成检查，并逐项通知检查状态。"""
+    """按阶段执行集成检查，支持构建和单元测试之间的显式生成门。"""
+
+    if phase not in {"all", "build", "unit"}:
+        raise ValueError(f"不支持的集成检查阶段：{phase}")
 
     root = workspace_root(state).resolve()
     log_root = workflow_artifact_root(state).resolve() / "runtime" / "tests"
@@ -44,31 +49,57 @@ def run_integration_checks(
 
     results: list[dict[str, Any]] = []
     events: list[str] = []
-    for result in _frontend_checks(
-        root,
-        log_root,
-        frontend,
-        state=state,
-        unit_tests_affected=(
-            affected_unit_test_layers is None
-            or "frontend" in affected_unit_test_layers
-        ),
-        on_progress=on_progress,
-    ):
+    frontend_unit_tests_affected = (
+        affected_unit_test_layers is None
+        or "frontend" in affected_unit_test_layers
+    )
+    backend_unit_tests_affected = (
+        affected_unit_test_layers is None
+        or "backend" in affected_unit_test_layers
+    )
+
+    if phase in {"all", "build"}:
+        frontend_results = _frontend_checks(
+            root,
+            log_root,
+            frontend,
+            state=state,
+            unit_tests_affected=frontend_unit_tests_affected,
+            include_unit_tests=phase == "all",
+            on_progress=on_progress,
+        )
+    else:
+        frontend_results = _frontend_unit_checks(
+            root,
+            log_root,
+            frontend,
+            state=state,
+            unit_tests_affected=frontend_unit_tests_affected,
+            on_progress=on_progress,
+        )
+    for result in frontend_results:
         results.append(result)
         events.append(result["id"])
     # Static 是纯前端运行时，即使模板保留 pom.xml 也不得触发后端质量门。
     if datasource_type != "static":
-        for result in _backend_checks(
-            root,
-            log_root,
-            state=state,
-            unit_tests_affected=(
-                affected_unit_test_layers is None
-                or "backend" in affected_unit_test_layers
-            ),
-            on_progress=on_progress,
-        ):
+        if phase in {"all", "build"}:
+            backend_results = _backend_checks(
+                root,
+                log_root,
+                state=state,
+                unit_tests_affected=backend_unit_tests_affected,
+                include_unit_tests=phase == "all",
+                on_progress=on_progress,
+            )
+        else:
+            backend_results = _backend_unit_checks(
+                root,
+                log_root,
+                state=state,
+                unit_tests_affected=backend_unit_tests_affected,
+                on_progress=on_progress,
+            )
+        for result in backend_results:
             results.append(result)
             events.append(result["id"])
     return {"test_results": results, "test_events": events}
@@ -123,12 +154,13 @@ def _frontend_checks(
     *,
     state: dict[str, Any] | None = None,
     unit_tests_affected: bool = True,
+    include_unit_tests: bool = True,
     on_progress: CheckProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
-    """依次执行前端安装、类型检查、构建和按需单元测试。"""
+    """依次执行前端安装、类型检查、构建和可选的单元测试。"""
 
     if frontend is None:
-        return [
+        results = [
             _missing_tool_result(
                 check_id="frontend_install",
                 name="前端依赖安装检查",
@@ -138,16 +170,20 @@ def _frontend_checks(
                 required=True,
                 on_progress=on_progress,
             ),
-            _missing_tool_result(
-                check_id="frontend_unit_tests",
-                name="前端单元测试",
-                layer="frontend",
-                language="typescript",
-                evidence="未找到前端 package.json，无法确认对应单元测试文件，跳过前端单元测试。",
-                required=False,
-                on_progress=on_progress,
-            ),
         ]
+        if include_unit_tests:
+            results.append(
+                _missing_tool_result(
+                    check_id="frontend_unit_tests",
+                    name="前端单元测试",
+                    layer="frontend",
+                    language="typescript",
+                    evidence="未找到前端 package.json，无法确认对应单元测试文件，跳过前端单元测试。",
+                    required=False,
+                    on_progress=on_progress,
+                )
+            )
+        return results
 
     package_manager_command = shutil.which(frontend.package_manager)
     install_result = (
@@ -199,6 +235,8 @@ def _frontend_checks(
         required=True,
         on_progress=on_progress,
     )
+    if not include_unit_tests:
+        return [install_result, typecheck_result, build_result]
     blocked_reason = None
     if not install_result["passed"]:
         blocked_reason = "前端依赖安装检查失败，跳过本轮前端单元测试。"
@@ -214,6 +252,47 @@ def _frontend_checks(
         on_progress=on_progress,
     )
     return [install_result, typecheck_result, build_result, unit_result]
+
+
+def _frontend_unit_checks(
+    root: Path,
+    log_root: Path,
+    frontend: PackageProject | None,
+    *,
+    state: dict[str, Any],
+    unit_tests_affected: bool,
+    on_progress: CheckProgressCallback | None,
+) -> list[dict[str, Any]]:
+    """在前端构建阶段完成后执行单元测试，不重复安装或构建。"""
+
+    if frontend is None:
+        return [
+            _missing_tool_result(
+                check_id="frontend_unit_tests",
+                name="前端单元测试",
+                layer="frontend",
+                language="typescript",
+                evidence="未找到前端 package.json，无法确认对应单元测试文件，跳过前端单元测试。",
+                required=False,
+                on_progress=on_progress,
+            )
+        ]
+    blocked_reason = _blocked_by_previous_check(
+        state,
+        check_ids=("frontend_install", "frontend_build"),
+        evidence="前端构建检查未通过，跳过本轮前端单元测试。",
+    )
+    return [
+        _frontend_unit_test_result(
+            root=root,
+            log_root=log_root,
+            frontend=frontend,
+            state=state,
+            unit_tests_affected=unit_tests_affected,
+            blocked_reason=blocked_reason,
+            on_progress=on_progress,
+        )
+    ]
 
 
 def _frontend_unit_test_result(
@@ -286,9 +365,10 @@ def _backend_checks(
     *,
     state: dict[str, Any] | None = None,
     unit_tests_affected: bool = True,
+    include_unit_tests: bool = True,
     on_progress: CheckProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
-    """拆分后端生产构建与仅在有对应测试时运行的 Maven 单测。"""
+    """执行后端生产构建和可选的 Maven 单测。"""
 
     state = state or {}
     maven_root = _find_maven_project_root(root)
@@ -315,25 +395,26 @@ def _backend_checks(
                     ("backend_static_check", "后端静态检查通过", False),
                 )
             ]
-            results.append(
-                _missing_tool_result(
-                    check_id="backend_unit_tests",
-                    name="后端单元测试",
-                    layer="backend",
-                    language="java",
-                    evidence=(
-                        "本次后端功能没有对应单元测试文件，按策略通过。"
-                        if not has_unit_tests
-                        else (
-                            "本次变更未影响后端业务代码，跳过后端单元测试。"
-                            if not unit_tests_affected
-                            else "发现后端单元测试文件，但未找到可用的 Maven wrapper 或全局 mvn。"
-                        )
-                    ),
-                    required=has_unit_tests and unit_tests_affected,
-                    on_progress=on_progress,
+            if include_unit_tests:
+                results.append(
+                    _missing_tool_result(
+                        check_id="backend_unit_tests",
+                        name="后端单元测试",
+                        layer="backend",
+                        language="java",
+                        evidence=(
+                            "本次后端功能没有对应单元测试文件，按策略通过。"
+                            if not has_unit_tests
+                            else (
+                                "本次变更未影响后端业务代码，跳过后端单元测试。"
+                                if not unit_tests_affected
+                                else "发现后端单元测试文件，但未找到可用的 Maven wrapper 或全局 mvn。"
+                            )
+                        ),
+                        required=has_unit_tests and unit_tests_affected,
+                        on_progress=on_progress,
+                    )
                 )
-            )
             return results
 
         build_result = _run_command_result(
@@ -348,6 +429,8 @@ def _backend_checks(
             required=True,
             on_progress=on_progress,
         )
+        if not include_unit_tests:
+            return [build_result]
         if not has_unit_tests:
             unit_test_result = _missing_tool_result(
                 check_id="backend_unit_tests",
@@ -393,7 +476,7 @@ def _backend_checks(
             )
         return [build_result, unit_test_result]
 
-    return [
+    results = [
         _missing_tool_result(
             check_id="backend_build",
             name="后端构建检查",
@@ -402,17 +485,149 @@ def _backend_checks(
             evidence="未发现 Maven、pom.xml 或 pytest 项目配置，跳过后端构建检查。",
             required=False,
             on_progress=on_progress,
-        ),
-        _missing_tool_result(
+        )
+    ]
+    if include_unit_tests:
+        results.append(
+            _missing_tool_result(
+                check_id="backend_unit_tests",
+                name="后端单元测试",
+                layer="backend",
+                language="java",
+                evidence="未发现 Maven 工程，跳过后端单元测试。",
+                required=False,
+                on_progress=on_progress,
+            )
+        )
+    return results
+
+
+def _backend_unit_checks(
+    root: Path,
+    log_root: Path,
+    *,
+    state: dict[str, Any],
+    unit_tests_affected: bool,
+    on_progress: CheckProgressCallback | None,
+) -> list[dict[str, Any]]:
+    """在后端构建阶段完成后执行 Maven 单测，不重复执行生产构建。"""
+
+    maven_root = _find_maven_project_root(root)
+    if maven_root is None:
+        return [
+            _missing_tool_result(
+                check_id="backend_unit_tests",
+                name="后端单元测试",
+                layer="backend",
+                language="java",
+                evidence="未发现 Maven 工程，跳过后端单元测试。",
+                required=False,
+                on_progress=on_progress,
+            )
+        ]
+    maven_argv = _maven_command(maven_root)
+    has_unit_tests = (
+        _has_corresponding_unit_tests(state, root, "backend")
+        if "unit_test_affected_layers" in state
+        else _has_backend_unit_tests(maven_root)
+    )
+    if maven_argv is None:
+        evidence = (
+            "本次后端功能没有对应单元测试文件，按策略通过。"
+            if not has_unit_tests
+            else (
+                "本次变更未影响后端业务代码，跳过后端单元测试。"
+                if not unit_tests_affected
+                else "发现后端单元测试文件，但未找到可用的 Maven wrapper 或全局 mvn。"
+            )
+        )
+        return [
+            _missing_tool_result(
+                check_id="backend_unit_tests",
+                name="后端单元测试",
+                layer="backend",
+                language="java",
+                evidence=evidence,
+                required=has_unit_tests and unit_tests_affected,
+                on_progress=on_progress,
+            )
+        ]
+    blocked_reason = _blocked_by_previous_check(
+        state,
+        check_ids=("backend_build",),
+        evidence="后端构建检查未通过，跳过本轮后端单元测试。",
+    )
+    if not has_unit_tests:
+        return [
+            _missing_tool_result(
+                check_id="backend_unit_tests",
+                name="后端单元测试",
+                layer="backend",
+                language="java",
+                evidence="本次后端功能没有对应单元测试文件，按策略通过。",
+                required=False,
+                on_progress=on_progress,
+            )
+        ]
+    if not unit_tests_affected:
+        return [
+            _missing_tool_result(
+                check_id="backend_unit_tests",
+                name="后端单元测试",
+                layer="backend",
+                language="java",
+                evidence="本次变更未影响后端业务代码，跳过后端单元测试。",
+                required=False,
+                on_progress=on_progress,
+            )
+        ]
+    if blocked_reason:
+        return [
+            _missing_tool_result(
+                check_id="backend_unit_tests",
+                name="后端单元测试",
+                layer="backend",
+                language="java",
+                evidence=blocked_reason,
+                required=False,
+                on_progress=on_progress,
+            )
+        ]
+    return [
+        _run_command_result(
             check_id="backend_unit_tests",
             name="后端单元测试",
             layer="backend",
             language="java",
-            evidence="未发现 Maven 工程，跳过后端单元测试。",
-            required=False,
+            argv=[*maven_argv, "-B", "-DfailIfNoTests=true", "test"],
+            cwd=maven_root,
+            root=root,
+            log_root=log_root,
+            required=True,
             on_progress=on_progress,
-        ),
+        )
     ]
+
+
+def _blocked_by_previous_check(
+    state: dict[str, Any],
+    *,
+    check_ids: tuple[str, ...],
+    evidence: str,
+) -> str | None:
+    """读取前一阶段检查结果，只有明确失败时才阻断对应单元测试。"""
+
+    results_by_id = {
+        str(result.get("id") or ""): result
+        for result in state.get("test_results", [])
+        if isinstance(result, dict)
+    }
+    if any(
+        check_id in results_by_id and not bool(results_by_id[check_id].get("passed"))
+        for check_id in check_ids
+    ):
+        return evidence
+    return None
 
 
 

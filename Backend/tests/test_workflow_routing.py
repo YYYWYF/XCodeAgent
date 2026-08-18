@@ -177,6 +177,20 @@ class WorkflowRoutingTests(unittest.TestCase):
             "await_user_input",
         )
 
+    def test_integration_test_confirmation_overrides_stale_quality_gate(self) -> None:
+        """重试测试时上一轮通过结果不得让本轮确认门直接进入预览。"""
+
+        self.assertEqual(
+            route_test_validation(
+                {
+                    "status": "requires_user_input",
+                    "quality_gate_passed": True,
+                    "integration_next_action": "await_user_input",
+                }
+            ),
+            "await_user_input",
+        )
+
     def test_integration_test_terminal_failure_routes_to_failure(self) -> None:
         self.assertEqual(
             route_test_validation(

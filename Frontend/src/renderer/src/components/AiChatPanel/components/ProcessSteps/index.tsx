@@ -388,6 +388,8 @@ function IntegrationTestChecklist({
   return (
     <section
       aria-label={summary}
+      aria-live="polite"
+      aria-busy={counts.running > 0}
       className={cx('integration-test-checklist', counts.running > 0 ? 'running' : 'settled')}
     >
       <div className={cx('integration-test-checklist-header')}>
@@ -439,9 +441,10 @@ function IntegrationTestChecklist({
                   {check.required ? 'REQUIRED' : 'OPTIONAL'}
                 </span>
               </span>
-              {(check.status === 'failed' || check.status === 'skipped') && check.evidence && (
-                <Text type="secondary">{check.evidence}</Text>
-              )}
+              {(check.status === 'running' ||
+                check.status === 'failed' ||
+                check.status === 'skipped') &&
+                check.evidence && <Text type="secondary">{check.evidence}</Text>}
             </span>
             <Text className={cx('integration-test-check-status')}>
               {testCheckStatusLabel(check.status)}

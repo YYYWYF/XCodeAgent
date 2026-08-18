@@ -11,6 +11,10 @@ from deepagents.backends.protocol import (
     EditResult,
     FileDownloadResponse,
     FileUploadResponse,
+    GlobResult,
+    GrepResult,
+    LsResult,
+    ReadResult,
     WriteResult,
 )
 
@@ -65,6 +69,31 @@ class ScopedTestGenerationBackend(BackendProtocol):
 
     def __init__(self, delegate: BackendProtocol):
         self._delegate = delegate
+
+    def ls(self, path: str) -> LsResult:
+        """转发技能加载和工作区浏览所需的目录列表操作。"""
+
+        return self._delegate.ls(path)
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2_000) -> ReadResult:
+        """转发 Agent 读取源码和测试文件的操作。"""
+
+        return self._delegate.read(file_path, offset, limit)
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> GrepResult:
+        """转发 Agent 搜索源码内容的操作。"""
+
+        return self._delegate.grep(pattern, path, glob)
+
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        """转发 Agent 匹配源码路径的操作。"""
+
+        return self._delegate.glob(pattern, path)
 
     def write(self, file_path: str, content: str) -> WriteResult:
         """拒绝测试目录之外的新增文件。"""

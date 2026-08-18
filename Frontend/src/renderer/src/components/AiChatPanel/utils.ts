@@ -234,6 +234,20 @@ export function workflowCodeChanges(
   return undefined
 }
 
+/** 仅在简单改码或正式流程已进入启动预览阶段后展示最终结果与文件差异。 */
+export function workflowShouldShowCodeChanges(
+  workflow: WorkflowRunPayload | undefined
+): boolean {
+  if (!workflow) return true
+
+  return [
+    'conversation',
+    'launch_project',
+    'acceptance',
+    'completed'
+  ].includes(String(workflow.summary.phase || ''))
+}
+
 /** 根据 Workflow 最终状态生成结果标题，避免失败运行被标记为任务完成。 */
 export function workflowFinalResultPresentation(
   workflow: WorkflowRunPayload | undefined

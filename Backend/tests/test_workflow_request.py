@@ -391,6 +391,29 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertFalse(inputs["user_interaction_submission"])
 
+    def test_unit_test_confirmation_is_forwarded_as_resume_decision(self) -> None:
+        """单元测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "clarificationAnswers": {
+                    "unit_test_confirmation": {
+                        "selected": "skip",
+                    }
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "integration_test",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "integration_test")
+        self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
+        self.assertTrue(inputs["user_interaction_submission"])
+
     def test_removed_requirements_resume_falls_back_to_main_start(self) -> None:
         inputs = workflow_run_inputs(
             {
