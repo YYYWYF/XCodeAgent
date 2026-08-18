@@ -63,6 +63,113 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             ["file_operation", "scope_boundary"],
         )
 
+    def test_frontend_mock_source_skips_service_get_binding_check(self) -> None:
+        """前端内存 Mock 来源（effective_source.kind=frontend_mock）不经过集中 service，
+        应跳过 service.get 与接口路径绑定检查，只校验 Schema 字段。"""
+
+        task = {
+            "id": "page-leave-list",
+            "owner": "frontend",
+            "unit_id": "page:leave-list",
+            "source_refs": {"endpoint_ids": ["leave.list"]},
+            "change_scope": [
+                {"operation": "add", "path": "frontend/src/apis/leaveApi.ts"},
+                {"operation": "add", "path": "frontend/src/pages/LeaveListPage/index.tsx"},
+            ],
+        }
+        context = {
+            "executable_details": {
+                "data_sources": [{"id": "leave-source", "type": "static"}],
+                "direct_endpoint_details": [
+                    {
+                        "endpoint_id": "leave.list",
+                        "api_contract_id": "leave-api",
+                        "endpoint_decision": {
+                            "data_origin": {
+                                "source_type": "static",
+                                "effective_source": {
+                                    "kind": "frontend_mock",
+                                    "data_source_id": "leave-source",
+                                },
+                            }
+                        },
+                    }
+                ],
+                "page_detail_plans": [
+                    {
+                        "response_bindings": [
+                            {"endpoint_id": "leave.list", "source_path": "items[].applicant"},
+                            {"endpoint_id": "leave.list", "source_path": "items[].status"},
+                        ]
+                    }
+                ],
+                "api_contracts": [
+                    {
+                        "id": "leave-api",
+                        "data_source_id": "leave-source",
+                        "schemas": {
+                            "LeaveListResponse": {
+                                "type": "object",
+                                "properties": {
+                                    "applicant": {"type": "string"},
+                                    "status": {"type": "string"},
+                                },
+                            }
+                        },
+                        "endpoints": [
+                            {
+                                "id": "leave.list",
+                                "method": "GET",
+                                "path": "/api/leaves",
+                                "response_schema_ref": "#/schemas/LeaveListResponse",
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+        compiled = compile_engineering_acceptance([task], context)[0]
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            api_file = root / "frontend/src/apis/leaveApi.ts"
+            page_file = root / "frontend/src/pages/LeaveListPage/index.tsx"
+            api_file.parent.mkdir(parents=True)
+            page_file.parent.mkdir(parents=True)
+            # 内存 Mock 模块不 import service、不调用 service.get，
+            # 只用内存数组与 async 函数实现契约字段。
+            api_file.write_text(
+                "export interface LeaveItem { applicant: string; status: string }\n"
+                "const records: LeaveItem[] = [{ applicant: 'a', status: 'pending' }];\n"
+                "export const fetchLeaveList = async () => ({ items: records, total: 1 });",
+                encoding="utf-8",
+            )
+            page_file.write_text(
+                "const columns = [{ dataIndex: 'applicant' }, { dataIndex: 'status' }];",
+                encoding="utf-8",
+            )
+            _, errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={
+                    "files": [
+                        {"path": str(api_file.relative_to(root)), "changeType": "added"},
+                        {"path": str(page_file.relative_to(root)), "changeType": "added"},
+                    ]
+                },
+                workspace_root=workspace,
+            )
+
+        # frontend_mock 来源跳过 service.get 与接口路径检查，Schema 字段齐全，应通过。
+        self.assertFalse(
+            any("service.get" in error for error in errors),
+            f"frontend_mock 来源不应要求 service.get 绑定，但报错：{errors}",
+        )
+        self.assertFalse(
+            any("接口路径" in error for error in errors),
+            f"frontend_mock 来源不应要求接口路径绑定，但报错：{errors}",
+        )
+        self.assertFalse(errors, f"frontend_mock 内存 Mock 模块应通过契约验收，但报错：{errors}")
+
     def test_frontend_contract_binding_uses_deterministic_source_evidence(self) -> None:
         """前端 API 方法、路径和页面绑定字段必须来自生成源文件。"""
 
