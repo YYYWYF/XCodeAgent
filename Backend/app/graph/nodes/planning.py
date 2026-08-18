@@ -1,8 +1,16 @@
 import logging
 
+from copy import deepcopy
+from typing import Any
+
 from langgraph.config import get_stream_writer
 
 from app.agents.main.document_sync import sync_project_plan_from_markdown
+from app.agents.database.generator import (
+    entity_design_bindings_with_agent,
+    entity_design_table_selection_with_agent,
+    generate_database_with_deep_agent,
+)
 from app.agents.main.planner import (
     plan_project_with_chat_model,
     revise_project_plan_with_chat_model,
@@ -24,7 +32,16 @@ from app.services.frontend_page_tree import (
     flatten_frontend_pages,
     update_frontend_page_leaves,
 )
-from app.services.database_context import prepare_endpoint_database_context
+from app.services.entity_design import (
+    ENTITY_DESIGN_STAGE_EXTERNAL_API_INPUT,
+    ENTITY_DESIGN_STAGE_REVIEW_READY,
+    apply_complete_entity_design,
+    apply_entity_design_action,
+    entity_bound_design_gate,
+    entity_design_validation_errors,
+    execute_entity_database_operations,
+)
+from app.services.entity_design_assist import entity_design_ai_suggestions
 from app.services.entity_detail_plan import (
     attach_entity_detail_plan,
     create_entity_detail_plan,
@@ -51,6 +68,19 @@ from app.workspace.plan_documents import (
 
 
 logger = logging.getLogger("uvicorn.error")
+
+
+class EntityDesignRequiredError(ValueError):
+    """接口/页面详细设计开始前，绑定的实体尚未完成实体设计并确认。"""
+
+    def __init__(
+        self,
+        reason: str,
+        missing_entities: list[dict[str, str]] | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.missing_entities = missing_entities or []
 
 
 def _detail_workspace_options(state: ProjectState) -> dict[str, str]:
@@ -264,8 +294,7 @@ def detail_confirmation(state: ProjectState) -> dict:
             selected_endpoint_id=selected_endpoint_id,
             selected_entity_id=selected_entity_id,
             detail_target_type=detail_target_type,
-            regenerate_endpoint_details=acceptance_adjustment_type
-            in {"endpoint_change", "data_source_change"},
+            regenerate_endpoint_details=acceptance_adjustment_type == "endpoint_change",
         )
     if acceptance_adjustment_type == "project_plan_change" and not has_detail_submission:
         return _regenerate_acceptance_detail_plan(
@@ -277,6 +306,50 @@ def detail_confirmation(state: ProjectState) -> dict:
             detail_target_type=detail_target_type,
             regenerate_endpoint_details=True,
         )
+    # 单卡片一次性提交：把 submit_entity_design 动作转译为实体确认载荷，
+    # 由下方既有确认门禁完成校验、确认与数据库操作执行。
+    entity_submit_action = (
+        state.get("entity_design_action")
+        if isinstance(state.get("entity_design_action"), dict)
+        and str(state.get("entity_design_action", {}).get("action") or "")
+        == "submit_entity_design"
+        and str(state.get("entity_design_action", {}).get("entity_id") or "")
+        == selected_entity_id
+        else None
+    )
+    if entity_submit_action and not submission:
+        submit_base_plan = (
+            pending_plan
+            if isinstance(pending_plan, dict)
+            else state.get("project_plan")
+            if isinstance(state.get("project_plan"), dict)
+            else None
+        )
+        if not isinstance(submit_base_plan, dict):
+            raise ValueError("缺少项目计划，无法提交实体设计。")
+        review_plan = _ensure_entity_detail_for_submit(
+            state,
+            submit_base_plan,
+            selected_entity_id,
+            entity_submit_action,
+        )
+        entity_detail = next(
+            (
+                item
+                for item in review_plan.get("entity_detail_plans", [])
+                if isinstance(item, dict)
+                and str(item.get("entity_id") or "") == selected_entity_id
+            ),
+            None,
+        )
+        if entity_detail is not None:
+            apply_complete_entity_design(entity_detail, entity_submit_action)
+            pending_plan = review_plan
+            submission = {
+                "review_status": "confirmed",
+                "target_changes": [],
+                "overall_note": "实体设计单卡片确认",
+            }
     if pending_plan and isinstance(submission, dict):
         edited_markdown = edited_project_plan_markdown(state, pending_plan)
         synchronized_plan = (
@@ -288,6 +361,23 @@ def detail_confirmation(state: ProjectState) -> dict:
             if edited_markdown is not None and state.get("requirement_spec")
             else pending_plan
         )
+        if selected_entity_id:
+            entity_errors = _pending_entity_design_validation_errors(
+                synchronized_plan,
+                selected_entity_id,
+            )
+            if entity_errors:
+                review_plan = _attach_entity_design_validation_errors(
+                    synchronized_plan,
+                    selected_entity_id,
+                    entity_errors,
+                )
+                return _entity_design_requires_revision(
+                    state,
+                    review_plan,
+                    selected_entity_id=selected_entity_id,
+                    detail_target_type=detail_target_type or "entity",
+                )
         confirmed_plan = apply_detail_review_submission(
             synchronized_plan,
             submission,
@@ -296,6 +386,12 @@ def detail_confirmation(state: ProjectState) -> dict:
             selected_endpoint_id=selected_endpoint_id or None,
             selected_entity_id=selected_entity_id or None,
         )
+        if selected_entity_id:
+            confirmed_plan = _execute_confirmed_entity_database_operations(
+                state,
+                confirmed_plan,
+                selected_entity_id,
+            )
         project_plan_path = write_project_plan_document(state, confirmed_plan)
         return {
             "phase": "detail_confirmation",
@@ -304,7 +400,15 @@ def detail_confirmation(state: ProjectState) -> dict:
             "pending_project_plan": {},
             "project_plan_path": project_plan_path,
             "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "clarification": _project_plan_confirmed_payload(confirmed_plan),
+            "clarification": (
+                _entity_design_confirmed_payload(
+                    confirmed_plan,
+                    selected_entity_id=selected_entity_id,
+                    detail_target_type=detail_target_type or "entity",
+                )
+                if selected_entity_id
+                else _project_plan_confirmed_payload(confirmed_plan)
+            ),
             "detail_selection": {
                 "status": "completed",
                 "mode": "batch_review",
@@ -336,6 +440,8 @@ def detail_confirmation(state: ProjectState) -> dict:
     if pending_plan and (selectedPageId or selected_endpoint_id or selected_entity_id):
         review_plan = pending_plan
         project_plan_path = state.get("project_plan_path")
+        ai_suggestions: dict[str, Any] | None = None
+        ddl_execution: dict[str, Any] | None = None
         if selectedPageId and not _has_selected_page_detail(review_plan, selectedPageId):
             # 旧会话可能保留上一页面的待确认计划；新选择的页面缺失时必须基于最新正式计划补生成。
             source_plan = state.get("project_plan")
@@ -346,6 +452,7 @@ def detail_confirmation(state: ProjectState) -> dict:
                     source_plan,
                     frontend_pages=state.get("frontend_pages"),
                     selectedPageId=selectedPageId,
+                    enforce_entity_gate=True,
                     **_detail_workspace_options(state),
                 )
             except PageDependencyGapError as exc:
@@ -354,6 +461,15 @@ def detail_confirmation(state: ProjectState) -> dict:
                     "status": "requires_user_input",
                     "project_plan": source_plan,
                     "clarification": _project_plan_revision_required_payload(str(exc)),
+                    "selectedPageId": selectedPageId,
+                    "timeline": ["detail_confirmation"],
+                }
+            except EntityDesignRequiredError as exc:
+                return {
+                    "phase": "detail_confirmation",
+                    "status": "requires_user_input",
+                    "project_plan": source_plan,
+                    "clarification": _entity_design_required_payload(exc),
                     "selectedPageId": selectedPageId,
                     "timeline": ["detail_confirmation"],
                 }
@@ -367,30 +483,108 @@ def detail_confirmation(state: ProjectState) -> dict:
             source_plan = state.get("project_plan")
             if not isinstance(source_plan, dict):
                 source_plan = pending_plan
-            review_plan = _generate_all_detail_plans(
-                source_plan,
-                selected_api_contract_id=selected_api_contract_id,
-                selected_endpoint_id=selected_endpoint_id,
-                detail_target_type=detail_target_type or "endpoint",
-                **_detail_workspace_options(state),
-            )
+            try:
+                review_plan = _generate_all_detail_plans(
+                    source_plan,
+                    selected_api_contract_id=selected_api_contract_id,
+                    selected_endpoint_id=selected_endpoint_id,
+                    detail_target_type=detail_target_type or "endpoint",
+                    enforce_entity_gate=True,
+                    **_detail_workspace_options(state),
+                )
+            except EntityDesignRequiredError as exc:
+                return {
+                    "phase": "detail_confirmation",
+                    "status": "requires_user_input",
+                    "project_plan": source_plan,
+                    "clarification": _entity_design_required_payload(exc),
+                    "selected_api_contract_id": selected_api_contract_id,
+                    "selected_endpoint_id": selected_endpoint_id,
+                    "detail_target_type": detail_target_type or "endpoint",
+                    "timeline": ["detail_confirmation"],
+                }
             review_plan["confirmation_status"] = "pending_user_confirmation"
             project_plan_path = write_project_plan_document(state, review_plan)
-        if selected_entity_id and not _has_selected_entity_detail(
-            review_plan,
-            selected_entity_id,
-        ):
+        if selected_entity_id:
             source_plan = state.get("project_plan")
             if not isinstance(source_plan, dict):
-                source_plan = pending_plan
-            review_plan = _generate_all_detail_plans(
-                source_plan,
-                selected_entity_id=selected_entity_id,
-                detail_target_type=detail_target_type or "entity",
-                **_detail_workspace_options(state),
-            )
-            review_plan["confirmation_status"] = "pending_user_confirmation"
-            project_plan_path = write_project_plan_document(state, review_plan)
+                source_plan = review_plan
+            action = state.get("entity_design_action")
+            if isinstance(action, dict) and str(action.get("entity_id") or "") == selected_entity_id:
+                if str(action.get("action") or "") == "ai_assist":
+                    ai_suggestions = _build_entity_design_ai_suggestions(
+                        source_plan,
+                        selected_entity_id,
+                        action,
+                        workspace_root=_detail_workspace_options(state).get(
+                            "workspace_root"
+                        ),
+                    )
+                elif str(action.get("action") or "") == "execute_add_columns":
+                    ddl_execution = _execute_entity_add_columns_with_agent(
+                        state,
+                        source_plan,
+                        selected_entity_id,
+                        action,
+                    )
+                    if ddl_execution.get("status") == "approval_required":
+                        return {
+                            "phase": "detail_confirmation",
+                            "status": "requires_user_input",
+                            "entity_design_action": {
+                                **action,
+                                "database_change_plan": ddl_execution.get(
+                                    "database_change_plan"
+                                ),
+                            },
+                            "clarification": _entity_ddl_approval_payload(
+                                ddl_execution
+                            ),
+                            "pending_project_plan": review_plan,
+                            "project_plan": state.get("project_plan"),
+                            "project_plan_path": project_plan_path,
+                            "project_plan_json_path": _project_plan_json_path_for_state(
+                                state
+                            ),
+                            "timeline": ["detail_confirmation"],
+                        }
+                elif str(action.get("action") or "") == "execute_create_table":
+                    ddl_execution = _execute_entity_create_table_action(
+                        state,
+                        source_plan,
+                        selected_entity_id,
+                        action,
+                    )
+                    if ddl_execution.get("status") == "approval_required":
+                        return {
+                            "phase": "detail_confirmation",
+                            "status": "requires_user_input",
+                            "entity_design_action": {
+                                **action,
+                                "database_change_plan": ddl_execution.get(
+                                    "database_change_plan"
+                                ),
+                            },
+                            "clarification": _entity_ddl_approval_payload(
+                                ddl_execution
+                            ),
+                            "pending_project_plan": review_plan,
+                            "project_plan": state.get("project_plan"),
+                            "project_plan_path": project_plan_path,
+                            "project_plan_json_path": _project_plan_json_path_for_state(
+                                state
+                            ),
+                            "timeline": ["detail_confirmation"],
+                        }
+                else:
+                    review_plan = _apply_entity_design_action(
+                        state,
+                        source_plan,
+                        review_plan,
+                        selected_entity_id,
+                    )
+                    review_plan["confirmation_status"] = "pending_user_confirmation"
+                    project_plan_path = write_project_plan_document(state, review_plan)
         clarification = detail_review_payload(
             review_plan,
             selectedPageId=selectedPageId or None,
@@ -399,6 +593,18 @@ def detail_confirmation(state: ProjectState) -> dict:
             selected_entity_id=selected_entity_id or None,
             detail_target_type=detail_target_type or None,
         )
+        if ai_suggestions is not None:
+            entity_design = (
+                clarification.get("review", {}).get("summary", {}).get("entityDesign")
+            )
+            if isinstance(entity_design, dict):
+                entity_design["ai_suggestions"] = ai_suggestions
+        if ddl_execution is not None:
+            entity_design = (
+                clarification.get("review", {}).get("summary", {}).get("entityDesign")
+            )
+            if isinstance(entity_design, dict):
+                entity_design["ddl_execution"] = ddl_execution
         return {
             "phase": "detail_confirmation",
             "status": "requires_user_input",
@@ -431,6 +637,7 @@ def detail_confirmation(state: ProjectState) -> dict:
                 selected_endpoint_id=selected_endpoint_id or None,
                 selected_entity_id=selected_entity_id or None,
             ),
+            "entity_design_action": {},
             "timeline": ["detail_confirmation"],
         }
 
@@ -472,6 +679,33 @@ def detail_confirmation(state: ProjectState) -> dict:
         raise ValueError(
             "开始详细设计时必须提供 selectedPageId、selectedEndpointId 或 selectedEntityId。"
         )
+    if selected_entity_id and not _has_selected_entity_detail(
+        project_plan,
+        selected_entity_id,
+    ):
+        # 实体设计从数据源选择开始：首次进入不自动生成详情，而是返回选择界面。
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "clarification": detail_review_payload(
+                project_plan,
+                selected_entity_id=selected_entity_id,
+                detail_target_type=detail_target_type or "entity",
+            ),
+            "pending_project_plan": project_plan,
+            "project_plan": project_plan,
+            "project_plan_path": state.get("project_plan_path"),
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
+            "detail_selection": {
+                "status": "requires_user_input",
+                "mode": "entity_review",
+                **selected_entity_state,
+                "targets": [],
+            },
+            **selected_entity_state,
+            "detail_plans": [],
+            "timeline": ["detail_confirmation"],
+        }
     if selected_entity_id and _has_selected_entity_detail(
         project_plan,
         selected_entity_id,
@@ -593,8 +827,21 @@ def detail_confirmation(state: ProjectState) -> dict:
             selected_endpoint_id=selected_endpoint_id or None,
             selected_entity_id=selected_entity_id or None,
             detail_target_type=detail_target_type or None,
+            enforce_entity_gate=bool(selectedPageId or selected_endpoint_id),
             **_detail_workspace_options(state),
         )
+    except EntityDesignRequiredError as exc:
+        return {
+            "phase": "detail_confirmation",
+            "status": "requires_user_input",
+            "project_plan": project_plan,
+            "clarification": _entity_design_required_payload(exc),
+            "selectedPageId": selectedPageId or None,
+            "selected_api_contract_id": selected_api_contract_id or None,
+            "selected_endpoint_id": selected_endpoint_id or None,
+            "detail_target_type": detail_target_type or None,
+            "timeline": ["detail_confirmation"],
+        }
     except (PageDependencyGapError, ValueError) as exc:
         return {
             "phase": "detail_confirmation",
@@ -790,6 +1037,7 @@ def _generate_all_detail_plans(
     workspace_root: str | None = None,
     user_request: str = "",
     regenerate_endpoint_details: bool = False,
+    enforce_entity_gate: bool = False,
 ) -> dict:
     """为用户选中的页面、endpoint 或实体生成功能详细设计。"""
 
@@ -845,6 +1093,7 @@ def _generate_all_detail_plans(
             selected_endpoint_id,
             workspace_root,
             user_request=user_request,
+            enforce_entity_gate=True,
         )
         updated_plan = {
             **updated_plan,
@@ -925,6 +1174,7 @@ def _generate_all_detail_plans(
                     endpoint_id,
                     workspace_root,
                     user_request=user_request,
+                    enforce_entity_gate=enforce_entity_gate,
                 )
             if str(existing_detail.get("status") or "") != "confirmed":
                 endpoint_review_details.append(existing_detail)
@@ -1023,6 +1273,7 @@ def _generate_endpoint_detail_plan(
     endpoint_id: str,
     workspace_root: str | None = None,
     user_request: str = "",
+    enforce_entity_gate: bool = False,
 ) -> tuple[dict, dict]:
     """复用独立 endpoint 设计链路生成详情并挂回 ProjectPlan 内存态。"""
 
@@ -1032,32 +1283,20 @@ def _generate_endpoint_detail_plan(
         api_contract_id=api_contract_id,
         endpoint_id=endpoint_id,
     )
+    if enforce_entity_gate:
+        gate_errors, missing_entities = entity_bound_design_gate(
+            project_plan,
+            api_contract_id,
+        )
+        if gate_errors:
+            raise EntityDesignRequiredError(
+                "；".join(gate_errors),
+                missing_entities=missing_entities,
+            )
     endpoint_context = extract_endpoint_detail_context(
         project_plan,
         api_contract_id,
         endpoint_id,
-    )
-    _detail_progress(
-        "正在确认接口数据来源。",
-        target_type="endpoint",
-        api_contract_id=api_contract_id,
-        endpoint_id=endpoint_id,
-        data_source_id=endpoint_context.get("data_source_id"),
-    )
-    database_context = prepare_endpoint_database_context(
-        project_plan,
-        endpoint_context,
-        workspace_root,
-    )
-    endpoint_context = {**endpoint_context, "database_context": database_context}
-    _detail_progress(
-        database_context.get("message") or "数据库上下文准备完成。",
-        target_type="endpoint",
-        api_contract_id=api_contract_id,
-        endpoint_id=endpoint_id,
-        database_context_status=database_context.get("status"),
-        reason=database_context.get("reason"),
-        enabled=database_context.get("enabled"),
     )
     _detail_progress(
         "已定位接口契约，正在调用模型生成接口决策。",
@@ -1073,11 +1312,7 @@ def _generate_endpoint_detail_plan(
         user_request,
     )
     _detail_progress(
-        (
-            "接口决策仍需用户确认，已暂停处理逻辑与验收标准组装。"
-            if detail.get("design_stage") == "needs_user_confirmation"
-            else "接口决策已闭合，完整接口详情已确定性组装。"
-        ),
+        "接口决策已闭合，完整接口详情已确定性组装。",
         target_type="endpoint",
         api_contract_id=api_contract_id,
         endpoint_id=endpoint_id,
@@ -1118,11 +1353,28 @@ def _generate_entity_detail_plan(
     )
     if entity is None:
         raise ValueError(f"项目计划中不存在实体：{entity_id}")
+    existing_detail = next(
+        (
+            item
+            for item in project_plan.get("entity_detail_plans", [])
+            if isinstance(item, dict) and str(item.get("entity_id") or "") == entity_id
+        ),
+        None,
+    )
     detail = create_entity_detail_plan(
         project_plan,
         entity,
         user_request=user_request,
-        default_datasource_type="database",
+        default_datasource_type=(
+            str(existing_detail.get("data_source_type") or "database")
+            if isinstance(existing_detail, dict)
+            else "database"
+        ),
+        design_stage=(
+            existing_detail.get("design_stage")
+            if isinstance(existing_detail, dict)
+            else None
+        ),
     )
     _detail_progress(
         "实体详细设计已确定性组装，等待用户确认。",
@@ -1141,6 +1393,725 @@ def _generate_entity_detail_plan(
         detail_plan_id=detail.get("id"),
     )
     return updated_plan, detail
+
+
+def _ensure_entity_detail_for_submit(
+    state: ProjectState,
+    plan: dict[str, Any],
+    entity_id: str,
+    action: dict[str, Any],
+) -> dict[str, Any]:
+    """单卡片提交前确保实体详情存在；不存在时按所选数据源创建。"""
+
+    existing = next(
+        (
+            item
+            for item in plan.get("entity_detail_plans", [])
+            if isinstance(item, dict) and str(item.get("entity_id") or "") == entity_id
+        ),
+        None,
+    )
+    if existing is not None:
+        return plan
+    source_plan = (
+        state.get("project_plan")
+        if isinstance(state.get("project_plan"), dict)
+        else plan
+    )
+    entity = next(
+        (
+            item
+            for item in source_plan.get("entities", [])
+            if isinstance(item, dict) and str(item.get("id") or "") == entity_id
+        ),
+        None,
+    )
+    if entity is None:
+        raise ValueError(f"项目计划中不存在实体：{entity_id}")
+    detail = create_entity_detail_plan(
+        source_plan,
+        entity,
+        default_datasource_type=str(action.get("data_source_type") or ""),
+        design_stage=ENTITY_DESIGN_STAGE_REVIEW_READY,
+    )
+    return attach_entity_detail_plan(plan, detail)
+
+
+def _build_entity_design_ai_suggestions(
+    source_plan: dict[str, Any],
+    entity_id: str,
+    action: dict[str, Any],
+    *,
+    workspace_root: str | None = None,
+) -> dict[str, Any]:
+    """定位实体并生成 AI 辅助建议；实体缺失时返回可展示错误。"""
+
+    entity = next(
+        (
+            item
+            for item in source_plan.get("entities", [])
+            if isinstance(item, dict) and str(item.get("id") or "") == entity_id
+        ),
+        None,
+    )
+    if entity is None:
+        return {
+            "assist_type": str(action.get("assist_type") or ""),
+            "suggestions": [],
+            "source": "error",
+            "note": f"项目计划中不存在实体：{entity_id}",
+        }
+    context = dict(
+        action.get("context") if isinstance(action.get("context"), dict) else {}
+    )
+    # 注入工作区路径，供后端按真实库表结构校验/过滤 AI 建议，前端无需改动。
+    if workspace_root:
+        context.setdefault("workspace_root", workspace_root)
+    assist_type = str(action.get("assist_type") or "")
+    if workspace_root and assist_type == "table_selection":
+        try:
+            # 表选型优先走数据库 Deep Agent：用 get_mysql_table_info 工具
+            # 读取真实表与列后给出建议；失败时降级为普通模型调用。
+            return entity_design_table_selection_with_agent(
+                entity=entity,
+                context=context,
+                workspace=workspace_root,
+                selected_skill_names=None,
+            )
+        except Exception:
+            pass
+    if workspace_root and assist_type == "bindings":
+        try:
+            # 字段映射同样走数据库 Deep Agent：指定表后读取真实列再绑定，
+            # 与表选型复用同一个 Agent，避免模型臆造列名。
+            return entity_design_bindings_with_agent(
+                entity=entity,
+                context=context,
+                workspace=workspace_root,
+                selected_skill_names=None,
+            )
+        except Exception:
+            pass
+    return entity_design_ai_suggestions(
+        entity,
+        assist_type=assist_type,
+        instruction=str(action.get("instruction") or ""),
+        context=context,
+    )
+
+
+def _apply_entity_design_action(
+    state: ProjectState,
+    source_plan: dict[str, Any],
+    review_plan: dict[str, Any],
+    entity_id: str,
+) -> dict[str, Any]:
+    """应用实体设计动作：选择数据源、补充外部 API 信息、构建静态数据或审批表生成。"""
+
+    action = state.get("entity_design_action") or {}
+    entity = next(
+        (
+            item
+            for item in source_plan.get("entities", [])
+            if isinstance(item, dict) and str(item.get("id") or "") == entity_id
+        ),
+        None,
+    )
+    if entity is None:
+        raise ValueError(f"项目计划中不存在实体：{entity_id}")
+    action_name = str(action.get("action") or "")
+    existing = next(
+        (
+            item
+            for item in review_plan.get("entity_detail_plans", [])
+            if isinstance(item, dict) and str(item.get("entity_id") or "") == entity_id
+        ),
+        None,
+    )
+    if action_name == "select_data_source":
+        if existing is not None:
+            return review_plan
+        source_type = str(action.get("data_source_type") or "")
+        design_stage = (
+            "database_design"
+            if source_type == "database"
+            else ENTITY_DESIGN_STAGE_EXTERNAL_API_INPUT
+            if source_type == "external_api"
+            else "static_design"
+        )
+        detail = create_entity_detail_plan(
+            source_plan,
+            entity,
+            default_datasource_type=source_type,
+            design_stage=design_stage,
+        )
+        detail["status"] = "pending_user_confirmation"
+        detail["approved"] = False
+        return attach_entity_detail_plan(review_plan, detail)
+    if existing is None:
+        raise ValueError("实体设计动作需要先选择数据源。")
+    apply_entity_design_action(
+        source_plan,
+        existing,
+        action,
+        workspace_root=_detail_workspace_options(state).get("workspace_root"),
+    )
+    return attach_entity_detail_plan(review_plan, existing)
+
+
+def _pending_entity_design_validation_errors(
+    project_plan: dict[str, Any],
+    entity_id: str,
+) -> list[str]:
+    """确认前校验实体设计是否符合 ProjectPlan 契约，返回可读错误列表。"""
+
+    detail = next(
+        (
+            item
+            for item in project_plan.get("entity_detail_plans", [])
+            if isinstance(item, dict) and str(item.get("entity_id") or "") == entity_id
+        ),
+        None,
+    )
+    if detail is None:
+        return [f"实体 {entity_id} 尚未生成实体设计。"]
+    return entity_design_validation_errors(project_plan, detail)
+
+
+def _attach_entity_design_validation_errors(
+    project_plan: dict[str, Any],
+    entity_id: str,
+    errors: list[str],
+) -> dict[str, Any]:
+    """把确定性校验错误写回实体设计对应方案段落，供界面展示。"""
+
+    updated = deepcopy(project_plan)
+    for detail in updated.get("entity_detail_plans", []):
+        if not isinstance(detail, dict) or str(detail.get("entity_id") or "") != entity_id:
+            continue
+        source_type = str(detail.get("data_source_type") or "")
+        section_key = {
+            "database": "database_design",
+            "external_api": "external_api_design",
+            "static": "static_design",
+        }.get(source_type)
+        if section_key:
+            section = detail.get(section_key) if isinstance(detail.get(section_key), dict) else {}
+            section["validation_errors"] = errors
+            detail[section_key] = section
+        detail["validation_errors"] = errors
+    return updated
+
+
+def _entity_design_requires_revision(
+    state: ProjectState,
+    review_plan: dict[str, Any],
+    *,
+    selected_entity_id: str,
+    detail_target_type: str,
+) -> dict:
+    """实体设计校验失败时打回修订，继续停在实体设计确认门禁。"""
+
+    selected_entity_state = {
+        "selected_entity_id": selected_entity_id,
+        "detail_target_type": detail_target_type,
+    }
+    return {
+        "phase": "detail_confirmation",
+        "status": "requires_user_input",
+        "clarification": detail_review_payload(
+            review_plan,
+            selected_entity_id=selected_entity_id,
+            detail_target_type=detail_target_type,
+        ),
+        "pending_project_plan": review_plan,
+        "project_plan": state.get("project_plan"),
+        "project_plan_path": state.get("project_plan_path"),
+        "project_plan_json_path": _project_plan_json_path_for_state(state),
+        "detail_selection": {
+            "status": "requires_user_input",
+            "mode": "entity_review",
+            **selected_entity_state,
+            "targets": _selected_detail_design_targets(
+                review_plan,
+                "",
+                selected_entity_id=selected_entity_id,
+            ),
+        },
+            **selected_entity_state,
+            "detail_plans": _selected_detail_plans(
+                review_plan,
+                "",
+                selected_entity_id=selected_entity_id,
+            ),
+            "detail_review_submission": {},
+            "entity_design_action": {},
+            "timeline": ["detail_confirmation"],
+        }
+
+
+def _execute_confirmed_entity_database_operations(
+    state: ProjectState,
+    project_plan: dict[str, Any],
+    entity_id: str,
+) -> dict[str, Any]:
+    """实体设计确认后执行数据库表操作，并把执行证据写回实体详情。"""
+
+    updated = deepcopy(project_plan)
+    for detail in updated.get("entity_detail_plans", []):
+        if not isinstance(detail, dict) or str(detail.get("entity_id") or "") != entity_id:
+            continue
+        if str(detail.get("status") or "") != "confirmed":
+            continue
+        if str(detail.get("data_source_type") or "") != "database":
+            continue
+        database_design = (
+            detail.get("database_design")
+            if isinstance(detail.get("database_design"), dict)
+            else {}
+        )
+        operations = [
+            item
+            for item in database_design.get("database_operations", [])
+            if isinstance(item, dict)
+        ]
+        if not operations:
+            continue
+        _detail_progress(
+            "实体设计已确认，开始落地数据库表操作。",
+            target_type="entity",
+            entity_id=entity_id,
+            operation_count=len(operations),
+        )
+        if not _execute_entity_database_operations_with_agent(
+            state,
+            updated,
+            detail,
+        ):
+            execute_entity_database_operations(
+                detail,
+                workspace_root=_detail_workspace_options(state).get("workspace_root"),
+            )
+    return updated
+
+
+def _execute_entity_database_operations_with_agent(
+    state: ProjectState,
+    project_plan: dict[str, Any],
+    detail: dict[str, Any],
+    database_change_plan: dict[str, Any] | None = None,
+    require_approval: bool = False,
+) -> bool:
+    """按 Database Agent 流程执行实体设计确认后的建表/补列 DDL。
+
+    与 build 阶段数据库任务一致：先扫描真实库表，与目标表结构 diff，
+    由 Deep Agent 生成 DDL 计划，风险分级后执行并复查；仅在确实存在
+    create_table / add_column 操作且有工作区时才接管，其余情况返回
+    False 走确定性执行。
+    """
+
+    workspace_root = _detail_workspace_options(state).get("workspace_root")
+    if not workspace_root:
+        return False
+    database_design = (
+        detail.get("database_design")
+        if isinstance(detail.get("database_design"), dict)
+        else {}
+    )
+    operations = [
+        item
+        for item in database_design.get("database_operations", [])
+        if isinstance(item, dict)
+    ]
+    create_tables = [
+        operation
+        for operation in operations
+        if str(operation.get("operation") or "") == "create_table"
+    ]
+    add_columns = [
+        operation
+        for operation in operations
+        if str(operation.get("operation") or "") == "add_column"
+    ]
+    if not create_tables and not add_columns:
+        return False
+    gaps: list[dict[str, Any]] = []
+    tables: list[str] = []
+    for operation in create_tables:
+        table = (
+            operation.get("table")
+            if isinstance(operation.get("table"), dict)
+            else {}
+        )
+        table_name = str(table.get("name") or "")
+        if not table_name:
+            continue
+        tables.append(table_name)
+        gaps.append(
+            {
+                "kind": "missing_table",
+                "table": table_name,
+                "required": table,
+            }
+        )
+    for operation in add_columns:
+        table_name = str(operation.get("table") or "")
+        column_name = str(operation.get("column") or "")
+        to = operation.get("to") if isinstance(operation.get("to"), dict) else {}
+        if not table_name or not column_name:
+            continue
+        if table_name not in tables:
+            tables.append(table_name)
+        gaps.append(
+            {
+                "kind": "missing_column",
+                "table": table_name,
+                "column": column_name,
+                "required": {
+                    "name": column_name,
+                    "type": str(to.get("type") or "VARCHAR(255)"),
+                    "nullable": to.get("nullable") is not False,
+                    "comment": str(to.get("comment") or ""),
+                },
+            }
+        )
+    if not gaps:
+        return False
+    entity_id = str(detail.get("entity_id") or "entity")
+    task = {
+        "id": f"entity-design-ddl-{entity_id}",
+        "owner": "database",
+        # 建表属于结构性 DDL，强制进入审批流程；补列按 Agent 风险分级。
+        "risk": "high" if (create_tables and require_approval) else "low",
+        "summary": f"为实体 {entity_id} 落地数据库 DDL（建表/补列）",
+        "database_scope": {
+            "tables": tables,
+            "gaps": gaps,
+        },
+    }
+    try:
+        results = generate_database_with_deep_agent(
+            project_plan=project_plan,
+            build_task_plan={},
+            tasks=[task],
+            workspace=workspace_root,
+            selected_skill_names=None,
+            database_change_plan=database_change_plan,
+        )
+    except Exception as exc:
+        results = [
+            {
+                "task_id": task["id"],
+                "status": "failed",
+                "failure_category": "runner_crash",
+                "failure_reason": f"{type(exc).__name__}: {exc}",
+                "agent_note": f"数据库 DDL Agent 执行失败：{type(exc).__name__}: {exc}",
+            }
+        ]
+    task_result = results[0] if results else {}
+    execution = (
+        task_result.get("database_execution")
+        if isinstance(task_result.get("database_execution"), dict)
+        else {}
+    )
+    detail["database_execution"] = {
+        **execution,
+        "operation_ids": [
+            str(operation.get("id") or "") for operation in operations
+        ],
+        "approved_by": "entity_design_confirmation",
+        "agent_note": str(task_result.get("agent_note") or ""),
+        "plan": task_result.get("plan"),
+        "risk": task_result.get("risk"),
+        "task_status": str(task_result.get("status") or ""),
+        "approval_required": (
+            str(task_result.get("failure_category") or "")
+            == "database_approval_required"
+        ),
+        "database_approval": task_result.get("database_approval"),
+        "database_change_plan": task_result.get("database_change_plan"),
+        "database_risk": task_result.get("database_risk"),
+    }
+    detail["table_operations_executed"] = (
+        execution.get("status") == "completed"
+    )
+    return True
+
+
+def _execute_entity_add_columns_with_agent(
+    state: ProjectState,
+    project_plan: dict[str, Any],
+    entity_id: str,
+    action: dict[str, Any],
+) -> dict[str, Any]:
+    """点击“补充字段”后立即进入 DDL 生成阶段并执行补列，成功后由前端写入映射。"""
+
+    table_name = str(action.get("table_name") or "").strip()
+    fields = [
+        item
+        for item in action.get("fields", [])
+        if isinstance(item, dict) and str(item.get("entity_field") or "").strip()
+    ]
+    columns = [str(item.get("entity_field") or "") for item in fields]
+    if not table_name or not fields:
+        return {
+            "status": "failed",
+            "table_name": table_name,
+            "columns": columns,
+            "message": "缺少补列参数。",
+        }
+    workspace_root = _detail_workspace_options(state).get("workspace_root")
+    if not workspace_root:
+        return {
+            "status": "failed",
+            "table_name": table_name,
+            "columns": columns,
+            "message": "缺少工作区路径，无法执行 DDL。",
+        }
+    operations = [
+        {
+            "id": f"add_{table_name}_{str(item.get('entity_field') or '')}",
+            "operation": "add_column",
+            "table": table_name,
+            "column": str(item.get("entity_field") or ""),
+            "to": {
+                "type": str(item.get("type") or "VARCHAR(255)"),
+                "nullable": item.get("nullable") is not False,
+                "comment": str(item.get("comment") or ""),
+            },
+            "approved_by_user": True,
+        }
+        for item in fields
+    ]
+    detail = {
+        "entity_id": entity_id,
+        "database_design": {"database_operations": operations},
+    }
+    _execute_entity_database_operations_with_agent(
+        state,
+        project_plan,
+        detail,
+        action.get("database_change_plan")
+        if isinstance(action.get("database_change_plan"), dict)
+        else None,
+        True,
+    )
+    execution = (
+        detail.get("database_execution")
+        if isinstance(detail.get("database_execution"), dict)
+        else {}
+    )
+    if execution.get("approval_required"):
+        return {
+            "status": "approval_required",
+            "table_name": table_name,
+            "columns": columns,
+            "message": "高危数据库操作需要审批后才能执行。",
+            "approval": execution.get("database_approval"),
+            "database_change_plan": execution.get("database_change_plan"),
+            "risk": execution.get("database_risk"),
+            "execution": execution,
+        }
+    if execution.get("status") == "skipped":
+        return {
+            "status": "already_satisfied",
+            "table_name": table_name,
+            "columns": columns,
+            "message": "字段已存在，无需补充。",
+            "execution": execution,
+        }
+    status = "completed" if execution.get("status") == "completed" else "failed"
+    return {
+        "status": status,
+        "table_name": table_name,
+        "columns": columns,
+        "message": (
+            f"补列 DDL 执行完成，已补充字段：{'、'.join(columns) or '无'}。"
+            if status == "completed"
+            else str(
+                execution.get("failure_reason")
+                or execution.get("summary")
+                or "补列 DDL 执行失败。"
+            )
+        ),
+        "execution": execution,
+    }
+
+
+def _execute_entity_create_table_action(
+    state: ProjectState,
+    project_plan: dict[str, Any],
+    entity_id: str,
+    action: dict[str, Any],
+) -> dict[str, Any]:
+    """点击“确认建表并应用”后立即按 Database Agent 流程生成并执行建表 DDL。"""
+
+    proposal = (
+        action.get("proposal")
+        if isinstance(action.get("proposal"), dict)
+        else {}
+    )
+    table_name = str(proposal.get("name") or "").strip()
+    if not table_name:
+        return {
+            "status": "failed",
+            "table_name": "",
+            "columns": [],
+            "message": "缺少建表方案。",
+        }
+    workspace_root = _detail_workspace_options(state).get("workspace_root")
+    if not workspace_root:
+        return {
+            "status": "failed",
+            "table_name": table_name,
+            "columns": [],
+            "message": "缺少工作区路径，无法执行 DDL。",
+        }
+    detail = {
+        "entity_id": entity_id,
+        "database_design": {
+            "database_operations": [
+                {
+                    "id": f"create_{table_name}",
+                    "operation": "create_table",
+                    "table": proposal,
+                    "to": {},
+                    "approved_by_user": True,
+                }
+            ]
+        },
+    }
+    _execute_entity_database_operations_with_agent(
+        state,
+        project_plan,
+        detail,
+        action.get("database_change_plan")
+        if isinstance(action.get("database_change_plan"), dict)
+        else None,
+    )
+    execution = (
+        detail.get("database_execution")
+        if isinstance(detail.get("database_execution"), dict)
+        else {}
+    )
+    if execution.get("approval_required"):
+        return {
+            "status": "approval_required",
+            "table_name": table_name,
+            "columns": [],
+            "message": "高危数据库操作需要审批后才能执行。",
+            "approval": execution.get("database_approval"),
+            "database_change_plan": execution.get("database_change_plan"),
+            "risk": execution.get("database_risk"),
+            "execution": execution,
+        }
+    if execution.get("status") == "skipped":
+        return {
+            "status": "already_satisfied",
+            "table_name": table_name,
+            "columns": [],
+            "message": "数据表已存在，无需创建。",
+            "execution": execution,
+        }
+    status = "completed" if execution.get("status") == "completed" else "failed"
+    return {
+        "status": status,
+        "table_name": table_name,
+        "columns": [],
+        "message": (
+            f"建表 DDL 执行完成，已创建数据表 {table_name}。"
+            if status == "completed"
+            else str(
+                execution.get("failure_reason")
+                or execution.get("summary")
+                or "建表 DDL 执行失败。"
+            )
+        ),
+        "execution": execution,
+    }
+
+
+def _entity_ddl_approval_payload(ddl_execution: dict[str, Any]) -> dict[str, Any]:
+    """把实体设计补列 DDL 的高危审批结果转换为 Workflow clarification。"""
+
+    approval = (
+        ddl_execution.get("approval")
+        if isinstance(ddl_execution.get("approval"), dict)
+        else {}
+    )
+    risk = (
+        ddl_execution.get("risk")
+        if isinstance(ddl_execution.get("risk"), dict)
+        else {}
+    )
+    plan = (
+        ddl_execution.get("database_change_plan")
+        if isinstance(ddl_execution.get("database_change_plan"), dict)
+        else {}
+    )
+    statements = (
+        plan.get("statements") if isinstance(plan.get("statements"), list) else []
+    )
+    return {
+        "mode": "agent_approval",
+        "status": "requires_user_input",
+        "message": "实体设计补列 DDL 属于高危数据库操作，需要审批后才能执行。",
+        "approval": approval,
+        "tool": approval.get("tool") or "database.execute",
+        "risk": risk,
+        "database_change_plan": plan,
+        "questions": [
+            {
+                "id": "database_approval",
+                "header": "数据库审批",
+                "question": str(
+                    approval.get("description")
+                    or "是否批准执行该高危数据库变更计划？"
+                ),
+                "type": "text",
+                "placeholder": "在审批卡片中批准或拒绝；批准后继续当前工作流。",
+            }
+        ],
+        "context": {
+            "taskId": "",
+            "subject": approval.get("subject"),
+            "details": approval.get("details"),
+            "statementCount": len(statements),
+        },
+    }
+
+
+def _entity_design_required_payload(error: EntityDesignRequiredError) -> dict:
+    """接口/页面详细设计前置门禁：要求先完成绑定实体的实体设计并确认。"""
+
+    payload = build_ask_user_payload(
+        [
+            AskUserQuestion(
+                header="实体设计门禁",
+                question=(
+                    "接口/页面详细设计开始前，必须先完成其绑定实体的实体设计并确认。"
+                    f"{error.reason}"
+                    "请先回到左侧大纲选择对应实体完成实体设计。"
+                ),
+                type="text",
+                placeholder="例如：先完成订单实体的数据源选择与绑定确认。",
+            )
+        ]
+    )
+    payload["mode"] = "entity_design_required"
+    payload["message"] = "存在未完成实体设计的实体，接口/页面详细设计已暂停。"
+    payload["reason"] = error.reason
+    payload["missing_entities"] = [
+        {
+            "entity_id": str(item.get("entity_id") or ""),
+            "entity_name": str(
+                item.get("entity_name") or item.get("entity_id") or ""
+            ),
+        }
+        for item in error.missing_entities
+        if isinstance(item, dict) and str(item.get("entity_id") or "").strip()
+    ]
+    return payload
 
 
 def _normalize_detail_page(page: dict) -> dict:
@@ -1247,11 +2218,11 @@ def _has_selected_entity_detail(
 
 
 def _has_formal_endpoint_detail_content(detail: dict) -> bool:
-    """判断 endpoint 详情是否包含可供用户确认的正式三段设计内容。"""
+    """判断 endpoint 详情是否包含可供用户确认的正式设计内容，接口不依赖数据源。"""
 
     return all(
         isinstance(detail.get(field), dict) and bool(detail.get(field))
-        for field in ("data_usage", "data_origin", "interface_design")
+        for field in ("data_usage", "interface_design")
     )
 
 
@@ -1428,6 +2399,27 @@ def _project_plan_confirmed_payload(project_plan: dict) -> dict:
         "message": "项目计划已由用户确认，可以继续后续流程。",
         "plan_summary": project_plan.get("app", {}).get("name", "未命名应用"),
     }
+
+
+def _entity_design_confirmed_payload(
+    project_plan: dict,
+    *,
+    selected_entity_id: str = "",
+    detail_target_type: str = "entity",
+) -> dict:
+    """实体设计确认后的完成载荷：保留已确认实体设计的 review 摘要，
+    前端据此继续展示确认卡片（锁定态），避免确认后上下文丢失。"""
+
+    payload = detail_review_payload(
+        project_plan,
+        selected_entity_id=selected_entity_id or None,
+        detail_target_type=detail_target_type or "entity",
+    )
+    payload["status"] = "clear"
+    payload["message"] = (
+        f"实体 `{selected_entity_id}` 详细设计已确认并保存，可以继续后续流程。"
+    )
+    return payload
 
 
 def _user_confirmed_project_plan(request: str) -> bool:

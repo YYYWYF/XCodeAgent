@@ -14,6 +14,7 @@ from app.protocols.workflow.definition import (
 )
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.database_planning_context import database_context_requirement
+from app.services.page_detail_plan import endpoint_bound_entity_summaries
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.plan_documents import (
     render_endpoint_detail_markdown,
@@ -682,7 +683,21 @@ def _detail_confirmation_project_plan_update(
             api_contract_id = str(detail.get("api_contract_id") or "").strip()
             method = str(detail.get("method") or "GET").upper()
             path = str(detail.get("path") or "").strip()
-            content = render_endpoint_detail_markdown(detail).strip()
+            source_plan = update.get("project_plan")
+            bound_entities: list[dict[str, Any]] = []
+            if isinstance(source_plan, dict):
+                try:
+                    bound_entities = endpoint_bound_entity_summaries(
+                        source_plan,
+                        api_contract_id,
+                    )
+                except ValueError:
+                    # 只读展示层缺计划时降级为空引用，不阻断接口详情投影。
+                    bound_entities = []
+            content = render_endpoint_detail_markdown(
+                detail,
+                bound_entities=bound_entities,
+            ).strip()
             if not content:
                 continue
             endpoint_sections.append(

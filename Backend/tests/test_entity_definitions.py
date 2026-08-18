@@ -19,7 +19,6 @@ from app.services.entity_definitions import (
 )
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
-from app.services.page_detail_plan import _default_endpoint_data_origin
 from app.workspace.spec_documents import render_requirement_spec_markdown
 
 
@@ -283,7 +282,7 @@ class EntityDefinitionTests(unittest.TestCase):
         self.assertEqual(database_operation_field_errors([], {}), [])
 
     def test_required_schema_merges_entity_tables(self) -> None:
-        """目标 Schema 以实体为基线，并让操作定义覆盖实体列类型。"""
+        """目标 Schema 以实体设计为基线，并让已确认操作定义覆盖实体列类型。"""
 
         targets = [
             {
@@ -292,33 +291,55 @@ class EntityDefinitionTests(unittest.TestCase):
                 "method": "POST",
                 "path": "/api/book",
                 "data_source_id": "book_source",
-                "endpoint_detail": {
-                    "data_origin": {
-                        "source_type": "database",
-                        "effective_source": {
-                            "kind": "mysql_new_table",
-                            "database": "demo",
-                            "tables": ["book"],
-                        },
-                        "database_operations": [
+                "entity_ids": ["Book"],
+                "entity_designs": [
+                    {
+                        "entity_id": "Book",
+                        "entity_name": "书籍",
+                        "fields": [
                             {
-                                "operation": "create_table",
-                                "database": "demo",
-                                "table": {
-                                    "name": "book",
-                                    "columns": [
-                                        {
-                                            "name": "title",
-                                            "type": "VARCHAR(500)",
-                                            "nullable": True,
-                                        }
-                                    ],
-                                    "primary_key": ["id"],
-                                },
-                            }
+                                "name": "title",
+                                "label": "书名",
+                                "type": "text",
+                                "required": True,
+                                "column_type": "VARCHAR(255)",
+                            },
+                            {
+                                "name": "price",
+                                "label": "价格",
+                                "type": "decimal",
+                                "required": False,
+                                "column_type": "DECIMAL(12,2)",
+                            },
                         ],
+                        "database_design": {
+                            "database_name": "demo",
+                            "matched_table": "book",
+                            "bindings": [],
+                            "database_operations": [
+                                {
+                                    "operation": "create_table",
+                                    "database": "demo",
+                                    "table": {
+                                        "name": "book",
+                                        "columns": [
+                                            {
+                                                "name": "title",
+                                                "type": "VARCHAR(500)",
+                                                "nullable": True,
+                                            }
+                                        ],
+                                        "primary_key": ["id"],
+                                    },
+                                }
+                            ],
+                            "table_generation": {
+                                "required": True,
+                                "approved": True,
+                            },
+                        },
                     }
-                },
+                ],
             }
         ]
         data_sources = [
@@ -384,29 +405,6 @@ class EntityDefinitionTests(unittest.TestCase):
         contract_schemas = plan["api_contracts"][0]["schemas"]
         entity_schema = contract_schemas[next(iter(contract_schemas))]
         self.assertIn("id", entity_schema["properties"])
-
-    def test_default_data_origin_projects_entity_table_names(self) -> None:
-        """已确认实体设计把实体对象投影为目标表名时使用 snake_case(id)。"""
-
-        project_plan = {
-            "entities": [
-                {
-                    "id": "Book",
-                    "name": "书籍数据源",
-                    "fields": [{"name": "title", "type": "text"}],
-                }
-            ]
-        }
-        detail = create_entity_detail_plan(
-            project_plan,
-            project_plan["entities"][0],
-            default_datasource_type="database",
-        )
-        detail["status"] = "confirmed"
-        project_plan = attach_entity_detail_plan(project_plan, detail)
-        origin = _default_endpoint_data_origin(project_plan, "database")
-        self.assertEqual(origin["effective_source"]["tables"], ["book"])
-
 
 if __name__ == "__main__":
     unittest.main()

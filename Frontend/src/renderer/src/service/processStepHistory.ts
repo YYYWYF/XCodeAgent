@@ -365,6 +365,9 @@ function workflowNodeLabel(nodeName: string, workflow: WorkflowRunPayload): stri
   if (nodeName === 'detail_confirmation' && detailTargetType === 'endpoint') {
     return '接口细节确认'
   }
+  if (nodeName === 'detail_confirmation' && detailTargetType === 'entity') {
+    return '实体设计'
+  }
   return WORKFLOW_NODE_LABELS[nodeName]
 }
 

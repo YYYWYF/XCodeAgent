@@ -69,12 +69,12 @@ class WorkflowSelectedPageTests(unittest.TestCase):
                 selectedPageId="inventory",
             )
 
-        normalized_plan = extract_context.call_args.args[0]
+        normalized_plan = extract_context.call_args_list[-1].args[0]
         self.assertEqual(
             [page["pageId"] for page in normalized_plan["frontend_pages"]],
             ["dashboard", "inventory"],
         )
-        extract_context.assert_called_once_with(normalized_plan, "inventory")
+        self.assertEqual(extract_context.call_args_list[-1].args[1], "inventory")
         design_page.assert_called_once()
         self.assertEqual(result["detail_confirmation_summary"]["total_pages"], 1)
 
@@ -181,6 +181,7 @@ class WorkflowSelectedPageTests(unittest.TestCase):
             current_plan,
             frontend_pages=current_plan["frontend_pages"],
             selectedPageId="weather-detail",
+            enforce_entity_gate=True,
         )
         self.assertFalse(
             result["clarification"]["review"]["summary"]["missingSelectedPagePlan"]

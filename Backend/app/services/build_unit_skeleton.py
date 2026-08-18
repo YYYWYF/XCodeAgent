@@ -8,7 +8,6 @@ import json
 from typing import Any
 
 from app.services.frontend_page_tree import flatten_frontend_pages
-from app.services.database_planning_context import endpoint_detail_uses_database
 from app.services.entity_definitions import plan_data_sources
 
 
@@ -79,20 +78,30 @@ def _contract_source_ids(
     project_plan: dict[str, Any],
     contracts: list[dict[str, Any]],
 ) -> dict[str, str]:
-    """按契约 entity_ids 反查所属数据源类型。"""
+    """按契约 entity_ids 反查所属数据源类型；混合实体源时优先数据库/外部 API。"""
 
     entity_to_source = _entity_to_source_map(project_plan)
     result: dict[str, str] = {}
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
-        source_id = ""
-        for entity_id in _string_items(contract.get("entity_ids")):
-            if entity_id in entity_to_source:
-                source_id = entity_to_source[entity_id]
-                break
+        source_ids = [
+            entity_to_source[entity_id]
+            for entity_id in _string_items(contract.get("entity_ids"))
+            if entity_id in entity_to_source
+        ]
+        source_id = _preferred_source_id(source_ids)
         if contract_id:
             result[contract_id] = source_id
     return result
+
+
+def _preferred_source_id(source_ids: list[str]) -> str:
+    """按 数据库 > 外部 API > 静态 的顺序选取契约级数据源标识。"""
+
+    for preferred in ("database", "external_api", "static"):
+        if preferred in source_ids:
+            return preferred
+    return source_ids[0] if source_ids else ""
 
 
 def ensure_build_unit_skeleton(
@@ -325,9 +334,18 @@ def apply_target_unit_dependencies(
     build_task_plan: dict[str, Any],
     build_context: dict[str, Any],
 ) -> dict[str, Any]:
-    """按已确认 EndpointDetail 为当前 scope 接入 database→endpoint Unit 依赖。"""
+    """按构建范围为当前 scope 接入 database→endpoint Unit 依赖。
+
+    endpoint/page 范围不再包含 database:* 单元（实体表操作已在实体设计阶段完成），
+    只有全量构建范围内存在 database:* 单元时才接数据库依赖边。
+    """
 
     scoped_plan = deepcopy(build_task_plan)
+    required_unit_ids = {
+        str(unit_id) for unit_id in build_context.get("required_unit_ids") or []
+    }
+    if not any(unit_id.startswith("database:") for unit_id in required_unit_ids):
+        return scoped_plan
     unit_graph = scoped_plan.get("unit_graph")
     if not isinstance(unit_graph, dict):
         return scoped_plan
@@ -343,14 +361,8 @@ def apply_target_unit_dependencies(
         if isinstance(unit_graph.get("validation"), dict)
         else []
     )
-    for detail in _dict_items(build_context.get("direct_endpoint_details")):
-        if not endpoint_detail_uses_database(detail):
-            continue
-        api_contract_id = str(detail.get("api_contract_id") or "")
-        endpoint_id = str(detail.get("endpoint_id") or "")
-        data_source_id = str(detail.get("data_source_id") or "")
+    for data_source_id, endpoint_unit_id in _database_endpoint_refs(build_context):
         database_unit_id = f"database:{data_source_id}"
-        endpoint_unit_id = _endpoint_unit_id(api_contract_id, endpoint_id)
         missing_units = [
             unit_id
             for unit_id in (database_unit_id, endpoint_unit_id)
@@ -358,7 +370,7 @@ def apply_target_unit_dependencies(
         ]
         if missing_units:
             errors.append(
-                f"EndpointDetail {api_contract_id}:{endpoint_id} references missing Units: "
+                f"Database endpoint {endpoint_unit_id} references missing Units: "
                 + ", ".join(missing_units)
             )
             continue
@@ -379,6 +391,19 @@ def apply_target_unit_dependencies(
         },
     }
     return scoped_plan
+
+
+def _database_endpoint_refs(build_context: dict[str, Any]) -> list[tuple[str, str]]:
+    """从构建上下文读取数据源到 endpoint Unit 的只读依赖引用。"""
+
+    refs = build_context.get("database_endpoint_refs")
+    if not isinstance(refs, list):
+        return []
+    return [
+        (str(item[0]), str(item[1]))
+        for item in refs
+        if isinstance(item, (list, tuple)) and len(item) == 2
+    ]
 
 
 def _page_dependency_source(

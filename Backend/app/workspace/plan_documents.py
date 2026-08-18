@@ -6,7 +6,6 @@ from typing import Any
 
 from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
 from app.services.entity_definitions import data_source_type_label, plan_data_sources
-from app.services.page_detail_plan import normalize_endpoint_data_origin
 from app.workspace.spec_documents import workflow_artifact_root
 
 
@@ -267,16 +266,13 @@ def render_page_detail_markdown(detail: dict[str, Any]) -> str:
     )
 
 
-def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
-    """渲染单个 endpoint 详细设计的独立 Markdown 文档。"""
+def render_endpoint_detail_markdown(
+    detail: dict[str, Any],
+    bound_entities: list[dict[str, Any]] | None = None,
+) -> str:
+    """渲染单个 endpoint 详细设计的独立 Markdown 文档，接口不设计数据来源。"""
 
     data_usage = detail.get("data_usage") if isinstance(detail.get("data_usage"), dict) else {}
-    data_origin = normalize_endpoint_data_origin(detail.get("data_origin"))
-    effective_source = (
-        data_origin.get("effective_source")
-        if isinstance(data_origin.get("effective_source"), dict)
-        else {}
-    )
     interface_design = (
         detail.get("interface_design")
         if isinstance(detail.get("interface_design"), dict)
@@ -307,6 +303,27 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
         if isinstance(endpoint_decision.get("operation_semantics"), dict)
         else {}
     )
+    entity_lines: list[str] = []
+    for entity in bound_entities or []:
+        if not isinstance(entity, dict):
+            continue
+        entity_id = str(entity.get("entity_id") or "")
+        entity_name = str(entity.get("entity_name") or entity_id)
+        source_type = str(entity.get("data_source_type") or "")
+        source_label = {
+            "database": "数据库",
+            "external_api": "外部 API",
+            "static": "静态数据",
+        }.get(source_type, source_type or "待确认")
+        field_count = len(
+            entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        )
+        entity_lines.append(
+            f"- `{entity_id}`（{entity_name}）：{field_count} 个字段，"
+            f"数据源由实体设计确定为「{source_label}」"
+        )
+    if not entity_lines:
+        entity_lines.append("- 暂无已确认的绑定实体设计参考")
     return "\n".join(
         [
             f"# 接口详细设计：{detail.get('method', 'GET')} {detail.get('path', '')}",
@@ -315,25 +332,21 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
             "",
             f"- 接口 ID：`{detail.get('endpoint_id', 'unknown')}`",
             f"- API 契约：`{detail.get('api_contract_id', 'unknown')}`",
-            f"- 数据源上下文：`{detail.get('data_source_id', 'unknown')}`",
             f"- 用途：{data_usage.get('purpose') or detail.get('summary') or '待补充'}",
             f"- 服务业务：{data_usage.get('served_business') or '待补充'}",
             f"- 消费方：{data_usage.get('consumer') or '待补充'}",
             f"- 依赖页面：{_joined_labels(data_usage.get('served_pages', []))}",
             f"- 确认状态：{_status_label(detail.get('status', 'draft'))}",
             "",
-            "## 二、数据来源",
+            "## 二、接口行为决策",
             "",
-            f"- 来源类型：{_endpoint_source_label(data_origin)}",
-            f"- 有效来源：{_json_brief(effective_source)}",
-            f"- 字段映射：{_json_brief(data_origin.get('field_mappings'))}",
-            f"- 差异项：{_json_brief(data_origin.get('differences'))}",
-            f"- 数据库操作：{_json_brief(data_origin.get('database_operations'))}",
-            f"- 备注：{_joined_items(data_origin.get('notes', []))}",
-            f"- 设计阶段：{detail.get('design_stage') or '待补充'}",
-            f"- 接口行为决策：{_json_brief(operation_semantics)}",
+            f"- 行为语义：{_json_brief(operation_semantics)}",
             "",
-            "## 三、接口设计",
+            "## 三、绑定实体参考",
+            "",
+            *entity_lines,
+            "",
+            "## 四、接口设计",
             "",
             "### RESTful 风格",
             "",
@@ -359,20 +372,196 @@ def render_endpoint_detail_markdown(detail: dict[str, Any]) -> str:
             f"- 结构：{_json_brief(response_format.get('structure'))}",
             f"- 错误响应：{_joined_items(response_format.get('errors', []))}",
             "",
-            "## 四、处理逻辑",
+            "## 五、处理逻辑",
             "",
             _bullet_items(detail.get("processing_logic", [])) or "- 待补充处理逻辑",
             "",
-            "## 五、验收标准",
+            "## 六、验收标准",
             "",
             _bullet_items(detail.get("acceptance_criteria", [])) or "- 待补充接口验收标准",
             "",
-            "## 六、风险与待确认事项",
+            "## 七、风险与待确认事项",
             "",
             _bullet_items(detail.get("risks", [])) or "- 暂无明确风险",
             "",
         ]
     )
+
+
+def _entity_design_source_sections(detail: dict[str, Any]) -> list[str]:
+    """按实体设计数据源类型渲染分方案设计段落（数据库 / 外部 API / 静态数据）。"""
+
+    source_type = str(detail.get("data_source_type") or "")
+    if source_type == "database":
+        return _database_design_markdown_section(detail)
+    if source_type == "external_api":
+        return _external_api_design_markdown_section(detail)
+    if source_type == "static":
+        return _static_design_markdown_section(detail)
+    return []
+
+
+def _database_design_markdown_section(detail: dict[str, Any]) -> list[str]:
+    """渲染数据库方案的可用表、绑定、差异、表操作与落地证据。"""
+
+    database_design = (
+        detail.get("database_design")
+        if isinstance(detail.get("database_design"), dict)
+        else {}
+    )
+    schema_context = (
+        database_design.get("schema_context")
+        if isinstance(database_design.get("schema_context"), dict)
+        else {}
+    )
+    available_tables = _dict_items(database_design.get("available_tables"))
+    bindings = _dict_items(database_design.get("bindings"))
+    differences = _dict_items(database_design.get("differences"))
+    operations = _dict_items(database_design.get("database_operations"))
+    table_generation = (
+        database_design.get("table_generation")
+        if isinstance(database_design.get("table_generation"), dict)
+        else {}
+    )
+    lines = [
+        "## 三-A、数据库方案",
+        "",
+        f"- 数据库连接：{schema_context.get('status') or '未检测'}",
+        f"- 可用表数量：{len(available_tables)}",
+        f"- 绑定状态：{database_design.get('binding_status') or '待绑定'}",
+        f"- 目标表：`{database_design.get('matched_table') or '未匹配'}`",
+    ]
+    if bindings:
+        lines.extend(["", "字段绑定："])
+        lines.extend(
+            f"- `{binding.get('entity_field', '')}` -> "
+            f"`{binding.get('table', '')}.{binding.get('table_column', '')}`"
+            f"（{binding.get('rule', 'manual')}）"
+            for binding in bindings
+        )
+    if differences:
+        lines.extend(["", "结构化差异："])
+        lines.extend(
+            f"- {difference.get('kind', 'unknown')}：{difference.get('field', '')}，"
+            f"期望 {difference.get('expected', '')} / 实际 {difference.get('actual', '')}"
+            f"（{difference.get('resolution', '')}）"
+            for difference in differences
+        )
+    if operations:
+        lines.extend(["", "数据库操作："])
+        lines.extend(
+            (
+                f"- `{operation.get('operation', '')}` "
+                f"{_operation_table_text(operation)}"
+            )
+            for operation in operations
+        )
+    if table_generation.get("required"):
+        proposal = (
+            table_generation.get("proposal")
+            if isinstance(table_generation.get("proposal"), dict)
+            else {}
+        )
+        proposal_columns = _dict_items(proposal.get("columns"))
+        lines.extend(
+            [
+                "",
+                "目标表结构（需用户审批）：",
+                f"- 表名：`{proposal.get('name', '')}`",
+                f"- 表注释：{proposal.get('comment', '') or '未生成'}",
+                *(
+                    f"  - `{column.get('name', '')}` {column.get('type', '')} "
+                    f"{'非空' if not column.get('nullable') else '可空'}"
+                    for column in proposal_columns
+                ),
+                f"- 审批状态：{'已审批' if table_generation.get('approved') else '待审批'}",
+            ]
+        )
+    execution = (
+        detail.get("database_execution")
+        if isinstance(detail.get("database_execution"), dict)
+        else {}
+    )
+    if execution:
+        lines.extend(
+            [
+                "",
+                f"- 表操作落地：{execution.get('status')}，{execution.get('summary') or ''}",
+            ]
+        )
+    lines.append("")
+    return lines
+
+
+def _operation_table_text(operation: dict[str, Any]) -> str:
+    """渲染单条数据库操作的目标对象。"""
+
+    raw_table = operation.get("table")
+    if isinstance(raw_table, dict):
+        return f"`{raw_table.get('name', '')}`"
+    table = str(raw_table or "")
+    column = str(operation.get("column") or "")
+    return f"`{table}.{column}`" if column else f"`{table}`"
+
+
+def _external_api_design_markdown_section(detail: dict[str, Any]) -> list[str]:
+    """渲染外部 API 方案的接口信息与字段映射。"""
+
+    external_api_design = (
+        detail.get("external_api_design")
+        if isinstance(detail.get("external_api_design"), dict)
+        else {}
+    )
+    api_info = (
+        external_api_design.get("api_info")
+        if isinstance(external_api_design.get("api_info"), dict)
+        else {}
+    )
+    mappings = _dict_items(external_api_design.get("field_mappings"))
+    lines = [
+        "## 三-A、外部 API 方案",
+        "",
+        f"- 请求路径：`{api_info.get('path') or '待补充'}`",
+        f"- 请求方式：`{api_info.get('method') or '待补充'}`",
+        f"- 请求体：{_json_brief(api_info.get('request_body'))}",
+        f"- 返回体：{_json_brief(api_info.get('response_body'))}",
+    ]
+    if mappings:
+        lines.extend(["", "返回体字段绑定："])
+        lines.extend(
+            f"- `{mapping.get('entity_field', '')}` <- `{mapping.get('source_field', '')}`"
+            f"（{mapping.get('rule', 'manual')}）"
+            for mapping in mappings
+        )
+    lines.append("")
+    return lines
+
+
+def _static_design_markdown_section(detail: dict[str, Any]) -> list[str]:
+    """渲染静态数据方案的种子数据与字段取值。"""
+
+    static_design = (
+        detail.get("static_design")
+        if isinstance(detail.get("static_design"), dict)
+        else {}
+    )
+    seed_rows = _dict_items(static_design.get("seed_rows"))
+    field_values = (
+        static_design.get("field_values")
+        if isinstance(static_design.get("field_values"), dict)
+        else {}
+    )
+    lines = ["## 三-A、静态数据方案", ""]
+    if seed_rows:
+        lines.extend(["种子数据：", *[f"- {_json_brief(row)}" for row in seed_rows]])
+    if field_values:
+        lines.extend(["", "字段取值/枚举："])
+        for key, values in field_values.items():
+            lines.append(f"- `{key}`：{_joined_items(values)}")
+    if not seed_rows and not field_values:
+        lines.append("- 暂无静态数据，请补充字段取值、枚举或种子数据。")
+    lines.append("")
+    return lines
 
 
 def render_entity_detail_markdown(detail: dict[str, Any]) -> str:
@@ -441,6 +630,7 @@ def render_entity_detail_markdown(detail: dict[str, Any]) -> str:
                 else f"- 数据源类型为 {data_source_type_label(data_source_type)}，不生成数据库表。"
             ),
             "",
+            *_entity_design_source_sections(detail),
             "## 四、业务规则",
             "",
             _bullet_items(
@@ -473,19 +663,6 @@ def render_entity_detail_markdown(detail: dict[str, Any]) -> str:
             "",
         ]
     )
-
-
-def _endpoint_source_label(data_origin: dict[str, Any]) -> str:
-    """将 EndpointDetail 正式来源转换为用户可读标签。"""
-
-    source_type = str(data_origin.get("source_type") or "")
-    if source_type == "static":
-        return "前端 Mock 数据契约"
-    if source_type == "database":
-        return "真实 HTTP API（数据库）"
-    if source_type == "external_api":
-        return "外部 API"
-    return "待确认"
 
 
 def _schema_type(schema: Any) -> str:

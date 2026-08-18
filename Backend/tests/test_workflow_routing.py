@@ -73,8 +73,18 @@ class WorkflowRoutingTests(unittest.TestCase):
             "inspect_workspace",
         )
 
+    def test_detail_confirmation_ends_after_entity_confirmation(self) -> None:
+        """实体设计只承担 detail_confirmation 阶段：确认完成即结束当前工作流。"""
+
+        self.assertEqual(
+            route_detail_confirmation(
+                {"status": "completed", "selected_entity_id": "product"}
+            ),
+            "await_user_input",
+        )
+
     def test_workspace_inspection_routes_to_database_context_when_required(self) -> None:
-        """接口 data_origin 来源于数据库时，工作区检查后进入数据库上下文节点。"""
+        """接口绑定实体数据源为数据库时，工作区检查后进入数据库上下文节点。"""
 
         with patch("app.graph.workflow._latest_compact_project_plan", return_value={}), patch(
             "app.graph.workflow._workspace_snapshot_from_state",
@@ -89,7 +99,7 @@ class WorkflowRoutingTests(unittest.TestCase):
             self.assertEqual(route_workspace_inspection({}), "inspect_database_context")
 
     def test_workspace_inspection_skips_database_context_for_external_api(self) -> None:
-        """外部 API 来源不展示数据库上下文检查节点。"""
+        """接口绑定实体数据源为外部 API 时不展示数据库上下文检查节点。"""
 
         with patch("app.graph.workflow._latest_compact_project_plan", return_value={}), patch(
             "app.graph.workflow._workspace_snapshot_from_state",

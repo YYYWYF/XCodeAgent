@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -14,6 +15,7 @@ from app.graph.nodes.tasks import (
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.database_planning_context import (
     database_context_requirement,
+    database_origin_targets,
     prepare_database_planning_context,
 )
 from tests.entity_design_test_utils import confirm_entity_designs
@@ -33,8 +35,41 @@ def _workspace_tool(tool: SimpleNamespace):
     return invoke
 
 
-def _project_plan(method: str = "POST") -> dict:
-    """构造实体设计已确认为数据库、含单接口契约的测试 ProjectPlan。"""
+def _with_database_design(
+    plan: dict,
+    *,
+    matched_table: str = "orders",
+    bindings: list | None = None,
+    differences: list | None = None,
+    operations: list | None = None,
+    table_generation: dict | None = None,
+) -> dict:
+    """给已确认实体设计补上数据库方案，作为任务规划的目标结构来源。"""
+
+    updated = deepcopy(plan)
+    for detail in updated.get("entity_detail_plans", []):
+        if not isinstance(detail, dict) or str(detail.get("status") or "") != "confirmed":
+            continue
+        existing_design = (
+            detail.get("database_design")
+            if isinstance(detail.get("database_design"), dict)
+            else {}
+        )
+        detail["database_design"] = {
+            **existing_design,
+            "database_name": "sales",
+            "matched_table": matched_table,
+            "bindings": bindings or [],
+            "differences": differences or [],
+            "database_operations": operations or [],
+            "table_generation": table_generation
+            or {"required": False, "approved": False},
+        }
+    return updated
+
+
+def _project_plan(method: str = "POST", *, source_type: str = "database") -> dict:
+    """构造实体设计已确认、含单接口契约的测试 ProjectPlan。"""
 
     plan = {
         "version": "plan-v1",
@@ -70,7 +105,10 @@ def _project_plan(method: str = "POST") -> dict:
             }
         ],
     }
-    return confirm_entity_designs(plan, source_type="database")
+    plan = confirm_entity_designs(plan, source_type=source_type)
+    if source_type == "database":
+        plan = _with_database_design(plan, matched_table="orders")
+    return plan
 
 
 def _build_context(endpoint_id: str = "orders.create") -> dict:
@@ -83,31 +121,17 @@ def _build_context(endpoint_id: str = "orders.create") -> dict:
             "api_contract_id": "orders-api",
         },
         "endpoint_ids": [endpoint_id],
-        "api_contract_ids": ["orders-api"],
-        "data_source_ids": ["database"],
+        "entity_ids": ["Order"],
         "required_unit_ids": [
-            "database:database",
+            "backend:bootstrap",
             "backend:endpoint:orders-api:orders.create",
         ],
         "direct_endpoint_details": [
             {
                 "api_contract_id": "orders-api",
                 "endpoint_id": endpoint_id,
-                "data_source_id": "database",
                 "method": "POST",
                 "path": "/orders",
-                "data_origin": {
-                    "source_type": "database",
-                    "effective_source": {
-                        "kind": "mysql_existing",
-                        "data_source_id": "database",
-                        "database": "sales",
-                        "tables": ["orders"],
-                    },
-                    "field_mappings": [],
-                    "differences": [],
-                    "notes": [],
-                },
                 "processing_logic": ["写入 orders 表。"],
             }
         ],
@@ -160,7 +184,7 @@ def _tool_payload(*, database_exists: bool = True, tables: dict | None = None) -
 def _summary_project_plan() -> dict:
     """构造概览聚合接口的 ProjectPlan，响应字段不等同于数据库字段。"""
 
-    return {
+    plan = {
         "version": "plan-v1",
         "confirmation_status": "confirmed",
         "entities": [
@@ -174,6 +198,7 @@ def _summary_project_plan() -> dict:
         "api_contracts": [
             {
                 "id": "core_management_api",
+                "entity_ids": ["Core"],
                 "data_source_id": "database",
                 "schemas": {
                     "CoreManagementSummary": {
@@ -198,6 +223,34 @@ def _summary_project_plan() -> dict:
             }
         ],
     }
+    plan = confirm_entity_designs(
+        plan,
+        source_type="database",
+        entity_ids=["Core"],
+    )
+    return _with_database_design(
+        plan,
+        matched_table="user",
+        bindings=[
+            {
+                "entity_field": "id",
+                "table": "user",
+                "table_column": "id",
+                "rule": "same_name",
+                "suggestion": True,
+            }
+        ],
+        differences=[
+            {
+                "kind": "backend_adaptation",
+                "field": "recentChanges[].department",
+                "table": "user",
+                "expected": "允许为空的部门展示字段",
+                "actual": "user 表无 department 列",
+                "resolution": "后端返回 null，不修改数据库。",
+            }
+        ],
+    )
 
 
 def _summary_build_context() -> dict:
@@ -210,61 +263,13 @@ def _summary_build_context() -> dict:
             "api_contract_id": "core_management_api",
         },
         "endpoint_ids": ["core_management.summary"],
-        "api_contract_ids": ["core_management_api"],
-        "data_source_ids": ["database"],
+        "entity_ids": ["Core"],
         "direct_endpoint_details": [
             {
                 "api_contract_id": "core_management_api",
                 "endpoint_id": "core_management.summary",
-                "data_source_id": "database",
                 "method": "GET",
                 "path": "/api/core-management/summary",
-                "data_origin": {
-                    "source_type": "database",
-                    "effective_source": {
-                        "kind": "mysql_existing",
-                        "database": "xcode",
-                        "tables": ["user"],
-                    },
-                    "field_mappings": [
-                        {
-                            "target_field": "totalStaff",
-                            "source": "user 表行计数",
-                            "rule": "SELECT COUNT(*) FROM user",
-                        },
-                        {
-                            "target_field": "newEntries",
-                            "source": "无对应列，暂时无法计算",
-                            "rule": "返回 0",
-                        },
-                        {
-                            "target_field": "recentChanges[].id",
-                            "source": "user.id",
-                            "rule": "直接映射，但类型为int → string",
-                        },
-                        {
-                            "target_field": "recentChanges[].department",
-                            "source": "无对应列",
-                            "rule": "返回 null",
-                        },
-                    ],
-                    "differences": [
-                        {
-                            "field": "recentChanges[].department",
-                            "actual": "user 表无 department 列",
-                            "expected": "允许为空的部门展示字段",
-                            "resolution_kind": "backend_adaptation",
-                            "operation_refs": [],
-                            "backend_adaptation": {
-                                "strategy": "default_value",
-                                "value": None,
-                                "temporary": True,
-                                "description": "当前接口明确返回 null，不修改数据库。",
-                            },
-                        }
-                    ],
-                    "database_operations": [],
-                },
             }
         ],
     }
@@ -334,27 +339,10 @@ class DatabaseContextV1Tests(unittest.TestCase):
     def test_missing_table_becomes_database_task_intent(self) -> None:
         """目标表不存在时不报错，而是转成 missing_table gap 和建表意图。"""
 
-        build_context = _build_context()
-        detail = build_context["direct_endpoint_details"][0]
-        detail["data_origin"] = {
-            "source_type": "database",
-            "effective_source": {
-                "kind": "mysql_new_table",
-                "database": "sales",
-                "tables": ["orders"],
-            },
-            "field_mappings": [],
-            "differences": [
-                {
-                    "field": "orders",
-                    "expected": "订单持久化表",
-                    "actual": "数据库不存在 orders 表",
-                    "resolution_kind": "database_change",
-                    "operation_refs": ["create-orders"],
-                    "backend_adaptation": None,
-                }
-            ],
-            "database_operations": [
+        plan = _with_database_design(
+            _project_plan(),
+            matched_table="orders",
+            operations=[
                 {
                     "id": "create-orders",
                     "operation": "create_table",
@@ -377,15 +365,16 @@ class DatabaseContextV1Tests(unittest.TestCase):
                     },
                 }
             ],
-        }
+            table_generation={"required": True, "approved": True},
+        )
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload(tables={})))
         with patch(
             "app.services.database_schema_summary.get_mysql_table_info_for_workspace",
             side_effect=_workspace_tool(tool),
         ):
             context = prepare_database_planning_context(
-                _project_plan(),
-                build_context,
+                plan,
+                _build_context(),
                 workspace_root=_TEST_WORKSPACE_ROOT,
             )
 
@@ -443,36 +432,28 @@ class DatabaseContextV1Tests(unittest.TestCase):
     def test_existing_table_add_column_operation_becomes_task_intent(self) -> None:
         """mysql_existing 的结构化 add_column 应生成缺字段 gap 和任务意图。"""
 
-        build_context = _build_context()
-        detail = build_context["direct_endpoint_details"][0]
-        detail["data_origin"]["differences"] = [
-            {
-                "field": "department",
-                "expected": "持久化部门字段",
-                "actual": "orders 表缺少 department",
-                "resolution_kind": "database_change",
-                "operation_refs": ["add-orders-department"],
-                "backend_adaptation": None,
-            }
-        ]
-        detail["data_origin"]["database_operations"] = [
-            {
-                "id": "add-orders-department",
-                "operation": "add_column",
-                "database": "sales",
-                "table": "orders",
-                "column": "department",
-                "from": None,
-                "to": {
-                    "type": "varchar(128)",
-                    "nullable": False,
-                    "default": None,
-                    "comment": "所属部门",
-                },
-                "reason": "订单需要持久化部门字段",
-                "source_fields": ["department"],
-            }
-        ]
+        plan = _with_database_design(
+            _project_plan(),
+            matched_table="orders",
+            operations=[
+                {
+                    "id": "add-orders-department",
+                    "operation": "add_column",
+                    "database": "sales",
+                    "table": "orders",
+                    "column": "department",
+                    "from": None,
+                    "to": {
+                        "type": "varchar(128)",
+                        "nullable": False,
+                        "default": None,
+                        "comment": "所属部门",
+                    },
+                    "reason": "订单需要持久化部门字段",
+                    "source_fields": ["department"],
+                }
+            ],
+        )
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
         with patch(
@@ -480,8 +461,8 @@ class DatabaseContextV1Tests(unittest.TestCase):
             side_effect=_workspace_tool(tool),
         ):
             context = prepare_database_planning_context(
-                _project_plan(),
-                build_context,
+                plan,
+                _build_context(),
                 workspace_root=_TEST_WORKSPACE_ROOT,
             )
 
@@ -492,24 +473,20 @@ class DatabaseContextV1Tests(unittest.TestCase):
     def test_existing_table_backend_default_does_not_create_gap(self) -> None:
         """结构化 backend_adaptation 默认值不得被转换成数据库字段。"""
 
-        build_context = _build_context()
-        detail = build_context["direct_endpoint_details"][0]
-        detail["data_origin"]["differences"] = [
-            {
-                "field": "remark",
-                "expected": "备注字段",
-                "actual": "orders 表缺少 remark",
-                "resolution_kind": "backend_adaptation",
-                "operation_refs": [],
-                "backend_adaptation": {
-                    "strategy": "default_value",
-                    "value": "",
-                    "temporary": False,
-                    "description": "后端返回空字符串。",
-                },
-            }
-        ]
-        detail["data_origin"]["database_operations"] = []
+        plan = _with_database_design(
+            _project_plan(),
+            matched_table="orders",
+            differences=[
+                {
+                    "kind": "backend_adaptation",
+                    "field": "remark",
+                    "table": "orders",
+                    "expected": "备注字段",
+                    "actual": "orders 表缺少 remark",
+                    "resolution": "后端返回空字符串，不修改数据库。",
+                }
+            ],
+        )
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
         with patch(
@@ -517,8 +494,8 @@ class DatabaseContextV1Tests(unittest.TestCase):
             side_effect=_workspace_tool(tool),
         ):
             context = prepare_database_planning_context(
-                _project_plan(),
-                build_context,
+                plan,
+                _build_context(),
                 workspace_root=_TEST_WORKSPACE_ROOT,
             )
 
@@ -528,21 +505,23 @@ class DatabaseContextV1Tests(unittest.TestCase):
     def test_existing_table_default_change_becomes_task_intent(self) -> None:
         """结构化默认值变更应生成 default_mismatch 和对应任务意图。"""
 
-        build_context = _build_context()
-        detail = build_context["direct_endpoint_details"][0]
-        detail["data_origin"]["database_operations"] = [
-            {
-                "id": "default-orders-status",
-                "operation": "alter_column_default",
-                "database": "sales",
-                "table": "orders",
-                "column": "status",
-                "from": {"default": None},
-                "to": {"default": {"kind": "literal", "value": "active"}},
-                "reason": "新订单默认启用",
-                "source_fields": ["status"],
-            }
-        ]
+        plan = _with_database_design(
+            _project_plan(),
+            matched_table="orders",
+            operations=[
+                {
+                    "id": "default-orders-status",
+                    "operation": "alter_column_default",
+                    "database": "sales",
+                    "table": "orders",
+                    "column": "status",
+                    "from": {"default": None},
+                    "to": {"default": {"kind": "literal", "value": "active"}},
+                    "reason": "新订单默认启用",
+                    "source_fields": ["status"],
+                }
+            ],
+        )
 
         tool = SimpleNamespace(invoke=Mock(return_value=_tool_payload()))
         with patch(
@@ -550,8 +529,8 @@ class DatabaseContextV1Tests(unittest.TestCase):
             side_effect=_workspace_tool(tool),
         ):
             context = prepare_database_planning_context(
-                _project_plan(),
-                build_context,
+                plan,
+                _build_context(),
                 workspace_root=_TEST_WORKSPACE_ROOT,
             )
 
@@ -593,15 +572,10 @@ class DatabaseContextV1Tests(unittest.TestCase):
     def test_third_party_endpoint_skips_database_context_node(self) -> None:
         """外部 API 来源不会触发数据库上下文检查节点。"""
 
-        build_context = _build_context()
-        build_context["direct_endpoint_details"][0]["data_origin"] = {
-            "source_type": "third_party",
-            "effective_source": {"kind": "third_party", "name": "remote-api"},
-            "field_mappings": [],
-            "differences": [],
-            "notes": [],
-        }
-        requirement = database_context_requirement(_project_plan(), build_context)
+        requirement = database_context_requirement(
+            _project_plan(source_type="external_api"),
+            _build_context(),
+        )
 
         self.assertFalse(requirement["required"])
         self.assertEqual(requirement["status"], "not_required")
@@ -648,10 +622,90 @@ class DatabaseContextV1Tests(unittest.TestCase):
                 target_id="orders.create",
                 api_contract_id="orders-api",
             )
-            self.assertEqual(context["data_source_ids"], ["external_api"])
+            self.assertNotIn("data_source_ids", context)
+            self.assertEqual(context["entity_ids"], ["Order"])
+            self.assertEqual(
+                context["required_unit_ids"],
+                ["backend:bootstrap", "backend:endpoint:orders-api:orders.create"],
+            )
             requirement = database_context_requirement(plan, context)
             self.assertFalse(requirement["required"])
             self.assertEqual(requirement["status"], "not_required")
+
+    def test_mixed_entity_sources_resolve_per_entity(self) -> None:
+        """契约绑定数据库与静态实体时，endpoint 上下文按实体集合解析并进入数据库上下文。"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            detail_path = Path(tmpdir) / "endpoint.json"
+            detail_path.write_text(
+                json.dumps(
+                    {
+                        "api_contract_id": "orders-api",
+                        "endpoint_id": "orders.create",
+                        "status": "confirmed",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            plan = _project_plan()
+            plan["entities"].append({"id": "Role", "name": "角色", "fields": []})
+            plan["api_contracts"][0]["entity_ids"] = ["Order", "Role"]
+            plan = confirm_entity_designs(
+                plan,
+                source_type="database",
+                entity_ids=["Order"],
+            )
+            plan = confirm_entity_designs(
+                plan,
+                source_type="static",
+                entity_ids=["Role"],
+            )
+            plan["api_contracts"][0]["endpoints"][0]["detail_design"] = {
+                "status": "confirmed",
+                "json_path": str(detail_path),
+            }
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="endpoint",
+                target_id="orders.create",
+                api_contract_id="orders-api",
+            )
+
+        self.assertEqual(context["entity_ids"], ["Order", "Role"])
+        self.assertEqual(
+            [design["data_source_type"] for design in context["entity_designs"]],
+            ["database", "static"],
+        )
+        for key in (
+            "entity_source_types",
+            "data_source_ids",
+            "database_source_ids",
+            "database_endpoint_refs",
+            "api_contract_ids",
+        ):
+            self.assertNotIn(key, context)
+        self.assertFalse(any(unit.startswith("database:") for unit in context["required_unit_ids"]))
+        self.assertIn("frontend:data:static", context["required_unit_ids"])
+        self.assertEqual(
+            context["required_unit_ids"],
+            [
+                "backend:bootstrap",
+                "backend:endpoint:orders-api:orders.create",
+                "frontend:data:static",
+            ],
+        )
+        requirement = database_context_requirement(plan, context)
+        self.assertTrue(requirement["required"])
+        self.assertEqual(requirement["reason"], "database_entity_source")
+        targets = database_origin_targets(plan, context)
+        self.assertEqual(len(targets), 1)
+        self.assertEqual(
+            [design["entity_id"] for design in targets[0]["entity_designs"]],
+            ["Order", "Role"],
+        )
+        self.assertEqual(targets[0]["data_source_id"], "database")
 
     def test_task_preparation_view_includes_new_database_context(self) -> None:
         """任务规划模型输入包含新版数据库上下文和已确认接口详情。"""

@@ -16,55 +16,6 @@ from app.utils.model_output import extract_json_object
 
 
 ENDPOINT_DECISION_OUTPUT_SCHEMA: dict[str, Any] = {
-    "data_origin": {
-        "source_type": "database|static|external_api",
-        "effective_source": {
-            "kind": "frontend_mock|third_party|mysql_existing|mysql_new_table|needs_user_confirmation",
-            "data_source_id": "string|null",
-            "database": "string|null",
-            "tables": ["string"],
-            "provider": "string|null",
-            "endpoint": "string|null",
-            "method": "string|null",
-            "description": "string",
-        },
-        "field_mappings": [
-            {
-                "target_field": "string",
-                "source": "string",
-                "rule": "string",
-            }
-        ],
-        "differences": [
-            {
-                "field": "string",
-                "expected": "string",
-                "actual": "string",
-                "resolution_kind": "already_supported|database_change|backend_adaptation|needs_user_confirmation",
-                "operation_refs": ["string"],
-                "backend_adaptation": None,
-            }
-        ],
-        "database_operations": [
-            {
-                "id": "string",
-                "operation": "create_table|add_column|alter_column_type|alter_column_nullable|alter_column_default",
-                "database": "string",
-                "table": "string|object",
-                "column": "string|null",
-                "from": "object|null",
-                "to": {
-                    "type": "string|null",
-                    "nullable": "boolean|null",
-                    "default": "any|null",
-                    "comment": "string",
-                },
-                "reason": "string",
-                "source_fields": ["string"],
-            }
-        ],
-        "notes": ["string"],
-    },
     "operation_semantics": {
         "operation_kind": "read|create|update|delete|action",
         "target_cardinality": "exactly_one|zero_or_one|many|not_applicable",
@@ -230,71 +181,21 @@ def _endpoint_decision_prompt(
         "processing logic and acceptance criteria. It must match this formal schema exactly; "
         "replace the sample type strings with concrete design content and keep every key present:\n"
         f"{formal_schema}\n"
-        "data_origin must be compact: include exactly one effective_source object for the "
-        "actual source, field_mappings for known existing target-to-source mappings, structured "
-        "differences for every schema/field gap, database_operations for confirmed schema changes, "
-        "and notes for concise assumptions. Every difference must use resolution_kind; "
-        "database_change must reference complete database_operations by id, backend_adaptation "
-        "must be an object with strategy (type_conversion/computed/default_value/not_persisted), "
-        "value, temporary, and description; all other resolution kinds must set it to null. "
-        "needs_user_confirmation must not contain an executable "
-        "operation. mysql_existing may add or alter columns on an existing table. Never infer a "
-        "database operation from prose and never map a missing column as an existing field_mapping. "
-        "operation_refs is allowed only on database_change differences; every other "
-        "resolution_kind (already_supported, backend_adaptation, needs_user_confirmation) "
-        "must keep operation_refs empty ([]). "
-        "Do not output parallel "
-        "third_party/mysql_existing/mysql_new_table branches, do not output applicable=false "
-        "objects, and do not store user-facing questions inside data_origin. "
-        "When endpoint_context.database_context.status is completed, the inspected database "
-        "facts are authoritative and you must produce the concrete database design directly in "
-        "effective_source.kind; needs_user_confirmation must not appear in that state. If the "
-        "target table already exists in database_context.tables, set effective_source.kind to "
-        "mysql_existing, map contract fields to its columns in field_mappings, and express every "
-        "missing or insufficient column as a database_change difference that references a "
-        "complete add_column/alter_column_type/alter_column_nullable/alter_column_default "
-        "database_operation; fields whose values are computed or transformed by the backend are "
-        "backend_adaptation differences with operation_refs []. "
-        "If the target table is absent or database_context.database_exists is false, set "
-        "effective_source.kind to mysql_new_table and design the table directly from the API "
-        "contract: provide one complete create_table database_operation whose table object "
-        "includes name, comment, columns (name/type/nullable/default/comment), primary_key, "
-        "indexes and foreign_keys, and cover every contract field in "
-        "field_mappings/differences. Use database_context.database as the target database name. "
-        "For mysql_new_table, also declare the table creation itself as exactly one "
-        "database_change difference with operation_refs referencing the create_table operation "
-        "id and backend_adaptation null (use the new table name as its field); columns defined "
-        "by create_table belong in field_mappings, and fields whose values are produced by "
-        "backend logic or database defaults (server-generated id, computed values, timestamps) "
-        "are backend_adaptation differences with operation_refs []. "
-        "When database_context is skipped or failed, do not invent inspected tables; continue "
-        "from the API contract and record concrete unresolved schema gaps in "
-        "data_origin.differences. "
-        "When endpoint_context.data_source.entities contains entity definitions with fields, "
-        "those fields are the authoritative business fields for the data source. The implicit "
-        "id column is always allowed. For mysql_new_table, create_table must use the table name "
-        "derived from the entity id in snake_case (for example entity Book -> table book) and "
-        "may only define entity fields plus id; add_column/alter_column_type/"
-        "alter_column_nullable/alter_column_default may only reference entity fields or id. "
-        "If the API contract needs a field that is not in the entity, never emit a database "
-        "operation for it; express it as a needs_user_confirmation difference so the ProjectPlan "
-        "entity can be revised and confirmed first. "
-        "data_origin.source_type is the immutable ProjectPlan data source category and must be "
-        "database, static, or external_api; keep the category unchanged. Only when "
-        "database_context is skipped or failed and the concrete implementation is genuinely "
-        "unclear may you set effective_source.kind to needs_user_confirmation; when "
-        "database_context.status is completed, effective_source.kind must be mysql_existing or "
-        "mysql_new_table, never needs_user_confirmation. "
+        "This endpoint design does NOT design any data source. Do not emit data_origin, "
+        "effective_source, field_mappings, database operations, source branches, or any "
+        "database/static/mock/third-party implementation content. The data source (database or "
+        "external API) and its bindings are decided exclusively by the confirmed entity design: "
+        "endpoint_context.bound_entities is a read-only reference to those entity designs and "
+        "must never be extended, changed, or duplicated into this decision. Do not add fields, "
+        "tables, schemas, or endpoints beyond the API contract, and do not revise entities. "
+        "If a contract field is not covered by the bound entity fields, record it as a risk so "
+        "the entity can be revised and confirmed first. "
         "operation_semantics must express contract behavior once, without implementation prose. "
         "For a single-resource endpoint, target_cardinality and multiple_match_behavior must make "
         "the single-resource boundary explicit. selector.fields must only use contract parameters "
         "or request fields. success_status_code must follow the API contract when declared. "
-        "Even when data_origin needs confirmation, still describe the endpoint's intended contract "
-        "semantics; the workflow will stop before composing executable detail fields. "
-        "If the ProjectPlan data source type is static, set data_origin.source_type to \"static\" "
-        "and effective_source.kind to \"frontend_mock\". It uses the frontend in-memory data module, "
-        "has no database operations, and does not create a real backend endpoint. Never emit mock as "
-        "a formal source_type or effective_source.kind.\n\n"
+        "risks must list only concise assumptions and contract/entity gaps that need user "
+        "attention before confirmation.\n\n"
         f"Latest user feedback:\n{user_request}\n\n"
         f"Endpoint context:\n{json.dumps(endpoint_context, ensure_ascii=False)}"
     )

@@ -36,6 +36,36 @@ def inspect_mysql_schema(
     return summarize_tool_result(str(tool_result), target=target)
 
 
+def inspect_mysql_table(
+    target: dict[str, Any],
+    table_name: str,
+    workspace_root: str | None = None,
+) -> dict[str, Any]:
+    """调用受控 MySQL 工具并返回指定表的字段结构摘要。
+
+    只在用户于实体设计数据库方案中明确选择某张表后按需执行，不做预扫描。
+    """
+
+    if workspace_root is None or not str(workspace_root).strip():
+        return connection_failed(
+            "missing_workspace",
+            "缺少当前应用工作区，无法读取应用级数据库连接配置。",
+            target=target,
+        )
+    try:
+        tool_result = get_mysql_table_info_for_workspace(
+            workspace_root,
+            table_name=str(table_name or "").strip() or None,
+        )
+    except Exception as exc:
+        return connection_failed(
+            "tool_exception",
+            f"数据库工具执行异常：{type(exc).__name__}: {exc}",
+            target=target,
+        )
+    return summarize_tool_result(str(tool_result), target=target)
+
+
 def is_database_data_source(data_source: Any) -> bool:
     """根据 ProjectPlan 数据源声明判断是否需要数据库扫描。"""
 

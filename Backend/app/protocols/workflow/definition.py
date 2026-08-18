@@ -69,7 +69,7 @@ def workflow_capabilities() -> dict[str, Any]:
                 "local_fix": "仅修改当前已确认范围内的局部实现，不改变产品语义。",
                 "page_design_change": "重新生成页面详细设计并再次确认。",
                 "endpoint_change": "重新生成接口详细设计并再次确认。",
-                "data_source_change": "重新生成接口及数据来源相关详细设计并再次确认。",
+                "data_source_change": "重新生成实体设计并再次确认，接口详情不依赖数据源。",
                 "project_plan_change": "重新生成项目计划，确认后再生成页面/接口详细设计。",
             },
         },

@@ -26,7 +26,10 @@ import {
   workflowInteractionAvailability,
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
-import { pageAcceptanceContinuationMessage } from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
+import {
+  entityDesignActionContinuationMessage,
+  pageAcceptanceContinuationMessage
+} from '../src/renderer/src/components/AiChatPanel/workflowContinuation'
 import {
   createSessionIdentity,
   selectableEndpointSessionId,
@@ -102,6 +105,21 @@ test('页面验收在问题列表为空时仍生成结构化继续消息', () =>
       page_acceptance: 'accepted'
     }),
     '已完成页面预览，确认验收通过并完成计划。'
+  )
+})
+
+test('实体设计动作生成对应的继续消息', () => {
+  assert.equal(
+    entityDesignActionContinuationMessage({ action: 'select_data_source' }),
+    '已选择数据源，请生成实体设计方案后继续。'
+  )
+  assert.equal(
+    entityDesignActionContinuationMessage({ action: 'approve_table_generation' }),
+    '已批准生成目标表结构，请继续。'
+  )
+  assert.equal(
+    entityDesignActionContinuationMessage(undefined),
+    ''
   )
 })
 
@@ -278,6 +296,12 @@ test('页面、接口、会话和 Workflow 使用一致的详情目标键', () =
       }
     }),
     'endpoint:orders-api:list-orders'
+  )
+  assert.equal(
+    workflowDetailTargetKey({
+      state: { selected_entity_id: 'product' }
+    }),
+    'entity:product'
   )
 })
 

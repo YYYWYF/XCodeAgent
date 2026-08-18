@@ -179,6 +179,19 @@ def _task_preparation_prompt(
         "non-executable Unit skeleton: it describes all pages, data sources, public "
         "application units, and API ranges, but it must never cause tasks for pages or "
         "data sources outside TargetBuildContext.required_unit_ids.\n"
+        "Plan tasks per bound entity, never per endpoint-level data source: resolve each "
+        "endpoint's bound entities from executable_details.entity_designs (each entry carries "
+        "entity_id/entity_name/data_source_type plus the confirmed database/external_api/static "
+        "design summary). A database entity produces backend data read-write tasks; an "
+        "external_api entity produces backend call "
+        "tasks from its confirmed field mappings; a static entity produces "
+        "frontend:data:static in-memory mock modules. When an endpoint binds entities with "
+        "different data source types, plan separate tasks for each entity source instead of "
+        "classifying the endpoint as a single data source. Database table operations are "
+        "already executed and confirmed during entity design: in endpoint/page scopes NEVER "
+        "create owner=database tasks or database:* Unit tasks. API contracts in "
+        "executable_details.api_contracts are only request/response schema references and "
+        "must never be used to infer a data source.\n"
         "Do not invent generic paths when an existing project convention is present in "
         "the snapshot. For page tasks, use only confirmed executable_details.page_detail_plans "
         "and use page_goal, layout_design, operation_interactions, state_feedback, "
@@ -251,7 +264,7 @@ def _task_preparation_prompt(
         "When TargetBuildContext.target.type is `endpoint`, every new task MUST use the exact "
         "`backend:endpoint:<apiContractId>:<endpointId>` Unit from TargetBuildContext.required_unit_ids "
         "or an unprepared prerequisite Unit listed there. Do not create page tasks, do not create "
-        "tasks for other endpoints in the same data source, and use the confirmed "
+        "tasks for other endpoints or other entities' data sources, and use the confirmed "
         "executable_details.endpoint_detail_plans[0] as the executable source of truth.\n"
         "## CRITICAL — Reuse existing template scaffold, do NOT rebuild it\n"
         "The WorkspaceSnapshot describes a frontend template project that ALREADY EXISTS "
@@ -444,6 +457,41 @@ def _invoke_live_main_agent(
     return _coerce_content_text(content) or ""
 
 
+def _reset_model_acceptance_fields(agent_plan: dict[str, Any] | None) -> None:
+    """在模型输出边界强制清空候选任务的验收字段。
+
+    模型即使收到提示词约束也可能生成不准确的验收内容，这里把解析出的
+    tasks / dag.tasks 中的 acceptance_criteria 与 acceptance_checks 统一重置为
+    空数组，确保下游只依赖确定性编译器生成的验收点，防止模型生成的验收
+    文案或检查对象进入 Build Task Plan。
+    TODO(验收措施): 后续需要设计更完善的验收验证措施，当前工程验收由
+    确定性编译器依据 change_scope 等元数据生成。
+    """
+
+    if not isinstance(agent_plan, dict):
+        return
+    raw_tasks = agent_plan.get("tasks")
+    if isinstance(raw_tasks, list):
+        _reset_task_acceptance_fields(raw_tasks)
+        return
+    dag = agent_plan.get("dag")
+    if isinstance(dag, dict):
+        for key in ("tasks", "nodes"):
+            value = dag.get(key)
+            if isinstance(value, list):
+                _reset_task_acceptance_fields(value)
+                return
+
+
+def _reset_task_acceptance_fields(tasks: list[Any]) -> None:
+    """将候选任务列表中的验收字段统一重置为空数组。"""
+
+    for task in tasks:
+        if isinstance(task, dict):
+            task["acceptance_criteria"] = []
+            task["acceptance_checks"] = []
+
+
 def prepare_build_tasks_with_main_agent(
     project_plan: dict[str, Any],
     *,
@@ -464,6 +512,11 @@ def prepare_build_tasks_with_main_agent(
     )
     preparation_source = "direct_chat_model"
     agent_plan = extract_json_object(agent_note)
+    # 模型输出的验收字段不可信，在解析边界统一强制重置为空数组，
+    # 防止模型生成不准确的 acceptance_criteria / acceptance_checks 进入下游；
+    # 真正的工程验收由确定性编译器基于 change_scope 等元数据生成。
+    # TODO(验收措施): 后续需要设计更完善的验收验证措施。
+    _reset_model_acceptance_fields(agent_plan)
     _log_task_model_response_diagnostics(agent_note, agent_plan)
 
     try:

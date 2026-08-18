@@ -243,6 +243,26 @@ export function planExecutionContextForEndpoint(
   return { execution: identityExecution, dependencyLocked: false }
 }
 
+/** 只按当前 Workflow 自身 runId/threadId 定位执行，不回退到应用级或页面级执行。 */
+export function planExecutionContextForRun(
+  lifecycle: ApplicationLifecycle | undefined,
+  workflowIdentity?: { runId?: string; threadId?: string }
+): PagePlanExecutionContext {
+  const executions = Object.values(lifecycle?.activeExecutions || {})
+  const runIdentityExecution = workflowIdentity?.runId
+    ? lifecycle?.activeExecutions?.[workflowIdentity.runId]
+    : undefined
+  if (runIdentityExecution) {
+    return { execution: runIdentityExecution, dependencyLocked: false }
+  }
+  const identityExecution = executions.find(
+    (execution) =>
+      (Boolean(workflowIdentity?.runId) && execution.runId === workflowIdentity?.runId) ||
+      (Boolean(workflowIdentity?.threadId) && execution.threadId === workflowIdentity?.threadId)
+  )
+  return { execution: identityExecution, dependencyLocked: false }
+}
+
 /** 统一页面标识的历史前缀与分隔符，避免同一页面被误判为空闲。 */
 function normalizePageId(value?: string): string {
   return (value || '')

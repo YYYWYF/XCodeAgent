@@ -20,7 +20,10 @@ import type {
   WorkflowRunPayload,
 } from "../../../../typings";
 import { cx } from "../../../../utils";
-import { pageAcceptanceContinuationMessage } from '../../workflowContinuation';
+import {
+  entityDesignActionContinuationMessage,
+  pageAcceptanceContinuationMessage,
+} from '../../workflowContinuation';
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode';
 import AgentApprovalCard from '../AgentApprovalCard';
 import {
@@ -30,6 +33,7 @@ import {
 import type { ToolApproval } from '../../../../service/workspaceTools';
 import ConfirmationArtifact from './ConfirmationArtifact';
 import DetailReview from './DetailReview';
+import EntityDesignGateCard from './EntityDesignGateCard';
 import './WorkflowRunCard.less';
 
 const { Text } = Typography;
@@ -42,27 +46,51 @@ export type ClarificationAnswers = WorkflowClarificationAnswers;
 type WorkflowRunCardProps = {
   disabled?: boolean;
   interactionAvailability: WorkflowInteractionAvailability;
+  onEntityDesignGateJump?: (entityId: string) => void;
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
   ) => void;
   workflow: WorkflowRunPayload;
+  workspaceRoot?: string;
 };
 
 export default function WorkflowRunCard({
   disabled,
   interactionAvailability,
+  onEntityDesignGateJump,
   onSubmitClarification,
   workflow,
+  workspaceRoot,
 }: WorkflowRunCardProps): ReactElement {
   const status = String(workflow.summary.status || "unknown");
   const artifacts = workflow.summary.artifacts || {};
   const clarification = workflowClarification(workflow);
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification);
   const clarificationQuestions = clarification?.questions || [];
+  const entityDesignGate = clarification?.mode === 'entity_design_required';
+  const gateQuestion = clarification?.questions?.[0];
+  const entityGateEntities = (clarification?.missing_entities || []).filter(
+    (item) =>
+      Boolean(
+        item &&
+          typeof item === 'object' &&
+          String((item as { entity_id?: string }).entity_id || '').trim(),
+      ),
+  );
+  const entityGateAnswerKey = gateQuestion
+    ? clarificationQuestionKey(gateQuestion, 0)
+    : 'entity_design_required';
   const detailReview = clarification?.mode === 'detail_review'
     ? clarification.review
     : undefined;
+  // 实体设计评审：确认对象包含实体目标或实体设计摘要时，视为实体设计场景，
+  // 此时裁剪卡片顶部的等待提示与“已生成产物”列表，避免与实体面板信息重复。
+  const entityDesignReview = Boolean(
+    detailReview &&
+      ((detailReview.entities?.length || 0) > 0 ||
+        Boolean(detailReview.summary?.entityDesign)),
+  );
   const databaseApproval = workflowDatabaseApproval(clarification);
   const databaseApprovalAnswerKey = clarificationQuestions[0]
     ? clarificationQuestionKey(clarificationQuestions[0], 0)
@@ -106,12 +134,12 @@ export default function WorkflowRunCard({
           {workflowStatusText(status)}
         </Tag>
       </div>
-      {workflow.summary.message && (
+      {!entityDesignReview && workflow.summary.message && (
         <div className={cx("workflow-run-message")}>
           <Text>{String(workflow.summary.message)}</Text>
         </div>
       )}
-      {Object.keys(artifacts).length > 0 && (
+      {!entityDesignReview && Object.keys(artifacts).length > 0 && (
         <div className={cx("workflow-artifacts")}>
           <div className={cx("workflow-section-heading")}>
             <Text type="secondary">已生成产物</Text>
@@ -127,21 +155,23 @@ export default function WorkflowRunCard({
       )}
       {(clarificationQuestions.length > 0 || detailReview) && (
         <div className={cx("workflow-clarification")}>
-          <div className={cx("workflow-clarification-header")}>
-            <div>
-              <Text strong>待确认事项</Text>
+          {!entityDesignReview && !entityDesignGate && (
+            <div className={cx("workflow-clarification-header")}>
+              <div>
+                <Text strong>待确认事项</Text>
+              </div>
+              <Tag
+                className={cx("workflow-confirmation-count")}
+                color={
+                  requiresConfirmation
+                    ? "gold"
+                    : "default"
+                }
+              >
+                {confirmationItemCount}
+              </Tag>
             </div>
-            <Tag
-              className={cx("workflow-confirmation-count")}
-              color={
-                requiresConfirmation
-                  ? "gold"
-                  : "default"
-              }
-            >
-              {confirmationItemCount}
-            </Tag>
-          </div>
+          )}
           {requiresConfirmation && interactionAvailability !== 'active' && (
             <Alert
               message={
@@ -157,11 +187,15 @@ export default function WorkflowRunCard({
             <DetailReview
               disabled={disabled}
               message={clarification?.message}
+              onDesignAction={(action) =>
+                onSubmitClarification?.(workflow, { entity_design: action })
+              }
               onConfirm={(submission) => onSubmitClarification?.(
                 workflow,
                 { detail_review: submission },
               )}
               review={detailReview}
+              workspaceRoot={workspaceRoot}
             />
           ) : databaseApproval ? (
             <DatabaseApprovalDecision
@@ -173,6 +207,22 @@ export default function WorkflowRunCard({
                 })
               }
               statements={databaseApproval.statements}
+            />
+          ) : entityDesignGate ? (
+            <EntityDesignGateCard
+              disabled={disabled}
+              entities={entityGateEntities}
+              explanation={
+                clarification?.message ||
+                String(gateQuestion?.question || '')
+              }
+              onJump={(entityId) => onEntityDesignGateJump?.(entityId)}
+              onRetry={() =>
+                onSubmitClarification?.(workflow, {
+                  [entityGateAnswerKey]:
+                    '已完成实体设计，请重新检测并继续生成页面/接口详细设计。',
+                })
+              }
             />
           ) : (
             <>
@@ -1134,6 +1184,10 @@ export function buildClarificationContinuationMessage(
     ) {
       return '已整体审阅并确认全部页面和数据源设计，请合并本次结构化修改后继续。';
     }
+  }
+  if (clarification?.mode === 'detail_review' && answers.entity_design) {
+    const actionMessage = entityDesignActionContinuationMessage(answers.entity_design);
+    if (actionMessage) return actionMessage;
   }
   const questions = clarification?.questions || [];
   const originalRequest = workflowOriginalRequest(workflow);

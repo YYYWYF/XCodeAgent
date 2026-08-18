@@ -213,15 +213,17 @@ def _unit_source_refs(
             "target": target,
             "page_detail": _dict_value(refs.get("page_detail")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": _string_list(build_context.get("entity_ids")),
+            "entity_designs": _entity_design_items(build_context.get("entity_designs")),
         }
     if unit_id.startswith("frontend:data:"):
         return {
             **existing,
             "type": "frontend_mock_contract",
             "target": target,
-            "data_source_ids": _string_list(build_context.get("data_source_ids")),
-            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": _string_list(build_context.get("entity_ids")),
+            "entity_designs": _entity_design_items(build_context.get("entity_designs")),
         }
     if unit_id.startswith("database:"):
         database_context = _dict_value(build_context.get("database_planning_context"))
@@ -246,8 +248,9 @@ def _unit_source_refs(
                 refs.get("endpoint_details"),
                 _string_list(build_context.get("endpoint_ids")),
             ),
-            "data_source_ids": _string_list(build_context.get("data_source_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": _string_list(build_context.get("entity_ids")),
+            "entity_designs": _entity_design_items(build_context.get("entity_designs")),
         }
         gap_ids = [
             str(gap.get("id") or "")
@@ -267,8 +270,9 @@ def _unit_source_refs(
                 refs.get("endpoint_details"),
                 _string_list(build_context.get("endpoint_ids")),
             ),
-            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": _string_list(build_context.get("entity_ids")),
+            "entity_designs": _entity_design_items(build_context.get("entity_designs")),
         }
     return {
         **existing,
@@ -289,22 +293,24 @@ def _unit_fingerprint_payload(
             "unit_id": unit_id,
             "source_refs": source_refs,
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
-            "data_source_ids": _string_list(build_context.get("data_source_ids")),
+            "entity_ids": _string_list(build_context.get("entity_ids")),
+            "entity_designs": _entity_design_items(build_context.get("entity_designs")),
         }
     if unit_id.startswith("frontend:data:"):
         return {
             "unit_id": unit_id,
             "source_refs": source_refs,
-            "data_source_ids": _string_list(build_context.get("data_source_ids")),
-            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": _string_list(build_context.get("entity_ids")),
+            "entity_designs": _entity_design_items(build_context.get("entity_designs")),
         }
     if unit_id.startswith("database:"):
         return {
             "unit_id": unit_id,
             "source_refs": source_refs,
-            "data_source_ids": _string_list(build_context.get("data_source_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": _string_list(build_context.get("entity_ids")),
+            "entity_designs": _entity_design_items(build_context.get("entity_designs")),
             "database_planning_context": _dict_value(
                 build_context.get("database_planning_context")
             ),
@@ -313,8 +319,9 @@ def _unit_fingerprint_payload(
         return {
             "unit_id": unit_id,
             "source_refs": source_refs,
-            "api_contract_ids": _string_list(build_context.get("api_contract_ids")),
             "endpoint_ids": _string_list(build_context.get("endpoint_ids")),
+            "entity_ids": _string_list(build_context.get("entity_ids")),
+            "entity_designs": _entity_design_items(build_context.get("entity_designs")),
         }
     return {
         "unit_id": unit_id,
@@ -349,6 +356,12 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _entity_design_items(value: Any) -> list[dict[str, Any]]:
+    """读取构建上下文中的实体设计摘要，只保留字典项。"""
+
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:

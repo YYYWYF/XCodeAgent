@@ -93,7 +93,10 @@ class DetailDesignDocumentsTests(unittest.TestCase):
                 all((workspace / item["json_path"]).is_file() for item in endpoint_refs)
             )
             self.assertTrue(
-                all("plans/endpoints/" in item["json_path"] for item in endpoint_refs)
+                all(
+                    "plans/endpoints/" in item["json_path"].replace("\\", "/")
+                    for item in endpoint_refs
+                )
             )
             self.assertNotIn("interface_design", persisted_detail)
             endpoint_artifact = load_project_plan_json(workspace / endpoint_refs[0]["json_path"])

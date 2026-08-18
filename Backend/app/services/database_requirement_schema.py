@@ -17,30 +17,15 @@ def derive_required_database_schema(
     data_sources: list[dict[str, Any]] | None = None,
     new_table_entity_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """从已确认接口详情、实体定义和 API Contract 推导目标数据库结构。"""
+    """从已确认实体设计与 API Contract 推导目标数据库结构。"""
 
     tables: dict[str, dict[str, Any]] = {}
     resolution_items: list[dict[str, Any]] = []
     database = ""
     for target in targets:
-        detail = target.get("endpoint_detail")
-        detail = detail if isinstance(detail, dict) else {}
-        data_origin = detail.get("data_origin")
-        data_origin = data_origin if isinstance(data_origin, dict) else {}
-        effective_source = data_origin.get("effective_source")
-        effective_source = (
-            effective_source if isinstance(effective_source, dict) else {}
-        )
-        operations = dict_items(data_origin.get("database_operations"))
-        database = database or str(effective_source.get("database") or "")
-        database = database or next(
-            (
-                str(item.get("database") or "")
-                for item in operations
-                if item.get("database")
-            ),
-            "",
-        )
+        entity_designs = _entity_design_items(target.get("entity_designs"))
+        operations = _entity_design_operations(entity_designs)
+        database = database or _entity_design_database_name(entity_designs)
         table_names = _target_table_names(target)
         for table_name in table_names:
             table = _required_table(tables, table_name)
@@ -53,9 +38,11 @@ def derive_required_database_schema(
                     "data_source_id": target.get("data_source_id"),
                 }
             )
-            _merge_mapping_columns(table, data_origin, table_name)
+            _merge_entity_design_columns(table, entity_designs, table_name)
         _merge_database_operations(tables, operations, target)
-        resolution_items.extend(_structured_resolution_items(data_origin, target))
+        resolution_items.extend(
+            _entity_design_resolution_items(entity_designs, target)
+        )
     if isinstance(data_sources, list):
         in_scope_source_ids = {
             str(target.get("data_source_id") or "") for target in targets
@@ -128,117 +115,162 @@ def _merge_entity_target_tables(
                 }
 
 
-def _target_table_names(target: dict[str, Any]) -> list[str]:
-    """按 EndpointDetail.data_origin 优先读取目标表名，不用 ProjectPlan 臆测字段。"""
+def _entity_design_items(value: Any) -> list[dict[str, Any]]:
+    """把 target.entity_designs 规范为字典列表。"""
 
-    detail = target.get("endpoint_detail")
-    detail = detail if isinstance(detail, dict) else {}
-    data_origin = detail.get("data_origin")
-    data_origin = data_origin if isinstance(data_origin, dict) else {}
-    effective_source = data_origin.get("effective_source")
-    effective_source = effective_source if isinstance(effective_source, dict) else {}
-    names = text_items(
-        effective_source.get("tables")
-        or effective_source.get("table_names")
-        or data_origin.get("tables")
-        or data_origin.get("table_names")
+    return dict_items(value)
+
+
+def _database_design(entity_design: dict[str, Any]) -> dict[str, Any]:
+    """读取实体设计中的数据库方案，缺失时返回空对象。"""
+
+    return (
+        entity_design.get("database_design")
+        if isinstance(entity_design.get("database_design"), dict)
+        else {}
     )
-    table = str(effective_source.get("table") or data_origin.get("table") or "").strip()
-    return list(dict.fromkeys([*names, *([table] if table else [])]))
 
 
-def _merge_mapping_columns(
+def _entity_design_database_name(entity_designs: list[dict[str, Any]]) -> str:
+    """从实体设计的数据库方案读取目标数据库名。"""
+
+    for entity_design in entity_designs:
+        database_design = _database_design(entity_design)
+        database_name = str(database_design.get("database_name") or "").strip()
+        if database_name:
+            return database_name
+        schema_context = (
+            database_design.get("schema_context")
+            if isinstance(database_design.get("schema_context"), dict)
+            else {}
+        )
+        database_name = str(schema_context.get("database") or "").strip()
+        if database_name:
+            return database_name
+    return ""
+
+
+def _target_table_names(target: dict[str, Any]) -> list[str]:
+    """按实体设计的目标表与绑定反查表名，接口不再携带数据源信息。"""
+
+    names: list[str] = []
+    for entity_design in _entity_design_items(target.get("entity_designs")):
+        entity_id = str(entity_design.get("entity_id") or "").strip()
+        database_design = _database_design(entity_design)
+        matched_table = str(database_design.get("matched_table") or "").strip()
+        binding_tables = [
+            str(binding.get("table") or "").strip()
+            for binding in dict_items(database_design.get("bindings"))
+            if str(binding.get("table") or "").strip()
+        ]
+        if matched_table or binding_tables:
+            names.extend([matched_table, *binding_tables])
+            continue
+        if entity_id:
+            names.append(entity_table_name(entity_id))
+    return list(dict.fromkeys(name for name in names if name))
+
+
+def _merge_entity_design_columns(
     table: dict[str, Any],
-    data_origin: dict[str, Any],
+    entity_designs: list[dict[str, Any]],
     table_name: str,
 ) -> None:
-    """从 field_mappings 中提取明确存在的数据库列。"""
+    """从实体设计的字段与表绑定编译目标表列，接口不参与列定义。"""
 
     columns = table["columns"]
-    for mapping in dict_items(data_origin.get("field_mappings")):
-        mapping_table = str(
-            mapping.get("table")
-            or mapping.get("table_name")
-            or mapping.get("target_table")
-            or ""
-        ).strip()
-        column_name = str(
-            mapping.get("column")
-            or mapping.get("column_name")
-            or mapping.get("target_column")
-            or mapping.get("db_column")
-            or ""
-        ).strip()
-        if not column_name:
-            parsed = _source_table_column(mapping, table_name)
-            if parsed:
-                mapping_table, column_name = parsed
-        if mapping_table and mapping_table != table_name:
-            continue
-        if not column_name:
-            continue
-        columns.setdefault(
-            column_name,
-            {
-                "name": column_name,
-                "type": str(
-                    mapping.get("mysql_type") or mapping.get("column_type") or ""
-                ),
-                "nullable": mapping.get("nullable"),
-                "source": "field_mapping",
-                "source_evidence": mapping,
-            },
+    for entity_design in entity_designs:
+        entity_id = str(entity_design.get("entity_id") or "").strip()
+        database_design = _database_design(entity_design)
+        for binding in dict_items(database_design.get("bindings")):
+            binding_table = str(binding.get("table") or "").strip()
+            column_name = str(
+                binding.get("table_column")
+                or binding.get("column")
+                or binding.get("column_name")
+                or ""
+            ).strip()
+            if not column_name:
+                continue
+            if binding_table and binding_table != table_name:
+                continue
+            columns.setdefault(
+                column_name,
+                {
+                    "name": column_name,
+                    "source": "entity_design_binding",
+                    "source_evidence": binding,
+                },
+            )
+        if table_name == entity_table_name(entity_id):
+            for field in dict_items(entity_design.get("fields")):
+                field_name = str(field.get("name") or "").strip()
+                if not field_name:
+                    continue
+                columns.setdefault(
+                    field_name,
+                    {
+                        "name": field_name,
+                        "type": str(field.get("column_type") or ""),
+                        "nullable": not bool(field.get("required")),
+                        "source": "entity_design",
+                        "source_evidence": field,
+                    },
+                )
+
+
+def _entity_design_operations(
+    entity_designs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """汇总实体设计已确认的数据库结构操作。"""
+
+    operations: list[dict[str, Any]] = []
+    for entity_design in entity_designs:
+        operations.extend(
+            dict_items(_database_design(entity_design).get("database_operations"))
         )
+    return operations
 
 
-def _source_table_column(
-    mapping: dict[str, Any],
-    table_name: str,
-) -> tuple[str, str] | None:
-    """从自然语言映射中识别 table.column 形式的真实数据库列。"""
-
-    source = str(mapping.get("source") or "")
-    marker = f"{table_name}."
-    if marker not in source:
-        return None
-    remainder = source.split(marker, 1)[1]
-    column = ""
-    for char in remainder:
-        if char.isalnum() or char == "_":
-            column += char
-            continue
-        break
-    return (table_name, column) if column else None
-
-
-def _structured_resolution_items(
-    data_origin: dict[str, Any],
+def _entity_design_resolution_items(
+    entity_designs: list[dict[str, Any]],
     target: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """把结构化字段决策投射为数据库上下文的处理建议。"""
+    """把实体设计中的结构化差异投射为数据库上下文的处理建议。"""
 
     items: list[dict[str, Any]] = []
-    for difference in dict_items(data_origin.get("differences")):
-        field = str(difference.get("field") or "").strip()
-        items.append(
-            {
-                "resolution_kind": str(difference.get("resolution_kind") or ""),
-                "target_field": field,
-                "operation_refs": text_items(difference.get("operation_refs")),
-                "backend_adaptation": difference.get("backend_adaptation"),
-                "message": str(
-                    difference.get("actual") or difference.get("expected") or ""
-                ),
-                "source_refs": [
-                    {
-                        "api_contract_id": target.get("api_contract_id"),
-                        "endpoint_id": target.get("endpoint_id"),
-                        "data_source_id": target.get("data_source_id"),
-                    }
-                ],
-                "source_evidence": difference,
-            }
-        )
+    source_refs = [
+        {
+            "api_contract_id": target.get("api_contract_id"),
+            "endpoint_id": target.get("endpoint_id"),
+            "data_source_id": target.get("data_source_id"),
+        }
+    ]
+    for entity_design in entity_designs:
+        for difference in dict_items(
+            _database_design(entity_design).get("differences")
+        ):
+            field = str(difference.get("field") or "").strip()
+            items.append(
+                {
+                    "resolution_kind": str(
+                        difference.get("kind")
+                        or difference.get("resolution_kind")
+                        or "needs_user_confirmation"
+                    ),
+                    "target_field": field,
+                    "operation_refs": text_items(difference.get("operation_refs")),
+                    "backend_adaptation": difference.get("backend_adaptation"),
+                    "message": str(
+                        difference.get("resolution")
+                        or difference.get("actual")
+                        or difference.get("expected")
+                        or ""
+                    ),
+                    "source_refs": source_refs,
+                    "source_evidence": difference,
+                }
+            )
     return items
 
 

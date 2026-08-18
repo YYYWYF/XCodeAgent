@@ -189,10 +189,152 @@ def contract_data_source_id(project_plan: Any, contract: Any) -> str:
     return ""
 
 
+def confirmed_entity_designs(project_plan: Any, contract: Any) -> list[dict[str, Any]]:
+    """按契约 entity_ids 顺序返回已确认实体设计，作为接口构建上下文的实体事实来源。"""
+
+    if not isinstance(contract, dict) or not isinstance(project_plan, dict):
+        return []
+    entity_ids = [
+        str(item).strip()
+        for item in contract.get("entity_ids") if isinstance(contract.get("entity_ids"), list)
+        if str(item).strip()
+    ]
+    confirmed_details = {
+        str(detail.get("entity_id") or ""): detail
+        for detail in project_plan.get("entity_detail_plans") or []
+        if isinstance(detail, dict)
+        and str(detail.get("status") or "") == "confirmed"
+        and str(detail.get("entity_id") or "")
+    }
+    return [
+        confirmed_details[entity_id]
+        for entity_id in entity_ids
+        if entity_id in confirmed_details
+    ]
+
+
+def missing_entity_design_ids(project_plan: Any, contract: Any) -> list[str]:
+    """返回契约绑定但尚无已确认实体设计的实体 id 清单，供构建门禁给出可定位错误。"""
+
+    if not isinstance(contract, dict) or not isinstance(project_plan, dict):
+        return []
+    entity_ids = [
+        str(item).strip()
+        for item in contract.get("entity_ids") if isinstance(contract.get("entity_ids"), list)
+        if str(item).strip()
+    ]
+    confirmed_ids = {
+        str(detail.get("entity_id") or "")
+        for detail in confirmed_entity_designs(project_plan, contract)
+    }
+    return [entity_id for entity_id in entity_ids if entity_id not in confirmed_ids]
+
+
+def entity_design_source_type(detail: Any) -> str:
+    """归一化读取实体设计的数据源类型；确认设计缺失类型时按默认 database 处理。"""
+
+    if not isinstance(detail, dict):
+        return ""
+    return normalize_data_source_type(
+        detail.get("data_source_type") or detail.get("data_source_id")
+    )
+
+
+def entity_design_summaries(project_plan: Any, entity_ids: Any) -> list[dict[str, Any]]:
+    """把已确认实体设计压缩为有界摘要，供构建上下文与任务规划模型使用。"""
+
+    requested_ids = [
+        str(item).strip()
+        for item in entity_ids if isinstance(entity_ids, list)
+        if str(item).strip()
+    ]
+    confirmed_details = {
+        str(detail.get("entity_id") or ""): detail
+        for detail in project_plan.get("entity_detail_plans") or []
+        if isinstance(detail, dict)
+        and str(detail.get("status") or "") == "confirmed"
+        and str(detail.get("entity_id") or "")
+    }
+    return [
+        _entity_design_summary(confirmed_details[entity_id])
+        for entity_id in requested_ids
+        if entity_id in confirmed_details
+    ]
+
+
+def _entity_design_summary(detail: dict[str, Any]) -> dict[str, Any]:
+    """把单个已确认实体设计压缩为任务规划可读的有界摘要。"""
+
+    fields = detail.get("fields") if isinstance(detail.get("fields"), list) else []
+    summary: dict[str, Any] = {
+        "entity_id": str(detail.get("entity_id") or ""),
+        "entity_name": str(detail.get("entity_name") or detail.get("entity_id") or ""),
+        "data_source_type": entity_design_source_type(detail),
+        "fields": [
+            {
+                "name": str(field.get("name") or ""),
+                "label": str(field.get("label") or field.get("name") or ""),
+                "type": str(field.get("type") or "text"),
+                "required": bool(field.get("required")),
+            }
+            for field in fields[:100]
+            if isinstance(field, dict) and field.get("name")
+        ],
+    }
+    database_design = (
+        detail.get("database_design")
+        if isinstance(detail.get("database_design"), dict)
+        else {}
+    )
+    if database_design:
+        summary["database_design"] = {
+            "matched_table": database_design.get("matched_table"),
+            "binding_count": len(_design_items(database_design.get("bindings"))),
+            "operation_count": len(_design_items(database_design.get("database_operations"))),
+            "table_generation_required": bool(
+                isinstance(database_design.get("table_generation"), dict)
+                and database_design.get("table_generation", {}).get("required")
+            ),
+        }
+    external_api_design = (
+        detail.get("external_api_design")
+        if isinstance(detail.get("external_api_design"), dict)
+        else {}
+    )
+    if external_api_design:
+        api_info = (
+            external_api_design.get("api_info")
+            if isinstance(external_api_design.get("api_info"), dict)
+            else {}
+        )
+        summary["external_api_design"] = {
+            "path": api_info.get("path"),
+            "method": api_info.get("method"),
+            "mapping_count": len(_design_items(external_api_design.get("field_mappings"))),
+        }
+    static_design = (
+        detail.get("static_design")
+        if isinstance(detail.get("static_design"), dict)
+        else {}
+    )
+    if static_design:
+        summary["static_design"] = {
+            "seed_row_count": len(_design_items(static_design.get("seed_rows"))),
+            "field_value_count": len(static_design.get("field_values") or {}),
+        }
+    return summary
+
+
+def _design_items(value: Any) -> list[dict[str, Any]]:
+    """只保留列表中的字典项，用于读取实体设计各方案段。"""
+
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 def normalize_entity_field(
     value: Any,
     index: int,
-    *,
+    *, 
     with_types: bool = False,
 ) -> dict[str, Any] | None:
     """归一化单个实体字段；需求层只保留展示信息，规划层才生成字段名与语义类型。"""
@@ -488,6 +630,8 @@ def database_operation_field_errors(
     effective_source = origin.get("effective_source")
     effective_source = effective_source if isinstance(effective_source, dict) else {}
     kind = str(effective_source.get("kind") or "")
+    # 实体设计确认的目标表允许执行补列等既有表操作；新建表仍需规范表名。
+    matched_table = str(origin.get("matched_table") or "").strip()
     errors: list[str] = []
     for operation in origin.get("database_operations") if isinstance(origin.get("database_operations"), list) else []:
         if not isinstance(operation, dict):
@@ -511,7 +655,7 @@ def database_operation_field_errors(
                     )
             continue
         table_name = str(raw_table or "").strip()
-        if table_name and table_name not in entity_tables:
+        if table_name and table_name not in entity_tables and table_name != matched_table:
             errors.append(f"数据库操作表名 {table_name or '空'} 不是实体定义的目标表。")
         column_name = str(operation.get("column") or "").strip()
         if column_name and column_name not in allowed_columns:

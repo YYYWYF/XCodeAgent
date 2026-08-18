@@ -70,6 +70,7 @@ type UseWorkflowConversationParams = {
   selectedEndpointId?: string
   selectedEndpointLabel?: string
   selectedEntityId?: string
+  selectedEntityLabel?: string
   selectedPageId?: string
   selectedPageLabel?: string
   conversationEnabled: boolean
@@ -81,6 +82,7 @@ type UseWorkflowConversationParams = {
     endpointId: string,
     endpointLabel: string
   ) => Promise<SessionIdentity>
+  ensureEntitySession: (entityId: string, entityLabel: string) => Promise<SessionIdentity>
   ensurePageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
@@ -147,6 +149,15 @@ function workflowSelectedPageId(workflow: WorkflowRunPayload): string | undefine
   const statePageId = typeof stateValue === 'string' ? stateValue.trim() : ''
   const resultPageId = typeof resultValue === 'string' ? resultValue.trim() : ''
   return statePageId || resultPageId || undefined
+}
+
+/** 从 Workflow 快照中读取最近一次实体选择，作为实体设计确认继续时的兜底上下文。 */
+function workflowSelectedEntityId(workflow: WorkflowRunPayload): string | undefined {
+  const stateValue = workflow.state?.selectedEntityId ?? workflow.state?.selected_entity_id
+  const resultValue = workflow.result?.selectedEntityId ?? workflow.result?.selected_entity_id
+  const stateEntityId = typeof stateValue === 'string' ? stateValue.trim() : ''
+  const resultEntityId = typeof resultValue === 'string' ? resultValue.trim() : ''
+  return stateEntityId || resultEntityId || undefined
 }
 
 /** 从 Workflow 快照中恢复 endpoint 构建范围，供详情确认后的继续执行使用。 */
@@ -231,6 +242,7 @@ export function useWorkflowConversation({
   selectedEndpointId,
   selectedEndpointLabel,
   selectedEntityId,
+  selectedEntityLabel,
   selectedPageId,
   selectedPageLabel,
   conversationEnabled,
@@ -238,6 +250,7 @@ export function useWorkflowConversation({
   editorMode,
   ensureActiveSession,
   ensureEndpointSession,
+  ensureEntitySession,
   ensurePageSession,
   getSessionMessages,
   persistSession,
@@ -260,6 +273,7 @@ export function useWorkflowConversation({
   const selectedTarget = {
     apiContractId: selectedApiContractId,
     endpointId: selectedEndpointId,
+    entityId: selectedEntityId,
     pageId: selectedPageId
   }
   const matchingActiveSession =
@@ -309,7 +323,10 @@ export function useWorkflowConversation({
       isConversationWorkflow(activeWorkflow) && matchingActiveSession
         ? matchingActiveSession
         : selectedEntityId
-          ? await ensureActiveSession()
+          ? await ensureEntitySession(
+              selectedEntityId,
+              selectedEntityLabel || selectedEntityId
+            )
           : selectedApiContractId && selectedEndpointId
           ? await ensureEndpointSession(
               selectedApiContractId,
@@ -374,6 +391,7 @@ export function useWorkflowConversation({
       selectedApiContractId?: string
       selectedEndpointId?: string
       selectedEntityId?: string
+      selectedEntityLabel?: string
       endpointLabel?: string
       detailTargetType?: 'page' | 'endpoint' | 'entity'
       sessionIdentity?: SessionIdentity
@@ -506,6 +524,8 @@ export function useWorkflowConversation({
         apiContractId: identity.apiContractId,
         endpointId: identity.endpointId,
         endpointLabel: identity.endpointLabel,
+        entityId: identity.entityId,
+        entityLabel: identity.entityLabel,
         pageId: identity.pageId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
@@ -585,6 +605,8 @@ export function useWorkflowConversation({
         apiContractId: identity.apiContractId,
         endpointId: identity.endpointId,
         endpointLabel: identity.endpointLabel,
+        entityId: identity.entityId,
+        entityLabel: identity.entityLabel,
         pageId: identity.pageId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
@@ -605,6 +627,8 @@ export function useWorkflowConversation({
           apiContractId: identity.apiContractId,
           endpointId: identity.endpointId,
           endpointLabel: identity.endpointLabel,
+          entityId: identity.entityId,
+          entityLabel: identity.entityLabel,
           pageId: identity.pageId
         })
         return false
@@ -632,6 +656,8 @@ export function useWorkflowConversation({
           apiContractId: identity.apiContractId,
           endpointId: identity.endpointId,
           endpointLabel: identity.endpointLabel,
+          entityId: identity.entityId,
+          entityLabel: identity.entityLabel,
           pageId: identity.pageId,
           titleFrom: message
         })
@@ -667,6 +693,8 @@ export function useWorkflowConversation({
         apiContractId: identity.apiContractId,
         endpointId: identity.endpointId,
         endpointLabel: identity.endpointLabel,
+        entityId: identity.entityId,
+        entityLabel: identity.entityLabel,
         pageId: identity.pageId,
         titleFrom: options?.titleFrom || message
       })
@@ -705,6 +733,8 @@ export function useWorkflowConversation({
     const continuationPageId = endpointScope
       ? undefined
       : workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId
+    const continuationEntityId =
+      workflowSelectedEntityId(workflow) || activeSession?.entityId || selectedEntityId
     if (conversation && clarificationMode === 'small_task_scope_confirmation') {
       return sendWorkflowMessage(
         handoffApproved
@@ -746,10 +776,17 @@ export function useWorkflowConversation({
       clarificationAnswers: answers,
       originalRequest,
       resumeState: workflow,
-      selectedPageId: continuationPageId,
+      selectedPageId: continuationEntityId ? '' : continuationPageId,
       selectedApiContractId: endpointScope?.apiContractId,
       selectedEndpointId: endpointScope?.targetId,
-      detailTargetType: endpointScope ? 'endpoint' : continuationPageId ? 'page' : undefined,
+      selectedEntityId: continuationEntityId,
+      detailTargetType: endpointScope
+        ? 'endpoint'
+        : continuationEntityId
+          ? 'entity'
+          : continuationPageId
+            ? 'page'
+            : undefined,
       buildExecutionScope: endpointScope,
       titleFrom: originalRequest || '补充需求确认',
       conversation
@@ -828,11 +865,12 @@ export function useWorkflowConversation({
     hasDetailPlan?: boolean
   }): Promise<boolean> => {
     if (!target.entityId || loading || workspaceBusy) return false
-    const identity = await ensureActiveSession()
+    const identity = await ensureEntitySession(target.entityId, target.entityLabel)
     return sendWorkflowMessage(
       `${target.hasDetailPlan ? '查看已生成实体计划' : '开始设计实体'}：${target.entityLabel}`,
       {
         selectedEntityId: target.entityId,
+        selectedEntityLabel: target.entityLabel,
         selectedPageId: '',
         selectedApiContractId: '',
         selectedEndpointId: '',

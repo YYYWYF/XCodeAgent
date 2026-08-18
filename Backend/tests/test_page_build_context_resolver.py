@@ -48,9 +48,9 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
             "references": {"endpoint_dependencies": [{"endpoint_id": "customers.list"}]},
         },
     )
-    for contract_id, endpoint_id, source_id in (
-        ("orders-api", "orders.list", "database"),
-        ("customers-api", "customers.list", "database"),
+    for contract_id, endpoint_id in (
+        ("orders-api", "orders.list"),
+        ("customers-api", "customers.list"),
     ):
         _write_json(
             workspace
@@ -58,12 +58,7 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
             {
                 "api_contract_id": contract_id,
                 "endpoint_id": endpoint_id,
-                "data_source_id": source_id,
                 "status": "confirmed",
-                "data_origin": {
-                    "source_type": "database",
-                    "effective_source": {"kind": "mysql_existing"},
-                },
             },
         )
     plan = {
@@ -124,6 +119,18 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
 
 
 class PageBuildContextResolverTests(unittest.TestCase):
+    def _assert_no_source_or_contract_fields(self, context: dict) -> None:
+        """endpoint/page 上下文不得携带数据源类型或契约清单字段。"""
+
+        for key in (
+            "api_contract_ids",
+            "data_source_ids",
+            "entity_source_types",
+            "database_source_ids",
+            "database_endpoint_refs",
+        ):
+            self.assertNotIn(key, context)
+
     def test_page_context_requires_and_loads_endpoint_details(self) -> None:
         """页面 scope 必须加载 requiredEndpoints 对应的独立 EndpointDetail。"""
 
@@ -138,8 +145,8 @@ class PageBuildContextResolverTests(unittest.TestCase):
             )
 
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
-        self.assertEqual(context["api_contract_ids"], ["orders-api"])
-        self.assertEqual(context["data_source_ids"], ["database"])
+        self.assertEqual(context["entity_ids"], ["Order"])
+        self.assertEqual(context["entity_designs"][0]["data_source_type"], "database")
         self.assertEqual(context["page_detail"]["pageId"], "orders")
         self.assertEqual(
             [detail["endpoint_id"] for detail in context["direct_endpoint_details"]],
@@ -150,7 +157,9 @@ class PageBuildContextResolverTests(unittest.TestCase):
             ["orders.list"],
         )
         self.assertEqual(context["required_endpoint_ids"], ["orders.list"])
-        self.assertIn("database:database", context["required_unit_ids"])
+        self._assert_no_source_or_contract_fields(context)
+        self.assertFalse(any(unit.startswith("database:") for unit in context["required_unit_ids"]))
+        self.assertIn("backend:bootstrap", context["required_unit_ids"])
         self.assertIn(
             "backend:endpoint:orders-api:orders.list",
             context["required_unit_ids"],
@@ -162,7 +171,6 @@ class PageBuildContextResolverTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             plan, plan_path = _project_plan(Path(workspace))
-            plan["api_contracts"][1]["data_source_id"] = "database"
             plan["api_contracts"][0]["schemas"] = {
                 "Order": {"type": "object", "properties": {}}
             }
@@ -181,8 +189,8 @@ class PageBuildContextResolverTests(unittest.TestCase):
             )
             validation_plan = _scoped_contract_validation_plan(plan, context)
 
-        self.assertEqual(context["data_source_ids"], ["database"])
-        self.assertEqual(context["api_contract_ids"], ["orders-api"])
+        self.assertEqual(context["entity_ids"], ["Order"])
+        self._assert_no_source_or_contract_fields(context)
         self.assertEqual(
             [contract["id"] for contract in validation_plan["api_contracts"]],
             ["orders-api"],
@@ -210,12 +218,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 {
                     "api_contract_id": "orders-api",
                     "endpoint_id": "orders.list",
-                    "data_source_id": "database",
                     "status": "confirmed",
-                    "data_origin": {
-                        "source_type": "database",
-                        "effective_source": {"kind": "mysql_existing"},
-                    },
                 },
             )
 
@@ -254,7 +257,14 @@ class PageBuildContextResolverTests(unittest.TestCase):
             [detail["endpoint_id"] for detail in context["direct_endpoint_details"]],
             ["orders.list", "customers.list"],
         )
-        self.assertEqual(context["required_unit_ids"], ["database:database"])
+        self.assertEqual(
+            context["required_unit_ids"],
+            [
+                "backend:bootstrap",
+                "backend:endpoint:orders-api:orders.list",
+                "backend:endpoint:customers-api:customers.list",
+            ],
+        )
 
     def test_page_context_rejects_missing_required_endpoint_detail(self) -> None:
         """页面 requiredEndpoint 缺少独立详情时必须返回可定位错误。"""
@@ -284,13 +294,8 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 {
                     "api_contract_id": "orders-api",
                     "endpoint_id": "orders.list",
-                    "data_source_id": "database",
                     "status": "confirmed",
                     "interface_design": {"route": "GET /orders"},
-                    "data_origin": {
-                        "source_type": "database",
-                        "effective_source": {"kind": "mysql_existing"},
-                    },
                 },
             )
 
@@ -306,12 +311,49 @@ class PageBuildContextResolverTests(unittest.TestCase):
         self.assertEqual(context["target"]["type"], "endpoint")
         self.assertEqual(context["target"]["api_contract_id"], "orders-api")
         self.assertEqual(context["endpoint_ids"], ["orders.list"])
-        self.assertEqual(context["api_contract_ids"], ["orders-api"])
+        self.assertEqual(context["entity_ids"], ["Order"])
+        self.assertEqual(context["entity_designs"][0]["entity_id"], "Order")
         self.assertEqual(context["direct_endpoint_details"][0]["endpoint_id"], "orders.list")
+        self._assert_no_source_or_contract_fields(context)
+        self.assertFalse(any(unit.startswith("database:") for unit in context["required_unit_ids"]))
         self.assertEqual(
             context["required_unit_ids"],
-            ["backend:bootstrap", "database:database", "backend:endpoint:orders-api:orders.list"],
+            ["backend:bootstrap", "backend:endpoint:orders-api:orders.list"],
         )
+
+    def test_endpoint_context_rejects_missing_entity_design(self) -> None:
+        """绑定实体尚未完成并确认实体设计时，endpoint 上下文必须给出可定位错误。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            plan.pop("entity_detail_plans", None)
+
+            with self.assertRaisesRegex(ValueError, "绑定实体 Order 缺少已确认实体设计"):
+                resolve_target_build_context(
+                    plan,
+                    target_type="endpoint",
+                    target_id="orders.list",
+                    api_contract_id="orders-api",
+                    project_plan_path=plan_path,
+                )
+
+    def test_endpoint_context_rejects_empty_entity_binding(self) -> None:
+        """契约未绑定任何实体时，endpoint 上下文必须给出可定位错误。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            plan["api_contracts"][0]["entity_ids"] = []
+
+            with self.assertRaisesRegex(ValueError, "未绑定任何实体"):
+                resolve_target_build_context(
+                    plan,
+                    target_type="endpoint",
+                    target_id="orders.list",
+                    api_contract_id="orders-api",
+                    project_plan_path=plan_path,
+                )
 
     def test_static_page_context_only_requires_frontend_data_module(self) -> None:
         """Static 页面不要求后端、数据库或业务 Endpoint Unit。"""
@@ -321,13 +363,6 @@ class PageBuildContextResolverTests(unittest.TestCase):
             plan, plan_path = _project_plan(workspace_path)
             plan = confirm_entity_designs(plan, source_type="static")
             _write_json(plan_path, plan)
-            detail_path = workspace_path / ".xcodeagent/plans/endpoints/endpoint--orders-api--orders.list.json"
-            detail = json.loads(detail_path.read_text(encoding="utf-8"))
-            detail["data_origin"] = {
-                "source_type": "static",
-                "effective_source": {"kind": "frontend_mock"},
-            }
-            _write_json(detail_path, detail)
 
             context = resolve_target_build_context(
                 plan,

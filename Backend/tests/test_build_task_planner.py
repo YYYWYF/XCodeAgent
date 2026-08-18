@@ -888,7 +888,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "target": {"type": "page", "id": "orders"},
             "required_unit_ids": ["frontend:api-client", "database:orders", "page:orders"],
             "endpoint_ids": ["orders_api.list"],
-            "data_source_ids": ["orders"],
             "source_refs": {
                 "page_detail": {"id": "orders", "json_path": "plans/pages/page--orders.json", "sha256": "p1"},
                 "data_source_details": [
@@ -942,8 +941,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "database_context_status": None,
                 "database_context_hashes": [],
                 "endpoint_details": [],
-                "data_source_ids": ["orders"],
                 "endpoint_ids": ["orders_api.list"],
+                "entity_ids": [],
+                "entity_designs": [],
             },
         )
         self.assertTrue(plan["build_units"]["page:orders"]["input_fingerprint"])
@@ -1159,6 +1159,10 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 },
             },
             build_context={
+                "required_unit_ids": [
+                    "database:users",
+                    "backend:endpoint:user_api:user.list",
+                ],
                 "direct_endpoint_details": [
                     {
                         "endpoint_id": "user.list",
@@ -1245,7 +1249,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 },
             },
             build_context={
-                "data_source_ids": ["users"],
+                "required_unit_ids": [
+                    "database:users",
+                    "backend:endpoint:user_api:user.create",
+                    "page:users",
+                ],
                 "database_planning_context": {
                     "schema_version": "database-context.v1",
                     "status": "completed",
@@ -1347,7 +1355,10 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 },
             },
             build_context={
-                "data_source_ids": ["core"],
+                "required_unit_ids": [
+                    "database:core",
+                    "backend:endpoint:core_api:summary",
+                ],
                 "database_planning_context": {
                     "schema_version": "database-context.v1",
                     "status": "completed",

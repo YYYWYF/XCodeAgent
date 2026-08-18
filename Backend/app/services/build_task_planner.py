@@ -402,6 +402,10 @@ def _normalize_agent_tasks(
                     item.get("parallel_reason"),
                     "依赖满足且目标文件不冲突时可并行。",
                 ),
+                # 模型返回的验收字段不可信，统一置空；工程验收由确定性编译器
+                # 依据 change_scope/allowed_paths/菜单/API 契约生成，模型无法
+                # 通过 acceptance_criteria / acceptance_checks 注入验收内容。
+                # TODO(验收措施): 后续需要设计更完善的验收验证措施。
                 "acceptance_criteria": [],
                 "acceptance_checks": [],
                 "engineering_context": _dict_value(item.get("engineering_context")),
@@ -432,6 +436,8 @@ def _drop_unneeded_database_change_tasks(
 ) -> list[dict[str, Any]]:
     """在新版 schema gaps 为空时移除多余 database.change 候选任务。"""
 
+    if not _scope_has_database_unit(build_context):
+        return tasks
     database_context = _dict_value(build_context.get("database_planning_context"))
     if database_context.get("status") != "completed":
         return tasks
@@ -459,6 +465,8 @@ def _complete_database_task_scopes(
 ) -> list[dict[str, Any]]:
     """用唯一数据库 gap 意图补齐模型遗漏的 database_scope。"""
 
+    if not _scope_has_database_unit(build_context):
+        return tasks
     database_context = _dict_value(build_context.get("database_planning_context"))
     if database_context.get("status") != "completed":
         return tasks
@@ -517,6 +525,8 @@ def _ensure_database_intent_tasks(
 ) -> list[dict[str, Any]]:
     """把数据库上下文中的确定性任务意图补进模型候选任务列表。"""
 
+    if not _scope_has_database_unit(build_context):
+        return tasks
     database_context = _dict_value(build_context.get("database_planning_context"))
     if database_context.get("status") != "completed":
         return tasks
@@ -532,6 +542,15 @@ def _ensure_database_intent_tasks(
         result.append(_database_task_from_intent(intent, index, build_context))
         covered_gap_ids.update(gap_ids)
     return result
+
+
+def _scope_has_database_unit(build_context: dict[str, Any]) -> bool:
+    """判断当前构建范围是否包含 database:* 单元（仅全量构建需要数据库任务）。"""
+
+    return any(
+        str(unit_id).startswith("database:")
+        for unit_id in build_context.get("required_unit_ids") or []
+    )
 
 
 def _covered_database_gap_ids(tasks: list[dict[str, Any]]) -> set[str]:
@@ -554,8 +573,12 @@ def _database_task_from_intent(
 
     task_id = str(intent.get("id") or f"database-gap-{index:03d}")
     description = _text(intent.get("description"), "补齐数据库结构以满足接口需求。")
-    data_source_ids = _string_list(build_context.get("data_source_ids"))
-    unit_id = f"database:{data_source_ids[0]}" if data_source_ids else "database:default"
+    database_unit_ids = [
+        str(unit_id)
+        for unit_id in build_context.get("required_unit_ids") or []
+        if str(unit_id).startswith("database:")
+    ]
+    unit_id = database_unit_ids[0] if database_unit_ids else "database:database"
     database_scope = _dict_value(intent.get("database_scope"))
     database_scope["gap_ids"] = _string_list(intent.get("gap_ids"))
     return {

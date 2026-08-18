@@ -287,7 +287,7 @@ def _persisted_page_detail(detail: dict[str, Any]) -> dict[str, Any]:
 
 
 def _endpoint_dependencies(detail: dict[str, Any]) -> dict[str, list[str]]:
-    """从 endpoint 详情中提取契约、接口、数据源和页面依赖索引。"""
+    """从 endpoint 详情中提取契约、接口和页面依赖索引，接口不携带数据源。"""
 
     dependentPageIds = []
     data_usage = detail.get("data_usage") if isinstance(detail.get("data_usage"), dict) else {}
@@ -298,11 +298,9 @@ def _endpoint_dependencies(detail: dict[str, Any]) -> dict[str, list[str]]:
             dependentPageIds.append(item.strip())
     api_contract_id = str(detail.get("api_contract_id") or "")
     endpoint_id = str(detail.get("endpoint_id") or "")
-    data_source_id = str(detail.get("data_source_id") or "")
     return {
         "api_contract_ids": [api_contract_id] if api_contract_id else [],
         "endpoint_ids": [endpoint_id] if endpoint_id else [],
-        "dataSourceIds": [data_source_id] if data_source_id else [],
         "pageIds": sorted(dict.fromkeys(item for item in dependentPageIds if item)),
     }
 
@@ -389,6 +387,7 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
         render_endpoint_detail_markdown,
         render_page_detail_markdown,
     )
+    from app.services.page_detail_plan import endpoint_bound_entity_summaries
 
     compact_plan = deepcopy(plan)
     page_directory = _artifact_directory(state, artifact_type="page")
@@ -407,7 +406,13 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
         json_path = endpoint_directory / f"{stem}.json"
         markdown_path = endpoint_directory / f"{stem}.md"
         sha256 = _write_json_atomically(json_path, detail)
-        _write_markdown_atomically(markdown_path, render_endpoint_detail_markdown(detail))
+        _write_markdown_atomically(
+            markdown_path,
+            render_endpoint_detail_markdown(
+                detail,
+                bound_entities=endpoint_bound_entity_summaries(plan, api_contract_id),
+            ),
+        )
         reference = _detail_reference(
             state,
             json_path=json_path,

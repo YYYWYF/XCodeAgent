@@ -59,6 +59,7 @@ class ProjectState(TypedDict, total=False):
     data_source_spec_draft: dict[str, Any]
     detail_plans: list[dict[str, Any]]
     detail_review_submission: dict[str, Any]
+    entity_design_action: dict[str, Any]
     application_planning_confirmation: dict[str, Any]
     ui_designs: dict[str, Any]
     ui_design_action: dict[str, Any]

@@ -101,6 +101,31 @@ def _with_confirmed_designs(plan: dict, *, source_type: str = "database") -> dic
     return confirm_entity_designs(updated, source_type=source_type)
 
 
+def _database_planning_context() -> dict:
+    """构造最小可用的数据库规划上下文，模拟前置数据库检查节点已完成。"""
+
+    return {
+        "schema_version": "database-context.v1",
+        "status": "completed",
+        "connection": {"status": "connected", "database": "sales"},
+        "actual_schema": {
+            "database": "sales",
+            "database_exists": True,
+            "tables": [],
+        },
+        "required_schema": {
+            "database": "sales",
+            "tables": [],
+            "resolution_items": [],
+        },
+        "gaps": [],
+        "resolution_items": [],
+        "task_intents": [],
+        "targets": [],
+        "summary": "数据库上下文检查完成。",
+    }
+
+
 class PrepareBuildTasksGuardTests(unittest.TestCase):
     def test_page_scope_prepares_only_direct_units_and_context(self) -> None:
         """页面 scope 只编译当前页面、直接数据源和必要公共 Unit 的叶子任务。"""
@@ -185,6 +210,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "workspace": workspace,
                     "project_plan": state_project_plan,
                     "project_plan_json_path": project_plan_path,
+                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -271,6 +297,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "workspace": workspace,
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
+                    "database_planning_context": _database_planning_context(),
                     "build_task_plan": first_plan,
                     "build_execution_scope": {"type": "page", "targetId": "customers"},
                     "timeline": [],
@@ -345,6 +372,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "workspace": workspace,
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
+                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -457,6 +485,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
                     "build_task_plan": base_plan,
+                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -570,6 +599,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "workspace": workspace,
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
+                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -636,6 +666,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
                     "build_task_plan": first_plan,
+                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {
                         "type": "page",
                         "targetId": "orderReports",
@@ -734,7 +765,11 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertNotIn("code_changes", result)
         self.assertNotIn("code_change_sets", result)
         self.assertEqual(result["build_task_plan"]["prepared_by"]["mode"], "direct")
-        self.assertTrue(dag_path.endswith(".xcodeagent/plans/BUILD_TASK_DAG.md"))
+        self.assertTrue(
+            dag_path.replace("\\", "/").endswith(
+                ".xcodeagent/plans/BUILD_TASK_DAG.md"
+            )
+        )
         self.assertIn("# Build Task DAG", dag_content)
         self.assertTrue(
             all(

@@ -8,6 +8,8 @@ export type SessionIdentity = {
   apiContractId?: string
   endpointId?: string
   endpointLabel?: string
+  entityId?: string
+  entityLabel?: string
   pageId?: string
   editorMode: EditorMode
   workspaceRoot: string
@@ -44,6 +46,8 @@ export function createSessionIdentity(input: {
   apiContractId?: string
   endpointId?: string
   endpointLabel?: string
+  entityId?: string
+  entityLabel?: string
   pageId?: string
 }): SessionIdentity {
   return {
@@ -70,6 +74,8 @@ export function sessionIdentityFromSummary(
     apiContractId: summary.apiContractId,
     endpointId: summary.endpointId,
     endpointLabel: summary.endpointLabel,
+    entityId: summary.entityId,
+    entityLabel: summary.entityLabel,
     pageId: summary.pageId
   })
 }
@@ -91,21 +97,38 @@ export function selectableEndpointSessionId(
   )?.id
 }
 
+/** 查找可直接打开的实体会话；空白历史不应阻止目标切换后显示实体信息挡板。 */
+export function selectableEntitySessionId(
+  sessions: ChatSessionSummary[],
+  entityId: string
+): string | undefined {
+  const normalizedEntityId = entityId.trim()
+  if (!normalizedEntityId) return undefined
+  return sessions.find(
+    (session) =>
+      session.entityId === normalizedEntityId &&
+      session.messageCount > 0
+  )?.id
+}
+
 /** 判断运行会话是否属于当前页面、接口或无目标自由对话，禁止跨目标复用运行进度。 */
 export function sessionIdentityMatchesTarget(
   identity: SessionIdentity,
   target: {
     apiContractId?: string
     endpointId?: string
+    entityId?: string
     pageId?: string
   }
 ): boolean {
   const apiContractId = target.apiContractId?.trim() || ''
   const endpointId = target.endpointId?.trim() || ''
+  const entityId = target.entityId?.trim() || ''
   const pageId = target.pageId?.trim() || ''
   if (apiContractId || endpointId) {
     return identity.apiContractId === apiContractId && identity.endpointId === endpointId
   }
+  if (entityId) return identity.entityId === entityId
   if (pageId) return identity.pageId === pageId
-  return !identity.pageId && !identity.apiContractId && !identity.endpointId
+  return !identity.pageId && !identity.apiContractId && !identity.endpointId && !identity.entityId
 }

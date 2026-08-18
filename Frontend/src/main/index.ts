@@ -101,6 +101,13 @@ type WorkbenchEntityOption = {
   label: string
   purpose: string
   dataSourceType: string
+  fields?: Array<{
+    name: string
+    label?: string
+    type: string
+    required?: boolean
+  }>
+  detail?: Record<string, unknown>
   designed: boolean
   detailPlanStatus?: string
   hasDetailPlan: boolean
@@ -189,8 +196,11 @@ async function endpointDetailPlanExists(
   }
 }
 
-/** 检查选中实体是否已经存在外置详情 JSON。 */
-async function entityDetailPlanExists(workspaceRoot: string, entityId: string): Promise<boolean> {
+/** 读取选中实体的外置详情 JSON，未设计或读取失败时返回 undefined。 */
+async function readEntityDetailPlan(
+  workspaceRoot: string,
+  entityId: string
+): Promise<Record<string, unknown> | undefined> {
   const detailPath = path.join(
     workspaceRoot,
     '.xcodeagent',
@@ -200,9 +210,13 @@ async function entityDetailPlanExists(workspaceRoot: string, entityId: string): 
   )
   try {
     const content = await fs.readFile(detailPath, 'utf8')
-    return Boolean(content.trim())
+    if (!content.trim()) return undefined
+    const parsed: unknown = JSON.parse(content)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined
   } catch {
-    return false
+    return undefined
   }
 }
 
@@ -333,6 +347,22 @@ function projectPlanEntities(value: unknown): WorkbenchEntityOption[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return []
   return recordItems((value as Record<string, unknown>).entities).map((record, index) => {
     const id = String(record.id || `entity-${index + 1}`).trim()
+    const fields = Array.isArray(record.fields)
+      ? record.fields
+          .filter((field): field is Record<string, unknown> =>
+            Boolean(field && typeof field === 'object' && !Array.isArray(field))
+          )
+          .map((field) => ({
+            name: String(field.name || '').trim(),
+            label:
+              typeof field.label === 'string' && field.label.trim()
+                ? field.label.trim()
+                : undefined,
+            type: String(field.type || 'text').trim(),
+            required: field.required === true
+          }))
+          .filter((field) => Boolean(field.name))
+      : []
     const detailDesign =
       record.detail_design &&
       typeof record.detail_design === 'object' &&
@@ -356,6 +386,7 @@ function projectPlanEntities(value: unknown): WorkbenchEntityOption[] {
         `实体 ${index + 1}`
       ),
       dataSourceType,
+      ...(fields.length > 0 ? { fields } : {}),
       designed: Boolean(detailDesign.json_path || record.detail_plan_id),
       detailPlanStatus: String(detailDesign.status || record.detail_status || ''),
       hasDetailPlan: Boolean(detailDesign.json_path || record.detail_plan_id)
@@ -370,11 +401,13 @@ async function mergeWorkbenchEntityStatus(
 ): Promise<WorkbenchEntityOption[]> {
   return Promise.all(
     entities.map(async (entity) => {
-      const hasDetailPlan = await entityDetailPlanExists(workspaceRoot, entity.id)
+      const detail = await readEntityDetailPlan(workspaceRoot, entity.id)
+      const hasDetailPlan = Boolean(detail)
       return {
         ...entity,
         designed: hasDetailPlan,
-        hasDetailPlan
+        hasDetailPlan,
+        ...(detail ? { detail } : {})
       }
     })
   )
@@ -530,16 +563,21 @@ async function mergeWorkbenchApiStatus(
   )
 }
 
-/** 判断页面设计目录是否包含任意持久化产物。 */
+/** 判断是否已存在任意持久化详细设计（页面/接口/实体），用于首次设计解锁。 */
 async function pageDesignDirectoryHasEntries(workspaceRoot: string): Promise<boolean> {
-  try {
-    const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', 'pages'))
-    return entries.length > 0
-  } catch (error: unknown) {
-    const errnoException = error as NodeJS.ErrnoException
-    if (errnoException?.code === 'ENOENT') return false
-    throw error
+  for (const directory of ['pages', 'endpoints', 'entities']) {
+    try {
+      const entries = await fs.readdir(
+        path.join(workspaceRoot, '.xcodeagent', 'plans', directory)
+      )
+      if (entries.length > 0) return true
+    } catch (error: unknown) {
+      const errnoException = error as NodeJS.ErrnoException
+      if (errnoException?.code === 'ENOENT') continue
+      throw error
+    }
   }
+  return false
 }
 
 /** 校验正式规划产物，并从 ProjectPlan 投射应用大纲与页面设计状态。 */
@@ -666,6 +704,8 @@ type ChatSessionSummary = {
   apiContractId?: string
   endpointId?: string
   endpointLabel?: string
+  entityId?: string
+  entityLabel?: string
   pageId?: string
   createdAt: number
   updatedAt: number
@@ -682,6 +722,8 @@ type NormalizedChatSession = {
   apiContractId?: string
   endpointId?: string
   endpointLabel?: string
+  entityId?: string
+  entityLabel?: string
   pageId?: string
   createdAt: number
   updatedAt: number
@@ -1059,6 +1101,8 @@ function sessionSummary(session: NormalizedChatSession): ChatSessionSummary {
     apiContractId: session.apiContractId,
     endpointId: session.endpointId,
     endpointLabel: session.endpointLabel,
+    entityId: session.entityId,
+    entityLabel: session.entityLabel,
     pageId: session.pageId,
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
@@ -1085,6 +1129,7 @@ function normalizeSession(session: unknown): NormalizedChatSession {
 
   const pageId = normalizeSessionPageId(session.pageId) || inferSessionPageId(messages)
   const endpointContext = normalizeSessionEndpointContext(session, messages)
+  const entityContext = normalizeSessionEntityContext(session, messages)
   return {
     id,
     title: String(session.title || '新对话'),
@@ -1093,6 +1138,8 @@ function normalizeSession(session: unknown): NormalizedChatSession {
     ...(endpointContext.apiContractId ? { apiContractId: endpointContext.apiContractId } : {}),
     ...(endpointContext.endpointId ? { endpointId: endpointContext.endpointId } : {}),
     ...(endpointContext.endpointLabel ? { endpointLabel: endpointContext.endpointLabel } : {}),
+    ...(entityContext.entityId ? { entityId: entityContext.entityId } : {}),
+    ...(entityContext.entityLabel ? { entityLabel: entityContext.entityLabel } : {}),
     ...(pageId ? { pageId } : {}),
     createdAt: Number(session.createdAt || Date.now()),
     updatedAt: Number(session.updatedAt || Date.now()),
@@ -1130,6 +1177,24 @@ function normalizeSessionEndpointContext(
     endpointId: explicit.endpointId || inferred.endpointId,
     endpointLabel:
       explicit.endpointLabel || inferred.endpointLabel || inferEndpointLabelFromTitle(session.title)
+  }
+}
+
+/** 从会话字段或旧版 Workflow 快照推断实体会话归属。 */
+function normalizeSessionEntityContext(
+  session: JsonRecord,
+  messages: JsonRecord[]
+): { entityId?: string; entityLabel?: string } {
+  const explicit = {
+    entityId: normalizeSessionEndpointField(session.entityId),
+    entityLabel: normalizeSessionEndpointField(session.entityLabel)
+  }
+  if (explicit.entityId) return explicit
+  const inferred = inferSessionEntityContext(messages)
+  return {
+    entityId: explicit.entityId || inferred.entityId,
+    entityLabel:
+      explicit.entityLabel || inferred.entityLabel || inferSessionEntityLabelFromTitle(session.title)
   }
 }
 
@@ -1178,6 +1243,38 @@ function inferSessionEndpointContext(messages: JsonRecord[]): {
     if (apiContractId && endpointId) return { apiContractId, endpointId }
   }
   return {}
+}
+
+/** 从旧版消息中的 Workflow 状态快照推断实体会话归属。 */
+function inferSessionEntityContext(messages: JsonRecord[]): {
+  entityId?: string
+  entityLabel?: string
+} {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const workflow = messages[index].workflow
+    if (!isJsonRecord(workflow)) continue
+    const state = isJsonRecord(workflow.state) ? workflow.state : undefined
+    const result = isJsonRecord(workflow.result) ? workflow.result : undefined
+    const summary = isJsonRecord(workflow.summary) ? workflow.summary : undefined
+    const clarification = isJsonRecord(summary?.clarification) ? summary.clarification : undefined
+    const review = isJsonRecord(clarification?.review) ? clarification.review : undefined
+    const reviewSummary = isJsonRecord(review?.summary) ? review.summary : undefined
+    const entityId =
+      normalizeSessionEndpointField(state?.selectedEntityId) ||
+      normalizeSessionEndpointField(state?.selected_entity_id) ||
+      normalizeSessionEndpointField(result?.selectedEntityId) ||
+      normalizeSessionEndpointField(result?.selected_entity_id) ||
+      normalizeSessionEndpointField(reviewSummary?.selectedEntityId)
+    if (entityId) return { entityId }
+  }
+  return {}
+}
+
+/** 从会话标题中恢复实体展示名，兼容旧标题。 */
+function inferSessionEntityLabelFromTitle(value: unknown): string | undefined {
+  const title = typeof value === 'string' ? value.trim() : ''
+  const matched = title.match(/(?:设计实体|确认实体|开始设计实体|查看已生成实体计划)：(.+)$/)
+  return matched?.[1]?.trim() || undefined
 }
 
 /** 从会话标题中恢复接口展示名，兼容旧标题。 */

@@ -98,13 +98,17 @@ def route_build_result(state: ProjectState) -> str:
 
 
 def route_detail_confirmation(state: ProjectState) -> str:
-    """细节确认完成后进入工作区检查，等待用户输入时停止。"""
+    """细节确认完成后进入工作区检查，等待用户输入时停止。
 
-    return (
-        "await_user_input"
-        if state.get("status") == "requires_user_input"
-        else "inspect_workspace"
-    )
+    实体设计只承担 detail_confirmation 阶段：确认完成即结束当前工作流，
+    不再进入工作区检查与后续构建阶段。
+    """
+
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
+    if str(state.get("selected_entity_id") or "").strip():
+        return "await_user_input"
+    return "inspect_workspace"
 
 
 def route_project_planning(state: ProjectState) -> str:

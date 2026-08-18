@@ -8,7 +8,7 @@ from app.graph.nodes.confirmation import (
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
-from app.services.entity_definitions import contract_data_source_id, plan_data_sources
+from app.services.entity_definitions import entity_design_summaries, plan_data_sources
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.build_task_progress import (
     build_task_artifacts,
@@ -511,8 +511,7 @@ def _resolve_build_context(
         "endpoint_detail": None,
         "direct_endpoint_details": [],
         "endpoint_ids": [],
-        "api_contract_ids": [],
-        "data_source_ids": [],
+        "entity_ids": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
     }, build_task_plan)
@@ -651,8 +650,21 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
     """按当前构建目标投射可执行任务所需的页面、endpoint 和 API 详情。"""
 
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
-    contract_ids = {str(item) for item in build_context.get("api_contract_ids") or []}
-    source_ids = {str(item) for item in build_context.get("data_source_ids") or []}
+    entity_ids = {str(item) for item in build_context.get("entity_ids") or []}
+    target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
+    is_application = str(target.get("type") or "") == "application"
+    if is_application:
+        entity_ids = set(_confirmed_entity_ids(project_plan))
+    scoped_contracts = _scoped_contracts(project_plan, build_context, is_application=is_application)
+    scoped_contract_ids = {str(contract.get("id") or "") for contract in scoped_contracts}
+    if is_application:
+        source_ids = {
+            str(source.get("id") or "")
+            for source in plan_data_sources(project_plan)
+            if isinstance(source, dict) and source.get("id")
+        }
+    else:
+        source_ids = _scoped_entity_source_ids(project_plan, entity_ids)
     return {
         "page_detail_plans": (
             [build_context["page_detail"]] if build_context.get("page_detail") else []
@@ -660,23 +672,82 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
         "endpoint_detail_plans": list(
             build_context.get("direct_endpoint_details") or []
         ),
+        "entity_designs": entity_design_summaries(
+            project_plan,
+            entity_ids,
+        ),
         "data_sources": [
-            _scoped_data_source(source, contract_ids)
+            _scoped_data_source(source, scoped_contract_ids)
             for source in plan_data_sources(project_plan)
             if isinstance(source, dict) and str(source.get("id") or "") in source_ids
         ],
         "api_contracts": [
             _scoped_api_contract(contract, endpoint_ids)
-            for contract in project_plan.get("api_contracts", [])
-            if isinstance(contract, dict)
-            and contract_data_source_id(project_plan, contract) in source_ids
-            and (
-                not contract_ids
-                or str(contract.get("id") or "") in contract_ids
-            )
+            for contract in scoped_contracts
         ],
         "database_planning_context": build_context.get("database_planning_context", {}),
     }
+
+
+def _confirmed_entity_ids(project_plan: dict) -> list[str]:
+    """返回已确认实体设计的实体 id，供全量构建投射实体上下文。"""
+
+    return [
+        str(detail.get("entity_id") or "")
+        for detail in project_plan.get("entity_detail_plans") or []
+        if isinstance(detail, dict)
+        and str(detail.get("status") or "") == "confirmed"
+        and detail.get("entity_id")
+    ]
+
+
+def _scoped_entity_source_ids(project_plan: dict, entity_ids: set[str]) -> set[str]:
+    """按范围内实体设计推导虚拟数据源 id（即实体数据源类型）。"""
+
+    return {
+        str(summary.get("data_source_type") or "")
+        for summary in entity_design_summaries(project_plan, sorted(entity_ids))
+        if summary.get("data_source_type")
+    }
+
+
+def _scoped_contracts(
+    project_plan: dict,
+    build_context: dict,
+    *,
+    is_application: bool = False,
+) -> list[dict]:
+    """按范围内 endpoint/实体/详情契约收敛 API 契约，契约只作 schema 引用。"""
+
+    all_contracts = [
+        contract
+        for contract in project_plan.get("api_contracts", [])
+        if isinstance(contract, dict)
+    ]
+    if is_application:
+        return all_contracts
+    endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
+    entity_ids = {str(item) for item in build_context.get("entity_ids") or []}
+    detail_contract_ids = {
+        str(detail.get("api_contract_id") or "")
+        for detail in build_context.get("direct_endpoint_details") or []
+        if isinstance(detail, dict) and detail.get("api_contract_id")
+    }
+    return [
+        contract
+        for contract in all_contracts
+        if (
+            str(contract.get("id") or "") in detail_contract_ids
+            or any(
+                isinstance(endpoint, dict) and str(endpoint.get("id") or "") in endpoint_ids
+                for endpoint in contract.get("endpoints") or []
+            )
+            or bool(
+                entity_ids
+                and entity_ids & {str(item) for item in contract.get("entity_ids") or []}
+            )
+        )
+    ]
 
 
 def _scoped_api_contract(contract: dict, endpoint_ids: set[str]) -> dict:
@@ -729,9 +800,9 @@ def _scoped_contract_errors(
 def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) -> dict:
     """投射目标详情、直接数据源和其 API 契约，供局部构建执行独立校验。"""
 
-    source_ids = {str(item) for item in build_context.get("data_source_ids") or []}
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
-    contract_ids = {str(item) for item in build_context.get("api_contract_ids") or []}
+    entity_ids = {str(item) for item in build_context.get("entity_ids") or []}
+    source_ids = _scoped_entity_source_ids(project_plan, entity_ids)
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     target_page_id = str(target.get("id") or "") if target.get("type") == "page" else ""
     pages = []
@@ -751,17 +822,12 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
                     },
                 }
             )
+    scoped_contracts = _scoped_contracts(project_plan, build_context)
+    scoped_contract_ids = {str(contract.get("id") or "") for contract in scoped_contracts}
     scoped_sources = [
-        _scoped_data_source(source, contract_ids)
+        _scoped_data_source(source, scoped_contract_ids)
         for source in plan_data_sources(project_plan)
         if isinstance(source, dict) and str(source.get("id") or "") in source_ids
-    ]
-    scoped_contracts = [
-        contract
-        for contract in project_plan.get("api_contracts", [])
-        if isinstance(contract, dict)
-        and contract_data_source_id(project_plan, contract) in source_ids
-        and (not contract_ids or str(contract.get("id") or "") in contract_ids)
     ]
     return {
         **project_plan,

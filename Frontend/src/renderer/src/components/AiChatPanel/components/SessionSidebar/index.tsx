@@ -330,9 +330,9 @@ function apiEndpointSelectionKey(contractId: string, endpointId: string): string
   return `${contractId}:${endpointId}`
 }
 
-/** 判断会话是否属于没有页面或 API 归属的自由对话。 */
+/** 判断会话是否属于没有页面、API 或实体归属的自由对话。 */
 function isFreeChatSession(session: ChatSessionSummary): boolean {
-  return !session.pageId && !session.apiContractId && !session.endpointId
+  return !session.pageId && !session.apiContractId && !session.endpointId && !session.entityId
 }
 
 /** 使用 ProjectPlan 页面清单组织工作台左侧大纲与快捷入口。 */
@@ -428,6 +428,16 @@ export default function SessionSidebar({
       const endpointSessions = groupedSessions.get(endpointKey) || []
       endpointSessions.push(session)
       groupedSessions.set(endpointKey, endpointSessions)
+    })
+    return groupedSessions
+  }, [sessions])
+  const sessionsByEntityId = useMemo(() => {
+    const groupedSessions = new Map<string, ChatSessionSummary[]>()
+    sessions.forEach((session) => {
+      if (!session.entityId) return
+      const entitySessions = groupedSessions.get(session.entityId) || []
+      entitySessions.push(session)
+      groupedSessions.set(session.entityId, entitySessions)
     })
     return groupedSessions
   }, [sessions])
@@ -863,6 +873,20 @@ export default function SessionSidebar({
                             </span>
                           </span>
                         </button>
+                        <PageSessionHistory
+                          activeSessionId={activeSessionId}
+                          deletingSessionId={deletingSessionId}
+                          loadingSessions={loadingSessions}
+                          onCreateSession={async () => onEntitySelect(entity)}
+                          onDeleteSession={onDeleteSession}
+                          onOpenSession={onOpenSession}
+                          deleteTitle="删除这个实体会话？"
+                          emptyDescription="当前实体暂无历史会话"
+                          sessionError={sessionError}
+                          sessionRunStates={sessionRunStates}
+                          sessions={sessionsByEntityId.get(entity.id) || []}
+                          targetLabel={entity.label}
+                        />
                       </div>
                     )
                   })}

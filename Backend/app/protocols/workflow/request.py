@@ -9,6 +9,7 @@ from app.domain.acceptance_adjustment import (
     acceptance_adjustment_resume_node,
     normalize_acceptance_adjustment,
 )
+from app.services.entity_design import normalize_entity_design_action
 from app.services.execution_resource_scope import resolve_execution_resource_claims
 from app.services.frontend_page_tree import flatten_frontend_pages, frontend_page_ids
 
@@ -138,6 +139,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     detail_review_submission = _detail_review_submission(clarification_answers)
+    entity_design_action = _entity_design_action(clarification_answers)
     acceptance_decision = _page_acceptance_decision(clarification_answers)
     acceptance_adjustment = _acceptance_adjustment(clarification_answers)
     ui_design_action = _ui_design_action(clarification_answers)
@@ -263,11 +265,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **_debug_resume_values(debug_state, workspace=workspace),
         "retry_failed_tasks": workflow_action == "retry_failed_tasks",
         "selected_skill_names": list(selected_skill_names),
-        **(
+        **(            
             {"detail_review_submission": detail_review_submission}
             if detail_review_submission
             else {}
         ),
+        **({"entity_design_action": entity_design_action} if entity_design_action else {}),
         **({"ui_design_action": ui_design_action} if ui_design_action else {}),
         **({"acceptance_decision": acceptance_decision} if acceptance_decision else {}),
         **(
@@ -1296,6 +1299,23 @@ def _detail_review_submission(value: Any) -> dict[str, Any] | None:
     if submission.get("review_status") != "confirmed":
         return None
     return submission
+
+
+def _entity_design_action(value: Any) -> dict[str, Any] | None:
+    """从结构化确认答案中提取实体设计动作。
+
+    实体设计是 detail_confirmation 的 entity 内部分支交互：前端在数据源选择、
+    外部 API 信息补充、静态数据构建、手动绑定与表生成审批等步骤提交
+    ``{entity_design: {action, entity_id, ...}}``，由本函数规整后进入
+    resume_values 供 detail_confirmation 节点消费。
+    """
+
+    if not isinstance(value, dict):
+        return None
+    action = value.get("entity_design")
+    if not isinstance(action, dict):
+        return None
+    return normalize_entity_design_action(action)
 
 
 def _ui_design_action(value: Any) -> dict[str, Any] | None:

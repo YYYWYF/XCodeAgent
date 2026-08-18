@@ -34,6 +34,8 @@ export type ChatSessionRecord = {
   apiContractId?: string;
   endpointId?: string;
   endpointLabel?: string;
+  entityId?: string;
+  entityLabel?: string;
   pageId?: string;
   workspaceRoot: string;
   messages: ChatSessionMessage[];
@@ -49,6 +51,8 @@ export type ChatSessionSummary = {
   apiContractId?: string;
   endpointId?: string;
   endpointLabel?: string;
+  entityId?: string;
+  entityLabel?: string;
   pageId?: string;
   createdAt: number;
   updatedAt: number;
@@ -206,6 +210,7 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
   const session = value as Partial<ChatSessionRecord>;
   if (!session.id || !session.editorMode || !session.threadId) return null;
   const endpointContext = inferEndpointContextFromMessages(session.messages);
+  const entityContext = inferEntityContextFromMessages(session.messages);
   return {
     id: String(session.id),
     title: String(session.title || '新对话'),
@@ -221,6 +226,11 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
       normalizeEndpointField(session.endpointLabel) ||
       endpointContext?.endpointLabel ||
       inferEndpointLabelFromTitle(session.title),
+    entityId: normalizeEndpointField(session.entityId) || entityContext?.entityId,
+    entityLabel:
+      normalizeEndpointField(session.entityLabel) ||
+      entityContext?.entityLabel ||
+      inferEntityLabelFromTitle(session.title),
     pageId: normalizePageId(session.pageId) || inferPageIdFromMessages(session.messages),
     workspaceRoot: String(session.workspaceRoot || ''),
     messages: normalizeMessages(session.messages),
@@ -238,6 +248,8 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     apiContractId: session.apiContractId,
     endpointId: session.endpointId,
     endpointLabel: session.endpointLabel,
+    entityId: session.entityId,
+    entityLabel: session.entityLabel,
     pageId: session.pageId,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -257,6 +269,8 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       apiContractId: normalizeEndpointField(item.apiContractId),
       endpointId: normalizeEndpointField(item.endpointId),
       endpointLabel: normalizeEndpointField(item.endpointLabel),
+      entityId: normalizeEndpointField(item.entityId),
+      entityLabel: normalizeEndpointField(item.entityLabel),
       pageId: normalizePageId(item.pageId),
       createdAt: Number(item.createdAt || Date.now()),
       updatedAt: Number(item.updatedAt || Date.now()),
@@ -331,10 +345,44 @@ function inferEndpointContextFromMessages(value: unknown): {
   return undefined;
 }
 
+/** 从旧会话保存的 Workflow 快照中恢复实体归属。 */
+function inferEntityContextFromMessages(value: unknown): {
+  entityId?: string;
+  entityLabel?: string;
+} | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    const message = value[index];
+    if (!message || typeof message !== 'object') continue;
+    const workflow = (message as { workflow?: unknown }).workflow;
+    if (!workflow || typeof workflow !== 'object') continue;
+    const payload = workflow as {
+      state?: Record<string, unknown>;
+      result?: Record<string, unknown>;
+      summary?: { clarification?: { review?: { summary?: Record<string, unknown> } } };
+    };
+    const reviewSummary = payload.summary?.clarification?.review?.summary;
+    const entityId = normalizeEndpointField(
+      payload.state?.selectedEntityId ||
+      payload.result?.selectedEntityId ||
+      reviewSummary?.selectedEntityId
+    );
+    if (entityId) return { entityId };
+  }
+  return undefined;
+}
+
 /** 从会话标题中恢复接口展示名，兼容旧的“设计接口：METHOD path”标题。 */
 function inferEndpointLabelFromTitle(value: unknown): string | undefined {
   const title = typeof value === 'string' ? value.trim() : '';
   const matched = title.match(/(?:设计接口|确认接口|开始设计接口|查看已生成接口计划)：(.+)$/);
+  return matched?.[1]?.trim() || undefined;
+}
+
+/** 从会话标题中恢复实体展示名，兼容旧的“设计实体：name”标题。 */
+function inferEntityLabelFromTitle(value: unknown): string | undefined {
+  const title = typeof value === 'string' ? value.trim() : '';
+  const matched = title.match(/(?:设计实体|确认实体|开始设计实体|查看已生成实体计划)：(.+)$/);
   return matched?.[1]?.trim() || undefined;
 }
 

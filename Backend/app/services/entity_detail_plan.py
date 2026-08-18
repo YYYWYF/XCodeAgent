@@ -134,6 +134,7 @@ def create_entity_detail_plan(
     entity: Any,
     user_request: str = "",
     default_datasource_type: str | None = None,
+    design_stage: str | None = None,
 ) -> dict[str, Any]:
     """从已确认实体定义确定性组装 EntityDetail；数据源在实体设计中选定并确认。"""
 
@@ -177,6 +178,7 @@ def create_entity_detail_plan(
         "entity_name": str(normalized.get("name") or entity_id),
         "description": str(normalized.get("description") or ""),
         "module_id": str(normalized.get("module_id") or ""),
+        "design_stage": design_stage or "review_ready",
         "data_source_id": data_source_id,
         "data_source_type": data_source_type,
         "fields": fields,
