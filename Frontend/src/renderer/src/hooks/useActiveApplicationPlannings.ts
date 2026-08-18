@@ -13,6 +13,7 @@ import {
 } from '../service/applicationStorage'
 import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
 import { cx } from '../utils'
+import { useSessionRuntimeStore } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
 type UseActiveApplicationPlanningsOptions = {
@@ -52,6 +53,7 @@ export function useActiveApplicationPlannings({
   onOpenWorkbench,
   theme
 }: UseActiveApplicationPlanningsOptions): ActiveApplicationPlanningsController {
+  const { clearWorkspace } = useSessionRuntimeStore()
   const [activePlannings, setActivePlannings] = useState<PersistedActivePlanning[]>([])
   const [visiblePlanningId, setVisiblePlanningId] = useState<string>()
   const [deletingPlanningIds, setDeletingPlanningIds] = useState<Set<string>>(() => new Set())
@@ -225,7 +227,7 @@ export function useActiveApplicationPlannings({
     [generateApplicationTemplateFiles, setVisiblePlanning]
   )
 
-  // 停止并删除指定初始化计划，不触碰其他应用的任务和文件。
+  // 停止并删除指定初始化计划，连同 .xcodeagent 目录和聊天记录一起移入系统回收站，不触碰其他应用的任务和文件。
   const deletePlanning = useCallback(
     async (planning: PersistedActivePlanning): Promise<void> => {
       const applicationId = planning.application.id
@@ -235,10 +237,14 @@ export function useActiveApplicationPlannings({
       try {
         await stopHandlersRef.current.get(applicationId)?.()
         await waitForTemplateGeneration(applicationId)?.catch(() => undefined)
+        // 先停止并清理内存中的会话运行态，再由主进程转移磁盘上的目录与会话文件。
+        await clearWorkspace(workspaceRoot)
         await deleteStoredAgentDirectory(workspaceRoot)
         await removeStoredApplication(applicationId)
         dismissPlanning(applicationId)
-        message.success(`「${planning.application.appName}」初始化计划和 .xcodeagent 目录已删除`)
+        message.success(
+          `「${planning.application.appName}」初始化计划已删除，.xcodeagent 目录和聊天记录已移至系统回收站`
+        )
       } catch (reason) {
         const errorMessage = reason instanceof Error ? reason.message : String(reason)
         message.error(`删除「${planning.application.appName}」初始化计划失败：${errorMessage}`)
@@ -250,10 +256,10 @@ export function useActiveApplicationPlannings({
         })
       }
     },
-    [deletingPlanningIds, dismissPlanning, waitForTemplateGeneration]
+    [clearWorkspace, deletingPlanningIds, dismissPlanning, waitForTemplateGeneration]
   )
 
-  // 二次确认单个计划的停止和目录清理范围。
+  // 二次确认单个计划的停止、目录清理和聊天记录转移范围。
   const removePlanning = useCallback(
     (applicationId: string): void => {
       const planning = activePlanningsRef.current.find(
@@ -262,8 +268,9 @@ export function useActiveApplicationPlannings({
       if (!planning || deletingPlanningIds.has(applicationId)) return
       Modal.confirm({
         title: `停止并删除「${planning.application.appName}」的初始化计划？`,
-        content: '只会停止该应用的规划，并删除其 .xcodeagent 目录及规划文档。',
-        okText: '确认',
+        content:
+          '会停止该应用的规划，并把 .xcodeagent 目录（含规划文档）和该项目的全部聊天记录一起移到系统回收站；清空回收站前仍可找回。',
+        okText: '确认移到回收站',
         okButtonProps: { danger: true },
         cancelText: '取消',
         onOk: () => deletePlanning(planning),

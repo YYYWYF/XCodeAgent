@@ -9,11 +9,7 @@ import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { setupApplicationSettingsIpc } from './applicationSettings'
-import {
-  lstatIfPresent,
-  movePathToTrashIfPresent,
-  removeDirectoryIfPresent
-} from './filesystem'
+import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
 import { readManagedWorkspaceApplication } from './managedWorkspace'
 import {
   clearAuthState,
@@ -690,8 +686,8 @@ async function trashProjectDirectory(workspaceRoot: unknown): Promise<void> {
   await movePathToTrashIfPresent(projectRoot, (targetPath) => shell.trashItem(targetPath))
 }
 
-/** 仅删除受控工作区内部由 XCodeAgent 生成的规划与运行目录。 */
-async function deleteProjectAgentDirectory(workspaceRoot: unknown): Promise<void> {
+/** 仅将受控工作区内部由 XCodeAgent 生成的规划与运行目录移入系统回收站。 */
+async function trashProjectAgentDirectory(workspaceRoot: unknown): Promise<void> {
   const projectRoot = resolveWorkspaceRoot(workspaceRoot)
   const protectedRoots = new Set(
     [
@@ -723,7 +719,7 @@ async function deleteProjectAgentDirectory(workspaceRoot: unknown): Promise<void
     throw new Error('该目录不包含 XCodeAgent 应用标识，不能清理')
   }
 
-  await removeDirectoryIfPresent(agentDirectory)
+  await movePathToTrashIfPresent(agentDirectory, (targetPath) => shell.trashItem(targetPath))
 }
 
 /** 注册应用列表读取和保存所需的 IPC。 */
@@ -748,7 +744,12 @@ function setupApplicationStorageIpc(): void {
   })
 
   ipcMain.handle('applications:delete-agent-directory', async (_event, payload = {}) => {
-    await deleteProjectAgentDirectory(payload.workspaceRoot)
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    await trashProjectAgentDirectory(workspaceRoot)
+    // .xcodeagent 移入回收站后同步转移环境级会话，避免同一路径重建时继承旧项目聊天历史。
+    await movePathToTrashIfPresent(getWorkspaceSessionRoot(workspaceRoot), (targetPath) =>
+      shell.trashItem(targetPath)
+    )
     return { ok: true }
   })
 }
