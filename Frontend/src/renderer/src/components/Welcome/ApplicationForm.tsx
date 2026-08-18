@@ -72,7 +72,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
   const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? true
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? false
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
-  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#2c68ff'
+  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
     const keyword = trackMethodSearch.trim().toLowerCase()
@@ -314,7 +314,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
               />
             </div>
             <Input
-              placeholder="请输入主题色色值，如：#2c68ff"
+              placeholder="请输入主题色色值，如：#6b3cf0"
               style={{ flex: 1 }}
               value={themePrimaryColor || ''}
               onChange={(e) => {
