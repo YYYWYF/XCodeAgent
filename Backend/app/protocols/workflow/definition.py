@@ -161,6 +161,8 @@ def workflow_capabilities() -> dict[str, Any]:
                             "status": "running|passed|skipped|failed",
                             "required": "boolean",
                             "evidence": "brief sanitized evidence",
+                            "passed_tests": "optional non-negative integer for unit-test checks",
+                            "total_tests": "optional non-negative integer for unit-test checks",
                         },
                     }
                 },

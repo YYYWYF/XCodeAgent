@@ -489,7 +489,7 @@ testing.START
 
 输出至少包含：
 
-- `test_results`：每项测试的通过状态、命令和证据；
+- `test_results`：每项测试的通过状态、命令和证据；单元测试命令若能从 Jest、Vitest 或 Maven 输出中解析数量，还会提供 `passed_tests` 与 `total_tests` 供集成检查矩阵展示；
 - `test_report`：确定性测试汇总和质量门禁结果；
 - `test_report_path`：结构化测试报告 JSON 路径；
 - `quality_gate_passed`：是否允许进入启动和验收；

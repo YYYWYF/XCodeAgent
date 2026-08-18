@@ -19,7 +19,10 @@ from app.protocols.workflow.projection import (
     _workflow_node_detail,
     _workflow_progress_summary,
 )
-from app.protocols.workflow.stream_events import integration_test_check_summary
+from app.protocols.workflow.stream_events import (
+    integration_test_check_summary,
+    integration_test_checks,
+)
 from app.protocols.workflow_visualization import (
     _workflow_summary,
     _workflow_visual_payload,
@@ -1456,6 +1459,25 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("前端构建检查：已通过", detail)
         self.assertIn("前端 lint 通过：已跳过", detail)
         self.assertNotIn("2/2", detail)
+
+    def test_integration_check_projection_preserves_unit_test_counts(self) -> None:
+        """单元测试数量字段必须穿过 AG-UI 进度裁剪层到达前端。"""
+
+        checks = integration_test_checks(
+            [
+                {
+                    "id": "frontend_unit_tests",
+                    "name": "前端单元测试",
+                    "status": "passed",
+                    "required": True,
+                    "passed_tests": 3,
+                    "total_tests": 3,
+                }
+            ]
+        )
+
+        self.assertEqual(checks[0]["passed_tests"], 3)
+        self.assertEqual(checks[0]["total_tests"], 3)
 
     def test_repair_loop_emits_unique_attempt_steps_and_semantic_statuses(self) -> None:
         """多轮构建测试必须保留唯一步骤 ID、attempt 与测试失败终态。"""

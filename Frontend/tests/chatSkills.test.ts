@@ -1285,6 +1285,14 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
               name: '前端 lint 通过',
               status: 'skipped',
               required: false
+            },
+            {
+              id: 'frontend_unit_tests',
+              name: '前端单元测试',
+              status: 'passed',
+              required: true,
+              passedTests: 3,
+              totalTests: 3
             }
           ]
         }
@@ -1299,6 +1307,7 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
   assert.match(markup, /OPTIONAL/)
   assert.match(markup, /已通过/)
   assert.match(markup, /已跳过/)
+  assert.match(markup, /通过 3\/3 个测试/)
   assert.doesNotMatch(markup, /<pre>[^<]*已完成 2\/2 项，通过 1 项，跳过 1 项/)
 })
 

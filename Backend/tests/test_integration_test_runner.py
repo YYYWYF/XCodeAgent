@@ -151,7 +151,11 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 """记录前端命令并统一模拟成功。"""
 
                 calls.append(argv)
-                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="Test Suites: 3 passed, 3 total\nTests: 3 passed, 3 total",
+                    stderr="",
+                )
 
             with (
                 patch(
@@ -170,6 +174,8 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         )
         self.assertTrue(unit_tests["passed"])
         self.assertFalse(unit_tests["skipped"])
+        self.assertEqual(unit_tests["passed_tests"], 3)
+        self.assertEqual(unit_tests["total_tests"], 3)
         self.assertEqual(
             calls,
             [

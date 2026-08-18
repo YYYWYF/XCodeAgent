@@ -168,6 +168,8 @@ export type IntegrationTestCheckRecord = {
   status: 'running' | 'passed' | 'skipped' | 'failed'
   required: boolean
   evidence?: string
+  passedTests?: number
+  totalTests?: number
 }
 
 export type DagGenerationStageRecord = {
@@ -1144,12 +1146,16 @@ export function readIntegrationTestChecks(
     if (!id || !name || seenIds.has(id)) continue
     seenIds.add(id)
     const evidence = stringValue(check.evidence).slice(0, 1_000)
+    const passedTests = optionalNonNegativeInteger(check.passedTests ?? check.passed_tests)
+    const totalTests = optionalNonNegativeInteger(check.totalTests ?? check.total_tests)
     checks.push({
       id,
       name,
       status: status as IntegrationTestCheckRecord['status'],
       required: check.required === true,
-      ...(evidence ? { evidence } : {})
+      ...(evidence ? { evidence } : {}),
+      ...(passedTests !== undefined ? { passedTests } : {}),
+      ...(totalTests !== undefined ? { totalTests } : {})
     })
   }
   return checks.length > 0 ? checks : undefined

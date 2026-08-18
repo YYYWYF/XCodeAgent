@@ -441,6 +441,9 @@ function IntegrationTestChecklist({
                   {check.required ? 'REQUIRED' : 'OPTIONAL'}
                 </span>
               </span>
+              {testCheckCountLabel(check) && (
+                <Text type="secondary">{testCheckCountLabel(check)}</Text>
+              )}
               {(check.status === 'running' ||
                 check.status === 'failed' ||
                 check.status === 'skipped') &&
@@ -552,6 +555,19 @@ function testCheckStatusLabel(status: IntegrationTestCheckRecord['status']): str
   if (status === 'passed') return '已通过'
   if (status === 'skipped') return '已跳过'
   return '未通过'
+}
+
+/** 返回单元测试检查项的通过数与总数，缺少结构化统计时不显示占位数字。 */
+function testCheckCountLabel(check: IntegrationTestCheckRecord): string | undefined {
+  if (
+    check.passedTests === undefined ||
+    check.totalTests === undefined ||
+    check.totalTests < 0 ||
+    check.passedTests < 0
+  ) {
+    return undefined
+  }
+  return `通过 ${Math.min(check.passedTests, check.totalTests)}/${check.totalTests} 个测试`
 }
 
 /** 根据步骤类型与终态选择时间线图标。 */

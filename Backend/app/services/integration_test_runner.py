@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -738,6 +739,11 @@ def _run_command_result(
     stdout_log.write_text(stdout, encoding="utf-8")
     stderr_log.write_text(stderr, encoding="utf-8")
     passed = returncode == 0 and not timed_out and error is None
+    passed_tests, total_tests = _extract_test_counts(
+        check_id,
+        stdout,
+        stderr,
+    )
     evidence = (
         f"命令执行通过：{' '.join(argv)}"
         if passed
@@ -788,8 +794,94 @@ def _run_command_result(
             "stderr_tail": stderr[-COMMAND_OUTPUT_SUMMARY_LIMIT:],
         },
     }
+    if passed_tests is not None and total_tests is not None:
+        result["passed_tests"] = passed_tests
+        result["total_tests"] = total_tests
     report_check_progress(on_progress, status="passed" if passed else "failed", check=result)
     return result
+
+
+def _extract_test_counts(
+    check_id: str,
+    stdout: str,
+    stderr: str,
+) -> tuple[int | None, int | None]:
+    """从常见测试运行器输出提取单元测试通过数和总数。"""
+
+    if not check_id.endswith("_unit_tests"):
+        return None, None
+    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", "\n".join((stdout, stderr)))
+
+    # Jest: Tests: 3 passed, 1 failed, 4 total；无 Tests 行时兼容 Test Suites 摘要。
+    jest_line = re.search(r"(?im)^\s*(?:Tests|Test Suites):\s*(?P<details>.+)$", output)
+    if jest_line:
+        counts = _counts_from_summary_line(jest_line.group("details"))
+        if counts != (None, None):
+            return counts
+
+    # Vitest: Tests  3 passed (3) / Tests  3 passed | 1 failed (4)
+    vitest_line = re.search(r"(?im)^\s*Tests\s+(?P<details>.+)$", output)
+    if vitest_line:
+        details = vitest_line.group("details")
+        total_match = re.search(r"\((\d+)\)\s*$", details)
+        passed_match = re.search(r"(\d+)\s+passed\b", details)
+        if total_match and passed_match:
+            return int(passed_match.group(1)), int(total_match.group(1))
+
+    # Maven Surefire: Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
+    maven_matches = re.finditer(
+        r"Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+)",
+        output,
+        re.IGNORECASE,
+    )
+    maven_counts = [
+        (
+            int(match.group(1)),
+            int(match.group(2)),
+            int(match.group(3)),
+            int(match.group(4)),
+        )
+        for match in maven_matches
+    ]
+    if maven_counts:
+        total = sum(item[0] for item in maven_counts)
+        passed = max(0, total - sum(item[1] + item[2] + item[3] for item in maven_counts))
+        return passed, total
+
+    # pytest: 3 passed, 1 failed, 4 total / 3 passed in 0.12s
+    pytest_line = re.search(r"(?im)^\s*(?P<details>\d+\s+passed.+)$", output)
+    if pytest_line:
+        counts = _counts_from_summary_line(pytest_line.group("details"))
+        if counts != (None, None):
+            return counts
+
+    return None, None
+
+
+def _counts_from_summary_line(details: str) -> tuple[int | None, int | None]:
+    """解析包含 passed、failed、error、skipped 和 total 的摘要行。"""
+
+    passed_match = re.search(r"(\d+)\s+passed\b", details, re.IGNORECASE)
+    if not passed_match:
+        return None, None
+    passed = int(passed_match.group(1))
+    total_match = re.search(r"(\d+)\s+total\b", details, re.IGNORECASE)
+    if total_match:
+        return passed, int(total_match.group(1))
+
+    other_count = sum(
+        int(match.group(1))
+        for match in re.finditer(
+            r"(\d+)\s+(?:failed|failure|failures|error|errors|skipped)\b",
+            details,
+            re.IGNORECASE,
+        )
+    )
+    if other_count:
+        return passed, passed + other_count
+    if re.search(r"\bpassed\s+in\b", details, re.IGNORECASE):
+        return passed, passed
+    return None, None
 
 
 def _missing_tool_result(
