@@ -48,7 +48,12 @@ export async function loadActiveApplicationPlannings(): Promise<PersistedActiveP
         threadId
       })
     } catch (error) {
-      console.warn('读取应用生命周期失败', error)
+      // 历史/已删除工作区的 application-lifecycle.json 不存在属正常情况，
+      // 静默跳过即可，避免每次刷新都刷屏。
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.includes('application-lifecycle.json 不存在')) {
+        console.warn('读取应用生命周期失败', error)
+      }
     }
   }
   return recoveredActive

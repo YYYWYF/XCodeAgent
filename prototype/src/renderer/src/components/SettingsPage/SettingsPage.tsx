@@ -3,6 +3,7 @@ import {
   BankOutlined,
   CheckCircleFilled,
   CloudOutlined,
+  CloseOutlined,
   CodeOutlined,
   DashboardOutlined,
   DatabaseOutlined,
@@ -70,6 +71,7 @@ type EnvVariable = {
 
 type Props = {
   application: ApplicationConfig
+  onClose: () => void
   onSaved: (application: ApplicationConfig) => void
 }
 
@@ -80,6 +82,7 @@ type SettingsFormValues = Pick<
   envVariables: EnvVariable[]
 }
 
+/** 渲染统一的应用配置分区容器。 */
 function SettingsCard({
   icon,
   title,
@@ -96,7 +99,7 @@ function SettingsCard({
   disabled?: boolean
   id?: string
   compact?: boolean
-}) {
+}): ReactElement {
   return (
     <section id={id} className={cx('settings-card', disabled && 'settings-card--disabled')}>
       <header className={cx('settings-card-header')}>
@@ -114,7 +117,7 @@ function SettingsCard({
 }
 
 /** 组织并保存应用级基础能力与环境配置。 */
-export default function SettingsPage({ application, onSaved }: Props): ReactElement {
+export default function SettingsPage({ application, onClose, onSaved }: Props): ReactElement {
   const [form] = Form.useForm<SettingsFormValues>()
   const [saving, setSaving] = useState(false)
 
@@ -163,7 +166,8 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
     [envVars]
   )
 
-  const scrollToEnvironment = () => {
+  /** 将配置区平滑定位到环境变量设置。 */
+  const scrollToEnvironment = (): void => {
     document.getElementById('settings-environment')?.scrollIntoView({ behavior: 'smooth' })
   }
 
@@ -233,11 +237,14 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
       await saveApplication(updatedApplication)
       onSaved(updatedApplication)
       message.success('保存成功')
-    } catch (error: any) {
+    } catch (caughtError: unknown) {
+      const validationError = caughtError as {
+        errorFields?: Array<{ errors?: string[] }>
+      }
       // antd validateFields 校验失败时返回 { errorFields, values }，非 Error 实例
       // errorFields 按字段注册顺序排列（静态字段先于 Form.List 动态字段），
       // 需要按 DOM 视觉位置（从上到下）找出第一个可见的错误
-      if (error?.errorFields?.length) {
+      if (validationError.errorFields?.length) {
         // 扫描所有带 .ant-form-item-has-error 的 DOM 元素，按 Y 坐标排序
         const errorNodes = document.querySelectorAll('.ant-form-item-has-error')
         const byPosition = Array.from(errorNodes)
@@ -254,11 +261,11 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
           firstVisible.scrollIntoView({ behavior: 'smooth', block: 'center' })
         } else {
           // 回退：无可视错误元素时用 errorFields[0]
-          const firstErr = error.errorFields[0]?.errors?.[0]
+          const firstErr = validationError.errorFields[0]?.errors?.[0]
           if (firstErr) message.error(firstErr)
         }
-      } else if (error instanceof Error) {
-        message.error(`保存失败：${error.message}`)
+      } else if (caughtError instanceof Error) {
+        message.error(`保存失败：${caughtError.message}`)
       }
     } finally {
       setSaving(false)
@@ -295,9 +302,17 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
     <div className={cx('settings-page')}>
       <header className={cx('settings-page-header')}>
         <div className={cx('settings-page-title-line')}>
+          <Button
+            aria-label="关闭应用配置"
+            className={cx('settings-close-btn')}
+            icon={<CloseOutlined />}
+            onClick={onClose}
+            title="关闭应用配置"
+            type="text"
+          />
           <SettingOutlined className={cx('settings-page-title-icon')} />
           <Title level={4} style={{ margin: 0 }}>
-            应用设置
+            应用配置
           </Title>
         </div>
         <div className={cx('settings-page-header-right')}>
@@ -307,7 +322,7 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
             loading={saving}
             onClick={handleSave}
           >
-            保存设置
+            保存配置
           </Button>
         </div>
       </header>

@@ -167,3 +167,29 @@
     transition-duration: 1ms;
   }
 }
+
+/* 项目启动通知始终显示在最上层 */
+.@{class-prefix}-project-launch-loading {
+  z-index: 9999;
+}
+
+/*
+ * 顶部阶段栏 + 主体行的列容器。
+ * workbench-shell 本身是 flex-row（见 global.less）；这里在它内部加一层 column，
+ * 把 TopBar 放顶部、LeftPanel 放下方，不改 shell 自身的 CSS，降低布局风险。
+ */
+.@{class-prefix}-workbench-shell-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.@{class-prefix}-workbench-shell-body {
+  display: flex;
+  flex-direction: row;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}

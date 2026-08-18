@@ -32,7 +32,7 @@ export type SendWorkflowMessageOptions = {
   selectedPageId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint'
+  detailTargetType?: 'page' | 'endpoint' | 'application'
   buildExecutionScope?: WorkflowBuildExecutionScope
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
@@ -124,6 +124,7 @@ export type DagGenerationStageRecord = {
   name: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   detail: string
+  output?: DagGenerationStageOutput
 }
 
 export type DagGenerationTaskRecord = {
@@ -142,6 +143,70 @@ export type DagGenerationArtifactRecord = {
   kind: 'internal' | 'markdown'
   status: 'saved'
   path?: string
+}
+
+/** DAG 阶段展开后的结构化产物，按阶段 kind 区分渲染。 */
+export type DagGenerationStageOutput =
+  | {
+      kind: 'unit_graph'
+      units: Array<{ id: string; kind: string; status: string; taskCount: number }>
+      edges: Array<{ from: string; to: string }>
+    }
+  | {
+      kind: 'build_context'
+      target: string
+      units: string[]
+      endpoints: string[]
+      dataSources: string[]
+    }
+  | {
+      kind: 'contract_validation'
+      passed: boolean
+      scope: string[]
+      issues: string[]
+    }
+  | {
+      kind: 'tasks'
+      tasks: DagGenerationTaskRecord[]
+      edges: Array<{ from: string; to: string }>
+    }
+  | {
+      kind: 'dag_validation'
+      valid: boolean
+      batches: Array<{ mode: 'parallel' | 'blocked' | 'serial'; taskIds: string[] }>
+      topologicalOrder: string[]
+    }
+  | { kind: 'artifacts'; artifacts: DagGenerationArtifactRecord[] }
+
+/** 工作区代码扫描快照（inspect_workspace 节点产物）。 */
+export type WorkspaceInspectionSnapshot = {
+  revision: string
+  status: string
+  durationMs: number
+  metrics: {
+    totalFiles: number
+    sourceFiles: number
+    filesIndexed: number
+    symbolsIndexed: number
+    relationsIndexed: number
+  }
+  techStack: string[]
+  projectRoots: Array<{ kind: string; path: string }>
+  entrypoints: Array<{ kind: string; path: string }>
+  codeGraph: {
+    available: boolean
+    languages: string[]
+    nodesByKind: Array<{ kind: string; count: number }>
+    relationsByKind: Array<{ kind: string; count: number }>
+    sampleSymbols: Array<{
+      path: string
+      name: string
+      kind: string
+      lineStart: number
+      lineEnd: number
+    }>
+    warnings: string[]
+  }
 }
 
 export type DagGenerationSnapshot = {
@@ -175,6 +240,7 @@ export type ProcessStepRecord = {
   iterationKind?: string
   buildExecutionSlice?: import('../typings').WorkflowBuildExecutionSlice
   dagGeneration?: DagGenerationSnapshot
+  workspaceInspection?: WorkspaceInspectionSnapshot
 }
 
 /** 返回主工作流的 AG-UI 地址。 */
@@ -228,7 +294,10 @@ export class AgUiChatSession {
     // 浏览器 mock 环境（无 Electron）直接回放剧本，不经真实后端。
     if (!window.xcodeAgent?.isElectron) {
       void message
-      const [{ replayPlanning, replayDesignPhase }, { replayWorkbench }] = await Promise.all([
+      const [
+        { replayPlanning, replayDesignPhase },
+        { replayApplicationAcceptance, replayWorkbench, replayCodeReview }
+      ] = await Promise.all([
         import('../mock/scripts/planning'),
         import('../mock/scripts/workbench')
       ])
@@ -248,7 +317,11 @@ export class AgUiChatSession {
           ? await replayPlanning(this.threadId, options, callbacks)
           : options.workflowScope === 'application_design'
             ? await replayDesignPhase(this.threadId, options, callbacks)
-            : await replayWorkbench(this.threadId, options, callbacks)
+            : options.workflowScope === 'application_acceptance'
+              ? await replayApplicationAcceptance(this.threadId, options, callbacks)
+            : options.workflowScope === 'application_review'
+              ? await replayCodeReview(this.threadId, options, callbacks)
+              : await replayWorkbench(this.threadId, options, callbacks)
       return {
         threadId: this.threadId,
         runId: result?.runId || 'mock-run',
@@ -435,6 +508,10 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
   if (!['running', 'completed', 'failed', 'requires_user_input'].includes(status)) return undefined
   const checks = readIntegrationTestChecks(step.checks)
   const dagGeneration = readDagGenerationSnapshot(step.dagGeneration)
+  const workspaceInspection =
+    step.workspaceInspection && typeof step.workspaceInspection === 'object'
+      ? (step.workspaceInspection as WorkspaceInspectionSnapshot)
+      : undefined
   return {
     id,
     kind: kind as ProcessStepRecord['kind'],
@@ -452,7 +529,8 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
         ? (step.buildExecutionSlice as import('../typings').WorkflowBuildExecutionSlice)
         : undefined,
     ...(checks ? { checks } : {}),
-    ...(dagGeneration ? { dagGeneration } : {})
+    ...(dagGeneration ? { dagGeneration } : {}),
+    ...(workspaceInspection ? { workspaceInspection } : {})
   }
 }
 
@@ -472,7 +550,10 @@ export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot
         id,
         name,
         status: status as DagGenerationStageRecord['status'],
-        detail: boundedString(stage.detail, 1_000)
+        detail: boundedString(stage.detail, 1_000),
+        ...(stage.output && typeof stage.output === 'object'
+          ? { output: stage.output as DagGenerationStageOutput }
+          : {})
       }
     ]
   })

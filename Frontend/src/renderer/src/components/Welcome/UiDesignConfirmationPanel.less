@@ -309,20 +309,20 @@
   flex-shrink: 0;
 }
 
-// 「换一换」「对话调整」幽灵按钮：圆角、统一尺寸。
+// 「查看设计稿」「选模板」「换一换」按钮：圆角、统一尺寸。
 .@{class-prefix}-ui-design-action-btn.ant-btn {
   height: 34px;
   padding: 0 14px;
   border-radius: 8px;
-  border-color: var(--modal-border-strong);
+  border-color: var(--wb-border-strong, var(--modal-border-strong, rgba(0, 0, 0, 0.115)));
   background: transparent;
-  color: var(--modal-text-secondary);
+  color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
   font-size: 13px;
 
   &:hover:not(:disabled),
   &:focus:not(:disabled) {
-    border-color: var(--modal-accent);
-    color: var(--modal-accent);
+    border-color: var(--wb-accent, var(--modal-accent, #6b3cf0));
+    color: var(--wb-accent, var(--modal-accent, #6b3cf0));
     background: transparent;
   }
 
@@ -439,15 +439,16 @@
   padding: 16px;
   border: none;
   border-radius: 12px;
-  background: var(--modal-surface);
+  background: var(--modal-surface, var(--wb-canvas, #fff));
 
   .ant-input {
-    border-color: var(--modal-border-strong);
-    background: var(--modal-field);
-    color: var(--modal-text);
+    border-color: var(--modal-border-strong, var(--wb-border, #d9d9d9));
+    background: var(--modal-field, var(--wb-canvas, #fff));
+    color: var(--modal-text, var(--wb-text, inherit));
+    border-radius: 8px;
 
     &::placeholder {
-      color: var(--modal-text-secondary);
+      color: var(--modal-text-secondary, var(--wb-text-secondary, rgba(0, 0, 0, 0.45)));
     }
   }
 }
@@ -461,35 +462,35 @@
 }
 
 .@{class-prefix}-ui-design-confirm-hint.ant-typography {
-  color: var(--modal-text-secondary);
+  color: var(--modal-text-secondary, var(--wb-text-secondary, rgba(0, 0, 0, 0.45)));
   font-size: 13px;
 }
 
 // 「确认全部」大按钮：圆角、阴影、主色。
 .@{class-prefix}-ui-design-confirm-all-btn.ant-btn {
   height: 42px;
-  padding: 0 28px;
+  padding: 0 20px;
   border-radius: 10px;
   font-size: 14px;
   font-weight: 600;
-  color: #fff;
-  border-color: var(--modal-accent);
-  background: var(--modal-accent);
-  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.28);
+  color: #fff !important;
+  border-color: var(--wb-accent, var(--modal-accent, #6b3cf0)) !important;
+  background: var(--wb-accent, var(--modal-accent, #6b3cf0)) !important;
+  box-shadow: 0 4px 14px rgba(107, 60, 240, 0.28);
 
   &:hover:not(:disabled) {
-    color: #fff;
-    border-color: var(--modal-accent-hover);
-    background: var(--modal-accent-hover);
+    color: #fff !important;
+    border-color: var(--wb-accent-hover, var(--modal-accent-hover, #7e50f4)) !important;
+    background: var(--wb-accent-hover, var(--modal-accent-hover, #7e50f4)) !important;
   }
 
   &:disabled {
     // 不用 opacity 衰减整体——半透明紫底会让白字在浅色主题下几乎不可见。
     // 改用中性灰底 + 次级文字色，保证两个主题下禁用文字都清晰可读。
     opacity: 1;
-    color: var(--modal-text-secondary);
-    border-color: var(--modal-border-strong);
-    background: var(--modal-surface-hover);
+    color: var(--modal-text-secondary, var(--wb-text-secondary, rgba(0, 0, 0, 0.45))) !important;
+    border-color: var(--modal-border-strong, var(--wb-border, #d9d9d9)) !important;
+    background: var(--modal-surface-hover, var(--wb-surface-hover, rgba(0, 0, 0, 0.04))) !important;
     box-shadow: none;
   }
 }
@@ -715,8 +716,8 @@
 
 // header 中"正在处理某页"提示：run 期间全局禁用时让用户理解为何按钮点不了。
 .@{class-prefix}-ui-design-processing-hint {
-  flex-shrink: 0;
-  align-self: flex-start;
+  display: inline-block;
+  margin-top: 8px;
   padding: 4px 12px;
   border-radius: 999px;
   background: rgba(250, 173, 20, 0.12);
@@ -738,11 +739,11 @@
   margin-bottom: 4px;
   max-height: 220px;
   overflow-y: auto;
-  border: 1px solid var(--modal-border-strong);
+  border: 1px solid var(--modal-border-strong, var(--wb-border, #d9d9d9));
   border-radius: 8px;
-  background: var(--modal-surface);
+  background: var(--modal-surface, var(--wb-canvas, #fff));
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
-  z-index: 10;
+  z-index: 100;
   padding: 4px;
 }
 
@@ -753,13 +754,13 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: var(--modal-text);
+  color: var(--modal-text, var(--wb-text, inherit));
   font-size: 13px;
   text-align: left;
   cursor: pointer;
 
   &:hover {
-    background: var(--modal-surface-hover);
+    background: var(--modal-surface-hover, var(--wb-surface-hover, rgba(0, 0, 0, 0.04)));
   }
 }
 
@@ -804,3 +805,147 @@
   backdrop-filter: blur(2px);
   z-index: 5;
 }
+
+// ---------- 工作台 MessageList 卡片模式：页面列表 ----------
+.@{class-prefix}-ui-design-page-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.@{class-prefix}-ui-design-page-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color-split, rgba(0, 0, 0, 0.06));
+  border-radius: 8px;
+  background: var(--fill-color-quaternary, rgba(0, 0, 0, 0.02));
+  transition: border-color 0.2s, background 0.2s;
+
+  &:hover {
+    border-color: var(--primary-color-3, rgba(22, 119, 255, 0.3));
+    background: var(--primary-color-1, rgba(22, 119, 255, 0.04));
+  }
+
+  &.@{class-prefix}-is-confirmed {
+    border-color: var(--success-color-3, rgba(82, 196, 26, 0.3));
+    background: var(--success-color-1, rgba(82, 196, 26, 0.04));
+  }
+
+  &.@{class-prefix}-is-acting {
+    border-color: var(--primary-color-4, rgba(22, 119, 255, 0.4));
+    background: var(--primary-color-1, rgba(22, 119, 255, 0.06));
+  }
+}
+
+.@{class-prefix}-ui-design-page-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.@{class-prefix}-ui-design-page-row-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--fill-color, rgba(0, 0, 0, 0.06));
+  font-size: 12px;
+  color: var(--text-color-secondary, rgba(0, 0, 0, 0.45));
+
+  .@{class-prefix}-is-confirmed & {
+    background: var(--success-color, #52c41a);
+    color: #fff;
+  }
+}
+
+.@{class-prefix}-ui-design-page-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.@{class-prefix}-ui-design-page-row-name.ant-typography {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+
+.@{class-prefix}-ui-design-page-row-path.ant-typography {
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  flex-shrink: 2;
+}
+
+.@{class-prefix}-ui-design-page-row-template.ant-typography {
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  flex-shrink: 3;
+}
+
+.@{class-prefix}-ui-design-page-row-status.ant-tag {
+  margin: 0;
+  flex-shrink: 0;
+  border-radius: 10px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  border: 1px solid transparent;
+
+  &.@{class-prefix}-is-generating {
+    color: #fa8c16 !important;
+    background: #fff7e6 !important;
+    border-color: #ffd591 !important;
+  }
+
+  &.@{class-prefix}-is-confirmed {
+    color: #52c41a !important;
+    background: #f6ffed !important;
+    border-color: #b7eb8f !important;
+  }
+
+  &.@{class-prefix}-is-pending {
+    color: #1677ff !important;
+    background: #e6f4ff !important;
+    border-color: #91caff !important;
+  }
+
+  &.@{class-prefix}-is-empty {
+    color: rgba(0, 0, 0, 0.45) !important;
+    background: rgba(0, 0, 0, 0.04) !important;
+    border-color: rgba(0, 0, 0, 0.08) !important;
+  }
+}
+
+.@{class-prefix}-ui-design-page-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+

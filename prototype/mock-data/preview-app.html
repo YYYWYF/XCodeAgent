@@ -2,116 +2,500 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <title>武汉分行项目管理系统 · 预览</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>武汉分行需求回检系统 · 预览</title>
     <style>
-      * { box-sizing: border-box; }
-      body { margin: 0; font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif; color: #1f2933; background: #f5f5f7; }
-      .app-nav { display: flex; align-items: center; gap: 16px; height: 52px; padding: 0 22px; background: linear-gradient(90deg, #5d31dc, #7c3aed); color: #fff; font-size: 13px; }
-      .app-nav strong { font-size: 15px; margin-right: 6px; }
-      .app-nav a { color: rgba(255,255,255,0.85); cursor: pointer; text-decoration: none; }
-      .app-nav a.active { color: #fff; font-weight: 600; }
-      .app-nav .spacer { flex: 1; }
-      .app-nav .env { font-size: 11px; opacity: 0.7; }
-      .app-body { padding: 20px 22px; max-width: 1100px; margin: 0 auto; }
-      .app-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-      .app-head h1 { margin: 0; font-size: 20px; }
-      .app-head .crumb { font-size: 12px; color: #8a8f99; }
-      .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
-      .field { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #555; }
-      .field input, .field select { height: 30px; border: 1px solid #d9d9d9; border-radius: 4px; padding: 0 8px; font-size: 13px; background: #fff; }
-      .btn { height: 30px; padding: 0 14px; border: none; border-radius: 4px; background: #6b3cf0; color: #fff; font-size: 13px; cursor: pointer; }
-      .btn.ghost { background: #fff; color: #6b3cf0; border: 1px solid #6b3cf0; }
-      .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
-      .stat { border: 1px solid #ececf0; border-radius: 10px; padding: 14px 16px; background: #fff; }
-      .stat small { color: #8a8f99; font-size: 12px; }
-      .stat strong { display: block; font-size: 24px; color: #6b3cf0; margin-top: 4px; }
-      .card { border: 1px solid #ececf0; border-radius: 10px; background: #fff; overflow: hidden; }
-      .card-head { padding: 12px 16px; border-bottom: 1px solid #f0f0f2; font-weight: 600; font-size: 14px; }
-      .card-body { padding: 16px; }
-      table { width: 100%; border-collapse: collapse; font-size: 13px; }
-      th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid #f0f0f2; }
-      th { color: #8a8f99; font-weight: 500; background: #fafafa; }
-      .tag { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; }
-      .tag-ok { background: #e7f7ee; color: #1a7f37; }
-      .tag-wait { background: #fff1e7; color: #b45309; }
-      .tag-purple { background: #f0eaff; color: #6b3cf0; }
-      .form-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
-      .form-item { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: #555; min-width: 200px; }
-      .form-item input, .form-item select, .form-item textarea { height: 32px; border: 1px solid #d9d9d9; border-radius: 4px; padding: 0 8px; font-size: 13px; background: #fff; }
-      .form-item textarea { height: auto; padding: 8px; }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif;
+        color: #1f2933;
+        background: #f5f5f7;
+      }
+      .app-nav {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        height: 52px;
+        padding: 0 22px;
+        background: linear-gradient(90deg, #5d31dc, #7c3aed);
+        color: #fff;
+        font-size: 13px;
+      }
+      .app-nav strong {
+        font-size: 15px;
+        margin-right: 6px;
+      }
+      .app-nav a {
+        color: rgba(255, 255, 255, 0.85);
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .app-nav a.active {
+        color: #fff;
+        font-weight: 600;
+      }
+      .app-nav .spacer {
+        flex: 1;
+      }
+      .app-nav .version {
+        padding: 3px 9px;
+        border: 1px solid rgba(255, 255, 255, 0.34);
+        border-radius: 12px;
+        font-size: 11px;
+      }
+      .app-nav .env {
+        font-size: 11px;
+        opacity: 0.72;
+      }
+      .app-body {
+        padding: 20px 22px 32px;
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+      .app-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+      }
+      .app-head h1 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .app-head .crumb {
+        font-size: 12px;
+        color: #8a8f99;
+      }
+      .release-note {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 38px;
+        margin-bottom: 16px;
+        padding: 8px 12px;
+        border: 1px solid #ded4ff;
+        border-radius: 8px;
+        background: #f5f1ff;
+        color: #4c2aad;
+        font-size: 12px;
+      }
+      .release-note strong {
+        padding: 2px 7px;
+        border-radius: 10px;
+        background: #6b3cf0;
+        color: #fff;
+        font-size: 11px;
+      }
+      .toolbar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+      }
+      .field {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: #555;
+      }
+      .field input,
+      .field select {
+        height: 30px;
+        border: 1px solid #d9d9d9;
+        border-radius: 4px;
+        padding: 0 8px;
+        font-size: 13px;
+        background: #fff;
+      }
+      .field input {
+        width: 180px;
+      }
+      .btn {
+        height: 30px;
+        padding: 0 14px;
+        border: none;
+        border-radius: 4px;
+        background: #6b3cf0;
+        color: #fff;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .btn.ghost {
+        background: #fff;
+        color: #6b3cf0;
+        border: 1px solid #6b3cf0;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .stat {
+        border: 1px solid #ececf0;
+        border-radius: 10px;
+        padding: 13px 15px;
+        background: #fff;
+      }
+      .stat small {
+        color: #8a8f99;
+        font-size: 12px;
+      }
+      .stat strong {
+        display: block;
+        font-size: 23px;
+        color: #6b3cf0;
+        margin-top: 4px;
+      }
+      .card {
+        margin-bottom: 14px;
+        border: 1px solid #ececf0;
+        border-radius: 10px;
+        background: #fff;
+        overflow: hidden;
+      }
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        border-bottom: 1px solid #f0f0f2;
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .card-head small {
+        color: #8a8f99;
+        font-weight: 400;
+      }
+      .card-body {
+        padding: 16px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 10px 16px;
+        border-bottom: 1px solid #f0f0f2;
+      }
+      th {
+        color: #8a8f99;
+        font-weight: 500;
+        background: #fafafa;
+      }
+      .tag {
+        display: inline-block;
+        padding: 2px 9px;
+        border-radius: 10px;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .tag-ok {
+        background: #e7f7ee;
+        color: #1a7f37;
+      }
+      .tag-wait {
+        background: #fff1e7;
+        color: #b45309;
+      }
+      .tag-purple {
+        background: #f0eaff;
+        color: #6b3cf0;
+      }
+      .tag-danger {
+        background: #fff0f0;
+        color: #c43d3d;
+      }
+      .form-row {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      .form-item {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        font-size: 13px;
+        color: #555;
+        min-width: 200px;
+      }
+      .form-item input,
+      .form-item select,
+      .form-item textarea {
+        height: 32px;
+        border: 1px solid #d9d9d9;
+        border-radius: 4px;
+        padding: 0 8px;
+        font-size: 13px;
+        background: #fff;
+      }
+      .form-item textarea {
+        height: auto;
+        padding: 8px;
+      }
+      .intro-hero {
+        padding: 34px 30px;
+        margin-bottom: 16px;
+        color: #fff;
+        background: linear-gradient(120deg, #5d31dc, #7c3aed);
+        border-radius: 12px;
+      }
+      .intro-hero h2 {
+        margin: 0 0 10px;
+        font-size: 26px;
+      }
+      .intro-hero p {
+        max-width: 680px;
+        margin: 0 0 20px;
+        color: rgba(255, 255, 255, 0.84);
+        line-height: 1.7;
+      }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .step {
+        padding: 18px;
+        background: #fff;
+        border: 1px solid #ececf0;
+        border-radius: 10px;
+      }
+      .step strong {
+        display: block;
+        margin-bottom: 7px;
+        color: #6b3cf0;
+      }
+      .step p {
+        margin: 0;
+        color: #69707d;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      @media (max-width: 760px) {
+        .stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .app-nav {
+          padding: 0 14px;
+        }
+        .app-body {
+          padding: 16px 14px 24px;
+        }
+      }
     </style>
   </head>
   <body>
     <nav class="app-nav" id="nav"></nav>
-    <div class="app-body">
+    <main class="app-body">
       <div class="app-head">
         <h1 id="pageTitle"></h1>
         <span class="crumb" id="pagePath"></span>
       </div>
+      <div class="release-note" id="releaseNote"></div>
       <div id="content"></div>
-    </div>
+    </main>
 
     <script>
-      // 生成的"应用"：按路由渲染对应页面 UI（对应页面详细设计）
+      var versionId = new URLSearchParams(location.search).get('version') || 'app-pms-new-v1-3'
+      var matchedVersion = versionId.match(/v1-(\d+)/)
+      var versionMinor = matchedVersion ? Number(matchedVersion[1]) : 3
+      var versionLabel = 'v1.' + versionMinor
+      var path = location.pathname === '/' ? '/recheck-introduction' : location.pathname
+      var versionQuery = '?version=' + encodeURIComponent(versionId)
       var MENU = [
-        ['/my-projects', '我的项目'], ['/my-rechecks', '我的回检'], ['/recheck-review', '回检审核']
-      ];
-      var path = location.pathname;
-      var title = '页面';
+        ['/recheck-introduction', '回检介绍'],
+        ['/my-rechecks', '我的回检']
+      ]
 
+      // 生成数据表格，四个版本复用一致的基础信息结构。
       function table(headers, rows) {
-        return '<table><thead><tr>' + headers.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>' +
-          rows.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>';
+        return (
+          '<table><thead><tr>' +
+          headers
+            .map(function (header) {
+              return '<th>' + header + '</th>'
+            })
+            .join('') +
+          '</tr></thead><tbody>' +
+          rows
+            .map(function (row) {
+              return (
+                '<tr>' +
+                row
+                  .map(function (cell) {
+                    return '<td>' + cell + '</td>'
+                  })
+                  .join('') +
+                '</tr>'
+              )
+            })
+            .join('') +
+          '</tbody></table>'
+        )
       }
 
-      var PAGES = {
-        '/my-projects': {
-          title: '我的项目',
-          body: '<div class="toolbar">' +
-            '<span class="field">状态<select><option>全部</option><option>进行中</option><option>已完成</option><option>已验收</option></select></span>' +
-            '<span class="field"><input placeholder="项目名称 / 关键字"></span>' +
-            '<button class="btn">查询</button><button class="btn">新建项目</button></div>' +
-            table(['项目名称', '状态', '负责人', '进度', '创建时间'], [
-              ['分行数据中台项目', '<span class="tag tag-purple">进行中</span>', '张伟', '60%', '2026-06-12'],
-              ['对公授信流程优化', '<span class="tag tag-purple">进行中</span>', '李娜', '35%', '2026-07-01'],
-              ['零售客户画像平台', '<span class="tag tag-ok">已验收</span>', '王强', '100%', '2026-04-18'],
-              ['合规报表改造', '<span class="tag tag-wait">已完成</span>', '刘敏', '100%', '2026-05-06']
-            ])
-        },
-        '/my-rechecks': {
-          title: '我的回检',
-          body: '<div class="toolbar">' +
-            '<span class="field">状态<select><option>全部</option><option>待审核</option><option>已通过</option><option>已驳回</option></select></span>' +
-            '<button class="btn">提交回检</button></div>' +
-            '<div class="card"><div class="card-head">提交需求回检单</div><div class="card-body">' +
-            '<div class="form-row">' +
-            '<span class="form-item">关联项目<select><option>分行数据中台项目</option><option>对公授信流程优化</option></select></span>' +
-            '<span class="form-item">需求达成情况<input placeholder="整体达成情况"></span></div>' +
-            '<div class="form-row"><span class="form-item" style="flex:1">问题与建议<textarea rows="2" placeholder="未达成项、问题与改进建议"></textarea></span></div>' +
-            '<button class="btn">提交回检单</button></div></div>' +
-            table(['回检单号', '关联项目', '填报人', '状态', '提交时间'], [
-              ['RC-2026-0812', '零售客户画像平台', '陈静', '<span class="tag tag-ok">已通过</span>', '2026-07-20'],
-              ['RC-2026-0830', '合规报表改造', '陈静', '<span class="tag tag-wait">已驳回</span>', '2026-07-26']
-            ])
-        },
-        '/recheck-review': {
-          title: '回检审核',
-          body: '<div class="toolbar"><span class="field">待审核 <strong>2</strong> 条</span></div>' +
-            table(['回检单号', '关联项目', '填报人', '提交时间', '操作'], [
-              ['RC-2026-0845', '对公授信流程优化', '赵磊', '2026-08-02', '<button class="btn">审核</button>'],
-              ['RC-2026-0849', '分行数据中台项目', '孙悦', '2026-08-03', '<button class="btn">审核</button>']
-            ])
-        }
-      };
+      // 根据版本生成统计卡，后续版本逐步补齐运营视角。
+      function stats(items) {
+        return (
+          '<div class="stats">' +
+          items
+            .map(function (item) {
+              return (
+                '<div class="stat"><small>' +
+                item[0] +
+                '</small><strong>' +
+                item[1] +
+                '</strong></div>'
+              )
+            })
+            .join('') +
+          '</div>'
+        )
+      }
 
-      var current = PAGES[path] || { title: '页面', body: '<div class="card"><div class="card-body">页面未生成</div></div>' };
-      document.title = '武汉分行项目管理系统 · ' + current.title;
-      document.getElementById('pageTitle').textContent = current.title;
-      document.getElementById('pagePath').textContent = path;
-      document.getElementById('content').innerHTML = current.body;
-      document.getElementById('nav').innerHTML = '<strong>武汉分行项目管理系统</strong>' +
-        MENU.map(function (m) { return '<a href="' + m[0] + '" class="' + (m[0] === path ? 'active' : '') + '">' + m[1] + '</a>'; }).join('') +
-        '<span class="spacer"></span><span class="env">dev · 分行环境</span>';
+      // 新建旅程 v1.0：构建的「我的回检」页面含提交回检 + 状态筛选 + 审核状态跟踪。
+      // 与回退旅程 v1.0（查询起点）是两条独立实例的版本线，表格各自独立。
+      var rowsV0 = [
+        ['RC-2026-0801', '零售客户画像平台', '陈静', '<span class="tag tag-ok">已通过</span>'],
+        ['RC-2026-0806', '对公授信流程优化', '陈静', '<span class="tag tag-purple">待审核</span>'],
+        ['RC-2026-0809', '合规报表改造', '陈静', '<span class="tag tag-wait">已驳回</span>']
+      ]
+      var rowsV10 = [
+        ['RC-2026-0812', '零售客户画像平台', '陈静', '<span class="tag tag-ok">已通过</span>']
+      ]
+      var rowsV11 = rowsV10.concat([
+        ['RC-2026-0824', '对公授信流程优化', '陈静', '<span class="tag tag-purple">待审核</span>']
+      ])
+      var rowsV12 = rowsV11.concat([
+        ['RC-2026-0830', '合规报表改造', '陈静', '<span class="tag tag-wait">已驳回</span>']
+      ])
+      var rowsV13 = rowsV12.concat([
+        ['RC-2026-0841', '网点服务评价升级', '陈静', '<span class="tag tag-danger">待补充</span>']
+      ])
+
+      var versionContent = {
+        0: {
+          note: '首个生产版本：新增回检单填报与审核，填报人可提交并跟踪审核状态。',
+          body:
+            '<div class="card"><div class="card-head">提交需求回检单 <small>v1.0 新增</small></div><div class="card-body"><div class="form-row"><span class="form-item">关联项目<select><option>分行数据中台项目</option><option>对公授信流程优化</option></select></span><span class="form-item">需求达成情况<input placeholder="整体达成情况"></span></div><div class="form-row"><span class="form-item" style="flex:1">问题与建议<textarea rows="2" placeholder="未达成项、问题与改进建议"></textarea></span></div><button class="btn">提交回检单</button></div></div>' +
+            '<div class="toolbar"><span class="field">状态<select><option>全部</option><option>待审核</option><option>已通过</option><option>已驳回</option></select></span><button class="btn">查询</button></div>' +
+            '<div class="card"><div class="card-head">我的回检记录 <small>支持审核状态筛选</small></div>' +
+            table(['回检单号', '关联项目', '填报人', '状态'], rowsV0) +
+            '</div>'
+        },
+        1: {
+          note: '新增状态筛选与待办统计，便于快速定位待审核记录。',
+          body:
+            stats([
+              ['全部回检', '12'],
+              ['待审核', '3'],
+              ['已通过', '8'],
+              ['已驳回', '1']
+            ]) +
+            '<div class="toolbar"><span class="field">状态<select><option>全部</option><option>待审核</option><option>已通过</option></select></span><button class="btn">查询</button></div>' +
+            '<div class="card"><div class="card-head">我的回检记录 <small>支持状态筛选</small></div>' +
+            table(['回检单号', '关联项目', '填报人', '状态'], rowsV11) +
+            '</div>'
+        },
+        2: {
+          note: '新增在线提交回检单，填写达成情况和问题建议后直接发起审核。',
+          body:
+            stats([
+              ['全部回检', '18'],
+              ['待审核', '4'],
+              ['已通过', '12'],
+              ['已驳回', '2']
+            ]) +
+            '<div class="card"><div class="card-head">提交需求回检单 <small>v1.2 新增</small></div><div class="card-body"><div class="form-row"><span class="form-item">关联项目<select><option>分行数据中台项目</option><option>对公授信流程优化</option></select></span><span class="form-item">需求达成情况<input placeholder="整体达成情况"></span></div><div class="form-row"><span class="form-item" style="flex:1">问题与建议<textarea rows="2" placeholder="未达成项、问题与改进建议"></textarea></span></div><button class="btn">提交回检单</button></div></div>' +
+            '<div class="card"><div class="card-head">我的回检记录</div>' +
+            table(['回检单号', '关联项目', '填报人', '状态'], rowsV12) +
+            '</div>'
+        },
+        3: {
+          note: '当前版本：增加关键词检索、紧急程度、更新时间和回检台账导出。',
+          body:
+            stats([
+              ['全部回检', '26'],
+              ['待审核', '5'],
+              ['本月通过', '16'],
+              ['平均处理时长', '1.8 天']
+            ]) +
+            '<div class="toolbar"><span class="field">关键词<input placeholder="单号 / 项目名称"></span><span class="field">状态<select><option>全部</option><option>待审核</option><option>已通过</option><option>已驳回</option></select></span><button class="btn">查询</button><button class="btn ghost">导出台账</button></div>' +
+            '<div class="card"><div class="card-head">快速提交回检 <small>草稿自动保存</small></div><div class="card-body"><div class="form-row"><span class="form-item">关联项目<select><option>分行数据中台项目</option><option>对公授信流程优化</option></select></span><span class="form-item">紧急程度<select><option>一般</option><option>紧急</option></select></span><span class="form-item">需求达成情况<input placeholder="整体达成情况"></span></div><div class="form-row"><span class="form-item" style="flex:1">问题与建议<textarea rows="2" placeholder="未达成项、问题与改进建议"></textarea></span></div><button class="btn">提交回检单</button></div></div>' +
+            '<div class="card"><div class="card-head">我的回检记录 <small>共 26 条</small></div>' +
+            table(
+              ['回检单号', '关联项目', '填报人', '状态', '更新时间'],
+              rowsV13.map(function (row, index) {
+                return row.concat(['2026-08-' + String(8 + index).padStart(2, '0')])
+              })
+            ) +
+            '</div>'
+        }
+      }
+
+      var currentVersion = versionContent[versionMinor] || versionContent[3]
+      var introductionContent = {
+        0: {
+          note: '首个生产版本：建立统一的需求回检说明和四步处理流程。',
+          lead: '把需求交付结果说清楚、核准确、跟到底。'
+        },
+        1: {
+          note: '补充审核状态说明，帮助业务人员理解每个处理节点。',
+          lead: '从提交到归档，每一步都有明确状态。'
+        },
+        2: {
+          note: '加入在线填报指引，介绍页可直接进入回检单提交。',
+          lead: '了解流程后即可发起一笔新的需求回检。'
+        },
+        3: {
+          note: '当前版本：完善检索、紧急程度和台账导出的使用说明。',
+          lead: '面向生产协作的需求回检入口与操作指南。'
+        }
+      }
+      var currentIntroduction = introductionContent[versionMinor] || introductionContent[3]
+      document.title = '武汉分行需求回检系统 · ' + versionLabel
+      if (path === '/recheck-introduction') {
+        document.getElementById('pageTitle').textContent = '回检介绍'
+        document.getElementById('pagePath').textContent = '/recheck-introduction'
+        document.getElementById('releaseNote').innerHTML =
+          '<strong>' + versionLabel + '</strong><span>' + currentIntroduction.note + '</span>'
+        document.getElementById('content').innerHTML =
+          '<section class="intro-hero"><h2>' +
+          currentIntroduction.lead +
+          '</h2><p>武汉分行需求回检系统覆盖业务填报、结果审核、问题整改与台账归档，让每一项需求都有清晰、可追踪的验收结论。</p><a class="btn" href="/my-rechecks' +
+          versionQuery +
+          '">开始回检</a></section><section class="steps"><div class="step"><strong>1. 填报</strong><p>关联项目并记录需求达成情况、问题与建议。</p></div><div class="step"><strong>2. 审核</strong><p>按统一口径检查交付结果并给出审核结论。</p></div><div class="step"><strong>3. 整改</strong><p>针对未达成项补充说明并持续跟踪处理。</p></div><div class="step"><strong>4. 归档</strong><p>沉淀可检索、可导出的需求回检台账。</p></div></section>'
+      } else {
+        document.getElementById('pageTitle').textContent = '我的回检'
+        document.getElementById('pagePath').textContent = '/my-rechecks'
+        document.getElementById('releaseNote').innerHTML =
+          '<strong>' + versionLabel + '</strong><span>' + currentVersion.note + '</span>'
+        document.getElementById('content').innerHTML = currentVersion.body
+      }
+      document.getElementById('nav').innerHTML =
+        '<strong>武汉分行需求回检系统</strong>' +
+        MENU.map(function (menu) {
+          return (
+            '<a href="' +
+            menu[0] +
+            versionQuery +
+            '" class="' +
+            (menu[0] === path ? 'active' : '') +
+            '">' +
+            menu[1] +
+            '</a>'
+          )
+        }).join('')
     </script>
   </body>
 </html>

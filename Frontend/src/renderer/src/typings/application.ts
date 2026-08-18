@@ -394,6 +394,9 @@ export interface ApplicationConfig extends ApplicationSchemaConfig {
   schema: ApplicationSchemaConfig;
   requirementPlan?: RequirementDevelopmentPlan;
   planningConfirmedAt?: number;
+  /** 应用规划线程 id，模板生成时持久化，供从历史恢复设计阶段历史卡片使用
+   *  （后端在 lifecycle=ready_for_workbench 时会清空 threadId，前端需自行保留）。 */
+  planningThreadId?: string;
   createdAt: number;
 }
 

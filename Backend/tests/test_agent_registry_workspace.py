@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.agents import registry
+from app.protocols.workflow.definition import workflow_capabilities
 
 
 class AgentRegistryWorkspaceTests(unittest.TestCase):
@@ -15,6 +16,23 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         registry.clear_agent_bundle_cache()
+
+    def test_workflow_capabilities_publish_only_registered_agents(self) -> None:
+        """公开技能能力必须与当前六个 Agent 的注册表保持一致。"""
+
+        forced_agents = workflow_capabilities()["skillSelection"]["forcedAgents"]
+
+        self.assertEqual(
+            forced_agents,
+            [
+                "frontend",
+                "data_source",
+                "database",
+                "repair_planner",
+                "small_task",
+                "workspace_assistant",
+            ],
+        )
 
     def test_agent_bundles_are_cached_by_workspace_root(self) -> None:
         with (
@@ -49,10 +67,6 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             patch(
                 "app.agents.registry.create_database_agent",
                 side_effect=lambda model, **kwargs: ("database", kwargs),
-            ),
-            patch(
-                "app.agents.registry.create_test_agent",
-                side_effect=lambda model, **kwargs: ("test", kwargs),
             ),
             patch(
                 "app.agents.registry.create_repair_planner_agent",
@@ -126,10 +140,6 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             patch(
                 "app.agents.registry.create_database_agent",
                 side_effect=lambda model, **kwargs: ("database", kwargs),
-            ),
-            patch(
-                "app.agents.registry.create_test_agent",
-                side_effect=lambda model, **kwargs: ("test", kwargs),
             ),
             patch(
                 "app.agents.registry.create_repair_planner_agent",
@@ -209,10 +219,6 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
                 side_effect=lambda model, **kwargs: ("database", kwargs),
             ),
             patch(
-                "app.agents.registry.create_test_agent",
-                side_effect=lambda model, **kwargs: ("test", kwargs),
-            ),
-            patch(
                 "app.agents.registry.create_repair_planner_agent",
                 side_effect=lambda model, **kwargs: ("repair", kwargs),
             ),
@@ -235,7 +241,7 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
         for agent in (
             first.frontend,
             first.data_source,
-            first.test,
+            first.database,
             first.repair_planner,
             first.small_task,
             first.workspace_assistant,

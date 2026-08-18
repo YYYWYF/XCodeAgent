@@ -1,8 +1,11 @@
-import { Layout } from 'antd'
+import { Layout, notification } from 'antd'
+import { LoadingOutlined } from '@ant-design/icons'
 import { useEffect, useRef, useState } from 'react'
-import { LeftPanel } from '../components'
+import { LeftPanel, WorkbenchTopBar } from '../components'
+import { WorkbenchPhaseProvider } from '../context'
 import {
   inspectWorkspacePlanningArtifacts,
+  isApplicationCreationComplete,
   loadWorkspaceApplicationConfig
 } from '../service/applicationStorage'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
@@ -13,7 +16,9 @@ import type {
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
-  EditorMode
+  EditorMode,
+  WorkflowClarificationAnswers,
+  WorkflowRunPayload
 } from '../typings'
 import { cx, previewOrigin } from '../utils'
 import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
@@ -24,7 +29,22 @@ type Props = {
   applicationLifecycle?: ApplicationLifecycle
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onReturnWelcome: () => void
+  onSubmitPlanningClarification: (
+    workflow: WorkflowRunPayload,
+    answers: WorkflowClarificationAnswers,
+    editedRequirementSpec?: Record<string, unknown>,
+    requirementSpecFeedback?: string
+  ) => void
   onThemeChange: (theme: Theme) => void
+  onPlanningStreamReady?: (
+    inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
+  ) => void
+  /** 模板生成失败后重试（重新触发模板生成）。 */
+  onRetryTemplate?: () => void
+  /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
+  generatingTemplate?: boolean
+  planningThreadId?: string
+  planningWorkflow?: WorkflowRunPayload
   theme: Theme
 }
 
@@ -40,7 +60,13 @@ function WorkbenchPage({
   applicationLifecycle,
   onApplicationLifecycleChange,
   onReturnWelcome,
+  onSubmitPlanningClarification,
   onThemeChange,
+  onPlanningStreamReady,
+  onRetryTemplate,
+  generatingTemplate,
+  planningThreadId,
+  planningWorkflow,
   theme
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
@@ -64,22 +90,38 @@ function WorkbenchPage({
   const [previewLaunchError, setPreviewLaunchError] = useState('')
   const [previewLaunchLoading, setPreviewLaunchLoading] = useState(false)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
+  const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const entryStartedAtRef = useRef(Date.now())
   const launchedWorkspaceRef = useRef<string>()
   const activeLaunchWorkspaceRef = useRef('')
   const launchRunIdRef = useRef(0)
   const launchCleanupPendingRef = useRef(false)
   const launchCleanupTimerRef = useRef<number>()
+  // 模板是否就绪（lifecycle=ready_for_workbench）。用 boolean 而非整个 lifecycle 作为预览启动
+  // effect 的依赖，避免规划期流式 workflow 事件频繁递增 revision 导致 effect 反复 cleanup，
+  // 进而中断正在进行的 npm install / dev server 启动。
+  const lifecycleReadyForWorkbench = isApplicationCreationComplete(applicationLifecycle)
 
-  // 进入工作台时自动异步尝试启动项目预览（首次创建和重新进入均生效）
+  // 进入工作台时自动异步尝试启动项目预览（首次创建和重新进入均生效）。
+  // 新建应用需等模板拉取完成（lifecycle=ready_for_workbench）后才有 frontend/package.json，
+  // 在此之前启动会报"未找到前端 package.json"，故规划期跳过，就绪后再启动。
   useEffect(() => {
-    const workspacePath = application.workspaceRoot || application.projectParentPath || ''
+    const workspacePath =
+      application.workspaceRoot || application.projectParentPath || ''
+    console.log('[preview-launch-effect]', 'workspace=', workspacePath, 'source=', application.source, 'ready=', lifecycleReadyForWorkbench, 'launched=', launchedWorkspaceRef.current, 'activeLaunch=', activeLaunchWorkspaceRef.current)
     if (launchCleanupTimerRef.current !== undefined) {
       window.clearTimeout(launchCleanupTimerRef.current)
       launchCleanupTimerRef.current = undefined
     }
     launchCleanupPendingRef.current = false
     if (!workspacePath) {
+      activeLaunchWorkspaceRef.current = ''
+      setPreviewLaunchLoading(false)
+      return
+    }
+    // 新建应用在模板就绪前不启动预览（工作区尚无 frontend/package.json）。
+    // 非新建应用（source !== 'new'）已有完整工程，直接启动。
+    if (application.source === 'new' && !lifecycleReadyForWorkbench) {
       activeLaunchWorkspaceRef.current = ''
       setPreviewLaunchLoading(false)
       return
@@ -102,51 +144,72 @@ function WorkbenchPage({
     const launchRunId = launchRunIdRef.current + 1
     launchRunIdRef.current = launchRunId
     launchedWorkspaceRef.current = workspacePath
-
     setPreviewBaseUrl('')
     setPreviewLaunchError('')
     setPreviewLaunchLoading(true)
 
-    startProjectLaunch(workspacePath)
-      .then((result) => {
-        const launchStillCurrent =
-          launchRunIdRef.current === launchRunId &&
-          activeLaunchWorkspaceRef.current === workspacePath &&
-          !launchCleanupPendingRef.current
-        if (!launchStillCurrent) {
-          if (result.status === 'running') {
-            void stopProjectPreview(workspacePath).finally(() => {
-              void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
-                workspaceRoot: workspacePath
-              })
+    const loadingKey = `project-launch-${application.id}-${launchRunId}`
+    notification.open({
+      key: loadingKey,
+      message: '项目正在启动中',
+      description: '正在安装依赖并启动开发服务器，请稍候...',
+      placement: 'bottomRight',
+      duration: null,
+      icon: <LoadingOutlined />,
+      className: cx('project-launch-loading'),
+    })
+
+    startProjectLaunch(workspacePath).then(result => {
+      const launchStillCurrent =
+        launchRunIdRef.current === launchRunId &&
+        activeLaunchWorkspaceRef.current === workspacePath &&
+        !launchCleanupPendingRef.current
+      console.log('[preview-launch-result]', 'status=', result.status, 'previewUrl=', result.preview_url, 'stillCurrent=', launchStillCurrent, 'cleanupPending=', launchCleanupPendingRef.current, 'msg=', result.message)
+      notification.close(loadingKey)
+      if (!launchStillCurrent) {
+        if (result.status === 'running') {
+          void stopProjectPreview(workspacePath).finally(() => {
+            void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
+              workspaceRoot: workspacePath
             })
-          }
-          return
-        }
-        setPreviewLaunchLoading(false)
-        if (result.status === 'running' && result.preview_url) {
-          void window.xcodeAgent?.projectPreview?.registerWorkspace({
-            workspaceRoot: workspacePath
           })
-          setPreviewBaseUrl(previewOrigin(result.preview_url))
-          setPreviewLaunchError('')
-        } else {
-          const errorMsg = result.message || '未知错误'
-          setPreviewBaseUrl('')
-          setPreviewLaunchError(errorMsg)
         }
-      })
-      .catch((err) => {
-        const launchStillCurrent =
-          launchRunIdRef.current === launchRunId &&
-          activeLaunchWorkspaceRef.current === workspacePath &&
-          !launchCleanupPendingRef.current
-        if (!launchStillCurrent) return
-        const errorMsg = err instanceof Error ? err.message : '网络请求失败'
+        return
+      }
+      setPreviewLaunchLoading(false)
+      if (result.status === 'running' && result.preview_url) {
+        void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot: workspacePath })
+        setPreviewBaseUrl(previewOrigin(result.preview_url))
+        setPreviewLaunchError('')
+        notification.success({
+          message: '项目预览已启动',
+          description: '可在预览面板中查看效果',
+          placement: 'bottomRight',
+          duration: 3,
+        })
+      } else {
+        const errorMsg = result.message || '未知错误'
         setPreviewBaseUrl('')
         setPreviewLaunchError(errorMsg)
-        setPreviewLaunchLoading(false)
-      })
+        notification.warning({
+          message: '项目预览启动失败',
+          description: `${errorMsg}，可在预览区查看详情`,
+          placement: 'bottomRight',
+          duration: 3,
+        })
+      }
+    }).catch(err => {
+      notification.close(loadingKey)
+      const launchStillCurrent =
+        launchRunIdRef.current === launchRunId &&
+        activeLaunchWorkspaceRef.current === workspacePath &&
+        !launchCleanupPendingRef.current
+      if (!launchStillCurrent) return
+      setPreviewLaunchLoading(false)
+      const errorMsg = err instanceof Error ? err.message : '网络请求失败'
+      setPreviewBaseUrl('')
+      setPreviewLaunchError(errorMsg)
+    })
     return () => {
       launchCleanupPendingRef.current = true
       launchCleanupTimerRef.current = window.setTimeout(() => {
@@ -158,7 +221,7 @@ function WorkbenchPage({
         }
       }, 0)
     }
-  }, [application.id, application.projectParentPath, application.workspaceRoot])
+  }, [application.id, application.source, application.projectParentPath, application.workspaceRoot, lifecycleReadyForWorkbench])
 
   useEffect(() => {
     let active = true
@@ -268,26 +331,55 @@ function WorkbenchPage({
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       {developmentPlanningPagesLoaded ? (
-        <LeftPanel
-          application={workspaceApplication}
-          applicationLifecycle={applicationLifecycle}
-          developmentPlanningReady={developmentPlanningPagesLoaded}
-          hasPageDesigns={hasPageDesigns}
-          developmentPlanningPages={developmentPlanningPages}
-          developmentPlanningPageTree={developmentPlanningPageTree}
-          developmentPlanningApiContracts={developmentPlanningApiContracts}
-          developmentPlanningEntities={developmentPlanningEntities}
-          editorMode={editorMode}
-          onApplicationUpdate={handleApplicationUpdate}
-          onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
-          previewBaseUrl={previewBaseUrl}
-          previewLaunchError={previewLaunchError}
-          previewLaunchLoading={previewLaunchLoading}
-          onApplicationLifecycleChange={onApplicationLifecycleChange}
-          onReturnWelcome={onReturnWelcome}
-          onThemeChange={handleThemeChange}
-          theme={theme}
-        />
+        <WorkbenchPhaseProvider
+          applicationId={workspaceApplication.id}
+          lifecycle={applicationLifecycle}
+        >
+          <div className={cx('workbench-shell-column')}>
+            <WorkbenchTopBar
+              application={workspaceApplication}
+              workspaceRoot={
+                workspaceApplication.workspaceRoot || workspaceApplication.projectParentPath || ''
+              }
+              theme={theme}
+              onThemeChange={handleThemeChange}
+              onReturnWelcome={onReturnWelcome}
+              lifecycle={applicationLifecycle}
+              rightPanelOpen={rightPanelOpen}
+              onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
+            />
+            <div className={cx('workbench-shell-body')}>
+              <LeftPanel
+                application={workspaceApplication}
+                applicationLifecycle={applicationLifecycle}
+                developmentPlanningReady={developmentPlanningPagesLoaded}
+                hasPageDesigns={hasPageDesigns}
+                developmentPlanningPages={developmentPlanningPages}
+                developmentPlanningPageTree={developmentPlanningPageTree}
+                developmentPlanningApiContracts={developmentPlanningApiContracts}
+                developmentPlanningEntities={developmentPlanningEntities}
+                editorMode={editorMode}
+                onApplicationUpdate={handleApplicationUpdate}
+                onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
+                previewBaseUrl={previewBaseUrl}
+                previewLaunchError={previewLaunchError}
+                previewLaunchLoading={previewLaunchLoading}
+                onApplicationLifecycleChange={onApplicationLifecycleChange}
+                onReturnWelcome={onReturnWelcome}
+                onSubmitPlanningClarification={onSubmitPlanningClarification}
+                onThemeChange={handleThemeChange}
+                onPlanningStreamReady={onPlanningStreamReady}
+                onRetryTemplate={onRetryTemplate}
+                generatingTemplate={generatingTemplate}
+                planningThreadId={planningThreadId}
+                planningWorkflow={planningWorkflow}
+                theme={theme}
+                rightPanelOpen={rightPanelOpen}
+                onRightPanelOpenChange={setRightPanelOpen}
+              />
+            </div>
+          </div>
+        </WorkbenchPhaseProvider>
       ) : null}
 
       {entryStage !== 'ready' ? (

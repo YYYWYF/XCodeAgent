@@ -12,7 +12,6 @@ from deepagents.middleware.memory import MemoryMiddleware
 from app.agents.data_source import agent as data_source_agent
 from app.agents.frontend import agent as frontend_agent
 from app.agents.repair_planner import agent as repair_planner_agent
-from app.agents.test import agent as test_agent
 from app.agents.workspace_scope import create_workspace_backend
 from app.services import agent_memory_runtime
 from app.services.agent_file_documents import (
@@ -128,7 +127,6 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
         factories = (
             (frontend_agent, frontend_agent.create_frontend_agent),
             (data_source_agent, data_source_agent.create_data_source_agent),
-            (test_agent, test_agent.create_test_agent),
             (repair_planner_agent, repair_planner_agent.create_repair_planner_agent),
         )
         for module, factory in factories:

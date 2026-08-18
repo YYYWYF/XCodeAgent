@@ -98,6 +98,9 @@ type UseChatSessionsParams = {
   application: ApplicationConfig
   editorMode: EditorMode
   onCloseRightPanel: () => void
+  /** 设计阶段：规划 session 由 ensurePlanningSession 激活，loadSessionsForMode
+   *  只加载会话列表不自动 openChatSession，避免覆盖规划 session 的 activeSessionId。 */
+  designPhasePlanning?: boolean
 }
 
 type UseChatSessionsResult = {
@@ -115,6 +118,7 @@ type UseChatSessionsResult = {
   createEntitySession: (entityId: string, entityLabel: string) => Promise<SessionIdentity>
   createPageSession: (pageId: string, pageLabel: string) => Promise<SessionIdentity>
   ensureActiveSession: () => Promise<SessionIdentity>
+  ensurePlanningSession: (threadId: string) => Promise<SessionIdentity>
   ensureEndpointSession: (
     apiContractId: string,
     endpointId: string,
@@ -146,21 +150,28 @@ type UseChatSessionsResult = {
 export function useChatSessions({
   application,
   editorMode,
-  onCloseRightPanel
+  onCloseRightPanel,
+  designPhasePlanning = false
 }: UseChatSessionsParams): UseChatSessionsResult {
   const [sessionSummaries, setSessionSummaries] = useState<
     Record<EditorMode, ChatSessionSummary[]>
   >({ frontend: [], backend: [] })
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<EditorMode, string>>>({})
+  // 初始即标记为加载中：loadSessionsForMode 在 effect 中异步执行，
+  // 首次渲染时 loadingSessions 需为 true，否则 ensurePlanningSession effect
+  // 会在 sessionSummaries 为空时抢先创建重复 session，导致历史对话丢失。
   const [sessionLoadingModes, setSessionLoadingModes] = useState<
     Partial<Record<EditorMode, boolean>>
-  >({})
+  >({ frontend: true, backend: true })
   const [sessionErrors, setSessionErrors] = useState<Partial<Record<EditorMode, string>>>({})
   const [deletingSessionIds, setDeletingSessionIds] = useState<Partial<Record<EditorMode, string>>>(
     {}
   )
   const sessionSummariesRef = useRef(sessionSummaries)
   const pageSessionPromisesRef = useRef<Record<string, Promise<SessionIdentity>>>({})
+  // 设计阶段规划 session 已激活标志：ensurePlanningSession 完成后置 true，
+  // 阻止 loadSessionsForMode 的异步 openChatSession 覆盖规划 session 的 activeSessionId。
+  const planningSessionActivatedRef = useRef(false)
   const {
     agUiSessionsRef,
     draftForKey,
@@ -180,6 +191,13 @@ export function useChatSessions({
   useEffect(() => {
     sessionSummariesRef.current = sessionSummaries
   }, [sessionSummaries])
+
+  // 退出设计阶段时重置规划 session 激活标志，允许后续正常 openChatSession。
+  useEffect(() => {
+    if (!designPhasePlanning) {
+      planningSessionActivatedRef.current = false
+    }
+  }, [designPhasePlanning])
 
   useEffect(() => {
     loadSessionsForMode(editorMode)
@@ -227,6 +245,7 @@ export function useChatSessions({
     if (!application.workspaceRoot) {
       setSessionSummaries((current) => ({ ...current, [mode]: [] }))
       setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
+      setSessionLoadingModes((current) => ({ ...current, [mode]: false }))
       return
     }
 
@@ -243,10 +262,21 @@ export function useChatSessions({
         setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
         return
       }
-      // 优先恢复最近一条有内容的会话，避免空白“新对话”遮住已经落盘的页面设计记录。
-      const sessionToOpen =
-        nextSessions.find((session) => session.messageCount > 0) || nextSessions[0]
-      await openChatSession(mode, sessionToOpen.id)
+      // 设计阶段规划 session 由 ensurePlanningSession 激活，这里只加载列表，
+      // 不自动 openChatSession 抢占 activeSessionId，避免覆盖规划 session。
+      if (designPhasePlanning) return
+      // 优先恢复最近一条有内容的页面/接口会话，避免空白”新对话”遮住已经落盘的页面设计记录。
+      // 跳过 planning session（无 pageId 且无 endpointId 的规划会话）：开发阶段不应自动恢复
+      // 设计阶段对话，否则会覆盖 autoSelectDevPage 的首个待设计页面选择，对话区误显设计卡片。
+      const detailSessionToOpen =
+        nextSessions.find(
+          (session) => (session.pageId || session.endpointId) && session.messageCount > 0
+        ) || nextSessions.find((session) => session.pageId || session.endpointId)
+      if (detailSessionToOpen) {
+        console.log('[load-sessions] mode=', mode, 'total=', nextSessions.length, 'sessions=', nextSessions.map(s => ({ id: s.id.slice(0, 8), msgs: s.messageCount, thread: s.threadId?.slice(0, 8), page: s.pageId?.slice(0, 8) })), 'opening=', detailSessionToOpen.id.slice(0, 8), 'openingMsgs=', detailSessionToOpen.messageCount)
+        await openChatSession(mode, detailSessionToOpen.id)
+      }
+      // 若没有任何页面/接口会话，不自动打开——交给 autoSelectDevPage 选首个待设计页面。
     } catch (caughtError) {
       setSessionErrors((current) => ({
         ...current,
@@ -276,7 +306,13 @@ export function useChatSessions({
         pageId: session.pageId
       })
       registerSession(identity, session.messages)
+      console.log('[open-session] registered key=', key.slice(-12), 'msgs=', session.messages.length, 'threadId=', session.threadId?.slice(0, 8))
+    } else {
+      console.log('[open-session] agent exists, skip read key=', key.slice(-12), 'memMsgs=', getSessionMessages(key).length)
     }
+
+    // 设计阶段规划 session 已激活时，不抢 activeSessionId，避免覆盖规划对话。
+    if (planningSessionActivatedRef.current) return
 
     setActiveSessionIds((current) => ({ ...current, [mode]: sessionId }))
     onCloseRightPanel()
@@ -298,13 +334,13 @@ export function useChatSessions({
     }
   }
 
-  /** 切换页面时仅恢复已有且有消息的会话，空白页面等待首次发送后再创建会话。 */
+  /** 切换页面时恢复该页面的已有会话（含仅含挡板消息的空会话），无会话则清空等待首次创建。 */
   const handleSelectPage = async (pageId: string): Promise<void> => {
     const normalizedPageId = pageId.trim()
     if (!normalizedPageId || loadingSessions) return
 
     const existingSession = sessionSummariesRef.current[editorMode].find(
-      (session) => session.pageId === normalizedPageId && session.messageCount > 0
+      (session) => session.pageId === normalizedPageId
     )
     if (existingSession) {
       await handleOpenSession(existingSession.id)
@@ -372,7 +408,8 @@ export function useChatSessions({
     entityContext?: {
       entityId: string
       entityLabel: string
-    }
+    },
+    options?: { threadId?: string; title?: string }
   ): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) {
       throw new Error('创建会话前需要选择工作目录。')
@@ -380,7 +417,7 @@ export function useChatSessions({
 
     const now = Date.now()
     const sessionId = createChatSessionId()
-    const agUiSession = new AgUiChatSession()
+    const agUiSession = new AgUiChatSession(options?.threadId)
     const identity = createSessionIdentity({
       workspaceRoot: application.workspaceRoot,
       editorMode,
@@ -395,7 +432,9 @@ export function useChatSessions({
     })
     const session: ChatSessionRecord = {
       id: sessionId,
-      title: entityContext
+      title: options?.title
+        ? options.title
+        : entityContext
         ? `实体新会话：${entityContext.entityLabel}`
         : endpointContext
           ? `接口新会话：${endpointContext.endpointLabel}`
@@ -432,6 +471,92 @@ export function useChatSessions({
       return activeSession
     }
     return createNewSession()
+  }
+
+  /** 设计阶段规划会话：绑定 planningThreadId，用于在工作台展示规划对话流。
+   *  规划仍由 ApplicationPagePlanningModal 的 session 跑，本会话只承接转发的流式消息。 */
+  const ensurePlanningSession = async (threadId: string): Promise<SessionIdentity> => {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) throw new Error('规划线程标识不能为空。')
+    // 已存在同 threadId 的会话则复用并激活。
+    // 可能有多个同 threadId 的重复 session（历史 bug 产生），优先选消息最多的；
+    // 同时检查内存中 messagesRef 是否有历史消息（未落盘的规划对话）。
+    const sameThreadSessions = sessionSummaries[editorMode].filter(
+      (summary) => summary.threadId === normalizedThreadId
+    )
+    if (sameThreadSessions.length > 0) {
+      // 选消息最多或内存中有消息的 session，避免选中空壳重复 session 丢失历史对话。
+      const best = sameThreadSessions.reduce((picked, candidate) => {
+        const candidateKey = sessionRuntimeKey(
+          application.workspaceRoot || '',
+          editorMode,
+          candidate.id
+        )
+        const candidateMemCount = getSessionMessages(candidateKey).length
+        const pickedKey = sessionRuntimeKey(
+          application.workspaceRoot || '',
+          editorMode,
+          picked.id
+        )
+        const pickedMemCount = getSessionMessages(pickedKey).length
+        // 优先比内存消息数（未落盘的规划对话），再比磁盘 messageCount。
+        const candidateScore = candidateMemCount * 1000 + candidate.messageCount
+        const pickedScore = pickedMemCount * 1000 + picked.messageCount
+        return candidateScore > pickedScore ? candidate : picked
+      })
+      const identity = sessionIdentityFromSummary(best, editorMode, application.workspaceRoot || '')
+      if (identity) {
+        ensureAgent(identity)
+        // 内存中没有历史消息但磁盘有（应用重启后重新进入）：从磁盘加载消息，
+        // 避免规划对话历史丢失。内存已有消息（同一进程内切换工作区）则直接复用。
+        const memMessages = getSessionMessages(identity.key)
+        if (memMessages.length === 0 && best.messageCount > 0) {
+          try {
+            const session = await readChatSession(
+              application.workspaceRoot || '',
+              editorMode,
+              best.id
+            )
+            registerSession(identity, session.messages)
+          } catch {
+            // 读取失败不阻塞，后续流式 chunk 仍可注入。
+          }
+        }
+        planningSessionActivatedRef.current = true
+        setActiveSessionIds((current) => ({ ...current, [editorMode]: best.id }))
+        // 清理同 threadId 的重复空壳 session（消息数 0 且非选中），避免再次串用。
+        for (const duplicate of sameThreadSessions) {
+          if (duplicate.id === best.id) continue
+          const dupKey = sessionRuntimeKey(application.workspaceRoot || '', editorMode, duplicate.id)
+          const dupMemCount = getSessionMessages(dupKey).length
+          if (duplicate.messageCount === 0 && dupMemCount === 0) {
+            try {
+              await deleteChatSession(application.workspaceRoot || '', editorMode, duplicate.id)
+              removeSession(dupKey)
+              setSessionSummaries((current) => ({
+                ...current,
+                [editorMode]: current[editorMode].filter((s) => s.id !== duplicate.id)
+              }))
+            } catch {
+              // 删除失败不阻塞，下次再清理。
+            }
+          }
+        }
+        return identity
+      }
+    }
+    const identity = await createNewSession(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        threadId: normalizedThreadId,
+        title: '产品 Agent'
+      }
+    )
+    planningSessionActivatedRef.current = true
+    return identity
   }
 
   /** 为指定页面显式创建一个新的独立会话和 AG-UI thread。 */
@@ -673,6 +798,7 @@ export function useChatSessions({
     draft,
     draftKey,
     ensureActiveSession,
+    ensurePlanningSession,
     ensureEndpointSession,
     ensureEntitySession,
     ensurePageSession,
@@ -694,6 +820,13 @@ export function useChatSessions({
     sessions,
     setDraftByKey,
     setSelectedSkillsByKey,
-    setSessionMessages
+    setSessionMessages,
+    clearActiveSession: () => {
+      setActiveSessionIds((current) =>
+        current[editorMode] === undefined
+          ? current
+          : { ...current, [editorMode]: undefined }
+      )
+    }
   }
 }

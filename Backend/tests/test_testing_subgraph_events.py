@@ -4,11 +4,9 @@ import unittest
 from unittest.mock import patch
 
 from app.graph.subgraphs.testing import (
-    api_contract_check,
     build_testing_subgraph,
     integration_test,
 )
-from app.workspace.code_changes import CapturedWorkspaceChanges
 
 
 class TestingSubgraphEventsTests(unittest.TestCase):
@@ -24,25 +22,12 @@ class TestingSubgraphEventsTests(unittest.TestCase):
     def test_test_events_accumulate_across_all_nodes(self) -> None:
         subgraph = build_testing_subgraph()
 
-        test_agent_value = {"reviewed_by": "test_agent", "agent_note": "ok"}
-
         with patch(
             "app.graph.subgraphs.testing.run_integration_checks",
             return_value={
                 "test_results": [{"id": "frontend_install", "passed": True}],
                 "test_events": ["frontend_install", "backend_install"],
             },
-        ), patch(
-            "app.graph.subgraphs.testing.validate_api_contract_consistency",
-            return_value=[],
-        ), patch(
-            "app.graph.subgraphs.testing.summarize_tests_with_deep_agent",
-            return_value=test_agent_value,
-        ) as test_agent, patch(
-            "app.graph.subgraphs.testing.capture_agent_file_changes",
-            side_effect=lambda **kwargs: CapturedWorkspaceChanges(
-                value=kwargs["action"](), code_change_set=None
-            ),
         ), patch(
             "app.graph.subgraphs.testing.evaluate_quality_gate",
             return_value={
@@ -54,12 +39,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             "app.graph.subgraphs.testing.write_test_report_json",
             return_value="/tmp/test_report.json",
         ), patch(
-            "app.graph.subgraphs.testing.plan_repairs_with_repair_planner_agent",
-            return_value={"decision": "terminal_failure", "status": "terminal_failure", "tasks": []},
-        ), patch(
-            "app.graph.subgraphs.testing.write_repair_task_plan_json",
-            return_value="/tmp/repair_task_plan.json",
-        ):
+            "app.graph.subgraphs.testing.plan_repairs_with_repair_planner_agent"
+        ) as repair_planner:
             result = subgraph.invoke(
                 {
                     "workspace": "/tmp/workspace",
@@ -78,8 +59,6 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         # instead of being overwritten by the last node.
         self.assertIn("frontend_install", events)
         self.assertIn("backend_install", events)
-        self.assertIn("api_contract", events)
-        self.assertIn("test_agent_review", events)
         self.assertIn("main_quality_gate", events)
         self.assertIn("repair_planning:skipped", events)
         # Order follows node execution order.
@@ -88,44 +67,11 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             [
                 "frontend_install",
                 "backend_install",
-                "api_contract",
-                "test_agent_review",
                 "main_quality_gate",
                 "repair_planning:skipped",
             ],
         )
-        self.assertEqual(
-            test_agent.call_args.kwargs["selected_skill_names"],
-            ["workflow-skill"],
-        )
-
-    def test_api_contract_check_reports_running_and_terminal_progress(self) -> None:
-        """验证确定性 API 契约检查也会写入实时检查清单。"""
-
-        progress: list[dict] = []
-        with patch(
-            "app.graph.subgraphs.testing.validate_api_contract_consistency",
-            return_value=[],
-        ):
-            result = api_contract_check(
-                {
-                    "build_summary": {"failed": 0, "pending": 0},
-                    "project_plan": {},
-                    "test_results": [],
-                },
-                config={
-                    "configurable": {
-                        "integration_test_progress_reporter": progress.append,
-                    }
-                },
-            )
-
-        self.assertEqual(
-            [event["status"] for event in progress],
-            ["running", "passed"],
-        )
-        self.assertEqual(progress[-1]["check"]["id"], "api_contract")
-        self.assertEqual(result["test_results"][0]["id"], "api_contract")
+        repair_planner.assert_not_called()
 
     def test_integration_test_forwards_nested_progress_as_custom_snapshot(self) -> None:
         """验证外层节点会把内部子图回调合并后写入 custom stream。"""
@@ -160,7 +106,6 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             return {
                 "test_results": [],
                 "test_events": [],
-                "test_agent_review": {},
                 "test_report": {},
                 "quality_gate_passed": True,
                 "needs_revision": False,

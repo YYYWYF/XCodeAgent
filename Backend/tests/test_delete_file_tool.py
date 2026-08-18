@@ -11,7 +11,6 @@ from deepagents.backends import FilesystemBackend
 from app.agents.data_source.agent import create_data_source_agent
 from app.agents.frontend.agent import create_frontend_agent
 from app.agents.repair_planner.agent import create_repair_planner_agent
-from app.agents.test.agent import create_test_agent
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.tools.delete_file import create_delete_file_tool
@@ -161,10 +160,6 @@ class DeleteFileToolTests(unittest.TestCase):
                     side_effect=lambda **kwargs: kwargs,
                 ),
                 patch(
-                    "app.agents.test.agent.create_deep_agent",
-                    side_effect=lambda **kwargs: kwargs,
-                ),
-                patch(
                     "app.agents.repair_planner.agent.create_deep_agent",
                     side_effect=lambda **kwargs: kwargs,
                 ),
@@ -181,12 +176,6 @@ class DeleteFileToolTests(unittest.TestCase):
                     user_skills_backend=user_skills_backend,
                     agent_memory_backend=agent_memory_backend,
                 )
-                test = create_test_agent(
-                    "model",
-                    workspace_root=workspace,
-                    user_skills_backend=user_skills_backend,
-                    agent_memory_backend=agent_memory_backend,
-                )
                 repair_planner = create_repair_planner_agent(
                     "model",
                     workspace_root=workspace,
@@ -196,14 +185,15 @@ class DeleteFileToolTests(unittest.TestCase):
 
         self.assertIn("delete_file", _tool_names(frontend.get("tools", [])))
         self.assertIn("delete_file", _tool_names(data_source.get("tools", [])))
-        self.assertNotIn("delete_file", _tool_names(test.get("tools", [])))
         self.assertNotIn("delete_file", _tool_names(repair_planner.get("tools", [])))
         self.assertEqual(
             frontend.get("skills"),
             [BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         )
-        self.assertEqual(data_source.get("skills"), [USER_SKILLS_VIRTUAL_ROOT])
-        self.assertEqual(test.get("skills"), [USER_SKILLS_VIRTUAL_ROOT])
+        self.assertEqual(
+            data_source.get("skills"),
+            [BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
+        )
         self.assertEqual(repair_planner.get("skills"), [USER_SKILLS_VIRTUAL_ROOT])
 
     def _invoke_delete(self, workspace: str | None, file_path: str) -> dict:

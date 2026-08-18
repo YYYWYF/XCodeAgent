@@ -30,7 +30,12 @@ type Props = {
   previewLaunchError: string
   rightPanelOpen: boolean
   onRightPanelOpenChange: (open: boolean) => void
+  applicationPreviewMode: boolean
+  onApplicationPreviewModeChange: (open: boolean) => void
   theme: 'light' | 'dark'
+  versionReadOnly: boolean
+  versionPreviewOnly: boolean
+  versionViewKey: string
 }
 
 /** 组合工作台左侧应用导航与主 Workflow 面板。 */
@@ -50,13 +55,19 @@ export default function LeftPanel({
   previewLaunchError,
   rightPanelOpen,
   onRightPanelOpenChange,
-  theme
+  applicationPreviewMode,
+  onApplicationPreviewModeChange,
+  theme,
+  versionReadOnly,
+  versionPreviewOnly,
+  versionViewKey
 }: Props): ReactElement {
   return (
     <div className={cx('left-panel-wrapper')}>
       <Sider width="100%" className={cx('workbench-pane', 'workbench-left')}>
         <div className={cx('pane-content')}>
           <AiChatPanel
+            key={versionViewKey}
             application={application}
             applicationLifecycle={applicationLifecycle}
             developmentPlanningReady={developmentPlanningReady}
@@ -73,6 +84,11 @@ export default function LeftPanel({
             theme={theme}
             rightPanelOpen={rightPanelOpen}
             onRightPanelOpenChange={onRightPanelOpenChange}
+            applicationPreviewMode={applicationPreviewMode}
+            onApplicationPreviewModeChange={onApplicationPreviewModeChange}
+            versionReadOnly={versionReadOnly}
+            versionPreviewOnly={versionPreviewOnly}
+            versionViewKey={versionViewKey}
           />
         </div>
       </Sider>

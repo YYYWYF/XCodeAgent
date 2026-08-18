@@ -15,7 +15,7 @@ def _test_repair_planning_prompt(
     revision_requests: list[dict[str, Any]],
     build_task_plan: dict[str, Any] | None,
 ) -> str:
-    """构造集成测试 RepairPlanner 提示，并强制契约错误走实现修复任务。"""
+    """构造集成测试 RepairPlanner 提示并约束修复决策边界。"""
 
     return (
         "You are the RepairPlanner Agent for an app-generation workflow.\n"
@@ -33,10 +33,7 @@ def _test_repair_planning_prompt(
         '  "reason": "required for confirmation or terminal failure",\n'
         '  "failure_handling": "how the workflow should handle this failure"\n'
         "}\n\n"
-        "For a contract_mismatch failure, choose repair and create bounded data-source "
-        "implementation tasks that make the generated project conform to the current "
-        "contract; do not request ProjectPlan revision confirmation. Choose "
-        "requires_user_confirmation only when repair requires expanding product scope, "
+        "Choose requires_user_confirmation only when repair requires expanding product scope, "
         "changing confirmed requirements, or making a product decision. Choose "
         "terminal_failure when evidence is insufficient or the failure is not "
         "automatically actionable.\n\n"
@@ -175,16 +172,6 @@ def plan_repairs_with_repair_planner_agent(
             "strategy": agent_note,
         }
 
-    if _has_contract_mismatch(revision_requests):
-        # API 契约错误必须生成实现修复任务，不能被模型重新路由到计划确认。
-        planner_decision = {
-            **planner_decision,
-            "decision": "repair",
-            "strategy": planner_decision.get("strategy")
-            or "Repair generated data-source implementation to satisfy the API contract.",
-            "reason": "",
-        }
-
     decision = planner_decision.get("decision")
     if decision in {"requires_user_confirmation", "terminal_failure"}:
         bounded_candidate = create_repair_task_plan(
@@ -233,14 +220,3 @@ def plan_repairs_with_repair_planner_agent(
     if planner_decision.get("strategy"):
         repair_task_plan["strategy"] = planner_decision["strategy"]
     return repair_task_plan
-
-
-def _has_contract_mismatch(revision_requests: list[dict[str, Any]]) -> bool:
-    """判断集成测试返修请求中是否包含 API 契约错误。"""
-
-    return any(
-        isinstance(request.get("failed_check"), dict)
-        and request["failed_check"].get("failure_category") == "contract_mismatch"
-        for request in revision_requests
-        if isinstance(request, dict)
-    )

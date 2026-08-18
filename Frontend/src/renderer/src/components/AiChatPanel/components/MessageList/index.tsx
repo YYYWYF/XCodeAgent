@@ -3,13 +3,18 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   RobotOutlined,
-  ToolOutlined
+  ToolOutlined,
+  UserOutlined
 } from '@ant-design/icons'
 import { Spin, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useWorkbenchPhase } from '../../../../context'
+import { WORKBENCH_PHASE_AGENTS } from '../../../../workbenchPhase'
 import type {
   ApplicationLifecycle,
+  DatasourceEnum,
+  DevelopmentPlanningPageOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../../../typings'
@@ -23,6 +28,10 @@ import WorkflowRunCard, {
   workflowClarification
 } from '../WorkflowRunCard'
 import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
+import TemplatePreparingCard, {
+  isTemplatePreparing
+} from '../WorkflowRunCard/TemplatePreparingCard'
+import DetailBlockerCard from '../../../DetailConfirmationPageSelector/DetailBlockerCard'
 import {
   processStepsForMessageDisplay,
   workflowMessageContentForDisplay
@@ -79,18 +88,61 @@ function entityDesignMessageContent(
   return parts.join('\n\n')
 }
 
+/** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 研发 / 审查）在回复。
+ *  人像图标 + Agent 角色名，独占一行，下方换行展示正文/卡片。 */
+function MessageAgentHeader({ agentKey }: { agentKey: 'product' | 'development' | 'test' }): ReactElement {
+  const agent = WORKBENCH_PHASE_AGENTS[agentKey]
+  return (
+    <div className={cx('ai-message-agent', agentKey)}>
+      <span className={cx('ai-message-agent-avatar')} aria-hidden="true">
+        <UserOutlined />
+      </span>
+      <span className={cx('ai-message-agent-name')}>{agent.role}</span>
+    </div>
+  )
+}
+
 type MessageListProps = {
   applicationLifecycle?: ApplicationLifecycle
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
   entityDesignSession?: boolean
+  /** 设计阶段：规划 workflow 确认卡始终可提交（由 planningSubmitRef 驱动），
+   *  不走开发 execution 的 workflowInteractionAvailability 判定。 */
+  designPhasePlanning?: boolean
+  /** UI 设计稿确认：当前选中页 id（与右侧预览面板联动）。 */
+  uiDesignActivePageId?: string
+  /** UI 设计稿确认：选中页变化时通知外部（联动右侧预览）。 */
+  onUiDesignActivePageChange?: (pageId: string) => void
+  /** UI 设计稿确认：当前正在执行单页动作的 pageId（联动右侧加载态）。 */
+  uiDesignActionPageId?: string | null
+  /** UI 设计稿确认：单页动作页变化时通知外部。 */
+  onUiDesignActionPageIdChange?: (pageId: string | null) => void
+  /** 需求文档确认：保存编辑草稿（重写 Markdown+JSON），返回更新后的 spec。 */
+  onSaveRequirementSpec?: (
+    workflow: WorkflowRunPayload,
+    spec: Record<string, unknown>
+  ) => Promise<Record<string, unknown> | undefined>
+  /** 需求文档确认：数据源类型（驱动编辑器数据源字段渲染）。 */
+  datasourceType?: DatasourceEnum
+  /** 需求文档确认：菜单根路径（驱动编辑器页面路由前缀）。 */
+  rootPath?: string
+  /** 模板就绪后点击进入开发阶段（放开 product 锁，恢复跟随旅程）。 */
+  onEnterDevelopment?: () => void
+  /** 模板生成失败后重试（重新触发模板生成）。 */
+  onRetryTemplate?: () => void
+  /** 当前应用是否正在生成模板（前端状态信号，lifecycle 在生成期间不变）。 */
+  generatingTemplate?: boolean
+  /** 开发阶段：detailBlocker 卡片点击「开始详细设计」。 */
+  onStartDetailDesign?: (page: DevelopmentPlanningPageOption) => void
   loading: boolean
   messages: AgentChatMessage[]
   onEntityDesignGateJump?: (entityId: string) => void
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
   onSubmitClarification: (
     workflow: WorkflowRunPayload,
-    answers: ClarificationAnswers
+    answers: ClarificationAnswers,
+    editedRequirementSpec?: Record<string, unknown>
   ) => Promise<void>
   onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
   revertingCodeChangeIds: ReadonlySet<string>
@@ -103,6 +155,18 @@ export default function MessageList({
   codeChangeActionsDisabled,
   conversationRunning,
   entityDesignSession = false,
+  designPhasePlanning = false,
+  uiDesignActivePageId,
+  onUiDesignActivePageChange,
+  uiDesignActionPageId,
+  onUiDesignActionPageIdChange,
+  onSaveRequirementSpec,
+  datasourceType,
+  rootPath,
+  onEnterDevelopment,
+  onRetryTemplate,
+  generatingTemplate,
+  onStartDetailDesign,
   loading,
   messages,
   onEntityDesignGateJump,
@@ -112,6 +176,7 @@ export default function MessageList({
   onSubmitClarification,
   workspaceRoot
 }: MessageListProps): ReactElement {
+  const { phase: currentPhase } = useWorkbenchPhase()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
   const followLatestContentRef = useRef(true)
@@ -122,6 +187,10 @@ export default function MessageList({
   const hasStreamingProcess = messages.some(
     (message) => message.id === activeAssistantMessageId && Boolean(message.processSteps?.length)
   )
+  // 诊断：设计阶段空状态/加载态判定。
+  useEffect(() => {
+    console.log('[message-list] msgs=', messages.length, 'designPhasePlanning=', designPhasePlanning, 'loading=', loading)
+  }, [messages.length, designPhasePlanning, loading])
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -208,13 +277,23 @@ export default function MessageList({
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
           {messages.length === 0 ? (
             <div className={cx('ai-message-empty')}>
-              <span className={cx('ai-message-empty-mark')}>
-                <RobotOutlined />
-              </span>
-              <Text strong>从一个想法开始</Text>
+              {designPhasePlanning ? (
+                <>
+                  <Spin size="small" />
+                  <Text type="secondary">产品 Agent 正在准备需求确认…</Text>
+                </>
+              ) : (
+                <>
+                  <span className={cx('ai-message-empty-mark')}>
+                    <RobotOutlined />
+                  </span>
+                  <Text strong>从一个想法开始</Text>
+                </>
+              )}
             </div>
           ) : (
             messages.map((message) => {
+              console.log('[msg-debug] id=', message.id, 'content=', JSON.stringify(message.content).slice(0, 50), 'hasWorkflow=', Boolean(message.workflow), 'phase=', message.workflow?.summary?.phase, 'clarStatus=', message.workflow ? workflowClarification(message.workflow)?.status : undefined, 'planningLoading=', message.planningLoading)
               const messageLoading = message.id === activeAssistantMessageId
               const entityDesignMessage = isEntityDesignWorkflow(message.workflow)
               // 实体会话内所有消息按对话样式渲染，运行中的临时快照缺少实体
@@ -246,9 +325,26 @@ export default function MessageList({
                   message.workflow &&
                     workflowClarification(message.workflow)?.review?.summary?.entityDesign
                 )
+              // UI 确认阶段的卡片在换一换/选模板期间（workflow running，clarification
+              // 可能短暂丢失 requires_user_input/mode）也保持显示，避免卡片闪烁。
+              // 用 phase=ui_confirmation 作为权威判据（running 期间 phase 不丢），
+              // 辅以 clarification.mode 兜底。
+              const messageClarification = message.workflow ? workflowClarification(message.workflow) : undefined
+              const isUiDesignConfirmationCard =
+                message.workflow &&
+                (message.workflow.summary?.phase === 'ui_confirmation' ||
+                  messageClarification?.mode === 'ui_design_confirmation')
+              // 项目规划生成中（phase=project_planning, running）也展示 WorkflowRunCard，
+              // 让用户看到"正在生成项目规划…"加载态，而非长时间无反馈。
+              const isProjectPlanningCard =
+                message.workflow &&
+                message.workflow.summary?.phase === 'project_planning'
+              const showWorkflowCard = Boolean(
+                message.workflow && (requiresClarification || isUiDesignConfirmationCard || isProjectPlanningCard)
+              )
               const interactionAvailability =
                 message.workflow && requiresClarification
-                  ? conversation
+                  ? conversation || designPhasePlanning
                     ? 'active'
                     : workflowInteractionAvailability(message.workflow, applicationLifecycle)
                   : 'stale'
@@ -259,6 +355,26 @@ export default function MessageList({
                     message.workflow,
                     Boolean(visibleProcessSteps?.length)
                   )
+              // 项目计划确认阶段：ProjectPlanSummary 已展示结构化计划，隐藏流式 JSON 原文。
+              // 项目规划生成中（running）：只显示加载态，不展示原始 JSON 流式文本（太乱）。
+              // 规划占位消息（planningLoading）：用户提交后产品 Agent 正在思考，只显示 loading 态。
+              const isProjectPlanConfirmationCard =
+                message.workflow &&
+                messageClarification?.mode === 'project_plan_confirmation'
+              const isProjectPlanningRunningCard =
+                message.workflow &&
+                message.workflow.summary?.phase === 'project_planning' &&
+                message.workflow.summary?.status === 'running'
+              const isPlanningLoadingPlaceholder = Boolean(message.planningLoading)
+              // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
+              // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。
+              const effectiveAssistantContent =
+                isProjectPlanConfirmationCard ||
+                isProjectPlanningRunningCard ||
+                isPlanningLoadingPlaceholder ||
+                (showWorkflowCard && requiresClarification && !entityDesignCardVisible)
+                  ? ''
+                  : visibleAssistantContent
               return (
                 <article
                   className={cx(
@@ -271,9 +387,38 @@ export default function MessageList({
                   <div className={cx('ai-message-content')}>
                     {message.role === 'assistant' ? (
                       <>
+                        {/* 统一 Agent 头：人像图标 + 当前阶段 Agent 角色名（产品/研发/审查），
+                            独占一行，下方换行展示正文/卡片。 */}
+                        <MessageAgentHeader agentKey={currentPhase} />
+                        {/* 设计阶段规划占位消息：初次进入或用户提交后产品 Agent 正在准备，
+                            planningLoading 标记的占位消息显示 loading 态，
+                            流式 chunk 到达后 planningLoading 被清除，展示返回内容。 */}
+                        {isPlanningLoadingPlaceholder && (
+                          <div className={cx('ai-message-loading-placeholder')}>
+                            <Spin size="small" />
+                            <Text type="secondary">正在准备需求确认…</Text>
+                          </div>
+                        )}
+                        {/* 开发阶段 detailBlocker：研发 Agent 流内挡板卡，
+                            选中待设计页面时注入，展示「尚未进行详细设计」+ 开始按钮。 */}
+                        {message.detailBlocker && (
+                          <DetailBlockerCard
+                            disabled={loading}
+                            onStart={(page) => onStartDetailDesign?.(page)}
+                            selectedPage={{
+                              pageId: message.detailBlocker!.pageId,
+                              key: message.detailBlocker!.pageId,
+                              label: message.detailBlocker!.label,
+                              path: message.detailBlocker!.path || '/',
+                              purpose: message.detailBlocker!.purpose || '',
+                              designed: false
+                            }}
+                          />
+                        )}
                         {!hideEntityWorkflowChrome &&
                         visibleProcessSteps &&
-                        visibleProcessSteps.length > 0 && (
+                        visibleProcessSteps.length > 0 &&
+                        !(designPhasePlanning && showWorkflowCard) && (
                           <ProcessSteps
                             conversation={conversation}
                             loading={messageLoading}
@@ -305,11 +450,11 @@ export default function MessageList({
                             </div>
                           </div>
                         )}
-                        {visibleAssistantContent && (
+                        {effectiveAssistantContent && (
                           <div
                             className={cx(!messageLoading && codeChanges && 'final-result-content')}
                           >
-                            <MarkdownContent content={visibleAssistantContent} />
+                            <MarkdownContent content={effectiveAssistantContent} />
                           </div>
                         )}
                         {message.workflow &&
@@ -323,12 +468,19 @@ export default function MessageList({
                               workflow={message.workflow}
                               workspaceRoot={workspaceRoot}
                             />
-                          ) : requiresClarification ? (
+                          ) : showWorkflowCard ? (
                             <WorkflowRunCard
                               disabled={loading || interactionAvailability !== 'active'}
                               interactionAvailability={interactionAvailability}
                               onEntityDesignGateJump={onEntityDesignGateJump}
                               onSubmitClarification={onSubmitClarification}
+                              uiDesignActivePageId={uiDesignActivePageId}
+                              onUiDesignActivePageChange={onUiDesignActivePageChange}
+                              uiDesignActionPageId={uiDesignActionPageId}
+                              onUiDesignActionPageIdChange={onUiDesignActionPageIdChange}
+                              onSaveRequirementSpec={onSaveRequirementSpec}
+                              datasourceType={datasourceType}
+                              rootPath={rootPath}
                               workflow={message.workflow}
                               workspaceRoot={workspaceRoot}
                             />
@@ -368,6 +520,17 @@ export default function MessageList({
               )
             })
           )}
+          {designPhasePlanning && (generatingTemplate || isTemplatePreparing(applicationLifecycle)) ? (
+            <article className={cx('ai-message', 'assistant', 'template-preparing-message')}>
+              <div className={cx('ai-message-content')}>
+                <TemplatePreparingCard
+                  lifecycle={applicationLifecycle}
+                  onEnterDevelopment={onEnterDevelopment}
+                  onRetry={onRetryTemplate}
+                />
+              </div>
+            </article>
+          ) : null}
           {loading && !hasStreamingProcess && (
             <div className={cx('ai-message', 'assistant', 'loading')}>
               <Spin size="small" />

@@ -2,6 +2,7 @@ import type { EditorMode } from '../../../typings'
 import type { ChatSessionSummary } from '../../../service/chatSessions'
 
 export type SessionIdentity = {
+  artifactIds?: string[]
   key: string
   sessionId: string
   threadId: string
@@ -24,6 +25,7 @@ export function sessionRuntimeKey(
 }
 
 export function createSessionIdentity(input: {
+  artifactIds?: string[]
   workspaceRoot: string
   editorMode: EditorMode
   sessionId: string
@@ -50,6 +52,7 @@ export function sessionIdentityFromSummary(
 ): SessionIdentity | undefined {
   if (!summary || !workspaceRoot) return undefined
   return createSessionIdentity({
+    artifactIds: summary.artifactIds,
     workspaceRoot,
     editorMode,
     sessionId: summary.id,

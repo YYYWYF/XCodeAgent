@@ -13,7 +13,6 @@ from app.agents.database.agent import create_database_agent
 from app.agents.frontend.agent import create_frontend_agent
 from app.agents.frontend.generator import _frontend_generation_prompt
 from app.agents.repair_planner.agent import create_repair_planner_agent
-from app.agents.test.agent import create_test_agent
 from app.tools.code_graph_context import create_code_graph_context_tool
 
 
@@ -30,7 +29,6 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                 "app.agents.frontend.agent.create_deep_agent",
                 "app.agents.data_source.agent.create_deep_agent",
                 "app.agents.database.agent.create_deep_agent",
-                "app.agents.test.agent.create_deep_agent",
                 "app.agents.repair_planner.agent.create_deep_agent",
             )
             with (
@@ -38,7 +36,6 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                 patch(factories[1], side_effect=lambda **kwargs: kwargs),
                 patch(factories[2], side_effect=lambda **kwargs: kwargs),
                 patch(factories[3], side_effect=lambda **kwargs: kwargs),
-                patch(factories[4], side_effect=lambda **kwargs: kwargs),
             ):
                 common = {
                     "workspace_root": workspace,
@@ -48,20 +45,18 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                 frontend = create_frontend_agent("model", **common)
                 data_source = create_data_source_agent("model", **common)
                 database = create_database_agent("model", **common)
-                test = create_test_agent("model", **common)
                 repair = create_repair_planner_agent("model", **common)
 
         self.assertIn("code_graph_context", _tool_names(frontend))
         self.assertIn("code_graph_context", _tool_names(data_source))
         self.assertNotIn("code_graph_context", _tool_names(database))
-        self.assertNotIn("code_graph_context", _tool_names(test))
         self.assertNotIn("code_graph_context", _tool_names(repair))
         for agent in (frontend, data_source):
             prompt = " ".join(str(agent.get("system_prompt") or "").split())
             self.assertIn("Process dispatched tasks one by one by `task_id`", prompt)
             self.assertIn("do not repeat the same graph query", prompt)
             self.assertIn("always read the current source file", prompt)
-        for agent in (database, test, repair):
+        for agent in (database, repair):
             self.assertNotIn("code_graph_context", str(agent.get("system_prompt") or ""))
 
     def test_execution_prompts_define_graph_validity_and_fallback(self) -> None:

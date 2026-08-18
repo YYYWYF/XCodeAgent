@@ -845,4 +845,306 @@
   }
 }
 
+.@{class-prefix}-artifact-auth-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--wb-surface-subtle, #f7f8fa);
+  border: 1px solid var(--wb-border, #eef0f3);
+}
+
+.@{class-prefix}-artifact-auth-bar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.@{class-prefix}-artifact-auth-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--wb-text-secondary, #8a9099);
+  font-size: 13px;
+
+  .anticon {
+    color: var(--wb-code-add-text, #1a7f37);
+  }
+}
+
+.@{class-prefix}-artifact-auth-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+// 需求文档确认卡片的按钮：圆角与高度对齐 UI 确认的「进入项目规划」按钮。
+.@{class-prefix}-requirement-spec-confirmation-card .@{class-prefix}-artifact-auth-actions .ant-btn,
+.@{class-prefix}-project-plan-confirmation-card .@{class-prefix}-artifact-auth-actions .ant-btn {
+  height: 42px;
+  padding: 0 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+// 需求澄清表单「确认并继续」按钮：与 UI 确认的「进入项目规划」按钮同款——
+// 主色实心、白字、圆角、按内容宽度不占满卡片。
+// 父级 .workflow-clarification 是 flex column（align-items: stretch），需 align-self 解除拉伸。
+.@{class-prefix}-clarification-confirm-btn.ant-btn {
+  align-self: flex-end;
+  height: 42px;
+  padding: 0 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff !important;
+  border-color: var(--wb-accent, #6b3cf0) !important;
+  background: var(--wb-accent, #6b3cf0) !important;
+  box-shadow: 0 4px 14px rgba(107, 60, 240, 0.28);
+
+  &:hover:not(:disabled) {
+    color: #fff !important;
+    border-color: var(--wb-accent-hover, #7e50f4) !important;
+    background: var(--wb-accent-hover, #7e50f4) !important;
+  }
+
+  &:disabled {
+    opacity: 1;
+    color: var(--wb-text-secondary, rgba(0, 0, 0, 0.45)) !important;
+    border-color: var(--wb-border, #d9d9d9) !important;
+    background: var(--wb-surface-hover, rgba(0, 0, 0, 0.04)) !important;
+    box-shadow: none;
+  }
+}
+
+// 项目计划确认后"产品 Agent 正在准备模板"卡片：加载/就绪/失败三态。
+// 复用 artifact-auth-bar 容器风格，内部按 lifecycle.initialization.stage 切换。
+.@{class-prefix}-template-preparing-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: var(--wb-surface-subtle, #f7f8fa);
+  border: 1px solid var(--wb-border, #eef0f3);
+}
+
+.@{class-prefix}-template-preparing-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.@{class-prefix}-template-preparing-icon {
+  font-size: 16px;
+
+  &.@{class-prefix}-is-ready {
+    font-size: 22px;
+    color: #16a34a;
+  }
+
+  &.@{class-prefix}-is-error {
+    color: var(--wb-danger-text, #cf1322);
+  }
+}
+
+.@{class-prefix}-template-preparing-ready {
+  align-items: stretch;
+  background: linear-gradient(135deg, rgba(22, 163, 74, 0.06), transparent 40%), var(--wb-surface-subtle, #f7f8fa);
+  border-color: rgba(22, 163, 74, 0.25);
+
+  .@{class-prefix}-template-preparing-head .ant-typography {
+    color: #16a34a;
+    font-size: 16px;
+  }
+}
+
+.@{class-prefix}-template-preparing-desc {
+  color: var(--wb-text-secondary, #8a9099);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.@{class-prefix}-template-preparing-enter-btn.ant-btn {
+  align-self: flex-end;
+  height: 42px;
+  padding: 0 20px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 10px;
+}
+
+.@{class-prefix}-workflow-run-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--wb-surface-subtle, #f7f8fa);
+  border: 1px solid var(--wb-border, #eef0f3);
+
+  .anticon {
+    color: var(--wb-accent, #6b3cf0);
+  }
+}
+
+// 需求文档确认卡片：内嵌 RequirementSpecEditor（原为 Modal 上下文组件，用 --modal-* 变量）。
+// 工作台用 --wb-* 变量体系，这里把 --modal-* 映射到 --wb-*，让编辑器及其子组件样式在工作台正确渲染，
+// 同时用 --wb-* 给 planning-artifact-card 等容器补工作台版外观（这些类名原属 Modal less）。
+.@{class-prefix}-requirement-spec-confirmation-card {
+  display: grid;
+  gap: 10px;
+}
+
+.@{class-prefix}-requirement-spec-confirmation-hint {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.@{class-prefix}-requirement-spec-edit-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+// 「修改」按钮：次要样式，强调色边框与文字，与 primary「确认并继续规划」搭配。
+.ant-btn.@{class-prefix}-requirement-spec-edit-btn {
+  color: var(--wb-accent, #6b3cf0);
+  border-color: var(--wb-accent-border, rgba(107, 60, 240, 0.3));
+  background: var(--wb-surface, #ffffff);
+
+  &:hover:not(:disabled) {
+    color: var(--wb-accent-hover, #7c3aed);
+    border-color: var(--wb-accent, #6b3cf0);
+    background: var(--wb-accent-soft, rgba(107, 60, 240, 0.06));
+  }
+}
+
+// 需求文档修改弹窗：Modal portal 挂在 body 下，脱离 .workbench-shell 的 --wb-* 变量域，
+// 所以 --modal-* 直接用硬编码值（浅色），深色模式由 body:has(...dark) 覆盖。
+// 限制 content 高度避免内容撑高超出屏幕。
+.@{class-prefix}-requirement-spec-edit-modal {
+  --modal-bg: #f5f5f5;
+  --modal-surface: rgba(255, 255, 255, 0.78);
+  --modal-surface-hover: rgba(0, 0, 0, 0.045);
+  --modal-field: rgba(0, 0, 0, 0.025);
+  --modal-border: rgba(0, 0, 0, 0.075);
+  --modal-border-strong: rgba(0, 0, 0, 0.115);
+  --modal-text: #202124;
+  --modal-text-secondary: #65666a;
+  --modal-accent: #6b3cf0;
+  --modal-accent-hover: #7e50f4;
+
+  .ant-modal-content {
+    max-height: 84vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ant-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) .@{class-prefix}-requirement-spec-edit-modal {
+  --modal-bg: #1b1b1d;
+  --modal-surface: #28282b;
+  --modal-surface-hover: #34343a;
+  --modal-field: #1f1f22;
+  --modal-border: #3a3a3f;
+  --modal-border-strong: #4a4a52;
+  --modal-text: #e6e6e8;
+  --modal-text-secondary: #9b9ba0;
+  --modal-accent: #a782ff;
+  --modal-accent-hover: #b89aff;
+}
+
+.@{class-prefix}-planning-artifact-card {
+  overflow: hidden;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface);
+
+  > header {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--wb-border);
+    background: var(--wb-surface-subtle);
+
+    > div {
+      display: grid;
+      gap: 2px;
+    }
+  }
+}
+
+.@{class-prefix}-planning-artifact-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 36px;
+  border: 1px solid var(--wb-border);
+  border-radius: 5px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-bg);
+}
+
+.@{class-prefix}-planning-artifact-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-planning-artifact-toggle.ant-btn,
+.@{class-prefix}-planning-artifact-edit.ant-btn {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  color: var(--wb-accent);
+  background: var(--wb-surface);
+
+  &:hover,
+  &:focus {
+    border-color: var(--wb-accent);
+    color: var(--wb-accent);
+    background: var(--wb-surface-subtle);
+  }
+}
+
+.@{class-prefix}-planning-artifact-content {
+  max-height: 430px;
+  padding: 16px;
+  overflow: auto;
+  color: var(--wb-text);
+  background: var(--wb-bg);
+}
+
+.@{class-prefix}-requirement-spec-confirmation-actions {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface-subtle);
+}
+
 @import './WorkflowRunCardConsole.less';

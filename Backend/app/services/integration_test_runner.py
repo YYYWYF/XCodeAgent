@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -33,13 +32,12 @@ def run_integration_checks(
     *,
     on_progress: CheckProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """按应用数据源类型执行必要集成检查，并逐项通知检查状态。"""
+    """执行前端与 Maven 项目的必要集成检查，并逐项通知检查状态。"""
 
     root = workspace_root(state).resolve()
     log_root = workflow_artifact_root(state).resolve() / "runtime" / "tests"
     log_root.mkdir(parents=True, exist_ok=True)
     frontend = _find_frontend_package(root)
-    workspace_package = _read_package_project(root / "package.json")
     results: list[dict[str, Any]] = []
     events: list[str] = []
     for result in _frontend_checks(root, log_root, frontend, on_progress=on_progress):
@@ -183,60 +181,13 @@ def _backend_checks(
             ),
         ]
 
-    if _has_pytest_project(root):
-        python_argv = _python_command()
-        if python_argv is None:
-            return [
-                _missing_tool_result(
-                    check_id="backend_unit_tests",
-                    name="后端单元测试通过",
-                    layer="backend",
-                    language="python",
-                    evidence="发现 pytest 项目，但未找到可用的 Python 解释器。",
-                    required=True,
-                    on_progress=on_progress,
-                )
-            ]
-        return [
-            _missing_tool_result(
-                check_id="backend_build",
-                name="后端构建检查",
-                layer="backend",
-                language="python",
-                evidence="Python 项目没有独立构建步骤，已跳过后端构建检查。",
-                required=False,
-                on_progress=on_progress,
-            ),
-            _missing_tool_result(
-                check_id="backend_static_check",
-                name="后端静态检查通过",
-                layer="backend",
-                language="python",
-                evidence="未发现统一静态检查命令，已跳过后端静态检查。",
-                required=False,
-                on_progress=on_progress,
-            ),
-            _run_command_result(
-                check_id="backend_unit_tests",
-                name="后端单元测试通过",
-                layer="backend",
-                language="python",
-                argv=[*python_argv, "-m", "pytest"],
-                cwd=root,
-                root=root,
-                log_root=log_root,
-                required=True,
-                on_progress=on_progress,
-            ),
-        ]
-
     return [
         _missing_tool_result(
             check_id="backend_build",
             name="后端构建检查",
             layer="backend",
             language=None,
-            evidence="未发现 Maven、pom.xml 或 pytest 项目配置，跳过后端构建检查。",
+            evidence="未发现 Maven 或 pom.xml 项目配置，跳过后端构建检查。",
             required=False,
             on_progress=on_progress,
         ),
@@ -505,19 +456,6 @@ def _maven_command(cwd: Path) -> list[str] | None:
     return [command] if command else None
 
 
-def _python_command() -> list[str] | None:
-    """选择可运行目标项目 pytest 的跨平台 Python 命令。"""
-
-    if not getattr(sys, "frozen", False) and sys.executable:
-        return [sys.executable]
-    for name in ("python3", "python"):
-        command = shutil.which(name)
-        if command:
-            return [command]
-    py_launcher = shutil.which("py")
-    return [py_launcher, "-3"] if py_launcher else None
-
-
 def _scripts(package: PackageProject) -> dict[str, Any]:
     scripts = package.package_json.get("scripts")
     return scripts if isinstance(scripts, dict) else {}
@@ -540,13 +478,6 @@ def _first_package_with_script(
         if _first_script(_scripts(package), script_names):
             return package
     return None
-
-
-def _has_pytest_project(root: Path) -> bool:
-    return any(
-        (root / name).exists()
-        for name in ("pytest.ini", "pyproject.toml", "setup.cfg")
-    )
 
 
 def _failure_category(check_id: str) -> str:

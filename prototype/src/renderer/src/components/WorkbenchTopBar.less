@@ -44,19 +44,15 @@
   border: 0;
   border-radius: 6px;
   background: var(--wb-surface-subtle);
-  cursor: pointer;
+  cursor: default;
   color: var(--wb-text-secondary);
   font-size: 12px;
   flex: 0 0 auto;
-
-  &:hover {
-    background: var(--wb-surface-hover);
-    color: var(--wb-text);
-  }
 }
 
 .@{class-prefix}-workbench-topbar-app-name {
   overflow: hidden;
+  color: var(--wb-text);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -68,6 +64,21 @@
   gap: 6px;
   min-width: 0;
   flex: 0 0 auto;
+}
+
+.@{class-prefix}-workbench-topbar-phase.@{class-prefix}-locked {
+  .@{class-prefix}-workbench-topbar-stepper {
+    opacity: 0.48;
+  }
+
+  .@{class-prefix}-workbench-topbar-phase-item,
+  .@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-active,
+  .@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-reached {
+    color: var(--wb-text-tertiary);
+    background: var(--wb-surface-subtle);
+    border-color: transparent;
+    cursor: not-allowed;
+  }
 }
 
 .@{class-prefix}-workbench-topbar-stepper {
@@ -120,12 +131,29 @@
   }
 }
 
-.@{class-prefix}-workbench-topbar-phase-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.75;
+.@{class-prefix}-workbench-topbar-phase-index {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  background: var(--wb-surface-subtle);
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  opacity: 0.78;
+}
+
+.@{class-prefix}-workbench-topbar-phase-item.@{class-prefix}-active
+  .@{class-prefix}-workbench-topbar-phase-index {
+  color: var(--wb-accent);
+  background: #fff;
+  border-color: #fff;
+  opacity: 1;
 }
 
 .@{class-prefix}-workbench-topbar-node {
@@ -136,21 +164,6 @@
 }
 
 /* —— 右侧状态提示（Agent + 跟随旅程）—— */
-.@{class-prefix}-workbench-topbar-tail {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-
-.@{class-prefix}-workbench-topbar-agent {
-  color: var(--wb-text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 .@{class-prefix}-workbench-topbar-follow {
   cursor: default;
   user-select: none;
@@ -161,8 +174,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
+  min-width: 26px;
   height: 26px;
+  gap: 6px;
+  padding: 0 9px;
   margin-right: 4px;
   border: 0;
   border-radius: 6px;
@@ -179,6 +194,37 @@
   &.@{class-prefix}-active {
     color: var(--wb-accent);
     background: var(--wb-accent-soft);
+  }
+}
+
+.@{class-prefix}-workbench-topbar-panel-toggle {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--wb-text-tertiary);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-left: auto;
+
+  &:hover:not(:disabled) {
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+  }
+
+  &.@{class-prefix}-active {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.38;
   }
 }
 

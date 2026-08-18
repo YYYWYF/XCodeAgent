@@ -27,6 +27,10 @@ type ActiveApplicationPlanningsController = {
   activePlannings: PersistedActivePlanning[]
   deletingPlanningIds: ReadonlySet<string>
   dismissPlanning: (applicationId: string) => void
+  /** 只隐藏规划 Modal（清 visiblePlanningId），不删除 activePlannings 中的 planning。 */
+  hidePlanning: (applicationId: string) => void
+  /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
+  generatingAppIds: ReadonlySet<string>
   onPlanningConfirmed: (applicationId: string) => Promise<boolean>
   registerStopHandler: (applicationId: string, handler?: () => Promise<void>) => void
   removePlanning: (applicationId: string) => void
@@ -35,7 +39,8 @@ type ActiveApplicationPlanningsController = {
   startPlanning: (
     application: ApplicationConfig,
     threadId: string,
-    lifecycle: ApplicationLifecycle
+    lifecycle: ApplicationLifecycle,
+    visible?: boolean
   ) => void
   updatePlanningStatus: (applicationId: string, status: ActivePlanningStatus) => void
   updatePlanningWorkflow: (applicationId: string, workflow: WorkflowRunPayload) => void
@@ -99,7 +104,12 @@ export function useActiveApplicationPlannings({
 
   // 启动新的独立规划会话，并保留其他未完成会话。
   const startPlanning = useCallback(
-    (application: ApplicationConfig, threadId: string, lifecycle: ApplicationLifecycle): void => {
+    (
+      application: ApplicationConfig,
+      threadId: string,
+      lifecycle: ApplicationLifecycle,
+      visible = true
+    ): void => {
       refreshIdRef.current += 1
       commitPlannings((current) => [
         {
@@ -110,7 +120,11 @@ export function useActiveApplicationPlannings({
         },
         ...current.filter((planning) => planning.application.id !== application.id)
       ])
-      setVisiblePlanning(application.id)
+      // visible=false 时只挂载规划会话（Modal 隐藏但继续跑 graph），用于新建应用后
+      // 直接进工作台、规划在后台运行的场景；后续 awaiting_user 时由 AppEntryPage 自动弹出。
+      if (visible) {
+        setVisiblePlanning(application.id)
+      }
     },
     [commitPlannings, setVisiblePlanning]
   )
@@ -171,15 +185,27 @@ export function useActiveApplicationPlannings({
     [commitPlannings, setVisiblePlanning]
   )
 
+  // 只隐藏指定规划的 Modal，保留 planning 在 activePlannings 中，
+  // 供工作台设计阶段继续读取 planningWorkflow 渲染需求文档/UI设计稿 tab。
+  const hidePlanning = useCallback(
+    (applicationId: string): void => {
+      if (visiblePlanningIdRef.current === applicationId) {
+        setVisiblePlanning(undefined)
+      }
+    },
+    [setVisiblePlanning]
+  )
+
   // 为模板生成回调提供当前可见应用标识，避免捕获过期渲染状态。
   const getVisiblePlanningId = useCallback(
     (): string | undefined => visiblePlanningIdRef.current,
     []
   )
-  const { generateApplicationTemplateFiles, waitForTemplateGeneration } =
+  const { generateApplicationTemplateFiles, waitForTemplateGeneration, generatingAppIds } =
     useApplicationTemplateGeneration({
       commitPlannings,
       dismissPlanning,
+      hidePlanning,
       getVisiblePlanningId,
       onOpenWorkbench
     })
@@ -280,6 +306,8 @@ export function useActiveApplicationPlannings({
     activePlannings,
     deletingPlanningIds,
     dismissPlanning,
+    hidePlanning,
+    generatingAppIds,
     onPlanningConfirmed,
     registerStopHandler,
     removePlanning,

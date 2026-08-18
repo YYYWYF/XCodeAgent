@@ -3,11 +3,11 @@ import { Button, message, Tooltip } from 'antd'
 import {
   CreateApplicationAction,
   OpenWorkspaceAction,
-  WelcomeAgentTrack,
   WelcomeHero,
   WelcomeRecentProjects
 } from '../components/Welcome'
 import BrandLogo from '../components/BrandLogo'
+import heroArtworkLight from '../assets/welcome-application-layers-light.png'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
 import './WelcomePage.less'
@@ -28,14 +28,13 @@ type WelcomeTheme = 'dark' | 'light'
 // 不再有独立的“未完成应用计划”恢复入口（原“阶段 1/2”分支已移除）。
 export default function WelcomePage({
   onOpenApplication,
-  onOpenWorkbenchAfterCreate,
-  theme
+  onOpenWorkbenchAfterCreate
 }: Props): JSX.Element {
   return (
-    <main className={cx('welcome-page')} data-theme={theme}>
+    <main className={cx('welcome-page')} data-theme="light">
       <section className={cx('welcome-shell')}>
         <header className={cx('welcome-topbar')}>
-          <BrandLogo className={cx('welcome-brand')} size={34} />
+          <BrandLogo className="welcome-brand" size={34} />
 
           <nav className={cx('welcome-utilities')} aria-label="欢迎页工具">
             <Button
@@ -57,21 +56,30 @@ export default function WelcomePage({
         </header>
 
         <div className={cx('welcome-content')}>
-          <section className={cx('welcome-primary')}>
-            <WelcomeHero />
-
-            <section className={cx('welcome-actions')} aria-label="开始使用 XCodeAgent">
-              <CreateApplicationAction
-                onOpenWorkbenchAfterCreate={onOpenWorkbenchAfterCreate}
-                theme={theme}
-              />
-              <OpenWorkspaceAction onOpenApplication={onOpenApplication} theme={theme} />
-            </section>
-
-            <WelcomeRecentProjects onOpenApplication={onOpenApplication} theme={theme} />
+          <section className={cx('welcome-create-area')}>
+            <div className={cx('welcome-hero-stage')}>
+              <div className={cx('welcome-hero-copy')}>
+                <WelcomeHero />
+              </div>
+              <div className={cx('welcome-hero-artwork')} aria-hidden="true">
+                <img className={cx('welcome-artwork-light')} src={heroArtworkLight} alt="" />
+              </div>
+            </div>
+            <CreateApplicationAction
+              onOpenWorkbenchAfterCreate={onOpenWorkbenchAfterCreate}
+              theme="light"
+            />
           </section>
 
-          <WelcomeAgentTrack />
+          <section className={cx('welcome-lower')}>
+            <WelcomeRecentProjects
+              headerAction={
+                <OpenWorkspaceAction compact onOpenApplication={onOpenApplication} theme="light" />
+              }
+              onOpenApplication={onOpenApplication}
+              theme="light"
+            />
+          </section>
         </div>
       </section>
     </main>

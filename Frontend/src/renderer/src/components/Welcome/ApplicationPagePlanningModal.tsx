@@ -53,6 +53,18 @@ type Props = {
   threadId: string
   visible: boolean
   onReturnHome: () => void
+  onSubmitClarificationChange: (
+    handler:
+      | ((
+          workflow: WorkflowRunPayload,
+          answers: WorkflowClarificationAnswers,
+          editedRequirementSpec?: Record<string, unknown>,
+          requirementSpecFeedback?: string
+        ) => void)
+      | null
+  ) => void
+  onPlanningContent?: (content: string) => void
+  onPlanningWorkflow?: (workflow: WorkflowRunPayload) => void
   onConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
   onStatusChange: (status: ActivePlanningStatus) => void
   onWorkflowChange: (workflow: WorkflowRunPayload) => void
@@ -203,6 +215,9 @@ export default function ApplicationPagePlanningModal({
   threadId,
   visible,
   onReturnHome,
+  onSubmitClarificationChange,
+  onPlanningContent,
+  onPlanningWorkflow,
   onConfirmed,
   onStatusChange,
   onWorkflowChange,
@@ -212,6 +227,9 @@ export default function ApplicationPagePlanningModal({
   const originalRequest = useMemo(() => buildApplicationPlanningRequest(application), [application])
   const startedRef = useRef(false)
   const completedRef = useRef(false)
+  // 标记本轮 runPlanning 流式 onWorkflow 是否已转发最终（requires_user_input）workflow，
+  // 避免 result.workflow 重复转发导致工作台新增重复卡片。
+  const streamedFinalWorkflowRef = useRef(false)
   // 一旦进入过 UI 确认阶段就锁定：单页"选模板/换一换"run 期间 workflow 流式快照
   // 可能短暂丢失 clarification/phase，导致 showingProgress 闪烁切回进度页白屏。
   // 锁定后整个会话不再切回全屏进度页，逐页动作只在渲染区显示加载态。
@@ -292,14 +310,17 @@ export default function ApplicationPagePlanningModal({
 
   // 保持加载界面直到模板准备完成，失败时恢复可重试状态。
   const completePlanning = async (confirmation: ApplicationPlanningConfirmation): Promise<void> => {
+    console.log('[planning-modal] completePlanning triggered, calling onConfirmed')
     completedRef.current = true
     setPreparingTemplate(true)
     try {
       const succeeded = await onConfirmed(confirmation)
+      console.log('[planning-modal] completePlanning onConfirmed succeeded=', succeeded)
       if (succeeded) return
       completedRef.current = false
       setError('应用模板准备失败，请重试；成功后才会进入工作台。')
     } catch (reason) {
+      console.error('[planning-modal] completePlanning error', reason)
       completedRef.current = false
       throw reason
     } finally {
@@ -315,11 +336,13 @@ export default function ApplicationPagePlanningModal({
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
   ): Promise<void> => {
+    console.log('[planning-modal] runPlanning start workspaceRoot=', application.workspaceRoot, 'answers=', answers, 'hasResumeState=', Boolean(resumeState), 'threadId=', threadId)
     if (!application.workspaceRoot) return
     setRunning(true)
     onStatusChange('running')
     setError('')
     setStreamingContent('')
+    streamedFinalWorkflowRef.current = false
     try {
       let currentResumeState = resumeState
       if (currentResumeState) {
@@ -350,15 +373,35 @@ export default function ApplicationPagePlanningModal({
             },
         workflowScope: 'application_planning',
         workspaceRoot: application.workspaceRoot,
-        onContent: setStreamingContent,
-        onWorkflow: handleWorkflowChange
+        onContent: (content) => {
+          setStreamingContent(content)
+          onPlanningContent?.(content)
+        },
+        onWorkflow: (nextWorkflow) => {
+          console.log('[planning-modal] onWorkflow streamed', nextWorkflow?.summary?.phase, nextWorkflow?.summary?.status)
+          handleWorkflowChange(nextWorkflow)
+          onPlanningWorkflow?.(nextWorkflow)
+          // 流式已转发最终（requires_user_input）workflow，标记避免 result.workflow 重复转发。
+          if (nextWorkflow?.summary?.status === 'requires_user_input') {
+            streamedFinalWorkflowRef.current = true
+          }
+        }
       })
-      if (result.workflow) handleWorkflowChange(result.workflow)
+      console.log('[planning-modal] result.workflow=', Boolean(result.workflow), 'phase=', result.workflow?.summary?.phase, 'status=', result.workflow?.summary?.status, 'streamedFinal=', streamedFinalWorkflowRef.current)
+      if (result.workflow) {
+        handleWorkflowChange(result.workflow)
+        // 流式已转发最终 workflow 时不再重复转发，避免工作台新增重复卡片。
+        if (!streamedFinalWorkflowRef.current) {
+          onPlanningWorkflow?.(result.workflow)
+        }
+      }
       const confirmation = workflowConfirmation(result.workflow)
+      console.log('[planning-modal] workflowConfirmation=', Boolean(confirmation), 'completedRef=', completedRef.current, 'resultStatus=', result.workflow?.summary?.status, 'hasAppPlanningConfirmation=', Boolean(result.workflow?.result?.application_planning_confirmation || result.workflow?.state?.application_planning_confirmation))
       if (confirmation && !completedRef.current) {
         await completePlanning(confirmation)
       }
     } catch (reason) {
+      console.error('[planning-modal] runPlanning error', reason)
       if (isAuthenticationFailure(reason)) return
       setError(formatError(reason, '创建规划运行失败'))
     } finally {
@@ -383,10 +426,29 @@ export default function ApplicationPagePlanningModal({
         editorMode: 'frontend',
         workflowScope: 'application_planning',
         workspaceRoot: application.workspaceRoot,
-        onContent: setStreamingContent,
-        onWorkflow: handleWorkflowChange
+        onContent: (content) => {
+          setStreamingContent(content)
+          // 恢复只读 checkpoint，content 是状态描述（"已恢复待确认..."），
+          // 不是产品 Agent 对话，不转发到工作台 MessageList，避免生硬文案。
+        },
+        onWorkflow: (nextWorkflow) => {
+          console.log('[planning-modal] onWorkflow streamed', nextWorkflow?.summary?.phase, nextWorkflow?.summary?.status)
+          handleWorkflowChange(nextWorkflow)
+          onPlanningWorkflow?.(nextWorkflow)
+          // 流式已转发最终（requires_user_input）workflow，标记避免 result.workflow 重复转发。
+          if (nextWorkflow?.summary?.status === 'requires_user_input') {
+            streamedFinalWorkflowRef.current = true
+          }
+        }
       })
-      if (result.workflow) handleWorkflowChange(result.workflow)
+      console.log('[planning-modal] result.workflow=', Boolean(result.workflow), 'phase=', result.workflow?.summary?.phase, 'status=', result.workflow?.summary?.status, 'streamedFinal=', streamedFinalWorkflowRef.current)
+      if (result.workflow) {
+        handleWorkflowChange(result.workflow)
+        // 流式已转发最终 workflow 时不再重复转发，避免工作台新增重复卡片。
+        if (!streamedFinalWorkflowRef.current) {
+          onPlanningWorkflow?.(result.workflow)
+        }
+      }
     } catch (reason) {
       if (isAuthenticationFailure(reason)) return
       setError(formatError(reason, '恢复待确认规划失败'))
@@ -427,6 +489,7 @@ export default function ApplicationPagePlanningModal({
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
   ): void => {
+    console.log('[planning-modal] handleSubmitClarification answers=', answers, 'phase=', currentWorkflow.summary?.phase, 'threadId=', threadId)
     void runPlanning(
       '请根据本轮确认继续创建规划。',
       answers,
@@ -435,6 +498,23 @@ export default function ApplicationPagePlanningModal({
       requirementSpecFeedback
     )
   }
+
+  // 把提交确认的能力注册给 AppEntryPage，供工作台中间区的 ApplicationPlanningQuestionPanel
+  // 直接调用（设计阶段不弹 Modal，确认卡内嵌在工作台中间区）。
+  useEffect(() => {
+    onSubmitClarificationChange(
+      (
+        workflow: WorkflowRunPayload,
+        answers: WorkflowClarificationAnswers,
+        editedRequirementSpec?: Record<string, unknown>,
+        requirementSpecFeedback?: string
+      ) => {
+        handleSubmitClarification(workflow, answers, editedRequirementSpec, requirementSpecFeedback)
+      }
+    )
+    return () => onSubmitClarificationChange(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 保存需求编辑草稿并刷新当前确认卡，不确认文档也不继续规划。
   const handleSaveRequirementSpec = async (

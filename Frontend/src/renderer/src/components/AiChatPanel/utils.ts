@@ -1,4 +1,4 @@
-import { MIN_ASSISTANT_PANEL_WIDTH, MIN_RIGHT_PANEL_WIDTH, SPLIT_HANDLE_WIDTH } from './constants'
+import { MIN_ASSISTANT_PANEL_RATIO, MIN_RIGHT_PANEL_RATIO } from './constants'
 import type {
   DevelopmentPlanningApiEndpoint,
   DevelopmentPlanningEntityOption,
@@ -168,14 +168,13 @@ export function formatSessionTime(value: number): string {
   })
 }
 
-export function clampAssistantPanelWidth(nextWidth: number, panel: HTMLElement | null): number {
-  const panelWidth = panel?.getBoundingClientRect().width ?? 0
-  const maxWidth = Math.max(
-    MIN_ASSISTANT_PANEL_WIDTH,
-    panelWidth - MIN_RIGHT_PANEL_WIDTH - SPLIT_HANDLE_WIDTH
+export function clampAssistantPanelRatio(nextRatio: number): number {
+  const maxRatio = Math.max(
+    MIN_ASSISTANT_PANEL_RATIO,
+    1 - MIN_RIGHT_PANEL_RATIO,
   )
 
-  return Math.min(Math.max(nextWidth, MIN_ASSISTANT_PANEL_WIDTH), maxWidth)
+  return Math.min(Math.max(nextRatio, MIN_ASSISTANT_PANEL_RATIO), maxRatio)
 }
 
 /** 判断变更路径是否属于工作目录内的 Agent 内部状态目录。 */

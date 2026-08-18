@@ -7,3 +7,4 @@ export { default as GlobalConfigPanel } from './GlobalConfigPanel/GlobalConfigPa
 export { default as LeftPanel } from './LeftPanel/LeftPanel';
 export { default as PlaceholderPanel } from './PlaceholderPanel/PlaceholderPanel';
 export { default as ResizeHandle } from './ResizeHandle/ResizeHandle';
+export { default as WorkbenchTopBar } from './WorkbenchTopBar';

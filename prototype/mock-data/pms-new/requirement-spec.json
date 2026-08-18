@@ -1,40 +1,30 @@
 {
   "app_info": {
-    "name": "武汉分行项目管理系统",
-    "description": "武汉分行的项目与需求回检管理平台，管理项目生命周期与需求回检闭环。",
+    "name": "武汉分行需求回检系统",
+    "description": "武汉分行的需求回检管理平台，覆盖需求回检填报与审核闭环。",
     "terminal": "PC",
     "layout": "side 侧边导航布局",
-    "target_audience": "分行项目管理人员与回检相关人员"
+    "target_audience": "分行回检填报人与审核人"
   },
   "user_roles": [
     {
-      "id": "project-manager",
-      "name": "项目经理",
-      "description": "管理本人负责的项目。",
-      "permissions": ["查看我的项目", "创建项目"]
+      "id": "recheck-reporter",
+      "name": "回检填报人",
+      "description": "提交需求回检单，跟踪回检状态。",
+      "permissions": ["提交回检", "查看我的回检"]
     },
     {
-      "id": "recheck-user",
-      "name": "回检人员",
-      "description": "负责需求回检相关操作。",
-      "permissions": ["提交回检", "审核回检"]
+      "id": "recheck-reviewer",
+      "name": "回检审核人",
+      "description": "审核回检单。",
+      "permissions": ["审核回检"]
     }
   ],
   "pages": [
-    { "pageId": "my-projects", "name": "我的项目", "path": "/my-projects", "description": "项目列表" },
-    { "pageId": "my-rechecks", "name": "我的回检", "path": "/my-rechecks", "description": "回检填报" },
-    { "pageId": "recheck-review", "name": "回检审核", "path": "/recheck-review", "description": "回检审核" }
+    { "pageId": "recheck-introduction", "name": "回检介绍", "path": "/recheck-introduction", "description": "静态介绍需求回检场景与处理流程" },
+    { "pageId": "my-rechecks", "name": "我的回检", "path": "/my-rechecks", "description": "回检填报" }
   ],
   "business_flows": [
-    {
-      "id": "project-flow",
-      "name": "项目管理流程",
-      "description": "项目创建到验收的基本流程。",
-      "steps": [
-        { "step_id": 1, "description": "创建项目" },
-        { "step_id": 2, "description": "推进与验收" }
-      ]
-    },
     {
       "id": "recheck-flow",
       "name": "需求回检流程",
@@ -46,7 +36,8 @@
     }
   ],
   "acceptance_criteria": [
-    "可管理项目与回检"
+    "回检介绍无需接口即可完整展示",
+    "可提交回检单并跟踪状态"
   ],
   "assumptions": [
     "角色与流程细节待设计阶段澄清确认"

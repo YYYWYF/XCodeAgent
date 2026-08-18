@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -58,7 +57,6 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         self.assertTrue(any("clean" in argv and "install" in argv for argv in calls))
         report = evaluate_quality_gate(
             test_results=result["test_results"],
-            agent_note="ok",
         )
         self.assertTrue(
             any(
@@ -102,9 +100,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         ids = [item["id"] for item in result["test_results"]]
         self.assertIn("frontend_install", ids)
         self.assertIn("frontend_build", ids)
-        self.assertIn("frontend_lint", ids)
         self.assertIn("frontend_typecheck", ids)
-        self.assertIn("frontend_unit_tests", ids)
         self.assertNotIn("e2e_tests", ids)
         self.assertIn(["pnpm", "install"], calls)
         self.assertIn(["pnpm", "run", "build"], calls)
@@ -114,7 +110,6 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         self.assertTrue(all("execution" in item for item in result["test_results"]))
         report = evaluate_quality_gate(
             test_results=result["test_results"],
-            agent_note="ok",
         )
         self.assertNotIn("e2e_tests", report["quality_gate"]["required_checks"])
 
@@ -144,29 +139,28 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         self.assertIn("未找到包管理器命令", install["evidence"])
         run.assert_not_called()
 
-    def test_python_tests_use_current_interpreter(self) -> None:
-        """验证 Windows 与 macOS 都通过当前 Python 解释器运行 pytest。"""
+    def test_python_project_markers_do_not_trigger_backend_commands(self) -> None:
+        """验证 Python 配置文件不会触发解释器探测或 pytest 命令。"""
 
-        with tempfile.TemporaryDirectory() as workspace:
-            (Path(workspace) / "pyproject.toml").write_text(
-                "[tool.pytest.ini_options]\n",
-                encoding="utf-8",
-            )
-            calls: list[list[str]] = []
+        for marker, content in (
+            ("pyproject.toml", "[tool.pytest.ini_options]\n"),
+            ("pytest.ini", "[pytest]\n"),
+            ("setup.cfg", "[tool:pytest]\n"),
+        ):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as workspace:
+                (Path(workspace) / marker).write_text(content, encoding="utf-8")
+                with patch("app.services.integration_test_runner.subprocess.run") as run:
+                    result = run_integration_checks({"workspace": workspace})
 
-            def fake_run(argv, **kwargs):
-                """记录 pytest 命令并返回成功结果。"""
-
-                calls.append(argv)
-                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
-
-            with patch(
-                "app.services.integration_test_runner.subprocess.run",
-                side_effect=fake_run,
-            ):
-                run_integration_checks({"workspace": workspace})
-
-        self.assertIn([sys.executable, "-m", "pytest"], calls)
+                backend_build = next(
+                    item
+                    for item in result["test_results"]
+                    if item["id"] == "backend_build"
+                )
+                self.assertTrue(backend_build["skipped"])
+                self.assertIsNone(backend_build["command"])
+                self.assertIsNone(backend_build["language"])
+                run.assert_not_called()
 
     def test_maven_wrapper_matches_host_platform(self) -> None:
         """验证 Maven 工程优先使用当前系统可执行的 wrapper。"""
@@ -297,14 +291,14 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with patch("app.services.integration_test_runner.subprocess.run") as run:
                 result = run_integration_checks({"workspace": workspace})
 
-        backend_unit_tests = next(
+        backend_build = next(
             item
             for item in result["test_results"]
-            if item["id"] == "backend_unit_tests"
+            if item["id"] == "backend_build"
         )
-        self.assertTrue(backend_unit_tests["skipped"])
-        self.assertIsNone(backend_unit_tests["command"])
-        self.assertNotEqual(backend_unit_tests["language"], "python")
+        self.assertTrue(backend_build["skipped"])
+        self.assertIsNone(backend_build["command"])
+        self.assertIsNone(backend_build["language"])
         run.assert_not_called()
 
     def test_failed_result_becomes_scheduler_friendly_revision_request(self) -> None:

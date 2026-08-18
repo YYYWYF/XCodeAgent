@@ -608,7 +608,7 @@ async def _apply_ui_design_action(
         )
     else:  # regenerate
         _emit_progress(
-            f"正在重新生成设计稿：{target_page.get('name') or page_id}",
+            f"正在生成设计稿：{target_page.get('name') or page_id}",
             pageId=page_id,
             ready=len(pages),
             total=len(pages),

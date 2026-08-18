@@ -1,0 +1,68 @@
+.@{class-prefix}-workspace-tabs {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--wb-border);
+  background: var(--wb-canvas);
+  flex: 0 0 auto;
+}
+
+.@{class-prefix}-workspace-tabs-list {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.@{class-prefix}-workspace-tab {
+  position: relative;
+  padding: 8px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) {
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+  }
+
+  &.@{class-prefix}-active {
+    color: var(--wb-accent);
+    font-weight: 600;
+  }
+
+  &.@{class-prefix}-active::after {
+    content: '';
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 0;
+    height: 2px;
+    background: var(--wb-accent);
+    border-radius: 2px;
+  }
+
+  &:disabled {
+    color: var(--wb-text-tertiary);
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.@{class-prefix}-workspace-tabs-close {
+  flex: 0 0 auto;
+  width: 36px;
+  border: 0;
+  border-left: 1px solid var(--wb-border);
+  background: transparent;
+  color: var(--wb-text-secondary);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+    color: var(--wb-text);
+  }
+}

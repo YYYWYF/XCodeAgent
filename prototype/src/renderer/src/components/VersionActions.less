@@ -1,0 +1,148 @@
+.@{class-prefix}-workbench-version-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-left: 2px;
+}
+
+/* 生成版本按钮：重要操作，渐变 + 发光强调；可生成时高亮，禁用时还原。 */
+.@{class-prefix}-workbench-publish-button {
+  height: 28px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 0;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #6b3cf0 0%, #3f6cf5 100%);
+  box-shadow: 0 2px 10px rgba(107, 60, 240, 0.35);
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    opacity 120ms ease;
+
+  &.@{class-prefix}-ready:not([disabled]) {
+    background: linear-gradient(135deg, #6b3cf0 0%, #3f6cf5 100%);
+    box-shadow: 0 4px 18px rgba(107, 60, 240, 0.5);
+
+    &:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px rgba(107, 60, 240, 0.6);
+    }
+
+    &:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 10px rgba(107, 60, 240, 0.4);
+    }
+  }
+
+  &[disabled] {
+    background: #c9c2d8;
+    box-shadow: none;
+  }
+}
+
+.@{class-prefix}-workbench-version-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  color: var(--wb-accent, #6b3cf0);
+  font-family: var(--ui-font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--wb-border, #d8e0ea);
+  border-radius: 6px;
+  background: var(--wb-canvas, #f6f8fb);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+
+  &:hover {
+    border-color: var(--wb-accent, #6b3cf0);
+    background: var(--wb-surface-hover, #f0ecfb);
+  }
+
+  /* 已生成版本仍保持品牌主色；锁图标表达状态，不降低顶栏版本信息的视觉层级。 */
+  &.@{class-prefix}-is-released {
+    color: var(--wb-accent, #6b3cf0);
+    border-color: color-mix(in srgb, var(--wb-accent, #6b3cf0) 42%, var(--wb-border, #d8e0ea));
+    background: var(--wb-surface-hover, #f0ecfb);
+  }
+}
+
+.@{class-prefix}-workbench-rollback-button {
+  height: 28px;
+  color: var(--wb-accent, #6b3cf0);
+  border-color: var(--wb-accent, #6b3cf0);
+  border-radius: 8px;
+  background: var(--wb-canvas, #fff);
+}
+
+.@{class-prefix}-workbench-version-label {
+  line-height: 1;
+}
+
+.@{class-prefix}-workbench-version-caret {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+/* 版本下拉单列面板：每个版本直显完整日志（pre-line），无 hover 面板。 */
+.@{class-prefix}-version-dropdown {
+  width: 320px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--wb-surface, #fff);
+  box-shadow: 0 12px 36px rgba(15, 18, 24, 0.16);
+}
+
+.@{class-prefix}-version-dropdown-item {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  color: var(--wb-text-primary, #2f2638);
+  text-align: left;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+
+  & + .@{class-prefix}-version-dropdown-item {
+    border-top: 1px solid var(--wb-border-strong, #eef0f4);
+  }
+
+  &.@{class-prefix}-is-active {
+    background: var(--wb-surface-hover, #f0ecfb);
+  }
+}
+
+.@{class-prefix}-version-dropdown-item-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.@{class-prefix}-version-dropdown-item-log {
+  padding-left: 1px;
+  color: var(--wb-text-tertiary, #8b8199);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+.@{class-prefix}-version-menu-label {
+  font-family: var(--ui-font-mono);
+}
+
+.@{class-prefix}-version-menu-status {
+  margin-left: auto;
+  color: var(--wb-text-tertiary, #8b8199);
+  font-size: 12px;
+}

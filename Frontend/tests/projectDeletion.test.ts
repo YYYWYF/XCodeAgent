@@ -3,7 +3,11 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { lstatIfPresent, removeDirectoryIfPresent } from '../src/main/filesystem'
+import {
+  lstatIfPresent,
+  movePathToTrashIfPresent,
+  removeDirectoryIfPresent
+} from '../src/main/filesystem'
 import {
   sessionRuntimeKey,
   sessionRuntimeKeyBelongsToWorkspace
@@ -33,6 +37,39 @@ test('删除存在的目录仍然执行递归删除', async () => {
     await fs.writeFile(path.join(projectDirectory, 'nested', 'file.txt'), 'content', 'utf8')
     await removeDirectoryIfPresent(projectDirectory)
     assert.equal(await lstatIfPresent(projectDirectory), undefined)
+  } finally {
+    await fs.rm(temporaryRoot, { force: true, recursive: true })
+  }
+})
+
+/** 验证项目路径通过系统回收站适配器转移，不再执行永久删除。 */
+test('存在的项目路径会移入系统回收站', async () => {
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-trash-'))
+  const projectDirectory = path.join(temporaryRoot, 'project')
+  const trashedPaths: string[] = []
+
+  try {
+    await fs.mkdir(projectDirectory)
+    await movePathToTrashIfPresent(projectDirectory, async (targetPath) => {
+      trashedPaths.push(targetPath)
+    })
+    assert.deepEqual(trashedPaths, [projectDirectory])
+  } finally {
+    await fs.rm(temporaryRoot, { force: true, recursive: true })
+  }
+})
+
+/** 验证不存在的路径不会调用系统回收站，也不会产生错误。 */
+test('不存在的项目路径跳过系统回收站调用', async () => {
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-trash-'))
+  const missingDirectory = path.join(temporaryRoot, 'missing-project')
+  let trashCallCount = 0
+
+  try {
+    await movePathToTrashIfPresent(missingDirectory, async () => {
+      trashCallCount += 1
+    })
+    assert.equal(trashCallCount, 0)
   } finally {
     await fs.rm(temporaryRoot, { force: true, recursive: true })
   }

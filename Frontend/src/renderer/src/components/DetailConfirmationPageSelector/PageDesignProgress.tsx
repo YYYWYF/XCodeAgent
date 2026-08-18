@@ -6,7 +6,7 @@ import type { WorkflowEvent } from '../../typings'
 import { cx } from '../../utils'
 import './PageDesignProgress.less'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 
 const DESIGN_STAGES = [
   { label: '准备设计上下文', detail: '读取页面目标、路由与已有项目规划', target: 12 },
@@ -104,50 +104,44 @@ export default function PageDesignProgress({
 
   return (
     <section aria-live="polite" className={cx('detail-page-progress')}>
-      <div className={cx('detail-page-progress-visual')} aria-hidden>
-        <span className={cx('detail-page-progress-orbit')}>
-          <span />
+      <div className={cx('detail-page-progress-head')}>
+        <Text className={cx('detail-page-progress-title')} strong>
+          正在设计「{pageLabel}」
+        </Text>
+        <Text
+          aria-label={`${
+            resolvedTargetType === 'endpoint'
+              ? '接口'
+              : resolvedTargetType === 'entity'
+                ? '实体'
+                : '页面'
+          }设计进度 ${percent}%`}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={percent}
+          className={cx('detail-page-progress-percent')}
+          role="progressbar"
+        >
+          {percent}%
+        </Text>
+      </div>
+
+      <div className={cx('detail-page-progress-status')}>
+        <span className={cx('detail-page-progress-status-icon')} aria-hidden="true">
+          {completed ? <CheckOutlined /> : <LoadingOutlined spin />}
         </span>
-        <LoadingOutlined className={cx('detail-page-progress-loading')} />
+        <div className={cx('detail-page-progress-status-text')}>
+          <Text className={cx('detail-page-progress-current')}>{currentLabel}</Text>
+          <Text className={cx('detail-page-progress-detail')} type="secondary">
+            {stage.detail}
+          </Text>
+        </div>
       </div>
 
-      <Text className={cx('detail-page-selector-eyebrow')}>
-        {resolvedTargetType === 'endpoint'
-          ? 'GENERATING API DESIGN'
-          : resolvedTargetType === 'entity'
-            ? 'GENERATING ENTITY DESIGN'
-            : 'GENERATING PAGE DESIGN'}
-      </Text>
-      <Title level={3}>正在设计「{pageLabel}」</Title>
-      <Text className={cx('detail-page-progress-current')}>{currentLabel}</Text>
-      <Text className={cx('detail-page-progress-detail')} type="secondary">
-        {stage.detail}
-      </Text>
-
-      <div className={cx('detail-page-progress-summary')}>
-        <Text>设计进度</Text>
-        <Text strong>{percent}%</Text>
-      </div>
       <div
-        aria-label={`${
-          resolvedTargetType === 'endpoint'
-            ? '接口'
-            : resolvedTargetType === 'entity'
-              ? '实体'
-              : '页面'
-        }设计进度 ${percent}%`}
-        aria-valuemax={100}
-        aria-valuemin={0}
-        aria-valuenow={percent}
-        className={cx('detail-page-progress-track')}
-        role="progressbar"
+        className={cx('detail-page-progress-stepper')}
+        style={{ gridTemplateColumns: `repeat(${stages.length}, minmax(0, 1fr))` }}
       >
-        <span className={cx('detail-page-progress-bar')} style={{ width: `${percent}%` }}>
-          <span />
-        </span>
-      </div>
-
-      <div className={cx('detail-page-progress-stages')}>
         {stages.map((item, index) => {
           const isDone = completed || index < stageIndex
           const isActive = !completed && index === stageIndex

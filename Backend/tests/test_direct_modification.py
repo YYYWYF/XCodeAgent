@@ -792,7 +792,7 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertIn("最终验收", finalized["message"])
 
     def test_integration_disables_contract_and_repair(self) -> None:
-        """快速测试必须复用节点但关闭正式契约校验和 RepairPlanner。"""
+        """快速测试必须复用节点但关闭 Testing Subgraph 的 RepairPlanner。"""
 
         captured_state: dict = {}
 
@@ -814,7 +814,6 @@ class DirectModificationNodeTests(unittest.TestCase):
                 {"direct_code_change_sets": []}
             )
 
-        self.assertIs(captured_state["integration_contract_check_enabled"], False)
         self.assertIs(captured_state["integration_repair_enabled"], False)
         self.assertEqual(update["status"], "failed")
         self.assertEqual(_route_integration_test(update), "finalize")

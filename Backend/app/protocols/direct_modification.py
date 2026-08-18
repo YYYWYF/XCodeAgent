@@ -198,7 +198,6 @@ def build_conversation_ag_ui_stream(
             "active_run_id": run_id,
             "direct_modification_approved_paths": _safe_approved_paths(request.approved_paths),
             "direct_modification_handoff_decision": str(request.handoff_decision or ""),
-            "integration_contract_check_enabled": False,
             "integration_repair_enabled": False,
             "repair_iteration": 0,
             "max_repair_iterations": 3,
