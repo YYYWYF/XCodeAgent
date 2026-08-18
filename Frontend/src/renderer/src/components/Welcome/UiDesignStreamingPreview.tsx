@@ -19,6 +19,9 @@ type PageDesign = {
   code_path?: string
   /** 设计稿 .tsx 源码（方案 B：DesignRenderer 直接消费此字段编译渲染）。 */
   code?: string
+  /** 仅用于隔离设计稿预览，不是 ProductPlan 正式路由。 */
+  preview_path?: string
+  /** 旧 UI Manifest 兼容字段。 */
   route_path?: string
   status?: string
 }

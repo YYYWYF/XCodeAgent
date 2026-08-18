@@ -75,7 +75,14 @@ def _workflow_start_node(
     if workflow_scope == "application_planning":
         return (
             resume_from
-            if resume_from in {"requirements", "project_planning"}
+            if resume_from
+            in {
+                "requirements",
+                "product_planning",
+                "ui_confirmation",
+                "technical_planning",
+                "project_planning",
+            }
             else "requirements"
         )
     supported = set(WORKFLOW_NODE_LABELS) - {"handle_failure"}
@@ -92,7 +99,13 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         # 误判为"设计稿生成中"继续渲染设计稿区域。
         if update.get("status") == "requires_user_input":
             return []
-        return ["project_planning"]
+        return ["technical_planning"]
+    if node_name == "product_planning":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["ui_confirmation"]
+    if node_name == "technical_planning":
+        return []
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):
             return ["launch_project"]
@@ -260,6 +273,26 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 f"计划文档={update.get('project_plan_path')}"
             ),
             "data": {"projectPlan": update.get("project_plan")},
+        }
+    if node_name == "product_planning":
+        clarification = update.get("clarification")
+        return {
+            "message": f"产品规划={update.get('product_plan_path')}",
+            "data": {
+                "productPlan": update.get("product_plan"),
+                "clarification": clarification,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+            },
+        }
+    if node_name == "technical_planning":
+        clarification = update.get("clarification")
+        return {
+            "message": f"技术规划={update.get('technical_plan_path') or update.get('project_plan_path')}",
+            "data": {
+                "technicalPlan": update.get("technical_plan") or update.get("project_plan"),
+                "clarification": clarification,
+                "requiresUserInput": update.get("status") == "requires_user_input",
+            },
         }
     if node_name == "detail_confirmation":
         clarification = update.get("clarification")
@@ -935,6 +968,10 @@ def _workflow_visual_payload(
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
         "clarification": result.get("clarification", {}),
+        "product_plan": result.get("product_plan"),
+        "product_plan_path": result.get("product_plan_path"),
+        "technical_plan": result.get("technical_plan"),
+        "technical_plan_path": result.get("technical_plan_path"),
         "project_plan": result.get("project_plan"),
         "pending_project_plan": result.get("pending_project_plan"),
         "project_plan_path": result.get("project_plan_path"),
@@ -992,6 +1029,18 @@ def _workflow_confirmation_artifact(
             "id": "project_plan",
             "name": "project-plan.md",
             "path_field": "project_plan_path",
+        },
+        "product_plan_confirmation": {
+            "phase": "product_planning",
+            "id": "product_plan",
+            "name": "product-plan.md",
+            "path_field": "product_plan_path",
+        },
+        "technical_plan_confirmation": {
+            "phase": "technical_planning",
+            "id": "technical_plan",
+            "name": "technical-plan.md",
+            "path_field": "technical_plan_path",
         },
     }
     contract = artifact_contracts.get(str(clarification.get("mode") or ""))

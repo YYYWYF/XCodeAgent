@@ -13,7 +13,6 @@ import { useWorkbenchPhase } from '../../../../context'
 import { WORKBENCH_PHASE_AGENTS } from '../../../../workbenchPhase'
 import type {
   ApplicationLifecycle,
-  DatasourceEnum,
   DevelopmentPlanningPageOption,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
@@ -23,6 +22,7 @@ import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import CodeChangeCard from '../CodeChangeCard'
 import { ToolCallChain } from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
+import VersionCommitReminder from '../VersionCommitReminder'
 import WorkflowRunCard, {
   type ClarificationAnswers,
   workflowClarification
@@ -78,8 +78,6 @@ type MessageListProps = {
     workflow: WorkflowRunPayload,
     spec: Record<string, unknown>
   ) => Promise<Record<string, unknown> | undefined>
-  /** 需求文档确认：数据源类型（驱动编辑器数据源字段渲染）。 */
-  datasourceType?: DatasourceEnum
   /** 需求文档确认：菜单根路径（驱动编辑器页面路由前缀）。 */
   rootPath?: string
   /** 模板就绪后点击进入开发阶段（放开 product 锁，恢复跟随旅程）。 */
@@ -113,7 +111,6 @@ export default function MessageList({
   uiDesignActionPageId,
   onUiDesignActionPageIdChange,
   onSaveRequirementSpec,
-  datasourceType,
   rootPath,
   onEnterDevelopment,
   onRetryTemplate,
@@ -137,10 +134,7 @@ export default function MessageList({
   const hasStreamingProcess = messages.some(
     (message) => message.id === activeAssistantMessageId && Boolean(message.processSteps?.length)
   )
-  // 诊断：设计阶段空状态/加载态判定。
-  useEffect(() => {
-    console.log('[message-list] msgs=', messages.length, 'designPhasePlanning=', designPhasePlanning, 'loading=', loading)
-  }, [messages.length, designPhasePlanning, loading])
+  const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -270,13 +264,14 @@ export default function MessageList({
                 message.workflow &&
                 (message.workflow.summary?.phase === 'ui_confirmation' ||
                   messageClarification?.mode === 'ui_design_confirmation')
-              // 项目规划生成中（phase=project_planning, running）也展示 WorkflowRunCard，
-              // 让用户看到"正在生成项目规划…"加载态，而非长时间无反馈。
-              const isProjectPlanningCard =
+              // 创建规划的产品/技术阶段也展示 WorkflowRunCard，保证运行与确认状态连续可见。
+              const isPlanningStageCard =
                 message.workflow &&
-                message.workflow.summary?.phase === 'project_planning'
+                ['product_planning', 'project_planning', 'technical_planning'].includes(
+                  String(message.workflow.summary?.phase || '')
+                )
               const showWorkflowCard = Boolean(
-                message.workflow && (requiresClarification || isUiDesignConfirmationCard || isProjectPlanningCard)
+                message.workflow && (requiresClarification || isUiDesignConfirmationCard || isPlanningStageCard)
               )
               const interactionAvailability =
                 message.workflow && requiresClarification
@@ -289,21 +284,24 @@ export default function MessageList({
                 message.workflow,
                 Boolean(visibleProcessSteps?.length)
               )
-              // 项目计划确认阶段：ProjectPlanSummary 已展示结构化计划，隐藏流式 JSON 原文。
-              // 项目规划生成中（running）：只显示加载态，不展示原始 JSON 流式文本（太乱）。
+              // 规划文档确认阶段由确认卡展示，隐藏流式 JSON 原文；生成中只显示加载态。
               // 规划占位消息（planningLoading）：用户提交后产品 Agent 正在思考，只显示 loading 态。
-              const isProjectPlanConfirmationCard =
+              const isPlanningArtifactConfirmationCard =
                 message.workflow &&
-                messageClarification?.mode === 'project_plan_confirmation'
-              const isProjectPlanningRunningCard =
+                ['requirement_spec_confirmation', 'product_plan_confirmation', 'technical_plan_confirmation', 'project_plan_confirmation'].includes(
+                  String(messageClarification?.mode || '')
+                )
+              const isPlanningStageRunningCard =
                 message.workflow &&
-                message.workflow.summary?.phase === 'project_planning' &&
+                ['product_planning', 'project_planning', 'technical_planning'].includes(
+                  String(message.workflow.summary?.phase || '')
+                ) &&
                 message.workflow.summary?.status === 'running'
               const isPlanningLoadingPlaceholder = Boolean(message.planningLoading)
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
               // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。
               const effectiveAssistantContent =
-                isProjectPlanConfirmationCard || isProjectPlanningRunningCard || isPlanningLoadingPlaceholder || (showWorkflowCard && requiresClarification)
+                isPlanningArtifactConfirmationCard || isPlanningStageRunningCard || isPlanningLoadingPlaceholder || (showWorkflowCard && requiresClarification)
                   ? ''
                   : visibleAssistantContent
               return (
@@ -394,7 +392,6 @@ export default function MessageList({
                             uiDesignActionPageId={uiDesignActionPageId}
                             onUiDesignActionPageIdChange={onUiDesignActionPageIdChange}
                             onSaveRequirementSpec={onSaveRequirementSpec}
-                            datasourceType={datasourceType}
                             rootPath={rootPath}
                             workflow={message.workflow!}
                           />
@@ -410,6 +407,20 @@ export default function MessageList({
                             reverting={revertingCodeChangeIds.has(codeChanges.id)}
                           />
                         )}
+                        {!messageLoading &&
+                          codeChanges &&
+                          message.workflow &&
+                          message.id === latestVersionReminderMessageId && (
+                            <VersionCommitReminder
+                              codeChanges={codeChanges}
+                              disabled={codeChangeActionsDisabled}
+                              onReview={() =>
+                                codeChanges.files[0] &&
+                                onOpenCodeChangeFile(codeChanges, codeChanges.files[0].path)
+                              }
+                              workflow={message.workflow}
+                            />
+                          )}
                       </>
                     ) : (
                       <>
@@ -471,6 +482,26 @@ export default function MessageList({
 function findLastAssistantMessageId(messages: AgentChatMessage[]): number | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === 'assistant') return messages[index].id
+  }
+  return undefined
+}
+
+/** 只为最新一轮快速修改显示版本提醒，避免历史消息重复读取 Git 状态。 */
+function findLatestVersionReminderMessageId(messages: AgentChatMessage[]): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    const workflow = message.workflow
+    const codeChanges = message.codeChanges ?? workflowCodeChanges(workflow)
+    if (
+      message.role === 'assistant' &&
+      workflow &&
+      codeChanges?.files.length &&
+      isConversationWorkflow(workflow) &&
+      workflow.summary.intent === 'workspace_change' &&
+      ['completed', 'failed'].includes(String(workflow.summary.status))
+    ) {
+      return message.id
+    }
   }
   return undefined
 }

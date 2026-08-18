@@ -22,24 +22,34 @@ def _requirements_prompt(
     existing_spec: dict[str, Any] | None = None,
     datasource_type: DatasourceType = "database",
 ) -> str:
-    """构建需求模型提示，并注入只读的应用数据源类型。"""
+    """构建产品需求提示；技术配置与产品验收均不进入需求澄清。"""
 
+    visible_existing_spec = (
+        {
+            key: value
+            for key, value in existing_spec.items()
+            if key not in {"data_sources", "acceptance_criteria"}
+        }
+        if isinstance(existing_spec, dict)
+        else None
+    )
     revision_context = (
         "Revise the existing RequirementSpec using the latest user feedback. "
         "The latest feedback overrides conflicting older requirements. Preserve stable ids for "
         "unchanged items, remove items the user no longer wants, and add newly requested items.\n"
-        f"Existing RequirementSpec:\n{json.dumps(existing_spec, ensure_ascii=False)}\n\n"
-        if existing_spec
+        f"Existing RequirementSpec:\n{json.dumps(visible_existing_spec, ensure_ascii=False)}\n\n"
+        if visible_existing_spec
         else "Create a new RequirementSpec from the user request.\n"
     )
     clarification_policy = (
         "Before asking the user, silently audit every required aspect together, including the "
-        "information needed to derive API contracts, page inventory, data-source inventory, business "
-        "flows, roles, and acceptance criteria. In each clarification turn, batch every material missing "
+        "product goals, page inventory, user roles, business flows, and information needs. "
+        "In each clarification turn, batch every material missing "
         "or ambiguous item into one to four focused questions. An application name and a broad scenario "
-        "alone are not sufficient when roles, core tasks, page boundaries, data sources, permissions, or "
+        "alone are not sufficient when roles, core tasks, page boundaries, permissions, or "
         "the primary business flow cannot be inferred safely. Ask only about gaps that would materially "
-        "change the product design; use explicit assumptions for secondary details when safe. Do not "
+        "change the product design; omit optional details that the user did not request instead of "
+        "inventing assumptions. Do not "
         "ask open-ended follow-up questions such as whether there are more roles, pages, "
         "or optional features after the user has answered a prior clarification turn.\n"
     )
@@ -47,8 +57,7 @@ def _requirements_prompt(
         "The latest request contains answers to a previous clarification turn. Treat these answers as "
         "the user's confirmation for the asked dimensions. Merge them into a complete RequirementSpec "
         "now. Do not call ask_user again for the same dimensions, and do not ask optional 'any other "
-        "roles/pages/features' questions. Use explicit assumptions for optional details that remain "
-        "unspecified.\n"
+        "roles/pages/features' questions. Omit optional details that remain unspecified.\n"
         if existing_spec
         and existing_spec.get("confirmation_status") == "pending_user_input"
         else ""
@@ -61,11 +70,10 @@ def _requirements_prompt(
         "Analyze the user's application request and decide whether the requirement is clear enough "
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 用户角色, 功能模块, "
-        "页面清单, 数据源清单, 业务流程, 验收标准.\n"
-        f"The authoritative application datasource type is {datasource_type}. Every data_sources item "
-        f"MUST use exactly type={datasource_type}. The type is read-only policy data: do not infer it "
-        "from user wording, do not change it, and never emit the legacy type mock. Generate only the "
-        "business data-source name, description, and entity list.\n"
+        "页面清单, 业务信息需求, 业务流程.\n"
+        "Data sources, databases, persistence, API contracts, schemas, and storage choices are technical "
+        "planning concerns. Do not ask the product user about them, do not expose them for confirmation, "
+        "and do not include data_sources in the returned RequirementSpec.\n"
         f"{clarification_policy}"
         f"{followup_policy}"
         "When asking, questions can be choice, text, or yesno. For every choice question, first decide "
@@ -76,8 +84,10 @@ def _requirements_prompt(
         "continue planning until the user answers.\n"
         "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
         "without markdown fences or commentary. It must include app_info, user_roles, "
-        "feature_modules, pages, data_sources, business_flows, acceptance_criteria, and assumptions. "
-        "Every role, module, data source, and flow must have a stable id. Every page must have a "
+        "feature_modules, pages, and business_flows. Do not return assumptions or product risks. "
+        "Product acceptance criteria belong to the later ProductPlan and must not be generated in the "
+        "RequirementSpec confirmation document. "
+        "Every role, module, and flow must have a stable id. Every page must have a "
         "stable pageId, name, unique path, module_id, and description. Use '/' only for the single "
         "home/dashboard page; all other pages must have business routes derived from their pageId, "
         "such as '/employees-list' or '/onboarding-form'. Never return multiple pages with path '/'. "
@@ -160,11 +170,10 @@ def analyze_requirements_with_chat_model(
     )
     if _is_clarification_followup(existing_spec):
         spec = merge_clarification_answers_into_spec(spec, request)
-        # 澄清答案可能新增或复写数据源，合并后再次恢复 application.json 的权威类型。
+        # 数据源不进入产品澄清；合并其他产品答案后仍恢复内部技术配置的权威类型。
         spec = apply_authoritative_datasource_type(spec, datasource_type)
     clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
-    spec["assumptions"] = clarification["assumptions"]
     spec["clarification_status"] = clarification["status"]
     spec["unresolved_requirement_dimensions"] = clarification.get(
         "all_unresolved_dimensions", []

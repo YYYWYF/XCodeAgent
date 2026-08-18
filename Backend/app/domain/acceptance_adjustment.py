@@ -27,7 +27,8 @@ class AcceptanceAdjustment(BaseModel):
 
 _ADJUSTMENT_RESUME_NODES: dict[AcceptanceAdjustmentType, str] = {
     "local_fix": "small_task_repair",
-    "page_design_change": "detail_confirmation",
+    # 历史 page_design_change 不再回到 PageDetail，统一升级为技术规划调整。
+    "page_design_change": "project_planning",
     "endpoint_change": "detail_confirmation",
     "data_source_change": "detail_confirmation",
     "project_plan_change": "project_planning",

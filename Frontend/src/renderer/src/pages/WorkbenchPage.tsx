@@ -84,7 +84,7 @@ function WorkbenchPage({
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [previewBaseUrl, setPreviewBaseUrl] = useState('')
   const [previewLaunchError, setPreviewLaunchError] = useState('')
-  // 预览启动中状态：驱动左侧上下文头"预览页面"按钮的 loading 呈现（合并 dev_agent 的轻量化改动补齐）。
+  // 预览启动中状态：驱动左侧上下文头“预览页面”按钮的 loading 呈现。
   const [previewLaunchLoading, setPreviewLaunchLoading] = useState(false)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
@@ -120,10 +120,12 @@ function WorkbenchPage({
     // 非新建应用（source !== 'new'）已有完整工程，直接启动。
     if (application.source === 'new' && !lifecycleReadyForWorkbench) {
       activeLaunchWorkspaceRef.current = ''
+      setPreviewLaunchLoading(false)
       return
     }
     activeLaunchWorkspaceRef.current = workspacePath
     if (launchedWorkspaceRef.current === workspacePath) {
+      setPreviewLaunchLoading(false)
       const existingLaunchRunId = launchRunIdRef.current
       return () => {
         launchCleanupPendingRef.current = true
@@ -140,6 +142,7 @@ function WorkbenchPage({
     const launchRunId = launchRunIdRef.current + 1
     launchRunIdRef.current = launchRunId
     launchedWorkspaceRef.current = workspacePath
+    setPreviewLaunchLoading(true)
 
     const loadingKey = `project-launch-${application.id}-${launchRunId}`
     notification.open({
@@ -151,7 +154,6 @@ function WorkbenchPage({
       icon: <LoadingOutlined />,
       className: cx('project-launch-loading'),
     })
-    setPreviewLaunchLoading(true)
 
     startProjectLaunch(workspacePath).then(result => {
       const launchStillCurrent =
@@ -170,11 +172,11 @@ function WorkbenchPage({
         }
         return
       }
+      setPreviewLaunchLoading(false)
       if (result.status === 'running' && result.preview_url) {
         void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot: workspacePath })
         setPreviewBaseUrl(previewOrigin(result.preview_url))
         setPreviewLaunchError('')
-        setPreviewLaunchLoading(false)
         notification.success({
           message: '项目预览已启动',
           description: '可在预览面板中查看效果',
@@ -185,7 +187,6 @@ function WorkbenchPage({
         const errorMsg = result.message || '未知错误'
         setPreviewBaseUrl('')
         setPreviewLaunchError(errorMsg)
-        setPreviewLaunchLoading(false)
         notification.warning({
           message: '项目预览启动失败',
           description: `${errorMsg}，可在预览区查看详情`,

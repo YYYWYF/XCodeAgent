@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.database_planning_context import endpoint_detail_uses_database
-from app.services.frontend_page_tree import find_frontend_page
+from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 
 
 def _page_key_from_page_id(page_id: str) -> str:
@@ -53,19 +53,23 @@ def _page_context(
     page_id: str,
     project_plan_path: str | Path | None,
 ) -> dict[str, Any]:
-    """解析页面及其全部必需 EndpointDetail，形成三类 Unit 的定向上下文。"""
+    """解析页面实现契约及其全部必需 EndpointDetail，形成三类 Unit 的定向上下文。"""
 
-    page = find_frontend_page(project_plan.get("frontend_pages"), page_id)
+    page = find_frontend_page(project_plan_page_records(project_plan), page_id)
     if page is None:
         raise ValueError(f"ProjectPlan does not contain page {page_id}.")
-    page_detail = _load_external_detail(
-        page.get("detail_design"),
-        "PageDetail",
+    page_contract = _page_implementation_contract(
+        project_plan,
         page_id,
         project_plan_path,
     )
+    legacy_page_detail = (
+        page_contract
+        if page_contract.get("schema_version") != "page-implementation-contract.v1"
+        else None
+    )
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
-    endpoint_ids = _endpoint_ids(page_detail)
+    endpoint_ids = _contract_endpoint_ids(page_contract)
     source_ids: list[str] = []
     contract_ids: list[str] = []
     endpoint_unit_ids: list[str] = []
@@ -117,7 +121,8 @@ def _page_context(
             "id": page_id,
             "page_key": _page_key_from_page_id(page_id),
         },
-        "page_detail": page_detail,
+        "page_detail": legacy_page_detail,
+        "page_implementation_contract": page_contract,
         "endpoint_detail": None,
         "direct_endpoint_details": endpoint_details,
         "endpoint_ids": endpoint_ids,
@@ -136,7 +141,24 @@ def _page_context(
             f"page:{page_id}",
         ],
         "source_refs": {
-            "page_detail": _artifact_ref(page.get("detail_design"), page_id),
+            **(
+                {"page_detail": _artifact_ref(page.get("detail_design"), page_id)}
+                if legacy_page_detail is not None
+                else {}
+            ),
+            "page_implementation_contract": {
+                "id": page_id,
+                "ui_design_path": (
+                    page_contract.get("uiDesignRef", {}).get("path")
+                    if isinstance(page_contract.get("uiDesignRef"), dict)
+                    else None
+                ),
+                "ui_design_sha256": (
+                    page_contract.get("uiDesignRef", {}).get("sha256")
+                    if isinstance(page_contract.get("uiDesignRef"), dict)
+                    else None
+                ),
+            },
             "endpoint_details": endpoint_refs,
         },
     }
@@ -392,6 +414,40 @@ def _endpoint_ids(page_detail: dict[str, Any]) -> list[str]:
         if endpoint_id and endpoint_id not in result:
             result.append(endpoint_id)
     return result
+
+
+def _page_implementation_contract(
+    project_plan: dict[str, Any],
+    page_id: str,
+    project_plan_path: str | Path | None,
+) -> dict[str, Any]:
+    """读取当前页面的正式实现契约，并对旧项目回退到已确认 PageDetail。"""
+
+    for contract in _dict_items(project_plan.get("page_implementation_contracts")):
+        if str(contract.get("pageId") or "") == page_id:
+            return contract
+    page = find_frontend_page(project_plan_page_records(project_plan), page_id)
+    if page is None:
+        raise ValueError(f"ProjectPlan does not contain page {page_id}.")
+    if isinstance(page.get("detail_design"), dict):
+        return _load_external_detail(
+            page.get("detail_design"),
+            "PageDetail",
+            page_id,
+            project_plan_path,
+        )
+    raise ValueError(f"TechnicalPlan does not contain PageImplementationContract {page_id}.")
+
+
+def _contract_endpoint_ids(contract: dict[str, Any]) -> list[str]:
+    """从新版页面实现契约或旧 PageDetail 中提取去重 endpoint 标识。"""
+
+    result = []
+    for endpoint_id in contract.get("requiredEndpointIds") or []:
+        normalized = str(endpoint_id or "").strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result or _endpoint_ids(contract)
 
 
 def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:

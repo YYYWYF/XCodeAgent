@@ -29,7 +29,7 @@ from app.services.build_unit_skeleton import (
     ensure_build_unit_skeleton,
 )
 from app.services.database_planning_context import database_context_requirement
-from app.services.frontend_page_tree import flatten_frontend_pages
+from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
@@ -507,6 +507,7 @@ def _resolve_build_context(
     return _add_reusable_task_context({
         "target": {"type": "application", "id": "application"},
         "page_detail": None,
+        "page_implementation_contract": None,
         "endpoint_detail": None,
         "direct_endpoint_details": [],
         "endpoint_ids": [],
@@ -563,7 +564,7 @@ def _database_planning_status(build_context: dict) -> str:
 
 
 def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> dict:
-    """构造任务拆分视图：ProjectPlan 只作 Unit 骨架，Detail 才作可执行任务输入。"""
+    """构造任务拆分视图：TechnicalPlan 作 Unit 骨架，实现契约作页面执行输入。"""
 
     return {
         "version": project_plan.get("version"),
@@ -585,7 +586,13 @@ def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> d
 
 
 def _skeleton_pages(project_plan: dict) -> list[dict]:
-    """提取页面 Unit 骨架摘要，不携带可执行页面详情。"""
+    """提取页面 Unit 骨架摘要，不携带完整页面实现契约。"""
+
+    contract_status = {
+        str(contract.get("pageId") or ""): "confirmed"
+        for contract in project_plan.get("page_implementation_contracts", [])
+        if isinstance(contract, dict) and contract.get("pageId")
+    }
 
     return [
         {
@@ -595,12 +602,15 @@ def _skeleton_pages(project_plan: dict) -> list[dict]:
             "module_id": page.get("module_id"),
             "description": page.get("description"),
             "detail_status": (
-                page.get("detail_design", {}).get("status")
-                if isinstance(page.get("detail_design"), dict)
-                else None
+                contract_status.get(str(page.get("pageId") or ""))
+                or (
+                    page.get("detail_design", {}).get("status")
+                    if isinstance(page.get("detail_design"), dict)
+                    else None
+                )
             ),
         }
-        for page in flatten_frontend_pages(project_plan.get("frontend_pages"))
+        for page in project_plan_page_records(project_plan)
         if isinstance(page, dict)
     ]
 
@@ -647,12 +657,19 @@ def _skeleton_api_contracts(project_plan: dict) -> list[dict]:
 
 
 def _executable_details(project_plan: dict, build_context: dict) -> dict:
-    """按当前构建目标投射可执行任务所需的页面、endpoint 和 API 详情。"""
+    """按当前构建目标投射页面实现契约、endpoint 和 API 详情。"""
 
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
     contract_ids = {str(item) for item in build_context.get("api_contract_ids") or []}
     source_ids = {str(item) for item in build_context.get("data_source_ids") or []}
     return {
+        "page_implementation_contracts": (
+            [build_context["page_implementation_contract"]]
+            if build_context.get("page_implementation_contract")
+            else list(project_plan.get("page_implementation_contracts") or [])
+            if build_context.get("target", {}).get("type") == "application"
+            else []
+        ),
         "page_detail_plans": (
             [build_context["page_detail"]] if build_context.get("page_detail") else []
         ),
@@ -734,7 +751,7 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     target_page_id = str(target.get("id") or "") if target.get("type") == "page" else ""
     pages = []
-    for page in flatten_frontend_pages(project_plan.get("frontend_pages")):
+    for page in project_plan_page_records(project_plan):
         if not isinstance(page, dict):
             continue
         if str(page.get("pageId") or "") == target_page_id:
@@ -750,9 +767,10 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
                     },
                 }
             )
+    page_field = "pages" if project_plan.get("artifact_type") == "technical-plan" else "frontend_pages"
     return {
         **project_plan,
-        "frontend_pages": pages,
+        page_field: pages,
         "data_sources": [
             _scoped_data_source(source, contract_ids)
             for source in project_plan.get("data_sources", [])
@@ -770,6 +788,11 @@ def _scoped_contract_validation_plan(project_plan: dict, build_context: dict) ->
         ],
         "page_detail_plans": (
             [build_context["page_detail"]] if build_context.get("page_detail") else []
+        ),
+        "page_implementation_contracts": (
+            [build_context["page_implementation_contract"]]
+            if build_context.get("page_implementation_contract")
+            else []
         ),
         "endpoint_detail_plans": list(
             build_context.get("direct_endpoint_details") or []

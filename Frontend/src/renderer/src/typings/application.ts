@@ -250,8 +250,18 @@ export interface ApplicationPageInteraction {
   trigger: string;
   userAction: string;
   systemResponse: string;
+  bindingType?: 'endpoint' | 'navigation' | 'local' | 'sequence' | 'external';
   endpointId?: string;
   targetMenuKey?: string;
+  localEffect?: string;
+  externalTarget?: string;
+  steps?: Array<{
+    type: 'endpoint' | 'navigation' | 'local' | 'external';
+    endpointId?: string;
+    targetPageId?: string;
+    localEffect?: string;
+    externalTarget?: string;
+  }>;
 }
 
 export interface ApplicationApiDefinition {
@@ -278,7 +288,6 @@ export interface ProductDefinition {
     goal: string;
     summary: string;
     acceptanceCriteria: string[];
-    assumptions: string[];
   };
   architecture: {
     frontend: string;
@@ -293,7 +302,6 @@ export interface ProductDefinition {
     actorRoleIds: string[];
     steps: Array<{ order: number; menuKey: string; interactionId: string }>;
   }>;
-  risks: Array<{ id: string; level: 'low' | 'medium' | 'high'; description: string }>;
 }
 
 export interface ApplicationPageDesign {

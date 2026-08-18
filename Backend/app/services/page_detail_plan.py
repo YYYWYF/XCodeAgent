@@ -11,7 +11,7 @@ from app.services.api_contracts import (
 )
 from app.services.frontend_page_tree import (
     find_frontend_page,
-    flatten_frontend_pages,
+    project_plan_page_records,
     update_frontend_page_leaves,
 )
 from app.services.page_dependencies import page_design_references
@@ -31,7 +31,7 @@ def detail_design_targets(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
                 f"{page.get('description') or page.get('name') or '待补充页面目标'}"
             ),
         }
-        for page in flatten_frontend_pages(project_plan.get("frontend_pages"))
+        for page in project_plan_page_records(project_plan)
         if isinstance(page, dict) and page.get("pageId")
     ]
     return page_targets
@@ -508,7 +508,7 @@ def extract_page_detail_context(
 ) -> dict[str, Any]:
     """提取单个叶子页面详细设计所需的最小上下文。"""
 
-    page = _find_page_by_pageId(project_plan["frontend_pages"], pageId)
+    page = _find_page_by_pageId(project_plan_page_records(project_plan), pageId)
     page_name = str(page.get("name") or pageId)
     page_path = str(page.get("path") or "/")
     references = page_design_references(project_plan, pageId)
@@ -542,7 +542,7 @@ def extract_page_detail_context(
             "name": candidate.get("name"),
             "path": candidate.get("path"),
         }
-        for candidate in flatten_frontend_pages(project_plan.get("frontend_pages"))
+        for candidate in project_plan_page_records(project_plan)
         if str(candidate.get("pageId"))
         in {str(item.get("targetPageId")) for item in references["navigation_targets"]}
     ]
@@ -665,7 +665,7 @@ def extract_endpoint_detail_context(
             "usage": str(dependency.get("usage") or ""),
             "trigger": str(dependency.get("trigger") or ""),
         }
-        for page in flatten_frontend_pages(project_plan.get("frontend_pages"))
+        for page in project_plan_page_records(project_plan)
         for dependency in _dict_items(
             (page.get("references") if isinstance(page.get("references"), dict) else {}).get(
                 "endpoint_dependencies"
@@ -1448,7 +1448,7 @@ def create_page_detail_plan(
     agent_detail_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     pageId = page_context["pageId"]
-    page = _find_page_by_pageId(project_plan["frontend_pages"], pageId)
+    page = _find_page_by_pageId(project_plan_page_records(project_plan), pageId)
     page_name = str(page.get("name") or pageId)
     page_path = str(page.get("path") or "/")
     api_contracts = _dict_items(project_plan.get("api_contracts"))
@@ -1487,7 +1487,7 @@ def create_page_detail_plan(
             **item,
             "target_path": str(
                 _find_page_by_pageId(
-                    project_plan["frontend_pages"], item["targetPageId"]
+                    project_plan_page_records(project_plan), item["targetPageId"]
                 ).get("path")
                 or ""
             ),
@@ -1615,8 +1615,9 @@ def attach_page_detail_plan(
     }
     existing_details[detail_plan["pageId"]] = detail_plan
     updated_plan["page_detail_plans"] = list(existing_details.values())
-    updated_plan["frontend_pages"] = update_frontend_page_leaves(
-        updated_plan.get("frontend_pages"),
+    page_field = "pages" if updated_plan.get("artifact_type") == "technical-plan" else "frontend_pages"
+    updated_plan[page_field] = update_frontend_page_leaves(
+        updated_plan.get(page_field),
         {
             detail_plan["pageId"]: {
                 "detail_status": "confirmed",
@@ -1627,7 +1628,7 @@ def attach_page_detail_plan(
 
     updated_plan["detail_confirmation_summary"] = {
         "confirmed_pages": len(updated_plan["page_detail_plans"]),
-        "total_pages": len(flatten_frontend_pages(updated_plan.get("frontend_pages"))),
+        "total_pages": len(project_plan_page_records(updated_plan)),
         "latestPageId": detail_plan["pageId"],
     }
     return updated_plan

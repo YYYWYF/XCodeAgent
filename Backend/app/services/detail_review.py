@@ -84,7 +84,9 @@ def detail_review_payload(
         selected_api_contract_id=selected_api_contract_id,
         selected_endpoint_id=selected_endpoint_id,
     )
-    missingSelectedPagePlan = bool(selectedPageId and not pages)
+    missingSelectedPagePlan = bool(
+        selectedPageId and not pages and not str(detail_target_type or "").startswith("endpoint")
+    )
     missingSelectedEndpointPlan = bool(detail_target_type == "endpoint" and selected_endpoint_id and not endpoints)
     return {
         "mode": "detail_review",
@@ -100,6 +102,9 @@ def detail_review_payload(
             else
             f"请审阅接口 `{selected_endpoint_id}` 详细设计；仅展开需要调整的对象。"
             if detail_target_type == "endpoint" and selected_endpoint_id
+            else
+            f"请审阅页面 `{selectedPageId}` 依赖的接口详细设计；页面视觉以已确认 React UI 稿为准。"
+            if detail_target_type == "endpoint_batch" and selectedPageId
             else
             f"请审阅页面 `{selectedPageId}` 详细设计；仅展开需要调整的对象。"
             if selectedPageId
@@ -199,8 +204,9 @@ def apply_detail_review_submission(
         and detail.get("pageId")
             and detail.get("status") == "confirmed"
     }
-    updated["frontend_pages"] = update_frontend_page_leaves(
-        updated.get("frontend_pages"),
+    page_field = "pages" if updated.get("artifact_type") == "technical-plan" else "frontend_pages"
+    updated[page_field] = update_frontend_page_leaves(
+        updated.get(page_field),
         {
             page_id: {"detail_status": "confirmed"}
             for page_id in confirmedPageIds

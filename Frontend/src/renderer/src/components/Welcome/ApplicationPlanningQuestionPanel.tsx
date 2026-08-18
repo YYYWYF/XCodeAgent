@@ -15,7 +15,7 @@ import DetailReview from '../AiChatPanel/components/WorkflowRunCard/DetailReview
 import RequirementSpecSummary from './RequirementSpecSummary'
 import RequirementSpecEditor from './RequirementSpecEditor'
 import UiDesignConfirmationPanel from './UiDesignConfirmationPanel'
-import ProjectPlanSummary from './ProjectPlanSummary'
+import TechnicalPlanSummary from './TechnicalPlanSummary'
 import { projectPlanReadingSections } from './ProjectPlanReadingSections'
 import type {
   WorkflowClarification,
@@ -24,7 +24,6 @@ import type {
   WorkflowClarificationQuestion,
   WorkflowRunPayload
 } from '../../typings'
-import type { DatasourceEnum } from '../../typings'
 import { cx } from '../../utils'
 import { useTabToFillPlaceholder } from './hooks/useTabToFillPlaceholder'
 import './ApplicationPlanningQuestionPanel.less'
@@ -38,7 +37,6 @@ type ProjectPlanConfirmationForm = {
 }
 
 type Props = {
-  datasourceType: DatasourceEnum
   disabled?: boolean
   onSaveRequirementSpec: (
     workflow: WorkflowRunPayload,
@@ -104,8 +102,9 @@ function answerComplete(
 // 根据确认阶段给出符合创建规划语义的标题。
 function panelTitle(mode?: string): string {
   if (mode === 'requirement_spec_confirmation') return '确认需求文档'
+  if (mode === 'product_plan_confirmation') return '确认产品规划'
   if (mode === 'ui_design_confirmation') return '确认UI设计稿'
-  if (mode === 'project_plan_confirmation') return '确认项目计划'
+  if (mode === 'technical_plan_confirmation') return '确认技术规划'
   if (mode === 'detail_review') return '审核页面与数据源细节'
   return '补充规划细节'
 }
@@ -113,8 +112,9 @@ function panelTitle(mode?: string): string {
 // 根据确认阶段给出下一步按钮文案。
 function submitLabel(mode?: string): string {
   if (mode === 'requirement_spec_confirmation') return '需求正确，继续规划'
+  if (mode === 'product_plan_confirmation') return '确认产品规划并设计 UI'
   if (mode === 'ui_design_confirmation') return '确认设计稿并继续'
-  if (mode === 'project_plan_confirmation') return '确认计划并进入工作区'
+  if (mode === 'technical_plan_confirmation') return '确认技术规划并进入工作区'
   if (!mode) return '重新生成当前规划'
   return '提交回答并继续'
 }
@@ -130,12 +130,12 @@ type ProjectPlanConfirmationLayoutProps = {
   onReturnHome: () => void
   onToggleOriginal: () => void
   plan: Record<string, unknown>
-  projectPlanAnswerKey: string
+  technicalPlanAnswerKey: string
   planVersion: string
   showOriginal: boolean
 }
 
-// 还原项目规划确认稿的完整工作区壳层，并把正式计划、原文和确认动作放在同一页面流中。
+// 还原规划确认稿的完整工作区壳层，并把正式计划、原文和确认动作放在同一页面流中。
 function ProjectPlanConfirmationLayout({
   appName,
   artifactContent,
@@ -147,7 +147,7 @@ function ProjectPlanConfirmationLayout({
   onReturnHome,
   onToggleOriginal,
   plan,
-  projectPlanAnswerKey,
+  technicalPlanAnswerKey,
   planVersion,
   showOriginal
 }: ProjectPlanConfirmationLayoutProps): ReactElement {
@@ -270,7 +270,7 @@ function ProjectPlanConfirmationLayout({
           />
           <div className={cx('project-plan-confirmation-brand')}>
             <span className={cx('project-plan-confirmation-brand-mark')}>✦</span>
-            <span>XCodeAgent / 项目规划</span>
+            <span>XCodeAgent / 技术规划</span>
           </div>
         </div>
         <div className={cx('project-plan-confirmation-topbar-meta')}>
@@ -281,16 +281,16 @@ function ProjectPlanConfirmationLayout({
       </header>
 
       <div className={cx('project-plan-confirmation-layout')}>
-        <aside className={cx('project-plan-confirmation-sidebar')} aria-label="项目规划导航">
+        <aside className={cx('project-plan-confirmation-sidebar')} aria-label="技术规划导航">
           <div className={cx('project-plan-confirmation-project-heading')}>
             <span className={cx('project-plan-confirmation-project-mark')}>{projectMark}</span>
             <div className={cx('project-plan-confirmation-project-copy')}>
               <strong>{appName}</strong>
-              <span>项目规划 · {planVersion}</span>
+              <span>技术规划 · {planVersion}</span>
             </div>
           </div>
 
-          <nav className={cx('project-plan-confirmation-nav')} aria-label="项目规划阅读章节">
+          <nav className={cx('project-plan-confirmation-nav')} aria-label="技术规划阅读章节">
             {readingSections.map((section) => {
               const isActive = section.id === activeReadingSectionId
               return (
@@ -314,7 +314,7 @@ function ProjectPlanConfirmationLayout({
               需求文档 <span>完成</span>
             </div>
             <div className={cx('project-plan-confirmation-step', 'is-active')} data-step="02">
-              项目规划 <span>当前</span>
+              技术规划 <span>当前</span>
             </div>
             <div className={cx('project-plan-confirmation-step')} data-step="03">
               进入工作区 <span>下一步</span>
@@ -327,13 +327,13 @@ function ProjectPlanConfirmationLayout({
             {showOriginal ? (
               <section className={cx('project-plan-confirmation-original')}>
                 <header>
-                  <Text strong>项目计划原文</Text>
+                  <Text strong>技术规划原文</Text>
                   <Text type="secondary">当前确认版本的 Markdown 文档</Text>
                 </header>
                 <MarkdownContent content={artifactContent} />
               </section>
             ) : (
-              <ProjectPlanSummary plan={plan} />
+              <TechnicalPlanSummary plan={plan} />
             )}
           </div>
 
@@ -343,13 +343,13 @@ function ProjectPlanConfirmationLayout({
             layout="vertical"
             onFinish={onFinish}
           >
-            <Form.Item name={['answers', projectPlanAnswerKey]} noStyle>
+              <Form.Item name={['answers', technicalPlanAnswerKey]} noStyle>
               <TextArea
-                aria-label="项目规划意见"
+                aria-label="技术规划意见"
                 autoSize={{ minRows: 1, maxRows: 2 }}
                 disabled={disabled}
                 onKeyDown={onFeedbackTab}
-                placeholder="意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容 (按 Tab 采用)"
+                placeholder="意见（可选）：如需调整，请填写架构、API、工程设计或页面引用 (按 Tab 采用)"
               />
             </Form.Item>
             <div className={cx('project-plan-confirmation-actions')}>
@@ -362,7 +362,7 @@ function ProjectPlanConfirmationLayout({
                 icon={<CheckCircleOutlined />}
                 type="primary"
               >
-                {hasFeedback ? '提交意见，调整规划' : '规划正确，进入工作区'}
+                {hasFeedback ? '提交意见，调整技术规划' : '技术规划正确，进入工作区'}
               </Button>
             </div>
           </Form>
@@ -383,10 +383,10 @@ function requirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> 
   return undefined
 }
 
-// 从公开 Workflow 结果中读取 ProjectPlan 结构化状态，供模块化规划视图使用。
-function projectPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
+// 从公开 Workflow 结果中读取 TechnicalPlan 结构化状态，供开发审核视图使用。
+function technicalPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
   for (const source of [workflow.result, workflow.state]) {
-    const value = source?.project_plan
+    const value = source?.technical_plan
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
     }
@@ -396,7 +396,6 @@ function projectPlan(workflow: WorkflowRunPayload): Record<string, unknown> | un
 
 // 使用创建规划页面自己的表单视觉展示问题和正式产物，不渲染通用 Workflow 卡片。
 export default function ApplicationPlanningQuestionPanel({
-  datasourceType,
   disabled,
   onSaveRequirementSpec,
   onReturnHome,
@@ -409,40 +408,46 @@ export default function ApplicationPlanningQuestionPanel({
     | WorkflowClarificationAnswer
     | undefined
   const [showArtifactDetail, setShowArtifactDetail] = useState(false)
-  const [showProjectPlanOriginal, setShowProjectPlanOriginal] = useState(false)
+  const [showTechnicalPlanOriginal, setShowTechnicalPlanOriginal] = useState(false)
   const [editingRequirement, setEditingRequirement] = useState(false)
   const [requirementDraft, setRequirementDraft] = useState<Record<string, unknown>>()
   const [savingRequirement, setSavingRequirement] = useState(false)
   const clarification = planningClarification(workflow)
   const questions = clarification?.questions || []
   const isRequirementConfirmation = clarification?.mode === 'requirement_spec_confirmation'
-  const isProjectPlanConfirmation = clarification?.mode === 'project_plan_confirmation'
-  const isDocumentConfirmation = isRequirementConfirmation || isProjectPlanConfirmation
-  const projectPlanAnswerKey = questions[0]
+  const isProductPlanConfirmation = clarification?.mode === 'product_plan_confirmation'
+  const isTechnicalPlanConfirmation =
+    clarification?.mode === 'technical_plan_confirmation'
+  const isDocumentConfirmation =
+    isRequirementConfirmation || isProductPlanConfirmation || isTechnicalPlanConfirmation
+  const technicalPlanAnswerKey = questions[0]
     ? questionKey(questions[0], 0)
-    : 'project_plan_confirmation'
-  const projectPlanFeedback = Form.useWatch(['answers', projectPlanAnswerKey], form) as
+    : 'technical_plan_confirmation'
+  const technicalPlanFeedback = Form.useWatch(['answers', technicalPlanAnswerKey], form) as
     | WorkflowClarificationAnswer
     | undefined
   const handleConfirmationFeedbackTab = useTabToFillPlaceholder(form, [
     'answers',
-    isRequirementConfirmation ? 'requirement_spec_feedback' : projectPlanAnswerKey
+    isRequirementConfirmation ? 'requirement_spec_feedback' : technicalPlanAnswerKey
   ])
   const hasRecoveryAction = clarification?.status === 'requires_user_input' && !questions.length
   const artifact = workflow.confirmationArtifact
   const spec = artifact?.id === 'requirement_spec' ? requirementSpec(workflow) : undefined
-  const plan = artifact?.id === 'project_plan' ? projectPlan(workflow) : undefined
+  const plan =
+    artifact?.id === 'technical_plan'
+      ? technicalPlan(workflow)
+      : undefined
   const displayedSpec = requirementDraft || spec
   const canShowSummary = Boolean(spec)
   // 意见非空时切换提交语义，避免按钮继续暗示需求文档完全正确。
   const hasRequirementFeedback =
     typeof requirementFeedback === 'string' && Boolean(requirementFeedback.trim())
-  const hasProjectPlanFeedback =
-    typeof projectPlanFeedback === 'string' && Boolean(projectPlanFeedback.trim())
+  const hasTechnicalPlanFeedback =
+    typeof technicalPlanFeedback === 'string' && Boolean(technicalPlanFeedback.trim())
 
   if (!clarification) return null
 
-  // run 中途流式快照可能产生未知 mode（如 undefined、project_plan_dependency_validation_error），
+  // run 中途流式快照可能产生未知 mode（如 undefined、技术规划校验错误），
   // 此时 clarification.pages 也会丢失。缓存最近一次有效的 UI 确认 workflow，run 中途用缓存
   // 渲染，保持左侧页面列表 + 右侧渲染区布局不动，单页加载态由面板内 actionPageId 控制。
   const clarificationPages = (clarification as unknown as Record<string, unknown>).pages
@@ -455,11 +460,12 @@ export default function ApplicationPlanningQuestionPanel({
     clarification.mode === 'ui_design_confirmation' && hasUiDesignPages
       ? workflow
       : lastValidUiWorkflowRef.current ?? workflow
-  // run 中途 mode 变未知（undefined/project_plan_dependency_validation_error 等）但曾进入过
+  // run 中途 mode 变未知但曾进入过
   // UI 确认阶段：用缓存的有效 UI workflow 渲染，保持布局不动，单页加载态由面板内控制。
   const knownConfirmationModes = new Set([
     'ui_design_confirmation',
-    'project_plan_confirmation',
+    'product_plan_confirmation',
+    'technical_plan_confirmation',
     'requirement_spec_confirmation',
     'detail_review',
   ])
@@ -478,11 +484,11 @@ export default function ApplicationPlanningQuestionPanel({
 
   // 需求确认阶段的自然语言意见直接作为确认答案提交，后端据此区分确认或修订。
   const handleSubmit = (values: { answers?: WorkflowClarificationAnswers }): void => {
-    if (isProjectPlanConfirmation) {
-      const feedback = values.answers?.[projectPlanAnswerKey]
+    if (isProductPlanConfirmation || isTechnicalPlanConfirmation) {
+      const feedback = values.answers?.[technicalPlanAnswerKey]
       const feedbackText = typeof feedback === 'string' ? feedback.trim() : ''
       onSubmit(workflow, {
-        [projectPlanAnswerKey]: feedbackText || '正确，继续'
+        [technicalPlanAnswerKey]: feedbackText || '正确，继续'
       })
       return
     }
@@ -531,18 +537,19 @@ export default function ApplicationPlanningQuestionPanel({
     }
   }
 
-  if (isProjectPlanConfirmation && plan) {
+  if (isTechnicalPlanConfirmation && plan) {
     const planApp =
       plan.app && typeof plan.app === 'object' ? (plan.app as Record<string, unknown>) : {}
-    const planVersion = typeof plan.version === 'string' ? plan.version : '0.1.0'
-    const appName = typeof planApp.name === 'string' ? planApp.name : '未命名应用'
+    const planVersion =
+      typeof plan.artifact_type === 'string' ? plan.artifact_type : 'technical-plan'
+    const appName = typeof planApp.name === 'string' ? planApp.name : '开发技术规划'
 
     return (
       <section
         className={cx(
           'planning-question-panel',
           'is-document-confirmation',
-          'is-project-plan-confirmation'
+          'is-technical-plan-confirmation'
         )}
       >
         <ProjectPlanConfirmationLayout
@@ -550,15 +557,15 @@ export default function ApplicationPlanningQuestionPanel({
           artifactContent={artifact?.content || ''}
           disabled={disabled}
           form={form}
-          hasFeedback={hasProjectPlanFeedback}
+          hasFeedback={hasTechnicalPlanFeedback}
           onFeedbackTab={handleConfirmationFeedbackTab}
           onFinish={handleSubmit}
           onReturnHome={onReturnHome}
-          onToggleOriginal={() => setShowProjectPlanOriginal((current) => !current)}
+          onToggleOriginal={() => setShowTechnicalPlanOriginal((current) => !current)}
           plan={plan}
           planVersion={planVersion}
-          projectPlanAnswerKey={projectPlanAnswerKey}
-          showOriginal={showProjectPlanOriginal}
+          technicalPlanAnswerKey={technicalPlanAnswerKey}
+          showOriginal={showTechnicalPlanOriginal}
         />
       </section>
     )
@@ -608,15 +615,19 @@ export default function ApplicationPlanningQuestionPanel({
               <Text strong>
                 {artifact.id === 'requirement_spec'
                   ? '需求文档'
-                  : artifact.id === 'project_plan'
-                    ? '项目规划'
-                    : '项目计划'}
+                  : artifact.id === 'product_plan'
+                    ? '产品规划'
+                    : artifact.id === 'technical_plan'
+                      ? '技术规划'
+                      : '当前规划'}
               </Text>
               <Text type="secondary">
                 {isRequirementConfirmation
                   ? '请审核需求文档。需要补充时只在下方填写意见；文档正确时，直接点击右下角按钮继续。'
-                  : isProjectPlanConfirmation
-                    ? '请审核项目规划。需要调整时只在下方填写意见；规划正确时，直接点击右下角按钮进入工作区。'
+                  : isProductPlanConfirmation
+                    ? '请由产品角色审核页面目标、业务信息、核心操作、跳转与验收标准；确认后进入 UI 设计。'
+                    : isTechnicalPlanConfirmation
+                      ? '请由开发角色审核架构、API、数据源、权限与页面实现契约；确认后进入工作区。'
                     : artifact.name}
               </Text>
             </div>
@@ -660,24 +671,23 @@ export default function ApplicationPlanningQuestionPanel({
                 ) : null}
               </div>
             ) : (
-              <Tag>{artifact.id === 'project_plan' ? 'JSON' : 'Markdown'}</Tag>
+              <Tag>{artifact.id === 'technical_plan' ? 'JSON' : 'Markdown'}</Tag>
             )}
           </header>
           <div className={cx('planning-artifact-content')}>
             {editingRequirement && requirementDraft ? (
               <RequirementSpecEditor
-                datasourceType={datasourceType}
                 onChange={setRequirementDraft}
                 rootPath={rootPath || '/'}
                 spec={requirementDraft}
               />
             ) : canShowSummary && !showArtifactDetail ? (
               <RequirementSpecSummary spec={displayedSpec!} />
-            ) : artifact.id === 'project_plan' ? (
+            ) : artifact.id === 'technical_plan' ? (
               plan ? (
-                <ProjectPlanSummary plan={plan} />
+                <TechnicalPlanSummary plan={plan} />
               ) : (
-                <Text type="secondary">项目规划结构化数据暂不可用，请重新生成当前规划。</Text>
+                <Text type="secondary">技术规划结构化数据暂不可用，请重新生成当前规划。</Text>
               )
             ) : (
               <MarkdownContent content={artifact.content} />
@@ -714,17 +724,25 @@ export default function ApplicationPlanningQuestionPanel({
               className={cx('planning-confirmation-feedback')}
               name={[
                 'answers',
-                isRequirementConfirmation ? 'requirement_spec_feedback' : projectPlanAnswerKey
+                isRequirementConfirmation ? 'requirement_spec_feedback' : technicalPlanAnswerKey
               ]}
             >
               <TextArea
-                aria-label={isRequirementConfirmation ? '需求文档意见' : '项目规划意见'}
+                aria-label={
+                  isRequirementConfirmation
+                    ? '需求文档意见'
+                    : isProductPlanConfirmation
+                      ? '产品规划意见'
+                      : '技术规划意见'
+                }
                 autoSize={{ minRows: 1, maxRows: 2 }}
                 disabled={disabled}
                 placeholder={
                   isRequirementConfirmation
                     ? '意见（可选）：如需调整，请填写具体内容 (按 Tab 采用)'
-                    : '意见（可选）：如需调整，请填写架构、页面、API、数据源等修改内容 (按 Tab 采用)'
+                    : isProductPlanConfirmation
+                      ? '意见（可选）：如需调整，请填写页面目标、业务信息、操作或跳转等修改内容 (按 Tab 采用)'
+                      : '意见（可选）：如需调整，请填写架构、API、数据源、权限等修改内容 (按 Tab 采用)'
                 }
                 onKeyDown={handleConfirmationFeedbackTab}
               />
@@ -784,10 +802,14 @@ export default function ApplicationPlanningQuestionPanel({
                     ? hasRequirementFeedback
                       ? '提交需求文档意见并继续规划'
                       : '确认需求文档正确并继续规划'
-                    : isProjectPlanConfirmation
-                      ? hasProjectPlanFeedback
-                        ? '提交项目规划意见并调整规划'
-                        : '确认项目规划正确并进入工作区'
+                    : isProductPlanConfirmation
+                      ? hasTechnicalPlanFeedback
+                        ? '提交产品规划意见并调整规划'
+                        : '确认产品规划正确并进入 UI 设计'
+                      : isTechnicalPlanConfirmation
+                      ? hasTechnicalPlanFeedback
+                        ? '提交技术规划意见并调整规划'
+                        : '确认技术规划正确并进入工作区'
                       : undefined
                 }
                 disabled={disabled}
@@ -805,10 +827,12 @@ export default function ApplicationPlanningQuestionPanel({
                   ? '确认修改并继续规划'
                   : isRequirementConfirmation && hasRequirementFeedback
                     ? '提交意见，继续规划'
-                    : isProjectPlanConfirmation && hasProjectPlanFeedback
+                    : (isProductPlanConfirmation || isTechnicalPlanConfirmation) && hasTechnicalPlanFeedback
                       ? '提交意见，调整规划'
-                      : isProjectPlanConfirmation
-                        ? '规划正确，进入工作区'
+                      : isTechnicalPlanConfirmation
+                        ? '技术规划正确，进入工作区'
+                        : isProductPlanConfirmation
+                          ? '产品规划正确，进入 UI 设计'
                         : submitLabel(clarification.mode)}
               </Button>
             </div>

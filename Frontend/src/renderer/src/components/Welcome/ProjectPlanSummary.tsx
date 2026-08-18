@@ -442,7 +442,9 @@ export default function ProjectPlanSummary({ plan }: Props): ReactElement {
       }
     })
     .filter((item): item is ApiContractInfo => Boolean(item))
-  const pageTree = projectPlanPageTreeNodes(plan.frontend_pages)
+  const pageTree = projectPlanPageTreeNodes(
+    plan.artifact_type === 'technical-plan' ? plan.pages : plan.frontend_pages
+  )
   const dataSources = recordItems(plan.data_sources)
   const datasourceType = fieldText(dataSources[0]?.type, 'database')
   const isStaticDatasource = datasourceType === 'static'

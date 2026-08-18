@@ -10,7 +10,9 @@ from app.domain.acceptance_adjustment import (
     normalize_acceptance_adjustment,
 )
 from app.services.execution_resource_scope import resolve_execution_resource_claims
-from app.services.frontend_page_tree import flatten_frontend_pages, frontend_page_ids
+from app.services.frontend_page_tree import project_plan_page_records
+from app.services.page_implementation_contract import materialize_technical_plan_runtime
+from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
@@ -141,7 +143,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     acceptance_decision = _page_acceptance_decision(clarification_answers)
     acceptance_adjustment = _acceptance_adjustment(clarification_answers)
     ui_design_action = _ui_design_action(clarification_answers)
-    if acceptance_decision:
+    if acceptance_adjustment:
+        resume_from = acceptance_adjustment_resume_node(acceptance_adjustment)
+    elif acceptance_decision:
         resume_from = "acceptance"
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
@@ -457,7 +461,13 @@ def _project_plan_page_ids(project_plan: Any) -> list[str]:
     """从 ProjectPlan 页面目录中提取去重后的正式 pageId。"""
 
     plan = project_plan if isinstance(project_plan, dict) else {}
-    return frontend_page_ids(plan.get("frontend_pages"))
+    return list(
+        dict.fromkeys(
+            str(page.get("pageId") or page.get("id") or "").strip()
+            for page in project_plan_page_records(plan)
+            if str(page.get("pageId") or page.get("id") or "").strip()
+        )
+    )
 
 
 def _page_id_alias(value: str) -> str:
@@ -649,7 +659,12 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
     """限制独立规划 Graph 与主 Graph 各自可恢复的节点集合。"""
 
     supported = (
-        {"requirements", "ui_confirmation", "project_planning"}
+        {
+            "requirements",
+            "product_planning",
+            "ui_confirmation",
+            "technical_planning",
+        }
         if workflow_scope == "application_planning"
         else {
             "detail_confirmation",
@@ -678,7 +693,14 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     result = _optional_dict(value.get("result")) or {}
     merged = {**state, **result}
     allowed_keys = {
+        "product_plan",
+        "product_plan_path",
+        "product_plan_json_path",
+        "technical_plan",
+        "technical_plan_path",
+        "technical_plan_json_path",
         "project_plan",
+        "pages",
         "frontend_pages",
         "pending_project_plan",
         "project_plan_path",
@@ -786,55 +808,65 @@ def _project_plan_start_values(
     workspace_root = _workspace_root_path(workspace)
     if workspace_root is None:
         return {}
-    for relative_path in (
-        Path(".xcodeagent/plans/project-plan.json"),
-        Path("plans/project-plan.json"),
+    project_plan_path = workspace_root / ".xcodeagent" / "plans" / "technical-plan.json"
+    if not project_plan_path.is_file():
+        return {}
+    technical_plan = load_project_plan_json(
+        project_plan_path,
+        hydrate_detail_designs=True,
+    )
+    if not isinstance(technical_plan, dict):
+        raise ValueError("technical-plan.json 的根结构必须是 JSON 对象。")
+    if technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE:
+        raise ValueError("只接受当前 TechnicalPlan。")
+    requirement_spec = load_requirement_spec_json(
+        workspace_root / ".xcodeagent" / "specs" / "requirement-spec.json"
+    )
+    product_plan = load_project_plan_json(
+        workspace_root / ".xcodeagent" / "plans" / "product-plan.json"
+    )
+    ui_designs = load_ui_designs_json(
+        workspace_root / ".xcodeagent" / "specs" / "ui-designs.json"
+    )
+    if not product_plan or not ui_designs:
+        raise ValueError("当前 TechnicalPlan 运行时需要已确认的 ProductPlan 和 UiManifest。")
+    project_plan = materialize_technical_plan_runtime(
+        technical_plan,
+        requirement_spec,
+        product_plan,
+        ui_designs,
+    )
+    plan_pages = project_plan.get("pages", [])
+    normalized_pages = [
+        dict(page)
+        for page in plan_pages
+        if isinstance(page, dict)
+    ]
+    selected_page = _selected_requirement_page(
+        workspace_root,
+        selected_page_id,
+    )
+    if selected_page and not any(
+        str(page.get("pageId") or page.get("id") or "") == selected_page_id
+        for page in normalized_pages
     ):
-        project_plan_path = workspace_root / relative_path
-        if not project_plan_path.is_file():
-            continue
-        project_plan = load_project_plan_json(
-            project_plan_path,
-            hydrate_detail_designs=True,
-        )
-        if not isinstance(project_plan, dict):
-            raise ValueError("project-plan.json 的根结构必须是 JSON 对象。")
-        frontend_pages_tree = project_plan.get("frontend_pages", [])
-        normalized_pages = [
-            dict(page)
-            for page in flatten_frontend_pages(frontend_pages_tree)
-            if isinstance(page, dict)
-        ]
-        selected_page = _selected_requirement_page(
-            workspace_root,
-            selected_page_id,
-        )
-        if selected_page and not any(
-            str(page.get("pageId") or page.get("id") or "") == selected_page_id
-            for page in normalized_pages
-        ):
-            normalized_pages.append(selected_page)
-            existing_page_tree = (
-                list(frontend_pages_tree)
-                if isinstance(frontend_pages_tree, list)
-                else []
-            )
-            project_plan = {
-                **project_plan,
-                "frontend_pages": [*existing_page_tree, selected_page],
-            }
-        return {
-            "project_plan": project_plan,
-            "frontend_pages": normalized_pages,
-            "project_plan_path": _markdown_sibling_path(project_plan_path),
-            "project_plan_json_path": str(project_plan_path),
-            # 加载 UI确认阶段持久化的设计稿索引（pageId→page_key 映射），
-            # 供 build 阶段前端 agent read_file 还原设计稿视觉。缺失时为空 dict 降级。
-            "ui_designs": load_ui_designs_json(
-                workspace_root / ".xcodeagent" / "specs" / "ui-designs.json"
-            ),
+        normalized_pages.append(selected_page)
+        project_plan = {
+            **project_plan,
+            "pages": [*normalized_pages, selected_page],
         }
-    return {}
+    return {
+        "technical_plan": technical_plan,
+        "project_plan": project_plan,
+        "pages": normalized_pages,
+        "project_plan_path": _markdown_sibling_path(project_plan_path),
+        "project_plan_json_path": str(project_plan_path),
+        "technical_plan_path": _markdown_sibling_path(project_plan_path),
+        "technical_plan_json_path": str(project_plan_path),
+        "ui_designs": ui_designs,
+        "requirement_spec": requirement_spec,
+        "product_plan": product_plan,
+    }
 
 
 def _selected_requirement_page(
@@ -1286,7 +1318,7 @@ def _ui_design_action(value: Any) -> dict[str, Any] | None:
     UiDesignConfirmationPanel 在用户逐页"选模板"或"换一换"时即时提交。
     多页调整动作形如 ``{ui_design_action: {action: "adjust_pages", pageIds: [...],
     instruction: "..."}}``，由底部斜杠提及 + 调整按钮提交。
-    action 接受 select_template / regenerate / adjust_pages；其余视为无动作。
+    action 接受 select_template / regenerate / adjust_pages / skip；其余视为无动作。
     """
 
     if not isinstance(value, dict):
@@ -1295,8 +1327,12 @@ def _ui_design_action(value: Any) -> dict[str, Any] | None:
     if not isinstance(action, dict):
         return None
     action_type = _optional_text(action.get("action"))
-    if action_type not in {"select_template", "regenerate", "adjust_pages"}:
+    if action_type not in {"select_template", "regenerate", "adjust_pages", "skip"}:
         return None
+
+    # 跳过 UI 设计不绑定具体页面，直接把当前创建规划推进到技术规划。
+    if action_type == "skip":
+        return {"action": "skip"}
 
     # 多页调整：pageIds 数组（可为空，空时由大模型按 instruction 自行判断）+
     # instruction 字符串（非空校验）。

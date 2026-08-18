@@ -46,16 +46,43 @@ import {
 } from './sessionRuntime'
 import {
   planExecutionForPage,
-  acceptanceAdjustmentResumeNode,
   withWorkflowExecutionStatus,
   workflowInteractionAvailability,
-  workflowResumeNode
 } from '../planExecutionMode'
 
 type SessionRunEntry = {
   identity: SessionIdentity
   status: SessionRunStatus
   conversation: boolean
+}
+
+type ConversationTarget =
+  | {
+      type: 'page'
+      pageId: string
+    }
+  | {
+      type: 'endpoint'
+      apiContractId: string
+      endpointId: string
+    }
+
+/** 从会话身份提取当前页面或接口目标，让“这个页面”等指代随自由协作请求到达后端。 */
+function conversationTargetFromIdentity(identity: SessionIdentity): ConversationTarget | undefined {
+  if (identity.apiContractId && identity.endpointId) {
+    return {
+      type: 'endpoint',
+      apiContractId: identity.apiContractId,
+      endpointId: identity.endpointId
+    }
+  }
+  if (identity.pageId) {
+    return {
+      type: 'page',
+      pageId: identity.pageId
+    }
+  }
+  return undefined
 }
 
 type UseWorkflowConversationParams = {
@@ -109,7 +136,7 @@ type UseWorkflowConversationResult = {
   handleStartDetailConfirmation: (
     selectedPageId: string,
     pageLabel: string,
-    hasDetailPlan?: boolean,
+    _hasDetailPlan?: boolean,
     templateParams?: {
       templateId?: string
       templateName?: string
@@ -365,6 +392,7 @@ export function useWorkflowConversation({
         sourcePath?: string
       }
       conversation?: boolean
+      conversationTarget?: ConversationTarget
       conversationApprovedPaths?: string[]
       conversationHandoffDecision?: 'approved' | 'rejected'
     }
@@ -517,6 +545,8 @@ export function useWorkflowConversation({
         resumeState: options?.resumeState,
         pageTemplate: options?.pageTemplate,
         conversation: options?.conversation,
+        conversationTarget:
+          options?.conversationTarget || conversationTargetFromIdentity(identity),
         conversationApprovedPaths: options?.conversationApprovedPaths,
         conversationHandoffDecision: options?.conversationHandoffDecision,
         onContent: (content) => {
@@ -737,11 +767,11 @@ export function useWorkflowConversation({
     })
   }
 
-  /** 以用户选择的 RequirementSpec 页面作为主 Workflow 细节设计起点。 */
+  /** 以用户选择的页面实现契约作为主 Workflow 开发起点。 */
   const handleStartDetailConfirmation = async (
     selectedPageId: string,
     pageLabel: string,
-    hasDetailPlan?: boolean,
+    _hasDetailPlan?: boolean,
     templateParams?: {
       templateId?: string
       templateName?: string
@@ -751,12 +781,12 @@ export function useWorkflowConversation({
     if (!selectedPageId || loading || workspaceBusy) return false
     const identity = await ensurePageSession(selectedPageId, pageLabel)
     return sendWorkflowMessage(
-      `${hasDetailPlan ? '查看已生成页面计划' : '开始设计页面'}：${pageLabel}`,
+      `开始开发页面：${pageLabel}`,
       {
         selectedPageId,
         detailTargetType: 'page',
         sessionIdentity: identity,
-        titleFrom: `${hasDetailPlan ? '确认页面' : '设计页面'}：${pageLabel}`,
+        titleFrom: `开发页面：${pageLabel}`,
         ...(templateParams?.templateSourcePath
           ? {
               pageTemplate: {
@@ -840,15 +870,12 @@ export function useWorkflowConversation({
       { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
     )
     const isStopped = execution?.status === 'stopped' || activeWorkflow.summary.status === 'stopped'
-    const resumeFrom = workflowResumeNode(activeWorkflow, execution?.phase)
     await sendWorkflowMessage('重试当前计划任务。', {
       resumeState: activeWorkflow,
       resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
       selectedPageId: workflowSelectedPageId(activeWorkflow) || activeSession?.pageId,
       titleFrom: '重试计划任务',
-      ...(isStopped
-        ? { workflowDebug: { enabled: true, resumeFrom } }
-        : { workflowAction: 'retry_failed_tasks' })
+      ...(!isStopped ? { workflowAction: 'retry_failed_tasks' as const } : {})
     })
   }
 
@@ -882,7 +909,6 @@ export function useWorkflowConversation({
       activeSession?.pageId || selectedPageId,
       { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
     )
-    const resumeFrom = acceptanceAdjustmentResumeNode(adjustmentType)
     const endpointScope = workflowEndpointExecutionScope(activeWorkflow)
     return sendWorkflowMessage(`调整执行计划：${normalizedFeedback}`, {
       clarificationAnswers: {
@@ -904,8 +930,7 @@ export function useWorkflowConversation({
       selectedEndpointId: endpointScope?.targetId,
       detailTargetType: endpointScope ? 'endpoint' : undefined,
       buildExecutionScope: endpointScope,
-      titleFrom: '调整执行计划',
-      workflowDebug: { enabled: true, resumeFrom }
+      titleFrom: '调整执行计划'
     })
   }
 

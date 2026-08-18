@@ -44,6 +44,26 @@ function getWorkspaceApplicationFile(workspaceRoot: string): string {
   return path.join(workspaceRoot, '.xcodeagent', 'application.json')
 }
 
+/** 校验新应用目标目录未被已有应用或其他文件占用，避免创建失败后污染工作区。 */
+async function assertNewProjectDirectory(projectPath: string): Promise<void> {
+  const existing = await lstatIfPresent(projectPath)
+  if (!existing) return
+  if (!existing.isDirectory() || existing.isSymbolicLink()) {
+    throw new Error('新应用项目目录必须是非符号链接目录，请选择独立的项目目录。')
+  }
+
+  const applicationFile = getWorkspaceApplicationFile(projectPath)
+  const lifecycleFile = path.join(projectPath, '.xcodeagent', 'application-lifecycle.json')
+  if ((await lstatIfPresent(applicationFile)) || (await lstatIfPresent(lifecycleFile))) {
+    throw new Error('当前工作区已属于另一个应用，请为新应用选择独立的项目目录。')
+  }
+
+  const entries = await fs.readdir(projectPath)
+  if (entries.length > 0) {
+    throw new Error('新应用项目目录必须是不存在或为空的独立目录。')
+  }
+}
+
 type WorkbenchPageOption = {
   key: string
   pageId: string
@@ -120,13 +140,13 @@ function recordItems(value: unknown): Array<Record<string, unknown>> {
   )
 }
 
-/** 判断 ProjectPlan.frontend_pages 当前节点是否为菜单目录节点。 */
+/** 判断当前计划页面节点是否为菜单目录节点。 */
 function isFrontendMenuNode(record: Record<string, unknown>): boolean {
   const pageId = String(record.pageId || record.id || '').trim()
   return Array.isArray(record.children) && !pageId
 }
 
-/** 递归拍平 frontend_pages，仅保留真正的业务页面叶子。 */
+/** 递归拍平当前计划页面，仅保留真正的业务页面叶子。 */
 function flattenFrontendPageRecords(value: unknown): Array<Record<string, unknown>> {
   const flattened: Array<Record<string, unknown>> = []
   recordItems(value).forEach((record) => {
@@ -143,23 +163,6 @@ function flattenFrontendPageRecords(value: unknown): Array<Record<string, unknow
 function detailFileStem(value: string, prefix: string): string {
   const normalized = value.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^[-_]+|[-_]+$/g, '')
   return `${prefix}${normalized || 'unknown'}`
-}
-
-/** 检查选中页面是否已经存在外置详情 JSON。 */
-async function pageDetailPlanExists(workspaceRoot: string, pageId: string): Promise<boolean> {
-  const detailPath = path.join(
-    workspaceRoot,
-    '.xcodeagent',
-    'plans',
-    'pages',
-    `${detailFileStem(pageId, 'page--')}.json`
-  )
-  try {
-    const content = await fs.readFile(detailPath, 'utf8')
-    return Boolean(content.trim())
-  } catch {
-    return false
-  }
 }
 
 /** 检查选中接口是否已经存在外置详情 JSON。 */
@@ -183,12 +186,12 @@ async function endpointDetailPlanExists(
   }
 }
 
-/** 从 ProjectPlan 中按页面标识收集应用大纲页面。 */
+/** 从当前计划的 pages 中按页面标识收集应用大纲页面。 */
 function projectPlanPages(value: unknown): Map<string, Record<string, unknown>> {
   const result = new Map<string, Record<string, unknown>>()
   if (!value || typeof value !== 'object' || Array.isArray(value)) return result
-  const frontendPages = flattenFrontendPageRecords((value as Record<string, unknown>).frontend_pages)
-  frontendPages.forEach((page) => {
+  const pages = flattenFrontendPageRecords((value as Record<string, unknown>).pages)
+  pages.forEach((page) => {
     const record = page
     const pageId = String(record.id || record.pageId || '').trim()
     if (pageId) result.set(pageId, record)
@@ -196,7 +199,7 @@ function projectPlanPages(value: unknown): Map<string, Record<string, unknown>> 
   return result
 }
 
-/** 从 ProjectPlan 的 frontend_pages 生成工作台页面目录。 */
+/** 从当前计划的 pages 生成工作台页面目录。 */
 function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
   return [...projectPlanPages(value).entries()].map(([pageId, record], index) => ({
     key: pageId,
@@ -210,10 +213,30 @@ function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
   }))
 }
 
-/** 把 ProjectPlan.frontend_pages 递归转换为工作台可展示的页面目录树。 */
+/** 把当前计划的 pages 递归转换为工作台可展示的页面目录树。 */
 function projectPlanPageTree(value: unknown): WorkbenchPageTreeNode[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return []
-  return buildWorkbenchPageTree((value as Record<string, unknown>).frontend_pages)
+  return buildWorkbenchPageTree((value as Record<string, unknown>).pages)
+}
+
+/** 运行时把 ProductPlan 页面事实与 TechnicalPlan references 合并为工作台视图。 */
+function technicalPlanWorkbenchView(
+  technicalPlan: Record<string, unknown>,
+  productPlan: Record<string, unknown>
+): Record<string, unknown> {
+  const references = new Map(
+    recordItems(technicalPlan.pages).map((page) => [
+      String(page.pageId || '').trim(),
+      isJsonRecord(page.references) ? page.references : {}
+    ])
+  )
+  return {
+    ...technicalPlan,
+    pages: recordItems(productPlan.pages).map((page) => ({
+      ...page,
+      references: references.get(String(page.pageId || '').trim()) || {}
+    }))
+  }
 }
 
 /** 递归构造工作台侧栏使用的页面树节点。 */
@@ -305,32 +328,18 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
   return [...groupedContracts.values()]
 }
 
-/** 只根据外置页面详情文件补充每个页面的设计状态。 */
-async function mergeWorkbenchPageStatus(
-  workspaceRoot: string,
+/** 初始化页面设计状态；TechnicalPlan 的实现契约不代表用户已经开始页面设计。 */
+function mergeWorkbenchPageStatus(
   pages: WorkbenchPageOption[],
-  plannedPages: Map<string, Record<string, unknown>>,
   buildTaskPlan?: Record<string, unknown>
-): Promise<WorkbenchPageOption[]> {
-  return Promise.all(
-    pages.map(async (page) => {
-      const plannedPage = plannedPages.get(page.pageId)
-      const detailDesign =
-        plannedPage?.detail_design &&
-        typeof plannedPage.detail_design === 'object' &&
-        !Array.isArray(plannedPage.detail_design)
-          ? (plannedPage.detail_design as Record<string, unknown>)
-          : {}
-      const hasDetailPlan = await pageDetailPlanExists(workspaceRoot, page.pageId)
-      return {
-        ...page,
-        designed: hasDetailPlan,
-        detailPlanStatus: String(detailDesign.status || ''),
-        hasDetailPlan,
-        taskSummary: pageBuildTaskSummary(buildTaskPlan, page.pageId)
-      }
-    })
-  )
+): WorkbenchPageOption[] {
+  return pages.map((page) => ({
+    ...page,
+    designed: false,
+    detailPlanStatus: '',
+    hasDetailPlan: false,
+    taskSummary: pageBuildTaskSummary(buildTaskPlan, page.pageId)
+  }))
 }
 
 /** 把页面叶子的详细设计状态回写到页面目录树，保留菜单层级不变。 */
@@ -455,19 +464,7 @@ async function mergeWorkbenchApiStatus(
   )
 }
 
-/** 判断页面设计目录是否包含任意持久化产物。 */
-async function pageDesignDirectoryHasEntries(workspaceRoot: string): Promise<boolean> {
-  try {
-    const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', 'pages'))
-    return entries.length > 0
-  } catch (error: unknown) {
-    const errnoException = error as NodeJS.ErrnoException
-    if (errnoException?.code === 'ENOENT') return false
-    throw error
-  }
-}
-
-/** 校验正式规划产物，并从 ProjectPlan 投射应用大纲与页面设计状态。 */
+/** 校验正式规划产物，并从 TechnicalPlan 投射应用大纲与页面开发就绪状态。 */
 async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise<{
   ready: boolean
   hasPageDesigns: boolean
@@ -516,44 +513,52 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     }
   }
 
-  // 新工作区以 plans/project_plan.json 为大纲唯一语义来源，并兼容既有连字符文件名。
-  for (const relativePath of ['plans/project_plan.json', 'plans/project-plan.json']) {
-    try {
-      const content = await fs.readFile(path.join(artifactRoot, relativePath), 'utf8')
-      const projectPlan = JSON.parse(content)
-      if (
-        !projectPlan ||
-        typeof projectPlan !== 'object' ||
-        Array.isArray(projectPlan) ||
-        projectPlan.confirmation_status !== 'confirmed'
-      ) {
-        invalid.push(relativePath)
-      }
-      plannedPages = projectPlanPages(projectPlan)
-      pageTree = projectPlanPageTree(projectPlan)
-      apiContracts = projectPlanApiContracts(projectPlan)
-      projectPlanLoaded = true
-      break
-    } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException
-      if (errnoException?.code === 'ENOENT') continue
-      invalid.push(relativePath)
-      projectPlanLoaded = true
-      break
+  // 工作台只读取当前 TechnicalPlan，不回退到其他计划文件。
+  const technicalPlanPath = 'plans/technical-plan.json'
+  try {
+    const content = await fs.readFile(path.join(artifactRoot, technicalPlanPath), 'utf8')
+    const technicalPlan = JSON.parse(content)
+    if (
+      !technicalPlan ||
+      typeof technicalPlan !== 'object' ||
+      Array.isArray(technicalPlan) ||
+      technicalPlan.artifact_type !== 'technical-plan' ||
+      technicalPlan.confirmation_status !== 'confirmed'
+    ) {
+      invalid.push(technicalPlanPath)
     }
+    const productPlanContent = await fs.readFile(
+      path.join(artifactRoot, 'plans/product-plan.json'),
+      'utf8'
+    )
+    const productPlan = JSON.parse(productPlanContent)
+    if (
+      !productPlan ||
+      typeof productPlan !== 'object' ||
+      Array.isArray(productPlan) ||
+      productPlan.confirmation_status !== 'confirmed'
+    ) {
+      invalid.push('plans/product-plan.json')
+    }
+    const workbenchPlan = technicalPlanWorkbenchView(technicalPlan, productPlan)
+    plannedPages = projectPlanPages(workbenchPlan)
+    pageTree = projectPlanPageTree(workbenchPlan)
+    apiContracts = projectPlanApiContracts(workbenchPlan)
+    projectPlanLoaded = true
+  } catch (error: unknown) {
+    const errnoException = error as NodeJS.ErrnoException
+    if (errnoException?.code !== 'ENOENT') invalid.push(technicalPlanPath)
   }
-  if (!projectPlanLoaded) missing.push('plans/project_plan.json')
+  if (!projectPlanLoaded) missing.push('plans/technical-plan.json')
 
   const buildTaskPlan = await readBuildTaskPlan(workspaceRoot)
-  const pages = await mergeWorkbenchPageStatus(
-    workspaceRoot,
-    projectPlanPageOptions({ frontend_pages: [...plannedPages.values()] }),
-    plannedPages,
+  const pages = mergeWorkbenchPageStatus(
+    projectPlanPageOptions({ pages: [...plannedPages.values()] }),
     buildTaskPlan
   )
   const pagesById = new Map(pages.map((page) => [page.pageId, page]))
   apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
-  const hasPageDesigns = await pageDesignDirectoryHasEntries(workspaceRoot)
+  const hasPageDesigns = pages.some((page) => page.designed)
 
   return {
     ready: missing.length === 0 && invalid.length === 0,
@@ -910,16 +915,6 @@ function getSessionFile(workspaceRoot: unknown, editorMode: unknown, sessionId: 
   return path.join(getSessionsDir(workspaceRoot, editorMode), `${assertSessionId(sessionId)}.json`)
 }
 
-/** 返回旧版工作区内会话目录，用于兼容迁移。 */
-function getLegacyWorkspaceSessionsDir(workspaceRoot: unknown, editorMode: unknown): string {
-  return path.join(
-    resolveWorkspaceRoot(workspaceRoot),
-    XCODE_AGENT_ENV.WORKING_DIR,
-    'sessions',
-    assertEditorMode(editorMode)
-  )
-}
-
 /** 创建环境级会话目录并更新其工作区元数据。 */
 async function ensureSessionsDir(workspaceRoot: unknown, editorMode: unknown): Promise<string> {
   const resolvedWorkspaceRoot = resolveWorkspaceRoot(workspaceRoot)
@@ -932,42 +927,6 @@ async function ensureSessionsDir(workspaceRoot: unknown, editorMode: unknown): P
     'utf8'
   )
   return sessionsDir
-}
-
-/** 将旧版工作区内的有效会话按需迁移到环境级存储。 */
-async function migrateLegacyWorkspaceSessions(
-  workspaceRoot: unknown,
-  editorMode: unknown,
-  sessionsDir: string
-): Promise<void> {
-  const legacySessionsDir = getLegacyWorkspaceSessionsDir(workspaceRoot, editorMode)
-  if (path.resolve(legacySessionsDir) === path.resolve(sessionsDir)) return
-
-  let entries
-  try {
-    entries = await fs.readdir(legacySessionsDir, { withFileTypes: true })
-  } catch {
-    return
-  }
-
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue
-
-    try {
-      const rawValue = await fs.readFile(path.join(legacySessionsDir, entry.name), 'utf8')
-      const session = normalizeSession(JSON.parse(rawValue || '{}'))
-      const targetFile = getSessionFile(workspaceRoot, editorMode, session.id)
-      try {
-        await fs.access(targetFile)
-        continue
-      } catch {
-        // Missing target files are copied into the app-owned environment store below.
-      }
-      await fs.writeFile(targetFile, `${JSON.stringify(session, null, 2)}\n`, 'utf8')
-    } catch {
-      // Ignore malformed legacy files so migration never blocks the current app store.
-    }
-  }
 }
 
 /** 将规范化会话转换为列表展示所需的摘要。 */
@@ -1227,19 +1186,16 @@ function setupWorkspaceIpc(): void {
     }
 
     const projectPath = path.resolve(payload.workspacePath)
-
-    try {
+    await assertNewProjectDirectory(projectPath)
+    if (!(await lstatIfPresent(projectPath))) {
       await fs.mkdir(projectPath, { recursive: false })
-    } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException
-      if (errnoException?.code !== 'EEXIST') throw error
     }
     const applicationFile = getWorkspaceApplicationFile(projectPath)
     await fs.mkdir(path.dirname(applicationFile), { recursive: true })
     await fs.writeFile(
       applicationFile,
       `${JSON.stringify(payload.applicationConfig, null, 2)}\n`,
-      'utf8'
+      { encoding: 'utf8', flag: 'wx' }
     )
 
     return {
@@ -1375,7 +1331,7 @@ export default function ${componentName}() {
       written.push({ pageKey, path: filePath })
     }
 
-    // 按 ProjectPlan.frontend_pages 的树形结构整体覆盖 menus.ts 中的 BIZ_MENUS。
+    // 按当前计划 pages 的结构整体覆盖 menus.ts 中的 BIZ_MENUS。
     const menusPath = path.join(
       projectPath,
       'frontend',
@@ -1534,7 +1490,6 @@ function setupSessionStorageIpc(): void {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
     const editorMode = assertEditorMode(payload.editorMode)
     const sessionsDir = await ensureSessionsDir(workspaceRoot, editorMode)
-    await migrateLegacyWorkspaceSessions(workspaceRoot, editorMode, sessionsDir)
 
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true })
     const sessions: ChatSessionSummary[] = []

@@ -33,7 +33,7 @@ class ApplicationPlanningRecoveryRequest(BaseModel):
 
 
 def application_page_planning_capabilities() -> dict[str, Any]:
-    """发布创建应用专用两节点 Workflow 的 AG-UI 能力。"""
+    """发布创建应用产品/UI/技术四阶段 Workflow 的 AG-UI 能力。"""
 
     return {
         "name": "application-page-planning",
@@ -43,8 +43,24 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "stateSnapshotKey": "workflow",
         "customEventName": "workflow-run",
         "recoveryActionField": "forwardedProps.applicationPlanningRecovery",
-        "phases": ["requirements", "ui_confirmation", "project_planning"],
-        "confirmationArtifacts": ["requirement_spec", "ui_designs", "project_plan"],
+        "phases": [
+            "requirements",
+            "product_planning",
+            "ui_confirmation",
+            "technical_planning",
+        ],
+        "confirmationArtifacts": [
+            "requirement_spec",
+            "product_plan",
+            "ui_designs",
+            "technical_plan",
+        ],
+        "artifactSchemas": {
+            "product_plan": "product-plan.v4",
+            "ui_designs": "ui-manifest.v3",
+            "technical_plan": "technical-plan",
+        },
+        "uiDesignActions": ["select_template", "regenerate", "adjust_pages", "skip"],
         "editableArtifacts": {
             "requirement_spec": {
                 "requestField": "forwardedProps.editedRequirementSpec",

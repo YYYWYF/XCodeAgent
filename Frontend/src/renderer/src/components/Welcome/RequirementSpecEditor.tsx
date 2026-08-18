@@ -1,14 +1,12 @@
 import {
-  DatabaseOutlined,
   DeleteOutlined,
   DesktopOutlined,
   PartitionOutlined,
   PlusOutlined,
   TeamOutlined
 } from '@ant-design/icons'
-import { Button, Input, Tag, Typography } from 'antd'
+import { Button, Input, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import { DatasourceEnum } from '../../typings'
 import { cx } from '../../utils'
 import RequirementSpecFlowEditor from './RequirementSpecFlowSteps'
 import './RequirementSpecEditor.less'
@@ -17,13 +15,12 @@ const { Text, Title } = Typography
 const { TextArea } = Input
 
 type Props = {
-  datasourceType: DatasourceEnum
   onChange: (spec: Record<string, unknown>) => void
   rootPath: string
   spec: Record<string, unknown>
 }
 
-type ListField = 'pages' | 'user_roles' | 'business_flows' | 'data_sources'
+type ListField = 'pages' | 'user_roles' | 'business_flows'
 
 // 将未知值安全收窄为可编辑对象。
 function asRecord(value: unknown): Record<string, unknown> {
@@ -106,20 +103,13 @@ function EditorField({ children, label }: { children: ReactNode; label: string }
   )
 }
 
-// 以结构化表单编辑概览中的应用、页面、角色、流程和数据源。
+// 以结构化表单编辑产品确认范围内的应用、页面、角色和流程。
 export default function RequirementSpecEditor({
-  datasourceType,
   onChange,
   rootPath,
   spec
 }: Props): ReactElement {
   const appInfo = asRecord(spec.app_info)
-  const dataSourceTypeLabels: Record<DatasourceEnum, string> = {
-    [DatasourceEnum.DB]: '数据库',
-    [DatasourceEnum.API]: '外部 API',
-    [DatasourceEnum.STATIC]: '静态数据'
-  }
-
   // 只更新应用定位字段，保留内部规划元数据。
   const updateApp = (field: string, value: string): void => {
     onChange({ ...spec, app_info: { ...appInfo, [field]: value } })
@@ -127,11 +117,7 @@ export default function RequirementSpecEditor({
 
   // 替换指定模块的整个条目列表。
   const replaceList = (field: ListField, items: Record<string, unknown>[]): void => {
-    const nextItems =
-      field === 'data_sources'
-        ? items.map((item) => ({ ...item, type: datasourceType }))
-        : items
-    onChange({ ...spec, [field]: nextItems })
+    onChange({ ...spec, [field]: items })
   }
 
   // 修改指定模块的单个条目字段。
@@ -296,48 +282,6 @@ export default function RequirementSpecEditor({
               updateItem('business_flows', itemIndex, key, value)
             }
           />
-        ))}
-      </EditorSection>
-
-      <EditorSection
-        icon={<DatabaseOutlined />}
-        onAdd={() =>
-          addItem('data_sources', {
-            id: draftId('source'),
-            name: '新数据源',
-            type: datasourceType,
-            description: '',
-            entities: []
-          })
-        }
-        title="数据来源"
-      >
-        {recordList(spec.data_sources).map((item, index) => (
-          <EditorItem
-            key={textValue(item.id) || `source-${index}`}
-            onRemove={() => removeItem('data_sources', index)}
-          >
-            <EditorField label="数据源名称">
-              <Input
-                onChange={(event) => updateItem('data_sources', index, 'name', event.target.value)}
-                placeholder="请输入数据源名称"
-                value={textValue(item.name)}
-              />
-            </EditorField>
-            <EditorField label="数据源类型">
-              <Tag>{dataSourceTypeLabels[datasourceType]}</Tag>
-            </EditorField>
-            <EditorField label="数据源说明">
-              <TextArea
-                autoSize={{ minRows: 2, maxRows: 4 }}
-                onChange={(event) =>
-                  updateItem('data_sources', index, 'description', event.target.value)
-                }
-                placeholder="请输入数据源说明"
-                value={textValue(item.description)}
-              />
-            </EditorField>
-          </EditorItem>
         ))}
       </EditorSection>
     </div>

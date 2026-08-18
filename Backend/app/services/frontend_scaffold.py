@@ -1,6 +1,6 @@
 """工作区前端工程页面脚手架 — 在 detail_confirmation 完成后创建。
 
-根据已确认的 ProjectPlan.frontend_pages，在 frontend/ 下生成：
+根据已确认计划的 pages，在 frontend/ 下生成：
 
 1. src/constants/menus.ts — 完整的 BIZ_MENUS（包含所有项目页面菜单项）
 2. src/pages/<PageKey>/index.tsx — 每个页面的 hello agent! 占位文件
@@ -15,9 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.services.frontend_page_tree import (
-    flatten_frontend_pages,
-)
+from app.services.frontend_page_tree import project_plan_page_records
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +64,9 @@ def scaffold_frontend_pages(workspace_root: str, project_plan: dict[str, Any]) -
 
 
 def _collect_project_pages(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
-    """从 ProjectPlan.frontend_pages 拍平并提取需要脚手架化的页面。"""
+    """从当前计划 pages 提取需要脚手架化的页面。"""
 
-    raw = flatten_frontend_pages(project_plan.get("frontend_pages", []))
+    raw = project_plan_page_records(project_plan)
     pages: list[dict[str, Any]] = []
     seen: set[str] = set()
     for page in raw:

@@ -7,16 +7,18 @@ from typing import Any
 from app.services.api_contracts import dict_items, endpoint_dependencies_for_contracts
 from app.services.frontend_page_tree import (
     find_frontend_page,
-    flatten_frontend_pages,
     frontend_page_menu_paths,
     is_menu_node,
     is_page_leaf,
+    project_plan_page_records,
 )
 
 
 def normalize_page_dependencies(
     pages: list[dict[str, Any]],
     api_contracts: list[dict[str, Any]],
+    *,
+    include_action_implementations: bool = False,
 ) -> list[dict[str, Any]]:
     """为每个页面生成唯一的 references 依赖容器。"""
 
@@ -32,6 +34,16 @@ def normalize_page_dependencies(
         navigation_targets = _normalize_navigation_targets(
             _references_value(page, "navigation_targets"), pageIds=pageIds
         )
+        references = {
+            "permissions": _string_items(_references_value(page, "permissions")),
+            "endpoint_dependencies": [dict(item) for item in endpoint_dependencies],
+            "navigation_targets": [dict(item) for item in navigation_targets],
+        }
+        if include_action_implementations:
+            references["action_implementations"] = [
+                dict(item)
+                for item in dict_items(_references_value(page, "action_implementations"))
+            ]
         normalized.append(
             {
                 "pageId": str(page.get("pageId") or ""),
@@ -39,13 +51,7 @@ def normalize_page_dependencies(
                 "path": str(page.get("path") or "/"),
                 "module_id": str(page.get("module_id") or "core"),
                 "description": str(page.get("description") or page.get("name") or "业务页面"),
-                "references": {
-                    "permissions": _string_items(_references_value(page, "permissions")),
-                    "endpoint_dependencies": [
-                        dict(item) for item in endpoint_dependencies
-                    ],
-                    "navigation_targets": [dict(item) for item in navigation_targets],
-                },
+                "references": references,
             }
         )
     return normalized
@@ -54,7 +60,7 @@ def normalize_page_dependencies(
 def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str]:
     """校验页面 id、路由、endpoint 与跳转均可由 ProjectPlan 独立解析。"""
 
-    pages = flatten_frontend_pages(project_plan.get("frontend_pages"))
+    pages = project_plan_page_records(project_plan)
     contracts = dict_items(project_plan.get("api_contracts"))
     data_sources = dict_items(project_plan.get("data_sources"))
     endpoint_index = _endpoint_index(contracts)
@@ -63,13 +69,18 @@ def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str
         errors.append("ProjectPlan defines data sources but api_contracts is empty.")
     _validate_unique_values(pages, "pageId", "pageId", errors)
     _validate_unique_values(pages, "path", "page path", errors)
-    menu_paths = frontend_page_menu_paths(project_plan.get("frontend_pages"))
+    page_source = (
+        project_plan.get("pages", [])
+        if project_plan.get("artifact_type") == "technical-plan"
+        else project_plan.get("frontend_pages")
+    )
+    menu_paths = frontend_page_menu_paths(page_source)
     duplicates = sorted(
         {value for value in menu_paths if value and menu_paths.count(value) > 1}
     )
     for value in duplicates:
         errors.append(f"Duplicate menu unique_path: {value}.")
-    _validate_menu_page_path_conflicts(project_plan.get("frontend_pages"), errors)
+    _validate_menu_page_path_conflicts(page_source, errors)
     pageIds = {str(page.get("pageId") or "") for page in pages}
     for page in pages:
         pageId = str(page.get("pageId") or "")
@@ -118,7 +129,7 @@ def page_design_references(
 ) -> dict[str, Any]:
     """从 ProjectPlan 原样复制页面设计允许使用的全部引用型依赖。"""
 
-    page = find_frontend_page(project_plan.get("frontend_pages"), pageId)
+    page = find_frontend_page(project_plan_page_records(project_plan), pageId)
     if page is None:
         raise ValueError(f"项目计划中不存在页面：{pageId}")
     references = (
@@ -148,9 +159,13 @@ def page_data_source_ids(page: dict[str, Any], api_contracts: list[dict[str, Any
     """根据页面 endpoint 引用反查数据源，避免页面索引重复保存 data_dependencies。"""
 
     endpoint_index = _endpoint_index(api_contracts)
-    references = page_design_references({"frontend_pages": [page]}, str(page.get("pageId") or ""))
+    page_references = page.get("references") if isinstance(page.get("references"), dict) else {}
+    endpoint_dependencies = dict_items(
+        page_references.get("endpoint_dependencies") or page.get("endpoint_dependencies")
+    )
     return _data_source_ids_for_endpoints(
-        references["endpoint_dependencies"], endpoint_index=endpoint_index
+        endpoint_dependencies,
+        endpoint_index=endpoint_index,
     )
 
 

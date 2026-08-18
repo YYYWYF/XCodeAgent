@@ -325,8 +325,8 @@ class DetailConfirmationTests(unittest.TestCase):
             page_context["references"]["endpoint_dependencies"],
         )
 
-    def test_page_detail_confirmation_generates_required_endpoint_details(self) -> None:
-        """单页设计应先补齐缺失 EndpointDetail 并纳入同轮审核。"""
+    def test_page_selection_only_generates_required_endpoint_details(self) -> None:
+        """选择页面应只补齐 EndpointDetail，不再调用 PageDetail 设计模型。"""
 
         project_plan = create_project_plan(
             create_requirement_spec("创建一个库存管理系统")
@@ -343,6 +343,9 @@ class DetailConfirmationTests(unittest.TestCase):
         ) as endpoint_designer, patch(
             "app.graph.nodes.planning.prepare_endpoint_database_context",
             return_value={"status": "skipped", "message": "无需数据库上下文。"},
+        ), patch(
+            "app.graph.nodes.planning.write_project_plan_document",
+            return_value="/tmp/project-plan.md",
         ):
             selected_page = project_plan["frontend_pages"][1]
             result = detail_confirmation(
@@ -356,27 +359,20 @@ class DetailConfirmationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["mode"], "detail_review")
-        self.assertEqual(
-            [item["target_id"] for item in result["clarification"]["review"]["pages"]],
-            [selected_page["pageId"]],
-        )
+        self.assertEqual(result["clarification"]["review"]["pages"], [])
         self.assertEqual(
             len(result["clarification"]["review"]["endpoints"]),
             endpoint_designer.call_count,
         )
-        self.assertEqual(page_designer.call_count, 1)
+        page_designer.assert_not_called()
         self.assertGreater(endpoint_designer.call_count, 0)
-        page_contexts = [call.args[1] for call in page_designer.call_args_list]
-        self.assertTrue(
-            any(context["endpoint_detail_summaries"] for context in page_contexts)
-        )
         self.assertEqual(
             result["pending_project_plan"]["confirmation_status"],
             "pending_user_confirmation",
         )
 
-    def test_page_detail_confirmation_reuses_existing_endpoint_detail(self) -> None:
-        """页面设计应复用已设计 endpoint，并把未确认详情纳入同轮审核。"""
+    def test_page_selection_reuses_existing_endpoint_detail(self) -> None:
+        """页面开发前应复用已有 endpoint，并把未确认详情纳入同轮审核。"""
 
         project_plan = create_project_plan(create_requirement_spec("创建库存管理系统"))
         selected_page = project_plan["frontend_pages"][1]
@@ -395,9 +391,12 @@ class DetailConfirmationTests(unittest.TestCase):
         with patch(
             "app.graph.nodes.planning.design_page_with_chat_model",
             side_effect=create_page_detail_plan,
-        ), patch(
+        ) as page_designer, patch(
             "app.graph.nodes.planning.design_endpoint_with_chat_model",
-        ) as endpoint_designer:
+        ) as endpoint_designer, patch(
+            "app.graph.nodes.planning.write_project_plan_document",
+            return_value="/tmp/project-plan.md",
+        ):
             result = detail_confirmation(
                 {
                     "request": "开始页面详细设计",
@@ -408,6 +407,7 @@ class DetailConfirmationTests(unittest.TestCase):
             )
 
         endpoint_designer.assert_not_called()
+        page_designer.assert_not_called()
         self.assertEqual(len(result["clarification"]["review"]["endpoints"]), 1)
 
     def test_detail_review_applies_page_patch_and_confirms_once(self) -> None:
@@ -433,27 +433,31 @@ class DetailConfirmationTests(unittest.TestCase):
         }
         pageId = page_context["pageId"]
 
-        result = detail_confirmation(
-            {
-                "request": "已整体确认设计",
-                "project_plan": project_plan,
-                "pending_project_plan": pending_plan,
-                "detail_review_submission": {
-                    "review_status": "confirmed",
-                    "target_changes": [
-                        {
-                            "target_type": "page",
-                            "target_id": pageId,
-                            "changes": {
-                                "page_goal": "快速查看库存并支持批量导出",
-                                "interactions": ["搜索", "筛选", "批量导出"],
-                            },
-                        }
-                    ],
-                },
-                "timeline": [],
-            }
-        )
+        with patch(
+            "app.graph.nodes.planning.write_project_plan_document",
+            return_value="/tmp/project-plan.md",
+        ):
+            result = detail_confirmation(
+                {
+                    "request": "已整体确认设计",
+                    "project_plan": project_plan,
+                    "pending_project_plan": pending_plan,
+                    "detail_review_submission": {
+                        "review_status": "confirmed",
+                        "target_changes": [
+                            {
+                                "target_type": "page",
+                                "target_id": pageId,
+                                "changes": {
+                                    "page_goal": "快速查看库存并支持批量导出",
+                                    "interactions": ["搜索", "筛选", "批量导出"],
+                                },
+                            }
+                        ],
+                    },
+                    "timeline": [],
+                }
+            )
 
         detail = result["project_plan"]["page_detail_plans"][0]
         self.assertEqual(result["status"], "completed")
@@ -477,14 +481,18 @@ class DetailConfirmationTests(unittest.TestCase):
             ],
         }
 
-        result = detail_confirmation(
-            {
-                "request": "正确，继续",
-                "project_plan": project_plan,
-                "pending_project_plan": pending_project_plan,
-                "timeline": [],
-            }
-        )
+        with patch(
+            "app.graph.nodes.planning.write_project_plan_document",
+            return_value="/tmp/project-plan.md",
+        ):
+            result = detail_confirmation(
+                {
+                    "request": "正确，继续",
+                    "project_plan": project_plan,
+                    "pending_project_plan": pending_project_plan,
+                    "timeline": [],
+                }
+            )
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agents.workspace_scope import resolve_workspace_root
 from app.graph.direct_modification_workflow import (
@@ -46,6 +46,34 @@ CONVERSATION_EVENT_NAME = "conversation"
 CONVERSATION_STATE_KEY = "conversation"
 
 
+class DirectModificationTarget(BaseModel):
+    """校验自由协作当前页面或接口目标，保留无目标对话能力。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    type: Literal["page", "endpoint"]
+    page_id: str | None = Field(default=None, alias="pageId", max_length=512)
+    api_contract_id: str | None = Field(
+        default=None,
+        alias="apiContractId",
+        max_length=512,
+    )
+    endpoint_id: str | None = Field(default=None, alias="endpointId", max_length=512)
+
+    @model_validator(mode="after")
+    def validate_target_identifiers(self) -> "DirectModificationTarget":
+        """要求页面和接口目标分别携带完整且非空的稳定标识。"""
+
+        if self.type == "page" and not str(self.page_id or "").strip():
+            raise ValueError("页面目标必须提供 pageId。")
+        if self.type == "endpoint" and (
+            not str(self.api_contract_id or "").strip()
+            or not str(self.endpoint_id or "").strip()
+        ):
+            raise ValueError("接口目标必须提供 apiContractId 和 endpointId。")
+        return self
+
+
 class DirectModificationInput(BaseModel):
     """校验快速修改 AG-UI forwardedProps 的最小业务参数。"""
 
@@ -62,6 +90,8 @@ class DirectModificationInput(BaseModel):
         alias="originalRequest",
         max_length=16_000,
     )
+    target: DirectModificationTarget | None = None
+    change_id: str | None = Field(default=None, alias="changeId", max_length=256)
     approved_paths: list[str] = Field(
         default_factory=list,
         alias="approvedPaths",
@@ -101,6 +131,14 @@ def conversation_capabilities() -> dict[str, Any]:
         ],
         "workflowIndependent": True,
         "targetRequired": False,
+        "target": {
+            "optional": True,
+            "types": {
+                "page": ["pageId"],
+                "endpoint": ["apiContractId", "endpointId"],
+            },
+        },
+        "changeIdSupported": True,
         "conversationSummaryMaxChars": 4_000,
         "automaticRepair": {
             "enabled": True,
@@ -196,6 +234,12 @@ def build_conversation_ag_ui_stream(
             "selected_skill_names": list(request.selected_skill_names),
             "active_thread_id": thread_id,
             "active_run_id": run_id,
+            "change_id": str(request.change_id or ""),
+            "change_target": (
+                request.target.model_dump(by_alias=True, exclude_none=True)
+                if request.target is not None
+                else {}
+            ),
             "direct_modification_approved_paths": _safe_approved_paths(request.approved_paths),
             "direct_modification_handoff_decision": str(request.handoff_decision or ""),
             "integration_repair_enabled": False,

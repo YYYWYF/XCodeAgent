@@ -1,8 +1,5 @@
 import {
-  DatabaseOutlined,
   DesktopOutlined,
-  FileTextOutlined,
-  FlagOutlined,
   PartitionOutlined,
   TeamOutlined
 } from '@ant-design/icons'
@@ -51,19 +48,6 @@ function itemLabels(value: unknown): string[] {
   return asArray(value)
     .map((item) => typeof item === 'string' ? item : itemText(item, ['name', 'label']))
     .filter(Boolean)
-}
-
-const dataSourceTypeLabels: Record<string, string> = {
-  database: '数据库',
-  external_api: '外部 API',
-  static: '静态数据'
-}
-
-// 将数据源类型转换为单个中文标签，不暴露具体业务字段。
-function dataSourceLabels(item: unknown): string[] {
-  const type = itemText(item, ['type'])
-  const typeLabel = dataSourceTypeLabels[type.toLowerCase()] || (/[\u3400-\u9fff]/.test(type) ? type : '其他数据源')
-  return [typeLabel]
 }
 
 // 渲染带图标和标题的需求概览分区。
@@ -120,9 +104,7 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
   const app = asRecord(spec.app_info) || {}
   const roles = asArray(spec.user_roles)
   const pages = asArray(spec.pages)
-  const dataSources = asArray(spec.data_sources)
   const flows = asArray(spec.business_flows)
-  const assumptions = itemLabels(spec.assumptions)
   const appName = itemText(app, ['name']) || '未命名应用'
 
   return (
@@ -194,30 +176,6 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
         </SummarySection>
       ) : null}
 
-      {dataSources.length ? (
-        <SummarySection icon={<DatabaseOutlined />} title="数据来源">
-          <div className={cx('requirement-summary-grid')}>
-            {dataSources.map((item, index) => {
-              return (
-                <SummaryItem
-                  description={itemText(item, ['description'])}
-                  key={itemText(item, ['id', 'name']) || `source-${index}`}
-                  labels={dataSourceLabels(item)}
-                  name={itemText(item, ['name']) || `数据源 ${index + 1}`}
-                />
-              )
-            })}
-          </div>
-        </SummarySection>
-      ) : null}
-
-      {assumptions.length ? (
-        <SummarySection icon={<FlagOutlined />} title="规划假设">
-          <div className={cx('requirement-summary-notes')}>
-            {assumptions.map((item) => <Text key={item}><FileTextOutlined />{item}</Text>)}
-          </div>
-        </SummarySection>
-      ) : null}
     </div>
   )
 }

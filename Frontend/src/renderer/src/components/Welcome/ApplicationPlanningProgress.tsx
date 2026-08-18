@@ -6,8 +6,9 @@ const { Text } = Typography
 
 const STAGE_LABELS: Record<string, string> = {
   requirements: '需求确认',
+  product_planning: '产品规划',
   ui_confirmation: 'UI确认',
-  project_planning: '项目规划',
+  technical_planning: '技术规划',
   application_template: '应用模板'
 }
 
@@ -25,7 +26,7 @@ type Props = {
   title: string
 }
 
-// 使用原创建规划页面的动态视觉展示两节点进度、时间线与 AG-UI 实时消息。
+// 使用原创建规划页面的动态视觉展示四阶段进度、时间线与 AG-UI 实时消息。
 export default function ApplicationPlanningProgress({
   events,
   fallbackMessage,

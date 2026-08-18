@@ -68,28 +68,35 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
     ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
     },
     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+    },
+    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN: {
+        ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+    },
+    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION: {
+        ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+        ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
     },
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS: {
         ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
     },
     ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION: {
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
     },
-    ApplicationLifecycleStage.GENERATING_PROJECT_PLAN: {
-        ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+    ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN: {
+        ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
     },
-    ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION: {
-        ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+    ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION: {
+        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
         ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
     },
     ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES: {
@@ -798,12 +805,26 @@ def complete_application_template_generation(
     requirement_status = _artifact_confirmation_status(
         Path(workspace) / ".xcodeagent/specs/requirement-spec.json"
     )
-    plan_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/plans/project-plan.json"
+    product_plan_status = _artifact_confirmation_status(
+        Path(workspace) / ".xcodeagent/plans/product-plan.json"
     )
-    if succeeded and (requirement_status != "confirmed" or plan_status != "confirmed"):
+    ui_design_status = _artifact_confirmation_status(
+        Path(workspace) / ".xcodeagent/specs/ui-designs.json"
+    )
+    technical_plan_status = _artifact_confirmation_status(
+        Path(workspace) / ".xcodeagent/plans/technical-plan.json",
+        expected_artifact_type="technical-plan",
+    )
+    # UI 阶段可以是用户明确跳过，其余正式产物仍必须处于 confirmed。
+    artifacts_confirmed = (
+        requirement_status == "confirmed"
+        and product_plan_status == "confirmed"
+        and ui_design_status in {"confirmed", "skipped"}
+        and technical_plan_status == "confirmed"
+    )
+    if succeeded and not artifacts_confirmed:
         succeeded = False
-        error_message = "正式需求文档或项目计划未确认，不能进入工作台。"
+        error_message = "需求、产品、技术正式产物必须确认，UI 设计稿必须确认或明确跳过，才能进入工作台。"
     if succeeded:
         # 进入工作台前，按项目计划声明的 API 契约预生成 API 骨架文件到 frontend/src/apis/。
         # 这样 build 阶段对这些文件的变更类型是 modified（而非 added），与 build-task-plan
@@ -855,14 +876,23 @@ def _pending_interaction(
     )
 
 
-def _artifact_confirmation_status(path: Path) -> str | None:
-    """严格读取正式 JSON 的 confirmation_status；损坏时返回显式异常状态。"""
+def _artifact_confirmation_status(
+    path: Path,
+    *,
+    expected_artifact_type: str | None = None,
+) -> str | None:
+    """严格读取当前正式 JSON 的确认状态和可选产物类型。"""
 
     if not path.is_file():
         return None
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
+        return "invalid"
+    if expected_artifact_type and (
+        not isinstance(value, dict)
+        or value.get("artifact_type") != expected_artifact_type
+    ):
         return "invalid"
     confirmation_status = value.get("confirmation_status") if isinstance(value, dict) else None
     return confirmation_status if isinstance(confirmation_status, str) else "invalid"
@@ -987,7 +1017,7 @@ def _preload_api_skeletons(workspace: str | Path) -> None:
     """
 
     workspace_path = Path(str(workspace)).expanduser().resolve()
-    plan_path = workspace_path / ".xcodeagent" / "plans" / "project-plan.json"
+    plan_path = workspace_path / ".xcodeagent" / "plans" / "technical-plan.json"
     if not plan_path.is_file():
         return
     try:
@@ -995,6 +1025,8 @@ def _preload_api_skeletons(workspace: str | Path) -> None:
     except (OSError, json.JSONDecodeError):
         return
     if not isinstance(plan, dict):
+        return
+    if plan.get("artifact_type") != "technical-plan" or plan.get("confirmation_status") != "confirmed":
         return
     contracts = plan.get("api_contracts")
     if not isinstance(contracts, list):

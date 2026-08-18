@@ -880,6 +880,14 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "method": "GET",
                     "path": "/api/inventory",
                     "summary": "查询库存",
+                    "data_origin": {
+                        "source_type": "database",
+                        "effective_source": {
+                            "kind": "mysql_existing",
+                            "database": "inventory",
+                            "tables": [{"name": "inventory"}],
+                        },
+                    },
                     "status": "confirmed",
                 },
             ],
@@ -919,6 +927,14 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                         "method": "POST",
                         "path": "/api/orders",
                         "summary": "创建订单",
+                        "data_origin": {
+                            "source_type": "database",
+                            "effective_source": {
+                                "kind": "mysql_existing",
+                                "database": "orders",
+                                "tables": [{"name": "orders"}],
+                            },
+                        },
                         "status": "confirmed",
                     }
                 ],

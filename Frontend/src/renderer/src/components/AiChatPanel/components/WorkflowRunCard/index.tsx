@@ -19,7 +19,6 @@ import type {
   WorkflowConfirmationArtifact,
   WorkflowRunPayload,
 } from "../../../../typings";
-import type { DatasourceEnum } from "../../../../typings";
 import { cx } from "../../../../utils";
 import { pageAcceptanceContinuationMessage } from '../../workflowContinuation';
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode';
@@ -33,6 +32,7 @@ import ConfirmationArtifact from './ConfirmationArtifact';
 import DetailReview from './DetailReview';
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel';
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary';
+import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary';
 import RequirementSpecEditor from '../../../Welcome/RequirementSpecEditor';
 import './WorkflowRunCard.less';
 
@@ -44,6 +44,8 @@ const OTHER_OPTION_VALUE = '__other__';
 // 设计阶段产物确认卡 mode → 文档信息（驱动产物确认行渲染）。
 const ARTIFACT_CONFIRMATION_MAP: Record<string, { title: string; summary: string }> = {
   requirement_spec_confirmation: { title: '需求文档', summary: '需求文档已生成，请确认内容。' },
+  product_plan_confirmation: { title: '产品规划', summary: '产品规划已生成，确认后生成 UI 设计稿。' },
+  technical_plan_confirmation: { title: '技术规划', summary: '技术规划已生成，确认后进入应用工作区。' },
   project_plan_confirmation: { title: '项目计划', summary: '项目计划已生成，确认后生成构建任务清单。' },
 };
 
@@ -70,8 +72,6 @@ type WorkflowRunCardProps = {
     workflow: WorkflowRunPayload,
     spec: Record<string, unknown>
   ) => Promise<Record<string, unknown> | undefined>;
-  /** 需求文档确认：数据源类型（驱动编辑器数据源字段渲染）。 */
-  datasourceType?: DatasourceEnum;
   /** 需求文档确认：菜单根路径（驱动编辑器页面路由前缀）。 */
   rootPath?: string;
   workflow: WorkflowRunPayload;
@@ -86,7 +86,6 @@ export default function WorkflowRunCard({
   uiDesignActionPageId,
   onUiDesignActionPageIdChange,
   onSaveRequirementSpec,
-  datasourceType,
   rootPath,
   workflow,
 }: WorkflowRunCardProps): ReactElement {
@@ -99,7 +98,7 @@ export default function WorkflowRunCard({
     ? clarification.review
     : undefined;
   const databaseApproval = workflowDatabaseApproval(clarification);
-  // 产物确认（需求文档/项目计划）：展示"已生成 + 放弃/确认保存"行，不走通用表单。
+  // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
     : undefined;
@@ -108,15 +107,23 @@ export default function WorkflowRunCard({
   const uiDesignConfirmation =
     clarification?.mode === 'ui_design_confirmation' ||
     workflow.summary?.phase === 'ui_confirmation';
-  // 项目规划生成中：phase=project_planning 且 status=running，展示加载态 + 流式文本。
-  const projectPlanningRunning =
-    workflow.summary?.phase === 'project_planning' && status === 'running';
-  // 项目计划确认：从 workflow.state/result.project_plan 读取结构化计划，供 ProjectPlanSummary 展示。
+  // 创建规划各阶段生成中都要保留卡片，避免运行期间没有任何可见反馈。
+  const planningPhase = workflow.summary?.phase;
+  const planningRunning =
+    ['product_planning', 'project_planning', 'technical_planning'].includes(String(planningPhase)) &&
+    status === 'running';
+  // 各规划文档从 workflow.state/result 读取结构化内容，供确认卡预览。
+  const productPlanObject = readProductPlan(workflow);
   const projectPlanObject = readProjectPlan(workflow);
-  // 产物确认答案键：根据 clarification.mode 动态选择，避免 project_plan_confirmation 误发 requirement_spec_confirmation。
-  const artifactAnswerKey = clarification?.mode === 'project_plan_confirmation'
-    ? 'project_plan_confirmation'
-    : 'requirement_spec_confirmation';
+  const technicalPlanObject = readTechnicalPlan(workflow);
+  // 产物确认答案键必须与当前 mode 一一对应，避免确认产品规划时误发需求确认答案。
+  const artifactAnswerKey = clarification?.mode === 'product_plan_confirmation'
+    ? 'product_plan_confirmation'
+    : clarification?.mode === 'technical_plan_confirmation'
+      ? 'technical_plan_confirmation'
+      : clarification?.mode === 'project_plan_confirmation'
+        ? 'project_plan_confirmation'
+        : 'requirement_spec_confirmation';
   const databaseApprovalAnswerKey = clarificationQuestions[0]
     ? clarificationQuestionKey(clarificationQuestions[0], 0)
     : "database_approval";
@@ -184,10 +191,16 @@ export default function WorkflowRunCard({
           <Text>{String(workflow.summary.message)}</Text>
         </div>
       )}
-      {projectPlanningRunning ? (
+      {planningRunning ? (
         <div className={cx("workflow-run-progress")}>
           <LoadingOutlined aria-hidden="true" />
-          <Text type="secondary">正在生成项目计划…</Text>
+          <Text type="secondary">
+            {planningPhase === 'product_planning'
+              ? '正在生成产品规划…'
+              : planningPhase === 'technical_planning'
+                ? '正在生成技术规划…'
+                : '正在生成项目计划…'}
+          </Text>
         </div>
       ) : null}
       {Object.keys(artifacts).length > 0 && artifactConfirmation && (
@@ -257,7 +270,6 @@ export default function WorkflowRunCard({
             clarification?.mode === 'requirement_spec_confirmation' ? (
               <RequirementSpecConfirmationCard
                 artifact={confirmationArtifact}
-                datasourceType={datasourceType}
                 disabled={Boolean(disabled)}
                 onSaveRequirementSpec={onSaveRequirementSpec}
                 onSubmit={(editedSpec, feedback) =>
@@ -270,11 +282,25 @@ export default function WorkflowRunCard({
                 workflow={workflow}
               />
             ) : (
-            <ProjectPlanConfirmationCard
+            <PlanConfirmationCard
+              artifact={confirmationArtifact}
               disabled={Boolean(disabled)}
               onAbandon={() => onSubmitClarification?.(workflow, { [artifactAnswerKey]: '需要修改，请重新生成' })}
               onConfirm={() => onSubmitClarification?.(workflow, { [artifactAnswerKey]: '正确，继续' })}
-              plan={projectPlanObject}
+              plan={
+                clarification?.mode === 'product_plan_confirmation'
+                  ? productPlanObject
+                  : clarification?.mode === 'technical_plan_confirmation'
+                    ? technicalPlanObject
+                    : projectPlanObject
+              }
+              planType={
+                clarification?.mode === 'product_plan_confirmation'
+                  ? 'product'
+                  : clarification?.mode === 'technical_plan_confirmation'
+                    ? 'technical'
+                    : 'project'
+              }
               requiresConfirmation={requiresConfirmation}
               title={artifactConfirmation?.title || '项目计划'}
             />
@@ -357,11 +383,10 @@ function readRequirementSpec(workflow: WorkflowRunPayload): Record<string, unkno
 
 /**
  * 需求文档确认卡片：展示已生成状态 + 修改（弹窗结构化编辑器）+ 确认并继续规划。
- * 右侧需求文档只读；点「修改」打开 Modal 编辑页面/数据源/角色/流程，保存后同步给后端，
+ * 右侧需求文档只读；点「修改」打开 Modal 编辑页面/角色/流程，保存后同步给后端，
  * 再点「确认并继续规划」时大模型拿到最新需求文档。
  */
 function RequirementSpecConfirmationCard({
-  datasourceType,
   disabled,
   onSaveRequirementSpec,
   onSubmit,
@@ -370,7 +395,6 @@ function RequirementSpecConfirmationCard({
   workflow,
 }: {
   artifact?: WorkflowConfirmationArtifact
-  datasourceType?: DatasourceEnum
   disabled: boolean
   onSaveRequirementSpec?: (
     workflow: WorkflowRunPayload,
@@ -385,7 +409,7 @@ function RequirementSpecConfirmationCard({
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Record<string, unknown> | undefined>()
   const [saving, setSaving] = useState(false)
-  const canEdit = Boolean(spec) && Boolean(onSaveRequirementSpec) && Boolean(datasourceType)
+  const canEdit = Boolean(spec) && Boolean(onSaveRequirementSpec)
 
   const startEditing = (): void => {
     if (!spec) return
@@ -466,9 +490,8 @@ function RequirementSpecConfirmationCard({
         width={920}
         destroyOnClose
       >
-        {draft && datasourceType ? (
+        {draft ? (
           <RequirementSpecEditor
-            datasourceType={datasourceType}
             onChange={setDraft}
             rootPath={rootPath || '/'}
             spec={draft}
@@ -479,23 +502,33 @@ function RequirementSpecConfirmationCard({
   )
 }
 
-/** 项目计划确认卡片：展示已生成状态 + 查看项目计划书（弹窗只读）+ 放弃/确认保存。 */
-function ProjectPlanConfirmationCard({
+/** 规划文档确认卡片：展示当前文档并提交放弃或确认操作。 */
+function PlanConfirmationCard({
+  artifact,
   disabled,
   onAbandon,
   onConfirm,
   plan,
+  planType,
   requiresConfirmation,
   title,
 }: {
+  artifact?: WorkflowConfirmationArtifact
   disabled: boolean
   onAbandon: () => void
   onConfirm: () => void
   plan?: Record<string, unknown>
+  planType: 'product' | 'technical' | 'project'
   requiresConfirmation: boolean
   title: string
 }): ReactElement {
   const [viewing, setViewing] = useState(false)
+  const canView = Boolean(artifact || plan)
+  const documentLabel = planType === 'product'
+    ? '产品规划'
+    : planType === 'technical'
+      ? '技术规划'
+      : '项目计划书'
   return (
     <div className={cx("artifact-auth-bar", "project-plan-confirmation-card")}>
       <div className={cx("artifact-auth-bar-footer")}>
@@ -504,12 +537,12 @@ function ProjectPlanConfirmationCard({
           {title}已生成
         </span>
         <span className={cx("artifact-auth-actions")}>
-          {plan ? (
+          {canView ? (
             <Button
               className={cx("requirement-spec-edit-btn")}
               onClick={() => setViewing(true)}
             >
-              查看项目计划书
+              查看{documentLabel}
             </Button>
           ) : null}
           <Button
@@ -534,11 +567,19 @@ function ProjectPlanConfirmationCard({
         footer={null}
         onCancel={() => setViewing(false)}
         open={viewing}
-        title="项目计划书"
+        title={documentLabel}
         width={920}
         destroyOnClose
       >
-        {plan ? <ProjectPlanSummary plan={plan} /> : null}
+        {planType === 'product' && artifact ? (
+          <ConfirmationArtifact artifact={artifact} />
+        ) : planType === 'technical' && plan ? (
+          <TechnicalPlanSummary plan={plan} />
+        ) : plan ? (
+          <ProjectPlanSummary plan={plan} />
+        ) : artifact ? (
+          <ConfirmationArtifact artifact={artifact} />
+        ) : null}
       </Modal>
     </div>
   )
@@ -1565,6 +1606,28 @@ function readProjectPlan(workflow: WorkflowRunPayload): Record<string, unknown> 
   return undefined
 }
 
+/** 从 Workflow 公开状态中读取 ProductPlan 结构化数据。 */
+function readProductPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
+  for (const source of [workflow.result, workflow.state]) {
+    const value = source?.product_plan
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
+/** 从 Workflow 公开状态中读取 TechnicalPlan 结构化数据。 */
+function readTechnicalPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
+  for (const source of [workflow.result, workflow.state]) {
+    const value = source?.technical_plan
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function workflowClarification(
   workflow: WorkflowRunPayload,
@@ -1635,9 +1698,13 @@ function workflowConfirmationArtifact(
 ): WorkflowConfirmationArtifact | undefined {
   const expectedArtifactId = clarification?.mode === 'requirement_spec_confirmation'
     ? 'requirement_spec'
-    : clarification?.mode === 'project_plan_confirmation'
-      ? 'project_plan'
-      : undefined;
+    : clarification?.mode === 'product_plan_confirmation'
+      ? 'product_plan'
+      : clarification?.mode === 'technical_plan_confirmation'
+        ? 'technical_plan'
+        : clarification?.mode === 'project_plan_confirmation'
+          ? 'project_plan'
+          : undefined;
   const artifact = workflow.confirmationArtifact;
 
   if (

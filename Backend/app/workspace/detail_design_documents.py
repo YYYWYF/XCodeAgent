@@ -12,7 +12,7 @@ from typing import Any
 from app.services.api_contracts import normalize_page_api_dependencies
 from app.services.frontend_page_tree import (
     find_frontend_page,
-    flatten_frontend_pages,
+    project_plan_page_records,
     update_frontend_page_leaves,
 )
 from app.workspace.spec_documents import workflow_artifact_root
@@ -165,7 +165,7 @@ def hydrate_external_detail_designs(
     page_details: list[dict[str, Any]] = []
     endpoint_details: list[dict[str, Any]] = []
 
-    for page in flatten_frontend_pages(hydrated.get("frontend_pages")):
+    for page in project_plan_page_records(hydrated):
         pageId = str(page.get("pageId") or "")
         if not pageId:
             continue
@@ -361,8 +361,10 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
     compact_plan = deepcopy(plan)
     page_directory = _artifact_directory(state, artifact_type="page")
     endpoint_directory = _artifact_directory(state, artifact_type="endpoint")
-    page_directory.mkdir(parents=True, exist_ok=True)
-    endpoint_directory.mkdir(parents=True, exist_ok=True)
+    if _dict_items(plan.get("page_detail_plans")):
+        page_directory.mkdir(parents=True, exist_ok=True)
+    if _dict_items(plan.get("endpoint_detail_plans")):
+        endpoint_directory.mkdir(parents=True, exist_ok=True)
 
     # 先写 EndpointDetail 并建立索引，随后 PageDetail 才能记录稳定的独立产物路径。
     for detail in _dict_items(plan.get("endpoint_detail_plans")):
@@ -414,8 +416,9 @@ def externalize_detail_designs(state: dict[str, Any], plan: dict[str, Any]) -> d
             sha256=sha256,
             dependencies=_page_dependencies(plan, detail),
         )
-        compact_plan["frontend_pages"] = update_frontend_page_leaves(
-            compact_plan.get("frontend_pages"),
+        page_field = "pages" if compact_plan.get("artifact_type") == "technical-plan" else "frontend_pages"
+        compact_plan[page_field] = update_frontend_page_leaves(
+            compact_plan.get(page_field),
             {
                 pageId: {
                     "detail_design": reference,

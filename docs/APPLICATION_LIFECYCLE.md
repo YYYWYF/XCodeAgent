@@ -1,15 +1,12 @@
 # 应用生命周期状态文件
 
-## 参考架构映射
+## 设计边界
 
-- `learn-coding-agent`：采用“收集上下文、执行、验证”的紧凑循环，以及关键恢复输入同步落盘、HITL 可恢复、任务图单独持久化的边界。其当前公开提交只包含研究文档，没有 README 所列 `src/*` 源码，因此原子写入和稳定交互 ID 是 XCodeAgent 的明确自有设计。
-- OpenCode：采用稳定 session/run 引用、可恢复持久化状态和事件与业务投影分责；初始化期间的 `initialization.threadId` 只定位技术 checkpoint，不成为业务阶段真相，并在进入工作台时删除。
-- Deep Agents：沿用外层确定性状态机和人机确认门禁；LangGraph checkpoint 继续保存技术执行断点，不能替代业务生命周期文件。
-- 128k 上下文：状态文件只保存阶段、revision、引用、待交互和短错误摘要。正式 Markdown/JSON、Build DAG、测试日志和会话历史按需从各自文件加载，不复制进生命周期或模型上下文。
+- 生命周期文件只保存当前阶段、revision、引用、待交互和短错误摘要；正式 Markdown/JSON、Build DAG、测试日志和会话记录按需从各自文件加载，不复制进生命周期或模型上下文。
 
 ## 权威边界
 
-`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台执行和资源锁的持久化权威来源。应用索引中的 `planningConfirmedAt` 是“初始化已完成、允许永久进入工作台”的不可逆准入事实；它在首次完成应用计划时写入，之后页面计划或工作台执行状态不得撤销该事实。`checkpoints.sqlite` 继续负责 LangGraph 技术断点；当前对话的运行状态以实时 AG-UI 流和对应 `threadId` 的 checkpoint 为准，不会在每个节点运行前从状态文件重建。RequirementSpec 和 ProjectPlan JSON 继续负责文档内容及确认状态；Build DAG、ExecutionRun 和 TestReport 继续负责执行和测试事实。
+`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台执行和资源锁的持久化权威来源。应用索引中的 `planningConfirmedAt` 是“初始化已完成、允许永久进入工作台”的不可逆准入事实。`checkpoints.sqlite` 继续负责 LangGraph 技术断点；RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 各自负责正式内容与确认状态；Build DAG、ExecutionRun 和 TestReport 继续负责执行和测试事实。
 
 生命周期文件只承担冷启动、断线重连和显式校准，不作为渲染进程的实时轮询源。后端每次原子写入成功后，必须先通过主 Workflow AG-UI 流发送独立的 `application-lifecycle` 自定义事件，再继续投影对应节点或控制动作。工作台顶层 application store 按应用标识与单调 `revision` 合并冷启动读取、重连校准和实时事件；页面控制栏、应用大纲及 API 大纲只消费这一个 store。较旧的文件读取结果不得覆盖更新的实时 revision。
 
@@ -27,8 +24,12 @@ collecting_requirement
   -> awaiting_requirement_clarification -> analyzing_requirement
   -> generating_requirement_spec
   -> awaiting_requirement_confirmation -> generating_requirement_spec
-  -> generating_project_plan
-  -> awaiting_project_plan_confirmation -> generating_project_plan
+  -> generating_product_plan
+  -> awaiting_product_plan_confirmation -> generating_product_plan
+  -> generating_ui_designs
+  -> awaiting_ui_design_confirmation -> generating_ui_designs
+  -> generating_technical_plan
+  -> awaiting_technical_plan_confirmation -> generating_technical_plan
   -> generating_application_template_files
   -> application_template_generation_failed -> generating_application_template_files
   -> ready_for_workbench
@@ -45,7 +46,7 @@ collecting_requirement
 
 主 Workflow 获取范围登记时在 `activeExecutions` 中创建运行，并由后端从正式 ProjectPlan 计算资源集合。页面主目标、导航关联页、直接使用的 API 契约及其数据源，以及共享这些 API/数据源的其他页面和契约会原子写入 `resourceLocks`。当前阶段 `resourceLocks` 仅作为可观测、可持久化的资源元数据，不参与启动门禁：同工作区、同页面、共享 API/数据源或应用级范围均不会因为已有登记被拒绝；同一资源键以最近一次运行记录为准。等待授权、修复确认、验收、失败和停止仍保留登记，只有 `finalize_project` 成功或用户明确“结束计划”才清理该 run 当前拥有的登记。已停止或失败的执行继续运行时，前端只提交旧 runId 作为同一执行的恢复令牌；后端仍验证同一 thread、scope 和 target，并在一次写入中转移旧 run 当前可见的资源记录。该令牌不参与 Graph 状态重建。
 
-这一阶段性设计保留 learn-coding-agent/OpenCode 中“运行记录与权限执法分层”的边界，也保留 Deep Agents 的工具沙箱、文件权限和 HITL 审批；XCodeAgent 暂时只关闭业务资源集合的互斥执法，不放宽文件、命令、敏感操作或 Agent 工具权限。`resourceLocks` 只保存稳定资源键和紧凑 owner 元数据，符合 128k 上下文下按需投影、避免把工作区细节塞入主上下文的约束。恢复业务互斥前应重新引入显式策略开关和冲突 UX，而不是让持久化字段隐式阻断。
+当前实现只关闭业务资源集合的互斥执法，不放宽文件、命令、敏感操作或 Agent 工具权限。`resourceLocks` 只保存稳定资源键和紧凑 owner 元数据，恢复业务互斥前应重新引入显式策略开关和冲突 UX，而不是让持久化字段隐式阻断。
 
 资源登记成功产生的 lifecycle revision 必须立即到达 application store，因此当前页面控制栏在同一 React 提交中更新，不等待 Graph 首节点完成，也不通过重新读取文件猜测状态。页面与 API 目录暂不展示资源占用标识，后续统一设计只读取现有 `resourceLocks` 投影。
 
@@ -144,4 +145,4 @@ RepairPlanner 若请求扩大业务资源范围，必须在确认载荷中给出
 
 同一初始化阶段允许更新运行状态或活动 run 引用；跨阶段只允许图中边。初始化确认和澄清由对应 thread 的 Graph checkpoint 与历史 Workflow 快照恢复，不在状态文件根节点重复保存 pending interaction。工作台 execution 的待处理交互仍使用 `id + basedOnRevision` 校验，过期提交显式冲突。
 
-新应用创建时必须通过 AG-UI `applicationLifecycle.action = create` 显式创建状态文件。客户端重启后只使用 `get` 读取已有状态；缺失状态不会触发旧数据兼容或阶段推断。ProjectPlan 确认后进入“生成应用模板文件”阶段，前端完成真实文件写入后通过 `complete_template_generation` 提交结果。
+新应用创建时必须通过 AG-UI `applicationLifecycle.action = create` 显式创建状态文件。客户端重启后只使用 `get` 读取当前状态；缺失状态不会触发历史数据推断。TechnicalPlan 经开发确认后进入“生成应用模板文件”阶段，前端完成真实文件写入后通过 `complete_template_generation` 提交结果；后端复核 RequirementSpec、ProductPlan、TechnicalPlan 已确认，且 UiDesign 已确认或明确跳过后，才允许进入工作台。

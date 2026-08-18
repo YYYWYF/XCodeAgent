@@ -7,7 +7,12 @@ from pathlib import Path
 from unittest.mock import ANY, patch
 
 from app.graph.nodes.planning import project_planning as run_project_planning
-from app.services.project_plan import apply_project_plan_feedback, create_project_plan
+from app.services.product_plan import create_product_plan
+from app.services.project_plan import (
+    apply_project_plan_feedback,
+    create_project_plan,
+    create_technical_plan,
+)
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import write_project_plan_document
 
@@ -30,6 +35,23 @@ def project_planning(state: dict) -> dict:
         encoding="utf-8",
     )
     return run_project_planning(state)
+
+
+def confirmed_application_planning_artifacts(spec: dict) -> tuple[dict, dict, dict]:
+    """构造四阶段 TechnicalPlan 节点所需的已确认上游产物。"""
+
+    product_plan = create_product_plan(spec)
+    product_plan["confirmation_status"] = "confirmed"
+    technical_plan = create_technical_plan(
+        {**spec, "confirmed_product_plan": product_plan}
+    )
+    technical_plan["confirmation_status"] = "pending_user_confirmation"
+    ui_designs = {
+        "schema_version": "ui-manifest.v3",
+        "confirmation_status": "confirmed",
+        "pages": [],
+    }
+    return product_plan, technical_plan, ui_designs
 
 
 class ProjectPlanningConfirmationTests(unittest.TestCase):
@@ -65,7 +87,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
 
     def test_project_planning_continues_after_user_confirms_plan(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
-        plan = create_project_plan(spec)
+        product_plan, technical_plan, ui_designs = confirmed_application_planning_artifacts(spec)
 
         with tempfile.TemporaryDirectory() as workspace:
             result = project_planning(
@@ -75,21 +97,22 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                     "workflow_scope": "application_planning",
                     "user_interaction_submission": True,
                     "requirement_spec": spec,
-                    "project_plan": plan,
+                    "product_plan": product_plan,
+                    "technical_plan": technical_plan,
+                    "ui_designs": ui_designs,
                     "timeline": [],
                 }
             )
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["clarification"]["status"], "clear")
-        self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
+        self.assertEqual(result["technical_plan"]["confirmation_status"], "confirmed")
 
     def test_application_planning_recovery_text_cannot_confirm_plan(self) -> None:
         """创建规划的继续文案没有结构化提交时不得确认 ProjectPlan。"""
 
         spec = create_requirement_spec("创建一个库存管理系统")
-        plan = create_project_plan(spec)
-        plan["confirmation_status"] = "pending_user_confirmation"
+        product_plan, technical_plan, ui_designs = confirmed_application_planning_artifacts(spec)
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
                 "app.graph.nodes.planning.plan_project_with_chat_model",
@@ -102,7 +125,9 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                         "workflow_scope": "application_planning",
                         "user_interaction_submission": False,
                         "requirement_spec": spec,
-                        "project_plan": plan,
+                        "product_plan": product_plan,
+                        "technical_plan": technical_plan,
+                        "ui_designs": ui_designs,
                         "timeline": [],
                     }
                 )
@@ -110,7 +135,7 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
         planner.assert_not_called()
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(
-            result["project_plan"]["confirmation_status"],
+            result["technical_plan"]["confirmation_status"],
             "pending_user_confirmation",
         )
 

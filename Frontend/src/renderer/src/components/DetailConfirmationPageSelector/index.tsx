@@ -447,7 +447,7 @@ export default function DetailConfirmationPageSelector({
           size="large"
           type="primary"
         >
-          开始生成「{selectedTarget?.label || "所选对象"}」
+          开始详细设计「{selectedTarget?.label || "所选对象"}」
         </Button>
         </div>
       </main>

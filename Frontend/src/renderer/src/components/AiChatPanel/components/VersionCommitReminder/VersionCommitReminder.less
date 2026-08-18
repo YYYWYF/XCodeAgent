@@ -1,0 +1,211 @@
+.@{class-prefix}-version-commit-reminder {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  color: var(--wb-text);
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 9px;
+
+  &.@{class-prefix}-warning {
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border-strong);
+
+    .@{class-prefix}-version-commit-icon {
+      color: var(--wb-warning);
+      background: var(--wb-surface);
+      border-color: var(--wb-border);
+    }
+  }
+
+  &.@{class-prefix}-committed {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+}
+
+.@{class-prefix}-version-commit-icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-version-commit-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+
+  .ant-typography {
+    margin: 0;
+    color: var(--wb-text);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+  }
+}
+
+.@{class-prefix}-version-commit-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  .ant-btn {
+    border-radius: 6px;
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-version-commit-modal {
+  .ant-modal-content,
+  .ant-modal-header {
+    color: var(--wb-text);
+    background: var(--wb-canvas);
+  }
+
+  .ant-modal-header,
+  .ant-modal-footer {
+    border-color: var(--wb-border);
+  }
+
+  .ant-modal-title,
+  .ant-modal-close,
+  .ant-checkbox-wrapper,
+  .ant-typography {
+    color: var(--wb-text);
+  }
+
+  .ant-input {
+    color: var(--wb-text);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+
+    &:focus,
+    &:hover {
+      border-color: var(--wb-accent);
+      box-shadow: 0 0 0 2px var(--wb-accent-soft);
+    }
+  }
+}
+
+.@{class-prefix}-version-commit-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  > .ant-typography {
+    margin: 0;
+    color: var(--wb-text-secondary);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+}
+
+.@{class-prefix}-version-commit-repository {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 12px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+
+  > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+}
+
+.@{class-prefix}-version-commit-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+
+  > .ant-typography {
+    font-size: 13px;
+  }
+
+  .ant-checkbox-group {
+    width: 100%;
+  }
+}
+
+.@{class-prefix}-version-commit-file-list {
+  display: flex;
+  max-height: 220px;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+
+  .ant-checkbox-wrapper {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    margin: 0;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--wb-border);
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    &:hover {
+      background: var(--wb-surface-hover);
+    }
+
+    > span:last-child {
+      min-width: 0;
+      flex: 1;
+    }
+  }
+}
+
+.@{class-prefix}-version-commit-file {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+
+  > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-version-commit-reminder {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .@{class-prefix}-version-commit-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .@{class-prefix}-version-commit-repository {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+}

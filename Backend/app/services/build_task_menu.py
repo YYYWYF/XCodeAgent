@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from app.services.frontend_page_tree import find_frontend_page
+from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 
 
 logger = logging.getLogger(__name__)
@@ -708,7 +708,7 @@ def _page_skeleton(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]
     """从任务准备视图读取当前页面的名称、路径和模块标识。
 
     优先从 ``application_skeleton.pages`` 读取；当该视图为空（部分工作区未填充
-    application_skeleton）时回退到 ``frontend_pages`` 树，否则页面 name/path 取不到，
+    application_skeleton）时回退到当前计划的 ``pages``，否则页面 name/path 取不到，
     会导致菜单重复检测失配、生成错误的菜单登记任务。
     """
 
@@ -723,7 +723,7 @@ def _page_skeleton(project_plan: dict[str, Any], page_id: str) -> dict[str, Any]
         None,
     )
     if match is None:
-        match = find_frontend_page(project_plan.get("frontend_pages"), page_id)
+        match = find_frontend_page(project_plan_page_records(project_plan), page_id)
     return match if isinstance(match, dict) else {}
 
 

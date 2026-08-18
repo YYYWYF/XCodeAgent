@@ -35,9 +35,19 @@ function hasItems(value: unknown): boolean {
 export function projectPlanReadingSections(
   plan: Record<string, unknown>
 ): ProjectPlanReadingSection[] {
+  if (plan.artifact_type === 'technical-plan') {
+    return [
+      { id: PROJECT_PLAN_READING_SECTION_IDS.architecture, label: '技术架构' },
+      { id: PROJECT_PLAN_READING_SECTION_IDS.overview, label: '工程设计' },
+      { id: PROJECT_PLAN_READING_SECTION_IDS.data, label: 'API 契约' },
+      { id: PROJECT_PLAN_READING_SECTION_IDS.experience, label: '页面技术引用' }
+    ]
+  }
   const overview = asRecord(plan.requirements_overview)
   const hasBusinessFlows = hasItems(overview.business_flows || plan.business_flows)
-  const hasPages = projectPlanPageTreeNodes(plan.frontend_pages).length > 0
+  const hasPages = projectPlanPageTreeNodes(
+    plan.artifact_type === 'technical-plan' ? plan.pages : plan.frontend_pages
+  ).length > 0
   const hasApiContracts = hasItems(plan.api_contracts)
   const hasDataSources = hasItems(plan.data_sources)
   const datasourceType = Array.isArray(plan.data_sources)

@@ -8,9 +8,12 @@ from app.config import Settings
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.data_source_policy import DatasourceType
 from app.services.project_plan import (
+    TECHNICAL_PLAN_ARTIFACT_TYPE,
     create_project_plan,
+    create_technical_plan,
     validate_project_plan_datasource_policy,
 )
+from app.services.product_plan import create_product_plan, validate_product_plan
 from app.services.requirement_spec import create_requirement_spec
 from app.utils.model_output import extract_json_object
 
@@ -22,19 +25,26 @@ def _sync_prompt(
     edited_markdown: str,
     datasource_type: DatasourceType = "database",
 ) -> str:
-    """构建 Markdown 同步提示，并在 RequirementSpec 阶段固定数据源类型。"""
+    """构建 Markdown 同步提示，并按产品/技术边界限制可见字段。"""
 
     datasource_instruction = (
-        f"For RequirementSpec data_sources, the authoritative application type is {datasource_type}. "
-        f"Keep every data_sources[].type exactly {datasource_type}; the user cannot change this field, "
-        "and the legacy type mock must never be emitted.\n\n"
-        if artifact_name == "RequirementSpec"
-        else (
+        (
             f"For ProjectPlan data_sources, the authoritative application type is {datasource_type}. "
             f"Keep every data_sources[].type exactly {datasource_type}; user Markdown cannot change "
             "the type or its architecture implementation boundary. Preserve data source ids and "
             "contract references, and never emit mock.\n\n"
         )
+        if artifact_name == "ProjectPlan"
+        else ""
+    )
+    visible_document = (
+        {
+            key: value
+            for key, value in structured_document.items()
+            if key not in {"data_sources", "acceptance_criteria"}
+        }
+        if artifact_name == "RequirementSpec"
+        else structured_document
     )
     return (
         f"You synchronize a user-edited {artifact_name} Markdown document back into its internal JSON.\n"
@@ -44,7 +54,7 @@ def _sync_prompt(
         "metadata that the Markdown does not represent. Apply additions, edits, and removals expressed "
         "by the Markdown, but do not invent unrelated fields or discard hidden structured details.\n\n"
         f"{datasource_instruction}"
-        f"Current internal JSON:\n{json.dumps(structured_document, ensure_ascii=False)}\n\n"
+        f"Current internal JSON:\n{json.dumps(visible_document, ensure_ascii=False)}\n\n"
         f"User-edited Markdown:\n{edited_markdown}"
     )
 
@@ -126,38 +136,77 @@ def sync_project_plan_from_markdown(
 ) -> dict[str, Any]:
     """同步 ProjectPlan Markdown，并恢复应用权威类型和实现边界。"""
 
+    is_technical_plan = existing_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE
     synced = _invoke_sync_model(
-        artifact_name="ProjectPlan",
+        artifact_name="TechnicalPlan" if is_technical_plan else "ProjectPlan",
         structured_document=existing_plan,
         edited_markdown=edited_markdown,
         datasource_type=datasource_type,
     )
-    normalized = create_project_plan(
-        requirement_spec,
-        agent_note="synchronized from user-edited ProjectPlan Markdown",
-        planning_source="user_edited_markdown",
-        agent_plan=synced,
-        authoritative_agent_plan=True,
-        datasource_type=datasource_type,
+    normalized = (
+        create_technical_plan(
+            requirement_spec,
+            agent_plan=synced,
+            datasource_type=datasource_type,
+        )
+        if is_technical_plan
+        else create_project_plan(
+            requirement_spec,
+            agent_note="synchronized from user-edited ProjectPlan Markdown",
+            planning_source="user_edited_markdown",
+            agent_plan=synced,
+            authoritative_agent_plan=True,
+            datasource_type=datasource_type,
+        )
     )
-    if isinstance(synced.get("app"), dict):
-        normalized["app"] = synced["app"]
-    for key in (
-        "page_detail_plans",
-        "endpoint_detail_plans",
-        "detail_confirmation_summary",
-        "page_detail_confirmation_summary",
-        "endpoint_detail_confirmation_summary",
-    ):
-        value = synced.get(key, existing_plan.get(key))
-        if value is not None:
-            normalized[key] = value
+    if not is_technical_plan:
+        if isinstance(synced.get("app"), dict):
+            normalized["app"] = synced["app"]
+        for key in (
+            "page_detail_plans",
+            "endpoint_detail_plans",
+            "detail_confirmation_summary",
+            "page_detail_confirmation_summary",
+            "endpoint_detail_confirmation_summary",
+        ):
+            value = synced.get(key, existing_plan.get(key))
+            if value is not None:
+                normalized[key] = value
     errors = validate_api_contract_consistency(normalized)
-    errors.extend(
-        validate_project_plan_datasource_policy(normalized, datasource_type)
-    )
+    if not is_technical_plan:
+        errors.extend(
+            validate_project_plan_datasource_policy(normalized, datasource_type)
+        )
     if errors:
         raise ValueError("编辑后的项目计划存在不一致：" + "; ".join(errors))
+    if not is_technical_plan:
+        normalized["markdown_sync"] = {
+            "status": "synchronized",
+            "source": "user_edited_markdown",
+        }
+    return normalized
+
+
+def sync_product_plan_from_markdown(
+    existing_plan: dict[str, Any],
+    requirement_spec: dict[str, Any],
+    edited_markdown: str,
+) -> dict[str, Any]:
+    """同步产品编辑后的 ProductPlan Markdown，并恢复稳定页面与操作结构。"""
+
+    synced = _invoke_sync_model(
+        artifact_name="ProductPlan",
+        structured_document=existing_plan,
+        edited_markdown=edited_markdown,
+    )
+    normalized = create_product_plan(
+        requirement_spec,
+        agent_plan=synced,
+        existing_plan=existing_plan,
+    )
+    errors = validate_product_plan(normalized, requirement_spec)
+    if errors:
+        raise ValueError("编辑后的产品规划存在不一致：" + "；".join(errors))
     normalized["markdown_sync"] = {
         "status": "synchronized",
         "source": "user_edited_markdown",

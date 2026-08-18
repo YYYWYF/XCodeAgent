@@ -65,6 +65,58 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
         self.assertIn("RUN_FINISHED", frames)
         self.assertEqual(saved["initialization"]["threadId"], "lifecycle-thread")
 
+    def test_create_action_rejects_another_application_without_writing(self) -> None:
+        """创建动作命中其他应用时应失败，并保持原生命周期文件不变。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            original_stream = build_application_lifecycle_ag_ui_stream(
+                payload={
+                    "threadId": "lifecycle-thread",
+                    "runId": "lifecycle-run",
+                    "forwardedProps": {
+                        "applicationLifecycle": {
+                            "action": "create",
+                            "workspaceRoot": directory,
+                            "application": {"id": "app-1", "appName": "原应用"},
+                        }
+                    },
+                }
+            )
+
+            async def collect_original() -> None:
+                """创建测试中的原始生命周期。"""
+
+                [frame async for frame in original_stream]
+
+            asyncio.run(collect_original())
+
+            conflicting_stream = build_application_lifecycle_ag_ui_stream(
+                payload={
+                    "threadId": "new-thread",
+                    "runId": "new-run",
+                    "forwardedProps": {
+                        "applicationLifecycle": {
+                            "action": "create",
+                            "workspaceRoot": directory,
+                            "application": {"id": "app-2", "appName": "新应用"},
+                        }
+                    },
+                }
+            )
+
+            async def collect_conflict() -> str:
+                """消费冲突创建结果，确认动作以失败事件结束。"""
+
+                return "".join([frame async for frame in conflicting_stream])
+
+            frames = asyncio.run(collect_conflict())
+            saved = json.loads(
+                application_lifecycle_path(directory).read_text(encoding="utf-8")
+            )
+
+        self.assertIn("当前工作区已属于另一个应用", frames)
+        self.assertEqual(saved["application"]["id"], "app-1")
+
 
 if __name__ == "__main__":
     unittest.main()

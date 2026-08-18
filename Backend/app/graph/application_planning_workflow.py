@@ -26,23 +26,30 @@ def _route_start(state: ProjectState) -> str:
     """根据独立创建规划会话的恢复点选择节点入口。"""
 
     resume_from = state.get("resume_from")
-    if resume_from in {"project_planning", "ui_confirmation"}:
+    if resume_from in {"product_planning", "ui_confirmation", "technical_planning"}:
         return resume_from
     return "requirements"
 
 
 def _route_requirements(state: ProjectState) -> str:
-    """需求未确认时结束当前轮次，否则进入 UI确认。"""
+    """需求未确认时结束当前轮次，否则进入产品规划。"""
+
+    clarification = state.get("clarification")
+    return "await_user_input" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "product_planning"
+
+
+def _route_product_planning(state: ProjectState) -> str:
+    """ProductPlan 未确认时结束当前轮次，否则进入 UI 设计。"""
 
     clarification = state.get("clarification")
     return "await_user_input" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "ui_confirmation"
 
 
 def _route_ui_confirmation(state: ProjectState) -> str:
-    """UI设计稿未全部确认时结束当前轮次，否则进入项目规划。"""
+    """UI设计稿未全部确认时结束当前轮次，否则进入技术规划。"""
 
     clarification = state.get("clarification")
-    return "await_user_input" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "project_planning"
+    return "await_user_input" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "technical_planning"
 
 
 def _requirements(state: ProjectState) -> dict:
@@ -96,16 +103,13 @@ def _requirements(state: ProjectState) -> dict:
 
 
 async def _ui_confirmation(state: ProjectState) -> dict:
-    """为每个页面生成设计稿并等待用户逐页确认后放行项目规划。"""
+    """为每个页面生成设计稿或处理明确跳过，并在阶段完成后进入技术规划。"""
 
     workspace = _workspace(state)
     try:
         lifecycle = load_application_lifecycle(workspace) or _ensure_lifecycle(state)
         # 需求确认完成后推进到 UI设计生成阶段（若尚未推进）。
-        if lifecycle.initialization.stage in {
-            ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-            ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-        }:
+        if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION:
             lifecycle = persist_application_lifecycle_transition(
                 workspace,
                 stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
@@ -130,10 +134,10 @@ async def _ui_confirmation(state: ProjectState) -> dict:
                 "workflow_scope": "application_planning",
                 "lifecycle": application_lifecycle_payload(lifecycle),
             }
-        # 全部确认完成，推进到项目规划阶段。
+        # UI 已全部确认或明确跳过，推进到开发技术规划阶段。
         lifecycle = persist_application_lifecycle_transition(
             workspace,
-            stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
             status=ApplicationLifecycleStatus.RUNNING,
             active_run_id=state.get("active_run_id"),
         )
@@ -150,16 +154,65 @@ async def _ui_confirmation(state: ProjectState) -> dict:
         raise
 
 
-def _project_planning(state: ProjectState) -> dict:
-    """复用项目规划节点，并在用户确认后校验 specs/plans 产物。"""
+def _product_planning(state: ProjectState) -> dict:
+    """生成 ProductPlan，并把产品确认状态写入权威生命周期。"""
 
     workspace = _workspace(state)
     try:
         lifecycle = load_application_lifecycle(workspace) or _ensure_lifecycle(state)
-        lifecycle = _prepare_project_planning_lifecycle(workspace, lifecycle, state)
+        if (
+            lifecycle.initialization.stage == ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN
+            and lifecycle.initialization.status
+            in {ApplicationLifecycleStatus.FAILED, ApplicationLifecycleStatus.CANCELLED}
+        ):
+            lifecycle = persist_application_lifecycle_transition(
+                workspace,
+                stage=ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+                status=ApplicationLifecycleStatus.RUNNING,
+                active_run_id=state.get("active_run_id"),
+            )
+        update = nodes.product_planning(state)
+        if update.get("status") != "completed":
+            lifecycle = persist_application_lifecycle_transition(
+                workspace,
+                stage=ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                status=ApplicationLifecycleStatus.AWAITING_USER,
+                active_run_id=state.get("active_run_id"),
+            )
+            return {
+                **update,
+                "workflow_scope": "application_planning",
+                "lifecycle": application_lifecycle_payload(lifecycle),
+            }
+        lifecycle = persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+            status=ApplicationLifecycleStatus.RUNNING,
+            active_run_id=state.get("active_run_id"),
+        )
+        return {
+            **update,
+            "workflow_scope": "application_planning",
+            "lifecycle": application_lifecycle_payload(lifecycle),
+        }
+    except asyncio.CancelledError:
+        _persist_node_cancelled(workspace, state)
+        raise
+    except Exception as exc:
+        _persist_node_error(workspace, state, exc)
+        raise
+
+
+def _technical_planning(state: ProjectState) -> dict:
+    """生成 TechnicalPlan，并在开发确认后校验全部正式产物。"""
+
+    workspace = _workspace(state)
+    try:
+        lifecycle = load_application_lifecycle(workspace) or _ensure_lifecycle(state)
+        lifecycle = _prepare_technical_planning_lifecycle(workspace, lifecycle, state)
         if (
             lifecycle.initialization.stage
-            == ApplicationLifecycleStage.GENERATING_PROJECT_PLAN
+            == ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
             and lifecycle.initialization.status in {
                 ApplicationLifecycleStatus.FAILED,
                 ApplicationLifecycleStatus.CANCELLED,
@@ -167,17 +220,7 @@ def _project_planning(state: ProjectState) -> dict:
         ):
             lifecycle = persist_application_lifecycle_transition(
                 workspace,
-                stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
-                status=ApplicationLifecycleStatus.RUNNING,
-                active_run_id=state.get("active_run_id"),
-            )
-        if lifecycle.initialization.stage in {
-            ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
-            ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-        }:
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+                stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
                 status=ApplicationLifecycleStatus.RUNNING,
                 active_run_id=state.get("active_run_id"),
             )
@@ -185,7 +228,7 @@ def _project_planning(state: ProjectState) -> dict:
         if update.get("status") != "completed":
             lifecycle = persist_application_lifecycle_transition(
                 workspace,
-                stage=ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+                stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
                 status=ApplicationLifecycleStatus.AWAITING_USER,
                 active_run_id=state.get("active_run_id"),
             )
@@ -233,8 +276,8 @@ def _ensure_lifecycle(state: ProjectState):
     )
 
 
-def _prepare_project_planning_lifecycle(workspace: str, lifecycle, state: ProjectState):
-    """为旧 checkpoint 首次落盘补齐进入项目规划前的合法状态路径。"""
+def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: ProjectState):
+    """把当前生命周期推进到开发技术规划的合法状态路径。"""
 
     common = {
         "active_run_id": state.get("active_run_id"),
@@ -269,22 +312,50 @@ def _prepare_project_planning_lifecycle(workspace: str, lifecycle, state: Projec
     ):
         lifecycle = persist_application_lifecycle_transition(
             workspace,
-            stage=ApplicationLifecycleStage.GENERATING_PROJECT_PLAN,
+            stage=ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
             status=ApplicationLifecycleStatus.RUNNING,
             **common,
         )
-    project_plan = state.get("project_plan")
+    if lifecycle.initialization.stage == ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN:
+        lifecycle = persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+            status=ApplicationLifecycleStatus.AWAITING_USER,
+            **common,
+        )
+    if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION:
+        lifecycle = persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+            status=ApplicationLifecycleStatus.RUNNING,
+            **common,
+        )
+    if lifecycle.initialization.stage == ApplicationLifecycleStage.GENERATING_UI_DESIGNS:
+        lifecycle = persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+            status=ApplicationLifecycleStatus.AWAITING_USER,
+            **common,
+        )
+    if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION:
+        lifecycle = persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            status=ApplicationLifecycleStatus.RUNNING,
+            **common,
+        )
+    technical_plan = state.get("technical_plan")
     if (
-        lifecycle.initialization.stage == ApplicationLifecycleStage.GENERATING_PROJECT_PLAN
-        and isinstance(project_plan, dict)
-        and project_plan.get("confirmation_status") in {
+        lifecycle.initialization.stage == ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
+        and isinstance(technical_plan, dict)
+        and technical_plan.get("confirmation_status") in {
             "pending_user_confirmation",
             "confirmed",
         }
     ):
         lifecycle = persist_application_lifecycle_transition(
             workspace,
-            stage=ApplicationLifecycleStage.AWAITING_PROJECT_PLAN_CONFIRMATION,
+            stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
             status=ApplicationLifecycleStatus.AWAITING_USER,
             **common,
         )
@@ -323,11 +394,10 @@ def _persist_requirement_result(workspace: str, update: dict, state: ProjectStat
             **common,
         )
     if update.get("status") == "completed":
-        # 需求确认完成后进入 UI设计生成阶段（而非直接项目规划），
-        # 与 Graph 路由 requirements -> ui_confirmation -> project_planning 对齐。
+        # 需求确认完成后先进入 ProductPlan 产品确认。
         return persist_application_lifecycle_transition(
             workspace,
-            stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+            stage=ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
             status=ApplicationLifecycleStatus.RUNNING,
             **common,
         )
@@ -395,26 +465,32 @@ def _workspace(state: ProjectState) -> str:
 
 
 def build_application_planning_graph(*, checkpointer):
-    """构建确认项目规划后即结束的创建规划两节点 Graph。"""
+    """构建需求、产品、UI、技术四阶段创建规划 Graph。"""
 
     builder = StateGraph(ProjectState)
     builder.add_node("requirements", _requirements)
+    builder.add_node("product_planning", _product_planning)
     builder.add_node("ui_confirmation", _ui_confirmation)
-    builder.add_node("project_planning", _project_planning)
+    builder.add_node("technical_planning", _technical_planning)
     builder.add_conditional_edges(START, _route_start, {
         "requirements": "requirements",
+        "product_planning": "product_planning",
         "ui_confirmation": "ui_confirmation",
-        "project_planning": "project_planning",
+        "technical_planning": "technical_planning",
     })
     builder.add_conditional_edges("requirements", _route_requirements, {
+        "product_planning": "product_planning",
+        "await_user_input": END,
+    })
+    builder.add_conditional_edges("product_planning", _route_product_planning, {
         "ui_confirmation": "ui_confirmation",
         "await_user_input": END,
     })
     builder.add_conditional_edges("ui_confirmation", _route_ui_confirmation, {
-        "project_planning": "project_planning",
+        "technical_planning": "technical_planning",
         "await_user_input": END,
     })
-    builder.add_edge("project_planning", END)
+    builder.add_edge("technical_planning", END)
     return builder.compile(checkpointer=checkpointer)
 
 

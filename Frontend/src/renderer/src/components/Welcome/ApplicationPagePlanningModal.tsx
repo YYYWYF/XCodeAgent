@@ -71,29 +71,40 @@ type Props = {
   onStopHandlerChange: (handler?: () => Promise<void>) => void
 }
 
-const phaseOrder = ['requirements', 'ui_confirmation', 'project_planning']
+const phaseOrder = [
+  'requirements',
+  'product_planning',
+  'ui_confirmation',
+  'technical_planning'
+]
 
 const phaseProgress: Record<
   string,
   { active: number; complete: number; message: string; title: string }
 > = {
   requirements: {
-    active: 18,
-    complete: 30,
+    active: 10,
+    complete: 20,
     message: '正在分析需求并生成需求文档…',
     title: '正在确认产品需求'
   },
+  product_planning: {
+    active: 30,
+    complete: 40,
+    message: '正在生成页面目标、核心操作与产品验收标准…',
+    title: '正在生成产品规划'
+  },
   ui_confirmation: {
-    active: 45,
-    complete: 60,
+    active: 52,
+    complete: 65,
     message: '正在为各页面生成设计稿…',
     title: '正在生成UI设计稿'
   },
-  project_planning: {
-    active: 75,
+  technical_planning: {
+    active: 78,
     complete: 100,
-    message: '正在生成项目计划…',
-    title: '正在规划项目结构'
+    message: '正在生成 API、数据与页面实现契约…',
+    title: '正在生成技术规划'
   }
 }
 
@@ -108,10 +119,15 @@ function workflowConfirmation(
   return undefined
 }
 
-// 读取需求文档里登记的页面总数，用于 UI确认生成期间渲染未就绪骨架。
+// 优先读取已确认 ProductPlan 的页面数，用于 UI 生成期间渲染未就绪骨架。
 function planningUiDesignPageTotal(workflow?: WorkflowRunPayload): number {
   if (!workflow) return 0
   for (const source of [workflow.result, workflow.state]) {
+    const productPlan = source?.product_plan
+    if (productPlan && typeof productPlan === 'object' && !Array.isArray(productPlan)) {
+      const productPages = (productPlan as Record<string, unknown>).pages
+      if (Array.isArray(productPages)) return productPages.length
+    }
     const spec = source?.requirement_spec
     if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
       const pages = (spec as Record<string, unknown>).pages
@@ -146,15 +162,15 @@ function withAuthoritativeLifecycle(
   }
 }
 
-// 根据当前阶段计算两步规划条的高亮位置。
+// 根据当前阶段计算四段规划条的高亮位置。
 function workflowStep(workflow?: WorkflowRunPayload): number {
   const phase = planningWorkflowPhase(workflow)
   const index = phaseOrder.indexOf(phase)
   return index >= 0 ? index : 0
 }
 
-// 判断当前是否已经进入项目规划确认，便于切换成完整的项目规划工作区壳层。
-function projectPlanConfirmationReady(workflow?: WorkflowRunPayload): boolean {
+// 判断当前是否已经进入技术规划确认，便于切换成完整的技术规划工作区壳层。
+function technicalPlanConfirmationReady(workflow?: WorkflowRunPayload): boolean {
   const clarifications = [
     workflow?.summary.clarification,
     workflow?.state?.clarification,
@@ -162,7 +178,8 @@ function projectPlanConfirmationReady(workflow?: WorkflowRunPayload): boolean {
   ]
   return clarifications.some((clarification) => {
     if (!clarification || typeof clarification !== 'object') return false
-    return (clarification as WorkflowClarification).mode === 'project_plan_confirmation'
+    const mode = (clarification as WorkflowClarification).mode
+    return mode === 'technical_plan_confirmation'
   })
 }
 
@@ -205,7 +222,7 @@ function workflowProgressCopy(workflow?: WorkflowRunPayload): { fallback: string
   return { fallback: meta.message, title: meta.title }
 }
 
-// 在创建应用弹窗中运行并可视化独立的两节点规划 Graph。
+// 在创建应用弹窗中运行并可视化产品、UI 与技术分层的规划 Graph。
 export default function ApplicationPagePlanningModal({
   application,
   initialStatus,
@@ -255,7 +272,7 @@ export default function ApplicationPagePlanningModal({
   ) {
     enteredUiConfirmationRef.current = true
   }
-  // 已离开 UI 确认阶段（流转到 project_planning 等）：解除锁定，让进度页正常显示。
+  // 已离开 UI 确认阶段（流转到 technical_planning 等）：解除锁定，让进度页正常显示。
   if (
     enteredUiConfirmationRef.current &&
     planningWorkflowPhase(workflow) &&
@@ -274,15 +291,15 @@ export default function ApplicationPagePlanningModal({
       workflow?.result?.clarification
   )
   // UI确认节点生成期间，流式展示已就绪的设计稿，避免干等到最后一次性出现。
-  // 排除 ui_confirmation 已完成（用户一键确认全部设计稿后同 run 流转到 project_planning，
-  // 但 project_planning 的 started 帧到达前可能短暂停留在 ui_confirmation completed 帧），
+  // 排除 ui_confirmation 已完成（用户一键确认全部设计稿后同 run 流转到 technical_planning，
+  // 但 technical_planning 的 started 帧到达前可能短暂停留在 ui_confirmation completed 帧），
   // 否则会误显示"设计稿生成中"。
   const streamingUiPhase =
     showingProgress &&
     planningWorkflowPhase(workflow) === 'ui_confirmation' &&
     workflow?.summary?.status !== 'completed'
   const streamingUiTotal = planningUiDesignPageTotal(workflow)
-  const isProjectPlanConfirmation = projectPlanConfirmationReady(workflow)
+  const isTechnicalPlanConfirmation = technicalPlanConfirmationReady(workflow)
 
   // 向首页注册当前 AG-UI 会话的停止句柄，以便从规划页外安全取消运行。
   useEffect(() => {
@@ -362,13 +379,17 @@ export default function ApplicationPagePlanningModal({
           ? undefined
           : {
               enabled: true,
-              resumeFrom:
-                initialLifecycle.initialization.stage === 'generating_project_plan' ||
-                initialLifecycle.initialization.stage === 'awaiting_project_plan_confirmation'
-                  ? 'project_planning'
+                resumeFrom:
+                initialLifecycle.initialization.stage === 'generating_technical_plan' ||
+                initialLifecycle.initialization.stage === 'awaiting_technical_plan_confirmation'
+                  ? 'technical_planning'
                   : initialLifecycle.initialization.stage === 'generating_ui_designs' ||
                       initialLifecycle.initialization.stage === 'awaiting_ui_design_confirmation'
                     ? 'ui_confirmation'
+                    : initialLifecycle.initialization.stage === 'generating_product_plan' ||
+                        initialLifecycle.initialization.stage ===
+                          'awaiting_product_plan_confirmation'
+                      ? 'product_planning'
                     : 'requirements'
             },
         workflowScope: 'application_planning',
@@ -565,7 +586,7 @@ export default function ApplicationPagePlanningModal({
         'welcome-modal',
         'page-planning-modal',
         'page-planning-screen',
-        isProjectPlanConfirmation && 'is-project-plan-confirmation',
+        isTechnicalPlanConfirmation && 'is-technical-plan-confirmation',
         `theme-${theme}`,
         !visible && 'is-hidden'
       )}
@@ -593,15 +614,16 @@ export default function ApplicationPagePlanningModal({
 
       <div className={cx('page-planning-screen-body')}>
         <div className={cx('page-planning-screen-content')}>
-          {!isProjectPlanConfirmation ? (
+          {!isTechnicalPlanConfirmation ? (
             <Steps
               className={cx('page-planning-steps')}
               current={workflowStep(workflow)}
               size="small"
             >
               <Step title="需求确认" />
+              <Step title="产品规划" />
               <Step title="UI确认" />
-              <Step title="项目规划" />
+              <Step title="技术规划" />
             </Steps>
           ) : null}
 
@@ -617,7 +639,7 @@ export default function ApplicationPagePlanningModal({
                 </Button>
               }
               status="error"
-              subTitle={`${error} 请检查网络或模型服务后重试。`}
+              subTitle={`${error} 可点击重试；仅在提示连接或超时时检查网络与模型服务。`}
               title="应用初始化失败"
             />
           ) : (
@@ -639,7 +661,6 @@ export default function ApplicationPagePlanningModal({
               ) : null}
               {!showingProgress && workflow && hasClarification ? (
                 <ApplicationPlanningQuestionPanel
-                  datasourceType={application.datasource.type}
                   disabled={running}
                   onSaveRequirementSpec={handleSaveRequirementSpec}
                   onReturnHome={onReturnHome}

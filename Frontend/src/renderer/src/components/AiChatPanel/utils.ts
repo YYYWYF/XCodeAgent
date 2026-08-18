@@ -269,16 +269,18 @@ export function workflowPreviewTarget(
   }
 }
 
-/** 仅在当前工作区还没有任何已落盘页面设计时显示首次详细设计挡板。 */
+/** 进入开发阶段时先要求用户选择开发目标，已有页面设计也允许重新选择页面继续开发。 */
 export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): boolean {
-  return !hasPageDesigns
+  void hasPageDesigns
+  return true
 }
 
-/** 以当前页面的落盘详情状态判断是否需要锁定对话区。 */
+/** 页面视觉由 React UI 稿负责，因此页面永远不再要求 PageDetail 门禁。 */
 export function requiresPageDetailDesign(
   page: DevelopmentPlanningPageOption | undefined
 ): boolean {
-  return Boolean(page && !page.designed && !page.hasDetailPlan)
+  void page
+  return false
 }
 
 /** 以当前接口的落盘详情状态判断是否需要锁定对话区。 */

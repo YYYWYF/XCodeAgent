@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 import re
 from typing import Any
@@ -24,6 +25,7 @@ from app.services.frontend_page_tree import (
     rebuild_frontend_page_tree,
 )
 from app.services.page_dependencies import normalize_page_dependencies
+from app.services.requirement_spec import product_acceptance_criteria
 
 
 BACKEND_TECH_STACK = {
@@ -37,6 +39,8 @@ STATIC_BACKEND_TECH_STACK = {
     "language": "Java8",
     "framework": "Springboot",
 }
+
+TECHNICAL_PLAN_ARTIFACT_TYPE = "technical-plan"
 
 
 def _architecture_for_datasource_type(
@@ -77,6 +81,13 @@ def apply_project_plan_datasource_policy(
         else {}
     )
     policy = _architecture_for_datasource_type(effective_type)
+    if projected.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
+        for key in ("backend", "data", "backend_tech_stack", "data_contract"):
+            architecture[key] = policy[key]
+        architecture.setdefault("frontend", policy["frontend"])
+        architecture.pop("testing", None)
+        projected["architecture"] = architecture
+        return projected
     if effective_type == "static":
         # Static 只保留允许的架构字段，避免模型通过 orm/migration 等扩展键带回数据库实现。
         policy["testing"] = architecture.get("testing") or policy["testing"]
@@ -331,7 +342,7 @@ def _normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def normalize_project_plan(project_plan: dict[str, Any]) -> dict[str, Any]:
-    """规范化 ProjectPlan 的内部结构，并保持 frontend_pages 的菜单树兼容。"""
+    """规范化主工作流 ProjectPlan 的内部结构与菜单树。"""
 
     normalized = dict(project_plan)
     route_root_path = _route_root_path_from_plan(normalized)
@@ -794,10 +805,10 @@ def _project_acceptance_criteria(
 ) -> list[str]:
     agent_criteria = _agent_section(agent_plan, "project_acceptance_criteria")
     if isinstance(agent_criteria, list) and agent_criteria:
-        criteria = [str(item) for item in agent_criteria if str(item).strip()]
+        criteria = product_acceptance_criteria(agent_criteria)
         if criteria:
             return criteria
-    return list(spec["acceptance_criteria"])
+    return product_acceptance_criteria(spec["acceptance_criteria"])
 
 
 def apply_project_plan_feedback(
@@ -807,6 +818,8 @@ def apply_project_plan_feedback(
 ) -> dict[str, Any]:
     """清理旧派生字段，并保持反馈不能改变应用数据源类型。"""
 
+    if plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
+        return dict(plan)
     if not _text(user_feedback):
         return plan
 
@@ -907,6 +920,239 @@ def _permission_model(
     if isinstance(agent_model, dict):
         model.update(agent_model)
     return model
+
+
+def _engineering_design(
+    agent_plan: dict[str, Any] | None,
+    *,
+    architecture: dict[str, Any],
+) -> dict[str, Any]:
+    """规范主工作流 ProjectPlan 的工程设计，不混入产品或视觉决策。"""
+
+    value = _agent_section(agent_plan, "engineering_design")
+    design = dict(value) if isinstance(value, dict) else {}
+    defaults: dict[str, Any] = {
+        "module_boundaries": [],
+        "data_models": [],
+        "storage_and_indexes": [],
+        "cache_strategy": [],
+        "transactions_and_idempotency": [],
+        "error_model": [],
+        "security_controls": [],
+        "observability": [],
+        "performance_targets": [],
+        "deployment_constraints": [],
+        "test_strategy": [str(architecture.get("testing") or "执行契约、集成和冒烟检查。")],
+    }
+    for key, fallback in defaults.items():
+        current = design.get(key)
+        if isinstance(current, list):
+            defaults[key] = [item for item in current if isinstance(item, (str, dict))]
+    return defaults
+
+
+def _technical_engineering_design(
+    agent_plan: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """只保留 TechnicalPlan 的模块边界和数据模型。"""
+
+    value = _agent_section(agent_plan, "engineering_design")
+    design = value if isinstance(value, dict) else {}
+    return {
+        key: [item for item in design.get(key, []) if isinstance(item, (str, dict))]
+        if isinstance(design.get(key), list)
+        else []
+        for key in ("module_boundaries", "data_models")
+    }
+
+
+def _technical_plan_pages(
+    spec: dict[str, Any],
+    agent_plan: dict[str, Any] | None,
+    api_contracts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """只保存页面身份和 TechnicalPlan 新增的 endpoint 技术引用。"""
+
+    product_plan = (
+        spec.get("confirmed_product_plan")
+        if isinstance(spec.get("confirmed_product_plan"), dict)
+        else {}
+    )
+    source_pages = _dict_items(product_plan.get("pages")) or _dict_items(spec.get("pages"))
+    raw_agent_pages = _agent_section(agent_plan, "pages")
+    agent_pages = {
+        str(page.get("pageId") or ""): page
+        for page in _dict_items(raw_agent_pages)
+        if page.get("pageId")
+    }
+    normalized = normalize_page_dependencies(
+        [
+            {
+                "pageId": str(page.get("pageId") or ""),
+                "references": (
+                    agent_pages.get(str(page.get("pageId") or ""), {}).get("references")
+                    if isinstance(
+                        agent_pages.get(str(page.get("pageId") or ""), {}).get("references"),
+                        dict,
+                    )
+                    else agent_pages.get(str(page.get("pageId") or ""), {})
+                ),
+            }
+            for page in source_pages
+            if page.get("pageId")
+        ],
+        api_contracts,
+        include_action_implementations=True,
+    )
+    return [
+        {
+            "pageId": str(page.get("pageId") or ""),
+            "references": {
+                "endpoint_dependencies": [
+                    {
+                        "endpoint_id": str(item.get("endpoint_id") or ""),
+                        "usage": str(item.get("usage") or "read"),
+                        "trigger": str(item.get("trigger") or "页面交互触发"),
+                        "required_for_initial_load": bool(
+                            item.get("required_for_initial_load")
+                        ),
+                    }
+                    for item in _dict_items(
+                        (page.get("references") or {}).get("endpoint_dependencies")
+                    )
+                    if item.get("endpoint_id")
+                ],
+                "action_implementations": _technical_action_implementations(
+                    (page.get("references") or {}).get("action_implementations")
+                ),
+            },
+        }
+        for page in normalized
+    ]
+
+
+def _technical_action_implementations(value: Any) -> list[dict[str, Any]]:
+    """只保留 ProductPlan 业务 action 到 endpoint 的最小引用。"""
+
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in _dict_items(value):
+        action_id = str(item.get("actionId") or "").strip()
+        if not action_id or action_id in seen:
+            continue
+        step_bindings = [
+            {
+                "stepId": str(binding.get("stepId") or ""),
+                "endpointId": str(binding.get("endpointId") or ""),
+            }
+            for binding in _dict_items(item.get("stepBindings"))
+            if binding.get("stepId") and binding.get("endpointId")
+        ]
+        endpoint_id = str(item.get("endpointId") or "").strip()
+        if step_bindings:
+            result.append({"actionId": action_id, "stepBindings": step_bindings})
+        elif endpoint_id:
+            result.append({"actionId": action_id, "endpointId": endpoint_id})
+        else:
+            continue
+        seen.add(action_id)
+    return result
+
+
+def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """过滤模型多余键，只持久化 API Contract 的开发边界字段。"""
+
+    normalized = _normalize_api_contracts(items)
+    contract_keys = (
+        "id",
+        "data_source_id",
+        "resource",
+        "base_path",
+        "authentication",
+        "schemas",
+        "endpoints",
+    )
+    endpoint_keys = (
+        "id",
+        "method",
+        "path",
+        "summary",
+        "parameters",
+        "request_schema_ref",
+        "response_schema_ref",
+        "error_codes",
+        "authentication",
+    )
+    return [
+        {
+            key: (
+                [
+                    {
+                        endpoint_key: deepcopy(endpoint.get(endpoint_key))
+                        for endpoint_key in endpoint_keys
+                    }
+                    for endpoint in _dict_items(contract.get("endpoints"))
+                ]
+                if key == "endpoints"
+                else deepcopy(contract.get(key))
+            )
+            for key in contract_keys
+        }
+        for contract in normalized
+    ]
+
+
+def create_technical_plan(
+    spec: dict[str, Any],
+    *,
+    agent_plan: dict[str, Any] | None = None,
+    datasource_type: DatasourceType | None = None,
+) -> dict[str, Any]:
+    """生成只包含开发新增事实的 TechnicalPlan。"""
+
+    effective_datasource_type: EnabledDatasourceType = (
+        ensure_enabled_datasource_type(datasource_type)
+        if datasource_type is not None
+        else datasource_type_from_artifact(spec, fallback="database")
+    )
+    data_sources = _normalize_data_sources(
+        apply_authoritative_datasource_type(
+            {"data_sources": _planned_data_sources(spec)},
+            effective_datasource_type,
+        )["data_sources"]
+    )
+    api_contracts = _technical_api_contracts(
+        _merge_agent_items(
+            _api_contracts(data_sources, spec),
+            agent_plan,
+            "api_contracts",
+            authoritative=True,
+        )
+    )
+    policy = _architecture_for_datasource_type(effective_datasource_type)
+    architecture = {
+        key: deepcopy(policy[key])
+        for key in ("frontend", "backend", "data", "backend_tech_stack", "data_contract")
+    }
+    agent_architecture = _agent_section(agent_plan, "architecture")
+    if isinstance(agent_architecture, dict):
+        for key in architecture:
+            if key in agent_architecture:
+                architecture[key] = deepcopy(agent_architecture[key])
+    for key in ("backend", "data", "backend_tech_stack", "data_contract"):
+        architecture[key] = deepcopy(policy[key])
+    if effective_datasource_type == "static":
+        architecture["frontend"] = deepcopy(policy["frontend"])
+    engineering_design = _technical_engineering_design(agent_plan)
+    plan = {
+        "artifact_type": TECHNICAL_PLAN_ARTIFACT_TYPE,
+        "architecture": architecture,
+        "engineering_design": engineering_design,
+        "api_contracts": api_contracts,
+        "pages": _technical_plan_pages(spec, agent_plan, api_contracts),
+    }
+    repaired, _ = repair_cross_contract_schema_refs(plan)
+    return repaired
 
 
 def create_project_plan(
@@ -1027,6 +1273,10 @@ def create_project_plan(
             frontend_page_leaves,
             agent_plan,
         ),
+        "engineering_design": _engineering_design(
+            agent_plan,
+            architecture=architecture,
+        ),
         "business_flows": (
             _dict_items(_agent_section(agent_plan, "business_flows"))
             if authoritative_agent_plan
@@ -1034,9 +1284,9 @@ def create_project_plan(
             else spec["business_flows"]
         ),
         "acceptance_criteria": (
-            _string_items(_agent_section(agent_plan, "acceptance_criteria"))
+            product_acceptance_criteria(_agent_section(agent_plan, "acceptance_criteria"))
             if authoritative_agent_plan
-            and _string_items(_agent_section(agent_plan, "acceptance_criteria"))
+            and product_acceptance_criteria(_agent_section(agent_plan, "acceptance_criteria"))
             else spec["acceptance_criteria"]
         ),
         "risks": (

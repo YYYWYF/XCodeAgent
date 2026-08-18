@@ -254,7 +254,7 @@ def merge_clarification_answers_into_spec(
                 }
                 for index, value in enumerate(values)
             ]
-        elif "数据源" in question or "数据" in question or "存储" in question:
+        elif "数据源" in question or "存储方式" in question:
             existing_sources = (
                 merged.get("data_sources")
                 if isinstance(merged.get("data_sources"), list)
@@ -475,13 +475,39 @@ def _business_flows(modules: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _acceptance_criteria(spec_name: str) -> list[str]:
+    """生成只描述应用用户结果的默认产品验收标准。"""
+
     return [
-        f"用户可以启动并访问{spec_name}本地预览地址。",
-        "主要页面可以正常打开，无前端运行错误。",
+        f"目标用户可以访问{spec_name}的主要业务页面。",
         "页面清单中的每个页面都有可见标题、主要内容区、加载态、空态和错误态。",
-        "数据源清单中的核心实体可以被页面读取并展示。",
+        "页面所需的核心业务信息可以被正确读取并展示。",
+        "用户执行核心操作后可以看到与产品规则一致的成功、失败或校验反馈。",
+        "主要业务流程可以由对应角色按预期步骤完成。",
         "如包含登录或权限模块，未授权用户不能访问受保护页面。",
-        "集成测试和质量门禁通过后才进入用户验收。",
+    ]
+
+
+_WORKFLOW_ACCEPTANCE_PATTERNS = (
+    re.compile(r"xcodeagent", re.IGNORECASE),
+    re.compile(r"质量门禁"),
+    re.compile(r"(?:集成|单元|冒烟|自动化)?测试.*(?:通过|完成).*(?:用户验收|交付)"),
+    re.compile(r"(?:编译|构建|lint|typecheck|代码生成).*(?:通过|完成)", re.IGNORECASE),
+    re.compile(r"本地预览地址"),
+    re.compile(r"前端运行错误"),
+    re.compile(r"(?:工作流|流水线).*(?:阶段|节点|通过|完成)"),
+)
+
+
+def product_acceptance_criteria(value: Any) -> list[str]:
+    """只保留生成应用自身的产品结果，剔除 XCodeAgent 交付工作流标准。"""
+
+    if not isinstance(value, list):
+        return []
+    return [
+        text
+        for item in value
+        if (text := str(item).strip())
+        and not any(pattern.search(text) for pattern in _WORKFLOW_ACCEPTANCE_PATTERNS)
     ]
 
 
@@ -561,7 +587,6 @@ def create_requirement_spec(
         "data_sources": _data_sources(modules, effective_datasource_type),
         "business_flows": _business_flows(modules),
         "acceptance_criteria": _acceptance_criteria(app_name),
-        "assumptions": [],
         "clarification_questions": [],
         "agent_note": agent_note,
         "approved": True,
@@ -646,11 +671,7 @@ def create_requirement_spec(
         page["path"] = _unique_page_path(path, pageId, used_page_paths)
 
     criteria = spec.get("acceptance_criteria")
-    normalized_criteria = (
-        [str(item) for item in criteria if str(item).strip()]
-        if isinstance(criteria, list)
-        else []
-    )
+    normalized_criteria = product_acceptance_criteria(criteria)
     has_authoritative_criteria = (
         authoritative_agent_spec
         and isinstance(agent_spec, dict)
@@ -661,12 +682,8 @@ def create_requirement_spec(
         if normalized_criteria or has_authoritative_criteria
         else default_spec["acceptance_criteria"]
     )
-    assumptions = spec.get("assumptions")
-    spec["assumptions"] = (
-        [str(item) for item in assumptions if str(item).strip()]
-        if isinstance(assumptions, list)
-        else []
-    )
+    # RequirementSpec 只保留正式产品事实，必须清除模型越界返回的产品假设。
+    spec.pop("assumptions", None)
     spec.update(
         {
             "version": str(spec.get("version") or "0.1.0"),

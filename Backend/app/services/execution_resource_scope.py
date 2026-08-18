@@ -10,7 +10,7 @@ from app.domain.application_lifecycle import (
     ExecutionResourceRole,
     ExecutionResourceType,
 )
-from app.services.frontend_page_tree import find_frontend_page, flatten_frontend_pages
+from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 
 
 def resolve_execution_resource_claims(
@@ -51,7 +51,7 @@ def _page_claims(
 ) -> list[ExecutionResourceClaim]:
     """解析页面本身、跳转关联页、API 契约及其数据源。"""
 
-    page = find_frontend_page(project_plan.get("frontend_pages"), page_id)
+    page = find_frontend_page(project_plan_page_records(project_plan), page_id)
     if page is None:
         return [_claim(ExecutionResourceType.PAGE, page_id, primary=True)]
 
@@ -100,7 +100,7 @@ def _page_claims(
         related_endpoint_ids.update(contract_endpoint_ids)
 
     # 共享 API 或数据源的页面同样会被后端拒绝启动，提前写入页面锁可让切页后立即显示只读控制栏。
-    for related_page in flatten_frontend_pages(project_plan.get("frontend_pages")):
+    for related_page in project_plan_page_records(project_plan):
         related_page_id = str(
             related_page.get("pageId") or related_page.get("id") or ""
         ).strip()
@@ -142,7 +142,7 @@ def _data_source_claims(
             for endpoint in _dict_items(contract.get("endpoints"))
         )
     endpoint_ids.discard("")
-    for page in flatten_frontend_pages(project_plan.get("frontend_pages")):
+    for page in project_plan_page_records(project_plan):
         references = page.get("references") if isinstance(page.get("references"), dict) else {}
         dependencies = _dict_items(
             references.get("endpoint_dependencies") or page.get("endpoint_dependencies")
@@ -183,7 +183,7 @@ def _endpoint_claims(
         claims.append(_claim(ExecutionResourceType.API_CONTRACT, contract_id))
     if source_id:
         claims.append(_claim(ExecutionResourceType.DATA_SOURCE, source_id))
-    for page in flatten_frontend_pages(project_plan.get("frontend_pages")):
+    for page in project_plan_page_records(project_plan):
         references = page.get("references") if isinstance(page.get("references"), dict) else {}
         dependencies = _dict_items(
             references.get("endpoint_dependencies") or page.get("endpoint_dependencies")

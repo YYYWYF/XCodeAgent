@@ -114,6 +114,36 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
 
 
 class PageBuildContextResolverTests(unittest.TestCase):
+    def test_page_context_uses_implementation_contract_without_page_detail(self) -> None:
+        """新版 TechnicalPlan 应直接用页面实现契约解析接口，不要求 PageDetail 文件。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            plan["page_implementation_contracts"] = [
+                {
+                    "schema_version": "page-implementation-contract.v1",
+                    "pageId": "orders",
+                    "uiDesignRef": {"path": ".xcodeagent/ui-design/pages/Orders/index.tsx"},
+                    "requiredEndpointIds": ["orders.list"],
+                }
+            ]
+            plan["frontend_pages"][0].pop("detail_design", None)
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+
+        self.assertIsNone(context["page_detail"])
+        self.assertEqual(
+            context["page_implementation_contract"]["pageId"],
+            "orders",
+        )
+        self.assertEqual(context["required_endpoint_ids"], ["orders.list"])
+
     def test_page_context_requires_and_loads_endpoint_details(self) -> None:
         """页面 scope 必须加载 requiredEndpoints 对应的独立 EndpointDetail。"""
 

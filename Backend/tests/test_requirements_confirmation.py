@@ -39,6 +39,34 @@ def requirements(state: dict) -> dict:
 
 
 class RequirementsConfirmationTests(unittest.TestCase):
+    def test_default_acceptance_criteria_exclude_xcodeagent_workflow(self) -> None:
+        """默认产品验收只能描述应用结果，不能泄漏生成器交付门禁。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        combined = "\n".join(spec["acceptance_criteria"])
+
+        for forbidden in ("本地预览地址", "前端运行错误", "集成测试", "质量门禁", "用户验收"):
+            self.assertNotIn(forbidden, combined)
+        self.assertIn("主要业务流程", combined)
+
+    def test_model_workflow_acceptance_is_removed(self) -> None:
+        """模型混入工作流门禁时只保留生成应用本身的产品标准。"""
+
+        spec = create_requirement_spec(
+            "创建一个库存管理系统",
+            agent_spec={
+                "acceptance_criteria": [
+                    "集成测试和质量门禁通过后才进入用户验收。",
+                    "仓库管理员可以完成库存查询和调整。",
+                ]
+            },
+        )
+
+        self.assertEqual(
+            spec["acceptance_criteria"],
+            ["仓库管理员可以完成库存查询和调整。"],
+        )
+
     def test_authoritative_markdown_sync_can_remove_generated_items(self) -> None:
         spec = create_requirement_spec(
             "创建一个库存管理系统",
@@ -60,13 +88,13 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 "data_sources": [{"id": "people_source", "name": "人员数据", "type": "database", "entities": ["Person"], "description": "人员信息"}],
                 "business_flows": [{"id": "browse_people", "name": "浏览人员", "steps": ["打开列表"]}],
                 "acceptance_criteria": ["列表可以展示人员信息"],
-                "assumptions": [],
             },
         )
 
         self.assertEqual([role["id"] for role in spec["user_roles"]], ["user"])
         self.assertEqual([page["pageId"] for page in spec["pages"]], ["people_list"])
         self.assertNotIn("login_page", [page["pageId"] for page in spec["pages"]])
+        self.assertNotIn("assumptions", spec)
 
     def test_clarification_answers_merge_into_requirement_spec_fields(self) -> None:
         spec = create_requirement_spec("创建一个业务管理系统")
@@ -554,7 +582,6 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 spec["app_info"]["name"],
                 "仓储管理应用",
             )
-            edited_markdown = edited_markdown.replace("（database）", "（mock）")
             markdown_path.write_text(edited_markdown, encoding="utf-8")
             synchronized = {
                 **spec,
@@ -592,8 +619,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual(result["requirement_spec"]["app_info"]["name"], "仓储管理应用")
         self.assertEqual(internal_json["app_info"]["name"], "仓储管理应用")
         self.assertEqual(internal_json["data_sources"][0]["type"], "database")
-        self.assertNotEqual(preserved_markdown, edited_markdown)
-        self.assertIn("（database）", preserved_markdown)
+        self.assertEqual(preserved_markdown, edited_markdown)
+        self.assertNotIn("数据源清单", preserved_markdown)
         self.assertIn("仓储管理应用", preserved_markdown)
 
 

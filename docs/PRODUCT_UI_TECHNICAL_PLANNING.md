@@ -1,0 +1,352 @@
+# 产品规划、UI 设计与技术规划分层
+
+## 目标
+
+应用创建流程把产品决策和开发决策拆成两个独立确认边界，避免 UI 设计稿与页面详细设计重复定义布局、组件和交互。
+
+```text
+RequirementSpec
+  -> 产品确认
+ProductPlan
+  -> 产品确认
+UiDesign（可选的真实 React 页面稿 + UiManifest）
+  -> 产品确认或明确跳过
+TechnicalPlan
+  -> 开发确认
+Workbench
+  -> EndpointDetail（仅在所选范围缺失或需要调整时确认）
+  -> Build DAG
+  -> Build / Test / Acceptance
+```
+
+产品确认“做什么、有哪些页面、用户如何操作、页面长什么样”；开发确认“API、数据、权限和工程如何实现”。同一页面不再经过第二次视觉详设确认。
+
+## 正式产物
+
+### RequirementSpec
+
+路径：`.xcodeagent/specs/requirement-spec.md|json`
+
+负责人：产品。
+
+包含产品目标、范围、用户角色、功能模块、业务流程、初步页面清单和业务信息需求。它不生成产品验收标准，不包含模型生成的产品假设或产品风险，也不决定数据源、存储方式、页面布局、API、数据库表和代码任务。产品事实不明确时必须在需求阶段向用户澄清；用户未要求的可选细节直接省略。内部技术配置可以随工作流保存，但不得出现在 RequirementSpec 产品确认文档、概览或编辑器中，也不得成为需求澄清问题。
+
+### ProductPlan
+
+路径：`.xcodeagent/plans/product-plan.md|json`
+
+负责人：产品。
+
+包含：
+
+- 拍平页面清单和稳定 `pageId`；
+- 页面目标、业务信息项和稳定 `actionId`；
+- 每个 action 的产品行为类型、预期业务/可见结果和组合步骤；
+- 页面跳转关系和允许访问的产品角色；
+- loading、empty、error、success 等产品状态要求；
+- 页面级产品验收标准。
+
+ProductPlan 使用 `business`、`navigation`、`interface`、`external`、`sequence` 表达产品可见行为。`business` 只说明查询、提交、变更、导出等业务结果，不选择 endpoint；`interface` 只说明需要本地界面变化，具体控件效果由 UiDesign 实现；组合行为以稳定 `stepId` 和产品结果表达。ProductPlan 不包含 HTTP method、endpointId、API Schema、数据库操作或代码文件。
+
+ProductPlan 中面向产品角色展示的验收标准，只描述生成应用的目标用户能够观察或完成的产品结果。XCodeAgent 自身的本地预览、代码生成、编译、构建、lint、typecheck、自动化/集成测试、质量门禁、工作流节点和“何时进入用户验收”等交付条件属于独立工程运行状态，不得写入应用产品验收标准；确定性归一化会剔除这类越界文案。
+
+正式 JSON 使用 `product-plan.v4`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
+
+```json
+{
+  "schema_version": "product-plan.v4",
+  "app": {"name": "...", "summary": "..."},
+  "user_roles": [],
+  "business_flows": [],
+  "pages": [
+    {
+      "pageId": "orders",
+      "name": "订单列表",
+      "path": "/orders",
+      "module_id": "order_management",
+      "description": "...",
+      "goal": "...",
+      "information_items": [
+        {"itemId": "order-number", "label": "订单编号", "description": "..."}
+      ],
+      "actions": [
+        {
+          "actionId": "open-order-detail",
+          "name": "查看订单详情",
+          "description": "点击订单进入详情页",
+          "requiresConfirmation": false,
+          "behavior": {
+            "type": "navigation",
+            "targetPageId": "order-detail",
+            "expectedResult": "进入所选订单的详情页"
+          }
+        }
+      ],
+      "navigation_targets": ["order-detail"],
+      "allowed_roles": ["user"],
+      "state_requirements": {
+        "loading": "...",
+        "empty": "...",
+        "error": "...",
+        "success": "...",
+        "validation": "..."
+      },
+      "acceptance_criteria": []
+    }
+  ],
+  "product_acceptance_criteria": []
+}
+```
+
+模型提示直接提供包含全部 RequirementSpec 页面身份的完整 JSON 响应示例；根对象只能包含 `app`、`user_roles`、`business_flows`、`pages`、`product_acceptance_criteria`。页面、信息项、action、behavior、sequence step 和状态对象均拒绝未声明字段。`information_items` 必须是 JSON 对象，禁止把 Python/JSON 字典序列化成字符串。action 只表示用户主动触发且会改变可见状态、结果集、页面位置、业务信息或外部效果的产品意图。阅读、浏览、滚动或看见内容不是 action，应写入 `information_items` 或 `acceptance_criteria`；纯展示页面允许 `actions: []`。导航 action 必须声明 `targetPageId`，并同步进入 `navigation_targets`。
+
+### UiDesign
+
+路径：
+
+- `.xcodeagent/ui-design/pages/<PageKey>/index.tsx`
+- `.xcodeagent/specs/ui-designs.json`
+
+负责人：产品。
+
+生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。用户也可以明确跳过 UI 设计；此时不生成页面 TSX，Manifest 使用 `confirmation_status: skipped` 和空 `pages`，TechnicalPlan 与页面代码生成直接依据 ProductPlan、TechnicalPlan 和模板技能继续。
+
+`ui-designs.json` 使用 `ui-manifest.v3`，它是 React 稿的引用与校验证据，不是另一份页面详设，也不是第二份产品事实。正式落盘文件不保存 TSX 正文，不重复页面名称、正式路由、描述、角色、状态要求、业务标签或验收标准；确认界面需要这些文案时，仅从当前 ProductPlan 临时投影。核心结构为：
+
+```json
+{
+  "schema_version": "ui-manifest.v3",
+  "confirmation_status": "pending_user_confirmation",
+  "product_plan_sha256": "...",
+  "pages": [
+    {
+      "pageId": "orders",
+      "page_key": "Orders",
+      "preview_path": "/page/orders",
+      "code_path": ".../.xcodeagent/ui-design/pages/Orders/index.tsx",
+      "code_sha256": "...",
+      "status": "confirmed",
+      "bindings": {
+        "actions": [
+          {"actionId": "open-filter", "controlIds": ["open-filter-control"], "uiEffect": "展开筛选区域"},
+          {"actionId": "open-order-detail", "controlIds": ["open-order-detail-control"]}
+        ],
+        "information_items": [
+          {"informationItemId": "order-number", "controlIds": ["order-number-display"]}
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "code_sha256": "...",
+        "checks": [],
+        "errors": []
+      }
+    }
+  ]
+}
+```
+
+`preview_path` 只用于隔离设计稿预览，不是产品正式路由。正式路由始终来自 ProductPlan。Graph 运行态可以临时携带 `code` 供 `DesignRenderer` 渲染，落盘时必须剔除；恢复会话时只允许从同一工作区 `.xcodeagent/ui-design/` 受控目录按 `code_path` 恢复源码。
+
+UI 生成只能消费已确认 ProductPlan，不能发明 ProductPlan 中不存在的页面、业务字段或操作；跳过 UI 时同样不改变 ProductPlan。
+
+生成、模板适配、用户调整和最终确认都必须执行确定性一致性检查：ProductPlan 的每个 `actionId` 和 `informationItemId` 必须在 TSX 中有静态控件映射；`interface` action 还必须通过 `data-ui-effect` 固化实际本地界面效果；未知 ID、缺失映射、无归属交互控件、无归属业务展示组件都拒绝确认。仅用于切换原型状态的控件必须显式标记 `data-preview-only="true"`，不得进入 ProductPlan 或 TechnicalPlan。模板只能作为布局和组件风格参考，必须先按 ProductPlan 重写业务语义，禁止原样携带模板字段或操作。若用户跳过 UI，则不执行这些 TSX 映射门禁，页面实现契约从 ProductPlan 的 `expectedResult` 补齐本地交互效果。
+
+RequirementSpec、ProductPlan 和 UiDesign 的产品确认均不得要求产品角色选择或审核数据源、数据库、持久化和 API 方案；这些内容只进入 TechnicalPlan 的开发确认。
+
+### TechnicalPlan
+
+正式路径：`.xcodeagent/plans/technical-plan.md|json`
+
+负责人：开发。
+
+TechnicalPlan 只写入 `.xcodeagent/plans/technical-plan.md|json`，`technical_plan` 是唯一语义来源。
+
+TechnicalPlan 包含：
+
+- 技术架构、模块边界、API Contract、请求/响应 Schema；
+- `engineering_design` 只保留模块边界和数据模型；
+- ProductPlan 中 `business` action/step 到 endpoint 的 `action_implementations`；
+- ProductPlan 与 UiManifest 的上游内容哈希。
+
+正式 JSON 使用 `artifact_type: "technical-plan"`，只持久化本阶段新增的开发事实：
+
+```json
+{
+  "artifact_type": "technical-plan",
+  "confirmation_status": "pending_user_confirmation",
+  "product_plan_sha256": "...",
+  "ui_designs_sha256": "...",
+  "architecture": {},
+  "engineering_design": {
+    "module_boundaries": [],
+    "data_models": []
+  },
+  "api_contracts": [],
+  "pages": [
+    {
+      "pageId": "orders",
+      "references": {
+        "endpoint_dependencies": [],
+        "action_implementations": []
+      }
+    }
+  ]
+}
+```
+
+TechnicalPlan 不再持久化 `app`、`requirements_overview`、`project_acceptance_criteria`、
+`business_flows`、`acceptance_criteria`、`risks`、`data_sources`、`permission_model`、
+`frontend_pages` 或 `page_implementation_contracts`。页面字段来自 ProductPlan，数据源身份来自
+RequirementSpec 内部配置，角色/跳转/状态来自 ProductPlan；UI 路径与控件映射来自已确认 UiManifest，跳过时不提供 UI 路径和控件映射；
+运行时按当前构建范围组合这些正式上游产物。
+
+TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品可见的 `sequence` 决策；这些事实已经分别由 ProductPlan 和 UiDesign 确认。它只为需要后端/数据实现的业务 action 或业务 step 选择 endpoint：
+
+```json
+{
+  "action_implementations": [
+    {"actionId": "search-orders", "endpointId": "orders.list"},
+    {
+      "actionId": "delete-and-refresh",
+      "stepBindings": [
+        {"stepId": "delete-order", "endpointId": "orders.delete"},
+        {"stepId": "reload-orders", "endpointId": "orders.list"}
+      ]
+    }
+  ]
+}
+```
+
+确定性编译器合并 ProductPlan 行为、UiManifest 控件/本地效果和 TechnicalPlan endpoint 实现，按需生成 Build 使用的 `PageImplementationContract`。它是运行时投影，不写入 `technical-plan.json`，也不是 TechnicalPlan 模型重复维护的第二份动作分类：
+
+```json
+{
+  "pageId": "order-list",
+  "uiDesignRef": {
+    "path": ".xcodeagent/ui-design/pages/OrderList/index.tsx",
+    "sha256": "..."
+  },
+  "requiredEndpointIds": ["orders.list", "orders.delete"],
+  "actionBindings": [
+    {"actionId": "open-filter", "bindingType": "local", "localEffect": "展开筛选区域"},
+    {"actionId": "search-orders", "bindingType": "endpoint", "endpointId": "orders.list"},
+    {
+      "actionId": "delete-order",
+      "bindingType": "sequence",
+      "steps": [
+        {"type": "endpoint", "endpointId": "orders.delete"},
+        {"type": "endpoint", "endpointId": "orders.list"}
+      ]
+    }
+  ],
+  "responseBindings": [],
+  "permissionBindings": [],
+  "navigationBindings": [],
+  "engineeringAcceptance": []
+}
+```
+
+编译后的每个 `actionBindings` 条目会确定性附加 `actionName` 和 `uiControlRefs[{controlId,label}]`，供 Build 直接消费。其判别类型来自三个已经分权的上游来源：
+
+- `endpoint`：调用已确认 API Contract 中的 endpoint；
+- `navigation`：跳转到 ProductPlan 已声明的目标页面；
+- `local`：打开弹窗、切换 Tab、展开区域等纯前端状态变化；
+- `external`：打开明确的外部目标；
+- `sequence`：由以上原子步骤组成的有序组合，例如提交成功后关闭弹窗并刷新。
+
+纯装饰控件和没有产品语义的 UI 内部控件不进入 ProductPlan actions，也不要求 TechnicalPlan 绑定。ProductPlan 决定导航、外部和组合业务结果，UiDesign 决定本地界面效果，TechnicalPlan 模型显式生成 `action_implementations`；确定性编译器合并三者且绝不根据按钮名称或 HTTP Method 猜测 endpoint。
+
+### TechnicalPlan 上下文预算
+
+- 128k 上下文：TechnicalPlan 不复制三份上游文档；主 Workflow 按页面/API 范围加载 ProductPlan、UiManifest、TechnicalPlan references 和必要 EndpointDetail。
+
+### EndpointDetail
+
+路径：`.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.md|json`
+
+负责人：开发。
+
+EndpointDetail 保留，因为 UI 和 API Contract 都不能表达接口内部实现决策。它负责数据来源、字段差异、数据库操作、处理逻辑、目标记录选择、事务、副作用、异常语义和接口验收。它不得修改 TechnicalPlan 中已经确认的 API Schema；发现契约缺口时必须返回 TechnicalPlan 重新确认。
+
+## 页面详设移除范围
+
+主流程停止生成新的 `.xcodeagent/plans/pages/page--<pageId>.*`，并移除页面是否存在 PageDetail 的工作台门禁。
+
+不读取历史 PageDetail；以下仅定义当前产物的责任边界，不执行历史字段迁移：
+
+| 页面事实 | 当前归属 |
+| --- | --- |
+| `page_goal` | ProductPlan |
+| `basic_layout`、`layout_design` | UiDesign React 稿 |
+| `operation_interactions` 的产品结果与导航/外部目标 | ProductPlan |
+| `operation_interactions` 的本地界面行为 | UiDesign |
+| `operation_interactions` 的接口绑定 | TechnicalPlan |
+| `state_feedback` 的产品要求 | ProductPlan |
+| `state_feedback` 的视觉表达 | UiDesign |
+| `api_dependencies`、`response_bindings` | TechnicalPlan |
+| `page_navigation` | ProductPlan 定义目标，编译器直接投射 |
+| `permissions`、`operation_visibility` | ProductPlan 定义产品角色，TechnicalPlan 保存权限绑定 |
+| `acceptance_criteria` | ProductPlan 保存产品标准，TechnicalPlan 保存工程标准 |
+| `endpoint_detail_refs` | TechnicalPlan |
+
+需要删除的运行行为：
+
+- 页面设计 ChatModel 调用；
+- PageDetail 生成、编辑和确认表单；
+- 页面布局、组件、交互入口和状态反馈的二次确认；
+- 通过 `plans/pages/` 判断页面是否可开发；
+- 选择页面时进入页面详设的路由；
+- `page_design_change` 返回 PageDetail 的恢复语义。
+
+旧 PageDetail 文件不参与当前流程；任何新运行只读取当前 ProductPlan、UiDesign、TechnicalPlan 和 EndpointDetail。
+
+## 工作台执行
+
+选择页面时：
+
+```text
+读取 PageImplementationContract
+  -> 解析 requiredEndpointIds
+  -> 检查 EndpointDetail
+  -> 缺失或失效时只生成并确认 EndpointDetail
+  -> inspect_workspace
+  -> prepare_build_tasks
+  -> build
+```
+
+纯静态且没有 endpoint 的页面直接进入工作区检查和任务规划。选择单个 endpoint 时仍可独立生成、调整并确认 EndpointDetail。
+
+## 一致性与失效规则
+
+正式依赖顺序为：
+
+```text
+RequirementSpec -> ProductPlan -> UiDesign（可选） -> TechnicalPlan -> EndpointDetail -> Build DAG
+```
+
+每个下游产物必须记录直接上游的版本或 SHA-256。上游内容变化时，只使直接或传递受影响的下游产物失效：
+
+- ProductPlan 变化：重新确认受影响 UI 和 TechnicalPlan；
+- UiDesign 变化：重新确认受影响 PageImplementationContract，不默认重做 EndpointDetail；
+- TechnicalPlan API/Schema 变化：使相关 EndpointDetail 和任务 DAG 失效；
+- EndpointDetail 内部实现变化：只使相关任务 DAG 失效；
+- 纯代码实现错误：进入 SmallTask 修复，不返回产品规划。
+
+TechnicalPlan 确认前执行确定性一致性检查：UI 中声明的每个业务操作、显示项和跳转必须能映射到 ProductPlan；每个 ProductPlan `business` action 和组合中的每个 `business` step 必须有且只有一个 endpoint 实现；TechnicalPlan 不得为 `navigation`、`interface` 或 `external` 行为重复作产品/UI 决策；每个技术绑定必须引用已存在的 action/step、endpoint、Schema、角色和页面。编译后的 `endpoint`、`navigation`、`local`、`external`、`sequence` 联合契约必须完整闭合，失败时不得进入工作台。
+
+## 上下文预算
+
+RequirementSpec 与 ProductPlan 只持久化用户提出或确认的产品事实，不保存模型推测的 `assumptions` 或 `risks`。TechnicalPlan、EndpointDetail 和任务规划只接收当前目标所需的结构化输入，不复制上游全文或无关历史记录。
+
+单次模型上下文限制为当前阶段所需内容：
+
+- ProductPlan：RequirementSpec；
+- UiDesign：单页 ProductPlan 摘要；
+- TechnicalPlan：RequirementSpec 摘要、完整 ProductPlan、UI manifest，不加载全部 TSX 正文；
+- EndpointDetail：单个 API Contract、关联页面实现契约和压缩数据库事实；
+- Build：当前 Unit 的 TechnicalPlan 切片、相关 EndpointDetail、UI 设计文件路径和工作区快照。
+
+ProductPlan 每次自动修复只回灌最多八条校验摘要，TechnicalPlan 最多回灌十二条页面/API/数据源契约摘要；两者都不追加历史模型全文。重试候选保留在当前节点局部变量中，TechnicalPlan 只携带精简 UiManifest 而不加载 TSX 正文，只有通过校验的计划才进入确认产物，从而保持 128k 上下文预算与 checkpoint 可检查性。
+
+任何完整 TSX、数据库工具原始输出、仓库扫描结果和历史日志都写入文件，只向主上下文返回路径、哈希和有界摘要。

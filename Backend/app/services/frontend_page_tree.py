@@ -38,6 +38,16 @@ def flatten_frontend_pages(value: Any) -> list[dict[str, Any]]:
     return flattened
 
 
+def project_plan_page_records(project_plan: Any) -> list[dict[str, Any]]:
+    """按当前计划类型读取页面记录，TechnicalPlan 使用扁平 pages。"""
+
+    if not isinstance(project_plan, dict):
+        return []
+    if project_plan.get("artifact_type") == "technical-plan":
+        return dict_items(project_plan.get("pages"))
+    return flatten_frontend_pages(project_plan.get("frontend_pages"))
+
+
 def frontend_page_ids(value: Any) -> list[str]:
     """返回树中全部页面叶子的稳定 pageId 列表。"""
 

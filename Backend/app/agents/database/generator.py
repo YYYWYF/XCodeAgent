@@ -387,33 +387,29 @@ def _verify_database_gaps(
     """执行后重新扫描数据库并确认任务声明的 gaps 已消除。"""
 
     latest_summary = inspect_mysql_schema(_target_from_tasks(tasks), workspace)
+    # 执行后的验收必须重新读取真实 Schema，不能用 SQL 执行返回成功替代结构复核。
+    if latest_summary.get("status") != "completed":
+        return {
+            "status": "failed",
+            "summary": str(latest_summary.get("message") or "数据库执行后复查失败。"),
+            "remaining_gaps": [],
+            "latest_summary": latest_summary,
+        }
+    required_schema = _required_schema_from_tasks(tasks, before_summary)
+    remaining_gaps = diff_database_schema(
+        actual_schema=_actual_schema_from_summary(latest_summary),
+        required_schema=required_schema,
+    )
     return {
-        "status": "completed",
-        "summary": "数据库执行后复查通过，目标结构差异已消除。",
-        "remaining_gaps": [],
+        "status": "failed" if remaining_gaps else "completed",
+        "summary": (
+            f"数据库执行后仍存在 {len(remaining_gaps)} 个目标结构差异。"
+            if remaining_gaps
+            else "数据库执行后复查通过，目标结构差异已消除。"
+        ),
+        "remaining_gaps": remaining_gaps,
         "latest_summary": latest_summary,
     }
-    # if latest_summary.get("status") != "completed":
-    #     return {
-    #         "status": "failed",
-    #         "summary": str(latest_summary.get("message") or "数据库执行后复查失败。"),
-    #         "latest_summary": latest_summary,
-    #     }
-    # required_schema = _required_schema_from_tasks(tasks, before_summary)
-    # remaining_gaps = diff_database_schema(
-    #     actual_schema=_actual_schema_from_summary(latest_summary),
-    #     required_schema=required_schema,
-    # )
-    # return {
-    #     "status": "failed" if remaining_gaps else "completed",
-    #     "summary": (
-    #         f"数据库执行后仍存在 {len(remaining_gaps)} 个目标结构差异。"
-    #         if remaining_gaps
-    #         else "数据库执行后复查通过，目标结构差异已消除。"
-    #     ),
-    #     "remaining_gaps": remaining_gaps,
-    #     "latest_summary": latest_summary,
-    # }
 
 
 def _required_schema_from_tasks(

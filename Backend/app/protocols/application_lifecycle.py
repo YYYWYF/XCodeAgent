@@ -85,6 +85,9 @@ def build_application_lifecycle_ag_ui_stream(
             application = request.application
             if application is None:
                 raise ValueError("create 必须提供有效的 application.id 和 application.appName。")
+            existing = load_application_lifecycle(request.workspace_root)
+            if existing is not None and existing.application.id != application.id:
+                raise ValueError("当前工作区已属于另一个应用，请为新应用选择独立的项目目录。")
             state = ensure_application_lifecycle(
                 request.workspace_root,
                 application_id=application.id,

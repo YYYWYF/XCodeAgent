@@ -9,6 +9,7 @@ from app.graph.nodes.lifecycle import (
 )
 from app.graph.nodes.modification import direct_modification
 from app.graph.nodes.planning import detail_confirmation, project_planning
+from app.graph.nodes.product_planning import product_planning
 from app.graph.nodes.requirements import requirements
 from app.graph.nodes.testing import integration_test, quality_gate
 from app.graph.nodes.small_task import small_task_repair
@@ -32,6 +33,7 @@ __all__ = [
     "launch_project",
     "prepare_build_tasks",
     "project_planning",
+    "product_planning",
     "quality_gate",
     "requirements",
     "ui_confirmation",

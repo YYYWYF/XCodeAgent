@@ -561,10 +561,14 @@ def _page_response_bindings(executable: dict[str, Any]) -> dict[str, list[str]]:
     """按 endpoint 汇总页面实际绑定的响应字段，避免要求页面消费完整 Schema。"""
 
     result: dict[str, list[str]] = {}
-    for detail in _dict_items(executable.get("page_detail_plans")):
-        for binding in _dict_items(detail.get("response_bindings")):
-            endpoint_id = str(binding.get("endpoint_id") or "")
-            source_path = str(binding.get("source_path") or "")
+    details = _dict_items(executable.get("page_implementation_contracts")) or _dict_items(
+        executable.get("page_detail_plans")
+    )
+    for detail in details:
+        bindings = detail.get("responseBindings") or detail.get("response_bindings")
+        for binding in _dict_items(bindings):
+            endpoint_id = str(binding.get("endpointId") or binding.get("endpoint_id") or "")
+            source_path = str(binding.get("sourcePath") or binding.get("source_path") or "")
             field = _terminal_field(source_path)
             if endpoint_id and field and field not in result.setdefault(endpoint_id, []):
                 result[endpoint_id].append(field)

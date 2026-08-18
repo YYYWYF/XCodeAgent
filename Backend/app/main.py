@@ -43,6 +43,10 @@ from app.protocols.code_changes import (
     build_code_changes_ag_ui_stream,
     code_changes_capabilities,
 )
+from app.protocols.version_control import (
+    build_version_control_ag_ui_stream,
+    version_control_capabilities,
+)
 from app.protocols.direct_modification import (
     build_conversation_ag_ui_stream,
     conversation_capabilities,
@@ -119,6 +123,7 @@ async def health() -> dict[str, object]:
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
             "code_changes": code_changes_capabilities(),
+            "version_control": version_control_capabilities(),
             "conversation": conversation_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
@@ -208,6 +213,20 @@ async def run_code_changes(
 
     return StreamingResponse(
         build_code_changes_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/version-control/run")
+async def run_version_control(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流复核并显式提交二次修改。"""
+
+    return StreamingResponse(
+        build_version_control_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

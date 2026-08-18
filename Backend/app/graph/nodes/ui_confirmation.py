@@ -14,8 +14,9 @@ index.tsx，并把源码内联到 ui_designs.pages[].code 供前端 DesignRender
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
-from pathlib import Path
 from typing import Any
 
 from langgraph.config import get_stream_writer
@@ -25,6 +26,7 @@ from app.graph.nodes.confirmation import (
     user_confirmed_text,
 )
 from app.graph.state import ProjectState
+from app.services.product_plan import require_current_product_plan
 from app.services.ui_design_generator import (
     delete_page_code,
     derive_page_key,
@@ -32,11 +34,14 @@ from app.services.ui_design_generator import (
     generate_page_react_code,
     load_page_code,
     load_template_source,
-    menu_path_for_page,
     pages_dir,
     persist_page_code,
     resolve_adjust_target_pages,
-    route_path_for_page,
+)
+from app.services.ui_design_manifest import (
+    UI_MANIFEST_SCHEMA_VERSION,
+    build_ui_page_manifest,
+    present_ui_pages,
 )
 from app.services.ui_design_project_setup import setup_ui_design_project
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
@@ -50,23 +55,41 @@ _UI_DESIGN_CONCURRENCY = 3
 
 
 def _page_list(state: ProjectState) -> list[dict[str, Any]]:
-    """从需求 spec 读取扁平页面清单，缺失时返回空列表。"""
+    """只从当前 ProductPlan.pages 读取 UI 设计页面。"""
 
-    requirement_spec = state.get("requirement_spec")
-    if not isinstance(requirement_spec, dict):
+    product_plan = state.get("product_plan")
+    if not isinstance(product_plan, dict):
         return []
-    pages = requirement_spec.get("pages")
+    pages = product_plan.get("pages")
     return [page for page in pages if isinstance(page, dict)] if isinstance(pages, list) else []
 
 
 def _page_id(page: dict[str, Any]) -> str:
+    """返回 UI 设计目标的稳定 pageId。"""
+
     return str(page.get("pageId") or page.get("id") or "").strip()
 
 
-def _ui_design_confirmation_payload(ui_designs: dict[str, Any]) -> dict[str, Any]:
+def _product_plan_hash(state: ProjectState) -> str:
+    """生成 UiDesign 对已确认 ProductPlan 的直接依赖哈希。"""
+
+    product_plan = state.get("product_plan")
+    if not isinstance(product_plan, dict):
+        return ""
+    return hashlib.sha256(
+        json.dumps(product_plan, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _ui_design_confirmation_payload(
+    state: ProjectState,
+    ui_designs: dict[str, Any],
+) -> dict[str, Any]:
     """构造 UI确认待确认交互载荷，附带页面设计稿摘要供前端渲染。"""
 
-    pages = ui_designs.get("pages") if isinstance(ui_designs, dict) else None
+    product_plan = state.get("product_plan")
+    product_plan = product_plan if isinstance(product_plan, dict) else {}
+    pages = present_ui_pages(ui_designs, product_plan)
     pending_count = sum(
         1
         for page in (pages or [])
@@ -89,11 +112,18 @@ def _ui_design_confirmation_payload(ui_designs: dict[str, Any]) -> dict[str, Any
     payload["mode"] = "ui_design_confirmation"
     payload["message"] = "请逐页确认设计稿后再继续项目规划。"
     payload["pending_count"] = pending_count
-    payload["pages"] = list(pages or [])
+    payload["pages"] = pages
     return payload
 
 
-def _ui_design_confirmed_payload(ui_designs: dict[str, Any]) -> dict[str, Any]:
+def _ui_design_confirmed_payload(
+    state: ProjectState,
+    ui_designs: dict[str, Any],
+) -> dict[str, Any]:
+    """构造只用于前端展示的已确认 UI 页面投影。"""
+
+    product_plan = state.get("product_plan")
+    product_plan = product_plan if isinstance(product_plan, dict) else {}
     return {
         "mode": "ui_design_confirmation",
         "status": "clear",
@@ -101,8 +131,36 @@ def _ui_design_confirmed_payload(ui_designs: dict[str, Any]) -> dict[str, Any]:
         "questions": [],
         "assumptions": [],
         "message": "所有页面设计稿已确认，可以继续项目规划。",
-        "pages": ui_designs.get("pages", []) if isinstance(ui_designs, dict) else [],
+        "pages": present_ui_pages(ui_designs, product_plan),
     }
+
+
+def _ui_design_skipped_payload() -> dict[str, Any]:
+    """构造跳过 UI 设计后直接进入技术规划的清晰状态载荷。"""
+
+    return {
+        "mode": "ui_design_confirmation",
+        "status": "clear",
+        "question_schema": "gemini_cli.ask_user.v1",
+        "questions": [],
+        "assumptions": [],
+        "message": "已跳过 UI 设计稿生成，直接进入技术规划。",
+        "skipped": True,
+        "pages": [],
+    }
+
+
+def _build_skipped_ui_designs(state: ProjectState) -> dict[str, Any]:
+    """构造并持久化用户主动跳过后的空 UI Manifest。"""
+
+    ui_designs = {
+        "schema_version": UI_MANIFEST_SCHEMA_VERSION,
+        "confirmation_status": "skipped",
+        "product_plan_sha256": _product_plan_hash(state),
+        "pages": [],
+    }
+    _persist_ui_designs(state, ui_designs)
+    return ui_designs
 
 
 def _user_confirmed_all_designs(request: str) -> bool:
@@ -125,6 +183,61 @@ def _user_confirmed_all_designs(request: str) -> bool:
             "不是",
             "需要改",
         ),
+    )
+
+
+def _verified_ui_designs_for_confirmation(
+    state: ProjectState,
+    ui_designs: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """按当前 ProductPlan 和真实 TSX 重新校验全部页面后返回 v2 清单。"""
+
+    product_pages = {_page_id(page): page for page in _page_list(state) if _page_id(page)}
+    existing_pages = {
+        _page_id(page): page
+        for page in ui_designs.get("pages", [])
+        if isinstance(page, dict) and _page_id(page)
+    }
+    errors: list[str] = []
+    if ui_designs.get("product_plan_sha256") != _product_plan_hash(state):
+        errors.append("UI Manifest 引用的 ProductPlan 哈希已过期，请重新生成受影响页面。")
+    if set(existing_pages) != set(product_pages):
+        errors.append("UI Manifest 页面集合必须与 ProductPlan pages 完全一致。")
+    verified_pages: list[dict[str, Any]] = []
+    for page_id, product_page in product_pages.items():
+        existing = existing_pages.get(page_id, {})
+        page_key = str(existing.get("page_key") or derive_page_key(product_page)).strip()
+        code = load_page_code(
+            str(workspace_root(state) / ".xcodeagent" / "ui-design"),
+            page_key,
+        ) or str(existing.get("code") or "")
+        status = str(existing.get("status") or "pending")
+        verified = build_ui_page_manifest(
+            product_page,
+            page_key=page_key,
+            code_path=str(existing.get("code_path") or ""),
+            code=code,
+            status=status,
+            template_id=str(existing.get("template_id") or ""),
+            template_source_path=str(existing.get("template_source_path") or ""),
+            error=str(existing.get("error") or ""),
+        )
+        verification = verified.get("verification", {})
+        page_errors = verification.get("errors") if isinstance(verification, dict) else []
+        if status != "confirmed":
+            errors.append(f"页面 {page_id} 尚未确认。")
+        if verification.get("status") != "passed":
+            detail = "；".join(str(item) for item in page_errors) or "设计稿代码或映射缺失"
+            errors.append(f"页面 {page_id} 未通过产品事实一致性校验：{detail}")
+        verified_pages.append(verified)
+    return (
+        {
+            "schema_version": UI_MANIFEST_SCHEMA_VERSION,
+            "confirmation_status": "pending_user_confirmation",
+            "product_plan_sha256": _product_plan_hash(state),
+            "pages": verified_pages,
+        },
+        errors,
     )
 
 
@@ -166,41 +279,32 @@ async def _generate_one_page(
 
     page_id = _page_id(page)
     page_key = derive_page_key(page, used_keys)
-    menu_path = menu_path_for_page(page, page_key)
-    route_path = route_path_for_page(menu_path)
-    entry = {
-        "pageId": page_id,
-        "name": str(page.get("name") or page_id),
-        "path": str(page.get("path") or "/"),
-        "description": str(page.get("description") or ""),
-        "page_key": page_key,
-        "menu_path": menu_path,
-        "route_path": route_path,
-        "code_path": "",
-        # 内联 .tsx 源码：方案 B 下前端 DesignRenderer 直接消费此字段编译渲染，
-        # 不再依赖独立 dev server。code_path 仍保留给后续还原链路。
-        "code": "",
-        "status": "pending",
-    }
+    entry = build_ui_page_manifest(page, page_key=page_key)
     if not page_id or not project_dir:
         return entry
     # 已存在落盘设计稿直接复用，避免恢复时重复调用 LLM。
     existing = load_page_code(project_dir, page_key)
     if existing:
-        entry["code_path"] = str(pages_dir(project_dir) / page_key / "index.tsx")
-        entry["code"] = existing
-        ready_pages.append(entry)
-        _emit_progress(
-            f"已加载现有设计稿：{entry['name']}（{len(ready_pages)}/{total}）",
-            pageId=page_id,
-            ready=len(ready_pages),
-            total=total,
-            pages=list(ready_pages),
+        reused = build_ui_page_manifest(
+            page,
+            page_key=page_key,
+            code_path=str(pages_dir(project_dir) / page_key / "index.tsx"),
+            code=existing,
+            status="pending",
         )
-        return entry
+        if reused.get("verification", {}).get("status") == "passed":
+            ready_pages.append(reused)
+            _emit_progress(
+                f"已加载现有设计稿：{page.get('name') or page_id}（{len(ready_pages)}/{total}）",
+                pageId=page_id,
+                ready=len(ready_pages),
+                total=total,
+                pages=list(ready_pages),
+            )
+            return reused
     async with semaphore:
         _emit_progress(
-            f"正在生成设计稿：{entry['name']}",
+            f"正在生成设计稿：{page.get('name') or page_id}",
             pageId=page_id,
             ready=len(ready_pages),
             total=total,
@@ -213,11 +317,17 @@ async def _generate_one_page(
             code = await asyncio.to_thread(
                 generate_page_react_code, page, page_key, project_dir
             )
-            entry["code_path"] = persist_page_code(project_dir, page_key, code)
-            entry["code"] = code
+            code_path = persist_page_code(project_dir, page_key, code)
+            entry = build_ui_page_manifest(
+                page,
+                page_key=page_key,
+                code_path=code_path,
+                code=code,
+                status="pending",
+            )
             ready_pages.append(entry)
             _emit_progress(
-                f"设计稿已生成：{entry['name']}（{len(ready_pages)}/{total}）",
+                f"设计稿已生成：{page.get('name') or page_id}（{len(ready_pages)}/{total}）",
                 pageId=page_id,
                 ready=len(ready_pages),
                 total=total,
@@ -225,11 +335,15 @@ async def _generate_one_page(
             )
         except Exception as exc:
             logger.exception("ui_design_generation_failed page_id=%s", page_id)
-            entry["status"] = "generation_failed"
-            entry["error"] = str(exc)[:500]
+            entry = build_ui_page_manifest(
+                page,
+                page_key=page_key,
+                status="generation_failed",
+                error=str(exc),
+            )
             ready_pages.append(entry)
             _emit_progress(
-                f"设计稿生成失败：{entry['name']}（{len(ready_pages)}/{total}）",
+                f"设计稿生成失败：{page.get('name') or page_id}（{len(ready_pages)}/{total}）",
                 pageId=page_id,
                 ready=len(ready_pages),
                 total=total,
@@ -241,7 +355,7 @@ async def _generate_one_page(
 async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
     """首次进入 UI 确认节点：只为每个页面准备骨架条目，不生成设计稿。
 
-    每页带 page_key/menu_path/route_path 但 code 为空、status=pending。用户在前端
+    每页只带 pageId、page_key、预览路径和空验证记录。用户在前端
     逐页"选模板"（套用模板代码）或"换一换"（调 LLM 生成）后才产生设计稿——
     通过 ui_design_action 单页动作路径即时回填。确认全部后放行项目规划。
     """
@@ -257,24 +371,8 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
     used_keys: set[str] = {"DefaultPage"}
     entries: list[dict[str, Any]] = []
     for page in valid_pages:
-        page_id = _page_id(page)
         page_key = derive_page_key(page, used_keys)
-        menu_path = menu_path_for_page(page, page_key)
-        route_path = route_path_for_page(menu_path)
-        entries.append(
-            {
-                "pageId": page_id,
-                "name": str(page.get("name") or page_id),
-                "path": str(page.get("path") or "/"),
-                "description": str(page.get("description") or ""),
-                "page_key": page_key,
-                "menu_path": menu_path,
-                "route_path": route_path,
-                "code_path": "",
-                "code": "",
-                "status": "pending",
-            }
-        )
+        entries.append(build_ui_page_manifest(page, page_key=page_key))
     _emit_progress(
         f"已准备 {total} 个页面，请逐页选择模板或换一换生成设计稿",
         ready=0,
@@ -282,7 +380,9 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
         pages=list(entries),
     )
     return {
+        "schema_version": UI_MANIFEST_SCHEMA_VERSION,
         "confirmation_status": "pending_user_confirmation",
+        "product_plan_sha256": _product_plan_hash(state),
         "pages": entries,
     }
 
@@ -328,7 +428,9 @@ async def _build_initial_ui_designs(state: ProjectState) -> dict[str, Any]:
         pages=list(page_entries),
     )
     return {
+        "schema_version": UI_MANIFEST_SCHEMA_VERSION,
         "confirmation_status": "pending_user_confirmation",
+        "product_plan_sha256": _product_plan_hash(state),
         "pages": page_entries,
     }
 
@@ -336,43 +438,48 @@ async def _build_initial_ui_designs(state: ProjectState) -> dict[str, Any]:
 def _apply_template_to_page(
     page: dict[str, Any], page_key: str, project_dir: str, template_id: str
 ) -> dict[str, Any]:
-    """用页面模板源码作为单页设计稿，落盘并返回更新后的页面条目。
+    """把模板仅作为视觉参考重写为符合 ProductPlan 的单页设计稿。"""
 
-    选模板路径：直接读模板 index.tsx 作 code（不调 LLM、不走 validate），
-    因为模板是成熟可运行的 Pro 组件页面。落盘后与 LLM 生成的设计稿一样
-    可被前端 DesignRenderer 渲染、被 build 阶段 _ui_design_reference_instruction
-    读取还原。失败时标记 generation_failed，不阻断其他页。
-    """
-
-    entry = {
-        "pageId": _page_id(page),
-        "name": str(page.get("name") or _page_id(page)),
-        "path": str(page.get("path") or "/"),
-        "description": str(page.get("description") or ""),
-        "page_key": page_key,
-        "menu_path": menu_path_for_page(page, page_key),
-        "route_path": route_path_for_page(menu_path_for_page(page, page_key)),
-        "code_path": "",
-        "code": "",
-        "status": "pending",
-        "template_id": template_id,
-    }
+    entry = build_ui_page_manifest(
+        page,
+        page_key=page_key,
+        template_id=template_id,
+    )
     if not project_dir:
         return entry
     try:
-        code = load_template_source(template_id)
-        entry["code_path"] = persist_page_code(project_dir, page_key, code)
-        entry["code"] = code
-        entry["template_source_path"] = (
-            f"src/renderer/src/templates/{template_id}"
+        template_code = load_template_source(template_id)
+        code = generate_adjusted_page_react_code(
+            page,
+            page_key,
+            project_dir,
+            template_code,
+            (
+                "Treat the supplied template only as a visual layout and component-style reference. "
+                "Replace all template business semantics with exactly the ProductPlan information "
+                "items and actions. Do not preserve any template field, metric, filter, action, "
+                "route, role, or label that ProductPlan does not declare."
+            ),
         )
-        # 选模板成功即视为该页设计稿已确认：模板是成熟可运行代码，无需用户
-        # 再手动确认。前端据 status=confirmed 在左侧列表标记已完成。
-        entry["status"] = "confirmed"
+        code_path = persist_page_code(project_dir, page_key, code)
+        entry = build_ui_page_manifest(
+            page,
+            page_key=page_key,
+            code_path=code_path,
+            code=code,
+            status="confirmed",
+            template_id=template_id,
+            template_source_path=f"src/renderer/src/templates/{template_id}",
+        )
     except Exception as exc:
         logger.exception("ui_design_template_failed page_id=%s", _page_id(page))
-        entry["status"] = "generation_failed"
-        entry["error"] = str(exc)[:500]
+        entry = build_ui_page_manifest(
+            page,
+            page_key=page_key,
+            status="generation_failed",
+            template_id=template_id,
+            error=str(exc),
+        )
     return entry
 
 
@@ -398,7 +505,9 @@ async def _apply_adjust_pages(
     instruction = str(action.get("instruction") or "").strip()
     if not instruction:
         return {
+            "schema_version": UI_MANIFEST_SCHEMA_VERSION,
             "confirmation_status": "pending_user_confirmation",
+            "product_plan_sha256": _product_plan_hash(state),
             "pages": pages,
         }
 
@@ -427,7 +536,9 @@ async def _apply_adjust_pages(
                 adjust_ready=0,
             )
             return {
+                "schema_version": UI_MANIFEST_SCHEMA_VERSION,
                 "confirmation_status": "pending_user_confirmation",
+                "product_plan_sha256": _product_plan_hash(state),
                 "pages": pages,
             }
 
@@ -463,7 +574,11 @@ async def _apply_adjust_pages(
             continue
         target = pages[idx]
         page_key = str(target.get("page_key") or "").strip()
-        name = str(target.get("name") or page_id)
+        spec_page = next(
+            (item for item in _page_list(state) if _page_id(item) == page_id),
+            {"pageId": page_id},
+        )
+        name = str(spec_page.get("name") or page_id)
         # 现有设计稿：优先落盘文件，其次条目内联 code。
         prev_code = ""
         if page_key and project_dir:
@@ -491,10 +606,6 @@ async def _apply_adjust_pages(
             adjust_current=page_id,
         )
         try:
-            spec_page = next(
-                (p for p in _page_list(state) if _page_id(p) == page_id),
-                target,
-            )
             code = await asyncio.to_thread(
                 generate_adjusted_page_react_code,
                 spec_page,
@@ -504,12 +615,13 @@ async def _apply_adjust_pages(
                 instruction,
             )
             code_path = persist_page_code(project_dir, page_key, code)
-            pages[idx] = {
-                **target,
-                "code": code,
-                "code_path": code_path,
-                "status": "confirmed",
-            }
+            pages[idx] = build_ui_page_manifest(
+                spec_page,
+                page_key=page_key,
+                code_path=code_path,
+                code=code,
+                status="confirmed",
+            )
             _emit_progress(
                 f"设计稿已调整：{name}（第 {seq + 1}/{total} 页完成）",
                 ready=seq + 1,
@@ -520,11 +632,14 @@ async def _apply_adjust_pages(
             )
         except Exception as exc:
             logger.exception("ui_design_adjust_failed page_id=%s", page_id)
-            pages[idx] = {
-                **target,
-                "status": "generation_failed",
-                "error": str(exc)[:500],
-            }
+            pages[idx] = build_ui_page_manifest(
+                spec_page,
+                page_key=page_key,
+                code_path=str(target.get("code_path") or ""),
+                code=str(target.get("code") or ""),
+                status="generation_failed",
+                error=str(exc),
+            )
             _emit_progress(
                 f"设计稿调整失败：{name}（第 {seq + 1}/{total} 页）",
                 ready=seq + 1,
@@ -535,7 +650,9 @@ async def _apply_adjust_pages(
             )
 
     return {
+        "schema_version": UI_MANIFEST_SCHEMA_VERSION,
         "confirmation_status": "pending_user_confirmation",
+        "product_plan_sha256": _product_plan_hash(state),
         "pages": pages,
     }
 
@@ -585,30 +702,34 @@ async def _apply_ui_design_action(
         return existing
 
     target_page = pages[target_index]
+    spec_page = next(
+        (page for page in _page_list(state) if _page_id(page) == page_id),
+        {"pageId": page_id},
+    )
+    page_name = str(spec_page.get("name") or page_id)
     page_key = str(target_page.get("page_key") or "").strip()
     if not page_key:
-        # 找不到原始 page 时用 requirement_spec 里的页面信息派生
-        spec_page = next(
-            (p for p in _page_list(state) if _page_id(p) == page_id),
-            {"pageId": page_id, "name": page_id},
-        )
         page_key = derive_page_key(spec_page, used_keys)
 
     if action_type == "select_template":
         template_id = str(action.get("templateId") or "").strip()
         _emit_progress(
-            f"正在套用页面模板：{target_page.get('name') or page_id}",
+            f"正在按页面事实适配模板：{page_name}",
             pageId=page_id,
             ready=len(pages),
             total=len(pages),
             pages=list(pages),
         )
-        updated = _apply_template_to_page(
-            target_page, page_key, project_dir, template_id
+        updated = await asyncio.to_thread(
+            _apply_template_to_page,
+            spec_page,
+            page_key,
+            project_dir,
+            template_id,
         )
     else:  # regenerate
         _emit_progress(
-            f"正在生成设计稿：{target_page.get('name') or page_id}",
+            f"正在重新生成设计稿：{page_name or target_page.get('name') or page_id}",
             pageId=page_id,
             ready=len(pages),
             total=len(pages),
@@ -616,32 +737,22 @@ async def _apply_ui_design_action(
         )
         # 删除已落盘设计稿，绕过 load_page_code 复用，强制重新调 LLM。
         delete_page_code(project_dir, page_key)
-        spec_page = next(
-            (p for p in _page_list(state) if _page_id(p) == page_id),
-            target_page,
-        )
-        updated = {
-            "pageId": page_id,
-            "name": str(target_page.get("name") or page_id),
-            "path": str(target_page.get("path") or "/"),
-            "description": str(target_page.get("description") or ""),
-            "page_key": page_key,
-            "menu_path": str(target_page.get("menu_path") or menu_path_for_page(spec_page, page_key)),
-            "route_path": str(target_page.get("route_path") or route_path_for_page(str(target_page.get("menu_path") or menu_path_for_page(spec_page, page_key)))),
-            "code_path": "",
-            "code": "",
-            "status": "pending",
-        }
+        updated = build_ui_page_manifest(spec_page, page_key=page_key)
         try:
             code = await asyncio.to_thread(
                 generate_page_react_code, spec_page, page_key, project_dir
             )
-            updated["code_path"] = persist_page_code(project_dir, page_key, code)
-            updated["code"] = code
+            code_path = persist_page_code(project_dir, page_key, code)
+            updated = build_ui_page_manifest(
+                spec_page,
+                page_key=page_key,
+                code_path=code_path,
+                code=code,
+                status="confirmed",
+            )
             # 换一换成功即视为该页设计稿已确认：用户主动触发生成，无需再手动确认。
-            updated["status"] = "confirmed"
             _emit_progress(
-                f"设计稿已重新生成：{updated['name']}",
+                f"设计稿已重新生成：{page_name}",
                 pageId=page_id,
                 ready=len(pages),
                 total=len(pages),
@@ -649,10 +760,14 @@ async def _apply_ui_design_action(
             )
         except Exception as exc:
             logger.exception("ui_design_regenerate_failed page_id=%s", page_id)
-            updated["status"] = "generation_failed"
-            updated["error"] = str(exc)[:500]
+            updated = build_ui_page_manifest(
+                spec_page,
+                page_key=page_key,
+                status="generation_failed",
+                error=str(exc),
+            )
             _emit_progress(
-                f"设计稿重新生成失败：{updated['name']}",
+                f"设计稿重新生成失败：{page_name}",
                 pageId=page_id,
                 ready=len(pages),
                 total=len(pages),
@@ -664,22 +779,45 @@ async def _apply_ui_design_action(
     # template_id——这里显式清除，恢复为纯 LLM 设计稿。
     if action_type == "regenerate":
         updated = {k: v for k, v in updated.items() if k not in {"template_id", "template_source_path"}}
-        pages[target_index] = {**target_page, **updated}
-        pages[target_index].pop("template_id", None)
-        pages[target_index].pop("template_source_path", None)
+        pages[target_index] = updated
     else:
-        pages[target_index] = {**target_page, **updated}
+        pages[target_index] = updated
     return {
+        "schema_version": UI_MANIFEST_SCHEMA_VERSION,
         "confirmation_status": "pending_user_confirmation",
+        "product_plan_sha256": _product_plan_hash(state),
         "pages": pages,
     }
 
 
 async def ui_confirmation(state: ProjectState) -> dict:
-    """生成各页 React 设计稿并等待用户逐页确认。"""
+    """生成各页 React 设计稿、处理跳过动作并等待用户逐页确认。"""
 
+    requirement_spec = state.get("requirement_spec")
+    if not isinstance(requirement_spec, dict):
+        raise ValueError("UI 设计必须读取已确认的 RequirementSpec。")
+    product_plan = require_current_product_plan(state.get("product_plan"), requirement_spec)
+    if product_plan.get("confirmation_status") != "confirmed":
+        raise ValueError("UI 设计必须基于已确认 ProductPlan 生成。")
     existing = state.get("ui_designs")
     request = state.get("request", "")
+
+    # 跳过动作是显式结构化提交，不生成设计稿、不创建设计目录，直接放行技术规划。
+    action = state.get("ui_design_action")
+    if (
+        isinstance(action, dict)
+        and action.get("action") == "skip"
+        and _has_explicit_user_submission(state)
+    ):
+        ui_designs = _build_skipped_ui_designs(state)
+        return {
+            "phase": "ui_confirmation",
+            "status": "completed",
+            "ui_designs": ui_designs,
+            "ui_design_action": None,
+            "clarification": _ui_design_skipped_payload(),
+            "timeline": ["ui_confirmation"],
+        }
 
     # 恢复路径：已有待确认设计稿且本轮无新提交，直接重放确认卡。
     if (
@@ -692,14 +830,13 @@ async def ui_confirmation(state: ProjectState) -> dict:
             "phase": "ui_confirmation",
             "status": "requires_user_input",
             "ui_designs": existing,
-            "clarification": _ui_design_confirmation_payload(existing),
+            "clarification": _ui_design_confirmation_payload(state, existing),
             "timeline": ["ui_confirmation"],
         }
 
     # 单页动作路径：用户逐页"选模板"或"重新生成"，即时更新该页设计稿后重放确认卡。
     # 不推进到 project_planning——只有"确认全部设计稿"才放行。动作处理完清除
     # ui_design_action，避免下次恢复时残留动作被重复执行。
-    action = state.get("ui_design_action")
     if (
         isinstance(action, dict)
         and isinstance(existing, dict)
@@ -713,7 +850,7 @@ async def ui_confirmation(state: ProjectState) -> dict:
             "status": "requires_user_input",
             "ui_designs": ui_designs,
             "ui_design_action": None,
-            "clarification": _ui_design_confirmation_payload(ui_designs),
+            "clarification": _ui_design_confirmation_payload(state, ui_designs),
             "timeline": ["ui_confirmation"],
         }
 
@@ -723,21 +860,29 @@ async def ui_confirmation(state: ProjectState) -> dict:
         and existing.get("confirmation_status") == "pending_user_confirmation"
         and _user_confirmed_all_designs(request)
     ):
-        confirmed_pages = [
-            {**page, "status": "confirmed"}
-            for page in existing.get("pages", [])
-            if isinstance(page, dict)
-        ]
+        verified, validation_errors = _verified_ui_designs_for_confirmation(state, existing)
+        if validation_errors:
+            clarification = _ui_design_confirmation_payload(state, verified)
+            clarification["message"] = "设计稿尚未通过产品事实一致性校验，请修正后再确认。"
+            clarification["validation_errors"] = validation_errors
+            _persist_ui_designs(state, verified)
+            return {
+                "phase": "ui_confirmation",
+                "status": "requires_user_input",
+                "ui_designs": verified,
+                "clarification": clarification,
+                "timeline": ["ui_confirmation"],
+            }
         ui_designs = {
+            **verified,
             "confirmation_status": "confirmed",
-            "pages": confirmed_pages,
         }
         _persist_ui_designs(state, ui_designs)
         return {
             "phase": "ui_confirmation",
             "status": "completed",
             "ui_designs": ui_designs,
-            "clarification": _ui_design_confirmed_payload(ui_designs),
+            "clarification": _ui_design_confirmed_payload(state, ui_designs),
             "timeline": ["ui_confirmation"],
         }
 
@@ -749,7 +894,7 @@ async def ui_confirmation(state: ProjectState) -> dict:
         "phase": "ui_confirmation",
         "status": "requires_user_input",
         "ui_designs": ui_designs,
-        "clarification": _ui_design_confirmation_payload(ui_designs),
+        "clarification": _ui_design_confirmation_payload(state, ui_designs),
         "timeline": ["ui_confirmation"],
     }
 

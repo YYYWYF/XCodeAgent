@@ -17,6 +17,7 @@ from app.services.data_source_policy import (
 from app.services.project_plan import (
     apply_project_plan_feedback,
     create_project_plan,
+    create_technical_plan,
 )
 from app.utils.model_output import extract_json_object
 
@@ -37,6 +38,99 @@ STATIC_DATA_SOURCE_REQUIREMENT = (
 )
 
 
+def _technical_planning_prompt(
+    requirement_spec: dict[str, Any],
+    existing_plan: dict[str, Any] | None,
+    effective_type: str,
+) -> str:
+    """构造不重复上游产品事实的 TechnicalPlan 提示。"""
+
+    page_ids = [
+        str(page.get("pageId") or "")
+        for page in (
+            requirement_spec.get("confirmed_product_plan", {}).get("pages", [])
+            if isinstance(requirement_spec.get("confirmed_product_plan"), dict)
+            else requirement_spec.get("pages", [])
+        )
+        if isinstance(page, dict) and page.get("pageId")
+    ]
+    page_example = [
+        {
+            "pageId": page_id,
+            "references": {
+                "endpoint_dependencies": [
+                    {
+                        "endpoint_id": "resource.list",
+                        "usage": "page_load",
+                        "trigger": "进入页面",
+                        "required_for_initial_load": True,
+                    }
+                ],
+                "action_implementations": [],
+            },
+        }
+        for page_id in page_ids
+    ]
+    revision_context = (
+        "Revise the existing TechnicalPlan using planning_adjustment_request. Return the complete "
+        "four-key object; omitted technical items are treated as removed.\n"
+        f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"
+        if existing_plan
+        else "Create a new TechnicalPlan.\n"
+    )
+    datasource_requirement = (
+        "The application uses static data. Model api_contracts as a frontend in-memory data-access "
+        "boundary and do not declare database, cache, migration, or backend endpoint implementation."
+        if effective_type == "static"
+        else BACKEND_TECH_STACK_REQUIREMENT
+    )
+    ui_design_manifest = requirement_spec.get("confirmed_ui_design_manifest")
+    ui_design_skipped = (
+        isinstance(ui_design_manifest, dict)
+        and ui_design_manifest.get("confirmation_status") == "skipped"
+    )
+    ui_design_instruction = (
+        "The user explicitly skipped UI design generation. No visual React reference is available; "
+        "derive page implementation requirements from ProductPlan and TechnicalPlan, and do not "
+        "invent UI-specific decisions in this plan."
+        if ui_design_skipped
+        else "The confirmed UiManifest is the immutable visual reference for implementation; do not redesign it."
+    )
+    return (
+        "You are the technical-planning model for an app-generation workflow. Return only one JSON "
+        "object and do not call tools, delegate, or generate code.\n"
+        "RequirementSpec, ProductPlan, and UiManifest are immutable upstream artifacts. "
+        f"{ui_design_instruction}\n"
+        "TechnicalPlan "
+        "must contain only new developer decisions. Never repeat app metadata, requirements overview, "
+        "roles, modules, business flows, product acceptance, page names/routes/descriptions, UI paths, "
+        "UI controls, navigation, permissions, product states, risks, or generation metadata.\n"
+        "Do not emit requirements_overview, project_acceptance_criteria, app, data_sources, "
+        "permission_model, business_flows, acceptance_criteria, risks, frontend_pages, "
+        "page_implementation_contracts, status, version, generated_at, approved, planned_by, or hashes.\n"
+        "The root object must contain exactly architecture, engineering_design, api_contracts, and pages.\n"
+        "architecture must contain only frontend, backend, data, backend_tech_stack, and data_contract.\n"
+        f"{datasource_requirement}\n"
+        f"The authoritative data source type is {effective_type}. data source ids and business entities "
+        "already exist upstream; reference them only through api_contracts[].data_source_id.\n"
+        "api_contracts items use exactly id, data_source_id, resource, base_path, authentication, schemas, "
+        "and endpoints. Endpoints use id, method, path, summary, parameters, request_schema_ref, "
+        "response_schema_ref, error_codes, and authentication. Every request/response schema reference "
+        "must resolve inside the same contract. Schema references are bare names, never OpenAPI wrappers.\n"
+        "engineering_design contains exactly these arrays: module_boundaries and data_models.\n"
+        "pages must contain every upstream pageId exactly once. Each page contains exactly pageId and "
+        "references. references contains exactly endpoint_dependencies and action_implementations. "
+        "endpoint_dependencies items use endpoint_id, usage, trigger, required_for_initial_load. "
+        "action_implementations contains only ProductPlan business actions: direct actions use "
+        "{actionId, endpointId}; sequences use {actionId, stepBindings:[{stepId, endpointId}]}. Every "
+        "selected endpointId must exist in api_contracts and the same page's endpoint_dependencies.\n"
+        "Do not copy permissions or navigation_targets into references. Do not emit action_bindings; the "
+        "runtime compiler derives them from ProductPlan, UiManifest, and these endpoint choices.\n"
+        f"Required page skeleton:\n{json.dumps(page_example, ensure_ascii=False)}\n\n"
+        f"{revision_context}Planning inputs:\n{json.dumps(requirement_spec, ensure_ascii=False)}"
+    )
+
+
 def _planning_prompt(
     requirement_spec: dict[str, Any],
     existing_plan: dict[str, Any] | None = None,
@@ -49,6 +143,12 @@ def _planning_prompt(
         if datasource_type is not None
         else datasource_type_from_artifact(requirement_spec, fallback="database")
     )
+    if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
+        return _technical_planning_prompt(
+            requirement_spec,
+            existing_plan,
+            effective_type,
+        )
     datasource_requirement = (
         STATIC_DATA_SOURCE_REQUIREMENT
         if effective_type == "static"
@@ -63,10 +163,14 @@ def _planning_prompt(
         else "Create a new complete ProjectPlan.\n"
     )
     return (
-        "You are the project-planning model for an app-generation workflow.\n"
+        "You are the technical-planning model for an app-generation workflow.\n"
         "This is a planning-only boundary. Do not call tools, do not call subagents, "
         "do not delegate tasks, and do not generate or modify code.\n"
-        "Create a project-level planning document from the RequirementSpec.\n"
+        "Create a developer-facing TechnicalPlan from the confirmed RequirementSpec. When the input "
+        "contains confirmed_product_plan and confirmed_ui_design_manifest, they are immutable upstream "
+        "product decisions. Do not redesign layouts, components, page goals, product actions, or visual "
+        "states. Design only architecture, API contracts, schemas, data sources, permissions, and the "
+        "technical references needed to implement the confirmed UI.\n"
         f"{datasource_requirement}\n"
         f"The authoritative data source type is {effective_type}. Preserve every RequirementSpec "
         "data source id, name, description, entities and type exactly. Never change the type based "
@@ -105,7 +209,10 @@ def _planning_prompt(
         "Return only one JSON object, without markdown fences or commentary.\n"
         "The JSON object must include these top-level keys:\n"
         "- requirements_overview: app goal, roles, modules, flows, acceptance focus\n"
-        "- project_acceptance_criteria: whole-requirement acceptance criteria for project completion\n"
+        "- project_acceptance_criteria: user-visible product outcomes for the generated application only; "
+        "never include XCodeAgent workflow stages, preview availability, code generation, build/compile/"
+        "lint/typecheck status, automated or integration tests, quality gates, or conditions for entering "
+        "user acceptance\n"
         "- architecture: frontend, backend, data, testing\n"
         "- api_contracts: the only source of business field definitions. Every item must use exactly "
         "{id, data_source_id, resource, base_path, authentication, schemas, endpoints}. id and "
@@ -154,22 +261,34 @@ def _planning_prompt(
         "- frontend_pages: menu tree plus page leaves. CRITICAL: the page leaf set (every pageId) MUST come from "
         "RequirementSpec.pages and match them one-to-one. You may NOT invent, merge, rename, or omit any page. "
         "Your only job is to wrap them with a menu tree and attach references {permissions, endpoint_dependencies, "
-        "navigation_targets}. Never change an existing pageId, name, module_id, or path. "
+        "navigation_targets, action_implementations}. Never change an existing pageId, name, module_id, or path. "
         "A menu node uses exactly {name, unique_path, children}. "
         "Each child may be another menu node or a page leaf. Every page leaf must still include unique non-empty "
         "pageId, unique path, module_id, description, and references {permissions, endpoint_dependencies "
         "[{endpoint_id, usage, trigger, required_for_initial_load}], navigation_targets "
-        "[{targetPageId, trigger}]}. Menu nodes must never contain pageId/path/module_id/description/references. "
+        "[{targetPageId, trigger}], action_implementations}. Menu nodes must never contain pageId/path/module_id/description/references. "
+        "ProductPlan already owns whether an action is business, navigation, interface, external, or sequence; "
+        "UiManifest already owns control mappings and local UI effects. Do not classify or restate those decisions. "
+        "action_implementations contains ONLY technical endpoint choices needed by product behavior.type=business. "
+        "For a direct business action use {actionId, endpointId}. For a sequence containing business steps use "
+        "{actionId, stepBindings:[{stepId,endpointId}]}, covering each and only each business stepId. "
+        "Do not emit action_implementations for navigation, interface, or external actions/steps. Never emit "
+        "bindingType, targetPageId, localEffect, externalTarget, UI behavior, button behavior, or visual feedback "
+        "inside TechnicalPlan. Every selected endpointId must also appear in that page's endpoint_dependencies. "
         "If a menu node owns a real route, its unique_path must be the final absolute route, not a relative segment. "
         "If a menu unique_path is non-empty, every descendant page path must extend from that menu path with at least one child segment; it must not equal the menu unique_path. "
         "If the application has a root route prefix, every non-empty menu unique_path and every page path must extend from that root prefix. "
         "If a menu unique_path is empty, treat that menu as a pure grouping node and let child pages remain directly under the nearest non-empty ancestor route. "
         "Dynamic/detail pages with path parameters are hidden routable pages and do not count as visible menu leaves when deciding whether a parent menu is needed. "
-        "Do not emit duplicate root permissions, endpoint_dependencies, navigation_targets, data_dependencies, "
+        "Do not emit duplicate root permissions, endpoint_dependencies, navigation_targets, action_implementations, data_dependencies, "
         "or states fields\n"
         "- data_sources: copy id, name, description, entities and type from RequirementSpec exactly; "
         "only add planning fields such as schema_refs and seed strategy; never duplicate fields\n"
         "- permission_model: roles, page access, operation permissions\n"
+        "- engineering_design: developer-only decisions using exactly these arrays: module_boundaries and "
+        "data_models. Use concrete technical objects or concise engineering statements to name module ownership "
+        "and model entities, relations, fields, constraints, and indexes. Do not put product behavior, UI layout, "
+        "navigation, dialogs, tabs, button semantics, or stakeholder-facing acceptance prose here.\n"
         "- risks: planning risks and items to refine later\n\n"
         "API contracts are the canonical backend/frontend boundary. The first generated ProjectPlan must "
         "derive each contract from the data source name, description and entities together with pages, "
@@ -187,7 +306,10 @@ def _planning_prompt(
         "2.4 If a menu unique_path is empty, descendant page paths must start from the nearest non-empty ancestor route or directly from route_root_path.\n"
         "2.5 If menu_enabled is true, no page path may equal '/' or route_root_path itself; every page path must contain at least one business leaf segment beyond the nearest menu route or route_root_path.\n"
         "3. Every data-backed page declares endpoint_dependencies using only endpoint_id values declared in "
-        "api_contracts. Do not leave API selection to page design.\n"
+        "api_contracts. Do not leave API selection to a later stage.\n"
+        "3.1 Every ProductPlan business action and every business step inside a sequence has exactly one "
+        "endpoint implementation. ProductPlan navigation/external decisions and UiManifest interface effects "
+        "must not be repeated in TechnicalPlan.\n"
         "4. Every navigation_targets[].targetPageId names another declared frontend pageId.\n"
         "5. Do not emit data_dependencies as an independent source of truth; the backend derives it from "
         "endpoint_dependencies through API contracts.\n"
@@ -195,8 +317,9 @@ def _planning_prompt(
         "the SAME contract that owns the endpoint. Cross-contract schema references are forbidden; "
         "duplicate the schema into each contract that needs it instead.\n"
         "Before returning, perform this dependency audit yourself and correct the plan in the same response. "
-        "A later page-design stage will copy permissions, endpoint_dependencies, and navigation_targets "
-        "verbatim and is forbidden from adding dependencies.\n"
+        "The deterministic PageImplementationContract compiler will copy permissions, endpoint_dependencies, "
+        "navigation_targets, confirmed product actions, and UI manifest references verbatim. There is no later "
+        "page-detail design stage.\n"
         "Pages may only reference contract endpoints and valid targetPageId values, and must not define "
         "additional fields. Define reusable "
         "project-level endpoints here rather than inventing them per page. Keep ids stable and reuse "
@@ -260,24 +383,39 @@ def plan_project_with_chat_model(
     )
     planning_source = "direct_chat_model"
 
+    agent_plan = extract_json_object(agent_note)
+    if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
+        return create_technical_plan(
+            requirement_spec,
+            agent_plan=agent_plan,
+            datasource_type=datasource_type,
+        )
     plan = create_project_plan(
         requirement_spec,
         agent_note=agent_note,
         planning_source=planning_source,
-        agent_plan=extract_json_object(agent_note),
+        agent_plan=agent_plan,
         authoritative_agent_plan=True,
         datasource_type=datasource_type,
     )
+    # 保留技术规划模型来源，便于会话恢复与产物审计时识别生成边界。
+    plan["planned_by"] = {
+        "agent": "chat-model",
+        "mode": "direct",
+        "model": settings.model_name,
+        "source": planning_source,
+    }
     return plan
 
 
 def _plan_pages_for_repair(existing_plan: dict[str, Any]) -> list[dict[str, Any]]:
     """从已有计划中提取扁平页面列表，供修复路径当作 requirement_spec.pages 使用。
 
-    修复时 existing_plan 里的 frontend_pages 已经是菜单树（LEAF/Branch），
-    直接当 pages 传给 _frontend_pages 会让非叶节点被覆盖为 pageId="page"，
-    导致菜单下只有首页概览 + 默认页面，其余业务页全部丢失。
+    TechnicalPlan 的当前页面事实已经是扁平 pages；旧 ProjectPlan 才需要从
+    frontend_pages 菜单树中提取叶子，避免把菜单节点误当成业务页面。
     """
+    if existing_plan.get("artifact_type") == "technical-plan":
+        return [page for page in existing_plan.get("pages", []) if isinstance(page, dict)]
     pages = existing_plan.get("frontend_pages", [])
     flat = flatten_frontend_pages(pages)
     if flat:

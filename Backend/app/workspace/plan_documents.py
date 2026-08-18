@@ -6,6 +6,7 @@ from typing import Any
 
 from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
 from app.services.page_detail_plan import normalize_endpoint_data_origin
+from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 from app.workspace.spec_documents import workflow_artifact_root
 
 
@@ -457,6 +458,7 @@ def _page_references_markdown(page: dict[str, Any]) -> str:
     permissions = references.get("permissions") or page.get("permissions", [])
     endpoints = references.get("endpoint_dependencies") or page.get("endpoint_dependencies", [])
     navigation = references.get("navigation_targets") or page.get("navigation_targets", [])
+    implementations = references.get("action_implementations") or page.get("action_implementations", [])
     endpoint_lines = [
         f"  - `{item.get('endpoint_id', 'unknown')}`：{item.get('usage', 'read')}；"
         f"触发 {item.get('trigger', '页面交互')}；"
@@ -466,6 +468,18 @@ def _page_references_markdown(page: dict[str, Any]) -> str:
     navigation_lines = [
         f"  - `{item.get('targetPageId', 'unknown')}`：{item.get('trigger', '页面跳转')}"
         for item in _dict_items(navigation)
+    ]
+    implementation_lines = [
+        f"  - action `{item.get('actionId', 'unknown')}`："
+        + (
+            f"endpoint `{item.get('endpointId', '')}`"
+            if item.get("endpointId")
+            else "；".join(
+                f"step `{step.get('stepId', '')}` → endpoint `{step.get('endpointId', '')}`"
+                for step in _dict_items(item.get("stepBindings"))
+            )
+        )
+        for item in _dict_items(implementations)
     ]
     return "\n".join(
         [
@@ -477,6 +491,8 @@ def _page_references_markdown(page: dict[str, Any]) -> str:
             *(endpoint_lines or ["  - 无；静态页面或需在项目计划中补充接口依赖"]),
             "- navigation_targets:",
             *(navigation_lines or ["  - 无"]),
+            "- action_implementations（仅 endpoint 技术选择）:",
+            *(implementation_lines or ["  - 无；本页没有需要 endpoint 的业务操作"]),
         ]
     )
 
@@ -511,8 +527,139 @@ def _frontend_page_tree_markdown(nodes: Any, *, level: int = 0) -> list[str]:
     return lines
 
 
+def _action_binding_target(binding: dict[str, Any]) -> str:
+    """把类型化操作绑定压缩成开发确认文档中的可读目标。"""
+
+    binding_type = str(binding.get("bindingType") or "unknown")
+    if binding_type == "endpoint":
+        return f"API `{binding.get('endpointId', '')}`"
+    if binding_type == "navigation":
+        return f"跳转页面 `{binding.get('targetPageId', '')}`"
+    if binding_type == "local":
+        return f"本地行为：{binding.get('localEffect', '')}"
+    if binding_type == "external":
+        return f"外部目标：{binding.get('externalTarget', '')}"
+    if binding_type == "sequence":
+        steps = [
+            _action_binding_target({**step, "bindingType": step.get("type")})
+            for step in _dict_items(binding.get("steps"))
+        ]
+        return "按顺序执行 " + " → ".join(steps)
+    return "未明确实现方式"
+
+
+def _page_implementation_contract_markdown(contract: dict[str, Any]) -> str:
+    """逐条展示 UI 控件、产品操作与技术实现的绑定链路。"""
+
+    binding_lines = []
+    for binding in _dict_items(contract.get("actionBindings")):
+        controls = [
+            str(control.get("label") or control.get("controlId") or "未命名控件")
+            for control in _dict_items(binding.get("uiControlRefs"))
+        ]
+        binding_lines.append(
+            f"  - UI `{('、'.join(controls) or '无独立控件')}` → "
+            f"action `{binding.get('actionId', '')}` {binding.get('actionName', '')} → "
+            f"{_action_binding_target(binding)}"
+        )
+    return "\n".join(
+        [
+            f"- `{contract.get('pageId', 'unknown')}`：UI `{contract.get('uiDesignRef', {}).get('path', '')}`；"
+            f"接口 {_code_items(contract.get('requiredEndpointIds', []))}",
+            *(binding_lines or ["  - 无业务操作绑定"]),
+        ]
+    )
+
+
+def _technical_page_references_markdown(page: dict[str, Any]) -> str:
+    """渲染当前页面新增的 endpoint 依赖与业务 action 实现。"""
+
+    references = page.get("references") if isinstance(page.get("references"), dict) else {}
+    dependencies = [
+        f"  - `{item.get('endpoint_id', '')}`：{item.get('usage', '')}；"
+        f"触发={item.get('trigger', '')}；首屏必需={bool(item.get('required_for_initial_load'))}"
+        for item in _dict_items(references.get("endpoint_dependencies"))
+    ]
+    implementations = [
+        f"  - `{item.get('actionId', '')}`："
+        f"{json.dumps({key: value for key, value in item.items() if key != 'actionId'}, ensure_ascii=False)}"
+        for item in _dict_items(references.get("action_implementations"))
+    ]
+    return "\n".join(
+        [
+            f"### `{page.get('pageId', 'unknown')}`",
+            "",
+            "Endpoint 依赖：",
+            *(dependencies or ["  - 无"]),
+            "",
+            "业务 Action 实现：",
+            *(implementations or ["  - 无"]),
+        ]
+    )
+
+
+def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
+    """渲染只供开发审核且不重复产品事实的 TechnicalPlan。"""
+
+    architecture = plan.get("architecture") if isinstance(plan.get("architecture"), dict) else {}
+    backend_stack = (
+        architecture.get("backend_tech_stack")
+        if isinstance(architecture.get("backend_tech_stack"), dict)
+        else {}
+    )
+    stack_text = "；".join(f"{key}={value}" for key, value in backend_stack.items()) or "待补充"
+    engineering_design = (
+        plan.get("engineering_design")
+        if isinstance(plan.get("engineering_design"), dict)
+        else {}
+    )
+    engineering_sections = "\n\n".join(
+        f"### {label}\n\n{_bullet_items(engineering_design.get(key, [])) or '- 无'}"
+        for key, label in (
+            ("module_boundaries", "模块边界与所有权"),
+            ("data_models", "数据模型与约束"),
+        )
+    )
+    api_contracts = "\n\n".join(
+        _api_contract_markdown(contract)
+        for contract in _dict_items(plan.get("api_contracts"))
+    )
+    pages = "\n\n".join(
+        _technical_page_references_markdown(page)
+        for page in _dict_items(plan.get("pages"))
+    )
+    return f"""# 技术规划
+
+- 状态：{_status_label(plan.get('confirmation_status', 'draft'))}
+- 类型：{plan.get('artifact_type', TECHNICAL_PLAN_ARTIFACT_TYPE)}
+
+## 技术架构
+
+- 前端：{architecture.get('frontend', '待补充')}
+- 后端：{architecture.get('backend', '待补充')}
+- 数据：{architecture.get('data', '待补充')}
+- 技术栈：{stack_text}
+- 数据契约：{architecture.get('data_contract', '待补充')}
+
+## 工程设计
+
+{engineering_sections or '- 无'}
+
+## API 契约
+
+{api_contracts or '- 无'}
+
+## 页面技术引用
+
+{pages or '- 无'}
+"""
+
+
 def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     """按 ProjectPlan 数据源类型渲染真实 HTTP 或前端 Mock 契约文档。"""
+
+    if plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
+        return _render_technical_plan_markdown(plan)
 
     overview = plan.get("requirements_overview", {})
     acceptance_criteria = plan.get("project_acceptance_criteria") or plan.get(
@@ -547,10 +694,9 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         f"{_joined_items(item.get('operations', []))}"
         for item in _dict_items(permissions.get("operation_permissions", []))
     )
-    page_details = "\n".join(
-        f"- {page.get('name', page.get('pageId', '未命名页面'))}：{page.get('detail_design', {}).get('markdown_path', '尚未生成独立详细设计')}"
-        for page in flatten_frontend_pages(plan.get("frontend_pages", []))
-        if isinstance(page.get("detail_design"), dict)
+    page_contracts = "\n".join(
+        _page_implementation_contract_markdown(contract)
+        for contract in _dict_items(plan.get("page_implementation_contracts", []))
     )
     app = plan.get("app", {})
     architecture = plan.get("architecture", {})
@@ -582,8 +728,34 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
         )
         if backend_stack.get(key)
     ) or "待补充后端技术栈"
+    engineering_design = (
+        plan.get("engineering_design")
+        if isinstance(plan.get("engineering_design"), dict)
+        else {}
+    )
+    engineering_sections = "\n\n".join(
+        f"### {label}\n\n{_bullet_items(engineering_design.get(key, [])) or '- 无'}"
+        for key, label in (
+            ("module_boundaries", "模块边界与所有权"),
+            ("data_models", "数据模型与约束"),
+            ("storage_and_indexes", "存储、索引与迁移"),
+            ("cache_strategy", "缓存策略"),
+            ("transactions_and_idempotency", "事务、并发与幂等"),
+            ("error_model", "错误模型与重试"),
+            ("security_controls", "认证、授权与审计"),
+            ("observability", "日志、指标与链路追踪"),
+            ("performance_targets", "性能与容量目标"),
+            ("deployment_constraints", "部署、迁移与回滚约束"),
+            ("test_strategy", "工程测试策略"),
+        )
+    )
 
-    return f"""# {app.get('name', '未命名应用')}总体计划书
+    document_title = (
+        "技术规划"
+        if plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE
+        else "总体计划书"
+    )
+    return f"""# {app.get('name', '未命名应用')}{document_title}
 
 ## 项目概述
 
@@ -611,6 +783,10 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 - 后端技术栈：{backend_stack_text}
 - 数据：{architecture.get('data', '待补充数据架构')}
 - 测试：{architecture.get('testing', '待补充测试策略')}
+
+## 工程设计
+
+{engineering_sections or "- 暂无工程设计"}
 
 ## {contract_title}
 
@@ -642,9 +818,9 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 {operation_permissions or "- 暂无操作权限规则"}
 
-## 页面详细设计
+## 页面实现契约
 
-{page_details or "- 尚未确认页面详细设计"}
+{page_contracts or "- 暂无页面实现契约"}
 
 ## 风险与待细化点
 
@@ -653,7 +829,11 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 
 
 def write_project_plan_document(state: dict[str, Any], plan: dict[str, Any]) -> str:
-    """写入主计划 Markdown，并先将详细设计拆分为独立产物。"""
+    """写入当前规划文档；创建流程只写当前 TechnicalPlan。"""
+
+    if state.get("workflow_scope") == "application_planning":
+        markdown_path, _ = write_technical_plan_document(state, plan)
+        return markdown_path
 
     path = project_plan_markdown_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -661,6 +841,48 @@ def write_project_plan_document(state: dict[str, Any], plan: dict[str, Any]) -> 
     compact_plan = load_project_plan_json(project_plan_json_path(state))
     path.write_text(render_project_plan_markdown(compact_plan), encoding="utf-8")
     return str(path)
+
+
+def technical_plan_markdown_path(state: dict[str, Any]) -> Path:
+    """返回开发确认使用的 TechnicalPlan Markdown 正式路径。"""
+
+    return workflow_artifact_root(state) / "plans" / "technical-plan.md"
+
+
+def technical_plan_json_path(state: dict[str, Any]) -> Path:
+    """返回开发确认使用的 TechnicalPlan JSON 正式路径。"""
+
+    return workflow_artifact_root(state) / "plans" / "technical-plan.json"
+
+
+def edited_technical_plan_markdown(
+    state: dict[str, Any],
+    plan: dict[str, Any],
+) -> str | None:
+    """读取用户在开发确认阶段直接修改的 TechnicalPlan Markdown。"""
+
+    path = technical_plan_markdown_path(state)
+    if not path.is_file():
+        return None
+    content = path.read_text(encoding="utf-8")
+    return content if content != render_project_plan_markdown(plan) else None
+
+
+def write_technical_plan_document(
+    state: dict[str, Any],
+    plan: dict[str, Any],
+) -> tuple[str, str]:
+    """写入当前 TechnicalPlan 正式文件。"""
+
+    from app.workspace.detail_design_documents import write_compact_project_plan
+
+    json_path = technical_plan_json_path(state)
+    markdown_path = technical_plan_markdown_path(state)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    write_compact_project_plan(state, json_path, plan)
+    compact_plan = load_project_plan_json(json_path)
+    markdown_path.write_text(render_project_plan_markdown(compact_plan), encoding="utf-8")
+    return str(markdown_path), str(json_path)
 
 
 def project_plan_markdown_path(state: dict[str, Any]) -> Path:

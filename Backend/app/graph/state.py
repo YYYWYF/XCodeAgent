@@ -12,6 +12,8 @@ class ProjectState(TypedDict, total=False):
     application_name: str
     active_thread_id: str
     active_run_id: str
+    change_id: str
+    change_target: dict[str, Any]
     user_interaction_submission: bool
     lifecycle: dict[str, Any]
     lifecycle_interaction_submission: dict[str, Any]
@@ -41,8 +43,15 @@ class ProjectState(TypedDict, total=False):
     requirement_spec_feedback: str
     requirement_spec_path: str
     requirement_spec_json_path: str
+    product_plan: dict[str, Any]
+    product_plan_path: str
+    product_plan_json_path: str
     clarification: dict[str, Any]
+    technical_plan: dict[str, Any]
+    technical_plan_path: str
+    technical_plan_json_path: str
     project_plan: dict[str, Any]
+    pages: list[dict[str, Any]]
     frontend_pages: list[dict[str, Any]]
     pending_project_plan: dict[str, Any]
     project_plan_path: str

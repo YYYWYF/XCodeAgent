@@ -120,13 +120,17 @@ function pageKeyFromPageId(rawPageId: unknown, fallbackPath: unknown, fallbackIn
   return pageKeyFromPath(fallbackPath, fallbackIndex)
 }
 
-/** 读取 workflow 中最新的 ProjectPlan，供模板文件和菜单初始化使用。 */
+/** 读取 workflow 中当前流程的计划，供模板文件和菜单初始化使用。 */
 function projectPlanFromWorkflow(
   workflow: WorkflowRunPayload | undefined
 ): Record<string, unknown> | undefined {
   if (!workflow) return undefined
-  for (const source of [workflow.result, workflow.state]) {
-    const projectPlan = source?.project_plan
+  const sources = [workflow.result, workflow.state]
+  const applicationPlanning = sources.some((source) =>
+    source?.workflow_scope === 'application_planning' || source?.workflowScope === 'application_planning'
+  )
+  for (const source of sources) {
+    const projectPlan = applicationPlanning ? source?.technical_plan : source?.project_plan
     if (projectPlan && typeof projectPlan === 'object' && !Array.isArray(projectPlan)) {
       return projectPlan as Record<string, unknown>
     }
@@ -182,7 +186,7 @@ function relativeMenuPath(currentAbsolutePath: string, parentAbsolutePath: strin
   return currentAbsolutePath.replace(/^\/+/, '')
 }
 
-/** 递归把 ProjectPlan.frontend_pages 转成可写入模板 menus.ts 的 ApplicationMenuItem[]。 */
+/** 递归把当前计划 pages 转成可写入模板 menus.ts 的 ApplicationMenuItem[]。 */
 function buildTemplateMenuItems(
   value: unknown,
   pageKeysByIdentity: Map<string, string>,
@@ -233,7 +237,7 @@ function buildTemplateMenuItems(
   })
 }
 
-/** 递归拍平 ProjectPlan.frontend_pages，仅保留真正的页面叶子。 */
+/** 递归拍平当前计划 pages，仅保留真正的页面叶子。 */
 function flattenFrontendPages(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => {
@@ -257,13 +261,13 @@ function extractFrontendTemplateArtifacts(
   const projectPlan = projectPlanFromWorkflow(workflow)
   if (!projectPlan) return { menuItems: [], pages: [] }
 
-  const frontendPages = flattenFrontendPages(projectPlan.frontend_pages)
-  if (!frontendPages.length) return { menuItems: [], pages: [] }
+  const sourcePages = flattenFrontendPages(projectPlan.pages)
+  if (!sourcePages.length) return { menuItems: [], pages: [] }
 
   const pageKeysByIdentity = new Map<string, string>()
   const seenPageKeys = new Set<string>()
   const pages: TemplatePageWriteItem[] = []
-  frontendPages.forEach((page, index) => {
+  sourcePages.forEach((page, index) => {
     const identity = frontendPageIdentity(page, index)
     let pageKey = pageKeyFromPageId(page.pageId ?? page.id, page.path, index)
     if (!pageKey) return
@@ -283,7 +287,7 @@ function extractFrontendTemplateArtifacts(
   return {
     pages,
     menuItems: buildTemplateMenuItems(
-      projectPlan.frontend_pages,
+      projectPlan.pages,
       pageKeysByIdentity,
       projectPlanRouteRootPath(projectPlan)
     )
@@ -296,7 +300,7 @@ function extractFrontendTemplateArtifacts(
  *
  * @param schema 应用 schema，用于读取应用名称
  * @param projectPath 当前应用指定的项目位置
- * @param workflow 规划完成后的 workflow 快照，含 ProjectPlan.frontend_pages
+ * @param workflow 规划完成后的 workflow 快照，含当前计划 pages
  */
 export async function generateApplicationTemplateFiles(
   schema: ApplicationSchemaConfig,

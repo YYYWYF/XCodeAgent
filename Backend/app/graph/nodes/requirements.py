@@ -146,6 +146,7 @@ def requirements(state: ProjectState) -> dict:
     )
     _apply_menus_root_path_to_pages(spec, state)
     clarification = analysis["clarification"]
+    clarification = _without_technical_datasource_questions(clarification, spec)
     if _should_suppress_repeat_clarification(existing_spec, clarification):
         clarification = clear_clarification(spec)
         spec["clarification_questions"] = []
@@ -187,7 +188,7 @@ def _requirement_spec_confirmation_payload(spec: dict) -> dict:
         ]
     )
     payload["mode"] = "requirement_spec_confirmation"
-    payload["message"] = "请确认需求文档是否正确后再继续项目规划。"
+    payload["message"] = "请确认需求文档是否正确后再继续产品规划。"
     payload["spec_summary"] = spec.get("app_info", {}).get("name", "未命名应用")
     return payload
 
@@ -198,8 +199,8 @@ def _requirement_spec_confirmed_payload(spec: dict) -> dict:
         "status": "clear",
         "question_schema": "gemini_cli.ask_user.v1",
         "questions": [],
-        "assumptions": spec.get("assumptions", []),
-        "message": "需求文档已由用户确认，可以继续项目规划。",
+        "assumptions": [],
+        "message": "需求文档已由用户确认，可以继续产品规划。",
         "spec_summary": spec.get("app_info", {}).get("name", "未命名应用"),
     }
 
@@ -355,7 +356,31 @@ def _is_optional_additive_question(question: object) -> bool:
     )
     normalized = text.replace(" ", "")
     additive_markers = ("其他", "更多", "还有", "补充", "是否还", "是否有")
-    requirement_dimensions = ("角色", "页面", "菜单", "功能", "模块", "数据源", "验收")
+    requirement_dimensions = ("角色", "页面", "菜单", "功能", "模块", "验收")
     return any(marker in normalized for marker in additive_markers) and any(
         dimension in normalized for dimension in requirement_dimensions
     )
+
+
+def _without_technical_datasource_questions(clarification: dict, spec: dict) -> dict:
+    """移除产品需求阶段误生成的数据源技术问题，并在无产品问题时直接清空澄清。"""
+
+    questions = clarification.get("questions")
+    if not isinstance(questions, list):
+        return clarification
+    filtered = [question for question in questions if not _is_datasource_question(question)]
+    if not filtered:
+        return clear_clarification(spec)
+    return {**clarification, "questions": filtered}
+
+
+def _is_datasource_question(question: object) -> bool:
+    """识别数据源、数据库、存储与持久化类技术澄清问题。"""
+
+    if not isinstance(question, dict):
+        return False
+    text = "".join(
+        str(question.get(key) or "")
+        for key in ("id", "header", "dimension", "question")
+    ).replace(" ", "")
+    return any(marker in text for marker in ("数据源", "数据库", "存储方式", "持久化"))

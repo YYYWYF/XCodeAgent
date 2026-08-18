@@ -9,8 +9,12 @@ PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
-    "detail_confirmation": "页面细节确认",
-    "project_planning": "项目规划",
+    "requirements": "需求文档",
+    "product_planning": "产品规划",
+    "ui_confirmation": "UI 设计",
+    "technical_planning": "技术规划",
+    "detail_confirmation": "接口详细设计",
+    "project_planning": "技术规划调整",
     "inspect_workspace": "扫描工作区代码",
     "inspect_database_context": "数据库上下文检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
@@ -27,6 +31,9 @@ WORKFLOW_NODE_LABELS = {
 WORKFLOW_STATIC_NEXT_NODES = {
     "detail_confirmation": ["inspect_workspace"],
     "project_planning": ["detail_confirmation"],
+    "requirements": ["product_planning"],
+    "product_planning": ["ui_confirmation"],
+    "ui_confirmation": ["technical_planning"],
     "inspect_workspace": ["inspect_database_context", "prepare_build_tasks"],
     "inspect_database_context": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
@@ -38,6 +45,10 @@ WORKFLOW_STATIC_NEXT_NODES = {
 WORKFLOW_ARTIFACT_FIELDS = (
     "requirement_spec_path",
     "requirement_spec_json_path",
+    "product_plan_path",
+    "product_plan_json_path",
+    "technical_plan_path",
+    "technical_plan_json_path",
     "project_plan_path",
     "project_plan_json_path",
     "build_task_plan_path",
@@ -67,10 +78,10 @@ def workflow_capabilities() -> dict[str, Any]:
             "requestField": "clarificationAnswers.acceptance_adjustment",
             "values": {
                 "local_fix": "仅修改当前已确认范围内的局部实现，不改变产品语义。",
-                "page_design_change": "重新生成页面详细设计并再次确认。",
+                "page_design_change": "兼容旧请求：不再生成 PageDetail，按技术规划调整处理。",
                 "endpoint_change": "重新生成接口详细设计并再次确认。",
                 "data_source_change": "重新生成接口及数据来源相关详细设计并再次确认。",
-                "project_plan_change": "重新生成项目计划，确认后再生成页面/接口详细设计。",
+                "project_plan_change": "重新生成技术规划，开发确认后再检查相关接口详细设计。",
             },
         },
         "skillSelection": {
