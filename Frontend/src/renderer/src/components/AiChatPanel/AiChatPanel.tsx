@@ -79,7 +79,11 @@ function planningUserMessageText(answers: WorkflowClarificationAnswers): string 
   const entries = Object.entries(answers)
   if (entries.length === 0) return ''
   // UI 设计稿单页动作（换一换/选模板/调整）：不作为用户消息留痕（卡片内已体现操作）。
-  if ('ui_design_action' in answers) return ''
+  // 但“跳过”会推进到技术规划阶段，属于阶段切换，需要留痕。
+  if ('ui_design_action' in answers) {
+    const action = (answers as { ui_design_action?: { action?: string } }).ui_design_action
+    return action?.action === 'skip' ? '跳过 UI 设计稿，直接进入技术规划' : ''
+  }
   const lines: string[] = []
   for (const [key, value] of entries) {
     const text = planningAnswerToText(value)
@@ -623,40 +627,37 @@ export default function AiChatPanel({
     setRightPanel({ type: 'doc', docKey: 'requirement-spec' })
   }, [isDesignPhase, rightPanelOpen, planningClarification, requirementDocAvailable, rightPanel, setRightPanel])
 
-  // UI 设计稿首次可用时自动切到"UI设计稿"tab（进入 UI 确认阶段）。
-  // 用 ref 标记是否已自动切过，避免用户切回需求文档后被反复切走。
-  const uiDesignAutoOpenedRef = useRef(false)
-  useEffect(() => {
-    if (!isDesignPhase || !rightPanelOpen || !uiDesignAvailable) return
-    if (uiDesignAutoOpenedRef.current) return
-    uiDesignAutoOpenedRef.current = true
-    setRightPanel({ type: 'doc', docKey: 'ui-design' })
-  }, [isDesignPhase, rightPanelOpen, uiDesignAvailable, setRightPanel])
-
-  // 产品规划确认阶段自动切到"产品规划"tab，展示生成的产品规划文档。
-  // 用 ref 标记是否已自动切过，避免用户切回需求文档后被反复切回项目计划。
-  const productPlanAutoOpenedRef = useRef(false)
+  // 设计阶段右侧 tab 跟随当前规划阶段自动切换：阶段变化时切到对应文档 tab，
+  // 同阶段内用户手动切到其他 tab 不被拉回。用 ref 记录上次自动同步的阶段，
+  // 仅在 planningPhase 真正变化时触发，避免覆盖用户的同阶段内手动切换。
+  const PHASE_DOC_KEY: Record<string, WorkspaceDocKey> = {
+    requirements: 'requirement-spec',
+    product_planning: 'product-plan',
+    ui_confirmation: 'ui-design',
+    technical_planning: 'technical-plan',
+  }
+  const lastAutoSyncedPhaseRef = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!isDesignPhase || !rightPanelOpen) return
-    if (planningClarification?.mode !== 'product_plan_confirmation') return
-    if (!productPlanDocAvailable) return
-    if (productPlanAutoOpenedRef.current) return
-    productPlanAutoOpenedRef.current = true
-    if (rightPanel?.type === 'doc' && rightPanel.docKey === 'product-plan') return
-    setRightPanel({ type: 'doc', docKey: 'product-plan' })
-  }, [isDesignPhase, rightPanelOpen, planningClarification, productPlanDocAvailable, rightPanel, setRightPanel])
+    const phase = planningPhase
+    const docKey = phase ? PHASE_DOC_KEY[phase] : undefined
+    if (!docKey) return
+    // UI 设计稿 tab 需等设计稿生成后才可用，未就绪时不切到灰显 tab。
+    if (phase === 'ui_confirmation' && !uiDesignAvailable) return
+    // 仅在阶段切换时自动切 tab；同阶段内不干预用户的手动选择。
+    if (lastAutoSyncedPhaseRef.current === phase) return
+    lastAutoSyncedPhaseRef.current = phase
+    if (rightPanel?.type === 'doc' && rightPanel.docKey === docKey) return
+    setRightPanel({ type: 'doc', docKey })
+  }, [isDesignPhase, rightPanelOpen, planningPhase, uiDesignAvailable, rightPanel, setRightPanel])
 
-  // 技术规划确认阶段自动打开技术规划文档，保持最后一个确认门可见。
-  const technicalPlanAutoOpenedRef = useRef(false)
+  // 切换应用时重置自动同步标记并清空右侧面板，避免上次会话选中的 tab 残留。
   useEffect(() => {
-    if (!isDesignPhase || !rightPanelOpen) return
-    if (planningClarification?.mode !== 'technical_plan_confirmation') return
-    if (!technicalPlanDocAvailable) return
-    if (technicalPlanAutoOpenedRef.current) return
-    technicalPlanAutoOpenedRef.current = true
-    if (rightPanel?.type === 'doc' && rightPanel.docKey === 'technical-plan') return
-    setRightPanel({ type: 'doc', docKey: 'technical-plan' })
-  }, [isDesignPhase, rightPanelOpen, planningClarification, technicalPlanDocAvailable, rightPanel, setRightPanel])
+    lastAutoSyncedPhaseRef.current = undefined
+    if (isDesignPhase) {
+      setRightPanel(undefined)
+    }
+  }, [application.id, isDesignPhase, setRightPanel])
 
   // 确认完成后 confirmationArtifact 不再返回（后端只在 requires_user_input 时返回），
   // 但文件已落盘。从 workflow summary.artifacts 读取路径，异步读文件内容填充右侧 tab。
@@ -1750,8 +1751,12 @@ export default function AiChatPanel({
     // 设计阶段：规划确认走 planningSubmitRef（Modal 的 runPlanning），不走开发 workflow。
     if (isDesignPhase) {
       // UI 设计稿的单页动作（换一换/选模板/调整）是同一轮内的更新，不新增消息卡片，
-      // 只更新现有卡片；只有推进到下一阶段（确认全部/需求确认/项目规划）才新增卡片。
-      if (!answers || !('ui_design_action' in answers)) {
+      // 只更新现有卡片；跳过与确认全部等推进到下一阶段的操作才新增卡片并留痕。
+      const isUiDesignPageAction =
+        answers && 'ui_design_action' in answers
+          ? (answers as { ui_design_action?: { action?: string } }).ui_design_action?.action !== 'skip'
+          : false
+      if (!isUiDesignPageAction) {
         planningNewRoundRef.current = true
         // 用户操作留痕：把确认/放弃/填表等操作作为 user 消息追加到对话区。
         appendPlanningUserMessage(answers)
