@@ -8,11 +8,7 @@ from app.services.api_contracts import (
     response_field_paths,
 )
 from app.services.api_schema_refs import normalize_local_schema_ref
-from app.services.entity_definitions import (
-    contract_data_source_id,
-    normalize_entities,
-    plan_data_sources,
-)
+from app.services.entity_definitions import normalize_entities
 
 
 def _string_items(value: Any) -> list[str]:
@@ -29,47 +25,29 @@ def _string_items(value: Any) -> list[str]:
 
 
 def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]:
-    """校验项目计划中的 API 契约、数据源和页面字段引用是否闭合。"""
+    """校验项目计划中的实体、API 契约和页面字段引用是否闭合。"""
 
     contracts = dict_items(project_plan.get("api_contracts"))
-    data_sources = plan_data_sources(project_plan)
     errors: list[str] = []
     endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
-    schema_refs: set[str] = set()
-    data_source_ids = {
-        str(source.get("id")) for source in data_sources if source.get("id")
-    }
     entity_ids_set = {
         str(entity.get("id") or "")
         for entity in normalize_entities(project_plan.get("entities"))
         if entity.get("id")
     }
-    if data_sources and not contracts:
-        errors.append("ProjectPlan defines data sources but api_contracts is empty.")
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
         entity_ids_list = _string_items(contract.get("entity_ids"))
-        data_source_id = contract_data_source_id(project_plan, contract)
         if not contract_id:
             errors.append("API contract does not define id.")
-        if data_sources and not entity_ids_list and not data_source_id:
-            errors.append(f"API contract {contract_id} does not define entity_ids.")
         for entity_id in entity_ids_list:
-            if entity_ids_set and entity_id not in entity_ids_set:
+            if entity_id not in entity_ids_set:
                 errors.append(
                     f"API contract {contract_id} references unknown entity {entity_id}."
                 )
-        # 数据源只属于实体设计：未完成实体设计的契约允许暂缺 data_source_id，
-        # 由接口详细设计入口强制先完成实体设计；已解析来源必须落在数据源清单内。
-        if data_source_id and data_source_id not in data_source_ids:
-            errors.append(
-                f"API contract {contract_id} references unknown data source {data_source_id}."
-            )
         schemas = contract.get("schemas", {})
         if not schemas:
             errors.append(f"API contract {contract_id} does not define schemas.")
-        for schema_id in schemas:
-            schema_refs.add(f"{contract_id}#/schemas/{schema_id}")
         _validate_contract_schemas(contract_id, schemas, errors)
         _index_and_validate_endpoints(
             contract,
@@ -79,7 +57,6 @@ def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]
         if not dict_items(contract.get("endpoints")):
             errors.append(f"API contract {contract_id} does not define endpoints.")
 
-    _validate_data_sources(project_plan, schema_refs, errors)
     _validate_page_api_dependencies(project_plan, endpoint_index, errors)
     _validate_page_bindings(project_plan, contracts, errors)
     return errors
@@ -164,19 +141,6 @@ def _validate_endpoint(
         resolved_ref = normalize_local_schema_ref(ref, contract_id=contract_id)
         if ref and resolved_ref not in schemas:
             errors.append(f"Endpoint {endpoint_id} references unknown schema {ref}.")
-
-
-def _validate_data_sources(
-    project_plan: dict[str, Any],
-    schema_refs: set[str],
-    errors: list[str],
-) -> None:
-    for source in plan_data_sources(project_plan):
-        if source.get("schema"):
-            errors.append(f"Data source {source.get('id')} duplicates contract fields in schema.")
-        for ref in source.get("schema_refs", []):
-            if ref not in schema_refs:
-                errors.append(f"Data source {source.get('id')} references unknown schema {ref}.")
 
 
 def _validate_page_api_dependencies(

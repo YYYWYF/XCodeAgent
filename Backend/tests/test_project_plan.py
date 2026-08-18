@@ -405,8 +405,8 @@ class ProjectPlanTests(unittest.TestCase):
         self.assertTrue(plan["api_contracts"])
         self.assertEqual(validate_api_contract_consistency(plan), [])
 
-    def test_contract_consistency_rejects_empty_contracts_for_data_sources(self) -> None:
-        """实体设计已确认但契约为空时在用户确认前返回明确错误。"""
+    def test_contract_consistency_ignores_data_sources_without_contracts(self) -> None:
+        """契约校验不再因实体设计推导出的数据源阻止无契约计划。"""
 
         plan = {
             "api_contracts": [],
@@ -419,17 +419,9 @@ class ProjectPlanTests(unittest.TestCase):
             ],
         }
         plan = confirm_entity_designs(plan, source_type="database")
-        errors = validate_api_contract_consistency(plan)
-
-        self.assertIn(
-            "ProjectPlan defines data sources but api_contracts is empty.",
-            errors,
-        )
+        self.assertEqual(validate_api_contract_consistency(plan), [])
         plan["frontend_pages"] = []
-        self.assertIn(
-            "ProjectPlan defines data sources but api_contracts is empty.",
-            validate_project_plan_dependencies(plan),
-        )
+        self.assertEqual(validate_project_plan_dependencies(plan), [])
 
     def test_project_plan_normalizes_json_pointer_schema_refs(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")

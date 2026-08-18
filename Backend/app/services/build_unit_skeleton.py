@@ -150,7 +150,7 @@ def _build_units(
     project_plan: dict[str, Any],
     existing_units: Any,
 ) -> dict[str, dict[str, Any]]:
-    """从确认计划构造公共、数据源、endpoint 和页面 Unit，并尽量保留已有状态。"""
+    """从确认计划构造公共、静态数据、endpoint 和页面 Unit，并保留已有状态。"""
 
     existing = existing_units if isinstance(existing_units, dict) else {}
     source_type_map = _source_type_map(project_plan)
@@ -158,9 +158,7 @@ def _build_units(
     for source_id, source_type in source_type_map.items():
         if source_type == "static":
             unit_ids.append(f"frontend:data:{source_id}")
-        elif source_type == "database":
-            unit_ids.append(f"database:{source_id}")
-        # external_api 源不建独立源 Unit，由 endpoint Unit 承载。
+        # database 已在实体确认阶段落库，external_api 由 endpoint Unit 承载。
     unit_ids.extend(
         _endpoint_unit_ids(
             project_plan.get("api_contracts"),
@@ -195,7 +193,7 @@ def _unit_definition(unit_id: str, existing_unit: Any) -> dict[str, Any]:
         **({"page_id": target_id} if kind == "page" else {}),
         **(
             {"data_source_id": target_id.removeprefix("data:")}
-            if kind == "database" or target_id.startswith("data:")
+            if target_id.startswith("data:")
             else {}
         ),
         **(
@@ -253,8 +251,6 @@ def _unit_graph(
     for source_id, source_type in source_type_map.items():
         if source_type == "static":
             source_unit_id = f"frontend:data:{source_id}"
-        elif source_type == "database":
-            source_unit_id = f"database:{source_id}"
         else:
             continue
         edges.append(
@@ -328,82 +324,6 @@ def _unit_graph(
         "edges": _unique_edges(edges),
         "validation": {"is_valid": not errors, "errors": errors},
     }
-
-
-def apply_target_unit_dependencies(
-    build_task_plan: dict[str, Any],
-    build_context: dict[str, Any],
-) -> dict[str, Any]:
-    """按构建范围为当前 scope 接入 database→endpoint Unit 依赖。
-
-    endpoint/page 范围不再包含 database:* 单元（实体表操作已在实体设计阶段完成），
-    只有全量构建范围内存在 database:* 单元时才接数据库依赖边。
-    """
-
-    scoped_plan = deepcopy(build_task_plan)
-    required_unit_ids = {
-        str(unit_id) for unit_id in build_context.get("required_unit_ids") or []
-    }
-    if not any(unit_id.startswith("database:") for unit_id in required_unit_ids):
-        return scoped_plan
-    unit_graph = scoped_plan.get("unit_graph")
-    if not isinstance(unit_graph, dict):
-        return scoped_plan
-    build_units = scoped_plan.get("build_units")
-    build_units = build_units if isinstance(build_units, dict) else {}
-    edges = [
-        dict(edge)
-        for edge in unit_graph.get("edges", [])
-        if isinstance(edge, dict)
-    ]
-    errors = list(
-        (unit_graph.get("validation") or {}).get("errors", [])
-        if isinstance(unit_graph.get("validation"), dict)
-        else []
-    )
-    for data_source_id, endpoint_unit_id in _database_endpoint_refs(build_context):
-        database_unit_id = f"database:{data_source_id}"
-        missing_units = [
-            unit_id
-            for unit_id in (database_unit_id, endpoint_unit_id)
-            if unit_id not in build_units
-        ]
-        if missing_units:
-            errors.append(
-                f"Database endpoint {endpoint_unit_id} references missing Units: "
-                + ", ".join(missing_units)
-            )
-            continue
-        edges.append(
-            {
-                "from": database_unit_id,
-                "to": endpoint_unit_id,
-                "type": "depends_on",
-            }
-        )
-    unique_errors = list(dict.fromkeys(errors))
-    scoped_plan["unit_graph"] = {
-        **unit_graph,
-        "edges": _unique_edges(edges),
-        "validation": {
-            "is_valid": not unique_errors,
-            "errors": unique_errors,
-        },
-    }
-    return scoped_plan
-
-
-def _database_endpoint_refs(build_context: dict[str, Any]) -> list[tuple[str, str]]:
-    """从构建上下文读取数据源到 endpoint Unit 的只读依赖引用。"""
-
-    refs = build_context.get("database_endpoint_refs")
-    if not isinstance(refs, list):
-        return []
-    return [
-        (str(item[0]), str(item[1]))
-        for item in refs
-        if isinstance(item, (list, tuple)) and len(item) == 2
-    ]
 
 
 def _page_dependency_source(
@@ -489,8 +409,6 @@ def _unit_identity(unit_id: str) -> tuple[str, str]:
 
     if unit_id.startswith("page:"):
         return "page", unit_id.removeprefix("page:")
-    if unit_id.startswith("database:"):
-        return "database", unit_id.removeprefix("database:")
     if unit_id.startswith("backend:endpoint:"):
         return "backend", unit_id.removeprefix("backend:endpoint:")
     if unit_id.startswith("backend:"):

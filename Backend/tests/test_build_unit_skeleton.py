@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.build_unit_skeleton import (
-    apply_target_unit_dependencies,
-    ensure_build_unit_skeleton,
-)
+from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from tests.entity_design_test_utils import confirm_entity_designs
 
 
@@ -142,7 +139,7 @@ class BuildUnitSkeletonTests(unittest.TestCase):
 
         plan = ensure_build_unit_skeleton(project_plan, {})
         units = plan["build_units"]
-        self.assertIn("database:database", units)
+        self.assertNotIn("database:database", units)
         self.assertIn("frontend:data:static", units)
         self.assertIn("backend:endpoint:orders-api:orders.list", units)
         self.assertIn("backend:endpoint:weather-api:weather.get", units)
@@ -160,7 +157,7 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         self.assertEqual(plan["schema_version"], "build-dag.v3")
         self.assertIn("page:orders", plan["build_units"])
         self.assertIn("page:customers", plan["build_units"])
-        self.assertIn("database:database", plan["build_units"])
+        self.assertNotIn("database:database", plan["build_units"])
         self.assertIn("backend:endpoint:orders-api:orders.list", plan["build_units"])
         self.assertIn("frontend:api-client", plan["build_units"])
         self.assertEqual(
@@ -184,49 +181,6 @@ class BuildUnitSkeletonTests(unittest.TestCase):
             plan["unit_graph"]["edges"],
         )
         self.assertEqual(plan["build_units"]["page:orders"]["status"], "not_prepared")
-
-    def test_skips_database_dependency_for_scoped_build_without_database_units(self) -> None:
-        """endpoint/page 范围无 database:* 单元时，不接入数据库依赖边且不报缺失。"""
-
-        plan = ensure_build_unit_skeleton(_project_plan(), {})
-        scoped = apply_target_unit_dependencies(
-            plan,
-            {
-                "required_unit_ids": [
-                    "backend:bootstrap",
-                    "backend:endpoint:orders-api:orders.list",
-                ],
-                "database_endpoint_refs": [
-                    ("database", "backend:endpoint:orders-api:orders.list"),
-                ]
-            },
-        )
-
-        self.assertNotIn(
-            {"from": "database:database", "to": "backend:endpoint:orders-api:orders.list", "type": "depends_on"},
-            scoped["unit_graph"]["edges"],
-        )
-        self.assertTrue(scoped["unit_graph"]["validation"]["is_valid"])
-
-    def test_adds_database_dependency_for_application_scope(self) -> None:
-        """全量构建范围含 database:* 单元时，数据库依赖边保持接入。"""
-
-        plan = ensure_build_unit_skeleton(_project_plan(), {})
-        scoped = apply_target_unit_dependencies(
-            plan,
-            {
-                "required_unit_ids": list(plan["build_units"].keys()),
-                "database_endpoint_refs": [
-                    ("database", "backend:endpoint:orders-api:orders.list"),
-                ]
-            },
-        )
-        edges = scoped["unit_graph"]["edges"]
-        self.assertIn(
-            {"from": "database:database", "to": "backend:endpoint:orders-api:orders.list", "type": "depends_on"},
-            edges,
-        )
-        self.assertTrue(scoped["unit_graph"]["validation"]["is_valid"])
 
     def test_static_builds_frontend_data_units_without_backend_units(self) -> None:
         """Static 骨架只建立前端内存数据模块到页面的依赖。"""

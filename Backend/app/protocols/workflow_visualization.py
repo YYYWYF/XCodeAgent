@@ -22,8 +22,6 @@ from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
 from app.protocols.workflow.request import workflow_run_inputs
-from app.services.build_context_resolver import resolve_target_build_context
-from app.services.database_planning_context import database_context_requirement
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.run_lease import (
     WorkspaceRunLease,
@@ -38,7 +36,6 @@ WORKFLOW_NODE_LABELS = {
     "detail_confirmation": "页面细节确认",
     "project_planning": "项目规划",
     "inspect_workspace": "工作区快照检查",
-    "inspect_database_context": "数据库上下文检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
     "integration_test": "集成测试与质量门禁",
@@ -52,8 +49,7 @@ WORKFLOW_NODE_LABELS = {
 WORKFLOW_STATIC_NEXT_NODES = {
     "detail_confirmation": ["inspect_workspace"],
     "project_planning": ["detail_confirmation"],
-    "inspect_workspace": ["inspect_database_context", "prepare_build_tasks"],
-    "inspect_database_context": ["prepare_build_tasks"],
+    "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
     "build": ["integration_test"],
     "small_task_repair": ["integration_test"],
@@ -1027,7 +1023,7 @@ def _workflow_start_node(
     if resume_from == "inspect_workspace":
         return "inspect_workspace"
     if resume_from == "inspect_database_context":
-        return "inspect_database_context"
+        return "prepare_build_tasks"
     if resume_from == "prepare_build_tasks":
         return "prepare_build_tasks"
     if resume_from == "build":
@@ -1065,46 +1061,12 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             return []
         return ["detail_confirmation"]
     if node_name == "inspect_workspace":
-        if _database_context_next_required(update):
-            return ["inspect_database_context"]
-        return ["prepare_build_tasks"]
-    if node_name == "inspect_database_context":
-        if update.get("status") == "requires_user_input":
-            return []
         return ["prepare_build_tasks"]
     if node_name == "prepare_build_tasks":
         if update.get("status") == "requires_user_input":
             return []
         return ["build"]
     return WORKFLOW_STATIC_NEXT_NODES.get(node_name, [])
-
-
-def _database_context_next_required(update: dict[str, Any]) -> bool:
-    """预测工作区检查后是否需要展示数据库上下文节点。"""
-
-    project_plan = update.get("project_plan")
-    if not isinstance(project_plan, dict):
-        return False
-    scope = update.get("build_execution_scope")
-    scope = scope if isinstance(scope, dict) else {}
-    target_type = str(scope.get("type") or "").strip()
-    target_id = str(scope.get("targetId") or scope.get("target_id") or "").strip()
-    if target_type not in {"page", "data_source", "endpoint"} or not target_id:
-        return False
-    try:
-        build_context = resolve_target_build_context(
-            project_plan,
-            target_type=target_type,
-            target_id=target_id,
-            api_contract_id=str(
-                scope.get("apiContractId") or scope.get("api_contract_id") or ""
-            ).strip() or None,
-            project_plan_path=update.get("project_plan_json_path"),
-        )
-        requirement = database_context_requirement(project_plan, build_context)
-    except Exception:
-        return False
-    return bool(requirement.get("required") or requirement.get("status") == "blocked")
 
 
 def _workflow_artifacts(value: dict[str, Any]) -> dict[str, Any]:
@@ -1231,20 +1193,6 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "workspaceSnapshotHash": update.get("workspace_snapshot_hash"),
                 "workspaceSnapshotPath": update.get("workspace_snapshot_path"),
                 "fileManifest": manifest,
-            },
-        }
-    if node_name == "inspect_database_context":
-        database_context = update.get("database_planning_context")
-        database_context = database_context if isinstance(database_context, dict) else {}
-        gaps = database_context.get("gaps")
-        gaps = gaps if isinstance(gaps, list) else []
-        return {
-            "message": database_context.get("summary")
-            or database_context.get("message")
-            or f"数据库结构差异={len(gaps)}",
-            "data": {
-                "databasePlanningContext": database_context,
-                "requiresUserInput": update.get("status") == "requires_user_input",
             },
         }
     if node_name == "prepare_build_tasks":

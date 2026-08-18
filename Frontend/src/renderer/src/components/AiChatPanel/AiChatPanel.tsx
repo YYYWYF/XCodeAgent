@@ -743,8 +743,7 @@ export default function AiChatPanel({
     sessions,
     setDraftByKey,
     setSelectedSkillsByKey,
-    setSessionMessages,
-    clearActiveSession
+    setSessionMessages
   } = useChatSessions({
     application,
     editorMode,

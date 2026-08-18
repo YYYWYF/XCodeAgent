@@ -21,15 +21,15 @@ ENDPOINT_DECISION_OUTPUT_SCHEMA: dict[str, Any] = {
         "target_cardinality": "exactly_one|zero_or_one|many|not_applicable",
         "selector": {
             "source": "path|query|request_body|contract|none",
-            "fields": ["string"],
+            "fields": ["<contract parameter or request field name>"],
         },
-        "transaction_required": "boolean",
-        "zero_match_behavior": "string",
-        "multiple_match_behavior": "string",
-        "success_status_code": "number",
+        "transaction_required": False,
+        "zero_match_behavior": "<concise Chinese behavior>",
+        "multiple_match_behavior": "<concise Chinese behavior>",
+        "success_status_code": 200,
         "side_effect": "none|insert|update|delete|custom",
     },
-    "risks": ["string"],
+    "risks": ["<concise Chinese risk>"],
 }
 
 
@@ -162,42 +162,161 @@ def design_page_with_chat_model(
     return detail_plan
 
 
+def _endpoint_decision_input(
+    endpoint_context: dict[str, Any],
+    user_request: str,
+) -> dict[str, Any]:
+    """提取接口语义决策真正需要的业务上下文，避免暴露内部定位和数据源信息。"""
+
+    endpoint = (
+        endpoint_context.get("endpoint")
+        if isinstance(endpoint_context.get("endpoint"), dict)
+        else {}
+    )
+    dependent_pages = (
+        endpoint_context.get("dependent_pages")
+        if isinstance(endpoint_context.get("dependent_pages"), list)
+        else []
+    )
+    bound_entities = (
+        endpoint_context.get("bound_entities")
+        if isinstance(endpoint_context.get("bound_entities"), list)
+        else []
+    )
+    return {
+        "endpoint_contract": {
+            "method": str(endpoint_context.get("method") or "GET").upper(),
+            "path": str(endpoint_context.get("path") or ""),
+            "summary": str(endpoint_context.get("summary") or ""),
+            "parameters": (
+                endpoint.get("parameters")
+                if isinstance(endpoint.get("parameters"), list)
+                else []
+            ),
+            "request": {
+                "type_name": endpoint.get("request_schema_ref"),
+                "schema": endpoint_context.get("request_schema"),
+            },
+            "response": {
+                "type_name": endpoint.get("response_schema_ref"),
+                "schema": endpoint_context.get("response_schema"),
+            },
+            "error_codes": endpoint.get("error_responses")
+            or endpoint.get("error_codes")
+            or [],
+        },
+        "consumer_scenarios": [
+            {
+                "page_name": str(page.get("page_name") or ""),
+                "usage": str(page.get("usage") or ""),
+                "trigger": str(page.get("trigger") or ""),
+            }
+            for page in dependent_pages
+            if isinstance(page, dict)
+        ],
+        "related_entities": [
+            {
+                "name": str(entity.get("entity_name") or ""),
+                "fields": [
+                    {
+                        "name": str(field.get("name") or ""),
+                        "label": str(field.get("label") or ""),
+                        "type": str(field.get("type") or ""),
+                        "required": bool(field.get("required")),
+                    }
+                    for field in (
+                        entity.get("fields")
+                        if isinstance(entity.get("fields"), list)
+                        else []
+                    )
+                    if isinstance(field, dict)
+                ],
+            }
+            for entity in bound_entities
+            if isinstance(entity, dict)
+        ],
+        "latest_user_feedback": user_request.strip(),
+    }
+
+
 def _endpoint_decision_prompt(
     endpoint_context: dict[str, Any],
     user_request: str,
 ) -> str:
-    """构造 EndpointDetail 第一步的唯一语义决策提示词。"""
+    """构造职责、输入和输出边界清晰的接口语义决策提示词。"""
 
-    formal_schema = json.dumps(ENDPOINT_DECISION_OUTPUT_SCHEMA, ensure_ascii=False, indent=2)
+    output_template = json.dumps(
+        ENDPOINT_DECISION_OUTPUT_SCHEMA,
+        ensure_ascii=False,
+        indent=2,
+    )
+    decision_input = json.dumps(
+        _endpoint_decision_input(endpoint_context, user_request),
+        ensure_ascii=False,
+        indent=2,
+    )
     return (
-        "You are the endpoint-decision model for an app-generation workflow.\n"
-        "This is a design-only boundary. Do not call tools, do not call subagents, "
-        "and do not generate or modify code.\n"
-        "This is step 1 of EndpointDetail design. Decide the implementation semantics for "
-        "exactly one API endpoint. The API contract is the "
-        "source of truth for method, path, parameters, request schema and response schema. "
-        "Do not add new endpoints or change the contract. Return only one JSON object without "
-        "markdown fences or commentary. The object is the only semantic source used to compose "
-        "processing logic and acceptance criteria. It must match this formal schema exactly; "
-        "replace the sample type strings with concrete design content and keep every key present:\n"
-        f"{formal_schema}\n"
-        "This endpoint design does NOT design any data source. Do not emit data_origin, "
-        "effective_source, field_mappings, database operations, source branches, or any "
-        "database/static/mock/third-party implementation content. The data source (database or "
-        "external API) and its bindings are decided exclusively by the confirmed entity design: "
-        "endpoint_context.bound_entities is a read-only reference to those entity designs and "
-        "must never be extended, changed, or duplicated into this decision. Do not add fields, "
-        "tables, schemas, or endpoints beyond the API contract, and do not revise entities. "
-        "If a contract field is not covered by the bound entity fields, record it as a risk so "
-        "the entity can be revised and confirmed first. "
-        "operation_semantics must express contract behavior once, without implementation prose. "
-        "For a single-resource endpoint, target_cardinality and multiple_match_behavior must make "
-        "the single-resource boundary explicit. selector.fields must only use contract parameters "
-        "or request fields. success_status_code must follow the API contract when declared. "
-        "risks must list only concise assumptions and contract/entity gaps that need user "
-        "attention before confirmation.\n\n"
-        f"Latest user feedback:\n{user_request}\n\n"
-        f"Endpoint context:\n{json.dumps(endpoint_context, ensure_ascii=False)}"
+        "<role>\n"
+        "You are the endpoint behavior decision model in an app-generation workflow. "
+        "You make one closed behavioral decision for exactly one fixed API endpoint.\n"
+        "</role>\n\n"
+        "<goal>\n"
+        "Fill in the behavioral semantics that the API contract does not state directly but "
+        "that deterministic processing logic and acceptance criteria require. Do not design or "
+        "modify the API contract, produce the final EndpointDetail, implement code, call tools, "
+        "or delegate work.\n"
+        "</goal>\n\n"
+        "<input_explanation>\n"
+        "- endpoint_contract is the immutable source of truth for the method, path, parameters, "
+        "request type, response type, schemas, and error behavior.\n"
+        "- request.type_name and response.type_name are contract-defined business type names. "
+        "Interpret each together with its schema; never rename, replace, or extend either type.\n"
+        "- consumer_scenarios only explain why pages use this endpoint. They may clarify intent "
+        "but may not add capabilities, fields, parameters, or endpoints.\n"
+        "- related_entities are the business objects involved in this endpoint. Their confirmed "
+        "fields define the allowed business-field boundary; they do not describe storage or "
+        "source implementation.\n"
+        "- latest_user_feedback may refine an undecided behavior only when it remains compatible "
+        "with endpoint_contract and related_entities.\n"
+        "</input_explanation>\n\n"
+        "<output_field_definitions>\n"
+        "- operation_kind: the endpoint's primary business operation. Use action only for a "
+        "non-CRUD business action.\n"
+        "- target_cardinality: the number of business targets one request may process or return. "
+        "exactly_one requires one target, zero_or_one permits an optional singleton, many permits "
+        "a collection or batch, and not_applicable means target count has no business meaning.\n"
+        "- selector.source: where the target locator or filter comes from. contract means the "
+        "fixed route semantics determine the target without a named input field; none means the "
+        "operation does not select an existing target.\n"
+        "- selector.fields: only the contract parameter names or request-field names that actually "
+        "locate or filter targets. Use an empty array for contract or none.\n"
+        "- transaction_required: whether the business operation must complete atomically as one "
+        "all-or-nothing action, without naming a storage technology.\n"
+        "- zero_match_behavior: the externally observable contract behavior when no target matches.\n"
+        "- multiple_match_behavior: the externally observable contract behavior when matches "
+        "exceed the selected target cardinality.\n"
+        "- success_status_code: the integer HTTP status for success. Follow an explicitly declared "
+        "contract status; otherwise use 201 for single-resource creation, 204 for DELETE without "
+        "a response schema, and 200 for all other cases.\n"
+        "- side_effect: the conceptual change to business resource state, not an implementation "
+        "procedure.\n"
+        "- risks: concise Chinese strings for material contract ambiguity, missing entity business "
+        "fields, or assumptions requiring confirmation. Return [] when none exist.\n"
+        "</output_field_definitions>\n\n"
+        "<decision_rules>\n"
+        "Keep the contract unchanged and do not add schemas, fields, entities, or endpoints. For "
+        "a single-resource endpoint, make zero-match and multiple-match behavior explicit. Do not "
+        "treat response envelope or control fields such as items, total, success, or message as "
+        "missing entity fields. Express each behavior once and do not include implementation prose "
+        "or source-specific operations.\n"
+        "</decision_rules>\n\n"
+        f"<input>\n{decision_input}\n</input>\n\n"
+        "<output_requirement>\n"
+        "Return exactly one JSON object with every key shown below. Use the listed enum values "
+        "exactly, use real JSON booleans and integers, replace descriptive placeholders with "
+        "concrete content, and include no markdown fences, commentary, or additional keys.\n"
+        f"{output_template}\n"
+        "</output_requirement>"
     )
 
 

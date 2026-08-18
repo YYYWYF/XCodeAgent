@@ -7,15 +7,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.graph.nodes.tasks import prepare_build_tasks
+from app.graph.nodes.tasks import _latest_project_plan, prepare_build_tasks
 from app.services.build_task_planner import (
     create_build_task_plan,
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
 )
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.entity_definitions import confirmed_entity_designs
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
+from app.workspace.plan_documents import (
+    load_project_plan_json,
+    write_project_plan_document,
+)
 from tests.entity_design_test_utils import confirm_entity_designs
 
 
@@ -101,32 +106,53 @@ def _with_confirmed_designs(plan: dict, *, source_type: str = "database") -> dic
     return confirm_entity_designs(updated, source_type=source_type)
 
 
-def _database_planning_context() -> dict:
-    """构造最小可用的数据库规划上下文，模拟前置数据库检查节点已完成。"""
-
-    return {
-        "schema_version": "database-context.v1",
-        "status": "completed",
-        "connection": {"status": "connected", "database": "sales"},
-        "actual_schema": {
-            "database": "sales",
-            "database_exists": True,
-            "tables": [],
-        },
-        "required_schema": {
-            "database": "sales",
-            "tables": [],
-            "resolution_items": [],
-        },
-        "gaps": [],
-        "resolution_items": [],
-        "task_intents": [],
-        "targets": [],
-        "summary": "数据库上下文检查完成。",
-    }
-
-
 class PrepareBuildTasksGuardTests(unittest.TestCase):
+    def test_latest_project_plan_hydrates_confirmed_entity_designs(self) -> None:
+        """Build 重读轻量计划时必须回填外置的已确认实体设计。"""
+
+        project_plan = _with_confirmed_designs(
+            create_project_plan(create_requirement_spec("创建商品管理系统"))
+        )
+        project_plan["confirmation_status"] = "confirmed"
+        contract = next(
+            item
+            for item in project_plan["api_contracts"]
+            if isinstance(item, dict) and item.get("entity_ids")
+        )
+
+        with tempfile.TemporaryDirectory() as workspace:
+            state = {
+                "workspace": workspace,
+                "project_plan": project_plan,
+            }
+            write_project_plan_document(state, project_plan)
+            plan_path = Path(workspace) / ".xcodeagent/plans/project-plan.json"
+            state["project_plan_json_path"] = str(plan_path)
+
+            compact_plan = load_project_plan_json(plan_path)
+            hydrated_plan = _latest_project_plan(state)
+
+        self.assertNotIn("entity_detail_plans", compact_plan)
+        self.assertEqual(
+            [
+                detail["entity_id"]
+                for detail in confirmed_entity_designs(hydrated_plan, contract)
+            ],
+            list(contract["entity_ids"]),
+        )
+        unconfirmed_plan = deepcopy(hydrated_plan)
+        unconfirmed_id = str(contract["entity_ids"][0])
+        for detail in unconfirmed_plan.get("entity_detail_plans", []):
+            if str(detail.get("entity_id") or "") == unconfirmed_id:
+                detail["status"] = "pending_user_confirmation"
+        self.assertNotIn(
+            unconfirmed_id,
+            [
+                detail["entity_id"]
+                for detail in confirmed_entity_designs(unconfirmed_plan, contract)
+            ],
+        )
+
     def test_page_scope_prepares_only_direct_units_and_context(self) -> None:
         """页面 scope 只编译当前页面、直接数据源和必要公共 Unit 的叶子任务。"""
 
@@ -210,7 +236,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "workspace": workspace,
                     "project_plan": state_project_plan,
                     "project_plan_json_path": project_plan_path,
-                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -297,7 +322,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "workspace": workspace,
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
-                    "database_planning_context": _database_planning_context(),
                     "build_task_plan": first_plan,
                     "build_execution_scope": {"type": "page", "targetId": "customers"},
                     "timeline": [],
@@ -372,7 +396,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "workspace": workspace,
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
-                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -485,7 +508,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
                     "build_task_plan": base_plan,
-                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -599,7 +621,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "workspace": workspace,
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
-                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                     "timeline": [],
                 }
@@ -666,7 +687,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "project_plan": project_plan,
                     "project_plan_json_path": project_plan_path,
                     "build_task_plan": first_plan,
-                    "database_planning_context": _database_planning_context(),
                     "build_execution_scope": {
                         "type": "page",
                         "targetId": "orderReports",

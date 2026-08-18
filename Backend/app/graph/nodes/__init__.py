@@ -1,6 +1,5 @@
 from app.graph.nodes.tasks import prepare_build_tasks
 from app.graph.nodes.classification import classify_request_complexity
-from app.graph.nodes.database_context import inspect_database_context
 from app.graph.nodes.lifecycle import (
     acceptance,
     finalize_project,
@@ -24,7 +23,6 @@ __all__ = [
     "direct_modification",
     "finalize_project",
     "handle_failure",
-    "inspect_database_context",
     "inspect_workspace",
     "scan_workspace_code",
     "integration_test",

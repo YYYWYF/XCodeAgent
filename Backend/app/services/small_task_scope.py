@@ -72,8 +72,8 @@ def small_task_preflight(task: dict[str, Any]) -> dict[str, str]:
     ):
         return {
             "reasonCode": "database_change",
-            "reason": "数据库结构、迁移或 DDL 变更必须由数据库上下文和正式工作流处理。",
-            "workflowIntent": "inspect_database_context",
+            "reason": "数据库结构、迁移或 DDL 变更必须由实体设计确认或专门数据库流程处理。",
+            "workflowIntent": "detail_confirmation",
         }
     if not paths or any(_is_placeholder_path(path) for path in paths) or any(
         any(marker in path for marker in _FORMAL_PATH_MARKERS)
@@ -99,7 +99,6 @@ def workflow_target_for_small_task(escalation: dict[str, Any]) -> str:
         "detail_confirmation",
         "project_planning",
         "inspect_workspace",
-        "inspect_database_context",
         "prepare_build_tasks",
         "build",
     }:
@@ -108,7 +107,7 @@ def workflow_target_for_small_task(escalation: dict[str, Any]) -> str:
         escalation.get("reasonCode") or escalation.get("reason_code") or ""
     ).strip()
     if reason_code in {"database_change", "migration", "ddl_change"}:
-        return "inspect_database_context"
+        return "detail_confirmation"
     if reason_code in {
         "formal_artifact_change",
         "new_page",

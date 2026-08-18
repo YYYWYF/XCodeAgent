@@ -5,9 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.graph.nodes.tasks import _scoped_contract_validation_plan
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.build_context_resolver import resolve_target_build_context
+from app.services.page_dependencies import validate_project_plan_dependencies
+from app.services.scoped_contract_validation import (
+    scoped_contract_validation_plan,
+)
 from tests.entity_design_test_utils import confirm_entity_designs
 
 
@@ -174,6 +177,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
             plan["api_contracts"][0]["schemas"] = {
                 "Order": {"type": "object", "properties": {}}
             }
+            plan["frontend_pages"][0]["path"] = "/orders"
             plan["api_contracts"][0]["endpoints"][0].update(
                 {
                     "method": "GET",
@@ -187,7 +191,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
                 target_id="orders",
                 project_plan_path=plan_path,
             )
-            validation_plan = _scoped_contract_validation_plan(plan, context)
+            validation_plan = scoped_contract_validation_plan(plan, context)
 
         self.assertEqual(context["entity_ids"], ["Order"])
         self._assert_no_source_or_contract_fields(context)
@@ -203,6 +207,9 @@ class PageBuildContextResolverTests(unittest.TestCase):
             ],
             ["orders.list"],
         )
+        self.assertNotIn("data_sources", validation_plan)
+        self.assertEqual(validation_plan["entities"], [{"id": "Order"}])
+        self.assertEqual(validate_project_plan_dependencies(validation_plan), [])
         self.assertEqual(validate_api_contract_consistency(validation_plan), [])
 
     def test_page_context_only_loads_direct_endpoint_detail(self) -> None:

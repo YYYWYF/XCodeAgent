@@ -1028,6 +1028,28 @@ class WorkflowRequestTests(unittest.TestCase):
             ["FastAPI", "React"],
         )
 
+    def test_legacy_database_context_resume_maps_to_task_preparation(self) -> None:
+        """旧快照节点兼容重定向，并丢弃已退役的数据库规划状态。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "resumeState": {
+                    "events": [
+                        {
+                            "status": "requires_user_input",
+                            "nodeName": "inspect_database_context",
+                        }
+                    ],
+                    "state": {
+                        "database_planning_context": {"status": "completed"},
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+        self.assertNotIn("database_planning_context", inputs["resume_values"])
+
     def test_workflow_debug_auto_loads_fixed_workspace_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)

@@ -3,9 +3,10 @@
 > 模板依据：`docs/XCODEAGENT_COMPLETE_WORKFLOW.md` 第 13.3 节「后续节点审计统一模板」
 > 审计日期：2026-08-11
 > 审计基线：当前工作区源码（含未提交改动：`task_preparer.py` / `build_task_planner.py` 的验收字段强制置空、`main.py` 格式化与 uvicorn 入口）
+> 2026-08-18 更新：数据库上下文检查节点已退役，相关段落按现行工作流收敛。
 > 审计范围：
 > - 应用初始化阶段：`requirements`、`ui_confirmation`（ui_design）、`project_planning`
-> - 任务规划阶段：`inspect_workspace`、`inspect_database_context`、`prepare_build_tasks`
+> - 任务规划阶段：`inspect_workspace`、`prepare_build_tasks`
 > - build 阶段后端 Agent：`data_source_agent`（owner=backend）
 > 性质：只读审计，未改动任何代码
 
@@ -48,7 +49,6 @@
 | `ui_confirmation`（ui_design） | 应用初始化 | 每页直接 ChatModel + 代码校验 + 确认门禁 | `services/ui_design_generator.py`、`graph/nodes/ui_confirmation.py` | ui-designs.json（无显式版本） |
 | `project_planning` | 应用初始化 | 直接 ChatModel + 确定性修复/契约校验 + 确认门禁 | `agents/main/planner.py`、`graph/nodes/planning.py` | project-plan（`version` / `source_project_plan_version`） |
 | `inspect_workspace` | 任务规划 | 确定性扫描 + 代码图索引（无 LLM） | `graph/nodes/workspace_inspection.py`、`services/workspace_inspector.py` | workspace-snapshot `1.2.0` |
-| `inspect_database_context` | 任务规划 | 确定性数据库探测 + schema diff（无 LLM） | `graph/nodes/database_context.py`、`services/database_planning_context.py` | `database-context.v1` |
 | `prepare_build_tasks` | 任务规划 | 直接 ChatModel（无工具）+ 7 阶段确定性编译器 | `graph/nodes/tasks.py`、`agents/main/task_preparer.py`、`services/build_task_planner.py` | `build-dag.v3` + `build-unit-graph.v3` |
 | `data_source_agent` | build | Deep Agent + 确定性调度/验收 harness | `agents/data_source/agent.py`、`agents/data_source/generator.py`、`graph/subgraphs/build.py` | `build-dag.v3`、`repair-acceptance.v2` |
 
@@ -140,52 +140,30 @@
 | 副作用 / 授权范围 / 幂等键 / checkpoint | 写快照缓存；首次进入写 `src/constants/menus.ts` 与页面占位目录（存在 scaffold 与前端菜单任务双 owner 风险，见 4 节）；幂等键：`workspace_revision + schema_version` |
 | 错误分类 | 文件搜索/CRG 失败可降级；scaffold 异常仅日志；无阻断性错误 |
 | 最大重试次数 / 退避 / 超时 | 子进程超时 10s；CRG 内部自身超时/降级；节点不重试 |
-| 成功路由 / 失败路由 / 修复后回测路由 | 按 `database_context_requirement` 路由：有 database 来源 endpoint → `inspect_database_context`；否则直接 `prepare_build_tasks`（路由异常时 fail-open 到 prepare_build_tasks） |
+| 成功路由 / 失败路由 / 修复后回测路由 | 成功后固定进入 `prepare_build_tasks`；扫描失败按既有降级策略处理 |
 | 用户确认载荷 / basedOnRevision | 无确认；`basedOnRevision=workspace_revision` |
 | 可观测 evidence / 日志和持久化路径 | `workspace_inspection.progress`、`frontend_scaffold` 日志、快照 JSON + hash |
 
-### 3.5 `inspect_database_context` / 检查数据库上下文
-
-| 模板字段 | 审计结论 |
-| --- | --- |
-| 节点名称 / node_id / 版本 | `inspect_database_context`；产物 `database-context.v1` |
-| 节点类型 | 确定性数据库连接、schema 摘要与 schema diff；无 LLM |
-| DRI / 审核人 / 批准人 | database_planning_context / schema_diff 负责人；无人工确认（连接失败除外） |
-| 目标与非目标 | 目标：探测真实 MySQL schema，与所需 schema 做 diff，编译 `gaps + task_intents`。非目标：不执行变更、不做业务决策；结构差异不阻断，只编译成任务意图 |
-| 触发条件 / 前置条件 | 上游 `inspect_workspace` 按 `data_origin=database` 路由进入；`resume_from=inspect_database_context`；前置：ProjectPlan confirmed、目标详情存在、WorkspaceSnapshot、MySQL 配置可读 |
-| 当前提示词及源码位置 | 无提示词；`graph/nodes/database_context.py::inspect_database_context`、`services/database_planning_context.py::prepare_database_planning_context` |
-| 输入 | 已确认 ProjectPlan、`build_execution_scope`、EndpointDetail `data_origin`、WorkspaceSnapshot、MySQL 连接配置、已有 `build-dag.v3`（复用或先生成 Unit 骨架） |
-| 输出 | `database_planning_context`（v1；`completed`/`connection_failed`/`blocked`/`skipped`）、`actual_schema`、`required_schema`、`gaps`、`resolution_items`、`task_intents`、`targets`、合并后的 `build_context` |
-| 成功与校验规则 | 仅 database 来源才要求检查；连接失败必须阻断（`connection_failed → blocked` + `mode=database_context_check` 澄清）；上下文必须 v1 且 `status=completed` 才允许数据库任务规划；结构差异编译为 gap 分类（`database_change` 才生成任务，`backend_adaptation` 归后端任务，`needs_confirmation` 永不生成任务） |
-| 硬依赖 / 可选依赖 | 硬依赖：MySQL 连接与真实 schema（`inspect_mysql_schema`）；可选：已有有效 DAG |
-| 可并行条件 / 冲突资源 / join 条件 | 无并行；只读探测，不写库；无 join |
-| 副作用 / 授权范围 / 幂等键 / checkpoint | 只读探测 + 写 Graph state；幂等键：`database-context.v1 + captured_at`；checkpoint 持久化 |
-| 错误分类 | 连接失败 → 阻断并要求用户补齐配置；schema diff 失败视为异常；无“可重试工具错误”分类 |
-| 最大重试次数 / 退避 / 超时 | 无重试/退避；依赖用户修正配置后重进节点 |
-| 成功路由 / 失败路由 / 修复后回测路由 | completed → `prepare_build_tasks`；`requires_user_input → await_user_input` |
-| 用户确认载荷 / basedOnRevision | 连接失败澄清（`database_context_check`，含 targets）；`basedOnRevision` 为 context v1 与 `workspace_revision` |
-| 可观测 evidence / 日志和持久化路径 | 脱敏连接摘要（只暴露错误类别与空配置键）、`database-context.v1`、checkpoint；不落独立文件 |
-
-### 3.6 `prepare_build_tasks` / 生成并编译 Build DAG
+### 3.5 `prepare_build_tasks` / 生成并编译 Build DAG
 
 | 模板字段 | 审计结论 |
 | --- | --- |
 | 节点名称 / node_id / 版本 | `prepare_build_tasks`；产物 `build-dag.v3` + `build-unit-graph.v3`，修复任务验收 `repair-acceptance.v2` |
 | 节点类型 | 直接 ChatModel（无工具、planning-only）+ 7 阶段确定性编译器（unit_skeleton → build_context → contract_validation → model_planning → task_compilation → dag_validation → artifact_persistence） |
 | DRI / 审核人 / 批准人 | task_preparer / build_task_planner 负责人；模型候选任务由确定性编译器“审核” |
-| 目标与非目标 | 目标：按 scope 编译可执行任务 DAG（数据库→后端→前端顺序、后端四阶段 stage 拆分、页面 API 服务文件、菜单登记）。非目标：模型不得生成验证/测试任务（`acceptance_criteria=[]`、`acceptance_checks=[]`、`verification_commands=[]`）；不得越过 required Unit；不重建模板骨架 |
-| 触发条件 / 前置条件 | 上游 `inspect_workspace`/`inspect_database_context`；`resume_from=prepare_build_tasks`；前置：ProjectPlan confirmed（未确认先走确认/修订分支）、目标详情存在、数据库来源已有 completed v1 |
+| 目标与非目标 | 目标：按 scope 编译后端/前端可执行任务 DAG（后端四阶段 stage 拆分、页面 API 服务文件、菜单登记）。非目标：模型不得生成数据库、验证或测试任务；不得越过 required Unit；不重建模板骨架 |
+| 触发条件 / 前置条件 | 上游 `inspect_workspace`；`resume_from=prepare_build_tasks`；前置：ProjectPlan confirmed（未确认先走确认/修订分支）、目标详情和绑定实体设计存在 |
 | 当前提示词及源码位置 | `agents/main/task_preparer.py::_task_preparation_prompt`（内联 springboot-mybatis-generate SKILL.md 全文、后端真实目录树、Java 8 约束、四阶段 stage 规则）；Static 走 `_static_task_preparation_prompt` |
-| 输入 | 确认 ProjectPlan、`build_execution_scope`（application/page/endpoint/data source）、PageDetail/EndpointDetail、WorkspaceSnapshot（裁剪到 80 项/12k 字符）、DatabasePlanningContext、已有 DAG、可复用 Unit |
+| 输入 | 确认 ProjectPlan、`build_execution_scope`、PageDetail/EndpointDetail、有界实体设计摘要、WorkspaceSnapshot（裁剪到 80 项/12k 字符）、已有 DAG、可复用 Unit |
 | 输出 | `build-dag.v3`（build_units/unit_graph/task_registry/task_graph/tasks/execution batches）、`build_context`、`dag_generation_progress` 七阶段快照、`.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md` |
-| 成功与校验规则 | Unit skeleton 合法；契约校验（页面依赖、API contract scope）；模型任务归一化后强制置空验收字段（未提交改动：`task_preparer.py::_reset_model_acceptance_fields`、`build_task_planner.py` 归一化置空），工程验收由确定性编译器按 change_scope/allowed_paths/菜单/API 契约生成；owner↔Unit 匹配、数据库任务必须有 `database_scope` + completed v1 + 高危必须 approval、无代码路径混入；任务 ID/依赖/拓扑/循环/批次校验；页面 PageKey 与实时唯一目录纠正、漏报菜单登记时确定性补齐 |
-| 硬依赖 / 可选依赖 | 硬依赖：确认 ProjectPlan、详情、快照、数据库 context（按需）；可选：可复用 Unit 与已有 DAG |
+| 成功与校验规则 | Unit skeleton 合法；契约校验（页面依赖、API contract scope）；模型任务归一化后强制置空验收字段，工程验收由确定性编译器按 change_scope/allowed_paths/菜单/API 契约生成；正常 Build 不含 database Unit/owner；任务 ID/依赖/拓扑/循环/批次校验；页面 PageKey 与实时唯一目录纠正、漏报菜单登记时确定性补齐 |
+| 硬依赖 / 可选依赖 | 硬依赖：确认 ProjectPlan、详情、实体摘要和快照；可选：可复用 Unit 与已有 DAG |
 | 可并行条件 / 冲突资源 / join 条件 | 编译阶段串行；冲突资源：build-task-plan.json；执行批次（`execution.batches`）决定后续 build 并行面 |
 | 副作用 / 授权范围 / 幂等键 / checkpoint | 写 build-task-plan.json 与 BUILD_TASK_DAG.md；幂等键：`build-dag.v3 + source_project_plan_version + workspace_snapshot_ref.workspace_revision`；checkpoint 持久化 |
 | 错误分类 | 各阶段失败 → `requires_user_input`（带错误澄清，用户确认后重跑，不自动重试）；模型 JSON 解析失败/无有效任务 → 同样转 requires_user_input；异常型错误抛给节点生命周期 |
 | 最大重试次数 / 退避 / 超时 | 模型单次调用 + 传输层重试 2 次/120s；`default_max_tokens=2048`；无节点级自动重试 |
 | 成功路由 / 失败路由 / 修复后回测路由 | completed → `build`；requires_user_input → END；后续修复不再回本节点（修复任务直接追加到 build 调度） |
-| 用户确认载荷 / basedOnRevision | `build_context_error` / `api_contract_inconsistency` / `build_task_plan_validation_error` 等澄清载荷；`basedOnRevision` 为 plan version、workspace revision、database-context v1 |
+| 用户确认载荷 / basedOnRevision | `build_context_error` / `api_contract_inconsistency` / `build_task_plan_validation_error` 等澄清载荷；`basedOnRevision` 为 plan version 与 workspace revision |
 | 可观测 evidence / 日志和持久化路径 | `dag_generation_progress` 七阶段快照、脱敏模型诊断日志（response_sha256、token 用量、finish_reason）、build-task-plan.json、BUILD_TASK_DAG.md |
 
 ### 3.7 `data_source_agent`（build 阶段后端 Agent，owner=backend）
@@ -215,9 +193,9 @@
 ## 4. 横切发现与建议
 
 1. **信任边界设计一致且合理**：三个初始化节点和任务规划都是“planning-only 提示词 + 确定性门禁兜底”；build 后端 Agent 的结果不以自然语言为准，全部由工作区 diff 和确定性验收检查验证。模型能影响的范围被压缩到“任务候选/设计稿/计划草案”本身。
-2. **重试策略分层但不对称**：传输层 2 次/120s；UI 设计有独立 1+2 预算；build 调度循环 `len(tasks)*2`；显式 retry 恢复。但 `prepare_build_tasks` 与 `inspect_database_context` 失败只转 `requires_user_input`，没有节点级自动重试/退避——13.3 模板要求的“最大重试/退避/超时”在这两处实质空缺。
-3. **revision/hash 覆盖不全**：database-context.v1、build-dag.v3、workspace-snapshot 1.2.0、repair-acceptance.v2 有版本；但 requirement-spec 与 ui-designs.json 无 schema 版本或内容哈希，恢复只靠 `confirmation_status` + 文件路径。
-4. **已知风险与代码 TODO 一致**：工作区未提交改动强制清空模型验收字段并留有 `TODO(验收措施)`，说明“确定性验收编译器”仍是当前唯一验收手段；文档 12 节 P1 的“前端 scaffold 与菜单任务双 owner”“数据库路由 fail-open”在代码中依然存在（`route_workspace_inspection` 异常时 fail-open 到 prepare_build_tasks）。
+2. **重试策略分层但不对称**：传输层 2 次/120s；UI 设计有独立 1+2 预算；build 调度循环 `len(tasks)*2`；显式 retry 恢复。但 `prepare_build_tasks` 失败只转 `requires_user_input`，没有节点级自动重试/退避。
+3. **revision/hash 覆盖不全**：build-dag.v3、workspace-snapshot 1.2.0、repair-acceptance.v2 有版本；但 requirement-spec 与 ui-designs.json 无 schema 版本或内容哈希，恢复只靠 `confirmation_status` + 文件路径。
+4. **已知风险与代码 TODO 一致**：工作区未提交改动强制清空模型验收字段并留有 `TODO(验收措施)`，说明“确定性验收编译器”仍是当前唯一验收手段；前端 scaffold 与菜单任务双 owner 风险仍需关注。
 5. **文档 13.3 模板的“DRI/审核人/批准人”仓库无元数据**，当前只能按模块归属推断；若要形成正式审计基线，建议在节点 docstring 或 artifacts 中补充 DRI 与审核人字段。
 
 ---
@@ -280,9 +258,8 @@
 - `Backend/app/graph/nodes/workspace_inspection.py`：工作区扫描节点
 - `Backend/app/services/workspace_inspector.py`：快照构建/缓存/降级
 - `Backend/app/services/frontend_scaffold.py`：前端脚手架（菜单 + 页面占位）
-- `Backend/app/graph/nodes/database_context.py`：数据库上下文节点
-- `Backend/app/services/database_planning_context.py`：database-context.v1 生成
-- `Backend/app/services/database_schema_summary.py` / `database_schema_diff.py` / `database_requirement_schema.py`：schema 探测与 gap 编译
+- `Backend/app/services/entity_design.py`：实体数据库设计、确认与执行证据
+- `Backend/app/services/database_schema_summary.py` / `database_schema_diff.py` / `database_requirement_schema.py`：实体设计和专门数据库流程的 schema 探测与 diff
 - `Backend/app/graph/nodes/tasks.py`：prepare_build_tasks 节点（7 阶段）
 - `Backend/app/agents/main/task_preparer.py`：任务规划提示词与模型调用
 - `Backend/app/services/build_task_planner.py`：任务归一化、编译、语义校验

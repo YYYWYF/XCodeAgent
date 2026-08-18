@@ -282,13 +282,6 @@ def project_build_context_output(
         "entityIds": _compact_strings(
             build_context.get("entity_ids"), item_limit=200, text_limit=240
         ),
-        "databaseStatus": _compact_text(
-            (build_context.get("database_planning_context") or {}).get("status")
-            if isinstance(build_context.get("database_planning_context"), dict)
-            else "missing",
-            80,
-        )
-        or "missing",
         "reusableTaskIds": _compact_strings(reusable_ids, item_limit=200, text_limit=240),
     }
 

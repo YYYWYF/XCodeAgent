@@ -287,14 +287,38 @@ def _entity_design_summary(detail: dict[str, Any]) -> dict[str, Any]:
         else {}
     )
     if database_design:
+        bindings = _design_items(database_design.get("bindings"))
+        table_generation = (
+            database_design.get("table_generation")
+            if isinstance(database_design.get("table_generation"), dict)
+            else {}
+        )
+        database_execution = (
+            detail.get("database_execution")
+            if isinstance(detail.get("database_execution"), dict)
+            else {}
+        )
         summary["database_design"] = {
+            "database_name": str(database_design.get("database_name") or ""),
             "matched_table": database_design.get("matched_table"),
-            "binding_count": len(_design_items(database_design.get("bindings"))),
-            "operation_count": len(_design_items(database_design.get("database_operations"))),
-            "table_generation_required": bool(
-                isinstance(database_design.get("table_generation"), dict)
-                and database_design.get("table_generation", {}).get("required")
-            ),
+            "binding_status": database_design.get("binding_status"),
+            "bindings": [
+                {
+                    "entity_field": str(binding.get("entity_field") or ""),
+                    "table": str(binding.get("table") or ""),
+                    "table_column": str(binding.get("table_column") or ""),
+                    "rule": str(binding.get("rule") or ""),
+                }
+                for binding in bindings[:100]
+                if binding.get("entity_field") and binding.get("table_column")
+            ],
+            "table_generation_required": bool(table_generation.get("required")),
+            "table_generation_approved": bool(table_generation.get("approved")),
+            "execution": {
+                "status": str(database_execution.get("status") or ""),
+                "summary": str(database_execution.get("summary") or "")[:500],
+                "operation_count": len(database_execution.get("operation_ids") or []),
+            },
         }
     external_api_design = (
         detail.get("external_api_design")

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.api_contracts import dict_items, endpoint_dependencies_for_contracts
-from app.services.entity_definitions import plan_data_sources
 from app.services.frontend_page_tree import (
     find_frontend_page,
     flatten_frontend_pages,
@@ -57,11 +56,8 @@ def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str
 
     pages = flatten_frontend_pages(project_plan.get("frontend_pages"))
     contracts = dict_items(project_plan.get("api_contracts"))
-    data_sources = plan_data_sources(project_plan)
     endpoint_index = _endpoint_index(contracts)
     errors: list[str] = []
-    if data_sources and not contracts:
-        errors.append("ProjectPlan defines data sources but api_contracts is empty.")
     _validate_unique_values(pages, "pageId", "pageId", errors)
     _validate_unique_values(pages, "path", "page path", errors)
     menu_paths = frontend_page_menu_paths(project_plan.get("frontend_pages"))

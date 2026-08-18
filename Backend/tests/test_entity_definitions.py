@@ -9,6 +9,7 @@ from app.services.entity_detail_plan import (
 )
 from app.services.entity_definitions import (
     database_operation_field_errors,
+    entity_design_summaries,
     entity_json_schema,
     entity_mysql_target_table,
     entity_table_name,
@@ -280,6 +281,50 @@ class EntityDefinitionTests(unittest.TestCase):
             [],
         )
         self.assertEqual(database_operation_field_errors([], {}), [])
+
+    def test_database_entity_summary_exposes_bounded_build_bindings(self) -> None:
+        """任务规划只读取已确认表绑定和执行摘要，不暴露完整 Schema 上下文。"""
+
+        plan = create_project_plan(create_requirement_spec("创建书籍管理系统"))
+        entity = plan["entities"][0]
+        detail = create_entity_detail_plan(
+            plan,
+            entity,
+            default_datasource_type="database",
+        )
+        detail["status"] = "confirmed"
+        detail["database_design"] = {
+            "database_name": "library",
+            "matched_table": "book",
+            "binding_status": "matched",
+            "bindings": [
+                {
+                    "entity_field": "title",
+                    "table": "book",
+                    "table_column": "book_title",
+                    "rule": "manual",
+                }
+            ],
+            "schema_context": {"tables": [{"table_name": "book"}]},
+            "available_tables": [{"table_name": "book"}],
+            "database_operations": [{"operation": "add_column"}],
+            "table_generation": {"required": False, "approved": True},
+        }
+        detail["database_execution"] = {
+            "status": "completed",
+            "summary": "数据库表操作已完成。",
+            "operation_ids": ["add_book_title"],
+        }
+        plan = attach_entity_detail_plan(plan, detail)
+
+        summary = entity_design_summaries(plan, [entity["id"]])[0]["database_design"]
+
+        self.assertEqual(summary["database_name"], "library")
+        self.assertEqual(summary["matched_table"], "book")
+        self.assertEqual(summary["bindings"][0]["table_column"], "book_title")
+        self.assertEqual(summary["execution"]["status"], "completed")
+        self.assertNotIn("schema_context", summary)
+        self.assertNotIn("database_operations", summary)
 
     def test_required_schema_merges_entity_tables(self) -> None:
         """目标 Schema 以实体设计为基线，并让已确认操作定义覆盖实体列类型。"""

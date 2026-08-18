@@ -12,7 +12,6 @@ WORKFLOW_NODE_LABELS = {
     "detail_confirmation": "页面细节确认",
     "project_planning": "项目规划",
     "inspect_workspace": "扫描工作区代码",
-    "inspect_database_context": "数据库上下文检查",
     "prepare_build_tasks": "构建任务 DAG 生成",
     "build": "代码生成与构建协调",
     "integration_test": "集成测试与质量门禁",
@@ -27,8 +26,7 @@ WORKFLOW_NODE_LABELS = {
 WORKFLOW_STATIC_NEXT_NODES = {
     "detail_confirmation": ["inspect_workspace"],
     "project_planning": ["detail_confirmation"],
-    "inspect_workspace": ["inspect_database_context", "prepare_build_tasks"],
-    "inspect_database_context": ["prepare_build_tasks"],
+    "inspect_workspace": ["prepare_build_tasks"],
     "prepare_build_tasks": ["build"],
     "build": ["integration_test"],
     "small_task_repair": ["integration_test"],

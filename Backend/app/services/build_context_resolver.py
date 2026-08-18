@@ -74,17 +74,6 @@ def _assert_endpoint_entities_designed(
         raise ValueError(f"Endpoint {endpoint_id} 未绑定任何实体。")
 
 
-def _endpoint_uses_source(
-    project_plan: dict[str, Any],
-    endpoint: dict[str, Any],
-    source_id: str,
-) -> bool:
-    """判断 endpoint 绑定实体中是否存在指定数据源类型。"""
-
-    entity_designs, _missing = _endpoint_entity_designs(project_plan, endpoint)
-    return source_id in _entity_design_source_types(entity_designs)
-
-
 def _page_key_from_page_id(page_id: str) -> str:
     """将 snake_case 的 pageId 转换为 PascalCase 的 PageKey。
 
@@ -115,8 +104,6 @@ def resolve_target_build_context(
 
     if target_type == "page":
         return _page_context(project_plan, target_id, project_plan_path)
-    if target_type == "data_source":
-        return _data_source_context(project_plan, target_id, project_plan_path)
     if target_type == "endpoint":
         return _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
     raise ValueError(f"Unsupported build target type: {target_type}.")
@@ -208,65 +195,6 @@ def _page_context(
         ],
         "source_refs": {
             "page_detail": _artifact_ref(page.get("detail_design"), page_id),
-            "endpoint_details": endpoint_refs,
-        },
-    }
-
-
-def _data_source_context(
-    project_plan: dict[str, Any],
-    source_id: str,
-    project_plan_path: str | Path | None,
-) -> dict[str, Any]:
-    """兼容旧数据源目标：按实体源类型收敛 endpoint，并只暴露实体推导的 Unit 白名单。"""
-
-    source = _required_item(plan_data_sources(project_plan), "id", source_id, "data source")
-    endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
-    endpoint_ids = [
-        endpoint_id for endpoint_id, endpoint in endpoint_index.items()
-        if _endpoint_uses_source(project_plan, endpoint, source_id)
-        and "\0" not in endpoint_id
-    ]
-    endpoint_details = []
-    endpoint_refs = []
-    entity_ids: list[str] = []
-    for endpoint_id in endpoint_ids:
-        endpoint = endpoint_index[endpoint_id]
-        reference = endpoint.get("detail_design")
-        detail = _load_optional_external_detail(reference, project_plan_path)
-        if detail is not None:
-            endpoint_details.append(detail)
-            endpoint_refs.append(_artifact_ref(reference, endpoint_id))
-        entity_designs, _missing = _endpoint_entity_designs(project_plan, endpoint)
-        for entity_design in entity_designs:
-            entity_id = str(entity_design.get("entity_id") or "")
-            if entity_id and entity_id not in entity_ids:
-                entity_ids.append(entity_id)
-    source_type = _source_type(source)
-    if source_type == "static":
-        required_unit_ids = ["frontend:data:static"]
-    else:
-        required_unit_ids = [
-            "backend:bootstrap",
-            *(
-                _endpoint_unit_id(
-                    str(endpoint_index[endpoint_id].get("api_contract_id") or ""),
-                    endpoint_id,
-                )
-                for endpoint_id in endpoint_ids
-                if endpoint_index[endpoint_id].get("api_contract_id")
-            ),
-        ]
-    return {
-        "target": {"type": "data_source", "id": source_id},
-        "page_detail": None,
-        "endpoint_detail": None,
-        "direct_endpoint_details": endpoint_details,
-        "endpoint_ids": endpoint_ids,
-        "entity_ids": entity_ids,
-        "entity_designs": entity_design_summaries(project_plan, entity_ids),
-        "required_unit_ids": required_unit_ids,
-        "source_refs": {
             "endpoint_details": endpoint_refs,
         },
     }

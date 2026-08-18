@@ -865,28 +865,43 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("page-home", markdown)
 
     def test_compiles_unit_dependencies_and_source_refs(self) -> None:
-        """页面任务只继承前端公共 Unit，后端和数据库仅保留来源引用。"""
+        """页面任务只继承前端公共 Unit，后端 Unit 仅保留接口来源引用。"""
 
         base_plan = {
             "schema_version": "build-dag.v3",
             "build_units": {
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "frontend"},
-                "database:orders": {"id": "database:orders", "kind": "database"},
+                "backend:endpoint:orders": {
+                    "id": "backend:endpoint:orders",
+                    "kind": "backend",
+                },
                 "page:orders": {"id": "page:orders", "kind": "page"},
             },
             "unit_graph": {
                 "schema_version": "build-unit-graph.v3",
-                "nodes": ["frontend:api-client", "database:orders", "page:orders"],
+                "nodes": [
+                    "frontend:api-client",
+                    "backend:endpoint:orders",
+                    "page:orders",
+                ],
                 "edges": [
                     {"from": "frontend:api-client", "to": "page:orders", "type": "depends_on"},
-                    {"from": "database:orders", "to": "page:orders", "type": "depends_on"},
+                    {
+                        "from": "backend:endpoint:orders",
+                        "to": "page:orders",
+                        "type": "depends_on",
+                    },
                 ],
                 "validation": {"is_valid": True, "errors": []},
             },
         }
         build_context = {
             "target": {"type": "page", "id": "orders"},
-            "required_unit_ids": ["frontend:api-client", "database:orders", "page:orders"],
+            "required_unit_ids": [
+                "frontend:api-client",
+                "backend:endpoint:orders",
+                "page:orders",
+            ],
             "endpoint_ids": ["orders_api.list"],
             "source_refs": {
                 "page_detail": {"id": "orders", "json_path": "plans/pages/page--orders.json", "sha256": "p1"},
@@ -909,8 +924,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     },
                     {
                         "id": "task:orders-api",
-                        "unit_id": "database:orders",
-                        "owner": "database",
+                        "unit_id": "backend:endpoint:orders",
+                        "owner": "backend",
                         "description": "实现订单 API",
                         "change_scope": [{"operation": "modify", "path": "Backend/app/orders.py"}],
                     },
@@ -934,12 +949,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
         )
         self.assertEqual(tasks["task:orders-page"]["source_refs"]["type"], "page_detail")
         self.assertEqual(
-            plan["build_units"]["database:orders"]["source_refs"],
+            plan["build_units"]["backend:endpoint:orders"]["source_refs"],
             {
-                "type": "database_context",
+                "type": "endpoint_detail",
                 "target": {"type": "page", "id": "orders"},
-                "database_context_status": None,
-                "database_context_hashes": [],
+                "endpoint_detail": {},
                 "endpoint_details": [],
                 "endpoint_ids": ["orders_api.list"],
                 "entity_ids": [],
@@ -1028,17 +1042,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         },
                     }
                 ],
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {"schema_hash": "required-hash", "tables": []},
-                    "gaps": [
-                        {"id": "gap-core", "kind": "missing_table", "table": "core"},
-                        {"id": "gap-user", "kind": "missing_table", "table": "user"},
-                    ],
-                    "task_intents": [],
-                }
             },
         )
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
@@ -1086,16 +1089,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     "validation": {"is_valid": True, "errors": []},
                 },
             },
-            build_context={
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {"schema_hash": "required-hash", "tables": []},
-                    "gaps": [],
-                    "task_intents": [],
-                }
-            },
+            build_context={},
         )
 
         self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
@@ -1104,8 +1098,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             " ".join(plan["task_graph"]["validation"]["errors"]),
         )
 
-    def test_readonly_existing_database_endpoint_drops_database_change_task(self) -> None:
-        """只读 mysql_existing 接口已有真实摘要时，不保留多余 database.change 任务。"""
+    def test_normal_build_scope_rejects_database_task(self) -> None:
+        """实体确认已完成数据库操作后，正常 Build 不接受数据库任务。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -1116,82 +1110,42 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "unit_id": "database:users",
                         "owner": "database",
                         "task_type": "database.change",
-                        "description": "为用户列表准备数据库。",
+                        "description": "重复创建用户表。",
                         "database_scope": {
                             "data_source_id": "users",
                             "operations": ["create_table"],
                         },
-                        "change_scope": [
-                            {"operation": "add", "path": "database/migrations/users.sql"}
-                        ],
-                    },
-                    {
-                        "id": "users-api",
-                        "unit_id": "backend:endpoint:user_api:user.list",
-                        "owner": "backend",
-                        "description": "实现用户列表接口。",
-                        "change_scope": [{"operation": "modify", "path": "Backend/UserApi.java"}],
-                    },
+                        "change_scope": [],
+                    }
                 ]
             },
             base_build_task_plan={
                 "schema_version": "build-dag.v3",
                 "build_units": {
-                    "database:users": {"id": "database:users", "kind": "database"},
                     "backend:endpoint:user_api:user.list": {
                         "id": "backend:endpoint:user_api:user.list",
                         "kind": "backend",
-                    },
+                    }
                 },
                 "unit_graph": {
-                    "nodes": [
-                        "database:users",
-                        "backend:endpoint:user_api:user.list",
-                    ],
-                    "edges": [
-                        {
-                            "from": "database:users",
-                            "to": "backend:endpoint:user_api:user.list",
-                            "type": "depends_on",
-                        }
-                    ],
+                    "nodes": ["backend:endpoint:user_api:user.list"],
+                    "edges": [],
                     "validation": {"is_valid": True, "errors": []},
                 },
             },
             build_context={
-                "required_unit_ids": [
-                    "database:users",
-                    "backend:endpoint:user_api:user.list",
-                ],
-                "direct_endpoint_details": [
-                    {
-                        "endpoint_id": "user.list",
-                        "method": "GET",
-                        "data_origin": {
-                            "source_type": "database",
-                            "effective_source": {"kind": "mysql_existing"},
-                            "differences": [],
-                            "notes": [],
-                        },
-                    }
-                ],
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {"schema_hash": "required-hash", "tables": []},
-                    "gaps": [],
-                    "task_intents": [],
-                },
+                "required_unit_ids": ["backend:endpoint:user_api:user.list"]
             },
         )
 
-        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        self.assertNotIn("users-db", tasks)
-        self.assertIn("users-api", tasks)
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertIn(
+            "not allowed in normal Build scope",
+            " ".join(plan["task_graph"]["validation"]["errors"]),
+        )
 
-    def test_database_endpoint_and_page_units_allow_frontend_backend_parallelism(self) -> None:
-        """数据库 gap 约束 endpoint，但 page 不等待 endpoint 实现。"""
+    def test_entity_backed_endpoint_and_page_allow_parallelism(self) -> None:
+        """实体数据库操作完成后，endpoint 与 page 仍按代码 Unit 并行编译。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -1220,7 +1174,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             base_build_task_plan={
                 "schema_version": "build-dag.v3",
                 "build_units": {
-                    "database:users": {"id": "database:users", "kind": "database"},
                     "backend:endpoint:user_api:user.create": {
                         "id": "backend:endpoint:user_api:user.create",
                         "kind": "backend",
@@ -1228,17 +1181,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     "page:users": {"id": "page:users", "kind": "page"},
                 },
                 "unit_graph": {
-                    "nodes": [
-                        "database:users",
-                        "backend:endpoint:user_api:user.create",
-                        "page:users",
-                    ],
+                    "nodes": ["backend:endpoint:user_api:user.create", "page:users"],
                     "edges": [
-                        {
-                            "from": "database:users",
-                            "to": "backend:endpoint:user_api:user.create",
-                            "type": "depends_on",
-                        },
                         {
                             "from": "backend:endpoint:user_api:user.create",
                             "to": "page:users",
@@ -1250,65 +1194,19 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
             build_context={
                 "required_unit_ids": [
-                    "database:users",
                     "backend:endpoint:user_api:user.create",
                     "page:users",
                 ],
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {
-                        "schema_hash": "required-hash",
-                        "tables": [{"name": "users", "columns": []}],
-                    },
-                    "gaps": [
-                        {
-                            "id": "gap-users-table",
-                            "kind": "missing_table",
-                            "database": "xcode",
-                            "table": "users",
-                            "message": "表 users 不存在，需要创建。",
-                        }
-                    ],
-                    "task_intents": [
-                        {
-                            "id": "db-intent-gap-users-table",
-                            "operation": "create_table",
-                            "task_type": "database.change",
-                            "risk": "low",
-                            "gap_ids": ["gap-users-table"],
-                            "database_scope": {
-                                "database": "xcode",
-                                "tables": ["users"],
-                                "operations": ["create_table"],
-                                "gaps": [
-                                    {
-                                        "id": "gap-users-table",
-                                        "kind": "missing_table",
-                                        "database": "xcode",
-                                        "table": "users",
-                                        "message": "表 users 不存在，需要创建。",
-                                    }
-                                ],
-                            },
-                            "description": "表 users 不存在，需要创建。",
-                        }
-                    ],
-                },
             },
         )
 
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        self.assertIn("db-intent-gap-users-table", tasks)
-        self.assertEqual(tasks["db-intent-gap-users-table"]["owner"], "database")
-        self.assertIn("db-intent-gap-users-table", tasks["users-api"]["dependencies"])
         self.assertNotIn("users-api", tasks["users-page"]["dependencies"])
         self.assertEqual(tasks["users-page"]["dependencies"], [])
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
 
-    def test_database_task_missing_scope_uses_unique_gap_intent_scope(self) -> None:
-        """模型生成数据库任务但漏 scope 时，可由唯一 gap 意图补齐范围。"""
+    def test_database_task_missing_scope_is_not_auto_completed(self) -> None:
+        """专门数据库流程必须显式提供 scope，不再从规划上下文自动补齐。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -1321,91 +1219,30 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "task_type": "database.change",
                         "description": "补充 user 表的 entryDate 字段。",
                         "change_scope": [],
-                    },
-                    {
-                        "id": "summary-api",
-                        "unit_id": "backend:endpoint:core_api:summary",
-                        "owner": "backend",
-                        "description": "实现概览接口。",
-                        "change_scope": [
-                            {"operation": "modify", "path": "Backend/SummaryApi.java"}
-                        ],
-                    },
+                    }
                 ]
             },
             base_build_task_plan={
                 "schema_version": "build-dag.v3",
                 "build_units": {
                     "database:core": {"id": "database:core", "kind": "database"},
-                    "backend:endpoint:core_api:summary": {
-                        "id": "backend:endpoint:core_api:summary",
-                        "kind": "backend",
-                    },
                 },
                 "unit_graph": {
-                    "nodes": ["database:core", "backend:endpoint:core_api:summary"],
-                    "edges": [
-                        {
-                            "from": "database:core",
-                            "to": "backend:endpoint:core_api:summary",
-                            "type": "depends_on",
-                        }
-                    ],
+                    "nodes": ["database:core"],
+                    "edges": [],
                     "validation": {"is_valid": True, "errors": []},
                 },
             },
             build_context={
-                "required_unit_ids": [
-                    "database:core",
-                    "backend:endpoint:core_api:summary",
-                ],
-                "database_planning_context": {
-                    "schema_version": "database-context.v1",
-                    "status": "completed",
-                    "actual_schema": {"schema_hash": "actual-hash", "tables": []},
-                    "required_schema": {
-                        "schema_hash": "required-hash",
-                        "tables": [{"name": "user", "columns": [{"name": "entryDate"}]}],
-                    },
-                    "gaps": [
-                        {
-                            "id": "gap-entry-date",
-                            "kind": "missing_column",
-                            "resolution_kind": "database_change",
-                            "database": "xcode",
-                            "table": "user",
-                            "column": "entryDate",
-                            "message": "表 user 缺少字段 entryDate。",
-                        }
-                    ],
-                    "task_intents": [
-                        {
-                            "id": "db-intent-gap-entry-date",
-                            "operation": "add_column",
-                            "task_type": "database.change",
-                            "risk": "low",
-                            "gap_ids": ["gap-entry-date"],
-                            "database_scope": {
-                                "database": "xcode",
-                                "tables": ["user"],
-                                "columns": ["entryDate"],
-                                "operations": ["add_column"],
-                                "gap_ids": ["gap-entry-date"],
-                            },
-                            "description": "表 user 缺少字段 entryDate。",
-                        }
-                    ],
-                },
+                "required_unit_ids": ["database:core"],
             },
         )
 
-        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        self.assertEqual(
-            tasks["db-add-summary-columns"]["database_scope"]["columns"],
-            ["entryDate"],
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertIn(
+            "must declare non-empty database_scope",
+            " ".join(plan["task_graph"]["validation"]["errors"]),
         )
-        self.assertIn("db-add-summary-columns", tasks["summary-api"]["dependencies"])
-        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
 
     def test_invalid_graph_reader_preserves_every_registry_task(self) -> None:
         """无效 DAG 使用完整 nodes 读取，不能退化为不完整拓扑序。"""

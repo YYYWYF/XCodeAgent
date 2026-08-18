@@ -820,13 +820,6 @@ export function useChatSessions({
     sessions,
     setDraftByKey,
     setSelectedSkillsByKey,
-    setSessionMessages,
-    clearActiveSession: () => {
-      setActiveSessionIds((current) =>
-        current[editorMode] === undefined
-          ? current
-          : { ...current, [editorMode]: undefined }
-      )
-    }
+    setSessionMessages
   }
 }

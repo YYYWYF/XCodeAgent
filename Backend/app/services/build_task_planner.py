@@ -430,188 +430,6 @@ def _raw_agent_tasks(agent_plan: dict[str, Any] | None) -> Any:
     return None
 
 
-def _drop_unneeded_database_change_tasks(
-    tasks: list[dict[str, Any]],
-    build_context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """在新版 schema gaps 为空时移除多余 database.change 候选任务。"""
-
-    if not _scope_has_database_unit(build_context):
-        return tasks
-    database_context = _dict_value(build_context.get("database_planning_context"))
-    if database_context.get("status") != "completed":
-        return tasks
-    if _dict_items(database_context.get("gaps")):
-        return tasks
-    retained: list[dict[str, Any]] = []
-    for task in tasks:
-        if (
-            task.get("owner") == "database"
-            and str(task.get("task_type") or "") == "database.change"
-            and not any(_is_code_path(path) for path in _task_declared_paths(task))
-        ):
-            logger.info(
-                "build_task_plan_dropped_unneeded_database_change task_id=%s",
-                task.get("id"),
-            )
-            continue
-        retained.append(task)
-    return retained
-
-
-def _complete_database_task_scopes(
-    tasks: list[dict[str, Any]],
-    build_context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """用唯一数据库 gap 意图补齐模型遗漏的 database_scope。"""
-
-    if not _scope_has_database_unit(build_context):
-        return tasks
-    database_context = _dict_value(build_context.get("database_planning_context"))
-    if database_context.get("status") != "completed":
-        return tasks
-    intents = _dict_items(database_context.get("task_intents"))
-    if not intents:
-        return tasks
-    available_intents = [
-        intent
-        for intent in intents
-        if _dict_value(intent.get("database_scope"))
-        and _string_list(intent.get("gap_ids"))
-    ]
-    result: list[dict[str, Any]] = []
-    covered_gap_ids = _covered_database_gap_ids(tasks)
-    for task in tasks:
-        if (
-            task.get("owner") == "database"
-            and not _dict_value(task.get("database_scope"))
-            and not any(_is_code_path(path) for path in _task_declared_paths(task))
-        ):
-            candidates = [
-                intent
-                for intent in available_intents
-                if not set(_string_list(intent.get("gap_ids"))).issubset(covered_gap_ids)
-            ]
-            if len(candidates) == 1:
-                intent = candidates[0]
-                completed = {
-                    **task,
-                    "database_scope": _dict_value(intent.get("database_scope")),
-                    "source_refs": {
-                        **_dict_value(task.get("source_refs")),
-                        "type": "database_context_gap",
-                        "gap_ids": _string_list(intent.get("gap_ids")),
-                    },
-                    "risk": _text(task.get("risk"), _text(intent.get("risk"), "low")),
-                    "task_type": _text(
-                        task.get("task_type"),
-                        _text(intent.get("task_type"), "database.change"),
-                    ),
-                }
-                covered_gap_ids.update(_string_list(intent.get("gap_ids")))
-                result.append(completed)
-                continue
-            logger.info(
-                "build_task_plan_kept_unscoped_database_task task_id=%s reason=no_unique_gap",
-                task.get("id"),
-            )
-        result.append(task)
-    return result
-
-
-def _ensure_database_intent_tasks(
-    tasks: list[dict[str, Any]],
-    build_context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """把数据库上下文中的确定性任务意图补进模型候选任务列表。"""
-
-    if not _scope_has_database_unit(build_context):
-        return tasks
-    database_context = _dict_value(build_context.get("database_planning_context"))
-    if database_context.get("status") != "completed":
-        return tasks
-    intents = _dict_items(database_context.get("task_intents"))
-    if not intents:
-        return tasks
-    covered_gap_ids = _covered_database_gap_ids(tasks)
-    result = list(tasks)
-    for index, intent in enumerate(intents, start=1):
-        gap_ids = _string_list(intent.get("gap_ids"))
-        if gap_ids and all(gap_id in covered_gap_ids for gap_id in gap_ids):
-            continue
-        result.append(_database_task_from_intent(intent, index, build_context))
-        covered_gap_ids.update(gap_ids)
-    return result
-
-
-def _scope_has_database_unit(build_context: dict[str, Any]) -> bool:
-    """判断当前构建范围是否包含 database:* 单元（仅全量构建需要数据库任务）。"""
-
-    return any(
-        str(unit_id).startswith("database:")
-        for unit_id in build_context.get("required_unit_ids") or []
-    )
-
-
-def _covered_database_gap_ids(tasks: list[dict[str, Any]]) -> set[str]:
-    """统计当前数据库任务已经覆盖的 gap id。"""
-
-    return {
-        str(gap_id)
-        for task in tasks
-        if task.get("owner") == "database"
-        for gap_id in _string_list(_dict_value(task.get("database_scope")).get("gap_ids"))
-    }
-
-
-def _database_task_from_intent(
-    intent: dict[str, Any],
-    index: int,
-    build_context: dict[str, Any],
-) -> dict[str, Any]:
-    """把单个数据库任务意图转换成 DAG v3 叶子任务。"""
-
-    task_id = str(intent.get("id") or f"database-gap-{index:03d}")
-    description = _text(intent.get("description"), "补齐数据库结构以满足接口需求。")
-    database_unit_ids = [
-        str(unit_id)
-        for unit_id in build_context.get("required_unit_ids") or []
-        if str(unit_id).startswith("database:")
-    ]
-    unit_id = database_unit_ids[0] if database_unit_ids else "database:database"
-    database_scope = _dict_value(intent.get("database_scope"))
-    database_scope["gap_ids"] = _string_list(intent.get("gap_ids"))
-    return {
-        "id": task_id,
-        "owner": "database",
-        "task_type": _text(intent.get("task_type"), "database.change"),
-        "title": description,
-        "description": description,
-        "dependencies": [],
-        "status": "pending",
-        "unit_id": unit_id,
-        "source_refs": {
-            "type": "database_context_gap",
-            "gap_ids": _string_list(intent.get("gap_ids")),
-        },
-        "requires_capabilities": [],
-        "provides_capabilities": [unit_id],
-        "database_scope": database_scope,
-        "risk": _text(intent.get("risk"), "low"),
-        "approval": {"required": _text(intent.get("risk"), "low") == "high"},
-        "allowed_paths": [],
-        "target_files": [],
-        "change_scope": [],
-        "impact_scope": _impact_scope({}, description),
-        "can_run_in_parallel": False,
-        "parallel_reason": "数据库结构变更按同一连接串行执行。",
-        "acceptance_criteria": [
-            "数据库上下文复查时对应 schema gap 已消除。",
-        ],
-        "verification_commands": [],
-    }
-
-
 def _annotate_parallelism(
     tasks: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -728,8 +546,7 @@ def _task_semantic_errors(
     """校验 DAG 拓扑之外的 owner、Unit、数据库职责和审批语义。"""
 
     errors: list[str] = []
-    database_context = _dict_value(build_context.get("database_planning_context"))
-    database_context_completed = database_context.get("status") == "completed"
+    required_unit_ids = _string_list(build_context.get("required_unit_ids"))
     for task in tasks:
         task_id = str(task.get("id") or "")
         owner = str(task.get("owner") or "")
@@ -743,12 +560,17 @@ def _task_semantic_errors(
         if unit_id.startswith(("page:", "frontend:")) and owner != "frontend":
             errors.append(f"Task {task_id} is in frontend/page Unit {unit_id} but owner is {owner}.")
         if owner == "database":
+            if required_unit_ids and not any(
+                candidate.startswith("database:") for candidate in required_unit_ids
+            ):
+                errors.append(
+                    f"Database task {task_id} is not allowed in normal Build scope; "
+                    "database changes are completed during entity confirmation."
+                )
             errors.extend(
                 _database_task_semantic_errors(
                     task,
                     paths=paths,
-                    database_context_completed=database_context_completed,
-                    database_context=database_context,
                 )
             )
         elif task.get("database_scope"):
@@ -763,8 +585,6 @@ def _database_task_semantic_errors(
     task: dict[str, Any],
     *,
     paths: list[str],
-    database_context_completed: bool,
-    database_context: dict[str, Any],
 ) -> list[str]:
     """校验 database task 只能处理数据库，不能混入代码修改。"""
 
@@ -774,24 +594,12 @@ def _database_task_semantic_errors(
     if task_type not in {"database.change", "database.seed", "database.verify"}:
         errors.append(f"Database task {task_id} has invalid task_type {task_type}.")
     if not isinstance(task.get("database_scope"), dict) or not task.get("database_scope"):
-        match_count = len(
-            [
-                intent
-                for intent in _dict_items(database_context.get("task_intents"))
-                if _dict_value(intent.get("database_scope"))
-            ]
-        )
-        errors.append(
-            f"Database task {task_id} must declare non-empty database_scope; "
-            f"matched_database_change_gap_count={match_count}."
-        )
+        errors.append(f"Database task {task_id} must declare non-empty database_scope.")
     code_paths = [path for path in paths if _is_code_path(path)]
     if code_paths:
         errors.append(
             f"Database task {task_id} must not modify code files: {', '.join(code_paths)}."
         )
-    if not database_context_completed:
-        errors.append(f"Database task {task_id} requires completed database-context.v1.")
     if _database_task_requires_approval(task) and not _approval_required(task):
         errors.append(f"High-risk database task {task_id} must require user approval.")
     return errors
@@ -1003,9 +811,6 @@ def create_build_task_plan(
         workspace_root=workspace_root,
         build_context=context,
     )
-    proposed_tasks = _drop_unneeded_database_change_tasks(proposed_tasks, context)
-    proposed_tasks = _complete_database_task_scopes(proposed_tasks, context)
-    proposed_tasks = _ensure_database_intent_tasks(proposed_tasks, context)
     logger.info(
         "build_task_plan_normalization parsed_keys=%s raw_tasks_type=%s raw_tasks_count=%s "
         "valid_tasks_count=%s valid_task_ids=%s",
