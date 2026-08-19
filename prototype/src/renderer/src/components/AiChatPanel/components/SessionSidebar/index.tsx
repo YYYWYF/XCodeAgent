@@ -937,8 +937,8 @@ export default function SessionSidebar(props: SessionSidebarProps): ReactElement
         className={cx('navigation-view-switch')}
         onChange={(value) => setView(value as NavigationView)}
         options={[
-          { label: '产物', value: 'artifacts' },
-          { label: '对话', value: 'tasks' }
+          { label: '产物视图', value: 'artifacts' },
+          { label: '对话视图', value: 'tasks' }
         ]}
         value={view}
       />

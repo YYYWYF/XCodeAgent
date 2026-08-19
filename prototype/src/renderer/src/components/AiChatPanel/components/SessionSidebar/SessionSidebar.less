@@ -1441,24 +1441,6 @@
   background: var(--wb-surface-subtle);
   border: 1px solid var(--wb-border);
   border-radius: 5px;
-
-  &.@{class-prefix}-stage-1 {
-    color: var(--wb-accent);
-    background: var(--wb-accent-soft);
-    border-color: var(--wb-accent-border);
-  }
-
-  &.@{class-prefix}-stage-2 {
-    color: #7652d7;
-    background: rgba(118, 82, 215, 0.09);
-    border-color: rgba(118, 82, 215, 0.2);
-  }
-
-  &.@{class-prefix}-stage-3 {
-    color: #a76508;
-    background: rgba(211, 132, 20, 0.1);
-    border-color: rgba(211, 132, 20, 0.22);
-  }
 }
 
 .@{class-prefix}-task-conversation-delete,
@@ -1646,6 +1628,16 @@
       opacity: 1;
     }
   }
+
+  /* 不可用产物不给任何 hover 反馈：禁用只靠灰化呈现，避免暗示可交互。 */
+  &:has(> .@{class-prefix}-artifact-row:disabled):hover,
+  &:has(> .@{class-prefix}-artifact-row:disabled):focus-within {
+    background: transparent;
+
+    .@{class-prefix}-artifact-more {
+      opacity: 0;
+    }
+  }
 }
 
 .@{class-prefix}-artifact-row {
@@ -1693,8 +1685,7 @@
 
   &:disabled {
     color: var(--wb-text-tertiary);
-    cursor: not-allowed;
-    opacity: 0.58;
+    cursor: default;
   }
 }
 
@@ -1799,16 +1790,6 @@
   }
   .@{class-prefix}-artifact-status-dot {
     background: #666e80;
-  }
-  .@{class-prefix}-sidebar-phase-index.@{class-prefix}-stage-2 {
-    color: #bda9ff;
-    background: rgba(150, 115, 255, 0.13);
-    border-color: rgba(177, 150, 255, 0.25);
-  }
-  .@{class-prefix}-sidebar-phase-index.@{class-prefix}-stage-3 {
-    color: #e2ad5c;
-    background: rgba(224, 160, 65, 0.13);
-    border-color: rgba(224, 160, 65, 0.25);
   }
   .@{class-prefix}-artifact-conversation-menu.ant-dropdown-menu {
     --wb-surface: #171d29;

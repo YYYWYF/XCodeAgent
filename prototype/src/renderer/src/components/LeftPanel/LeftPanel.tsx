@@ -36,6 +36,10 @@ type Props = {
   versionReadOnly: boolean
   versionPreviewOnly: boolean
   versionViewKey: string
+  /** 顶部阶段条请求打开“进入审查”确认弹框的自增信号（透传给聊天面板）。 */
+  reviewEntryRequest?: number
+  /** 聊天面板上报审查阶段是否具备进入条件（透传给工作台页）。 */
+  onReviewEntryAvailableChange?: (available: boolean) => void
 }
 
 /** 组合工作台左侧应用导航与主 Workflow 面板。 */
@@ -60,7 +64,9 @@ export default function LeftPanel({
   theme,
   versionReadOnly,
   versionPreviewOnly,
-  versionViewKey
+  versionViewKey,
+  reviewEntryRequest,
+  onReviewEntryAvailableChange
 }: Props): ReactElement {
   return (
     <div className={cx('left-panel-wrapper')}>
@@ -89,6 +95,8 @@ export default function LeftPanel({
             versionReadOnly={versionReadOnly}
             versionPreviewOnly={versionPreviewOnly}
             versionViewKey={versionViewKey}
+            reviewEntryRequest={reviewEntryRequest}
+            onReviewEntryAvailableChange={onReviewEntryAvailableChange}
           />
         </div>
       </Sider>

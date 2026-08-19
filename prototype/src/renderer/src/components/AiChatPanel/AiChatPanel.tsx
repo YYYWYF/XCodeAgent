@@ -107,6 +107,10 @@ type Props = {
   versionReadOnly: boolean
   versionPreviewOnly: boolean
   versionViewKey: string
+  /** 顶部阶段条请求打开“进入审查”确认弹框的自增信号。 */
+  reviewEntryRequest?: number
+  /** 向顶部阶段条上报审查阶段是否具备进入条件（“允许进入”不等于“已进入”）。 */
+  onReviewEntryAvailableChange?: (available: boolean) => void
 }
 
 type ActiveView = 'chat' | 'skills' | 'files' | 'settings'
@@ -360,7 +364,9 @@ export default function AiChatPanel({
   theme,
   versionReadOnly,
   versionPreviewOnly,
-  versionViewKey
+  versionViewKey,
+  reviewEntryRequest,
+  onReviewEntryAvailableChange
 }: Props): ReactElement {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   // 设计阶段文档编辑态:editedDesignDocs 存保存后的编辑版(覆盖静态产物显示);
@@ -545,6 +551,13 @@ export default function AiChatPanel({
         isEndpointDesigned(contract.id, String(endpoint.id || ''))
       )
     )
+  // 审查阶段“允许进入”判定：与“当前所在阶段”解耦——全部开发产物完成后即使弹框被暂缓，
+  // 顶部阶段条仍可发起进入确认；进入后或旅程推进后该信号自动撤销。
+  const reviewEntryAvailable =
+    activeWorkbenchPhase === 'development' &&
+    allDevelopmentModulesComplete &&
+    !versionReadOnly &&
+    !reviewTransitionRequested
   const {
     assistantPanelWidth,
     handlePanelSplitKeyDown,
@@ -1030,6 +1043,18 @@ export default function AiChatPanel({
     versionReadOnly,
     versionViewKey
   ])
+  // 向顶部阶段条上报审查阶段是否具备进入条件，供其放开审查节点点击。
+  useEffect(() => {
+    onReviewEntryAvailableChange?.(reviewEntryAvailable)
+  }, [onReviewEntryAvailableChange, reviewEntryAvailable])
+  // 顶部阶段条发起进入请求时复用同一个确认弹框：只有确认动作才创建审查对话并推进阶段。
+  const handledReviewEntryRequestRef = useRef(0)
+  useEffect(() => {
+    if (!reviewEntryRequest || reviewEntryRequest <= handledReviewEntryRequestRef.current) return
+    handledReviewEntryRequestRef.current = reviewEntryRequest
+    if (!reviewEntryAvailable) return
+    setDevelopmentCompleteModalOpen(true)
+  }, [reviewEntryAvailable, reviewEntryRequest])
   const activeDesignSessionSummary = activeSession
     ? sessions.find((session) => session.id === activeSession.sessionId)
     : undefined

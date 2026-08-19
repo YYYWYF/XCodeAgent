@@ -29,6 +29,10 @@ type Props = {
   onRollbackVersion: (versionId: string) => void
   onStartIteration: () => void
   onVersionSelect: (versionId: string) => void
+  /** 审查阶段是否具备进入条件（全部开发产物已完成；“允许进入”不等于“已进入”）。 */
+  canEnterReviewStage?: boolean
+  /** 用户点击具备进入条件的审查阶段节点时，发起进入审查确认。 */
+  onRequestEnterReview?: () => void
 }
 
 /**
@@ -50,15 +54,24 @@ export default function WorkbenchTopBar({
   onPublishVersion,
   onRollbackVersion,
   onStartIteration,
-  onVersionSelect
+  onVersionSelect,
+  canEnterReviewStage,
+  onRequestEnterReview
 }: Props): JSX.Element {
   const { phase, derivedPhase, locked, manualOverride, switchPhase } = useWorkbenchPhase()
   const following = manualOverride === null
   // 回到前序阶段会改变当前执行状态，需要确认；向后续阶段推进不额外打断。
   const [confirmPhase, setConfirmPhase] = useState<WorkbenchPhase | null>(null)
+  /** 处理阶段节点点击：未到达且不具备条件的阶段不可点，其余按回退/进入分流。 */
   const handlePhaseClick = (phaseKey: WorkbenchPhase): void => {
     if (locked || phaseKey === phase) return
-    if (PHASE_ORDER.indexOf(phaseKey) < PHASE_ORDER.indexOf(phase)) {
+    const targetIndex = PHASE_ORDER.indexOf(phaseKey)
+    // 旅程尚未到达审查、但开发产物已全部完成：允许进入，点击先走确认弹框而不是直接切视图。
+    if (targetIndex > PHASE_ORDER.indexOf(derivedPhase) && phaseKey === 'test' && canEnterReviewStage) {
+      onRequestEnterReview?.()
+      return
+    }
+    if (targetIndex < PHASE_ORDER.indexOf(phase)) {
       setConfirmPhase(phaseKey)
       return
     }
@@ -90,6 +103,9 @@ export default function WorkbenchTopBar({
           {PHASE_ORDER.map((phaseKey, idx) => {
             const isActive = phase === phaseKey
             const reached = PHASE_ORDER.indexOf(derivedPhase) >= idx
+            // 审查阶段具备进入条件时视同“已到达”：沿用可点击的未选中样式，不新增视觉状态。
+            const reachable =
+              reached || (!locked && phaseKey === 'test' && Boolean(canEnterReviewStage))
             return (
               <Fragment key={phaseKey}>
                 {idx > 0 ? (
@@ -104,9 +120,9 @@ export default function WorkbenchTopBar({
                   className={cx(
                     'workbench-topbar-phase-item',
                     isActive && 'active',
-                    reached && !isActive && 'reached'
+                    reachable && !isActive && 'reached'
                   )}
-                  disabled={locked || !reached}
+                  disabled={locked || !reachable}
                   onClick={() => handlePhaseClick(phaseKey)}
                 >
                   <span className={cx('workbench-topbar-phase-index')} aria-hidden="true">

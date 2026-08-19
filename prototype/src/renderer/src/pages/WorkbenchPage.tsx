@@ -105,6 +105,10 @@ function WorkbenchPage({
   const [applicationPreviewMode, setApplicationPreviewMode] = useState(false)
   const [publishModalOpen, setPublishModalOpen] = useState(false)
   const [iterationModalOpen, setIterationModalOpen] = useState(false)
+  // 审查阶段进入口：聊天面板上报“允许进入”（全部开发产物完成），顶部阶段条发起“进入确认”。
+  // “允不允许进入”与“当前进没进去”是两个状态，分别由这两个 state 承载。
+  const [reviewEntryAvailable, setReviewEntryAvailable] = useState(false)
+  const [reviewEntryRequest, setReviewEntryRequest] = useState(0)
   // 生成版本:版本描述(提交日志)+ 多步骤进度态(打包/提交码云/打Tag)。
   const [versionDescription, setVersionDescription] = useState('')
   const [generating, setGenerating] = useState<{ stepIndex: number } | null>(null)
@@ -578,6 +582,8 @@ function WorkbenchPage({
               onRollbackVersion={setRollbackTargetId}
               onStartIteration={() => setIterationModalOpen(true)}
               onVersionSelect={handleVersionSelect}
+              canEnterReviewStage={reviewEntryAvailable}
+              onRequestEnterReview={() => setReviewEntryRequest((count) => count + 1)}
             />
             <div className={cx('workbench-shell-body')}>
               <LeftPanel
@@ -602,6 +608,8 @@ function WorkbenchPage({
                 versionViewKey={viewedVersion?.id || ''}
                 versionReadOnly={!isViewingActiveVersion || viewedVersion?.status === 'released'}
                 versionPreviewOnly={!isViewingActiveVersion}
+                reviewEntryRequest={reviewEntryRequest}
+                onReviewEntryAvailableChange={setReviewEntryAvailable}
               />
             </div>
           </div>
