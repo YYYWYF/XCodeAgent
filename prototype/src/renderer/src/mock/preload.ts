@@ -40,7 +40,6 @@ import {
   presetCompletedVersionIds
 } from './fixtures'
 import { mockApplicationInPlanning } from './mockHttpAgent'
-import { isEndpointDesigned, isPageDesigned } from './designState'
 import { preloadPresetTestCaseTasks } from '../backgroundTasks'
 import { TEST_CASE_BLUEPRINTS } from '../testCasePreparation'
 import {
@@ -49,6 +48,13 @@ import {
   readInitializationPlanningRecord
 } from '../initializationPlanning'
 import type { InitializationPlanningSeed } from '../initializationPlanning'
+import {
+  isAgentDesigned,
+  isEndpointDesigned,
+  isEntityDesigned,
+  isPageDesigned
+} from './designState'
+import type { DevelopmentPlanningAgent } from '../agentDevelopment'
 
 // 预览地址跟随当前页面主机名：本机访问走 127.0.0.1，局域网设备访问时自动指向原型所在机器。
 const MOCK_APPLICATION_PREVIEW_URL = `http://${window.location.hostname || '127.0.0.1'}:5190`
@@ -133,9 +139,18 @@ function findAppSchema(workspaceRoot?: string) {
 
 // 把运行时已确认设计的页面标记到规划产物，避免设计完成后仍显示未设计。
 // 注意：artifacts 里自带的 designed 状态保留，只把 designState 中本会话内确认设计的页面额外标为 designed。
-function withDesignedPages(artifacts: { pages: unknown[]; pageTree: unknown[]; apiContracts: unknown[] }) {
+function withDesignedPages(
+  artifacts: {
+    pages: unknown[]
+    pageTree: unknown[]
+    apiContracts: unknown[]
+    entities: any[]
+    agents: DevelopmentPlanningAgent[]
+  },
+  versionKey?: string
+) {
   const markPage = (page: any) =>
-    isPageDesigned(page?.pageId || '')
+    isPageDesigned(page?.pageId || '', versionKey)
       ? { ...page, designed: true, hasDetailPlan: true, detailPlanStatus: 'confirmed' }
       : page
   const markNode = (node: any): any => {
@@ -148,7 +163,7 @@ function withDesignedPages(artifacts: { pages: unknown[]; pageTree: unknown[]; a
     endpoints: (contract.endpoints || []).map((endpoint: any, index: number) => {
       const rawEndpointId = endpoint.id || String(index + 1)
       const apiContractId = endpoint.apiContractId || contract.id
-      return isEndpointDesigned(apiContractId, rawEndpointId)
+      return isEndpointDesigned(apiContractId, rawEndpointId, versionKey)
         ? { ...endpoint, designed: true, hasDetailPlan: true }
         : endpoint
     })
@@ -157,7 +172,17 @@ function withDesignedPages(artifacts: { pages: unknown[]; pageTree: unknown[]; a
     ...artifacts,
     pages: artifacts.pages.map(markPage),
     pageTree: artifacts.pageTree.map(markNode),
-    apiContracts: artifacts.apiContracts.map(markEndpoint)
+    apiContracts: artifacts.apiContracts.map(markEndpoint),
+    entities: artifacts.entities.map((entity) =>
+      isEntityDesigned(String(entity.entityId || ''), versionKey)
+        ? { ...entity, designed: true, hasDetailPlan: true, detailPlanStatus: 'confirmed' }
+        : entity
+    ),
+    agents: artifacts.agents.map((agent) =>
+      isAgentDesigned(agent.id, versionKey)
+        ? { ...agent, designed: true, hasDetailPlan: true, detailPlanStatus: 'confirmed' }
+        : agent
+    )
   }
 }
 
@@ -190,7 +215,13 @@ function mergeMockSessions(
 }
 
 // 把共享的 v1.3 完成态规划产物还原为新应用/新迭代的待开发基线，再叠加本次运行已确认的任务。
-function asPendingPlanningArtifacts(artifacts: { pages: any[]; pageTree: any[]; apiContracts: any[] }) {
+function asPendingPlanningArtifacts(artifacts: {
+  pages: any[]
+  pageTree: any[]
+  apiContracts: any[]
+  entities: any[]
+  agents: DevelopmentPlanningAgent[]
+}) {
   const resetPage = (page: any): any => ({
     ...page,
     designed: false,
@@ -212,6 +243,18 @@ function asPendingPlanningArtifacts(artifacts: { pages: any[]; pageTree: any[]; 
         designed: false,
         hasDetailPlan: false
       }))
+    })),
+    entities: artifacts.entities.map((entity: any) => ({
+      ...entity,
+      designed: false,
+      hasDetailPlan: false,
+      detailPlanStatus: 'pending'
+    })),
+    agents: artifacts.agents.map((agent) => ({
+      ...agent,
+      designed: false,
+      hasDetailPlan: false,
+      detailPlanStatus: 'pending'
     })),
     hasPageDesigns: false
   }
@@ -269,7 +312,8 @@ const aiStudio = {
         withDesignedPages(
           presetCompletedVersionIds.has(String(versionId || ''))
             ? artifacts
-            : asPendingPlanningArtifacts(artifacts as never)
+            : asPendingPlanningArtifacts(artifacts as never),
+          versionId
         )
       )
     }

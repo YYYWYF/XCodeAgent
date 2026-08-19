@@ -9,6 +9,7 @@ import type {
 import BusinessObjectDevelopmentPanel from '../../../BusinessObjects/BusinessObjectDevelopmentPanel'
 import { useBusinessObjects } from '../../../BusinessObjects/store'
 import type { WorkbenchArtifactStatus } from '../../../../workbenchDomain'
+import type { DevelopmentPlanningAgent } from '../../../../agentDevelopment'
 import { cx } from '../../../../utils'
 import { DevelopmentArtifactTree } from '../SessionSidebar/DevelopmentArtifactTree'
 import './DevelopmentArtifactsPanel.less'
@@ -17,7 +18,7 @@ export type DevelopmentArtifactItem = {
   groupId?: string
   groupLabel?: string
   id: string
-  kind: 'business-object' | 'page'
+  kind: 'agent' | 'business-object' | 'endpoint' | 'entity' | 'page'
   label: string
   path: string
   status: WorkbenchArtifactStatus
@@ -25,6 +26,7 @@ export type DevelopmentArtifactItem = {
 
 type Props = {
   activeId?: string
+  agents: DevelopmentPlanningAgent[]
   apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
   requirementSpec: Record<string, unknown>
@@ -71,6 +73,70 @@ function pagePreviewReady(status: WorkbenchArtifactStatus): boolean {
   return status === 'completed' || status === 'awaiting-review'
 }
 
+/** 将领域状态转换为接口内容区使用的中文文案；实现阶段状态由后台任务流水推导。 */
+function statusLabel(status: WorkbenchArtifactStatus): string {
+  if (status === 'completed') return '已完成'
+  if (status === 'awaiting-review') return '待继续'
+  if (status === 'implementing') return '执行中'
+  if (status === 'impl-queued') return '排队中'
+  if (status === 'failed') return '失败'
+  if (status === 'in-progress') return '进行中'
+  return '未开始'
+}
+
+/** 渲染精简的接口调试内容，保持原型可交互但不连接真实后端。 */
+function EndpointDebugContent({ item }: { item: DevelopmentArtifactItem }): ReactElement {
+  const [requestBody, setRequestBody] = useState(`{
+  "page": 1,
+  "pageSize": 20
+}`)
+  const [responseBody, setResponseBody] = useState('')
+  const method = item.label.split(' ')[0] || 'GET'
+
+  /** 用固定演示结果模拟请求响应，供接口产物内容区快速演示。 */
+  const handleSend = (): void => {
+    setResponseBody(
+      JSON.stringify(
+        {
+          code: 200,
+          data: { items: [], page: 1, pageSize: 20, total: 0 },
+          message: 'success'
+        },
+        null,
+        2
+      )
+    )
+  }
+
+  return (
+    <section aria-label="接口调试" className={cx('development-artifact-endpoint-content')}>
+      <header className={cx('development-artifact-content-header')}>
+        <div>
+          <span className={cx('development-artifact-method', method.toLowerCase())}>{method}</span>
+          <strong>{item.path}</strong>
+          <small>{item.label}</small>
+        </div>
+        <span className={cx('development-artifact-content-status')}>{statusLabel(item.status)}</span>
+      </header>
+      <div className={cx('development-artifact-request-bar')}>
+        <span className={cx('development-artifact-request-method')}>{method}</span>
+        <code>{item.path}</code>
+        <button type="button" onClick={handleSend}>发送</button>
+      </div>
+      <div className={cx('development-artifact-debug-grid')}>
+        <label>
+          <span>请求参数</span>
+          <textarea aria-label="请求参数" onChange={(event) => setRequestBody(event.target.value)} value={requestBody} />
+        </label>
+        <label>
+          <span>响应结果</span>
+          <pre aria-label="响应结果">{responseBody || '点击发送后查看响应结果'}</pre>
+        </label>
+      </div>
+    </section>
+  )
+}
+
 /** 按当前产物类型呈现页面预览或实体的数据绑定工作台。 */
 function DevelopmentArtifactContent({
   activeItem,
@@ -106,6 +172,18 @@ function DevelopmentArtifactContent({
       <div className={cx('development-artifact-content-empty')}>从左侧目录选择一个开发产物</div>
     )
   }
+  if (activeItem.kind === 'endpoint') return <EndpointDebugContent item={activeItem} />
+  if (activeItem.kind === 'agent') {
+    return (
+      <div className={cx('development-artifact-content-empty')}>
+        <strong>{activeItem.label}</strong>
+        <span>在左侧对话中确认智能体详细设计，完成后可查看 Python Runtime 产物。</span>
+      </div>
+    )
+  }
+  if (activeItem.kind === 'entity') {
+    return <div className={cx('development-artifact-content-empty')}>实体设计敬请期待</div>
+  }
   if (activeItem.status === 'failed') {
     return (
       <div className={cx('development-artifact-content-empty')}>
@@ -132,6 +210,7 @@ function DevelopmentArtifactContent({
 /** 承载旧版产物目录和当前产物内容，复用“应用文件”的右目录布局。 */
 export default function DevelopmentArtifactsPanel({
   activeId,
+  agents,
   apiContracts,
   application,
   requirementSpec,
@@ -220,6 +299,29 @@ export default function DevelopmentArtifactsPanel({
                 activeItem?.kind === 'page' ? activeItem.id.replace(/^page:/, '') : ''
               }
             />
+            {agents.length > 0 ? (
+              <div className={cx('development-artifact-agent-list')}>
+                <strong>智能体</strong>
+                {agents.map((agent) => {
+                  const item = itemById.get(`agent:${agent.id}`)
+                  if (!item) return null
+                  return (
+                    <button
+                      className={cx(
+                        'development-artifact-agent-item',
+                        activeItem?.id === item.id && 'active'
+                      )}
+                      key={agent.id}
+                      onClick={() => onSelect(item)}
+                      type="button"
+                    >
+                      <span>{agent.label}</span>
+                      <small>{statusLabel(item.status)}</small>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
           </div>
         </aside>
         <main className={cx('development-artifacts-content')}>

@@ -5,6 +5,7 @@ import type {
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntity
 } from '../src/renderer/src/typings'
+import type { DevelopmentPlanningAgent } from '../src/renderer/src/agentDevelopment'
 
 // —— pms-new 新建主旅程（需求回检单模块）——
 import { pmsNewApplication, WORKSPACE_ROOT as NEW_ROOT } from './pms-new/application'
@@ -32,6 +33,7 @@ export type PlanningArtifactsShape = {
   pageTree: Array<Record<string, unknown>>
   apiContracts: DevelopmentPlanningApiContract[]
   entities: DevelopmentPlanningEntity[]
+  agents: DevelopmentPlanningAgent[]
 }
 
 export type AppScenario = {
@@ -135,6 +137,7 @@ export const presetCompletedVersionIds: ReadonlySet<string> = new Set(
 
 /** 按 workspaceRoot 路由；唯一场景直接返回新建应用数据。 */
 export function appDataByWorkspace(_workspaceRoot?: string): AppScenario {
+  void _workspaceRoot
   return NEW_SCENARIO
 }
 

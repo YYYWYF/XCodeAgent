@@ -581,6 +581,7 @@ def _resolve_build_context(
         "entity_ids": [],
         "endpoint_designs": [],
         "source_types": [],
+        "agent_contracts": list(project_plan.get("agent_contracts") or []),
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         "source_refs": {},
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
