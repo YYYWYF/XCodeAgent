@@ -6,6 +6,8 @@ import type {
   WorkspaceCodeChangeSet
 } from '../../typings'
 import type { WorkbenchPhase } from '../../workbenchPhase'
+import type { AgentDetailBlocker } from '../../agentDevelopment'
+import type { ChatSessionMessage } from '../../service/chatSessions'
 
 export type AgentChatMessage = {
   id: number
@@ -18,23 +20,8 @@ export type AgentChatMessage = {
   codeChanges?: WorkspaceCodeChangeSet
   toolCalls?: ToolCallRecord[]
   processSteps?: ProcessStepRecord[]
-  /** 待设计目标挡板：作为对话历史消息持久化，支持页面与接口两类详细设计入口。 */
-  detailBlocker?:
-    | {
-        type: 'page'
-        pageId: string
-        label: string
-        path?: string
-        purpose?: string
-      }
-    | {
-        type: 'endpoint'
-        apiContractId: string
-        endpointId: string
-        label: string
-        path?: string
-        purpose?: string
-      }
+  /** 待设计目标挡板：作为对话历史消息持久化，支持页面、接口与智能体详细设计入口。 */
+  detailBlocker?: ChatSessionMessage['detailBlocker'] | AgentDetailBlocker
   /** 引导消息的快速动作：artifact-launch = 内嵌「选择产物并发起实施」快速按钮。 */
   guideAction?: 'artifact-launch'
   createdAt: number
@@ -45,6 +32,8 @@ export type WorkspaceDocKey = 'requirement-spec' | 'project-plan'
 
 export type RightPanelState =
   | { type: 'preview'; requestKey?: string; url?: string }
+  | { type: 'agent-config' }
+  | { type: 'agent-preview' }
   | {
       type: 'diff'
       codeChanges: WorkspaceCodeChangeSet
