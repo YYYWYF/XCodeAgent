@@ -21,8 +21,37 @@
     }
   ],
   "pages": [
-    { "pageId": "recheck-introduction", "name": "回检介绍", "path": "/recheck-introduction", "description": "静态介绍需求回检场景与处理流程" },
-    { "pageId": "my-rechecks", "name": "我的回检", "path": "/my-rechecks", "description": "回检填报" }
+    {
+      "pageId": "recheck-introduction",
+      "name": "回检介绍",
+      "path": "/recheck-introduction",
+      "description": "静态介绍需求回检场景与处理流程"
+    },
+    {
+      "pageId": "my-rechecks",
+      "name": "我的回检",
+      "path": "/my-rechecks",
+      "description": "回检填报"
+    }
+  ],
+  "agents": [
+    {
+      "id": "recheck-assistant",
+      "name": "回检填报助手",
+      "purpose": "解释当前用户的回检状态，并给出下一步操作建议。",
+      "pages": ["my-rechecks"],
+      "interaction": "用户在“我的回检”页面打开助手，通过连续多轮消息获得回复，并可查看本轮工具调用摘要和数据来源。",
+      "boundaries": [
+        "只读取当前用户可见的回检单",
+        "不代替用户提交、修改或审核回检单",
+        "工具失败时明确提示并提供重试入口，不编造业务数据"
+      ],
+      "acceptance_criteria": [
+        "能够解释待审核、已驳回等回检状态并给出可执行建议",
+        "连续追问时保留本次会话上下文",
+        "回复包含工具调用摘要和数据来源说明"
+      ]
+    }
   ],
   "business_flows": [
     {
@@ -45,9 +74,8 @@
   },
   "acceptance_criteria": [
     "回检介绍无需接口即可完整展示",
-    "可提交回检单并跟踪状态"
+    "可提交回检单并跟踪状态",
+    "我的回检页面可打开回检填报助手并通过发送消息获得回复"
   ],
-  "assumptions": [
-    "角色与流程细节待设计阶段澄清确认"
-  ]
+  "assumptions": ["角色与流程细节待设计阶段澄清确认"]
 }

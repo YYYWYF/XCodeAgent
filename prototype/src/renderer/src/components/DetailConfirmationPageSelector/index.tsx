@@ -13,7 +13,7 @@ import "./DetailConfirmationPageSelector.less";
 
 const { Text } = Typography;
 
-type DetailTargetType = "page" | "endpoint";
+type DetailTargetType = "page" | "endpoint" | "agent";
 
 type Props = {
   disabled: boolean;
@@ -22,12 +22,13 @@ type Props = {
   /** 仅在当前工作流正在启动时显示按钮加载态；历史卡片禁用但不显示转圈。 */
   loading?: boolean;
   onStart?: (
-    targetType: "page" | "endpoint",
+    targetType: "page" | "endpoint" | "agent",
     targetId: string,
     targetLabel: string,
     hasDetailPlan: boolean,
     targetContext?: {
       apiContractId?: string;
+      agentId?: string;
       endpointId?: string;
       /** 选中的页面模板 ID（可选） */
       templateId?: string;
@@ -45,6 +46,13 @@ type Props = {
     path?: string;
     purpose?: string;
   };
+  selectedAgent?: {
+    agentId: string;
+    hasDetailPlan?: boolean;
+    label: string;
+    model: string;
+    purpose: string;
+  };
   selectedPage?: DevelopmentPlanningPageOption;
 };
 
@@ -55,26 +63,31 @@ export default function DetailConfirmationPageSelector({
   embedded = false,
   loading = false,
   onStart,
+  selectedAgent: progressAgent,
   selectedEndpoint: progressEndpoint,
   selectedPage: progressPage,
 }: Props): JSX.Element {
   const [focusedTemplateIndex, setFocusedTemplateIndex] = useState(0);
   const templates = useMemo(() => getAvailableTemplates(), []);
 
-  const progressTarget = progressEndpoint || progressPage;
-  const progressTargetType: DetailTargetType | undefined = progressEndpoint
-    ? "endpoint"
-    : progressPage
-      ? "page"
-      : undefined;
+  const progressTarget = progressAgent || progressEndpoint || progressPage;
+  const progressTargetType: DetailTargetType | undefined = progressAgent
+    ? "agent"
+    : progressEndpoint
+      ? "endpoint"
+      : progressPage
+        ? "page"
+        : undefined;
   if (!progressTarget || !progressTargetType) {
     return <div className={cx("detail-page-selector-inline")} />;
   }
 
   const lockedTargetId =
-    progressTargetType === "endpoint"
-      ? progressEndpoint?.endpointId
-      : progressPage?.pageId;
+    progressTargetType === "agent"
+      ? progressAgent?.agentId
+      : progressTargetType === "endpoint"
+        ? progressEndpoint?.endpointId
+        : progressPage?.pageId;
   /** 组装当前选中模板的上下文，供 onStart 携带给后端学习模板源码。 */
   const buildTemplateContext = (): {
     templateId: string;
@@ -140,7 +153,11 @@ export default function DetailConfirmationPageSelector({
           <div className={cx("detail-page-selector-inline-title")}>
             <span className={cx("detail-page-selector-inline-signal")} aria-hidden="true" />
             <Text className={cx("detail-page-selector-inline-name")} strong>
-              {progressTargetType === "endpoint" ? "接口详细设计" : "选择页面模板"}
+              {progressTargetType === "agent"
+                ? "智能体详细设计"
+                : progressTargetType === "endpoint"
+                  ? "接口详细设计"
+                  : "选择页面模板"}
             </Text>
           </div>
           {lockedTemplateVisible && (
@@ -186,7 +203,9 @@ export default function DetailConfirmationPageSelector({
               lockedTargetId,
               progressTarget.label,
               Boolean(progressTarget.hasDetailPlan),
-              progressTargetType === "endpoint" && progressEndpoint
+              progressTargetType === "agent" && progressAgent
+                ? { agentId: progressAgent.agentId }
+                : progressTargetType === "endpoint" && progressEndpoint
                 ? {
                     apiContractId: progressEndpoint.apiContractId,
                     endpointId: progressEndpoint.endpointId,

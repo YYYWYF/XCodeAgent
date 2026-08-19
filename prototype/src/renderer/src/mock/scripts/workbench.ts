@@ -39,6 +39,7 @@ import { markEndpointDesigned, markPageDesigned } from '../designState'
 import { appPath, WORKSPACE_DOC_PATHS } from '../workspaceFiles'
 import { TEST_CASE_BLUEPRINTS, type TestCaseDefect } from '../../testCasePreparation'
 import { nextLifecycleRevision } from './revision'
+import { replayAgentWorkbench, resolveAgentTarget } from './agentWorkbench'
 
 const MOCK_APPLICATION_PREVIEW_URL = 'http://127.0.0.1:5190/'
 const MOCK_TEST_CASES = TEST_CASE_BLUEPRINTS
@@ -2104,6 +2105,10 @@ export async function replayWorkbench(
 ): Promise<WorkflowRunPayload | undefined> {
   const { onContent, onWorkflow, onApplicationLifecycle, onProcessSteps } = callbacks
   const resume = options.resumeState as WorkflowRunPayload | undefined
+  const agentTarget = resolveAgentTarget(options, resume)
+  if (agentTarget) {
+    return replayAgentWorkbench(threadId, agentTarget, options, callbacks)
+  }
   // 接口目标优先于页面：选中接口或续传快照带接口身份时走接口剧本。
   const endpointTarget = resolveEndpointTarget(options, resume)
   if (endpointTarget) {

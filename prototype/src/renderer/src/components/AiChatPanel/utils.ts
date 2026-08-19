@@ -83,6 +83,8 @@ export function workflowDetailTargetKey(workflow: unknown): string {
   }
   const state = payload.state || {}
   const result = payload.result || {}
+  const agentId = String(state.selectedAgentId || result.selectedAgentId || '').trim()
+  if (agentId) return `agent:${agentId}`
   const apiContractId = String(
     state.selectedApiContractId ||
       state.selected_api_contract_id ||

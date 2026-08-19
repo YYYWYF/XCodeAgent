@@ -44,6 +44,41 @@
       { "id": "query-api", "label": "回检查询接口", "total": 2, "coverage": "当前用户数据、分页参数与状态筛选" }
     ]
   },
+  "agents": [
+    {
+      "id": "recheck-assistant",
+      "name": "回检填报助手",
+      "purpose": "解释当前用户的回检状态，并基于可见回检单给出下一步操作建议",
+      "model": "项目默认模型",
+      "modelId": "default-model",
+      "pages": ["my-rechecks"],
+      "entityIds": ["recheck-record"],
+      "apiDependencies": ["GET /api/rechecks/my"],
+      "apiReferences": [
+        {
+          "apiContractId": "rechecks",
+          "endpointId": "ep-my-rechecks",
+          "method": "GET",
+          "path": "/api/rechecks/my",
+          "purpose": "查询当前用户的回检单"
+        }
+      ],
+      "tools": ["查询我的回检单"],
+      "knowledgeReferences": ["knowledge:recheck-policy"],
+      "permissions": ["只读当前用户可见数据", "禁止代替用户提交或修改回检单"],
+      "acceptanceCriteria": [
+        "回答包含工具调用摘要和数据来源说明",
+        "支持连续多轮对话并保留本次会话上下文",
+        "工具失败时展示可重试错误，不编造业务数据"
+      ],
+      "integration": "在“我的回检”页面提供助手入口和抽屉式对话，覆盖加载、回复、权限拒绝、失败重试和人工验收状态。"
+    }
+  ],
+  "agent_acceptance_criteria": [
+    "页面内可以发送消息并获得回检填报助手回复",
+    "连续追问、工具证据、权限拒绝和失败重试状态均可验证",
+    "智能体 Python 定义、工具适配器和页面接入文件分别通过 Diff 验收"
+  ],
   "execution_order": [
     {
       "order": 1,
@@ -58,6 +93,11 @@
       "task": "实现我的回检页面与查询接口",
       "target": "我的回检 + GET /api/rechecks/my"
     },
-    { "order": 6, "task": "执行页面与接口联调及整体测试", "target": "集成测试" }
+    {
+      "order": 6,
+      "task": "生成回检填报助手 Python 定义、工具适配器并接入我的回检页面",
+      "target": "回检填报助手"
+    },
+    { "order": 7, "task": "执行页面、接口与智能体联调及整体测试", "target": "集成测试" }
   ]
 }

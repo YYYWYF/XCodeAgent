@@ -101,6 +101,11 @@ import type {
   TestCasePreparationSnapshot
 } from '../../testCasePreparation'
 import { TEST_CASE_ESTIMATE_GROUPS } from '../../testCasePreparation'
+import {
+  agentArtifactId,
+  buildAgentDetailBlocker,
+  type DevelopmentPlanningAgent
+} from '../../agentDevelopment'
 
 type Props = {
   application: ApplicationConfig
@@ -110,6 +115,7 @@ type Props = {
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   developmentPlanningEntities: DevelopmentPlanningEntity[]
+  developmentPlanningAgents: DevelopmentPlanningAgent[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -162,13 +168,20 @@ type ActiveApiEndpointTarget = {
 type ActiveDetailTarget =
   | { type: 'none' }
   | { type: 'page'; pageId: string }
+  | { type: 'agent'; agentId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
 
-type DevelopmentAutoTarget = {
-  artifactId: string
-  kind: 'page'
-  page: DevelopmentPlanningPageOption
-}
+type DevelopmentAutoTarget =
+  | {
+      artifactId: string
+      kind: 'page'
+      page: DevelopmentPlanningPageOption
+    }
+  | {
+      artifactId: string
+      kind: 'agent'
+      agent: DevelopmentPlanningAgent
+    }
 
 type DevelopmentCompletionCandidate = {
   runId: string
@@ -395,6 +408,7 @@ function completeAcceptanceExecution(
 /** 为页面或接口生成稳定的前端目标键，隔离各目标的临时交互状态。 */
 function detailTargetKey(target: ActiveDetailTarget): string {
   if (target.type === 'page') return pageDetailTargetKey(target.pageId)
+  if (target.type === 'agent') return agentArtifactId(target.agentId)
   if (target.type === 'endpoint') {
     return endpointDetailTargetKey(target.apiContractId, target.endpointId)
   }
@@ -430,6 +444,10 @@ function developmentWorkflowArtifactId(workflow?: WorkflowRunPayload): string {
       result.selected_page_id ||
       ''
   ).trim()
+  const agentId = String(
+    state.selectedAgentId || result.selectedAgentId || ''
+  ).trim()
+  if (agentId && detailTargetType === 'agent') return agentArtifactId(agentId)
   // 页面工作流即使带有依赖接口，也只推进页面产物；接口工作流才推进 endpoint。
   if (pageId && detailTargetType !== 'endpoint') return pageArtifactId(pageId)
   if (apiContractId && endpointId) return endpointArtifactId(apiContractId, endpointId)
@@ -621,6 +639,7 @@ export default function AiChatPanel({
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
   developmentPlanningEntities,
+  developmentPlanningAgents,
   editorMode,
   onApplicationUpdate,
   onApplicationLifecycleChange,
@@ -748,6 +767,7 @@ export default function AiChatPanel({
   // 准入必须读取当前工作台动态产物清单，不能读取静态演示剧本，否则未开始页面会被误判为已完成。
   const planningPages = developmentPlanningPages
   const planningContracts = developmentPlanningApiContracts
+  const planningAgents = developmentPlanningAgents
   const testExecutionExtensions = (applicationLifecycle?.extensions || {}) as Record<string, unknown>
   const testExecutionSnapshot = readTestExecutionSnapshot(testExecutionExtensions)
   const testExecutionPassedForEntry = testExecutionSnapshot?.status === 'passed'
@@ -768,6 +788,11 @@ export default function AiChatPanel({
             endpointArtifactId(contract.id, String(endpoint.id || ''))
           ] === 'completed')
       )
+    ) &&
+    planningAgents.every(
+      (agent) =>
+        developmentStatusState.versionKey === versionViewKey &&
+        developmentStatusState.statuses[agentArtifactId(agent.id)] === 'completed'
     )
   const {
     assistantPanelWidth,
@@ -958,6 +983,7 @@ export default function AiChatPanel({
     activeWorkflow,
     error,
     handleSend,
+    handleStartAgentDetailConfirmation,
     handleStartEndpointDetailConfirmation,
     handleStartDetailConfirmation,
     handleStopGenerating,
@@ -1766,6 +1792,13 @@ export default function AiChatPanel({
         return savedFileExists(`frontend/pages/${pageId}.tsx`)
       }
       if (artifactId.startsWith('endpoint:')) return savedFileExists('backend/rechecks-controller.java')
+      if (artifactId.startsWith('agent:')) {
+        const agentId = artifactId.replace(/^agent:/, '').replace(/-/g, '_')
+        return (
+          savedFileExists(`agent-runtime/agents/${agentId}.py`) &&
+          savedFileExists(`agent-runtime/tools/${agentId}_tools.py`)
+        )
+      }
       return false
     }
     const workflowSnapshots = messages
@@ -1801,6 +1834,10 @@ export default function AiChatPanel({
           nextStatuses[artifactId] = statusForArtifact(artifactId)
         })
       })
+      developmentPlanningAgents.forEach((agent) => {
+        const artifactId = agentArtifactId(agent.id)
+        nextStatuses[artifactId] = statusForArtifact(artifactId)
+      })
       // 后台实现任务覆盖产物状态：任务流水是「排队/实现中/待验收/失败/完成」的权威来源；
       // 按更新次序应用，同一产物以最新任务为准，且已确认完成的产物不回退。
       versionBackgroundTasks
@@ -1822,6 +1859,7 @@ export default function AiChatPanel({
   }, [
     artifactTaskStatusSignature,
     developmentPlanningApiContracts,
+    developmentPlanningAgents,
     developmentPlanningPages,
     messages,
     sessions,
@@ -1862,11 +1900,19 @@ export default function AiChatPanel({
         label: entity.label,
         path: entity.schemaRef || `entities/${entity.entityId}`,
         status: developmentArtifactStatusById[entityArtifactId(entity.entityId)] || 'not-started'
+      })),
+      ...developmentPlanningAgents.map((agent) => ({
+        id: agentArtifactId(agent.id),
+        kind: 'agent' as const,
+        label: agent.label,
+        path: `agent-runtime/agents/${agent.id}.py`,
+        status: developmentArtifactStatusById[agentArtifactId(agent.id)] || 'not-started'
       }))
     ],
     [
       developmentArtifactStatusById,
       developmentPlanningApiContracts,
+      developmentPlanningAgents,
       developmentPlanningEntities,
       developmentPlanningPages
     ]
@@ -1898,9 +1944,14 @@ export default function AiChatPanel({
         artifactId: pageArtifactId(page.pageId),
         kind: 'page' as const,
         page
+      })),
+      ...developmentPlanningAgents.map((agent) => ({
+        artifactId: agentArtifactId(agent.id),
+        kind: 'agent' as const,
+        agent
       }))
     ],
-    [developmentPlanningPages]
+    [developmentPlanningAgents, developmentPlanningPages]
   )
   const developmentHistoryRepairRef = useRef(new Set<string>())
 
@@ -1915,7 +1966,9 @@ export default function AiChatPanel({
       return
     }
     const completedPages = developmentAutoTargets.filter(
-      (target) => developmentArtifactStatusById[target.artifactId] === 'completed'
+      (target): target is Extract<DevelopmentAutoTarget, { kind: 'page' }> =>
+        target.kind === 'page' &&
+        developmentArtifactStatusById[target.artifactId] === 'completed'
     )
     const missingPages = completedPages.filter((target) => {
       const repairKey = `${versionViewKey}:${target.artifactId}`
@@ -2282,6 +2335,13 @@ export default function AiChatPanel({
   }
   /** 在开发清单中切换当前目标；主对话不切换，后续发送内容才会推动对应 Workflow。 */
   const handleSelectDevelopmentArtifact = (item: DevelopmentArtifactItem): void => {
+    if (item.kind === 'agent') {
+      const agent = developmentPlanningAgents.find(
+        (candidate) => agentArtifactId(candidate.id) === item.id
+      )
+      if (agent) setActiveDetailTarget({ type: 'agent', agentId: agent.id })
+      return
+    }
     if (item.kind === 'page') {
       const page = developmentPlanningPages.find((candidate) => pageArtifactId(candidate.pageId) === item.id)
       if (page) setActiveDetailTarget({ type: 'page', pageId: page.pageId })
@@ -2304,7 +2364,9 @@ export default function AiChatPanel({
     }
   }
   const activeDevelopmentArtifactId =
-    activeDetailTarget.type === 'page'
+    activeDetailTarget.type === 'agent'
+      ? agentArtifactId(activeDetailTarget.agentId)
+      : activeDetailTarget.type === 'page'
       ? pageArtifactId(activeDetailTarget.pageId)
       : activeDetailTarget.type === 'endpoint'
         ? endpointArtifactId(activeDetailTarget.apiContractId, activeDetailTarget.endpointId)
@@ -2421,6 +2483,17 @@ export default function AiChatPanel({
           available: true
         }))
       : []),
+    ...(developmentPlanningReady && developmentCatalogUnlocked
+      ? developmentPlanningAgents.map((agent) => ({
+          id: agentArtifactId(agent.id),
+          name: agent.label,
+          path: `agent-runtime/agents/${agent.id}.py`,
+          phase: 'development' as const,
+          status: developmentArtifactStatusById[agentArtifactId(agent.id)] || 'not-started',
+          type: 'agent' as const,
+          available: true
+        }))
+      : []),
     {
       id: documentArtifactId('code-review'),
       name: '审查报告',
@@ -2448,6 +2521,7 @@ export default function AiChatPanel({
     setActiveDetailTarget((currentTarget) => {
       if (currentTarget.type === 'endpoint') return currentTarget
       if (currentTarget.type === 'none') return currentTarget
+      if (currentTarget.type === 'agent') return currentTarget
       const currentPageId = currentTarget.pageId
       if (developmentPlanningPages.length === 0) return currentTarget
       if (developmentPlanningPages.some((page) => page.pageId === currentPageId)) {
@@ -2520,7 +2594,7 @@ export default function AiChatPanel({
     setActiveView('settings')
   }
 
-  /** 在开发主对话中投放页面模板选择卡，作为下一条产物 Workflow 的正式起点。 */
+  /** 在开发主对话中投放页面或智能体确认卡，作为下一条产物 Workflow 的正式起点。 */
   const presentDevelopmentTemplateSelector = async (
     target: DevelopmentAutoTarget
   ): Promise<void> => {
@@ -2528,13 +2602,23 @@ export default function AiChatPanel({
     const now = Date.now()
     let nextMessages: AgentChatMessage[] = []
     let appended = false
+    const targetArtifactId = target.artifactId
     // 用函数式更新读取 store 的最新数组，避免两个自动入口用旧快照覆盖上一段 Workflow 历史。
     setSessionMessages(identity.key, (currentMessages) => {
       if (
         currentMessages.some(
-          (message) =>
-            message.detailBlocker?.type === 'page' &&
-            message.detailBlocker.pageId === target.page.pageId
+          (message) => {
+            if (target.kind === 'agent') {
+              return (
+                message.detailBlocker?.type === 'agent' &&
+                message.detailBlocker.agentId === target.agent.id
+              )
+            }
+            return (
+              message.detailBlocker?.type === 'page' &&
+              message.detailBlocker.pageId === target.page.pageId
+            )
+          }
         )
       ) {
         nextMessages = currentMessages
@@ -2549,21 +2633,27 @@ export default function AiChatPanel({
           // 模板选择卡自身已经包含完整引导，不重复追加一段普通正文。
           content: '',
           createdAt: now,
-          detailBlocker: {
-            type: 'page',
-            pageId: target.page.pageId,
-            label: target.page.label,
-            path: target.page.path,
-            purpose: target.page.purpose
-          },
+          detailBlocker:
+            target.kind === 'agent'
+              ? buildAgentDetailBlocker(target.agent)
+              : {
+                  type: 'page',
+                  pageId: target.page.pageId,
+                  label: target.page.label,
+                  path: target.page.path,
+                  purpose: target.page.purpose
+                },
           // 模板选择是开发 Workflow 的第一个可交互节点，后续设计与实现继续复用该消息。
           processSteps: [
             {
-              id: `detail-template-${pageDetailTargetKey(target.page.pageId)}`,
+              id: `detail-template-${targetArtifactId}`,
               kind: 'workflow',
               status: 'requires_user_input',
-              title: '选择页面模板',
-              detail: '请选择页面模板后开始详细设计。',
+              title: target.kind === 'agent' ? '确认智能体详细设计' : '选择页面模板',
+              detail:
+                target.kind === 'agent'
+                  ? '请确认智能体职责、工具与边界后开始详细设计。'
+                  : '请选择页面模板后开始详细设计。',
               sequence: 1,
               nodeName: 'detail_confirmation'
             } satisfies ProcessStepRecord
@@ -2597,9 +2687,15 @@ export default function AiChatPanel({
     setViewingTaskPhase('development')
     setGeneratingDetailTargetKey('')
     if (activateTarget) {
-      setActiveArtifactTab('page-source')
-      setInteractingDetailTargetKey(pageDetailTargetKey(target.page.pageId))
-      setActiveDetailTarget({ type: 'page', pageId: target.page.pageId })
+      if (target.kind === 'agent') {
+        setActiveArtifactTab('agent-source')
+        setInteractingDetailTargetKey(target.artifactId)
+        setActiveDetailTarget({ type: 'agent', agentId: target.agent.id })
+      } else {
+        setActiveArtifactTab('page-source')
+        setInteractingDetailTargetKey(pageDetailTargetKey(target.page.pageId))
+        setActiveDetailTarget({ type: 'page', pageId: target.page.pageId })
+      }
     }
     await presentDevelopmentTemplateSelector(target)
   }
@@ -2664,7 +2760,7 @@ export default function AiChatPanel({
     // 已派发后台实现任务的产物由任务中心和验收流程接管，自动模板卡只投放未接管的产物。
     const isCompleted = (target: DevelopmentAutoTarget): boolean => {
       if (isArtifactHandledByTasks(target.artifactId)) return true
-      return isPageCodeDelivered(target.page.pageId)
+      return target.kind === 'page' ? isPageCodeDelivered(target.page.pageId) : false
     }
     const nextTarget = developmentAutoTargets.find((target) => !isCompleted(target))
     if (!nextTarget) return
@@ -2854,20 +2950,37 @@ export default function AiChatPanel({
     }
   }
 
-  /** 对话节点「开始详细设计」：按当前待设计目标（含可选模板）启动页面/接口设计。 */
+  /** 对话节点「开始详细设计」：按当前待设计目标启动页面、接口或智能体设计。 */
   const handleStartDetailDesign = async (
-    targetType: 'page' | 'endpoint',
+    targetType: 'page' | 'endpoint' | 'agent',
     targetId: string,
     targetLabel: string,
     hasDetailPlan: boolean,
     targetContext?: {
       apiContractId?: string
+      agentId?: string
       endpointId?: string
       templateId?: string
       templateName?: string
       templateSourcePath?: string
     }
   ): Promise<void> => {
+    if (targetType === 'agent') {
+      const agent = developmentPlanningAgents.find(
+        (item) => item.id === (targetContext?.agentId || targetId)
+      )
+      if (!agent) return
+      setActiveDetailTarget({ type: 'agent', agentId: agent.id })
+      setGeneratingDetailTargetKey(hasDetailPlan ? '' : agentArtifactId(agent.id))
+      const started = await handleStartAgentDetailConfirmation({
+        agentId: agent.id,
+        agentLabel: agent.label,
+        hasDetailPlan
+      })
+      if (started) onPlanningArtifactsRefresh()
+      else setGeneratingDetailTargetKey('')
+      return
+    }
     if (targetType === 'endpoint') {
       await handleStartEndpointDesign(targetId, targetLabel, hasDetailPlan, targetContext)
       return
@@ -3443,6 +3556,7 @@ export default function AiChatPanel({
                   <DevelopmentArtifactsPanel
                     application={application}
                     activeId={activeDevelopmentArtifactId}
+                    agents={developmentPlanningAgents}
                     apiContracts={developmentPlanningApiContracts}
                     entities={developmentPlanningEntities}
                     items={developmentArtifactItems}
