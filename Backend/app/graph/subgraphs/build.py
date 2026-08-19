@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
 
@@ -54,12 +55,9 @@ from app.workspace.code_changes import (
     code_change_state_update,
     merge_code_change_sets,
 )
-from app.workspace.plan_documents import (
-    project_plan_json_path,
-    write_project_plan_document,
-)
 from app.workspace.task_documents import (
-    write_build_task_dag_markdown,
+    build_task_plan_json_path,
+    load_build_task_plan_json,
     write_build_task_plan_json,
 )
 from app.workspace.task_documents import write_repair_task_plan_json
@@ -495,15 +493,10 @@ def _apply_scheduler_results(
             repaired_tasks,
             updated.get("build_results", []),
         )
-    project_plan_path = write_project_plan_document(state, updated["project_plan"])
     build_task_plan_path = write_build_task_plan_json(state, updated["build_task_plan"])
-    build_task_dag_path = write_build_task_dag_markdown(state, updated["build_task_plan"])
     return {
         **updated,
-        "project_plan_path": project_plan_path,
-        "project_plan_json_path": str(project_plan_json_path(state)),
         "build_task_plan_path": build_task_plan_path,
-        "build_task_dag_path": build_task_dag_path,
     }
 
 
@@ -626,6 +619,126 @@ def _repair_scope_confirmation_payload(repair_task_plan: dict[str, Any]) -> dict
             }
         ],
     }
+
+
+def _latest_build_task_plan_for_build(
+    state: ProjectState,
+) -> tuple[dict[str, Any], list[str]]:
+    """读取工作区最新 DAG 并执行 Build 入口的最小确认门禁。"""
+
+    workspace = workspace_from_state(state)
+    path = (
+        Path(workspace).expanduser() / ".xcodeagent" / "plans" / "build-task-plan.json"
+        if workspace
+        else build_task_plan_json_path(state)
+    )
+    if not path.is_file():
+        return {}, ["工作区中不存在最新 build-task-plan.json，Build 已被阻止。"]
+    try:
+        build_task_plan = load_build_task_plan_json(path)
+    except (OSError, ValueError, TypeError):
+        return {}, ["最新 build-task-plan.json 无法读取或不是有效 JSON。"]
+    if not isinstance(build_task_plan, dict):
+        return {}, ["最新 build-task-plan.json 根结构必须是对象。"]
+    errors: list[str] = []
+    if build_task_plan.get("schema_version") != "build-dag.v3":
+        errors.append("最新 Build DAG schema_version 不是 build-dag.v3。")
+    if build_task_plan.get("status") != "ready":
+        errors.append(
+            f"最新 Build DAG status={build_task_plan.get('status') or 'unknown'}，不能进入 Build。"
+        )
+    confirmation_status = build_task_plan.get("confirmation_status")
+    if confirmation_status != "confirmed":
+        errors.append(
+            "Build DAG 尚未确认。"
+            if confirmation_status == "pending"
+            else "Build DAG 缺少有效 confirmation_status。"
+        )
+    graph = build_task_plan.get("task_graph")
+    validation = graph.get("validation") if isinstance(graph, dict) else None
+    if not isinstance(validation, dict) or validation.get("is_valid") is not True:
+        graph_errors = validation.get("errors") if isinstance(validation, dict) else []
+        errors.extend(str(error) for error in graph_errors if str(error).strip())
+        if not graph_errors:
+            errors.append("Build DAG task_graph.validation 未通过。")
+    current_scope = state.get("build_execution_scope")
+    current_scope = current_scope if isinstance(current_scope, dict) else {}
+    planned_scope = build_task_plan.get("build_execution_scope")
+    planned_scope = planned_scope if isinstance(planned_scope, dict) else {}
+    if planned_scope and current_scope and planned_scope != current_scope:
+        errors.append(
+            "Build DAG scope 与当前 Build scope 不一致："
+            f"planned={planned_scope} current={current_scope}。"
+        )
+    return build_task_plan, _dedupe_build_gate_errors(errors)
+
+
+def _build_gate_result(
+    state: ProjectState,
+    build_task_plan: dict[str, Any],
+    errors: list[str],
+) -> dict[str, Any]:
+    """把待确认或平台门禁失败映射为 Build 节点可投影的结构。"""
+
+    confirmation_status = build_task_plan.get("confirmation_status")
+    pending = confirmation_status == "pending" and all(
+        error == "Build DAG 尚未确认。" for error in errors
+    )
+    if pending:
+        clarification = {
+            "mode": "build_task_plan_confirmation",
+            "status": "requires_user_input",
+            "message": "Build DAG 已生成，请先确认最新任务规划。",
+            "actionValues": ["confirm", "patch", "regenerate"],
+            "editableFields": ["title", "description"],
+            "errors": errors,
+            "buildExecutionScope": build_task_plan.get("build_execution_scope") or state.get("build_execution_scope") or {},
+        }
+        workflow_status = "requires_user_input"
+        summary_status = "requires_confirmation"
+    else:
+        clarification = {
+            "mode": "build_task_plan_generation_error",
+            "status": "failed",
+            "message": "最新 Build DAG 未通过平台执行门禁，不能人工修正任务边界。",
+            "errors": errors,
+        }
+        workflow_status = "failed"
+        summary_status = "failed"
+    tasks = tasks_from_build_task_plan(build_task_plan)
+    return {
+        "phase": "build",
+        "status": workflow_status,
+        "build_task_plan": build_task_plan,
+        "tasks": tasks,
+        "build_results": list(state.get("build_results", [])),
+        "build_summary": {
+            "status": summary_status,
+            "total": len(tasks),
+            "completed": 0,
+            "failed": 0,
+            "pending": len(tasks),
+            "gate_errors": errors,
+        },
+        "build_execution_scope": state.get("build_execution_scope") or build_task_plan.get("build_execution_scope"),
+        "error": "；".join(errors),
+        "clarification": clarification,
+        "build_events": ["scheduler:build_gate_blocked"],
+        "timeline": ["build"],
+    }
+
+
+def _dedupe_build_gate_errors(errors: list[str]) -> list[str]:
+    """按顺序去重 Build 门禁错误，保持任务或字段定位信息完整。"""
+
+    result: list[str] = []
+    for error in errors:
+        text = str(error or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
 def run_build_scheduler(
     state: ProjectState,
     *,
@@ -633,7 +746,9 @@ def run_build_scheduler(
 ) -> dict[str, Any]:
     """按 build_execution_scope 裁剪任务图，并持续调度到当前切片完成或阻塞。"""
 
-    build_task_plan = dict(state.get("build_task_plan") or {})
+    build_task_plan, gate_errors = _latest_build_task_plan_for_build(state)
+    if gate_errors:
+        return _build_gate_result(state, build_task_plan, gate_errors)
     canonical_tasks = migrate_legacy_repair_acceptance(
         list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
     )
@@ -1027,12 +1142,7 @@ def run_build_scheduler(
                 current_state,
                 next_build_task_plan,
             )
-            build_task_dag_path = write_build_task_dag_markdown(
-                current_state,
-                next_build_task_plan,
-            )
             current_state["build_task_plan_path"] = build_task_plan_path
-            current_state["build_task_dag_path"] = build_task_dag_path
             build_events.append(f"scheduler:repair_planned:{len(repair_task_plan['tasks'])}")
             _emit_build_progress(
                 progress_writer,
@@ -1105,20 +1215,11 @@ def run_build_scheduler(
     return {
         "phase": "build",
         "project_plan": current_state.get("project_plan", state.get("project_plan", {})),
-        "project_plan_path": current_state.get(
-            "project_plan_path", state.get("project_plan_path")
-        ),
-        "project_plan_json_path": current_state.get(
-            "project_plan_json_path", state.get("project_plan_json_path")
-        ),
         "build_task_plan": current_state.get(
             "build_task_plan", state.get("build_task_plan", {})
         ),
         "build_task_plan_path": current_state.get(
             "build_task_plan_path", state.get("build_task_plan_path")
-        ),
-        "build_task_dag_path": current_state.get(
-            "build_task_dag_path", state.get("build_task_dag_path")
         ),
         "tasks": current_state["tasks"],
         "ready_tasks": [],

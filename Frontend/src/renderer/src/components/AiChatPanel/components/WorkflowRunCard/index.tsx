@@ -28,6 +28,8 @@ import type {
   WorkflowClarificationSelectionGroup,
   WorkflowClarificationAnswer,
   WorkflowClarificationAnswers,
+  WorkflowBuildTaskPlan,
+  WorkflowBuildTaskPlanConfirmation,
   WorkflowConfirmationArtifact,
   WorkflowRunPayload
 } from '../../../../typings'
@@ -41,6 +43,7 @@ import AgentApprovalCard from '../AgentApprovalCard'
 import { approveToolRequest, rejectToolRequest } from '../../../../service/workspaceTools'
 import type { ToolApproval } from '../../../../service/workspaceTools'
 import ConfirmationArtifact from './ConfirmationArtifact'
+import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import DetailReview from './DetailReview'
 import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
@@ -146,6 +149,10 @@ export default function WorkflowRunCard({
     clarification?.mode === 'frontend_performance_confirmation'
   // 项目启动节点使用专用卡片展示运行、完成和失败状态。
   const projectLaunch = workflow.summary.phase === 'launch_project'
+  const dagConfirmation = clarification?.mode === 'build_task_plan_confirmation'
+  const dagTaskPlan =
+    (clarification?.taskPlan as WorkflowBuildTaskPlan | undefined) ||
+    workflow.summary.buildTaskPlan
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -180,6 +187,8 @@ export default function WorkflowRunCard({
     : 'database_approval'
   const confirmationItemCount = detailReview
     ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
+    : dagConfirmation
+      ? dagTaskPlan?.tasks?.length || 0
     : uiDesignConfirmation
       ? ((clarification as unknown as Record<string, unknown>).pages as unknown[] | undefined)
           ?.length || clarificationQuestions.length
@@ -237,7 +246,8 @@ export default function WorkflowRunCard({
         !uiDesignConfirmation &&
         !artifactConfirmation &&
         !unitTestConfirmation &&
-        !projectLaunch && (
+        !projectLaunch && 
+        !dagConfirmation && (
           <div className={cx('workflow-run-message')}>
             <Text>{String(workflow.summary.message)}</Text>
           </div>
@@ -271,7 +281,7 @@ export default function WorkflowRunCard({
           ))}
         </div>
       )}
-      {(clarificationQuestions.length > 0 || detailReview || technicalPlanGenerationError) && (
+      {(clarificationQuestions.length > 0 || detailReview || technicalPlanGenerationError || dagConfirmation) && (
         <div className={cx('workflow-clarification')}>
           {!entityDesignReview && !entityDesignGate && (
             <div className={cx('workflow-clarification-header')}>
@@ -297,7 +307,7 @@ export default function WorkflowRunCard({
               type="info"
             />
           )}
-          {technicalPlanGenerationError && requiresConfirmation ? (
+          {technicalPlanGenerationError && requiresConfirmation && (
             <Alert
               action={
                 <Button
@@ -320,6 +330,18 @@ export default function WorkflowRunCard({
               message={clarification?.message || '技术规划自动修复后仍未通过校验。'}
               showIcon
               type="error"
+            />
+          )}
+          {dagConfirmation && requiresConfirmation ? (
+            <BuildTaskPlanConfirmation
+              disabled={disabled || interactionAvailability !== 'active'}
+              errors={clarification?.errors}
+              onSubmit={(action: WorkflowBuildTaskPlanConfirmation) =>
+                onSubmitClarification?.(workflow, {
+                  build_task_plan_confirmation: action
+                })
+              }
+              plan={dagTaskPlan}
             />
           ) : unitTestConfirmation && requiresConfirmation ? (
             <UnitTestConfirmationPanel
@@ -1830,6 +1852,7 @@ export function workflowClarification(
 ): WorkflowClarification | undefined {
   for (const candidate of [
     workflow.summary.clarification,
+    workflow.summary.buildTaskPlanConfirmation,
     workflow.state?.clarification,
     workflow.result?.clarification
   ]) {

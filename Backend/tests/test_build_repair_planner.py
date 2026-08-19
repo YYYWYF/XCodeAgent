@@ -223,7 +223,7 @@ class BuildRepairPlannerTests(unittest.TestCase):
 
         repair_task = plan["tasks"][0]
         acceptance = repair_task["acceptance_criteria"]
-        self.assertIn("menu_registration", [item["kind"] for item in repair_task["acceptance_checks"]])
+        self.assertNotIn("menu_registration", [item["kind"] for item in repair_task["acceptance_checks"]])
         self.assertFalse(any("文件必须产生实际变更（非空写入）" in item for item in acceptance))
 
     def test_repair_recompiles_file_operations_for_exact_repair_scope(self) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import threading
 import unittest
@@ -19,6 +20,26 @@ def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     with open(full_path, "w", encoding="utf-8") as f:
         f.write(f"// auto-generated: {rel_path}\n")
+
+
+def _ready_build_state(workspace: str, state: dict) -> dict:
+    """为调度器测试落盘一份已确认的当前 JSON DAG，匹配真实 Build 门禁。"""
+
+    plan = dict(state.get("build_task_plan") or {})
+    plan["status"] = "ready"
+    plan["confirmation_status"] = "confirmed"
+    plan["confirmed_at"] = "2026-08-19T00:00:00+00:00"
+    scope = state.get("build_execution_scope")
+    plan["build_execution_scope"] = dict(scope) if isinstance(scope, dict) else {}
+    graph = plan.get("task_graph") if isinstance(plan.get("task_graph"), dict) else {}
+    # 调度器测试把任务计划视为已经通过前置 DAG 编译；图结构本身由规划器测试覆盖。
+    graph["validation"] = {"is_valid": True, "errors": []}
+    plan["task_graph"] = graph
+    path = os.path.join(workspace, ".xcodeagent", "plans", "build-task-plan.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(plan, handle, ensure_ascii=False)
+    return {**state, "build_task_plan": plan}
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
@@ -217,7 +238,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 ),
             ):
                 result = build(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
@@ -236,7 +257,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         ),
                         "timeline": [],
                         "selected_skill_names": ["workflow-skill"],
-                    }
+                    })
                 )
 
         self.assertEqual(result["build_summary"]["status"], "completed")
@@ -302,7 +323,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 ),
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
@@ -334,7 +355,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         },
                         "retry_failed_tasks": True,
                         "timeline": [],
-                    }
+                    })
                 )
 
         self.assertEqual(result["build_summary"]["status"], "completed")
@@ -357,7 +378,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as workspace:
             result = run_build_scheduler(
-                {
+                _ready_build_state(workspace, {
                     "workspace": workspace,
                     "project_plan": {"version": "1.0.0"},
                     "build_task_plan": replace_build_task_plan_tasks(
@@ -384,7 +405,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     ],
                     "retry_failed_tasks": True,
                     "timeline": [],
-                }
+                })
             )
 
         self.assertEqual(result["status"], "failed")
@@ -441,7 +462,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 side_effect=complete_runner,
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
@@ -473,7 +494,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         },
                         "retry_failed_tasks": True,
                         "timeline": [],
-                    }
+                    })
                 )
 
         self.assertEqual(calls, [["repair-page"]])
@@ -534,7 +555,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 side_effect=complete_runner,
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
@@ -562,7 +583,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         },
                         "retry_failed_tasks": True,
                         "timeline": [],
-                    }
+                    })
                 )
 
         self.assertEqual(calls, [["repair-page"]])
@@ -600,7 +621,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 side_effect=database_runner,
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
@@ -617,7 +638,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             tasks,
                         ),
                         "timeline": [],
-                    }
+                    })
                 )
 
         self.assertEqual(result["build_summary"]["status"], "completed")
@@ -669,7 +690,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 side_effect=database_runner,
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
@@ -686,7 +707,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             tasks,
                         ),
                         "timeline": [],
-                    }
+                    })
                 )
 
         self.assertEqual(result["status"], "requires_user_input")
@@ -716,7 +737,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 side_effect=AssertionError("拒绝后不得重新调度数据库任务"),
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "request": "拒绝执行",
                         "project_plan": {"version": "1.0.0"},
@@ -735,7 +756,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         ),
                         "build_results": [],
                         "timeline": [],
-                    }
+                    })
                 )
 
         self.assertEqual(result["status"], "failed")
@@ -790,7 +811,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 side_effect=database_runner,
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "request": "同意执行，仅本次",
                         "project_plan": {"version": "1.0.0"},
@@ -809,7 +830,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         ),
                         "build_results": [],
                         "timeline": [],
-                    }
+                    })
                 )
 
         self.assertEqual(result["build_summary"]["status"], "completed")
@@ -863,7 +884,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 ),
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_execution_scope": {
@@ -894,7 +915,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             tasks,
                         ),
                         "timeline": [],
-                    },
+                    }),
                     progress_writer=progress_events.append,
                 )
 
@@ -967,7 +988,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 side_effect=frontend_runner,
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
@@ -981,7 +1002,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             tasks,
                         ),
                         "timeline": [],
-                    },
+                    }),
                     progress_writer=progress_events.append,
                 )
 
@@ -1077,7 +1098,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 ) as repair_planner,
             ):
                 result = build(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
@@ -1096,7 +1117,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         ),
                         "timeline": [],
                         "selected_skill_names": ["repair-skill"],
-                    }
+                    })
                 )
 
         self.assertEqual(result["build_summary"]["status"], "completed")
@@ -1177,7 +1198,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 ),
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
@@ -1200,7 +1221,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             tasks,
                         ),
                         "timeline": [],
-                    }
+                    })
                 )
 
         statuses = {task["id"]: task["status"] for task in result["tasks"]}
@@ -1278,7 +1299,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 ),
             ):
                 result = build(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_execution_scope": {"type": "page", "targetId": "orders"},
@@ -1314,7 +1335,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             tasks,
                         ),
                         "timeline": [],
-                    }
+                    })
                 )
 
         self.assertEqual(dispatched_task_ids, ["orders-api", "orders-page"])
@@ -1366,7 +1387,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 side_effect=repair_runner,
             ):
                 result = run_build_scheduler(
-                    {
+                    _ready_build_state(workspace, {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
                         "build_execution_scope": {"type": "page", "targetId": "orders"},
@@ -1385,7 +1406,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             "tasks": [repair_task],
                         },
                         "repair_iteration": 0,
-                    }
+                    })
                 )
 
         self.assertEqual(dispatched_task_ids, [repair_task["id"]])

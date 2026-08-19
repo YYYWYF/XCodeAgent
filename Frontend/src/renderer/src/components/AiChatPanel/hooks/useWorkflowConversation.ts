@@ -15,6 +15,7 @@ import type {
   EditorMode,
   WorkflowAcceptanceAdjustmentType,
   WorkflowBuildExecutionScope,
+  WorkflowBuildTaskPlanConfirmation,
   WorkflowDebugOptions,
   WorkflowAction,
   WorkflowRunPayload
@@ -176,6 +177,34 @@ function workflowSelectedPageId(workflow: WorkflowRunPayload): string | undefine
   const statePageId = typeof stateValue === 'string' ? stateValue.trim() : ''
   const resultPageId = typeof resultValue === 'string' ? resultValue.trim() : ''
   return statePageId || resultPageId || undefined
+}
+
+/** 从确认卡提交的答案中提取 Build DAG 结构化动作，避免落回普通问题文本协议。 */
+function buildTaskPlanConfirmationAction(
+  answers: ClarificationAnswers
+): WorkflowBuildTaskPlanConfirmation | undefined {
+  const value = answers.build_task_plan_confirmation
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const action = String((value as Record<string, unknown>).action || '')
+  if (!['confirm', 'patch', 'regenerate'].includes(action)) return undefined
+  const patches = (value as Record<string, unknown>).patches
+  return {
+    mode: 'build_task_plan_confirmation',
+    action: action as WorkflowBuildTaskPlanConfirmation['action'],
+    ...(Array.isArray(patches) ? { patches } : {})
+  }
+}
+
+/** 为 Build DAG 结构化动作生成可追踪的用户消息，不把动作语义编码进自然语言。 */
+function buildTaskPlanConfirmationMessage(
+  action: WorkflowBuildTaskPlanConfirmation['action']
+): string {
+  const messages: Record<WorkflowBuildTaskPlanConfirmation['action'], string> = {
+    confirm: '已确认 Build DAG，请进入 Build。',
+    patch: '已提交 Build DAG 任务修改，请重新校验并确认。',
+    regenerate: '请重新生成 Build DAG。'
+  }
+  return messages[action]
 }
 
 /** 从 Workflow 快照中读取最近一次实体选择，作为实体设计确认继续时的兜底上下文。 */
@@ -760,6 +789,7 @@ export function useWorkflowConversation({
       selectedApiContractId,
       selectedEndpointId
     )
+    const workflowBuildScope = workflow.summary.buildExecutionScope || endpointScope
     const continuationPageId = endpointScope
       ? undefined
       : workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId
@@ -800,6 +830,18 @@ export function useWorkflowConversation({
         titleFrom: originalRequest || '正式工作流确认'
       })
     }
+    if (!conversation && clarificationMode === 'build_task_plan_confirmation') {
+      const action = buildTaskPlanConfirmationAction(answers)
+      if (!action || loading || workspaceBusy) return false
+      return sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
+        clarificationAnswers: answers,
+        originalRequest,
+        resumeState: workflow,
+        buildExecutionScope: workflowBuildScope,
+        titleFrom: 'Build DAG 确认',
+        conversation: false
+      })
+    }
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
     if (!continuationMessage || loading || workspaceBusy) return false
     return sendWorkflowMessage(continuationMessage, {
@@ -817,7 +859,7 @@ export function useWorkflowConversation({
           : continuationPageId
             ? 'page'
             : undefined,
-      buildExecutionScope: endpointScope,
+      buildExecutionScope: workflowBuildScope,
       titleFrom: originalRequest || '补充需求确认',
       conversation
     })

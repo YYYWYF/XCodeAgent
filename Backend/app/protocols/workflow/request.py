@@ -70,6 +70,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         payload.get("clarificationAnswers")
         or forwarded_props.get("clarificationAnswers")
     )
+    build_task_plan_confirmation = _build_task_plan_confirmation(
+        clarification_answers
+    )
     small_task_handoff_submission = _small_task_handoff_submission(
         clarification_answers
     )
@@ -164,6 +167,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         resume_from = "build"
     elif small_task_handoff_submission and workflow_scope not in APPLICATION_PLANNING_SCOPES:
         resume_from = "small_task_repair"
+    elif build_task_plan_confirmation and workflow_scope != "application_planning":
+        # DAG 确认必须回到同一 prepare 节点，不能被通用 detail_confirmation 回退规则截走。
+        resume_from = "prepare_build_tasks"
     if not resume_from and _clarification_answers_to_text(clarification_answers):
         resume_from = (
             "requirements"
@@ -305,6 +311,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **_debug_resume_values(debug_state, workspace=workspace),
         "design_change_submission": design_change_submission,
         "retry_failed_tasks": workflow_action == "retry_failed_tasks",
+        **(
+            {"build_task_plan_confirmation": build_task_plan_confirmation}
+            if build_task_plan_confirmation
+            else {}
+        ),
         "selected_skill_names": list(selected_skill_names),
         **(
             {"detail_review_submission": detail_review_submission}
@@ -821,6 +832,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "requirement_spec_json_path",
         "build_task_plan",
         "build_task_plan_path",
+        "build_task_plan_confirmation",
         "build_execution_scope",
         "build_context",
         "execution_resource_claims",
@@ -879,6 +891,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     camel_aliases = {
         "build_task_plan": "buildTaskPlan",
         "build_execution_scope": "buildExecutionScope",
+        "build_task_plan_confirmation": "buildTaskPlanConfirmation",
         "build_results": "buildResults",
         "build_summary": "buildSummary",
         "repair_task_plan": "repairTaskPlan",
@@ -1359,6 +1372,27 @@ def _clarification_answers_to_text(value: Any) -> str:
         return "\n".join(lines)
 
     return _answer_to_text(value)
+
+
+def _build_task_plan_confirmation(value: Any) -> dict[str, Any]:
+    """提取并限制 DAG 确认动作，保持其与正式文档确认协议隔离。"""
+
+    if not isinstance(value, dict):
+        return {}
+    raw = value.get("build_task_plan_confirmation")
+    if not isinstance(raw, dict):
+        return {}
+    action = _optional_text(raw.get("action")).lower()
+    if action not in {"confirm", "patch", "regenerate"}:
+        return {}
+    patches = raw.get("patches")
+    return {
+        "mode": "build_task_plan_confirmation",
+        "action": action,
+        "patches": [dict(item) for item in patches if isinstance(item, dict)]
+        if isinstance(patches, list)
+        else [],
+    }
 
 
 def _unit_test_decision(value: Any) -> str:

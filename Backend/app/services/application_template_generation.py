@@ -52,6 +52,60 @@ def load_template_generation_manifest(workspace: str | Path) -> dict[str, Any]:
     return payload
 
 
+def inspect_template_generation_readiness(workspace: str | Path) -> dict[str, Any]:
+    """只读检查模板 manifest、真实页面入口和菜单是否满足 DAG 前置条件。"""
+
+    workspace_path = Path(workspace).expanduser().resolve()
+    errors: list[str] = []
+    try:
+        manifest = load_template_generation_manifest(workspace_path)
+    except ApplicationTemplateGenerationError as exc:
+        return {"ready": False, "errors": [str(exc)], "manifest": {}}
+
+    steps = manifest.get("steps") if isinstance(manifest.get("steps"), dict) else {}
+    for step_name in ("download", "templateFiles", "menus", "gate"):
+        step = steps.get(step_name) if isinstance(steps, dict) else None
+        if not isinstance(step, dict) or step.get("status") != "succeeded":
+            errors.append(f"模板 manifest 步骤 {step_name} 未完成")
+    overall = manifest.get("overall") if isinstance(manifest.get("overall"), dict) else {}
+    if overall.get("status") != "succeeded":
+        errors.append(f"模板 manifest 完成门禁状态为 {overall.get('status') or 'unknown'}")
+
+    for target in ("frontend", "backend"):
+        target_error = _template_target_error(workspace_path, target)
+        if target_error:
+            errors.append(target_error)
+
+    try:
+        product_plan, ui_designs = _load_template_planning_artifacts(workspace_path)
+        pages = collect_template_pages(product_plan, ui_designs)
+    except (ApplicationTemplateGenerationError, ValueError) as exc:
+        return {
+            "ready": False,
+            "errors": [*errors, str(exc)],
+            "manifest": manifest,
+        }
+    missing_pages = [
+        f"frontend/src/pages/{page['key']}/index.tsx"
+        for page in pages
+        if not (workspace_path / f"frontend/src/pages/{page['key']}/index.tsx").is_file()
+    ]
+    if missing_pages:
+        errors.append("页面入口缺失：" + "、".join(missing_pages))
+    menu_check = inspect_frontend_menu_entries(workspace_path / "frontend", pages)
+    if menu_check.get("error"):
+        errors.append(f"菜单文件无效：{menu_check['error']}")
+    elif menu_check.get("missingKeys"):
+        errors.append("菜单项缺失：" + "、".join(menu_check["missingKeys"]))
+    return {
+        "ready": not errors,
+        "errors": errors,
+        "manifest": manifest,
+        "pages": pages,
+        "menu": menu_check,
+    }
+
+
 def prepare_application_template_generation(
     workspace: str | Path,
     download_result: dict[str, Any],

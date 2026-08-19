@@ -52,6 +52,18 @@ def _workflow_progress_summary(
             result.get("preview_url") if _preview_visible_for_phase(phase) else None
         ),
         "buildSummary": result.get("build_summary", {}),
+        "buildTaskPlan": result.get("build_task_plan", {}),
+        "buildExecutionScope": result.get("build_execution_scope"),
+        "buildTaskPlanConfirmation": (
+            result.get("build_task_plan_confirmation")
+            or (
+                result.get("clarification")
+                if isinstance(result.get("clarification"), dict)
+                and result.get("clarification", {}).get("mode")
+                == "build_task_plan_confirmation"
+                else {}
+            )
+        ),
         "testSummary": {},
         "smallTaskTasks": result.get("small_task_tasks", []),
         "smallTaskResults": result.get("small_task_results", []),
@@ -151,6 +163,8 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     if node_name == "prepare_build_tasks":
         if update.get("status") == "requires_user_input":
             return []
+        if update.get("status") == "failed":
+            return ["handle_failure"]
         return ["build"]
     if node_name == "build":
         build_summary = update.get("build_summary")
@@ -358,20 +372,42 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 else []
             )
             return {
-                "message": f"项目计划未确认，已阻止代码生成，待确认问题={len(questions)}",
+                "message": _prepare_build_tasks_input_message(clarification, len(questions)),
                 "data": {
                     "projectPlan": update.get("project_plan"),
+                    "buildTaskPlan": update.get("build_task_plan"),
+                    "buildExecutionScope": update.get("build_execution_scope"),
+                    "buildTaskPlanConfirmation": update.get(
+                        "build_task_plan_confirmation"
+                    ) or clarification,
                     "clarification": clarification,
                     "requiresUserInput": True,
+                    "dagGeneration": update.get("dag_generation_progress"),
                 },
             }
         tasks = update.get("tasks") if isinstance(update.get("tasks"), list) else []
+        if update.get("status") == "failed":
+            return {
+                "message": str(
+                    update.get("message")
+                    or "Build DAG 自动重生成失败，已停止代码生成。"
+                ),
+                "data": {
+                    "buildTaskPlan": update.get("build_task_plan"),
+                    "buildExecutionScope": update.get("build_execution_scope"),
+                    "dagGeneration": update.get("dag_generation_progress"),
+                    "error": update.get("error"),
+                },
+            }
         return {
             "message": f"任务数={len(tasks)}，任务 DAG 已按范围生成",
             "data": {
                 "buildTaskPlan": update.get("build_task_plan"),
                 "taskCount": len(tasks),
                 "buildExecutionScope": update.get("build_execution_scope"),
+                "buildTaskPlanConfirmation": update.get(
+                    "build_task_plan_confirmation"
+                ),
                 "dagGeneration": update.get("dag_generation_progress"),
             },
         }
@@ -775,6 +811,26 @@ def _detail_confirmation_project_plan_update(
     }
 
 
+def _prepare_build_tasks_input_message(
+    clarification: Any,
+    question_count: int,
+) -> str:
+    """按 DAG 前置检查、校验失败和确认等待区分工作台提示。"""
+
+    mode = clarification.get("mode") if isinstance(clarification, dict) else ""
+    messages = {
+        "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
+        "build_prerequisite_error": "Build DAG 的正式产物或模板前置条件未满足，已返回上游流程。",
+        "build_context_error": "当前构建范围缺少已确认的实现详情，已返回详细设计流程。",
+        "api_contract_consistency_error": "当前构建范围的 API 契约校验未通过，已阻止代码生成。",
+        "build_task_plan_validation_error": "Build DAG 校验未通过，平台已停止代码生成。",
+        "build_task_plan_generation_error": "Build DAG 自动重生成未得到有效任务计划，平台已停止代码生成。",
+    }
+    if mode in messages:
+        return messages[mode]
+    return f"当前构建准备需要输入，待确认问题={question_count}"
+
+
 def _render_project_plan_page_update(detail: dict[str, Any]) -> str:
     """渲染页面更新正文，同时移除外置详情文件的宿主路径。"""
 
@@ -916,6 +972,16 @@ def _workflow_summary(
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
         "buildSummary": build_summary,
+        "buildTaskPlan": result.get("build_task_plan", {}),
+        "buildExecutionScope": result.get("build_execution_scope"),
+        "buildTaskPlanConfirmation": (
+            result.get("build_task_plan_confirmation")
+            or (
+                clarification
+                if clarification.get("mode") == "build_task_plan_confirmation"
+                else {}
+            )
+        ),
         "testSummary": test_summary,
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
@@ -950,6 +1016,7 @@ def _workflow_user_input_message(
         "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",
         "small_task_workflow_handoff": "小任务需要确认后转入正式工作流。",
         "unit_test_confirmation": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
+        "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
     }
     if clarification_mode in confirmation_labels:
         return confirmation_labels[clarification_mode]
@@ -987,6 +1054,9 @@ def _workflow_visual_payload(
         "tasks": result.get("tasks", []),
         "dagGeneration": result.get("dag_generation_progress"),
         "buildSummary": result.get("build_summary", {}),
+        "buildTaskPlan": result.get("build_task_plan", {}),
+        "buildExecutionScope": result.get("build_execution_scope"),
+        "buildTaskPlanConfirmation": summary.get("buildTaskPlanConfirmation"),
         "buildExecutionSlice": result.get("build_execution_slice"),
         "testReport": result.get("test_report", {}),
         "repairTaskPlan": result.get("repair_task_plan"),

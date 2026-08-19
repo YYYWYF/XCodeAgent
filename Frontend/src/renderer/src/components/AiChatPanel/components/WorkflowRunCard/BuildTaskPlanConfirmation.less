@@ -1,0 +1,456 @@
+// Build DAG 待确认组件的专属样式，避免与通用 WorkflowRunCard 样式相互耦合。
+.@{class-prefix}-workflow-run-card-dag-confirmation {
+  gap: 0;
+  padding: 14px;
+  border-color: var(--wb-border-strong);
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-workflow-dag-confirmation-shell {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.@{class-prefix}-workflow-dag-confirmation {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+
+  .ant-alert {
+    color: var(--wb-text);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+  }
+
+  .ant-alert-message,
+  .ant-alert-description {
+    color: inherit;
+  }
+
+  .ant-alert-warning {
+    background: color-mix(in srgb, var(--wb-warning) 8%, var(--wb-surface));
+    border-color: color-mix(in srgb, var(--wb-warning) 38%, var(--wb-border));
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-overview {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 2px 0 14px;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-workflow-dag-confirmation-overview-copy,
+.@{class-prefix}-workflow-dag-confirmation-overview-title {
+  display: flex;
+  min-width: 0;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-overview-copy {
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-overview-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  color: var(--wb-canvas);
+  font-size: 17px;
+  background: var(--wb-accent);
+  border-radius: 7px;
+  place-items: center;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-overview-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-overview-title {
+  color: var(--wb-text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-overview-title .ant-typography,
+.@{class-prefix}-workflow-dag-confirmation-overview-subtitle {
+  margin: 0;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-overview-subtitle {
+  display: block;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-unit-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+
+  &::before {
+    width: 6px;
+    height: 6px;
+    content: '';
+    background: var(--wb-accent);
+    border-radius: 50%;
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-section-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
+
+  > div {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .anticon {
+    color: var(--wb-accent);
+  }
+
+  .ant-typography {
+    margin: 0;
+  }
+
+  > .@{class-prefix}-workflow-dag-confirmation-unit-count {
+    flex: 0 0 auto;
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-empty {
+  padding: 22px 12px;
+  color: var(--wb-text-secondary);
+  text-align: center;
+  border: 1px dashed var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface-subtle);
+}
+
+.@{class-prefix}-workflow-dag-confirmation-tasks.ant-collapse {
+  display: grid;
+  min-width: 0;
+  flex-direction: initial;
+  align-items: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  border: 0;
+  background: transparent;
+
+  .ant-collapse-item {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--wb-border);
+    border-radius: 8px;
+    background: var(--wb-surface);
+  }
+
+  .ant-collapse-header {
+    padding: 11px 10px;
+    color: var(--wb-text);
+  }
+
+  .ant-collapse-expand-icon {
+    display: none;
+  }
+
+  .ant-collapse-content,
+  .ant-collapse-content-box {
+    color: var(--wb-text);
+    background: transparent;
+    border-top-color: var(--wb-border);
+  }
+
+  .ant-collapse-content-box {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 11px 10px 10px;
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-header {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  align-items: stretch;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-header-main {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-index {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  color: var(--wb-canvas);
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--workflow-dag-tone-solid, var(--wb-accent));
+  border: 0;
+  border-radius: 50%;
+  place-items: center;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-id,
+.@{class-prefix}-workflow-dag-confirmation-dependency-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  padding: 2px 6px;
+  overflow: hidden;
+  color: var(--workflow-dag-tone-solid, var(--wb-text-secondary));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--workflow-dag-tone-soft, var(--wb-surface-subtle));
+  border: 1px solid var(--workflow-dag-tone-border, var(--wb-border));
+  border-radius: 5px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-id {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-unit {
+  display: inline-flex;
+  margin-left: auto;
+  flex: 0 0 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  max-width: 40%;
+  padding: 3px 7px;
+  overflow: hidden;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-unit-label {
+  flex: 0 0 auto;
+  color: var(--wb-text-tertiary);
+  font-size: 9px;
+  line-height: 15px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-unit-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-dependencies {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-left: 31px;
+  gap: 4px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-dependency-label,
+.@{class-prefix}-workflow-dag-confirmation-task-dependency-empty {
+  display: inline-flex;
+  min-height: 21px;
+  align-items: center;
+  color: var(--wb-text-tertiary);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-dependency-label {
+  flex: 0 0 auto;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-tone-green {
+  --workflow-dag-tone-solid: var(--wb-code-add-text);
+  --workflow-dag-tone-soft: color-mix(in srgb, var(--wb-code-add-text) 12%, var(--wb-surface));
+  --workflow-dag-tone-border: color-mix(in srgb, var(--wb-code-add-text) 32%, var(--wb-border));
+}
+
+.@{class-prefix}-workflow-dag-confirmation-tone-purple {
+  --workflow-dag-tone-solid: var(--wb-accent);
+  --workflow-dag-tone-soft: var(--wb-accent-soft);
+  --workflow-dag-tone-border: var(--wb-accent-border);
+}
+
+.@{class-prefix}-workflow-dag-confirmation-tone-blue {
+  --workflow-dag-tone-solid: color-mix(in srgb, var(--wb-accent) 58%, var(--wb-text-secondary));
+  --workflow-dag-tone-soft: color-mix(in srgb, var(--wb-accent-soft) 70%, var(--wb-surface));
+  --workflow-dag-tone-border: color-mix(in srgb, var(--wb-accent-border) 70%, var(--wb-border));
+}
+
+.@{class-prefix}-workflow-dag-confirmation-tone-orange {
+  --workflow-dag-tone-solid: var(--wb-warning);
+  --workflow-dag-tone-soft: color-mix(in srgb, var(--wb-warning) 12%, var(--wb-surface));
+  --workflow-dag-tone-border: color-mix(in srgb, var(--wb-warning) 32%, var(--wb-border));
+}
+
+.@{class-prefix}-workflow-dag-confirmation-edit-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-edit-grid > label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-field-label {
+  line-height: 16px;
+  color: var(--wb-text-secondary);
+  font-size: 10px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-field-control {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-field-control .ant-input {
+  padding-right: 30px;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  border-color: var(--wb-border);
+  border-radius: 6px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-field-control .ant-input:hover,
+.@{class-prefix}-workflow-dag-confirmation-field-control .ant-input:focus,
+.@{class-prefix}-workflow-dag-confirmation-field-control .ant-input-focused {
+  border-color: var(--wb-accent-border);
+  box-shadow: 0 0 0 2px var(--wb-accent-soft);
+}
+
+.@{class-prefix}-workflow-dag-confirmation-field-control > .anticon {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  right: 9px;
+  color: var(--wb-text-tertiary);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.@{class-prefix}-workflow-dag-confirmation-readonly {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-readonly-item {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  background: var(--wb-surface-subtle);
+}
+
+.@{class-prefix}-workflow-dag-confirmation-readonly-label {
+  flex: 0 0 auto;
+  color: var(--wb-text-tertiary);
+  font-size: 10px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-readonly-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  font-size: 10px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-workflow-dag-confirmation-actions .ant-space {
+  gap: 6px !important;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-actions .ant-btn {
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-workflow-dag-confirmation-tasks.ant-collapse {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-overview,
+  .@{class-prefix}-workflow-dag-confirmation-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-task-header-main {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-task-unit {
+    max-width: 100%;
+    margin-left: 0;
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-actions .ant-space {
+    justify-content: flex-end;
+  }
+}

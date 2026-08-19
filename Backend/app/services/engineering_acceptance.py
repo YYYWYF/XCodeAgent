@@ -202,7 +202,7 @@ def _compile_task(
     *,
     recovery: bool,
 ) -> dict[str, Any]:
-    """根据文件范围、菜单上下文和正式契约编译单个任务的工程检查。"""
+    """根据文件范围和正式契约编译单个任务的工程检查。"""
 
     compiled = deepcopy(task)
     checks: list[dict[str, Any]] = []
@@ -211,9 +211,6 @@ def _compile_task(
     else:
         checks.extend(_file_operation_checks(task))
         checks.append(_scope_boundary_check(task))
-        menu_check = _menu_registration_check(task)
-        if menu_check:
-            checks.append(menu_check)
         contract_check = (
             _contract_binding_check(task, context)
             if _task_requires_contract_binding(task)
@@ -430,7 +427,7 @@ def _contract_binding_check(
         f"{item['method']} {item['path']}" for item in expectations
     )
     has_frontend_api = any(
-        "/src/apis/" in f"/{path.replace('\\', '/')}"
+        "/src/apis/" in f"/{path.replace(chr(92), '/')}"
         for path in _allowed_paths(task)
     )
     if owner == "backend":

@@ -187,10 +187,28 @@ def _endpoint_source_prompt_fragments(
     return mapping + "".join(fragments), "".join(skill_fragments), source_types
 
 
+def _task_plan_retry_feedback(errors: list[str] | None) -> str:
+    """把平台校验错误转换为下一次任务规划模型的内部重生成指令。"""
+
+    normalized = [str(error).strip() for error in errors or [] if str(error).strip()]
+    if not normalized:
+        return ""
+    return (
+        "\n\n--- AUTOMATIC REGENERATION FEEDBACK ---\n"
+        "The previous candidate task plan violated platform-owned task boundaries or DAG "
+        "constraints. Regenerate the complete JSON task plan now. Do not ask the user to "
+        "decide how to split platform tasks, do not preserve the invalid task, and do not "
+        "explain the correction outside the JSON output. Fix every issue below:\n"
+        + "\n".join(f"- {error}" for error in normalized[:20])
+        + "\n--- END AUTOMATIC REGENERATION FEEDBACK ---\n"
+    )
+
+
 def _task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
     build_context: dict[str, Any] | None = None,
+    validation_feedback: list[str] | None = None,
 ) -> str:
     """按本轮实际待生成 Unit 选择渐进式任务规划提示词。"""
 
@@ -257,6 +275,7 @@ def _combined_task_preparation_prompt(
             project_plan,
             workspace_snapshot,
             build_context,
+            validation_feedback,
         )
     endpoint_source_rules = ""
     endpoint_skill_documents = ""
@@ -336,7 +355,7 @@ def _combined_task_preparation_prompt(
         "（*.test.*、*.spec.*、Java 测试类等）。不要把 PageDetail、EndpointDetail 或需求文档中的"
         "业务验收标准复制到任务；acceptance_criteria 和 acceptance_checks 都必须返回空数组（[]），"
         "模型不得输出任何验收检查对象或验收文案，后端会根据 change_scope、"
-        "allowed_paths、菜单元数据和正式 API 契约确定性生成纯工程验收点并写入 acceptance_checks。"
+        "allowed_paths 和正式 API 契约确定性生成纯工程验收点并写入 acceptance_checks。"
         "verification_commands 必须留空；工程验收由确定性 harness 执行，build/lint/typecheck/test "
         "由后续集成测试阶段负责。\n"
           
@@ -411,7 +430,7 @@ def _combined_task_preparation_prompt(
         "- impact_scope: {summary, affected_modules, public_contracts, risks}\n"
         "- can_run_in_parallel and parallel_reason\n"
         "- acceptance_criteria: always [] because deterministic engineering acceptance compilation owns this field\n"
-        "- acceptance_checks: always [] and never emit check objects; the deterministic compiler derives acceptance_checks from change_scope/allowed_paths/menu/API contract metadata\n"
+        "- acceptance_checks: always [] and never emit check objects; the deterministic compiler derives acceptance_checks from change_scope/allowed_paths/API contract metadata\n"
         "- verification_commands: frontend and backend tasks must leave it empty (verification happens in the integration test phase)\n"
         "- status: pending for every newly planned task\n"
         "Before returning JSON, self-check every task and remove duplicate or semantically "
@@ -421,18 +440,16 @@ def _combined_task_preparation_prompt(
         "When TargetBuildContext.reusable_tasks_by_unit lists an application Unit, do not "
         "create another task for that Unit and do not copy its task ids into dependencies; "
         "the deterministic Unit Graph will connect that reusable capability.\n"
-        "For a page target, the page must also be registered in the template menu so its "
-        "automatic route can resolve. Use TargetBuildContext.target.page_key as the "
-        "authoritative PageKey for the page directory name and menu key — this is a "
+        "For a page target, the page entry, route and menu are already initialized by the "
+        "template lifecycle and are read-only during DAG planning. Use TargetBuildContext.target.page_key as the "
+        "authoritative PageKey for the page directory name and existing entry lookup — this is a "
         "PascalCase identifier derived from the page ID (e.g. dashboard_page → "
         "DashboardPage). All page-related paths in target_files, allowed_paths, and "
         "change_scope MUST use this exact PageKey: `frontend/src/pages/<PageKey>/index.tsx`. "
         "Do NOT use the raw page ID (snake_case like dashboard_page) as the directory name. "
-        "Menu entries use the exact template shape `{ path, name, key }`; never use "
-        "a `label` field. A deterministic compiler step will add the bounded menus.ts task "
-        "when the model omits it and will reconcile a planned PageKey with one unique semantically "
-        "equivalent live page directory. Never create a second page merely because a stale "
-        "WorkspaceSnapshot omitted the live directory.\n"
+        "The deterministic compiler only verifies the already-existing page entry and never "
+        "creates a menu, route or placeholder task. Never create a second page "
+        "merely because a stale WorkspaceSnapshot omitted the live directory.\n"
         "When TargetBuildContext.target.type is `endpoint`, every new task MUST use the exact "
         "`backend:endpoint:<apiContractId>:<endpointId>` Unit from TargetBuildContext.required_unit_ids "
         "or an unprepared prerequisite Unit listed there. Do not create page tasks, do not create "
@@ -452,17 +469,14 @@ def _combined_task_preparation_prompt(
         "src/hooks/useGuard.ts, src/apis/service.ts, src/constants/index.ts, "
         "src/constants/routes.ts, src/constants/menus.ts, src/typings/**, src/styles/**. "
         "These are the template skeleton; recreating them wastes effort and breaks the build.\n"
-        "- NEVER plan `operation: modify` on the skeleton files above either, except the "
-        "single permitted append-only change to `src/constants/menus.ts`: add the current "
-        "page as `{ path, name, key }` to the top-level `BIZ_MENUS` array without changing "
-        "existing entries or the "
-        "file structure. All other skeleton files remain read-only.\n"
-        "- When the menu item path contains a React Router dynamic path segment such as "
-        "`:id` or `detail/:id`, include `hideInMenu: true` on that new menu item because "
-        "parameterized pages are not stable menu entries.\n"
+        "- NEVER plan `operation: modify` on the skeleton files above. Menus, routes and "
+        "shared registration files are initialized upstream and remain read-only in this DAG.\n"
+        "- Do not return menu or route metadata in task output. Menu and route registration "
+        "are completed by the template lifecycle and are not Build task scope.\n"
         "- Only plan `operation: add` for NEW business files that do NOT exist in the "
-        "snapshot: business page components under src/pages/<PageKey>/index.tsx (replace "
-        "the scaffold placeholder content), business API files under src/apis/<biz>Api.ts, "
+        "snapshot. The existing page entry src/pages/<PageKey>/index.tsx is a template "
+        "file and may only be modified for business content; add business API files under "
+        "src/apis/<biz>Api.ts, "
         "and page-specific types/constants/hooks/utils/components as governed by the "
         "frontend-template-modification-boundary skill. Every page task with confirmed "
         "api_dependencies MUST create the matching src/apis/<biz>Api.ts service file "
@@ -477,6 +491,7 @@ def _combined_task_preparation_prompt(
         "workspace_analysis must summarize the directories, entry files, stack, and "
         "conventions used from the WorkspaceSnapshot.\n\n"
         f"WorkspaceSnapshot (bounded planning projection):\n{snapshot_text}\n\n"
+        f"{_task_plan_retry_feedback(validation_feedback)}"
         f"TargetBuildContext:\n{json.dumps(build_context or {}, ensure_ascii=False, indent=2)}\n\n"
         f"TaskPreparationContext:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
     )
@@ -838,6 +853,7 @@ def _static_task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
     build_context: dict[str, Any] | None,
+    validation_feedback: list[str] | None = None,
 ) -> str:
     """构造 Static 专用任务提示，不注入 Spring、MyBatis 或数据库生成要求。"""
 
@@ -858,17 +874,17 @@ def _static_task_preparation_prompt(
         "strictly bounded by executable_details.api_contracts. Page components must import that "
         "module and must not contain business-data arrays or call a backend service.\n"
         "All files live under /frontend/. Reuse the existing scaffold. Do not modify package.json, "
-        "vite.config.ts, src/apis/service.ts, framework entry files, or dependencies. The only "
-        "permitted scaffold edit is appending the current page to src/constants/menus.ts.\n"
+        "vite.config.ts, src/apis/service.ts, framework entry files, dependencies, menus, or routes.\n"
         "Return one JSON object with workspace_analysis and tasks. Every task must use an allowed "
         "Unit ID, owner=frontend, Simplified Chinese title/description, same-Unit dependencies only, "
         "exact change_scope paths, impact_scope, can_run_in_parallel, parallel_reason, status=pending, "
         "acceptance_criteria=[], acceptance_checks=[] (the deterministic compiler owns both), "
-        "and verification_commands=[]. Do not plan tests or verification.\n\n"
+        "and verification_commands=[]. Do not plan tests or verification. Menu and route files are read-only.\n\n"
         "--- INJECTED frontend-static-data-generate SKILL.md ---\n"
         + static_skill
         + "\n--- END INJECTED frontend-static-data-generate SKILL.md ---\n\n"
         f"WorkspaceSnapshot:\n{snapshot_text}\n\n"
+        f"{_task_plan_retry_feedback(validation_feedback)}"
         f"TargetBuildContext:\n{json.dumps(build_context or {}, ensure_ascii=False, indent=2)}\n\n"
         f"TaskPreparationContext:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
     )
@@ -880,6 +896,7 @@ def _invoke_live_main_agent(
     workspace: str | None = None,
     workspace_snapshot: dict[str, Any] | None = None,
     build_context: dict[str, Any] | None = None,
+    validation_feedback: list[str] | None = None,
     settings: Settings | None = None,
 ) -> str:
     """调用无工具 ChatModel 执行只读的构建任务候选规划。"""
@@ -889,6 +906,7 @@ def _invoke_live_main_agent(
         project_plan,
         workspace_snapshot,
         build_context,
+        validation_feedback,
     )
     result = create_chat_model(active_settings).bind(
         max_tokens=active_settings.default_max_tokens
@@ -945,52 +963,119 @@ def prepare_build_tasks_with_main_agent(
     workspace_snapshot: dict[str, Any] | None = None,
     build_context: dict[str, Any] | None = None,
     build_task_plan: dict[str, Any] | None = None,
+    build_execution_scope: dict[str, Any] | None = None,
+    validation_feedback: list[str] | None = None,
 ) -> dict[str, Any]:
-    """通过直接模型边界生成当前范围的可执行 Build DAG 候选任务。"""
+    """通过直接模型边界生成并自动修复当前范围的 Build DAG 候选任务。"""
 
     settings = Settings.from_env()
-    agent_note = _invoke_live_main_agent(
-        project_plan,
-        workspace=workspace,
-        workspace_snapshot=workspace_snapshot,
-        build_context=build_context,
-        settings=settings,
-    )
-    preparation_source = "direct_chat_model"
-    agent_plan = extract_json_object(agent_note)
-    # 模型输出的验收字段不可信，在解析边界统一强制重置为空数组，
-    # 防止模型生成不准确的 acceptance_criteria / acceptance_checks 进入下游；
-    # 真正的工程验收由确定性编译器基于 change_scope 等元数据生成。
-    # TODO(验收措施): 后续需要设计更完善的验收验证措施。
-    _reset_model_acceptance_fields(agent_plan)
-    _log_task_model_response_diagnostics(agent_note, agent_plan)
-
-    try:
-        build_task_plan = create_build_task_plan(
+    max_retries = max(0, int(getattr(settings, "build_task_plan_max_retries", 2)))
+    feedback = list(validation_feedback or [])
+    last_errors: list[str] = []
+    for attempt in range(max_retries + 1):
+        agent_note = _invoke_live_main_agent(
             project_plan,
-            agent_note=agent_note,
-            agent_plan=agent_plan,
+            workspace=workspace,
             workspace_snapshot=workspace_snapshot,
-            base_build_task_plan=build_task_plan,
             build_context=build_context,
-            workspace_root=workspace,
+            validation_feedback=feedback,
+            settings=settings,
         )
-    except ValueError as exc:
-        logger.warning(
-            "build_task_plan_compile_failed response_sha256=%s parsed_keys=%s error=%s",
-            _response_fingerprint(agent_note),
-            _parsed_keys(agent_plan),
-            str(exc),
-        )
-        raise
-    build_task_plan["prepared_by"] = {
-        "agent": "chat-model",
-        "mode": "direct",
-        "model": settings.model_name,
-        "source": preparation_source,
-    }
-    build_task_plan["preparation_source"] = preparation_source
-    return build_task_plan
+        preparation_source = "direct_chat_model"
+        agent_plan = extract_json_object(agent_note)
+        # 模型输出的验收字段不可信，在解析边界统一强制重置为空数组，
+        # 防止模型生成不准确的 acceptance_criteria / acceptance_checks 进入下游；
+        # 真正的工程验收由确定性编译器基于 change_scope 等元数据生成。
+        # TODO(验收措施): 后续需要设计更完善的验收验证措施。
+        _reset_model_acceptance_fields(agent_plan)
+        _log_task_model_response_diagnostics(agent_note, agent_plan)
+
+        try:
+            build_task_plan = create_build_task_plan(
+                project_plan,
+                agent_note=agent_note,
+                agent_plan=agent_plan,
+                workspace_snapshot=workspace_snapshot,
+                base_build_task_plan=build_task_plan,
+                build_context=build_context,
+                build_execution_scope=build_execution_scope,
+                workspace_root=workspace,
+            )
+        except ValueError as exc:
+            last_errors = [str(exc)]
+            logger.warning(
+                "build_task_plan_compile_failed attempt=%s/%s response_sha256=%s "
+                "parsed_keys=%s error=%s",
+                attempt + 1,
+                max_retries + 1,
+                _response_fingerprint(agent_note),
+                _parsed_keys(agent_plan),
+                str(exc),
+            )
+            if attempt >= max_retries:
+                raise ValueError(
+                    "Build DAG 自动重生成耗尽，最后一次任务候选无法编译："
+                    + str(exc)
+                ) from exc
+            feedback = last_errors
+            continue
+
+        last_errors = _build_task_plan_validation_errors(build_task_plan)
+        if last_errors:
+            logger.warning(
+                "build_task_plan_validation_retry attempt=%s/%s response_sha256=%s "
+                "errors=%s",
+                attempt + 1,
+                max_retries + 1,
+                _response_fingerprint(agent_note),
+                last_errors,
+            )
+            if attempt >= max_retries:
+                raise ValueError(
+                    "Build DAG 自动重生成耗尽，最后一次任务候选仍未通过校验："
+                    + "；".join(last_errors)
+                )
+            feedback = last_errors
+            continue
+
+        build_task_plan["prepared_by"] = {
+            "agent": "chat-model",
+            "mode": "direct",
+            "model": settings.model_name,
+            "source": preparation_source,
+            "generation_attempt": attempt + 1,
+        }
+        build_task_plan["preparation_source"] = preparation_source
+        return build_task_plan
+
+    raise ValueError(
+        "Build DAG 自动重生成未返回可执行任务：" + "；".join(last_errors)
+    )
+
+
+def _build_task_plan_validation_errors(build_task_plan: dict[str, Any]) -> list[str]:
+    """读取候选 Build DAG 的确定性校验错误，供平台自动重生成使用。"""
+
+    graph = build_task_plan.get("task_graph")
+    validation = graph.get("validation") if isinstance(graph, dict) else None
+    errors = [
+        str(error)
+        for error in (validation.get("errors") if isinstance(validation, dict) else [])
+        if str(error).strip()
+    ]
+    execution = build_task_plan.get("execution")
+    blocked_batches = (
+        execution.get("blocked_batches")
+        if isinstance(execution, dict)
+        else []
+    )
+    for batch in blocked_batches if isinstance(blocked_batches, list) else []:
+        if not isinstance(batch, dict):
+            continue
+        reason = str(batch.get("reason") or "任务执行批次被阻断。").strip()
+        if reason and reason not in errors:
+            errors.append(reason)
+    return errors
 
 
 def _log_task_model_response_diagnostics(

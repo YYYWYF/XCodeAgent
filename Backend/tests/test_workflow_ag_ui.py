@@ -452,7 +452,15 @@ class FakeDagGenerationProgressGraph:
             "stages": [{**stage, "status": "completed"} for stage in stages],
             "tasks": [{"id": "page", "title": "实现页面", "owner": "frontend", "status": "pending"}],
             "summary": {"unitCount": 2, "taskCount": 1},
-            "artifacts": [{"id": "dag", "name": "BUILD_TASK_DAG.md", "kind": "markdown", "status": "saved"}],
+            "artifacts": [
+                {
+                    "id": "plan",
+                    "name": "build-task-plan.json",
+                    "kind": "json",
+                    "status": "saved",
+                    "confirmationStatus": "pending",
+                }
+            ],
         }
         yield "updates", {
             "prepare_build_tasks": {

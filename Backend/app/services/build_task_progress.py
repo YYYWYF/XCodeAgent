@@ -38,7 +38,7 @@ class BuildTaskProgressTracker:
             for stage_id, name in DAG_GENERATION_STAGES
         ]
         self._build_task_plan: dict[str, Any] = {}
-        self._artifacts: list[dict[str, str]] = []
+        self._artifacts: list[dict[str, Any]] = []
         self._stage_outputs: dict[str, dict[str, Any]] = {}
 
     def start(self, stage_id: str, detail: str) -> None:
@@ -53,7 +53,7 @@ class BuildTaskProgressTracker:
         detail: str,
         *,
         build_task_plan: dict[str, Any] | None = None,
-        artifacts: list[dict[str, str]] | None = None,
+        artifacts: list[dict[str, Any]] | None = None,
         output: dict[str, Any] | None = None,
     ) -> None:
         """完成指定阶段，并冻结该阶段的结构化产物投影。"""
@@ -100,6 +100,11 @@ class BuildTaskProgressTracker:
             "tasks": tasks,
             "summary": _project_summary(self._build_task_plan, tasks),
             "artifacts": deepcopy(self._artifacts),
+            "confirmationStatus": _compact_text(
+                self._build_task_plan.get("confirmation_status"), 40
+            )
+            or None,
+            "scope": deepcopy(self._build_task_plan.get("build_execution_scope") or {}),
         }
 
     def _update_stage(self, stage_id: str, *, status: str, detail: str) -> None:
@@ -150,22 +155,20 @@ def create_build_task_progress_tracker() -> BuildTaskProgressTracker:
     return BuildTaskProgressTracker(writer)
 
 
-def build_task_artifacts(markdown_path: str) -> list[dict[str, str]]:
-    """构造面向用户的产物摘要，隐藏内部 JSON 文件路径与正文。"""
+def build_task_artifacts(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """构造 JSON DAG 产物摘要，隐藏内部文件路径并暴露确认状态。"""
 
     return [
         {
             "id": "build_task_plan",
-            "name": "内部 Build Task Plan",
-            "kind": "internal",
+            "name": "build-task-plan.json",
+            "kind": "json",
             "status": "saved",
-        },
-        {
-            "id": "build_task_dag",
-            "name": "BUILD_TASK_DAG.md",
-            "kind": "markdown",
-            "status": "saved",
-            "path": _compact_text(markdown_path, 1_000),
+            "confirmationStatus": _compact_text(
+                build_task_plan.get("confirmation_status"), 40
+            )
+            or "pending",
+            "scope": deepcopy(build_task_plan.get("build_execution_scope") or {}),
         },
     ]
 
@@ -187,15 +190,24 @@ def _project_tasks(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
                     task.get("title") or task.get("description") or task_id,
                     500,
                 ),
+                "description": _compact_text(task.get("description"), 2_000),
                 "owner": _compact_text(task.get("owner"), 80),
+                "unitId": _compact_text(task.get("unit_id"), 240),
                 "status": _task_status(task.get("status")),
                 "dependencies": _compact_strings(dependencies, item_limit=200, text_limit=240),
                 "changePaths": _change_paths(task),
+                "allowedPaths": _compact_strings(
+                    task.get("allowed_paths") or [],
+                    item_limit=200,
+                    text_limit=1_000,
+                ),
+                "changeScope": _project_change_scope(task.get("change_scope")),
                 "acceptanceCriteria": _compact_strings(
                     acceptance,
                     item_limit=100,
                     text_limit=1_000,
                 ),
+                "acceptanceChecks": _project_acceptance_checks(task.get("acceptance_checks")),
             }
         )
     return projected
@@ -371,7 +383,7 @@ def project_dag_validation_output(build_task_plan: dict[str, Any]) -> dict[str, 
     }
 
 
-def project_artifact_output(artifacts: list[dict[str, str]]) -> dict[str, Any]:
+def project_artifact_output(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
     """投射已保存产物列表，并隐藏内部计划正文。"""
 
     return {
@@ -469,6 +481,44 @@ def _change_paths(task: dict[str, Any]) -> list[str]:
         target_files = task.get("target_files")
         values = target_files if isinstance(target_files, list) else []
     return _compact_strings(values, item_limit=200, text_limit=1_000)
+
+
+def _project_change_scope(value: Any) -> list[dict[str, Any]]:
+    """裁剪任务变更范围，保留前端核对操作和路径所需的安全字段。"""
+
+    if not isinstance(value, list):
+        return []
+    projected: list[dict[str, Any]] = []
+    for item in value[:200]:
+        if not isinstance(item, dict):
+            continue
+        entry = {
+            key: _compact_text(item.get(key), 80 if key == "operation" else 1_000)
+            for key in ("path", "operation")
+            if item.get(key)
+        }
+        if entry:
+            projected.append(entry)
+    return projected
+
+
+def _project_acceptance_checks(value: Any) -> list[dict[str, Any]]:
+    """只暴露工程检查的名称和检查类型，隐藏实现细节与内部绝对路径。"""
+
+    if not isinstance(value, list):
+        return []
+    projected: list[dict[str, Any]] = []
+    for item in value[:100]:
+        if not isinstance(item, dict):
+            continue
+        entry = {
+            key: _compact_text(item.get(key), 240)
+            for key in ("id", "type", "description", "path")
+            if item.get(key)
+        }
+        if entry:
+            projected.append(entry)
+    return projected
 
 
 def _compact_strings(value: Any, *, item_limit: int, text_limit: int) -> list[str]:

@@ -92,9 +92,9 @@ class ProjectState(TypedDict, total=False):
     database_change_plan: dict[str, Any]
     database_approval_requests: list[dict[str, Any]]
     build_task_plan: dict[str, Any]
+    build_task_plan_confirmation: dict[str, Any]
     dag_generation_progress: dict[str, Any]
     build_task_plan_path: str
-    build_task_dag_path: str
     retry_failed_tasks: bool
     build_units: dict[str, dict[str, Any]]
     unit_graph: dict[str, Any]

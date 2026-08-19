@@ -545,7 +545,9 @@ function ArtifactRow({ artifact }: { artifact: DagGenerationArtifactRecord }): R
       <span>
         <Text>{artifact.name}</Text>
         <Text type="secondary">
-          {artifact.kind === 'internal' ? '内部状态已保存' : artifact.path || '已保存'}
+          {artifact.kind === 'internal'
+            ? '内部状态已保存'
+            : `JSON 产物 · 确认状态：${artifact.confirmationStatus || 'pending'}`}
         </Text>
       </span>
       <CheckCircleOutlined />

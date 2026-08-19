@@ -203,7 +203,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 code_change_set={
                     "files": [
                         {"path": api_file.relative_to(root).as_posix(), "changeType": "added"},
-                        {"path": page_file.relative_to(root).as_posix(), "changeType": "added"},
+                        {"path": page_file.relative_to(root).as_posix(), "changeType": "modified"},
                     ]
                 },
                 workspace_root=workspace,
@@ -953,7 +953,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             "change_scope": [
                 {"operation": "add", "path": "frontend/src/apis/leaveApi.ts"},
                 {
-                    "operation": "add",
+                    "operation": "modify",
                     "path": "frontend/src/pages/LeaveListPage/index.tsx",
                 },
             ],

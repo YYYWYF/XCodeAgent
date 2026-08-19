@@ -38,6 +38,7 @@ class Settings:
     default_max_tokens: int = 2048
     ui_design_max_tokens: int = 8192
     ui_design_max_retries: int = 2
+    build_task_plan_max_retries: int = 2
     checkpoint_db_path: str = ""  # populated in from_env
     checkpoint_retention_days: int = 30
     langsmith_tracing_enabled: bool = False
@@ -86,6 +87,9 @@ class Settings:
             ),
             ui_design_max_retries=int(
                 os.getenv("UI_DESIGN_MAX_RETRIES", "2")
+            ),
+            build_task_plan_max_retries=int(
+                os.getenv("BUILD_TASK_PLAN_MAX_RETRIES", "2")
             ),
             checkpoint_db_path=os.getenv("XCODEAGENT_CHECKPOINT_DB", ""),
             checkpoint_retention_days=int(

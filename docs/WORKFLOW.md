@@ -104,7 +104,7 @@ START
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
-`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，只要 `project_plan.confirmation_status != confirmed`，该节点必须停止并通过 `ask_user` 要求确认，绝不能生成任务 DAG 或进入 `build`。定向 Build Context 以该已确认 ProjectPlan 的 `api_contracts` 为 endpoint 请求/响应权威来源；页面外置详情仍是页面任务的正式输入，但 endpoint 外置详情只作可选补充，缺失、未确认或失效时不得替代或否定 ProjectPlan 契约。集成测试失败后的修复不回到 `build`：`integration_test` 只负责确定性检查、质量门禁和调用只读 RepairPlanner 生成任务包；局部任务统一进入 `small_task_repair`，由共享 SmallTask Agent 执行后再回到 `integration_test`。
+`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，也必须只读校验已确认 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、模板生成 manifest 和当前范围的详细设计；任一前置条件不满足时返回 `build_prerequisite_error`，绝不修改上游正式产物、生成任务 DAG 或进入 `build`。定向 Build Context 以当前 TechnicalPlan 投影和已确认 EndpointDetail 为 endpoint 请求/响应权威来源；缺失的 PageImplementationContract、EndpointDetail 或实体设计必须返回 Workbench 详细设计恢复路径。集成测试失败后的修复不回到 `build`：`integration_test` 只负责确定性检查、质量门禁和调用只读 RepairPlanner 生成任务包；局部任务统一进入 `small_task_repair`，由共享 SmallTask Agent 执行后再回到 `integration_test`。
 
 页面任务只继承 `frontend:*` 公共 Unit 和同页面 Unit 内部依赖，不把 `backend:endpoint:*` 或 `database:*` 编译成任务依赖。数据库前置任务完成后，BuildScheduler 可把依赖已满足且文件锁不重叠的 backend 与 page 任务放入同一批次，Build Subgraph 再按 owner 并发调用前后端 Agent；并发工作区快照按各自任务的 `change_scope/target_files/allowed_paths` 过滤后再归属，防止前端文件计入后端结果。API Contract 是并行期间的共同事实来源，`app:integration` 仍等待 endpoint 与 page 两边完成后统一验证。该设计沿用 learn-coding-agent 的契约先行、执行后验证循环，采用 OpenCode 的独立 owner/tool 执行边界，并让 Deep Agents 的专业 Agent 仅获得各自任务范围；每个 owner 仍只接收当前批次的紧凑任务与正式产物引用，符合 128k 上下文预算。
 
@@ -212,7 +212,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 等待 `project_plan_confirmation` 时，AG-UI workflow payload 的只读 `confirmationArtifact` 只返回当前 `project-plan.md`，不会同时返回 RequirementSpec 正文。用户提交调整意见并重新生成计划后，下一轮确认展示新写入的 Markdown；`detail_confirmation` 不复用该载荷展示 ProjectPlan。
 
-ProjectPlan 同样以 Markdown 作为用户确认入口。确认前若 Markdown 被直接编辑，节点先将改动同步到内部 ProjectPlan JSON，并执行 API 契约、页面清单和数据源一致性校验；同步成功后才允许确认并进入后续节点。AG-UI 产物列表只展示 Markdown 等用户可读文件，所有 JSON 路径和 JSON 任务文件都属于内部工作流状态，不向用户呈现为可编辑产物。
+ProjectPlan 同样以 Markdown 作为用户确认入口。确认前若 Markdown 被直接编辑，节点先将改动同步到内部 ProjectPlan JSON，并执行 API 契约、页面清单和数据源一致性校验；同步成功后才允许确认并进入后续节点。正式产品产物仍以 Markdown 供用户编辑；Build DAG 的 JSON 仅作为内部最新规划存储，由 AG-UI 确认卡投影可编辑的任务名称和描述，不把 JSON 文件作为用户文档编辑入口。
 
 API 契约在此阶段作为前后端共享的接口字段事实来源生成。为保持简约和可扩展，每个 contract 只包含资源级 `schemas`、稳定 endpoint id、HTTP method、path、参数、请求/响应 schema 引用、错误码、权限要求和 `entity_ids`（关联的业务实体 id 数组，可关联多个实体）。契约的唯一权威绑定是实体，禁止生成、持久化或兼容读取 `data_source_id`；需要数据源时必须按 `entity_ids` 反查已确认 EntityDesign，且多实体分别读取各自方案。页面详细设计只能通过 `api_dependencies` 和 `response_bindings` 引用已声明 endpoint 与响应字段。`detail_confirmation` 若发现字段或接口缺口，应提出 TechnicalPlan 调整并经过确认，不能自行补字段或发明独立接口。
 
@@ -288,14 +288,12 @@ API 契约在此阶段作为前后端共享的接口字段事实来源生成。�
 
 ### `prepare_build_tasks`
 
-先由确定性服务根据已经确认并写回的 `TechnicalPlan` 生成完整 `build-dag.v3` Unit DAG 骨架，再由 planning-only ChatModel 只根据当前范围的 `PageImplementationContract`、React UI 引用、EndpointDetail、真实数据库摘要和 `WorkspaceSnapshot` 生成可执行静态 task DAG：
+先由确定性服务根据已经确认的 `TechnicalPlan` 生成完整 `build-dag.v3` Unit DAG 骨架，再由 planning-only ChatModel 只根据当前范围的 `PageImplementationContract`、React UI 引用、EndpointDetail、已确认实体执行证据和 `WorkspaceSnapshot` 生成可执行静态 task DAG：
 
 - 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为唯一工作区事实来源，不读取、创建、修改或删除代码文件，也不查询或注入 request-scoped 代码图上下文；
 - 生成稳定的 `task_id`；
-- 指定任务 owner，只允许 `database`、`backend`、`frontend`；
-- 指定任务类型，例如 `database.change`、`database.seed`、`database.verify`、`backend.code`、`backend.verify`、`frontend.code`、`frontend.verify`；
-- 数据库相关任务必须写入 `database_scope`，并通过 `requires_capabilities` / `provides_capabilities` 表达“数据库已准备好”等能力边界；
-- 删除字段、删除表、删除数据、不可逆迁移等高危数据库任务必须标记 `risk = high` 并写入 `approval`，后续调度不得在未获用户同意时执行；
+- Normal Build 只规划 `backend`、`frontend` 代码任务；`database` owner、`database:*` Unit 和数据库变更任务由实体确认流程负责，不进入本 DAG；
+- 后端任务类型使用 `backend.code`，前端任务类型使用 `frontend.code`，数据库表结构和数据源操作不从已确认实体上下文重新推导；
 - 计算任务依赖；
 - 标记可并行任务；
 - 以 `change_scope` 记录新增、修改、删除文件及每项改动目的，并据此设置允许修改的文件范围；
@@ -309,7 +307,6 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已�
 `build-dag.v3` 的 Unit ID 采用新的层次：
 
 - `application:root` 表示整应用根；
-- `database:<dataSourceId>` 聚合同一数据源下所有建表、迁移、Seed 和数据库校验任务；
 - `backend:bootstrap` 表示后端工程基础能力；
 - `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
 - `frontend:shell`、`frontend:route-registry`、`frontend:api-client`、`frontend:auth-guard` 表示前端公共能力；
@@ -321,27 +318,27 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已�
 
 任务规划模型输入中的数据源事实只来自当前范围的 `executable_details.entity_designs`。数据库实体摘要公开已确认的目标表、字段绑定与数据库执行状态，外部 API 实体摘要公开已确认的上游方法与映射计数，静态实体摘要公开种子记录统计；完整库表快照、数据库操作清单、连接信息和未确认的外部 API 细节不进入模型。endpoint 模式的 `TargetBuildContext` 只携带目标、Unit、实体 ID 和工件引用，完整 EndpointDetail、实体摘要与当前 API Contract 只在 `TaskPreparationContext.executable_details` 出现一次。数据库与外部 API 实体只生成 `owner=backend` 的 endpoint 任务，静态实体只生成 `owner=frontend` 的 `frontend:data:*` 任务；所有正常 Build scope 都不得生成 `owner=database` 任务，模型返回此类任务时确定性语义校验会阻止 DAG 进入 Build。
 
-任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：正常 Build 的 `required_unit_ids` 不含 `database:*`，因此 `owner=database` 的候选任务会被拒绝。专门数据库流程仍要求数据库任务声明非空 `database_scope`、使用受支持的数据库任务类型、不得混入代码文件路径，并对高危操作要求显式审批。Backend task 不得声明 `database_scope` 或 `database.*` task type；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。
+任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：Normal Build 的 Unit 骨架不包含 `database:*`，模型误返回 `owner=database` 或 `database:*` 候选时会保留原候选并把职责越界写入 `task_graph.validation.errors`，不能以静默删除的方式掩盖边界问题。数据库表结构和数据源操作继续由实体确认流程负责；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。候选任务的边界、owner、Unit 和拓扑均属于平台设计，校验失败会自动回灌错误并重生成，不要求用户人工拆分任务。
 
-Build Task 保留独立工程验收元数据，但当前不在每个任务执行完成后调用 verifier，也不复制 ProductPlan、UiDesign、TechnicalPlan 或 EndpointDetail 中的业务验收。角色数据范围、业务状态转换、页面可见内容、筛选交互、loading/empty/error 和点击行为分别保留在 ProductPlan 与 React UI 稿中，并通过 `PageImplementationContract` 进入代码生成上下文；任务规划模型必须返回空 `acceptance_criteria`。确定性编译器忽略模型输出的验收文案，依据 `owner/task_type/change_scope/allowed_paths/source_refs/build_context` 生成带稳定 ID 的内部 `acceptance_checks`，再把检查描述投影到兼容前端的 `acceptance_criteria: string[]`，供审计和修复上下文使用。Build 执行阶段只做结果归一化和真实 diff 归属，不再因工作区中额外的编译产物或生成文件阻断任务；菜单、API/Spring 契约、数据库及 build、lint、test 由后续集成质量门禁处理。
+Build Task 保留独立工程验收元数据，但当前不在每个任务执行完成后调用 verifier，也不复制 ProductPlan、UiDesign、TechnicalPlan 或 EndpointDetail 中的业务验收。角色数据范围、业务状态转换、页面可见内容、筛选交互、loading/empty/error 和点击行为分别保留在 ProductPlan 与 React UI 稿中，并通过 `PageImplementationContract` 进入代码生成上下文；任务规划模型必须返回空 `acceptance_criteria`。确定性编译器忽略模型输出的验收文案，依据 `owner/task_type/change_scope/allowed_paths/source_refs/build_context` 生成带稳定 ID 的内部 `acceptance_checks`，再把检查描述投影到兼容前端的 `acceptance_criteria: string[]`，供审计和修复上下文使用。Build 执行阶段只做结果归一化和真实 diff 归属，不再因工作区中额外的编译产物或生成文件阻断任务；菜单、路由、页面占位由模板初始化流程负责，不生成 DAG 工程检查。API/Spring 契约、数据库及 build、lint、test 由后续集成质量门禁处理。
 
 恢复旧 `build-dag.v3` 时会从任务元数据重新编译工程检查并清除旧业务验收文案。若旧接口任务缺少生成 API/Spring 契约检查所需的 Endpoint/API Contract 上下文，任务图校验失败并要求重新执行 `prepare_build_tasks`，不得用泛化文案或 Agent 自报证据继续执行。
 
-任务编译器不再按 Schema gap 自动删除、补齐或生成数据库任务，也不会推导缺失的 `database_scope`。专门数据库流程必须显式提供执行范围；正常 Build 只从实体绑定生成后端持久化代码任务。
+任务编译器不再按 Schema gap 自动删除、补齐或生成数据库任务，也不会推导缺失的 `database_scope`。正常 Build 只消费实体确认阶段的表结构、字段绑定和执行证据，生成后端持久化代码任务。
 
-Build DAG 只注册具有 `change_scope`、`allowed_paths`、`target_files` 或数据库 `database_scope` 的可执行任务。仅检查已有前端壳、路由或布局的候选任务不会进入任务注册表，统一交给 `integration_test` 验证；`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
+Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_files` 的代码实现任务。仅检查已有前端壳、菜单、路由或布局的候选任务会被 DAG 校验拒绝并自动重生成，统一交给模板 manifest 和 `integration_test` 验证；`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
 
-该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。模型负责将当前已确认的页面详细设计、endpoint 详情、实体设计摘要、API Contract 和当前工程结构转换成后端/前端可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性归一化与 DAG 校验、更新 `tasks`，并交给后续 Build Subgraph 执行。
+该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。模型负责将当前已确认的页面详细设计、endpoint 详情、实体设计摘要、API Contract 和当前工程结构转换成后端/前端可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性结构字段编译与 DAG 校验，任何任务边界越界都保留错误并自动重生成，再交给后续 Build Subgraph 执行。
 
 `prepare_build_tasks` 的契约校验负责页面引用、Contract 绑定实体、Endpoint、Schema 和响应字段绑定，不校验旧式 `data_sources`、`data_source_id` 或源级 `schema_refs`。应用 scope 使用完整实体目录，页面和 endpoint scope 使用当前 `build_context.entity_ids` 构造最小实体目录，并只投射当前页面、必要导航目标与直接相关 API Contract；范围外设计缺失不得阻塞当前目标。页面上下文以运行时编译的 `PageImplementationContract`、React UI 路径、required EndpointDetail、相关 API Contract 和有界实体设计摘要为准，不再要求新建 PageDetail。
 
 该边界沿用 learn-coding-agent 的紧凑“收集目标上下文→规划动作→验证 DAG”循环、OpenCode 的 plan/build 分离，以及 Deep Agents 的渐进上下文原则。完整内容保存在独立文件中，跨 Unit 顺序由可恢复、可审计的 Unit Graph 固定编译，以适应页面级重复规划和 128k 上下文预算。
 
-任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面验收和整体集成验证。内部 DAG 仍保留 API、数据、共享组件、权限、路由和测试等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
+任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面内容实现和整体集成验证。内部 DAG 保留 API、共享组件、权限和页面实现等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内；菜单、路由、页面占位和项目级测试不属于 DAG 任务。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
 
-该节点通过 `agents/main/task_preparer.py` 调用 direct ChatModel 生成任务编排建议，再由确定性 schema 归一化为静态 Build DAG。`build_task_plan.workspace_analysis` 优先使用模型返回的结构化摘要；缺省时由 `WorkspaceSnapshot` 兜底，并记录 `workspace_snapshot_ref` 以便恢复和审计。模型未返回可解析任务时，节点必须阻止进入 `build`，不能用硬编码任务清单代替模型规划结果。
+该节点通过 `agents/main/task_preparer.py` 调用 direct ChatModel 生成任务编排建议，再由确定性 schema 编译结构字段为静态 Build DAG，不改变候选的语义边界。`build_task_plan.workspace_analysis` 优先使用模型返回的结构化摘要；缺省时由 `WorkspaceSnapshot` 兜底，并记录 `workspace_snapshot_ref` 以便恢复和审计。模型未返回可解析任务、越过平台职责边界或生成无效 DAG 时，节点会把具体错误自动回灌模型并有界重生成；重试耗尽才进入平台失败处理，不把任务拆分规则交给用户，也不能用硬编码任务清单代替模型规划结果。
 
-调用模型生成任务 DAG 前，节点必须检查 `ProjectPlan.confirmation_status == confirmed`。若计划未确认，节点返回 `requires_user_input` 并停止在当前阶段；用户确认后可从 `prepare_build_tasks` 续跑，再生成任务 DAG。
+调用模型生成任务 DAG 前，节点必须只读检查已确认的 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、模板生成 manifest 以及当前范围的 PageImplementationContract、EndpointDetail 和实体设计。任一前置条件未满足时，节点返回可定位的 `build_prerequisite_error`，不修改或确认上游正式产物。
 
 `build_task_plan` 至少包含：
 
@@ -351,14 +348,14 @@ Build DAG 只注册具有 `change_scope`、`allowed_paths`、`target_files` 或�
 - `prepared_by`：执行任务编排的 Agent、运行方式和模型信息；
 - `coordination`：任务分发顺序、依赖策略和串并行执行批次。
 
-节点成功后必须写入两个任务 DAG 产物：
+节点成功后只写入一份任务 DAG 规划产物：
 
 - `.xcodeagent/plans/build-task-plan.json`：内部结构化状态，供 BuildScheduler、调试续跑和后续节点读取；v3 task registry 使用 snake_case 单一字段，不再写入或读取 `task_id/dependsOn/targetFiles/acceptanceCriteria/canRunInParallel` 等旧 DAG 同义字段，`agent_note` 只保留短摘要和响应 hash；
-- `.xcodeagent/plans/BUILD_TASK_DAG.md`：人类可读的任务 DAG 摘要，展示任务、owner、依赖、change scope 和验收标准。该 Markdown 不作为用户编辑入口，修改任务 DAG 仍应通过确认后的 ProjectPlan 或重新执行 `prepare_build_tasks` 完成。
+- 规划 JSON 初次保存为 `confirmation_status=pending`；通过 AG-UI 的 `build_task_plan_confirmation` 动作确认后才允许进入 Build。DAG 确认只编辑任务 `title` 和 `description`，不再生成或读取 `BUILD_TASK_DAG.md`。
 
-任务准备期间通过 LangGraph custom stream 发送 `prepare_build_tasks.progress` 完整快照，AG-UI 运行层将其投射到同一个 `workflow:prepare_build_tasks` 的 `agent-process.dagGeneration` 字段。快照固定按 Unit 骨架、目标上下文、契约校验、模型规划、任务编译、DAG 校验和产物保存七阶段排列；每个阶段可携带冻结的结构化 `output`，前端将候选任务归入模型规划阶段、最终任务表归入任务编译阶段、产物表归入产物保存阶段。最终任务按有效拓扑序展示，无效图则保留完整 task registry。公开快照只包含安全摘要、变更路径、验收标准和 Markdown 产物标签，不发送模型原文、WorkspaceSnapshot 正文或内部 JSON 路径。
+任务准备期间通过 LangGraph custom stream 发送 `prepare_build_tasks.progress` 完整快照，AG-UI 运行层将其投射到同一个 `workflow:prepare_build_tasks` 的 `agent-process.dagGeneration` 字段。快照固定按 Unit 骨架、目标上下文、契约校验、模型规划、任务编译、DAG 校验和产物保存七阶段排列；每个阶段可携带冻结的结构化 `output`，前端将候选任务归入模型规划阶段、最终任务表归入任务编译阶段、JSON 产物及确认状态归入产物保存阶段。最终任务按有效拓扑序展示，无效图则保留完整 task registry。公开快照只包含安全摘要、变更路径、工程检查摘要和 JSON 产物标签，不发送模型原文、WorkspaceSnapshot 正文或内部 JSON 路径。
 
-`stages[].output` 是严格的 `kind` 判别联合：`unit_graph` 包含 Unit（id/type/status/taskCount）、Unit 依赖边和骨架校验；`build_context` 包含目标 type/id、关联 Unit/Endpoint/API Contract/数据源及数据库摘要状态；`contract_validation` 包含校验范围、通过状态和问题；`candidate_tasks` 包含候选任务、负责人、依赖和 owner 汇总；`compiled_tasks` 包含最终拓扑任务、变更文件、验收标准、任务依赖边和 owner 汇总；`dag_validation` 包含根/叶任务、拓扑顺序、执行批次（串/并行）和校验错误；`artifacts` 仅包含内部计划状态与 Markdown DAG 的安全标签。列表字段最多 200 条、文本最多 1000 字符，依赖边最多 500 条并带 `truncated` 标记；顶层 `tasks`、`artifacts` 仅作为兼容投影保留。阶段完成或失败后产物冻结，后续阶段更新不得覆盖早期详情。历史会话重入时，前端以已完成 Workflow 事件、状态和结果中的 DAG 快照回填已持久化的步骤；若多个来源同时存在，优先选择包含更多阶段 `output` 的完整快照，避免旧的中间进度帧覆盖完成产物。
+`stages[].output` 是严格的 `kind` 判别联合：`unit_graph` 包含 Unit（id/type/status/taskCount）、Unit 依赖边和骨架校验；`build_context` 包含目标 type/id、关联 Unit/Endpoint/API Contract/数据源及数据库摘要状态；`contract_validation` 包含校验范围、通过状态和问题；`candidate_tasks` 包含候选任务、负责人、依赖和 owner 汇总；`compiled_tasks` 包含最终拓扑任务、变更文件、工程检查摘要、任务依赖边和 owner 汇总；`dag_validation` 包含根/叶任务、拓扑顺序、执行批次（串/并行）和校验错误；`artifacts` 仅包含 `build-task-plan.json` 的 JSON 安全标签和确认状态。列表字段最多 200 条、文本最多 1000 字符，依赖边最多 500 条并带 `truncated` 标记；顶层 `tasks`、`artifacts` 仅作为安全投影保留。阶段完成或失败后产物冻结，后续阶段更新不得覆盖早期详情。历史会话重入时，前端以已完成 Workflow 事件、状态和结果中的 DAG 快照回填已持久化的步骤；若多个来源同时存在，优先选择包含更多阶段 `output` 的完整快照，避免旧的中间进度帧覆盖完成产物。
 
 该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。与 Deep Agents 的默认 harness 映射是：`prepare_build_tasks` 只负责 planning，不挂载文件工具；后续 BuildScheduler 与代码执行 runner 负责 action/verification。为控制 128k 上下文预算，模型只接收已确认计划、快照摘要和精确文件清单，不把完整目录树或文件内容复制进 Graph State。任务规划提示词还按本轮实际可替换 Unit 渐进注入上下文：只有 endpoint Unit 待生成时注入 EndpointDetail、绑定实体设计和当前数据源对应的 Skill（数据库 MyBatis、外部 API 集成或前端静态数据），只有 page Unit 待生成时注入页面实现契约和前端事实；两类 Unit 同轮待生成时才组合当前范围的完整前后端提示词。endpoint 工作区快照仅保留相关侧的入口、关键文件、现有路由/模型或 API client 与目录树，排除构建测试命令、全局统计、通用代码图和另一侧技术栈；混合来源使用前后端最小投影并集。已准备的 endpoint Unit 被页面范围复用时，不会为页面规划重复注入 endpoint 后端上下文。执行 Agent 使用任务 `source_refs.entity_designs` 选择相同 Skill，Build Unit 编译器按 owner/source 过滤来源引用。`springboot-mybatis-generate` 的入口只保留规划所需四阶段与职责边界，执行 Agent 再按入口路由读取分层实现或显式 bootstrap reference；普通 endpoint Unit 不加载或生成 bootstrap 修改。
 
@@ -366,7 +363,7 @@ Build DAG 只注册具有 `change_scope`、`allowed_paths`、`target_files` 或�
 
 ```text
 {workspace}/.xcodeagent/specs/requirement-spec.{md,json}
-{workspace}/.xcodeagent/plans/project-plan.{md,json}
+{workspace}/.xcodeagent/plans/technical-plan.{md,json}
 {workspace}/.xcodeagent/checkpoints/checkpoints.sqlite
 {workspace}/.xcodeagent/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json
 {workspace}/.xcodeagent/plans/build-task-plan.json
@@ -374,10 +371,10 @@ Build DAG 只注册具有 `change_scope`、`allowed_paths`、`target_files` 或�
 {workspace}/.xcodeagent/reports/test-report.json
 ```
 
-`project-plan.md` 和 `requirement-spec.md` 面向人类阅读；节点恢复执行必须优先使用同目录下的 JSON 文件。若要跳过前序节点单独验证任务 DAG 生成，可执行：
+`technical-plan.md` 和 `requirement-spec.md` 面向人类阅读；节点恢复执行必须优先使用同目录下的 JSON 文件。若要跳过前序节点单独验证任务 DAG 生成，可执行：
 
 ```bash
-app-demo-prepare-build-tasks var/workspaces/demo-project/.xcodeagent/plans/project-plan.json
+app-demo-prepare-build-tasks var/workspaces/demo-project/.xcodeagent/plans/technical-plan.json
 ```
 
 本地调试某个节点时，使用前端 Chat Composer 的“Workflow 调试”面板选择开始节点，并填写已落盘 JSON 产物路径，避免每次从头生成需求文档。调试面板通过 AG-UI `forwardedProps.workflowDebug` 传入 `resumeFrom`、`requirementSpecPath`、`projectPlanPath`、`workspaceSnapshotPath` 和 `buildTaskPlanPath`；当 `resumeFrom=prepare_build_tasks` 且范围为 endpoint 时，必须同时提供 `targetId` 与 `apiContractId`，前端会复用当前快照中的 API Contract ID，后端在缺失但 ProjectPlan 中存在唯一归属时自动补齐，存在多个归属时明确报错。工作台的失败任务恢复则使用独立的 `forwardedProps.workflowAction = retry_failed_tasks`，优先重试瞬时失败任务；若当前已有无需额外确认的 RepairPlanner 计划，则执行该修复任务集。恢复快照缺少计划时，协议适配器会从当前 workspace 的 `.xcodeagent/plans/build-task-plan.json` 与 `.xcodeagent/plans/repair-task-plan.json` 补回内部状态，不依赖自然语言或调试节点选择。
@@ -520,13 +517,13 @@ testing.START
 
 任务编译和执行还必须遵守以下确定性边界：
 
-- 页面任务进入 DAG 前，以实时工作区校对模型计划路径。只有当计划入口不存在，且实时 `frontend/src/pages` 中存在唯一的同义目录（忽略大小写、分隔符和 `Page` 后缀）时，才把目标路径改写到该既有入口并把 `add` 改成 `modify`；多候选时不得猜测。这样可修复 WorkspaceSnapshot 在长流程中变旧造成的 `DashboardPage`/`Dashboard` 重复入口，同时保留可审计的 `path_reconciliation`。
-- 模板页面必须具备页面范围内的菜单与自动路由登记结果。任务编译器先读取实时 `frontend/src/constants/menus.ts`：脚手架已写入完全一致的 `{ path, name, key }` 时，不再补充重复任务，并将模型已有菜单任务标记为 `already_satisfied`；仅在条目缺失时生成只能追加 `BIZ_MENUS.firstLevel.children` 的受限任务。PageKey 必须与规范页面目录完全一致，不得修改路由生成器或既有菜单项。
+- 页面任务进入 DAG 前，以实时工作区校对模型计划路径。只有当计划入口不存在，且实时 `frontend/src/pages` 中存在唯一的同义目录（忽略大小写、分隔符和 `Page` 后缀）时，才把目标路径改写到该既有入口；保留模型声明的 `add/modify` 操作，若仍违反页面初始化边界则写入校验错误并自动重生成；多候选时不得猜测。这样可修复 WorkspaceSnapshot 在长流程中变旧造成的 `DashboardPage`/`Dashboard` 重复入口，同时保留可审计的 `path_reconciliation`。
+- 模板页面的占位文件、菜单和路由必须在模板初始化阶段完成。DAG 只读校验既有页面入口和菜单状态；模型误返回共享菜单、路由、隐藏路由或页面占位注册任务时，编译器保留原候选并把任务 ID、字段和路径写入 `task_graph.validation.errors`，随后自动重生成；不创建兜底任务、不修剪混合页面任务，也不修改共享注册文件。
 - 任何具有精确 `target_files` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
 - Frontend/Data Source owner Agent 只负责任务范围内的源码读取和实现，不在 task 内执行依赖安装、build、lint、typecheck、unit test 或 dev-server 命令；这些项目级检查统一由后续 `integration_test` 执行，缺少依赖或命令时由 Agent 在结构化结果中报告，不得自行安装恢复。
 - 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`，但状态声明和自然语言证据都不构成项目级质量结论。当前 Build 调度器只负责结果归一化和真实文件 diff 的任务归属，不再执行 `engineering_acceptance`/`acceptance_checks` 逐项工程验收，也不因批次快照中出现额外的编译产物或生成文件而阻断代码生成。菜单、API/Spring 契约和数据库等项目级正确性统一由后续 `integration_test` 的 install、build、unit test 和质量门禁处理；`acceptance_checks` 仍保留在任务计划和修复上下文中，供审计或后续重新启用。合法 JSON 遗漏已派发任务时记为 `runner_protocol_error`；明显未转义双引号会先做一次确定性恢复，仍损坏的顶层报告记为 `invalid_structured_response` 并进入受控重试分类。
 - Deep Agent 工具活动继续使用根图和子图流；执行器按“根图优先、浅层 namespace 优先、同层最新优先”恢复最终 `values/messages`。根 `values` 快照不含 `messages` 时先使用根消息分片，再回退到最浅层 Agent namespace，且不得把工具结果或更深子 Agent 文本误作主 Agent 报告。
-- RepairPlanner 必须为每个修复任务返回父任务授权内的精确 `change_scope`。修复任务不继承父任务历史执行的 `add/modify/delete` 差异检查，而是按本轮范围重新编译文件检查；父任务的菜单/API/Schema 等最终结果检查继续继承。兼容旧 RepairPlanner 且无法确定精确文件时，`completed` 至少要产生一处授权变更，`already_satisfied` 必须证明原精确目标状态成立。只有本轮文件检查和继承的结果检查全部通过才可关闭父任务，从而避免要求 DTO 小修复重新新增整个模块，也避免重复菜单等非幂等改动。
+- RepairPlanner 必须为每个修复任务返回父任务授权内的精确 `change_scope`。修复任务不继承父任务历史执行的 `add/modify/delete` 差异检查，而是按本轮范围重新编译文件检查；父任务的 API/Schema 等最终结果检查继续继承。兼容旧 RepairPlanner 且无法确定精确文件时，`completed` 至少要产生一处授权变更，`already_satisfied` 必须证明原精确目标状态成立。只有本轮文件检查和继承的结果检查全部通过才可关闭父任务，从而避免要求 DTO 小修复重新新增整个模块。
 - 恢复旧 DAG 时，如果 Repair 正是因为继承父任务 `added` 差异而产生 `acceptance_verification_failed`，调度器会从旧修复描述中恢复明确提及的精确父任务路径、按 `modify` 重编译检查并把该 Repair 恢复为 `pending`；其他失败类型和无法确认父任务的 Repair 不会被自动重置。
 
 该边界继续对应 learn-coding-agent 的“收集实时事实—执行—立即验证”循环；对应 OpenCode 的稳定任务 ID、显式任务状态和权限受限执行；对应 Deep Agents 的根/子图消息分流与结构化 subagent 结果。任务状态、文件归属和验收仍由外层确定性调度器裁决，Agent 输出视为不可信输入；Graph State 只保存紧凑报告和证据引用，不复制完整消息流或工具日志，保持在 128k 上下文预算内。

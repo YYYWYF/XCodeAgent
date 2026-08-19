@@ -112,8 +112,12 @@ def finalize_project(state: ProjectState) -> dict:
 
 
 def handle_failure(state: ProjectState) -> dict:
+    """保留上游失败原因并统一结束失败工作流。"""
+
     return {
         "phase": "failed",
         "status": "failed",
+        "message": state.get("message") or "Workflow 执行失败。",
+        "error": state.get("error"),
         "timeline": ["handle_failure"],
     }

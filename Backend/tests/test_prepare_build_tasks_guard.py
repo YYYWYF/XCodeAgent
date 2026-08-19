@@ -7,7 +7,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.graph.nodes.tasks import _latest_project_plan, prepare_build_tasks
+from app.graph.nodes.tasks import (
+    _build_task_plan_confirmation_payload,
+    _build_prerequisite_errors,
+    _handle_build_task_plan_confirmation,
+    _latest_project_plan,
+    prepare_build_tasks,
+)
 from app.services.build_task_planner import (
     create_build_task_plan,
     replace_build_task_plan_tasks,
@@ -92,7 +98,170 @@ def _with_confirmed_designs(plan: dict, *, source_type: str = "database") -> dic
     return confirm_entity_designs(deepcopy(plan), source_type=source_type)
 
 
+def _write_formal_build_artifacts(
+    workspace: str,
+    *,
+    technical_status: str = "confirmed",
+    include_technical_plan: bool = True,
+) -> None:
+    """写入 Build 门禁需要的最小正式产物集合。"""
+
+    workspace_root = Path(workspace)
+    payloads = {
+        ".xcodeagent/specs/requirement-spec.json": {
+            "confirmation_status": "confirmed",
+        },
+        ".xcodeagent/plans/product-plan.json": {
+            "confirmation_status": "confirmed",
+        },
+        ".xcodeagent/specs/ui-designs.json": {
+            "confirmation_status": "skipped",
+        },
+    }
+    if include_technical_plan:
+        payloads[".xcodeagent/plans/technical-plan.json"] = {
+            "artifact_type": "technical-plan",
+            "confirmation_status": technical_status,
+        }
+    for relative_path, payload in payloads.items():
+        path = workspace_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 class PrepareBuildTasksGuardTests(unittest.TestCase):
+    def test_prerequisite_gate_reads_workspace_plan_over_stale_checkpoint(self) -> None:
+        """正式 TechnicalPlan 已确认时，不应被 checkpoint 的 pending 状态阻断。"""
+
+        state = {
+            "requirement_spec": {"confirmation_status": "confirmed"},
+            "product_plan": {"confirmation_status": "confirmed"},
+            "ui_designs": {"confirmation_status": "skipped"},
+            "technical_plan": {
+                "artifact_type": "technical-plan",
+                "confirmation_status": "pending_user_confirmation",
+            },
+        }
+        project_plan = {
+            "artifact_type": "technical-plan",
+            "confirmation_status": "confirmed",
+        }
+
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks.inspect_template_generation_readiness",
+            return_value={"errors": []},
+        ):
+            _write_formal_build_artifacts(workspace)
+            errors = _build_prerequisite_errors(
+                state,
+                project_plan,
+                workspace=workspace,
+            )
+
+        self.assertNotIn("TechnicalPlan 缺失、类型不正确或未确认。", errors)
+
+    def test_prerequisite_gate_does_not_fallback_to_checkpoint_when_plan_is_missing(self) -> None:
+        """正式 TechnicalPlan 缺失时，即使 checkpoint 已确认也必须阻断。"""
+
+        state = {
+            "technical_plan": {
+                "artifact_type": "technical-plan",
+                "confirmation_status": "confirmed",
+            },
+        }
+        project_plan = {
+            "artifact_type": "technical-plan",
+            "confirmation_status": "confirmed",
+        }
+
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks.inspect_template_generation_readiness",
+            return_value={"errors": []},
+        ):
+            _write_formal_build_artifacts(workspace, include_technical_plan=False)
+            errors = _build_prerequisite_errors(
+                state,
+                project_plan,
+                workspace=workspace,
+            )
+
+        self.assertIn("TechnicalPlan 缺失、类型不正确或未确认。", errors)
+
+    def test_prepare_build_tasks_syncs_formal_artifacts_into_blocked_state(self) -> None:
+        """门禁阻断时也要把正式产物状态写回 checkpoint，避免旧快照继续残留。"""
+
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks.inspect_template_generation_readiness",
+            return_value={"errors": ["模板 manifest 尚未就绪。"]},
+        ), patch(
+            "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
+            side_effect=AssertionError("formal artifact gate must block before task generation"),
+        ):
+            _write_formal_build_artifacts(workspace)
+            result = prepare_build_tasks(
+                {
+                    "workspace": workspace,
+                    "project_plan": {
+                        "artifact_type": "technical-plan",
+                        "confirmation_status": "confirmed",
+                    },
+                    "technical_plan": {
+                        "artifact_type": "technical-plan",
+                        "confirmation_status": "pending_user_confirmation",
+                    },
+                    "timeline": [],
+                }
+            )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["technical_plan"]["confirmation_status"], "confirmed")
+
+    def test_confirm_repairs_missing_generated_dag_status(self) -> None:
+        """确认当前 build-dag.v3 时应修复生成阶段漏写的顶层 status。"""
+
+        scope = {"type": "page", "targetId": "home"}
+        plan = {
+            "schema_version": "build-dag.v3",
+            "task_graph": {"validation": {"is_valid": True, "errors": []}},
+            "execution": {"batches": [{"mode": "serial", "tasks": []}]},
+            "task_registry": {},
+            "confirmation_status": "pending",
+            "build_execution_scope": scope,
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            result = _handle_build_task_plan_confirmation(
+                {
+                    "workspace": workspace,
+                    "build_task_plan_confirmation": {
+                        "mode": "build_task_plan_confirmation",
+                        "action": "confirm",
+                    },
+                },
+                {"artifact_type": "technical-plan", "confirmation_status": "confirmed"},
+                scope,
+            )
+            persisted = json.loads(plan_path.read_text(encoding="utf-8"))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["build_task_plan"]["status"], "ready")
+        self.assertEqual(persisted["status"], "ready")
+        self.assertEqual(persisted["confirmation_status"], "confirmed")
+
+    def test_build_task_plan_confirmation_exposes_only_supported_actions(self) -> None:
+        """DAG 确认卡只暴露确认、局部修改和重新生成动作。"""
+
+        payload = _build_task_plan_confirmation_payload(
+            {"confirmation_status": "pending"},
+            {"type": "application", "targetId": "application"},
+        )
+
+        self.assertEqual(payload["actionValues"], ["confirm", "patch", "regenerate"])
+
     def test_latest_project_plan_hydrates_confirmed_entity_designs(self) -> None:
         """Build 重读轻量计划时必须回填外置的已确认实体设计。"""
 
@@ -201,6 +370,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks._build_prerequisite_errors", return_value=[]
+        ), patch(
             "app.graph.nodes.tasks.validate_project_plan_dependencies", return_value=[]
         ), patch(
             "app.graph.nodes.tasks.validate_api_contract_consistency", return_value=[]
@@ -221,7 +392,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["build_execution_scope"], {"type": "page", "targetId": "orders"})
         self.assertEqual(
             set(result["build_task_plan"]["task_registry"]),
@@ -242,6 +413,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             ["orders.list"],
         )
         self.assertNotIn("data_sources", executable_details)
+        self.assertIn("entity_designs", executable_details)
         self.assertEqual(
             [
                 endpoint["id"]
@@ -285,6 +457,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
         first_plan["task_graph"]["topological_order"].append("shared-shell-task")
         with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks._build_prerequisite_errors", return_value=[]
+        ), patch(
             "app.graph.nodes.tasks.validate_project_plan_dependencies", return_value=[]
         ), patch(
             "app.graph.nodes.tasks.validate_api_contract_consistency", return_value=[]
@@ -357,6 +531,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks._build_prerequisite_errors", return_value=[]
+        ), patch(
             "app.graph.nodes.tasks.validate_project_plan_dependencies", return_value=[]
         ), patch(
             "app.graph.nodes.tasks.validate_api_contract_consistency", return_value=[]
@@ -376,9 +552,9 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(result["status"], "requires_user_input")
-        self.assertEqual(result["clarification"]["mode"], "build_task_plan_generation_error")
-        self.assertIn("page:dashboard", result["clarification"]["error"])
+        self.assertEqual(result["status"], "failed")
+        self.assertNotIn("clarification", result)
+        self.assertIn("page:dashboard", result["error"])
         self.assertEqual(
             next(
                 stage
@@ -465,6 +641,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks._build_prerequisite_errors", return_value=[]
+        ), patch(
             "app.graph.nodes.tasks.validate_project_plan_dependencies", return_value=[]
         ), patch(
             "app.graph.nodes.tasks.validate_api_contract_consistency", return_value=[]
@@ -486,7 +664,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             )
 
         task_registry = result["build_task_plan"]["task_registry"]
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "requires_user_input")
         self.assertIn("shared-api-client-task", task_registry)
         self.assertIn(
             "backend-endpoint-orders-api-orders-list--shared-api-client-task",
@@ -576,6 +754,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             },
         )
         with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks._build_prerequisite_errors", return_value=[]
+        ), patch(
             "app.graph.nodes.tasks.validate_project_plan_dependencies", return_value=[]
         ), patch(
             "app.graph.nodes.tasks.validate_api_contract_consistency", return_value=[]
@@ -641,6 +821,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.nodes.tasks._build_prerequisite_errors", return_value=[]
+        ), patch(
             "app.graph.nodes.tasks.validate_project_plan_dependencies", return_value=[]
         ), patch(
             "app.graph.nodes.tasks.validate_api_contract_consistency", return_value=[]
@@ -665,7 +847,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             )
 
         task_registry = second_result["build_task_plan"]["task_registry"]
-        self.assertEqual(second_result["status"], "completed")
+        self.assertEqual(second_result["status"], "requires_user_input")
         self.assertIn("shared-api-client-task", task_registry)
         self.assertIn("orders-api-task", task_registry)
         self.assertNotIn("duplicate-api-client-task", task_registry)
@@ -679,7 +861,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             task_registry["order-reports-page-task"]["dependencies"],
         )
 
-    def test_prepare_build_tasks_waits_when_project_plan_is_unconfirmed(self) -> None:
+    def test_prepare_build_tasks_blocks_when_formal_upstream_artifacts_are_unconfirmed(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
         project_plan["confirmation_status"] = "pending_user_confirmation"
 
@@ -696,10 +878,11 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "requires_user_input")
-        self.assertEqual(result["clarification"]["mode"], "project_plan_confirmation")
+        self.assertEqual(result["clarification"]["mode"], "build_prerequisite_error")
+        self.assertTrue(any("RequirementSpec" in error for error in result["clarification"]["errors"]))
         self.assertEqual(result["phase"], "prepare_build_tasks")
 
-    def test_prepare_build_tasks_continues_after_user_confirms_project_plan(self) -> None:
+    def test_prepare_build_tasks_does_not_confirm_or_rewrite_project_plan(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
         project_plan["confirmation_status"] = "pending_user_confirmation"
 
@@ -716,26 +899,38 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "request": "正确，继续",
                         "workspace": workspace,
                         "project_plan": project_plan,
-                        "timeline": [],
-                    }
-                )
+                    "timeline": [],
+                }
+            )
 
-        self.assertEqual(preparer.call_args.args[0]["confirmation_status"], "confirmed")
-        self.assertEqual(preparer.call_args.kwargs["workspace"], workspace)
-        self.assertEqual(result["status"], "completed")
-        self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
-        self.assertEqual(result["tasks"], [])
+        preparer.assert_not_called()
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["clarification"]["mode"], "build_prerequisite_error")
+        self.assertEqual(result["project_plan"]["confirmation_status"], "pending_user_confirmation")
 
-    def test_prepare_build_tasks_uses_model_output_and_does_not_report_code_changes(self) -> None:
+    def test_prepare_build_tasks_persists_pending_json_and_does_not_report_code_changes(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
         project_plan["confirmation_status"] = "confirmed"
 
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
+                "app.graph.nodes.tasks._build_prerequisite_errors",
+                return_value=[],
+            ), patch(
                 "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
                 return_value={
-                    "tasks": [],
-                    "summary": {"total": 0},
+                    "tasks": [
+                        {
+                            "id": "application-task",
+                            "unit_id": "application:root",
+                            "owner": "frontend",
+                            "title": "实现首页",
+                            "description": "实现首页内容",
+                            "change_scope": [
+                                {"operation": "modify", "path": "frontend/src/App.tsx"}
+                            ],
+                        }
+                    ],
                     "prepared_by": {"mode": "direct"},
                 },
             ):
@@ -747,19 +942,17 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "timeline": [],
                     }
                 )
-                dag_path = result["build_task_dag_path"]
-                with open(dag_path, encoding="utf-8") as dag_file:
-                    dag_content = dag_file.read()
+                plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+                persisted_plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
         self.assertNotIn("code_changes", result)
         self.assertNotIn("code_change_sets", result)
         self.assertEqual(result["build_task_plan"]["prepared_by"]["mode"], "direct")
-        self.assertTrue(
-            dag_path.replace("\\", "/").endswith(
-                ".xcodeagent/plans/BUILD_TASK_DAG.md"
-            )
-        )
-        self.assertIn("# Build Task DAG", dag_content)
+        self.assertNotIn("build_task_dag_path", result)
+        self.assertEqual(persisted_plan["status"], "ready")
+        self.assertEqual(persisted_plan["confirmation_status"], "pending")
+        self.assertIsNone(persisted_plan["confirmed_at"])
+        self.assertFalse((Path(workspace) / ".xcodeagent/plans/BUILD_TASK_DAG.md").exists())
         self.assertTrue(
             all(
                 stage["status"] == "completed"
@@ -800,10 +993,10 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     }
                 )
 
-        self.assertEqual(preparer.call_args.args[0]["confirmation_status"], "confirmed")
-        self.assertEqual(preparer.call_args.kwargs["workspace"], workspace)
-        self.assertEqual(result["status"], "completed")
-        self.assertEqual(result["project_plan"]["confirmation_status"], "confirmed")
+        preparer.assert_not_called()
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["clarification"]["mode"], "build_prerequisite_error")
+        self.assertEqual(result["project_plan"]["confirmation_status"], "pending_user_confirmation")
 
     def test_prepare_build_tasks_blocks_inconsistent_api_contract(self) -> None:
         project_plan = create_project_plan(create_requirement_spec("创建一个库存管理系统"))
@@ -811,6 +1004,8 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         project_plan["api_contracts"][0]["entity_ids"] = ["Unknown"]
 
         with patch(
+            "app.graph.nodes.tasks._build_prerequisite_errors", return_value=[]
+        ), patch(
             "app.graph.nodes.tasks.prepare_build_tasks_with_main_agent",
             side_effect=AssertionError("must not generate tasks with contract drift"),
         ):

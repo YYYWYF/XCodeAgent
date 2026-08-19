@@ -38,7 +38,7 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "ui_confirmation": ["technical_planning"],
     "technical_planning": [],
     "inspect_workspace": ["prepare_build_tasks"],
-    "prepare_build_tasks": ["build"],
+    "prepare_build_tasks": ["build", "handle_failure"],
     "build": ["integration_test"],
     "small_task_repair": ["integration_test"],
     "acceptance": ["finalize_project"],
@@ -54,7 +54,6 @@ WORKFLOW_ARTIFACT_FIELDS = (
     "project_plan_path",
     "project_plan_json_path",
     "build_task_plan_path",
-    "build_task_dag_path",
     "test_report_path",
     "repair_task_plan_path",
 )
@@ -73,7 +72,11 @@ def workflow_capabilities() -> dict[str, Any]:
                 "retry_failed_tasks": (
                     "恢复当前 Build 切片中的失败任务：优先重试 retry 分类的瞬时失败；"
                     "没有瞬时候选时，执行已生成且无需额外确认的 RepairPlanner 修复任务。"
-                )
+                ),
+                "build_task_plan_confirmation": (
+                    "通过 clarificationAnswers 提交 Build DAG 的 confirm、patch 或 regenerate 动作；"
+                    "确认对象只允许修改任务 title 和 description。"
+                ),
             },
         },
         "acceptanceAdjustments": {

@@ -157,11 +157,11 @@ def _verify_file_operation(
         accepted_change_types = {expected_change_type}
         if (
             isinstance(task, dict)
-            and task.get("kind") == "repair"
             and expected_change_type == "added"
+            and _task_has_retry_attempt(task)
         ):
-            # 修复任务面对的是当前工作区；原任务声明 add，但文件可能已被失败尝试创建，
-            # 此时本轮正确行为是原地修改，不能再把 modified 判成验收失败。
+            # 原始 add 任务重试时面对的是已经被失败尝试部分创建的工作区；
+            # 本轮按 attempt 基线允许 modified，但不改写规划 operation。
             accepted_change_types.add("modified")
         if actual_type not in accepted_change_types:
             accepted_text = " 或 ".join(sorted(accepted_change_types))
@@ -180,6 +180,30 @@ def _verify_file_operation(
         if not target.is_file():
             return f"已满足检查失败：{path} 不存在。", "目标文件不存在。"
     return None, f"{path} 的 {operation} 工程状态已由工作区证据确认。"
+
+
+def _task_has_retry_attempt(task: dict[str, Any]) -> bool:
+    """判断任务是否存在重试计数或明确的前次失败证据。"""
+
+    if str(task.get("kind") or "").strip().lower() == "repair":
+        return True
+    try:
+        if int(task.get("retry_count", 0) or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    scheduler = task.get("scheduler")
+    if isinstance(scheduler, dict):
+        try:
+            if int(scheduler.get("retry_count", 0) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return bool(
+        task.get("last_result_status") == "failed"
+        or task.get("failure_category")
+        or task.get("failure_reason")
+    )
 
 
 def _verify_repair_change(

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from app.services.build_task_menu import (
-    ensure_page_route_registration_task,
     reconcile_live_page_paths,
 )
 from app.services.engineering_acceptance import (
@@ -48,6 +47,17 @@ _CODE_PATH_SUFFIXES = (
     ".less",
     ".css",
 )
+_TEMPLATE_BOUNDARY_PATHS = {
+    "frontend/src/constants/menus.ts",
+    "src/constants/menus.ts",
+    "frontend/src/constants/routes.ts",
+    "src/constants/routes.ts",
+    "frontend/src/utils/route.tsx",
+    "src/utils/route.tsx",
+    "frontend/src/routes/index.tsx",
+    "src/routes/index.tsx",
+}
+_TEMPLATE_PAGE_ENTRY_PREFIXES = ("frontend/src/pages/", "src/pages/")
 
 
 def tasks_from_build_task_plan(build_task_plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -152,8 +162,7 @@ def _default_operation_for_path(path: str, workspace_root: str | Path | None) ->
     新增页面等文件并不存在；build 阶段实际产生 added 差异，与 modify 期望不符，
     导致工程验收报"预期 modified 实际 added"。这里在缺省时按磁盘存在性兜底：
     文件已存在 → modify，不存在 → add，使期望与实际差异类型对齐。
-    与 build_task_menu.ensure_page_route_registration_task 的
-    `modify if entry_exists else add` 同一约定。
+    与当前工作区差异校验的 `modify if entry_exists else add` 约定保持一致。
     """
 
     if not workspace_root:
@@ -337,10 +346,7 @@ def _normalize_agent_tasks(
         )
         # target_files 必须覆盖 change_scope 里的全部路径：模型常把页面入口
         # （frontend/src/pages/<Key>/index.tsx）只放在 change_scope 而漏进
-        # target_files。下游 ensure_page_route_registration_task /
-        # reconcile_live_page_paths 只从 target_files 提取页面 PageKey，若页面
-        # 入口缺失会使 page_keys 为空 → “must resolve to exactly one frontend
-        # page entry” 误报。这里始终合并（去重），而非仅在 target_files 为空时派生。
+        # target_files。这里始终合并（去重），供只读页面路径校对和工程验收使用。
         target_files = _dedupe_normalized_strings(
             [*target_files, *[change["path"] for change in change_scope]]
         )
@@ -413,6 +419,147 @@ def _normalize_agent_tasks(
             }
         )
     return tasks
+
+
+def _is_template_boundary_path(value: Any) -> bool:
+    """判断路径是否属于模板初始化负责的共享菜单或路由注册文件。"""
+
+    normalized = str(value or "").strip().replace("\\", "/").lstrip("./")
+    return normalized in _TEMPLATE_BOUNDARY_PATHS
+
+
+def _is_template_page_entry_path(value: Any) -> bool:
+    """判断路径是否是模板初始化负责创建的页面入口文件。"""
+
+    normalized = str(value or "").strip().replace("\\", "/").lstrip("./")
+    return (
+        any(normalized.startswith(prefix) for prefix in _TEMPLATE_PAGE_ENTRY_PREFIXES)
+        and normalized.endswith("/index.tsx")
+        and normalized.count("/") >= 4
+    )
+
+
+def merge_exact_duplicate_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """在工程验收和任务图编译前合并可确定完全相同的任务。"""
+
+    merged: list[dict[str, Any]] = []
+    key_to_index: dict[str, int] = {}
+    replacement: dict[str, str] = {}
+    for task in tasks:
+        duplicate_key = _exact_duplicate_key(task)
+        existing_index = key_to_index.get(duplicate_key) if duplicate_key else None
+        if existing_index is None:
+            merged.append(deepcopy(task))
+            if duplicate_key:
+                key_to_index[duplicate_key] = len(merged) - 1
+            continue
+        existing = merged[existing_index]
+        existing_id = str(existing.get("id") or "")
+        duplicate_id = str(task.get("id") or "")
+        if duplicate_id and existing_id and duplicate_id != existing_id:
+            replacement[duplicate_id] = existing_id
+        existing["dependencies"] = _dedupe_strings(
+            [
+                dependency
+                for dependency in [
+                    *_task_dependencies(existing),
+                    *_task_dependencies(task),
+                ]
+                if dependency not in {existing_id, duplicate_id}
+            ]
+        )
+        existing["source_refs"] = _merge_source_refs(
+            existing.get("source_refs"), task.get("source_refs")
+        )
+        existing["requires_capabilities"] = _dedupe_strings(
+            [
+                *_string_list(existing.get("requires_capabilities")),
+                *_string_list(task.get("requires_capabilities")),
+            ]
+        )
+        existing["provides_capabilities"] = _dedupe_strings(
+            [
+                *_string_list(existing.get("provides_capabilities")),
+                *_string_list(task.get("provides_capabilities")),
+            ]
+        )
+    if not replacement:
+        return merged
+    for task in merged:
+        task["dependencies"] = _dedupe_strings(
+            [replacement.get(dependency, dependency) for dependency in _task_dependencies(task)]
+        )
+    return merged
+
+
+def _exact_duplicate_key(task: dict[str, Any]) -> str:
+    """生成只包含确定性结构的完全重复任务键，不做语义相似度推断。"""
+
+    owner = _normalized_text_key(_text(task.get("owner")))
+    unit_id = _normalized_text_key(_text(task.get("unit_id")))
+    task_type = _normalized_text_key(_text(task.get("task_type")))
+    target_files = sorted(
+        _normalized_text_key(path) for path in _task_target_files(task) if path
+    )
+    change_scope = sorted(
+        (
+            _normalized_text_key(str(change.get("operation") or "modify")),
+            _normalized_text_key(str(change.get("path") or change.get("file") or "")),
+        )
+        for change in task.get("change_scope") or []
+        if isinstance(change, dict) and (change.get("path") or change.get("file"))
+    )
+    raw_database_scope = task.get("database_scope")
+    database_scope = (
+        _stable_json_key(raw_database_scope)
+        if isinstance(raw_database_scope, dict) and raw_database_scope
+        else ""
+    )
+    target_key = _stable_json_key({"target_files": target_files, "change_scope": change_scope})
+    if not target_files and not change_scope and not database_scope:
+        return ""
+    return "|".join((owner, unit_id, task_type, target_key, database_scope))
+
+
+def _stable_json_key(value: Any) -> str:
+    """把范围对象编码为稳定字符串，避免字典键顺序影响重复判断。"""
+
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _merge_source_refs(left: Any, right: Any) -> dict[str, Any]:
+    """合并重复任务来源引用，列表按稳定文本去重并保留首次顺序。"""
+
+    left_value = left if isinstance(left, dict) else {}
+    right_value = right if isinstance(right, dict) else {}
+    result: dict[str, Any] = dict(left_value)
+    for key, value in right_value.items():
+        if key not in result:
+            result[key] = deepcopy(value)
+            continue
+        existing = result[key]
+        if isinstance(existing, list) and isinstance(value, list):
+            result[key] = _merge_source_ref_list(existing, value)
+        elif isinstance(existing, dict) and isinstance(value, dict):
+            result[key] = _merge_source_refs(existing, value)
+    return result
+
+
+def _merge_source_ref_list(left: list[Any], right: list[Any]) -> list[Any]:
+    """合并来源引用列表并用稳定 JSON 键去重。"""
+
+    result: list[Any] = []
+    seen: set[str] = set()
+    for item in [*left, *right]:
+        key = _stable_json_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(deepcopy(item))
+    return result
 
 
 def _raw_agent_tasks(agent_plan: dict[str, Any] | None) -> Any:
@@ -543,16 +690,22 @@ def _task_semantic_errors(
     tasks: list[dict[str, Any]],
     build_context: dict[str, Any],
 ) -> list[str]:
-    """校验 DAG 拓扑之外的 owner、Unit、数据库职责和审批语义。"""
+    """校验 DAG 拓扑之外的任务边界、owner、Unit、数据库职责和审批语义。"""
 
     errors: list[str] = []
     required_unit_ids = _string_list(build_context.get("required_unit_ids"))
+    validate_task_scope = build_context.get("_validate_task_scope", True) is not False
     for task in tasks:
         task_id = str(task.get("id") or "")
         owner = str(task.get("owner") or "")
         unit_id = str(task.get("unit_id") or "")
         task_type = str(task.get("task_type") or "")
         paths = _task_declared_paths(task)
+        errors.extend(_template_boundary_errors(task, paths=paths))
+        if validate_task_scope and required_unit_ids and unit_id not in required_unit_ids:
+            errors.append(
+                f"Task {task_id} is outside the current Build scope: Unit {unit_id}."
+            )
         if unit_id.startswith("database:") and owner != "database":
             errors.append(f"Task {task_id} is in database Unit {unit_id} but owner is {owner}.")
         if unit_id.startswith("backend:") and owner != "backend":
@@ -578,6 +731,39 @@ def _task_semantic_errors(
         if owner == "backend" and task_type.startswith("database."):
             errors.append(f"Task {task_id} is backend owner but declares database task_type {task_type}.")
         errors.extend(engineering_acceptance_contract_errors(task))
+    return errors
+
+
+def _template_boundary_errors(
+    task: dict[str, Any],
+    *,
+    paths: list[str],
+) -> list[str]:
+    """显式报告模板职责越界，不修改候选任务以掩盖规划边界错误。"""
+
+    task_id = str(task.get("id") or "")
+    errors: list[str] = []
+    boundary_paths = sorted(
+        {
+            path
+            for path in paths
+            if _is_template_boundary_path(path)
+        }
+    )
+    if boundary_paths:
+        errors.append(
+            f"Task {task_id} crosses the template initialization boundary and must not "
+            "modify shared menu or route files: "
+            f"{', '.join(boundary_paths)}."
+        )
+    for change in _dict_items(task.get("change_scope")):
+        path = str(change.get("path") or change.get("file") or "").strip()
+        operation = str(change.get("operation") or "modify").strip().lower()
+        if _is_template_page_entry_path(path) and operation == "add":
+            errors.append(
+                f"Task {task_id} must not add template page entry {path}; "
+                "template initialization must create it before DAG generation."
+            )
     return errors
 
 
@@ -768,6 +954,8 @@ def compile_build_task_plan_scope(
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
     build_context: dict[str, Any] | None = None,
+    *,
+    validate_task_scope: bool = True,
 ) -> dict[str, Any]:
     """将 Unit 依赖、来源引用和输入指纹编译进任务图。"""
 
@@ -777,7 +965,16 @@ def compile_build_task_plan_scope(
         tasks,
         context,
     )
-    compiled = replace_build_task_plan_tasks(build_task_plan, scoped_tasks, context)
+    compiled = replace_build_task_plan_tasks(
+        build_task_plan,
+        scoped_tasks,
+        {
+            **context,
+            # 增量 Build 会保留其他 Unit 的既有任务；模型候选已经单独完成范围校验，
+            # 最终合并图只复核拓扑和职责，避免把保留任务误判为当前范围越界。
+            "_validate_task_scope": validate_task_scope,
+        },
+    )
     compiled["build_units"] = annotate_unit_inputs(
         compiled.get("build_units"),
         context,
@@ -793,26 +990,22 @@ def create_build_task_plan(
     workspace_snapshot: dict[str, Any] | None = None,
     base_build_task_plan: dict[str, Any] | None = None,
     build_context: dict[str, Any] | None = None,
+    build_execution_scope: dict[str, Any] | None = None,
     workspace_root: str | Path | None = None,
 ) -> dict[str, Any]:
-    """将模型候选任务归一化并合并到已有全局 Unit 骨架。"""
+    """编译模型候选任务并合并到全局 Unit 骨架，不修剪语义边界。"""
 
     raw_tasks = _raw_agent_tasks(agent_plan)
     proposed_tasks = _normalize_agent_tasks(raw_tasks, workspace_root=workspace_root)
     context = build_context or {}
+    proposed_tasks = merge_exact_duplicate_tasks(proposed_tasks)
     proposed_tasks = reconcile_live_page_paths(
         proposed_tasks,
         workspace_root=workspace_root,
         build_context=context,
     )
-    proposed_tasks = ensure_page_route_registration_task(
-        proposed_tasks,
-        project_plan=project_plan,
-        workspace_root=workspace_root,
-        build_context=context,
-    )
     logger.info(
-        "build_task_plan_normalization parsed_keys=%s raw_tasks_type=%s raw_tasks_count=%s "
+        "build_task_plan_candidate_compilation parsed_keys=%s raw_tasks_type=%s raw_tasks_count=%s "
         "valid_tasks_count=%s valid_task_ids=%s",
         sorted(str(key) for key in agent_plan) if isinstance(agent_plan, dict) else [],
         type(raw_tasks).__name__,
@@ -854,6 +1047,10 @@ def create_build_task_plan(
             else "blocked"
         ),
         "generated_at": datetime.now(UTC).isoformat(),
+        "source_project_plan_version": project_plan["version"],
+        "build_execution_scope": deepcopy(build_execution_scope or context.get("scope") or {}),
+        "confirmation_status": "pending",
+        "confirmed_at": None,
         "application": base_plan.get("application") or {"unit_id": "application:root", "status": "prepared"},
         "build_units": base_plan.get("build_units") or {
             "application:root": {

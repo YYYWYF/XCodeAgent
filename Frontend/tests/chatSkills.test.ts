@@ -861,7 +861,7 @@ test('工作区检查快照过滤绝对路径并渲染默认展开的科技感�
   assert.match(markup, /CACHE HIT/)
   assert.match(markup, /FastAPI/)
   assert.match(markup, /Backend\/app/)
-  assert.match(markup, /语义图谱未启用/)
+  assert.match(markup, /代码图暂不可用/)
   assert.ok((markup.match(/ open=""/g) || []).length >= 2)
   assert.doesNotMatch(markup, /private\/workspace|snapshot\.json/)
 })
@@ -1037,8 +1037,9 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
           artifacts: [
             {
               id: 'dag',
-              name: 'BUILD_TASK_DAG.md',
-              kind: 'markdown',
+              name: 'build-task-plan.json',
+              kind: 'json',
+              confirmationStatus: 'pending',
               status: 'saved'
             }
           ],
@@ -1070,10 +1071,10 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
       { id: 'plan', name: '内部 Build Task Plan', kind: 'internal', status: 'saved' },
       {
         id: 'dag',
-        name: 'BUILD_TASK_DAG.md',
-        kind: 'markdown',
+        name: 'build-task-plan.json',
+        kind: 'json',
         status: 'saved',
-        path: '/workspace/BUILD_TASK_DAG.md'
+        confirmationStatus: 'pending'
       }
     ]
   })
@@ -1098,8 +1099,8 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
   assert.match(markup, /生成 Unit DAG 骨架/)
   assert.match(markup, /实现首页/)
   assert.match(markup, /按 DAG 拓扑顺序排列，将在下一阶段执行/)
-  assert.match(markup, /BUILD_TASK_DAG\.md/)
-  assert.doesNotMatch(JSON.stringify(snapshot), /raw-model-output|build-task-plan\.json/)
+  assert.match(markup, /build-task-plan\.json/)
+  assert.doesNotMatch(JSON.stringify(snapshot), /raw-model-output|\/workspace\/build-task-plan\.json/)
 })
 
 test('旧会话从节点完成事件恢复 DAG 生成详情', () => {

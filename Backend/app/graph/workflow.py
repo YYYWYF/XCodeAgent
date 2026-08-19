@@ -113,11 +113,13 @@ def route_project_planning(state: ProjectState) -> str:
 
 
 def route_prepare_build_tasks(state: ProjectState) -> str:
-    """任务 DAG 生成需要用户输入时停止，否则进入 Build 调度。"""
+    """任务 DAG 生成失败进入统一失败处理，成功才进入 Build 调度。"""
 
-    return (
-        "await_user_input" if state.get("status") == "requires_user_input" else "build"
-    )
+    if state.get("status") == "requires_user_input":
+        return "await_user_input"
+    if state.get("status") == "failed":
+        return "handle_failure"
+    return "build"
 
 
 def route_acceptance(state: ProjectState) -> str:
@@ -183,6 +185,7 @@ def build_graph(*, checkpointer):
         {
             "build": "build",
             "await_user_input": END,
+            "handle_failure": "handle_failure",
         },
     )
     builder.add_conditional_edges(

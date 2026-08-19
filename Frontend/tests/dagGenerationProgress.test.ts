@@ -64,13 +64,29 @@ test('阶段产物会按 7 种结构化类型解析并保留任务和产物兼�
       }),
       stage('artifact_persistence', {
         kind: 'artifacts',
-        artifacts: [{ id: 'dag', name: 'BUILD_TASK_DAG.md', kind: 'markdown' }],
-        count: 1
+          artifacts: [
+            {
+              id: 'plan',
+              name: 'build-task-plan.json',
+              kind: 'json',
+              confirmationStatus: 'pending'
+            }
+          ],
+          count: 1
       })
     ],
     tasks: [{ id: 'compiled', title: '编译任务', owner: 'backend', status: 'pending' }],
     summary: { unitCount: 1, taskCount: 1, batchCount: 1 },
-    artifacts: [{ id: 'dag', name: 'BUILD_TASK_DAG.md', kind: 'markdown' }]
+    artifacts: [
+      {
+        id: 'plan',
+        name: 'build-task-plan.json',
+        kind: 'json',
+        confirmationStatus: 'pending'
+      }
+    ],
+    confirmationStatus: 'pending',
+    scope: { type: 'application', targetId: 'application' }
   })
 
   assert.ok(snapshot)
@@ -87,7 +103,9 @@ test('阶段产物会按 7 种结构化类型解析并保留任务和产物兼�
     ]
   )
   assert.equal(snapshot.tasks[0]?.id, 'compiled')
-  assert.equal(snapshot.artifacts[0]?.name, 'BUILD_TASK_DAG.md')
+  assert.equal(snapshot.artifacts[0]?.name, 'build-task-plan.json')
+  assert.equal(snapshot.artifacts[0]?.confirmationStatus, 'pending')
+  assert.equal(snapshot.confirmationStatus, 'pending')
 })
 
 test('未知阶段产物和非法任务会被过滤，不影响其他阶段快照', () => {

@@ -104,14 +104,20 @@ class BuildTaskProgressTests(unittest.TestCase):
             ["first", "second"],
         )
 
-    def test_artifacts_hide_internal_json_path(self) -> None:
-        """产物投影只公开 Markdown 路径，内部计划仅显示安全标签。"""
+    def test_artifacts_expose_only_json_confirmation_summary(self) -> None:
+        """产物投影只公开当前 JSON 计划和确认状态，不再生成 Markdown。"""
 
-        artifacts = build_task_artifacts("/workspace/.xcodeagent/plans/BUILD_TASK_DAG.md")
+        artifacts = build_task_artifacts(
+            {
+                "confirmation_status": "pending",
+                "build_execution_scope": {"type": "application", "targetId": "application"},
+            }
+        )
 
+        self.assertEqual(len(artifacts), 1)
         self.assertNotIn("path", artifacts[0])
-        self.assertEqual(artifacts[0]["kind"], "internal")
-        self.assertTrue(artifacts[1]["path"].endswith("BUILD_TASK_DAG.md"))
+        self.assertEqual(artifacts[0]["kind"], "json")
+        self.assertEqual(artifacts[0]["confirmationStatus"], "pending")
 
     def test_stage_outputs_are_frozen_and_cover_every_generation_phase(self) -> None:
         """每个阶段拥有独立结构化产物，后续计划变化不得覆盖已完成阶段。"""
@@ -183,7 +189,12 @@ class BuildTaskProgressTests(unittest.TestCase):
         tracker.complete("model_planning", "候选任务完成", output=project_candidate_tasks_output(plan))
         tracker.complete("task_compilation", "编译完成", output=project_compiled_tasks_output(plan))
         tracker.complete("dag_validation", "校验完成", output=project_dag_validation_output(plan))
-        artifacts = build_task_artifacts("/workspace/BUILD_TASK_DAG.md")
+        artifacts = build_task_artifacts(
+            {
+                "confirmation_status": "pending",
+                "build_execution_scope": {"type": "page", "targetId": "home"},
+            }
+        )
         tracker.complete(
             "artifact_persistence",
             "产物完成",
@@ -207,7 +218,7 @@ class BuildTaskProgressTests(unittest.TestCase):
         )
         self.assertEqual(outputs["unit_skeleton"]["units"][0]["status"], "prepared")
         self.assertEqual(outputs["task_compilation"]["tasks"][0]["id"], "shell")
-        self.assertEqual(outputs["artifact_persistence"]["count"], 2)
+        self.assertEqual(outputs["artifact_persistence"]["count"], 1)
         self.assertEqual(snapshot["tasks"][0]["id"], "shell")
         self.assertEqual(snapshot["artifacts"][0]["id"], "build_task_plan")
 

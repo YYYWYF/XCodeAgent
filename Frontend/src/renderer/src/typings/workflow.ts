@@ -32,6 +32,9 @@ export type WorkflowSummary = {
   smallTaskResults?: WorkflowSmallTaskResult[]
   smallTaskHandoff?: WorkflowSmallTaskHandoff
   buildSummary?: WorkflowBuildSummary
+  buildTaskPlan?: WorkflowBuildTaskPlan
+  buildExecutionScope?: WorkflowBuildExecutionScope
+  buildTaskPlanConfirmation?: WorkflowClarification
   lifecycle?: ApplicationLifecycle
   [key: string]: unknown
 }
@@ -327,9 +330,22 @@ export type WorkflowClarificationAnswer =
   | WorkflowEntityDesignAction
   | WorkflowAcceptanceAdjustment
   | WorkflowRequirementSpecEdit
+  | WorkflowBuildTaskPlanConfirmation
   | Record<string, unknown>
 
 export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer>
+
+export type WorkflowBuildTaskPlanPatch = {
+  task_id: string
+  title?: string
+  description?: string
+}
+
+export type WorkflowBuildTaskPlanConfirmation = {
+  mode?: 'build_task_plan_confirmation' | string
+  action: 'confirm' | 'patch' | 'regenerate'
+  patches?: WorkflowBuildTaskPlanPatch[]
+}
 
 export type WorkflowClarificationSelectionGroup = {
   type?: string
@@ -362,7 +378,39 @@ export type WorkflowClarification = {
     entity_id?: string
     entity_name?: string
   }>
+  taskPlan?: WorkflowBuildTaskPlan
+  buildExecutionScope?: WorkflowBuildExecutionScope
+  confirmationStatus?: 'pending' | 'confirmed' | string
+  editableFields?: string[]
+  actionValues?: string[]
+  errors?: string[]
   [key: string]: unknown
+}
+
+export type WorkflowBuildTaskPlan = {
+  version?: string
+  schemaVersion?: string
+  status?: 'ready' | 'blocked' | string
+  confirmationStatus?: 'pending' | 'confirmed' | string
+  summary?: Record<string, unknown>
+  tasks?: WorkflowBuildTaskPlanTask[]
+  taskGraph?: {
+    edges?: Array<Record<string, unknown>>
+  }
+}
+
+export type WorkflowBuildTaskPlanTask = {
+  id: string
+  title: string
+  description: string
+  owner?: string
+  unit_id?: string
+  dependencies?: string[]
+  target_files?: string[]
+  allowed_paths?: string[]
+  change_scope?: Array<Record<string, unknown>>
+  acceptance_checks?: Array<Record<string, unknown>>
+  status?: string
 }
 
 export type WorkflowSmallTask = {

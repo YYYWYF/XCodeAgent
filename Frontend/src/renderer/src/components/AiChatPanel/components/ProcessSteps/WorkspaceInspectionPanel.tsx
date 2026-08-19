@@ -30,7 +30,7 @@ export default function WorkspaceInspectionPanel({ snapshot }: Props): ReactElem
   const graphWarning =
     !graph.available || ['failed', 'indexing', 'unavailable'].includes(graphStatus)
   const graphStatusLabel =
-    graph.cacheHit || graphStatus === 'cache_hit'
+    snapshot.cacheHit || graph.cacheHit || graphStatus === 'cache_hit'
       ? 'CACHE HIT'
       : graphStatus === 'incremental' || graph.buildType === 'incremental'
         ? 'INCREMENTAL READY'

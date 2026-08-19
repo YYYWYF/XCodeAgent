@@ -283,19 +283,25 @@ export type DagGenerationBatchRecord = {
 export type DagGenerationTaskRecord = {
   id: string
   title: string
+  description?: string
   owner: string
+  unitId?: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   dependencies: string[]
   changePaths: string[]
+  allowedPaths?: string[]
+  changeScope?: Array<Record<string, unknown>>
   acceptanceCriteria: string[]
+  acceptanceChecks?: Array<Record<string, unknown>>
 }
 
 export type DagGenerationArtifactRecord = {
   id: string
   name: string
-  kind: 'internal' | 'markdown'
+  kind: 'json' | 'internal'
   status: 'saved'
-  path?: string
+  confirmationStatus?: string
+  scope?: Record<string, unknown>
 }
 
 export type DagGenerationSnapshot = {
@@ -312,6 +318,8 @@ export type DagGenerationSnapshot = {
     isValid: boolean
   }
   artifacts: DagGenerationArtifactRecord[]
+  confirmationStatus?: string
+  scope?: WorkflowBuildExecutionScope
 }
 
 const DAG_GENERATION_STAGE_OUTPUT_KIND: Record<string, DagGenerationStageOutput['kind']> = {
@@ -850,7 +858,12 @@ export function readDagGenerationSnapshot(value: unknown): DagGenerationSnapshot
       databaseCount: nonNegativeInteger(summary.databaseCount),
       isValid: summary.isValid === true
     },
-    artifacts
+    artifacts,
+    confirmationStatus: boundedString(
+      snapshot.confirmationStatus ?? snapshot.confirmation_status,
+      40
+    ) || undefined,
+    scope: readDagGenerationScope(snapshot.scope)
   }
 }
 
@@ -973,11 +986,23 @@ function readDagGenerationTasks(value: unknown): DagGenerationTaskRecord[] {
       {
         id,
         title,
+        description: boundedString(task.description, 2_000) || undefined,
         owner: boundedString(task.owner, 80),
+        unitId: boundedString(task.unitId ?? task.unit_id, 240) || undefined,
         status: status as DagGenerationTaskRecord['status'],
         dependencies: boundedStringList(task.dependencies, 200, 240),
         changePaths: boundedStringList(task.changePaths, 200, 1_000),
-        acceptanceCriteria: boundedStringList(task.acceptanceCriteria, 100, 1_000)
+        allowedPaths: boundedStringList(
+          task.allowedPaths ?? task.allowed_paths,
+          200,
+          1_000
+        ),
+        changeScope: objectRecordList(task.changeScope ?? task.change_scope, 200),
+        acceptanceCriteria: boundedStringList(task.acceptanceCriteria, 100, 1_000),
+        acceptanceChecks: objectRecordList(
+          task.acceptanceChecks ?? task.acceptance_checks,
+          100
+        )
       }
     ]
   })
@@ -1061,19 +1086,49 @@ function readDagGenerationArtifacts(value: unknown): DagGenerationArtifactRecord
     const id = boundedString(artifact.id, 240)
     const name = boundedString(artifact.name, 500)
     const kind = stringValue(artifact.kind)
-    if (!id || !name || !['internal', 'markdown'].includes(kind)) return []
+    if (!id || !name || !['json', 'internal'].includes(kind)) return []
     return [
       {
         id,
         name,
         kind: kind as DagGenerationArtifactRecord['kind'],
         status: 'saved' as const,
-        ...(boundedString(artifact.path, 1_000)
-          ? { path: boundedString(artifact.path, 1_000) }
+        ...(boundedString(artifact.confirmationStatus ?? artifact.confirmation_status, 40)
+          ? {
+              confirmationStatus: boundedString(
+                artifact.confirmationStatus ?? artifact.confirmation_status,
+                40
+              )
+            }
+          : {}),
+        ...(Object.keys(objectValue(artifact.scope)).length > 0
+          ? { scope: objectValue(artifact.scope) }
           : {})
       }
     ]
   })
+}
+
+/** 解析 DAG 运行范围，只保留可用于展示和恢复的当前范围字段。 */
+function readDagGenerationScope(value: unknown): WorkflowBuildExecutionScope | undefined {
+  const scope = objectValue(value)
+  const type = boundedString(scope.type, 40)
+  if (!['application', 'page', 'data_source', 'endpoint'].includes(type)) return undefined
+  const targetId = boundedString(scope.targetId ?? scope.target_id, 240)
+  const apiContractId = boundedString(scope.apiContractId ?? scope.api_contract_id, 240)
+  return {
+    type: type as WorkflowBuildExecutionScope['type'],
+    ...(targetId ? { targetId } : {}),
+    ...(apiContractId ? { apiContractId } : {})
+  }
+}
+
+/** 裁剪阶段输出中的对象列表，避免把服务端内部对象原样暴露到前端。 */
+function objectRecordList(value: unknown, limit: number): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value
+    .slice(0, limit)
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
 }
 
 /** 校验并裁剪页面细节确认产生的只读项目计划更新快照。 */

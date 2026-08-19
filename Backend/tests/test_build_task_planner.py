@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 import tempfile
 from pathlib import Path
@@ -19,10 +20,10 @@ from app.graph.nodes.tasks import _task_preparation_project_plan
 from app.services.build_task_planner import (
     _database_task_requires_approval,
     create_build_task_plan,
+    merge_exact_duplicate_tasks,
     tasks_from_build_task_plan,
 )
 from app.services.build_unit_compiler import annotate_unit_inputs
-from app.workspace.task_documents import render_build_task_dag_markdown
 
 
 class BuildTaskPlannerTests(unittest.TestCase):
@@ -668,6 +669,80 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(plan["workspace_analysis"]["inspection_status"], "completed")
         self.assertEqual(plan["prepared_by"]["model"], "test-model")
 
+    def test_invalid_candidate_is_automatically_regenerated(self) -> None:
+        """平台边界错误回喂模型自动重生成，不要求用户修正任务拆分。"""
+
+        invalid_response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "menu-task",
+                        "unit_id": "page:dashboard",
+                        "owner": "frontend",
+                        "description": "修改模板菜单",
+                        "change_scope": [
+                            {
+                                "operation": "modify",
+                                "path": "frontend/src/constants/menus.ts",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        valid_response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "page-task",
+                        "unit_id": "page:dashboard",
+                        "owner": "frontend",
+                        "description": "实现页面内容",
+                        "change_scope": [
+                            {
+                                "operation": "modify",
+                                "path": "frontend/src/pages/Dashboard/index.tsx",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        model = Mock(side_effect=[invalid_response, valid_response])
+        settings = SimpleNamespace(
+            model_name="test-model",
+            model_api_name="test-model",
+            default_max_tokens=4096,
+            build_task_plan_max_retries=2,
+        )
+        with (
+            patch(
+                "app.agents.main.task_preparer.Settings.from_env",
+                return_value=settings,
+            ),
+            patch(
+                "app.agents.main.task_preparer._invoke_live_main_agent",
+                model,
+            ),
+        ):
+            plan = prepare_build_tasks_with_main_agent(
+                {
+                    "version": "1.0.0",
+                    "application_skeleton": {
+                        "data_sources": [{"id": "main", "type": "static"}]
+                    },
+                },
+                build_context={"required_unit_ids": ["page:dashboard"]},
+            )
+
+        self.assertEqual([task["id"] for task in tasks_from_build_task_plan(plan)], ["page-task"])
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
+        self.assertIn(
+            "frontend/src/constants/menus.ts",
+            model.call_args_list[1].kwargs["validation_feedback"][0],
+        )
+
     def test_task_preparer_binds_configured_max_tokens(self) -> None:
         """任务规划调用必须显式传递 AGENT_MAX_TOKENS，避免采用 Provider 的短输出默认值。"""
 
@@ -789,8 +864,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(tasks[0]["parallel_with"], ["page-task-2"])
         self.assertEqual(tasks[1]["parallel_with"], ["page-task"])
 
-    def test_live_page_path_is_reconciled_and_menu_route_task_is_added(self) -> None:
-        """实时唯一同义页面目录应成为规范目标，并补齐菜单自动路由登记任务。"""
+    def test_live_page_path_is_reconciled_without_menu_route_task(self) -> None:
+        """实时唯一同义页面目录只用于路径校对，不补充菜单或路由登记任务。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -861,19 +936,16 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
         page_task = tasks["page-layout"]
-        route_task = tasks["page:dashboard_page:route-menu-registration"]
+        self.assertNotIn("page:dashboard_page:route-menu-registration", tasks)
         self.assertEqual(page_task["target_files"], ["frontend/src/pages/Dashboard/index.tsx"])
-        self.assertEqual(page_task["change_scope"][0]["operation"], "modify")
+        self.assertEqual(page_task["change_scope"][0]["operation"], "add")
         self.assertEqual(
             page_task["path_reconciliation"]["canonical_path"],
             "frontend/src/pages/Dashboard/index.tsx",
         )
-        self.assertEqual(route_task["target_files"], ["frontend/src/constants/menus.ts"])
-        self.assertEqual(route_task["dependencies"], ["page-layout"])
-        self.assertIn("key: 'Dashboard'", route_task["description"])
-        self.assertIn("path: '/page/'", route_task["description"])
-        self.assertIn("BIZ_MENUS 顶层数组", route_task["description"])
-        self.assertNotIn("firstLevel.children", route_task["description"])
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertIn("must not add template page entry", str(plan["task_graph"]["validation"]["errors"]))
+        self.assertNotIn("frontend/src/constants/menus.ts", page_task["allowed_paths"])
 
     def test_existing_page_entry_is_used_when_model_omits_page_path(self) -> None:
         """模板已有唯一页面入口时，模型漏写入口路径不应阻断任务拆分。"""
@@ -926,9 +998,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             )
 
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        route_task = tasks["page:pet_list_page:route-menu-registration"]
-        self.assertIn("key: 'PetListPage'", route_task["description"])
-        self.assertEqual(route_task["dependencies"], ["pet-data-view"])
+        self.assertEqual(set(tasks), {"pet-data-view"})
+        self.assertNotIn("page:pet_list_page:route-menu-registration", tasks)
 
     def test_missing_page_entry_is_injected_from_page_target(self) -> None:
         """模板入口尚未落盘且模型漏写路径时，按 pageId 补回标准页面入口。"""
@@ -979,23 +1050,19 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
         page_task = tasks["pet-data-view"]
-        route_task = tasks["page:pet_list_page:route-menu-registration"]
-        self.assertIn(
+        self.assertEqual(set(tasks), {"pet-data-view"})
+        self.assertNotIn("page:pet_list_page:route-menu-registration", tasks)
+        self.assertNotIn(
             "frontend/src/pages/PetListPage/index.tsx",
             page_task["target_files"],
         )
-        self.assertIn(
-            {
-                "operation": "add",
-                "path": "frontend/src/pages/PetListPage/index.tsx",
-                "description": "创建当前页面的标准入口文件。",
-            },
-            page_task["change_scope"],
+        self.assertNotIn(
+            "frontend/src/pages/PetListPage/index.tsx",
+            [change["path"] for change in page_task["change_scope"]],
         )
-        self.assertEqual(route_task["dependencies"], ["pet-data-view"])
 
-    def test_scaffolded_menu_entry_marks_model_task_already_satisfied(self) -> None:
-        """脚手架已注册精确菜单项时，模型菜单任务不得再次进入写执行器。"""
+    def test_scaffolded_menu_entry_excludes_model_menu_task(self) -> None:
+        """脚手架已注册精确菜单项时，模型菜单任务直接不进入 Build DAG。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -1084,19 +1151,17 @@ class BuildTaskPlannerTests(unittest.TestCase):
             )
 
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        menu_task = tasks["task-menu-register-dashboard"]
-        self.assertEqual(menu_task["status"], "already_satisfied")
-        self.assertEqual(menu_task["satisfied_by"], "frontend-template-page-scaffold")
-        self.assertEqual(
-            menu_task["satisfaction_evidence"]["target_files"],
-            ["frontend/src/constants/menus.ts"],
+        self.assertIn("task-menu-register-dashboard", tasks)
+        self.assertIn("page-layout", tasks)
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertIn(
+            "frontend/src/constants/menus.ts",
+            str(plan["task_graph"]["validation"]["errors"]),
         )
-        self.assertEqual(tasks["page-layout"]["dependencies"], ["task-menu-register-dashboard"])
-        self.assertEqual(plan["summary"]["already_satisfied"], 1)
-        self.assertEqual(plan["summary"]["completed"], 1)
+        self.assertEqual(plan["summary"].get("already_satisfied", 0), 0)
 
-    def test_existing_menu_is_removed_from_mixed_page_task(self) -> None:
-        """页面、API 与菜单混合任务遇到既有菜单时只移除菜单写入，其他工作仍需执行。"""
+    def test_mixed_page_task_template_boundary_violation_is_visible(self) -> None:
+        """页面任务越界修改菜单时必须保留原候选并暴露 DAG 校验错误。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -1178,13 +1243,16 @@ class BuildTaskPlannerTests(unittest.TestCase):
             [
                 "frontend/src/pages/DashboardPage/index.tsx",
                 "frontend/src/apis/leaveApi.ts",
+                "frontend/src/constants/menus.ts",
             ],
         )
-        self.assertNotIn("frontend/src/constants/menus.ts", task["allowed_paths"])
-        self.assertEqual(
-            task["pre_satisfied_targets"][0]["path"],
+        self.assertIn("frontend/src/constants/menus.ts", task["allowed_paths"])
+        self.assertIn(
             "frontend/src/constants/menus.ts",
+            str(plan["task_graph"]["validation"]["errors"]),
         )
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertNotIn("pre_satisfied_targets", task)
 
     def test_scaffolded_menu_entry_prevents_deterministic_duplicate_task(self) -> None:
         """模型未生成菜单任务时，已存在的脚手架菜单也不得被确定性重复补齐。"""
@@ -1243,8 +1311,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             ["page-layout"],
         )
 
-    def test_existing_model_menu_task_is_normalized_to_top_level_biz_menus(self) -> None:
-        """模型已有菜单任务时，任务编译器仍要统一追加位置和菜单 path。"""
+    def test_model_menu_task_is_rejected_by_dag_validation(self) -> None:
+        """模型返回菜单任务时，DAG 必须拒绝候选而不是静默删除。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -1305,17 +1373,18 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 workspace_root=workspace,
             )
 
-        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        menu_task = tasks["task-menu-register-dashboard"]
-        self.assertEqual(menu_task["target_files"], ["frontend/src/constants/menus.ts"])
-        self.assertEqual(menu_task["change_scope"][0]["description"], "仅向 BIZ_MENUS 顶层数组追加当前页面菜单项。")
-        self.assertIn("BIZ_MENUS 顶层数组", menu_task["description"])
-        self.assertIn("path: '/page/dashboard'", menu_task["description"])
-        self.assertNotIn("firstLevel.children", menu_task["description"])
-        self.assertIn("path=/page/dashboard", menu_task["acceptance_criteria"][2])
+        self.assertEqual(
+            [task["id"] for task in tasks_from_build_task_plan(plan)],
+            ["task-menu-register-dashboard", "page-layout"],
+        )
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertIn(
+            "frontend/src/constants/menus.ts",
+            str(plan["task_graph"]["validation"]["errors"]),
+        )
 
-    def test_missing_page_entry_falls_back_to_target_page_key(self) -> None:
-        """模型漏在 change_scope 声明页面入口时，用 target.page_key 兜底补齐菜单登记。"""
+    def test_missing_page_entry_is_not_injected_by_dag(self) -> None:
+        """DAG 不因模型漏写入口而创建页面占位或菜单注册任务。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -1368,11 +1437,10 @@ class BuildTaskPlannerTests(unittest.TestCase):
             )
 
         tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        route_task = tasks["page:project_list_page:route-menu-registration"]
-        self.assertIn("key: 'ProjectListPage'", route_task["description"])
-        self.assertIn("path: '/page/project-list'", route_task["description"])
+        self.assertEqual(list(tasks), ["task-api"])
+        self.assertNotIn("frontend/src/constants/menus.ts", str(tasks))
 
-    def test_v3_markdown_renders_units_and_task_graph(self) -> None:
+    def test_v3_plan_contains_json_confirmation_fields(self) -> None:
         plan = create_build_task_plan(
             {"version": "1.0.0"},
             agent_plan={
@@ -1387,11 +1455,42 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
         )
 
-        markdown = render_build_task_dag_markdown(plan)
+        self.assertEqual(plan["schema_version"], "build-dag.v3")
+        self.assertEqual(plan["confirmation_status"], "pending")
+        self.assertIsNone(plan["confirmed_at"])
+        self.assertEqual(plan["build_execution_scope"], {})
+        self.assertIn("page-home", plan["task_registry"])
 
-        self.assertIn("## Units", markdown)
-        self.assertIn("application:root", markdown)
-        self.assertIn("page-home", markdown)
+    def test_exact_duplicate_tasks_merge_dependencies_and_source_refs(self) -> None:
+        tasks = merge_exact_duplicate_tasks(
+            [
+                {
+                    "id": "task-a",
+                    "owner": "frontend",
+                    "unit_id": "page:home",
+                    "task_type": "frontend.code",
+                    "target_files": ["frontend/src/pages/Home/index.tsx"],
+                    "change_scope": [{"operation": "modify", "path": "frontend/src/pages/Home/index.tsx"}],
+                    "dependencies": ["shared"],
+                    "source_refs": {"pages": [{"id": "home"}]},
+                },
+                {
+                    "id": "task-b",
+                    "owner": "frontend",
+                    "unit_id": "page:home",
+                    "task_type": "frontend.code",
+                    "target_files": ["frontend/src/pages/Home/index.tsx"],
+                    "change_scope": [{"operation": "modify", "path": "frontend/src/pages/Home/index.tsx"}],
+                    "dependencies": ["task-a", "api"],
+                    "source_refs": {"pages": [{"id": "home"}], "contracts": [{"id": "home-api"}]},
+                },
+            ]
+        )
+
+        self.assertEqual([task["id"] for task in tasks], ["task-a"])
+        self.assertEqual(tasks[0]["dependencies"], ["shared", "api"])
+        self.assertEqual(len(tasks[0]["source_refs"]["pages"]), 1)
+        self.assertEqual(tasks[0]["source_refs"]["contracts"], [{"id": "home-api"}])
 
     def test_compiles_unit_dependencies_and_source_refs(self) -> None:
         """页面任务只继承前端公共 Unit，后端 Unit 仅保留接口来源引用。"""
@@ -1498,31 +1597,31 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "schema_version": "build-dag.v3",
             "build_units": {
                 "backend:bootstrap": {"id": "backend:bootstrap", "kind": "backend"},
-                "database:core": {"id": "database:core", "kind": "database"},
-                "database:user": {"id": "database:user", "kind": "database"},
+                "backend:core": {"id": "backend:core", "kind": "backend"},
+                "backend:user": {"id": "backend:user", "kind": "backend"},
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "frontend"},
                 "page:core": {"id": "page:core", "kind": "page"},
             },
             "unit_graph": {
                 "nodes": [
                     "backend:bootstrap",
-                    "database:core",
-                    "database:user",
+                    "backend:core",
+                    "backend:user",
                     "frontend:api-client",
                     "page:core",
                 ],
                 "edges": [
-                    {"from": "database:core", "to": "backend:bootstrap", "type": "depends_on"},
-                    {"from": "database:user", "to": "backend:bootstrap", "type": "depends_on"},
+                    {"from": "backend:core", "to": "backend:bootstrap", "type": "depends_on"},
+                    {"from": "backend:user", "to": "backend:bootstrap", "type": "depends_on"},
                     {"from": "frontend:api-client", "to": "page:core", "type": "depends_on"},
-                    {"from": "database:core", "to": "page:core", "type": "depends_on"},
+                    {"from": "backend:core", "to": "page:core", "type": "depends_on"},
                 ],
                 "validation": {"is_valid": True, "errors": []},
             },
         }
         code_tasks = [
-            ("core", "database:core", "database", "database/migrations/core.sql"),
-            ("user", "database:user", "database", "database/migrations/user.sql"),
+            ("core", "backend:core", "backend", "Backend/Core.py"),
+            ("user", "backend:user", "backend", "Backend/User.py"),
             ("bootstrap", "backend:bootstrap", "backend", "Backend/main.py"),
             ("client", "frontend:api-client", "frontend", "Frontend/api.ts"),
             ("page", "page:core", "frontend", "Frontend/Core.tsx"),
@@ -1585,7 +1684,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(tasks["core"]["dependencies"], [])
 
     def test_database_task_cannot_modify_backend_code_files(self) -> None:
-        """database owner 任务混入 Java/后端代码文件时必须在 DAG 校验中失败。"""
+        """数据库候选保留在 DAG 中并显式暴露代码职责越界。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -1620,15 +1719,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
             build_context={},
         )
-
         self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
-        self.assertIn(
-            "must not modify code files",
-            " ".join(plan["task_graph"]["validation"]["errors"]),
-        )
+        self.assertIn("must not modify code files", str(plan["task_graph"]["validation"]["errors"]))
 
     def test_normal_build_scope_rejects_database_task(self) -> None:
-        """实体确认已完成数据库操作后，正常 Build 不接受数据库任务。"""
+        """实体确认已完成数据库操作后，正常 Build 显式拒绝 database Unit 候选。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -1666,12 +1761,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "required_unit_ids": ["backend:endpoint:user_api:user.list"]
             },
         )
-
         self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
-        self.assertIn(
-            "not allowed in normal Build scope",
-            " ".join(plan["task_graph"]["validation"]["errors"]),
-        )
+        self.assertIn("outside the current Build scope", str(plan["task_graph"]["validation"]["errors"]))
 
     def test_entity_backed_endpoint_and_page_allow_parallelism(self) -> None:
         """实体数据库操作完成后，endpoint 与 page 仍按代码 Unit 并行编译。"""
@@ -1734,8 +1825,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(tasks["users-page"]["dependencies"], [])
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
 
-    def test_database_task_missing_scope_is_not_auto_completed(self) -> None:
-        """专门数据库流程必须显式提供 scope，不再从规划上下文自动补齐。"""
+    def test_database_task_is_excluded_from_normal_build(self) -> None:
+        """数据库候选不再被删除，缺少数据库范围时必须显式校验失败。"""
 
         plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -1766,12 +1857,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "required_unit_ids": ["database:core"],
             },
         )
-
         self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
-        self.assertIn(
-            "must declare non-empty database_scope",
-            " ".join(plan["task_graph"]["validation"]["errors"]),
-        )
+        self.assertIn("database_scope", str(plan["task_graph"]["validation"]["errors"]))
 
     def test_invalid_graph_reader_preserves_every_registry_task(self) -> None:
         """无效 DAG 使用完整 nodes 读取，不能退化为不完整拓扑序。"""
