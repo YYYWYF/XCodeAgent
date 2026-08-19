@@ -259,6 +259,10 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Generate or update unit tests for this bounded change. Read the referenced files "
         "from the workspace before writing. Existing tests must be updated in place when "
         "they cover the changed source. Do not create more than five test files.\n\n"
+        "Do not generate tests for backend mapping-only classes such as *Assembler, "
+        "*Converter or *Mapper, including MapStruct implementations; also exclude DTO, "
+        "entity, configuration and getter/setter-only classes. Prefer Service tests and "
+        "route-contract tests only when their behavior changed.\n\n"
         f"TestGenerationContext:\n{json.dumps(references, ensure_ascii=False, indent=2, default=str)[:28_000]}"
     )
 
@@ -525,7 +529,17 @@ def _workspace_security_snapshot(workspace: str) -> dict[str, str]:
 
     root = Path(workspace).expanduser().resolve()
     snapshot: dict[str, str] = {}
-    ignored_dirs = {".git", ".xcodeagent", "node_modules", ".venv"}
+    # 构建工具可能与测试生成并行刷新这些目录；它们是可重建产物，
+    # 不应被误判为 TestGeneration Agent 写入了生产代码。
+    ignored_dirs = {
+        ".git",
+        ".xcodeagent",
+        ".venv",
+        "node_modules",
+        "target",
+        "build",
+        "dist",
+    }
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(
             name

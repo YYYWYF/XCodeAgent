@@ -14,6 +14,7 @@ from app.graph.subgraphs.testing import (
     generate_unit_tests,
     integration_test,
     repair_planning,
+    _source_layer,
     skip_unit_tests,
     unit_test_confirmation,
     validate_generated_unit_tests,
@@ -30,6 +31,29 @@ class TestingSubgraphEventsTests(unittest.TestCase):
     timeline only contained the last node's marker. The frontend test timeline
     (projected from ``test_events``) was therefore incomplete.
     """
+
+    def test_mapping_layer_sources_are_not_unit_test_targets(self) -> None:
+        """映射层变化不生成单测目标，但 Service 仍可生成。"""
+
+        self.assertIsNone(
+            _source_layer(
+                "backend/src/main/java/demo/leave/LeaveRequestAssembler.java"
+            )
+        )
+        self.assertIsNone(
+            _source_layer(
+                "backend/src/main/java/demo/leave/LeaveRequestConverter.java"
+            )
+        )
+        self.assertIsNone(
+            _source_layer("backend/src/main/java/demo/leave/LeaveRequestMapper.java")
+        )
+        self.assertEqual(
+            _source_layer(
+                "backend/src/main/java/demo/leave/LeaveRequestService.java"
+            ),
+            "backend",
+        )
 
     def test_test_events_accumulate_across_all_nodes(self) -> None:
         subgraph = build_testing_subgraph()

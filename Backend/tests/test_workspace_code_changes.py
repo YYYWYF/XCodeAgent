@@ -86,6 +86,30 @@ class WorkspaceCodeChangeTests(unittest.TestCase):
 
             self.assertEqual(files, [])
 
+    def test_build_outputs_are_not_user_code_changes(self) -> None:
+        """Maven/前端构建产物不应污染 Agent 代码变更集。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            before = snapshot_workspace(workspace)
+            (root / "backend" / "target" / "classes").mkdir(parents=True)
+            (root / "backend" / "target" / "classes" / "Application.class").write_bytes(
+                b"compiled"
+            )
+            (root / "frontend" / "build").mkdir(parents=True)
+            (root / "frontend" / "build" / "index.js").write_text(
+                "compiled\n", encoding="utf-8"
+            )
+            after = snapshot_workspace(workspace)
+
+            files = diff_workspace_snapshots(
+                before,
+                after,
+                source_tool="test.agent",
+            )
+
+            self.assertEqual(files, [])
+
     def test_agent_internal_directory_is_not_included(self) -> None:
         """验证工作目录中的 .xcodeagent 状态文件不会进入用户代码变更集。"""
 

@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 from app.agents.test_generation.agent import _without_disabled_tools
 from app.agents.test_generation.generator import (
+    _build_prompt,
     _validate_test_files,
     generate_or_update_unit_tests_with_agent,
 )
@@ -21,6 +22,22 @@ from deepagents.backends.protocol import GlobResult, GrepResult, LsResult, ReadR
 
 class TestGenerationTests(unittest.TestCase):
     """覆盖测试生成的尽力放行、缓存和越权写入边界。"""
+
+    def test_prompt_excludes_backend_mapping_layer_tests(self) -> None:
+        """测试生成提示必须明确排除 MapStruct 映射层。"""
+
+        prompt = _build_prompt(
+            {
+                "source_files": [
+                    "backend/src/main/java/demo/LeaveRequestService.java"
+                ]
+            }
+        )
+
+        self.assertIn("*Assembler", prompt)
+        self.assertIn("*Converter", prompt)
+        self.assertIn("*Mapper", prompt)
+        self.assertIn("Prefer Service tests", prompt)
 
     def test_no_target_does_not_create_agent(self) -> None:
         """没有业务源码目标时不调用模型并返回跳过结果。"""
@@ -276,6 +293,75 @@ class TestGenerationTests(unittest.TestCase):
         self.assertEqual(result["validation"].get("unauthorized_paths"), None)
         self.assertEqual(result["test_files"], ["frontend/tests/api-leave-types.test.ts"])
         self.assertIn("service.get('/api/leave-types')", received_prompts[0])
+
+    def test_build_artifacts_are_not_generation_security_failures(self) -> None:
+        """测试生成期间刷新的 Maven target 产物不能掩盖已生成的后端测试。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            source = root / "backend/src/main/java/demo/OrdersService.java"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                "package demo;\npublic class OrdersService {}\n",
+                encoding="utf-8",
+            )
+
+            def invoke(_payload: dict) -> str:
+                """模拟 Maven/MapStruct 与测试 Agent 同时产生文件。"""
+
+                test_path = root / "backend/src/test/java/demo/OrdersServiceTest.java"
+                test_path.parent.mkdir(parents=True)
+                test_path.write_text(
+                    "package demo;\n"
+                    "import org.junit.jupiter.api.Test;\n"
+                    "class OrdersServiceTest { @Test void mainPath() {} }\n",
+                    encoding="utf-8",
+                )
+                target_classes = root / "backend/target/classes/demo"
+                target_classes.mkdir(parents=True)
+                (target_classes / "OrdersService.class").write_bytes(b"class")
+                generated_sources = root / "backend/target/generated-sources/annotations/demo"
+                generated_sources.mkdir(parents=True)
+                (generated_sources / "OrdersServiceImpl.java").write_text(
+                    "package demo;\nclass OrdersServiceImpl {}\n",
+                    encoding="utf-8",
+                )
+                return json.dumps(
+                    {
+                        "status": "completed",
+                        "test_files": [
+                            "backend/src/test/java/demo/OrdersServiceTest.java"
+                        ],
+                    }
+                )
+
+            fake_bundle = SimpleNamespace(
+                test_generation=SimpleNamespace(invoke=invoke)
+            )
+            with patch("app.agents.create_agent_bundle", return_value=fake_bundle):
+                result = generate_or_update_unit_tests_with_agent(
+                    {
+                        "workspace": workspace,
+                        "unit_test_generation_context": {
+                            "source_files": [
+                                "backend/src/main/java/demo/OrdersService.java"
+                            ],
+                            "affected_layers": ["backend"],
+                        },
+                    },
+                    workspace,
+                )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(
+            result["test_files"],
+            ["backend/src/test/java/demo/OrdersServiceTest.java"],
+        )
+        self.assertNotIn("unauthorized_paths", result["validation"])
+        self.assertEqual(
+            [item["path"] for item in result["code_change_sets"][0]["files"]],
+            ["backend/src/test/java/demo/OrdersServiceTest.java"],
+        )
 
     def test_formal_internal_artifact_write_remains_a_security_failure(self) -> None:
         """忽略 checkpoint 后仍必须阻断对正式 `.xcodeagent` 计划工件的修改。"""

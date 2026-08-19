@@ -458,6 +458,10 @@ Chat Composer 通过既有 `/skills/run` AG-UI 目录接口提供搜索和多选
 
 `integration_test` 在外层主 Graph 中表现为一个节点，但内部应实现为 Testing Subgraph，并合并原 `quality_gate` 的职责。
 
+测试生成快照会忽略 Maven `target/` 以及前端 `build/`、`dist/` 等可重建产物；生产源码、配置和正式 `.xcodeagent` 工件仍按越权写入处理。
+
+后端测试目标默认排除 MapStruct 或纯映射层（`*Assembler`、`*Converter`、`*Mapper`）、DTO、Entity、配置类和简单 getter/setter；优先覆盖 Service，只有路由或校验契约变化时才生成 Controller 测试。
+
 测试命令和质量判定完全以确定性结果为准。确定性规则负责更新 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`；只有门禁失败且启用自动修复时才调用独立 RepairPlanner Agent。
 
 Testing Subgraph 的最小内部结构：

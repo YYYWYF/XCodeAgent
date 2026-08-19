@@ -735,6 +735,16 @@ def _source_layer(path: str) -> str | None:
             or stem.endswith(
                 ("config", "configuration")
             )
+            or stem.endswith(
+                (
+                    "assembler",
+                    "assemblerimpl",
+                    "converter",
+                    "converterimpl",
+                    "mapper",
+                    "mapperimpl",
+                )
+            )
             or stem.endswith(("dto", "request", "response", "vo", "entity"))
         ):
             return None
