@@ -10,6 +10,7 @@ import {
 } from './TechnicalPlanDocSections'
 import { AuthorizationSection } from './TechnicalPlanAuthorizationSection'
 import { authorizationDesignView } from './TechnicalPlanAuthorizationData'
+import AgentContractsSection from './TechnicalPlanAgentSection'
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
 import './TechnicalPlanDocPanel.less'
 
@@ -30,12 +31,18 @@ export default function TechnicalPlanDocPanel({ plan, productPlan }: Props): Rea
   const architecture = asRecord(plan.architecture)
   const entities = recordItems(plan.entities)
   const contracts = recordItems(plan.api_contracts)
+  const agentContracts = recordItems(plan.agent_contracts)
   const pages = recordItems(plan.pages)
   const hasAuthorization = Boolean(authorizationDesignView(plan))
-  const sections = hasAuthorization
-    ? [...technicalPlanSections, { key: 'authorization' as const, label: '权限' }]
-    : technicalPlanSections
-  const [activeSection, setActiveSection] = useState<SectionKey>('api-contracts')
+  const sections = [
+    ...technicalPlanSections.slice(0, 3),
+    ...(agentContracts.length ? [{ key: 'agent-contracts' as const, label: '智能体契约' }] : []),
+    ...technicalPlanSections.slice(3),
+    ...(hasAuthorization ? [{ key: 'authorization' as const, label: '权限' }] : [])
+  ]
+  const [activeSection, setActiveSection] = useState<SectionKey>(
+    agentContracts.length ? 'agent-contracts' : 'api-contracts'
+  )
   const resolvedActiveSection = sections.some((section) => section.key === activeSection)
     ? activeSection
     : 'api-contracts'
@@ -110,6 +117,9 @@ export default function TechnicalPlanDocPanel({ plan, productPlan }: Props): Rea
           productPlan={productPlan}
           sectionKey="page-bindings"
         />
+      ) : null}
+      {resolvedActiveSection === 'agent-contracts' ? (
+        <AgentContractsSection contracts={agentContracts} sectionKey="agent-contracts" />
       ) : null}
       {resolvedActiveSection === 'authorization' ? (
         <AuthorizationSection plan={plan} sectionKey="authorization" />

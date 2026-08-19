@@ -408,6 +408,28 @@ def _unit_source_refs(
             **({"source_types": source_types} if source_types else {}),
             **({"business_descriptions": descriptions} if descriptions else {}),
         }
+    if unit_id.startswith("agent:"):
+        agent_id = unit_id.removeprefix("agent:")
+        agent_contracts = _dict_items(build_context.get("agent_contracts"))
+        matching_contracts = (
+            agent_contracts
+            if agent_id == "runtime"
+            else [
+                contract
+                for contract in agent_contracts
+                if str(contract.get("agentId") or "") == agent_id
+            ]
+        )
+        return {
+            **existing,
+            "type": (
+                "agent_runtime_bootstrap"
+                if agent_id == "runtime"
+                else "technical_plan_agent_contract"
+            ),
+            "target": {"type": "agent", "id": agent_id},
+            "agent_contracts": matching_contracts,
+        }
     return {
         **existing,
         "type": "application_unit",
@@ -441,6 +463,12 @@ def _unit_fingerprint_payload(
             "endpoint_designs": _endpoint_design_items(build_context.get("endpoint_designs")),
             "mapping_flows": _string_list(build_context.get("mapping_flows")),
             "business_descriptions": _dict_items(build_context.get("business_descriptions")),
+        }
+    if unit_id.startswith("agent:"):
+        return {
+            "unit_id": unit_id,
+            "source_refs": source_refs,
+            "agent_contracts": _dict_items(build_context.get("agent_contracts")),
         }
     return {
         "unit_id": unit_id,

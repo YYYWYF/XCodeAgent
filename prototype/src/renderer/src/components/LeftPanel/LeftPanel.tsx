@@ -4,10 +4,12 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
+  DevelopmentPlanningEntity,
   DevelopmentPlanningPageOption,
   DevelopmentPlanningPageTreeNode,
   EditorMode
 } from '../../typings'
+import type { DevelopmentPlanningAgent } from '../../agentDevelopment'
 import type { WorkbenchArtifactProgress } from '../../workbenchDomain'
 import type { BackgroundTaskSystem } from '../../backgroundTasks'
 import { cx } from '../../utils'
@@ -28,6 +30,8 @@ type Props = {
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
+  developmentPlanningEntities: DevelopmentPlanningEntity[]
+  developmentPlanningAgents: DevelopmentPlanningAgent[]
   editorMode: EditorMode
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPlanningArtifactsRefresh: () => void
@@ -110,6 +114,8 @@ export default function LeftPanel({
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
+  developmentPlanningEntities,
+  developmentPlanningAgents,
   editorMode,
   onApplicationLifecycleChange,
   onPlanningArtifactsRefresh,
@@ -164,6 +170,8 @@ export default function LeftPanel({
             developmentPlanningPages={developmentPlanningPages}
             developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}
+            developmentPlanningEntities={developmentPlanningEntities}
+            developmentPlanningAgents={developmentPlanningAgents}
             editorMode={editorMode}
             onApplicationLifecycleChange={onApplicationLifecycleChange}
             onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}

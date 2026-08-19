@@ -58,6 +58,72 @@ def _project_plan() -> dict:
 
 
 class BuildUnitSkeletonTests(unittest.TestCase):
+    def test_agent_contract_builds_runtime_agent_and_gateway_dependencies(self) -> None:
+        """智能体契约必须生成 Python runtime/Agent Unit 并闭合工具与网关依赖。"""
+
+        project_plan = {
+            **_project_plan(),
+            "agent_contracts": [
+                {
+                    "agentId": "inventory_assistant",
+                    "invocation": {
+                        "gatewayEndpointId": "customers.list",
+                    },
+                    "toolBindings": [
+                        {
+                            "toolId": "query_orders",
+                            "apiContractId": "orders-api",
+                            "endpointId": "orders.list",
+                            "accessMode": "read",
+                        }
+                    ],
+                    "artifacts": {
+                        "agentPath": "agent-runtime/agents/inventory_assistant.py",
+                        "toolAdapterPath": "agent-runtime/tools/inventory_assistant_tools.py",
+                        "testPath": "agent-runtime/tests/test_inventory_assistant.py",
+                    },
+                }
+            ],
+        }
+
+        plan = ensure_build_unit_skeleton(project_plan, {})
+
+        self.assertIn("agent:runtime", plan["build_units"])
+        self.assertIn("agent:inventory_assistant", plan["build_units"])
+        self.assertEqual(
+            plan["build_units"]["agent:inventory_assistant"]["kind"],
+            "agent",
+        )
+        self.assertEqual(
+            plan["build_units"]["agent:inventory_assistant"]["agent_id"],
+            "inventory_assistant",
+        )
+        self.assertIn(
+            {
+                "from": "backend:endpoint:orders-api:orders.list",
+                "to": "agent:inventory_assistant",
+                "type": "depends_on",
+            },
+            plan["unit_graph"]["edges"],
+        )
+        self.assertIn(
+            {
+                "from": "agent:runtime",
+                "to": "agent:inventory_assistant",
+                "type": "depends_on",
+            },
+            plan["unit_graph"]["edges"],
+        )
+        self.assertIn(
+            {
+                "from": "agent:inventory_assistant",
+                "to": "backend:endpoint:customers-api:customers.list",
+                "type": "depends_on",
+            },
+            plan["unit_graph"]["edges"],
+        )
+        self.assertTrue(plan["unit_graph"]["validation"]["is_valid"])
+
     def test_legacy_entity_sources_do_not_change_endpoint_units(self) -> None:
         """旧实体来源不再影响按 TechnicalPlan Endpoint 固定生成的后端 Unit。"""
 

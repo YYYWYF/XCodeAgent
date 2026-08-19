@@ -5,6 +5,7 @@ import type {
   ApplicationSchemaConfig,
   DevelopmentPlanningPageTreeNode
 } from './typings'
+import type { DevelopmentPlanningAgent } from './agentDevelopment'
 
 declare global {
   interface Window {
@@ -98,6 +99,8 @@ declare global {
               designed?: boolean
             }>
           }>
+          entities: DevelopmentPlanningEntity[]
+          agents: DevelopmentPlanningAgent[]
         }>
       }
       sessions?: {

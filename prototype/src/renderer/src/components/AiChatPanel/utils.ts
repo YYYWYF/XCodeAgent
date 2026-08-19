@@ -105,6 +105,8 @@ export function workflowDetailTargetKey(workflow: unknown): string {
   }
   const state = payload.state || {}
   const result = payload.result || {}
+  const agentId = String(state.selectedAgentId || result.selectedAgentId || '').trim()
+  if (agentId) return `agent:${agentId}`
   const apiContractId = workflowStateField(state, result, 'ApiContractId', 'api_contract_id')
   const endpointId = workflowStateField(state, result, 'EndpointId', 'endpoint_id')
   if (apiContractId && endpointId) {

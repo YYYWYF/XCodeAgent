@@ -35,6 +35,8 @@ export default function TechnicalPlanSummary({ plan }: Props): ReactElement {
   const entities = recordItems(plan.entities)
   const contracts = recordItems(plan.api_contracts)
   const pages = recordItems(plan.pages)
+  const agentContracts = recordItems(plan.agent_contracts)
+  const agentRuntime = String(architecture.agent_runtime || '').trim()
 
   return (
     <div className={cx('project-plan-summary')}>
@@ -56,6 +58,12 @@ export default function TechnicalPlanSummary({ plan }: Props): ReactElement {
         <div><Text strong>{contracts.length}</Text><Text type="secondary">API 契约</Text></div>
         <div><Text strong>{entities.length}</Text><Text type="secondary">业务实体</Text></div>
         <div><Text strong>{pages.length}</Text><Text type="secondary">页面引用</Text></div>
+        {agentContracts.length ? (
+          <div>
+            <Text strong>{agentContracts.length}</Text>
+            <Text type="secondary">智能体契约</Text>
+          </div>
+        ) : null}
       </div>
 
       <div className={cx('project-plan-summary-grid')}>
@@ -70,6 +78,12 @@ export default function TechnicalPlanSummary({ plan }: Props): ReactElement {
             <div><dt>前端</dt><dd>{String(architecture.frontend || '待补充')}</dd></div>
             <div><dt>后端</dt><dd>{String(architecture.backend || '待补充')}</dd></div>
             <div><dt>数据</dt><dd>{String(architecture.data || '待补充')}</dd></div>
+            {agentRuntime ? (
+              <div>
+                <dt>智能体运行时</dt>
+                <dd>{agentRuntime}</dd>
+              </div>
+            ) : null}
           </dl>
         </section>
 

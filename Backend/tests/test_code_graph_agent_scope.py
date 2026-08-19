@@ -113,6 +113,8 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertIn("Do not install dependencies", data_source_prompt)
         self.assertIn("provided array order", data_source_prompt)
         self.assertNotIn("regular backend verification", data_source_prompt)
+        self.assertIn("existing AG-UI client/event-stream boundary", frontend_prompt)
+        self.assertIn("do not call the Python sidecar directly", frontend_prompt)
 
     def test_frontend_execution_prompt_uses_template_service_business_body(self) -> None:
         """真实业务 API 必须直接消费模板 service 返回的业务类型。"""

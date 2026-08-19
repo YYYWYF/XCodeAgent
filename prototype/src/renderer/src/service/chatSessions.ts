@@ -10,6 +10,7 @@ import type {
 } from '../typings'
 import type { WorkbenchSessionKind } from '../workbenchDomain'
 import type { ProcessStepRecord, ToolCallRecord } from './agUiAgent'
+import type { AgentDetailBlocker } from '../agentDevelopment'
 
 export type ChatSessionMessage = {
   id: number
@@ -37,7 +38,7 @@ export type ChatSessionMessage = {
     label: string
     path?: string
     purpose?: string
-  }
+  } | AgentDetailBlocker
   createdAt: number
 }
 

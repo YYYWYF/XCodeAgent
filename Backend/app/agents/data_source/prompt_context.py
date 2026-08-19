@@ -198,6 +198,10 @@ def task_implementation_contract(
         raise ValueError("Backend Endpoint Task 必须且只能携带一个已确认 Endpoint API 设计。")
     source_refs = task.get("source_refs")
     source_refs = source_refs if isinstance(source_refs, dict) else {}
+    agent_contracts = _agent_contracts_for_gateway_endpoints(
+        project_plan,
+        endpoint_ids,
+    )
     return {
         "kind": "endpoint",
         "api_contract": api_contracts[0] if api_contracts else {},
@@ -208,10 +212,32 @@ def task_implementation_contract(
             if isinstance(item, dict)
         ],
         "authorization_constraints": _endpoint_authorization_constraints(task),
+        **({"agent_contracts": agent_contracts} if agent_contracts else {}),
         "language": {"java_version": "8"},
         "verification_policy": _OUTER_VERIFICATION_POLICY,
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }
+
+
+def _agent_contracts_for_gateway_endpoints(
+    project_plan: dict[str, Any],
+    endpoint_ids: set[str],
+) -> list[dict[str, Any]]:
+    """投射以当前 Java Endpoint 作为 AG-UI 网关的 Agent 技术契约。"""
+
+    return [
+        dict(contract)
+        for contract in _dict_items(project_plan.get("agent_contracts"))
+        if str(
+            (
+                contract.get("invocation")
+                if isinstance(contract.get("invocation"), dict)
+                else {}
+            ).get("gatewayEndpointId")
+            or ""
+        )
+        in endpoint_ids
+    ]
 
 
 def _endpoint_authorization_constraints(task: dict[str, Any]) -> dict[str, Any] | None:

@@ -28,6 +28,8 @@
     "test:branch-view": "node scripts/run-branch-view-tests.mjs",
     "test:iteration-origin": "node scripts/run-iteration-origin-tests.mjs",
     "test:application-authorization": "node scripts/run-application-authorization-tests.mjs",
+    "test:agent-product-plan": "node scripts/run-agent-product-plan-tests.mjs",
+    "test:agent-technical-plan-view": "node scripts/run-agent-technical-plan-view-tests.mjs",
     "test:planning-artifact-status": "node scripts/run-planning-artifact-status-tests.mjs",
     "test:api-design": "node scripts/run-api-design-tests.mjs",
     "test:preview-runtime": "node scripts/run-preview-runtime-tests.mjs",

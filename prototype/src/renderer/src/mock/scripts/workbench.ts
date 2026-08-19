@@ -71,6 +71,7 @@ export {
   replayApplicationTesting,
   replayCodeReview
 } from './workbenchStageFlows'
+import { replayAgentWorkbench, resolveAgentTarget } from './agentWorkbench'
 
 function dispatchImplementationTask(input: {
   options: SendWorkflowMessageOptions
@@ -782,6 +783,10 @@ export async function replayWorkbench(
   const appApiTarget = resolveAppApiTarget(options, resume)
   if (appApiTarget) {
     return replayAppApiWorkbench(threadId, appApiTarget, options, callbacks)
+  }
+  const agentTarget = resolveAgentTarget(options, resume)
+  if (agentTarget) {
+    return replayAgentWorkbench(threadId, agentTarget, options, callbacks)
   }
   // 接口目标优先于页面：选中接口或续传快照带接口身份时走接口剧本。
   const endpointTarget = resolveEndpointTarget(options, resume)

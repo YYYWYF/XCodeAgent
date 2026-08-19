@@ -29,6 +29,11 @@ export type PageDesignBinding = {
   sourcePath?: string
   target?: string
 }
+export type PageDesignAgentDep = {
+  agentId?: string
+  name?: string
+  purpose?: string
+}
 
 export type PageDesign = {
   target_type?: string
@@ -46,10 +51,47 @@ export type PageDesign = {
   permissions?: string[]
   states?: string[]
   api_dependencies?: PageDesignApiDep[]
+  agent_dependencies?: PageDesignAgentDep[]
   response_bindings?: PageDesignBinding[]
   acceptance_criteria?: string[]
   dependent_pages?: string[]
   [key: string]: unknown
+}
+
+type RequirementAgentSummary = {
+  id?: string
+  name?: string
+  label?: string
+  purpose?: string
+  pages?: string[]
+  interaction?: string
+  boundaries?: string[]
+  permissions?: string[]
+  acceptance_criteria?: string[]
+  acceptanceCriteria?: string[]
+}
+
+type ProjectPlanAgentApiReference = {
+  apiContractId?: string
+  endpointId?: string
+  method?: string
+  path?: string
+}
+
+type ProjectPlanAgentSummary = {
+  id?: string
+  name?: string
+  label?: string
+  purpose?: string
+  model?: string
+  modelId?: string
+  pages?: string[]
+  tools?: string[]
+  apiReferences?: ProjectPlanAgentApiReference[]
+  knowledgeReferences?: string[]
+  permissions?: string[]
+  integration?: string
+  acceptanceCriteria?: string[]
 }
 
 export type TestCaseEstimate = {
@@ -142,6 +184,13 @@ export function buildPageDesignDoc(design: PageDesign): string {
     )
     lines.push('')
   }
+  if (design.agent_dependencies?.length) {
+    lines.push('## 智能体依赖', '')
+    design.agent_dependencies.forEach((agent) =>
+      lines.push(`- **${agent.name || agent.agentId || '智能体'}** — ${agent.purpose || ''}`)
+    )
+    lines.push('')
+  }
   if (design.response_bindings?.length) {
     lines.push('## 数据绑定', '')
     design.response_bindings.forEach((binding) =>
@@ -179,7 +228,7 @@ function pascalCase(value: string): string {
     .join('')
 }
 
-/** 从页面设计生成真实感的 TSX 源码（含状态、表格与数据依赖）。 */
+/** 从页面设计生成真实感的 TSX 源码（含状态、表格、数据与接口依赖）。 */
 export function buildPageSource(
   design: PageDesign,
   pageId: string
@@ -190,6 +239,7 @@ export function buildPageSource(
   const regions = design.basic_layout?.regions?.map((r) => r.name || '').filter(Boolean) || []
   const apis = design.api_dependencies || []
   const interactions = design.interactions || []
+  const agents = design.agent_dependencies || []
   const apiComments = apis.length
     ? apis
         .map((api) => `// ${api.method || 'GET'} ${api.path || ''} — ${api.purpose || ''}`)
@@ -238,6 +288,7 @@ export function buildPageSource(
     `        dataSource={rows}`,
     `      />`,
     `      {/* 交互：${interactions.slice(0, 2).join('；') || '待补充'} */}`,
+    `      {/* 智能体：${agents.map((agent) => agent.name || agent.agentId).join('；') || '暂无'} */}`,
     `    </Card>`,
     `  )`,
     `}`,
@@ -408,6 +459,23 @@ export function buildRequirementSpecDoc(spec: Record<string, any>, appName?: str
   for (const page of (spec.pages || []) as Array<Record<string, any>>) {
     lines.push(`- **${page.name}** \`${page.path}\`：${page.description}`)
   }
+  const agents = (spec.agents || spec.agent_requirements || []) as RequirementAgentSummary[]
+  if (agents.length) {
+    lines.push('', '## 智能体需求')
+    for (const agent of agents) {
+      lines.push(`- **${agent.name || agent.label || agent.id}**：${agent.purpose || ''}`)
+      if (Array.isArray(agent.pages) && agent.pages.length) {
+        lines.push(`  - 页面入口：${agent.pages.map((page) => `\`${page}\``).join('、')}`)
+      }
+      if (agent.interaction) lines.push(`  - 交互：${agent.interaction}`)
+      for (const boundary of agent.boundaries || agent.permissions || []) {
+        lines.push(`  - 边界：${boundary}`)
+      }
+      for (const criterion of agent.acceptance_criteria || agent.acceptanceCriteria || []) {
+        lines.push(`  - 验收：${criterion}`)
+      }
+    }
+  }
   lines.push('', '## 核心业务流程')
   for (const flow of (spec.business_flows || []) as Array<Record<string, any>>) {
     lines.push(`- **${flow.name}**：${flow.description}`)
@@ -455,6 +523,40 @@ export function buildProjectPlanDoc(plan: Record<string, any>, appName?: string)
   lines.push('', '## 接口契约')
   for (const api of (plan.apis || []) as Array<Record<string, any>>) {
     lines.push(`- **${api.method}** \`${api.path}\` · ${api.summary}`)
+  }
+  const agents = (plan.agents || []) as ProjectPlanAgentSummary[]
+  if (agents.length) {
+    lines.push('', '## 智能体')
+    for (const agent of agents) {
+      lines.push(
+        `- **${agent.name || agent.label || agent.id}** \`${agent.id || ''}\`：${agent.purpose || ''}`
+      )
+      if (agent.model) {
+        lines.push(`  - 模型：${agent.model}${agent.modelId ? `（\`${agent.modelId}\`）` : ''}`)
+      }
+      if (Array.isArray(agent.pages) && agent.pages.length) {
+        lines.push(`  - 页面：${agent.pages.map((page) => `\`${page}\``).join('、')}`)
+      }
+      if (Array.isArray(agent.tools) && agent.tools.length) {
+        lines.push(`  - 工具：${agent.tools.join('、')}`)
+      }
+      for (const reference of agent.apiReferences || []) {
+        lines.push(
+          `  - 接口：\`${String(reference.method || 'GET').toUpperCase()} ${reference.path || ''}\`（契约：\`${reference.apiContractId || ''}\`，端点：\`${reference.endpointId || ''}\`）`
+        )
+      }
+      if (Array.isArray(agent.knowledgeReferences) && agent.knowledgeReferences.length) {
+        lines.push(`  - 知识：${agent.knowledgeReferences.map((item) => `\`${item}\``).join('、')}`)
+      }
+      for (const permission of agent.permissions || []) lines.push(`  - 权限：${permission}`)
+      if (agent.integration) lines.push(`  - 页面集成：${agent.integration}`)
+      for (const criterion of agent.acceptanceCriteria || []) lines.push(`  - 验收：${criterion}`)
+    }
+  }
+  const agentAcceptanceCriteria = (plan.agent_acceptance_criteria || []) as string[]
+  if (agentAcceptanceCriteria.length) {
+    lines.push('', '## 智能体集成验收')
+    for (const criterion of agentAcceptanceCriteria) lines.push(`- ${criterion}`)
   }
   lines.push('', '## 执行顺序')
   for (const step of (plan.execution_order || []) as Array<Record<string, any>>) {
