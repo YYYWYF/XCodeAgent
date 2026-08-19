@@ -164,8 +164,9 @@ TechnicalPlan 只写入 `.xcodeagent/plans/technical-plan.md|json`，`technical_
 
 TechnicalPlan 包含：
 
-- 技术架构、模块边界、API Contract、请求/响应 Schema；
-- `engineering_design` 只保留模块边界和数据模型；
+- `architecture` 三段技术架构、业务实体、API Contract、请求/响应 Schema；
+- `entities` 根据 RequirementSpec 实体骨架补齐规范字段，是实体与 API 的唯一字段事实源；
+- API Contract 通过 `entity_ids` 关联实体；Schema 字段可使用 `entity_field_ref` 表示实体来源，计算、聚合和传输字段可以不做实体映射；
 - ProductPlan 中 `business` action/step 到 endpoint 的 `action_implementations`；
 - ProductPlan 与 UiManifest 的上游内容哈希。
 
@@ -177,12 +178,24 @@ TechnicalPlan 包含：
   "confirmation_status": "pending_user_confirmation",
   "product_plan_sha256": "...",
   "ui_designs_sha256": "...",
-  "architecture": {},
-  "engineering_design": {
-    "module_boundaries": [],
-    "data_models": []
+  "architecture": {
+    "frontend": "PC 管理端采用 React 单页应用，通过 REST JSON API 访问后端。",
+    "backend": "后端采用 Java8 和 Springboot 提供业务 REST API。",
+    "data": "MySQL8 负责持久化，Redis 负责缓存和热点查询。"
   },
-  "api_contracts": [],
+  "entities": [
+    {
+      "id": "Order",
+      "name": "订单",
+      "description": "订单业务实体",
+      "fields": [
+        {"name": "order_number", "label": "订单编号", "type": "text", "required": true}
+      ]
+    }
+  ],
+  "api_contracts": [
+    {"id": "orders_api", "entity_ids": ["Order"], "base_path": "/api/orders", "schemas": {}, "endpoints": []}
+  ],
   "pages": [
     {
       "pageId": "orders",
@@ -197,8 +210,9 @@ TechnicalPlan 包含：
 
 TechnicalPlan 不再持久化 `app`、`requirements_overview`、`project_acceptance_criteria`、
 `business_flows`、`acceptance_criteria`、`risks`、`data_sources`、`permission_model`、
-`frontend_pages` 或 `page_implementation_contracts`。页面字段来自 ProductPlan，数据源身份来自
-RequirementSpec 内部配置，角色/跳转/状态来自 ProductPlan；UI 路径与控件映射来自已确认 UiManifest，跳过时不提供 UI 路径和控件映射；
+`frontend_pages` 或 `page_implementation_contracts`。页面字段来自 ProductPlan；实体字段来自
+TechnicalPlan 顶层 `entities`；数据源身份只来自后续已确认 EntityDesign。API Contract 必须通过非空
+`entity_ids` 关联一个或多个实体，禁止 `data_source_id`。角色/跳转/状态来自 ProductPlan；UI 路径与控件映射来自已确认 UiManifest，跳过时不提供 UI 路径和控件映射；
 运行时按当前构建范围组合这些正式上游产物。
 
 TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品可见的 `sequence` 决策；这些事实已经分别由 ProductPlan 和 UiDesign 确认。它只为需要后端/数据实现的业务 action 或业务 step 选择 endpoint：
@@ -259,7 +273,7 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 
 ### TechnicalPlan 上下文预算
 
-- 128k 上下文：TechnicalPlan 不复制三份上游文档；主 Workflow 按页面/API 范围加载 ProductPlan、UiManifest、TechnicalPlan references 和必要 EndpointDetail。
+- 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、角色、业务流程、页面信息和业务动作上下文，并在修订时注入修订上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
 
 ### EndpointDetail
 
@@ -343,10 +357,14 @@ RequirementSpec 与 ProductPlan 只持久化用户提出或确认的产品事实
 
 - ProductPlan：RequirementSpec；
 - UiDesign：单页 ProductPlan 摘要；
-- TechnicalPlan：RequirementSpec 摘要、完整 ProductPlan、UI manifest，不加载全部 TSX 正文；
+- TechnicalPlan：RequirementSpec 实体上下文、拆分的 ProductPlan 行为上下文和必要修订信息，不加载完整上游文档或 UI manifest JSON；
 - EndpointDetail：单个 API Contract、关联页面实现契约和压缩数据库事实；
 - Build：当前 Unit 的 TechnicalPlan 切片、相关 EndpointDetail、UI 设计文件路径和工作区快照。
 
-ProductPlan 每次自动修复只回灌最多八条校验摘要，TechnicalPlan 最多回灌十二条页面/API/数据源契约摘要；两者都不追加历史模型全文。重试候选保留在当前节点局部变量中，TechnicalPlan 只携带精简 UiManifest 而不加载 TSX 正文，只有通过校验的计划才进入确认产物，从而保持 128k 上下文预算与 checkpoint 可检查性。
+ProductPlan 每次自动修复只回灌最多八条校验摘要，TechnicalPlan 最多回灌十二条页面/API/数据源契约摘要；两者都不追加历史模型全文。重试候选保留在当前节点局部变量中，TechnicalPlan 只注入精简实体和 ProductPlan 行为上下文，只有通过校验的计划才进入确认产物，从而保持 128k 上下文预算与 checkpoint 可检查性。
+
+TechnicalPlan 的模型生成、JSON 解析和正式契约校验共用最多三次“生成 → 校验 → 错误反馈修复”总预算。三次仍失败时，节点停留在 `technical_planning` 并返回 `technical_plan_generation_error`，仅包含精简错误与重新生成操作，不写入 Markdown/JSON，也不发出确认产物。规划模型的 `llm.token` 原始 JSON 只用于内部生成过程，前端聊天和历史消息均不得展示；确认界面直接读取 Workflow `state/result.technical_plan` 的结构化计划。
+
+TechnicalPlan 的实体定义严格校验继续暂停；页面行为闭合校验暂时暂停；API Contract 的 `entity_ids`、可选 `entity_field_ref`、Schema 引用和统一分页校验启用。分页响应对象同级只能有 `total`、`pageSize`、`current`、`list` 四个字段。页面路由和 Endpoint 结构校验保持不变。
 
 任何完整 TSX、数据库工具原始输出、仓库扫描结果和历史日志都写入文件，只向主上下文返回路径、哈希和有界摘要。

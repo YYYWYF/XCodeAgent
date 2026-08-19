@@ -33,6 +33,7 @@ import TemplatePreparingCard, {
 } from '../WorkflowRunCard/TemplatePreparingCard'
 import DetailBlockerCard from '../../../DetailConfirmationPageSelector/DetailBlockerCard'
 import {
+  isStructuredPlanningWorkflow,
   processStepsForMessageDisplay,
   workflowMessageContentForDisplay
 } from '../../../../service/processStepHistory'
@@ -350,10 +351,7 @@ export default function MessageList({
                   messageClarification?.mode === 'ui_design_confirmation')
               // 创建规划的产品/技术阶段也展示 WorkflowRunCard，保证运行与确认状态连续可见。
               const isPlanningStageCard =
-                message.workflow &&
-                ['product_planning', 'project_planning', 'technical_planning'].includes(
-                  String(message.workflow.summary?.phase || '')
-                )
+                message.workflow && isStructuredPlanningWorkflow(message.workflow)
               const showWorkflowCard = Boolean(
                 message.workflow &&
                   (requiresClarification || isUiDesignConfirmationCard || isPlanningStageCard)
@@ -383,9 +381,7 @@ export default function MessageList({
                 ].includes(String(messageClarification?.mode || ''))
               const isPlanningStageRunningCard =
                 message.workflow &&
-                ['product_planning', 'project_planning', 'technical_planning'].includes(
-                  String(message.workflow.summary?.phase || '')
-                ) &&
+                isStructuredPlanningWorkflow(message.workflow) &&
                 message.workflow.summary?.status === 'running'
               const isPlanningLoadingPlaceholder = Boolean(message.planningLoading)
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，

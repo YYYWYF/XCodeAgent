@@ -6,7 +6,7 @@ import {
   EyeOutlined,
   FileTextOutlined
 } from '@ant-design/icons'
-import { Button, Checkbox, Form, Input, Radio, Tag, Typography } from 'antd'
+import { Alert, Button, Checkbox, Form, Input, Radio, Tag, Typography } from 'antd'
 import type { FormInstance } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEventHandler, ReactElement } from 'react'
@@ -105,6 +105,7 @@ function panelTitle(mode?: string): string {
   if (mode === 'product_plan_confirmation') return '确认产品规划'
   if (mode === 'ui_design_confirmation') return '确认UI设计稿'
   if (mode === 'technical_plan_confirmation') return '确认技术规划'
+  if (mode === 'technical_plan_generation_error') return '技术规划生成失败'
   if (mode === 'detail_review') return '审核页面与数据源细节'
   return '补充规划细节'
 }
@@ -115,6 +116,7 @@ function submitLabel(mode?: string): string {
   if (mode === 'product_plan_confirmation') return '确认产品规划并设计 UI'
   if (mode === 'ui_design_confirmation') return '确认设计稿并继续'
   if (mode === 'technical_plan_confirmation') return '确认技术规划并进入工作区'
+  if (mode === 'technical_plan_generation_error') return '重新生成技术规划'
   if (!mode) return '重新生成当前规划'
   return '提交回答并继续'
 }
@@ -418,6 +420,8 @@ export default function ApplicationPlanningQuestionPanel({
   const isProductPlanConfirmation = clarification?.mode === 'product_plan_confirmation'
   const isTechnicalPlanConfirmation =
     clarification?.mode === 'technical_plan_confirmation'
+  const isTechnicalPlanGenerationError =
+    clarification?.mode === 'technical_plan_generation_error'
   const isDocumentConfirmation =
     isRequirementConfirmation || isProductPlanConfirmation || isTechnicalPlanConfirmation
   const technicalPlanAnswerKey = questions[0]
@@ -433,10 +437,7 @@ export default function ApplicationPlanningQuestionPanel({
   const hasRecoveryAction = clarification?.status === 'requires_user_input' && !questions.length
   const artifact = workflow.confirmationArtifact
   const spec = artifact?.id === 'requirement_spec' ? requirementSpec(workflow) : undefined
-  const plan =
-    artifact?.id === 'technical_plan'
-      ? technicalPlan(workflow)
-      : undefined
+  const plan = isTechnicalPlanConfirmation ? technicalPlan(workflow) : undefined
   const displayedSpec = requirementDraft || spec
   const canShowSummary = Boolean(spec)
   // 意见非空时切换提交语义，避免按钮继续暗示需求文档完全正确。
@@ -466,6 +467,7 @@ export default function ApplicationPlanningQuestionPanel({
     'ui_design_confirmation',
     'product_plan_confirmation',
     'technical_plan_confirmation',
+    'technical_plan_generation_error',
     'requirement_spec_confirmation',
     'detail_review',
   ])
@@ -510,6 +512,39 @@ export default function ApplicationPlanningQuestionPanel({
       },
       requirementDraft,
       feedbackText || undefined
+    )
+  }
+
+  if (isTechnicalPlanGenerationError) {
+    const errors = Array.isArray(clarification.errors)
+      ? clarification.errors.map(String).filter(Boolean).slice(0, 8)
+      : []
+    return (
+      <section className={cx('planning-question-panel')}>
+        <Alert
+          description={
+            <>
+              <Paragraph>{clarification.message || '技术规划自动修复后仍未通过校验。'}</Paragraph>
+              {errors.length ? (
+                <ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul>
+              ) : null}
+            </>
+          }
+          message="未生成可确认的技术规划"
+          showIcon
+          type="error"
+        />
+        <Button
+          disabled={disabled}
+          onClick={() =>
+            onSubmit(workflow, { planning_recovery: '请重新生成技术规划，并修复全部结构和契约错误。' })
+          }
+          size="large"
+          type="primary"
+        >
+          重新生成技术规划
+        </Button>
+      </section>
     )
   }
 

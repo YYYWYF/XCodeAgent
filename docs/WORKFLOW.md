@@ -214,7 +214,7 @@ Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec`
 
 ProjectPlan 同样以 Markdown 作为用户确认入口。确认前若 Markdown 被直接编辑，节点先将改动同步到内部 ProjectPlan JSON，并执行 API 契约、页面清单和数据源一致性校验；同步成功后才允许确认并进入后续节点。AG-UI 产物列表只展示 Markdown 等用户可读文件，所有 JSON 路径和 JSON 任务文件都属于内部工作流状态，不向用户呈现为可编辑产物。
 
-API 契约在此阶段作为前后端共享的唯一字段事实来源生成。为保持简约和可扩展，每个 contract 只包含资源级 `schemas`、稳定 endpoint id、HTTP method、path、参数、请求/响应 schema 引用、错误码、权限要求和 `entity_ids`（关联的业务实体 id 数组，可关联多个实体）。契约的唯一权威绑定是实体；`data_source_id` 由系统按首实体所在数据源自动推导，模型不得自行发明数据源 id。`data_sources` 只能保存 `schema_refs`，不得复制字段；ProjectPlan 不生成页面与数据源/API 的绑定关系。页面详细设计只能通过 `api_dependencies` 和 `response_bindings` 引用已声明 endpoint 与响应字段。`detail_confirmation` 若发现字段或接口缺口，应提出 ProjectPlan 调整并经过确认，不能自行补字段或发明独立接口。
+API 契约在此阶段作为前后端共享的接口字段事实来源生成。为保持简约和可扩展，每个 contract 只包含资源级 `schemas`、稳定 endpoint id、HTTP method、path、参数、请求/响应 schema 引用、错误码、权限要求和 `entity_ids`（关联的业务实体 id 数组，可关联多个实体）。契约的唯一权威绑定是实体，禁止生成、持久化或兼容读取 `data_source_id`；需要数据源时必须按 `entity_ids` 反查已确认 EntityDesign，且多实体分别读取各自方案。页面详细设计只能通过 `api_dependencies` 和 `response_bindings` 引用已声明 endpoint 与响应字段。`detail_confirmation` 若发现字段或接口缺口，应提出 TechnicalPlan 调整并经过确认，不能自行补字段或发明独立接口。
 
 `ProjectPlan` 至少包含：
 
@@ -223,7 +223,7 @@ API 契约在此阶段作为前后端共享的唯一字段事实来源生成。�
 - `architecture`：前端、后端、数据和测试策略；
 - `api_contracts`：唯一的业务字段 Schema、资源 endpoint 和输入输出 Schema 引用；
 - `frontend_pages`：菜单树与页面叶子混合结构；菜单节点至少包含 `name`、`unique_path`、`children`，页面叶子保留 `pageId`、名称、路由、描述、模块归属、状态、权限及 `references`；
-- `entities`：ProjectPlan 顶层只保留实体列表，实体优先。每个实体包含 id、名称、说明、带类型的字段定义（snake_case 字段名 + 语义类型 text/long_text/number/decimal/date/datetime/enum/boolean），**不生成 `data_source`**——数据源只属于实体，由实体设计阶段选择并确认后写入 `entity_detail_plans`；`data_sources` 不单独持久化，按已确认实体设计的数据源类型确定性推导。需求层（RequirementSpec）的实体字段只是“需要展示的实体信息”（名称、说明，不生成字段名与类型，也不选择数据源）；项目规划层不选择数据源。API 契约以 `entity_ids` 数组绑定实体（可多实体），`data_source_id` 由系统按已确认实体设计的数据源类型推导，MySQL 列类型/约束/关系不写入用户可见工件；
+- `entities`：TechnicalPlan 顶层保存唯一权威实体列表。每个实体沿用 RequirementSpec 的稳定 id、名称和说明，并补齐带类型字段定义（snake_case 字段名 + 语义类型 text/long_text/number/decimal/date/datetime/enum/boolean），**不生成 `data_source`**——数据源只属于实体，由实体设计阶段选择并确认后写入 `entity_detail_plans`；`data_sources` 不单独持久化，按已确认实体设计的数据源类型确定性推导。需求层（RequirementSpec）的实体字段只是“需要展示的实体信息”（名称、说明，不生成字段名与类型，也不选择数据源）。API 契约只以非空 `entity_ids` 数组绑定一个或多个实体，禁止 `data_source_id`；需要数据源时按 `entity_ids` 反查已确认实体设计，MySQL 列类型/约束/关系不写入 TechnicalPlan；
 - `permission_model`：角色、页面访问规则、操作权限和默认权限策略；
 - `risks`：后续细节确认阶段需要消化的风险和待细化点。
 

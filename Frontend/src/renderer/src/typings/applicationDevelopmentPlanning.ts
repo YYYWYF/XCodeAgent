@@ -54,7 +54,7 @@ export type DevelopmentPlanningApiEndpoint = {
 export type DevelopmentPlanningApiContract = {
   id: string
   label: string
-  dataSourceIds?: string[]
+  entityIds?: string[]
   endpoints: DevelopmentPlanningApiEndpoint[]
 }
 export type DevelopmentPlanningEntityOption = {

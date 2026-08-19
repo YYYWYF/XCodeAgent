@@ -194,17 +194,41 @@ export function processStepsForMessageDisplay(
   return stableSteps
 }
 
-/** 在已有结构化步骤时隐藏后端生成的重复 Workflow 摘要，同时保留真实回复内容。 */
+/** 判断 Workflow 是否属于由结构化卡片承载的规划产物生成流程。 */
+export function isStructuredPlanningWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
+  if (!workflow || isConversationWorkflow(workflow)) return false
+  const planningNodes = new Set(['product_planning', 'project_planning', 'technical_planning'])
+  if (planningNodes.has(String(workflow.summary.phase || ''))) return true
+  const clarificationCandidates = [
+    workflow.summary.clarification,
+    workflow.state?.clarification,
+    workflow.result?.clarification
+  ]
+  if (
+    clarificationCandidates.some((value) => {
+      const mode = String((value as { mode?: string } | undefined)?.mode || '')
+      return mode.includes('product_plan') || mode.includes('project_plan') || mode.includes('technical_plan')
+    })
+  ) {
+    return true
+  }
+  return workflow.events.some((event) => planningNodes.has(String(event.nodeName || '')))
+}
+
+/** 隐藏结构化规划流程的原始 JSON 与重复 Workflow 摘要，同时保留真实回复内容。 */
 export function workflowMessageContentForDisplay(
   content: string,
   workflow: WorkflowRunPayload | undefined,
   hasProcessSteps: boolean
 ): string {
   const normalizedContent = content.trim()
-  if (!normalizedContent || !hasProcessSteps) return content
+  if (!normalizedContent) return content
 
   // 自由对话的摘要就是助手正文，必须始终保留，避免过程步骤在结束时吞掉回复。
   if (isConversationWorkflow(workflow)) return content
+  // 规划正文由确认卡、进度卡或错误卡展示，历史 session 中已保存的模型 JSON 也必须隐藏。
+  if (isStructuredPlanningWorkflow(workflow)) return ''
+  if (!hasProcessSteps) return content
 
   const normalizedSummary = workflow?.summary.message?.trim()
   if (normalizedSummary && normalizedContent === normalizedSummary) return ''

@@ -206,9 +206,9 @@ def _task_preparation_prompt(
         "frontend-backend API matching rules in this prompt: resolve every api_dependencies "
         "endpoint id to its exact method/path/schemas in executable_details.api_contracts and "
         "never invent endpoints or fields. For backend/data tasks, use only executable_details."
-        "endpoint_detail_plans, executable_details.data_sources, and "
-        "executable_details.api_contracts. ProjectPlan/API contracts in executable_details "
-        "are the only source of fields; preserve schema_refs, endpoint ids, "
+        "endpoint_detail_plans, executable_details.entity_designs, and "
+        "executable_details.api_contracts. TechnicalPlan entities and API contracts in executable_details "
+        "are the only source of fields; preserve entity_ids, endpoint ids, "
         "request/response schema refs, and page response_bindings in task source references.\n"
         
         "Split work into independently verifiable tasks. Every task must include:\n"

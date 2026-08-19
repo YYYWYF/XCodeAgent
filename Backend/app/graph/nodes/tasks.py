@@ -600,7 +600,6 @@ def _skeleton_api_contracts(project_plan: dict) -> list[dict]:
         {
             "id": contract.get("id"),
             "entity_ids": contract.get("entity_ids"),
-            "resource": contract.get("resource"),
             "base_path": contract.get("base_path"),
             "endpoint_ids": [
                 endpoint.get("id")

@@ -58,7 +58,6 @@ def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
         if not isinstance(contract, dict):
             continue
         contract_id = str(contract.get("id") or "")
-        source_id = str(contract.get("data_source_id") or "")
         for endpoint in contract.get("endpoints", []) or []:
             if not isinstance(endpoint, dict):
                 continue
@@ -66,12 +65,7 @@ def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
             detail = {
                 "api_contract_id": contract_id,
                 "endpoint_id": endpoint_id,
-                "data_source_id": source_id,
                 "status": "confirmed",
-                "data_origin": {
-                    "source_type": "static",
-                    "effective_source": {"kind": "frontend_mock"},
-                },
                 **supplied_endpoint_details.get((contract_id, endpoint_id), {}),
             }
             detail_path = workspace_root / (
@@ -93,17 +87,9 @@ def _externalize_detail_designs(workspace: str, project_plan: dict) -> str:
 
 
 def _with_confirmed_designs(plan: dict, *, source_type: str = "database") -> dict:
-    """去掉计划级 data_source 残留并把实体标记为已确认设计，供构建任务测试使用。"""
+    """为当前实体事实源补齐已确认设计，供构建任务测试使用。"""
 
-    updated = deepcopy(plan)
-    updated.pop("data_source_detail_plans", None)
-    for entity in updated.get("entities") or []:
-        if isinstance(entity, dict):
-            entity.pop("data_source", None)
-    for contract in updated.get("api_contracts") or []:
-        if isinstance(contract, dict):
-            contract.pop("data_source_id", None)
-    return confirm_entity_designs(updated, source_type=source_type)
+    return confirm_entity_designs(deepcopy(plan), source_type=source_type)
 
 
 class PrepareBuildTasksGuardTests(unittest.TestCase):
@@ -174,26 +160,20 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "id": "Order",
                     "name": "Order",
                     "fields": [],
-                    "data_source": "database",
                 },
                 {
                     "id": "Customer",
                     "name": "Customer",
                     "fields": [],
-                    "data_source": "database",
                 },
             ],
             "api_contracts": [
-                {"id": "orders-api", "entity_ids": ["Order"], "data_source_id": "database", "endpoints": [{"id": "orders.list"}]},
-                {"id": "customers-api", "entity_ids": ["Customer"], "data_source_id": "database", "endpoints": [{"id": "customers.list"}]},
+                {"id": "orders-api", "entity_ids": ["Order"], "endpoints": [{"id": "orders.list"}]},
+                {"id": "customers-api", "entity_ids": ["Customer"], "endpoints": [{"id": "customers.list"}]},
             ],
             "page_detail_plans": [
                 {"pageId": "orders", "references": {"endpoint_dependencies": [{"endpoint_id": "orders.list"}]}},
                 {"pageId": "customers", "references": {"endpoint_dependencies": [{"endpoint_id": "customers.list"}]}},
-            ],
-            "data_source_detail_plans": [
-                {"data_source_id": "database"},
-                {"data_source_id": "database"},
             ],
         }
         project_plan = _with_confirmed_designs(project_plan)
@@ -261,10 +241,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             [detail["endpoint_id"] for detail in executable_details["endpoint_detail_plans"]],
             ["orders.list"],
         )
-        self.assertEqual(
-            [source["id"] for source in executable_details["data_sources"]],
-            ["database"],
-        )
+        self.assertNotIn("data_sources", executable_details)
         self.assertEqual(
             [
                 endpoint["id"]
@@ -354,16 +331,14 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "id": "Order",
                     "name": "Order",
                     "fields": [],
-                    "data_source": "database",
                 }
             ],
             "api_contracts": [
-                {"id": "orders-api", "entity_ids": ["Order"], "data_source_id": "database", "endpoints": [{"id": "orders.list"}]},
+                {"id": "orders-api", "entity_ids": ["Order"], "endpoints": [{"id": "orders.list"}]},
             ],
             "page_detail_plans": [
                 {"pageId": "orders", "references": {"endpoint_dependencies": [{"endpoint_id": "orders.list"}]}},
             ],
-            "data_source_detail_plans": [{"data_source_id": "database"}],
         }
         project_plan = _with_confirmed_designs(project_plan)
         agent_plan = create_build_task_plan(
@@ -433,14 +408,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "id": "Order",
                     "name": "Order",
                     "fields": [],
-                    "data_source": "database",
                 }
             ],
             "api_contracts": [
                 {
                     "id": "orders-api",
                     "entity_ids": ["Order"],
-                    "data_source_id": "database",
                     "endpoints": [{"id": "orders.list"}],
                 }
             ],
@@ -452,7 +425,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     },
                 }
             ],
-            "data_source_detail_plans": [{"data_source_id": "database"}],
         }
         project_plan = _with_confirmed_designs(project_plan)
         base_plan = ensure_build_unit_skeleton(project_plan, {}, {})
@@ -556,14 +528,12 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     "id": "Order",
                     "name": "Order",
                     "fields": [],
-                    "data_source": "database",
                 }
             ],
             "api_contracts": [
                 {
                     "id": "orders-api",
                     "entity_ids": ["Order"],
-                    "data_source_id": "database",
                     "endpoints": [{"id": "orders.list"}],
                 }
             ],
@@ -581,7 +551,6 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                     },
                 },
             ],
-            "data_source_detail_plans": [{"data_source_id": "database"}],
         }
         project_plan = _with_confirmed_designs(project_plan)
         first_agent_plan = create_build_task_plan(

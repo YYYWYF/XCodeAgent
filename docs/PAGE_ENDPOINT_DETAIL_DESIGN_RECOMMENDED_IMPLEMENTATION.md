@@ -216,7 +216,7 @@ ProjectPlan 确认前应确定性校验 policy ref/hash、Endpoint 成功码以�
     },
 
     "api_contract_closure": {
-      "contract_fields": ["id", "data_source_id"],
+      "contract_fields": ["id", "entity_ids"],
       "endpoint_fields": [
         "id",
         "method",
@@ -259,7 +259,7 @@ PageDetail 不读取：完整 ProjectPlan、无关 pages/modules/contracts/endpo
   "project_plan": {
     "contract": {
       "id": "必需、只读",
-      "data_source_id": "必需、只读",
+      "entity_ids": "必需、只读、非空；可关联多个实体",
       "resource": "必需、只读",
       "base_path": "必需、只读",
       "authentication": "必需字段，可为空、只读",
@@ -278,19 +278,14 @@ PageDetail 不读取：完整 ProjectPlan、无关 pages/modules/contracts/endpo
       "authentication": "必需字段，可为空、只读"
     },
     "schema_closure": "目标 endpoint request/response schemas 的递归 $ref 闭包",
-    "data_source": {
-      "id": "必需、只读",
-      "type": "必需、只读",
-      "entities": "database 时条件必需；只是候选线索，不代替 DB facts"
-    },
+    "entity_design_summaries": "按 entity_ids 读取全部已确认 EntityDesign 的有界只读摘要",
     "dependent_pages": "仅用于建立依赖索引，不发送给 Endpoint 模型"
   },
-  "workspace_facts": "Controller/Service/Repository/DTO/Entity/Mapper/migration 或 static module 的最小事实切片",
-  "database_tables": "data_source.type=database 时条件必需：候选表完整结构"
+  "workspace_facts": "Controller/Service/Repository/DTO/Entity/Mapper 的最小事实切片"
 }
 ~~~
 
-EndpointDetail 不读取：完整 contract 的其他 endpoints、无关 schemas、页面正文、UI Design、完整 frontend page tree、无关 data sources、整个仓库。
+EndpointDetail 不读取：完整 contract 的其他 endpoints、无关 schemas、页面正文、UI Design、完整 frontend page tree、无关 EntityDesign、数据库结构或整个仓库；也不持久化数据源和数据库操作。
 
 ### 4.3 `prepare_detail_context` 的预处理职责与实现缺口
 
@@ -301,7 +296,7 @@ EndpointDetail 不读取：完整 contract 的其他 endpoints、无关 schemas�
 | 权限子集解析 | `page_design_references` 会复制页面 role ids；`_operation_visibility` 直接使用这些 ids，没有把目标操作解析到 `permission_model.operation_permissions` | 从目标 page 的 `references.permissions`/`page_access.allowed_roles` 与 `operation_permissions` 确定性计算 `operation_visibility`；原始 role ids 和计算结果都不需要进入 LLM 输入 |
 | Schema 闭包 | `extract_endpoint_detail_context` 会读取直接 request/response schema，同时把包含全部 schemas 的目标 Contract 放入 endpoint context；Page context 只过滤 endpoints，仍保留目标 Contract 的全部 schemas；当前没有生成递归最小闭包 | 从目标 request/response schema 开始递归解析同 Contract 内 `$ref`，只把闭包写入 `llm_input.endpoints[].schemas`；ref 不可解析时在模型调用前失败 |
 | Workspace Facts | 当前 `workspace_inspector` 能确定性识别文件、React 组件、API client、后端路由等，Code Graph 能查询符号和引用，受控文件工具能读取源码；但这些能力在详设前没有按目标串联，现有 Page/Endpoint 模型输入不含源码事实 | `prepare_detail_context` 复用现有 Workspace Inspector、Code Graph 和受控文件读取，按目标定位候选文件、读取必要源码片段并生成裁剪后的 `workspace_facts`；不增加事实提取 LLM |
-| Database 候选表 | `prepare_endpoint_database_context` 使用 `table_name=None` 读取数据库摘要；`database_schema_summary` 最多保留 12 表、每表 18 列，当前没有确定性候选表选择和逐表完整 facts | 使用 Contract resource/schema fields、`data_sources[].entities` 和 workspace entity/repository/migration facts 生成候选表名；调用现有 MySQL 工具按 `table_name` 定向读取，并新增不截断列的 targeted facts 投影，写入 Database Facts |
+| EntityDesign 摘要 | EndpointDetail 的数据实现依赖 Contract 绑定实体的已确认设计 | 按 `entity_ids` 分别读取全部已确认 EntityDesign 的有界摘要；任一实体未确认即阻止接口详设，不直接调用数据库工具，也不把来源绑定写入 EndpointDetail |
 | 消费页面反查 | `extract_endpoint_detail_context` 已遍历 `frontend_pages/**/references/endpoint_dependencies`，生成 `dependent_pages`，包含 pageId/name/path/usage/trigger | 只在系统内建立 Endpoint→Page 依赖索引；它不改变 Endpoint 实现决策，不进入 LLM 输入，也不新增 `consumer_page_ids` 字段 |
 | 数据库连接隔离 | `prepare_endpoint_database_context` 已通过 `get_mysql_table_info_for_workspace` 使用工作区连接，传给模型的是结构摘要而不是连接凭据 | 保留现有工具边界；连接配置属于工具权限，不进入 `DetailDesignContext`、LLM、artifact、日志或 AG-UI |
 | 上一版 Decision 加载 | revise/regenerate 当前只把 feedback 传入 Prompt；Page/Endpoint Prompt 没有读取目标上一版 Decision 正文 | 通过当前 run/interaction 关联的草稿读取 PageDecision/EndpointDecision，写入 `llm_input.previous_decisions`，再与 feedback 一起调用模型；不新增 `previous_draft_ref` 输入字段 |
@@ -313,7 +308,7 @@ prepare_detail_context(target, revise?)
 → 读取并校验 ProjectPlan/API Contract/UI refs
 → 函数内解析 permission subset、schema closure、consumer pages
 → 确定性定位并读取目标相关源码，生成 workspace facts
-→ database endpoint 选择候选表并获取完整 Database Facts
+→ 按 entity_ids 读取全部已确认 EntityDesign 摘要
 → revise 时加载 previous decision
 → 返回 {page_input?, endpoint_inputs[]}
 ~~~
@@ -380,31 +375,6 @@ Endpoint LLM 输出：
     "mode": "<reuse|extend|create>",
     "reuse_targets": [], // Controller/Service/Repository/DTO/Entity 等，必须来自 workspace_facts
     "planned_changes": []
-  },
-  "data_origin": {
-    "effective_source": {
-      "kind": "<mysql_existing|mysql_new_table|frontend_mock>",
-      "database": "<database|null>",
-      "tables": [],
-      "module_path": "<workspace-relative path|null>"
-    },
-    "field_mappings": [
-      {
-        "target_field": "<request/response schema field>",
-        "source": "<table column|static field|existing code field>",
-        "rule": "<mapping or deterministic transform>"
-      }
-    ],
-    "database_operations": [
-      {
-        "operation": "<create_table|add_column|alter_column_type|alter_column_nullable|alter_column_default>",
-        "table": "<table name or create-table definition>",
-        "column": "<column|null>",
-        "from": "<current definition|null>",
-        "to": "<target definition>",
-        "reason": "<contract-based reason>"
-      }
-    ]
   },
   "operation_semantics": {
     "operation_kind": "<read|create|update|delete|action>",
@@ -473,33 +443,26 @@ Endpoint 检索范围：同 contract/resource 的 Controller/Service/Repository�
 
 只把会改变 reuse/extend/create、binding 或数据来源决策的事实发送给对应 worker。
 
-## 6. Database Facts
+## 6. EntityDesign Facts
 
 适用条件：
 
 ~~~text
-/api_contracts/*/data_source_id
-→ /data_sources/*/id
-AND data_sources[*].type == database/mysql/db
+/api_contracts/*/entity_ids
+→ /entities/*/id
+→ /entity_detail_plans/*/entity_id（status == confirmed）
 ~~~
 
 推荐策略：
 
 ~~~text
-读取数据库和表名索引
-→ 根据 contract.resource、data_source.entities、schema fields 和源码确定候选表
-→ 对候选表逐表读取完整结构
-→ 读取与候选表直接关联的外键表
-→ 形成当前 run 的 database facts 切片
+逐个解析 Contract.entity_ids
+→ 校验每个实体都有已确认 EntityDesign
+→ 投射实体字段、数据源类型和来源绑定的有界只读摘要
+→ 作为接口行为决策上下文，不复制到 EndpointDetail
 ~~~
 
-不是把整个数据库完整注入模型；但候选表内容不得截断。
-
-模型输入只保留 `candidate_tables[].name/columns/primary_key/indexes/foreign_keys/unique_constraints`。数据库是否存在、候选选择证据和工具错误属于预处理/checkpoint；连接配置和密码始终只允许数据库工具读取。
-
-目标表不存在时，facts 必须可靠证明数据库存在状态、完整表名索引中无该表、相似表是否存在；不能因摘要截断而错误生成 `mysql_new_table` 或 `add_column`。
-
-不为 Database Facts 新增长期 artifact 或 schema；确认时重新执行 database facts 可用性和引用校验。
+接口详设不直接读取数据库、外部 API 文档或静态数据正文；这些来源事实和数据库操作由 EntityDesign 独立确认并持久化。多实体属于不同数据源时，摘要按实体分别保留，不能合并为 Contract 级数据源。
 
 ## 7. Draft、确认和可编辑边界
 
@@ -528,16 +491,6 @@ AND data_sources[*].type == database/mysql/db
         "reuse_targets": [],
         "planned_changes": []
       },
-      "data_origin": {
-        "effective_source": {
-          "kind": "<mysql_existing|mysql_new_table|frontend_mock>",
-          "database": "<database name>", // 仅 mysql 来源存在
-          "tables": [], // 仅 mysql 来源存在
-          "module_path": "<workspace-relative path>" // 仅 frontend_mock 存在
-        },
-        "field_mappings": [],
-        "database_operations": [] // 仅确有数据库结构差异时存在
-      },
       "operation_semantics": {
         "operation_kind": "<read|create|update|delete|action>",
         "target_cardinality": "<exactly_one|zero_or_one|many|not_applicable>",
@@ -563,7 +516,7 @@ AND data_sources[*].type == database/mysql/db
 }
 ~~~
 
-字段来源只有四类：target identity 来自上游正式事实；实现策略、binding、interaction、mapping、operation semantics 和 acceptance criteria 来自通过校验的 Decision；operation visibility 等可重算投影由任务准备阶段确定性生成且不持久化；`schema_version` 和 `draft_sha256` 由系统生成。PageDetail 不保存 EndpointDetail refs/hash，Batch 按 ProjectPlan dependencies 校验关联详情齐全。
+字段来源只有三类：target identity 来自上游正式事实；实现策略、binding、interaction、operation semantics 和 acceptance criteria 来自通过校验的 Decision；operation visibility 等可重算投影由任务准备阶段确定性生成且不持久化；`schema_version` 和 `draft_sha256` 由系统生成。EntityDesign 摘要仅作为只读输入，不写入 EndpointDetail。PageDetail 不保存 EndpointDetail refs/hash，Batch 按 ProjectPlan dependencies 校验关联详情齐全。
 
 ### 7.2 版本与一致性策略
 

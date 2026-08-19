@@ -34,13 +34,20 @@ def _sync_prompt(
         "must never be emitted.\n\n"
         if artifact_name == "RequirementSpec"
         else (
-            "For ProjectPlan and TechnicalPlan, keep entities source-free and bind API contracts "
-            "through entity_ids only. Do not emit a top-level data_sources field or assign an entity "
-            "data_source; those decisions belong to the separately confirmed entity design. Preserve "
-            "entity ids and "
-            "contract references, and never emit mock.\n\n"
+            "For TechnicalPlan, preserve the complete top-level entities array with RequirementSpec "
+            "ids/names/descriptions and the confirmed snake_case field definitions. API contracts bind "
+            "one or more entities through entity_ids only. Never emit data_source_id, a top-level "
+            "data_sources field, or entity data_source; source selection belongs to EntityDesign. "
+            "module_boundaries describes code/service ownership and must not define entities or fields.\n\n"
         )
-        if artifact_name in {"ProjectPlan", "TechnicalPlan"}
+        if artifact_name == "TechnicalPlan"
+        else (
+            "For ProjectPlan, keep entities source-free and bind API contracts through entity_ids only. "
+            "Do not emit a top-level data_sources field or assign entity data_source; those decisions "
+            "belong to the separately confirmed entity design. Preserve entity ids and contract "
+            "references, and never emit mock.\n\n"
+        )
+        if artifact_name == "ProjectPlan"
         else ""
     )
     visible_document = (
@@ -152,7 +159,15 @@ def sync_project_plan_from_markdown(
     normalized = (
         create_technical_plan(
             requirement_spec,
-            agent_plan=synced,
+            agent_plan={
+                key: synced.get(key)
+                for key in (
+                    "architecture",
+                    "entities",
+                    "api_contracts",
+                    "pages",
+                )
+            },
             datasource_type=datasource_type,
         )
         if is_technical_plan

@@ -145,6 +145,7 @@ export default function WorkflowRunCard({
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
     : undefined
+  const technicalPlanGenerationError = clarification?.mode === 'technical_plan_generation_error'
   // UI 确认阶段：clarification.mode 或 summary.phase 判定。换一换/选模板期间流式快照
   // 可能短暂丢失 clarification.mode，用 phase=ui_confirmation 兜底，避免卡片闪烁切换。
   const uiDesignConfirmation =
@@ -263,7 +264,7 @@ export default function WorkflowRunCard({
           ))}
         </div>
       )}
-      {(clarificationQuestions.length > 0 || detailReview) && (
+      {(clarificationQuestions.length > 0 || detailReview || technicalPlanGenerationError) && (
         <div className={cx('workflow-clarification')}>
           {!entityDesignReview && !entityDesignGate && (
             <div className={cx('workflow-clarification-header')}>
@@ -289,7 +290,31 @@ export default function WorkflowRunCard({
               type="info"
             />
           )}
-          {unitTestConfirmation && requiresConfirmation ? (
+          {technicalPlanGenerationError && requiresConfirmation ? (
+            <Alert
+              action={
+                <Button
+                  disabled={disabled || interactionAvailability !== 'active'}
+                  onClick={() =>
+                    onSubmitClarification?.(workflow, {
+                      planning_recovery: '请重新生成技术规划，并修复全部结构和契约错误。'
+                    })
+                  }
+                  type="primary"
+                >
+                  重新生成
+                </Button>
+              }
+              description={
+                Array.isArray(clarification?.errors)
+                  ? clarification.errors.map(String).filter(Boolean).slice(0, 5).join('；')
+                  : undefined
+              }
+              message={clarification?.message || '技术规划自动修复后仍未通过校验。'}
+              showIcon
+              type="error"
+            />
+          ) : unitTestConfirmation && requiresConfirmation ? (
             <UnitTestConfirmationPanel
               disabled={disabled || interactionAvailability !== 'active'}
               message={clarification?.message}

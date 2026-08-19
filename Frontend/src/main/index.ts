@@ -102,7 +102,7 @@ function normalizeWorkbenchNodeLabel(value: unknown, fallback: string): string {
 type WorkbenchApiContract = {
   id: string
   label: string
-  dataSourceIds: string[]
+  entityIds: string[]
   endpoints: Array<{
     apiContractId: string
     id: string
@@ -310,7 +310,7 @@ function buildWorkbenchPageTree(value: unknown): WorkbenchPageTreeNode[] {
   return nodes
 }
 
-/** 按 base_path 合并 ProjectPlan contracts，同一目录下展示所有具体 API。 */
+/** 按 base_path 合并 TechnicalPlan contracts，并保留其关联实体列表。 */
 function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return []
   const contracts = recordItems((value as Record<string, unknown>).api_contracts)
@@ -318,18 +318,24 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
   contracts.forEach((contract, contractIndex) => {
     const record = contract
     const contractId = String(record.id || `api-contract-${contractIndex + 1}`).trim()
-    const dataSourceId = String(record.data_source_id || contractId).trim()
+    const entityIds = Array.from(
+      new Set(
+        (Array.isArray(record.entity_ids) ? record.entity_ids : [])
+          .map((entityId) => String(entityId || '').trim())
+          .filter(Boolean)
+      )
+    )
     const basePath = normalizeApiPath(record.base_path, `/${contractId}`)
     const endpoints = recordItems(record.endpoints)
     const group = groupedContracts.get(basePath) || {
       id: basePath,
       label: basePath,
-      dataSourceIds: [],
+      entityIds: [],
       endpoints: []
     }
-    if (dataSourceId && !group.dataSourceIds.includes(dataSourceId)) {
-      group.dataSourceIds.push(dataSourceId)
-    }
+    entityIds.forEach((entityId) => {
+      if (!group.entityIds.includes(entityId)) group.entityIds.push(entityId)
+    })
     group.endpoints.push(
       ...endpoints.flatMap((endpoint, endpointIndex) => {
         const endpointRecord = endpoint
@@ -364,7 +370,7 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
   return [...groupedContracts.values()]
 }
 
-/** 从需求文档的 entities 生成工作台实体大纲选项。 */
+/** 从 TechnicalPlan.entities 生成工作台实体大纲选项。 */
 function projectPlanEntities(value: unknown): WorkbenchEntityOption[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return []
   return recordItems((value as Record<string, unknown>).entities).map((record, index) => {
@@ -605,7 +611,6 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   let pageTree: WorkbenchPageTreeNode[] = []
   let apiContracts: WorkbenchApiContract[] = []
   let entities: WorkbenchEntityOption[] = []
-  let requirementSpec: Record<string, unknown> | undefined
 
   for (const artifact of artifacts) {
     const artifactPath = path.join(artifactRoot, artifact.relativePath)
@@ -624,8 +629,6 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
           value.confirmation_status !== 'confirmed'
         ) {
           invalid.push(artifact.relativePath)
-        } else if (artifact.relativePath === 'specs/requirement-spec.json') {
-          requirementSpec = value as Record<string, unknown>
         }
       }
     } catch (error: unknown) {
@@ -682,7 +685,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     pageTree = projectPlanPageTree(workbenchPlan)
     apiContracts = projectPlanApiContracts(workbenchPlan)
   }
-  entities = projectPlanEntities(requirementSpec)
+  entities = projectPlanEntities(technicalPlan)
 
   const buildTaskPlan = await readBuildTaskPlan(workspaceRoot)
   const pages = mergeWorkbenchPageStatus(

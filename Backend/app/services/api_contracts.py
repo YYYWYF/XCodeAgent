@@ -30,7 +30,7 @@ def _string_items(value: Any) -> list[str]:
 
 
 def normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """规范化紧凑业务契约，并把契约内 Schema 引用统一为裸名称。"""
+    """规范化当前紧凑业务契约，只保留实体绑定和接口定义字段。"""
 
     normalized: list[dict[str, Any]] = []
     for item in items:
@@ -48,7 +48,6 @@ def normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]
         ]
         normalized.append(
             {
-                **item,
                 "id": contract_id,
                 "entity_ids": _string_items(item.get("entity_ids")),
                 "resource": str(item.get("resource") or contract_id),
@@ -100,7 +99,7 @@ def endpoint_dependencies_for_contracts(
 
 def normalize_page_api_dependencies(
     contracts: list[dict[str, Any]],
-    data_source_ids: list[str],
+    allowed_entity_ids: list[str],
     api_dependencies: Any,
     *,
     page_path: str = "",
@@ -148,7 +147,7 @@ def normalize_page_api_dependencies(
         )
         for dependency in endpoint_dependencies_for_contracts(
             contracts,
-            data_source_ids,
+            allowed_entity_ids,
             page_path=page_path,
             page_name=page_name,
         )
@@ -284,19 +283,27 @@ def contract_endpoints_for_dependencies(
     ]
 
 
-def schema_refs_for_data_source(
+def schema_refs_for_entities(
     contracts: list[dict[str, Any]],
-    data_source_id: str,
+    entity_ids: list[str],
 ) -> list[str]:
+    """按实体交集收集契约 Schema 引用，不从契约读取数据源绑定。"""
+
+    target_entity_ids = {str(entity_id) for entity_id in entity_ids if str(entity_id)}
     refs: list[str] = []
     for contract in contracts:
-        if contract.get("data_source_id") != data_source_id:
+        contract_entity_ids = {
+            str(entity_id)
+            for entity_id in contract.get("entity_ids", [])
+            if str(entity_id)
+        }
+        if not target_entity_ids.intersection(contract_entity_ids):
             continue
         refs.extend(
             f"{contract['id']}#/schemas/{schema_id}"
             for schema_id in contract.get("schemas", {})
         )
-    return refs
+    return list(dict.fromkeys(refs))
 
 
 def response_field_paths(

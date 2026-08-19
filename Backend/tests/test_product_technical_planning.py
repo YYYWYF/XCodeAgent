@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import unittest
+from copy import deepcopy
 
 from app.agents.main.product_planner import (
     _product_plan_json_example,
     _product_planning_prompt,
 )
+from app.agents.main.planner import _technical_planning_prompt
 from app.agents.main.requirements_analyzer import _requirements_prompt
 from app.services.page_implementation_contract import (
     attach_page_implementation_contracts,
@@ -149,6 +151,29 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("do not include data_sources", _requirements_prompt("创建库存系统"))
         self.assertIn("Do not return assumptions, product risks", _requirements_prompt("创建库存系统"))
 
+    def test_technical_prompt_uses_current_four_part_contract(self) -> None:
+        """TechnicalPlan 提示词必须使用三段架构、实体引用和新分页字段。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(requirement_spec)
+        prompt = _technical_planning_prompt(
+            {**requirement_spec, "confirmed_product_plan": product_plan},
+            None,
+        )
+
+        self.assertIn("architecture, entities, api_contracts, and pages", prompt)
+        self.assertIn("entity_field_ref", prompt)
+        self.assertIn("computed, aggregated, and transport properties may omit the mapping", prompt)
+        self.assertIn("has exactly four same-level properties", prompt)
+        self.assertIn("total, pageSize, current, and list", prompt)
+        self.assertIn("Product goal context", prompt)
+        self.assertIn("Role context", prompt)
+        self.assertIn("Business-flow context", prompt)
+        self.assertIn("Page context", prompt)
+        self.assertIn("Business-action context", prompt)
+        self.assertNotIn("engineering_design", prompt)
+        self.assertNotIn('"resource"', prompt)
+
     def test_product_model_example_contains_every_page_and_no_duplicate_tree(self) -> None:
         """模型完整 JSON 示例必须展开全部页面，并且只保留 pages。"""
 
@@ -223,7 +248,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             {
                 "artifact_type",
                 "architecture",
-                "engineering_design",
+                "entities",
                 "api_contracts",
                 "pages",
                 "product_plan_sha256",
@@ -239,19 +264,14 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertNotIn("risks", attached)
         self.assertEqual(
             set(attached["architecture"]),
-            {"frontend", "backend", "data", "backend_tech_stack", "data_contract"},
-        )
-        self.assertEqual(
-            set(attached["engineering_design"]),
-            {"module_boundaries", "data_models"},
+            {"frontend", "backend", "data"},
         )
         self.assertTrue(
             all(
                 set(contract)
                 == {
                     "id",
-                    "data_source_id",
-                    "resource",
+                    "entity_ids",
                     "base_path",
                     "authentication",
                     "schemas",
@@ -289,6 +309,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             )
         )
         markdown = render_project_plan_markdown(attached)
+        self.assertIn("业务实体", markdown)
+        self.assertIn(f"`{attached['entities'][0]['id']}`", markdown)
         self.assertNotIn("需求概述", markdown)
         self.assertNotIn("业务流程", markdown)
         self.assertNotIn("风险与待细化点", markdown)
@@ -342,6 +364,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         technical_plan = {
             "artifact_type": "technical-plan",
             "confirmation_status": "pending_user_confirmation",
+            "entities": deepcopy(requirement_spec["entities"]),
             "pages": [
                 {
                     **first_page,
@@ -361,7 +384,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             "api_contracts": [
                 {
                     "id": "inventory-api",
-                    "data_source_id": "inventory",
+                    "entity_ids": [requirement_spec["entities"][0]["id"]],
                     "endpoints": [
                         {
                             "id": "inventory.list",

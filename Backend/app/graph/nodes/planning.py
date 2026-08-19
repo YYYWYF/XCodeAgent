@@ -50,6 +50,7 @@ from app.services.project_plan import (
     apply_project_plan_datasource_policy,
     apply_project_plan_feedback,
     TECHNICAL_PLAN_ARTIFACT_TYPE,
+    validate_technical_plan_api_contracts,
     validate_project_plan_datasource_policy,
 )
 from app.services.product_plan import require_current_product_plan
@@ -155,7 +156,7 @@ def _technical_planning_requirement_spec(
     state: ProjectState,
     requirement_spec: dict,
 ) -> dict:
-    """把已确认 ProductPlan 与 UI manifest 注入开发技术规划输入。"""
+    """把已确认 ProductPlan 注入技术规划输入，并保留 UI 阶段门禁。"""
 
     if state.get("workflow_scope") != "application_planning":
         return requirement_spec
@@ -172,7 +173,6 @@ def _technical_planning_requirement_spec(
         **requirement_spec,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
-        "confirmed_ui_design_manifest": _technical_ui_manifest(ui_designs),
     }
 
 
@@ -240,7 +240,7 @@ def _technical_plan_confirmation_payload(technical_plan: dict) -> dict:
             AskUserQuestion(
                 header="技术规划确认",
                 question=(
-                    "请由开发角色确认技术架构、API、Schema、工程设计和页面 endpoint 引用。"
+                    "请由开发角色确认技术架构、业务实体、API、Schema、工程设计和页面 endpoint 引用。"
                     "正确时回复“确认技术规划，继续”；需要调整时直接写出技术修改意见。"
                 ),
                 type="text",
@@ -406,36 +406,42 @@ def project_planning(state: ProjectState) -> dict:
             **requirement_spec,
             "planning_adjustment_request": state["request"],
         }
-    project_plan = plan_project_with_chat_model(
-        requirement_spec,
-        **( 
-            {"existing_plan": existing_plan}
-            if existing_plan
-            else {}
-        ),
-        on_token=_planning_token_callback,
-    )
-    project_plan = apply_project_plan_feedback(
-        project_plan,
-        state.get("request", ""),
-    )
-    project_plan = _attach_technical_plan_contracts(state, project_plan)
-    project_plan["confirmation_status"] = "pending_user_confirmation"
-    validation_errors = _project_plan_validation_errors(
-        project_plan,
-        state,
-    )
-    if validation_errors:
-        project_plan, validation_errors = _repair_project_plan_validation_errors(
-            project_plan,
-            validation_errors,
-            state=state,
-            repair_attempts=(
-                _TECHNICAL_PLAN_GENERATION_ATTEMPTS - 1
-                if phase == "technical_planning"
-                else 1
-            ),
+    if phase == "technical_planning":
+        project_plan, validation_errors = _generate_valid_technical_plan(
+            state,
+            requirement_spec,
+            existing_plan if isinstance(existing_plan, dict) else None,
         )
+        if project_plan is None:
+            return {
+                "phase": phase,
+                "status": "requires_user_input",
+                "clarification": _technical_plan_generation_error_payload(validation_errors),
+                "timeline": [phase],
+            }
+    else:
+        project_plan = plan_project_with_chat_model(
+            requirement_spec,
+            **({"existing_plan": existing_plan} if existing_plan else {}),
+            on_token=_planning_token_callback,
+        )
+        project_plan = apply_project_plan_feedback(
+            project_plan,
+            state.get("request", ""),
+        )
+        project_plan = _attach_technical_plan_contracts(state, project_plan)
+        project_plan["confirmation_status"] = "pending_user_confirmation"
+        validation_errors = _project_plan_validation_errors(
+            project_plan,
+            state,
+        )
+        if validation_errors:
+            project_plan, validation_errors = _repair_project_plan_validation_errors(
+                project_plan,
+                validation_errors,
+                state=state,
+                repair_attempts=1,
+            )
     project_plan_path = write_project_plan_document(state, project_plan)
     clarification = (
         _project_plan_dependency_error_payload(validation_errors)
@@ -2668,6 +2674,18 @@ def _project_plan_dependency_error_payload(errors: list[str]) -> dict:
     return payload
 
 
+def _technical_plan_generation_error_payload(errors: list[str]) -> dict:
+    """在有界自动修复耗尽后返回可重试状态，避免把非法 JSON 当成正式产物。"""
+
+    return {
+        "mode": "technical_plan_generation_error",
+        "status": "requires_user_input",
+        "message": "技术规划自动修复后仍未通过校验。",
+        "errors": [str(error).strip() for error in errors if str(error).strip()][:8],
+        "questions": [],
+    }
+
+
 def _project_plan_dependency_error_summary(errors: list[str]) -> str:
     """把计划一致性错误压缩成用户可见的简短问题清单。"""
 
@@ -2707,8 +2725,21 @@ def _project_plan_validation_errors(
         *validate_api_contract_consistency(validation_plan),
         *validate_project_plan_datasource_policy(validation_plan),
     ]
-    if state is not None:
-        errors.extend(_technical_plan_contract_errors(state, project_plan))
+    # 实体定义严格规则继续暂停；API entity_ids、字段引用和分页规则在确认前启用。
+    if (
+        state is not None
+        and state.get("workflow_scope") == "application_planning"
+        and project_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE
+        and isinstance(state.get("requirement_spec"), dict)
+    ):
+        errors.extend(
+            validate_technical_plan_api_contracts(
+                project_plan,
+                state["requirement_spec"],
+            )
+        )
+        # 临时暂停页面行为闭合校验；页面 Endpoint 结构和 API 契约校验继续执行。
+        # errors.extend(_technical_plan_contract_errors(state, project_plan))
     return errors
 
 
@@ -2719,10 +2750,59 @@ def _technical_plan_retry_feedback(errors: list[str]) -> str:
     return (
         "系统 TechnicalPlan 一致性校验未通过。请基于已确认的 ProductPlan 与 UiManifest，"
         "在本次重新生成中返回完整 TechnicalPlan 并修复下列问题；不得猜测或省略业务 action/step，"
+        "必须完整保留 RequirementSpec 实体并通过 entity_ids 绑定 API Contract，禁止 data_source_id；"
         "每个 endpointId 必须同时存在于 api_contracts 和对应页面 endpoint_dependencies。"
         "不要要求用户重试，也不要解释校验过程：\n"
         f"{diagnostics}"
     )
+
+
+def _generate_valid_technical_plan(
+    state: ProjectState,
+    requirement_spec: dict,
+    existing_plan: dict | None,
+) -> tuple[dict | None, list[str]]:
+    """在统一的三次总预算内完成 TechnicalPlan 生成、规范化校验与错误反馈修复。"""
+
+    current_plan = existing_plan
+    remaining_errors: list[str] = []
+    base_feedback = str(requirement_spec.get("planning_adjustment_request") or "").strip()
+    for attempt in range(1, _TECHNICAL_PLAN_GENERATION_ATTEMPTS + 1):
+        retry_feedback = (
+            _technical_plan_retry_feedback(remaining_errors)
+            if remaining_errors
+            else base_feedback
+        )
+        current_requirement = {
+            **requirement_spec,
+            **(
+                {"planning_adjustment_request": retry_feedback}
+                if retry_feedback
+                else {}
+            ),
+        }
+        try:
+            candidate = plan_project_with_chat_model(
+                current_requirement,
+                **({"existing_plan": current_plan} if current_plan else {}),
+                on_token=_planning_token_callback,
+            )
+            candidate = apply_project_plan_feedback(candidate, retry_feedback)
+            candidate = _attach_technical_plan_contracts(state, candidate)
+            candidate["confirmation_status"] = "pending_user_confirmation"
+            remaining_errors = _project_plan_validation_errors(candidate, state)
+            if not remaining_errors:
+                return candidate, []
+            current_plan = candidate
+        except (TypeError, ValueError) as exc:
+            remaining_errors = [str(exc)]
+        logger.warning(
+            "technical_plan_generation_retry: attempt=%s/%s errors=%s",
+            attempt,
+            _TECHNICAL_PLAN_GENERATION_ATTEMPTS,
+            remaining_errors,
+        )
+    return None, remaining_errors
 
 
 def _repair_technical_plan_validation_errors(

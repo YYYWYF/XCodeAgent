@@ -876,31 +876,43 @@ def _technical_page_references_markdown(page: dict[str, Any]) -> str:
     )
 
 
+def _technical_entity_markdown(entity: dict[str, Any]) -> str:
+    """把 TechnicalPlan 权威实体字段渲染为开发可审核的 Markdown。"""
+
+    fields = _dict_items(entity.get("fields"))
+    field_rows = [
+        "| 字段名 | 展示名 | 类型 | 必填 | 说明 |",
+        "| --- | --- | --- | --- | --- |",
+        *[
+            f"| `{field.get('name', '')}` | {field.get('label', '')} | "
+            f"{field.get('type', 'text')} | {'是' if field.get('required') else '否'} | "
+            f"{field.get('description', '') or '-'} |"
+            for field in fields
+        ],
+    ]
+    return "\n".join(
+        [
+            f"### {entity.get('name', entity.get('id', '未命名实体'))} "
+            f"(`{entity.get('id', 'unknown')}`)",
+            "",
+            str(entity.get("description") or "暂无实体描述。"),
+            "",
+            *(field_rows if fields else ["- 暂无字段"]),
+        ]
+    )
+
+
 def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
     """渲染只供开发审核且不重复产品事实的 TechnicalPlan。"""
 
     architecture = plan.get("architecture") if isinstance(plan.get("architecture"), dict) else {}
-    backend_stack = (
-        architecture.get("backend_tech_stack")
-        if isinstance(architecture.get("backend_tech_stack"), dict)
-        else {}
-    )
-    stack_text = "；".join(f"{key}={value}" for key, value in backend_stack.items()) or "待补充"
-    engineering_design = (
-        plan.get("engineering_design")
-        if isinstance(plan.get("engineering_design"), dict)
-        else {}
-    )
-    engineering_sections = "\n\n".join(
-        f"### {label}\n\n{_bullet_items(engineering_design.get(key, [])) or '- 无'}"
-        for key, label in (
-            ("module_boundaries", "模块边界与所有权"),
-            ("data_models", "数据模型与约束"),
-        )
-    )
     api_contracts = "\n\n".join(
         _api_contract_markdown(contract)
         for contract in _dict_items(plan.get("api_contracts"))
+    )
+    entities = "\n\n".join(
+        _technical_entity_markdown(entity)
+        for entity in _dict_items(plan.get("entities"))
     )
     pages = "\n\n".join(
         _technical_page_references_markdown(page)
@@ -916,12 +928,10 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
 - 前端：{architecture.get('frontend', '待补充')}
 - 后端：{architecture.get('backend', '待补充')}
 - 数据：{architecture.get('data', '待补充')}
-- 技术栈：{stack_text}
-- 数据契约：{architecture.get('data_contract', '待补充')}
 
-## 工程设计
+## 业务实体
 
-{engineering_sections or '- 无'}
+{entities or '- 无'}
 
 ## API 契约
 

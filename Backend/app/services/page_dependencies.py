@@ -152,20 +152,6 @@ def page_design_references(
     }
 
 
-def page_data_source_ids(page: dict[str, Any], api_contracts: list[dict[str, Any]]) -> list[str]:
-    """根据页面 endpoint 引用反查数据源，避免页面索引重复保存 data_dependencies。"""
-
-    endpoint_index = _endpoint_index(api_contracts)
-    page_references = page.get("references") if isinstance(page.get("references"), dict) else {}
-    endpoint_dependencies = dict_items(
-        page_references.get("endpoint_dependencies") or page.get("endpoint_dependencies")
-    )
-    return _data_source_ids_for_endpoints(
-        endpoint_dependencies,
-        endpoint_index=endpoint_index,
-    )
-
-
 def _references_value(page: dict[str, Any], key: str) -> Any:
     """优先读取 references；规划生成阶段尚未归一化时读取同源根字段。"""
 
@@ -187,7 +173,6 @@ def _endpoint_index(api_contracts: list[dict[str, Any]]) -> dict[str, dict[str, 
     return {
         str(endpoint.get("id")): {
             "api_contract_id": str(contract.get("id") or ""),
-            "data_source_id": str(contract.get("data_source_id") or ""),
             "endpoint": endpoint,
         }
         for contract in api_contracts
@@ -251,24 +236,6 @@ def _normalize_navigation_targets(
             }
         )
     return result
-
-
-def _data_source_ids_for_endpoints(
-    endpoint_dependencies: list[dict[str, Any]],
-    *,
-    endpoint_index: dict[str, dict[str, Any]],
-) -> list[str]:
-    """根据 endpoint 反查数据源，避免页面自行维护第二份数据源依赖。"""
-
-    return list(
-        dict.fromkeys(
-            endpoint_index[str(item["endpoint_id"])]["data_source_id"]
-            for item in endpoint_dependencies
-            if endpoint_index.get(str(item.get("endpoint_id") or ""), {}).get(
-                "data_source_id"
-            )
-        )
-    )
 
 
 def _validate_unique_values(

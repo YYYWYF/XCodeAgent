@@ -376,27 +376,30 @@ flowchart TD
     ],
     "data_models": [
       {
-        "modelId": "order",
-        "name": "Order",
-        "fields": [
-          "id",
-          "order_number",
-          "status"
-        ],
-        "storage": "orders"
+        "entityId": "Order",
+        "note": "非权威工程说明；字段以顶层 entities 为准"
       }
     ]
   },
+  "entities": [
+    {
+      "id": "Order",
+      "name": "订单",
+      "description": "订单业务实体",
+      "fields": [
+        {"name": "order_number", "label": "订单编号", "description": "订单唯一业务编号", "type": "text", "required": true},
+        {"name": "status", "label": "状态", "description": "订单当前状态", "type": "enum", "required": true, "enum_values": ["pending", "completed"]}
+      ]
+    }
+  ],
   "api_contracts": [
     {
-      "endpointId": "orders.list",
-      "purpose": "按订单号查询订单列表",
-      "data_dependencies": ["order"]
-    },
-    {
-      "endpointId": "orders.get",
-      "purpose": "读取单个订单的状态和详情",
-      "data_dependencies": ["order"]
+      "id": "orders_api",
+      "entity_ids": ["Order"],
+      "resource": "Order",
+      "base_path": "/api/orders",
+      "schemas": {},
+      "endpoints": []
     }
   ],
   "pages": [
@@ -452,10 +455,11 @@ flowchart TD
 备注：
 
 - `artifact_type` 标识技术规划类型；`confirmation_status` 控制是否可以进入模板生成和后续开发。
-- `source_refs` 只保存已确认 ProductPlan 的版本；TechnicalPlan 不读取 UI 设计或 RequirementSpec 作为直接输入。
+- `source_refs` 保存已确认 ProductPlan 的版本；TechnicalPlan 同时读取 RequirementSpec 的实体骨架以稳定保留实体身份、名称、描述和顺序，不从 UI 设计推导实体。
 - 只补充产品落地所需的架构、数据、接口、权限和工程边界。
-- `architecture` 说明整体技术形态和主要技术栈；`engineering_design.module_boundaries` 划分代码模块及职责；`data_models` 定义需要持久化或传输的数据结构。
-- `api_contracts` 只定义接口 ID、职责和数据依赖，不直接绑定角色权限。
+- `architecture` 说明整体技术形态和主要技术栈；`engineering_design.module_boundaries` 只划分代码模块及职责，不得定义实体；`data_models` 是非权威工程说明，不得覆盖顶层 `entities`。
+- `entities` 沿用 RequirementSpec 的实体身份并补齐规范字段，是 API Contract 和 EntityDesign 的唯一字段事实源。
+- `api_contracts` 通过非空 `entity_ids` 绑定一个或多个实体，禁止 `data_source_id`，也不直接绑定角色权限。
 - `pages.references.endpoint_dependencies` 说明页面依赖哪些接口；`action_implementations` 说明 ProductPlan 的动作如何落到具体接口。
 - `information_implementations` 说明 ProductPlan 的信息项如何映射到接口返回值和数据模型字段，例如 `order-status` 对应 `orders.get` 的 `status`。
 - 角色权限以 ProductPlan 的 `actions.allowed_role_ids` 为准；TechnicalPlan 只说明权限如何在工程中落地，不在 API Contract 中重复定义。

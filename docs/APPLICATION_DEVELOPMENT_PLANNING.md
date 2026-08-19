@@ -2,9 +2,9 @@
 
 ## Scope
 
-Workbench 优先读取 `.xcodeagent/plans/technical-plan.json`，并以 ProductPlan 的 `pages` 作为页面事实，再按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲投射 `api_contracts`，实体大纲投射 TechnicalPlan/ProjectPlan 的 `entities`。页面开发就绪状态来自已确认的页面 references，不再检查 `.xcodeagent/plans/pages/`，也不再用 PageDetail 蒙层锁住页面对话。工作台检查产物时仍返回页面、API 与实体目录，实体目录包含字段摘要和独立设计状态。
+Workbench 读取 `.xcodeagent/plans/technical-plan.json`，并以 ProductPlan 的 `pages` 作为页面事实，再按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲投射 `api_contracts`，实体大纲只投射 TechnicalPlan 顶层 `entities`。页面开发就绪状态来自已确认的页面 references，不再检查 `.xcodeagent/plans/pages/`，也不再用 PageDetail 蒙层锁住页面对话。工作台检查产物时仍返回页面、API 与实体目录，实体目录包含字段摘要和独立设计状态。
 
-选择页面后，主 `/workflow/run` 从 ProductPlan、UiManifest 和 TechnicalPlan references 按需编译对应 `PageImplementationContract`：若 `requiredEndpointIds` 为空，直接进入工作区检查与任务规划；若存在接口依赖，只为缺失或失效的 EndpointDetail 生成批量开发确认。选择接口提交 `detailTargetType=endpoint`、`selectedApiContractId` 和 `selectedEndpointId`；选择实体提交 `detailTargetType=entity` 和 `selectedEntityId`。实体设计继续负责字段、数据源类型、来源绑定、业务规则与数据库表操作，确认后独立写入 `.xcodeagent/plans/entities/entity--<entityId>.json/.md`；接口设计只读引用绑定实体的已确认设计，接口或页面进入开发前必须通过实体确认门禁。
+选择页面后，主 `/workflow/run` 从 ProductPlan、UiManifest 和 TechnicalPlan references 按需编译对应 `PageImplementationContract`：若 `requiredEndpointIds` 为空，直接进入工作区检查与任务规划；若存在接口依赖，只为缺失或失效的 EndpointDetail 生成批量开发确认。选择接口提交 `detailTargetType=endpoint`、`selectedApiContractId` 和 `selectedEndpointId`；选择实体提交 `detailTargetType=entity` 和 `selectedEntityId`。TechnicalPlan 已确认实体字段；实体设计只负责数据源类型、来源绑定、业务规则与数据库表操作，确认后独立写入 `.xcodeagent/plans/entities/entity--<entityId>.json/.md`；接口设计通过 `entity_ids` 只读引用绑定实体的已确认设计，接口或页面进入开发前必须通过实体确认门禁。
 
 页面视觉、组件、交互入口和状态呈现以已确认 React UI 稿为权威；若 UI 阶段被跳过，则依据 ProductPlan、TechnicalPlan 和模板技能实现，不再生成新的 `plans/pages/page--<pageId>.*`。EndpointDetail 独立保存接口用途、处理逻辑及与已确认实体设计的绑定，页面任务上下文由 TechnicalPlan 切片、PageImplementationContract、React UI 路径、实体设计摘要及相关 EndpointDetail 共同组成。
 

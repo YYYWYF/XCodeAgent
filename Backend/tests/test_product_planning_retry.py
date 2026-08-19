@@ -13,11 +13,29 @@ from app.graph.nodes.product_planning import product_planning
 from app.graph.nodes.ui_confirmation import ui_confirmation
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.product_plan import create_product_plan, validate_product_plan
+from app.services.project_plan import create_technical_plan
 from app.services.requirement_spec import create_requirement_spec
 
 
 class ProductPlanningRetryTests(unittest.TestCase):
     """验证 ProductPlan 校验失败由工作流内部修复，而不是交给用户重试。"""
+
+    def _technical_planning_state(self) -> dict:
+        """构造已确认上游产物的最小 TechnicalPlan 测试状态。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(requirement_spec)
+        product_plan["confirmation_status"] = "confirmed"
+        return {
+            "workflow_scope": "application_planning",
+            "requirement_spec": requirement_spec,
+            "product_plan": product_plan,
+            "ui_designs": {
+                "confirmation_status": "confirmed",
+                "pages": [{"pageId": page["pageId"]} for page in product_plan["pages"]],
+            },
+            "request": "",
+        }
 
     @patch("app.graph.nodes.product_planning.write_product_plan_documents")
     @patch("app.graph.nodes.product_planning.plan_product_with_chat_model")
@@ -139,8 +157,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
 
         self.assertEqual(planner_mock.call_count, 3)
 
-    def test_technical_plan_retries_missing_business_action_implementations(self) -> None:
-        """TechnicalPlan 漏业务绑定时应保留上游上下文自动修复并重新编译契约。"""
+    def test_technical_plan_temporarily_skips_business_action_validation(self) -> None:
+        """页面行为校验暂停时，缺少业务动作绑定不触发 TechnicalPlan 重试。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
         target_page = requirement_spec["pages"][0]
@@ -185,7 +203,9 @@ class ProductPlanningRetryTests(unittest.TestCase):
             ],
         }
         invalid_plan = {
-            "artifact_type": "technical-plan",
+            **create_technical_plan(
+                {**requirement_spec, "confirmed_product_plan": product_plan}
+            ),
             "pages": [
                 {
                     "pageId": page["pageId"],
@@ -204,10 +224,13 @@ class ProductPlanningRetryTests(unittest.TestCase):
             "api_contracts": [
                 {
                     "id": "guides-api",
+                    "entity_ids": [requirement_spec["entities"][0]["id"]],
+                    "base_path": "/api/guides",
+                    "authentication": {"required": False, "roles": []},
+                    "schemas": {},
                     "endpoints": [{"id": "guides.search", "method": "GET"}],
                 }
             ],
-            "data_sources": [],
         }
         valid_plan = deepcopy(invalid_plan)
         valid_plan["pages"][0]["references"]["action_implementations"] = [
@@ -252,13 +275,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
         ):
             update = project_planning(state)
 
-        self.assertEqual(planner_mock.call_count, 2)
-        retry_input = planner_mock.call_args_list[1].args[0]
-        self.assertIs(retry_input["confirmed_product_plan"], product_plan)
-        self.assertIn(
-            "guide_list_page-search-guides",
-            retry_input["planning_adjustment_request"],
-        )
+        self.assertEqual(planner_mock.call_count, 1)
         self.assertEqual(update["status"], "requires_user_input")
         self.assertEqual(update["clarification"]["mode"], "technical_plan_confirmation")
         self.assertNotIn("page_implementation_contracts", update["technical_plan"])
@@ -271,7 +288,56 @@ class ProductPlanningRetryTests(unittest.TestCase):
         binding = runtime_plan["page_implementation_contracts"][0][
             "actionBindings"
         ][0]
-        self.assertEqual(binding["endpointId"], "guides.search")
+        self.assertEqual(binding["endpointId"], "")
+
+    def test_technical_plan_retries_raw_validation_error_then_confirms(self) -> None:
+        """首次原始 JSON 校验失败时应在同一生成预算内修复并返回确认载荷。"""
+
+        state = self._technical_planning_state()
+        valid_plan = create_technical_plan(
+            {
+                **state["requirement_spec"],
+                "confirmed_product_plan": state["product_plan"],
+            }
+        )
+        with (
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                side_effect=[ValueError("entities[0].fields[0] 缺少 label"), valid_plan],
+            ) as planner_mock,
+            patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="technical-plan.md",
+            ),
+        ):
+            update = project_planning(state)
+
+        self.assertEqual(planner_mock.call_count, 2)
+        self.assertEqual(update["clarification"]["mode"], "technical_plan_confirmation")
+        self.assertEqual(update["technical_plan"]["artifact_type"], "technical-plan")
+
+    def test_technical_plan_generation_error_is_retryable_after_three_attempts(self) -> None:
+        """连续三次原始 JSON 非法时应停留在技术规划并且不持久化非法产物。"""
+
+        state = self._technical_planning_state()
+        with (
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                side_effect=ValueError("字段必须使用 type，禁止 semantic_type"),
+            ) as planner_mock,
+            patch("app.graph.nodes.planning.write_project_plan_document") as writer_mock,
+        ):
+            update = project_planning(state)
+
+        self.assertEqual(planner_mock.call_count, 3)
+        writer_mock.assert_not_called()
+        self.assertEqual(update["phase"], "technical_planning")
+        self.assertEqual(update["status"], "requires_user_input")
+        self.assertEqual(update["clarification"]["mode"], "technical_plan_generation_error")
+        self.assertEqual(update["clarification"]["questions"], [])
+        self.assertNotIn("project_plan", update)
+        self.assertNotIn("technical_plan", update)
 
     def test_ui_design_can_be_skipped_and_returns_completed(self) -> None:
         """用户明确跳过 UI 设计时应落盘 skipped Manifest 并直接放行技术规划。"""

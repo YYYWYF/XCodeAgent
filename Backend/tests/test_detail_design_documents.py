@@ -12,10 +12,7 @@ from app.services.page_detail_plan import (
     extract_page_detail_context,
 )
 from app.services.detail_review import apply_detail_review_submission, detail_review_payload
-from app.services.page_dependencies import (
-    page_data_source_ids,
-    validate_project_plan_dependencies,
-)
+from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
 from app.workspace.plan_documents import load_project_plan_json, write_project_plan_document

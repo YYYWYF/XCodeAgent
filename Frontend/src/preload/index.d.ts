@@ -75,7 +75,7 @@ declare global {
           apiContracts: Array<{
             id: string
             label: string
-            dataSourceIds?: string[]
+            entityIds?: string[]
             endpoints: Array<{
               apiContractId?: string
               id: string

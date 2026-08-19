@@ -9,7 +9,6 @@ from app.services.api_contracts import (
     normalize_page_api_dependencies,
     normalize_response_bindings,
 )
-from app.services.entity_definitions import plan_data_sources
 from app.services.entity_detail_plan import refresh_entity_detail_table_design
 from app.services.entity_design import (
     entity_design_selection_summary,
@@ -347,10 +346,10 @@ def _repair_page_contract_fields(project_plan: dict[str, Any]) -> None:
     """按页面声明的 Endpoint 依赖重建受契约控制的依赖和响应绑定。"""
 
     contracts = project_plan.get("api_contracts", [])
-    data_source_ids = [
-        str(source.get("id"))
-        for source in plan_data_sources(project_plan)
-        if isinstance(source, dict) and source.get("id")
+    planned_entity_ids = [
+        str(entity.get("id"))
+        for entity in project_plan.get("entities", [])
+        if isinstance(entity, dict) and entity.get("id")
     ]
     for detail in project_plan.get("page_detail_plans", []):
         if not isinstance(detail, dict) or not detail.get("pageId"):
@@ -362,7 +361,7 @@ def _repair_page_contract_fields(project_plan: dict[str, Any]) -> None:
         )
         api_dependencies = normalize_page_api_dependencies(
             contracts if isinstance(contracts, list) else [],
-            data_source_ids if isinstance(data_source_ids, list) else [],
+            planned_entity_ids,
             declared_api_dependencies,
             page_path=str(detail.get("path") or ""),
             page_name=str(

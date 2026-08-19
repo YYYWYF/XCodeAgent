@@ -8,7 +8,7 @@ from typing import Any
 from app.services.api_contract_repair import repair_cross_contract_schema_refs
 from app.services.api_contracts import (
     normalize_api_contracts,
-    schema_refs_for_data_source,
+    schema_refs_for_entities,
 )
 from app.services.data_source_policy import (
     CANONICAL_DATASOURCE_TYPES,
@@ -25,8 +25,10 @@ from app.services.entity_definitions import (
     entity_json_schema,
     entity_table_name,
     normalize_data_source_type,
+    normalize_entity,
     normalize_entities,
     plan_data_sources,
+    validate_entity_definitions,
 )
 from app.services.frontend_page_tree import (
     apply_frontend_page_route_hierarchy,
@@ -137,10 +139,13 @@ def apply_project_plan_datasource_policy(
             else datasource_type_from_artifact(projected, fallback="database")
         )
         policy = _architecture_for_datasource_type(effective_type)
-        for key in ("backend", "data", "backend_tech_stack", "data_contract"):
+        for key in ("backend", "data"):
             architecture[key] = policy[key]
         architecture.setdefault("frontend", policy["frontend"])
-        architecture.pop("testing", None)
+        architecture = {
+            key: architecture.get(key, policy[key])
+            for key in ("frontend", "backend", "data")
+        }
         projected["architecture"] = architecture
         return projected
 
@@ -256,11 +261,6 @@ def _merge_agent_items(
             for item in default_items
             if item.get(identity_key)
         }
-        defaults_by_source = {
-            str(item.get("data_source_id")): item
-            for item in default_items
-            if item.get("data_source_id")
-        }
         merged: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
         for item in agent_items:
@@ -271,7 +271,6 @@ def _merge_agent_items(
             merged.append(
                 _merge_agent_item(
                     defaults_by_id.get(item_id)
-                    or defaults_by_source.get(str(item.get("data_source_id") or ""))
                     or (
                         default_items[0]
                         if key == "api_contracts"
@@ -305,14 +304,8 @@ def _normalize_agent_item_aliases(item: dict[str, Any], key: str) -> dict[str, A
         contract_id = normalized.get("contract_id") or normalized.get("contractId")
         if contract_id:
             normalized["id"] = contract_id
-    if not normalized.get("data_source_id"):
-        data_source_id = normalized.get("dataSourceId") or normalized.get("source_id")
-        if data_source_id:
-            normalized["data_source_id"] = data_source_id
     normalized.pop("contract_id", None)
     normalized.pop("contractId", None)
-    normalized.pop("dataSourceId", None)
-    normalized.pop("source_id", None)
     return normalized
 
 
@@ -774,7 +767,7 @@ def _api_contracts(
     data_sources: list[dict[str, Any]],
     spec: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """按实体生成最小必要数据访问契约，契约绑定实体 id 并携带数据源类型。"""
+    """按实体生成最小必要数据访问契约，契约只绑定实体 id。"""
 
     contracts: list[dict[str, Any]] = []
     for data_source in data_sources:
@@ -797,12 +790,12 @@ def _api_contracts(
                 schemas[f"{entity}ListOutput"] = {
                     "type": "object",
                     "properties": {
-                        "items": {"type": "array", "items": {"$ref": entity}},
                         "total": {"type": "integer"},
-                        "page": {"type": "integer"},
-                        "page_size": {"type": "integer"},
+                        "pageSize": {"type": "integer"},
+                        "current": {"type": "integer"},
+                        "list": {"type": "array", "items": {"$ref": entity}},
                     },
-                    "required": ["items", "total", "page", "page_size"],
+                    "required": ["total", "pageSize", "current", "list"],
                 }
                 endpoints.append({
                     "id": f"{contract_id}.list",
@@ -810,8 +803,8 @@ def _api_contracts(
                     "path": f"/api/{route_base}",
                     "summary": f"查询{entity_name}列表。",
                     "parameters": [
-                        {"name": "page", "in": "query", "required": False, "schema": {"type": "integer", "default": 1}},
-                        {"name": "page_size", "in": "query", "required": False, "schema": {"type": "integer", "default": 20}},
+                        {"name": "current", "in": "query", "required": False, "schema": {"type": "integer", "default": 1}},
+                        {"name": "pageSize", "in": "query", "required": False, "schema": {"type": "integer", "default": 20}},
                     ],
                     "response_schema_ref": f"{entity}ListOutput",
                     "error_codes": ["UNAUTHORIZED"],
@@ -862,7 +855,6 @@ def _api_contracts(
                 {
                     "id": contract_id,
                     "entity_ids": [entity],
-                    "resource": entity,
                     "base_path": f"/api/{route_base}",
                     "authentication": {"required": True, "roles": ["admin", "user"]},
                     "schemas": schemas,
@@ -1137,6 +1129,16 @@ def validate_project_plan_datasource_policy(
         else {}
     )
     architecture_text = _business_text(architecture).lower()
+    if project_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
+        if set(architecture) != {"frontend", "backend", "data"}:
+            errors.append("TechnicalPlan architecture 必须且只能包含 frontend、backend、data。")
+        if not all(isinstance(architecture.get(key), str) and architecture[key].strip() for key in ("frontend", "backend", "data")):
+            errors.append("TechnicalPlan architecture 的 frontend、backend、data 必须是非空字符串。")
+        if "java8" not in architecture_text or "springboot" not in architecture_text:
+            errors.append("TechnicalPlan backend 必须体现 Java8 和 Springboot。")
+        if "mysql8" not in architecture_text or "redis" not in architecture_text:
+            errors.append("TechnicalPlan data 必须体现 MySQL8 和 Redis。")
+        return errors
     source_types = {
         str(source.get("type") or "") for source in sources
     }
@@ -1230,6 +1232,41 @@ def _technical_engineering_design(
         else []
         for key in ("module_boundaries", "data_models")
     }
+
+
+def _technical_entities(
+    spec: dict[str, Any],
+    agent_plan: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """沿用旧 ProjectPlan 语义，把需求实体补全为 TechnicalPlan 权威字段定义。"""
+
+    requirement_entities = normalize_entities(spec.get("entities"))
+    planned_entities = {
+        str(item.get("id") or ""): item
+        for item in _dict_items(_agent_section(agent_plan, "entities"))
+        if str(item.get("id") or "").strip()
+    }
+    result: list[dict[str, Any]] = []
+    for index, requirement_entity in enumerate(requirement_entities):
+        entity_id = str(requirement_entity.get("id") or "")
+        supplement = planned_entities.get(entity_id, {})
+        fields = (
+            supplement.get("fields")
+            if isinstance(supplement.get("fields"), list)
+            and supplement.get("fields")
+            else requirement_entity.get("fields", [])
+        )
+        result.append(
+            normalize_entity(
+                {
+                    **requirement_entity,
+                    "fields": fields,
+                },
+                index,
+                with_types=True,
+            )
+        )
+    return result
 
 
 def _technical_plan_pages(
@@ -1331,8 +1368,7 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
     normalized = _normalize_api_contracts(items)
     contract_keys = (
         "id",
-        "data_source_id",
-        "resource",
+        "entity_ids",
         "base_path",
         "authentication",
         "schemas",
@@ -1368,6 +1404,300 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
+def _attach_technical_entity_field_refs(
+    contracts: list[dict[str, Any]],
+    entities: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """为确定性生成的同名 Schema 字段补充实体字段引用。"""
+
+    fields_by_entity = {
+        str(entity.get("id") or ""): {
+            str(field.get("name") or "")
+            for field in _dict_items(entity.get("fields"))
+            if str(field.get("name") or "").strip()
+        }
+        for entity in entities
+        if str(entity.get("id") or "").strip()
+    }
+
+    def attach(schema: Any, entity_ids: set[str]) -> Any:
+        if not isinstance(schema, dict):
+            return schema
+        updated = deepcopy(schema)
+        properties = updated.get("properties")
+        if isinstance(properties, dict):
+            for name, field_schema in properties.items():
+                if not isinstance(field_schema, dict):
+                    continue
+                if "entity_field_ref" not in field_schema:
+                    candidates = [
+                        entity_id
+                        for entity_id in entity_ids
+                        if str(name) in fields_by_entity.get(entity_id, set())
+                        or (str(name) == "id" and entity_id in fields_by_entity)
+                    ]
+                    if candidates:
+                        updated_schema = dict(field_schema)
+                        updated_schema["entity_field_ref"] = f"{candidates[0]}.{name}"
+                        properties[name] = updated_schema
+                        field_schema = updated_schema
+                properties[name] = attach(field_schema, entity_ids)
+        if isinstance(updated.get("items"), dict):
+            updated["items"] = attach(updated["items"], entity_ids)
+        for key in ("allOf", "anyOf", "oneOf"):
+            if isinstance(updated.get(key), list):
+                updated[key] = [attach(item, entity_ids) for item in updated[key]]
+        return updated
+
+    attached: list[dict[str, Any]] = []
+    for contract in contracts:
+        item = deepcopy(contract)
+        entity_ids = {
+            str(value).strip()
+            for value in item.get("entity_ids", [])
+            if str(value).strip()
+        }
+        if isinstance(item.get("schemas"), dict):
+            item["schemas"] = {
+                schema_id: attach(schema, entity_ids)
+                for schema_id, schema in item["schemas"].items()
+            }
+        attached.append(item)
+    return attached
+
+
+_API_SCHEMA_PAGINATION_FIELDS = {"total", "pageSize", "current", "list"}
+_API_SCHEMA_TRANSPORT_FIELDS = {
+    "code",
+    "count",
+    "data",
+    "detail",
+    "error",
+    "errors",
+    "has_more",
+    "message",
+    "next_cursor",
+    "request_id",
+    "result",
+    "results",
+    "success",
+    "trace_id",
+}
+
+
+def _technical_schema_field_refs(
+    schema: Any,
+    *,
+    contract_id: str,
+    schema_id: str,
+    bound_entity_ids: set[str],
+    entity_fields: dict[str, set[str]],
+    path: str = "",
+) -> list[str]:
+    """校验 API Schema 业务属性到绑定实体字段的显式关联。"""
+
+    if not isinstance(schema, dict):
+        return []
+    errors: list[str] = []
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        for field_name, field_schema in properties.items():
+            name = str(field_name or "").strip()
+            current_path = f"{path}.{name}" if path else name
+            if name in _API_SCHEMA_PAGINATION_FIELDS or name in _API_SCHEMA_TRANSPORT_FIELDS:
+                errors.extend(
+                    _technical_schema_field_refs(
+                        field_schema,
+                        contract_id=contract_id,
+                        schema_id=schema_id,
+                        bound_entity_ids=bound_entity_ids,
+                        entity_fields=entity_fields,
+                        path=current_path,
+                    )
+                )
+                continue
+            reference = field_schema.get("entity_field_ref") if isinstance(field_schema, dict) else None
+            if reference is not None and (not isinstance(reference, str) or "." not in reference):
+                errors.append(
+                    f"TechnicalPlan Schema {contract_id}.{schema_id}.{current_path} 的 entity_field_ref 格式非法。"
+                )
+            elif isinstance(reference, str):
+                reference_entity, reference_field = reference.split(".", 1)
+                if reference_entity not in bound_entity_ids:
+                    errors.append(
+                        f"TechnicalPlan Schema {contract_id}.{schema_id}.{current_path} 引用了未绑定实体 {reference_entity}。"
+                    )
+                elif reference_field != "id" and reference_field not in entity_fields.get(reference_entity, set()):
+                    errors.append(
+                        f"TechnicalPlan Schema {contract_id}.{schema_id}.{current_path} 引用了未知字段 {reference}。"
+                    )
+            errors.extend(
+                _technical_schema_field_refs(
+                    field_schema,
+                    contract_id=contract_id,
+                    schema_id=schema_id,
+                    bound_entity_ids=bound_entity_ids,
+                    entity_fields=entity_fields,
+                    path=current_path,
+                )
+            )
+    items = schema.get("items")
+    errors.extend(
+        _technical_schema_field_refs(
+            items,
+            contract_id=contract_id,
+            schema_id=schema_id,
+            bound_entity_ids=bound_entity_ids,
+            entity_fields=entity_fields,
+            path=f"{path}[]" if path else "[]",
+        )
+    )
+    for key in ("allOf", "anyOf", "oneOf"):
+        variants = schema.get(key)
+        if isinstance(variants, list):
+            for variant in variants:
+                errors.extend(
+                    _technical_schema_field_refs(
+                        variant,
+                        contract_id=contract_id,
+                        schema_id=schema_id,
+                        bound_entity_ids=bound_entity_ids,
+                        entity_fields=entity_fields,
+                        path=path,
+                    )
+                )
+    return errors
+
+
+def _schema_for_contract_ref(contract: dict[str, Any], reference: Any) -> dict[str, Any] | None:
+    """解析契约内的本地 Schema 引用。"""
+
+    if not isinstance(reference, str) or not isinstance(contract.get("schemas"), dict):
+        return None
+    return contract["schemas"].get(reference) if isinstance(contract["schemas"].get(reference), dict) else None
+
+
+def _validate_technical_pagination(
+    contract: dict[str, Any],
+    endpoint: dict[str, Any],
+) -> list[str]:
+    """校验列表接口的统一分页参数和响应结构。"""
+
+    endpoint_id = str(endpoint.get("id") or "unknown")
+    if not endpoint_id.endswith(".list"):
+        return []
+    errors: list[str] = []
+    parameter_names = {
+        str(parameter.get("name") or "")
+        for parameter in _dict_items(endpoint.get("parameters"))
+        if str(parameter.get("in") or "query") == "query"
+    }
+    for name in ("current", "pageSize"):
+        if name not in parameter_names:
+            errors.append(f"TechnicalPlan 列表 Endpoint {endpoint_id} 缺少分页参数 {name}。")
+    response = _schema_for_contract_ref(contract, endpoint.get("response_schema_ref"))
+    properties = response.get("properties") if isinstance(response, dict) else None
+    required = set(response.get("required", [])) if isinstance(response, dict) and isinstance(response.get("required"), list) else set()
+    if not isinstance(properties, dict):
+        return errors + [f"TechnicalPlan 列表 Endpoint {endpoint_id} 的响应 Schema 必须是对象。"]
+    pagination_fields = {"total", "pageSize", "current", "list"}
+    if set(properties) != pagination_fields:
+        extra_fields = sorted(set(properties) - pagination_fields)
+        missing_fields = sorted(pagination_fields - set(properties))
+        details = []
+        if extra_fields:
+            details.append("多余同级字段：" + "、".join(extra_fields))
+        if missing_fields:
+            details.append("缺少字段：" + "、".join(missing_fields))
+        errors.append(
+            f"TechnicalPlan 列表 Endpoint {endpoint_id} 响应同级字段必须且只能是 total、pageSize、current、list（{'；'.join(details)}）。"
+        )
+    if required != pagination_fields:
+        errors.append(f"TechnicalPlan 列表 Endpoint {endpoint_id} 的 total、pageSize、current、list 必须全部为必填字段。")
+    for name in ("total", "pageSize", "current"):
+        if isinstance(properties.get(name), dict) and properties[name].get("type") != "integer":
+            errors.append(f"TechnicalPlan 列表 Endpoint {endpoint_id} 的 {name} 必须是 integer。")
+    if isinstance(properties.get("list"), dict) and properties["list"].get("type") != "array":
+        errors.append(f"TechnicalPlan 列表 Endpoint {endpoint_id} 的 list 必须是 array。")
+    return errors
+
+
+def validate_technical_plan_api_contracts(
+    plan: dict[str, Any],
+    requirement_spec: dict[str, Any],
+) -> list[str]:
+    """校验 API Contract 的实体绑定、Schema 引用和分页契约。"""
+
+    raw_entities = _dict_items(plan.get("entities"))
+    known_entity_ids = {
+        str(entity.get("id") or "")
+        for entity in raw_entities
+        if str(entity.get("id") or "").strip()
+    }
+    if not known_entity_ids:
+        known_entity_ids = {
+            str(entity.get("id") or "")
+            for entity in normalize_entities(requirement_spec.get("entities"))
+            if str(entity.get("id") or "").strip()
+        }
+    source_entities = raw_entities or normalize_entities(requirement_spec.get("entities"))
+    entity_fields = {
+        str(entity.get("id") or ""): {
+            str(field.get("name") or "")
+            for field in _dict_items(entity.get("fields"))
+            if str(field.get("name") or "").strip()
+        }
+        for entity in source_entities
+        if str(entity.get("id") or "").strip()
+    }
+    errors: list[str] = []
+    for contract in _dict_items(plan.get("api_contracts")):
+        contract_id = str(contract.get("id") or "unknown")
+        allowed_keys = {
+            "authentication",
+            "base_path",
+            "endpoints",
+            "entity_ids",
+            "id",
+            "schemas",
+        }
+        required_keys = allowed_keys - {"authentication"}
+        unexpected = sorted(set(contract) - allowed_keys)
+        missing = sorted(required_keys - set(contract))
+        if unexpected:
+            errors.append(f"TechnicalPlan API Contract {contract_id} 包含非法字段：{'、'.join(unexpected)}。")
+        if missing:
+            errors.append(f"TechnicalPlan API Contract {contract_id} 缺少必需字段：{'、'.join(missing)}。")
+        raw_ids = contract.get("entity_ids")
+        ids = [str(value).strip() for value in raw_ids if str(value).strip()] if isinstance(raw_ids, list) else []
+        if not ids:
+            errors.append(f"TechnicalPlan API Contract {contract_id} 必须声明非空 entity_ids。")
+            continue
+        if len(ids) != len(raw_ids) or len(ids) != len(set(ids)):
+            errors.append(f"TechnicalPlan API Contract {contract_id} 的 entity_ids 必须非空且不重复。")
+        unknown = sorted(set(ids) - known_entity_ids)
+        if unknown:
+            errors.append(f"TechnicalPlan API Contract {contract_id} 引用了未知实体：{'、'.join(unknown)}。")
+        schemas = contract.get("schemas") if isinstance(contract.get("schemas"), dict) else {}
+        for schema_id, schema in schemas.items():
+            errors.extend(
+                _technical_schema_field_refs(
+                    schema,
+                    contract_id=contract_id,
+                    schema_id=str(schema_id),
+                    bound_entity_ids=set(ids),
+                    entity_fields=entity_fields,
+                )
+            )
+        for endpoint in _dict_items(contract.get("endpoints")):
+            for key in ("request_schema_ref", "response_schema_ref"):
+                reference = endpoint.get(key)
+                if reference and _schema_for_contract_ref(contract, reference) is None:
+                    errors.append(f"TechnicalPlan Endpoint {endpoint.get('id') or 'unknown'} 的 {key} 未解析到本契约 Schema。")
+            errors.extend(_validate_technical_pagination(contract, endpoint))
+    return errors
+
+
 def create_technical_plan(
     spec: dict[str, Any],
     *,
@@ -1381,39 +1711,43 @@ def create_technical_plan(
         if datasource_type is not None
         else datasource_type_from_artifact(spec, fallback="database")
     )
-    data_sources = _normalize_data_sources(
-        apply_authoritative_datasource_type(
-            {"data_sources": _planned_data_sources(spec)},
-            effective_datasource_type,
-        )["data_sources"]
-    )
+    entities = _technical_entities(spec, agent_plan)
+    contract_sources = [
+        {
+            "id": "unbound",
+            "type": "database",
+            "entities": entities,
+        }
+    ]
     api_contracts = _technical_api_contracts(
-        _merge_agent_items(
-            _api_contracts(data_sources, spec),
-            agent_plan,
-            "api_contracts",
-            authoritative=True,
+        _attach_technical_entity_field_refs(
+            _merge_agent_items(
+                _api_contracts(contract_sources, {**spec, "entities": entities}),
+                agent_plan,
+                "api_contracts",
+                authoritative=True,
+            ),
+            entities,
         )
     )
     policy = _architecture_for_datasource_type(effective_datasource_type)
     architecture = {
         key: deepcopy(policy[key])
-        for key in ("frontend", "backend", "data", "backend_tech_stack", "data_contract")
+        for key in ("frontend", "backend", "data")
     }
     agent_architecture = _agent_section(agent_plan, "architecture")
     if isinstance(agent_architecture, dict):
         for key in architecture:
             if key in agent_architecture:
                 architecture[key] = deepcopy(agent_architecture[key])
-    for key in ("backend", "data", "backend_tech_stack", "data_contract"):
+    for key in ("backend", "data"):
         architecture[key] = deepcopy(policy[key])
     if effective_datasource_type == "static":
         architecture["frontend"] = deepcopy(policy["frontend"])
-    engineering_design = _technical_engineering_design(agent_plan)
     plan = {
         "artifact_type": TECHNICAL_PLAN_ARTIFACT_TYPE,
         "architecture": architecture,
-        "engineering_design": engineering_design,
+        "entities": entities,
         "api_contracts": api_contracts,
         "pages": _technical_plan_pages(spec, agent_plan, api_contracts),
     }
@@ -1474,9 +1808,9 @@ def create_project_plan(
     data_sources = [
         {
             **source,
-            "schema_refs": schema_refs_for_data_source(
+            "schema_refs": schema_refs_for_entities(
                 api_contracts,
-                str(source.get("id") or ""),
+                entity_ids(source.get("entities")),
             ),
         }
         for source in data_sources

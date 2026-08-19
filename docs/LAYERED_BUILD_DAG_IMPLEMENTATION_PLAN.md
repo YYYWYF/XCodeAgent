@@ -74,13 +74,13 @@ Unit 只描述模块和依赖，初始为 `not_prepared`，不创建代码任务
 同一次调用中，`PageBuildContextResolver` 按当前选择目标解析：
 
 ```text
-PageDetail.endpoint_dependencies
-  → ProjectPlan.api_contracts.endpoint
-  → data_source_id
-  → DataSourceDetail artifact ref
+TechnicalPlan.pages.references.endpoint_dependencies
+  → TechnicalPlan.api_contracts.endpoint
+  → API Contract.entity_ids
+  → confirmed EntityDesign artifact refs（按实体分别解析）
 ```
 
-输出当前 PageDetail 或 DataSourceDetail、页面直接关联的 DataSourceDetail、endpoint IDs、必需 Unit IDs 与 artifact hashes。缺失 endpoint、契约或确认详情时阻止本次构建。无关页面和数据源详情不得加载。
+输出当前 PageImplementationContract、页面直接关联的已确认 EntityDesign 摘要、endpoint IDs、必需 Unit IDs 与 artifact hashes。缺失 endpoint、契约、实体绑定或任一相关实体确认时阻止本次构建。无关页面和实体设计不得加载；Contract 不保存数据源 id。
 
 验收：首次订单页面请求创建全局 Unit 骨架并仅加载订单数据源详情；后续客户页面请求保持已有骨架，仅解析客户页面上下文；错误 endpoint 给出明确阻止原因。
 

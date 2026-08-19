@@ -38,86 +38,196 @@ def _technical_planning_prompt(
     requirement_spec: dict[str, Any],
     existing_plan: dict[str, Any] | None,
 ) -> str:
-    """构造不重复上游产品事实的 TechnicalPlan 提示。"""
+    """Build the TechnicalPlan prompt with explicit output fields and split contexts."""
 
-    page_ids = [
-        str(page.get("pageId") or "")
-        for page in (
-            requirement_spec.get("confirmed_product_plan", {}).get("pages", [])
-            if isinstance(requirement_spec.get("confirmed_product_plan"), dict)
-            else requirement_spec.get("pages", [])
-        )
-        if isinstance(page, dict) and page.get("pageId")
+    product_plan = (
+        requirement_spec.get("confirmed_product_plan")
+        if isinstance(requirement_spec.get("confirmed_product_plan"), dict)
+        else {}
+    )
+    entities = [
+        item for item in requirement_spec.get("entities", []) if isinstance(item, dict)
     ]
-    page_example = [
-        {
-            "pageId": page_id,
-            "references": {
-                "endpoint_dependencies": [
+    pages = [item for item in product_plan.get("pages", []) if isinstance(item, dict)]
+    entity = entities[0] if entities else {
+        "id": "Order",
+        "name": "Order",
+        "description": "Order business entity",
+        "fields": [{"name": "order_number"}],
+    }
+    entity_id = str(entity.get("id") or "Order")
+    entity_fields = [item for item in entity.get("fields", []) if isinstance(item, dict)]
+    field_name = str((entity_fields[0] if entity_fields else {}).get("name") or "order_number")
+    page_id = str((pages[0] if pages else {}).get("pageId") or "order_list_page")
+    contract_id = f"{entity_id.lower()}_api"
+    list_schema_id = f"{entity_id}ListOutput"
+    item_schema_id = f"{entity_id}ListItem"
+    response_example = {
+        "architecture": {
+            "frontend": "A React single-page administration client communicates with the service through REST JSON APIs.",
+            "backend": "A Java8 and Springboot service exposes REST APIs organized by business capability.",
+            "data": "MySQL8 provides persistence and Redis provides caching for hot data.",
+        },
+        "entities": [
+            {
+                "id": entity_id,
+                "name": str(entity.get("name") or entity_id),
+                "description": str(entity.get("description") or "Business entity"),
+                "fields": [
                     {
-                        "endpoint_id": "resource.list",
-                        "usage": "page_load",
-                        "trigger": "进入页面",
-                        "required_for_initial_load": True,
+                        "name": field_name,
+                        "label": "Business field",
+                        "description": "The business meaning of this field.",
+                        "type": "text",
+                        "required": True,
                     }
                 ],
-                "action_implementations": [],
-            },
-        }
-        for page_id in page_ids
-    ]
+            }
+        ],
+        "api_contracts": [
+            {
+                "id": contract_id,
+                "entity_ids": [entity_id],
+                "base_path": f"/api/{entity_id.lower()}",
+                "authentication": {"required": True, "roles": ["admin"]},
+                "schemas": {
+                    item_schema_id: {
+                        "type": "object",
+                        "properties": {
+                            "displayValue": {
+                                "type": "string",
+                                "description": "A value formatted for list display.",
+                                "entity_field_ref": f"{entity_id}.{field_name}",
+                            }
+                        },
+                        "required": ["displayValue"],
+                    },
+                    list_schema_id: {
+                        "type": "object",
+                        "properties": {
+                            "total": {"type": "integer"},
+                            "pageSize": {"type": "integer"},
+                            "current": {"type": "integer"},
+                            "list": {"type": "array", "items": {"$ref": item_schema_id}},
+                        },
+                        "required": ["total", "pageSize", "current", "list"],
+                    },
+                },
+                "endpoints": [
+                    {
+                        "id": f"{contract_id}.list",
+                        "method": "GET",
+                        "path": f"/api/{entity_id.lower()}",
+                        "summary": "Query a paginated list.",
+                        "parameters": [
+                            {"name": "current", "in": "query", "required": False, "schema": {"type": "integer", "default": 1}},
+                            {"name": "pageSize", "in": "query", "required": False, "schema": {"type": "integer", "default": 20}},
+                        ],
+                        "request_schema_ref": None,
+                        "response_schema_ref": list_schema_id,
+                        "error_codes": ["UNAUTHORIZED"],
+                        "authentication": {"required": True, "roles": ["admin"]},
+                    }
+                ],
+            }
+        ],
+        "pages": [
+            {
+                "pageId": page_id,
+                "references": {
+                    "endpoint_dependencies": [
+                        {
+                            "endpoint_id": f"{contract_id}.list",
+                            "usage": "page_load",
+                            "trigger": "Page entry or filter submission",
+                            "required_for_initial_load": True,
+                        }
+                    ],
+                    "action_implementations": [],
+                },
+            }
+        ],
+    }
+    product_goal_context = {
+        "app": {
+            key: product_plan.get("app", {}).get(key)
+            for key in ("name", "summary", "route_root_path", "menu_enabled")
+            if isinstance(product_plan.get("app"), dict)
+            and product_plan["app"].get(key) is not None
+        },
+        "product_acceptance_criteria": product_plan.get("product_acceptance_criteria", []),
+    }
+    role_context = {"user_roles": product_plan.get("user_roles", [])}
+    flow_context = {"business_flows": product_plan.get("business_flows", [])}
+    page_context = {
+        "pages": [
+            {
+                key: page.get(key)
+                for key in ("pageId", "goal", "information_items", "allowed_roles")
+                if page.get(key) is not None
+            }
+            for page in pages
+        ]
+    }
+    action_context = {
+        "page_actions": [
+            {
+                "pageId": page.get("pageId"),
+                "actions": page.get("actions", []),
+            }
+            for page in pages
+            if page.get("pageId")
+        ]
+    }
+    entity_context = {"entities": entities}
     revision_context = (
-        "Revise the existing TechnicalPlan using planning_adjustment_request. Return the complete "
-        "four-key object; omitted technical items are treated as removed.\n"
+        "Revise the existing TechnicalPlan according to planning_adjustment_request and return the complete four-part object.\n"
         f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"
         if existing_plan
         else "Create a new TechnicalPlan.\n"
     )
-    ui_design_manifest = requirement_spec.get("confirmed_ui_design_manifest")
-    ui_design_skipped = (
-        isinstance(ui_design_manifest, dict)
-        and ui_design_manifest.get("confirmation_status") == "skipped"
-    )
-    ui_design_instruction = (
-        "The user explicitly skipped UI design generation. No visual React reference is available; "
-        "derive page implementation requirements from ProductPlan and TechnicalPlan, and do not "
-        "invent UI-specific decisions in this plan."
-        if ui_design_skipped
-        else "The confirmed UiManifest is the immutable visual reference for implementation; do not redesign it."
-    )
     return (
-        "You are the technical-planning model for an app-generation workflow. Return only one JSON "
-        "object and do not call tools, delegate, or generate code.\n"
-        "RequirementSpec, ProductPlan, and UiManifest are immutable upstream artifacts. "
-        f"{ui_design_instruction}\n"
-        "TechnicalPlan "
-        "must contain only new developer decisions. Never repeat app metadata, requirements overview, "
-        "roles, modules, business flows, product acceptance, page names/routes/descriptions, UI paths, "
-        "UI controls, navigation, permissions, product states, risks, or generation metadata.\n"
-        "Do not emit requirements_overview, project_acceptance_criteria, app, data_sources, "
-        "permission_model, business_flows, acceptance_criteria, risks, frontend_pages, "
-        "page_implementation_contracts, status, version, generated_at, approved, planned_by, or hashes.\n"
-        "The root object must contain exactly architecture, engineering_design, api_contracts, and pages.\n"
-        "architecture must contain only frontend, backend, data, backend_tech_stack, and data_contract.\n"
-        f"{DATASOURCE_PENDING_REQUIREMENT}\n{BACKEND_TECH_STACK_REQUIREMENT}\n"
-        "Business entities already exist upstream. Keep them source-free and reference them only through "
-        "api_contracts[].entity_ids; entity fields, tables, external mappings, and source type are decided "
-        "later by the separately confirmed entity design.\n"
-        "api_contracts items use exactly id, entity_ids, resource, base_path, authentication, schemas, "
-        "and endpoints. Endpoints use id, method, path, summary, parameters, request_schema_ref, "
-        "response_schema_ref, error_codes, and authentication. Every request/response schema reference "
-        "must resolve inside the same contract. Schema references are bare names, never OpenAPI wrappers.\n"
-        "engineering_design contains exactly these arrays: module_boundaries and data_models.\n"
-        "pages must contain every upstream pageId exactly once. Each page contains exactly pageId and "
-        "references. references contains exactly endpoint_dependencies and action_implementations. "
-        "endpoint_dependencies items use endpoint_id, usage, trigger, required_for_initial_load. "
-        "action_implementations contains only ProductPlan business actions: direct actions use "
-        "{actionId, endpointId}; sequences use {actionId, stepBindings:[{stepId, endpointId}]}. Every "
-        "selected endpointId must exist in api_contracts and the same page's endpoint_dependencies.\n"
-        "Do not copy permissions or navigation_targets into references. Do not emit action_bindings; the "
-        "runtime compiler derives them from ProductPlan, UiManifest, and these endpoint choices.\n"
-        f"Required page skeleton:\n{json.dumps(page_example, ensure_ascii=False)}\n\n"
-        f"{revision_context}Planning inputs:\n{json.dumps(requirement_spec, ensure_ascii=False)}"
+        "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
+        "The object has exactly four sections: architecture, entities, api_contracts, and pages.\n\n"
+        "Field definitions:\n"
+        "1. architecture is a technical summary. frontend describes the client form and communication style; "
+        "backend describes the Java8/Springboot service boundary; data describes MySQL8 persistence and Redis caching.\n"
+        "2. entities is the authoritative business-entity field specification. Preserve id, name, and description "
+        "from the entity context. Each field contains name, label, description, type, and required; enum fields "
+        "also contain enum_values. type is one of text, long_text, number, decimal, date, datetime, enum, or boolean. "
+        "Field names use snake_case.\n"
+        "3. api_contracts is the interface contract collection. Each contract contains id, entity_ids, base_path, "
+        "authentication, schemas, and endpoints. entity_ids identifies every related business entity. A business "
+        "Schema properties may use interface-specific names. Add entity_field_ref=<EntityId>.<field_name> when a "
+        "property is directly sourced from an entity field; computed, aggregated, and transport properties may omit "
+        "the mapping. Structural properties organize the response. A paginated list response object has exactly four "
+        "same-level properties: total, pageSize, current, and list. It has no other sibling properties. Its query "
+        "parameters use current and pageSize, while fields inside list items follow the item Schema. "
+        "Schema references resolve to names in the same contract. Each Endpoint contains id, method, path, summary, "
+        "parameters, request_schema_ref, response_schema_ref, error_codes, and authentication.\n"
+        "4. pages contains the technical references from each ProductPlan page to selected endpoints. Each item has "
+        "pageId and references. references contains endpoint_dependencies and action_implementations. Endpoint "
+        "dependencies contain endpoint_id, usage, trigger, and required_for_initial_load. A direct business action "
+        "uses {actionId, endpointId}; a business sequence uses {actionId, stepBindings:[{stepId, endpointId}]}. "
+        "Every selected endpointId exists in api_contracts and also appears in that page's endpoint_dependencies. "
+        "The page set covers every upstream ProductPlan pageId.\n\n"
+        "Complete result example:\n"
+        f"{json.dumps(response_example, ensure_ascii=False, indent=2)}\n\n"
+        "Dynamic context sections:\n"
+        "- Entity context: the RequirementSpec entity skeleton. Use it to preserve entity order and identity and to validate field references.\n"
+        f"{json.dumps(entity_context, ensure_ascii=False)}\n\n"
+        "- Product goal context: application purpose and product-level acceptance outcomes. Use it to shape the architecture and endpoint scope.\n"
+        f"{json.dumps(product_goal_context, ensure_ascii=False)}\n\n"
+        "- Role context: confirmed user roles. Use it to define endpoint authentication roles.\n"
+        f"{json.dumps(role_context, ensure_ascii=False)}\n\n"
+        "- Business-flow context: confirmed business flows. Use it to preserve cross-page and multi-step behavior.\n"
+        f"{json.dumps(flow_context, ensure_ascii=False)}\n\n"
+        "- Page context: page goals, information items, and allowed roles. Use it to determine read models and page dependencies.\n"
+        f"{json.dumps(page_context, ensure_ascii=False)}\n\n"
+        "- Business-action context: page-scoped ProductPlan actions. Use it to select endpoint implementations only for business actions and business steps.\n"
+        f"{json.dumps(action_context, ensure_ascii=False)}\n\n"
+        f"{revision_context}"
+        f"planning_adjustment_request:\n{str(requirement_spec.get('planning_adjustment_request') or '').strip()}\n"
     )
 
 
@@ -200,8 +310,8 @@ def _planning_prompt(
         "entity_ids are required; entity_ids is a non-empty array of RequirementSpec entity ids "
         "and is the only contract binding (one contract may involve multiple entities, for "
         "example an order contract references the order, customer and product entities). Never "
-        "emit data_source_id: contracts bind entities only and the system derives the data source "
-        "type from each entity. Always use the key id, never "
+        "emit data_source_id: contracts bind entities only; later stages resolve each entity's "
+        "confirmed EntityDesign when data-source context is required. Always use the key id, never "
         "contract_id or contractId. Each contract "
         "contains compact JSON-Schema-like schemas and endpoints. Endpoints contain stable id, method, path, summary, "
         "parameters [{name, in, required, schema}], request_schema_ref, response_schema_ref, "

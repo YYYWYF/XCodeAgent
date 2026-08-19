@@ -917,7 +917,10 @@ def _workflow_user_input_message(
 
     confirmation_labels = {
         "requirement_spec_confirmation": "需求文档已生成，请确认后继续。",
+        "product_plan_confirmation": "产品规划已生成，请确认后继续。",
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
+        "technical_plan_confirmation": "技术规划已生成，请确认后继续。",
+        "technical_plan_generation_error": "技术规划未通过校验，请重新生成。",
         "batch_review": "页面与数据源设计已生成，请确认后继续。",
         "detail_review": "页面与数据源设计已生成，请确认后继续。",
         "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",
