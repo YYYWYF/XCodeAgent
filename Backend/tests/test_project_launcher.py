@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +37,16 @@ from app.services.project_launcher import (
     launch_project_preview,
     stop_backend_project,
 )
+
+
+def _write_manifest_jar(path: Path, main_class: str | None = None) -> None:
+    """写入启动器测试所需的最小 JAR 清单。"""
+
+    manifest = "Manifest-Version: 1.0\n"
+    if main_class:
+        manifest += f"Main-Class: {main_class}\n"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("META-INF/MANIFEST.MF", manifest)
 
 
 class ProjectLauncherTests(unittest.TestCase):
@@ -420,6 +431,63 @@ class ProjectLauncherTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "running")
         self.assertEqual(Path(run.call_args.kwargs["cwd"]), backend.resolve())
+
+    def test_launch_backend_project_repackages_plain_jar_before_starting(self) -> None:
+        """验证普通 Maven JAR 缺少 Main-Class 时会先补执行 Spring Boot repackage。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            backend = Path(workspace) / "backend"
+            target = backend / "target"
+            target.mkdir(parents=True)
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            jar_path = target / "sample-1.0-SNAPSHOT.jar"
+            _write_manifest_jar(jar_path)
+            fake_process = SimpleNamespace(pid=97531, poll=lambda: None)
+            maven_command = "/usr/local/bin/mvn"
+
+            commands: list[list[str]] = []
+
+            def run_maven(*args: object, **kwargs: object) -> SimpleNamespace:
+                """记录构建和补打包命令，并模拟补打包生成可执行清单。"""
+
+                argv = list(args[0])
+                commands.append(argv)
+                if len(commands) == 2:
+                    _write_manifest_jar(
+                        jar_path,
+                        "org.springframework.boot.loader.JarLauncher",
+                    )
+                return SimpleNamespace(returncode=0, stdout="built", stderr="")
+
+            with (
+                patch(
+                    "app.services.backend_project_launcher.shutil.which",
+                    side_effect=[maven_command, "/usr/bin/java"],
+                ),
+                patch(
+                    "app.services.backend_project_launcher.subprocess.run",
+                    side_effect=run_maven,
+                ),
+                patch(
+                    "app.services.backend_project_launcher.subprocess.Popen",
+                    return_value=fake_process,
+                ),
+                patch(
+                    "app.services.backend_project_launcher._wait_for_backend_ready",
+                    return_value=True,
+                ),
+            ):
+                result = launch_backend_project(workspace)
+
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(
+            commands,
+            [
+                [maven_command, "clean", "install"],
+                [maven_command, "-B", "package", "spring-boot:repackage"],
+            ],
+        )
+        self.assertEqual(result["repackage"]["returncode"], 0)
 
     def test_second_backend_launch_stops_registered_process_before_maven_build(self) -> None:
         """验证同一工作区再次启动时先停止旧 Java 进程，再执行 Maven 构建。"""

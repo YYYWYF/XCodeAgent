@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import time
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from app.utils.subprocess_output import subprocess_output_text
 
 
 BACKEND_BUILD_TIMEOUT_SECONDS = 600
+BACKEND_REPACKAGE_TIMEOUT_SECONDS = 600
 BACKEND_READY_TIMEOUT_SECONDS = 60
 BACKEND_READY_INTERVAL_SECONDS = 1
 BACKEND_READY_MARKERS = ("Spring Boot", "ZA21 Version")
@@ -206,6 +208,47 @@ def _launch_backend_project_locked(
             prebuild_cleanup=prebuild_cleanup,
         )
 
+    repackage_result = None
+    if _jar_has_main_class(jar_path) is False:
+        # 部分 Spring Boot 工程只继承 starter parent，却没有声明 boot plugin；
+        # 这类工程的普通 JAR 没有 Main-Class，必须在启动前补执行 repackage。
+        repackage_result = _run_backend_repackage(
+            maven_command=maven_command,
+            cwd=backend_root,
+            runtime_root=runtime_root,
+        )
+        if repackage_result["returncode"] != 0:
+            return _failed_backend_launch(
+                "后端 JAR 不可执行，补打包失败。",
+                root=root,
+                backend_root=backend_root,
+                pom_path=pom_path,
+                runtime_root=runtime_root,
+                failed_stage="backend_repackage",
+                build=build_result,
+                repackage=repackage_result,
+                target_root=target_root,
+                jar_path=jar_path,
+                jar_candidates=candidates,
+                prebuild_cleanup=prebuild_cleanup,
+            )
+        jar_path, candidates = _find_backend_snapshot_jar(target_root)
+        if jar_path is None or _jar_has_main_class(jar_path) is not True:
+            return _failed_backend_launch(
+                "补打包完成，但 backend/target 中仍没有可执行的 Spring Boot JAR。",
+                root=root,
+                backend_root=backend_root,
+                pom_path=pom_path,
+                runtime_root=runtime_root,
+                failed_stage="backend_jar",
+                build=build_result,
+                repackage=repackage_result,
+                target_root=target_root,
+                jar_path=jar_path,
+                jar_candidates=candidates,
+                prebuild_cleanup=prebuild_cleanup,
+            )
+
     server_result, process = _start_backend_server(
         java_command=java_command,
         jar_path=jar_path,
@@ -251,6 +294,7 @@ def _launch_backend_project_locked(
             runtime_root=runtime_root,
             failed_stage="backend_start",
             build=build_result,
+            repackage=repackage_result,
             target_root=target_root,
             jar_path=jar_path,
             jar_candidates=candidates,
@@ -269,6 +313,7 @@ def _launch_backend_project_locked(
         "message": "Java 后端项目已启动并就绪。",
         "prebuild_cleanup": prebuild_cleanup,
         "build": build_result,
+        "repackage": repackage_result,
         "target_path": str(target_root),
         "jar_path": str(jar_path),
         "jar_relative_path": _relative(jar_path, root),
@@ -417,6 +462,60 @@ def _run_backend_build(
     }
 
 
+def _run_backend_repackage(
+    *,
+    maven_command: str,
+    cwd: Path,
+    runtime_root: Path,
+) -> dict[str, Any]:
+    """为缺少 Main-Class 的普通 JAR 补执行 Spring Boot repackage。"""
+
+    argv = [maven_command, "-B", "package", "spring-boot:repackage"]
+    started_at = datetime.now(UTC).isoformat()
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=str(cwd),
+            text=True,
+            capture_output=True,
+            timeout=BACKEND_REPACKAGE_TIMEOUT_SECONDS,
+            check=False,
+        )
+        stdout = subprocess_output_text(completed.stdout)
+        stderr = subprocess_output_text(completed.stderr)
+        returncode = completed.returncode
+        timed_out = False
+        error = None
+    except subprocess.TimeoutExpired as exc:
+        stdout = subprocess_output_text(exc.stdout)
+        stderr = subprocess_output_text(exc.stderr)
+        returncode = None
+        timed_out = True
+        error = None
+    except OSError as exc:
+        stdout = ""
+        stderr = str(exc)
+        returncode = None
+        timed_out = False
+        error = str(exc)
+
+    stdout_path = runtime_root / "backend-repackage.stdout.log"
+    stderr_path = runtime_root / "backend-repackage.stderr.log"
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
+    return {
+        "argv": argv,
+        "cwd": str(cwd),
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "error": error,
+        "started_at": started_at,
+        "finished_at": datetime.now(UTC).isoformat(),
+        "stdout_log": str(stdout_path),
+        "stderr_log": str(stderr_path),
+    }
+
+
 def _find_backend_snapshot_jar(target_root: Path) -> tuple[Path | None, list[Path]]:
     """筛选 Maven target 中唯一可执行的 SNAPSHOT 主 JAR。"""
 
@@ -431,6 +530,24 @@ def _find_backend_snapshot_jar(target_root: Path) -> tuple[Path | None, list[Pat
         key=lambda path: path.name,
     )
     return (candidates[0] if len(candidates) == 1 else None), candidates
+
+
+def _jar_has_main_class(path: Path) -> bool | None:
+    """读取 JAR 清单，返回是否含 Main-Class；损坏文件返回未知。"""
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            manifest = archive.read("META-INF/MANIFEST.MF").decode(
+                "utf-8", errors="replace"
+            )
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+
+    return any(
+        line.casefold().startswith("main-class:")
+        and line.split(":", 1)[1].strip()
+        for line in manifest.splitlines()
+    )
 
 
 def _is_auxiliary_snapshot_jar(path: Path) -> bool:
@@ -617,6 +734,7 @@ def _failed_backend_launch(
     runtime_root: Path,
     failed_stage: str,
     build: dict[str, Any] | None = None,
+    repackage: dict[str, Any] | None = None,
     target_root: Path | None = None,
     jar_path: Path | None = None,
     jar_candidates: list[Path] | None = None,
@@ -637,6 +755,7 @@ def _failed_backend_launch(
         "failed_stage": failed_stage,
         "prebuild_cleanup": prebuild_cleanup,
         "build": build,
+        "repackage": repackage,
         "target_path": str(target_root) if target_root else None,
         "jar_path": str(jar_path) if jar_path else None,
         "jar_candidates": [str(path) for path in (jar_candidates or [])],
