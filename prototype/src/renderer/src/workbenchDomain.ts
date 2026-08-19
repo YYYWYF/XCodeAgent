@@ -5,7 +5,13 @@ import {
   type WorkbenchPhase
 } from './workbenchPhase'
 
-export type WorkbenchArtifactType = 'document' | 'page' | 'endpoint' | 'entity'
+export type WorkbenchArtifactType =
+  | 'document'
+  | 'page'
+  | 'endpoint'
+  | 'entity'
+  | 'agent'
+  | 'model'
 /**
  * 开发产物扩展状态：文档类沿用三档；开发对象在后台实现任务接入后增加
  * 实现排队/实现中/待验收/失败四档，由统一后台任务流水推导。

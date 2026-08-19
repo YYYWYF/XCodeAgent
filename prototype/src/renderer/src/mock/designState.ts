@@ -7,20 +7,26 @@
 // 读写不同状态。这里统一通过 window.__xcodeAgentMockDesignState__ 读写，保证单份运行时状态。
 
 type MockDesignState = {
+  designedAgents: Set<string>
   designedPages: Set<string>
   designedEndpoints: Set<string>
 }
 
 function ensureState(): MockDesignState {
   const g = window as { __xcodeAgentMockDesignState__?: MockDesignState }
-  const shared =
-    g.__xcodeAgentMockDesignState__ || { designedPages: new Set<string>(), designedEndpoints: new Set<string>() }
+  const shared = g.__xcodeAgentMockDesignState__ || {
+    designedAgents: new Set<string>(),
+    designedPages: new Set<string>(),
+    designedEndpoints: new Set<string>()
+  }
+  shared.designedAgents ||= new Set<string>()
   g.__xcodeAgentMockDesignState__ = shared
   return shared
 }
 
 function readState(): MockDesignState | undefined {
-  return (window as { __xcodeAgentMockDesignState__?: MockDesignState }).__xcodeAgentMockDesignState__
+  return (window as { __xcodeAgentMockDesignState__?: MockDesignState })
+    .__xcodeAgentMockDesignState__
 }
 
 export function markPageDesigned(pageId: string): void {
@@ -38,4 +44,14 @@ export function markEndpointDesigned(apiContractId: string, endpointId: string):
 
 export function isEndpointDesigned(apiContractId: string, endpointId: string): boolean {
   return Boolean(readState()?.designedEndpoints.has(`${apiContractId}:${endpointId}`))
+}
+
+/** 标记智能体详细设计和构建已经完成。 */
+export function markAgentDesigned(agentId: string): void {
+  ensureState().designedAgents.add(agentId)
+}
+
+/** 判断智能体是否已在本轮 prototype 运行中完成。 */
+export function isAgentDesigned(agentId: string): boolean {
+  return Boolean(readState()?.designedAgents.has(agentId))
 }

@@ -44,6 +44,15 @@
       { "id": "query-api", "label": "回检查询接口", "total": 2, "coverage": "当前用户数据、分页参数与状态筛选" }
     ]
   },
+  "agents": [
+    {
+      "id": "recheck-assistant",
+      "name": "回检助手",
+      "entryPageIds": ["my-rechecks"],
+      "capabilities": ["解释回检状态", "给出下一步建议"],
+      "purpose": "解释回检状态并给出下一步操作建议"
+    }
+  ],
   "execution_order": [
     {
       "order": 1,

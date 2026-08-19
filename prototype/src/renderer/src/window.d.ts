@@ -6,6 +6,7 @@ import type {
   DevelopmentPlanningEntity,
   DevelopmentPlanningPageTreeNode
 } from './typings'
+import type { DevelopmentPlanningAgent } from './agentDevelopment'
 
 declare global {
   interface Window {
@@ -100,6 +101,7 @@ declare global {
             }>
           }>
           entities: DevelopmentPlanningEntity[]
+          agents: DevelopmentPlanningAgent[]
         }>
       }
       sessions?: {

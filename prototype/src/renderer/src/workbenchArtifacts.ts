@@ -22,6 +22,11 @@ export type PageDesignBinding = {
   sourcePath?: string
   target?: string
 }
+export type PageDesignAgentDep = {
+  agentId?: string
+  name?: string
+  purpose?: string
+}
 
 export type PageDesign = {
   target_type?: string
@@ -39,6 +44,7 @@ export type PageDesign = {
   permissions?: string[]
   states?: string[]
   api_dependencies?: PageDesignApiDep[]
+  agent_dependencies?: PageDesignAgentDep[]
   response_bindings?: PageDesignBinding[]
   acceptance_criteria?: string[]
   dependent_pages?: string[]
@@ -135,6 +141,13 @@ export function buildPageDesignDoc(design: PageDesign): string {
     )
     lines.push('')
   }
+  if (design.agent_dependencies?.length) {
+    lines.push('## 智能体依赖', '')
+    design.agent_dependencies.forEach((agent) =>
+      lines.push(`- **${agent.name || agent.agentId || '智能体'}** — ${agent.purpose || ''}`)
+    )
+    lines.push('')
+  }
   if (design.response_bindings?.length) {
     lines.push('## 数据绑定', '')
     design.response_bindings.forEach((binding) =>
@@ -173,15 +186,21 @@ function pascalCase(value: string): string {
 }
 
 /** 从页面设计生成真实感的 TSX 源码（含状态、表格、接口依赖）。 */
-export function buildPageSource(design: PageDesign, pageId: string): { filePath: string; content: string } {
+export function buildPageSource(
+  design: PageDesign,
+  pageId: string
+): { filePath: string; content: string } {
   const componentName = `${pascalCase(pageId)}Page`
   const name = design.name || pageId
   const path = design.path || `/${pageId}`
   const regions = design.basic_layout?.regions?.map((r) => r.name || '').filter(Boolean) || []
   const apis = design.api_dependencies || []
   const interactions = design.interactions || []
+  const agents = design.agent_dependencies || []
   const apiComments = apis.length
-    ? apis.map((api) => `// ${api.method || 'GET'} ${api.path || ''} — ${api.purpose || ''}`).join('\n  ')
+    ? apis
+        .map((api) => `// ${api.method || 'GET'} ${api.path || ''} — ${api.purpose || ''}`)
+        .join('\n  ')
     : '// 暂无接口依赖'
 
   const content = [
@@ -226,6 +245,7 @@ export function buildPageSource(design: PageDesign, pageId: string): { filePath:
     `        dataSource={rows}`,
     `      />`,
     `      {/* 交互：${interactions.slice(0, 2).join('；') || '待补充'} */}`,
+    `      {/* 智能体：${agents.map((agent) => agent.name || agent.agentId).join('；') || '暂无'} */}`,
     `    </Card>`,
     `  )`,
     `}`,
@@ -235,14 +255,19 @@ export function buildPageSource(design: PageDesign, pageId: string): { filePath:
 }
 
 /** 从接口设计生成真实感的 Java Controller 源码（对齐 build-task-plan 的 target_files）。 */
-export function buildEndpointSource(
-  design: Record<string, any>
-): { filePath: string; content: string } {
+export function buildEndpointSource(design: Record<string, any>): {
+  filePath: string
+  content: string
+} {
   const method = String(design.method || 'GET').toUpperCase()
   const path = String(design.path || '/api/resource')
   const summary = String(design.summary || design.name || '接口')
   // /api/rechecks/my → Rechecks;取 path 首段资源名做 Controller 类名。
-  const resource = path.split('/').filter(Boolean).find((seg) => seg !== 'api') || 'Resource'
+  const resource =
+    path
+      .split('/')
+      .filter(Boolean)
+      .find((seg) => seg !== 'api') || 'Resource'
   const className = `${pascalCase(resource)}Controller`
   const packageName = resource.toLowerCase()
 
@@ -253,13 +278,30 @@ export function buildEndpointSource(
   const logic = (design.processing_logic || []) as string[]
 
   const methodLower = method.toLowerCase()
-  const mapping = method === 'GET' ? 'GetMapping' : method === 'POST' ? 'PostMapping' : method === 'PUT' ? 'PutMapping' : method === 'DELETE' ? 'DeleteMapping' : 'RequestMapping'
+  const mapping =
+    method === 'GET'
+      ? 'GetMapping'
+      : method === 'POST'
+        ? 'PostMapping'
+        : method === 'PUT'
+          ? 'PutMapping'
+          : method === 'DELETE'
+            ? 'DeleteMapping'
+            : 'RequestMapping'
 
   const paramsSig = queryParams
-    .map((p) => `@RequestParam(required = ${Boolean(p.required)}) String ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')}`)
+    .map(
+      (p) =>
+        `@RequestParam(required = ${Boolean(p.required)}) String ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')}`
+    )
     .join(', ')
   const paramComments = queryParams.length
-    ? queryParams.map((p) => `   * @param ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')} ${p.schema || ''}`).join('\n')
+    ? queryParams
+        .map(
+          (p) =>
+            `   * @param ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')} ${p.schema || ''}`
+        )
+        .join('\n')
     : ''
   const logicComments = logic.length
     ? logic.map((l) => `     * ${l}`).join('\n')
@@ -294,16 +336,13 @@ export function buildEndpointSource(
     ``
   ]
   // 合并连续空行为单行,避免文档空洞。
-  const content = lines
-    .filter((line, i) => !(line === '' && lines[i - 1] === ''))
-    .join('\n')
+  const content = lines.filter((line, i) => !(line === '' && lines[i - 1] === '')).join('\n')
 
   return {
     filePath: backendControllerPath(packageName),
     content
   }
 }
-
 
 export function buildPageDocFallback(pageLabel: string, path: string, purpose: string): string {
   return [
@@ -329,18 +368,25 @@ export function buildPageDocFallback(pageLabel: string, path: string, purpose: s
 export function buildAppRequirementDoc(
   applicationName: string,
   pages: Array<{ label: string; path?: string; purpose?: string }>,
-  apiContracts: Array<{ label: string; endpoints: Array<{ method?: string; path?: string; summary?: string }> }>
+  apiContracts: Array<{
+    label: string
+    endpoints: Array<{ method?: string; path?: string; summary?: string }>
+  }>
 ): string {
   const lines: string[] = [`# ${applicationName || '应用'} 需求文档`, '']
   lines.push('## 页面清单')
   if (pages.length === 0) lines.push('_暂无页面_')
-  pages.forEach((page) => lines.push(`- **${page.label}** \`${page.path || ''}\` — ${page.purpose || ''}`))
+  pages.forEach((page) =>
+    lines.push(`- **${page.label}** \`${page.path || ''}\` — ${page.purpose || ''}`)
+  )
   if (apiContracts.length) {
     lines.push('', '## 接口契约')
     apiContracts.forEach((contract) => {
       lines.push(`- **${contract.label}**`)
       contract.endpoints.forEach((endpoint) =>
-        lines.push(`  - \`${endpoint.method || ''}\` \`${endpoint.path || ''}\` — ${endpoint.summary || ''}`)
+        lines.push(
+          `  - \`${endpoint.method || ''}\` \`${endpoint.path || ''}\` — ${endpoint.summary || ''}`
+        )
       )
     })
   }
@@ -350,12 +396,16 @@ export function buildAppRequirementDoc(
 // —— 设计阶段三份产物文档构建器（需求文档 / 项目计划 / 构建任务计划）——
 
 /** 从需求文档结构化数据渲染 Markdown。appName 优先用当前应用名。 */
-export function buildRequirementSpecDoc(
-  spec: Record<string, any>,
-  appName?: string
-): string {
+export function buildRequirementSpecDoc(spec: Record<string, any>, appName?: string): string {
   const app = (spec.app_info || {}) as Record<string, any>
-  const lines = [`# 需求文档 · ${appName || app.name || '应用'}`, '', '## 应用目标', String(app.description || ''), '', '## 用户角色']
+  const lines = [
+    `# 需求文档 · ${appName || app.name || '应用'}`,
+    '',
+    '## 应用目标',
+    String(app.description || ''),
+    '',
+    '## 用户角色'
+  ]
   for (const role of (spec.user_roles || []) as Array<Record<string, any>>) {
     lines.push(`- **${role.name}**：${role.description}`)
     if (Array.isArray(role.permissions) && role.permissions.length) {
@@ -382,12 +432,23 @@ export function buildRequirementSpecDoc(
 }
 
 /** 从项目计划数据渲染 Markdown（页面树 + 技术栈 + 接口契约 + 执行顺序）。 */
-export function buildProjectPlanDoc(
-  plan: Record<string, any>,
-  appName?: string
-): string {
+export function buildProjectPlanDoc(plan: Record<string, any>, appName?: string): string {
   const tech = (plan.tech_stack || {}) as Record<string, any>
-  const lines = [`# 项目计划 · ${appName || '应用'}`, '', '## 技术栈', `- 前端：${tech.frontend}`, `- 后端：${tech.backend}`, `- 数据库：${tech.database}`, '', '## 规划摘要', String(plan.summary || ''), '', '## 页面', '| 菜单 | 页面 | 路由 |', '| --- | --- | --- |']
+  const lines = [
+    `# 项目计划 · ${appName || '应用'}`,
+    '',
+    '## 技术栈',
+    `- 前端：${tech.frontend}`,
+    `- 后端：${tech.backend}`,
+    `- 数据库：${tech.database}`,
+    '',
+    '## 规划摘要',
+    String(plan.summary || ''),
+    '',
+    '## 页面',
+    '| 菜单 | 页面 | 路由 |',
+    '| --- | --- | --- |'
+  ]
   const walk = (nodes: Array<Record<string, any>>): void => {
     for (const node of nodes) {
       if (node.type === 'menu') {
@@ -425,8 +486,15 @@ export function buildBuildTaskPlanDoc(plan: Record<string, any>): string {
     )
   }
   header.push('', '## 构建单元', '| 单元 | 类型 | 状态 |', '| --- | --- | --- |')
-  units.forEach((unit) => header.push(`| ${unit.label || unit.id} | ${unit.kind || '-'} | ${unit.status || '-'} |`))
-  header.push('', '## 任务', '| ID | 单元 | Owner | 类型 | 标题 | 验收标准 |', '| --- | --- | --- | --- | --- | --- |')
+  units.forEach((unit) =>
+    header.push(`| ${unit.label || unit.id} | ${unit.kind || '-'} | ${unit.status || '-'} |`)
+  )
+  header.push(
+    '',
+    '## 任务',
+    '| ID | 单元 | Owner | 类型 | 标题 | 验收标准 |',
+    '| --- | --- | --- | --- | --- | --- |'
+  )
   tasks.forEach((task) => {
     const unitLabel = units.find((unit) => unit.id === task.unit_id)?.label || task.unit_id || '-'
     const acceptance = Array.isArray(task.acceptance_criteria)
@@ -478,11 +546,15 @@ export function buildEndpointDesignDoc(design: Record<string, any>): string {
   if (params.length) {
     lines.push('- **请求参数**：')
     params.forEach((param) =>
-      lines.push(`  - \`${param.name}\`（${param.in || 'param'}）${param.required ? ' 必填' : ''} — ${param.schema || ''}`)
+      lines.push(
+        `  - \`${param.name}\`（${param.in || 'param'}）${param.required ? ' 必填' : ''} — ${param.schema || ''}`
+      )
     )
   }
   if (request.request_body) {
-    lines.push(`- **请求体**：\`${JSON.stringify((request.request_body as Record<string, any>).schema || '')}\``)
+    lines.push(
+      `- **请求体**：\`${JSON.stringify((request.request_body as Record<string, any>).schema || '')}\``
+    )
   }
   const response = (iface.response_format || {}) as Record<string, any>
   if (response.status_code != null) {

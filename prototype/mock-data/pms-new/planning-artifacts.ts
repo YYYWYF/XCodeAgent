@@ -3,6 +3,7 @@ import type {
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntity
 } from '../../src/renderer/src/typings'
+import type { DevelopmentPlanningAgent } from '../../src/renderer/src/agentDevelopment'
 
 export const PMS_PAGES = [
   {
@@ -77,6 +78,26 @@ export const PMS_API_CONTRACTS: DevelopmentPlanningApiContract[] = [
 
 /** 当前只保留实体概念提示，不生成具体实体产物或实体工作流。 */
 export const PMS_ENTITIES: DevelopmentPlanningEntity[] = []
+export const PMS_AGENTS: DevelopmentPlanningAgent[] = [
+  {
+    id: 'recheck-assistant',
+    label: '回检填报助手',
+    purpose: '解释当前用户的回检状态，并基于可见回检单给出下一步操作建议',
+    model: '项目默认模型',
+    apiDependencies: ['GET /api/rechecks/my'],
+    pageIds: ['my-rechecks'],
+    tools: ['查询我的回检单'],
+    permissions: ['只读当前用户可见数据', '禁止代替用户提交或修改回检单'],
+    acceptanceCriteria: [
+      '回答包含工具调用摘要和数据来源说明',
+      '只能读取当前用户的回检单',
+      '工具失败时展示可重试错误，不编造业务数据'
+    ],
+    designed: true,
+    hasDetailPlan: true,
+    detailPlanStatus: 'confirmed'
+  }
+]
 
 export const mockPlanningArtifacts = {
   ready: true,
@@ -86,5 +107,6 @@ export const mockPlanningArtifacts = {
   pages: PMS_PAGES,
   pageTree: PMS_PAGE_TREE,
   apiContracts: PMS_API_CONTRACTS,
-  entities: PMS_ENTITIES
+  entities: PMS_ENTITIES,
+  agents: PMS_AGENTS
 }
