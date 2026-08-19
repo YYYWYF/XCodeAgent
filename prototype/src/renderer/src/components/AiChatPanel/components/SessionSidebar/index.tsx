@@ -440,7 +440,9 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
       }).length,
     0
   )
-  const completedEntities = 0
+  const completedEntities = props.entities.filter(
+    (entity) => props.artifactStatusById[entityArtifactId(entity.entityId)] === 'completed'
+  ).length
   const completedDocuments = props.designArtifacts.filter(
     (artifact) => artifact.status === 'completed'
   ).length

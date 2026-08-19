@@ -14,6 +14,7 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../typings'
+import type { AgentConfigState } from '../agentConfig'
 
 export type SendWorkflowMessageOptions = {
   workspaceRoot?: string
@@ -33,7 +34,14 @@ export type SendWorkflowMessageOptions = {
   selectedPageId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint' | 'application'
+  selectedAgentId?: string
+  /** 智能体配置候选版本，随 AG-UI 工作流进入确认、构建和验收。 */
+  agentConfig?: AgentConfigState
+  /** 智能体配置候选动作，不绕过工作流直接写入生效版本。 */
+  agentConfigAction?: 'submit' | 'confirm' | 'cancel'
+  /** 配置候选生成前的生效版本，仅用于确认卡展示变更范围。 */
+  agentConfigBase?: AgentConfigState
+  detailTargetType?: 'page' | 'endpoint' | 'agent' | 'application'
   buildExecutionScope?: WorkflowBuildExecutionScope
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
@@ -74,6 +82,10 @@ export function buildWorkflowForwardedProps(
     selectedPageId: options.selectedPageId,
     selectedApiContractId: options.selectedApiContractId,
     selectedEndpointId: options.selectedEndpointId,
+    selectedAgentId: options.selectedAgentId,
+    agentConfig: options.agentConfig,
+    agentConfigAction: options.agentConfigAction,
+    agentConfigBase: options.agentConfigBase,
     detailTargetType: options.detailTargetType,
     workflowDebug: options.workflowDebug,
     resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,

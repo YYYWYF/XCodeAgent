@@ -19,23 +19,47 @@ import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import ToolCallCard from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
 import WorkflowRunCard, {
-  type ClarificationAnswers,
-  workflowClarification
+  type ClarificationAnswers
 } from '../WorkflowRunCard'
+import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
 import DetailConfirmationPageSelector from '../../../../components/DetailConfirmationPageSelector'
 type DetailConfirmationStart = (
-  targetType: 'page' | 'endpoint',
+  targetType: 'page' | 'endpoint' | 'agent',
   targetId: string,
   targetLabel: string,
   hasDetailPlan: boolean,
   targetContext?: {
     apiContractId?: string
+    agentId?: string
     endpointId?: string
     templateId?: string
     templateName?: string
     templateSourcePath?: string
   }
 ) => Promise<void>
+
+type DetailBlocker = NonNullable<AgentChatMessage['detailBlocker']>
+
+/** 判断详情挡板是否为页面目标，集中处理联合类型收窄。 */
+function isPageDetailBlocker(
+  blocker: AgentChatMessage['detailBlocker']
+): blocker is Extract<DetailBlocker, { type: 'page' }> {
+  return Boolean(blocker && 'type' in blocker && blocker.type === 'page')
+}
+
+/** 判断详情挡板是否为接口目标，集中处理联合类型收窄。 */
+function isEndpointDetailBlocker(
+  blocker: AgentChatMessage['detailBlocker']
+): blocker is Extract<DetailBlocker, { type: 'endpoint' }> {
+  return Boolean(blocker && 'type' in blocker && blocker.type === 'endpoint')
+}
+
+/** 判断详情挡板是否为智能体目标，集中处理联合类型收窄。 */
+function isAgentDetailBlocker(
+  blocker: AgentChatMessage['detailBlocker']
+): blocker is Extract<DetailBlocker, { targetType: 'agent' }> {
+  return Boolean(blocker && 'targetType' in blocker && blocker.targetType === 'agent')
+}
 import {
   processStepsForMessageDisplay,
   workflowMessageContentForDisplay
@@ -449,19 +473,19 @@ export default function MessageList({
                 (testWorkflowPhase === 'application_test' || testWorkflowPhase === 'business_test') &&
                 testWorkflowStatus === 'running'
               const inlineTestCaseAuthorization =
-                Boolean(message.workflow) &&
+                message.workflow != null &&
                 workflowClarification(message.workflow)?.mode === 'test_case_execute' &&
                 requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
               // 产物验收卡与用例授权同构：内嵌在「确认验收」节点上，不单独渲染。
               const inlineArtifactAcceptance =
-                Boolean(message.workflow) &&
+                message.workflow != null &&
                 workflowClarification(message.workflow)?.mode === 'page_acceptance' &&
                 requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
               // 执行方式选择卡内嵌在「选择执行方式」节点上；节点轨迹存在时不再重复渲染独立卡。
               const inlineBackgroundDispatch =
-                Boolean(message.workflow) &&
+                message.workflow != null &&
                 workflowClarification(message.workflow)?.mode === 'background_dispatch' &&
                 requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
@@ -473,18 +497,19 @@ export default function MessageList({
                     message.workflow,
                     Boolean(visibleProcessSteps?.length)
                   )
-              const detailBlockerTargetKey =
-                message.detailBlocker?.type === 'endpoint'
+              const detailBlockerTargetKey = isAgentDetailBlocker(message.detailBlocker)
+                ? `agent:${message.detailBlocker.agentId}`
+                : isEndpointDetailBlocker(message.detailBlocker)
                   ? endpointDetailTargetKey(
                       message.detailBlocker.apiContractId,
                       message.detailBlocker.endpointId
                     )
-                  : message.detailBlocker?.type === 'page'
+                  : isPageDetailBlocker(message.detailBlocker)
                     ? pageDetailTargetKey(message.detailBlocker.pageId)
                     : ''
               const detailBlockerWorkflowStarted = hasWorkflowForTarget(detailBlockerTargetKey)
               const developmentTemplateSelector =
-                message.detailBlocker?.type === 'page' ? (
+                isPageDetailBlocker(message.detailBlocker) ? (
                   <DetailConfirmationPageSelector
                     embedded
                     disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
@@ -499,7 +524,7 @@ export default function MessageList({
                       designed: false
                     }}
                   />
-                ) : message.detailBlocker?.type === 'endpoint' ? (
+                ) : isEndpointDetailBlocker(message.detailBlocker) ? (
                   <DetailConfirmationPageSelector
                     embedded
                     disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
@@ -511,6 +536,20 @@ export default function MessageList({
                       label: message.detailBlocker.label,
                       path: message.detailBlocker.path,
                       purpose: message.detailBlocker.purpose
+                    }}
+                  />
+                ) : isAgentDetailBlocker(message.detailBlocker) ? (
+                  <DetailConfirmationPageSelector
+                    embedded
+                    disabled={loading || detailBlockerWorkflowStarted || interactionsDisabled}
+                    loading={loading}
+                    onStart={onStartDetailDesign}
+                    selectedAgent={{
+                      agentId: message.detailBlocker.agentId,
+                      label: message.detailBlocker.label,
+                      model: message.detailBlocker.model,
+                      purpose: message.detailBlocker.purpose,
+                      hasDetailPlan: false
                     }}
                   />
                 ) : undefined
@@ -528,7 +567,9 @@ export default function MessageList({
                           ? 'completed'
                           : 'requires_user_input',
                         title:
-                          message.detailBlocker?.type === 'endpoint'
+                          isAgentDetailBlocker(message.detailBlocker)
+                            ? '确认智能体详细设计'
+                            : isEndpointDetailBlocker(message.detailBlocker)
                             ? '确认接口详细设计'
                             : '选择页面模板',
                         detail: detailBlockerWorkflowStarted

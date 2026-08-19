@@ -83,6 +83,7 @@ export type EditableObjectType =
   | 'project_plan'
   | 'page_spec'
   | 'endpoint_spec'
+  | 'agent_spec'
   | 'code'
   | 'review_report'
 
@@ -93,7 +94,7 @@ const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
   // 计划阶段只维护项目计划和页面/接口/实体清单。
   planning: ['project_plan'],
   // 开发阶段负责页面、接口、实体的实现和开发自验证。
-  development: ['page_spec', 'endpoint_spec', 'code'],
+  development: ['page_spec', 'endpoint_spec', 'agent_spec', 'code'],
   // 测试阶段只执行用例，不在工作台编辑或确认报告。
   testing: [],
   // 审查 Agent 默认只读代码，只维护审查报告。

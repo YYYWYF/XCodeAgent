@@ -1,14 +1,17 @@
 import type { WorkflowClarification, WorkflowClarificationAnswers } from '../../typings'
 
-/** 为页面最终验收生成不依赖问题列表的稳定继续消息。 */
+/** 为页面或智能体最终验收生成不依赖问题列表的稳定继续消息。 */
 export function pageAcceptanceContinuationMessage(
   clarification: WorkflowClarification | undefined,
   answers: WorkflowClarificationAnswers
 ): string {
-  if (clarification?.mode !== 'page_acceptance' || answers.page_acceptance !== 'accepted') {
-    return ''
+  if (clarification?.mode === 'page_acceptance' && answers.page_acceptance === 'accepted') {
+    return '已完成页面预览，确认验收通过并完成计划。'
   }
-  return '已完成页面预览，确认验收通过并完成计划。'
+  if (clarification?.mode === 'agent_acceptance' && answers.agent_acceptance === 'accepted') {
+    return '已完成智能体试运行和页面预览，确认验收通过并完成智能体交付。'
+  }
+  return ''
 }
 
 /** 为执行方式选择节点生成稳定继续消息；答案携带所选执行通道。 */

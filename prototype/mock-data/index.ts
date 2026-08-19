@@ -5,6 +5,7 @@ import type {
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntity
 } from '../src/renderer/src/typings'
+import type { DevelopmentPlanningAgent } from '../src/renderer/src/agentDevelopment'
 
 // —— pms-new 新建主旅程（需求回检单模块）——
 import { pmsNewApplication, WORKSPACE_ROOT as NEW_ROOT } from './pms-new/application'
@@ -29,6 +30,7 @@ export type PlanningArtifactsShape = {
   pageTree: Array<Record<string, unknown>>
   apiContracts: DevelopmentPlanningApiContract[]
   entities: DevelopmentPlanningEntity[]
+  agents: DevelopmentPlanningAgent[]
 }
 
 export type AppScenario = {
@@ -62,17 +64,46 @@ function scenario(
   endpointDesigns: Record<string, unknown>,
   chatSessions: (workspaceRoot: string, editorMode: EditorMode) => unknown[]
 ): AppScenario {
-  return { app, workspaceRoot, lifecycle, planningArtifacts, workbenchPages, requirementSpec, projectPlan, clarificationQuestions, buildTaskPlan, pageDesigns, designedPageDesigns, endpointDesigns, chatSessions }
+  return {
+    app,
+    workspaceRoot,
+    lifecycle,
+    planningArtifacts,
+    workbenchPages,
+    requirementSpec,
+    projectPlan,
+    clarificationQuestions,
+    buildTaskPlan,
+    pageDesigns,
+    designedPageDesigns,
+    endpointDesigns,
+    chatSessions
+  }
 }
 
 // 唯一场景：新建应用（需求回检单模块）。
-const NEW_SCENARIO: AppScenario = scenario(pmsNewApplication, NEW_ROOT, pmsNewLifecycle, newArtifacts as PlanningArtifactsShape, newPages, newRequirementSpec as Record<string, unknown>, newProjectPlan as Record<string, unknown>, newClarification as Array<Record<string, unknown>>, newBuildTaskPlan as Record<string, unknown>, newPageDesigns as Record<string, unknown>, newDesignedPageDesigns as Record<string, unknown>, newEndpointDesigns as Record<string, unknown>, newSessions)
+const NEW_SCENARIO: AppScenario = scenario(
+  pmsNewApplication,
+  NEW_ROOT,
+  pmsNewLifecycle,
+  newArtifacts as PlanningArtifactsShape,
+  newPages,
+  newRequirementSpec as Record<string, unknown>,
+  newProjectPlan as Record<string, unknown>,
+  newClarification as Array<Record<string, unknown>>,
+  newBuildTaskPlan as Record<string, unknown>,
+  newPageDesigns as Record<string, unknown>,
+  newDesignedPageDesigns as Record<string, unknown>,
+  newEndpointDesigns as Record<string, unknown>,
+  newSessions
+)
 
 /** 最近项目列表：单一新建旅程场景。 */
 export const mockApplications: ApplicationConfig[] = [pmsNewApplication]
 
 /** 按 workspaceRoot 路由；唯一场景直接返回新建应用数据。 */
 export function appDataByWorkspace(_workspaceRoot?: string): AppScenario {
+  void _workspaceRoot
   return NEW_SCENARIO
 }
 

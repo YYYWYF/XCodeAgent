@@ -7,6 +7,7 @@ import type {
   DevelopmentPlanningPageTreeNode
 } from '../../../../typings'
 import type { WorkbenchArtifactStatus } from '../../../../workbenchDomain'
+import type { DevelopmentPlanningAgent } from '../../../../agentDevelopment'
 import { cx } from '../../../../utils'
 import { DevelopmentArtifactTree } from '../SessionSidebar'
 import './DevelopmentArtifactsPanel.less'
@@ -15,7 +16,7 @@ export type DevelopmentArtifactItem = {
   groupId?: string
   groupLabel?: string
   id: string
-  kind: 'endpoint' | 'entity' | 'page'
+  kind: 'agent' | 'endpoint' | 'entity' | 'page'
   label: string
   path: string
   status: WorkbenchArtifactStatus
@@ -23,6 +24,7 @@ export type DevelopmentArtifactItem = {
 
 type Props = {
   activeId?: string
+  agents: DevelopmentPlanningAgent[]
   apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
   entities: DevelopmentPlanningEntity[]
@@ -139,6 +141,14 @@ function DevelopmentArtifactContent({
     return <div className={cx('development-artifact-content-empty')}>从左侧目录选择一个开发产物</div>
   }
   if (activeItem.kind === 'endpoint') return <EndpointDebugContent item={activeItem} />
+  if (activeItem.kind === 'agent') {
+    return (
+      <div className={cx('development-artifact-content-empty')}>
+        <strong>{activeItem.label}</strong>
+        <span>在左侧对话中确认智能体详细设计，完成后可查看 Python Runtime 产物。</span>
+      </div>
+    )
+  }
   if (activeItem.kind === 'entity') {
     return <div className={cx('development-artifact-content-empty')}>实体设计敬请期待</div>
   }
@@ -168,6 +178,7 @@ function DevelopmentArtifactContent({
 /** 承载旧版产物目录和当前产物内容，复用“应用文件”的右目录布局。 */
 export default function DevelopmentArtifactsPanel({
   activeId,
+  agents,
   apiContracts,
   application,
   entities,
@@ -222,6 +233,29 @@ export default function DevelopmentArtifactsPanel({
                 activeItem?.kind === 'page' ? activeItem.id.replace(/^page:/, '') : ''
               }
             />
+            {agents.length > 0 ? (
+              <div className={cx('development-artifact-agent-list')}>
+                <strong>智能体</strong>
+                {agents.map((agent) => {
+                  const item = itemById.get(`agent:${agent.id}`)
+                  if (!item) return null
+                  return (
+                    <button
+                      className={cx(
+                        'development-artifact-agent-item',
+                        activeItem?.id === item.id && 'active'
+                      )}
+                      key={agent.id}
+                      onClick={() => onSelect(item)}
+                      type="button"
+                    >
+                      <span>{agent.label}</span>
+                      <small>{statusLabel(item.status)}</small>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
           </div>
         </aside>
         <main className={cx('development-artifacts-content')}>

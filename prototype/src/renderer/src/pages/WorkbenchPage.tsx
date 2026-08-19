@@ -43,6 +43,7 @@ import {
   createRollbackVersion,
   currentVersion,
   findVersion,
+  isVersionEditable,
   isVersionReleasable
 } from '../service/applicationVersions'
 import {
@@ -59,6 +60,7 @@ import type {
   DevelopmentPlanningPageOption,
   EditorMode
 } from '../typings'
+import type { DevelopmentPlanningAgent } from '../agentDevelopment'
 import type { WorkbenchArtifactProgress } from '../workbenchDomain'
 import { cx, previewOrigin } from '../utils'
 import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
@@ -168,6 +170,9 @@ function WorkbenchPage({
   >([])
   const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
     DevelopmentPlanningEntity[]
+  >([])
+  const [developmentPlanningAgents, setDevelopmentPlanningAgents] = useState<
+    DevelopmentPlanningAgent[]
   >([])
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [previewBaseUrl, setPreviewBaseUrl] = useState('')
@@ -400,6 +405,7 @@ function WorkbenchPage({
         setDevelopmentPlanningEntities(
           Array.isArray(inspection.entities) ? inspection.entities : []
         )
+        setDevelopmentPlanningAgents(Array.isArray(inspection.agents) ? inspection.agents : [])
         setHasPageDesigns(inspection.hasPageDesigns)
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
@@ -410,6 +416,7 @@ function WorkbenchPage({
         setDevelopmentPlanningPageTree([])
         setDevelopmentPlanningApiContracts([])
         setDevelopmentPlanningEntities([])
+        setDevelopmentPlanningAgents([])
         setHasPageDesigns(false)
         console.warn('检查 specs/plans 规划产物失败。', error)
       } finally {
@@ -497,6 +504,8 @@ function WorkbenchPage({
     testCaseGenerationTaskType
   )
   const releaseVersion = isViewingActiveVersion ? viewedVersion : undefined
+  // 只有当前迭代版本可编辑；设计完成、测试前和审查前仍保持 iterating，生成后才变为 released。
+  const versionReadOnly = !isViewingActiveVersion || !isVersionEditable(viewedVersion)
 
   const versionReleasable = Boolean(
     releaseVersion &&
@@ -734,7 +743,7 @@ function WorkbenchPage({
           key={viewedVersion?.id || workspaceApplication.id}
           applicationId={workspaceApplication.id}
           lifecycle={versionLifecycle}
-          locked={!isViewingActiveVersion || viewedVersion?.status === 'released'}
+          locked={versionReadOnly}
         >
           <div className={cx('workbench-shell-column')}>
             <WorkbenchTopBar
@@ -773,6 +782,7 @@ function WorkbenchPage({
                 developmentPlanningPageTree={developmentPlanningPageTree}
                 developmentPlanningApiContracts={developmentPlanningApiContracts}
                 developmentPlanningEntities={developmentPlanningEntities}
+                developmentPlanningAgents={developmentPlanningAgents}
                 editorMode={editorMode}
                 onApplicationUpdate={handleApplicationUpdate}
                 onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
@@ -780,7 +790,7 @@ function WorkbenchPage({
                 previewLaunchError={previewLaunchError}
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
                 versionViewKey={viewedVersion?.id || ''}
-                versionReadOnly={!isViewingActiveVersion || viewedVersion?.status === 'released'}
+                versionReadOnly={versionReadOnly}
                 versionPreviewOnly={!isViewingActiveVersion}
                 testingEntryRequest={testingEntryRequest}
                 onTestingEntryAvailableChange={setTestingEntryAvailable}

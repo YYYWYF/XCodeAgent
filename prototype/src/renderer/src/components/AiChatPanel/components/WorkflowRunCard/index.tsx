@@ -111,6 +111,234 @@ type WorkflowRunCardProps = {
   workflow: WorkflowRunPayload
 }
 
+/** 渲染 Agent 的实体依赖门禁，先完成实体设计再允许生成智能体详细设计。 */
+function AgentDependencyGate({
+  clarification,
+  disabled,
+  onSubmit,
+  workflow
+}: {
+  clarification: WorkflowClarification
+  disabled?: boolean
+  onSubmit?: (workflow: WorkflowRunPayload, answers: ClarificationAnswers) => void
+  workflow: WorkflowRunPayload
+}): ReactElement {
+  const context =
+    clarification.context && typeof clarification.context === 'object'
+      ? (clarification.context as { view?: string; entityId?: string })
+      : {}
+  const entityDesign =
+    clarification.entity_design && typeof clarification.entity_design === 'object'
+      ? (clarification.entity_design as {
+          entity_id?: string
+          name?: string
+          purpose?: string
+          document?: string
+        })
+      : undefined
+  const missingEntities = Array.isArray(clarification.missing_entities)
+    ? clarification.missing_entities.filter(
+        (item): item is { entity_id?: string; name?: string; purpose?: string } =>
+          Boolean(item && typeof item === 'object')
+      )
+    : []
+  const submit = (action: string, entityId?: string): void => {
+    onSubmit?.(workflow, {
+      agent_dependency_action: action,
+      ...(entityId ? { entity_id: entityId } : {})
+    })
+  }
+
+  return (
+    <div className={cx('workflow-run-card', 'workflow-run-card-pending')}>
+      <div className={cx('workflow-run-header')}>
+        <div className={cx('workflow-run-title')}>
+          <span className={cx('workflow-run-signal')} aria-hidden="true" />
+          <Text className={cx('workflow-run-name')} strong>
+            智能体依赖门禁
+          </Text>
+        </div>
+        <Tag color="orange">需要先完成实体设计</Tag>
+      </div>
+      <div className={cx('workflow-run-message')}>
+        <Text>{String(clarification.message || '智能体存在未确认的实体依赖。')}</Text>
+      </div>
+      {context.view === 'entity_design' && entityDesign ? (
+        <div className={cx('workflow-clarification-body')}>
+          <Alert
+            message={`实体设计：${entityDesign.name || entityDesign.entity_id || '未命名实体'}`}
+            description={entityDesign.purpose}
+            showIcon
+            type="info"
+          />
+          <pre className={cx('workflow-entity-design-document')}>
+            {entityDesign.document || '实体详细设计内容暂不可用。'}
+          </pre>
+          <div className={cx('workflow-clarification-nav')}>
+            <Button
+              disabled={disabled || !entityDesign.entity_id}
+              onClick={() => submit('confirm_entity_design', entityDesign.entity_id)}
+              type="primary"
+            >
+              确认实体设计并继续
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className={cx('workflow-clarification-body')}>
+          <Alert
+            message="以下实体尚未完成详细设计"
+            showIcon
+            type="warning"
+          />
+          <ul className={cx('workflow-entity-dependency-list')}>
+            {missingEntities.map((entity) => (
+              <li key={String(entity.entity_id || entity.name)}>
+                <div>
+                  <Text strong>{entity.name || entity.entity_id || '未命名实体'}</Text>
+                  <Text type="secondary">{entity.purpose || '需要完成实体详细设计'}</Text>
+                </div>
+                <Button
+                  disabled={disabled || !entity.entity_id}
+                  onClick={() => submit('open_design', entity.entity_id)}
+                >
+                  前往实体设计
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <div className={cx('workflow-clarification-nav')}>
+            <Button disabled={disabled} onClick={() => submit('recheck')}>
+              重新检测
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 渲染智能体配置变更确认卡，确认后才允许生成候选 Markdown、Python 与接入 Diff。 */
+function AgentConfigRevisionGate({
+  clarification,
+  disabled,
+  onSubmit,
+  workflow
+}: {
+  clarification: WorkflowClarification
+  disabled?: boolean
+  onSubmit?: (workflow: WorkflowRunPayload, answers: ClarificationAnswers) => void
+  workflow: WorkflowRunPayload
+}): ReactElement {
+  const context =
+    clarification.context && typeof clarification.context === 'object'
+      ? (clarification.context as { changedSections?: unknown; model?: unknown; summary?: unknown })
+      : {}
+  const changedSections = Array.isArray(context.changedSections)
+    ? context.changedSections.map((section) => String(section)).filter(Boolean)
+    : []
+  const model = typeof context.model === 'string' ? context.model : ''
+  const summary =
+    typeof context.summary === 'string'
+      ? context.summary
+      : '配置修改将作为候选版本进入增量生成，当前已生效代码和左侧对话在验收前保持不变。'
+  return (
+    <div className={cx('workflow-run-card', 'workflow-run-card-pending')}>
+      <div className={cx('workflow-run-header')}>
+        <div className={cx('workflow-run-title')}>
+          <span className={cx('workflow-run-signal')} aria-hidden="true" />
+          <Text className={cx('workflow-run-name')} strong>
+            智能体配置变更
+          </Text>
+        </div>
+        <Tag color="orange">等待确认</Tag>
+      </div>
+      <div className={cx('workflow-run-message')}>
+        <Text>{String(clarification.message || '检测到智能体配置修改。')}</Text>
+      </div>
+      <Alert message={summary} showIcon type="info" />
+      {model ? (
+        <div className={cx('workflow-agent-config-summary')}>
+          <Text type="secondary">候选模型</Text>
+          <Text>{model}</Text>
+        </div>
+      ) : null}
+      {changedSections.length > 0 ? (
+        <div className={cx('workflow-agent-config-summary')}>
+          <Text type="secondary">变更模块</Text>
+          <div className={cx('workflow-agent-config-change-list')}>
+            {changedSections.map((section) => (
+              <Tag key={section}>{section}</Tag>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className={cx('workflow-clarification-nav')}>
+        <Button
+          disabled={disabled}
+          onClick={() => onSubmit?.(workflow, { agent_config_action: 'cancel' })}
+        >
+          取消本次变更
+        </Button>
+        <Button
+          disabled={disabled}
+          onClick={() => onSubmit?.(workflow, { agent_config_action: 'confirm' })}
+          type="primary"
+        >
+          确认并重新生成
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** 渲染开发产物预览验收，Agent 与页面使用同一套确认节奏但保留目标语义。 */
+function ArtifactAcceptanceGate({
+  clarification,
+  disabled,
+  onSubmit,
+  workflow
+}: {
+  clarification: WorkflowClarification
+  disabled?: boolean
+  onSubmit?: (workflow: WorkflowRunPayload, answers: ClarificationAnswers) => void
+  workflow: WorkflowRunPayload
+}): ReactElement {
+  const isAgent = clarification.mode === 'agent_acceptance'
+  return (
+    <div className={cx('workflow-run-card', 'workflow-run-card-pending')}>
+      <div className={cx('workflow-run-header')}>
+        <div className={cx('workflow-run-title')}>
+          <span className={cx('workflow-run-signal')} aria-hidden="true" />
+          <Text className={cx('workflow-run-name')} strong>
+            {isAgent ? '智能体验收' : '页面验收'}
+          </Text>
+        </div>
+        <Tag color="orange">等待预览确认</Tag>
+      </div>
+      <Alert
+        message={String(
+          clarification.message ||
+            (isAgent ? '请完成智能体试运行和页面预览。' : '请完成页面预览。')
+        )}
+        showIcon
+        type="info"
+      />
+      <div className={cx('workflow-clarification-nav')}>
+        <Button
+          disabled={disabled}
+          onClick={() =>
+            onSubmit?.(workflow, isAgent ? { agent_acceptance: 'accepted' } : { page_acceptance: 'accepted' })
+          }
+          type="primary"
+        >
+          确认验收通过
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export default function WorkflowRunCard({
   disabled,
   embedded = false,
@@ -149,6 +377,36 @@ export default function WorkflowRunCard({
   if (clarification?.mode === 'application_acceptance') return null
   // 开发准入由独立弹框承载，计划对话只保留项目 Agent 的确认消息。
   if (clarification?.mode === 'development_entry_confirmation') return null
+  if (clarification?.mode === 'agent_dependency_gate') {
+    return (
+      <AgentDependencyGate
+        clarification={clarification}
+        disabled={disabled || interactionAvailability !== 'active'}
+        onSubmit={onSubmitClarification}
+        workflow={workflow}
+      />
+    )
+  }
+  if (clarification?.mode === 'agent_config_review') {
+    return (
+      <AgentConfigRevisionGate
+        clarification={clarification}
+        disabled={disabled || interactionAvailability !== 'active'}
+        onSubmit={onSubmitClarification}
+        workflow={workflow}
+      />
+    )
+  }
+  if (clarification?.mode === 'agent_acceptance' && requiresConfirmation) {
+    return (
+      <ArtifactAcceptanceGate
+        clarification={clarification}
+        disabled={disabled || interactionAvailability !== 'active'}
+        onSubmit={onSubmitClarification}
+        workflow={workflow}
+      />
+    )
+  }
   const canSubmitClarification =
     clarification?.status === 'requires_user_input' &&
     clarificationQuestions.length > 0 &&
@@ -469,6 +727,11 @@ function workflowCardCopy(mode?: string, phase?: string): WorkflowCardCopy {
       return {
         title: '授权执行用例',
         primaryAction: '开始执行'
+      }
+    case 'agent_acceptance':
+      return {
+        title: '智能体验收',
+        primaryAction: '确认验收'
       }
     default:
       // 没有明确交互类型时保留通用标题，兼容其它工作台过程卡片。
@@ -1181,6 +1444,17 @@ export function buildClarificationContinuationMessage(
   }
   if (mode === 'development_entry_confirmation') {
     return '确认进入开发阶段。'
+  }
+  if (mode === 'agent_dependency_gate') {
+    const action = String(answers.agent_dependency_action || '')
+    if (action === 'open_design') return '已进入实体详细设计，请审阅并确认后返回智能体流程。'
+    if (action === 'confirm_entity_design') return '已确认实体详细设计，请重新校验智能体依赖。'
+    if (action === 'recheck') return '已发起实体依赖重新检测。'
+  }
+  if (mode === 'agent_config_review') {
+    return String(answers.agent_config_action || '') === 'cancel'
+      ? '已取消本次智能体配置变更，保留当前生效版本。'
+      : '已确认智能体配置变更，请开始增量生成代码。'
   }
   if (
     mode === 'requirement_spec_confirmation' &&
