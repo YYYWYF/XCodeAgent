@@ -64,10 +64,33 @@
         "feedbackComponent": "Empty"
       }
     ],
+    "api_dependencies": [
+      {
+        "apiContractId": "rechecks",
+        "method": "GET",
+        "path": "/api/rechecks/my",
+        "purpose": "我的回检单分页查询"
+      }
+    ],
+    "response_bindings": [
+      {
+        "endpointId": "ep-my-rechecks",
+        "sourcePath": "data.list",
+        "target": "table.rows"
+      }
+    ],
+    "agent_dependencies": [
+      {
+        "agentId": "recheck-assistant",
+        "name": "回检填报助手",
+        "purpose": "解释回检状态并基于当前用户可见回检单给出下一步建议"
+      }
+    ],
     "acceptance_criteria": [
       "可提交回检单并校验必填项",
       "已提交回检单状态可跟踪",
-      "驳回回检可查看整改要求"
+      "驳回回检可查看整改要求",
+      "页面内可打开回检填报助手，工具失败与权限拒绝状态可见"
     ],
     "operation_interactions": [
       "列表与筛选通过 回检单API.查询我的回检() 读取数据，数据绑定由回检单应用API的开发工作流确认"

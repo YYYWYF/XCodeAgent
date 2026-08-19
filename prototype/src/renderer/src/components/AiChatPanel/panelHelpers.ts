@@ -32,13 +32,16 @@ import type { AgentChatMessage } from './types'
 import type { SessionRunStatus } from './hooks/sessionRuntime'
 import type { RelatedEndpointContext } from './hooks/useChatSessions'
 import { workflowClarification } from './components/WorkflowRunCard'
+import { agentArtifactId } from '../../agentDevelopment'
 
 /** 从挡板消息生成目标键，用于判断同一产物是否已有待确认的模板选择卡。 */
 export function detailBlockerTargetKey(blocker: AgentChatMessage['detailBlocker']): string {
   if (!blocker) return ''
-  return blocker.type === 'endpoint'
-    ? endpointDetailTargetKey(blocker.apiContractId, blocker.endpointId)
-    : pageDetailTargetKey(blocker.pageId)
+  if (blocker.type === 'endpoint') {
+    return endpointDetailTargetKey(blocker.apiContractId, blocker.endpointId)
+  }
+  if (blocker.type === 'agent') return agentArtifactId(blocker.agentId)
+  return pageDetailTargetKey(blocker.pageId)
 }
 
 /** 开发阶段的产物发起引导话术：空对话首次进入与无目标发送共用的落库文本；渲染层由产物发起引导卡承载。 */

@@ -15,7 +15,6 @@ import {
   recordItems,
   requirementFlowRows,
   requirementPageRows,
-  stringItems,
   textValue,
   type JsonRecord,
   type RequirementPageRow
@@ -23,7 +22,7 @@ import {
 
 const { Text } = Typography
 
-export type RequirementSectionKey = 'overview' | 'pages' | 'flows'
+export type RequirementSectionKey = 'overview' | 'agents' | 'pages' | 'flows'
 
 type SectionProps = {
   sectionKey: RequirementSectionKey
@@ -67,7 +66,10 @@ export function RequirementOverviewSection({
       <div className={cx('requirement-doc-card-list')}>
         {roles.length ? (
           roles.map((role, index) => (
-            <article className={cx('requirement-doc-card')} key={textValue(role.id, `role-${index}`)}>
+            <article
+              className={cx('requirement-doc-card')}
+              key={textValue(role.id, `role-${index}`)}
+            >
               <div className={cx('requirement-doc-card-heading')}>
                 <strong>{textValue(role.name, `角色 ${index + 1}`)}</strong>
                 <code>{textValue(role.id)}</code>
@@ -278,5 +280,3 @@ export function RequirementFlowsSection({
     </section>
   )
 }
-
-export { stringItems }

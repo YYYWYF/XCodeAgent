@@ -272,8 +272,22 @@ class ApplicationLifecycleTests(unittest.TestCase):
             plans.mkdir(parents=True)
             for path, payload in (
                 (specs / "requirement-spec.json", {"confirmation_status": "confirmed"}),
-                (plans / "product-plan.json", {"confirmation_status": "confirmed"}),
-                (specs / "ui-designs.json", {"confirmation_status": "skipped"}),
+                (
+                    plans / "product-plan.json",
+                    {
+                        "schema_version": "product-plan.v6",
+                        "confirmation_status": "confirmed",
+                        "pages": [],
+                    },
+                ),
+                (
+                    specs / "ui-designs.json",
+                    {
+                        "schema_version": "ui-manifest.v3",
+                        "confirmation_status": "skipped",
+                        "pages": [],
+                    },
+                ),
                 (plans / "technical-plan.json", {"confirmation_status": "confirmed", "artifact_type": "technical-plan"}),
             ):
                 path.write_text(json.dumps(payload), encoding="utf-8")

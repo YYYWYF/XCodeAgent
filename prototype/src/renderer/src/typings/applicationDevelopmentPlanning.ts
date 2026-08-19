@@ -57,6 +57,17 @@ export type DevelopmentPlanningApiContract = {
   dataSourceIds?: string[]
   endpoints: DevelopmentPlanningApiEndpoint[]
 }
+/** 开发阶段的实体产物；实体确认是页面、接口和智能体构建前的依赖门禁。 */
+export type DevelopmentPlanningEntity = {
+  entityId: string
+  key: string
+  label: string
+  purpose: string
+  schemaRef?: string
+  designed?: boolean
+  hasDetailPlan?: boolean
+  detailPlanStatus?: string
+}
 export type MenuDevelopmentPlan = {
   menuKey: string
   menuLabel: string

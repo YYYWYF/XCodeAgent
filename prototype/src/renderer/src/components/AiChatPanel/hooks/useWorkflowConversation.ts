@@ -16,6 +16,7 @@ import type {
   WorkflowRunPayload
 } from '../../../typings'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
+import type { AgentConfigState } from '../../../agentConfig'
 import {
   isDirectModificationWorkflow,
   shouldUseDirectModification
@@ -157,6 +158,11 @@ type UseWorkflowConversationResult = {
   handleStartAppApiWorkflow: (target: {
     objectId: string
     objectLabel: string
+  }) => Promise<boolean>
+  handleStartAgentDetailConfirmation: (target: {
+    agentId: string
+    agentLabel: string
+    hasDetailPlan?: boolean
   }) => Promise<boolean>
   handleStopGenerating: () => void
   handleSubmitClarification: (
@@ -580,8 +586,12 @@ export function useWorkflowConversation({
       selectedObjectId?: string
       selectedApiContractId?: string
       selectedEndpointId?: string
+      selectedAgentId?: string
+      agentConfig?: AgentConfigState
+      agentConfigAction?: 'submit' | 'confirm' | 'cancel'
+      agentConfigBase?: AgentConfigState
       endpointLabel?: string
-      detailTargetType?: 'page' | 'endpoint' | 'app-api' | 'application'
+      detailTargetType?: 'page' | 'endpoint' | 'app-api' | 'agent' | 'application'
       sessionIdentity?: SessionIdentity
       pageTemplate?: {
         id?: string
@@ -777,12 +787,16 @@ export function useWorkflowConversation({
         onApplicationLifecycle: onApplicationLifecycleChange,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
         selectedFilePaths: options?.selectedFilePaths,
-      selectedPageId:
-        options && 'selectedPageId' in options ? options.selectedPageId : identity.pageId,
-      selectedObjectId: options?.selectedObjectId,
-      selectedApiContractId: options?.selectedApiContractId,
-      selectedEndpointId: options?.selectedEndpointId,
-      detailTargetType: options?.detailTargetType,
+        selectedPageId:
+          options && 'selectedPageId' in options ? options.selectedPageId : identity.pageId,
+        selectedObjectId: options?.selectedObjectId,
+        selectedApiContractId: options?.selectedApiContractId,
+        selectedEndpointId: options?.selectedEndpointId,
+        selectedAgentId: options?.selectedAgentId,
+        agentConfig: options?.agentConfig,
+        agentConfigAction: options?.agentConfigAction,
+        agentConfigBase: options?.agentConfigBase,
+        detailTargetType: options?.detailTargetType,
         buildExecutionScope: options?.buildExecutionScope,
         planControlAction: options?.planControlAction,
         planControlRunId: options?.planControlRunId,
@@ -1174,6 +1188,29 @@ export function useWorkflowConversation({
     })
   }
 
+  /** 以用户选择的业务智能体作为单会话开发 Workflow 的详细设计起点。 */
+  const handleStartAgentDetailConfirmation = async (target: {
+    agentId: string
+    agentLabel: string
+    hasDetailPlan?: boolean
+  }): Promise<boolean> => {
+    if (!target.agentId || loading || workspaceBusy) return false
+    const identity = await ensureDevelopmentSession()
+    return sendWorkflowMessage(
+      `${target.hasDetailPlan ? '继续实现智能体' : '开始实现智能体'}：${target.agentLabel}`,
+      {
+        selectedAgentId: target.agentId,
+        selectedPageId: '',
+        detailTargetType: 'agent',
+        buildExecutionScope: { type: 'agent', targetId: target.agentId },
+        sessionIdentity: identity,
+        titleFrom: `实现${target.agentLabel}`,
+        reuseAssistantMessage: true,
+        suppressUserMessage: true
+      }
+    )
+  }
+
   const handleStopGenerating = (): void => {
     const runningIdentity = activeRun?.identity
     if (!runningIdentity || !loading || stopping) return
@@ -1250,6 +1287,7 @@ export function useWorkflowConversation({
     editingSessionId,
     error,
     handleSend,
+    handleStartAgentDetailConfirmation,
     handleStartEndpointDetailConfirmation,
     handleStartAppApiWorkflow,
     handleStartDetailConfirmation,
