@@ -78,7 +78,7 @@ export type WorkflowClarificationChoiceAnswer = {
 }
 
 export type WorkflowDetailReviewTarget = {
-  target_type: 'page' | 'endpoint'
+  target_type: 'page' | 'endpoint' | 'agent'
   target_id: string
   name?: string
   path?: string
@@ -107,28 +107,46 @@ export type WorkflowDetailReviewTarget = {
   interface_design?: Record<string, unknown>
   processing_logic?: string[]
   risks?: string[]
+  task?: string
+  rules?: string[]
+  limitations?: string[]
+  inputs?: string[]
+  outputs?: string[]
+  purpose?: string
+  model?: string
+  tools?: string[]
+  conversation_experience?: string[]
+  memory?: string[]
+  knowledge_retrieval?: string[]
+  system_instructions?: string[]
+  context_strategy?: string[]
+  failure_handling?: string[]
+  page_integrations?: Array<Record<string, unknown>>
 }
 
 export type WorkflowDetailReview = {
   pages?: WorkflowDetailReviewTarget[]
   endpoints?: WorkflowDetailReviewTarget[]
+  agents?: WorkflowDetailReviewTarget[]
   summary?: {
     page_count?: number
     endpoint_count?: number
+    agent_count?: number
     api_contract_count?: number
     missingSelectedPagePlan?: boolean
     missingSelectedEndpointPlan?: boolean
     selectedPageId?: string
     selectedApiContractId?: string
     selectedEndpointId?: string
-    detailTargetType?: 'page' | 'endpoint'
+    selectedAgentId?: string
+    detailTargetType?: 'page' | 'endpoint' | 'agent'
   }
 }
 
 export type WorkflowDetailReviewSubmission = {
   review_status: 'confirmed'
   target_changes: Array<{
-    target_type: 'page' | 'endpoint'
+    target_type: 'page' | 'endpoint' | 'agent'
     target_id: string
     changes: Record<string, unknown>
   }>
@@ -217,7 +235,7 @@ export type LifecycleError = {
 }
 
 export type WorkbenchExecution = {
-  scope: 'application' | 'page' | 'data_source' | 'endpoint'
+  scope: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId: string
   pageId?: string
   threadId: string
@@ -294,7 +312,7 @@ export type WorkflowDebugOptions = {
 }
 
 export type WorkflowBuildExecutionScope = {
-  type: 'application' | 'page' | 'data_source' | 'endpoint'
+  type: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId?: string
   apiContractId?: string
 }

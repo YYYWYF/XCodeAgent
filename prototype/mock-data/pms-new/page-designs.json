@@ -67,10 +67,18 @@
         "target": "table.rows"
       }
     ],
+    "agent_dependencies": [
+      {
+        "agentId": "recheck-assistant",
+        "name": "回检填报助手",
+        "purpose": "解释回检状态并基于当前用户可见回检单给出下一步建议"
+      }
+    ],
     "acceptance_criteria": [
       "可提交回检单并校验必填项",
       "已提交回检单状态可跟踪",
-      "驳回回检可查看整改要求"
+      "驳回回检可查看整改要求",
+      "页面内可打开回检填报助手，工具失败与权限拒绝状态可见"
     ]
   }
 }
