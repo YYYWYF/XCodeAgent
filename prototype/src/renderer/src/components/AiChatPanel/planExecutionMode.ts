@@ -79,6 +79,60 @@ function workflowLifecycleSnapshot(
   )
 }
 
+/** 从后端权威 execution 派生持久模式，停止中的短暂反馈由 Workflow 状态覆盖。 */
+export function derivePlanExecutionMode(execution?: WorkbenchExecution): PlanExecutionMode {
+  if (!execution || execution.status === 'completed') return 'idle'
+  if (execution.status === 'running') return 'running'
+  if (execution.status === 'stopping') return 'stopping'
+  if (execution.status === 'failed') return 'failed'
+  if (execution.status === 'stopped') return 'stopped'
+
+  const interactionType = execution.pendingInteraction?.type
+  if (interactionType === 'agent_approval') return 'awaiting_authorization'
+  if (interactionType === 'repair_scope_confirmation') {
+    return 'awaiting_repair_confirmation'
+  }
+  if (interactionType === 'page_acceptance' || interactionType === 'agent_acceptance') {
+    return 'awaiting_acceptance'
+  }
+  return 'awaiting_plan_adjustment'
+}
+
+/** 在生命周期快照暂缺时用当前 Workflow 状态守住输入锁，只有明确终态才恢复自由输入。 */
+export function deriveDisplayedPlanExecutionMode(
+  execution: WorkbenchExecution | undefined,
+  workflowStatus: string | undefined,
+  requestRunning: boolean,
+  hasLifecycleSnapshot = false
+): PlanExecutionMode {
+  if (requestRunning && workflowStatus === 'stopping') return 'stopping'
+  if (
+    (!hasLifecycleSnapshot || execution) &&
+    (workflowStatus === 'stopped' || workflowStatus === 'cancelled')
+  ) {
+    return 'stopped'
+  }
+  const executionMode = derivePlanExecutionMode(execution)
+  if (executionMode !== 'idle') return executionMode
+  if (requestRunning) {
+    return 'running'
+  }
+  // 已加载的应用生命周期是当前锁权威；其中没有 execution 时，历史会话状态不能重新锁住输入框。
+  if (hasLifecycleSnapshot) return 'idle'
+  if (workflowStatus === 'stopping') return 'stopping'
+  if (workflowStatus === 'running' || workflowStatus === 'requires_user_input') return 'running'
+  if (workflowStatus === 'failed') return 'failed'
+  return 'idle'
+}
+
+/** 简单模式运行时保留原对话框，仅让正式计划执行占用底部控制栏。 */
+export function shouldRenderPlanExecutionDock(
+  mode: PlanExecutionMode,
+  directModificationRunning: boolean
+): mode is Exclude<PlanExecutionMode, 'idle'> {
+  return mode !== 'idle' && !directModificationRunning
+}
+
 /** 乐观更新指定计划执行的控制状态，不覆盖独立的创建生命周期状态。 */
 export function withWorkflowExecutionStatus(
   workflow: WorkflowRunPayload | undefined,
@@ -147,6 +201,30 @@ function normalizePageId(value?: string): string {
     .toLowerCase()
     .replace(/_/g, '-')
     .replace(/^page-/, '')
+}
+
+/** 把内部 Workflow 节点转换为底部锁定条可读的当前任务名称。 */
+export function planExecutionPhaseLabel(phase?: string): string {
+  return (
+    {
+      detail_confirmation: '确认页面设计',
+      inspect_workspace: '检查工作区',
+      inspect_database_context: '获取数据库信息',
+      prepare_build_tasks: '生成执行计划',
+      build: '开发实现',
+      integration_test: '集成测试',
+      launch_project: '启动预览',
+      acceptance: '预览验收',
+      finalize_project: '完成交付'
+    }[phase || ''] || '执行页面计划'
+  )
+}
+
+/** 判断当前计划模式是否允许显示节点级调试恢复入口。
+ * 原型不提供节点级调试入口（生产功能），始终隐藏。 */
+export function planExecutionShowsDebugResume(_mode: PlanExecutionMode): boolean {
+  void _mode
+  return false
 }
 
 /** 从最近执行事件和生命周期阶段推断最安全的 Workflow 恢复节点。 */

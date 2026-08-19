@@ -1,15 +1,15 @@
 /**
  * 开发阶段的产物目标模型与消息提及渲染工具。
- * 开发阶段通过「产物」按钮直接选择页面 / 接口发起实施（不再经输入框 @ 键入）；
+ * 开发阶段通过「产物」按钮直接选择页面 / 接口 / 智能体发起实施（不再经输入框 @ 键入）；
  * 这里集中维护候选目标的状态描述与历史消息中 @ 提及的轻格式渲染，便于独立复用与测试。
  */
 
 /** 产物候选与直接发起共用的目标描述。 */
 export type ComposerArtifactTarget = {
-  /** 领域产物 ID（page:xxx / endpoint:contract:endpoint）。 */
+  /** 领域产物 ID（page:xxx / endpoint:contract:endpoint / agent:xxx）。 */
   artifactId: string
-  kind: 'page' | 'endpoint'
-  /** 候选项展示名，页面为页面名，接口为 `METHOD path`。 */
+  kind: 'page' | 'endpoint' | 'agent'
+  /** 候选项展示名，页面与智能体为名称，接口为 `METHOD path`。 */
   label: string
   /** 候选项第二行提示，页面显示路由，接口显示归属契约。 */
   hint: string
@@ -18,6 +18,8 @@ export type ComposerArtifactTarget = {
   /** 接口目标的契约与 endpoint 身份。 */
   apiContractId?: string
   endpointId?: string
+  /** 智能体目标的 agentId。 */
+  agentId?: string
   /** 产物当前实施状态，决定可否再次发起并渲染为面板状态徽标。 */
   state: ComposerArtifactState
   /** 产物已被后台任务接管、实施中或已交付时禁用再次发起，并给出原因。 */

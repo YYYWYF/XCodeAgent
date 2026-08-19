@@ -72,6 +72,43 @@ export function workbenchPhaseTabText(phase: WorkbenchPhase): string {
   return phase === 'analysis' || phase === 'planning' ? label : `${label}阶段`
 }
 
+/**
+ * 工作台里可被编辑/确认的对象类型，阶段门禁按它判定。
+ * 阶段决定当前可编辑哪些对象，其余对象在该阶段只读。
+ */
+export type EditableObjectType =
+  | 'requirement_doc'
+  | 'project_plan'
+  | 'page_spec'
+  | 'endpoint_spec'
+  | 'agent_spec'
+  | 'code'
+  | 'review_report'
+
+/** 各阶段可编辑的对象集合；不在集合里的对象在该阶段只读。 */
+const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
+  // 分析阶段只维护需求文档，项目计划由独立的项目 Agent 负责。
+  analysis: ['requirement_doc'],
+  // 计划阶段只维护项目计划和页面/接口/实体清单。
+  planning: ['project_plan'],
+  // 开发阶段负责页面、接口、实体的实现和开发自验证。
+  development: ['page_spec', 'endpoint_spec', 'agent_spec', 'code'],
+  // 测试阶段只执行用例，不在工作台编辑或确认报告。
+  testing: [],
+  // 审查 Agent 默认只读代码，只维护审查报告。
+  review: ['review_report'],
+  // 验收阶段只承载用户确认，不新增可编辑的正式产物。
+  acceptance: []
+}
+
+/** 阶段门禁：某对象在指定阶段是否可编辑。 */
+export function isObjectEditableInPhase(
+  objectType: EditableObjectType,
+  phase: WorkbenchPhase
+): boolean {
+  return PHASE_EDITABLE_OBJECTS[phase].includes(objectType)
+}
+
 /** 需求分析阶段的初始化节点：产品 Agent 仍在整理和确认需求。 */
 const ANALYSIS_INITIALIZATION_STAGES = new Set([
   'collecting_requirement',
@@ -232,5 +269,4 @@ export function deriveWorkbenchPhaseValidity(
 export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): WorkbenchPhase {
   return deriveWorkbenchExecutionPhase(lifecycle)
 }
-
 

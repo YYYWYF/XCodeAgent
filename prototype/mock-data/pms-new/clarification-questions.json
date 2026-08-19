@@ -50,6 +50,27 @@
     ]
   },
   {
+    "id": "agent-capability",
+    "header": "智能体能力",
+    "type": "choice",
+    "multiSelect": false,
+    "required": true,
+    "question": "「武汉分行需求回检系统」是否需要在“我的回检”页面提供智能体辅助？",
+    "presetAnswer": "recheck-assistant",
+    "options": [
+      {
+        "label": "回检填报助手",
+        "value": "recheck-assistant",
+        "description": "解释当前用户的回检状态，给出下一步操作建议，并展示工具调用与数据来源。"
+      },
+      {
+        "label": "暂不配置智能体",
+        "value": "no-agent",
+        "description": "本次只规划页面与接口，不提供页面内对话助手。"
+      }
+    ]
+  },
+  {
     "id": "remark",
     "header": "补充说明",
     "type": "text",
