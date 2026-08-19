@@ -225,6 +225,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selected_page_id=selectedPageId,
         selected_api_contract_id=selected_api_contract_id,
         selected_endpoint_id=selected_endpoint_id,
+        project_plan=project_plan_start_values.get("project_plan"),
     )
     # endpoint scope 是正式 handoff 的权威目标；即使客户端只发送了 scope，也要补回详情确认所需的显式 ID。
     if build_execution_scope.get("type") == "endpoint":
@@ -369,6 +370,7 @@ def _build_execution_scope(
     selected_page_id: str,
     selected_api_contract_id: str,
     selected_endpoint_id: str,
+    project_plan: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """标准化 AG-UI 构建范围，并为页面或 endpoint 详情入口推导局部 scope。"""
 
@@ -379,12 +381,18 @@ def _build_execution_scope(
         or _optional_dict(forwarded_props.get("build_execution_scope"))
     )
     if selected_endpoint_id and not explicit_scope:
-        if not selected_api_contract_id:
-            raise ValueError("endpoint 构建必须提供 selectedApiContractId。")
+        inferred_api_contract_id = (
+            selected_api_contract_id
+            or _infer_endpoint_api_contract_id(project_plan, selected_endpoint_id)
+        )
+        if not inferred_api_contract_id:
+            raise ValueError(
+                "endpoint 构建必须提供 selectedApiContractId，且无法从 ProjectPlan 唯一推导。"
+            )
         return {
             "type": "endpoint",
             "targetId": selected_endpoint_id,
-            "apiContractId": selected_api_contract_id,
+            "apiContractId": inferred_api_contract_id,
         }
     if selected_page_id and not explicit_scope:
         return {"type": "page", "targetId": selected_page_id}
@@ -411,11 +419,36 @@ def _build_execution_scope(
     if not target_id:
         raise ValueError("页面、数据源或 endpoint 构建必须提供 buildExecutionScope.targetId。")
     if target_type == "endpoint":
-        api_contract_id = api_contract_id or selected_api_contract_id
+        api_contract_id = (
+            api_contract_id
+            or selected_api_contract_id
+            or _infer_endpoint_api_contract_id(project_plan, target_id)
+        )
         if not api_contract_id:
             raise ValueError("endpoint 构建必须提供 buildExecutionScope.apiContractId。")
         return {"type": "endpoint", "targetId": target_id, "apiContractId": api_contract_id}
     return {"type": target_type, "targetId": target_id}
+
+
+def _infer_endpoint_api_contract_id(
+    project_plan: dict[str, Any] | None,
+    endpoint_id: str,
+) -> str:
+    """从当前确认的 ProjectPlan 唯一反查 endpoint 所属 API Contract。"""
+
+    if not isinstance(project_plan, dict) or not endpoint_id:
+        return ""
+    matches: list[str] = []
+    for contract in _dict_items(project_plan.get("api_contracts")):
+        contract_id = _optional_text(contract.get("id"))
+        if not contract_id:
+            continue
+        for endpoint in _dict_items(contract.get("endpoints")):
+            if _optional_text(endpoint.get("id")) != endpoint_id:
+                continue
+            if contract_id not in matches:
+                matches.append(contract_id)
+    return matches[0] if len(matches) == 1 else ""
 
 
 def _lifecycle_interaction_submission(
@@ -768,6 +801,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     # 归一化回 Graph State，否则按钮虽然显示，点击后后端会丢失实际恢复候选。
     camel_aliases = {
         "build_task_plan": "buildTaskPlan",
+        "build_execution_scope": "buildExecutionScope",
         "build_results": "buildResults",
         "build_summary": "buildSummary",
         "repair_task_plan": "repairTaskPlan",

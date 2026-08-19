@@ -347,7 +347,7 @@ def verify_task_file_changes(
     workspace_root: str | None = None,
     batch_unauthorized_paths: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """使用工作区差异和静态代码证据统一验证完成与已满足结果。"""
+    """为显式调用方执行完整工程验收；Build owner 执行路径不再调用此函数。"""
 
     changed_paths: list[str] = []
     if code_change_set and isinstance(code_change_set.get("files"), list):
@@ -399,6 +399,42 @@ def verify_task_file_changes(
             verified_result["scheduler_decision"] = classify_task_result(verified_result)
         verified.append(verified_result)
     return verified
+
+
+def attribute_task_file_changes(
+    *,
+    results: list[dict[str, Any]],
+    code_change_set: dict[str, Any] | None,
+    tasks: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """仅把真实文件差异归属到任务，不执行 engineering_acceptance 校验。"""
+
+    changed_paths: list[str] = []
+    if code_change_set and isinstance(code_change_set.get("files"), list):
+        changed_paths = [
+            str(file_item.get("path", ""))
+            for file_item in code_change_set["files"]
+            if isinstance(file_item, dict) and file_item.get("path")
+        ]
+
+    tasks_by_id = {
+        str(task.get("id")): task
+        for task in tasks or []
+        if task.get("id")
+    }
+    attributed: list[dict[str, Any]] = []
+    for result in results:
+        attributed_result = dict(result)
+        if result.get("status") in {"completed", "already_satisfied"}:
+            task = tasks_by_id.get(str(result.get("task_id") or ""), {})
+            authorized_paths = _task_authorized_paths(task)
+            attributed_result["changed_files"] = [
+                path
+                for path in changed_paths
+                if _path_matches_any(path, authorized_paths)
+            ]
+        attributed.append(attributed_result)
+    return attributed
 
 
 def _mark_acceptance_failure(

@@ -28,10 +28,6 @@ from app.services.build_repair_planner import (
 )
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
-from app.services.engineering_acceptance_verifier import (
-    apply_batch_scope_violation,
-    unauthorized_batch_paths,
-)
 from app.services.engineering_acceptance import migrate_legacy_repair_acceptance
 from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
@@ -42,6 +38,7 @@ from app.services.build_tool_activity import (
     task_ids_for_tool_activity,
 )
 from app.services.build_scheduler import (
+    attribute_task_file_changes,
     mark_tasks_running,
     normalize_task_results,
     ready_repair_task_ids,
@@ -51,14 +48,11 @@ from app.services.build_scheduler import (
     select_ready_build_batch,
     summarize_build_runtime,
     hydrate_missing_failed_results,
-    verify_task_file_changes,
 )
 from app.workspace.code_changes import (
     build_code_change_set,
     code_change_state_update,
-    diff_workspace_snapshots,
     merge_code_change_sets,
-    snapshot_workspace,
 )
 from app.workspace.plan_documents import (
     project_plan_json_path,
@@ -307,8 +301,6 @@ def _execute_ready_tasks(
 
     all_results: list[dict[str, Any]] = []
     code_change_sets: list[dict[str, Any]] = []
-    workspace = workspace_from_state(state)
-    batch_before = snapshot_workspace(workspace)
     owner_groups = list(_group_tasks_by_owner(ready_tasks).items())
     with ThreadPoolExecutor(
         max_workers=max(1, len(owner_groups)),
@@ -333,25 +325,8 @@ def _execute_ready_tasks(
             all_results.extend(owner_results)
             if owner_change_set:
                 code_change_sets.append(owner_change_set)
-    batch_after = snapshot_workspace(workspace)
-    batch_files = diff_workspace_snapshots(
-        batch_before,
-        batch_after,
-        source_tool="build.batch",
-    )
-    batch_change_set = (
-        build_code_change_set(
-            workspace_root=batch_after.root,
-            files=batch_files,
-            source_tool="build.batch",
-        )
-        if batch_files and batch_after is not None
-        else None
-    )
-    all_results = apply_batch_scope_violation(
-        all_results,
-        unauthorized_batch_paths(batch_change_set, ready_tasks),
-    )
+    # Build Agent 可能执行编译或生成代码，target、generated-sources 等工程产物
+    # 会自然出现在批次快照中；这些差异不再作为任务失败条件。
     return all_results, code_change_sets
 
 
@@ -362,7 +337,7 @@ def _execute_owner_tasks(
     *,
     on_batch_tool_activity: BatchToolActivityCallback | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    """执行一个 owner 的就绪任务，并把并发快照收敛到其授权文件范围。"""
+    """执行一个 owner 的就绪任务，并把可归属的代码差异收敛到任务结果。"""
 
     runner_entry = _runner_for_owner(owner)
     if runner_entry is None:
@@ -436,17 +411,16 @@ def _execute_owner_tasks(
         dispatched_tasks=owner_tasks,
         raw_results=captured.value,
     )
-    verified_results = (
+    attributed_results = (
         normalized_results
         if owner == "database"
-        else verify_task_file_changes(
+        else attribute_task_file_changes(
             results=normalized_results,
             code_change_set=owner_change_set,
             tasks=owner_tasks,
-            workspace_root=workspace,
         )
     )
-    return verified_results, owner_change_set
+    return attributed_results, owner_change_set
 
 
 def _filter_change_set_for_tasks(

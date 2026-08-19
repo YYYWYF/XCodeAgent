@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from app.graph.subgraphs.build import _execute_ready_tasks, build, run_build_scheduler
 from app.services.build_task_planner import replace_build_task_plan_tasks
-from app.services.build_scheduler import verify_task_file_changes
+from app.services.build_scheduler import attribute_task_file_changes
 
 
 def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
@@ -87,7 +87,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
     def test_file_changes_are_attributed_to_each_task_scope(self) -> None:
         """同 owner 批次的实际变更只能记到授权路径命中的任务。"""
 
-        results = verify_task_file_changes(
+        results = attribute_task_file_changes(
             results=[
                 {"task_id": "page-a", "status": "completed"},
                 {"task_id": "page-b", "status": "completed"},
@@ -105,11 +105,62 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
 
         self.assertEqual(results[0]["changed_files"], ["Frontend/src/PageA.tsx"])
         self.assertEqual(results[0]["status"], "completed")
-        self.assertEqual(results[1]["status"], "failed")
-        self.assertEqual(
-            results[1]["failure_category"],
-            "acceptance_verification_failed",
-        )
+        self.assertEqual(results[1]["status"], "completed")
+        self.assertEqual(results[1]["changed_files"], [])
+
+    def test_build_owner_execution_skips_engineering_acceptance_verifier(self) -> None:
+        """代码生成完成后只归属 diff，不再逐任务执行工程验收。"""
+
+        task = {
+            "id": "page",
+            "owner": "frontend",
+            "status": "pending",
+            "dependencies": [],
+            "change_scope": [
+                {"operation": "add", "path": "Frontend/src/Page.tsx"}
+            ],
+            "acceptance_checks": [
+                {
+                    "id": "page-file",
+                    "kind": "file_operation",
+                    "path": "Frontend/src/Page.tsx",
+                }
+            ],
+        }
+
+        def complete_runner(**kwargs):
+            workspace = kwargs.get("workspace")
+            _write_workspace_file(workspace, "Frontend/src/Page.tsx")
+            # Maven/编译工具产生的 target 文件不属于任务 scope，但不应再阻断任务完成。
+            _write_workspace_file(
+                workspace,
+                "backend/target/classes/application.yml",
+            )
+            return [{"task_id": "page", "owner": "frontend", "status": "completed"}]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.verify_task_file_changes",
+                    create=True,
+                ) as acceptance_verifier,
+            ):
+                results, _ = _execute_ready_tasks(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": {"schema_version": "build-dag.v3"},
+                    },
+                    [task],
+                )
+
+        self.assertEqual(results[0]["status"], "completed")
+        self.assertEqual(results[0]["changed_files"], ["Frontend/src/Page.tsx"])
+        acceptance_verifier.assert_not_called()
 
     def test_build_scheduler_runs_dependency_order_until_complete(self) -> None:
         runner_skill_sets: list[list[str] | None] = []

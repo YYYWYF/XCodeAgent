@@ -17,10 +17,15 @@ function scopeFromState(value: unknown): WorkflowBuildExecutionScope | undefined
   }
   if (type === 'application') return { type }
 
-  const targetId = typeof source.targetId === 'string' ? source.targetId.trim() : ''
+  const targetId =
+    typeof (source.targetId || source.target_id) === 'string'
+      ? String(source.targetId || source.target_id).trim()
+      : ''
   if (!targetId) return undefined
   const apiContractId =
-    typeof source.apiContractId === 'string' ? source.apiContractId.trim() : ''
+    typeof (source.apiContractId || source.api_contract_id) === 'string'
+      ? String(source.apiContractId || source.api_contract_id).trim()
+      : ''
   return {
     type: type as WorkflowBuildExecutionScope['type'],
     targetId,
@@ -32,12 +37,28 @@ function scopeFromState(value: unknown): WorkflowBuildExecutionScope | undefined
 export function workflowDebugBuildScope(
   workflow?: WorkflowRunPayload
 ): WorkflowBuildExecutionScope {
-  const stateScope = scopeFromState(workflow?.state?.buildExecutionScope)
+  const stateScope = scopeFromState(
+    workflow?.state?.buildExecutionScope || workflow?.state?.build_execution_scope
+  )
   if (stateScope) return stateScope
+
+  const resultScope = scopeFromState(
+    workflow?.result?.buildExecutionScope || workflow?.result?.build_execution_scope
+  )
+  if (resultScope) return resultScope
 
   const execution = workflow?.summary.lifecycle?.activeExecutions?.[workflow.runId || '']
   if (!execution) return { type: 'application' }
+  const stateApiContractId =
+    workflow?.state?.selectedApiContractId || workflow?.state?.selected_api_contract_id
+  const resultApiContractId =
+    workflow?.result?.selectedApiContractId || workflow?.result?.selected_api_contract_id
+  const apiContractId = String(stateApiContractId || resultApiContractId || '').trim()
   return execution.scope === 'application'
     ? { type: 'application' }
-    : { type: execution.scope, targetId: execution.targetId }
+    : {
+        type: execution.scope,
+        targetId: execution.targetId,
+        ...(execution.scope === 'endpoint' && apiContractId ? { apiContractId } : {})
+      }
 }

@@ -96,9 +96,15 @@ export default function ChatComposer({
   const [buildScopeTargetId, setBuildScopeTargetId] = useState(
     initialBuildScope.targetId || ''
   )
+  const [buildScopeApiContractId, setBuildScopeApiContractId] = useState(
+    initialBuildScope.apiContractId || ''
+  )
   const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
   const isBuildTaskDebug = debugEnabled && resumeFrom === 'prepare_build_tasks'
-  const hasBuildScopeTarget = buildScopeType === 'application' || Boolean(buildScopeTargetId.trim())
+  const hasBuildScopeTarget =
+    buildScopeType === 'application' ||
+    (Boolean(buildScopeTargetId.trim()) &&
+      (buildScopeType !== 'endpoint' || Boolean(buildScopeApiContractId.trim())))
   const canSend = debugEnabled
     ? hasDebugNode && (!isBuildTaskDebug || hasBuildScopeTarget)
     : Boolean(draft.trim())
@@ -115,7 +121,12 @@ export default function ChatComposer({
                   type: buildScopeType,
                   ...(buildScopeType === 'application'
                     ? {}
-                    : { targetId: buildScopeTargetId.trim() })
+                    : {
+                        targetId: buildScopeTargetId.trim(),
+                        ...(buildScopeType === 'endpoint'
+                          ? { apiContractId: buildScopeApiContractId.trim() }
+                          : {})
+                      })
                 }
               }
             : {})
@@ -217,15 +228,32 @@ export default function ChatComposer({
                       </Select>
                       {buildScopeType !== 'application' && (
                         <Input
-                          aria-label={buildScopeType === 'page' ? '页面 ID' : '数据源 ID'}
+                          aria-label={
+                            buildScopeType === 'page'
+                              ? '页面 ID'
+                              : buildScopeType === 'endpoint'
+                                ? '接口 ID'
+                                : '数据源 ID'
+                          }
                           disabled={loading}
                           placeholder={
                             buildScopeType === 'page'
                               ? '输入 pageId，例如 orders'
-                              : '输入 dataSourceId，例如 orders'
+                              : buildScopeType === 'endpoint'
+                                ? '输入 endpointId，例如 orders.list'
+                                : '输入 dataSourceId，例如 orders'
                           }
                           value={buildScopeTargetId}
                           onChange={(event) => setBuildScopeTargetId(event.target.value)}
+                        />
+                      )}
+                      {buildScopeType === 'endpoint' && (
+                        <Input
+                          aria-label="API Contract ID"
+                          disabled={loading}
+                          placeholder="输入 apiContractId，例如 orders-api"
+                          value={buildScopeApiContractId}
+                          onChange={(event) => setBuildScopeApiContractId(event.target.value)}
                         />
                       )}
                       <Text className={cx('workflow-debug-scope-hint')}>

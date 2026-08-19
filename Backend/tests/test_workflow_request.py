@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.protocols.workflow.request import workflow_run_inputs
+from app.protocols.workflow.request import _build_execution_scope, workflow_run_inputs
 
 
 class WorkflowRequestTests(unittest.TestCase):
@@ -53,6 +53,65 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(result["resume_values"]["selected_endpoint_id"], "orders.list")
         self.assertEqual(result["resume_values"]["detail_target_type"], "endpoint")
         self.assertNotIn("selectedPageId", result["resume_values"])
+
+    def test_resume_state_restores_camel_case_endpoint_scope(self) -> None:
+        """从公开 StateSnapshot 重新执行时，应恢复 camelCase endpoint scope。"""
+
+        result = workflow_run_inputs(
+            {
+                "request": "重新执行 prepare_build_tasks",
+                "forwardedProps": {
+                    "resumeState": {
+                        "state": {
+                            "phase": "prepare_build_tasks",
+                            "buildExecutionScope": {
+                                "type": "endpoint",
+                                "targetId": "orders.list",
+                                "apiContractId": "orders-api",
+                            },
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(
+            result["resume_values"]["build_execution_scope"],
+            {
+                "type": "endpoint",
+                "targetId": "orders.list",
+                "apiContractId": "orders-api",
+            },
+        )
+
+    def test_endpoint_scope_infers_unique_api_contract_from_project_plan(self) -> None:
+        """调试 scope 遗漏 apiContractId 时，应从唯一 endpoint 归属自动补齐。"""
+
+        scope = _build_execution_scope(
+            {"buildExecutionScope": {"type": "endpoint", "targetId": "orders.list"}},
+            forwarded_props={},
+            resume_values={},
+            selected_page_id="",
+            selected_api_contract_id="",
+            selected_endpoint_id="",
+            project_plan={
+                "api_contracts": [
+                    {
+                        "id": "orders-api",
+                        "endpoints": [{"id": "orders.list"}],
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(
+            scope,
+            {
+                "type": "endpoint",
+                "targetId": "orders.list",
+                "apiContractId": "orders-api",
+            },
+        )
 
     def test_workbench_extracts_explicit_resume_execution_run_id(self) -> None:
         """继续执行应只把旧 runId 作为锁转移令牌，不依赖生命周期快照恢复 Graph。"""

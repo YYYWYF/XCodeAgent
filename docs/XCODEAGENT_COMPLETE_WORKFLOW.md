@@ -60,7 +60,7 @@ flowchart TD
         B2["database_agent / 数据库变更执行"]
         B3["data_source_agent / 后端数据源代码生成"]
         B4["frontend_agent / 前端代码生成"]
-        B5["engineering_acceptance / 工程验收与结果归并"]
+        B5["result_normalization / 结果归一化与 diff 归属"]
     end
 
     subgraph P6["阶段六：测试与修复"]
@@ -396,7 +396,7 @@ flowchart TD
 ### 6.4 `prepare_build_tasks / 生成并编译 Build DAG`
 
 - **类型**：直接 ChatModel 生成候选任务 + 多阶段确定性编译器。
-- **当前提示词**：`agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt`。数据库应用 Prompt 内联 Spring Boot/MyBatis 技能并严格限制目录、Unit、change scope、API 字段、数据库 gap 和模板修改边界；任务生成顺序固定为数据库 → 后端 → 前端。每个后端 endpoint/table 模块必须拆成对象类、Repository、ApplicationService、Controller 四个串行 stage task，各 stage 只拥有自己的文件，并把上一阶段的预期文件、职责和契约写入下一阶段描述。带 `api_dependencies` 的页面必须规划或复用 `src/apis/<biz>Api.ts`，页面只能通过该服务访问共享 axios 实例。Static 应用只允许前端内存数据模块和页面任务；模型不得生成验证任务，`acceptance_criteria=[]` 且 `acceptance_checks=[]`，工程验收由后端编译。
+- **当前提示词**：`agents/main/task_preparer.py::_task_preparation_prompt` 或 `_static_task_preparation_prompt`。数据库应用 Prompt 内联 Spring Boot/MyBatis 技能并严格限制目录、Unit、change scope、API 字段、数据库 gap 和模板修改边界；任务生成顺序固定为数据库 → 后端 → 前端。每个后端 endpoint/table 模块必须拆成对象类、Repository、ApplicationService、Controller 四个串行 stage task，各 stage 只拥有自己的文件，并把上一阶段的预期文件、职责和契约写入下一阶段描述。带 `api_dependencies` 的页面必须规划或复用 `src/apis/<biz>Api.ts`，页面只能通过该服务访问共享 axios 实例。Static 应用只允许前端内存数据模块和页面任务；模型不得生成验证任务，`acceptance_criteria=[]` 且 `acceptance_checks=[]`，工程验收元数据由后端确定性编译，但不在单个任务完成后执行 verifier。
 - **输入**：确认后的 ProjectPlan、当前目标范围、PageDetail/EndpointDetail、WorkspaceSnapshot、DatabasePlanningContext、已有 Build DAG、可复用 Unit。
 - **输出**：`build-dag.v3`、`build_units`、`unit_graph`、`task_registry`、`task_graph`、`tasks`、`build_context`、`.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md`。
 - **校验规则**：ProjectPlan 必须 confirmed；Unit skeleton 合法；目标详情必须存在；数据库来源必须已有 completed v1 context；页面/API 契约按范围校验；模型任务不能越过 required Unit；任务 ID、依赖、DAG、路径和 owner 必须合法；工程 acceptance checks 确定性编译；无效计划阻断 Build。页面任务声明的 PageKey 若与实时唯一同义目录不同，会先纠正为真实目录；模型漏报页面入口时，编译器优先复用唯一实时入口，否则把 `target.page_key` 推导的标准入口补进已有前端页面任务，再确定性补齐或规范化顶层 `BIZ_MENUS` 登记。
@@ -419,7 +419,7 @@ flowchart TD
     DB["database_agent / 数据库变更 Agent"]
     BE["data_source_agent / 后端数据源 Agent"]
     FE["frontend_agent / 前端代码 Agent"]
-    V["engineering_acceptance / 工程验收与结果归并"]
+    V["result_normalization / 结果归一化与 diff 归属"]
     RP["build_repair_planning / 构建失败修复规划"]
     PAUSE(["requires_confirmation / 等待审批"])
     DONE(["build completed / 构建完成"])
@@ -454,7 +454,7 @@ flowchart TD
 - **类型**：确定性循环调度器；自身无 LLM 提示词。
 - **输入**：`build_task_plan`、`tasks`、`build_execution_scope`、已有结果、`retry_failed_tasks`、repair 状态、用户数据库或修复范围审批。
 - **输出**：更新后的 task 状态、`build_results`、带失败分类和恢复元数据的 `build_summary`、`build_execution_slice`、`code_changes`、repair plan、ProjectPlan/Build DAG 持久化路径。
-- **校验规则**：切片 DAG 必须合法；只调度依赖满足且文件范围不冲突的任务；最大循环 `len(tasks)*2`；结果必须与任务数量和 ID 对齐；真实文件 diff 必须落在授权路径并满足 acceptance checks。runner/tool/network 等瞬时失败只在显式 `retry_failed_tasks` 时恢复为 `pending` 并增加审计计数；若没有瞬时候选但已有无需确认的 RepairPlanner 任务，则重置并执行该修复集合；二者都没有时返回明确的无候选提示。旧 checkpoint 缺失失败 result 时先从 task 失败字段补齐，不把旧结果误判为当前失败。
+- **校验规则**：切片 DAG 必须合法；只调度依赖满足且文件范围不冲突的任务；最大循环 `len(tasks)*2`；结果必须与任务数量和 ID 对齐；真实文件 diff 只按任务范围归属，不再因批次快照中的额外编译产物或生成文件阻断任务，也不在单个任务完成后执行 `engineering_acceptance`/`acceptance_checks`。项目级正确性由后续 `integration_test` 统一检查。runner/tool/network 等瞬时失败只在显式 `retry_failed_tasks` 时恢复为 `pending` 并增加审计计数；若没有瞬时候选但已有无需确认的 RepairPlanner 任务，则重置并执行该修复集合；二者都没有时返回明确的无候选提示。旧 checkpoint 缺失失败 result 时先从 task 失败字段补齐，不把旧结果误判为当前失败。
 - **数据库审批恢复**：Database Agent 返回高危计划时，调度器把当前批次恢复为 `pending`，将同一份计划写入任务的 `approved_database_change_plan` 并返回 `agent_approval`；批准后重入 `build` 时复用该计划，避免重新生成导致 plan hash 改变。用户明确拒绝时，相应数据库任务以 `database_approval_rejected` 失败并结束本轮构建。
 - **依赖文件**：`graph/subgraphs/build.py`、`services/build_scheduler.py`、`services/build_result_coordinator.py`、`services/engineering_acceptance_verifier.py`、`workspace/code_changes.py`。
 - **依赖节点**：上游 `prepare_build_tasks`；内部派发三个 owner Agent；成功进入 `integration_test`。
@@ -467,7 +467,7 @@ flowchart TD
 - **输出**：SQL statements、risk、绑定 plan/schema hash 的 approval、execution evidence、post verification、逐任务结果。
 - **校验规则**：先扫描真实数据库；无 gap 直接 `already_satisfied`；低风险计划直接执行，高危计划先审批；审批恢复必须复用原 `database_change_plan`；SQL 由确定性 harness 在应用配置指定的数据库上执行，配置数据库与扫描上下文不一致时拒绝执行；执行后再次 diff；禁止跨数据库和未授权 DDL。
 - **依赖文件**：`agents/database/agent.py`、`agents/database/generator.py`、`services/database_execution.py`、`services/database_schema_diff.py`、MySQL 工具。
-- **依赖节点**：上游 `build` 的 owner 分组；下游 `engineering_acceptance`。
+- **依赖节点**：上游 `build` 的 owner 分组；下游 `integration_test`。
 
 ### 7.3 `data_source_agent / 后端数据源代码生成 Agent`
 
@@ -475,9 +475,9 @@ flowchart TD
 - **当前提示词**：System Prompt 位于 `agents/data_source/agent.py`；执行 Prompt 位于 `agents/data_source/generator.py::_data_source_generation_prompt`。要求只执行批准任务和 allowed paths，严格服从 API contract，Spring Boot/MyBatis 模块必须使用内置技能，代码兼容 Java 8，不在本阶段运行项目级构建/测试。
 - **输入**：backend owner tasks、BuildTaskPlan 摘要、ProjectPlan API/data context、工作区和选定技能。
 - **输出**：每个 task 的结构化状态、摘要、changed files、failure/change request、真实 diff。
-- **校验规则**：结构化 JSON 结果必须覆盖全部任务；文件变更按 task scope 过滤；禁止静默改 contract；独立 acceptance verifier 检查文件、范围和契约绑定。
+- **校验规则**：结构化 JSON 结果必须覆盖全部任务；文件变更按 task scope 归属；禁止静默改 contract；Build 调度器不再因批次快照中的额外生成文件阻断任务，项目级文件和契约正确性由后续 `integration_test` 处理。
 - **依赖文件**：`agents/data_source/agent.py`、`agents/data_source/generator.py`、`middleware/direct_modification.py`、`agents/workspace_scope.py`、内置 Spring Boot/MyBatis skill。
-- **依赖节点**：上游 `build`；下游 `engineering_acceptance`。
+- **依赖节点**：上游 `build`；下游 `integration_test`。
 
 ### 7.4 `frontend_agent / 前端代码生成 Agent`
 
@@ -485,18 +485,18 @@ flowchart TD
 - **当前提示词**：System Prompt 位于 `agents/frontend/agent.py`；执行 Prompt 位于 `agents/frontend/generator.py::_frontend_generation_prompt`。要求只执行批准任务；API 字段只能来自 contract；先读取模板修改边界和 code-block-template 技能；页面通过 `ui_designs.pages[].page_key` 读取用户确认的 `/.xcodeagent/ui-design/pages/<PageKey>/index.tsx` 作为视觉结构参考，再把静态 Mock/空交互替换为正式 API 或数据层；Static 数据源使用前端内存 API 模块；禁止在本阶段运行项目级构建/测试。
 - **输入**：frontend owner tasks、BuildTaskPlan、ProjectPlan、PageTemplate、`ui_designs` 映射、工作区和选定技能。
 - **输出**：结构化任务结果、页面/API 代码、菜单变更、真实 diff。
-- **校验规则**：结果必须覆盖全部任务；只允许 authorized paths；模板骨架大部分只读；菜单修改受限；独立 acceptance verifier 检查 diff、页面文件、菜单注册和契约绑定。
+- **校验规则**：结果必须覆盖全部任务；只允许 authorized paths；模板骨架大部分只读；菜单修改受限；Build 调度器只归属任务范围内的真实 diff，不再因批次快照中的额外生成文件阻断任务，项目级菜单、契约和构建正确性由后续 `integration_test` 处理。
 - **依赖文件**：`agents/frontend/agent.py`、`agents/frontend/generator.py`、内置 `frontend-template-modification-boundary`、`code-block-template`、UI 设计稿文件。
-- **依赖节点**：上游 `build`；下游 `engineering_acceptance`。
+- **依赖节点**：上游 `build`；下游 `integration_test`。
 
-### 7.5 `engineering_acceptance / 工程验收与结果归并`
+### 7.5 `engineering_acceptance / 工程验收元数据（当前不在 Build 执行路径）`
 
 - **类型**：确定性 verifier；无 LLM 提示词。
 - **输入**：批准任务、Agent 结果、任务前后 WorkspaceSnapshot/diff、acceptance checks、API contract。
-- **输出**：规范化 task results、任务 completed/failed 状态、failure category/reason、Build summary、更新后的 DAG 和 ProjectPlan 实施状态。
-- **校验规则**：实际变更类型必须匹配 add/modify/delete；不得越界；endpoint 任务检查 contract binding；菜单任务检查指定 path/name/key；数据库任务必须有执行证据；Agent 自然语言不能作为验收依据。
+- **输出**：任务计划中的 `acceptance_checks` 元数据、规范化所需的检查描述和修复上下文；Build 执行结果仍由调度器归一化并归属真实 diff。
+- **校验规则**：该 verifier 当前不由 Build 在每个任务完成后调用；Build 也不再以批次快照中的未授权文件变更阻断任务，实际构建、类型、单元测试和集成质量由后续 `integration_test` 决定。保留该服务及检查元数据供审计或后续重新启用，Agent 自然语言不能作为项目级质量依据。
 - **依赖文件**：`services/engineering_acceptance.py`、`services/engineering_acceptance_verifier.py`、`services/build_result_coordinator.py`、`workspace/code_changes.py`。
-- **依赖节点**：依赖三个 owner Agent；结果回到 `build` 调度循环。
+- **依赖节点**：该服务当前不在 owner Agent 的 Build 执行回路中；结果由后续 `integration_test` 和 RepairPlanner 处理。
 
 ### 7.6 `build_repair_planning / 构建失败修复规划`
 
