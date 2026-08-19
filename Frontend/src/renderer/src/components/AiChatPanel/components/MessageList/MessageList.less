@@ -210,6 +210,71 @@
   }
 }
 
+.@{class-prefix}-planning-workflow-activity {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--wb-canvas) 88%, var(--wb-accent-soft));
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 8px;
+
+  &.@{class-prefix}-completed {
+    border-color: var(--wb-border-strong);
+  }
+
+  &.@{class-prefix}-failed {
+    border-color: var(--wb-code-delete-text);
+  }
+}
+
+.@{class-prefix}-planning-workflow-activity-icon {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 7px;
+
+  .@{class-prefix}-failed & {
+    color: var(--wb-code-delete-text);
+  }
+}
+
+.@{class-prefix}-planning-workflow-activity-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+
+  .ant-typography {
+    margin: 0;
+    color: var(--wb-text);
+    line-height: 20px;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-planning-workflow-activity-intent.ant-tag {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 2px;
+  overflow: hidden;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-color: var(--wb-accent-border);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .@{class-prefix}-ai-message-agent {
   display: flex;
   align-items: center;

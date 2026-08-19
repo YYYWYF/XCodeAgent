@@ -71,7 +71,7 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 
 - 名称：{app_info.get('name', '未命名应用')}
 - 目标：{app_info.get('target', '生成一个可在本地运行的前后端应用工程。')}
-- 确认需求摘要：{spec.get('source_request', spec.get('summary', '待补充需求摘要'))}
+- 确认需求摘要：{spec.get('summary') or spec.get('source_request', '待补充需求摘要')}
 - 状态：{spec.get('status', 'draft')}
 - 版本：{spec.get('version', '0.1.0')}
 

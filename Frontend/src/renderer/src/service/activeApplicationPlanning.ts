@@ -19,7 +19,8 @@ export function activePlanningStatus(lifecycle: ApplicationLifecycle): ActivePla
   if (lifecycle.initialization.status === 'failed') return 'error'
   if (
     lifecycle.initialization.status === 'awaiting_user' ||
-    lifecycle.initialization.status === 'cancelled'
+    lifecycle.initialization.status === 'cancelled' ||
+    lifecycle.initialization.status === 'stopped'
   )
     return 'ready'
   return 'running'

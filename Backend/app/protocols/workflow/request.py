@@ -27,6 +27,20 @@ from app.services.workspace_inspector import snapshot_hash
 
 MAX_SELECTED_SKILLS = 64
 MAX_SELECTED_SKILL_NAME_CHARS = 128
+APPLICATION_PLANNING_SCOPES = {
+    "application_planning",
+}
+
+# 设计变更上下文只允许在“仍在等待用户回答/确认”的变更链路快照中回传。
+DESIGN_CHANGE_RESUME_KEYS = (
+    "design_change_submission",
+    "design_change_request",
+    "design_change_target",
+    "design_change_reason",
+    "design_change_affected_page_ids",
+    "design_change_applied_nodes",
+    "design_change_existing_artifacts",
+)
 
 
 class InvalidSelectedSkillsError(ValueError):
@@ -110,6 +124,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         _optional_text(payload.get("workflowScope"))
         or _optional_text(forwarded_props.get("workflowScope"))
     )
+    design_change_submission = (
+        payload.get("designChangeSubmission") is True
+        or payload.get("design_change_submission") is True
+        or forwarded_props.get("designChangeSubmission") is True
+        or forwarded_props.get("design_change_submission") is True
+    )
+    ui_design_action = _ui_design_action(clarification_answers)
     # 节点调试选择是用户本轮明确指定的恢复入口，优先于旧快照中的阻断节点。
     explicit_resume_from = (
         _optional_text(debug_state.get("resume_from"))
@@ -124,17 +145,28 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _resume_from_state(resume_state, workflow_scope=workflow_scope),
         workflow_scope=workflow_scope,
     )
+    # UI 卡片的结构化动作是 ui_confirmation 的直接调用，不属于自由输入设计变更。
+    # 即使恢复快照或错误客户端参数带有意图入口痕迹，也必须由该动作覆盖。
+    if ui_design_action:
+        if workflow_scope != "application_planning":
+            raise ValueError("UI 设计稿动作只能回到 application_planning Graph。")
+        design_change_submission = False
+        resume_from = "ui_confirmation"
+    elif design_change_submission:
+        if workflow_scope != "application_planning":
+            raise ValueError("设计产物变更只能回到 application_planning Graph。")
+        resume_from = "design_intent_analysis"
     if workflow_action == "retry_failed_tasks":
-        if workflow_scope == "application_planning":
+        if workflow_scope in APPLICATION_PLANNING_SCOPES:
             raise ValueError("retry_failed_tasks 只适用于主工作流的 Build 阶段。")
         # 显式重试动作拥有最高恢复优先级，不能被旧快照中的事件或自然语言推断覆盖。
         resume_from = "build"
-    elif small_task_handoff_submission and workflow_scope != "application_planning":
+    elif small_task_handoff_submission and workflow_scope not in APPLICATION_PLANNING_SCOPES:
         resume_from = "small_task_repair"
     if not resume_from and _clarification_answers_to_text(clarification_answers):
         resume_from = (
             "requirements"
-            if workflow_scope == "application_planning"
+            if workflow_scope in APPLICATION_PLANNING_SCOPES
             else "detail_confirmation"
         )
     if not request and resume_from:
@@ -142,7 +174,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     detail_review_submission = _detail_review_submission(clarification_answers)
     acceptance_decision = _page_acceptance_decision(clarification_answers)
     acceptance_adjustment = _acceptance_adjustment(clarification_answers)
-    ui_design_action = _ui_design_action(clarification_answers)
     unit_test_decision = _unit_test_decision(clarification_answers)
     if acceptance_adjustment:
         resume_from = acceptance_adjustment_resume_node(acceptance_adjustment)
@@ -211,7 +242,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     )
     project_plan_start_values = (
         _project_plan_start_values(workspace, selected_page_id=selectedPageId)
-        if workflow_scope != "application_planning"
+        if workflow_scope not in APPLICATION_PLANNING_SCOPES
         else {}
     )
     selectedPageId = _canonical_selected_page_id(
@@ -242,7 +273,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             project_plan_start_values.get("project_plan"),
             build_execution_scope,
         )
-        if workflow_scope != "application_planning"
+        if workflow_scope not in APPLICATION_PLANNING_SCOPES
         else []
     )
     resume_execution_run_id = (
@@ -255,6 +286,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **resume_values_from_state,
         **project_plan_start_values,
         **_debug_resume_values(debug_state, workspace=workspace),
+        "design_change_submission": design_change_submission,
         "retry_failed_tasks": workflow_action == "retry_failed_tasks",
         "selected_skill_names": list(selected_skill_names),
         **(
@@ -301,12 +333,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         **(
             {"edited_requirement_spec": edited_requirement_spec}
-            if edited_requirement_spec and workflow_scope == "application_planning"
+            if edited_requirement_spec and workflow_scope in APPLICATION_PLANNING_SCOPES
             else {}
         ),
         **(
             {"requirement_spec_feedback": requirement_spec_feedback}
-            if workflow_scope == "application_planning"
+            if workflow_scope in APPLICATION_PLANNING_SCOPES
             else {}
         ),
     }
@@ -350,6 +382,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "workspace": workspace,
         "editor_mode": editor_mode,
         "workflow_scope": workflow_scope,
+        "design_change_submission": design_change_submission,
         "workflow_debug_enabled": bool(debug_state.get("enabled")),
         "thread_id": (
             _optional_text(payload.get("thread_id"))
@@ -697,15 +730,16 @@ def _resume_from_state(
 def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
     """限制独立规划 Graph 与主 Graph 各自可恢复的节点集合。"""
 
-    supported = (
-        {
+    if workflow_scope == "application_planning":
+        supported = {
+            "design_intent_analysis",
             "requirements",
             "product_planning",
             "ui_confirmation",
             "technical_planning",
         }
-        if workflow_scope == "application_planning"
-        else {
+    else:
+        supported = {
             "detail_confirmation",
             "project_planning",
             "inspect_workspace",
@@ -718,7 +752,6 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "acceptance",
             "finalize_project",
         }
-    )
     return node_name if node_name in supported else ""
 
 
@@ -791,12 +824,29 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "workflow_scope",
         "acceptance_adjustment",
         "ui_designs",
+        "design_change_submission",
+        "design_change_request",
+        "design_change_target",
+        "design_change_reason",
+        "design_change_affected_page_ids",
+        "design_change_applied_nodes",
+        "design_change_existing_artifacts",
+        "conversation_response",
     }
     resumed_values = {
         key: merged[key]
         for key in allowed_keys
         if key in merged and merged[key] is not None
     }
+    # 设计变更上下文只在一次仍在等待用户回答/确认的变更链路内随快照回传；
+    # 已终结快照（completed/failed/cancelled 等）必须丢弃，
+    # 防止旧变更指令在后续自然轮次中复活。
+    snapshot_status = _optional_text(
+        (_optional_dict(value.get("summary")) or {}).get("status")
+    ) or _optional_text(merged.get("status"))
+    if snapshot_status and snapshot_status != "requires_user_input":
+        for design_change_key in DESIGN_CHANGE_RESUME_KEYS:
+            resumed_values.pop(design_change_key, None)
     # 前端 StateSnapshot 使用 camelCase；恢复失败任务时必须把修复计划和构建结果
     # 归一化回 Graph State，否则按钮虽然显示，点击后后端会丢失实际恢复候选。
     camel_aliases = {

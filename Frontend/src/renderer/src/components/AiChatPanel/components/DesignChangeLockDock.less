@@ -1,0 +1,81 @@
+.@{class-prefix}-design-change-lock-dock {
+  width: min(calc(100% - 60px), 1080px);
+  margin: 14px auto 24px;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(23, 20, 43, 0.05);
+
+  &.@{class-prefix}-starting {
+    overflow: hidden;
+    background: linear-gradient(90deg, var(--wb-accent-soft), transparent 46%), var(--wb-canvas);
+    border-color: var(--wb-accent-border);
+    box-shadow:
+      0 0 0 3px var(--wb-accent-soft),
+      0 8px 24px rgba(23, 20, 43, 0.08);
+  }
+
+  > .ant-alert {
+    margin: 0 14px 12px;
+    border-radius: 8px;
+  }
+}
+
+.@{class-prefix}-design-change-lock-dock-main {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.@{class-prefix}-design-change-lock-dock-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 9px;
+  font-size: 17px;
+}
+
+.@{class-prefix}-design-change-lock-dock-copy {
+  display: flex;
+  min-width: 180px;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+
+  .ant-typography {
+    margin: 0;
+    color: var(--wb-text);
+    font-size: 13px;
+    line-height: 19px;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 18px;
+  }
+}
+
+@media (max-width: 780px) {
+  .@{class-prefix}-design-change-lock-dock-main {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .@{class-prefix}-design-change-lock-dock-copy {
+    min-width: calc(100% - 46px);
+  }
+
+  .@{class-prefix}-design-change-lock-dock-main > .ant-btn {
+    width: 100%;
+    margin-left: 46px;
+  }
+}

@@ -4,6 +4,7 @@ import {
   EyeOutlined,
   InboxOutlined,
   LayoutOutlined,
+  LoadingOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
 import { Alert, Button, Input, Modal, Spin, Tag, Typography } from 'antd'
@@ -125,6 +126,7 @@ export default function UiDesignConfirmationPanel({
   // 受控模式（外部传入）优先，否则用内部状态；变化时通知外部联动右侧加载态。
   const [internalActionPageId, setInternalActionPageId] = useState<string | null>(null)
   const actionPageId = controlledActionPageId ?? internalActionPageId
+  const internalActionStartedRef = useRef(false)
   const setActionPageId = useCallback(
     (next: string | null | ((prev: string | null) => string | null)) => {
       const resolved = typeof next === 'function' ? next(actionPageId) : next
@@ -327,13 +329,19 @@ export default function UiDesignConfirmationPanel({
     }
   }, [activePageId, pages])
 
-  // 后端 run 完成后（disabled 解除）workflow 更新（pages 引用变化），清除单页动作加载态。
-  // run 期间 ui_confirmation.progress 事件会持续刷新 pages 引用，但此时 disabled 仍为 true，
-  // 不能清除 actionPageId，否则换一换/多页调整的加载态与"正在处理"提示会中途消失。
+  // 非受控模式只有在动作确实进入 running 后再回到可交互态时才清除 loading。
+  // 点击后的首帧仍是旧 Workflow，不能因为 disabled 尚未更新就立即清空 actionPageId。
   useEffect(() => {
-    if (disabled) return
-    setActionPageId(null)
-  }, [pages, disabled])
+    if (controlledActionPageId !== undefined || actionPageId === null) return
+    if (disabled) {
+      internalActionStartedRef.current = true
+      return
+    }
+    if (internalActionStartedRef.current) {
+      internalActionStartedRef.current = false
+      setInternalActionPageId(null)
+    }
+  }, [actionPageId, controlledActionPageId, disabled])
 
   if (!clarification) return null
 
@@ -350,6 +358,7 @@ export default function UiDesignConfirmationPanel({
           </p>
           {disabled && actionPageId ? (
             <span className={cx('ui-design-processing-hint')}>
+              <LoadingOutlined spin />
               {actionPageId === 'adjust'
                 ? '正在调整设计稿，请稍候…'
                 : `正在处理「${pages.find((p) => (p.pageId || '') === actionPageId)?.name || actionPageId}」，请稍候…`}
@@ -476,10 +485,11 @@ export default function UiDesignConfirmationPanel({
                           className={cx('ui-design-action-btn')}
                           disabled={disabled}
                           icon={<ReloadOutlined />}
+                          loading={actionPageId === pageId}
                           onClick={() => submitPageAction(pageId, 'regenerate')}
                           title={page.code ? '重新生成本页设计稿' : '生成本页设计稿'}
                         >
-                          {page.code ? '换一换' : '生成'}
+                          {actionPageId === pageId ? '生成中' : page.code ? '换一换' : '生成'}
                         </Button>
                       </div>
                     </div>
@@ -576,7 +586,12 @@ export default function UiDesignConfirmationPanel({
                     ) : null}
                   </div>
                   {acting ? (
-                    <Tag className={cx('ui-design-page-row-status', 'is-generating')}>生成中</Tag>
+                    <Tag
+                      className={cx('ui-design-page-row-status', 'is-generating')}
+                      icon={<LoadingOutlined spin />}
+                    >
+                      生成中
+                    </Tag>
                   ) : confirmed ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已确认</Tag>
                   ) : page.code ? (
@@ -611,10 +626,11 @@ export default function UiDesignConfirmationPanel({
                     className={cx('ui-design-action-btn')}
                     disabled={disabled}
                     icon={<ReloadOutlined />}
+                    loading={acting}
                     onClick={() => submitPageAction(pageId, 'regenerate')}
                     title={page.code ? '重新生成本页设计稿' : '生成本页设计稿'}
                   >
-                    {page.code ? '换一换' : '生成'}
+                    {acting ? '生成中' : page.code ? '换一换' : '生成'}
                   </Button>
                 </div>
               </div>

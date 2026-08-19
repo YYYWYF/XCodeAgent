@@ -9,6 +9,8 @@ PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
+    "design_intent_analysis": "设计变更意图分析",
+    "design_chat_response": "设计对话回复",
     "requirements": "需求文档",
     "product_planning": "产品规划",
     "ui_confirmation": "UI 设计",
@@ -29,6 +31,7 @@ WORKFLOW_NODE_LABELS = {
 
 # 仅用于可视化层的兜底预测；实际节点路由始终以 LangGraph 为准。
 WORKFLOW_STATIC_NEXT_NODES = {
+    "design_intent_analysis": ["requirements", "product_planning", "ui_confirmation"],
     "detail_confirmation": ["inspect_workspace"],
     "project_planning": ["detail_confirmation"],
     "requirements": ["product_planning"],

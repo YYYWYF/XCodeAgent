@@ -38,6 +38,7 @@ type Props = {
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
   ) => void
+  onStopPlanning: () => Promise<void>
   onThemeChange: (theme: 'light' | 'dark') => void
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
@@ -71,6 +72,7 @@ export default function LeftPanel({
   previewLaunchLoading,
   onReturnWelcome,
   onSubmitPlanningClarification,
+  onStopPlanning,
   onThemeChange,
   onPlanningStreamReady,
   onRetryTemplate,
@@ -102,6 +104,7 @@ export default function LeftPanel({
             previewLaunchLoading={previewLaunchLoading}
             onReturnWelcome={onReturnWelcome}
             onSubmitPlanningClarification={onSubmitPlanningClarification}
+            onStopPlanning={onStopPlanning}
             onThemeChange={onThemeChange}
             onPlanningStreamReady={onPlanningStreamReady}
             onRetryTemplate={onRetryTemplate}

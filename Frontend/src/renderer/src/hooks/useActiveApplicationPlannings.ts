@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { message, Modal } from 'antd'
 import {
+  activePlanningStatus,
   loadActiveApplicationPlannings,
   workflowApplicationLifecycle,
   type ActivePlanningStatus,
@@ -14,6 +15,7 @@ import {
 import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
 import { cx } from '../utils'
 import { useSessionRuntimeStore } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
+import { APPLICATION_TEMPLATE_GENERATION_ENABLED } from '../service/templateApi'
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
 type UseActiveApplicationPlanningsOptions = {
@@ -43,6 +45,8 @@ type ActiveApplicationPlanningsController = {
     lifecycle: ApplicationLifecycle,
     visible?: boolean
   ) => void
+  stopPlanning: (applicationId: string) => Promise<void>
+  updatePlanningLifecycle: (applicationId: string, lifecycle: ApplicationLifecycle) => void
   updatePlanningStatus: (applicationId: string, status: ActivePlanningStatus) => void
   updatePlanningWorkflow: (applicationId: string, workflow: WorkflowRunPayload) => void
   visiblePlanningId?: string
@@ -145,6 +149,20 @@ export function useActiveApplicationPlannings({
     [commitPlannings]
   )
 
+  // 使用后端权威快照同步单个初始化计划，停止后不从旧 Workflow 状态推断下一阶段。
+  const updatePlanningLifecycle = useCallback(
+    (applicationId: string, lifecycle: ApplicationLifecycle): void => {
+      commitPlannings((current) =>
+        current.map((planning) =>
+          planning.application.id === applicationId
+            ? { ...planning, lifecycle, status: activePlanningStatus(lifecycle) }
+            : planning
+        )
+      )
+    },
+    [commitPlannings]
+  )
+
   // 更新指定应用的 Workflow 与生命周期快照，禁止跨应用覆盖。
   const updatePlanningWorkflow = useCallback(
     (applicationId: string, workflow: WorkflowRunPayload): void => {
@@ -173,6 +191,11 @@ export function useActiveApplicationPlannings({
     },
     []
   )
+
+  // 停止指定应用的主规划 Workflow，供工作台自由变更入口复用同一停止句柄。
+  const stopPlanning = useCallback(async (applicationId: string): Promise<void> => {
+    await stopHandlersRef.current.get(applicationId)?.()
+  }, [])
 
   // 从活动集合移除已经完成或删除的单个计划。
   const dismissPlanning = useCallback(
@@ -218,7 +241,10 @@ export function useActiveApplicationPlannings({
         (candidate) => candidate.application.id === applicationId
       )
       if (!planning) return
-      if (planning.lifecycle.initialization.stage === 'application_template_generation_failed') {
+      if (
+        APPLICATION_TEMPLATE_GENERATION_ENABLED &&
+        planning.lifecycle.initialization.stage === 'application_template_generation_failed'
+      ) {
         void generateApplicationTemplateFiles(planning)
         return
       }
@@ -282,6 +308,7 @@ export function useActiveApplicationPlannings({
 
   // 后台恢复到模板生成阶段的每个应用都独立续跑，不抢占当前可见页面。
   useEffect(() => {
+    if (!APPLICATION_TEMPLATE_GENERATION_ENABLED) return
     for (const planning of activePlannings) {
       if (
         planning.application.id !== visiblePlanningId &&
@@ -320,6 +347,8 @@ export function useActiveApplicationPlannings({
     returnHome,
     showPlanning,
     startPlanning,
+    stopPlanning,
+    updatePlanningLifecycle,
     updatePlanningStatus,
     updatePlanningWorkflow,
     visiblePlanningId

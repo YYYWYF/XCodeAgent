@@ -8,7 +8,10 @@ import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleSt
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { stopProjectPreview } from '../service/projectLaunch'
-import { ensureApplicationTemplateReadiness } from '../service/templateApi'
+import {
+  APPLICATION_TEMPLATE_GENERATION_ENABLED,
+  ensureApplicationTemplateReadiness
+} from '../service/templateApi'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -53,7 +56,8 @@ function AppEntryContent(): JSX.Element {
           workflow: WorkflowRunPayload,
           answers: WorkflowClarificationAnswers,
           editedRequirementSpec?: Record<string, unknown>,
-          requirementSpecFeedback?: string
+          requirementSpecFeedback?: string,
+          designChangeRequest?: string
         ) => void)
       | undefined
     >
@@ -209,6 +213,7 @@ function AppEntryContent(): JSX.Element {
         let lifecycle = await getApplicationLifecycle(application)
         const templateStage = lifecycle.initialization.stage
         if (
+          APPLICATION_TEMPLATE_GENERATION_ENABLED &&
           application.source === 'new' &&
           [
             'generating_application_template_files',
@@ -309,6 +314,12 @@ function AppEntryContent(): JSX.Element {
           initialWorkflow={planning.workflow}
           key={planning.threadId}
           onConfirmed={() => planningController.onPlanningConfirmed(planning.application.id)}
+          onLifecycleChange={(lifecycle) => {
+            planningController.updatePlanningLifecycle(planning.application.id, lifecycle)
+            if (activeApplication?.id === planning.application.id) {
+              mergeApplicationLifecycle(lifecycle)
+            }
+          }}
           onSubmitClarificationChange={(handler) => {
             planningSubmitByAppRef.current[planning.application.id] = handler ?? undefined
           }}
@@ -349,13 +360,21 @@ function AppEntryContent(): JSX.Element {
               workflow,
               answers,
               editedRequirementSpec,
-              requirementSpecFeedback
+              requirementSpecFeedback,
+              designChangeRequest
             ) => {
               const submit = planningSubmitByAppRef.current[activeApplication.id]
               console.log('[planning-submit] onSubmitPlanningClarification appId=', activeApplication.id, 'submitRef=', Boolean(submit), 'answers=', answers, 'workflow.runId=', workflow.runId)
               if (submit)
-                submit(workflow, answers, editedRequirementSpec, requirementSpecFeedback)
+                submit(
+                  workflow,
+                  answers,
+                  editedRequirementSpec,
+                  requirementSpecFeedback,
+                  designChangeRequest
+                )
             }}
+            onStopPlanning={() => planningController.stopPlanning(activeApplication.id)}
             onThemeChange={setTheme}
             onPlanningStreamReady={handlePlanningStreamReady}
             onRetryTemplate={() => {

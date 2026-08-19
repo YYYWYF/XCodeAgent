@@ -115,6 +115,26 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
     },
 }
 
+APPLICATION_PLANNING_REVISION_STAGES = {
+    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+    ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+}
+
+APPLICATION_PLANNING_ACTIVE_STAGES = {
+    ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+    ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+    ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+    ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+    ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+    ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+}
+
 
 def application_lifecycle_path(workspace: str | Path) -> Path:
     """返回指定工作区的生命周期状态文件路径。"""
@@ -267,6 +287,46 @@ def persist_application_lifecycle_transition(
         status=status,
         active_run_id=active_run_id,
         error=error,
+    )
+    return write_application_lifecycle(
+        workspace,
+        updated,
+        expected_revision=current.revision,
+    )
+
+
+def restart_application_planning_lifecycle(
+    workspace: str | Path,
+    *,
+    stage: ApplicationLifecycleStage,
+    active_run_id: str | None = None,
+) -> ApplicationLifecycle:
+    """为设计产物修订把创建生命周期回退到指定生成阶段。"""
+
+    if stage not in APPLICATION_PLANNING_REVISION_STAGES:
+        raise ApplicationLifecycleConflictError(
+            f"设计修订不能回退到阶段：{stage.value}"
+        )
+    current = load_application_lifecycle(workspace)
+    if current is None:
+        raise ApplicationLifecycleConflictError("生命周期状态尚未初始化。")
+    if current.initialization.stage not in APPLICATION_PLANNING_ACTIVE_STAGES:
+        raise ApplicationLifecycleConflictError(
+            "只有尚未完成的创建规划可以修订设计产物，当前阶段为 "
+            f"{current.initialization.stage.value}。"
+        )
+    updated = current.model_copy(
+        update={
+            "updated_at": utc_now(),
+            "revision": current.revision + 1,
+            "initialization": ApplicationInitialization(
+                stage=stage,
+                status=ApplicationLifecycleStatus.RUNNING,
+                threadId=current.initialization.thread_id,
+            ),
+            "active_run_id": active_run_id or current.active_run_id,
+            "error": None,
+        }
     )
     return write_application_lifecycle(
         workspace,

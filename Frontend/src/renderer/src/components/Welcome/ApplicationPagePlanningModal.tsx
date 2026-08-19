@@ -59,13 +59,15 @@ type Props = {
           workflow: WorkflowRunPayload,
           answers: WorkflowClarificationAnswers,
           editedRequirementSpec?: Record<string, unknown>,
-          requirementSpecFeedback?: string
+          requirementSpecFeedback?: string,
+          designChangeRequest?: string
         ) => void)
       | null
   ) => void
   onPlanningContent?: (content: string) => void
   onPlanningWorkflow?: (workflow: WorkflowRunPayload) => void
   onConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
+  onLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onStatusChange: (status: ActivePlanningStatus) => void
   onWorkflowChange: (workflow: WorkflowRunPayload) => void
   onStopHandlerChange: (handler?: () => Promise<void>) => void
@@ -77,6 +79,22 @@ const phaseOrder = [
   'ui_confirmation',
   'technical_planning'
 ]
+
+const RUNNING_INITIALIZATION_STATUSES = new Set(['pending', 'running', 'stopping'])
+
+/** 等待取消动作写入权威生命周期，避免旧 running 快照继续驱动技术规划或模板生成。 */
+async function waitForStoppedPlanningLifecycle(
+  application: ApplicationConfig,
+  threadId: string
+): Promise<ApplicationLifecycle> {
+  let latest = await getApplicationLifecycle(application, threadId)
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (!RUNNING_INITIALIZATION_STATUSES.has(latest.initialization.status)) return latest
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 100))
+    latest = await getApplicationLifecycle(application, threadId)
+  }
+  throw new Error('规划停止后生命周期仍处于运行状态，请重试。')
+}
 
 const phaseProgress: Record<
   string,
@@ -236,6 +254,7 @@ export default function ApplicationPagePlanningModal({
   onPlanningContent,
   onPlanningWorkflow,
   onConfirmed,
+  onLifecycleChange,
   onStatusChange,
   onWorkflowChange,
   onStopHandlerChange
@@ -301,11 +320,21 @@ export default function ApplicationPagePlanningModal({
   const streamingUiTotal = planningUiDesignPageTotal(workflow)
   const isTechnicalPlanConfirmation = technicalPlanConfirmationReady(workflow)
 
-  // 向首页注册当前 AG-UI 会话的停止句柄，以便从规划页外安全取消运行。
+  // 向首页注册当前 AG-UI 会话的停止句柄，并在取消落盘后同步权威生命周期。
   useEffect(() => {
-    onStopHandlerChange(() => session.stop())
+    const stopPlanning = async (): Promise<void> => {
+      await session.stop()
+      const lifecycle = await waitForStoppedPlanningLifecycle(application, threadId)
+      onLifecycleChange(lifecycle)
+      if (workflow) {
+        const nextWorkflow = withAuthoritativeLifecycle(workflow, lifecycle)
+        setWorkflow(nextWorkflow)
+        onWorkflowChange(nextWorkflow)
+      }
+    }
+    onStopHandlerChange(stopPlanning)
     return () => onStopHandlerChange(undefined)
-  }, [onStopHandlerChange, session])
+  }, [application, onLifecycleChange, onStopHandlerChange, onWorkflowChange, session, threadId, workflow])
 
   // 将运行、待查看或异常状态同步给首页的规划入口。
   useEffect(() => {
@@ -351,7 +380,8 @@ export default function ApplicationPagePlanningModal({
     answers?: WorkflowClarificationAnswers,
     resumeState?: WorkflowRunPayload,
     editedRequirementSpec?: Record<string, unknown>,
-    requirementSpecFeedback?: string
+    requirementSpecFeedback?: string,
+    designChangeSubmission = false
   ): Promise<void> => {
     console.log('[planning-modal] runPlanning start workspaceRoot=', application.workspaceRoot, 'answers=', answers, 'hasResumeState=', Boolean(resumeState), 'threadId=', threadId)
     if (!application.workspaceRoot) return
@@ -372,6 +402,7 @@ export default function ApplicationPagePlanningModal({
         clarificationAnswers: answers,
         editedRequirementSpec,
         requirementSpecFeedback,
+        designChangeSubmission,
         editorMode: 'frontend',
         originalRequest,
         resumeState: currentResumeState,
@@ -528,8 +559,20 @@ export default function ApplicationPagePlanningModal({
         workflow: WorkflowRunPayload,
         answers: WorkflowClarificationAnswers,
         editedRequirementSpec?: Record<string, unknown>,
-        requirementSpecFeedback?: string
+        requirementSpecFeedback?: string,
+        designChangeRequest?: string
       ) => {
+        if (designChangeRequest) {
+          void runPlanning(
+            designChangeRequest,
+            undefined,
+            workflow,
+            undefined,
+            undefined,
+            true
+          )
+          return
+        }
         handleSubmitClarification(workflow, answers, editedRequirementSpec, requirementSpecFeedback)
       }
     )

@@ -42,6 +42,9 @@ export default function UiDesignPreviewPanel({
   onPageChange,
   pages
 }: Props): ReactElement {
+  const activePageGenerating = Boolean(
+    actionPageId && actionPageId !== 'adjust' && activePageId === actionPageId
+  )
   // 首次进入或选中页失效时，默认选第一页。
   useEffect(() => {
     if (pages.length === 0) return
@@ -92,7 +95,7 @@ export default function UiDesignPreviewPanel({
       </aside>
       <div className={cx('ui-design-preview-stage')}>
         <div className={cx('ui-design-preview-stage-body')}>
-          {generating && (activePageId === actionPageId || (!code && !actionPageId)) ? (
+          {activePageGenerating || (generating && !code && !actionPageId) ? (
             <div className={cx('ui-design-preview-loading')}>
               <RichLoading bare title="正在生成设计稿…" />
             </div>

@@ -8,11 +8,8 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
-from app.services.data_source_policy import DatasourceType, apply_authoritative_datasource_type
-from app.services.requirement_spec import (
-    create_requirement_spec,
-    merge_clarification_answers_into_spec,
-)
+from app.services.data_source_policy import DatasourceType
+from app.services.requirement_spec import create_requirement_spec
 from app.tools.ask_user import ask_user, extract_ask_user_clarification
 from app.utils.model_output import extract_json_object
 
@@ -34,9 +31,15 @@ def _requirements_prompt(
         else None
     )
     revision_context = (
-        "Revise the existing RequirementSpec using the latest user feedback. "
-        "The latest feedback overrides conflicting older requirements. Preserve stable ids for "
-        "unchanged items, remove items the user no longer wants, and add newly requested items.\n"
+        "Use the existing RequirementSpec and the latest user feedback together as inputs. Generate "
+        "one new, complete RequirementSpec whose full contents authoritatively replace the old document; "
+        "never return a partial patch. Treat the latest feedback as an incremental patch to the product, "
+        "not as a replacement application request. Start from every existing product fact, apply "
+        "only the additions, removals, or replacements explicitly requested by the feedback, and keep "
+        "all unrelated fields semantically unchanged. The latest feedback overrides only directly "
+        "conflicting older requirements. Preserve stable ids for unchanged items, remove items the user "
+        "no longer wants, and add newly requested items. app_info.summary must summarize the complete "
+        "merged application after the patch; it must not contain only the latest feedback.\n"
         f"Existing RequirementSpec:\n{json.dumps(visible_existing_spec, ensure_ascii=False)}\n\n"
         if visible_existing_spec
         else "Create a new RequirementSpec from the user request.\n"
@@ -161,17 +164,21 @@ def analyze_requirements_with_chat_model(
     analysis_source = "direct_chat_model"
 
     agent_spec = extract_json_object(agent_note)
+    asks_for_clarification = any(
+        getattr(message, "tool_calls", None) for message in messages
+    )
+    if isinstance(existing_spec, dict) and not asks_for_clarification:
+        _validate_complete_revised_requirement_spec(agent_spec)
     spec = create_requirement_spec(
         request,
         agent_note=agent_note,
         agent_spec=agent_spec,
         existing_spec=existing_spec,
+        authoritative_agent_spec=(
+            isinstance(existing_spec, dict) and isinstance(agent_spec, dict)
+        ),
         datasource_type=datasource_type,
     )
-    if _is_clarification_followup(existing_spec):
-        spec = merge_clarification_answers_into_spec(spec, request)
-        # 数据源不进入产品澄清；合并其他产品答案后仍恢复内部技术配置的权威类型。
-        spec = apply_authoritative_datasource_type(spec, datasource_type)
     clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
     spec["clarification_status"] = clarification["status"]
@@ -202,8 +209,30 @@ def analyze_requirements_with_chat_model(
     }
 
 
-def _is_clarification_followup(existing_spec: dict[str, Any] | None) -> bool:
-    return bool(
-        isinstance(existing_spec, dict)
-        and existing_spec.get("confirmation_status") == "pending_user_input"
-    )
+def _validate_complete_revised_requirement_spec(agent_spec: Any) -> None:
+    """修订时拒绝不完整模型结果，避免缺失字段静默回退成旧需求文档。"""
+
+    if not isinstance(agent_spec, dict):
+        raise ValueError("需求 AI 未返回完整的新 RequirementSpec。")
+    app_info = agent_spec.get("app_info")
+    missing_fields = [
+        field_name
+        for field_name in (
+            "user_roles",
+            "feature_modules",
+            "pages",
+            "business_flows",
+        )
+        if not isinstance(agent_spec.get(field_name), list)
+    ]
+    if not isinstance(app_info, dict):
+        missing_fields.insert(0, "app_info")
+    elif not str(app_info.get("name") or "").strip() or not str(
+        app_info.get("summary") or ""
+    ).strip():
+        missing_fields.insert(0, "app_info.name/summary")
+    if missing_fields:
+        raise ValueError(
+            "需求 AI 返回的新 RequirementSpec 缺少完整字段："
+            + "、".join(missing_fields)
+        )

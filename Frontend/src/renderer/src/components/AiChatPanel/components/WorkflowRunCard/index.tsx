@@ -283,10 +283,10 @@ export default function WorkflowRunCard({
                 artifact={confirmationArtifact}
                 disabled={Boolean(disabled)}
                 onSaveRequirementSpec={onSaveRequirementSpec}
-                onSubmit={(editedSpec, feedback) =>
+                onSubmit={(feedback) =>
                   onSubmitClarification?.(workflow, {
                     requirement_spec_confirmation: feedback || '正确，继续规划',
-                  }, editedSpec)
+                  })
                 }
                 requiresConfirmation={requiresConfirmation}
                 rootPath={rootPath}
@@ -395,7 +395,7 @@ function readRequirementSpec(workflow: WorkflowRunPayload): Record<string, unkno
 /**
  * 需求文档确认卡片：展示已生成状态 + 修改（弹窗结构化编辑器）+ 确认并继续规划。
  * 右侧需求文档只读；点「修改」打开 Modal 编辑页面/角色/流程，保存后同步给后端，
- * 再点「确认并继续规划」时大模型拿到最新需求文档。
+ * 确认只提交确认语义，禁止用前端快照覆盖后端已经生成或保存的新文档。
  */
 function RequirementSpecConfirmationCard({
   disabled,
@@ -411,7 +411,7 @@ function RequirementSpecConfirmationCard({
     workflow: WorkflowRunPayload,
     spec: Record<string, unknown>
   ) => Promise<Record<string, unknown> | undefined>
-  onSubmit: (editedSpec?: Record<string, unknown>, feedback?: string) => void
+  onSubmit: (feedback?: string) => void
   requiresConfirmation: boolean
   rootPath?: string
   workflow: WorkflowRunPayload
@@ -448,11 +448,6 @@ function RequirementSpecConfirmationCard({
     }
   }
 
-  // 确认时把最新 spec（弹窗保存后 inject 更新到 workflow）作为 editedSpec 传给后端。
-  const latestSpec =
-    (workflow.state?.requirement_spec as Record<string, unknown> | undefined) ??
-    (workflow.result?.requirement_spec as Record<string, unknown> | undefined)
-
   return (
     <div className={cx("requirement-spec-confirmation-card")}>
       <div className={cx("artifact-auth-bar-footer")}>
@@ -472,7 +467,7 @@ function RequirementSpecConfirmationCard({
           ) : null}
           <Button
             disabled={disabled || !requiresConfirmation}
-            onClick={() => onSubmit(latestSpec, undefined)}
+            onClick={() => onSubmit()}
             type="primary"
           >
             确认并继续规划

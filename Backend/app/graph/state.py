@@ -25,6 +25,13 @@ class ProjectState(TypedDict, total=False):
     complexity_decision: dict[str, Any]
     conversation_intent: str
     conversation_response: str
+    design_change_submission: bool
+    design_change_request: str
+    design_change_target: str
+    design_change_reason: str
+    design_change_affected_page_ids: list[str]
+    design_change_applied_nodes: list[str]
+    design_change_existing_artifacts: dict[str, bool]
     direct_modification_owner: str
     direct_modification_scope: str
     direct_modification_confidence: float

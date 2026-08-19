@@ -86,6 +86,7 @@ def _workflow_start_node(
             resume_from
             if resume_from
             in {
+                "design_intent_analysis",
                 "requirements",
                 "product_planning",
                 "ui_confirmation",
@@ -101,6 +102,14 @@ def _workflow_start_node(
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     """仅预测下一个 UI 时间线节点，不参与 LangGraph 实际路由。"""
 
+    if node_name == "design_intent_analysis":
+        target = str(update.get("design_change_target") or "design_chat_response")
+        return [target] if target in {
+            "requirements",
+            "product_planning",
+            "ui_confirmation",
+            "design_chat_response",
+        } else ["design_chat_response"]
     if node_name == "ui_confirmation":
         # 仅 application_planning 使用：待确认时 Graph 走 END 等待用户，不发 started；
         # 用户确认全部设计稿后同 run 内流转到 project_planning，必须预测下一节点，
@@ -230,6 +239,18 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "data": {
                 "requestComplexity": update.get("request_complexity"),
                 "complexityDecision": update.get("complexity_decision"),
+            },
+        }
+    if node_name == "design_intent_analysis":
+        return {
+            "message": (
+                f"设计变更目标={update.get('design_change_target')}，"
+                f"原因={update.get('design_change_reason')}"
+            ),
+            "data": {
+                "target": update.get("design_change_target"),
+                "reason": update.get("design_change_reason"),
+                "affectedPageIds": update.get("design_change_affected_page_ids", []),
             },
         }
     if node_name == "requirements":
@@ -878,7 +899,10 @@ def _workflow_summary(
     )
     artifacts = _workflow_artifacts(result)
     code_changes = _workflow_code_changes(result)
-    if status == "requires_user_input":
+    conversation_response = str(result.get("conversation_response") or "").strip()
+    if result.get("phase") == "design_chat_response" and conversation_response:
+        message = conversation_response
+    elif status == "requires_user_input":
         message = _workflow_user_input_message(result, clarification)
     else:
         message = f"Workflow {status}：完成 {len(completed_nodes)} 个节点。"
@@ -1000,6 +1024,13 @@ def _workflow_visual_payload(
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
         "clarification": result.get("clarification", {}),
+        "design_change_submission": result.get("design_change_submission", False),
+        "design_change_request": result.get("design_change_request"),
+        "design_change_target": result.get("design_change_target"),
+        "design_change_reason": result.get("design_change_reason"),
+        "design_change_existing_artifacts": result.get(
+            "design_change_existing_artifacts", {}
+        ),
         "product_plan": result.get("product_plan"),
         "product_plan_path": result.get("product_plan_path"),
         "technical_plan": result.get("technical_plan"),

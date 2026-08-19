@@ -7,7 +7,10 @@ from app.agents.main.product_planner import (
     _product_plan_json_example,
     _product_planning_prompt,
 )
-from app.agents.main.requirements_analyzer import _requirements_prompt
+from app.agents.main.requirements_analyzer import (
+    _requirements_prompt,
+    _validate_complete_revised_requirement_spec,
+)
 from app.services.page_implementation_contract import (
     attach_page_implementation_contracts,
     materialize_technical_plan_runtime,
@@ -148,6 +151,92 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("behavior.type is one of business, navigation, interface, external", prompt)
         self.assertIn("do not include data_sources", _requirements_prompt("创建库存系统"))
         self.assertIn("Do not return assumptions or product risks", _requirements_prompt("创建库存系统"))
+
+    def test_requirement_revision_uses_complete_merged_summary(self) -> None:
+        """需求修订不得用本轮增量输入覆盖原应用摘要。"""
+
+        existing = create_requirement_spec("创建一个库存管理系统")
+        revised = create_requirement_spec(
+            "新增低库存预警功能",
+            existing_spec=existing,
+            agent_spec={
+                "app_info": {
+                    "name": existing["app_info"]["name"],
+                    "summary": "库存管理系统支持库存查看、出入库管理和低库存预警。",
+                }
+            },
+        )
+
+        self.assertEqual(
+            revised["app_info"]["summary"],
+            "库存管理系统支持库存查看、出入库管理和低库存预警。",
+        )
+        self.assertEqual(revised["summary"], revised["app_info"]["summary"])
+        self.assertNotEqual(revised["summary"], "新增低库存预警功能")
+        self.assertEqual(
+            create_product_plan(revised)["app"]["summary"],
+            revised["app_info"]["summary"],
+        )
+
+    def test_requirement_revision_fallback_merges_old_summary_and_delta(self) -> None:
+        """模型漏掉摘要时仍需确定性保留原需求并标记最新调整。"""
+
+        existing = create_requirement_spec("创建一个库存管理系统")
+        revised = create_requirement_spec(
+            "新增低库存预警功能",
+            existing_spec=existing,
+            agent_spec={},
+        )
+
+        self.assertIn(existing["app_info"]["summary"], revised["summary"])
+        self.assertIn("新增低库存预警功能", revised["summary"])
+
+    def test_revision_prompts_define_incremental_merge_semantics(self) -> None:
+        """需求与产品规划修订提示都必须把自由输入解释为增量补丁。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(requirement_spec)
+        requirement_prompt = _requirements_prompt(
+            "新增低库存预警功能",
+            requirement_spec,
+        )
+        product_prompt = _product_planning_prompt(
+            requirement_spec,
+            product_plan,
+            "新增低库存预警操作",
+        )
+
+        self.assertIn("incremental patch", requirement_prompt)
+        self.assertIn("complete merged application", requirement_prompt)
+        self.assertIn("authoritatively replace the old document", requirement_prompt)
+        self.assertIn("never return a partial patch", requirement_prompt)
+        self.assertIn("incremental patch", product_prompt)
+        self.assertIn("complete merged ProductPlan", product_prompt)
+
+    def test_requirement_revision_rejects_incomplete_ai_document(self) -> None:
+        """需求 AI 未返回完整新文档时必须失败，不能用旧字段静默补齐。"""
+
+        with self.assertRaisesRegex(ValueError, "缺少完整字段"):
+            _validate_complete_revised_requirement_spec(
+                {
+                    "app_info": {
+                        "name": "个人喜好",
+                        "summary": "改成奶茶和零食两个固定页面。",
+                    },
+                    "pages": [],
+                }
+            )
+
+    def test_requirement_markdown_uses_complete_ai_summary(self) -> None:
+        """Markdown 必须展示 AI 合并后的完整摘要，而不是旧 source_request。"""
+
+        spec = create_requirement_spec("旧需求：使用统一喜好列表页。")
+        spec["source_request"] = "旧需求：使用统一喜好列表页。"
+        spec["summary"] = "新需求：使用奶茶喜好页和零食喜好页。"
+        markdown = render_requirement_spec_markdown(spec)
+
+        self.assertIn("确认需求摘要：新需求：使用奶茶喜好页和零食喜好页。", markdown)
+        self.assertNotIn("确认需求摘要：旧需求：使用统一喜好列表页。", markdown)
 
     def test_product_model_example_contains_every_page_and_no_duplicate_tree(self) -> None:
         """模型完整 JSON 示例必须展开全部页面，并且只保留 pages。"""

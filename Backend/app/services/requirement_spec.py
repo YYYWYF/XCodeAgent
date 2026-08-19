@@ -555,6 +555,11 @@ def create_requirement_spec(
     )
     requirement_summary = consolidated_requirement_text(request)
     source_text = requirement_summary or request
+    merged_summary = _merged_requirement_summary(
+        source_text,
+        agent_spec=agent_spec,
+        existing_spec=existing_spec,
+    )
     modules = _feature_modules(source_text)
     app_name = _app_name(source_text)
     roles = [
@@ -574,11 +579,11 @@ def create_requirement_spec(
         "version": "0.1.0",
         "status": "draft",
         "generated_at": datetime.now(UTC).isoformat(),
-        "summary": source_text,
+        "summary": merged_summary,
         "source_request": source_text,
         "app_info": {
             "name": app_name,
-            "summary": source_text,
+            "summary": merged_summary,
             "target": "生成一个可在本地运行的前后端应用工程。",
         },
         "user_roles": roles,
@@ -689,7 +694,7 @@ def create_requirement_spec(
             "version": str(spec.get("version") or "0.1.0"),
             "status": "draft",
             "generated_at": datetime.now(UTC).isoformat(),
-            "summary": source_text,
+            "summary": merged_summary,
             "source_request": source_text,
             "agent_note": agent_note,
             "agent_spec_used": isinstance(agent_spec, dict),
@@ -699,10 +704,43 @@ def create_requirement_spec(
     spec["app_info"] = {
         **default_spec["app_info"],
         **(spec.get("app_info") if isinstance(spec.get("app_info"), dict) else {}),
-        "summary": source_text,
+        "summary": merged_summary,
     }
     spec = _preserve_stable_data_source_ids(existing_spec, spec)
     return apply_authoritative_datasource_type(spec, effective_datasource_type)
+
+
+def _merged_requirement_summary(
+    latest_request: str,
+    *,
+    agent_spec: dict[str, Any] | None,
+    existing_spec: dict[str, Any] | None,
+) -> str:
+    """修订时保留完整需求语义，禁止把本轮增量输入直接覆盖原摘要。"""
+
+    agent_app_info = (
+        agent_spec.get("app_info")
+        if isinstance(agent_spec, dict) and isinstance(agent_spec.get("app_info"), dict)
+        else {}
+    )
+    agent_summary = str(agent_app_info.get("summary") or "").strip()
+    if agent_summary:
+        return agent_summary
+    if not isinstance(existing_spec, dict):
+        return latest_request
+    existing_app_info = (
+        existing_spec.get("app_info")
+        if isinstance(existing_spec.get("app_info"), dict)
+        else {}
+    )
+    existing_summary = str(
+        existing_app_info.get("summary") or existing_spec.get("summary") or ""
+    ).strip()
+    if not existing_summary:
+        return latest_request
+    if not latest_request or latest_request in existing_summary:
+        return existing_summary
+    return f"{existing_summary}；最新调整：{latest_request}"
 
 
 def _preserve_stable_data_source_ids(

@@ -52,6 +52,7 @@ from app.protocols.workflow.stream_events import (
     _workflow_ag_ui_frames,
 )
 from app.config import Settings
+from app.graph.application_planning_revision import cleared_design_change_context
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
@@ -242,6 +243,9 @@ def build_workflow_ag_ui_stream(
             resume_from = workflow_inputs.get("resume_from") or None
             initial_state: dict[str, Any] = {
                 "request": request,
+                "design_change_submission": bool(
+                    workflow_inputs.get("design_change_submission")
+                ),
                 "user_interaction_submission": bool(
                     workflow_inputs.get("user_interaction_submission")
                 ),
@@ -252,6 +256,14 @@ def build_workflow_ag_ui_stream(
                 "active_run_id": run_id,
             }
             initial_state.update(workflow_inputs.get("resume_values") or {})
+            # 非设计变更链路的规划轮次显式清空变更上下文：快照回传只覆盖公开字段，
+            # 已终结或被放弃的旧变更指令仍可能残留在 checkpoint 里，必须在这里覆写，
+            # 防止其随 checkpoint 合并复活并劫持后续自然回复轮次。
+            design_change_active = bool(
+                initial_state.get("design_change_submission")
+            ) or bool(str(initial_state.get("design_change_request") or "").strip())
+            if workflow_scope == "application_planning" and not design_change_active:
+                initial_state.update(cleared_design_change_context())
             first_node_name = _workflow_start_node(resume_from, workflow_scope)
             current_phase = first_node_name
             if not workflow_scope:
@@ -356,6 +368,22 @@ def build_workflow_ag_ui_stream(
             # awaitingUserInput=false → showingProgress=true 切到进度页，否则会卡在
             # 按钮禁用的确认面板不动。不修改共享 result，避免影响后续 updates 聚合。
             started_result = dict(result)
+            if workflow_scope == "application_planning":
+                # 规划修订恢复运行时持续投影变更上下文，让前端从 started 帧起展示真实生成阶段。
+                for key in (
+                    "design_change_request",
+                    "design_change_target",
+                    "design_change_reason",
+                ):
+                    if initial_state.get(key) is not None:
+                        started_result[key] = initial_state[key]
+                started_result["design_change_submission"] = bool(
+                    initial_state.get("design_change_submission")
+                    or (
+                        initial_state.get("design_change_request")
+                        and not initial_state.get("ui_design_action")
+                    )
+                )
             if resume_from == "ui_confirmation":
                 if "clarification" not in started_result and initial_state.get("clarification") is not None:
                     started_result["clarification"] = initial_state.get("clarification")

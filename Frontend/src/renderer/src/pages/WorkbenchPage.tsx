@@ -32,8 +32,10 @@ type Props = {
     workflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
-    requirementSpecFeedback?: string
+    requirementSpecFeedback?: string,
+    designChangeRequest?: string
   ) => void
+  onStopPlanning: () => Promise<void>
   onThemeChange: (theme: Theme) => void
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
@@ -60,6 +62,7 @@ function WorkbenchPage({
   onApplicationLifecycleChange,
   onReturnWelcome,
   onSubmitPlanningClarification,
+  onStopPlanning,
   onThemeChange,
   onPlanningStreamReady,
   onRetryTemplate,
@@ -358,6 +361,7 @@ function WorkbenchPage({
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
                 onReturnWelcome={onReturnWelcome}
                 onSubmitPlanningClarification={onSubmitPlanningClarification}
+                onStopPlanning={onStopPlanning}
                 onThemeChange={handleThemeChange}
                 onPlanningStreamReady={onPlanningStreamReady}
                 onRetryTemplate={onRetryTemplate}

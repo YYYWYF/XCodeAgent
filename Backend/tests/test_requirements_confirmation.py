@@ -14,7 +14,10 @@ from app.services.requirement_spec import (
     save_requirement_spec_draft,
 )
 from app.tools.ask_user import clear_clarification
-from app.workspace.spec_documents import write_requirement_spec_document
+from app.workspace.spec_documents import (
+    load_requirement_spec_json,
+    write_requirement_spec_document,
+)
 
 
 def _write_application_config(workspace: str, datasource_type: str = "database") -> None:
@@ -95,6 +98,99 @@ class RequirementsConfirmationTests(unittest.TestCase):
         self.assertEqual([page["pageId"] for page in spec["pages"]], ["people_list"])
         self.assertNotIn("login_page", [page["pageId"] for page in spec["pages"]])
         self.assertNotIn("assumptions", spec)
+
+    def test_revision_writes_complete_ai_spec_over_existing_document(self) -> None:
+        """旧文档与新需求交给 AI 后，完整新 Spec 必须覆盖同一路径的旧页面结构。"""
+
+        old_spec = create_requirement_spec(
+            "创建个人喜好应用，使用一个喜好列表页。",
+            agent_spec={
+                "app_info": {
+                    "name": "个人喜好",
+                    "summary": "通过喜好列表统一管理个人喜好。",
+                },
+                "pages": [
+                    {
+                        "pageId": "preference_list",
+                        "name": "喜好列表页",
+                        "path": "/preferences",
+                        "module_id": "preferences",
+                        "description": "统一管理全部喜好。",
+                    }
+                ],
+            },
+        )
+        old_spec["confirmation_status"] = "confirmed"
+        revised_spec = create_requirement_spec(
+            "不要喜好列表页，改成奶茶喜好页和零食喜好页。",
+            existing_spec=old_spec,
+            agent_spec={
+                "app_info": {
+                    "name": "个人喜好",
+                    "summary": "分别在奶茶喜好页和零食喜好页管理两类固定喜好。",
+                },
+                "user_roles": old_spec["user_roles"],
+                "feature_modules": old_spec["feature_modules"],
+                "pages": [
+                    {
+                        "pageId": "milk_tea_preferences",
+                        "name": "奶茶喜好页",
+                        "path": "/milk-tea-preferences",
+                        "module_id": "preferences",
+                        "description": "管理奶茶喜好。",
+                    },
+                    {
+                        "pageId": "snack_preferences",
+                        "name": "零食喜好页",
+                        "path": "/snack-preferences",
+                        "module_id": "preferences",
+                        "description": "管理零食喜好。",
+                    },
+                ],
+                "business_flows": old_spec["business_flows"],
+            },
+            authoritative_agent_spec=True,
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_application_config(workspace)
+            old_path = write_requirement_spec_document(
+                {"workspace": workspace},
+                old_spec,
+            )
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": revised_spec,
+                    "clarification": clear_clarification(revised_spec),
+                },
+            ) as analyzer:
+                result = requirements_node(
+                    {
+                        "request": "不要喜好列表页，改成奶茶喜好页和零食喜好页。",
+                        "workspace": workspace,
+                        "requirement_spec": old_spec,
+                        "requirement_spec_path": old_path,
+                        "timeline": [],
+                    }
+                )
+            markdown = Path(old_path).read_text(encoding="utf-8")
+            persisted = load_requirement_spec_json(
+                result["requirement_spec_json_path"]
+            )
+
+        analyzer.assert_called_once_with(
+            "不要喜好列表页，改成奶茶喜好页和零食喜好页。",
+            existing_spec=old_spec,
+            datasource_type="database",
+            on_token=ANY,
+        )
+        self.assertEqual(result["requirement_spec_path"], old_path)
+        self.assertEqual(
+            [page["name"] for page in persisted["pages"]],
+            ["奶茶喜好页", "零食喜好页"],
+        )
+        self.assertIn("分别在奶茶喜好页和零食喜好页管理两类固定喜好", markdown)
+        self.assertNotIn("喜好列表页", markdown)
 
     def test_clarification_answers_merge_into_requirement_spec_fields(self) -> None:
         spec = create_requirement_spec("创建一个业务管理系统")

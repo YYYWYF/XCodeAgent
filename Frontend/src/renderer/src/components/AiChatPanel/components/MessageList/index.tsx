@@ -11,6 +11,10 @@ import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWorkbenchPhase } from '../../../../context'
 import { WORKBENCH_PHASE_AGENTS } from '../../../../workbenchPhase'
+import {
+  planningWorkflowActivity,
+  planningWorkflowRequiresUserInput
+} from '../../../Welcome/planningWorkflowState'
 import type {
   ApplicationLifecycle,
   DevelopmentPlanningPageOption,
@@ -44,6 +48,7 @@ import {
 } from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
+import PlanningWorkflowActivity from './PlanningWorkflowActivity'
 import './MessageList.less'
 
 const { Text } = Typography
@@ -260,8 +265,12 @@ export default function MessageList({
                   )
               )
               const requiresClarification =
-                message.workflow &&
-                workflowClarification(message.workflow)?.status === 'requires_user_input'
+                message.workflow && planningWorkflowRequiresUserInput(message.workflow)
+              // 设计规划已经由专用进度块表达当前意图和生成阶段，不再重复展示
+              // 通用 ProcessSteps 的“执行完成 / 已归档步骤”摘要。
+              const planningActivity = designPhasePlanning
+                ? planningWorkflowActivity(message.workflow)
+                : undefined
               // UI 确认阶段的卡片在换一换/选模板期间（workflow running，clarification
               // 可能短暂丢失 requires_user_input/mode）也保持显示，避免卡片闪烁。
               // 用 phase=ui_confirmation 作为权威判据（running 期间 phase 不丢），
@@ -276,7 +285,7 @@ export default function MessageList({
                 message.workflow &&
                 ['product_planning', 'project_planning', 'technical_planning'].includes(
                   String(message.workflow.summary?.phase || '')
-                )
+                ) && message.workflow.summary?.status !== 'running'
               const showWorkflowCard = Boolean(
                 message.workflow && (requiresClarification || isUiDesignConfirmationCard || isPlanningStageCard)
               )
@@ -330,11 +339,22 @@ export default function MessageList({
                             planningLoading 标记的占位消息显示 loading 态，
                             流式 chunk 到达后 planningLoading 被清除，展示返回内容。 */}
                         {isPlanningLoadingPlaceholder && (
-                          <div className={cx('ai-message-loading-placeholder')}>
-                            <Spin size="small" />
-                            <Text type="secondary">正在准备需求确认…</Text>
-                          </div>
+                          planningActivity && message.workflow ? (
+                            <PlanningWorkflowActivity workflow={message.workflow} />
+                          ) : (
+                            <div className={cx('ai-message-loading-placeholder')}>
+                              <Spin size="small" />
+                              <Text type="secondary">
+                                {designPhasePlanning ? '正在准备需求确认…' : '正在处理…'}
+                              </Text>
+                            </div>
+                          )
                         )}
+                        {!isPlanningLoadingPlaceholder &&
+                          planningActivity &&
+                          message.workflow ? (
+                            <PlanningWorkflowActivity workflow={message.workflow} />
+                          ) : null}
                         {/* 开发阶段 detailBlocker：研发 Agent 流内挡板卡，
                             选中待设计页面时注入，展示「尚未进行详细设计」+ 开始按钮。 */}
                         {message.detailBlocker && (
@@ -351,7 +371,9 @@ export default function MessageList({
                             }}
                           />
                         )}
-                        {visibleProcessSteps && visibleProcessSteps.length > 0 && !(designPhasePlanning && showWorkflowCard) && (
+                        {visibleProcessSteps &&
+                          visibleProcessSteps.length > 0 &&
+                          !designPhasePlanning && (
                           <ProcessSteps
                             conversation={conversation}
                             loading={messageLoading}

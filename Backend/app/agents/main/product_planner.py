@@ -102,8 +102,13 @@ def _product_planning_prompt(
     """构造只负责产品语义、不包含技术实现的产品规划提示。"""
 
     revision_context = (
-        "Revise the existing ProductPlan with the latest product feedback. Preserve stable pageId "
-        "and actionId values for unchanged product concepts.\n"
+        "Treat the latest product feedback as an incremental patch to the existing ProductPlan, never "
+        "as a replacement plan. Start from the complete existing plan, change only facts explicitly "
+        "affected by the feedback or by the confirmed RequirementSpec, and preserve every unrelated "
+        "page goal, information item, action, navigation target, state requirement, acceptance criterion, "
+        "and app summary. Preserve stable pageId, itemId, actionId, and stepId values for unchanged "
+        "product concepts. Return the complete merged ProductPlan, not a patch and not a plan describing "
+        "only the latest feedback.\n"
         f"Existing ProductPlan:\n{json.dumps(_model_product_plan_view(existing_plan), ensure_ascii=False)}\n\n"
         if existing_plan
         else "Create a new ProductPlan from the confirmed RequirementSpec.\n"

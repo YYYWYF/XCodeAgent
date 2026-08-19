@@ -21,9 +21,16 @@ import { readWorkspaceFile } from '../../service/workspaceTools'
 import { saveRequirementSpecDraft } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { formatError } from '../Welcome/utils'
+import {
+  planningWorkflowActivity,
+  planningWorkflowRequiresUserInput,
+  planningWorkflowSettlesLoading,
+  shouldBackfillPlanningWorkflow
+} from '../Welcome/planningWorkflowState'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import ChatComposer from './components/ChatComposer'
 import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
+import DesignChangeLockDock from './components/DesignChangeLockDock'
 import DocPanel from './components/DocPanel'
 import SourcePanel from './components/SourcePanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
@@ -35,7 +42,6 @@ import RightPanelTabs, { type WorkspaceTab, type WorkspaceTabKey } from './compo
 import SessionSidebar from './components/SessionSidebar'
 import WorkspaceDebugDock from './components/WorkspaceDebugDock'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
-import { workflowClarification } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import DetailConfirmationPageSelector from '../DetailConfirmationPageSelector'
 import PageDesignProgress from '../DetailConfirmationPageSelector/PageDesignProgress'
@@ -99,6 +105,7 @@ const PLANNING_ANSWER_LABELS: Record<string, string> = {
   requirement_spec_confirmation: '需求文档确认',
   requirement_spec_feedback: '需求文档意见',
   product_plan_confirmation: '产品规划确认',
+  design_change_request: '设计变更',
   technical_plan_confirmation: '技术规划确认',
   project_plan_confirmation: '项目计划确认',
   detail_review: '详细设计确认'
@@ -144,8 +151,10 @@ type Props = {
     workflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
-    requirementSpecFeedback?: string
+    requirementSpecFeedback?: string,
+    designChangeRequest?: string
   ) => void
+  onStopPlanning: () => Promise<void>
   onThemeChange: (theme: 'light' | 'dark') => void
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
@@ -174,6 +183,90 @@ type ActiveDetailTarget =
   | { type: 'none' }
   | { type: 'page'; pageId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
+
+const ACTIVE_DESIGN_WORKFLOW_STATUSES = new Set([
+  'running',
+  'requires_user_input',
+  'paused',
+  'stopping'
+])
+
+const LOCAL_DESIGN_ARTIFACTS = [
+  {
+    key: 'requirement-spec',
+    artifactPaths: [
+      '.xcodeagent/specs/requirement-spec.json',
+      '.xcodeagent/specs/requirement-spec.md'
+    ],
+    markdownPath: '.xcodeagent/specs/requirement-spec.md'
+  },
+  {
+    key: 'product-plan',
+    artifactPaths: [
+      '.xcodeagent/plans/product-plan.json',
+      '.xcodeagent/plans/product-plan.md'
+    ],
+    markdownPath: '.xcodeagent/plans/product-plan.md'
+  },
+  {
+    key: 'ui-design',
+    artifactPaths: ['.xcodeagent/specs/ui-designs.json']
+  },
+  {
+    key: 'technical-plan',
+    artifactPaths: [
+      '.xcodeagent/plans/technical-plan.json',
+      '.xcodeagent/plans/technical-plan.md'
+    ],
+    markdownPath: '.xcodeagent/plans/technical-plan.md'
+  }
+] as const
+
+type LocalDesignArtifact = (typeof LOCAL_DESIGN_ARTIFACTS)[number]
+
+/** 从工作区读取单个设计产物；JSON/Markdown 只用于判定存在，展示内容始终优先使用 Markdown。 */
+async function readLocalDesignArtifact(
+  workspaceRoot: string,
+  artifact: LocalDesignArtifact
+): Promise<readonly [string, string] | null> {
+  let artifactExists = false
+  let markdownContent = ''
+  let markdownRead = false
+  for (const path of artifact.artifactPaths) {
+    try {
+      const isMarkdown = 'markdownPath' in artifact && path === artifact.markdownPath
+      const result = await readWorkspaceFile({
+        workspace_root: workspaceRoot,
+        path,
+        max_lines: isMarkdown ? 5000 : 1,
+        max_chars: isMarkdown ? 200000 : 200
+      })
+      artifactExists = true
+      if (isMarkdown) {
+        markdownContent = result.content
+        markdownRead = true
+      }
+      break
+    } catch {
+      // 当前候选不存在时继续检查同一产物的另一种正式文件格式。
+    }
+  }
+  if (!artifactExists) return null
+  if ('markdownPath' in artifact && !markdownRead) {
+    try {
+      const result = await readWorkspaceFile({
+        workspace_root: workspaceRoot,
+        path: artifact.markdownPath,
+        max_lines: 5000,
+        max_chars: 200000
+      })
+      markdownContent = result.content
+    } catch {
+      // JSON 产物已经足以放行 tab；Markdown 缺失时保持空内容。
+    }
+  }
+  return [artifact.key, markdownContent] as const
+}
 
 /** 为页面或接口生成稳定的前端目标键，隔离各目标的临时交互状态。 */
 function detailTargetKey(target: ActiveDetailTarget): string {
@@ -330,6 +423,7 @@ export default function AiChatPanel({
   previewLaunchLoading,
   onReturnWelcome,
   onSubmitPlanningClarification,
+  onStopPlanning,
   onThemeChange,
   onPlanningStreamReady,
   onRetryTemplate,
@@ -344,6 +438,8 @@ export default function AiChatPanel({
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
   // 记录用户是否主动进入自由对话，用于切换工作台上下文和设计入口状态。
   const [freeChatSelected, setFreeChatSelected] = useState(false)
+  // 设计阶段自由变更是主规划 Workflow 的显式中断模式，默认保持锁定。
+  const [designChangeUnlocked, setDesignChangeUnlocked] = useState(false)
   // 按页面/API目标保留输入模式，切换会话时不让用户反复选择同一模式。
   const [inputModes, setInputModes] = useState<Record<string, ChatInputMode>>({})
   const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
@@ -358,8 +454,8 @@ export default function AiChatPanel({
   const [uiDesignActivePageId, setUiDesignActivePageId] = useState('')
   // UI 设计稿：当前正在执行单页动作（选模板/换一换）的 pageId，用于右侧预览显示加载态。
   const [uiDesignActionPageId, setUiDesignActionPageId] = useState<string | null>(null)
-  // 设计阶段右侧文档：当 confirmationArtifact 不可用（确认完成后）时，从磁盘异步读取
-  // 需求文档/项目计划文件内容，避免确认后右侧 tab 显示"待生成"。
+  // 设计阶段右侧文档：从本地正式路径异步读取需求、产品和技术文档，
+  // 即使 Workflow 快照未携带产物路径，也允许用户切换到已经存在的文档。
   const [designDocFileContent, setDesignDocFileContent] = useState<Record<string, string>>({})
   const [runtimePreviewBaseUrl, setRuntimePreviewBaseUrl] = useState(() =>
     previewOrigin(previewBaseUrl)
@@ -369,6 +465,11 @@ export default function AiChatPanel({
   const { publishAiMessage } = useWorkbench()
   const { phase: activeWorkbenchPhase, switchPhase } = useWorkbenchPhase()
   const isDesignPhase = activeWorkbenchPhase === 'product'
+
+  // 切换应用或规划线程时回到主流程锁定态，避免把上一个规划的自由变更模式带入新会话。
+  useEffect(() => {
+    setDesignChangeUnlocked(false)
+  }, [application.id, isDesignPhase, planningThreadId])
   // 模板生成完成后（lifecycle 变为 ready_for_workbench），derivedPhase 自动变 development。
   // 前端拦截：保持 product 阶段，等用户点"进入开发"按钮后才放开（switchPhase(null) 恢复跟随旅程）。
   // 用 sessionStorage 按 applicationId 记录用户是否已确认进入开发，跨重挂载保持。
@@ -413,30 +514,13 @@ export default function AiChatPanel({
   // 面板内容（preview/doc/diff）由本组件按目标类型设置。
   const showRightPanel = rightPanelOpen && Boolean(rightPanel)
 
-  // ---- 设计阶段（product）：右侧展示需求文档/产品规划/技术规划 ----
-  // 文档内容来自真实规划 workflow（planningWorkflow），不照搬 prototype 的 mock。
-  // 需求确认后需求文档可用（confirmationArtifact.id=requirement_spec），
-  // 产品规划确认阶段直接展示当前 ProductPlan Markdown。
-  const planningArtifact = planningWorkflow?.confirmationArtifact
+  // ---- 设计阶段（product）：右侧展示需求文档/产品规划/UI设计稿/技术规划 ----
+  // tab 可用性只取决于本地正式产物是否存在，不受 Workflow 当前阶段或确认状态限制。
   // UI 设计稿：从规划 workflow 的 clarification（ui_design_confirmation 模式）或
   // state/result 的 ui_designs 读取页面列表。设计稿生成中或已就绪都算可用。
   const planningClarification = planningWorkflow?.summary?.clarification as
     | { mode?: string; status?: string; pages?: unknown[] }
     | undefined
-  // 产物文档只在对应确认阶段才视为可用：需求填表（requirements clarification）阶段
-  // 虽然后端已生成 artifact，但用户尚未确认，不应在右侧展示产物详情。
-  const requirementDocAvailable =
-    planningArtifact?.id === 'requirement_spec' &&
-    Boolean(planningArtifact.content) &&
-    planningClarification?.mode === 'requirement_spec_confirmation'
-  const productPlanDocAvailable =
-    planningArtifact?.id === 'product_plan' &&
-    Boolean(planningArtifact.content) &&
-    planningClarification?.mode === 'product_plan_confirmation'
-  const technicalPlanDocAvailable =
-    planningArtifact?.id === 'technical_plan' &&
-    Boolean(planningArtifact.content) &&
-    planningClarification?.mode === 'technical_plan_confirmation'
   const planningPhaseRunning = planningWorkflow?.summary?.status === 'running'
   const planningPhase = planningWorkflow?.summary?.phase
   const planningUiDesignPagesSource: unknown[] | undefined =
@@ -461,38 +545,38 @@ export default function AiChatPanel({
     }
     return raw
   }, [planningUiDesignPagesSource, planningPhaseRunning])
-  // UI 设计稿可用：设计稿已生成就算可用（不限制 clarification.mode），
-  // 避免项目规划阶段（mode=project_planning）UI设计稿 tab 被误禁用。
-  // 用 uiDesignPages（含 running 期间缓存）判断，避免流式快照丢失时 tab 误禁用。
-  const uiDesignAvailable = isDesignPhase && uiDesignPages.length > 0
+  const requirementDocAvailable = 'requirement-spec' in designDocFileContent
+  const productPlanDocAvailable = 'product-plan' in designDocFileContent
+  const uiDesignAvailable = 'ui-design' in designDocFileContent
+  const technicalPlanDocAvailable = 'technical-plan' in designDocFileContent
   const designDocs = isDesignPhase
     ? ([
         {
           key: 'requirement-spec' as WorkspaceDocKey,
           title: '需求文档',
           path: 'specs/requirement-spec.md',
-          content: requirementDocAvailable
-            ? planningArtifact?.content || ''
-            : designDocFileContent['requirement-spec'] || '',
-          available: requirementDocAvailable || Boolean(designDocFileContent['requirement-spec'])
+          content:
+            designDocFileContent['requirement-spec'] ||
+            (requirementDocAvailable ? '本地需求产物已存在，暂无 Markdown 展示内容。' : ''),
+          available: requirementDocAvailable
         },
         {
           key: 'product-plan' as WorkspaceDocKey,
           title: '产品规划',
           path: 'plans/product-plan.md',
-          content: productPlanDocAvailable
-            ? planningArtifact?.content || ''
-            : designDocFileContent['product-plan'] || '',
-          available: productPlanDocAvailable || Boolean(designDocFileContent['product-plan']) || planningPhase === 'product_planning'
+          content:
+            designDocFileContent['product-plan'] ||
+            (productPlanDocAvailable ? '本地产品规划产物已存在，暂无 Markdown 展示内容。' : ''),
+          available: productPlanDocAvailable
         },
         {
           key: 'technical-plan' as WorkspaceDocKey,
           title: '技术规划',
           path: 'plans/technical-plan.md',
-          content: technicalPlanDocAvailable
-            ? planningArtifact?.content || ''
-            : designDocFileContent['technical-plan'] || '',
-          available: technicalPlanDocAvailable || Boolean(designDocFileContent['technical-plan']) || planningPhase === 'technical_planning'
+          content:
+            designDocFileContent['technical-plan'] ||
+            (technicalPlanDocAvailable ? '本地技术规划产物已存在，暂无 Markdown 展示内容。' : ''),
+          available: technicalPlanDocAvailable
         },
         {
           key: 'ui-design' as WorkspaceDocKey,
@@ -521,6 +605,7 @@ export default function AiChatPanel({
   const designDocGenerating =
     isDesignPhase &&
     planningPhaseRunning &&
+    !activeDesignDoc?.available &&
     ((activeDesignDocKey === 'requirement-spec' && planningPhase === 'requirements') ||
       (activeDesignDocKey === 'product-plan' && planningPhase === 'product_planning') ||
       (activeDesignDocKey === 'technical-plan' && planningPhase === 'technical_planning'))
@@ -533,16 +618,28 @@ export default function AiChatPanel({
   const planningUiDesignAwaiting =
     planningClarification?.mode === 'ui_design_confirmation' &&
     planningClarification?.status === 'requires_user_input'
+  const planningUiDesignFailed = planningWorkflow?.summary?.status === 'failed'
   const uiDesignActionStartedRef = useRef(false)
   useEffect(() => {
     if (planningPhaseRunning && uiDesignActionPageId !== null) {
       uiDesignActionStartedRef.current = true
+      return
     }
-    if (planningUiDesignAwaiting && uiDesignActionStartedRef.current && uiDesignActionPageId !== null) {
+    if (
+      !planningPhaseRunning &&
+      (planningUiDesignAwaiting || planningUiDesignFailed) &&
+      uiDesignActionStartedRef.current &&
+      uiDesignActionPageId !== null
+    ) {
       uiDesignActionStartedRef.current = false
       setUiDesignActionPageId(null)
     }
-  }, [planningUiDesignAwaiting, planningPhaseRunning, uiDesignActionPageId])
+  }, [
+    planningPhaseRunning,
+    planningUiDesignAwaiting,
+    planningUiDesignFailed,
+    uiDesignActionPageId
+  ])
   // 当前选中页面的规划配置。必须提前到 workspaceTabs / 读取源码的 useEffect 之前，
   // 否则这些位置（尤其 useEffect 依赖数组）会在 const 暂时性死区里访问未初始化的
   // activePageOption，抛 ReferenceError: Cannot access 'activePageOption' before initialization。
@@ -618,15 +715,6 @@ export default function AiChatPanel({
     }
   }, [isDesignPhase, rightPanelOpen, rightPanel, designDocs, setRightPanel])
 
-  // 需求文档确认阶段：需求文档生成后自动切到"需求文档"tab 展示内容。
-  useEffect(() => {
-    if (!isDesignPhase || !rightPanelOpen) return
-    if (planningClarification?.mode !== 'requirement_spec_confirmation') return
-    if (!requirementDocAvailable) return
-    if (rightPanel?.type === 'doc' && rightPanel.docKey === 'requirement-spec') return
-    setRightPanel({ type: 'doc', docKey: 'requirement-spec' })
-  }, [isDesignPhase, rightPanelOpen, planningClarification, requirementDocAvailable, rightPanel, setRightPanel])
-
   // 设计阶段右侧 tab 跟随当前规划阶段自动切换：阶段变化时切到对应文档 tab，
   // 同阶段内用户手动切到其他 tab 不被拉回。用 ref 记录上次自动同步的阶段，
   // 仅在 planningPhase 真正变化时触发，避免覆盖用户的同阶段内手动切换。
@@ -659,55 +747,57 @@ export default function AiChatPanel({
     }
   }, [application.id, isDesignPhase, setRightPanel])
 
-  // 确认完成后 confirmationArtifact 不再返回（后端只在 requires_user_input 时返回），
-  // 但文件已落盘。从 workflow summary.artifacts 读取路径，异步读文件内容填充右侧 tab。
+  // 切换工作区时清空上一应用的本地文档缓存，防止旧内容误放行 tab。
   useEffect(() => {
-    if (!isDesignPhase || !planningWorkflow) return
-    const artifacts = planningWorkflow.summary?.artifacts || {}
+    setDesignDocFileContent({})
+  }, [application.id, application.workspaceRoot])
+
+  // 独立探测当前工作区的四类正式产物。Workflow 状态只触发产物生成后的重新检查，
+  // 不参与 available 判定，因此已有产物始终可切换、没有产物始终禁用。
+  useEffect(() => {
+    if (!isDesignPhase) return
     const workspaceRoot = application.workspaceRoot || ''
-    // 需求文档：confirmationArtifact 不可用时从磁盘读
-    const reqPath = String(artifacts.requirement_spec_path || '').trim()
-    const reqNeedFile = reqPath && !requirementDocAvailable
-    // 产品/技术规划：confirmationArtifact 不可用时从磁盘读
-    const productPlanPath = String(artifacts.product_plan_path || '').trim()
-    const technicalPlanPath = String(artifacts.technical_plan_path || '').trim()
-    const productPlanNeedFile = productPlanPath && !productPlanDocAvailable
-    const technicalPlanNeedFile = technicalPlanPath && !technicalPlanDocAvailable
-    if (!reqNeedFile && !productPlanNeedFile && !technicalPlanNeedFile) return
+    if (!workspaceRoot) return
     let cancelled = false
+
+    /** 并行探测本地正式产物，并用本次磁盘结果完整替换旧快照。 */
     const readFiles = async (): Promise<void> => {
-      const next: Record<string, string> = {}
-      try {
-        if (reqNeedFile) {
-          const result = await readWorkspaceFile({ workspace_root: workspaceRoot, path: reqPath })
-          if (result.content) next['requirement-spec'] = result.content
-        }
-      } catch { /* 文件可能尚未生成，静默 */ }
-      try {
-        if (productPlanNeedFile) {
-          const result = await readWorkspaceFile({ workspace_root: workspaceRoot, path: productPlanPath })
-          if (result.content) next['product-plan'] = result.content
-        }
-      } catch { /* 文件可能尚未生成，静默 */ }
-      try {
-        if (technicalPlanNeedFile) {
-          const result = await readWorkspaceFile({ workspace_root: workspaceRoot, path: technicalPlanPath })
-          if (result.content) next['technical-plan'] = result.content
-        }
-      } catch { /* 文件可能尚未生成，静默 */ }
-      if (!cancelled && Object.keys(next).length > 0) {
-        setDesignDocFileContent((current) => ({ ...current, ...next }))
+      const entries = await Promise.all(
+        LOCAL_DESIGN_ARTIFACTS.map((artifact) =>
+          readLocalDesignArtifact(workspaceRoot, artifact)
+        )
+      )
+      const next = Object.fromEntries(
+        entries.filter((entry): entry is readonly [string, string] => entry !== null)
+      )
+      if (!cancelled) {
+        setDesignDocFileContent(next)
       }
     }
     void readFiles()
-    return () => { cancelled = true }
-  }, [isDesignPhase, planningWorkflow, application.workspaceRoot, requirementDocAvailable, productPlanDocAvailable, technicalPlanDocAvailable])
+    return () => {
+      cancelled = true
+    }
+  }, [
+    isDesignPhase,
+    application.workspaceRoot,
+    planningPhase,
+    planningWorkflow?.summary?.status
+  ])
 
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
   const inputModeKey = activeTargetKey || 'free-chat'
   const inputMode: ChatInputMode =
     inputModes[inputModeKey] || (activeDetailTarget.type === 'none' ? 'conversation' : 'design')
+  const planningWorkflowStatus = String(planningWorkflow?.summary?.status || '')
+  const designWorkflowActive =
+    isDesignPhase &&
+    (!planningWorkflow || ACTIVE_DESIGN_WORKFLOW_STATUSES.has(planningWorkflowStatus))
+  const designChangeInputLocked = designWorkflowActive && !designChangeUnlocked
+  const designChangeInputEnabled = isDesignPhase && !designChangeInputLocked
+  const effectiveInputMode: ChatInputMode =
+    designChangeInputEnabled ? 'conversation' : inputMode
   const activePreviewPath = activePageOption?.path || '/'
   const conversationEnabled =
     activeDetailTarget.type === 'none'
@@ -834,7 +924,7 @@ export default function AiChatPanel({
     selectedPageId: activePageOption?.pageId || activePageOption?.key,
     selectedPageLabel: activePageOption?.label,
     conversationEnabled,
-    inputMode,
+    inputMode: effectiveInputMode,
     setDraftByKey,
     setSelectedSkillsByKey,
     setSessionMessages
@@ -854,6 +944,9 @@ export default function AiChatPanel({
   // 设计阶段：激活规划会话（绑定 planningThreadId），并注册流式注入句柄，
   // 让 AppEntryPage 把 Modal 转发的 onContent/onWorkflow 注入当前 session 的 messages。
   const planningSessionKeyRef = useRef<string>('')
+  // 保存最新规划权威快照，供会话键晚于流式事件就绪时补齐最终确认卡。
+  const planningWorkflowRef = useRef(planningWorkflow)
+  planningWorkflowRef.current = planningWorkflow
   // sessionKey 就绪前缓存的流式 chunk，就绪后回放，避免最早的规划消息丢失。
   const pendingPlanningChunksRef = useRef<Array<{ content?: string; workflow?: WorkflowRunPayload }>>([])
   // onPlanningStreamReady 注册的注入句柄，保存需求文档草稿后用它把更新后的
@@ -983,21 +1076,18 @@ export default function AiChatPanel({
       if (sameRun || sameUiDesignConfirmation || mergeIntoContentOnly) {
         // 同一轮或合并 content-only 消息：更新最后一条消息的 workflow 与 content。
         planningNewRoundRef.current = false
-        // 判断该 chunk 是否带来实质内容（待确认/已完成/有文本/规划阶段 running）。
-        // 纯 running 进度快照（如 requirements running、null running）不清除占位 loading，
-        // 否则 loading 态被过早清除而卡片又不显示（running 无 requires_user_input），
-        // 导致界面卡死。保持 loading 直到真正可交互的 workflow 到达。
-        const chunkRequiresInput =
-          workflowClarification(chunk.workflow)?.status === 'requires_user_input'
-        const chunkCompleted = chunk.workflow.summary?.status === 'completed'
+        // 判断该 chunk 是否已经携带可见状态。首次创建沿用原有阶段判定；
+        // 只有设计变更轮次才由聊天活动块承接 requirements/UI 等实时进度。
+        const chunkSettlesLoading = planningWorkflowSettlesLoading(chunk.workflow)
         const chunkHasContent = Boolean(chunk.content?.trim())
+        const chunkActivity = planningWorkflowActivity(chunk.workflow)
         const chunkIsPlanningRunning =
-          chunk.workflow.summary?.phase === 'project_planning' &&
-          chunk.workflow.summary?.status === 'running'
+          chunk.workflow.summary?.status === 'running' &&
+          (['product_planning', 'project_planning', 'technical_planning'].includes(
+            String(chunk.workflow.summary?.phase || '')
+          ) || chunkActivity?.status === 'running')
         const hasSubstantiveWorkflow =
-          chunkRequiresInput || chunkCompleted || chunkHasContent || chunkIsPlanningRunning ||
-          (['product_planning', 'technical_planning'].includes(String(chunk.workflow.summary?.phase || '')) &&
-            chunk.workflow.summary?.status === 'running')
+          chunkSettlesLoading || chunkHasContent || chunkIsPlanningRunning
         setSessionMessagesRef.current(sessionKey, (prev) => {
           const updated = [...prev]
           const prevMessage = updated[updated.length - 1]
@@ -1015,13 +1105,13 @@ export default function AiChatPanel({
         // 例外：规划阶段 running 期间创建卡片显示生成加载态，
         // 让用户看到规划进度，而非长时间无反馈。
         const hasContent = Boolean(chunk.content?.trim())
-        const requiresInput =
-          workflowClarification(chunk.workflow)?.status === 'requires_user_input'
+        const requiresInput = planningWorkflowRequiresUserInput(chunk.workflow)
+        const chunkActivity = planningWorkflowActivity(chunk.workflow)
         const isPlanningRunning =
-          ['product_planning', 'project_planning', 'technical_planning'].includes(
+          chunk.workflow.summary?.status === 'running' &&
+          (['product_planning', 'project_planning', 'technical_planning'].includes(
             String(chunk.workflow.summary?.phase || '')
-          ) &&
-          chunk.workflow.summary?.status === 'running'
+          ) || chunkActivity?.status === 'running')
         if (!hasContent && !requiresInput && !isPlanningRunning) {
           return
         }
@@ -1099,9 +1189,7 @@ export default function AiChatPanel({
     // 空 content 且无 workflow：丢弃，不创建空白消息。
     // workflow 到达稳定点（待确认/已完成）时延迟落盘，便于切换工作区或重启后恢复历史。
     if (chunk.workflow) {
-      const stable =
-        chunk.workflow.summary?.status === 'requires_user_input' ||
-        chunk.workflow.summary?.status === 'completed'
+      const stable = planningWorkflowSettlesLoading(chunk.workflow)
       if (stable) {
         console.log('[planning-persist] trigger stable sessionKey=', sessionKey.slice(-12), 'status=', chunk.workflow.summary?.status)
         persistPlanningSession(sessionKey)
@@ -1150,6 +1238,16 @@ export default function AiChatPanel({
           }
         ])
       }
+      // 工作台或会话键晚于最终 AG-UI 帧就绪时，用外层保存的权威快照收口占位消息。
+      const latestPlanningWorkflow = planningWorkflowRef.current
+      if (
+        shouldBackfillPlanningWorkflow(
+          latestPlanningWorkflow,
+          planningNewRoundRef.current
+        )
+      ) {
+        injectPlanningChunk(identity.key, { workflow: latestPlanningWorkflow })
+      }
       // 诊断：确认规划 session 消息数与 activeSession 是否对齐。
       const msgs = getSessionMessagesRef.current(identity.key)
       console.log('[planning-session] msgs after replay=', msgs.length, 'activeSessionId=', activeSessionIdRef.current, 'match=', activeSessionIdRef.current === identity.sessionId)
@@ -1160,6 +1258,22 @@ export default function AiChatPanel({
     // 只依赖 isDesignPhase/planningThreadId/loadingSessions，ensurePlanningSession 用 ref 避免循环。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDesignPhase, planningThreadId, loadingSessions])
+
+  // 外层规划状态始终保留最新 Workflow；稳定快照到达时主动补齐可能漏掉的流式确认卡。
+  useEffect(() => {
+    const sessionKey = planningSessionKeyRef.current
+    if (
+      !isDesignPhase ||
+      !planningThreadId ||
+      !sessionKey ||
+      !shouldBackfillPlanningWorkflow(planningWorkflow, planningNewRoundRef.current)
+    ) {
+      return
+    }
+    injectPlanningChunk(sessionKey, { workflow: planningWorkflow })
+    // injectPlanningChunk 读取的会话操作均由 ref 保持最新，避免把函数身份加入依赖造成重复注入。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesignPhase, planningThreadId, planningWorkflow])
 
   useEffect(() => {
     if (!onPlanningStreamReady) return
@@ -1803,32 +1917,19 @@ export default function AiChatPanel({
     [application.workspaceRoot, planningThreadId]
   )
 
-  // 设计阶段 ChatComposer 提交：把用户输入作为需求意见提交给规划 workflow。
-  // 当前 planningWorkflow 的 clarification.mode 决定答案键；无明确 mode 时作为
-  // requirement_spec_confirmation 提交，后端按需求确认意见处理。
-  const handleDesignPhaseSend = async (): Promise<void> => {
+  /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
+  const handleDesignChangeSend = async (): Promise<void> => {
     const trimmed = draft.trim()
     if (!trimmed || !planningWorkflow) return
-    const clarification = planningWorkflow.summary?.clarification as
-      | { mode?: string }
-      | undefined
-    const mode = clarification?.mode
-    const answers: WorkflowClarificationAnswers =
-      mode === 'product_plan_confirmation'
-        ? { product_plan_confirmation: trimmed }
-        : mode === 'technical_plan_confirmation'
-          ? { technical_plan_confirmation: trimmed }
-          : mode === 'project_plan_confirmation'
-            ? { project_plan_confirmation: trimmed }
-            : mode === 'ui_design_confirmation'
-              ? { ui_design_confirmation: trimmed }
-              : { requirement_spec_confirmation: trimmed }
-    // 标记新一轮：下一次 workflow chunk 到达时新增消息卡片，保留本轮对话历史。
     planningNewRoundRef.current = true
-    // 用户输入留痕：把输入文本作为 user 消息追加到对话区。
-    appendPlanningUserMessage(answers)
-    onSubmitPlanningClarification(planningWorkflow, answers)
-    // 提交后清空 draft（与 handleSend 行为一致）。
+    appendPlanningUserMessage({ design_change_request: trimmed })
+    onSubmitPlanningClarification(
+      planningWorkflow,
+      {},
+      undefined,
+      undefined,
+      trimmed
+    )
     setDraftByKey(draftKey, '')
   }
 
@@ -2061,6 +2162,14 @@ export default function AiChatPanel({
                 workspaceBusy={workspaceBusy}
                 workspaceRoot={workspaceRoot}
               />
+            ) : designChangeInputLocked ? (
+              <DesignChangeLockDock
+                disabled={loading || workspaceBusy}
+                onStart={async () => {
+                  await onStopPlanning()
+                  setDesignChangeUnlocked(true)
+                }}
+              />
             ) : (
               <>
                 <ChatComposer
@@ -2068,7 +2177,7 @@ export default function AiChatPanel({
                   copy={copy}
                   draft={draft}
                   error={error}
-                  inputMode={inputMode}
+                  inputMode={effectiveInputMode}
                   inputModeDisabled={inputModeLocked}
                   loading={loading}
                   onDraftChange={(value) => setDraftByKey(draftKey, value)}
@@ -2076,7 +2185,9 @@ export default function AiChatPanel({
                     activeDetailTarget.type === 'none' ? undefined : handleInputModeChange
                   }
                   onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
-                  onSend={isDesignPhase ? handleDesignPhaseSend : handleSend}
+                  // 设计工作台的自由输入始终先做意图识别；当前节点的澄清和确认
+                  // 只能通过上方结构化卡片提交，不能用当前阶段劫持自由输入语义。
+                  onSend={isDesignPhase ? handleDesignChangeSend : handleSend}
                   onStopGenerating={handleStopGenerating}
                   stopping={stopping}
                   selectedSkills={selectedSkills}

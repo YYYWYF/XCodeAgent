@@ -9,7 +9,11 @@ import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { setupApplicationSettingsIpc } from './applicationSettings'
-import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
+import {
+  lstatIfPresent,
+  movePathToTrashIfPresent,
+  removeDirectoryIfPresent
+} from './filesystem'
 import { readManagedWorkspaceApplication } from './managedWorkspace'
 import {
   clearAuthState,

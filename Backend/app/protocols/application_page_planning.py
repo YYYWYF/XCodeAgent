@@ -49,6 +49,14 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "ui_confirmation",
             "technical_planning",
         ],
+        "designChange": {
+            "requestField": "forwardedProps.designChangeSubmission",
+            "intentNode": "design_intent_analysis",
+            "targets": ["requirements", "product_planning", "ui_confirmation"],
+            "usesOriginalThread": True,
+            "incrementalArtifacts": True,
+            "existingArtifactsStateField": "design_change_existing_artifacts",
+        },
         "confirmationArtifacts": [
             "requirement_spec",
             "product_plan",

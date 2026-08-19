@@ -6,7 +6,10 @@ import {
   type PersistedActivePlanning
 } from '../service/activeApplicationPlanning'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
-import { ensureApplicationTemplateReadiness } from '../service/templateApi'
+import {
+  APPLICATION_TEMPLATE_GENERATION_ENABLED,
+  ensureApplicationTemplateReadiness
+} from '../service/templateApi'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 
 type PlanningUpdater = (
@@ -43,6 +46,9 @@ export function useApplicationTemplateGeneration({
   // 为单个应用生成模板文件，并复用同一应用尚未结束的幂等任务。
   const generateApplicationTemplateFiles = useCallback(
     (planning: PersistedActivePlanning): Promise<boolean> => {
+      // 临时关闭模板生成时直接完成规划回调，不触发下载、初始化或生命周期结果提交。
+      if (!APPLICATION_TEMPLATE_GENERATION_ENABLED) return Promise.resolve(true)
+
       const applicationId = planning.application.id
       const runningTask = tasksRef.current.get(applicationId)
       if (runningTask) return runningTask

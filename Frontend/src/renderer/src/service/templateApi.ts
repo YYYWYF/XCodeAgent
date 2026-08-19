@@ -15,6 +15,9 @@ export const DEFAULT_FRONTEND_TEMPLATE_REPO_URL = 'https://github.com/ruyue1/fro
 /** 默认后端模板仓库地址。 */
 export const DEFAULT_BACKEND_TEMPLATE_REPO_URL = 'https://github.com/Hupy2118/springboot-template.git'
 
+/** 临时关闭应用模板下载与初始化；保留完整实现，恢复时只需打开此开关。 */
+export const APPLICATION_TEMPLATE_GENERATION_ENABLED = false
+
 const readinessTasks = new Map<string, Promise<ApplicationLifecycle>>()
 
 /** 携带模板下载结构化结果，供后端 manifest 记录失败现场。 */
