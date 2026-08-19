@@ -243,6 +243,7 @@ def build_conversation_ag_ui_stream(
             "direct_modification_approved_paths": _safe_approved_paths(request.approved_paths),
             "direct_modification_handoff_decision": str(request.handoff_decision or ""),
             "integration_repair_enabled": False,
+            "frontend_performance_test_enabled": False,
             "repair_iteration": 0,
             "max_repair_iterations": 3,
             "repair_task_plan": {},

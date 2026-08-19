@@ -113,6 +113,7 @@ declare global {
       browser?: {
         openExternal: (url: string) => Promise<{ ok?: boolean }>
         openPreviewWindow?: (url: string) => Promise<{ ok?: boolean }>
+        openReportFile?: (reportPath: string) => Promise<{ ok?: boolean }>
       }
       projectPreview?: {
         registerWorkspace: (payload: { workspaceRoot: string }) => Promise<{ ok?: boolean }>

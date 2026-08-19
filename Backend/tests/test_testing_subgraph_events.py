@@ -11,9 +11,12 @@ from app.graph.subgraphs.testing import (
     build_project_checks,
     build_testing_subgraph,
     collect_unit_test_targets,
+    frontend_performance_confirmation,
+    frontend_performance_test,
     generate_unit_tests,
     integration_test,
     repair_planning,
+    skip_frontend_performance,
     _source_layer,
     skip_unit_tests,
     unit_test_confirmation,
@@ -130,6 +133,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                 "unit_test_generation:skipped",
                 "frontend_unit_tests",
                 "backend_unit_tests",
+                "frontend_performance_confirmation:auto_skipped_unavailable",
+                "frontend_performance:skipped",
                 "main_quality_gate",
                 "repair_planning:skipped",
             ],
@@ -244,6 +249,55 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertEqual(result["acceptance_request"], {})
         self.assertEqual(result["acceptance_decision"], "")
         self.assertFalse(result["accepted"])
+
+    def test_performance_confirmation_resume_preserves_unit_test_state(self) -> None:
+        """等待性能测试选择时不能清空单测决策和构建缓存，否则恢复后会从头重跑。"""
+
+        clarification = {
+            "mode": "frontend_performance_confirmation",
+            "status": "requires_user_input",
+            "message": "是否跳过前端性能测试？",
+            "questions": [{"id": "frontend_performance_confirmation"}],
+        }
+        cached_build_results = [
+            {"id": "frontend_build", "passed": True, "required": True}
+        ]
+
+        def invoke_subgraph(input_state: dict, *, config: dict) -> dict:
+            """模拟停在性能确认门，并保留输入中的单测状态。"""
+
+            return {
+                **input_state,
+                "status": "requires_user_input",
+                "clarification": clarification,
+                "integration_next_action": "await_user_input",
+                "test_results": cached_build_results,
+                "unit_test_decision": "skip",
+                "unit_test_build_checks_completed": True,
+                "unit_test_build_results": cached_build_results,
+            }
+
+        with patch(
+            "app.graph.subgraphs.testing._testing_subgraph.invoke",
+            side_effect=invoke_subgraph,
+        ):
+            result = integration_test(
+                {
+                    "unit_test_decision": "skip",
+                    "unit_test_build_checks_completed": True,
+                    "unit_test_build_results": cached_build_results,
+                    "frontend_performance_test_enabled": True,
+                    "repair_iteration": 0,
+                    "max_repair_iterations": 3,
+                }
+            )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["clarification"], clarification)
+        self.assertEqual(result["unit_test_decision"], "skip")
+        self.assertTrue(result["unit_test_build_checks_completed"])
+        self.assertEqual(result["unit_test_build_results"], cached_build_results)
+        self.assertTrue(result["frontend_performance_test_enabled"])
 
     def test_progress_snapshot_places_generation_after_frontend_build(self) -> None:
         """实时矩阵即使先收到生成事件，也必须把生成检查稳定排在构建检查之后。"""
@@ -392,9 +446,10 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                 ("frontend_test_generation", "running"),
                 ("frontend_test_generation", "skipped"),
                 ("frontend_unit_tests", "passed"),
+                ("frontend_performance", "skipped"),
             ],
         )
-        self.assertEqual(result["test_results"][-1]["id"], "frontend_unit_tests")
+        self.assertEqual(result["test_results"][-1]["id"], "frontend_performance")
 
     def test_build_completion_pauses_before_unit_test_generation(self) -> None:
         """构建检查完成后必须先等待用户决定，不能自动进入测试生成。"""
@@ -472,6 +527,165 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertEqual(result["status"], "in_progress")
         self.assertEqual(result.get("clarification"), {})
         self.assertIn("unit_test_confirmation:auto_skipped_disabled", result["test_events"])
+
+    def test_frontend_performance_confirmation_pauses_without_decision(self) -> None:
+        """单测完成后未选择性能测试时，应暂停并展示确认载荷。"""
+
+        with patch(
+            "app.graph.subgraphs.testing.frontend_performance_available",
+            return_value=True,
+        ), patch(
+            "app.graph.subgraphs.testing.frontend_build_passed",
+            return_value=True,
+        ):
+            result = frontend_performance_confirmation(
+                {"frontend_performance_test_enabled": True}
+            )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["clarification"]["mode"],
+            "frontend_performance_confirmation",
+        )
+        self.assertEqual(result["integration_next_action"], "await_user_input")
+
+    def test_frontend_performance_confirmation_auto_skips_when_disabled(self) -> None:
+        """快速修改流程关闭性能测试时自动跳过确认门。"""
+
+        result = frontend_performance_confirmation(
+            {"frontend_performance_test_enabled": False}
+        )
+        self.assertEqual(result["status"], "in_progress")
+        self.assertEqual(result["frontend_performance_decision"], "skip")
+        self.assertEqual(
+            result["integration_next_action"],
+            "skip_frontend_performance",
+        )
+
+    def test_subgraph_runs_performance_after_unit_tests_when_confirmed(self) -> None:
+        """用户选择继续执行时，性能测试必须位于单测之后、质量门禁之前。"""
+
+        def integration_checks(
+            _state: dict,
+            *,
+            on_progress=None,
+            phase: str = "all",
+        ) -> dict:
+            """按阶段返回构建与单测检查。"""
+
+            if phase == "build":
+                return {
+                    "test_results": [
+                        {"id": "frontend_build", "passed": True, "required": True}
+                    ],
+                    "test_events": ["frontend_build"],
+                }
+            return {
+                "test_results": [
+                    {"id": "frontend_unit_tests", "passed": True, "required": True}
+                ],
+                "test_events": ["frontend_unit_tests"],
+            }
+
+        with patch(
+            "app.graph.subgraphs.testing.run_integration_checks",
+            side_effect=integration_checks,
+        ), patch(
+            "app.graph.subgraphs.testing.frontend_performance_available",
+            return_value=True,
+        ), patch(
+            "app.graph.subgraphs.testing.frontend_build_passed",
+            return_value=True,
+        ), patch(
+            "app.graph.subgraphs.testing.run_frontend_performance_check",
+            return_value={
+                "test_results": [
+                    {
+                        "id": "frontend_performance",
+                        "passed": True,
+                        "blocking": False,
+                    }
+                ],
+                "test_events": ["frontend_performance"],
+            },
+        ) as performance_runner, patch(
+            "app.graph.subgraphs.testing.evaluate_quality_gate",
+            return_value={
+                "passed": True,
+                "needs_revision": False,
+                "revision_requests": [],
+            },
+        ), patch(
+            "app.graph.subgraphs.testing.write_test_report_json",
+            return_value="/tmp/test_report.json",
+        ):
+            result = build_testing_subgraph().invoke(
+                {
+                    "workspace": "/tmp/workspace",
+                    "test_results": [],
+                    "test_events": [],
+                    "code_changes": {},
+                    "code_change_sets": [],
+                    "unit_test_decision": "run",
+                    "frontend_performance_decision": "run",
+                    "timeline": [],
+                }
+            )
+
+        self.assertEqual(result["test_results"][-1]["id"], "frontend_performance")
+        self.assertIn("frontend_performance_confirmation:run", result["test_events"])
+        self.assertIn("frontend_performance", result["test_events"])
+        performance_runner.assert_called_once()
+
+    def test_subgraph_skips_performance_when_user_skips(self) -> None:
+        """用户选择跳过性能测试时只记录 skipped，不启动前端。"""
+
+        with patch(
+            "app.graph.subgraphs.testing.run_integration_checks",
+            return_value={
+                "test_results": [
+                    {"id": "frontend_build", "passed": True, "required": True}
+                ],
+                "test_events": ["frontend_build"],
+            },
+        ), patch(
+            "app.graph.subgraphs.testing.frontend_performance_available",
+            return_value=True,
+        ), patch(
+            "app.graph.subgraphs.testing.frontend_build_passed",
+            return_value=True,
+        ), patch(
+            "app.graph.subgraphs.testing.run_frontend_performance_check"
+        ) as performance_runner, patch(
+            "app.graph.subgraphs.testing.evaluate_quality_gate",
+            return_value={
+                "passed": True,
+                "needs_revision": False,
+                "revision_requests": [],
+            },
+        ), patch(
+            "app.graph.subgraphs.testing.write_test_report_json",
+            return_value="/tmp/test_report.json",
+        ):
+            result = build_testing_subgraph().invoke(
+                {
+                    "workspace": "/tmp/workspace",
+                    "test_results": [],
+                    "test_events": [],
+                    "code_changes": {},
+                    "code_change_sets": [],
+                    "unit_test_decision": "skip",
+                    "frontend_performance_decision": "skip",
+                    "timeline": [],
+                }
+            )
+
+        results_by_id = {check["id"]: check for check in result["test_results"]}
+        self.assertTrue(results_by_id["frontend_performance"]["skipped"])
+        self.assertTrue(results_by_id["frontend_performance"]["passed"])
+        self.assertFalse(results_by_id["frontend_performance"]["blocking"])
+        self.assertIn("frontend_performance:skipped", result["test_events"])
+        performance_runner.assert_not_called()
 
     def test_skip_unit_tests_does_not_invoke_generation_or_test_runner(self) -> None:
         """用户选择跳过后只记录 skipped 检查，不调用生成和单测命令。"""

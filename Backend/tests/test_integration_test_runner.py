@@ -726,6 +726,35 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         self.assertEqual(requests[0]["failed_attempt"]["logs"]["stderr"], "/tmp/stderr.log")
         self.assertEqual(requests[0]["failed_attempt"]["execution"]["returncode"], 1)
 
+    def test_advisory_performance_failure_does_not_block_quality_gate(self) -> None:
+        """前端性能测试失败属于咨询项：不阻断门禁、不生成返修请求。"""
+
+        passed_result = {
+            "id": "frontend_build",
+            "name": "前端构建检查",
+            "passed": True,
+            "required": True,
+        }
+        advisory_failed = {
+            "id": "frontend_performance",
+            "name": "前端性能测试",
+            "passed": False,
+            "required": False,
+            "blocking": False,
+            "advisory": True,
+            "evidence": "Lighthouse 执行失败。",
+        }
+
+        report = evaluate_quality_gate(
+            test_results=[passed_result, advisory_failed],
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertFalse(report["needs_revision"])
+        self.assertEqual(report["revision_requests"], [])
+        self.assertEqual(report["summary"]["total"], 2)
+        self.assertEqual(report["summary"]["failed"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -175,6 +175,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     acceptance_decision = _page_acceptance_decision(clarification_answers)
     acceptance_adjustment = _acceptance_adjustment(clarification_answers)
     unit_test_decision = _unit_test_decision(clarification_answers)
+    frontend_performance_decision = _frontend_performance_decision(
+        clarification_answers
+    )
     if acceptance_adjustment:
         resume_from = acceptance_adjustment_resume_node(acceptance_adjustment)
     elif acceptance_decision:
@@ -309,6 +312,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **(
             {"unit_test_decision": unit_test_decision}
             if unit_test_decision
+            else {}
+        ),
+        **(
+            {"frontend_performance_decision": frontend_performance_decision}
+            if frontend_performance_decision
             else {}
         ),
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
@@ -815,6 +823,8 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "small_task_max_concurrency",
         "integration_next_action",
         "unit_test_decision",
+        "frontend_performance_decision",
+        "frontend_performance_test_enabled",
         "unit_test_build_checks_completed",
         "unit_test_build_results",
         "unit_test_generation_context",
@@ -858,6 +868,8 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "repair_tasks": "repairTasks",
         "integration_next_action": "integrationNextAction",
         "unit_test_decision": "unitTestDecision",
+        "frontend_performance_decision": "frontendPerformanceDecision",
+        "frontend_performance_test_enabled": "frontendPerformanceTestEnabled",
         "unit_test_build_checks_completed": "unitTestBuildChecksCompleted",
         "unit_test_build_results": "unitTestBuildResults",
         "unit_test_generation_context": "unitTestGenerationContext",
@@ -1333,6 +1345,23 @@ def _unit_test_decision(value: Any) -> str:
     if not isinstance(value, dict):
         return ""
     answer = value.get("unit_test_confirmation")
+    if isinstance(answer, dict) and "selected" in answer:
+        selected = answer.get("selected")
+        answer = selected[0] if isinstance(selected, list) and selected else selected
+    normalized = str(answer or "").strip().casefold()
+    if normalized in {"skip", "是", "yes", "true", "跳过"}:
+        return "skip"
+    if normalized in {"run", "否", "no", "false", "继续"}:
+        return "run"
+    return ""
+
+
+def _frontend_performance_decision(value: Any) -> str:
+    """从结构化确认答案提取前端性能测试的 skip/run 决策。"""
+
+    if not isinstance(value, dict):
+        return ""
+    answer = value.get("frontend_performance_confirmation")
     if isinstance(answer, dict) and "selected" in answer:
         selected = answer.get("selected")
         answer = selected[0] if isinstance(selected, list) and selected else selected

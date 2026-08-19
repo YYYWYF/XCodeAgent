@@ -1479,6 +1479,42 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertEqual(checks[0]["passed_tests"], 3)
         self.assertEqual(checks[0]["total_tests"], 3)
 
+    def test_integration_check_projection_preserves_performance_report_fields(self) -> None:
+        """性能得分、核心指标和报告路径必须安全穿过 AG-UI 裁剪层。"""
+
+        checks = integration_test_checks(
+            [
+                {
+                    "id": "frontend_performance",
+                    "name": "前端性能测试",
+                    "status": "passed",
+                    "required": False,
+                    "advisory": True,
+                    "performance_scores": {
+                        "performance": 92,
+                        "accessibility": 95,
+                        "best_practices": 100,
+                        "seo": 88,
+                    },
+                    "performance_metrics": {
+                        "fcp": 900,
+                        "lcp": 1800,
+                        "tbt": 120,
+                        "cls": 0.02,
+                        "si": 1500,
+                    },
+                    "report_path": "/tmp/.xcodeagent/runtime/tests/frontend_performance/report.html",
+                }
+            ]
+        )
+
+        self.assertEqual(checks[0]["advisory"], True)
+        self.assertEqual(checks[0]["performanceScores"]["performance"], 92)
+        self.assertEqual(checks[0]["performanceScores"]["best_practices"], 100)
+        self.assertEqual(checks[0]["performanceMetrics"]["lcp"], 1800)
+        self.assertEqual(checks[0]["performanceMetrics"]["cls"], 0.02)
+        self.assertTrue(checks[0]["reportPath"].endswith("report.html"))
+
     def test_repair_loop_emits_unique_attempt_steps_and_semantic_statuses(self) -> None:
         """多轮构建测试必须保留唯一步骤 ID、attempt 与测试失败终态。"""
 

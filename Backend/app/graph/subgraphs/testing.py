@@ -12,6 +12,13 @@ from app.agents.repair_planner import plan_repairs_with_repair_planner_agent
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.graph.state import ProjectState
+from app.services.frontend_performance_runner import (
+    PERFORMANCE_CHECK_ID,
+    PERFORMANCE_CHECK_NAME,
+    frontend_build_passed,
+    frontend_performance_available,
+    run_frontend_performance_check,
+)
 from app.services.integration_test_runner import run_integration_checks
 from app.services.test_validation import evaluate_quality_gate
 from app.workspace.code_changes import code_change_state_update
@@ -26,6 +33,7 @@ _FRONTEND_SOURCE_SUFFIXES = {".js", ".jsx", ".ts", ".tsx"}
 _BACKEND_SOURCE_SUFFIXES = {".java"}
 _TEST_GENERATION_STATUSES = {"completed", "skipped", "failed"}
 _UNIT_TEST_DECISIONS = {"skip", "run"}
+_FRONTEND_PERFORMANCE_DECISIONS = {"skip", "run"}
 _MAX_TEST_DIFF_ENTRIES = 20
 _MAX_TEST_DIFF_CHARS = 12_000
 _MAX_SINGLE_TEST_DIFF_CHARS = 6_000
@@ -39,6 +47,7 @@ _INTEGRATION_CHECK_ORDER = (
     "backend_test_generation",
     "frontend_unit_tests",
     "backend_unit_tests",
+    "frontend_performance",
 )
 
 
@@ -75,6 +84,15 @@ def _check_progress_snapshot_writer() -> IntegrationTestProgressReporter:
             "status": status,
             "required": bool(check.get("required")),
             "evidence": str(check.get("evidence") or "")[:1_000],
+            "blocking": bool(check.get("blocking", True)),
+            "advisory": bool(check.get("advisory")),
+            "performance_scores": _bounded_performance_scores(
+                check.get("performance_scores")
+            ),
+            "performance_metrics": _bounded_performance_metrics(
+                check.get("performance_metrics")
+            ),
+            "report_path": str(check.get("report_path") or "")[:1_000] or None,
         }
         writer(
             {
@@ -84,6 +102,41 @@ def _check_progress_snapshot_writer() -> IntegrationTestProgressReporter:
         )
 
     return report
+
+
+def _bounded_performance_scores(value: Any) -> dict[str, int]:
+    """裁剪性能分类得分，只保留 0-100 的合法整数。"""
+
+    if not isinstance(value, dict):
+        return {}
+    allowed = {"performance", "accessibility", "best_practices", "seo"}
+    result: dict[str, int] = {}
+    for key, raw in value.items():
+        if key not in allowed:
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            continue
+        result[str(key)] = max(0, min(100, int(round(float(raw)))))
+    return result
+
+
+def _bounded_performance_metrics(value: Any) -> dict[str, float]:
+    """裁剪核心性能指标，只保留有限数值。"""
+
+    if not isinstance(value, dict):
+        return {}
+    allowed = {"fcp", "lcp", "tbt", "cls", "si"}
+    result: dict[str, float] = {}
+    for key, raw in value.items():
+        if key not in allowed:
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            continue
+        numeric = float(raw)
+        if numeric != numeric or numeric in {float("inf"), float("-inf")}:
+            continue
+        result[str(key)] = round(numeric, 3)
+    return result
 
 
 def _ordered_integration_checks(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -187,6 +240,89 @@ def _unit_test_confirmation_payload() -> dict[str, Any]:
                 ],
             }
         ],
+    }
+
+
+def _frontend_performance_decision(
+    state: ProjectState | dict[str, Any],
+) -> str:
+    """读取并规范化用户对前端性能测试的 skip/run 决策。"""
+
+    raw_decision = state.get("frontend_performance_decision")
+    if isinstance(raw_decision, dict) and "selected" in raw_decision:
+        selected = raw_decision.get("selected")
+        raw_decision = (
+            selected[0]
+            if isinstance(selected, list) and selected
+            else selected
+        )
+    normalized = str(raw_decision or "").strip().casefold()
+    if normalized in {"skip", "是", "yes", "true", "跳过"}:
+        return "skip"
+    if normalized in {"run", "否", "no", "false", "继续"}:
+        return "run"
+    return ""
+
+
+def _frontend_performance_confirmation_payload() -> dict[str, Any]:
+    """构造单元测试完成后的前端性能测试可选确认载荷。"""
+
+    return {
+        "mode": "frontend_performance_confirmation",
+        "status": "requires_user_input",
+        "message": (
+            "单元测试已完成。前端性能测试不是必需步骤，可能耗时较长，"
+            "是否跳过前端性能测试？"
+        ),
+        "questions": [
+            {
+                "id": "frontend_performance_confirmation",
+                "header": "前端性能测试",
+                "question": "是否跳过前端性能测试？",
+                "type": "choice",
+                "allowOther": False,
+                "options": [
+                    {
+                        "label": "是，跳过性能测试",
+                        "value": "skip",
+                        "description": "不启动前端、不执行 Lighthouse 性能测试。",
+                    },
+                    {
+                        "label": "否，继续执行",
+                        "value": "run",
+                        "description": "启动用户 frontend 工程并执行 Lighthouse 性能测试。",
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def _skipped_frontend_performance_check(evidence: str) -> dict[str, Any]:
+    """构造用户主动跳过或前置条件不满足时的性能检查结果。"""
+
+    return {
+        "id": PERFORMANCE_CHECK_ID,
+        "name": PERFORMANCE_CHECK_NAME,
+        "layer": "frontend",
+        "language": "typescript",
+        "passed": True,
+        "skipped": True,
+        "required": False,
+        "blocking": False,
+        "advisory": True,
+        "command": None,
+        "evidence": evidence,
+        "failure_category": None,
+        "execution": {
+            "tool": "none",
+            "argv": [],
+            "cwd": ".",
+            "returncode": None,
+            "timed_out": False,
+            "stdout_log": None,
+            "stderr_log": None,
+        },
     }
 
 
@@ -1044,6 +1180,102 @@ def actual_project_checks(
     }
 
 
+def frontend_performance_confirmation(
+    state: ProjectState,
+) -> dict[str, Any]:
+    """在单元测试阶段完成后暂停，等待用户选择是否跳过前端性能测试。"""
+
+    if state.get("frontend_performance_test_enabled") is False:
+        return {
+            "status": "in_progress",
+            "clarification": {},
+            "frontend_performance_decision": "skip",
+            "integration_next_action": "skip_frontend_performance",
+            "test_events": ["frontend_performance_confirmation:auto_skipped_disabled"],
+        }
+    if not frontend_performance_available(state) or not frontend_build_passed(state):
+        return {
+            "status": "in_progress",
+            "clarification": {},
+            "frontend_performance_decision": "skip",
+            "integration_next_action": "skip_frontend_performance",
+            "test_events": ["frontend_performance_confirmation:auto_skipped_unavailable"],
+        }
+    decision = _frontend_performance_decision(state)
+    if decision in _FRONTEND_PERFORMANCE_DECISIONS:
+        return {
+            "status": "in_progress",
+            "clarification": {},
+            "frontend_performance_decision": decision,
+            "integration_next_action": (
+                "skip_frontend_performance"
+                if decision == "skip"
+                else "run_frontend_performance"
+            ),
+            "test_events": [f"frontend_performance_confirmation:{decision}"],
+        }
+    return {
+        "status": "requires_user_input",
+        "clarification": _frontend_performance_confirmation_payload(),
+        "integration_next_action": "await_user_input",
+        "test_events": ["frontend_performance_confirmation:requires_user_input"],
+    }
+
+
+def _route_frontend_performance_confirmation(state: ProjectState) -> str:
+    """根据用户确认结果选择执行、跳过或暂停前端性能测试。"""
+
+    decision = _frontend_performance_decision(state)
+    if decision == "skip":
+        return "skip_frontend_performance"
+    if decision == "run":
+        return "frontend_performance_test"
+    return "await_user_input"
+
+
+def skip_frontend_performance(
+    state: ProjectState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """记录用户主动跳过的前端性能测试，并直接进入质量门禁。"""
+
+    check = _skipped_frontend_performance_check(
+        "本轮跳过前端性能测试，不启动前端、不执行 Lighthouse。"
+    )
+    reporter = _progress_reporter(config)
+    _report_generation_progress(reporter, check=check, status="skipped")
+    return {
+        "test_results": _ordered_integration_checks(
+            [*state.get("test_results", []), check]
+        ),
+        "frontend_performance_decision": "skip",
+        "test_events": ["frontend_performance:skipped"],
+    }
+
+
+def frontend_performance_test(
+    state: ProjectState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """启动用户 frontend 工程并执行 Lighthouse 性能测试。"""
+
+    result = run_frontend_performance_check(
+        state,
+        on_progress=_progress_reporter(config),
+    )
+    test_results = _ordered_integration_checks(
+        [
+            *state.get("test_results", []),
+            *result.get("test_results", []),
+        ]
+    )
+    return {
+        "test_results": test_results,
+        "frontend_performance_decision": "run",
+        "test_events": result.get("test_events", []),
+    }
+
+
 def main_quality_gate(state: ProjectState) -> dict:
     report = evaluate_quality_gate(
         test_results=state.get("test_results", []),
@@ -1322,6 +1554,12 @@ def build_testing_subgraph():
     builder.add_node("generate_unit_tests", generate_unit_tests)
     builder.add_node("validate_generated_unit_tests", validate_generated_unit_tests)
     builder.add_node("actual_project_checks", actual_project_checks)
+    builder.add_node(
+        "frontend_performance_confirmation",
+        frontend_performance_confirmation,
+    )
+    builder.add_node("skip_frontend_performance", skip_frontend_performance)
+    builder.add_node("frontend_performance_test", frontend_performance_test)
     builder.add_node("main_quality_gate", main_quality_gate)
     builder.add_node("repair_planning", repair_planning)
 
@@ -1337,10 +1575,27 @@ def build_testing_subgraph():
             "await_user_input": END,
         },
     )
-    builder.add_edge("skip_unit_tests", "main_quality_gate")
+    builder.add_edge(
+        "skip_unit_tests",
+        "frontend_performance_confirmation",
+    )
     builder.add_edge("generate_unit_tests", "validate_generated_unit_tests")
     builder.add_edge("validate_generated_unit_tests", "actual_project_checks")
-    builder.add_edge("actual_project_checks", "main_quality_gate")
+    builder.add_edge(
+        "actual_project_checks",
+        "frontend_performance_confirmation",
+    )
+    builder.add_conditional_edges(
+        "frontend_performance_confirmation",
+        _route_frontend_performance_confirmation,
+        {
+            "skip_frontend_performance": "skip_frontend_performance",
+            "frontend_performance_test": "frontend_performance_test",
+            "await_user_input": END,
+        },
+    )
+    builder.add_edge("skip_frontend_performance", "main_quality_gate")
+    builder.add_edge("frontend_performance_test", "main_quality_gate")
     builder.add_edge("main_quality_gate", "repair_planning")
     builder.add_edge("repair_planning", END)
 
@@ -1382,6 +1637,7 @@ def integration_test(state: ProjectState) -> dict:
         }.values()
     )
     decision = _unit_test_decision(state)
+    frontend_performance_decision = _frontend_performance_decision(state)
     reuse_build_checks = bool(
         state.get("unit_test_build_checks_completed")
         and decision in _UNIT_TEST_DECISIONS
@@ -1451,24 +1707,56 @@ def integration_test(state: ProjectState) -> dict:
         and isinstance(result.get("clarification"), dict)
         and result.get("clarification", {}).get("mode") == "unit_test_confirmation"
     )
+    waiting_for_frontend_performance_decision = (
+        result.get("status") == "requires_user_input"
+        and result.get("integration_next_action") == "await_user_input"
+        and isinstance(result.get("clarification"), dict)
+        and result.get("clarification", {}).get("mode")
+        == "frontend_performance_confirmation"
+    )
+    waiting_for_test_decision = (
+        waiting_for_unit_test_decision
+        or waiting_for_frontend_performance_decision
+    )
     quality_gate_passed = (
         False
-        if waiting_for_unit_test_decision
+        if waiting_for_test_decision
         else bool(result.get("quality_gate_passed", False))
     )
     terminal_status = (
         "requires_user_input"
-        if waiting_for_unit_test_decision
+        if waiting_for_test_decision
         else "completed"
         if quality_gate_passed
         else "failed"
+    )
+    resumed_unit_test_decision = (
+        decision
+        if waiting_for_unit_test_decision
+        else state.get("unit_test_decision")
+        if waiting_for_frontend_performance_decision
+        else ""
+    )
+    resumed_build_checks_completed = (
+        bool(result.get("unit_test_build_checks_completed"))
+        if waiting_for_unit_test_decision
+        else bool(state.get("unit_test_build_checks_completed"))
+        if waiting_for_frontend_performance_decision
+        else False
+    )
+    resumed_build_results = (
+        result.get("unit_test_build_results", [])
+        if waiting_for_unit_test_decision
+        else state.get("unit_test_build_results", [])
+        if waiting_for_frontend_performance_decision
+        else []
     )
     return {
         "phase": "integration_test",
         "status": terminal_status,
         "clarification": (
             result.get("clarification", {})
-            if waiting_for_unit_test_decision
+            if waiting_for_test_decision
             else {}
         ),
         "test_results": result.get("test_results", []),
@@ -1485,17 +1773,24 @@ def integration_test(state: ProjectState) -> dict:
         "unit_test_generation": result.get("unit_test_generation", {}),
         "unit_test_affected_layers": result.get("unit_test_affected_layers", []),
         "unit_test_decision": (
-            "" if not waiting_for_unit_test_decision else decision
+            resumed_unit_test_decision
+        ),
+        "frontend_performance_decision": (
+            ""
+            if not waiting_for_frontend_performance_decision
+            else frontend_performance_decision
+        ),
+        "frontend_performance_test_enabled": bool(
+            result.get(
+                "frontend_performance_test_enabled",
+                state.get("frontend_performance_test_enabled", True),
+            )
         ),
         "unit_test_build_checks_completed": (
-            bool(result.get("unit_test_build_checks_completed"))
-            if waiting_for_unit_test_decision
-            else False
+            resumed_build_checks_completed
         ),
         "unit_test_build_results": (
-            result.get("unit_test_build_results", [])
-            if waiting_for_unit_test_decision
-            else []
+            resumed_build_results
         ),
         "unit_test_mapping_path": result.get("unit_test_mapping_path"),
         "unit_test_code_change_sets": current_test_changes,

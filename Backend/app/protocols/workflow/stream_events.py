@@ -132,6 +132,7 @@ def integration_test_checks(value: Any) -> list[dict[str, Any]]:
             "name": str(raw_check.get("name") or check_id),
             "status": status,
             "required": bool(raw_check.get("required")),
+            "advisory": bool(raw_check.get("advisory")),
             "evidence": str(raw_check.get("evidence") or "")[:1_000],
         }
         passed_tests = raw_check.get("passed_tests", raw_check.get("passedTests"))
@@ -148,8 +149,56 @@ def integration_test_checks(value: Any) -> list[dict[str, Any]]:
             and total_tests >= 0
         ):
             normalized_check["total_tests"] = total_tests
+        performance_scores = raw_check.get(
+            "performance_scores", raw_check.get("performanceScores")
+        )
+        if isinstance(performance_scores, dict):
+            normalized_scores = _normalized_performance_scores(performance_scores)
+            if normalized_scores:
+                normalized_check["performanceScores"] = normalized_scores
+        performance_metrics = raw_check.get(
+            "performance_metrics", raw_check.get("performanceMetrics")
+        )
+        if isinstance(performance_metrics, dict):
+            normalized_metrics = _normalized_performance_metrics(performance_metrics)
+            if normalized_metrics:
+                normalized_check["performanceMetrics"] = normalized_metrics
+        report_path = raw_check.get("report_path", raw_check.get("reportPath"))
+        if isinstance(report_path, str) and report_path.strip():
+            normalized_check["reportPath"] = report_path.strip()[:1_000]
         checks.append(normalized_check)
     return checks
+
+
+def _normalized_performance_scores(value: dict[str, Any]) -> dict[str, int]:
+    """裁剪性能分类得分，只保留 0-100 的整数。"""
+
+    allowed = {"performance", "accessibility", "best_practices", "seo"}
+    normalized: dict[str, int] = {}
+    for key, raw in value.items():
+        if key not in allowed:
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            continue
+        normalized[str(key)] = max(0, min(100, int(round(float(raw)))))
+    return normalized
+
+
+def _normalized_performance_metrics(value: dict[str, Any]) -> dict[str, float]:
+    """裁剪核心性能指标，只保留有限数值。"""
+
+    allowed = {"fcp", "lcp", "tbt", "cls", "si"}
+    normalized: dict[str, float] = {}
+    for key, raw in value.items():
+        if key not in allowed:
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            continue
+        numeric = float(raw)
+        if numeric != numeric or numeric in {float("inf"), float("-inf")}:
+            continue
+        normalized[str(key)] = round(numeric, 3)
+    return normalized
 
 
 def integration_test_check_summary(checks: list[dict[str, Any]]) -> str:

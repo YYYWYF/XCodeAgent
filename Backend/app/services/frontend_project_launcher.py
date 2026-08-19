@@ -29,6 +29,7 @@ def launch_frontend_project(
     *,
     project_dir: str | Path | None = None,
     runtime_subdir: str = "launch",
+    skip_install: bool = False,
 ) -> dict[str, Any]:
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
@@ -36,6 +37,8 @@ def launch_frontend_project(
     用于启动非标准位置的前端工程（如 .xcodeagent/ui-design 设计稿工程）。
     runtime_subdir 指定运行时目录名（默认 launch），设计稿工程传
     "launch-ui-design" 以独立 PID 文件避免与正式前端预览冲突。
+    skip_install 为 True 时复用调用方已经完成的依赖安装，不再重复执行
+    install；性能测试节点在集成测试完成安装后使用该模式。
     """
 
     root = Path(workspace_path).expanduser().resolve()
@@ -102,11 +105,26 @@ def launch_frontend_project(
             package_json_path=package_path,
         )
 
-    install_result = _run_install(
-        package_manager_command=package_manager_command,
-        cwd=package_path.parent,
-        runtime_root=runtime_root,
-    )
+    if skip_install:
+        install_result = {
+            "skipped": True,
+            "reason": "集成测试已完成依赖安装，跳过重复安装。",
+            "argv": [],
+            "cwd": str(package_path.parent),
+            "returncode": 0,
+            "timed_out": False,
+            "error": None,
+            "started_at": None,
+            "finished_at": None,
+            "stdout_log": None,
+            "stderr_log": None,
+        }
+    else:
+        install_result = _run_install(
+            package_manager_command=package_manager_command,
+            cwd=package_path.parent,
+            runtime_root=runtime_root,
+        )
     if install_result["returncode"] != 0:
         return {
             **_base_launch_payload(

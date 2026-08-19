@@ -473,6 +473,77 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
         self.assertTrue(inputs["user_interaction_submission"])
 
+    def test_frontend_performance_confirmation_is_forwarded_as_resume_decision(self) -> None:
+        """前端性能测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "clarificationAnswers": {
+                    "frontend_performance_confirmation": {
+                        "selected": "run",
+                    }
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "integration_test",
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "integration_test")
+        self.assertEqual(
+            inputs["resume_values"]["frontend_performance_decision"],
+            "run",
+        )
+        self.assertTrue(inputs["user_interaction_submission"])
+
+    def test_performance_resume_keeps_previous_unit_test_decision(self) -> None:
+        """性能测试确认恢复时必须保留单测决策与构建缓存，避免集成测试从头重跑。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "clarificationAnswers": {
+                    "frontend_performance_confirmation": {
+                        "selected": "run",
+                    }
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "integration_test",
+                    },
+                    "result": {
+                        "phase": "integration_test",
+                        "status": "requires_user_input",
+                        "clarification": {
+                            "mode": "frontend_performance_confirmation"
+                        },
+                        "unit_test_decision": "skip",
+                        "unit_test_build_checks_completed": True,
+                        "unit_test_build_results": [
+                            {"id": "frontend_build", "passed": True}
+                        ],
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "integration_test")
+        self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
+        self.assertTrue(
+            inputs["resume_values"]["unit_test_build_checks_completed"]
+        )
+        self.assertEqual(
+            inputs["resume_values"]["unit_test_build_results"][0]["id"],
+            "frontend_build",
+        )
+        self.assertEqual(
+            inputs["resume_values"]["frontend_performance_decision"],
+            "run",
+        )
+
     def test_removed_requirements_resume_falls_back_to_main_start(self) -> None:
         inputs = workflow_run_inputs(
             {

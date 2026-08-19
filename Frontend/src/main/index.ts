@@ -805,6 +805,26 @@ function setupBrowserIpc(): void {
     previewWindow.show()
     return { ok: true }
   })
+
+  ipcMain.handle('browser:open-report-file', async (_event, reportPath) => {
+    if (typeof reportPath !== 'string' || !reportPath.trim()) {
+      throw new Error('reportPath must be a non-empty string')
+    }
+    const resolvedPath = path.resolve(reportPath)
+    const normalizedPath = resolvedPath.replaceAll('\\', '/').toLowerCase()
+    if (
+      !normalizedPath.includes('/.xcodeagent/runtime/tests/frontend_performance/') ||
+      !normalizedPath.endsWith('.html')
+    ) {
+      throw new Error('Only frontend performance HTML reports can be opened')
+    }
+    await fs.access(resolvedPath)
+    const openError = await shell.openPath(resolvedPath)
+    if (openError) {
+      throw new Error(openError)
+    }
+    return { ok: true }
+  })
 }
 
 /** 记录本次 Electron 会话中被工作台启动过的项目预览工作区。 */

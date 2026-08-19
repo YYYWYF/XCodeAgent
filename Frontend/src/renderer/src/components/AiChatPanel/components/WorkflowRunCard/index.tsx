@@ -99,6 +99,8 @@ export default function WorkflowRunCard({
     : undefined;
   const databaseApproval = workflowDatabaseApproval(clarification);
   const unitTestConfirmation = clarification?.mode === 'unit_test_confirmation';
+  const frontendPerformanceConfirmation =
+    clarification?.mode === 'frontend_performance_confirmation';
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -253,6 +255,16 @@ export default function WorkflowRunCard({
               onSubmit={(decision) =>
                 onSubmitClarification?.(workflow, {
                   unit_test_confirmation: decision,
+                })
+              }
+            />
+          ) : frontendPerformanceConfirmation && requiresConfirmation ? (
+            <FrontendPerformanceConfirmationPanel
+              disabled={disabled || interactionAvailability !== 'active'}
+              message={clarification?.message}
+              onSubmit={(decision) =>
+                onSubmitClarification?.(workflow, {
+                  frontend_performance_confirmation: decision,
                 })
               }
             />
@@ -1428,6 +1440,39 @@ function UnitTestConfirmationPanel({
           type="default"
         >
           是，跳过单元测试
+        </Button>
+        <Button
+          disabled={disabled}
+          onClick={() => onSubmit('run')}
+          type="primary"
+        >
+          否，继续执行
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** 单元测试完成后提供跳过或继续前端性能测试的双按钮确认面板。 */
+function FrontendPerformanceConfirmationPanel({
+  disabled,
+  message,
+  onSubmit,
+}: {
+  disabled?: boolean;
+  message?: string;
+  onSubmit: (decision: 'skip' | 'run') => void;
+}): ReactElement {
+  return (
+    <div className={cx("workflow-frontend-performance-confirmation")}>
+      <Text>{message || '单元测试已完成。是否跳过前端性能测试？'}</Text>
+      <div className={cx("workflow-frontend-performance-confirmation-actions")}>
+        <Button
+          disabled={disabled}
+          onClick={() => onSubmit('skip')}
+          type="default"
+        >
+          是，跳过性能测试
         </Button>
         <Button
           disabled={disabled}

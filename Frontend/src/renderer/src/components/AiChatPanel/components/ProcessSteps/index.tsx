@@ -9,7 +9,7 @@ import {
   SafetyCertificateOutlined,
   ToolOutlined
 } from '@ant-design/icons'
-import { Typography } from 'antd'
+import { Button, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
@@ -18,6 +18,7 @@ import type {
   WorkspaceInspectionProgress
 } from '../../../../service/agUiAgent'
 import { cx } from '../../../../utils'
+import { openLocalReportFile } from '../../../../utils/reportFile'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import DagGenerationProgress from './DagGenerationProgress'
 import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
@@ -319,6 +320,7 @@ function ProcessStep({
             />
           )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
+        {step.checks && <FrontendPerformanceReport checks={step.checks} />}
         {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
         {step.projectPlanUpdate && <ProjectPlanUpdatePanel update={step.projectPlanUpdate} />}
         {step.workspaceInspectionProgress && !step.workspaceInspection && (
@@ -457,6 +459,125 @@ function IntegrationTestChecklist({
       </ul>
     </section>
   )
+}
+
+/** 渲染 Lighthouse 前端性能报告的指标卡和完整报告打开入口。 */
+function FrontendPerformanceReport({
+  checks
+}: {
+  checks: IntegrationTestCheckRecord[]
+}): ReactElement | null {
+  const performanceCheck = checks.find(
+    (check) =>
+      check.id === 'frontend_performance' &&
+      (Boolean(check.performanceScores) ||
+        Boolean(check.performanceMetrics) ||
+        Boolean(check.reportPath))
+  )
+  if (!performanceCheck) return null
+  const scores = performanceCheck.performanceScores
+  const metrics = performanceCheck.performanceMetrics
+  const scoreEntries = scores
+    ? [
+        { key: 'performance', label: '性能', value: scores.performance },
+        { key: 'accessibility', label: '可访问性', value: scores.accessibility },
+        { key: 'bestPractices', label: '最佳实践', value: scores.bestPractices },
+        { key: 'seo', label: 'SEO', value: scores.seo }
+      ].filter((entry): entry is { key: string; label: string; value: number } =>
+        typeof entry.value === 'number'
+      )
+    : []
+  const metricEntries = metrics
+    ? [
+        { key: 'lcp', label: 'LCP', value: metrics.lcp, unit: 'ms' },
+        { key: 'fcp', label: 'FCP', value: metrics.fcp, unit: 'ms' },
+        { key: 'tbt', label: 'TBT', value: metrics.tbt, unit: 'ms' },
+        { key: 'cls', label: 'CLS', value: metrics.cls, unit: 'value' },
+        { key: 'si', label: 'SI', value: metrics.si, unit: 'ms' }
+      ].filter(
+        (entry): entry is { key: string; label: string; value: number; unit: string } =>
+          typeof entry.value === 'number'
+      )
+    : []
+
+  const handleOpenReport = async (): Promise<void> => {
+    if (!performanceCheck.reportPath) {
+      message.warning('尚未生成可打开的完整报告')
+      return
+    }
+    try {
+      await openLocalReportFile(performanceCheck.reportPath)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '打开完整报告失败')
+    }
+  }
+
+  return (
+    <section className={cx('frontend-performance-report')}>
+      <div className={cx('frontend-performance-report-header')}>
+        <span>
+          <Text className={cx('frontend-performance-report-eyebrow')} strong>
+            LIGHTHOUSE REPORT
+          </Text>
+          <Text className={cx('frontend-performance-report-title')} strong>
+            前端性能报告
+          </Text>
+        </span>
+        <Text type="secondary" className={cx('frontend-performance-report-advisory')}>
+          仅报告，不影响质量门禁
+        </Text>
+      </div>
+      {scoreEntries.length > 0 && (
+        <div className={cx('frontend-performance-report-scores')}>
+          {scoreEntries.map((entry) => (
+            <div className={cx('frontend-performance-score')} key={entry.key}>
+              <span className={cx('frontend-performance-score-label')}>
+                <Text>{entry.label}</Text>
+                <Text strong>{entry.value}</Text>
+              </span>
+              <span className={cx('frontend-performance-score-track')}>
+                <i
+                  className={cx(
+                    'frontend-performance-score-fill',
+                    scoreTone(entry.value)
+                  )}
+                  style={{ width: `${Math.max(0, Math.min(100, entry.value))}%` }}
+                />
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {metricEntries.length > 0 && (
+        <div className={cx('frontend-performance-report-metrics')}>
+          {metricEntries.map((entry) => (
+            <span className={cx('frontend-performance-metric')} key={entry.key}>
+              <small>{entry.label}</small>
+              <strong>
+                {entry.unit === 'ms'
+                  ? `${(entry.value / 1000).toFixed(2)}s`
+                  : entry.value.toFixed(3)}
+              </strong>
+            </span>
+          ))}
+        </div>
+      )}
+      {performanceCheck.reportPath && (
+        <div className={cx('frontend-performance-report-actions')}>
+          <Button size="small" onClick={handleOpenReport}>
+            打开完整报告
+          </Button>
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** 返回 Lighthouse 得分对应的视觉状态类。 */
+function scoreTone(value: number): string {
+  if (value >= 90) return 'good'
+  if (value >= 50) return 'warn'
+  return 'bad'
 }
 
 /** 返回当前执行步骤在总步骤中的位置与标题。 */

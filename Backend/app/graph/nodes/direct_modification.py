@@ -74,6 +74,7 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         "backend_handoff": {},
         "integration_repair_enabled": False,
         "unit_test_generation_enabled": False,
+        "frontend_performance_test_enabled": False,
         "repair_iteration": max(0, int(state.get("repair_iteration", 0) or 0)),
         "max_repair_iterations": max(1, int(state.get("max_repair_iterations", 3) or 3)),
         "repair_task_plan": {},
@@ -409,6 +410,7 @@ def run_direct_modification_integration_test(state: ProjectState) -> dict[str, A
             **state,
             "integration_repair_enabled": False,
             "unit_test_generation_enabled": False,
+            "frontend_performance_test_enabled": False,
             "repair_iteration": repair_iteration,
             "max_repair_iterations": max_repair_iterations,
         }

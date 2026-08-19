@@ -163,9 +163,19 @@ def workflow_capabilities() -> dict[str, Any]:
                             "name": "display name",
                             "status": "running|passed|skipped|failed",
                             "required": "boolean",
+                            "advisory": "boolean; advisory checks never block the quality gate",
                             "evidence": "brief sanitized evidence",
                             "passed_tests": "optional non-negative integer for unit-test checks",
                             "total_tests": "optional non-negative integer for unit-test checks",
+                            "performanceScores": (
+                                "optional 0-100 Lighthouse category scores for "
+                                "frontend_performance"
+                            ),
+                            "performanceMetrics": (
+                                "optional Lighthouse core metrics (fcp/lcp/tbt/cls/si) for "
+                                "frontend_performance"
+                            ),
+                            "reportPath": "optional absolute HTML report path",
                         },
                     }
                 },

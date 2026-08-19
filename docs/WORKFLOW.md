@@ -471,9 +471,9 @@ testing.START
   → collect_unit_test_targets
   → build_project_checks
   → unit_test_confirmation (用户选择)
-  → generate_unit_tests
-  → validate_generated_unit_tests
-  → actual_project_checks (unit tests)
+  → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks)
+  → frontend_performance_confirmation (用户选择)
+  → (skip_frontend_performance | frontend_performance_test)
   → main_quality_gate
   → repair_planning
   → testing.END
@@ -488,12 +488,13 @@ testing.START
 - 前端 typecheck；
 - 后端 Java 构建。
 - 前端和后端单元测试生成校验，以及存在对应测试文件时的 Jest/Surefire 单元测试。
+- `frontend_performance` 作为 advisory 检查纳入报告展示，但不参与门禁阻断与返修。
 
-单元测试生成是正式 Workflow 中的尽力而为阶段：测试子图从刚完成的 Build 代码变更集合中提取目标业务源码及有界真实 diff，并先完成前后端依赖、类型和构建检查；构建完成后暂停并通过 AG-UI 展示“是否跳过单元测试”的两个按钮。选择跳过时，生成和单元测试检查记录为 `passed=true, skipped=true` 后直接进入质量门禁；选择继续时才交给 TestGeneration Agent，再执行前后端单元测试。本轮没有对应测试文件、生成 Agent 无输出或 Agent 初始化失败时，生成和单测检查仍按尽力而为策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败仍进入 RepairPlanner → SmallTask 修复闭环。子图通过 `build_project_checks → unit_test_confirmation → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks)` 固定执行顺序，并在确认恢复时复用已完成的构建检查快照，避免重复安装和构建；TestGeneration Agent 调用期间通过 `integration_test.checks` 发布逐层 `running` 快照，前端原位展示集成检查矩阵、旋转 loading 和生成说明，校验完成后再更新为通过、跳过或失败；实时快照与最终报告均按依赖/类型检查、构建、测试生成检查、单元测试的稳定顺序展示。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。测试生成期间 LangGraph 对 `.xcodeagent/checkpoints/` 的技术性写入不属于工程变更；其他 `.xcodeagent` 正式工件仍受越权修改检查保护。
+单元测试生成是正式 Workflow 中的尽力而为阶段：测试子图从刚完成的 Build 代码变更集合中提取目标业务源码及有界真实 diff，并先完成前后端依赖、类型和构建检查；构建完成后暂停并通过 AG-UI 展示“是否跳过单元测试”的两个按钮。选择跳过时，生成和单元测试检查记录为 `passed=true, skipped=true` 后进入前端性能确认；选择继续时才交给 TestGeneration Agent，再执行前后端单元测试。本轮没有对应测试文件、生成 Agent 无输出或 Agent 初始化失败时，生成和单测检查仍按尽力而为策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败仍进入 RepairPlanner → SmallTask 修复闭环。子图通过 `build_project_checks → unit_test_confirmation → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks) → frontend_performance_confirmation → (skip_frontend_performance | frontend_performance_test)` 固定执行顺序，并在确认恢复时复用已完成的构建检查快照，避免重复安装和构建。TestGeneration Agent 调用期间通过 `integration_test.checks` 发布逐层 `running` 快照，前端原位展示集成检查矩阵、旋转 loading 和生成说明，校验完成后再更新为通过、跳过或失败；实时快照与最终报告均按依赖/类型检查、构建、测试生成检查、单元测试、前端性能测试的稳定顺序展示。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。测试生成期间 LangGraph 对 `.xcodeagent/checkpoints/` 的技术性写入不属于工程变更；其他 `.xcodeagent` 正式工件仍受越权修改检查保护。
 
 输出至少包含：
 
-- `test_results`：每项测试的通过状态、命令和证据；单元测试命令若能从 Jest、Vitest 或 Maven 输出中解析数量，还会提供 `passed_tests` 与 `total_tests` 供集成检查矩阵展示；
+- `test_results`：每项测试的通过状态、命令和证据；单元测试命令若能从 Jest、Vitest 或 Maven 输出中解析数量，还会提供 `passed_tests` 与 `total_tests` 供集成检查矩阵展示；`frontend_performance` 额外携带 `performance_scores`、`performance_metrics` 与 `report_path`；
 - `test_report`：确定性测试汇总和质量门禁结果；
 - `test_report_path`：结构化测试报告 JSON 路径；
 - `quality_gate_passed`：是否允许进入启动和验收；
@@ -512,6 +513,7 @@ testing.START
 - 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm` 或 `yarn`，执行 install、可选 `tsc` script、build，并在有对应测试文件时优先执行 `test:unit`、否则执行 `test`；
 - 后端：仅识别当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`），先执行 `-B -Dmaven.test.skip=true clean install`，确认构建通过且存在对应 `*Test.java` 后再执行 `-B -DfailIfNoTests=true test`；不探测 Python 工程或执行 pytest；
 - 未声明可选 `tsc` script 时会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。没有对应单测文件时不执行 Jest/Maven test，并以明确原因跳过；不执行 E2E。
+- 前端性能测试：单测确认后弹出“是否跳过”按钮；继续执行时用 `launch_frontend_project(skip_install=True)` 启动用户 `frontend` 工程并解析真实 `preview_url`，再由 `npx --yes --package @lhci/cli@0.7.2 lhci autorun` 对 `collect.url=[preview_url]` 执行 Lighthouse；使用模拟采集但把网络/CPU 限速调至接近本地无限制，避免 dev server 大体积未打包模块被限速模型放大；结果 advisory，失败不进入质量门禁阻断或修复闭环。
 
 任务编译和执行还必须遵守以下确定性边界：
 

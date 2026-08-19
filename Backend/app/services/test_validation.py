@@ -69,7 +69,11 @@ def create_deterministic_test_results(state: dict[str, Any]) -> list[dict[str, A
 def create_revision_requests(
     test_results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    failed_results = [result for result in test_results if not result["passed"]]
+    failed_results = [
+        result
+        for result in test_results
+        if not result["passed"] and _result_is_blocking(result)
+    ]
     return [
         {
             "id": f"revision:{result['id']}",
@@ -105,8 +109,11 @@ def evaluate_quality_gate(
     *,
     test_results: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    passed = all(result["passed"] for result in test_results)
     revision_requests = create_revision_requests(test_results)
+    passed = all(
+        bool(result["passed"]) or not _result_is_blocking(result)
+        for result in test_results
+    )
     default_required_ids = {check_id for check_id, _ in REQUIRED_TEST_CHECKS}
     required_checks = [
         str(result.get("id") or "")
@@ -137,6 +144,12 @@ def evaluate_quality_gate(
             "evaluated_by": "deterministic-quality-gate",
         },
     }
+
+
+def _result_is_blocking(result: dict[str, Any]) -> bool:
+    """判断测试结果是否参与质量门禁；advisory 检查默认不阻断。"""
+
+    return bool(result.get("blocking", True))
 
 
 def create_repair_task_plan(

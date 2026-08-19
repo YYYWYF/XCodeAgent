@@ -169,9 +169,24 @@ export type IntegrationTestCheckRecord = {
   name: string
   status: 'running' | 'passed' | 'skipped' | 'failed'
   required: boolean
+  advisory?: boolean
   evidence?: string
   passedTests?: number
   totalTests?: number
+  performanceScores?: {
+    performance?: number
+    accessibility?: number
+    bestPractices?: number
+    seo?: number
+  }
+  performanceMetrics?: {
+    fcp?: number
+    lcp?: number
+    tbt?: number
+    cls?: number
+    si?: number
+  }
+  reportPath?: string
 }
 
 export type DagGenerationStageRecord = {
@@ -1155,10 +1170,36 @@ export function readIntegrationTestChecks(
       name,
       status: status as IntegrationTestCheckRecord['status'],
       required: check.required === true,
+      ...(check.advisory === true ? { advisory: true } : {}),
       ...(evidence ? { evidence } : {}),
       ...(passedTests !== undefined ? { passedTests } : {}),
       ...(totalTests !== undefined ? { totalTests } : {})
     })
+    const performanceScores = readPerformanceScores(
+      check.performanceScores ?? check.performance_scores
+    )
+    if (Object.keys(performanceScores).length > 0) {
+      checks[checks.length - 1] = {
+        ...checks[checks.length - 1],
+        performanceScores
+      }
+    }
+    const performanceMetrics = readPerformanceMetrics(
+      check.performanceMetrics ?? check.performance_metrics
+    )
+    if (Object.keys(performanceMetrics).length > 0) {
+      checks[checks.length - 1] = {
+        ...checks[checks.length - 1],
+        performanceMetrics
+      }
+    }
+    const reportPath = stringValue(check.reportPath ?? check.report_path).slice(0, 1_000)
+    if (reportPath) {
+      checks[checks.length - 1] = {
+        ...checks[checks.length - 1],
+        reportPath
+      }
+    }
   }
   return checks.length > 0 ? checks : undefined
 }
@@ -1243,6 +1284,35 @@ function optionalNonNegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.min(1_000_000, Math.max(0, Math.trunc(value)))
     : undefined
+}
+
+/** 读取 Lighthouse 分类得分，只保留 0-100 的合法整数。 */
+function readPerformanceScores(value: unknown): NonNullable<IntegrationTestCheckRecord['performanceScores']> {
+  const source = objectValue(value)
+  const scores: NonNullable<IntegrationTestCheckRecord['performanceScores']> = {}
+  const allowed = ['performance', 'accessibility', 'bestPractices', 'best_practices', 'seo'] as const
+  for (const key of allowed) {
+    const raw = source[key]
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) continue
+    const normalized = Math.min(100, Math.max(0, Math.round(raw)))
+    const outputKey =
+      key === 'bestPractices' || key === 'best_practices' ? 'bestPractices' : key
+    scores[outputKey as keyof typeof scores] = normalized
+  }
+  return scores
+}
+
+/** 读取 Lighthouse 核心指标，只保留有限数值。 */
+function readPerformanceMetrics(value: unknown): NonNullable<IntegrationTestCheckRecord['performanceMetrics']> {
+  const source = objectValue(value)
+  const metrics: NonNullable<IntegrationTestCheckRecord['performanceMetrics']> = {}
+  const allowed = ['fcp', 'lcp', 'tbt', 'cls', 'si'] as const
+  for (const key of allowed) {
+    const raw = source[key]
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) continue
+    metrics[key] = raw
+  }
+  return metrics
 }
 
 function messageContentToText(content: Message['content'] | undefined): string {

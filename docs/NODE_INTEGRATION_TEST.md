@@ -6,9 +6,11 @@
 
 ```text
 collect_unit_test_targets
-  -> generate_or_update_unit_tests
-  -> validate_generated_unit_tests
-  -> actual_project_checks
+  -> build_project_checks
+  -> unit_test_confirmation
+  -> (skip_unit_tests | generate_or_update_unit_tests -> validate_generated_unit_tests -> actual_project_checks)
+  -> frontend_performance_confirmation
+  -> (skip_frontend_performance | frontend_performance_test)
   -> main_quality_gate
   -> repair_planning
 ```
@@ -65,6 +67,7 @@ API 契约一致性由 ProjectPlan 确认和 `prepare_build_tasks` 前置门禁�
 | `frontend_build` | true | 执行 `<package-manager> run build` |
 | `frontend_unit_tests` | 按对应测试文件 | 有 `frontend/tests/*.test.ts(x)` 时优先执行 `test:unit`，否则执行 `test`；无对应文件则 passed/skipped |
 | `frontend_test_generation` / `backend_test_generation` | 按目标 | 生成/校验阶段按受影响端记录；没有测试文件时 passed/skipped |
+| `frontend_performance` | false（advisory） | 单测确认后由 `frontend_performance_runner` 启动用户 `frontend` 工程并对解析出的 `preview_url` 执行 LHCI；用户可跳过，失败不阻断 |
 
 未找到前端 `package.json` 时生成 required failure；可选 `tsc` script 缺失时生成 passed/skipped 结果。测试文件不存在时不调用 Jest，避免当前 Jest “No tests found”造成假失败；E2E 不执行。
 
@@ -103,20 +106,34 @@ execution:
 
 完整 stdout/stderr 写入 `.xcodeagent/runtime/tests/<check-id>/`，Graph State 只保留有界尾部和稳定日志引用。超时、非零退出码、缺失必需命令和 `OSError` 都转换为结构化失败，不用模型推断结果。
 
-检查开始和终止状态通过 `integration_test.checks` custom stream 增量发送。事件只包含稳定 ID、名称、状态、required 和简短 evidence；完整日志不进入 AG-UI payload。
+检查开始和终止状态通过 `integration_test.checks` custom stream 增量发送。事件包含稳定 ID、名称、状态、required、advisory、简短 evidence，以及 `frontend_performance` 的得分/指标/报告路径；完整日志不进入 AG-UI payload。
+
+### 3.4 前端性能测试（advisory）
+
+单元测试阶段结束后先进入 `frontend_performance_confirmation`，通过 AG-UI 展示与单元测试同款的“是否跳过前端性能测试”按钮；选择继续执行后才启动 Lighthouse。
+
+执行器 `Backend/app/services/frontend_performance_runner.py` 复用 `launch_frontend_project(root, skip_install=True)` 启动用户工程 `frontend/` 下的 `dev|start` 脚本，并解析日志拿到真实 `preview_url`；随后在 `.xcodeagent/runtime/tests/frontend_performance/` 下运行：
+
+```text
+npx --yes --package @lhci/cli@0.7.2 lhci autorun --config=<绝对路径>
+```
+
+LHCI 配置固定使用 `collect.url=[preview_url]`、`numberOfRuns=1`、`upload.target=filesystem`，并保持 Lighthouse 7.3 可用的移动端模拟采集链路，同时把网络/CPU 限速调至接近本地无限制（`simulate` + 高吞吐 + 1x CPU），避免 dev server 未打包模块在 1.6Mbps 模拟限速下被放大成数十秒假指标。每次运行前会清理上一次的 LHCI 产物，运行失败不会复用旧报告。不审计静态目录、不重复启动服务器。测试结束后只有本次由性能测试启动的服务器会被停止（复用的既有预览不停止）。
+
+检查 ID 为 `frontend_performance`，结果为 `required=False`、`blocking=False`、`advisory=True`，携带 `performance_scores`（0–100）、`performance_metrics`（FCP/LCP/TBT/CLS/SI）和 `report_path`。无论得分高低或执行失败，该检查都不阻断质量门禁、不进入 RepairPlanner；前端通过指标卡展示得分并提供打开完整 HTML 报告的入口。
 
 ## 4. `main_quality_gate`
 
 源码：`Backend/app/services/test_validation.py`。
 
-质量门禁完全确定性执行：
+质量门禁完全确定性执行，但只统计 `blocking` 的失败项（默认 `True`；`frontend_performance` 显式 `False`）：
 
 ```text
-quality_gate_passed = all(result["passed"] for result in test_results)
-needs_revision = any(not result["passed"] for result in test_results)
+quality_gate_passed = all(result["passed"] or not result.get("blocking", True) for result in test_results)
+needs_revision = any(not result["passed"] and result.get("blocking", True) for result in test_results)
 ```
 
-每个失败检查会转换为一个 `revision_requests[]` 项，包含：
+每个阻断失败检查会转换为一个 `revision_requests[]` 项，包含：
 
 - 失败 check 的完整结构；
 - `failure_category`；
@@ -163,6 +180,8 @@ RepairPlanner 只能选择：
 | `selected_skill_names` | 失败时注入 RepairPlanner 的用户技能快照 |
 | `small_task_code_change_sets` | 合并历史修复变更审计 |
 | `unit_test_generation_enabled` | 正式 Workflow 默认开启；快速修改流程关闭 |
+| `frontend_performance_test_enabled` | 正式 Workflow 默认开启；快速修改流程关闭 |
+| `frontend_performance_decision` | 用户对前端性能测试的 skip/run 确认，恢复时由请求协议写回 |
 | `test_generation_input_code_changes` / `test_generation_input_code_change_sets` | 清空子图差异状态前固化的真实业务差异 |
 | `unit_test_generation_context` / `unit_test_generation` | 受影响源码、生成状态、测试文件、warning 和校验结果 |
 | `unit_test_affected_layers` | 控制只执行本次受影响端的单元测试 |
@@ -173,6 +192,7 @@ RepairPlanner 只能选择：
 ### 6.2 核心输出
 
 - `test_results` / `test_events`
+- `frontend_performance`（advisory 检查：`blocking=False`，含得分、指标、报告路径）
 - `unit_test_generation` / `unit_test_generation_context` / `unit_test_mapping_path`
 - `test_report` / `test_report_path`
 - `quality_gate_passed` / `needs_revision`
@@ -189,7 +209,7 @@ RepairPlanner 只能选择：
 
 ### 7.1 业务失败
 
-命令失败、缺少必需工具、超时或非零退出码都形成 `passed = false` 的 TestResult，节点仍会生成 TestReport 和修复决策。
+命令失败、缺少必需工具、超时或非零退出码都形成 `passed = false` 的 TestResult；只有 `blocking=True` 的失败项会生成修复决策，`frontend_performance` 等 advisory 失败只保留报告与证据。
 
 ### 7.2 技术异常
 
@@ -205,6 +225,9 @@ RepairPlanner 只能选择：
 ## 9. 回归测试重点
 
 - 成功子图事件顺序包含目标收集、测试生成/校验、工程检查、质量门禁和修复规划跳过，且 RepairPlanner 不被调用；
+- 单元测试完成后必须进入前端性能确认；`run/skip/未回答` 分别路由到执行、跳过和暂停恢复，快速修改与前置条件缺失自动跳过；
+- 性能测试使用 `launch_frontend_project(skip_install=True)` 解析真实 `preview_url` 执行 LHCI，报告写入 `.xcodeagent/runtime/tests/frontend_performance/`，复用中的预览服务不会被停止；
+- `frontend_performance` 失败不产生 revision request、不阻断质量门禁，但 summary 仍计入；
 - API contract 服务仍在 ProjectPlan 与 `prepare_build_tasks` 测试中受到保护，但 Testing 不产生 `api_contract` check；
 - Python 项目标记不会触发任何后端命令；
 - Maven 两段命令、零测试跳过、Static、包管理器缺失、命令超时和日志引用保持原行为；

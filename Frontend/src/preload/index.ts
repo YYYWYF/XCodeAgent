@@ -70,6 +70,12 @@ const xcodeAgentApi = {
       }
       return ipcRenderer.invoke('browser:open-preview-window', url);
     },
+    openReportFile: (reportPath) => {
+      if (typeof reportPath !== 'string') {
+        return Promise.reject(new Error('reportPath must be a string'));
+      }
+      return ipcRenderer.invoke('browser:open-report-file', reportPath);
+    },
   },
   projectPreview: {
     registerWorkspace: (payload: ProjectPreviewWorkspacePayload) =>
