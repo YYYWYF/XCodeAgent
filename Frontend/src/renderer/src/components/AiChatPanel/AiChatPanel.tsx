@@ -3,6 +3,10 @@ import { Alert, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useWorkbench, useWorkbenchPhase } from '../../context'
+import {
+  hasApplicationEnteredDevelopment,
+  markApplicationEnteredDevelopment
+} from '../../workbenchPhase'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -497,9 +501,8 @@ export default function AiChatPanel({
   // 仅凭 derivedPhase 会误触发拦截，导致后续真正完成时 ref 已置位、gate 不再出现。
   const lifecycleReadyForWorkbench =
     applicationLifecycle?.initialization?.stage === 'ready_for_workbench'
-  const enterDevConfirmedKey = `xcodeagent:enter-dev-confirmed:${application.id}`
   const [enterDevConfirmed, setEnterDevConfirmed] = useState(
-    () => window.localStorage.getItem(enterDevConfirmedKey) === '1'
+    () => hasApplicationEnteredDevelopment(application.id)
   )
   // 只在 lifecycle 首次到达 ready_for_workbench 时锁一次，不依赖 activeWorkbenchPhase（避免覆盖用户切换）。
   const planningConfirmedSeenRef = useRef(false)
@@ -2170,7 +2173,7 @@ export default function AiChatPanel({
    *  同时清空 activeSessionId：设计阶段绑定的是 planning session，进入开发后清掉其历史，
    *  对话区留空，等用户点页面/API 再展示研发 Agent 卡片。 */
   const handleEnterDevelopment = useCallback((): void => {
-    window.localStorage.setItem(enterDevConfirmedKey, '1')
+    markApplicationEnteredDevelopment(application.id)
     setEnterDevConfirmed(true)
     clearActiveSession()
     setActiveDetailTarget({ type: 'none' })
@@ -2180,7 +2183,7 @@ export default function AiChatPanel({
     setRightPanel(undefined)
     setActiveView('chat')
     switchPhase(null)
-  }, [enterDevConfirmedKey, switchPhase, clearActiveSession])
+  }, [application.id, switchPhase, clearActiveSession])
 
   /** 把底部结构化确认转换为当前 Workflow 已支持的确认答案。 */
   const handleConfirmPlanInteraction = (decision: 'reject' | 'once' | 'always'): void => {
@@ -2299,6 +2302,7 @@ export default function AiChatPanel({
                 pagePath={activeHeaderTarget.path}
                 pageTitle={activeHeaderTarget.title}
                 previewAvailable={showPreviewActions && Boolean(runtimePreviewBaseUrl)}
+                previewLaunchError={showPreviewActions ? runtimePreviewLaunchError : ''}
                 previewLaunchLoading={previewLaunchLoading}
                 status={activeHeaderStatus}
                 targetType={activeHeaderTarget.type}

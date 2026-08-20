@@ -171,6 +171,33 @@
   padding: 0;
 }
 
+.@{class-prefix}-page-context-preview-status {
+  display: inline-flex;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 24px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 999px;
+
+  &.@{class-prefix}-is-error {
+    color: var(--wb-danger);
+    background: color-mix(in srgb, var(--wb-danger) 8%, var(--wb-surface));
+    border-color: color-mix(in srgb, var(--wb-danger) 30%, var(--wb-border));
+    cursor: help;
+
+    &:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--wb-danger) 55%, transparent);
+      outline-offset: 2px;
+    }
+  }
+}
+
 .@{class-prefix}-page-context-detail {
   --page-detail-text: #202331;
   --page-detail-muted: #74798a;
@@ -404,6 +431,30 @@
   min-width: 170px;
   padding: 5px;
   border-radius: 8px;
+}
+
+// 启动失败提示通过 Portal 渲染，显式统一内容块与 antd4 箭头伪元素的底色。
+.@{class-prefix}-page-context-preview-error-tooltip {
+  --page-context-tooltip-bg: #ffffff;
+
+  .ant-tooltip-inner {
+    color: #202124;
+    background: var(--page-context-tooltip-bg);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .ant-tooltip-arrow-content {
+    --antd-arrow-background-color: var(--page-context-tooltip-bg);
+  }
+
+  &.@{class-prefix}-dark {
+    --page-context-tooltip-bg: #28282b;
+
+    .ant-tooltip-inner {
+      color: #f2f2f2;
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+  }
 }
 
 .@{class-prefix}-workbench-shell[data-theme='dark'] {

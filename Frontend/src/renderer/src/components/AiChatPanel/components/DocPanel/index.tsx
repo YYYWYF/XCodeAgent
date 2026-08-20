@@ -2,6 +2,7 @@ import { FileTextOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
+import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import RichLoading from '../DesignProgress/RichLoading'
 import './index.less'
 
@@ -34,7 +35,9 @@ export default function DocPanel({
             <RichLoading bare title={`正在生成${docName || '文档'}…`} />
           </div>
         ) : ready ? (
-          <pre className={cx('doc-panel-viewer')}>{content}</pre>
+          <div className={cx('doc-panel-viewer', 'doc-panel-markdown')}>
+            <MarkdownContent content={content ?? ''} />
+          </div>
         ) : (
           <div className={cx('doc-panel-empty')}>
             <span className={cx('doc-panel-orb')}>

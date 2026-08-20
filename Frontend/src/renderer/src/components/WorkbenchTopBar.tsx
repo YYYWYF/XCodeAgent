@@ -7,6 +7,7 @@ import { useWorkbenchPhase } from '../context'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
 import {
+  markApplicationEnteredDevelopment,
   WORKBENCH_PHASE_AGENTS,
   type WorkbenchPhase
 } from '../workbenchPhase'
@@ -50,7 +51,7 @@ export default function WorkbenchTopBar({
     // 用户主动切到开发阶段时，标记已确认进入开发（与对话区"进入开发"按钮一致），
     // 避免重挂载后 planningConfirmedAt effect 再次锁回 product。
     if (phaseKey === 'development') {
-      window.localStorage.setItem(`xcodeagent:enter-dev-confirmed:${application.id}`, '1')
+      markApplicationEnteredDevelopment(application.id)
     }
     switchPhase(phaseKey)
   }

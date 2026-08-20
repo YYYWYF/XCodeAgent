@@ -20,6 +20,7 @@ import type {
 } from '../typings'
 import WelcomePage from './WelcomePage'
 import WorkbenchPage from './WorkbenchPage'
+import { hasApplicationEnteredDevelopment } from '../workbenchPhase'
 
 type ActiveSurface = 'welcome' | 'workbench'
 
@@ -199,8 +200,7 @@ function AppEntryContent(): JSX.Element {
     async (application: ApplicationConfig): Promise<void> => {
       // 用户是否已确认进入开发（持久化标志，跨会话保留）。模板生成完但用户还没点
       // "进入开发"按钮时此标志为空，应进设计阶段回显历史卡片，而非直接进开发。
-      const enterDevConfirmed =
-        window.localStorage.getItem(`xcodeagent:enter-dev-confirmed:${application.id}`) === '1'
+      const enterDevConfirmed = hasApplicationEnteredDevelopment(application.id)
       if (application.source !== 'new') {
         // 已有工作区不属于新建应用模板生命周期，保持原有直接打开语义。
         await openWorkbench(application)
