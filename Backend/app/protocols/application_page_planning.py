@@ -6,6 +6,9 @@ from typing import Any, AsyncIterator, Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
+from app.protocols.application_planning_interrupt import (
+    project_application_planning_interrupt,
+)
 from app.protocols.application_lifecycle import application_lifecycle_input
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
@@ -50,12 +53,13 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "technical_planning",
         ],
         "designChange": {
-            "requestField": "forwardedProps.designChangeSubmission",
+            "requestField": "forwardedProps.applicationPlanningInteraction",
             "intentNode": "design_intent_analysis",
             "targets": ["requirements", "product_planning", "ui_confirmation"],
             "usesOriginalThread": True,
             "incrementalArtifacts": True,
             "existingArtifactsStateField": "design_change_existing_artifacts",
+            "resumePrimitive": "langgraph-interrupt-command",
         },
         "confirmationArtifacts": [
             "requirement_spec",
@@ -78,11 +82,35 @@ def application_page_planning_capabilities() -> dict[str, Any]:
                 "requestField": "forwardedProps.editedRequirementSpec",
                 "saveActionField": "forwardedProps.requirementSpecDraft",
                 "actions": ["save"],
-                "writes": ["requirement-spec.md", "requirement-spec.json"],
+                "writes": [
+                    "drafts/specs/requirement-spec.md",
+                    "drafts/specs/requirement-spec.json",
+                ],
+                "promotesTo": [
+                    "specs/requirement-spec.md",
+                    "specs/requirement-spec.json",
+                ],
+            }
+        },
+        "draftArtifacts": {
+            "product_plan": {
+                "writes": [
+                    "drafts/plans/product-plan.md",
+                    "drafts/plans/product-plan.json",
+                ],
+                "promotesTo": [
+                    "plans/product-plan.md",
+                    "plans/product-plan.json",
+                ],
             }
         },
         "writesApplicationJsonAfterConfirmation": False,
-        "artifactDirectories": [".xcodeagent/specs", ".xcodeagent/plans"],
+        "artifactDirectories": [
+            ".xcodeagent/drafts/specs",
+            ".xcodeagent/drafts/plans",
+            ".xcodeagent/specs",
+            ".xcodeagent/plans",
+        ],
         "workspaceGate": "planning-artifacts",
         "mainWorkflowIndependent": True,
     }
@@ -157,7 +185,7 @@ def _build_application_planning_recovery_ag_ui_stream(
         snapshot = await active_graph.aget_state(
             {"configurable": {"thread_id": thread_id}}
         )
-        result = dict(snapshot.values)
+        result = project_application_planning_interrupt(dict(snapshot.values), snapshot)
         if not result:
             raise ValueError("没有找到可恢复的应用规划 checkpoint。")
         lifecycle = load_application_lifecycle(request.workspaceRoot)

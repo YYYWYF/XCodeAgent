@@ -64,6 +64,7 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
     ApplicationLifecycleStage.COLLECTING_REQUIREMENT: {ApplicationLifecycleStage.ANALYZING_REQUIREMENT},
     ApplicationLifecycleStage.ANALYZING_REQUIREMENT: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+        ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
         ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
     },
     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION: {
@@ -77,6 +78,7 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
     },
     ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+        ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
         ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
         ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
         ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
@@ -107,16 +109,10 @@ ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecy
         ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
         ApplicationLifecycleStage.READY_FOR_WORKBENCH,
     },
-    ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED: {
-        ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
-    },
-    ApplicationLifecycleStage.READY_FOR_WORKBENCH: {
-        ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
-    },
 }
 
 APPLICATION_PLANNING_REVISION_STAGES = {
-    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+    ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
     ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
     ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
 }
@@ -301,7 +297,7 @@ def restart_application_planning_lifecycle(
     stage: ApplicationLifecycleStage,
     active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
-    """为设计产物修订把创建生命周期回退到指定生成阶段。"""
+    """为设计产物修订把创建生命周期回退到指定规划入口阶段。"""
 
     if stage not in APPLICATION_PLANNING_REVISION_STAGES:
         raise ApplicationLifecycleConflictError(
@@ -848,23 +844,6 @@ def complete_application_template_generation(
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
-    if current.initialization.stage == ApplicationLifecycleStage.READY_FOR_WORKBENCH:
-        current = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
-            status=ApplicationLifecycleStatus.RUNNING,
-            active_run_id=active_run_id,
-        )
-    if (
-        current.initialization.stage
-        == ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED
-    ):
-        current = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
-            status=ApplicationLifecycleStatus.RUNNING,
-            active_run_id=active_run_id,
-        )
     if (
         current.initialization.stage
         != ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES
@@ -916,7 +895,7 @@ def complete_application_template_generation(
         error=ApplicationLifecycleError(
             code="application_template_generation_failed",
             message=(error_message or "应用模板文件生成失败。")[:2048],
-            recoverable=True,
+            recoverable=False,
             occurredAt=utc_now(),
         ),
     )
@@ -927,25 +906,16 @@ def begin_application_template_generation(
     *,
     active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
-    """让首次生成、失败重试或再次进入统一处于模板生成中阶段。"""
+    """只允许 TechnicalPlan 确认后的模板生成阶段执行初始化。"""
 
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
     if current.initialization.stage == ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES:
         return current
-    if current.initialization.stage not in {
-        ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
-        ApplicationLifecycleStage.READY_FOR_WORKBENCH,
-    }:
-        raise ApplicationLifecycleConflictError(
-            f"当前阶段 {current.initialization.stage.value} 不能开始模板增量初始化。"
-        )
-    return persist_application_lifecycle_transition(
-        workspace,
-        stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
-        status=ApplicationLifecycleStatus.RUNNING,
-        active_run_id=active_run_id,
+    raise ApplicationLifecycleConflictError(
+        "只有用户确认 TechnicalPlan 后才能开始模板初始化；当前阶段为 "
+        f"{current.initialization.stage.value}。"
     )
 
 

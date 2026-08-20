@@ -80,7 +80,7 @@ flowchart TD
     A0 -->|"application identity + workspace + thread"| A1
     A1 -->|"confirmed RequirementSpec"| A2
     A2 -->|"confirmed ui_designs"| A3
-    A3 -->|"confirmed ProjectPlan"| T1
+    A3 -->|"confirmed TechnicalPlan"| T1
     T1 -->|"frontend/ + backend/ template"| T2
     T2 -->|"pages + menus + written files"| T3
     T3 -->|"succeeded=true"| T4
@@ -118,9 +118,9 @@ flowchart TD
 
 ### 2.1 当前前端用户旅程
 
-1. 欢迎页最多同时保留 3 个独立的新应用规划。每个应用拥有自己的 application、thread、lifecycle、Workflow 快照、停止处理器和模板任务；切换可见规划或返回首页只是隐藏界面，不会卸载仍在运行的规划或工作台。重启后可从应用索引和 lifecycle 恢复未完成初始化。
-2. 初始化依次经过 RequirementSpec、逐页 UI 设计和 ProjectPlan 三个确认门。RequirementSpec 支持结构化编辑和“保存草稿”，但保存不等于确认；ProjectPlan 当前通过反馈重新生成或显式确认，没有同等的前端结构化直改入口。
-3. ProjectPlan 确认后，前端拉取前后端模板、写页面占位和 `BIZ_MENUS`，再提交模板生成 lifecycle。当前可见规划完成后自动打开工作台；后台规划完成只提示用户从最近项目进入，并写入 `planningConfirmedAt` 作为永久工作台准入标记。
+1. 欢迎页最多同时保留 3 个独立的新应用规划。每个应用拥有自己的 application、thread、lifecycle、Workflow 快照、停止处理器和模板任务；切换可见规划或返回首页只是隐藏界面，不会卸载仍在运行的规划或工作台。重启只恢复未完成的规划交互，不恢复或重新启动模板生成。
+2. 初始化依次经过 RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 四个确认门。RequirementSpec 支持结构化编辑和“保存草稿”，但保存不等于确认；TechnicalPlan 必须显式确认，确认之前不会触发模板生成。
+3. TechnicalPlan 确认后，前端才拉取前后端模板、写页面占位和 `BIZ_MENUS`，再提交模板生成 lifecycle。应用打开、进入工作台、应用重启和模板生成失败都不会再次触发；成功后才允许进入工作台。
 4. 工作台进入时会先通过 `/api/projects/launch` 异步尝试启动“当前模板工程预览”。这是工作台预览初始化，不是主 Workflow 测试通过后的 `launch_project`，两次启动的时机和失败语义不同。
 5. 正式开发前先从 ProjectPlan 选择页面或具体 endpoint。页面设计可选 `commonTable`、`multiForm`、`tabsTable` 三种参考模板并预览，选择结果以 `pageTemplate={id,name,sourcePath}` 送入 `/workflow/run`；endpoint 使用 `detailTargetType=endpoint + selectedApiContractId + selectedEndpointId`。
 6. 页面和 endpoint 各自拥有会话、thread 和历史。目标输入默认走“设计修改”模式的 `/workflow/run`；已设计目标可切到“自由协作”模式的 `/conversation/run`。每条消息可选择当前启用的用户 Skill，选中列表随消息和会话快照传递。
@@ -222,7 +222,6 @@ flowchart LR
     G -->|"written[] + menus"| V
     V -->|"succeeded=true"| W
     V -->|"succeeded=false"| F
-    F -->|"retry"| C
 ```
 
 ### 4.1 `clone_templates / 拉取前后端模板`
@@ -250,7 +249,7 @@ flowchart LR
 - **输出**：`.xcodeagent/application-lifecycle.json` 的 `ready_for_workbench/completed` 或 `application_template_generation_failed/failed`。
 - **校验规则**：要求当前阶段允许完成模板；成功时复核 RequirementSpec 和 ProjectPlan JSON 的 `confirmation_status=confirmed`；当前不复核模板目录和实际写入文件。
 - **依赖文件**：`services/application_lifecycle.py`、`domain/application_lifecycle.py`、`.xcodeagent/application-lifecycle.json`、RequirementSpec JSON、ProjectPlan JSON。
-- **依赖节点**：上游 `generate_application_template_files`；成功进入工作台，失败回到模板重试。
+- **依赖节点**：上游 `generate_application_template_files`；成功进入工作台，失败停留在终止失败态。
 
 ## 5. 已实现但当前前端未挂载的应用开发任务规划动作
 

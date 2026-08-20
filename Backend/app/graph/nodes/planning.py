@@ -122,6 +122,21 @@ def _planning_phase(state: ProjectState) -> str:
     )
 
 
+def _application_planning_interaction(state: ProjectState) -> dict[str, Any]:
+    """读取当前创建规划的结构化 TechnicalPlan 动作。"""
+
+    value = state.get("application_planning_interaction")
+    return value if isinstance(value, dict) and value else {}
+
+
+def _planning_request(state: ProjectState, interaction: dict[str, Any]) -> str:
+    """选择技术规划请求，创建流程只使用结构化交互提供的文本。"""
+
+    if state.get("workflow_scope") == "application_planning" and interaction:
+        return str(interaction.get("request") or "").strip()
+    return str(state.get("request") or "")
+
+
 def _technical_ui_manifest(value: object) -> dict:
     """移除 UI TSX 正文，只向技术规划模型提供路径、哈希和控件索引。"""
 
@@ -293,6 +308,10 @@ def project_planning(state: ProjectState) -> dict:
     """生成或确认 ProjectPlan/TechnicalPlan，并保留独立实体设计边界。"""
 
     phase = _planning_phase(state)
+    interaction = _application_planning_interaction(state)
+    application_planning_scope = state.get("workflow_scope") == "application_planning"
+    request = _planning_request(state, interaction)
+    action = str(interaction.get("action") or "")
     if state.get("workflow_scope") == "application_planning":
         requirement_spec = state.get("requirement_spec")
         if not isinstance(requirement_spec, dict):
@@ -335,8 +354,10 @@ def project_planning(state: ProjectState) -> dict:
             ),
             "timeline": [phase],
         }
-    if existing_plan and _user_confirmed_project_plan(
-        state.get("request", "")
+    if existing_plan and (
+        action == "confirm"
+        if application_planning_scope
+        else _user_confirmed_project_plan(request)
     ):
         edited_markdown = (
             edited_technical_plan_markdown(state, existing_plan)
@@ -355,7 +376,7 @@ def project_planning(state: ProjectState) -> dict:
         project_plan = {
             **apply_project_plan_feedback(
                 synchronized_plan,
-                state.get("request", ""),
+                request,
             ),
             "confirmation_status": "confirmed",
         }
@@ -401,10 +422,10 @@ def project_planning(state: ProjectState) -> dict:
 
     requirement_spec = state["requirement_spec"]
     requirement_spec = _technical_planning_requirement_spec(state, requirement_spec)
-    if existing_plan and state.get("request"):
+    if existing_plan and request:
         requirement_spec = {
             **requirement_spec,
-            "planning_adjustment_request": state["request"],
+            "planning_adjustment_request": request,
         }
     if phase == "technical_planning":
         project_plan, validation_errors = _generate_valid_technical_plan(
@@ -427,7 +448,7 @@ def project_planning(state: ProjectState) -> dict:
         )
         project_plan = apply_project_plan_feedback(
             project_plan,
-            state.get("request", ""),
+            request,
         )
         project_plan = _attach_technical_plan_contracts(state, project_plan)
         project_plan["confirmation_status"] = "pending_user_confirmation"
@@ -2965,9 +2986,9 @@ def _user_confirmed_project_plan(request: str) -> bool:
 
 
 def _has_explicit_user_submission(state: ProjectState) -> bool:
-    """创建规划只接受本轮确认卡提交，避免恢复文案越过计划门禁。"""
+    """创建规划只接受原生中断恢复写入的计划交互。"""
 
     return (
         state.get("workflow_scope") != "application_planning"
-        or state.get("user_interaction_submission") is True
+        or bool(state.get("application_planning_interaction"))
     )

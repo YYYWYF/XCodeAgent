@@ -14,7 +14,6 @@ class ProjectState(TypedDict, total=False):
     active_run_id: str
     change_id: str
     change_target: dict[str, Any]
-    user_interaction_submission: bool
     lifecycle: dict[str, Any]
     lifecycle_interaction_submission: dict[str, Any]
     selected_skill_names: list[str]
@@ -30,8 +29,11 @@ class ProjectState(TypedDict, total=False):
     design_change_target: str
     design_change_reason: str
     design_change_affected_page_ids: list[str]
-    design_change_applied_nodes: list[str]
+    design_change_generation_target: str
+    design_change_generation_request: str
     design_change_existing_artifacts: dict[str, bool]
+    design_interaction_origin: str
+    application_planning_interaction: dict[str, Any]
     direct_modification_owner: str
     direct_modification_scope: str
     direct_modification_confidence: float
@@ -47,6 +49,8 @@ class ProjectState(TypedDict, total=False):
     backend_handoff: dict[str, Any]
     integration_repair_enabled: bool
     requirement_spec: dict[str, Any]
+    requirements_confirmed: bool
+    requirements_clarification_round: int
     edited_requirement_spec: dict[str, Any]
     requirement_spec_feedback: str
     requirement_spec_path: str

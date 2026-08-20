@@ -119,13 +119,70 @@ def render_product_plan_markdown(plan: dict[str, Any]) -> str:
 
 
 def product_plan_markdown_path(state: dict[str, Any]) -> Path:
-    """返回 ProductPlan Markdown 正式路径。"""
+    """返回当前状态关联的 ProductPlan Markdown 路径。"""
+
+    existing_path = state.get("product_plan_path")
+    if existing_path and str(existing_path).endswith(".md"):
+        return Path(existing_path)
+    return confirmed_product_plan_markdown_path(state)
+
+
+def product_plan_json_path(state: dict[str, Any]) -> Path:
+    """返回当前状态关联的 ProductPlan JSON 路径。"""
+
+    existing_path = state.get("product_plan_json_path")
+    if existing_path and str(existing_path).endswith(".json"):
+        return Path(existing_path)
+    return confirmed_product_plan_json_path(state)
+
+
+def _is_product_plan_draft_path(state: dict[str, Any], path: Path) -> bool:
+    """判断路径是否位于当前工作区的产品规划草稿目录。"""
+
+    draft_root = (workflow_artifact_root(state) / "drafts").resolve()
+    try:
+        path.resolve().relative_to(draft_root)
+    except ValueError:
+        return False
+    return True
+
+
+def product_plan_draft_markdown_path(state: dict[str, Any]) -> Path:
+    """返回待确认 ProductPlan 的 Markdown 草稿路径。"""
+
+    existing_path = state.get("product_plan_path")
+    candidate = Path(existing_path) if existing_path else None
+    if (
+        candidate
+        and candidate.suffix == ".md"
+        and _is_product_plan_draft_path(state, candidate)
+    ):
+        return candidate
+    return workflow_artifact_root(state) / "drafts" / "plans" / "product-plan.md"
+
+
+def product_plan_draft_json_path(state: dict[str, Any]) -> Path:
+    """返回待确认 ProductPlan 的内部 JSON 草稿路径。"""
+
+    existing_path = state.get("product_plan_json_path")
+    candidate = Path(existing_path) if existing_path else None
+    if (
+        candidate
+        and candidate.suffix == ".json"
+        and _is_product_plan_draft_path(state, candidate)
+    ):
+        return candidate
+    return workflow_artifact_root(state) / "drafts" / "plans" / "product-plan.json"
+
+
+def confirmed_product_plan_markdown_path(state: dict[str, Any]) -> Path:
+    """返回用户确认后正式 ProductPlan Markdown 的路径。"""
 
     return workflow_artifact_root(state) / "plans" / "product-plan.md"
 
 
-def product_plan_json_path(state: dict[str, Any]) -> Path:
-    """返回 ProductPlan JSON 正式路径。"""
+def confirmed_product_plan_json_path(state: dict[str, Any]) -> Path:
+    """返回用户确认后正式 ProductPlan JSON 的路径。"""
 
     return workflow_artifact_root(state) / "plans" / "product-plan.json"
 
@@ -134,21 +191,60 @@ def edited_product_plan_markdown(
     state: dict[str, Any],
     plan: dict[str, Any],
 ) -> str | None:
-    """读取产品在确认前直接修改的 ProductPlan Markdown。"""
+    """读取产品在确认前直接修改的 ProductPlan Markdown 草稿。"""
 
-    path = product_plan_markdown_path(state)
+    path = (
+        product_plan_draft_markdown_path(state)
+        if plan.get("confirmation_status") != "confirmed"
+        else product_plan_markdown_path(state)
+    )
     if not path.is_file():
         return None
     content = path.read_text(encoding="utf-8")
     return content if content != render_product_plan_markdown(plan) else None
 
 
-def write_product_plan_documents(state: dict[str, Any], plan: dict[str, Any]) -> tuple[str, str]:
-    """原子边界内连续写入 ProductPlan JSON 与 Markdown。"""
+def write_product_plan_draft_documents(
+    state: dict[str, Any],
+    plan: dict[str, Any],
+) -> tuple[str, str]:
+    """把待确认 ProductPlan 写入草稿目录，避免污染正式产物。"""
 
-    json_path = product_plan_json_path(state)
-    markdown_path = product_plan_markdown_path(state)
+    json_path = product_plan_draft_json_path(state)
+    markdown_path = product_plan_draft_markdown_path(state)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     markdown_path.write_text(render_product_plan_markdown(plan), encoding="utf-8")
+    return str(markdown_path), str(json_path)
+
+
+def write_product_plan_documents(state: dict[str, Any], plan: dict[str, Any]) -> tuple[str, str]:
+    """保留当前 ProductPlan 待确认写入入口，并将其落到草稿目录。"""
+
+    return write_product_plan_draft_documents(state, plan)
+
+
+def write_confirmed_product_plan_documents(
+    state: dict[str, Any],
+    plan: dict[str, Any],
+    markdown: str | None = None,
+) -> tuple[str, str]:
+    """将已确认 ProductPlan 提升到正式目录并清理对应草稿。"""
+
+    json_path = confirmed_product_plan_json_path(state)
+    markdown_path = confirmed_product_plan_markdown_path(state)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    markdown_path.write_text(
+        markdown if markdown is not None else render_product_plan_markdown(plan),
+        encoding="utf-8",
+    )
+    for draft_path in (
+        product_plan_draft_markdown_path(state),
+        product_plan_draft_json_path(state),
+    ):
+        try:
+            draft_path.unlink()
+        except FileNotFoundError:
+            pass
     return str(markdown_path), str(json_path)

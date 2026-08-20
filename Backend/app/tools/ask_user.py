@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 QuestionType = Literal["choice", "text", "yesno"]
 OTHER_OPTION_VALUE = "__other__"
+MAX_ASK_USER_QUESTIONS = 8
 
 
 class AskUserOption(BaseModel):
@@ -54,8 +55,8 @@ class AskUserQuestion(BaseModel):
 class AskUserInput(BaseModel):
     questions: list[AskUserQuestion] = Field(
         min_length=1,
-        max_length=4,
-        description="One to four questions to ask the user.",
+        max_length=MAX_ASK_USER_QUESTIONS,
+        description=f"One to {MAX_ASK_USER_QUESTIONS} questions to ask the user.",
     )
 
 
@@ -108,7 +109,7 @@ def build_ask_user_payload(questions: list[AskUserQuestion]) -> dict[str, Any]:
 
 @tool("ask_user", args_schema=AskUserInput)
 def ask_user(questions: list[AskUserQuestion]) -> str:
-    """Ask the user one to four questions before continuing the workflow."""
+    """Ask the user one to eight questions before continuing the workflow."""
 
     return json.dumps(build_ask_user_payload(questions), ensure_ascii=False)
 
@@ -196,7 +197,10 @@ def _valid_ask_user_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
     try:
         normalized = build_ask_user_payload(
-            [AskUserQuestion.model_validate(question) for question in questions[:4]]
+            [
+                AskUserQuestion.model_validate(question)
+                for question in questions[:MAX_ASK_USER_QUESTIONS]
+            ]
         )
     except (TypeError, ValueError):
         return None

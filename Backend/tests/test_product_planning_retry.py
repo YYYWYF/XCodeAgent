@@ -353,7 +353,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                     {
                         "workspace": directory,
                         "workflow_scope": "application_planning",
-                        "user_interaction_submission": True,
+                        "application_planning_interaction": {"action": "ui_action"},
                         "requirement_spec": requirement_spec,
                         "product_plan": product_plan,
                         "ui_design_action": {"action": "skip"},
@@ -374,6 +374,141 @@ class ProductPlanningRetryTests(unittest.TestCase):
         self.assertEqual(result["ui_designs"]["confirmation_status"], "skipped")
         self.assertTrue(result["clarification"]["skipped"])
         self.assertEqual(persisted["confirmation_status"], "skipped")
+
+    def test_product_plan_confirm_action_wins_over_revision_words_in_request(self) -> None:
+        """ProductPlan 的显式 confirm 即使请求含“只保留首页”也必须直接确认。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(requirement_spec)
+        product_plan["confirmation_status"] = "pending_user_confirmation"
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.product_planning.plan_product_with_chat_model",
+                side_effect=AssertionError("显式确认不应重新调用产品规划模型。"),
+            ) as planner_mock:
+                result = product_planning(
+                    {
+                        "workspace": workspace,
+                        "workflow_scope": "application_planning",
+                        "application_planning_interaction": {
+                            "action": "confirm",
+                            "request": "确认产品规划，只保留首页",
+                        },
+                        "request": "确认产品规划，只保留首页",
+                        "requirement_spec": requirement_spec,
+                        "product_plan": product_plan,
+                    }
+                )
+
+        planner_mock.assert_not_called()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["product_plan"]["confirmation_status"], "confirmed")
+
+    def test_product_plan_revise_action_wins_over_confirmation_words_in_request(self) -> None:
+        """ProductPlan 的显式 revise 即使请求含确认词也必须重新生成待确认版本。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(requirement_spec)
+        product_plan["confirmation_status"] = "pending_user_confirmation"
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.product_planning.plan_product_with_chat_model",
+                return_value=product_plan,
+            ) as planner_mock:
+                result = product_planning(
+                    {
+                        "workspace": workspace,
+                        "workflow_scope": "application_planning",
+                        "application_planning_interaction": {
+                            "action": "revise",
+                            "request": "确认后只保留首页",
+                        },
+                        "request": "确认后只保留首页",
+                        "requirement_spec": requirement_spec,
+                        "product_plan": product_plan,
+                    }
+                )
+
+        planner_mock.assert_called_once()
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["product_plan"]["confirmation_status"],
+            "pending_user_confirmation",
+        )
+
+    def test_product_plan_design_revision_without_interaction_keeps_server_request(self) -> None:
+        """设计意图路由生成 ProductPlan 时必须消费服务端游标请求。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(requirement_spec)
+        product_plan["confirmation_status"] = "confirmed"
+        with (
+            tempfile.TemporaryDirectory() as workspace,
+            patch(
+                "app.graph.nodes.product_planning.plan_product_with_chat_model",
+                return_value=product_plan,
+            ) as planner_mock,
+        ):
+            result = product_planning(
+                {
+                    "workspace": workspace,
+                    "workflow_scope": "application_planning",
+                    "application_planning_interaction": {},
+                    "design_change_generation_target": "product_planning",
+                    "design_change_generation_request": "只保留首页",
+                    "request": "只保留首页",
+                    "requirement_spec": requirement_spec,
+                    "product_plan": product_plan,
+                }
+            )
+
+        self.assertEqual(
+            planner_mock.call_args.kwargs["user_feedback"],
+            "只保留首页",
+        )
+        self.assertEqual(result["status"], "requires_user_input")
+
+    def test_technical_plan_confirm_action_wins_over_revision_words_in_request(self) -> None:
+        """TechnicalPlan 的显式 confirm 不因请求中的页面调整词而重新生成。"""
+
+        state = self._technical_planning_state()
+        technical_plan = create_technical_plan(
+            {
+                **state["requirement_spec"],
+                "confirmed_product_plan": state["product_plan"],
+            }
+        )
+        technical_plan["confirmation_status"] = "pending_user_confirmation"
+        state.update(
+            {
+                "technical_plan": technical_plan,
+                "application_planning_interaction": {
+                    "action": "confirm",
+                    "request": "确认技术规划，只保留首页",
+                },
+                "request": "确认技术规划，只保留首页",
+            }
+        )
+        with (
+            patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model",
+                side_effect=AssertionError("显式确认不应重新调用技术规划模型。"),
+            ) as planner_mock,
+            patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+            patch(
+                "app.graph.nodes.planning.write_project_plan_document",
+                return_value="technical-plan.md",
+            ),
+            patch(
+                "app.graph.nodes.planning.write_technical_plan_document",
+                return_value=("technical-plan.md", "technical-plan.json"),
+            ),
+        ):
+            result = project_planning(state)
+
+        planner_mock.assert_not_called()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["technical_plan"]["confirmation_status"], "confirmed")
 
     @patch("app.graph.nodes.product_planning.plan_product_with_chat_model")
     def test_legacy_product_plan_is_not_migrated(self, planner_mock) -> None:
@@ -451,7 +586,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                 "requirement_spec": requirement_spec,
                 "product_plan": existing,
                 "request": "确认产品规划，继续",
-                "user_interaction_submission": True,
+                "application_planning_interaction": {"action": "confirm"},
             }
         )
 
@@ -465,6 +600,52 @@ class ProductPlanningRetryTests(unittest.TestCase):
             validate_product_plan(update["product_plan"], requirement_spec),
             [],
         )
+
+    def test_product_plan_stays_in_draft_until_confirmation(self) -> None:
+        """ProductPlan 待确认期间只写草稿，确认后才提升为正式产物。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.product_planning.plan_product_with_chat_model",
+                return_value=create_product_plan(requirement_spec),
+            ):
+                pending = product_planning(
+                    {
+                        "workspace": workspace,
+                        "requirement_spec": requirement_spec,
+                    }
+                )
+            draft_markdown = Path(pending["product_plan_path"])
+            draft_json = Path(pending["product_plan_json_path"])
+            formal_markdown = Path(workspace) / ".xcodeagent/plans/product-plan.md"
+            formal_json = Path(workspace) / ".xcodeagent/plans/product-plan.json"
+
+            self.assertEqual(pending["status"], "requires_user_input")
+            self.assertTrue(draft_markdown.as_posix().endswith("drafts/plans/product-plan.md"))
+            self.assertTrue(draft_markdown.is_file())
+            self.assertTrue(draft_json.is_file())
+            self.assertFalse(formal_markdown.exists())
+            self.assertFalse(formal_json.exists())
+
+            confirmed = product_planning(
+                {
+                    "workspace": workspace,
+                    "workflow_scope": "application_planning",
+                    "application_planning_interaction": {"action": "confirm"},
+                    "requirement_spec": requirement_spec,
+                    "product_plan": pending["product_plan"],
+                    "product_plan_path": pending["product_plan_path"],
+                    "product_plan_json_path": pending["product_plan_json_path"],
+                }
+            )
+
+            self.assertEqual(confirmed["status"], "completed")
+            self.assertEqual(confirmed["product_plan"]["confirmation_status"], "confirmed")
+            self.assertTrue(formal_markdown.is_file())
+            self.assertTrue(formal_json.is_file())
+            self.assertFalse(draft_markdown.exists())
+            self.assertFalse(draft_json.exists())
 
 
 if __name__ == "__main__":

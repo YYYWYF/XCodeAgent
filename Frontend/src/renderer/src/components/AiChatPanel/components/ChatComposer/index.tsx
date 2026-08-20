@@ -5,7 +5,7 @@ import {
   StopOutlined,
   ToolOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Input, Radio, Select, Tag, Tooltip, Typography } from 'antd'
+import { Button, Input, Radio, Select, Tag, Tooltip, Typography } from 'antd'
 import type { KeyboardEvent, ReactElement } from 'react'
 import { useState } from 'react'
 import type {
@@ -53,7 +53,6 @@ type ChatComposerProps = {
   copy: ChatCopy[EditorMode]
   debugOnly?: boolean
   draft: string
-  error?: string
   initialResumeFrom?: string
   loading: boolean
   onDraftChange: (value: string) => void
@@ -74,7 +73,6 @@ export default function ChatComposer({
   copy,
   debugOnly = false,
   draft,
-  error,
   initialResumeFrom = 'detail_confirmation',
   loading,
   onDraftChange,
@@ -150,7 +148,6 @@ export default function ChatComposer({
   return (
     <div className={cx('ai-chat-composer', debugOnly && 'debug-only')}>
       <div className={cx('ai-chat-composer-column')}>
-        {error && <Alert message={error} showIcon type="error" />}
         <div className={cx('ai-chat-composer-frame')}>
           <div className={cx('composer-inline-input')}>
             {!debugOnly && selectedSkills.length > 0 && (

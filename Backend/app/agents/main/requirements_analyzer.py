@@ -9,17 +9,32 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.data_source_policy import DatasourceType
-from app.services.requirement_spec import create_requirement_spec
+from app.services.requirement_spec import (
+    create_requirement_spec,
+    merge_clarification_answers_into_spec,
+)
 from app.tools.ask_user import ask_user, extract_ask_user_clarification
 from app.utils.model_output import extract_json_object
+
+
+MAX_REQUIREMENT_CLARIFICATION_ROUNDS = 3
+MIN_REQUIREMENT_CLARIFICATION_QUESTIONS = 5
+MAX_REQUIREMENT_CLARIFICATION_QUESTIONS = 8
 
 
 def _requirements_prompt(
     request: str,
     existing_spec: dict[str, Any] | None = None,
     datasource_type: DatasourceType = "database",
+    clarification_round: int = 0,
 ) -> str:
     """构建产品需求提示；保留实体清单并把技术配置下沉到后续阶段。"""
+
+    bounded_round = max(0, min(clarification_round, MAX_REQUIREMENT_CLARIFICATION_ROUNDS))
+    next_round = min(
+        bounded_round + 1,
+        MAX_REQUIREMENT_CLARIFICATION_ROUNDS,
+    )
 
     visible_existing_spec = (
         {
@@ -44,17 +59,41 @@ def _requirements_prompt(
         if visible_existing_spec
         else "Create a new RequirementSpec from the user request.\n"
     )
+    round_context = (
+        f"The user has already completed all {MAX_REQUIREMENT_CLARIFICATION_ROUNDS} clarification rounds. "
+        f"This is the final consolidation pass after round {MAX_REQUIREMENT_CLARIFICATION_ROUNDS}; "
+        "never call ask_user in this pass. Merge the latest answers into the best complete JSON and "
+        "leave any still-optional detail empty.\n"
+        if bounded_round >= MAX_REQUIREMENT_CLARIFICATION_ROUNDS
+        else (
+            f"This request is entering clarification round {next_round} of "
+            f"{MAX_REQUIREMENT_CLARIFICATION_ROUNDS}; the number counts rounds already completed "
+            f"before this model call ({bounded_round}) plus this call. At the final round, ask the "
+            "last batch once if material gaps remain; do not defer questions to a later round.\n"
+        )
+    )
     clarification_policy = (
         "Before asking the user, silently audit every required aspect together, including the "
         "product goals, page inventory, user roles, business flows, and information needs. "
-        "In each clarification turn, batch every material missing "
-        "or ambiguous item into one to four focused questions. An application name and a broad scenario "
+        f"This workflow allows at most {MAX_REQUIREMENT_CLARIFICATION_ROUNDS} clarification rounds. "
+        f"{round_context}"
+        f"In each clarification turn, batch every material missing or ambiguous item into "
+        f"{MIN_REQUIREMENT_CLARIFICATION_QUESTIONS} to {MAX_REQUIREMENT_CLARIFICATION_QUESTIONS} focused questions "
+        "when at least that many material gaps remain. If fewer than "
+        f"{MIN_REQUIREMENT_CLARIFICATION_QUESTIONS} material gaps remain, ask exactly all remaining gaps and do not "
+        "invent filler questions. An application name and a broad scenario "
         "alone are not sufficient when roles, core tasks, page boundaries, permissions, or "
         "the primary business flow cannot be inferred safely. Ask only about gaps that would materially "
         "change the product design; omit optional details that the user did not request instead of "
         "inventing assumptions. Do not "
         "ask open-ended follow-up questions such as whether there are more roles, pages, "
-        "or optional features after the user has answered a prior clarification turn.\n"
+        "or optional features after the user has answered a prior clarification turn. "
+        "Never use ask_user to ask whether the requirements are complete, whether the user has "
+        "anything else to add, or to request generic confirmation; when no material gap remains, "
+        "return the complete JSON and let the workflow's artifact confirmation UI handle approval. "
+        f"After the user has answered round {MAX_REQUIREMENT_CLARIFICATION_ROUNDS}, never call ask_user again "
+        "under any circumstance; return the best complete JSON supported by the request and answers, "
+        "leaving genuinely unspecified optional details empty for the confirmation UI.\n"
     )
     followup_policy = (
         "The latest request contains answers to a previous clarification turn. Treat these answers as "
@@ -110,6 +149,7 @@ def _invoke_live_chat_model(
     *,
     existing_spec: dict[str, Any] | None = None,
     datasource_type: DatasourceType = "database",
+    clarification_round: int = 0,
     settings: Settings | None = None,
     on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -118,12 +158,26 @@ def _invoke_live_chat_model(
     active_settings = settings or Settings.from_env()
     runnable = create_chat_model(active_settings).bind_tools([ask_user])
     if on_token is None:
-        result = runnable.invoke(_requirements_prompt(request, existing_spec, datasource_type))
+        result = runnable.invoke(
+            _requirements_prompt(
+                request,
+                existing_spec,
+                datasource_type,
+                clarification_round,
+            )
+        )
         return {"messages": [result]}
 
     accumulated_text = ""
     merged_chunk: AIMessageChunk | None = None
-    for chunk in runnable.stream(_requirements_prompt(request, existing_spec, datasource_type)):
+    for chunk in runnable.stream(
+        _requirements_prompt(
+            request,
+            existing_spec,
+            datasource_type,
+            clarification_round,
+        )
+    ):
         if isinstance(chunk, AIMessageChunk):
             # glm-5.2 流式 chunk.content 是 content block 列表（如
             # [{"text": "...", "type": "text", "index": 0}]），不是纯字符串。
@@ -152,6 +206,7 @@ def analyze_requirements_with_chat_model(
     existing_spec: dict[str, Any] | None = None,
     *,
     datasource_type: DatasourceType = "database",
+    clarification_round: int = 0,
     on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """直接调用需求模型生成 RequirementSpec，并在关键需求不足时请求澄清。"""
@@ -161,6 +216,7 @@ def analyze_requirements_with_chat_model(
         request,
         existing_spec=existing_spec,
         datasource_type=datasource_type,
+        clarification_round=clarification_round,
         settings=settings,
         on_token=on_token,
     )
@@ -173,18 +229,28 @@ def analyze_requirements_with_chat_model(
     asks_for_clarification = any(
         getattr(message, "tool_calls", None) for message in messages
     )
+    if not asks_for_clarification and not isinstance(agent_spec, dict):
+        # 需求已被判定为清晰时必须有完整 JSON，不能退回固定页面模板继续向下游传播。
+        raise ValueError("需求 AI 未返回完整 RequirementSpec JSON。")
+    # 调用 ask_user 时只展示问题；即使消息同时夹带 JSON，也必须等下一轮完整回答后再采用。
+    effective_agent_spec = agent_spec if not asks_for_clarification else None
     if isinstance(existing_spec, dict) and not asks_for_clarification:
-        _validate_complete_revised_requirement_spec(agent_spec)
+        _validate_complete_revised_requirement_spec(effective_agent_spec)
     spec = create_requirement_spec(
         request,
         agent_note=agent_note,
-        agent_spec=agent_spec,
+        agent_spec=effective_agent_spec,
         existing_spec=existing_spec,
         authoritative_agent_spec=(
-            isinstance(existing_spec, dict) and isinstance(agent_spec, dict)
+            isinstance(existing_spec, dict) and isinstance(effective_agent_spec, dict)
         ),
         datasource_type=datasource_type,
+        # 实时模型的 RequirementSpec 必须完全来自模型或用户明确回答，禁止启用固定页面兜底。
+        allow_inferred_defaults=False,
     )
+    if _is_clarification_followup(existing_spec):
+        # 澄清答案先做确定性合并，避免模型再次遗漏已回答的角色、页面或功能事实。
+        spec = merge_clarification_answers_into_spec(spec, request)
     clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
     spec["clarification_status"] = clarification["status"]
@@ -213,6 +279,15 @@ def analyze_requirements_with_chat_model(
         "requirement_spec": spec,
         "clarification": clarification,
     }
+
+
+def _is_clarification_followup(existing_spec: dict[str, Any] | None) -> bool:
+    """判断当前模型调用是否正在处理上一轮澄清答案。"""
+
+    return bool(
+        isinstance(existing_spec, dict)
+        and existing_spec.get("confirmation_status") == "pending_user_input"
+    )
 
 
 def _validate_complete_revised_requirement_spec(agent_spec: Any) -> None:

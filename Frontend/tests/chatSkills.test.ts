@@ -1393,6 +1393,28 @@ test('构建完成后展示单元测试跳过确认按钮', () => {
   assert.doesNotMatch(markup, /127\.0\.0\.1:3000/)
 })
 
+test('UI 确认过渡帧缺少 clarification 时仍可正常渲染', () => {
+  assert.doesNotThrow(() =>
+    renderToStaticMarkup(
+      createElement(WorkflowRunCard, {
+        interactionAvailability: 'active',
+        workflow: {
+          runId: 'run-ui-confirmation-transition',
+          threadId: 'thread-ui-confirmation-transition',
+          summary: {
+            status: 'running',
+            phase: 'ui_confirmation',
+            message: '正在跳过 UI 设计并进入技术规划。'
+          },
+          events: [],
+          state: {},
+          result: {}
+        }
+      })
+    )
+  )
+})
+
 test('正式工作流只在启动预览后展示代码差异', () => {
   const workflow = (phase: string): WorkflowRunPayload => ({
     runId: `run-${phase}`,

@@ -996,6 +996,7 @@ def _workflow_progress_summary(
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
+        "requirementsConfirmed": result.get("requirements_confirmed") is True,
     }
 
 
@@ -1078,7 +1079,7 @@ def _workflow_artifacts(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
-    return {
+    public_state = {
         key: item
         for key, item in value.items()
         if key
@@ -1089,6 +1090,9 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
+    if "requirements_confirmed" in value:
+        public_state["requirementsConfirmed"] = value.get("requirements_confirmed") is True
+    return public_state
 
 
 def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
@@ -1113,7 +1117,12 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
         status = (
             clarification.get("status") if isinstance(clarification, dict) else None
         )
-        message = f"需求文档={update.get('requirement_spec_path')}"
+        if update.get("requirements_confirmed") is True:
+            message = f"需求文档={update.get('requirement_spec_path')}"
+        elif questions:
+            message = "需求信息尚不完整，等待用户补充；补充完成前不生成需求文档草稿"
+        else:
+            message = "需求草稿已写入右侧，等待确认后转为正式需求文档"
         if questions:
             message += f"，待确认问题={len(questions)}"
         return {
@@ -1381,6 +1390,12 @@ def _workflow_summary(
         question_count = len(questions) if isinstance(questions, list) else 0
         if isinstance(result.get("acceptance_request"), dict):
             message = "项目预览已就绪，请确认是否符合预期。"
+        elif clarification.get("mode") == "requirement_spec_confirmation":
+            message = (
+                "需求文档已生成，请确认后继续。"
+                if result.get("requirements_confirmed") is True
+                else "右侧已展示需求文档草稿，请确认需求没问题后转为正式文档。"
+            )
         elif question_count > 0:
             message = f"还有 {question_count} 个问题需要补充，完成后将继续执行。"
         else:
@@ -1413,6 +1428,7 @@ def _workflow_summary(
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": artifacts,
         "clarification": clarification,
+        "requirementsConfirmed": result.get("requirements_confirmed") is True,
     }
 
 
@@ -1441,6 +1457,7 @@ def _workflow_visual_payload(
         "testReport": result.get("test_report", {}),
         "repairTaskPlan": result.get("repair_task_plan"),
         "clarification": result.get("clarification", {}),
+        "requirementsConfirmed": result.get("requirements_confirmed") is True,
         "requirement_spec": result.get("requirement_spec"),
         "requirement_spec_path": result.get("requirement_spec_path"),
         "requirement_spec_json_path": result.get("requirement_spec_json_path"),
@@ -1502,11 +1519,16 @@ def _workflow_confirmation_artifact(
     contract = artifact_contracts.get(str(clarification.get("mode") or ""))
     if not contract or result.get("phase") != contract["phase"]:
         return None
-
     raw_path = result.get(contract["path_field"])
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
     path = Path(raw_path)
+    if (
+        contract["id"] == "requirement_spec"
+        and result.get("requirements_confirmed") is not True
+        and "drafts" not in path.parts
+    ):
+        return None
     if path.name != contract["name"] or not path.is_file():
         return None
 

@@ -15,7 +15,6 @@ import {
 import type { ApplicationConfig, ApplicationLifecycle, WorkflowRunPayload } from '../typings'
 import { cx } from '../utils'
 import { useSessionRuntimeStore } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
-import { APPLICATION_TEMPLATE_GENERATION_ENABLED } from '../service/templateApi'
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
 type UseActiveApplicationPlanningsOptions = {
@@ -34,7 +33,7 @@ type ActiveApplicationPlanningsController = {
   hidePlanning: (applicationId: string) => void
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
   generatingAppIds: ReadonlySet<string>
-  onPlanningConfirmed: (applicationId: string) => Promise<boolean>
+  onTechnicalPlanConfirmed: (applicationId: string) => Promise<boolean>
   registerStopHandler: (applicationId: string, handler?: () => Promise<void>) => void
   removePlanning: (applicationId: string) => void
   returnHome: () => void
@@ -47,6 +46,7 @@ type ActiveApplicationPlanningsController = {
   ) => void
   stopPlanning: (applicationId: string) => Promise<void>
   updatePlanningLifecycle: (applicationId: string, lifecycle: ApplicationLifecycle) => void
+  updatePlanningError: (applicationId: string, error?: string) => void
   updatePlanningStatus: (applicationId: string, status: ActivePlanningStatus) => void
   updatePlanningWorkflow: (applicationId: string, workflow: WorkflowRunPayload) => void
   visiblePlanningId?: string
@@ -163,6 +163,23 @@ export function useActiveApplicationPlannings({
     [commitPlannings]
   )
 
+  // 将隐藏规划窗口捕获到的模型错误同步到工作台，避免后台失败只剩空白占位。
+  const updatePlanningError = useCallback(
+    (applicationId: string, error?: string): void => {
+      const normalizedError = error?.trim() || undefined
+      commitPlannings((current) => {
+        const target = current.find((planning) => planning.application.id === applicationId)
+        if (!target || target.error === normalizedError) return current
+        return current.map((planning) =>
+          planning.application.id === applicationId
+            ? { ...planning, error: normalizedError }
+            : planning
+        )
+      })
+    },
+    [commitPlannings]
+  )
+
   // 更新指定应用的 Workflow 与生命周期快照，禁止跨应用覆盖。
   const updatePlanningWorkflow = useCallback(
     (applicationId: string, workflow: WorkflowRunPayload): void => {
@@ -234,23 +251,16 @@ export function useActiveApplicationPlannings({
       onOpenWorkbench
     })
 
-  // 打开指定规划；模板生成失败的计划直接按原有语义触发重试。
+  // 打开指定规划；模板生成失败只展示失败状态，不在打开时重新触发生成。
   const showPlanning = useCallback(
     (applicationId: string): void => {
       const planning = activePlanningsRef.current.find(
         (candidate) => candidate.application.id === applicationId
       )
       if (!planning) return
-      if (
-        APPLICATION_TEMPLATE_GENERATION_ENABLED &&
-        planning.lifecycle.initialization.stage === 'application_template_generation_failed'
-      ) {
-        void generateApplicationTemplateFiles(planning)
-        return
-      }
       setVisiblePlanning(applicationId)
     },
-    [generateApplicationTemplateFiles, setVisiblePlanning]
+    [setVisiblePlanning]
   )
 
   // 停止并删除指定初始化计划，连同 .xcodeagent 目录和聊天记录一起移入系统回收站，不触碰其他应用的任务和文件。
@@ -306,21 +316,8 @@ export function useActiveApplicationPlannings({
     [deletePlanning, deletingPlanningIds, theme]
   )
 
-  // 后台恢复到模板生成阶段的每个应用都独立续跑，不抢占当前可见页面。
-  useEffect(() => {
-    if (!APPLICATION_TEMPLATE_GENERATION_ENABLED) return
-    for (const planning of activePlannings) {
-      if (
-        planning.application.id !== visiblePlanningId &&
-        planning.lifecycle.initialization.stage === 'generating_application_template_files'
-      ) {
-        void generateApplicationTemplateFiles(planning)
-      }
-    }
-  }, [activePlannings, generateApplicationTemplateFiles, visiblePlanningId])
-
   // 仅确认回调所属应用的模板任务，忽略其他会话的完成状态。
-  const onPlanningConfirmed = useCallback(
+  const onTechnicalPlanConfirmed = useCallback(
     (applicationId: string): Promise<boolean> => {
       const planning = activePlanningsRef.current.find(
         (candidate) => candidate.application.id === applicationId
@@ -341,7 +338,7 @@ export function useActiveApplicationPlannings({
     dismissPlanning,
     hidePlanning,
     generatingAppIds,
-    onPlanningConfirmed,
+    onTechnicalPlanConfirmed,
     registerStopHandler,
     removePlanning,
     returnHome,
@@ -349,6 +346,7 @@ export function useActiveApplicationPlannings({
     startPlanning,
     stopPlanning,
     updatePlanningLifecycle,
+    updatePlanningError,
     updatePlanningStatus,
     updatePlanningWorkflow,
     visiblePlanningId

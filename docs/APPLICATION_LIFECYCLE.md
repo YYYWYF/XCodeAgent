@@ -22,8 +22,9 @@
 collecting_requirement
   -> analyzing_requirement
   -> awaiting_requirement_clarification -> analyzing_requirement
-  -> generating_requirement_spec
-  -> awaiting_requirement_confirmation -> generating_requirement_spec
+  -> awaiting_requirement_confirmation
+       ├─ revise -> analyzing_requirement
+       └─ confirm -> generating_requirement_spec
   -> generating_product_plan
   -> awaiting_product_plan_confirmation -> generating_product_plan
   -> generating_ui_designs
@@ -31,9 +32,11 @@ collecting_requirement
   -> generating_technical_plan
   -> awaiting_technical_plan_confirmation -> generating_technical_plan
   -> generating_application_template_files
-  -> application_template_generation_failed -> generating_application_template_files
-  -> ready_for_workbench
+       ├─ success -> ready_for_workbench
+       └─ failure -> application_template_generation_failed（终止）
 ```
+
+模板生成只由用户确认 TechnicalPlan 后的确认回调启动。失败、应用重启、再次打开和进入工作台都不会重新启动模板生成；任何新一轮生成都必须重新完成规划并确认 TechnicalPlan。
 
 ## 全应用生命周期与计划执行模式
 

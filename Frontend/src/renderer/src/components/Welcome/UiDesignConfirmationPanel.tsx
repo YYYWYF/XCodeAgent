@@ -210,9 +210,18 @@ export default function UiDesignConfirmationPanel({
   }, [workflow.events, actingPageIds])
 
   const confirmAll = (): void => {
-    // 提交一句明确的全部确认信号，后端 _user_confirmed_all_designs 据此进入技术规划。
-    const message = feedback.trim() || '确认全部设计稿'
-    onSubmit(workflow, { ui_design_confirmation: message })
+    const feedbackText = feedback.trim()
+    if (feedbackText) {
+      // 确认按钮带有修改意见时仍按 UI 调整提交，不能把意见吞成确认。
+      submitAdjustPages()
+      return
+    }
+    // 提交一句明确的全部确认信号，并显式标记为确认动作，避免后端从文案猜测用户意图。
+    const message = '确认全部设计稿'
+    onSubmit(
+      workflow,
+      { ui_design_confirmation: message, __applicationPlanningAction: 'confirm' }
+    )
   }
 
   // 一键并发生成所有未确认页面的设计稿：把所有 pending 页一次性提交为 multi
@@ -239,13 +248,16 @@ export default function UiDesignConfirmationPanel({
       batch.length === 1
         ? { pageId: batch[0].pageId, action: batch[0].action }
         : { action: 'multi', actions: batch }
-    onSubmit(workflow, { ui_design_action: payload })
+    onSubmit(workflow, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
   }
 
   // 用户明确选择跳过 UI 设计时，提交结构化动作并直接进入技术规划。
   const skipUiDesign = (): void => {
     if (disabled) return
-    onSubmit(workflow, { ui_design_action: { action: 'skip' } })
+    onSubmit(
+      workflow,
+      { ui_design_action: { action: 'skip' }, __applicationPlanningAction: 'ui_action' }
+    )
   }
 
   // 把队列中所有待处理 action 取出，提交一个 run。单 action 仍发单 action dict
@@ -260,7 +272,7 @@ export default function UiDesignConfirmationPanel({
       batch.length === 1
         ? { pageId: batch[0].pageId, action: batch[0].action, ...(batch[0].templateId ? { templateId: batch[0].templateId } : {}) }
         : { action: 'multi', actions: batch }
-    onSubmit(workflow, { ui_design_action: payload })
+    onSubmit(workflow, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
   }, [onSubmit, workflow])
 
   // 逐页"选模板"或"重新生成"：点击即把该页加入 acting 集合（立即禁用该页按钮 +
@@ -315,12 +327,16 @@ export default function UiDesignConfirmationPanel({
     const { pageIds, instruction } = parseMentionedPageIds(feedback)
     if (!instruction) return
     setActingPageIds(['adjust'])
+    runInFlightRef.current = true
+    runStartedAtRef.current = Date.now()
+    observedRunningRef.current = false
     onSubmit(workflow, {
       ui_design_action: {
         action: 'adjust_pages',
         pageIds,
         instruction,
       },
+      __applicationPlanningAction: 'ui_action'
     })
     setFeedback('')
   }, [feedback, onSubmit, parseMentionedPageIds, workflow])

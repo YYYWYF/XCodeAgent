@@ -45,6 +45,50 @@ class AskUserToolTests(unittest.TestCase):
         self.assertEqual(payload["questions"][0]["options"][-1]["label"], "其他")
         self.assertEqual(payload["questions"][0]["options"][-1]["value"], "__other__")
 
+    def test_payload_preserves_eight_questions_for_batched_clarification(self) -> None:
+        """通用问题工具必须保留需求澄清所需的批量问题，而不是截断成旧上限。"""
+
+        questions = [
+            AskUserQuestion(
+                header=f"问题{i}",
+                question=f"请补充第{i}项业务信息。",
+                type="text",
+            )
+            for i in range(1, 9)
+        ]
+        payload = build_ask_user_payload(
+            questions
+        )
+
+        self.assertEqual(len(payload["questions"]), 8)
+        clarification = extract_ask_user_clarification(
+            {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "ask_user",
+                                "args": {
+                                    "questions": [
+                                        question.model_dump(
+                                            by_alias=True,
+                                            exclude_none=True,
+                                        )
+                                        for question in questions
+                                    ]
+                                },
+                                "id": "call-8",
+                            }
+                        ],
+                    )
+                ]
+            },
+            {"app_info": {"name": "Demo App"}},
+        )
+
+        self.assertEqual(len(clarification["questions"]), 8)
+
     def test_extracts_clarification_from_tool_message(self) -> None:
         payload = build_ask_user_payload(
             [

@@ -9,7 +9,7 @@
 3. 菜单项增量注入；
 4. 模板生成 manifest；
 5. 模板生成完成门禁；
-6. 首次生成、失败重试、Electron 重启以及后续每次进入开发前的增量对账。
+6. TechnicalPlan 确认后的单次模板生成，以及失败后的终止状态记录。
 
 本文中的“进入”是指从欢迎页打开应用并准备进入开发会话，不是用户在工作台内切换页面或路由。模板生成仍然是一个整体业务阶段，不为下载、页面、菜单和门禁增加新的生命周期枚举。
 
@@ -20,7 +20,7 @@
 - 在应用工作区准备可用的前端和后端模板工程。
 - 根据最新正式 ProductPlan 页面清单补齐缺失页面占位文件。
 - 根据同一份 ProductPlan 补齐缺失菜单项。
-- 首次初始化、失败重试、重启恢复和再次进入开发时执行同一套增量对账。
+- 仅在用户确认 TechnicalPlan 后执行一次模板初始化；失败、重启、再次打开和进入工作台都不重新触发。
 - 模板下载、页面、菜单和完成门禁的状态统一写入 manifest。
 - 只有正式规划产物、manifest 和真实模板文件都满足门禁时，才允许进入开发。
 
@@ -104,7 +104,7 @@ generating_application_template_files
 | 并行编排与 manifest | 页面和菜单受控并行，单一写入者原子落盘 manifest | `Backend/app/services/application_template_generation.py` |
 | 生命周期动作 | 独立 AG-UI 动作执行 prepare 和 complete，文件任务不阻塞事件循环 | `Backend/app/protocols/application_lifecycle.py` |
 | 完成门禁 | 校验四份正式产物、manifest、模板入口、页面和菜单真实文件 | `Backend/app/services/application_lifecycle.py`、`Backend/app/services/application_template_generation.py` |
-| 重复进入 | 欢迎页再次打开新应用时重新执行 readiness，不使用 `planningConfirmedAt` 短路 | `Frontend/src/renderer/src/pages/AppEntryPage.tsx` |
+| 触发边界 | 只有 TechnicalPlan 确认回调会启动 readiness；欢迎页打开、重启、进入工作台和失败态不启动 | `Frontend/src/renderer/src/components/Welcome/ApplicationPagePlanningModal.tsx`、`Frontend/src/renderer/src/pages/AppEntryPage.tsx` |
 
 ### 4.2 本轮已处理的旧问题
 
@@ -138,14 +138,9 @@ RequirementSpec 和 TechnicalPlan 由完成门禁读取，用于确认状态校�
 
 模板阶段不新增或比较 ProductPlan hash。远端正式产物自身已有的上游 hash 规则保持原样，但不作为 template manifest 的版本绑定机制。
 
-### 5.2 每次进入开发前增量对账
+### 5.2 TechnicalPlan 确认后的单次初始化
 
-以下场景执行同一套流程：
-
-- TechnicalPlan 确认后的首次模板初始化；
-- 模板初始化失败后的重试；
-- Electron 重启后的恢复；
-- 从欢迎页再次打开一个已经 ready 的应用并准备进入开发。
+只有用户确认 TechnicalPlan 后，前端才启动这一套流程。模板初始化失败后，生命周期保持终止失败态；应用重启、再次打开、进入工作台或查看失败详情都不会再次启动。
 
 对账步骤：
 
@@ -158,9 +153,7 @@ RequirementSpec 和 TechnicalPlan 由完成门禁读取，用于确认状态校�
 7. 原子更新本轮 manifest；
 8. 执行完成门禁。
 
-“每次进入”不包括工作台内页面切换。如果计划和文件完全一致，对账只执行读取和验证，不产生文件修改。
-
-`planningConfirmedAt` 只表示初始化规划曾经完成，不能替代本次模板 readiness。应用最终是否可以进入开发，以本轮生命周期、manifest 和真实文件门禁结果为准。
+`planningConfirmedAt` 只记录初始化成功事实，不是模板 readiness 的触发条件。应用最终是否可以进入开发，以生命周期、manifest 和真实文件门禁结果为准。
 
 ### 5.3 增量而非重建
 
@@ -229,24 +222,18 @@ flowchart TD
     M --> N["单一写入者原子更新 manifest"]
     N --> O["完成门禁重读正式产物、manifest 和真实文件"]
     O --> P{"是否全部满足？"}
-    P -->|否| Q["进入可重试失败状态"]
+    P -->|否| Q["进入终止失败状态，不重新触发"]
     P -->|是| R["ready_for_workbench"]
 ~~~
 
-### 6.2 后续再次进入开发
+### 6.2 后续打开与失败状态
 
 ~~~mermaid
 flowchart TD
-    A["从欢迎页打开应用"] --> B["启动模板 readiness"]
-    B --> C["检查或补齐前后端模板"]
-    C --> D["读取最新 ProductPlan 和 UiDesign Manifest"]
-    D --> E["重新推导页面和菜单预期集合"]
-    E --> F["并行检查并只补齐缺失项"]
-    F --> G["原子更新 manifest"]
-    G --> H["完成门禁"]
-    H --> I{"门禁结果"}
-    I -->|成功| J["进入开发"]
-    I -->|失败| K["保留错误并允许重试"]
+    A["应用重启或再次打开应用"] --> B{"当前生命周期"}
+    B -->|ready_for_workbench| C["直接进入工作台，不启动模板生成"]
+    B -->|application_template_generation_failed| D["只展示失败信息，不提供模板重试"]
+    B -->|其他阶段| E["等待规划流程，不进入模板生成"]
 ~~~
 
 ## 7. 模板生成 manifest
@@ -326,8 +313,8 @@ flowchart TD
 - download.targets 记录每个模板的尝试次数和最终错误。
 - 页面和菜单记录预期项、原有项、本次新增项和最终缺失项。
 - 页面和菜单任务不直接写 manifest，由编排器收齐两个结果后统一原子写入。
-- 每次进入开发前重新计算 expected 集合；旧 manifest 的 succeeded 不能跳过真实检查。
-- overall.succeeded 只代表最近一次 readiness 和门禁成功。
+- TechnicalPlan 确认时计算本次 expected 集合；后续打开应用不重新启动 readiness。
+- overall.succeeded 只代表 TechnicalPlan 确认后这一次 readiness 和门禁成功。
 
 ## 8. 完成门禁
 
@@ -346,7 +333,7 @@ flowchart TD
 
 门禁不检查任何 API 文件，也不在成功判断过程中静默创建文件。
 
-如果 ProductPlan 在初始化后、门禁前发生变化，门禁按最新内容重新检查。发现新增缺失项时本次门禁失败，重新进入同一增量初始化流程；不通过 hash 让全部历史结果失效。
+如果 ProductPlan 在初始化后、门禁前发生变化，当前门禁按最新内容拒绝本次结果；必须回到规划流程并重新确认 TechnicalPlan 后，才允许启动新一轮模板生成。
 
 ## 9. 生命周期与 AG-UI 边界
 
@@ -356,12 +343,11 @@ flowchart TD
 
 ~~~text
 generating_application_template_files
-  -> application_template_generation_failed
-  -> generating_application_template_files
-  -> ready_for_workbench
+  ├─ success -> ready_for_workbench
+  └─ failure -> application_template_generation_failed（终止）
 ~~~
 
-为满足再次进入开发前的 readiness，`ready_for_workbench` 应允许进入一次受控的模板对账过程；对账成功后重新保持 ready，失败时进入可重试失败状态。
+`ready_for_workbench`、`application_template_generation_failed` 都不允许再次进入模板生成阶段。任何新一轮模板生成都必须先完成新的规划流程并重新确认 TechnicalPlan。
 
 ### 9.2 revision
 
@@ -440,8 +426,8 @@ generating_application_template_files
 8. 改造完成门禁，重读四份正式产物、manifest 和真实文件。
 9. 删除全部 API 骨架、候选文件和静默预加载逻辑。
 10. 删除 Renderer workflow 页面初始化主路径，避免双写。
-11. 调整应用入口，使首次、重试、重启和再次进入开发都执行 readiness。
-12. 增加下载、增量注入、重复进入、部分失败和门禁拒绝测试。
+11. 调整应用入口，使 readiness 只由 TechnicalPlan 确认回调执行。
+12. 增加单次触发、失败终止、部分失败和门禁拒绝测试。
 13. 后续另立任务修复 API 文件确定性命名与 TaskPlanner `add/modify`。
 
 ## 12. 验收标准
@@ -451,17 +437,17 @@ generating_application_template_files
 - 前端或后端任一模板最终失败时，页面和菜单步骤不执行，也不能进入开发。
 - 已存在且有效的模板不会重复下载。
 - 非空但无法识别的目录不会被自动删除。
-- 重启后不依赖 Renderer workflow，仍能从正式 ProductPlan 恢复页面和菜单初始化。
+- 应用重启、再次打开和进入工作台不依赖 Renderer workflow，也不会恢复或重新触发模板初始化。
 - ProductPlan 页面使用 `pageId` 作为身份权威，PageKey 与 UiDesign 映射一致。
 - UI 选择模板、重新生成或确认不会造成模板页面 PageKey 变化。
 - 已存在页面文件不会被覆盖，已存在菜单不会重复注入。
-- ProductPlan 新增页面后，再次进入开发只补齐新增页面和菜单。
+- ProductPlan 发生变化后，必须重新完成规划并确认 TechnicalPlan，不能通过再次进入开发触发补齐。
 - ProductPlan 删除页面时，本阶段不自动删除已有文件或菜单。
 - 页面或菜单任一步失败时，manifest 整体失败，同时保留另一步的完整结果。
 - 页面和菜单不会竞争写 manifest。
-- 同一工作区发生重复进入请求时，只运行一个模板初始化编排任务。
+- 同一工作区的重复打开请求不会启动模板初始化任务。
 - manifest 缺失、损坏、必需步骤未完成或真实产物缺失时，完成门禁拒绝进入开发。
-- 旧 manifest 成功但最新 ProductPlan 存在新增缺失项时，必须先完成增量注入。
+- 旧 manifest 成功或最新 ProductPlan 存在新增缺失项时，都不能直接触发模板生成；必须重新完成规划并确认 TechnicalPlan。
 - 完成门禁校验 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan、manifest、模板目录、页面和菜单。
 - 模板阶段不创建、检查或修改任何业务 API 文件。
 - `_preload_api_skeletons()` 和 API 候选文件逻辑不再参与生命周期成功路径。

@@ -21,6 +21,8 @@ export type ChatSessionMessage = {
   approvalStatus?: AgentApprovalStatus;
   codeChanges?: WorkspaceCodeChangeSet;
   workflow?: WorkflowRunPayload;
+  /** 持久化当前 assistant 轮次的模型或 Workflow 错误，恢复历史时仍能显示错误卡片。 */
+  error?: string;
   toolCalls?: ToolCallRecord[];
   processSteps?: ProcessStepRecord[];
   createdAt: number;
@@ -116,6 +118,8 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
         item.workflow && typeof item.workflow === 'object'
           ? (item.workflow as WorkflowRunPayload)
           : undefined,
+      error:
+        typeof item.error === 'string' && item.error.trim() ? item.error.trim() : undefined,
       toolCalls: normalizeToolCalls(item.toolCalls),
       processSteps: normalizeProcessSteps(item.processSteps),
       approvalStatus:

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from app.graph.application_planning_workflow import _route_requirements, _route_start
 from app.graph.application_planning_revision import (
     analyze_design_intent,
+    begin_current_artifact_revision,
     cleared_design_change_context,
     design_artifact_node_state,
     design_node_update,
@@ -27,6 +28,7 @@ from app.domain.application_lifecycle import (
 )
 from app.services.application_lifecycle import (
     ensure_application_lifecycle,
+    load_application_lifecycle,
     persist_application_lifecycle_transition,
     restart_application_planning_lifecycle,
 )
@@ -46,36 +48,27 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         )
 
     def test_design_change_request_starts_original_graph_intent_node(self) -> None:
-        """设计变更必须保持原 scope，并显式从意图节点启动。"""
+        """设计变更必须以类型化交互恢复当前原生中断。"""
 
         result = workflow_run_inputs(
             {
                 "message": "把首页改成运营工作台",
                 "workflowScope": "application_planning",
-                "designChangeSubmission": True,
-                "resumeState": {
-                    "summary": {
-                        "status": "requires_user_input",
-                        "phase": "ui_confirmation",
-                    },
-                    "state": {
-                        "requirement_spec": {"confirmation_status": "confirmed"},
-                        "product_plan": {"confirmation_status": "confirmed"},
-                    },
+                "applicationPlanningInteraction": {
+                    "gateId": "ui_designs:revision-1",
+                    "artifact": "ui_designs",
+                    "artifactRevision": "revision-1",
+                    "action": "design_change",
+                    "request": "把首页改成运营工作台",
                 },
             }
         )
 
         self.assertEqual(result["workflow_scope"], "application_planning")
-        self.assertTrue(result["design_change_submission"])
-        self.assertEqual(result["resume_from"], "design_intent_analysis")
+        self.assertEqual(result["resume_from"], "")
         self.assertEqual(
-            _workflow_start_node(result["resume_from"], result["workflow_scope"]),
-            "design_intent_analysis",
-        )
-        self.assertEqual(
-            _route_start({"resume_from": result["resume_from"]}),
-            "design_intent_analysis",
+            result["application_planning_interaction"]["action"],
+            "design_change",
         )
 
     def test_design_change_rejects_non_planning_scope(self) -> None:
@@ -86,54 +79,50 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                 {
                     "message": "修改需求",
                     "workflowScope": "workflow",
-                    "designChangeSubmission": True,
+                    "applicationPlanningInteraction": {
+                        "gateId": "requirement_spec:revision-1",
+                        "artifact": "requirement_spec",
+                        "artifactRevision": "revision-1",
+                        "action": "design_change",
+                        "request": "修改需求",
+                    },
                 }
             )
 
     def test_ui_design_action_bypasses_design_intent_analysis(self) -> None:
-        """UI 卡片动作必须直达 UI 节点，不能被意图标志或恢复快照带偏。"""
+        """UI 卡片动作必须作为当前 UI 中断的显式恢复载荷。"""
 
         result = workflow_run_inputs(
             {
                 "message": "请根据本轮确认继续创建规划。",
                 "forwardedProps": {
                     "workflowScope": "application_planning",
-                    "designChangeSubmission": True,
-                    "clarificationAnswers": {
-                        "ui_design_action": {
+                    "applicationPlanningInteraction": {
+                        "gateId": "ui_designs:revision-1",
+                        "artifact": "ui_designs",
+                        "artifactRevision": "revision-1",
+                        "action": "ui_action",
+                        "uiAction": {
                             "pageId": "dashboard_page",
                             "action": "regenerate",
-                        }
-                    },
-                    "resumeState": {
-                        "summary": {
-                            "status": "requires_user_input",
-                            "phase": "design_intent_analysis",
-                        },
-                        "state": {
-                            "design_change_submission": True,
-                            "design_change_target": "ui_confirmation",
                         },
                     },
                 },
             }
         )
 
-        self.assertFalse(result["design_change_submission"])
-        self.assertEqual(result["resume_from"], "ui_confirmation")
+        self.assertEqual(result["resume_from"], "")
         self.assertEqual(
-            result["resume_values"]["ui_design_action"],
+            result["application_planning_interaction"]["ui_action"],
             {"pageId": "dashboard_page", "action": "regenerate"},
         )
 
-    @patch("app.graph.application_planning_revision.restart_application_planning_lifecycle")
     @patch("app.graph.application_planning_revision.classify_design_conversation")
     def test_intent_analysis_restarts_original_requirement_stage(
         self,
         classify,
-        restart_lifecycle,
     ) -> None:
-        """需求意图应回退原生命周期并保存用户原始输入。"""
+        """需求意图应调用真实生命周期服务，从后续阶段回到分析并保存原始输入。"""
 
         classify.return_value = SimpleNamespace(
             target="requirements",
@@ -141,29 +130,69 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             affected_page_ids=["orders"],
             response="",
         )
-        restart_lifecycle.return_value = SimpleNamespace(
-            model_dump=lambda **_kwargs: {
-                "initialization": {
-                    "stage": "generating_requirement_spec",
-                    "status": "running",
-                }
-            }
-        )
+        with TemporaryDirectory() as workspace:
+            ensure_application_lifecycle(
+                workspace,
+                application_id="app-1",
+                application_name="测试应用",
+                initialization_thread_id="planning-thread",
+            )
+            for stage, status in (
+                (
+                    ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                    ApplicationLifecycleStatus.RUNNING,
+                ),
+                (
+                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                    ApplicationLifecycleStatus.RUNNING,
+                ),
+                (
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+                    ApplicationLifecycleStatus.AWAITING_USER,
+                ),
+                (
+                    ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+                    ApplicationLifecycleStatus.RUNNING,
+                ),
+                (
+                    ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                    ApplicationLifecycleStatus.AWAITING_USER,
+                ),
+                (
+                    ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                    ApplicationLifecycleStatus.RUNNING,
+                ),
+                (
+                    ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                    ApplicationLifecycleStatus.AWAITING_USER,
+                ),
+            ):
+                persist_application_lifecycle_transition(
+                    workspace,
+                    stage=stage,
+                    status=status,
+                )
 
-        update = analyze_design_intent(
-            {
-                "request": "新增报表页",
-                "workspace": "/tmp/design-workspace",
-                "active_run_id": "run-1",
-                "requirement_spec": {"confirmation_status": "confirmed"},
-                "product_plan": {"confirmation_status": "confirmed"},
-            }
-        )
+            update = analyze_design_intent(
+                {
+                    "request": "新增报表页",
+                    "workspace": workspace,
+                    "active_run_id": "run-1",
+                    "requirement_spec": {"confirmation_status": "confirmed"},
+                    "product_plan": {"confirmation_status": "confirmed"},
+                }
+            )
+            persisted = load_application_lifecycle(workspace)
 
         self.assertEqual(update["workflow_scope"], "application_planning")
         self.assertTrue(update["design_change_submission"])
         self.assertEqual(update["design_change_target"], "requirements")
+        self.assertEqual(
+            update["lifecycle"]["initialization"]["stage"],
+            "analyzing_requirement",
+        )
         self.assertEqual(update["design_change_request"], "新增报表页")
+        self.assertEqual(update["design_change_generation_target"], "requirements")
         self.assertEqual(
             update["design_change_existing_artifacts"],
             {
@@ -174,19 +203,28 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             },
         )
         self.assertEqual(route_design_intent(update), "requirements")
-        restart_lifecycle.assert_called_once()
+        assert persisted is not None
+        self.assertEqual(
+            persisted.initialization.stage,
+            ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+        )
+        self.assertEqual(persisted.active_run_id, "run-1")
 
     def test_first_node_application_uses_original_change_request(self) -> None:
-        """真实节点首次重做读取原始变更，确认轮次读取当前答案。"""
+        """只有服务端指定的一次性目标节点读取原始变更。"""
 
         base_state = {
             "request": "正确，继续规划",
             "design_change_request": "新增报表页",
-            "design_change_applied_nodes": [],
+            "design_change_generation_target": "requirements",
+            "design_change_generation_request": "新增报表页",
         }
         first = design_artifact_node_state(base_state, "requirements")
         resumed = design_artifact_node_state(
-            {**base_state, "design_change_applied_nodes": ["requirements"]},
+            {
+                **base_state,
+                "application_planning_interaction": {"action": "confirm"},
+            },
             "requirements",
         )
 
@@ -201,7 +239,8 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                 "design_change_request": "新增报表页",
                 "design_change_target": "requirements",
                 "design_change_reason": "页面清单发生变化",
-                "design_change_applied_nodes": [],
+                "design_change_generation_target": "requirements",
+                "design_change_generation_request": "新增报表页",
                 "design_change_existing_artifacts": {
                     "requirements": True,
                     "product_planning": True,
@@ -216,10 +255,53 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         self.assertTrue(update["design_change_submission"])
         self.assertEqual(update["design_change_request"], "新增报表页")
         self.assertEqual(update["design_change_target"], "requirements")
-        self.assertEqual(update["design_change_applied_nodes"], ["requirements"])
+        self.assertEqual(update["design_change_generation_target"], "requirements")
         self.assertFalse(
             update["design_change_existing_artifacts"]["technical_planning"]
         )
+
+    def test_current_artifact_revision_clears_terminal_planning_confirmation(self) -> None:
+        """重新生成任一设计产物时必须撤销旧终态，禁止客户端误启动模板初始化。"""
+
+        update = begin_current_artifact_revision(
+            {
+                "application_planning_confirmation": {
+                    "confirmedAt": "2026-08-20T00:00:00Z",
+                },
+                "requirement_spec": {"confirmation_status": "confirmed"},
+            },
+            node_name="requirements",
+            request="新增财务复核角色",
+        )
+
+        self.assertEqual(update["application_planning_confirmation"], {})
+        self.assertFalse(update["requirements_confirmed"])
+
+    def test_confirmed_revision_advances_downstream_generation_cursor(self) -> None:
+        """上游新版本确认后应重做下游，但不能把原修改文本重复套给下游。"""
+
+        update = design_node_update(
+            {
+                "design_change_request": "新增报表页",
+                "design_change_target": "requirements",
+                "design_change_reason": "页面清单发生变化",
+                "design_change_generation_target": "requirements",
+                "design_change_generation_request": "新增报表页",
+                "design_change_existing_artifacts": {"product_planning": True},
+                "application_planning_interaction": {"action": "confirm"},
+            },
+            "requirements",
+            {"status": "completed"},
+        )
+
+        self.assertEqual(update["design_change_generation_target"], "product_planning")
+        self.assertIn("最新上游产物", update["design_change_generation_request"])
+        downstream = design_artifact_node_state(
+            {**update, "request": "正确，继续规划"},
+            "product_planning",
+        )
+        self.assertNotEqual(downstream["request"], "新增报表页")
+        self.assertIn("ProductPlan", downstream["request"])
 
     def test_terminal_snapshot_drops_design_change_context(self) -> None:
         """已终结快照禁止回传设计变更上下文，防止旧变更指令在后续轮次复活。"""
@@ -250,10 +332,10 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         self.assertNotIn("design_change_affected_page_ids", resume_values)
         self.assertNotIn("design_change_applied_nodes", resume_values)
         self.assertNotIn("design_change_existing_artifacts", resume_values)
-        self.assertFalse(resume_values["design_change_submission"])
+        self.assertNotIn("design_change_submission", resume_values)
 
-    def test_awaiting_snapshot_keeps_design_change_context(self) -> None:
-        """仍在等待用户回答/确认的变更链路必须完整保留变更上下文。"""
+    def test_awaiting_snapshot_does_not_rehydrate_design_change_context(self) -> None:
+        """等待态也必须以服务端 checkpoint 为权威，禁止前端回灌修订上下文。"""
 
         result = workflow_run_inputs(
             {
@@ -269,7 +351,7 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                         "design_change_request": "新增报表页",
                         "design_change_target": "requirements",
                         "design_change_reason": "页面清单发生变化",
-                        "design_change_applied_nodes": ["requirements"],
+                        "design_change_generation_target": "",
                         "design_change_existing_artifacts": {"requirements": True},
                     },
                 },
@@ -277,11 +359,9 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         )
 
         resume_values = result["resume_values"]
-        self.assertEqual(resume_values["design_change_request"], "新增报表页")
-        self.assertEqual(resume_values["design_change_target"], "requirements")
-        self.assertEqual(resume_values["design_change_applied_nodes"], ["requirements"])
-        # submission 标志始终以本轮显式提交为准，不能由旧快照复活。
-        self.assertFalse(resume_values["design_change_submission"])
+        self.assertNotIn("design_change_request", resume_values)
+        self.assertNotIn("design_change_target", resume_values)
+        self.assertNotIn("design_change_generation_target", resume_values)
         self.assertEqual(result["resume_from"], "requirements")
 
     def test_cleared_design_change_context_disarms_revision_state(self) -> None:
@@ -293,7 +373,8 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             "design_change_target": "requirements",
             "design_change_reason": "页面清单发生变化",
             "design_change_affected_page_ids": ["reports"],
-            "design_change_applied_nodes": ["requirements"],
+            "design_change_generation_target": "requirements",
+            "design_change_generation_request": "新增报表页",
             "design_change_existing_artifacts": {"requirements": True},
         }
 
@@ -301,7 +382,8 @@ class ApplicationDesignConversationTests(unittest.TestCase):
 
         self.assertFalse(is_design_change(cleared_state))
         self.assertFalse(cleared_state["design_change_submission"])
-        self.assertEqual(cleared_state["design_change_applied_nodes"], [])
+        self.assertEqual(cleared_state["design_change_generation_target"], "")
+        self.assertEqual(cleared_state["design_change_generation_request"], "")
         self.assertEqual(cleared_state["design_change_existing_artifacts"], {})
 
     def test_requirement_confirmation_routes_to_product_planning(self) -> None:
@@ -338,7 +420,7 @@ class ApplicationDesignConversationTests(unittest.TestCase):
                             "clarification": clarification,
                         }
                     ),
-                    "await_user_input",
+                    "requirements_review",
                 )
 
     def test_router_cannot_skip_unconfirmed_upstream_artifacts(self) -> None:
@@ -402,8 +484,8 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         self.assertIsNone(state["ui_designs"])
         self.assertIsNone(state["ui_design_action"])
 
-    def test_lifecycle_can_reopen_requirement_generation_from_ui_confirmation(self) -> None:
-        """原规划停在 UI 确认时允许受控回退到需求生成阶段。"""
+    def test_lifecycle_can_reopen_requirement_analysis_from_ui_confirmation(self) -> None:
+        """原规划停在 UI 确认时允许受控回退到需求分析阶段。"""
 
         with TemporaryDirectory() as workspace:
             ensure_application_lifecycle(
@@ -451,13 +533,13 @@ class ApplicationDesignConversationTests(unittest.TestCase):
 
             restarted = restart_application_planning_lifecycle(
                 workspace,
-                stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
                 active_run_id="revision-run",
             )
 
         self.assertEqual(
             restarted.initialization.stage,
-            ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+            ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
         )
         self.assertEqual(
             restarted.initialization.status,

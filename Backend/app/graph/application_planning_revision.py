@@ -17,7 +17,12 @@ DESIGN_CHANGE_TARGET_NODES = (
     "ui_confirmation",
 )
 
-DESIGN_CHANGE_APPLIED_NODES = (*DESIGN_CHANGE_TARGET_NODES, "technical_planning")
+DESIGN_CHANGE_NEXT_NODE = {
+    "requirements": "product_planning",
+    "product_planning": "ui_confirmation",
+    "ui_confirmation": "technical_planning",
+    "technical_planning": "",
+}
 
 
 def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
@@ -49,8 +54,9 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         "design_change_target": target,
         "design_change_reason": reason,
         "design_change_affected_page_ids": decision.affected_page_ids,
-        "design_change_applied_nodes": [],
-        "design_change_existing_artifacts": _existing_artifact_presence(state),
+        "design_change_generation_target": target,
+        "design_change_generation_request": request,
+        "design_change_existing_artifacts": existing_artifact_presence(state),
         "conversation_response": decision.response,
         "application_planning_confirmation": {},
         "timeline": ["design_intent_analysis"],
@@ -59,13 +65,22 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         lifecycle = restart_application_planning_lifecycle(
             _workspace(state),
             stage={
-                "requirements": ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                "requirements": ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
                 "product_planning": ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
                 "ui_confirmation": ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
             }[target],
             active_run_id=state.get("active_run_id"),
         )
         update["lifecycle"] = application_lifecycle_payload(lifecycle)
+        if target == "requirements":
+            # 需求层变更立即撤销旧确认和旧路径，避免旧 Markdown 在新分析期间继续可见。
+            update["requirements_confirmed"] = False
+            update["requirement_spec_path"] = ""
+            update["requirement_spec_json_path"] = ""
+        elif target == "product_planning":
+            # 产品层变更期间只展示新一版草稿，避免旧正式规划被误当成当前候选。
+            update["product_plan_path"] = ""
+            update["product_plan_json_path"] = ""
     return update
 
 
@@ -77,13 +92,17 @@ def route_design_intent(state: ProjectState) -> str:
 
 
 def design_chat_response(state: ProjectState) -> dict[str, Any]:
-    """无需修改正式产物时在原创建 Graph 内结束本轮。"""
+    """无需修改正式产物时回复用户，并返回原正式产物审阅门。"""
 
     return {
+        **cleared_design_change_context(),
         "workflow_scope": "application_planning",
         "phase": "design_chat_response",
         "status": "completed",
         "conversation_response": str(state.get("conversation_response") or "").strip(),
+        "design_interaction_origin": str(
+            state.get("design_interaction_origin") or "requirements"
+        ),
         "timeline": ["design_chat_response"],
     }
 
@@ -122,21 +141,29 @@ def cleared_design_change_context() -> dict[str, Any]:
         "design_change_target": "",
         "design_change_reason": "",
         "design_change_affected_page_ids": [],
-        "design_change_applied_nodes": [],
+        "design_change_generation_target": "",
+        "design_change_generation_request": "",
         "design_change_existing_artifacts": {},
+        "design_interaction_origin": "",
     }
 
 
 def design_artifact_node_state(state: ProjectState, node_name: str) -> ProjectState:
-    """首次重做节点使用原始变更指令，确认轮次使用本轮确认答案。"""
+    """仅让服务端指定的首个修订节点消费一次原始设计变更指令。"""
 
     if not is_design_change(state):
         return state
-    request = (
-        str(state.get("request") or "")
-        if design_node_was_applied(state, node_name)
-        else str(state.get("design_change_request") or state.get("request") or "")
-    )
+    request = str(state.get("request") or "")
+    interaction = state.get("application_planning_interaction")
+    if (
+        not isinstance(interaction, dict)
+        or not interaction
+    ) and state.get("design_change_generation_target") == node_name:
+        request = str(
+            state.get("design_change_generation_request")
+            or state.get("design_change_request")
+            or request
+        )
     return {**state, "request": request, "workflow_scope": "application_planning"}
 
 
@@ -145,37 +172,75 @@ def design_node_update(
     node_name: str,
     update: dict[str, Any],
 ) -> dict[str, Any]:
-    """记录本次变更已经应用的真实节点，避免确认时重复套用原指令。"""
+    """保留修订展示上下文，并在目标生成节点完成后消费一次修改指令。"""
 
-    if not is_design_change(state):
-        return update
-    applied = [
-        str(item)
-        for item in state.get("design_change_applied_nodes", [])
-        if str(item) in DESIGN_CHANGE_APPLIED_NODES
-    ]
-    if node_name not in applied:
-        applied.append(node_name)
-    return {
+    normalized_update = {
         **update,
+        "application_planning_interaction": {},
+        "design_interaction_origin": "",
+    }
+    if not is_design_change(state):
+        return normalized_update
+    generation_target = str(state.get("design_change_generation_target") or "")
+    generation_request = str(state.get("design_change_generation_request") or "")
+    if generation_target == node_name and update.get("status") == "completed":
+        generation_target = DESIGN_CHANGE_NEXT_NODE.get(node_name, "")
+        generation_request = _downstream_regeneration_request(node_name, generation_target)
+    return {
+        **normalized_update,
         "workflow_scope": "application_planning",
         "design_change_submission": True,
         "design_change_request": str(state.get("design_change_request") or "").strip(),
         "design_change_target": str(state.get("design_change_target") or "").strip(),
         "design_change_reason": str(state.get("design_change_reason") or "").strip(),
-        "design_change_applied_nodes": applied,
+        "design_change_generation_target": generation_target,
+        "design_change_generation_request": generation_request,
         "design_change_existing_artifacts": dict(
             state.get("design_change_existing_artifacts") or {}
         ),
     }
 
 
-def design_node_was_applied(state: ProjectState, node_name: str) -> bool:
-    """判断原始变更指令是否已经在指定真实节点执行过。"""
+def begin_current_artifact_revision(
+    state: ProjectState,
+    *,
+    node_name: str,
+    request: str,
+) -> dict[str, Any]:
+    """由当前审阅门创建修订事务，杜绝前端残留字段伪造“重新生成”。"""
 
-    return node_name in {
-        str(item) for item in state.get("design_change_applied_nodes", [])
+    instruction = request.strip()
+    if not instruction:
+        raise ValueError("修订当前设计产物必须提供修改意见。")
+    update = {
+        "application_planning_confirmation": {},
+        "design_change_submission": True,
+        "design_change_request": instruction,
+        "design_change_target": node_name,
+        "design_change_reason": instruction,
+        "design_change_affected_page_ids": [],
+        "design_change_generation_target": node_name,
+        "design_change_generation_request": instruction,
+        "design_change_existing_artifacts": existing_artifact_presence(state),
     }
+    if node_name == "requirements":
+        # 需求开始修订时立即撤销旧确认，避免旧文档在新一轮分析期间继续被前端或恢复逻辑当成正式版本。
+        update.update(
+            {
+                "requirements_confirmed": False,
+                "requirement_spec_path": "",
+                "requirement_spec_json_path": "",
+            }
+        )
+    elif node_name == "product_planning":
+        # 产品开始修订时清空旧路径，待新候选写入 drafts/plans 后再公开给前端。
+        update.update(
+            {
+                "product_plan_path": "",
+                "product_plan_json_path": "",
+            }
+        )
+    return update
 
 
 def prepare_ui_revision_state(state: ProjectState) -> ProjectState:
@@ -207,8 +272,28 @@ def prepare_ui_revision_state(state: ProjectState) -> ProjectState:
             "pageIds": list(state.get("design_change_affected_page_ids", [])),
             "instruction": str(state.get("design_change_request") or "").strip(),
         },
-        "user_interaction_submission": True,
+        "application_planning_interaction": {
+            "action": "ui_action",
+        },
     }
+
+
+def _downstream_regeneration_request(current_node: str, next_node: str) -> str:
+    """为下游产物生成依赖更新指令，避免重复套用用户原始修改文本。"""
+
+    if not next_node:
+        return ""
+    labels = {
+        "requirements": "RequirementSpec",
+        "product_planning": "ProductPlan",
+        "ui_confirmation": "UiDesign",
+        "technical_planning": "TechnicalPlan",
+    }
+    return (
+        f"上游 {labels.get(current_node, current_node)} 已更新为正式新版本。"
+        f"请严格依据最新上游产物重新生成 {labels.get(next_node, next_node)}，"
+        "不要把上一阶段的用户修改原文当作当前阶段的独立新增需求。"
+    )
 
 
 def _dict_value(value: Any) -> dict[str, Any] | None:
@@ -217,7 +302,7 @@ def _dict_value(value: Any) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _existing_artifact_presence(state: ProjectState) -> dict[str, bool]:
+def existing_artifact_presence(state: ProjectState) -> dict[str, bool]:
     """冻结设计变更开始前的产物存在状态，供各阶段区分首次生成与重新生成。"""
 
     return {

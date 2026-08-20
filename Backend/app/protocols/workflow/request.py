@@ -10,6 +10,7 @@ from app.domain.acceptance_adjustment import (
     normalize_acceptance_adjustment,
 )
 from app.services.entity_design import normalize_entity_design_action
+from app.domain.application_planning_interaction import ApplicationPlanningInteraction
 from app.services.execution_resource_scope import resolve_execution_resource_claims
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
@@ -31,18 +32,6 @@ MAX_SELECTED_SKILL_NAME_CHARS = 128
 APPLICATION_PLANNING_SCOPES = {
     "application_planning",
 }
-
-# 设计变更上下文只允许在“仍在等待用户回答/确认”的变更链路快照中回传。
-DESIGN_CHANGE_RESUME_KEYS = (
-    "design_change_submission",
-    "design_change_request",
-    "design_change_target",
-    "design_change_reason",
-    "design_change_affected_page_ids",
-    "design_change_applied_nodes",
-    "design_change_existing_artifacts",
-)
-
 
 class InvalidSelectedSkillsError(ValueError):
     """表示 Workflow 请求中的技能名称集合格式无效。"""
@@ -101,9 +90,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         clarification_answers=clarification_answers,
     )
-    user_interaction_submission = bool(
-        _clarification_answers_to_text(clarification_answers)
-    )
     resume_state = (
         _optional_dict(payload.get("resumeState"))
         or _optional_dict(payload.get("resume_state"))
@@ -128,12 +114,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         _optional_text(payload.get("workflowScope"))
         or _optional_text(forwarded_props.get("workflowScope"))
     )
-    design_change_submission = (
-        payload.get("designChangeSubmission") is True
-        or payload.get("design_change_submission") is True
-        or forwarded_props.get("designChangeSubmission") is True
-        or forwarded_props.get("design_change_submission") is True
+    application_planning_interaction = _application_planning_interaction(
+        payload,
+        forwarded_props=forwarded_props,
+        fallback_request=request,
     )
+    if application_planning_interaction and workflow_scope != "application_planning":
+        raise ValueError("创建规划交互只能提交到 application_planning Graph。")
     ui_design_action = _ui_design_action(clarification_answers)
     # 节点调试选择是用户本轮明确指定的恢复入口，优先于旧快照中的阻断节点。
     explicit_resume_from = (
@@ -151,15 +138,15 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     )
     # UI 卡片的结构化动作是 ui_confirmation 的直接调用，不属于自由输入设计变更。
     # 即使恢复快照或错误客户端参数带有意图入口痕迹，也必须由该动作覆盖。
-    if ui_design_action:
-        if workflow_scope != "application_planning":
-            raise ValueError("UI 设计稿动作只能回到 application_planning Graph。")
-        design_change_submission = False
-        resume_from = "ui_confirmation"
-    elif design_change_submission:
-        if workflow_scope != "application_planning":
-            raise ValueError("设计产物变更只能回到 application_planning Graph。")
-        resume_from = "design_intent_analysis"
+    if application_planning_interaction:
+        # 原生 interrupt 由同一 thread 的 checkpoint 精确定位挂起点，不再推断恢复节点。
+        ui_design_action = None
+        resume_from = ""
+    elif ui_design_action:
+        if workflow_scope == "application_planning":
+            raise ValueError(
+                "创建规划 UI 动作必须通过 applicationPlanningInteraction 提交。"
+            )
     if workflow_action == "retry_failed_tasks":
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
             raise ValueError("retry_failed_tasks 只适用于主工作流的 Build 阶段。")
@@ -171,10 +158,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         # DAG 确认必须回到同一 prepare 节点，不能被通用 detail_confirmation 回退规则截走。
         resume_from = "prepare_build_tasks"
     if not resume_from and _clarification_answers_to_text(clarification_answers):
+        if workflow_scope in APPLICATION_PLANNING_SCOPES:
+            raise ValueError(
+                "创建规划确认必须通过 applicationPlanningInteraction 恢复原生中断。"
+            )
         resume_from = (
-            "requirements"
-            if workflow_scope in APPLICATION_PLANNING_SCOPES
-            else "detail_confirmation"
+            "detail_confirmation"
         )
     if not request and resume_from:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
@@ -309,7 +298,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         **resume_values_from_state,
         **project_plan_start_values,
         **_debug_resume_values(debug_state, workspace=workspace),
-        "design_change_submission": design_change_submission,
         "retry_failed_tasks": workflow_action == "retry_failed_tasks",
         **(
             {"build_task_plan_confirmation": build_task_plan_confirmation}
@@ -398,7 +386,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "request": request,
         "workflow_action": workflow_action,
-        "user_interaction_submission": user_interaction_submission,
+        "application_planning_interaction": application_planning_interaction,
         "resume_from": resume_from,
         "resume_values": resume_values,
         "selected_skill_names": list(selected_skill_names),
@@ -417,7 +405,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "workspace": workspace,
         "editor_mode": editor_mode,
         "workflow_scope": workflow_scope,
-        "design_change_submission": design_change_submission,
         "workflow_debug_enabled": bool(debug_state.get("enabled")),
         "thread_id": (
             _optional_text(payload.get("thread_id"))
@@ -863,13 +850,6 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "workflow_scope",
         "acceptance_adjustment",
         "ui_designs",
-        "design_change_submission",
-        "design_change_request",
-        "design_change_target",
-        "design_change_reason",
-        "design_change_affected_page_ids",
-        "design_change_applied_nodes",
-        "design_change_existing_artifacts",
         "conversation_response",
     }
     resumed_values = {
@@ -877,15 +857,6 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         for key in allowed_keys
         if key in merged and merged[key] is not None
     }
-    # 设计变更上下文只在一次仍在等待用户回答/确认的变更链路内随快照回传；
-    # 已终结快照（completed/failed/cancelled 等）必须丢弃，
-    # 防止旧变更指令在后续自然轮次中复活。
-    snapshot_status = _optional_text(
-        (_optional_dict(value.get("summary")) or {}).get("status")
-    ) or _optional_text(merged.get("status"))
-    if snapshot_status and snapshot_status != "requires_user_input":
-        for design_change_key in DESIGN_CHANGE_RESUME_KEYS:
-            resumed_values.pop(design_change_key, None)
     # 前端 StateSnapshot 使用 camelCase；恢复失败任务时必须把修复计划和构建结果
     # 归一化回 Graph State，否则按钮虽然显示，点击后后端会丢失实际恢复候选。
     camel_aliases = {
@@ -1528,6 +1499,42 @@ def _entity_design_action(value: Any) -> dict[str, Any] | None:
     if not isinstance(action, dict):
         return None
     return normalize_entity_design_action(action)
+
+
+def _application_planning_interaction(
+    payload: dict[str, Any],
+    *,
+    forwarded_props: dict[str, Any],
+    fallback_request: str,
+) -> dict[str, Any] | None:
+    """只从当前 AG-UI 字段读取并校验创建规划原生中断恢复载荷。"""
+
+    value = (
+        _optional_dict(payload.get("applicationPlanningInteraction"))
+        or _optional_dict(payload.get("application_planning_interaction"))
+        or _optional_dict(forwarded_props.get("applicationPlanningInteraction"))
+        or _optional_dict(forwarded_props.get("application_planning_interaction"))
+    )
+    if value is None:
+        return None
+    interaction = ApplicationPlanningInteraction.model_validate(value).model_dump(
+        by_alias=False,
+        exclude_none=True,
+    )
+    if not str(interaction.get("request") or "").strip():
+        interaction["request"] = _merge_clarification_answers(
+            request=fallback_request,
+            original_request=None,
+            clarification_answers=interaction.get("answers"),
+        )
+    if interaction.get("action") == "ui_action":
+        normalized_ui_action = _ui_design_action(
+            {"ui_design_action": interaction.get("ui_action")}
+        )
+        if normalized_ui_action is None:
+            raise ValueError("applicationPlanningInteraction 包含无效的 uiAction。")
+        interaction["ui_action"] = normalized_ui_action
+    return interaction
 
 
 def _ui_design_action(value: Any) -> dict[str, Any] | None:

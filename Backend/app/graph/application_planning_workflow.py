@@ -12,10 +12,16 @@ from app.graph.application_planning_revision import (
     design_artifact_node_state,
     design_chat_response,
     design_node_update,
-    design_node_was_applied,
     is_design_change,
     prepare_ui_revision_state,
     route_design_intent,
+)
+from app.graph.application_planning_interrupts import (
+    pending_review_node,
+    product_planning_review,
+    requirements_review,
+    technical_planning_review,
+    ui_confirmation_review,
 )
 from app.graph.state import ProjectState
 from app.domain.application_lifecycle import (
@@ -46,30 +52,37 @@ def _route_start(state: ProjectState) -> str:
 
 
 def _route_requirements(state: ProjectState) -> str:
-    """需求未确认时结束当前轮次，否则进入产品规划。"""
+    """需求未确认时进入原生审阅中断，否则进入产品规划。"""
 
     requirement_spec = state.get("requirement_spec")
     if (
         not isinstance(requirement_spec, dict)
         or requirement_spec.get("confirmation_status") != "confirmed"
     ):
-        return "await_user_input"
+        return "requirements_review"
     clarification = state.get("clarification")
-    return "await_user_input" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "product_planning"
+    return "requirements_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "product_planning"
 
 
 def _route_product_planning(state: ProjectState) -> str:
-    """ProductPlan 未确认时结束当前轮次，否则进入 UI 设计。"""
+    """ProductPlan 未确认时进入原生审阅中断，否则进入 UI 设计。"""
 
     clarification = state.get("clarification")
-    return "await_user_input" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "ui_confirmation"
+    return "product_planning_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "ui_confirmation"
 
 
 def _route_ui_confirmation(state: ProjectState) -> str:
-    """UI设计稿未全部确认时结束当前轮次，否则进入技术规划。"""
+    """UI设计稿未全部确认时进入原生审阅中断，否则进入技术规划。"""
 
     clarification = state.get("clarification")
-    return "await_user_input" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "technical_planning"
+    return "ui_confirmation_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "technical_planning"
+
+
+def _route_technical_planning(state: ProjectState) -> str:
+    """TechnicalPlan 未确认时进入原生审阅中断，确认后结束创建规划。"""
+
+    clarification = state.get("clarification")
+    return "technical_planning_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "completed"
 
 
 def _requirements(state: ProjectState) -> dict:
@@ -78,6 +91,12 @@ def _requirements(state: ProjectState) -> dict:
     node_state = design_artifact_node_state(state, "requirements")
     workspace = _workspace(node_state)
     lifecycle = _ensure_lifecycle(node_state)
+    interaction = state.get("application_planning_interaction")
+    interaction_action = (
+        str(interaction.get("action") or "")
+        if isinstance(interaction, dict)
+        else ""
+    )
     try:
         if lifecycle.initialization.stage in {
             ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
@@ -106,12 +125,21 @@ def _requirements(state: ProjectState) -> dict:
             lifecycle.initialization.stage
             == ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION
         ):
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-                status=ApplicationLifecycleStatus.RUNNING,
-                active_run_id=state.get("active_run_id"),
-            )
+            if interaction_action == "revise":
+                # 用户补充/修改会使上一版草稿失效，必须回到分析阶段，不能直接进入文档生成。
+                lifecycle = persist_application_lifecycle_transition(
+                    workspace,
+                    stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                    status=ApplicationLifecycleStatus.RUNNING,
+                    active_run_id=state.get("active_run_id"),
+                )
+            else:
+                lifecycle = persist_application_lifecycle_transition(
+                    workspace,
+                    stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                    status=ApplicationLifecycleStatus.RUNNING,
+                    active_run_id=state.get("active_run_id"),
+                )
         update = nodes.requirements(node_state)
         lifecycle = _persist_requirement_result(workspace, update, node_state)
         return design_node_update(
@@ -131,7 +159,11 @@ async def _ui_confirmation(state: ProjectState) -> dict:
     """为每个页面生成设计稿或处理明确跳过，并在阶段完成后进入技术规划。"""
 
     node_state = design_artifact_node_state(state, "ui_confirmation")
-    if is_design_change(state) and not design_node_was_applied(state, "ui_confirmation"):
+    if (
+        is_design_change(state)
+        and state.get("design_change_generation_target") == "ui_confirmation"
+        and not node_state.get("application_planning_interaction")
+    ):
         node_state = prepare_ui_revision_state(node_state)
     workspace = _workspace(node_state)
     try:
@@ -445,13 +477,6 @@ def _persist_requirement_result(workspace: str, update: dict, state: ProjectStat
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ValueError("需求节点完成后生命周期状态丢失。")
-    if current.initialization.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT:
-        persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
-            status=ApplicationLifecycleStatus.RUNNING,
-            **common,
-        )
     if update.get("status") == "completed":
         # 需求确认完成后先进入 ProductPlan 产品确认。
         return persist_application_lifecycle_transition(
@@ -530,9 +555,13 @@ def build_application_planning_graph(*, checkpointer):
     builder.add_node("design_intent_analysis", analyze_design_intent)
     builder.add_node("design_chat_response", design_chat_response)
     builder.add_node("requirements", _requirements)
+    builder.add_node("requirements_review", requirements_review)
     builder.add_node("product_planning", _product_planning)
+    builder.add_node("product_planning_review", product_planning_review)
     builder.add_node("ui_confirmation", _ui_confirmation)
+    builder.add_node("ui_confirmation_review", ui_confirmation_review)
     builder.add_node("technical_planning", _technical_planning)
+    builder.add_node("technical_planning_review", technical_planning_review)
     builder.add_conditional_edges(START, _route_start, {
         "design_intent_analysis": "design_intent_analysis",
         "requirements": "requirements",
@@ -548,18 +577,26 @@ def build_application_planning_graph(*, checkpointer):
     })
     builder.add_conditional_edges("requirements", _route_requirements, {
         "product_planning": "product_planning",
-        "await_user_input": END,
+        "requirements_review": "requirements_review",
     })
     builder.add_conditional_edges("product_planning", _route_product_planning, {
         "ui_confirmation": "ui_confirmation",
-        "await_user_input": END,
+        "product_planning_review": "product_planning_review",
     })
     builder.add_conditional_edges("ui_confirmation", _route_ui_confirmation, {
         "technical_planning": "technical_planning",
-        "await_user_input": END,
+        "ui_confirmation_review": "ui_confirmation_review",
     })
-    builder.add_edge("technical_planning", END)
-    builder.add_edge("design_chat_response", END)
+    builder.add_conditional_edges("technical_planning", _route_technical_planning, {
+        "technical_planning_review": "technical_planning_review",
+        "completed": END,
+    })
+    builder.add_conditional_edges("design_chat_response", pending_review_node, {
+        "requirements_review": "requirements_review",
+        "product_planning_review": "product_planning_review",
+        "ui_confirmation_review": "ui_confirmation_review",
+        "technical_planning_review": "technical_planning_review",
+    })
     return builder.compile(checkpointer=checkpointer)
 
 

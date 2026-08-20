@@ -538,7 +538,8 @@ export function useWorkflowConversation({
       content: string,
       workflow?: WorkflowRunPayload,
       toolCalls?: ToolCallRecord[],
-      processSteps?: ProcessStepRecord[]
+      processSteps?: ProcessStepRecord[],
+      error?: string
     ): AgentChatMessage[] => {
       const nextCodeChanges = workflowCodeChanges(workflow)
       const updateMessages = (currentMessages: AgentChatMessage[]): AgentChatMessage[] =>
@@ -548,6 +549,7 @@ export function useWorkflowConversation({
                 ...currentMessage,
                 content,
                 workflow: workflow ?? currentMessage.workflow,
+                error,
                 codeChanges: nextCodeChanges ?? currentMessage.codeChanges,
                 toolCalls: toolCalls ?? currentMessage.toolCalls,
                 processSteps: processSteps ?? currentMessage.processSteps
@@ -690,6 +692,11 @@ export function useWorkflowConversation({
           entityLabel: identity.entityLabel,
           pageId: identity.pageId
         })
+        // 认证失败由全局登录门禁处理，同时在当前对话区保留可见错误，避免门禁未及时出现时形成空白。
+        setErrors((current) => ({
+          ...current,
+          [identity.key]: '当前登录状态已失效，请重新登录后重试。'
+        }))
         return false
       }
       if (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError)) {
@@ -733,10 +740,11 @@ export function useWorkflowConversation({
         runError?.message ||
         (caughtError instanceof Error ? caughtError.message : '调用 Workflow 失败。')
       const failedMessages = updateAssistantMessage(
-        failedContent,
+        '',
         failedWorkflow,
         failedToolCalls,
-        failedProcessSteps
+        failedProcessSteps,
+        failedContent
       )
       if (failedWorkflow) {
         setLiveWorkflows((current) => ({

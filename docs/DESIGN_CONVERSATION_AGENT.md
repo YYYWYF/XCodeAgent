@@ -8,10 +8,11 @@
 
 ```text
 design_intent_analysis
-  ├─ requirements -> product_planning -> ui_confirmation -> technical_planning
-  ├─ product_planning -> ui_confirmation -> technical_planning
-  ├─ ui_confirmation -> technical_planning
-  └─ design_chat_response -> END
+  ├─ requirements -> requirements_review(interrupt) -> product_planning
+  ├─ product_planning -> product_planning_review(interrupt) -> ui_confirmation
+  ├─ ui_confirmation -> ui_confirmation_review(interrupt) -> technical_planning
+  ├─ technical_planning -> technical_planning_review(interrupt) -> END
+  └─ design_chat_response -> 原审阅门(interrupt)
 ```
 
 意图节点只负责路由，不复制 RequirementSpec、ProductPlan、UiDesign 或 TechnicalPlan 的生成逻辑。
@@ -22,12 +23,12 @@ design_intent_analysis
 - workflow scope：`application_planning`
 - Graph：`Backend/app/graph/application_planning_workflow.py`
 - 意图 Agent：`Backend/app/agents/design_conversation/router.py`
-- 请求标记：`forwardedProps.designChangeSubmission=true`
-- 实时状态：修订链路的 started/updated 快照持续投影 `design_change_submission`、`design_change_request`、`design_change_target`、`design_change_reason` 和本轮开始前冻结的 `design_change_existing_artifacts`；前端只有在当前阶段原本已有产物时才展示“重新生成”，否则仍展示“生成”
+- 恢复请求：`forwardedProps.applicationPlanningInteraction`，携带当前服务端中断的 `gateId`、`artifactRevision`、`artifact` 和显式 `action`
+- 实时状态：只有服务端审阅门创建修订事务后，started/updated 快照才投影 `design_change_submission`、`design_change_request`、`design_change_target`、`design_change_reason` 和修订开始前冻结的 `design_change_existing_artifacts`；前端仅在冻结快照明确标记当前阶段已有产物时展示“重新生成”，不得用当前待确认产物或残留 target 作兜底
 - threadId：继续使用原创建规划 threadId
-- resumeState：携带当前 `planningWorkflow`，只恢复当前契约允许的规划产物和设计变更上下文
+- checkpoint：服务端 SQLite checkpoint 是恢复权威；前端不回传 `resumeState` 重建创建规划上下文
 
-只有解锁后的底部自由输入可以发送 `designChangeSubmission=true` 并进入 `design_intent_analysis`。UI 设计稿确认卡中的 `select_template`、`regenerate`、`adjust_pages` 和 `skip` 都是结构化 `ui_design_action`，必须直接恢复 `ui_confirmation`，不得调用意图 Agent；当请求同时出现两种标记时，以 `ui_design_action` 为权威入口。
+底部自由输入提交 `action=design_change`，恢复当前审阅 interrupt 后进入 `design_intent_analysis`。正式卡片分别提交 `answer`、`confirm` 或 `revise`；UI 设计稿确认卡中的 `select_template`、`regenerate`、`adjust_pages` 和 `skip` 提交 `action=ui_action`，恢复当前 `ui_confirmation_review` 后直达 `ui_confirmation`，不得调用意图 Agent。创建规划节点只按该结构化 action 决定确认、修订或回答分支，不再用用户文本中的中文关键词二次猜测。服务端通过 Pydantic 校验动作与当前审阅阶段的组合，并在同一 thread 内串行执行“读取中断、校验 `gateId + artifactRevision`、恢复 Graph”的完整区间；旧卡片、并发重复提交和产物更新后的过期提交都在任何修订 started 投影之前拒绝。
 
 底部自由输入与当前待确认阶段严格解耦：即使当前 Graph 正停在 RequirementSpec、ProductPlan、UiDesign 或 TechnicalPlan 的澄清/确认状态，自由输入也不能按当前 `clarification.mode` 拼装阶段答案，必须先进入 `design_intent_analysis`。当前阶段的澄清、确认和 UI 单页动作只由对应结构化卡片提交。
 
@@ -46,24 +47,24 @@ design_intent_analysis
 
 ## 增量更新与确认
 
-`design_change_request` 保存用户原始输入。每个真实节点第一次进入时读取该原始输入，并基于现有产物生成增量候选；该节点进入确认轮次后读取当前确认答案，不能重复套用原始变更。
+`design_change_request` 保存用户原始输入，`design_change_generation_target` 是单节点再生成游标：首个受影响节点消费原始指令；该节点的新版本确认后，游标推进到下一正式产物，并改用“上游已确认新版本”的依赖更新指令。待确认期间游标不推进，确认 resume payload 优先于生成指令，因此不会重复生成当前产物，也不会把原修改文本重复套给下游。不再维护 applied-nodes 列表，也不在协议层替换通用 `request`。
 
 - RequirementSpec：把现有 spec 与最新反馈交给原需求分析节点；最新反馈只作为增量补丁，未提及事实和稳定 ID 必须保留，摘要必须描述合并后的完整需求，不能退化为本轮输入。
 - ProductPlan：把现有 plan、已确认 RequirementSpec 与原始变更交给原产品规划节点；只修改反馈或新 RequirementSpec 实际影响的字段，其余页面目标、信息、操作、状态、验收标准和摘要保持不变。
 - UiDesign：页面集合不变时转换为 `adjust_pages`；页面集合变化时由原 UI 节点重建当前页面集合。
 - TechnicalPlan：上游重新确认后，基于新的 ProductPlan 和 UiDesign 增量重做并再次确认。
 
-任何新版本都必须经过原节点的明确用户确认。澄清答案只补充信息，不等于确认。确认完成后由原 Graph 的边进入下一阶段，不允许前端手工拼接阶段或另起 Workflow。
+任何新版本都必须经过原节点后的 review interrupt 明确确认。澄清答案只补充信息，不等于确认。确认完成后由同一 Graph task 继续下一阶段；传输层会开启新的 AG-UI runId，但始终复用原 threadId 和 checkpoint，不允许前端手工拼接阶段或另起 Workflow。
 
-聊天区在修订节点运行时只展示“正在重新生成对应产物”的实时状态；节点生成完成后直接展示该产物的正式确认卡。设计阶段不展示通用 Workflow 步骤归档摘要。
+聊天区在修订节点运行时只展示“正在重新生成对应产物”的实时状态；需求节点仍在澄清时只展示问题，不写需求草稿或页面兜底，澄清结束后才在右侧展示最新 Markdown 草稿，聊天区只展示对应的确认操作卡。用户确认后才形成正式产物。设计阶段不展示通用 Workflow 步骤归档摘要。
 
 ## 生命周期
 
-意图命中正式产物时，创建生命周期受控回退到对应生成阶段：
+意图命中正式产物时，创建生命周期受控回退到对应真实处理阶段；需求层先回到分析，只有新版本再次确认后才进入文档生成：
 
 | target | lifecycle stage |
 | --- | --- |
-| `requirements` | `generating_requirement_spec` |
+| `requirements` | `analyzing_requirement` |
 | `product_planning` | `generating_product_plan` |
 | `ui_confirmation` | `generating_ui_designs` |
 

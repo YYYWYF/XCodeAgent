@@ -1672,6 +1672,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                 {
                     "phase": "requirements",
                     "status": "requires_user_input",
+                    "requirements_confirmed": True,
                     "requirement_spec_path": str(requirement_path),
                     "project_plan_path": str(project_plan_path),
                     "clarification": {
@@ -1730,6 +1731,37 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                 }
             )
         )
+
+    def test_unconfirmed_requirement_projects_draft_markdown_artifact(self) -> None:
+        """需求分析草稿未确认时应投射为右侧可见的草稿工件。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            requirement_path = (
+                Path(workspace)
+                / ".xcodeagent"
+                / "drafts"
+                / "specs"
+                / "requirement-spec.md"
+            )
+            requirement_path.parent.mkdir(parents=True, exist_ok=True)
+            requirement_path.write_text("# 当前需求草稿\n", encoding="utf-8")
+            artifact = _workflow_confirmation_artifact(
+                {
+                    "phase": "requirements",
+                    "status": "requires_user_input",
+                    "requirements_confirmed": False,
+                    "requirement_spec_path": str(requirement_path),
+                    "clarification": {
+                        "mode": "requirement_spec_confirmation",
+                        "status": "requires_user_input",
+                    },
+                }
+            )
+
+        self.assertIsNotNone(artifact)
+        assert artifact is not None
+        self.assertEqual(artifact["id"], "requirement_spec")
+        self.assertIn("当前需求草稿", artifact["content"])
 
     def test_stream_passes_forwarded_workspace_and_editor_mode_to_graph_state(self) -> None:
         graph = FakeWorkflowGraph()
