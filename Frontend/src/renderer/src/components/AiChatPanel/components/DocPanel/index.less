@@ -74,6 +74,17 @@
   word-break: break-word;
 }
 
+/* 渲染态 Markdown：恢复正文排版（覆盖上面 viewer 的等宽字体与预换行），
+   标题/列表/代码等样式由 MarkdownContent 自身提供。底色用 accent 以 2% 混入
+   canvas 得到近乎不可察觉的品牌色纸面，与整套 accent 系统及深/浅主题保持协调。 */
+.@{class-prefix}-doc-panel-markdown {
+  font-family: inherit;
+  line-height: 1.65;
+  white-space: normal;
+  word-break: normal;
+  background: color-mix(in srgb, var(--wb-accent, #6b3cf0) 2%, var(--wb-canvas, #ffffff));
+}
+
 .@{class-prefix}-doc-panel.@{class-prefix}-editing .@{class-prefix}-doc-panel-stage {
   padding: 16px 18px;
 }
