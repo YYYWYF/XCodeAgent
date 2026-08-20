@@ -10,7 +10,6 @@ from app.agents.tool_activity_stream import (
 )
 from app.config import Settings
 from app.services.build_result_coordinator import create_agent_task_results
-from app.services.entity_definitions import plan_data_sources
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
@@ -127,6 +126,23 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
     )
 
 
+def _task_frontend_source_types(tasks: list[dict[str, Any]]) -> set[str]:
+    """从当前前端任务的 source_refs 提取来源，避免使用项目级静态标记污染页面。"""
+
+    source_types: set[str] = set()
+    for task in tasks:
+        source_refs = task.get("source_refs")
+        if not isinstance(source_refs, dict):
+            continue
+        designs = source_refs.get("entity_designs")
+        if not isinstance(designs, list):
+            continue
+        for design in designs:
+            if isinstance(design, dict) and design.get("data_source_type"):
+                source_types.add(str(design["data_source_type"]).strip())
+    return source_types
+
+
 def _frontend_generation_prompt(
     *,
     project_plan: dict[str, Any],
@@ -138,13 +154,9 @@ def _frontend_generation_prompt(
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
     frontend_root = "frontend"
-    # Static 的正式实现来源固定为前端内存数据模块，不兼容旧 mock 类型。
-    data_source_list = plan_data_sources(project_plan)
-    has_static_data_source = any(
-        isinstance(source, dict)
-        and str(source.get("type") or "") == "static"
-        for source in data_source_list
-    )
+    # 静态规则只由当前派发任务的来源引用触发，不读取整个 ProjectPlan 的数据源清单。
+    task_source_types = _task_frontend_source_types(tasks)
+    has_static_data_source = "static" in task_source_types
     data_source_instruction = (
         "## CRITICAL: Data source is STATIC with effective_source=frontend_mock\n"
         "The data source for this page's entities declares type=static. Implement the approved "
@@ -160,6 +172,14 @@ def _frontend_generation_prompt(
         "untouched. Do NOT modify vite.config.ts to add a mock plugin. Keep all runtime records "
         "inside the API module; page components must never contain standalone business-data arrays. "
         "Only implement operations and fields declared by the approved contracts.\n\n"
+        if has_static_data_source
+        else ""
+    )
+    static_skill_requirement = (
+        "3. `/.xcodeagent/builtin-skills/frontend-static-data-generate/SKILL.md` — "
+        "static frontend:data tasks: module-level in-memory records, async contract "
+        "functions, exact fields/operations, and the prohibition on backend APIs or page-local "
+        "business arrays. READ THIS before writing a static data module.\n"
         if has_static_data_source
         else ""
     )
@@ -191,7 +211,7 @@ def _frontend_generation_prompt(
         + data_source_instruction
         + "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
         "Before generating or modifying any frontend code, you MUST read the following "
-        "two built-in skills with read_file(limit=400) and follow their instructions. "
+        "the required built-in skills with read_file(limit=400) and follow their instructions. "
         "These are mandatory constraints:\n"
         "1. `/.xcodeagent/builtin-skills/frontend-template-modification-boundary/SKILL.md` — "
         "file modification boundary: which files you MUST NOT modify (framework skeleton, "
@@ -214,8 +234,9 @@ def _frontend_generation_prompt(
         "`code-block-template/references/page-templates.md` (full page templates); "
         "`react-develop-specification/SKILL.md` (React coding conventions) for style rules "
         "when unsure. Reading these on demand keeps the context small.\n"
-        "Only after reading the two required skills above may you start writing code.\n\n"
-        "## Required final report\n"
+        "Only after reading all required skills above may you start writing code.\n\n"
+        + static_skill_requirement
+        + "## Required final report\n"
         "Return one JSON object with `task_results`, containing exactly one result for each "
         "approved task. Each result must contain `task_id`, `status` "
         "(`completed`, `already_satisfied`, or `failed`), and `summary`. Use "

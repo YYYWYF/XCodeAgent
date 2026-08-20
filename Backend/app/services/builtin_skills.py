@@ -14,6 +14,8 @@ BUILTIN_SKILLS_VIRTUAL_ROOT = "/.xcodeagent/builtin-skills/"
 REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
 CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
 SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME = "springboot-mybatis-generate"
+SPRINGBOOT_EXTERNAL_API_GENERATE_SKILL_NAME = "springboot-external-api-generate"
+FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME = "frontend-static-data-generate"
 UI_DESIGN_SKILL_NAME = "antd-ui-design"
 
 _REACT_DEV_SPEC_REFERENCE_FILES = [
@@ -33,10 +35,20 @@ _CODE_BLOCK_TEMPLATE_REFERENCE_FILES = [
     "references/page-templates.md",
 ]
 
+_SPRINGBOOT_MYBATIS_REFERENCE_FILES = [
+    "references/layer-implementation.md",
+    "references/bootstrap.md",
+]
+
 REQUIRED_BUILTIN_SKILL_FILES = {
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
-    SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME: ["SKILL.md"],
+    SPRINGBOOT_MYBATIS_GENERATE_SKILL_NAME: [
+        "SKILL.md",
+        *_SPRINGBOOT_MYBATIS_REFERENCE_FILES,
+    ],
+    SPRINGBOOT_EXTERNAL_API_GENERATE_SKILL_NAME: ["SKILL.md"],
+    FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME: ["SKILL.md"],
     UI_DESIGN_SKILL_NAME: ["SKILL.md"],
 }
 
@@ -118,10 +130,11 @@ def builtin_skills_root_label() -> str:
 
 
 def read_builtin_skill_md(skill_name: str) -> str | None:
-    """读取指定内置技能 SKILL.md 全文，缺失时返回 None。
+    """读取指定内置技能 SKILL.md 入口文档，缺失时返回 None。
 
     规划/生成模型处于 planning-only 边界，无法调用技能工具读取文件，因此需要把
-    SKILL.md 完整内容直接内联进 prompt 上下文。调用方负责在缺失时给出降级提示。
+    入口文档直接内联进 prompt 上下文。Skill 的实现细节可保存在 references 中，
+    由具备工作区读取能力的执行 Agent 按入口路由延迟加载。
     """
 
     try:

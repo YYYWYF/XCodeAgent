@@ -2,7 +2,10 @@ from typing import Any
 
 from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.planner import revise_project_plan_with_chat_model
-from app.agents.main.task_preparer import prepare_build_tasks_with_main_agent
+from app.agents.main.task_preparer import (
+    _planning_context_mode,
+    prepare_build_tasks_with_main_agent,
+)
 from app.graph.nodes.common import workspace_from_state
 from app.graph.nodes.confirmation import (
     user_confirmed_text,
@@ -237,11 +240,26 @@ def prepare_build_tasks(state: ProjectState) -> dict:
 
     progress.start("model_planning", "正在调用任务规划模型生成候选构建任务。")
     try:
+        planning_unit_ids = _replaceable_unit_ids(
+            build_task_plan,
+            build_context,
+            set(build_context.get("required_unit_ids") or []),
+        )
+        planning_build_context = {
+            **build_context,
+            "planning_unit_ids": sorted(planning_unit_ids),
+        }
+        planning_build_context["planning_context_mode"] = _planning_context_mode(
+            planning_build_context
+        )
         prepared_plan = prepare_build_tasks_with_main_agent(
-            _task_preparation_project_plan(project_plan, build_context),
+            _task_preparation_project_plan(
+                project_plan,
+                planning_build_context,
+            ),
             workspace=workspace,
             workspace_snapshot=workspace_snapshot,
-            build_context=build_context,
+            build_context=planning_build_context,
             build_task_plan=build_task_plan,
         )
     except ValueError as exc:
@@ -521,25 +539,154 @@ def _add_reusable_task_context(build_context: dict, build_task_plan: dict) -> di
 
 
 def _task_preparation_project_plan(project_plan: dict, build_context: dict) -> dict:
-    """构造任务拆分视图：TechnicalPlan 作 Unit 骨架，实现契约作页面执行输入。"""
+    """按本轮规划模式构造最小任务拆分视图。"""
 
+    mode = _planning_context_mode(build_context)
+    executable_details = _executable_details(project_plan, build_context)
+    if mode == "page":
+        executable_details.pop("endpoint_detail_plans", None)
+        executable_details.pop("entity_designs", None)
+    elif mode == "endpoint":
+        executable_details.pop("page_implementation_contracts", None)
+        executable_details.pop("page_detail_plans", None)
+
+    allowed_unit_ids = list(
+        build_context.get("planning_unit_ids")
+        or build_context.get("required_unit_ids")
+        or []
+    )
+    if mode == "endpoint":
+        return {
+            "architecture": _scoped_task_architecture(
+                project_plan,
+                mode,
+                build_context,
+            ),
+            "execution_target": build_context.get("target"),
+            "allowed_unit_ids": allowed_unit_ids,
+            "executable_details": executable_details,
+        }
+
+    skeleton = {
+        "pages": _skeleton_pages(project_plan) if mode in {"page", "combined"} else [],
+        "data_sources": (
+            _skeleton_data_sources(
+                project_plan,
+                None
+                if mode == "combined"
+                else build_context.get("entity_ids"),
+            )
+            if mode in {"endpoint", "combined"}
+            else []
+        ),
+        "api_contracts": _scoped_skeleton_api_contracts(
+            project_plan,
+            build_context,
+            mode,
+        ),
+        "permission_model": (
+            project_plan.get("permission_model")
+            if mode in {"page", "combined"}
+            else None
+        ),
+    }
     return {
         "version": project_plan.get("version"),
         "confirmation_status": project_plan.get("confirmation_status"),
         "app": project_plan.get("app"),
-        "requirements_overview": project_plan.get("requirements_overview"),
-        "architecture": project_plan.get("architecture"),
-        "project_acceptance_criteria": project_plan.get("project_acceptance_criteria"),
-        "application_skeleton": {
-            "pages": _skeleton_pages(project_plan),
-            "data_sources": _skeleton_data_sources(project_plan),
-            "api_contracts": _skeleton_api_contracts(project_plan),
-            "permission_model": project_plan.get("permission_model"),
-        },
+        "requirements_overview": (
+            project_plan.get("requirements_overview")
+            if mode == "combined"
+            else None
+        ),
+        "architecture": _scoped_task_architecture(project_plan, mode, build_context),
+        "project_acceptance_criteria": (
+            project_plan.get("project_acceptance_criteria")
+            if mode == "combined"
+            else None
+        ),
+        "application_skeleton": skeleton,
         "execution_target": build_context.get("target"),
-        "allowed_unit_ids": list(build_context.get("required_unit_ids") or []),
-        "executable_details": _executable_details(project_plan, build_context),
+        "allowed_unit_ids": allowed_unit_ids,
+        "executable_details": executable_details,
     }
+
+
+def _scoped_task_architecture(
+    project_plan: dict,
+    mode: str,
+    build_context: dict | None = None,
+) -> dict:
+    """只投射当前 endpoint/page 模式和数据源需要的架构事实。"""
+
+    architecture = project_plan.get("architecture")
+    if not isinstance(architecture, dict) or mode == "combined":
+        return architecture if isinstance(architecture, dict) else {}
+    if mode == "page":
+        return {
+            key: value
+            for key, value in architecture.items()
+            if key in {"frontend", "data_contract", "route_root_path", "menu_enabled"}
+        }
+    context = build_context if isinstance(build_context, dict) else {}
+    endpoint_source_types = {
+        str(item.get("data_source_type") or "")
+        for item in context.get("entity_designs") or []
+        if isinstance(item, dict) and item.get("data_source_type")
+    }
+    if endpoint_source_types == {"static"}:
+        return {
+            key: value
+            for key, value in architecture.items()
+            if key in {"frontend", "data_contract", "route_root_path", "menu_enabled"}
+        }
+    if endpoint_source_types and endpoint_source_types <= {"database", "external_api"}:
+        return {
+            key: value
+            for key, value in architecture.items()
+            if key in {"backend_tech_stack", "data_contract"}
+        }
+    return {
+        key: value
+        for key, value in architecture.items()
+        if key in {
+            "frontend",
+            "backend_tech_stack",
+            "data_contract",
+            "route_root_path",
+            "menu_enabled",
+        }
+    }
+
+
+def _scoped_skeleton_api_contracts(
+    project_plan: dict,
+    build_context: dict,
+    mode: str,
+) -> list[dict]:
+    """页面或 endpoint 模式只保留当前范围引用到的 API 契约骨架。"""
+
+    contracts = _skeleton_api_contracts(project_plan)
+    if mode == "combined":
+        return contracts
+    endpoint_ids = {
+        str(endpoint_id)
+        for endpoint_id in build_context.get("endpoint_ids") or []
+        if str(endpoint_id).strip()
+    }
+    if not endpoint_ids:
+        return []
+    return [
+        contract
+        for contract in contracts
+        if endpoint_ids.intersection(
+            {
+                str(endpoint_id)
+                for endpoint_id in contract.get("endpoint_ids") or []
+                if str(endpoint_id).strip()
+            }
+        )
+    ]
 
 
 def _skeleton_pages(project_plan: dict) -> list[dict]:
@@ -572,25 +719,47 @@ def _skeleton_pages(project_plan: dict) -> list[dict]:
     ]
 
 
-def _skeleton_data_sources(project_plan: dict) -> list[dict]:
-    """提取数据源 Unit 骨架摘要，不携带数据源详情正文。"""
+def _skeleton_data_sources(
+    project_plan: dict,
+    entity_ids: list[str] | None = None,
+) -> list[dict]:
+    """提取当前范围的数据源 Unit 骨架摘要，不携带数据源详情正文。"""
 
-    return [
-        {
-            "id": source.get("id"),
-            "name": source.get("name"),
-            "type": source.get("type"),
-            "entities": source.get("entities"),
-            "schema_refs": source.get("schema_refs"),
-            "detail_status": (
-                source.get("detail_design", {}).get("status")
-                if isinstance(source.get("detail_design"), dict)
-                else None
-            ),
-        }
-        for source in plan_data_sources(project_plan)
-        if isinstance(source, dict)
-    ]
+    allowed_entity_ids = {
+        str(entity_id).strip()
+        for entity_id in entity_ids or []
+        if str(entity_id).strip()
+    }
+    scoped_sources: list[dict] = []
+    for source in plan_data_sources(project_plan):
+        if not isinstance(source, dict):
+            continue
+        source_entities = [
+            entity
+            for entity in source.get("entities") or []
+            if isinstance(entity, dict)
+            and (
+                not allowed_entity_ids
+                or str(entity.get("id") or "") in allowed_entity_ids
+            )
+        ]
+        if allowed_entity_ids and not source_entities:
+            continue
+        scoped_sources.append(
+            {
+                "id": source.get("id"),
+                "name": source.get("name"),
+                "type": source.get("type"),
+                "entities": source_entities,
+                "schema_refs": source.get("schema_refs"),
+                "detail_status": (
+                    source.get("detail_design", {}).get("status")
+                    if isinstance(source.get("detail_design"), dict)
+                    else None
+                ),
+            }
+        )
+    return scoped_sources
 
 
 def _skeleton_api_contracts(project_plan: dict) -> list[dict]:
@@ -616,11 +785,23 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
     """按当前构建目标投射页面实现契约、endpoint 和 API 详情。"""
 
     endpoint_ids = {str(item) for item in build_context.get("endpoint_ids") or []}
-    entity_ids = {str(item) for item in build_context.get("entity_ids") or []}
+    entity_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in build_context.get("entity_ids") or []
+            if str(item).strip()
+        )
+    )
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     is_application = str(target.get("type") or "") == "application"
     if is_application:
-        entity_ids = set(_confirmed_entity_ids(project_plan))
+        entity_ids = _confirmed_entity_ids(project_plan)
+    context_entity_designs = build_context.get("entity_designs")
+    entity_designs = (
+        [dict(item) for item in context_entity_designs if isinstance(item, dict)]
+        if isinstance(context_entity_designs, list) and context_entity_designs
+        else entity_design_summaries(project_plan, entity_ids)
+    )
     scoped_contracts = _scoped_contracts(project_plan, build_context, is_application=is_application)
     return {
         "page_implementation_contracts": (
@@ -636,10 +817,7 @@ def _executable_details(project_plan: dict, build_context: dict) -> dict:
         "endpoint_detail_plans": list(
             build_context.get("direct_endpoint_details") or []
         ),
-        "entity_designs": entity_design_summaries(
-            project_plan,
-            entity_ids,
-        ),
+        "entity_designs": entity_designs,
         "api_contracts": [
             _scoped_api_contract(contract, endpoint_ids)
             for contract in scoped_contracts

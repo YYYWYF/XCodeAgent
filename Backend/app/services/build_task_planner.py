@@ -854,7 +854,6 @@ def create_build_task_plan(
             else "blocked"
         ),
         "generated_at": datetime.now(UTC).isoformat(),
-        "source_project_plan_version": project_plan["version"],
         "application": base_plan.get("application") or {"unit_id": "application:root", "status": "prepared"},
         "build_units": base_plan.get("build_units") or {
             "application:root": {
