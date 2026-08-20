@@ -651,7 +651,6 @@ export default function AiChatPanel({
   // UI 设计稿生成中：UI 确认阶段 workflow running（换一换/选模板/首次生成）。
   const uiDesignGenerating =
     isDesignPhase && planningPhaseRunning && planningPhase === 'ui_confirmation'
-  const planningUiDesignFailed = planningWorkflow?.summary?.status === 'failed'
   // acting 态的清理由 UiDesignConfirmationPanel 的 cleanup-effect（带 observedRunningRef
   // 防提前重置）全权管理；这里不再重复清理，避免与 panel 抢着清空导致下一批 acting 态
   // 在 flush 瞬间被清掉（按钮提前解禁、右侧 loading 消失）。

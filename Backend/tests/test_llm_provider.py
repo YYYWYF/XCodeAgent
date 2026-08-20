@@ -113,7 +113,7 @@ class ModelProviderConversionTests(unittest.TestCase):
             },
             clear=True,
         ):
-            with self.assertRaisesRegex(RuntimeError, "Unsupported MODEL_PROVIDER"):
+            with self.assertRaisesRegex(RuntimeError, "Only OpenAI-compatible"):
                 Settings.from_env()
 
 
