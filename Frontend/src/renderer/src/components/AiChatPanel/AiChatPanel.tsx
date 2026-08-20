@@ -1103,16 +1103,32 @@ export default function AiChatPanel({
       Boolean(lastWorkflowRunId) &&
       Boolean(chunkWorkflowRunId) &&
       lastWorkflowRunId === chunkWorkflowRunId
-    // UI 确认阶段的单页动作（换一换/选模板/调整）会触发新 runId，且中途流式快照可能
-    // 丢失 clarification.mode。只要最后一条消息是 ui_design_confirmation 卡片且未显式
-    // 开启新轮，就视为同轮更新，更新同一张卡片而非新增。
+    // 设计阶段的确认卡（需求/产品/技术/UI）在轮询、单页动作或无操作 resume 时会触发
+    // 新 runId（每次 resume 都 randomUUID），且中途流式快照可能丢失 clarification.mode。
+    // 只要最后一条消息与本次快照是同一种确认卡、且未显式开启新轮，就视为同轮更新，
+    // 更新同一张卡片而非新增——否则每次轮询都会新建一张同 phase 的确认卡并残留 loading。
+    const DESIGN_CONFIRMATION_MODES = new Set([
+      'requirement_spec_confirmation',
+      'product_plan_confirmation',
+      'technical_plan_confirmation',
+      'ui_design_confirmation'
+    ])
     const lastClarificationMode = lastMessage?.workflow?.summary?.clarification as
       | { mode?: string }
       | undefined
+    const chunkClarificationMode = chunk.workflow?.summary?.clarification as
+      | { mode?: string }
+      | undefined
+    const lastMode = lastClarificationMode?.mode
+    const chunkMode = chunkClarificationMode?.mode
     const sameUiDesignConfirmation =
       !planningNewRoundRef.current &&
       lastMessage?.role === 'assistant' &&
-      lastClarificationMode?.mode === 'ui_design_confirmation'
+      Boolean(lastMode) &&
+      DESIGN_CONFIRMATION_MODES.has(String(lastMode)) &&
+      // 中途流式快照可能丢失 mode（undefined），此时沿用最后一张确认卡的判定；
+      // 只有 chunk 明确带了不同 mode 才不算同轮。
+      (!chunkMode || chunkMode === lastMode)
 
     if (chunk.workflow) {
       // 新一轮 content 先于 workflow 到达时，content 已新增为无 workflow 的消息；

@@ -219,7 +219,9 @@ export default function MessageList({
     setShowScrollToBottom(shouldShowScrollToBottom(container))
   }, [])
 
-  /** 在下一动画帧直接贴底，卡片展开/收起导致高度变化时也保持贴底。 */
+  /** 在下一动画帧直接贴底，卡片展开/收起导致高度变化时也保持贴底。
+      仅当用户处于跟随状态（接近底部）时才自动贴底；用户上翻查看历史卡片时，
+      轮询/流式更新不再把视图拽到底部，改为显示「回到底部」悬浮按钮。 */
   const scheduleScrollUpdate = useCallback((): void => {
     if (scrollUpdateFrameRef.current !== undefined) {
       window.cancelAnimationFrame(scrollUpdateFrameRef.current)
@@ -231,6 +233,11 @@ export default function MessageList({
         const container = scrollContainerRef.current
         if (!container) {
           setShowScrollToBottom(false)
+          return
+        }
+        if (!followLatestContentRef.current) {
+          // 用户已上翻：不强行贴底，仅提示有新内容。
+          setShowScrollToBottom(true)
           return
         }
         container.scrollTo({ top: container.scrollHeight, behavior: 'auto' })
