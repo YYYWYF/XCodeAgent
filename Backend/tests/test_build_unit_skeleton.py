@@ -160,6 +160,7 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         self.assertNotIn("database:database", plan["build_units"])
         self.assertIn("backend:endpoint:orders-api:orders.list", plan["build_units"])
         self.assertIn("frontend:api-client", plan["build_units"])
+        self.assertNotIn("frontend:route-registry", plan["build_units"])
         self.assertEqual(
             plan["build_units"]["backend:endpoint:orders-api:orders.list"]["kind"],
             "backend",
@@ -179,6 +180,13 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         self.assertNotIn(
             {"from": "frontend:auth-guard", "to": "page:customers", "type": "depends_on"},
             plan["unit_graph"]["edges"],
+        )
+        self.assertFalse(
+            any(
+                edge.get("from") == "frontend:route-registry"
+                or edge.get("to") == "frontend:route-registry"
+                for edge in plan["unit_graph"]["edges"]
+            )
         )
         self.assertEqual(plan["build_units"]["page:orders"]["status"], "not_prepared")
 

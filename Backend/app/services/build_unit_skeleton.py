@@ -13,7 +13,6 @@ from app.services.frontend_page_tree import project_plan_page_records
 
 PUBLIC_UNIT_IDS = (
     "frontend:shell",
-    "frontend:route-registry",
     "frontend:api-client",
     "frontend:auth-guard",
     "backend:bootstrap",
@@ -31,7 +30,6 @@ def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
     if source_types and source_types <= {"static"}:
         return (
             "frontend:shell",
-            "frontend:route-registry",
             "frontend:auth-guard",
             "app:integration",
         )
@@ -286,7 +284,6 @@ def _unit_graph(
         edges.append({"from": "application:root", "to": page_unit_id, "type": "contains"})
         for public_unit_id in (
             "frontend:shell",
-            "frontend:route-registry",
             *([] if all_static else ["frontend:api-client"]),
         ):
             edges.append({"from": public_unit_id, "to": page_unit_id, "type": "depends_on"})

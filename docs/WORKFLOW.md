@@ -309,7 +309,7 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已�
 - `application:root` 表示整应用根；
 - `backend:bootstrap` 表示后端工程基础能力；
 - `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
-- `frontend:shell`、`frontend:route-registry`、`frontend:api-client`、`frontend:auth-guard` 表示前端公共能力；
+- `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；菜单、路由和隐藏路由由模板初始化独占，不建立 Build Unit；
 - `page:<pageId>` 表示页面实现范围。
 
 页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。

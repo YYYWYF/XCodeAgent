@@ -1607,9 +1607,9 @@ def _existing_application_unit_evidence(
         unit_id: str,
         prepared_plan: dict,
 ) -> dict[str, object] | None:
-    """根据任务规划前的工作区检查证据识别可复用的前端壳与路由 Unit。"""
+    """根据任务规划前的工作区检查证据识别可复用的前端壳 Unit。"""
 
-    if unit_id not in {"frontend:shell", "frontend:route-registry"}:
+    if unit_id != "frontend:shell":
         return None
     analysis = prepared_plan.get("workspace_analysis")
     if not isinstance(analysis, dict) or analysis.get("inspection_status") != "completed":
@@ -1621,18 +1621,11 @@ def _existing_application_unit_evidence(
         if str(path).strip()
     ]
     lowered = [path.lower() for path in paths]
-    if unit_id == "frontend:shell":
-        matched = [
-            path
-            for path, normalized in zip(paths, lowered)
-            if any(token in normalized for token in ("package.json", "/main.", "/app."))
-        ]
-    else:
-        matched = [
-            path
-            for path, normalized in zip(paths, lowered)
-            if any(token in normalized for token in ("route", "router"))
-        ]
+    matched = [
+        path
+        for path, normalized in zip(paths, lowered)
+        if any(token in normalized for token in ("package.json", "/main.", "/app."))
+    ]
     if not matched:
         return None
     return {
@@ -1851,7 +1844,7 @@ def _replaceable_unit_ids(
 def _is_reusable_public_unit(unit_id: str) -> bool:
     """判断 Unit 是否属于可复用的前端公共能力。"""
 
-    return unit_id in {"frontend:shell", "frontend:route-registry"}
+    return unit_id == "frontend:shell"
 
 
 def _unit_tasks_are_reusable(build_task_plan: dict, unit_id: str) -> bool:

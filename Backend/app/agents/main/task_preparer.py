@@ -218,17 +218,20 @@ def _task_preparation_prompt(
             project_plan,
             workspace_snapshot,
             build_context,
+            validation_feedback,
         )
     if mode == "endpoint":
         return _endpoint_task_preparation_prompt(
             project_plan,
             workspace_snapshot,
             build_context,
+            validation_feedback,
         )
     return _combined_task_preparation_prompt(
         project_plan,
         workspace_snapshot,
         build_context,
+        validation_feedback,
     )
 
 
@@ -267,6 +270,7 @@ def _combined_task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
     build_context: dict[str, Any] | None = None,
+    validation_feedback: list[str] | None = None,
 ) -> str:
     """组合全局计划与定向详情上下文，约束模型仅返回当前 Unit 的任务候选。"""
     source_types = _endpoint_source_types(project_plan, build_context)
@@ -501,6 +505,7 @@ def _page_task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
     build_context: dict[str, Any] | None,
+    validation_feedback: list[str] | None = None,
 ) -> str:
     """只为页面 Unit 注入前端实现、页面契约和前端工作区上下文。"""
 
@@ -517,9 +522,12 @@ def _page_task_preparation_prompt(
         "implementation tasks. Use only the current page implementation contract, its "
         "referenced API Contract schemas, and the existing frontend WorkspaceSnapshot.\n"
         "All generated frontend paths are under /frontend/. Use the authoritative "
-        "TargetBuildContext.target.page_key for src/pages/<PageKey>/index.tsx and menu "
-        "registration. Reuse the existing React scaffold; only add or replace business "
-        "page files and append the current menu item when required.\n"
+        "TargetBuildContext.target.page_key only for the existing "
+        "src/pages/<PageKey>/index.tsx page entry. Reuse the existing React scaffold and "
+        "only modify page business content or add page-owned business modules. The template "
+        "lifecycle already owns page placeholders, menus, routes, and hidden routes. Never "
+        "create a menu or route registration task, never emit menu or route metadata, and "
+        "never modify shared menu, route, router, or registration files.\n"
         "Every page API dependency must resolve to the exact method, path, request schema, "
         "and response schema in executable_details.api_contracts. Call the shared API "
         "service through the existing business API module; never invent URLs, fields, or "
@@ -528,6 +536,7 @@ def _page_task_preparation_prompt(
         "Do not plan tests, builds, lint, type checks, verification, or business acceptance. "
         "Return acceptance_criteria=[], acceptance_checks=[], verification_commands=[].\n\n"
         f"WorkspaceSnapshot (frontend-scoped):\n{snapshot_text}\n\n"
+        f"{_task_plan_retry_feedback(validation_feedback)}"
         f"TargetBuildContext:\n{json.dumps(prompt_context, ensure_ascii=False, indent=2)}\n\n"
         f"TaskPreparationContext (page-scoped):\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
     )
@@ -537,6 +546,7 @@ def _endpoint_task_preparation_prompt(
     project_plan: dict[str, Any],
     workspace_snapshot: dict[str, Any] | None,
     build_context: dict[str, Any] | None,
+    validation_feedback: list[str] | None = None,
 ) -> str:
     """只为 endpoint/data Unit 注入当前数据源所需的契约、Skill 和工作区上下文。"""
 
@@ -581,6 +591,7 @@ def _endpoint_task_preparation_prompt(
         "plan tests, builds, lint, type checks, verification, or business acceptance. "
         "Return acceptance_criteria=[], acceptance_checks=[], verification_commands=[].\n\n"
         f"WorkspaceSnapshot ({snapshot_label}):\n{snapshot_text}\n\n"
+        f"{_task_plan_retry_feedback(validation_feedback)}"
         f"TargetBuildContext:\n{json.dumps(prompt_context, ensure_ascii=False, indent=2)}\n\n"
         f"TaskPreparationContext (endpoint-scoped):\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
     )
@@ -604,6 +615,9 @@ def _common_task_preparation_rules() -> str:
         "tasks, without markdown fences or commentary. workspace_analysis must summarize "
         "only the directories, entrypoints, and reuse conventions actually present in the "
         "scoped WorkspaceSnapshot; do not infer omitted stack or verification facts.\n"
+        "Template initialization exclusively owns page placeholders, menus, routes, hidden "
+        "routes, and shared registration files. Never create tasks for those capabilities, "
+        "never emit their metadata, and never modify their files in any planning mode.\n"
         "The `dependencies` field is the execution prerequisite list: it must be a JSON "
         "array of task IDs from this response and the same Unit, meaning those tasks must "
         "complete before the current task starts. Use `dependencies: []` for a root task. "

@@ -6,7 +6,6 @@ import re
 from typing import Any
 
 FRONTEND_PAGE_ENTRY_PREFIX = "frontend/src/pages/"
-FRONTEND_MENU_PATH = "frontend/src/constants/menus.ts"
 
 
 def reconcile_live_page_paths(
@@ -124,47 +123,6 @@ def _replace_task_page_path(
             "reason": "unique semantic page directory already exists",
         },
     }
-
-
-def menu_registration_matches(
-    workspace_root: str | Path,
-    registration: dict[str, Any],
-) -> bool:
-    """复用菜单解析规则核对确定性工程验收中的完整菜单登记。"""
-
-    file_path = str(registration.get("file") or FRONTEND_MENU_PATH).lstrip("./")
-    menu_file = Path(workspace_root).expanduser().resolve() / file_path
-    try:
-        content = menu_file.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return False
-    expected = {
-        "path": str(registration.get("path") or ""),
-        "name": str(registration.get("name") or ""),
-        "key": str(registration.get("key") or ""),
-    }
-    expected_hidden = bool(registration.get("hide_in_menu"))
-    for match in re.finditer(r"\{(?P<body>[^{}]*)\}", content, flags=re.DOTALL):
-        body = match.group("body")
-        properties = {
-            name: _typescript_string_property(body, name)
-            for name in ("path", "name", "key")
-        }
-        if properties != expected:
-            continue
-        hidden = bool(re.search(r"\bhideInMenu\s*:\s*true\b", body))
-        return hidden is expected_hidden
-    return False
-
-
-def _typescript_string_property(body: str, name: str) -> str:
-    """从简单 TypeScript 对象文本中读取一个字符串属性。"""
-
-    match = re.search(
-        rf"\b{re.escape(name)}\s*:\s*(['\"])(?P<value>[^'\"]*)\1",
-        body,
-    )
-    return match.group("value") if match else ""
 
 
 def _task_target_files(task: dict[str, Any]) -> list[str]:

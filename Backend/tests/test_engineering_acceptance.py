@@ -820,45 +820,6 @@ class EngineeringAcceptanceTests(unittest.TestCase):
 
         self.assertEqual(unauthorized, ["frontend/vite.config.ts"])
 
-    def test_menu_registration_is_verified_from_existing_source(self) -> None:
-        """菜单工程验收必须复用确定性解析器核对完整对象字段。"""
-
-        task = {
-            "id": "menu-leave-list",
-            "owner": "frontend",
-            "change_scope": [
-                {
-                    "operation": "modify",
-                    "path": "frontend/src/constants/menus.ts",
-                }
-            ],
-            "engineering_context": {
-                "menu_registration": {
-                    "file": "frontend/src/constants/menus.ts",
-                    "path": "leave-list",
-                    "name": "请假列表",
-                    "key": "LeaveListPage",
-                    "hide_in_menu": False,
-                }
-            },
-        }
-        compiled = compile_engineering_acceptance([task], {})[0]
-        with tempfile.TemporaryDirectory() as workspace:
-            menu = Path(workspace) / "frontend/src/constants/menus.ts"
-            menu.parent.mkdir(parents=True)
-            menu.write_text(
-                "export const BIZ_MENUS = [{ path: 'leave-list', name: '请假列表', key: 'LeaveListPage' }];",
-                encoding="utf-8",
-            )
-            _, errors = verify_engineering_acceptance(
-                task=compiled,
-                status="already_satisfied",
-                code_change_set=None,
-                workspace_root=workspace,
-            )
-
-        self.assertFalse(errors)
-
     def test_database_task_compiles_gap_and_approval_checks(self) -> None:
         """数据库任务只生成 schema gap 与高风险审批工程检查。"""
 
