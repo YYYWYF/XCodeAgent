@@ -152,6 +152,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     "direct_endpoint_details": [{"endpoint_id": "orders.list"}],
                     "entity_designs": [{"entity_id": "Order"}],
                 },
+                ["Task menu-task must not modify frontend/src/constants/menus.ts."],
             )
 
         backend_skill.assert_not_called()
@@ -161,6 +162,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertNotIn('"backend"', prompt)
         self.assertNotIn("direct_endpoint_details", prompt)
         self.assertNotIn('"entity_designs"', prompt)
+        self.assertNotIn("append the current menu item", prompt)
+        self.assertIn("Never create a menu or route registration task", prompt)
+        self.assertIn("Task menu-task must not modify", prompt)
 
     def test_endpoint_prompt_injects_backend_skill_only_for_endpoint_scope(self) -> None:
         """只生成 endpoint 时注入后端技能和 endpoint 规则。"""
@@ -708,7 +712,21 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ]
             }
         )
-        model = Mock(side_effect=[invalid_response, valid_response])
+        chat_model = Mock()
+        bound_model = Mock()
+        chat_model.bind.return_value = bound_model
+        bound_model.invoke.side_effect = [
+            SimpleNamespace(
+                content=invalid_response,
+                usage_metadata=None,
+                response_metadata={},
+            ),
+            SimpleNamespace(
+                content=valid_response,
+                usage_metadata=None,
+                response_metadata={},
+            ),
+        ]
         settings = SimpleNamespace(
             model_name="test-model",
             model_api_name="test-model",
@@ -721,9 +739,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 return_value=settings,
             ),
             patch(
-                "app.agents.main.task_preparer._invoke_live_main_agent",
-                model,
-            ),
+                "app.agents.main.task_preparer.create_chat_model",
+                return_value=chat_model,
+            ) as create_model,
         ):
             plan = prepare_build_tasks_with_main_agent(
                 {
@@ -738,10 +756,15 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual([task["id"] for task in tasks_from_build_task_plan(plan)], ["page-task"])
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
         self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
-        self.assertIn(
-            "frontend/src/constants/menus.ts",
-            model.call_args_list[1].kwargs["validation_feedback"][0],
-        )
+        self.assertEqual(create_model.call_count, 2)
+        self.assertEqual(bound_model.invoke.call_count, 2)
+        first_prompt = bound_model.invoke.call_args_list[0].args[0]
+        second_prompt = bound_model.invoke.call_args_list[1].args[0]
+        self.assertIn("Never create a menu or route registration task", first_prompt)
+        self.assertNotIn("AUTOMATIC REGENERATION FEEDBACK", first_prompt)
+        self.assertIn("AUTOMATIC REGENERATION FEEDBACK", second_prompt)
+        self.assertIn("Task menu-task", second_prompt)
+        self.assertIn("frontend/src/constants/menus.ts", second_prompt)
 
     def test_task_preparer_binds_configured_max_tokens(self) -> None:
         """任务规划调用必须显式传递 AGENT_MAX_TOKENS，避免采用 Provider 的短输出默认值。"""
@@ -883,20 +906,20 @@ class BuildTaskPlannerTests(unittest.TestCase):
         build_context = {
             "target": {"type": "page", "id": "dashboard_page"},
             "page_detail": {"page_name": "概览页", "path": "/page/"},
-            "required_unit_ids": ["app:route-registry", "page:dashboard_page"],
+            "required_unit_ids": ["frontend:shell", "page:dashboard_page"],
             "source_refs": {"type": "page_detail"},
         }
         base_plan = {
             "schema_version": "build-dag.v3",
             "build_units": {
-                "app:route-registry": {"id": "app:route-registry", "kind": "application"},
+                "frontend:shell": {"id": "frontend:shell", "kind": "frontend"},
                 "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
             },
             "unit_graph": {
-                "nodes": ["app:route-registry", "page:dashboard_page"],
+                "nodes": ["frontend:shell", "page:dashboard_page"],
                 "edges": [
                     {
-                        "from": "app:route-registry",
+                        "from": "frontend:shell",
                         "to": "page:dashboard_page",
                         "type": "depends_on",
                     }
@@ -1080,19 +1103,19 @@ class BuildTaskPlannerTests(unittest.TestCase):
         build_context = {
             "target": {"type": "page", "id": "dashboard_page"},
             "page_detail": {"page_name": "概览页", "path": "/page/"},
-            "required_unit_ids": ["app:route-registry", "page:dashboard_page"],
+            "required_unit_ids": ["frontend:shell", "page:dashboard_page"],
         }
         base_plan = {
             "schema_version": "build-dag.v3",
             "build_units": {
-                "app:route-registry": {"id": "app:route-registry", "kind": "application"},
+                "frontend:shell": {"id": "frontend:shell", "kind": "frontend"},
                 "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
             },
             "unit_graph": {
-                "nodes": ["app:route-registry", "page:dashboard_page"],
+                "nodes": ["frontend:shell", "page:dashboard_page"],
                 "edges": [
                     {
-                        "from": "app:route-registry",
+                        "from": "frontend:shell",
                         "to": "page:dashboard_page",
                         "type": "depends_on",
                     }
@@ -1119,7 +1142,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     "tasks": [
                         {
                             "id": "task-menu-register-dashboard",
-                            "unit_id": "app:route-registry",
+                            "unit_id": "frontend:shell",
                             "owner": "frontend",
                             "description": "追加 DashboardPage 概览页菜单项",
                             "change_scope": [
@@ -1650,7 +1673,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         agent_tasks.extend(
             [
                 {"id": "verify-shell", "unit_id": "frontend:shell", "owner": "frontend", "description": "验证壳", "change_scope": []},
-                {"id": "verify-route", "unit_id": "app:route-registry", "owner": "frontend", "description": "验证路由", "change_scope": []},
+                {"id": "verify-route", "unit_id": "frontend:shell", "owner": "frontend", "description": "验证路由", "change_scope": []},
             ]
         )
 

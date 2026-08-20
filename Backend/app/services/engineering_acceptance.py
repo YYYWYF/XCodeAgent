@@ -325,35 +325,6 @@ def _repair_change_check(
     )
 
 
-def _menu_registration_check(task: dict[str, Any]) -> dict[str, Any] | None:
-    """读取确定性菜单任务元数据并生成精确菜单登记检查。"""
-
-    engineering_context = _dict_value(task.get("engineering_context"))
-    registration = _dict_value(engineering_context.get("menu_registration"))
-    required = ("path", "name", "key", "file")
-    if not registration or any(not str(registration.get(key) or "").strip() for key in required):
-        return None
-    expected = {
-        "file": str(registration["file"]).lstrip("./"),
-        "path": str(registration["path"]),
-        "name": str(registration["name"]),
-        "key": str(registration["key"]),
-        "hide_in_menu": bool(registration.get("hide_in_menu")),
-    }
-    description = (
-        f"{expected['file']} 必须登记菜单项 "
-        f"path={expected['path']}、name={expected['name']}、key={expected['key']}，"
-        "且不改写已有菜单项。"
-    )
-    return _check(
-        task,
-        kind="menu_registration",
-        description=description,
-        target_paths=[expected["file"]],
-        expected=expected,
-    )
-
-
 def _contract_binding_check(
     task: dict[str, Any], context: dict[str, Any]
 ) -> dict[str, Any] | None:

@@ -190,7 +190,6 @@ def _page_context(
         "entity_designs": entity_design_summaries(project_plan, entity_ids),
         "required_unit_ids": [
             "frontend:shell",
-            "frontend:route-registry",
             *(["frontend:api-client"] if not all_static else []),
             *(["frontend:auth-guard"] if _page_requires_auth(page) else []),
             *(["backend:bootstrap"] if source_types and not all_static else []),

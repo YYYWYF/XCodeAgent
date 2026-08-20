@@ -179,27 +179,19 @@ class BuildRepairPlannerTests(unittest.TestCase):
         task = compile_engineering_acceptance(
             [
                 {
-                    "id": "menu",
+                    "id": "page",
                     "owner": "frontend",
                     "status": "failed",
                     "change_scope": [
-                        {"operation": "modify", "path": "frontend/src/constants/menus.ts"}
+                        {"operation": "modify", "path": "frontend/src/pages/Dashboard/index.tsx"}
                     ],
-                    "allowed_paths": ["frontend/src/constants/menus.ts"],
-                    "engineering_context": {
-                        "menu_registration": {
-                            "file": "frontend/src/constants/menus.ts",
-                            "path": "dashboard",
-                            "name": "概览",
-                            "key": "DashboardPage",
-                        }
-                    },
+                    "allowed_paths": ["frontend/src/pages/Dashboard/index.tsx"],
                 }
             ],
             {},
         )[0]
         result = {
-            "task_id": "menu",
+            "task_id": "page",
             "status": "failed",
             "failure_category": "no_file_changes",
             "scheduler_decision": {"action": "repair", "reason": "no_file_changes"},
@@ -210,11 +202,11 @@ class BuildRepairPlannerTests(unittest.TestCase):
             tasks=[task],
             repair_planner=lambda repair_input: {
                 "decision": "repair",
-                "strategy": "检查并修复菜单",
+                "strategy": "检查并修复页面",
                 "repair_tasks": [
                     {
-                        "title": "修复菜单",
-                        "description": "确保菜单项存在",
+                        "title": "修复页面",
+                        "description": "确保页面内容正确",
                         "acceptance_criteria": ["文件必须产生实际变更（非空写入）"],
                     }
                 ],
@@ -223,7 +215,6 @@ class BuildRepairPlannerTests(unittest.TestCase):
 
         repair_task = plan["tasks"][0]
         acceptance = repair_task["acceptance_criteria"]
-        self.assertNotIn("menu_registration", [item["kind"] for item in repair_task["acceptance_checks"]])
         self.assertFalse(any("文件必须产生实际变更（非空写入）" in item for item in acceptance))
 
     def test_repair_recompiles_file_operations_for_exact_repair_scope(self) -> None:

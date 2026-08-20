@@ -67,7 +67,7 @@ ensure_build_unit_skeleton(ProjectPlan, WorkspaceSnapshot)
 
 - `page:<pageId>`；
 - `data-source:<dataSourceId>`；
-- `app:frontend-shell`、`app:route-registry`、`app:api-client`、`app:auth-guard`、`app:backend-bootstrap`、`app:integration` 等公共能力 Unit。
+- `frontend:shell`、`frontend:api-client`、`frontend:auth-guard`、`backend:bootstrap`、`app:integration` 等公共能力 Unit；菜单、路由和隐藏路由由模板初始化负责，不建立 Build Unit。
 
 Unit 只描述模块和依赖，初始为 `not_prepared`，不创建代码任务，不调用模型。后续选择第二个页面或数据源时，骨架只校验 ProjectPlan / WorkspaceSnapshot 指纹；输入未变化时复用原骨架，不重复创建 Unit。
 

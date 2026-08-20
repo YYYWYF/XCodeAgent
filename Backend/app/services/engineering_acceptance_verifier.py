@@ -4,7 +4,6 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
-from app.services.build_task_menu import menu_registration_matches
 from app.services.engineering_acceptance import ensure_engineering_acceptance
 from app.services.engineering_contract_verifier import verify_contract_binding
 
@@ -123,8 +122,6 @@ def _verify_check(
         return _verify_repair_change(check, status=status, changes=changes, root=root)
     if kind == "scope_boundary":
         return _verify_scope_boundary(task, batch_unauthorized_paths)
-    if kind == "menu_registration":
-        return _verify_menu_registration(check, root=root)
     if kind in {"frontend_contract_binding", "backend_contract_binding"}:
         return verify_contract_binding(check, kind=kind, root=root)
     return f"不支持的工程验收检查类型：{kind or '<empty>'}", "检查类型无法执行。"
@@ -252,17 +249,6 @@ def _verify_scope_boundary(
         joined = "、".join(sorted(set(unauthorized_paths)))
         return f"检测到未授权文件变更：{joined}。", f"批次越过任务 {task.get('id')} 的授权并集。"
     return None, "工作区差异全部位于本批次任务授权范围内。"
-
-
-def _verify_menu_registration(
-    check: dict[str, Any], *, root: Path | None
-) -> tuple[str | None, str]:
-    """复用菜单解析器核对 path、name、key 与动态路由隐藏标记。"""
-
-    expected = _dict_value(check.get("expected"))
-    if root is None or not menu_registration_matches(root, expected):
-        return "菜单或自动路由登记与确定性工程契约不一致。", "未找到完全匹配的菜单项。"
-    return None, "菜单 path、name、key 与隐藏标记均匹配。"
 
 
 def _resolved_path_error(root: Path, path: str) -> str | None:

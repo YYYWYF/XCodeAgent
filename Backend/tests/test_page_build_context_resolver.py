@@ -196,6 +196,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
             context["required_unit_ids"],
         )
         self.assertIn("frontend:auth-guard", context["required_unit_ids"])
+        self.assertNotIn("frontend:route-registry", context["required_unit_ids"])
 
     def test_page_context_limits_shared_data_source_to_direct_contract(self) -> None:
         """同一数据源对应多个契约时，页面 scope 只投射直接依赖的契约。"""
