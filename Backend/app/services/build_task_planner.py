@@ -695,6 +695,7 @@ def _task_semantic_errors(
     errors: list[str] = []
     required_unit_ids = _string_list(build_context.get("required_unit_ids"))
     validate_task_scope = build_context.get("_validate_task_scope", True) is not False
+    errors.extend(_required_bootstrap_task_errors(tasks, build_context))
     for task in tasks:
         task_id = str(task.get("id") or "")
         owner = str(task.get("owner") or "")
@@ -732,6 +733,23 @@ def _task_semantic_errors(
             errors.append(f"Task {task_id} is backend owner but declares database task_type {task_type}.")
         errors.extend(engineering_acceptance_contract_errors(task))
     return errors
+
+
+def _required_bootstrap_task_errors(
+    tasks: list[dict[str, Any]],
+    build_context: dict[str, Any],
+) -> list[str]:
+    """数据库规划范围要求 bootstrap 时，拒绝模型遗漏该可执行任务。"""
+
+    planning_unit_ids = set(_string_list(build_context.get("planning_unit_ids")))
+    if "backend:bootstrap" not in planning_unit_ids:
+        return []
+    if any(str(task.get("unit_id") or "") == "backend:bootstrap" for task in tasks):
+        return []
+    return [
+        "Database Build scope requires a backend:bootstrap task to validate Maven "
+        "dependencies and datasource/MyBatis configuration."
+    ]
 
 
 def _template_boundary_errors(

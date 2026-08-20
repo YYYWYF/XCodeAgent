@@ -187,6 +187,42 @@ def _endpoint_source_prompt_fragments(
     return mapping + "".join(fragments), "".join(skill_fragments), source_types
 
 
+def _backend_bootstrap_task_rules(
+    source_types: set[str],
+    build_context: dict[str, Any] | None,
+) -> str:
+    """仅在本轮数据库范围需要准备 bootstrap Unit 时注入强制任务规则。"""
+
+    context = build_context if isinstance(build_context, dict) else {}
+    planning_unit_ids = context.get("planning_unit_ids")
+    unit_ids = (
+        planning_unit_ids
+        if isinstance(planning_unit_ids, list) and planning_unit_ids
+        else context.get("required_unit_ids")
+    )
+    normalized_unit_ids = {
+        str(unit_id).strip()
+        for unit_id in unit_ids or []
+        if str(unit_id).strip()
+    }
+    if "database" not in source_types or "backend:bootstrap" not in normalized_unit_ids:
+        return ""
+    return (
+        "DATABASE BOOTSTRAP TASK IS REQUIRED: TargetBuildContext requires the "
+        "`backend:bootstrap` Unit. Return one focused owner=backend root task in that "
+        "exact Unit with dependencies=[]. The task must idempotently inspect the existing "
+        "`backend/pom.xml`, datasource configuration, and MyBatis-Plus configuration; keep "
+        "existing equivalent capabilities unchanged and add only database infrastructure "
+        "that is actually missing. Its change_scope must include `backend/pom.xml` so the "
+        "execution Agent is authorized to repair missing Maven dependencies, and may include "
+        "the exact existing or canonical application/configuration files needed for datasource "
+        "or pagination setup. This is the only task allowed to modify Maven dependencies or "
+        "global datasource/MyBatis configuration. It must not create business Entity, PO, DTO, "
+        "Mapper, Repository, Service, or Controller files. If inspection finds everything "
+        "already configured, execution will report already_satisfied; do not omit the task.\n"
+    )
+
+
 def _task_plan_retry_feedback(errors: list[str] | None) -> str:
     """把平台校验错误转换为下一次任务规划模型的内部重生成指令。"""
 
@@ -288,6 +324,7 @@ def _combined_task_preparation_prompt(
             project_plan,
             build_context,
         )
+    bootstrap_task_rules = _backend_bootstrap_task_rules(source_types, build_context)
     snapshot_text = json.dumps(
         _compact_workspace_snapshot(workspace_snapshot),
         ensure_ascii=False,
@@ -324,10 +361,13 @@ def _combined_task_preparation_prompt(
         
         "Backend path convention: this is a Spring Boot Maven project "
         f"rooted at `/{backend_root}/` (the directory containing pom.xml). Every backend "
-        "file MUST be planned under `/{backend_root}/src/main/java/...` or "
-        "`/{backend_root}/src/main/resources/...`; never use a bare `src/`, `app/backend/`, "
-        "or any other backend root. Do NOT plan tasks to create pom.xml, the main "
-        "application class, or the framework skeleton — those already exist.\n"
+        "business implementation file MUST be planned under "
+        f"`/{backend_root}/src/main/java/...` or `/{backend_root}/src/main/resources/...`; "
+        "never use a bare `src/`, `app/backend/`, or any other backend root. Do NOT plan "
+        "tasks to create pom.xml, the main application class, or the framework skeleton — "
+        "those already exist. The only exception is a required `backend:bootstrap` task, "
+        "which may modify the existing `/backend/pom.xml` and exact datasource/MyBatis "
+        "configuration files declared in its change_scope.\n"
         "The current real backend directory tree on disk is below. Directories end with "
         "`/`, files are leaves, and build artifacts (e.g. `target/`) are already excluded "
         "from the snapshot:\n"
@@ -348,6 +388,7 @@ def _combined_task_preparation_prompt(
         "cross-Unit edges.\n"
         + endpoint_source_rules
         + endpoint_skill_documents
+        + bootstrap_task_rules
         + "NOTE: any acceptance guidance inside the injected SKILL.md (for example "
         "`acceptance_criteria` covering compilation or REST availability) describes "
         "generated-code content expectations only and is SUPERSEDED for task output: "
@@ -557,6 +598,7 @@ def _endpoint_task_preparation_prompt(
         project_plan,
         build_context,
     )
+    bootstrap_task_rules = _backend_bootstrap_task_rules(source_types, build_context)
     snapshot_scope = (
         "frontend"
         if source_types == {"static"}
@@ -570,9 +612,12 @@ def _endpoint_task_preparation_prompt(
         indent=2,
     )
     path_rules = (
-        "Backend source tasks use /backend/src/main/java/... or "
+        "Backend business source tasks use /backend/src/main/java/... or "
         "/backend/src/main/resources/...; frontend static data tasks use "
-        "/frontend/src/apis/...; do not recreate either framework skeleton.\n"
+        "/frontend/src/apis/...; do not recreate either framework skeleton. A required "
+        "backend:bootstrap task is the sole exception and may modify the existing "
+        "/backend/pom.xml plus exact datasource/MyBatis configuration files in its "
+        "change_scope.\n"
     )
     snapshot_label = (
         "frontend-scoped"
@@ -588,6 +633,7 @@ def _endpoint_task_preparation_prompt(
         "designs in the endpoint-scoped context; do not infer data sources from API names.\n"
         + source_rules
         + skill_documents
+        + bootstrap_task_rules
         + path_rules
         + "Do not "
         "plan tests, builds, lint, type checks, verification, or business acceptance. "

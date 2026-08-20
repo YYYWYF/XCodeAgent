@@ -307,18 +307,18 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已�
 `build-dag.v3` 的 Unit ID 采用新的层次：
 
 - `application:root` 表示整应用根；
-- `backend:bootstrap` 表示后端工程基础能力；
+- `backend:bootstrap` 表示数据库来源后端所需的 Maven、数据源与 MyBatis-Plus 基础能力；外部 API-only 与静态范围不创建该 Unit；
 - `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
 - `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；菜单、路由和隐藏路由由模板初始化独占，不建立 Build Unit；
 - `page:<pageId>` 表示页面实现范围。
 
-页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。
+页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。只有包含 database 实体的范围才要求 `backend:bootstrap`，并由 Unit Graph 建立 `backend:bootstrap → backend:endpoint:*`；external_api-only endpoint 不依赖该 Unit。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。
 
 代码图不参与 DAG 任务生成。进入 `build` 后，Frontend Agent 与承载 backend task 的 DataSource Agent 才按 `task_id` 使用绑定当前 `workspaceRoot` 的 `code_graph_context`：已有目标文件优先查询 `file_summary`，未知业务符号优先查询 `search_symbols`，命中后再按需查询引用、影响和相关测试。只有 `status=ready` 且 `matches/relations/relatedTests/impactedFiles` 至少一项非空的结果才作为导航；空结果、异常或不可用状态会立即降级为任务 `target_files/allowed_paths/change_scope` 内的文件搜索和真实源码读取，不会令任务失败或扩大写入授权。代码图始终不是源码事实，修改前必须读取当前文件。
 
 任务规划模型输入中的数据源事实只来自当前范围的 `executable_details.entity_designs`。数据库实体摘要公开已确认的目标表、字段绑定与数据库执行状态，外部 API 实体摘要公开已确认的上游方法与映射计数，静态实体摘要公开种子记录统计；完整库表快照、数据库操作清单、连接信息和未确认的外部 API 细节不进入模型。endpoint 模式的 `TargetBuildContext` 只携带目标、Unit、实体 ID 和工件引用，完整 EndpointDetail、实体摘要与当前 API Contract 只在 `TaskPreparationContext.executable_details` 出现一次。数据库与外部 API 实体只生成 `owner=backend` 的 endpoint 任务，静态实体只生成 `owner=frontend` 的 `frontend:data:*` 任务；所有正常 Build scope 都不得生成 `owner=database` 任务，模型返回此类任务时确定性语义校验会阻止 DAG 进入 Build。
 
-任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：Normal Build 的 Unit 骨架不包含 `database:*`，模型误返回 `owner=database` 或 `database:*` 候选时会保留原候选并把职责越界写入 `task_graph.validation.errors`，不能以静默删除的方式掩盖边界问题。数据库表结构和数据源操作继续由实体确认流程负责；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。候选任务的边界、owner、Unit 和拓扑均属于平台设计，校验失败会自动回灌错误并重生成，不要求用户人工拆分任务。
+任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：Normal Build 的 Unit 骨架不包含 `database:*`，模型误返回 `owner=database` 或 `database:*` 候选时会保留原候选并把职责越界写入 `task_graph.validation.errors`，不能以静默删除的方式掩盖边界问题。当本轮 `planning_unit_ids` 包含 `backend:bootstrap` 时，候选必须包含该 Unit 的可执行后端任务；遗漏会作为平台校验错误回灌模型并自动重生成。已准备且不在本轮替换范围内的 bootstrap 任务继续复用，不要求重复生成。数据库表结构和数据源操作继续由实体确认流程负责；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。候选任务的边界、owner、Unit 和拓扑均属于平台设计，校验失败会自动回灌错误并重生成，不要求用户人工拆分任务。
 
 Build Task 保留独立工程验收元数据，但当前不在每个任务执行完成后调用 verifier，也不复制 ProductPlan、UiDesign、TechnicalPlan 或 EndpointDetail 中的业务验收。角色数据范围、业务状态转换、页面可见内容、筛选交互、loading/empty/error 和点击行为分别保留在 ProductPlan 与 React UI 稿中，并通过 `PageImplementationContract` 进入代码生成上下文；任务规划模型必须返回空 `acceptance_criteria`。确定性编译器忽略模型输出的验收文案，依据 `owner/task_type/change_scope/allowed_paths/source_refs/build_context` 生成带稳定 ID 的内部 `acceptance_checks`，再把检查描述投影到兼容前端的 `acceptance_criteria: string[]`，供审计和修复上下文使用。Build 执行阶段只做结果归一化和真实 diff 归属，不再因工作区中额外的编译产物或生成文件阻断任务；菜单、路由、页面占位由模板初始化流程负责，不生成 DAG 工程检查。API/Spring 契约、数据库及 build、lint、test 由后续集成质量门禁处理。
 
@@ -357,7 +357,7 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 
 `stages[].output` 是严格的 `kind` 判别联合：`unit_graph` 包含 Unit（id/type/status/taskCount）、Unit 依赖边和骨架校验；`build_context` 包含目标 type/id、关联 Unit/Endpoint/API Contract/数据源及数据库摘要状态；`contract_validation` 包含校验范围、通过状态和问题；`candidate_tasks` 包含候选任务、负责人、依赖和 owner 汇总；`compiled_tasks` 包含最终拓扑任务、变更文件、工程检查摘要、任务依赖边和 owner 汇总；`dag_validation` 包含根/叶任务、拓扑顺序、执行批次（串/并行）和校验错误；`artifacts` 仅包含 `build-task-plan.json` 的 JSON 安全标签和确认状态。列表字段最多 200 条、文本最多 1000 字符，依赖边最多 500 条并带 `truncated` 标记；顶层 `tasks`、`artifacts` 仅作为安全投影保留。阶段完成或失败后产物冻结，后续阶段更新不得覆盖早期详情。历史会话重入时，前端以已完成 Workflow 事件、状态和结果中的 DAG 快照回填已持久化的步骤；若多个来源同时存在，优先选择包含更多阶段 `output` 的完整快照，避免旧的中间进度帧覆盖完成产物。
 
-该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。与 Deep Agents 的默认 harness 映射是：`prepare_build_tasks` 只负责 planning，不挂载文件工具；后续 BuildScheduler 与代码执行 runner 负责 action/verification。为控制 128k 上下文预算，模型只接收已确认计划、快照摘要和精确文件清单，不把完整目录树或文件内容复制进 Graph State。任务规划提示词还按本轮实际可替换 Unit 渐进注入上下文：只有 endpoint Unit 待生成时注入 EndpointDetail、绑定实体设计和当前数据源对应的 Skill（数据库 MyBatis、外部 API 集成或前端静态数据），只有 page Unit 待生成时注入页面实现契约和前端事实；两类 Unit 同轮待生成时才组合当前范围的完整前后端提示词。endpoint 工作区快照仅保留相关侧的入口、关键文件、现有路由/模型或 API client 与目录树，排除构建测试命令、全局统计、通用代码图和另一侧技术栈；混合来源使用前后端最小投影并集。已准备的 endpoint Unit 被页面范围复用时，不会为页面规划重复注入 endpoint 后端上下文。执行 Agent 使用任务 `source_refs.entity_designs` 选择相同 Skill，Build Unit 编译器按 owner/source 过滤来源引用。`springboot-mybatis-generate` 的入口只保留规划所需四阶段与职责边界，执行 Agent 再按入口路由读取分层实现或显式 bootstrap reference；普通 endpoint Unit 不加载或生成 bootstrap 修改。
+该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。与 Deep Agents 的默认 harness 映射是：`prepare_build_tasks` 只负责 planning，不挂载文件工具；后续 BuildScheduler 与代码执行 runner 负责 action/verification。为控制 128k 上下文预算，模型只接收已确认计划、快照摘要和精确文件清单，不把完整目录树或文件内容复制进 Graph State。任务规划提示词还按本轮实际可替换 Unit 渐进注入上下文：只有 endpoint Unit 待生成时注入 EndpointDetail、绑定实体设计和当前数据源对应的 Skill（数据库 MyBatis、外部 API 集成或前端静态数据），只有 page Unit 待生成时注入页面实现契约和前端事实；两类 Unit 同轮待生成时才组合当前范围的完整前后端提示词。endpoint 与 combined 提示词在 database 且 `backend:bootstrap` 待准备时强制生成独立根任务，并明确允许它修改现有 `backend/pom.xml` 和精确的数据源/MyBatis 配置文件；普通 endpoint 任务仍不得修改全局依赖或配置。endpoint 工作区快照仅保留相关侧的入口、关键文件、现有路由/模型或 API client 与目录树，排除构建测试命令、全局统计、通用代码图和另一侧技术栈；混合来源使用前后端最小投影并集。已准备的 endpoint Unit 被页面范围复用时，不会为页面规划重复注入 endpoint 后端上下文。执行 Agent 使用任务 `source_refs.entity_designs` 选择相同 Skill，Build Unit 编译器按 owner/source 过滤来源引用；bootstrap 只继承 database 实体，因此只加载 MyBatis Skill 及显式 bootstrap reference。`springboot-mybatis-generate` 的入口只保留规划所需四阶段与职责边界，普通 endpoint Unit 不加载或生成 bootstrap 修改。
 
 该节点的结构化产物必须落盘，供后续恢复执行和单节点验证使用：
 

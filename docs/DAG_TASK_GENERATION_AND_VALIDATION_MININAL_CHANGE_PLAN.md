@@ -165,6 +165,12 @@ DAG 阶段只负责任务规划、页面内容实现、API 调用和后端实现
 | 页面 API 调用 | DAG / Build | 按已确认设计生成实现任务 |
 | 数据库表结构和数据源操作 | 实体确认流程 | DAG 只消费已确认的实体上下文 |
 
+数据库来源后端还必须拥有独立的 `backend:bootstrap` 基础能力任务：它幂等检查现有
+`backend/pom.xml`、数据源配置和 MyBatis-Plus 配置，只补充确实缺失的能力，不生成业务分层代码。
+endpoint-only 与前后端混合规划使用相同规则；external_api-only 和 static-only 范围不创建或依赖该 Unit。
+当 `backend:bootstrap` 位于本轮待规划 Unit 集合但模型遗漏对应任务时，确定性 DAG 校验必须报告错误并进入
+平台自动重生成，不能静默接受缺少前置能力的候选，也不能由编译器硬编码合成任务。
+
 新增页面必须在进入工作区检查和 DAG 之前完成以下前置动作。这里的页面初始化不是新的 Graph 节点，
 而是复用现有 `/application-lifecycle/run` 的模板准备和完成门禁：
 

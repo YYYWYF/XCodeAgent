@@ -343,6 +343,51 @@ class PageBuildContextResolverTests(unittest.TestCase):
             ["backend:bootstrap", "backend:endpoint:orders-api:orders.list"],
         )
 
+    def test_external_api_endpoint_context_omits_database_bootstrap(self) -> None:
+        """纯外部 API endpoint 只要求自身后端 Unit。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            plan = confirm_entity_designs(plan, source_type="external_api")
+            _write_json(plan_path, plan)
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="endpoint",
+                target_id="orders.list",
+                api_contract_id="orders-api",
+                project_plan_path=plan_path,
+            )
+
+        self.assertEqual(
+            context["required_unit_ids"],
+            ["backend:endpoint:orders-api:orders.list"],
+        )
+        self.assertNotIn("backend:bootstrap", context["required_unit_ids"])
+
+    def test_external_api_page_context_omits_database_bootstrap(self) -> None:
+        """纯外部 API 页面仍要求接口实现，但不要求数据库 bootstrap。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan, plan_path = _project_plan(workspace_path)
+            plan = confirm_entity_designs(plan, source_type="external_api")
+            _write_json(plan_path, plan)
+
+            context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+
+        self.assertIn(
+            "backend:endpoint:orders-api:orders.list",
+            context["required_unit_ids"],
+        )
+        self.assertNotIn("backend:bootstrap", context["required_unit_ids"])
+
     def test_endpoint_context_rejects_missing_entity_design(self) -> None:
         """绑定实体尚未完成并确认实体设计时，endpoint 上下文必须给出可定位错误。"""
 
