@@ -39,7 +39,6 @@ _MAX_TEST_DIFF_CHARS = 12_000
 _MAX_SINGLE_TEST_DIFF_CHARS = 6_000
 _INTEGRATION_CHECK_ORDER = (
     "frontend_install",
-    "frontend_typecheck",
     "frontend_build",
     "backend_build",
     "backend_static_check",
@@ -1000,7 +999,7 @@ def build_project_checks(
     state: ProjectState,
     config: RunnableConfig,
 ) -> dict[str, Any]:
-    """先执行依赖、类型和构建检查，为后续测试生成建立完成门。"""
+    """先执行依赖和构建检查，为后续测试生成建立完成门。"""
 
     reporter = _progress_reporter(config)
     decision = _unit_test_decision(state)

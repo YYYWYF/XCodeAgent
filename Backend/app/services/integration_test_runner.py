@@ -158,7 +158,7 @@ def _frontend_checks(
     include_unit_tests: bool = True,
     on_progress: CheckProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
-    """依次执行前端安装、类型检查、构建和可选的单元测试。"""
+    """依次执行前端安装、构建和可选的单元测试。"""
 
     if frontend is None:
         results = [
@@ -211,19 +211,6 @@ def _frontend_checks(
             on_progress=on_progress,
         )
     )
-    typecheck_result = _run_script_result(
-        check_id="frontend_typecheck",
-        name="前端 typecheck 检查",
-        layer="frontend",
-        language="typescript",
-        package=frontend,
-        script_name="tsc",
-        root=root,
-        log_root=log_root,
-        required=False,
-        missing_evidence="package.json 未声明 typecheck script，跳过前端类型检查。",
-        on_progress=on_progress,
-    )
     build_result = _run_script_result(
         check_id="frontend_build",
         name="前端构建检查",
@@ -237,7 +224,7 @@ def _frontend_checks(
         on_progress=on_progress,
     )
     if not include_unit_tests:
-        return [install_result, typecheck_result, build_result]
+        return [install_result, build_result]
     blocked_reason = None
     if not install_result["passed"]:
         blocked_reason = "前端依赖安装检查失败，跳过本轮前端单元测试。"
@@ -252,7 +239,7 @@ def _frontend_checks(
         blocked_reason=blocked_reason,
         on_progress=on_progress,
     )
-    return [install_result, typecheck_result, build_result, unit_result]
+    return [install_result, build_result, unit_result]
 
 
 def _frontend_unit_checks(
@@ -1059,8 +1046,6 @@ def _failure_category(check_id: str) -> str:
         return "dependency_install_failed"
     if "lint" in check_id:
         return "lint_failure"
-    if "typecheck" in check_id:
-        return "type_error"
     if "build" in check_id:
         return "compile_error"
     if "integration" in check_id:

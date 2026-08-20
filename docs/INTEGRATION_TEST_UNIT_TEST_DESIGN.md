@@ -332,7 +332,7 @@ frontend_test_generation
 backend_test_generation
 ```
 
-任何校验失败都进入与安装、typecheck、build 相同的质量门禁和修复流程。
+任何校验失败都进入与安装、build 相同的质量门禁和修复流程。
 
 ## 10. actual_project_checks 命令设计
 
@@ -343,13 +343,11 @@ backend_test_generation
 建议执行顺序：
 
 1. `frontend_install`
-2. `frontend_typecheck`
-3. `frontend_build`
-4. `frontend_unit_tests`
+2. `frontend_build`
+3. `frontend_unit_tests`
 
 脚本选择规则：
 
-- typecheck 依次识别 `typecheck`、`type-check`、`tsc`。
 - 单元测试优先使用 `test:unit`，否则使用 `test`。
 - 不自动选择 e2e、watch 或交互模式脚本。
 - 对当前 `xc2/frontend`，执行 `pnpm run test`。
@@ -410,7 +408,7 @@ backend/target/surefire-reports/
 
 ## 11. 失败派发与 SmallTaskAgent 修复闭环
 
-安装、typecheck、build、测试生成校验、Jest 或 Maven 测试失败，都由 `main_quality_gate` 转换为统一 revision request。建议补充：
+安装、build、测试生成校验、Jest 或 Maven 测试失败，都由 `main_quality_gate` 转换为统一 revision request。建议补充：
 
 - `affected_test_files`
 - `related_source_files`

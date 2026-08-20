@@ -323,7 +323,7 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已�
 
 任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：正常 Build 的 `required_unit_ids` 不含 `database:*`，因此 `owner=database` 的候选任务会被拒绝。专门数据库流程仍要求数据库任务声明非空 `database_scope`、使用受支持的数据库任务类型、不得混入代码文件路径，并对高危操作要求显式审批。Backend task 不得声明 `database_scope` 或 `database.*` task type；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。
 
-Build Task 保留独立工程验收元数据，但当前不在每个任务执行完成后调用 verifier，也不复制 ProductPlan、UiDesign、TechnicalPlan 或 EndpointDetail 中的业务验收。角色数据范围、业务状态转换、页面可见内容、筛选交互、loading/empty/error 和点击行为分别保留在 ProductPlan 与 React UI 稿中，并通过 `PageImplementationContract` 进入代码生成上下文；任务规划模型必须返回空 `acceptance_criteria`。确定性编译器忽略模型输出的验收文案，依据 `owner/task_type/change_scope/allowed_paths/source_refs/build_context` 生成带稳定 ID 的内部 `acceptance_checks`，再把检查描述投影到兼容前端的 `acceptance_criteria: string[]`，供审计和修复上下文使用。Build 执行阶段只做结果归一化和真实 diff 归属，不再因工作区中额外的编译产物或生成文件阻断任务；菜单、API/Spring 契约、数据库及 build、lint、typecheck、test 由后续集成质量门禁处理。
+Build Task 保留独立工程验收元数据，但当前不在每个任务执行完成后调用 verifier，也不复制 ProductPlan、UiDesign、TechnicalPlan 或 EndpointDetail 中的业务验收。角色数据范围、业务状态转换、页面可见内容、筛选交互、loading/empty/error 和点击行为分别保留在 ProductPlan 与 React UI 稿中，并通过 `PageImplementationContract` 进入代码生成上下文；任务规划模型必须返回空 `acceptance_criteria`。确定性编译器忽略模型输出的验收文案，依据 `owner/task_type/change_scope/allowed_paths/source_refs/build_context` 生成带稳定 ID 的内部 `acceptance_checks`，再把检查描述投影到兼容前端的 `acceptance_criteria: string[]`，供审计和修复上下文使用。Build 执行阶段只做结果归一化和真实 diff 归属，不再因工作区中额外的编译产物或生成文件阻断任务；菜单、API/Spring 契约、数据库及 build、lint、test 由后续集成质量门禁处理。
 
 恢复旧 `build-dag.v3` 时会从任务元数据重新编译工程检查并清除旧业务验收文案。若旧接口任务缺少生成 API/Spring 契约检查所需的 Endpoint/API Contract 上下文，任务图校验失败并要求重新执行 `prepare_build_tasks`，不得用泛化文案或 Agent 自报证据继续执行。
 
@@ -489,7 +489,6 @@ testing.START
 
 - 前端 TypeScript 依赖安装；
 - 前端 TypeScript 构建；
-- 前端 typecheck；
 - 后端 Java 构建。
 - 前端和后端单元测试生成校验，以及存在对应测试文件时的 Jest/Surefire 单元测试。
 - `frontend_performance` 作为 advisory 检查纳入报告展示，但不参与门禁阻断与返修。
@@ -514,9 +513,9 @@ testing.START
 
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：
 
-- 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm` 或 `yarn`，执行 install、可选 `tsc` script、build，并在有对应测试文件时优先执行 `test:unit`、否则执行 `test`；
+- 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm` 或 `yarn`，执行 install、build，并在有对应测试文件时优先执行 `test:unit`、否则执行 `test`；
 - 后端：仅识别当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`），先执行 `-B -Dmaven.test.skip=true clean install`，确认构建通过且存在对应 `*Test.java` 后再执行 `-B -DfailIfNoTests=true test`；不探测 Python 工程或执行 pytest；
-- 未声明可选 `tsc` script 时会以 `skipped=true` 且 `passed=true` 记录；缺失必需入口（如前端 package.json、frontend build script）会失败。没有对应单测文件时不执行 Jest/Maven test，并以明确原因跳过；不执行 E2E。
+- 缺失必需入口（如前端 package.json、frontend build script）会失败。没有对应单测文件时不执行 Jest/Maven test，并以明确原因跳过；不执行 E2E。
 - 前端性能测试：单测确认后弹出“是否跳过”按钮；继续执行时用 `launch_frontend_project(skip_install=True)` 启动用户 `frontend` 工程并解析真实 `preview_url`，再由 `npx --yes --package @lhci/cli@0.7.2 lhci autorun` 对 `collect.url=[preview_url]` 执行 Lighthouse；使用模拟采集但把网络/CPU 限速调至接近本地无限制，避免 dev server 大体积未打包模块被限速模型放大；结果 advisory，失败不进入质量门禁阻断或修复闭环。
 
 任务编译和执行还必须遵守以下确定性边界：
@@ -525,7 +524,7 @@ testing.START
 - 模板页面必须具备页面范围内的菜单与自动路由登记结果。任务编译器先读取实时 `frontend/src/constants/menus.ts`：脚手架已写入完全一致的 `{ path, name, key }` 时，不再补充重复任务，并将模型已有菜单任务标记为 `already_satisfied`；仅在条目缺失时生成只能追加 `BIZ_MENUS.firstLevel.children` 的受限任务。PageKey 必须与规范页面目录完全一致，不得修改路由生成器或既有菜单项。
 - 任何具有精确 `target_files` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
 - Frontend/Data Source owner Agent 只负责任务范围内的源码读取和实现，不在 task 内执行依赖安装、build、lint、typecheck、unit test 或 dev-server 命令；这些项目级检查统一由后续 `integration_test` 执行，缺少依赖或命令时由 Agent 在结构化结果中报告，不得自行安装恢复。
-- 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`，但状态声明和自然语言证据都不构成项目级质量结论。当前 Build 调度器只负责结果归一化和真实文件 diff 的任务归属，不再执行 `engineering_acceptance`/`acceptance_checks` 逐项工程验收，也不因批次快照中出现额外的编译产物或生成文件而阻断代码生成。菜单、API/Spring 契约和数据库等项目级正确性统一由后续 `integration_test` 的 install、typecheck、build、unit test 和质量门禁处理；`acceptance_checks` 仍保留在任务计划和修复上下文中，供审计或后续重新启用。合法 JSON 遗漏已派发任务时记为 `runner_protocol_error`；明显未转义双引号会先做一次确定性恢复，仍损坏的顶层报告记为 `invalid_structured_response` 并进入受控重试分类。
+- 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`，但状态声明和自然语言证据都不构成项目级质量结论。当前 Build 调度器只负责结果归一化和真实文件 diff 的任务归属，不再执行 `engineering_acceptance`/`acceptance_checks` 逐项工程验收，也不因批次快照中出现额外的编译产物或生成文件而阻断代码生成。菜单、API/Spring 契约和数据库等项目级正确性统一由后续 `integration_test` 的 install、build、unit test 和质量门禁处理；`acceptance_checks` 仍保留在任务计划和修复上下文中，供审计或后续重新启用。合法 JSON 遗漏已派发任务时记为 `runner_protocol_error`；明显未转义双引号会先做一次确定性恢复，仍损坏的顶层报告记为 `invalid_structured_response` 并进入受控重试分类。
 - Deep Agent 工具活动继续使用根图和子图流；执行器按“根图优先、浅层 namespace 优先、同层最新优先”恢复最终 `values/messages`。根 `values` 快照不含 `messages` 时先使用根消息分片，再回退到最浅层 Agent namespace，且不得把工具结果或更深子 Agent 文本误作主 Agent 报告。
 - RepairPlanner 必须为每个修复任务返回父任务授权内的精确 `change_scope`。修复任务不继承父任务历史执行的 `add/modify/delete` 差异检查，而是按本轮范围重新编译文件检查；父任务的菜单/API/Schema 等最终结果检查继续继承。兼容旧 RepairPlanner 且无法确定精确文件时，`completed` 至少要产生一处授权变更，`already_satisfied` 必须证明原精确目标状态成立。只有本轮文件检查和继承的结果检查全部通过才可关闭父任务，从而避免要求 DTO 小修复重新新增整个模块，也避免重复菜单等非幂等改动。
 - 恢复旧 DAG 时，如果 Repair 正是因为继承父任务 `added` 差异而产生 `acceptance_verification_failed`，调度器会从旧修复描述中恢复明确提及的精确父任务路径、按 `modify` 重编译检查并把该 Repair 恢复为 `pending`；其他失败类型和无法确认父任务的 Repair 不会被自动重置。
@@ -648,7 +647,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 实现布局、组件、交互、权限和 API 接入；
 - 实现 loading、empty 和 error 状态；
 - 编写页面测试；
-- 执行前端 lint、typecheck 和单元测试。
+- 执行前端 lint 和单元测试。
 
 它不负责页面需求确认，也不负责自行修改 ProjectPlan 或 API 契约。
 

@@ -652,6 +652,29 @@
 .@{class-prefix}-frontend-performance-report-actions {
   display: flex;
   justify-content: flex-end;
+
+  .@{class-prefix}-frontend-performance-report-open-button.ant-btn {
+    height: 34px;
+    padding: 0 16px;
+    color: #ffffff;
+    font-size: 13px;
+    background: var(--wb-accent);
+    border-color: var(--wb-accent);
+    border-radius: 8px;
+
+    &:hover,
+    &:focus {
+      color: #ffffff;
+      background: var(--wb-accent-hover);
+      border-color: var(--wb-accent-hover);
+    }
+
+    &:active {
+      color: #ffffff;
+      background: var(--wb-accent-active);
+      border-color: var(--wb-accent-active);
+    }
+  }
 }
 
 @keyframes process-status-pulse {

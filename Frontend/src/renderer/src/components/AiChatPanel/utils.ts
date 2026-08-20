@@ -33,6 +33,11 @@ export type WorkspaceCodeChangeSummary = {
   deletions: number
 }
 
+export type WorkspaceCodeChangeSection<T> = {
+  title: string
+  files: T[]
+}
+
 export type WorkspacePathParts = {
   directory: string
   fileName: string
@@ -228,6 +233,30 @@ export function summarizeWorkspaceCodeChanges(
     }),
     { files: 0, additions: 0, deletions: 0 }
   )
+}
+
+/** 判断变更路径是否属于前后端单元测试文件。 */
+export function isWorkspaceTestFilePath(path: string): boolean {
+  const normalized = path.replaceAll('\\', '/').toLowerCase()
+  const fileName = normalized.split('/').pop() || ''
+  const frontendTest = /\.(test|spec)\.(ts|tsx|js|jsx)$/.test(fileName)
+  const backendTest = /(?:^|\/)src\/test\/java\/.+\.java$/.test(normalized)
+  return frontendTest || backendTest
+}
+
+/** 把可审阅文件拆成业务代码和测试文件两组，业务代码始终在前。 */
+export function splitWorkspaceCodeChanges<T>(
+  files: T[],
+  pathOf: (item: T) => string
+): WorkspaceCodeChangeSection<T>[] {
+  const sections: [T[], T[]] = [[], []]
+  files.forEach((item) => {
+    sections[isWorkspaceTestFilePath(pathOf(item)) ? 1 : 0].push(item)
+  })
+  return [
+    { title: '业务代码', files: sections[0] },
+    { title: '测试文件', files: sections[1] }
+  ].filter((section) => section.files.length > 0)
 }
 
 export function stoppedAnswer(content: string): string {

@@ -5,6 +5,7 @@ import type { WorkspaceCodeChangeSet } from '../../../../typings'
 import { cx } from '../../../../utils'
 import {
   groupWorkspaceCodeChanges,
+  splitWorkspaceCodeChanges,
   splitWorkspacePath,
   summarizeWorkspaceCodeChanges,
   workspaceCodeChangeDisplayPath
@@ -38,6 +39,10 @@ export default function CodeChangeCard({
     [codeChanges.files]
   )
   const summary = useMemo(() => summarizeWorkspaceCodeChanges(groupedChanges), [groupedChanges])
+  const sections = useMemo(
+    () => splitWorkspaceCodeChanges(groupedChanges, (file) => file.path),
+    [groupedChanges]
+  )
   const pending =
     codeChanges.status === 'pending_approval' && Boolean(codeChanges.approvals?.length)
   const reverted = codeChanges.status === 'reverted'
@@ -82,33 +87,45 @@ export default function CodeChangeCard({
       </div>
 
       <div className={cx('code-change-file-list')}>
-        {groupedChanges.map((file) => {
-          const displayPath = workspaceCodeChangeDisplayPath(
-            file.path,
-            codeChanges.workspaceRoot,
-            codeChanges.workspaceName
-          )
-          const pathParts = splitWorkspacePath(displayPath)
-          return (
-            <button
-              className={cx('code-change-file-row')}
-              key={file.path}
-              onClick={() => onOpenFile(file.path)}
-              type="button"
-            >
-              <span className={cx('code-change-file-path')} title={displayPath}>
-                {pathParts.directory && (
-                  <span className={cx('code-change-file-directory')}>{pathParts.directory}/</span>
-                )}
-                <span className={cx('code-change-file-name')}>{pathParts.fileName}</span>
+        {sections.map((section) => (
+          <div className={cx('code-change-file-section')} key={section.title}>
+            <div className={cx('code-change-file-section-title')}>
+              <span>{section.title}</span>
+              <span className={cx('code-change-file-section-count')}>
+                {section.files.length}
               </span>
-              <span className={cx('code-change-file-stats')}>
-                <span className={cx('addition')}>+{file.additions}</span>
-                <span className={cx('deletion')}>-{file.deletions}</span>
-              </span>
-            </button>
-          )
-        })}
+            </div>
+            {section.files.map((file) => {
+              const displayPath = workspaceCodeChangeDisplayPath(
+                file.path,
+                codeChanges.workspaceRoot,
+                codeChanges.workspaceName
+              )
+              const pathParts = splitWorkspacePath(displayPath)
+              return (
+                <button
+                  className={cx('code-change-file-row')}
+                  key={file.path}
+                  onClick={() => onOpenFile(file.path)}
+                  type="button"
+                >
+                  <span className={cx('code-change-file-path')} title={displayPath}>
+                    {pathParts.directory && (
+                      <span className={cx('code-change-file-directory')}>
+                        {pathParts.directory}/
+                      </span>
+                    )}
+                    <span className={cx('code-change-file-name')}>{pathParts.fileName}</span>
+                  </span>
+                  <span className={cx('code-change-file-stats')}>
+                    <span className={cx('addition')}>+{file.additions}</span>
+                    <span className={cx('deletion')}>-{file.deletions}</span>
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        ))}
       </div>
 
       {pending && (

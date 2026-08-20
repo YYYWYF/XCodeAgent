@@ -63,13 +63,12 @@ API 契约一致性由 ProjectPlan 确认和 `prepare_build_tasks` 前置门禁�
 | 检查 ID | required | 行为 |
 | --- | ---: | --- |
 | `frontend_install` | true | `<package-manager> install` |
-| `frontend_typecheck` | false | 存在 `scripts.tsc` 时执行 `<package-manager> run tsc` |
 | `frontend_build` | true | 执行 `<package-manager> run build` |
 | `frontend_unit_tests` | 按对应测试文件 | 有 `frontend/tests/*.test.ts(x)` 时优先执行 `test:unit`，否则执行 `test`；无对应文件则 passed/skipped |
 | `frontend_test_generation` / `backend_test_generation` | 按目标 | 生成/校验阶段按受影响端记录；没有测试文件时 passed/skipped |
 | `frontend_performance` | false（advisory） | 单测确认后由 `frontend_performance_runner` 启动用户 `frontend` 工程并对解析出的 `preview_url` 执行 LHCI；用户可跳过，失败不阻断 |
 
-未找到前端 `package.json` 时生成 required failure；可选 `tsc` script 缺失时生成 passed/skipped 结果。测试文件不存在时不调用 Jest，避免当前 Jest “No tests found”造成假失败；E2E 不执行。
+未找到前端 `package.json` 时生成 required failure。测试文件不存在时不调用 Jest，避免当前 Jest “No tests found”造成假失败；E2E 不执行。
 
 ### 3.2 后端发现与检查
 

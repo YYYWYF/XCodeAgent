@@ -10,7 +10,6 @@ REQUIRED_TEST_CHECKS = [
     ("frontend_install", "前端依赖安装检查"),
     ("frontend_build", "前端 TS 构建检查"),
     ("frontend_lint", "前端 lint 通过"),
-    ("frontend_typecheck", "前端 typecheck 通过"),
     ("frontend_unit_tests", "前端单元测试通过"),
     ("backend_build", "后端 Java 构建检查"),
     ("backend_static_check", "后端静态检查通过"),

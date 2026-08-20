@@ -100,11 +100,11 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         ids = [item["id"] for item in result["test_results"]]
         self.assertIn("frontend_install", ids)
         self.assertIn("frontend_build", ids)
-        self.assertIn("frontend_typecheck", ids)
         self.assertIn("frontend_unit_tests", ids)
         self.assertNotIn("e2e_tests", ids)
         self.assertIn(["pnpm", "install"], calls)
         self.assertIn(["pnpm", "run", "build"], calls)
+        self.assertNotIn(["pnpm", "run", "tsc"], calls)
         self.assertNotIn(["pnpm", "run", "test"], calls)
         self.assertNotIn(["pnpm", "run", "test:e2e"], calls)
         self.assertNotIn(["npx", "playwright", "test"], calls)
@@ -242,7 +242,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
 
         self.assertEqual(
             [item["id"] for item in build_result["test_results"]],
-            ["frontend_install", "frontend_typecheck", "frontend_build"],
+            ["frontend_install", "frontend_build"],
         )
         self.assertEqual(
             [item["id"] for item in unit_result["test_results"]],

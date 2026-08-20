@@ -564,7 +564,11 @@ function FrontendPerformanceReport({
       )}
       {performanceCheck.reportPath && (
         <div className={cx('frontend-performance-report-actions')}>
-          <Button size="small" onClick={handleOpenReport}>
+          <Button
+            size="middle"
+            className={cx('frontend-performance-report-open-button')}
+            onClick={handleOpenReport}
+          >
             打开完整报告
           </Button>
         </div>
