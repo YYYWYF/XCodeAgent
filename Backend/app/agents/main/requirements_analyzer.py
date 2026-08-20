@@ -9,10 +9,7 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.data_source_policy import DatasourceType
-from app.services.requirement_spec import (
-    create_requirement_spec,
-    merge_clarification_answers_into_spec,
-)
+from app.services.requirement_spec import create_requirement_spec
 from app.tools.ask_user import ask_user, extract_ask_user_clarification
 from app.utils.model_output import extract_json_object
 
@@ -188,8 +185,6 @@ def analyze_requirements_with_chat_model(
         ),
         datasource_type=datasource_type,
     )
-    if _is_clarification_followup(existing_spec):
-        spec = merge_clarification_answers_into_spec(spec, request)
     clarification = extract_ask_user_clarification(agent_result, spec)
     spec["clarification_questions"] = clarification["questions"]
     spec["clarification_status"] = clarification["status"]
