@@ -1,0 +1,347 @@
+.@{class-prefix}-project-launch-card {
+  --project-launch-success: var(--wb-code-add-text);
+  --project-launch-success-soft: color-mix(
+    in srgb,
+    var(--wb-code-add-text) 7%,
+    var(--wb-surface)
+  );
+  --project-launch-success-border: color-mix(
+    in srgb,
+    var(--wb-code-add-text) 40%,
+    var(--wb-border)
+  );
+  --project-launch-danger: var(--wb-danger);
+  --project-launch-danger-soft: color-mix(
+    in srgb,
+    var(--wb-danger) 8%,
+    var(--wb-surface)
+  );
+  --project-launch-danger-border: color-mix(
+    in srgb,
+    var(--wb-danger) 42%,
+    var(--wb-border)
+  );
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  overflow: hidden;
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 var(--wb-surface-hover);
+
+  &.@{class-prefix}-running {
+    background: linear-gradient(180deg, var(--wb-accent-soft), var(--wb-surface));
+  }
+
+  &.@{class-prefix}-completed {
+    border-color: var(--project-launch-success-border);
+  }
+
+  &.@{class-prefix}-failed {
+    border-color: var(--project-launch-danger-border);
+  }
+}
+
+.@{class-prefix}-project-launch-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.@{class-prefix}-project-launch-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  font-size: 17px;
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 50%;
+}
+
+.@{class-prefix}-project-launch-card.@{class-prefix}-completed
+  .@{class-prefix}-project-launch-icon {
+  color: var(--project-launch-success);
+  background: var(--project-launch-success-soft);
+  border-color: var(--project-launch-success-border);
+}
+
+.@{class-prefix}-project-launch-card.@{class-prefix}-failed
+  .@{class-prefix}-project-launch-icon {
+  color: var(--project-launch-danger);
+  background: var(--project-launch-danger-soft);
+  border-color: var(--project-launch-danger-border);
+}
+
+.@{class-prefix}-project-launch-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+
+  > .ant-typography:last-child {
+    overflow: hidden;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-project-launch-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+
+  &.@{class-prefix}-running {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border: 1px solid var(--wb-accent-border);
+  }
+
+  &.@{class-prefix}-completed {
+    color: var(--project-launch-success);
+    background: var(--project-launch-success-soft);
+    border: 1px solid var(--project-launch-success-border);
+  }
+
+  &.@{class-prefix}-failed {
+    color: var(--project-launch-danger);
+    background: var(--project-launch-danger-soft);
+    border: 1px solid var(--project-launch-danger-border);
+  }
+}
+
+.@{class-prefix}-project-launch-steps {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.@{class-prefix}-project-launch-step {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid transparent;
+  border-radius: 7px;
+
+  &.@{class-prefix}-running {
+    border-color: var(--wb-accent-border);
+    background: var(--wb-accent-soft);
+  }
+
+  &.@{class-prefix}-completed {
+    background: var(--project-launch-success-soft);
+  }
+
+  &.@{class-prefix}-failed {
+    border-color: var(--project-launch-danger-border);
+    background: var(--project-launch-danger-soft);
+  }
+}
+
+.@{class-prefix}-project-launch-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-text-tertiary);
+  font-size: 13px;
+
+  .@{class-prefix}-project-launch-step-dot {
+    width: 7px;
+    height: 7px;
+    background: currentColor;
+    border-radius: 50%;
+    opacity: 0.55;
+  }
+}
+
+.@{class-prefix}-project-launch-step.@{class-prefix}-running
+  .@{class-prefix}-project-launch-step-icon {
+  color: var(--wb-accent);
+}
+
+.@{class-prefix}-project-launch-step.@{class-prefix}-completed
+  .@{class-prefix}-project-launch-step-icon {
+  color: var(--project-launch-success);
+}
+
+.@{class-prefix}-project-launch-step.@{class-prefix}-failed
+  .@{class-prefix}-project-launch-step-icon {
+  color: var(--project-launch-danger);
+}
+
+.@{class-prefix}-project-launch-step-label {
+  font-size: 12px;
+}
+
+.@{class-prefix}-project-launch-step-state {
+  font-size: 11px;
+}
+
+.@{class-prefix}-project-launch-preview {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-project-launch-preview-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  font-size: 15px;
+}
+
+.@{class-prefix}-project-launch-preview-url {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  background: transparent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-project-launch-services {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.@{class-prefix}-project-launch-service {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 20px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+
+  &.@{class-prefix}-running {
+    border-color: var(--project-launch-success-border);
+  }
+
+  &.@{class-prefix}-skipped {
+    opacity: 0.85;
+  }
+
+  &.@{class-prefix}-failed {
+    border-color: var(--project-launch-danger-border);
+  }
+}
+
+.@{class-prefix}-project-launch-service-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-text-tertiary);
+  font-size: 13px;
+}
+
+.@{class-prefix}-project-launch-service.@{class-prefix}-running
+  .@{class-prefix}-project-launch-service-icon {
+  color: var(--project-launch-success);
+}
+
+.@{class-prefix}-project-launch-service.@{class-prefix}-failed
+  .@{class-prefix}-project-launch-service-icon {
+  color: var(--project-launch-danger);
+}
+
+.@{class-prefix}-project-launch-service-name {
+  font-size: 12px;
+}
+
+.@{class-prefix}-project-launch-service-message {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-project-launch-service-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 999px;
+
+  &.@{class-prefix}-running {
+    color: var(--project-launch-success);
+    border-color: var(--project-launch-success-border);
+  }
+
+  &.@{class-prefix}-skipped {
+    color: var(--wb-text-tertiary);
+  }
+
+  &.@{class-prefix}-failed {
+    color: var(--project-launch-danger);
+    border-color: var(--project-launch-danger-border);
+  }
+}
+
+.@{class-prefix}-project-launch-error {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--project-launch-danger-soft);
+  border: 1px solid var(--project-launch-danger-border);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-project-launch-error-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--project-launch-danger);
+  font-size: 16px;
+}
+
+.@{class-prefix}-project-launch-error-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+
+  .ant-typography {
+    font-size: 12px;
+  }
+}

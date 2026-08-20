@@ -51,11 +51,22 @@ export type WorkflowBuildSummary = {
   [key: string]: unknown
 }
 
+export type WorkflowLaunchPart = {
+  status?: string
+  message?: string
+  preview_url?: string
+  reason?: string
+  [key: string]: unknown
+}
+
 export type WorkflowLaunchResult = {
   status?: string
   message?: string
   preview_url?: string
   server?: Record<string, unknown>
+  backend?: WorkflowLaunchPart
+  frontend?: WorkflowLaunchPart
+  failed_stage?: string
   [key: string]: unknown
 }
 

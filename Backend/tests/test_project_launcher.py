@@ -10,7 +10,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 from urllib.error import HTTPError
 
 from app.graph.nodes.lifecycle import acceptance, launch_project
@@ -1107,6 +1107,55 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(calls, ["backend", "frontend"])
         self.assertNotIn("_process", result["backend"])
 
+    def test_launch_preview_reports_real_stage_progress(self) -> None:
+        """启动预览按结构识别、后端、前端、就绪顺序报告真实阶段进度。"""
+
+        events: list[tuple[str, str]] = []
+        backend_process = MagicMock(pid=321)
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.services.project_launcher.find_backend_project_root",
+                    return_value=Path(workspace).resolve() / "backend",
+                ),
+                patch(
+                    "app.services.project_launcher.launch_backend_project",
+                    return_value={
+                        "status": "running",
+                        "message": "后端服务已就绪。",
+                        "_process": backend_process,
+                    },
+                ),
+                patch(
+                    "app.services.project_launcher.launch_frontend_project",
+                    return_value={
+                        "status": "running",
+                        "message": "前端服务已就绪。",
+                        "preview_url": "http://127.0.0.1:80",
+                    },
+                ),
+            ):
+                result = launch_project_preview(
+                    workspace,
+                    on_progress=lambda stage, status, _message: events.append(
+                        (stage, status)
+                    ),
+                )
+
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(
+            events,
+            [
+                ("structure", "running"),
+                ("structure", "completed"),
+                ("backend", "running"),
+                ("backend", "completed"),
+                ("frontend", "running"),
+                ("frontend", "completed"),
+                ("ready", "completed"),
+            ],
+        )
+
     def test_preview_rejects_missing_or_disabled_datasource_config(self) -> None:
         """缺少应用级数据源配置时仍按工程结构启动预览（数据源只属于实体设计）。"""
 
@@ -1158,7 +1207,7 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["acceptance_request"]["preview_url"], "http://127.0.0.1:80")
         self.assertEqual(result["launch_result"]["backend"]["status"], "running")
         self.assertEqual(result["launch_result"]["frontend"], frontend_result)
-        launcher.assert_called_once_with(Path("/workspace").resolve())
+        launcher.assert_called_once_with(Path("/workspace").resolve(), on_progress=ANY)
 
     def test_launch_project_reports_startup_failure(self) -> None:
         launch_result = {
@@ -1235,7 +1284,7 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["launch_result"]["frontend"], frontend_result)
         self.assertIn("前端项目已启动", result["launch_result"]["message"])
         self.assertNotIn("Java 后端与前端", result["launch_result"]["message"])
-        launcher.assert_called_once_with(root)
+        launcher.assert_called_once_with(root, on_progress=ANY)
 
     def test_launch_project_does_not_stop_backend_for_frontend_only_failure(self) -> None:
         """验证纯前端启动失败能被 Workflow 正确映射。"""

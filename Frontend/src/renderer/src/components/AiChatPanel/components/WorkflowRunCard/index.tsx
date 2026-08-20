@@ -43,6 +43,7 @@ import type { ToolApproval } from '../../../../service/workspaceTools'
 import ConfirmationArtifact from './ConfirmationArtifact'
 import DetailReview from './DetailReview'
 import EntityDesignGateCard from './EntityDesignGateCard'
+import ProjectLaunchCard from './ProjectLaunchCard'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -143,6 +144,8 @@ export default function WorkflowRunCard({
   const unitTestConfirmation = clarification?.mode === 'unit_test_confirmation'
   const frontendPerformanceConfirmation =
     clarification?.mode === 'frontend_performance_confirmation'
+  // 项目启动节点使用专用卡片展示运行、完成和失败状态。
+  const projectLaunch = workflow.summary.phase === 'launch_project'
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -233,7 +236,8 @@ export default function WorkflowRunCard({
         !entityDesignReview &&
         !uiDesignConfirmation &&
         !artifactConfirmation &&
-        !unitTestConfirmation && (
+        !unitTestConfirmation &&
+        !projectLaunch && (
           <div className={cx('workflow-run-message')}>
             <Text>{String(workflow.summary.message)}</Text>
           </div>
@@ -250,6 +254,7 @@ export default function WorkflowRunCard({
           </Text>
         </div>
       ) : null}
+      {projectLaunch && <ProjectLaunchCard workflow={workflow} />}
       {!entityDesignReview && Object.keys(artifacts).length > 0 && artifactConfirmation && (
         <div className={cx('workflow-artifacts')}>
           <div className={cx('workflow-section-heading')}>

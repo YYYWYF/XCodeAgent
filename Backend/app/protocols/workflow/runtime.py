@@ -542,6 +542,63 @@ def build_workflow_ag_ui_stream(
                             workspace_inspection_progress=progress_detail,
                         )
                         continue
+                    if event_type == "launch_project.progress":
+                        progress_node = str(progress.get("node_name") or "launch_project")
+                        progress_attempt = _current_node_attempt(
+                            node_attempts, progress_node
+                        )
+                        progress_detail = (
+                            progress.get("detail")
+                            if isinstance(progress.get("detail"), dict)
+                            else {}
+                        )
+                        progress_message = str(
+                            progress.get("message") or "正在启动项目预览…"
+                        )
+                        progress_state = {
+                            **initial_state,
+                            "phase": progress_node,
+                            "status": "in_progress",
+                            "launch_progress": progress_detail,
+                        }
+                        _workflow_event(
+                            events,
+                            "workflow.node.progress",
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            node_name=progress_node,
+                            status="running",
+                            message=progress_message,
+                            data={
+                                "phase": progress_node,
+                                "launchProgress": progress_detail,
+                                "stateDelta": _public_workflow_state(progress_state),
+                            },
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                            node_label=_runtime_node_label(progress_node, progress_state),
+                        )
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=progress_state,
+                        ):
+                            yield frame
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id(progress_node, progress_attempt),
+                            kind="workflow",
+                            status="running",
+                            title=f"正在执行 {_runtime_node_label(progress_node, progress_state)}",
+                            detail=progress_message,
+                            sequence=process_sequence,
+                            node_name=progress_node,
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                        )
+                        continue
                     if event_type == "ui_confirmation.progress":
                         progress_node = str(progress.get("node_name") or "ui_confirmation")
                         progress_attempt = _current_node_attempt(

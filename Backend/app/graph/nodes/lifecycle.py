@@ -1,13 +1,40 @@
+from typing import Any
+
+from langgraph.config import get_stream_writer
+
 from app.graph.state import ProjectState
 from app.services.project_launcher import launch_project_preview
 from app.workspace.spec_documents import workspace_root
+
+
+def _stream_writer() -> Any:
+    """获取 LangGraph custom writer，单元测试或非 Graph 调用时使用空实现。"""
+
+    try:
+        return get_stream_writer()
+    except RuntimeError:
+        return lambda _event: None
 
 
 def launch_project(state: ProjectState) -> dict:
     """按应用权威数据源类型启动预览，并返回完整启动证据。"""
 
     root = workspace_root(state).resolve()
-    launch = launch_project_preview(root)
+    writer = _stream_writer()
+
+    def on_progress(stage: str, status: str, message: str) -> None:
+        """把启动阶段转换为稳定的 Graph custom 事件，供前端实时推进步骤。"""
+
+        writer(
+            {
+                "type": "launch_project.progress",
+                "node_name": "launch_project",
+                "message": message,
+                "detail": {"stage": stage, "status": status},
+            }
+        )
+
+    launch = launch_project_preview(root, on_progress=on_progress)
     if launch.get("status") == "failed":
         return _failed_project_launch(launch)
     preview_url = launch.get("preview_url")
