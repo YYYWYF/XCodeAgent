@@ -357,7 +357,7 @@ export default function AiChatPanel({
   // UI 设计稿预览：右侧"UI设计稿"tab 当前选中的页面 id（由中间区卡片或右侧列表驱动）。
   const [uiDesignActivePageId, setUiDesignActivePageId] = useState('')
   // UI 设计稿：当前正在执行单页动作（选模板/换一换）的 pageId，用于右侧预览显示加载态。
-  const [uiDesignActionPageId, setUiDesignActionPageId] = useState<string | null>(null)
+  const [uiDesignActingPageIds, setUiDesignActingPageIds] = useState<string[]>([])
   // 设计阶段右侧文档：当 confirmationArtifact 不可用（确认完成后）时，从磁盘异步读取
   // 需求文档/项目计划文件内容，避免确认后右侧 tab 显示"待生成"。
   const [designDocFileContent, setDesignDocFileContent] = useState<Record<string, string>>({})
@@ -527,22 +527,9 @@ export default function AiChatPanel({
   // UI 设计稿生成中：UI 确认阶段 workflow running（换一换/选模板/首次生成）。
   const uiDesignGenerating =
     isDesignPhase && planningPhaseRunning && planningPhase === 'ui_confirmation'
-  // workflow 真正回到待确认状态（requires_user_input）且经历过 running 后才清除单页动作标记。
-  // 换一换提交瞬间 planningWorkflow 还是旧的（requires_user_input），此时不应清除；
-  // 必须等 workflow 进入 running（动作开始执行）再回到 requires_user_input（动作完成）才清除。
-  const planningUiDesignAwaiting =
-    planningClarification?.mode === 'ui_design_confirmation' &&
-    planningClarification?.status === 'requires_user_input'
-  const uiDesignActionStartedRef = useRef(false)
-  useEffect(() => {
-    if (planningPhaseRunning && uiDesignActionPageId !== null) {
-      uiDesignActionStartedRef.current = true
-    }
-    if (planningUiDesignAwaiting && uiDesignActionStartedRef.current && uiDesignActionPageId !== null) {
-      uiDesignActionStartedRef.current = false
-      setUiDesignActionPageId(null)
-    }
-  }, [planningUiDesignAwaiting, planningPhaseRunning, uiDesignActionPageId])
+  // acting 态的清理由 UiDesignConfirmationPanel 的 cleanup-effect（带 observedRunningRef
+  // 防提前重置）全权管理；这里不再重复清理，避免与 panel 抢着清空导致下一批 acting 态
+  // 在 flush 瞬间被清掉（按钮提前解禁、右侧 loading 消失）。
   // 当前选中页面的规划配置。必须提前到 workspaceTabs / 读取源码的 useEffect 之前，
   // 否则这些位置（尤其 useEffect 依赖数组）会在 const 暂时性死区里访问未初始化的
   // activePageOption，抛 ReferenceError: Cannot access 'activePageOption' before initialization。
@@ -885,10 +872,8 @@ export default function AiChatPanel({
     persistPlanningTimerRef.current = window.setTimeout(() => {
       persistPlanningTimerRef.current = undefined
       const identity = activeSessionRef.current
-      console.log('[planning-persist] timer fire sessionKey=', sessionKey.slice(-12), 'activeKey=', identity?.key?.slice(-12), 'match=', identity?.key === sessionKey)
       if (!identity || identity.key !== sessionKey) return
       const msgs = getSessionMessagesRef.current(sessionKey)
-      console.log('[planning-persist] msgs=', msgs.length)
       if (!msgs.length) return
       void persistSessionRef.current({
         editorMode: identity.editorMode,
@@ -900,7 +885,7 @@ export default function AiChatPanel({
         endpointLabel: identity.endpointLabel,
         pageId: identity.pageId,
         titleFrom: '产品 Agent'
-      }).catch((error) => console.warn('[planning-persist] failed', error))
+      }).catch((error) => console.warn('持久化规划会话失败。', error))
     }, 800)
   }, [])
 
@@ -1103,7 +1088,6 @@ export default function AiChatPanel({
         chunk.workflow.summary?.status === 'requires_user_input' ||
         chunk.workflow.summary?.status === 'completed'
       if (stable) {
-        console.log('[planning-persist] trigger stable sessionKey=', sessionKey.slice(-12), 'status=', chunk.workflow.summary?.status)
         persistPlanningSession(sessionKey)
       }
     }
@@ -1119,10 +1103,8 @@ export default function AiChatPanel({
     // 而创建新 session，导致历史对话丢失。
     if (loadingSessions) return
     let cancelled = false
-    console.log('[planning-session] ensure start', planningThreadId, 'isDesignPhase=', isDesignPhase, 'loadingSessions=', loadingSessions)
     void ensurePlanningSessionRef.current(planningThreadId).then((identity) => {
       if (cancelled) return
-      console.log('[planning-session] ensure done', identity.key, 'pending=', pendingPlanningChunksRef.current.length)
       planningSessionKeyRef.current = identity.key
       // 回放 sessionKey 就绪前缓存的 chunk。
       const pending = pendingPlanningChunksRef.current
@@ -1136,10 +1118,8 @@ export default function AiChatPanel({
       // 注入一条产品 Agent 占位消息，对话区显示「正在准备需求确认…」卡片，
       // 后续 requires_user_input 的 workflow chunk 到达后更新为真实内容。
       const currentMsgs = getSessionMessagesRef.current(identity.key)
-      console.log('[planning-placeholder] currentMsgs=', currentMsgs.length, 'pending=', pending.length, 'sessionKey=', identity.key.slice(-12))
       if (currentMsgs.length === 0) {
         const placeholderId = Date.now() * 1000 + (planningMessageIdRef.current++ % 1000)
-        console.log('[planning-placeholder] injecting placeholder id=', placeholderId)
         setSessionMessagesRef.current(identity.key, () => [
           {
             id: placeholderId,
@@ -1150,9 +1130,6 @@ export default function AiChatPanel({
           }
         ])
       }
-      // 诊断：确认规划 session 消息数与 activeSession 是否对齐。
-      const msgs = getSessionMessagesRef.current(identity.key)
-      console.log('[planning-session] msgs after replay=', msgs.length, 'activeSessionId=', activeSessionIdRef.current, 'match=', activeSessionIdRef.current === identity.sessionId)
     })
     return () => {
       cancelled = true
@@ -1168,7 +1145,6 @@ export default function AiChatPanel({
     // 总是注册，chunk 到达时 sessionKey 未就绪则缓存，待 ensurePlanningSession 完成后回放。
     const injectChunk = (chunk: { content?: string; workflow?: WorkflowRunPayload }): void => {
       const sessionKey = planningSessionKeyRef.current
-      console.log('[planning-inject] sessionKey=', sessionKey ? 'ready' : 'empty', chunk.content?.slice(0, 40) || chunk.workflow?.summary?.phase)
       if (!sessionKey) {
         pendingPlanningChunksRef.current.push(chunk)
         return
@@ -1747,7 +1723,6 @@ export default function AiChatPanel({
     editedRequirementSpec?: Record<string, unknown>
   ): Promise<void> => {
     setGeneratingDetailTargetKey('')
-    console.log('[planning-submit] handleSubmitWorkflowClarification isDesignPhase=', isDesignPhase, 'answers=', answers, 'workflow.runId=', workflow.runId, 'workflow.phase=', workflow.summary?.phase)
     // 设计阶段：规划确认走 planningSubmitRef（Modal 的 runPlanning），不走开发 workflow。
     if (isDesignPhase) {
       // UI 设计稿的单页动作（换一换/选模板/调整）是同一轮内的更新，不新增消息卡片，
@@ -1756,7 +1731,10 @@ export default function AiChatPanel({
         answers && 'ui_design_action' in answers
           ? (answers as { ui_design_action?: { action?: string } }).ui_design_action?.action !== 'skip'
           : false
-      if (!isUiDesignPageAction) {
+      // 空答案 = UI 设计稿生成池轮询（no-op resume）：不开启新一轮、不追加用户消息，
+      // 仅让后端 resume 路径重读 ui-designs.json 并回传最新页面状态。
+      const isUiDesignPoll = !answers || Object.keys(answers).length === 0
+      if (!isUiDesignPageAction && !isUiDesignPoll) {
         planningNewRoundRef.current = true
         // 用户操作留痕：把确认/放弃/填表等操作作为 user 消息追加到对话区。
         appendPlanningUserMessage(answers)
@@ -1991,13 +1969,14 @@ export default function AiChatPanel({
               revertingCodeChangeIds={revertingCodeChangeIds}
               uiDesignActivePageId={uiDesignActivePageId}
               onUiDesignActivePageChange={handleUiDesignActivePageChange}
-              uiDesignActionPageId={uiDesignActionPageId}
-              onUiDesignActionPageIdChange={setUiDesignActionPageId}
+              uiDesignActingPageIds={uiDesignActingPageIds}
+              onUiDesignActingPageIdsChange={setUiDesignActingPageIds}
               onSaveRequirementSpec={handleSaveRequirementSpec}
               rootPath={application.schema?.menus?.rootPath || '/'}
               onEnterDevelopment={handleEnterDevelopment}
               onRetryTemplate={onRetryTemplate}
               generatingTemplate={generatingTemplate}
+              planningWorkflow={planningWorkflow}
               onStartDetailDesign={(page) => {
                 void handleStartDetailDesign(
                   'page',
@@ -2156,7 +2135,7 @@ export default function AiChatPanel({
                 activePageId={uiDesignActivePage?.pageId || ''}
                 code={uiDesignActivePageCode}
                 generating={uiDesignGenerating}
-                actionPageId={uiDesignActionPageId}
+                actingPageIds={uiDesignActingPageIds}
                 onPageChange={setUiDesignActivePageId}
                 pages={uiDesignPages}
               />

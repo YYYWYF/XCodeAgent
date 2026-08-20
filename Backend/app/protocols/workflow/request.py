@@ -1318,7 +1318,10 @@ def _ui_design_action(value: Any) -> dict[str, Any] | None:
     UiDesignConfirmationPanel 在用户逐页"选模板"或"换一换"时即时提交。
     多页调整动作形如 ``{ui_design_action: {action: "adjust_pages", pageIds: [...],
     instruction: "..."}}``，由底部斜杠提及 + 调整按钮提交。
-    action 接受 select_template / regenerate / adjust_pages / skip；其余视为无动作。
+    多页并发动作形如 ``{ui_design_action: {action: "multi", actions: [{pageId,
+    action, templateId?}, ...]}}``，由前端把连续点击的多页"换一换/选模板"攒成
+    一个 run 提交，后端在一个 run 内并发处理（最多 3 个）。
+    action 接受 select_template / regenerate / adjust_pages / skip / multi；其余视为无动作。
     """
 
     if not isinstance(value, dict):
@@ -1327,12 +1330,56 @@ def _ui_design_action(value: Any) -> dict[str, Any] | None:
     if not isinstance(action, dict):
         return None
     action_type = _optional_text(action.get("action"))
-    if action_type not in {"select_template", "regenerate", "adjust_pages", "skip"}:
+    if action_type not in {
+        "select_template",
+        "regenerate",
+        "adjust_pages",
+        "skip",
+        "multi",
+    }:
         return None
 
     # 跳过 UI 设计不绑定具体页面，直接把当前创建规划推进到技术规划。
     if action_type == "skip":
         return {"action": "skip"}
+
+    # 多页并发：前端攒多页"换一换/选模板"成一个 run 提交。每项是合法单页动作，
+    # 同 pageId 去重（保留最后一个）。截断上限 12（覆盖绝大多数应用的页面数），
+    # 并发仍由 ui_confirmation 节点的 Semaphore(3) 限流——超出 3 个的页面在信号量
+    # 前排队等前面的释放，不会压垮模型服务。原硬编码 3 会导致 7 页应用一次"全部
+    # 生成"只处理前 3 个、第 4 个起被丢弃，用户须多次点击。
+    if action_type == "multi":
+        raw_actions = action.get("actions")
+        if not isinstance(raw_actions, list):
+            return None
+        normalized: list[dict[str, Any]] = []
+        for item in raw_actions:
+            if not isinstance(item, dict):
+                continue
+            sub_type = _optional_text(item.get("action"))
+            if sub_type not in {"select_template", "regenerate"}:
+                continue
+            page_id = _optional_text(item.get("pageId")) or _optional_text(
+                item.get("page_id")
+            )
+            if not page_id:
+                continue
+            sub: dict[str, Any] = {"pageId": page_id, "action": sub_type}
+            if sub_type == "select_template":
+                template_id = _optional_text(item.get("templateId")) or _optional_text(
+                    item.get("template_id")
+                )
+                if not template_id:
+                    continue
+                sub["templateId"] = template_id
+            # 同 pageId 去重：移除已有同 pageId 项，追加新项（保留最后一个）。
+            normalized = [n for n in normalized if n.get("pageId") != page_id]
+            normalized.append(sub)
+            if len(normalized) >= 12:
+                break
+        if not normalized:
+            return None
+        return {"action": "multi", "actions": normalized}
 
     # 多页调整：pageIds 数组（可为空，空时由大模型按 instruction 自行判断）+
     # instruction 字符串（非空校验）。

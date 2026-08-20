@@ -144,7 +144,10 @@ class DirectChatModelBoundaryTests(unittest.TestCase):
             result = planner.plan_project_with_chat_model(spec)
 
         from_env.assert_called_once_with()
-        create_model.assert_called_once_with(settings)
+        create_model.assert_called_once_with(
+            settings,
+            extra_model_kwargs={"thinking": {"type": "disabled"}},
+        )
         bundle_factory.assert_not_called()
         self.assertIsNone(fake_model.bound_tools)
         self.assertIn("technical-planning model", fake_model.prompts[0])

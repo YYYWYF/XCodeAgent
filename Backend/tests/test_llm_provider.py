@@ -92,14 +92,14 @@ class ModelProviderConversionTests(unittest.TestCase):
                 "MODEL_BASE_URL": "https://example.com/v1",
                 "MODEL_API_KEY": "test-key",
                 "MODEL_NAME": "test-model",
-                "UI_DESIGN_MAX_TOKENS": "8192",
-                "UI_DESIGN_MAX_RETRIES": "3",
+                "XCODEAGENT_UI_DESIGN_MAX_TOKENS": "12288",
+                "XCODEAGENT_UI_DESIGN_MAX_RETRIES": "3",
             },
             clear=True,
         ):
             settings = Settings.from_env()
 
-        self.assertEqual(settings.ui_design_max_tokens, 8192)
+        self.assertEqual(settings.ui_design_max_tokens, 12288)
         self.assertEqual(settings.ui_design_max_retries, 3)
 
     def test_settings_reject_non_openai_provider(self) -> None:
@@ -113,7 +113,7 @@ class ModelProviderConversionTests(unittest.TestCase):
             },
             clear=True,
         ):
-            with self.assertRaisesRegex(RuntimeError, "Only OpenAI-compatible"):
+            with self.assertRaisesRegex(RuntimeError, "Unsupported MODEL_PROVIDER"):
                 Settings.from_env()
 
 

@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.agents.messages import _coerce_content_text
+from app.agents.messages import _coerce_content_text, strip_thinking_fragments
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.builtin_skills import read_builtin_skill_md
@@ -49,6 +49,59 @@ _CODE_FENCE_RE = re.compile(
     r"^\s*```(?:tsx|ts|jsx|js)?\s*\n(?P<code>.*?)\n```\s*$",
     re.DOTALL,
 )
+
+# import 行首匹配：兼容行首残留的碎片括号（`]`/`}`/`'`）——剥离 thinking 碎片
+# 后可能与 import 同行粘连，行首正则 `^\s*import` 会失配导致组件被误判"未 import"。
+_IMPORT_LINE_RE = re.compile(r"^[\]}\'\s]*import\s+")
+
+
+def _is_multiline_import_continuation(line: str) -> bool:
+    """判断一行是否是多行 import 块的续行（非 import 开头、非空行）。
+
+    多行 import 形如::
+
+        import {
+          Button,
+          Row as R,
+        } from 'antd';
+
+    续行包括：``} from 'antd';``（闭合括号+from 子句）、``  Button,``
+    （缩进标识符+可选逗）、``from 'antd';``（from 子句独立成行）。
+    用精确模式避免误匹配正文代码（如 ``const X = 5;`` 不匹配）。
+    """
+
+    s = line.strip()
+    if not s:
+        return False
+    # } from 'antd'; / ] from ... / } 仅闭合括号
+    if re.match(r"^[}\]]\s*(?:from\s+['\"]|$)", s):
+        return True
+    # from 'antd'; （from 子句独立成行）
+    if re.match(r"^from\s+['\"]", s):
+        return True
+    # 缩进标识符：Button, / Button as Btn, / Button
+    if re.match(r"^\w+(?:\s+as\s+\w+)?\s*,?\s*(?://.*)?$", s):
+        return True
+    return False
+
+def _create_ui_design_model(settings: Settings):
+    """创建 UI 设计稿专用模型实例，尽量压低 GLM-5.2 的 thinking 预算。
+
+    GLM-5.2 默认开启深度思考，thinking 与正文共享 max_tokens，复杂页常在写完
+    代码前耗尽预算被截断（缺 export default）。
+
+    实测（curl 对照网关）：只传 Anthropic 原生 `thinking.type=disabled` 或只传
+    Zhipu `reasoning_effort=none` 都能压掉短任务的 thinking；但**两者同时传反而
+    触发更多 thinking**（语义冲突），且长代码任务上两者都压不掉。因此只传
+    Anthropic 原生字段（协议标准、短任务确有效），长任务的截断兜底交给
+    `generate_page_react_code` 里的断点续写逻辑（`_is_likely_truncated` +
+    `_build_continuation_prompt`），不依赖网关对 thinking 参数的不稳定处理。
+    """
+
+    return create_chat_model(
+        settings,
+        extra_model_kwargs={"thinking": {"type": "disabled"}},
+    ).bind(max_tokens=settings.ui_design_max_tokens)
 
 
 def _ui_design_skill_document() -> str:
@@ -114,6 +167,9 @@ def _build_ui_design_prompt(page: dict[str, Any], page_key: str) -> str:
         ".tsx page file for the single page described below, following the "
         "antd-ui-design skill strictly.\n"
         "Output rules:\n"
+        "- CRITICAL: Output the .tsx code DIRECTLY. Do NOT reason step by step, "
+        "do NOT produce thinking blocks, do NOT explore alternatives before "
+        "writing code. Start writing the import statements immediately.\n"
         "- Return a single .tsx file's source code ONLY. Do not wrap it in "
         "markdown fences, do not add commentary before or after.\n"
         "- The component name MUST be PascalCase. Use the suggested PageKey as "
@@ -174,6 +230,17 @@ def _product_fact_boundary_rules() -> str:
         "`data-information-item-id=\"<itemId>\"` and static "
         "`data-control-id=\"<itemId>-display\"` on the business display component itself. Never emit "
         "an undeclared data-information-item-id.\n"
+        "- CRITICAL binding rule: `data-information-item-id`, `data-control-id`, "
+        "`data-action-id`, `data-action-step-id`, `data-ui-effect`, and "
+        "`data-preview-only` values MUST be static string literals written "
+        "directly in the JSX (e.g. `data-information-item-id=\"dashboard_page-project-total\"`). "
+        "NEVER bind them via JSX expressions like `{item.itemId}`, `{m.id}`, "
+        "template literals, or `.map()` callback variables. When several declared "
+        "items share the same visual structure, write each one out explicitly as a "
+        "separate JSX element with its own hard-coded static id instead of "
+        "iterating over a data array. A static analyzer reads these attributes "
+        "and cannot resolve runtime expressions; expression-bound ids are treated "
+        "as MISSING bindings and will fail validation.\n"
         "- Any control used solely to switch prototype states must carry "
         "`data-preview-only=\"true\"`; it is review tooling, not product UI. Do not create any other "
         "preview-only business-looking control or content.\n"
@@ -184,23 +251,63 @@ def _product_fact_boundary_rules() -> str:
 
 
 def _extract_tsx_code(text: str) -> str:
-    """从模型返回文本中提取 .tsx 代码，去掉 markdown 围栏与前后说明。"""
+    """从模型返回文本中提取 .tsx 代码，去掉 markdown 围栏与前后说明。
 
-    stripped = text.strip()
-    # 优先匹配整段被围栏包裹的情况
+    glm-5.2 等推理模型常在正文里先输出中文思考过程（其中可能引用 import 字样、
+    甚至内嵌示例代码），再把真正的代码放在末尾。因此以「最后一个 export default」
+    所在的代码块为真代码：它可能在围栏内，也可能是末尾的裸代码。这样既不会取
+    第一个 import 行（会混入思考过程），也不会误取思考过程里的示例围栏块。
+    """
+
+    # 防御性剥离 thinking 碎片（网关可能把 [{'thinking': ..}] 逐 token 拼进
+    # content，虽已由 _coerce_content_text 剥过，这里对直接传入的文本再兜底）。
+    stripped = strip_thinking_fragments(text).strip()
+    if not stripped:
+        return stripped
+
+    lines = stripped.splitlines()
+    exports = list(re.finditer(r"export\s+default", stripped))
+    if exports:
+        last_export = exports[-1]
+        e_start, e_end = last_export.start(), last_export.end()
+
+        # 1) 最后一个 export default 落在某个围栏块内 → 返回该围栏块
+        for m in re.finditer(
+            r"```(?:tsx|ts|jsx|js)?\s*\n(.*?)\n```", stripped, re.DOTALL
+        ):
+            if m.start(1) <= e_start and e_end <= m.end(1):
+                return m.group(1).strip()
+
+        # 2) 否则取该 export default 之前的代码块。
+        # 从最近的 import 行开始反向扫描，包含所有 import 行、空行、以及
+        # 多行 import 的续行（} from 'antd'; 和缩进的 Button, 等）。
+        # 不用"找第一个 import"——prose 里也可能引用 import 字样。
+        export_idx = stripped.count("\n", 0, e_start)
+        import_idx = -1
+        for i in range(export_idx - 1, -1, -1):
+            if _IMPORT_LINE_RE.match(lines[i]):
+                import_idx = i
+                break
+        if import_idx >= 0:
+            start = import_idx
+            j = import_idx - 1
+            while j >= 0 and (
+                not lines[j].strip()
+                or _IMPORT_LINE_RE.match(lines[j])
+                or _is_multiline_import_continuation(lines[j])
+            ):
+                if lines[j].strip():
+                    start = j
+                j -= 1
+            return "\n".join(lines[start : export_idx + 1]).strip()
+
+    # 3) 兜底：整段被围栏包裹 / 去掉开头说明行，保留以 import 开头的代码
     fence_match = _CODE_FENCE_RE.match(stripped)
     if fence_match:
         return fence_match.group("code").strip()
-    # 兜底：若文本中间出现围栏（前后有说明），取第一个围栏块
-    inner = re.search(r"```(?:tsx|ts|jsx|js)?\s*\n(.*?)\n```", stripped, re.DOTALL)
-    if inner:
-        return inner.group(1).strip()
-    # 无围栏：去掉常见的开头说明行（如 "Here is the code:"），保留以 import 开头的代码
-    # 找到第一个 import 或 // 注释或 const/import 开头的行
-    lines = stripped.splitlines()
     start = 0
     for i, line in enumerate(lines):
-        if line.strip().startswith(("import ", "//", "/*", "const ", "export ")):
+        if line.lstrip("]}\' \t").startswith(("import ", "//", "/*", "const ", "export ")):
             start = i
             break
     return "\n".join(lines[start:]).strip() or stripped
@@ -250,9 +357,11 @@ def _collect_imported_and_local_names(code: str) -> set[str]:
     """
 
     names: set[str] = set()
-    # import 语句：默认导入 + 命名导入块 + 命名空间
+    # import 语句：默认导入 + 命名导入块 + 命名空间。
+    # 行首放宽到允许残留的碎片括号（] } ' 与空白），防止 thinking 碎片残留
+    # 粘连时整条 import 被漏掉、组件被误判"未 import"。
     for m in re.finditer(
-        r"^\s*import\s+(?:(\w+)(?:\s*,\s*)?)?(\{[^}]*\})?\s*(\*\s+as\s+(\w+))?\s*from",
+        r"^[\]}\'\s]*import\s+(?:(\w+)(?:\s*,\s*)?)?(\{[^}]*\})?\s*(\*\s+as\s+(\w+))?\s*from",
         code,
         re.MULTILINE,
     ):
@@ -333,6 +442,60 @@ def _is_meaningful_code(code: str) -> bool:
     return bool(re.search(r"export\s+default", code))
 
 
+def _merge_truncated_code(partial: str, tail: str) -> str:
+    """把截断的前半部分与续写的尾部拼成完整代码。
+
+    续写输出可能混入三类杂质，需清理后再拼：
+    1. 续写模型重新输出了 import/开头（没听"从断点续写"指令）；
+    2. 续写开头重复了 partial 末尾的若干字符（重叠）；
+    3. 续写只输出了一小段、或仍缺 export default（又截断了）。
+
+    策略：若 tail 自带 export default 且包含完整 import 头（说明模型重新输出了
+    整份代码），直接以 tail 为准（它更完整）；否则把 tail 拼到 partial 末尾，
+    并去掉两者重叠的前缀部分。
+    """
+
+    partial = partial.rstrip()
+    tail = tail.strip()
+    if not tail:
+        return partial
+    # 情形 1：tail 自己就是一份完整代码（带 import 头 + export default），
+    # 模型无视"续写"指令重写了整份——直接采用 tail。
+    if re.search(r"export\s+default", tail) and re.search(
+        r"^[\]}\'\s]*import\s", tail, re.MULTILINE
+    ):
+        return tail
+    # 情形 2：正常续写。去掉 tail 开头与 partial 末尾重叠的部分，避免重复。
+    # 从长到短找 partial 后缀 == tail 前缀的最长重叠（上限 200 字符）。
+    max_overlap = min(200, len(partial), len(tail))
+    overlap = 0
+    for size in range(max_overlap, 0, -1):
+        if partial.endswith(tail[:size]):
+            overlap = size
+            break
+    return partial + tail[overlap:]
+
+
+def _is_likely_truncated(code: str) -> bool:
+    """判定提取出的代码是否因输出预算耗尽而在 `export default` 前被截断。
+
+    推理模型（glm-5.2）的 thinking 与正文共享 max_tokens，复杂页（ProTable）
+    常在写完代码前就耗尽预算。此时网关把截断伪装成 stop_reason=end_turn（实测），
+    无法用 finish_reason 区分，只能看代码特征：
+    - 已有实质内容（非空、有一定长度、含 import / JSX 结构）；
+    - 但缺少 `export default` 导出。
+    两者同时满足即判定截断，可走「续写」而非整页重生成，避免重复浪费 thinking。
+    """
+
+    if not code or len(code.strip()) < 200:
+        return False
+    if re.search(r"export\s+default", code):
+        return False
+    # 有 import 或 JSX 标签结构，说明模型确实在写代码（只是没写完），
+    # 而非返回了无关文本。
+    return bool(re.search(r"^[\]}\'\s]*import\s", code, re.MULTILINE)) or "<" in code
+
+
 # 设计稿工程允许的 import 来源白名单。SKILL.md 约束只用这三个库 + react。
 # 白名单外的依赖（umi/mockjs/xlsx/axios/@/apis 等）工程未安装或会冲突，
 # import 它会导致 Vite "Failed to resolve import" 白屏。
@@ -370,7 +533,7 @@ def _find_forbidden_imports(code: str) -> list[str]:
 
     sources: set[str] = set()
     for m in re.finditer(
-        r"^\s*import\s+(?:[^'\";]+\s+from\s+)?['\"]([^'\"]+)['\"]",
+        r"^[\]}\'\s]*import\s+(?:[^'\";]+\s+from\s+)?['\"]([^'\"]+)['\"]",
         code,
         re.MULTILINE,
     ):
@@ -477,6 +640,42 @@ def _build_repair_prompt(
     )
 
 
+def _build_continuation_prompt(
+    page: dict[str, Any], page_key: str, partial_code: str
+) -> str:
+    """构造截断续写 prompt：把已生成的部分代码回喂，让模型从断点续完。
+
+    与整页 repair 的区别：repair 是"代码写完了但校验不过，定向改"；续写是
+    "代码因 token 耗尽没写完，从断点接着写"。续写能复用已写好的前半部分，
+    避免整页重生成再次消耗 thinking 预算（glm-5.2 复杂页 thinking 可达数万
+    token，重生成大概率在同一处再次截断）。
+    """
+
+    return (
+        "You previously started generating a React + antd5 + "
+        "@ant-design/pro-components .tsx page for the page below, but the "
+        "output was CUT OFF before completion because the output token limit "
+        "was reached mid-file. The partial code is shown below.\n\n"
+        "Continue writing the file from EXACTLY where it stopped. Output ONLY "
+        "the remaining code that completes the component, ending with "
+        f"`export default {page_key};`. Do NOT repeat any code that is already "
+        "present, do NOT restart from the imports, do NOT add commentary or "
+        "markdown fences. Begin your reply with the very next character that "
+        "should follow the partial code.\n\n"
+        "Keep the continuation CONCISE: prefer completing the current JSX "
+        "structure over adding new sections, so the file finishes within the "
+        "remaining token budget.\n\n"
+        + _product_fact_boundary_rules()
+        + "--- PAGE TO DESIGN ---\n"
+        f"{_page_brief(page)}\n"
+        "--- END PAGE ---\n\n"
+        "--- PARTIAL CODE (cut off at the token limit, incomplete) ---\n"
+        f"{partial_code}\n"
+        "--- END PARTIAL CODE ---\n\n"
+        "Output only the remaining code that completes this file now."
+    )
+
+
 def _build_adjust_prompt(
     page: dict[str, Any], page_key: str, prev_code: str, instruction: str
 ) -> str:
@@ -533,7 +732,7 @@ def generate_adjusted_page_react_code(
     """
 
     settings = Settings.from_env()
-    model = create_chat_model(settings).bind(max_tokens=settings.ui_design_max_tokens)
+    model = _create_ui_design_model(settings)
     page_id = str(page.get("pageId") or page.get("id") or "")
     max_retries = max(0, settings.ui_design_max_retries)
 
@@ -599,7 +798,10 @@ def resolve_adjust_target_pages(
     if not pages or not instruction.strip():
         return []
     settings = Settings.from_env()
-    model = create_chat_model(settings)
+    model = create_chat_model(
+        settings,
+        extra_model_kwargs={"thinking": {"type": "disabled"}},
+    )
     page_briefs = "\n".join(
         f"- pageId: {p.get('pageId') or p.get('id') or ''}"
         f" | name: {p.get('name') or ''}"
@@ -663,7 +865,7 @@ def generate_page_react_code(
     """
 
     settings = Settings.from_env()
-    model = create_chat_model(settings).bind(max_tokens=settings.ui_design_max_tokens)
+    model = _create_ui_design_model(settings)
     page_id = str(page.get("pageId") or page.get("id") or "")
     max_retries = max(0, settings.ui_design_max_retries)
 
@@ -675,7 +877,8 @@ def generate_page_react_code(
         page_id=page_id,
         max_retries=max_retries,
     )
-    content = _coerce_content_text(getattr(result, "content", ""))
+    raw_content = getattr(result, "content", "")
+    content = _coerce_content_text(raw_content)
     code = _extract_tsx_code(content)
     logger.info(
         "ui_design_generated page_id=%s attempt=1 content_chars=%s code_chars=%s",
@@ -683,11 +886,60 @@ def generate_page_react_code(
         len(content),
         len(code),
     )
+    # 调试：content 类型、前200/后200字符，用于排查 thinking 残留导致提取错误
+    logger.warning(
+        "ui_design_debug page_id=%s content_type=%s content_head=%s content_tail=%s "
+        "code_head=%s code_tail=%s",
+        page_id,
+        type(raw_content).__name__,
+        repr(content[:200]),
+        repr(content[-200:]) if len(content) > 200 else "",
+        repr(code[:200]),
+        repr(code[-200:]) if len(code) > 200 else "",
+    )
 
     # 校验 + 自动修复重试闭环
     ok, err = validate_page_code(project_dir, code, page)
     attempt = 1
+    continuation_used = False
     while not ok and attempt <= max_retries:
+        # 截断优先续写：代码有实质内容但缺 export default，说明模型在 token
+        # 耗尽前一直在正常写代码，只是没写完。此时整页 repair 会丢弃已写好的
+        # 大半代码并再次消耗 thinking 预算（很可能在同一处再截断），续写只补
+        # 剩余部分，省预算且更可能成功。续写不占 repair 重试次数。
+        if _is_likely_truncated(code) and not continuation_used:
+            continuation_used = True
+            logger.warning(
+                "ui_design_truncated page_id=%s code_chars=%s，尝试断点续写",
+                page_id,
+                len(code),
+            )
+            continuation_prompt = _build_continuation_prompt(page, page_key, code)
+            result = _invoke_ui_design_model(
+                model,
+                continuation_prompt,
+                page_id=page_id,
+                max_retries=max_retries,
+            )
+            raw_content = getattr(result, "content", "")
+            content = _coerce_content_text(raw_content)
+            tail = _extract_tsx_code(content)
+            # 续写可能仍带 thinking 碎片/重复开头，拼接前剥掉尾部块里的 import
+            # 与已存在的前缀，只保留真正的"后续代码"。
+            completed = _merge_truncated_code(code, tail)
+            logger.info(
+                "ui_design_continued page_id=%s tail_chars=%s merged_chars=%s",
+                page_id,
+                len(tail),
+                len(completed),
+            )
+            code = completed
+            ok, err = validate_page_code(project_dir, code, page)
+            if ok:
+                break
+            # 续写后仍不过：若非截断问题则落入下方 repair；若仍截断则放弃续写
+            # （continuation_used 已置位），走整页 repair。
+
         attempt += 1
         logger.warning(
             "ui_design_validate_failed page_id=%s attempt=%s err=%s",
@@ -702,13 +954,23 @@ def generate_page_react_code(
             page_id=page_id,
             max_retries=max_retries,
         )
-        content = _coerce_content_text(getattr(result, "content", ""))
+        raw_content = getattr(result, "content", "")
+        content = _coerce_content_text(raw_content)
         code = _extract_tsx_code(content)
         logger.info(
             "ui_design_repaired page_id=%s attempt=%s code_chars=%s",
             page_id,
             attempt,
             len(code),
+        )
+        logger.warning(
+            "ui_design_debug_repair page_id=%s content_type=%s "
+            "content_head=%s code_head=%s code_tail=%s",
+            page_id,
+            type(raw_content).__name__,
+            repr(content[:200]),
+            repr(code[:200]),
+            repr(code[-200:]) if len(code) > 200 else "",
         )
         ok, err = validate_page_code(project_dir, code, page)
 

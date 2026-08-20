@@ -449,7 +449,7 @@ export default function ApplicationPlanningQuestionPanel({
 
   // run 中途流式快照可能产生未知 mode（如 undefined、技术规划校验错误），
   // 此时 clarification.pages 也会丢失。缓存最近一次有效的 UI 确认 workflow，run 中途用缓存
-  // 渲染，保持左侧页面列表 + 右侧渲染区布局不动，单页加载态由面板内 actionPageId 控制。
+  // 渲染，保持左侧页面列表 + 右侧渲染区布局不动，逐页加载态由面板内 actingPageIds 控制。
   const clarificationPages = (clarification as unknown as Record<string, unknown>).pages
   const hasUiDesignPages = Array.isArray(clarificationPages) && clarificationPages.length > 0
   const lastValidUiWorkflowRef = useRef<WorkflowRunPayload | undefined>(undefined)

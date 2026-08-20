@@ -327,12 +327,10 @@ export default function ApplicationPagePlanningModal({
 
   // 保持加载界面直到模板准备完成，失败时恢复可重试状态。
   const completePlanning = async (confirmation: ApplicationPlanningConfirmation): Promise<void> => {
-    console.log('[planning-modal] completePlanning triggered, calling onConfirmed')
     completedRef.current = true
     setPreparingTemplate(true)
     try {
       const succeeded = await onConfirmed(confirmation)
-      console.log('[planning-modal] completePlanning onConfirmed succeeded=', succeeded)
       if (succeeded) return
       completedRef.current = false
       setError('应用模板准备失败，请重试；成功后才会进入工作台。')
@@ -353,7 +351,6 @@ export default function ApplicationPagePlanningModal({
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
   ): Promise<void> => {
-    console.log('[planning-modal] runPlanning start workspaceRoot=', application.workspaceRoot, 'answers=', answers, 'hasResumeState=', Boolean(resumeState), 'threadId=', threadId)
     if (!application.workspaceRoot) return
     setRunning(true)
     onStatusChange('running')
@@ -399,7 +396,6 @@ export default function ApplicationPagePlanningModal({
           onPlanningContent?.(content)
         },
         onWorkflow: (nextWorkflow) => {
-          console.log('[planning-modal] onWorkflow streamed', nextWorkflow?.summary?.phase, nextWorkflow?.summary?.status)
           handleWorkflowChange(nextWorkflow)
           onPlanningWorkflow?.(nextWorkflow)
           // 流式已转发最终（requires_user_input）workflow，标记避免 result.workflow 重复转发。
@@ -408,7 +404,6 @@ export default function ApplicationPagePlanningModal({
           }
         }
       })
-      console.log('[planning-modal] result.workflow=', Boolean(result.workflow), 'phase=', result.workflow?.summary?.phase, 'status=', result.workflow?.summary?.status, 'streamedFinal=', streamedFinalWorkflowRef.current)
       if (result.workflow) {
         handleWorkflowChange(result.workflow)
         // 流式已转发最终 workflow 时不再重复转发，避免工作台新增重复卡片。
@@ -417,7 +412,6 @@ export default function ApplicationPagePlanningModal({
         }
       }
       const confirmation = workflowConfirmation(result.workflow)
-      console.log('[planning-modal] workflowConfirmation=', Boolean(confirmation), 'completedRef=', completedRef.current, 'resultStatus=', result.workflow?.summary?.status, 'hasAppPlanningConfirmation=', Boolean(result.workflow?.result?.application_planning_confirmation || result.workflow?.state?.application_planning_confirmation))
       if (confirmation && !completedRef.current) {
         await completePlanning(confirmation)
       }
@@ -453,7 +447,6 @@ export default function ApplicationPagePlanningModal({
           // 不是产品 Agent 对话，不转发到工作台 MessageList，避免生硬文案。
         },
         onWorkflow: (nextWorkflow) => {
-          console.log('[planning-modal] onWorkflow streamed', nextWorkflow?.summary?.phase, nextWorkflow?.summary?.status)
           handleWorkflowChange(nextWorkflow)
           onPlanningWorkflow?.(nextWorkflow)
           // 流式已转发最终（requires_user_input）workflow，标记避免 result.workflow 重复转发。
@@ -462,7 +455,6 @@ export default function ApplicationPagePlanningModal({
           }
         }
       })
-      console.log('[planning-modal] result.workflow=', Boolean(result.workflow), 'phase=', result.workflow?.summary?.phase, 'status=', result.workflow?.summary?.status, 'streamedFinal=', streamedFinalWorkflowRef.current)
       if (result.workflow) {
         handleWorkflowChange(result.workflow)
         // 流式已转发最终 workflow 时不再重复转发，避免工作台新增重复卡片。
@@ -510,7 +502,6 @@ export default function ApplicationPagePlanningModal({
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
   ): void => {
-    console.log('[planning-modal] handleSubmitClarification answers=', answers, 'phase=', currentWorkflow.summary?.phase, 'threadId=', threadId)
     void runPlanning(
       '请根据本轮确认继续创建规划。',
       answers,

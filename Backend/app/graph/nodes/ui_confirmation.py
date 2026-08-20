@@ -27,14 +27,16 @@ from app.graph.nodes.confirmation import (
 )
 from app.graph.state import ProjectState
 from app.services.product_plan import require_current_product_plan
+from app.services.ui_design_generation_pool import (
+    UI_DESIGN_STATUS_GENERATING,
+    UI_DESIGN_STATUS_QUEUED,
+    UiDesignGenerationTask,
+    get_ui_design_generation_pool,
+)
 from app.services.ui_design_generator import (
-    delete_page_code,
     derive_page_key,
     generate_adjusted_page_react_code,
-    generate_page_react_code,
     load_page_code,
-    load_template_source,
-    pages_dir,
     persist_page_code,
     resolve_adjust_target_pages,
 )
@@ -43,15 +45,20 @@ from app.services.ui_design_manifest import (
     build_ui_page_manifest,
     present_ui_pages,
 )
-from app.services.ui_design_project_setup import setup_ui_design_project
+from app.services.ui_design_project_setup import (
+    setup_ui_design_project,
+    ui_design_project_dir,
+)
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
-from app.workspace.spec_documents import workspace_root, write_ui_designs_json
+from app.workspace.spec_documents import (
+    load_ui_designs_json,
+    ui_designs_json_path,
+    workspace_root,
+    write_ui_designs_json,
+)
 
 
 logger = logging.getLogger(__name__)
-
-# 并发生成上限：避免模型服务或 cloudflare 隧道并发限流。
-_UI_DESIGN_CONCURRENCY = 3
 
 
 def _page_list(state: ProjectState) -> list[dict[str, Any]]:
@@ -267,91 +274,6 @@ def _emit_progress(message: str, **detail: object) -> None:
     )
 
 
-async def _generate_one_page(
-    page: dict[str, Any],
-    project_dir: str,
-    used_keys: set[str],
-    semaphore: asyncio.Semaphore,
-    ready_pages: list[dict[str, Any]],
-    total: int,
-) -> dict[str, Any]:
-    """生成单个页面的 React 设计稿并落盘，完成后追加到共享列表并推送流式进度。"""
-
-    page_id = _page_id(page)
-    page_key = derive_page_key(page, used_keys)
-    entry = build_ui_page_manifest(page, page_key=page_key)
-    if not page_id or not project_dir:
-        return entry
-    # 已存在落盘设计稿直接复用，避免恢复时重复调用 LLM。
-    existing = load_page_code(project_dir, page_key)
-    if existing:
-        reused = build_ui_page_manifest(
-            page,
-            page_key=page_key,
-            code_path=str(pages_dir(project_dir) / page_key / "index.tsx"),
-            code=existing,
-            status="pending",
-        )
-        if reused.get("verification", {}).get("status") == "passed":
-            ready_pages.append(reused)
-            _emit_progress(
-                f"已加载现有设计稿：{page.get('name') or page_id}（{len(ready_pages)}/{total}）",
-                pageId=page_id,
-                ready=len(ready_pages),
-                total=total,
-                pages=list(ready_pages),
-            )
-            return reused
-    async with semaphore:
-        _emit_progress(
-            f"正在生成设计稿：{page.get('name') or page_id}",
-            pageId=page_id,
-            ready=len(ready_pages),
-            total=total,
-            pages=list(ready_pages),
-        )
-        try:
-            # generate_page_react_code 内部已做完整校验（非空 + 未定义引用 +
-            # esbuild 语法）并自动修复重试，返回的代码保证可渲染；校验全部
-            # 失败时抛 ValueError，由下方 except 捕获标记 generation_failed。
-            code = await asyncio.to_thread(
-                generate_page_react_code, page, page_key, project_dir
-            )
-            code_path = persist_page_code(project_dir, page_key, code)
-            entry = build_ui_page_manifest(
-                page,
-                page_key=page_key,
-                code_path=code_path,
-                code=code,
-                status="pending",
-            )
-            ready_pages.append(entry)
-            _emit_progress(
-                f"设计稿已生成：{page.get('name') or page_id}（{len(ready_pages)}/{total}）",
-                pageId=page_id,
-                ready=len(ready_pages),
-                total=total,
-                pages=list(ready_pages),
-            )
-        except Exception as exc:
-            logger.exception("ui_design_generation_failed page_id=%s", page_id)
-            entry = build_ui_page_manifest(
-                page,
-                page_key=page_key,
-                status="generation_failed",
-                error=str(exc),
-            )
-            ready_pages.append(entry)
-            _emit_progress(
-                f"设计稿生成失败：{page.get('name') or page_id}（{len(ready_pages)}/{total}）",
-                pageId=page_id,
-                ready=len(ready_pages),
-                total=total,
-                pages=list(ready_pages),
-            )
-    return entry
-
-
 async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
     """首次进入 UI 确认节点：只为每个页面准备骨架条目，不生成设计稿。
 
@@ -385,102 +307,6 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
         "product_plan_sha256": _product_plan_hash(state),
         "pages": entries,
     }
-
-
-async def _build_initial_ui_designs(state: ProjectState) -> dict[str, Any]:
-    """准备设计稿目录并并发为每个页面生成 React 设计稿，返回初始 ui_designs 状态。
-
-    方案 B：不再 clone 模板工程、不再启动 dev server。setup_ui_design_project
-    只确保 .xcodeagent/ui-design 目录存在。每生成完一页即通过 LangGraph stream
-    推送带当前已生成页面（含内联 code 源码）的进度，前端 DesignRenderer 流式渲染。
-    """
-
-    workspace = str(workspace_root(state))
-    pages = _page_list(state)
-    valid_pages = [page for page in pages if _page_id(page)]
-    total = len(valid_pages)
-
-    # 准备设计稿落盘目录（方案 B：仅 mkdir，无 clone/install/launch）。
-    _emit_progress("正在准备设计稿目录", ready=0, total=total, pages=[])
-    setup = await asyncio.to_thread(setup_ui_design_project, workspace)
-    project_dir = str(setup.get("project_dir") or "")
-    if setup.get("status") != "ready":
-        _emit_progress(
-            f"设计稿目录未就绪：{setup.get('message')}（代码仍会生成）",
-            ready=0, total=total, pages=[],
-        )
-    else:
-        _emit_progress("设计稿目录已就绪", ready=0, total=total, pages=[])
-    _emit_progress(f"开始为 {total} 个页面生成设计稿", ready=0, total=total, pages=[])
-    semaphore = asyncio.Semaphore(_UI_DESIGN_CONCURRENCY)
-    used_keys: set[str] = {"DefaultPage"}
-    # 共享已就绪页面列表：每个 task 完成后追加并推送，供前端流式渲染。
-    ready_pages: list[dict[str, Any]] = []
-    tasks = [
-        _generate_one_page(page, project_dir, used_keys, semaphore, ready_pages, total)
-        for page in valid_pages
-    ]
-    page_entries = await asyncio.gather(*tasks)
-    _emit_progress(
-        "全部页面设计稿已生成，等待逐页确认",
-        ready=total,
-        total=total,
-        pages=list(page_entries),
-    )
-    return {
-        "schema_version": UI_MANIFEST_SCHEMA_VERSION,
-        "confirmation_status": "pending_user_confirmation",
-        "product_plan_sha256": _product_plan_hash(state),
-        "pages": page_entries,
-    }
-
-
-def _apply_template_to_page(
-    page: dict[str, Any], page_key: str, project_dir: str, template_id: str
-) -> dict[str, Any]:
-    """把模板仅作为视觉参考重写为符合 ProductPlan 的单页设计稿。"""
-
-    entry = build_ui_page_manifest(
-        page,
-        page_key=page_key,
-        template_id=template_id,
-    )
-    if not project_dir:
-        return entry
-    try:
-        template_code = load_template_source(template_id)
-        code = generate_adjusted_page_react_code(
-            page,
-            page_key,
-            project_dir,
-            template_code,
-            (
-                "Treat the supplied template only as a visual layout and component-style reference. "
-                "Replace all template business semantics with exactly the ProductPlan information "
-                "items and actions. Do not preserve any template field, metric, filter, action, "
-                "route, role, or label that ProductPlan does not declare."
-            ),
-        )
-        code_path = persist_page_code(project_dir, page_key, code)
-        entry = build_ui_page_manifest(
-            page,
-            page_key=page_key,
-            code_path=code_path,
-            code=code,
-            status="confirmed",
-            template_id=template_id,
-            template_source_path=f"src/renderer/src/templates/{template_id}",
-        )
-    except Exception as exc:
-        logger.exception("ui_design_template_failed page_id=%s", _page_id(page))
-        entry = build_ui_page_manifest(
-            page,
-            page_key=page_key,
-            status="generation_failed",
-            template_id=template_id,
-            error=str(exc),
-        )
-    return entry
 
 
 async def _apply_adjust_pages(
@@ -657,137 +483,175 @@ async def _apply_adjust_pages(
     }
 
 
-async def _apply_ui_design_action(
-    state: ProjectState, existing: dict[str, Any], action: dict[str, Any]
+async def _latest_ui_designs(
+    state: ProjectState, existing: dict[str, Any]
 ) -> dict[str, Any]:
-    """处理单页"选模板"或"重新生成"动作，增量更新 ui_designs 并返回新状态。
+    """读取工作区最新 UI Manifest（池后台写入），并自愈恢复中断的生成页。
 
-    只更新动作指定的那一页，其余页面（含已确认状态）原样保留。处理完后
-    返回 requires_user_input 重放确认卡，不推进到 project_planning。
+    前端通过「无操作 resume」轮询进度：池在后台把每页状态（queued/generating/
+    confirmed/generation_failed）写进 specs/ui-designs.json，这里直接读文件拿到
+    最新状态。进程重启后，文件里仍为 queued/generating 但池已不在处理的页会在此
+    重新入队。返回的 ui_designs 仅供重放确认卡，不落盘（避免与池写文件竞争）。
+    """
+
+    manifest = load_ui_designs_json(ui_designs_json_path(state))
+    if not isinstance(manifest, dict) or not manifest.get("pages"):
+        return existing if isinstance(existing, dict) else {}
+
+    workspace = str(workspace_root(state))
+    project_dir = str(ui_design_project_dir(workspace))
+    pool = get_ui_design_generation_pool()
+    active_ids = pool.pending_page_ids(workspace)
+    spec_pages = {_page_id(p): p for p in _page_list(state) if _page_id(p)}
+
+    # 自愈恢复：重新入队状态仍为 queued/generating 且池未在处理的页。
+    stale: list[UiDesignGenerationTask] = []
+    for page in manifest["pages"]:
+        if not isinstance(page, dict):
+            continue
+        status = str(page.get("status") or "")
+        if status not in {UI_DESIGN_STATUS_QUEUED, UI_DESIGN_STATUS_GENERATING}:
+            continue
+        page_id = str(page.get("pageId") or "")
+        if not page_id or page_id in active_ids:
+            continue
+        spec_page = spec_pages.get(page_id)
+        if not spec_page:
+            continue
+        template_id = str(page.get("template_id") or "").strip()
+        page_key = str(page.get("page_key") or "").strip() or derive_page_key(spec_page)
+        stale.append(
+            UiDesignGenerationTask(
+                workspace=workspace,
+                project_id=str(state.get("project_id") or ""),
+                project_dir=project_dir,
+                page_id=page_id,
+                spec_page=spec_page,
+                page_key=page_key,
+                action="select_template" if template_id else "regenerate",
+                template_id=template_id,
+            )
+        )
+    if stale:
+        await pool.submit(stale)
+        manifest = load_ui_designs_json(ui_designs_json_path(state))
+
+    return manifest
+
+
+async def _enqueue_ui_design_generation(
+    state: ProjectState,
+    pages: list[dict[str, Any]],
+    action: dict[str, Any],
+) -> dict[str, Any]:
+    """把单页或批量「换一换/选模板」动作登记到后台生成池，返回最新 ui_designs。
+
+    不再在当前 Graph run 内同步调 LLM：先把目标页标记 queued 并写入 ui-designs.json，
+    池的 worker 异步生成后回写 confirmed/generation_failed。这里立即返回最新状态，
+    前端随后通过「无操作 resume」轮询看到生成进度。所有被点击的页最终都会被处理，
+    不再受单 run Semaphore(3) 或前端 3 页 acting 上限的丢页影响。
     """
 
     workspace = str(workspace_root(state))
-    setup = await asyncio.to_thread(setup_ui_design_project, workspace)
-    project_dir = str(setup.get("project_dir") or "")
+    project_dir = str(ui_design_project_dir(workspace))
+    spec_pages = {_page_id(p): p for p in _page_list(state) if _page_id(p)}
+    existing_pages = {str(p.get("pageId") or ""): p for p in pages}
 
-    page_id = str(action.get("pageId") or "").strip()
-    action_type = str(action.get("action") or "").strip()
-    pages = existing.get("pages") if isinstance(existing, dict) else None
-    pages = [p for p in (pages or []) if isinstance(p, dict)]
-
-    # 多页调整：顺序遍历 pageIds，对每页基于现有设计稿 + 调整指令重新生成。
-    # 一个 run 内顺序处理（不并发），每页完成推送进度，前端显示"第 X/N 页"。
-    if action_type == "adjust_pages":
-        return await _apply_adjust_pages(state, pages, project_dir, action)
-
-    # 派生 page_key：优先复用条目已有的 page_key，否则按 pageId 重新派生。
+    # 解析 action：支持单页 {pageId, action, templateId?} 或批量 {actions:[...]}。
+    raw_actions = (
+        action.get("actions") if isinstance(action.get("actions"), list) else [action]
+    )
+    # 复用条目已有 page_key，避免换一换后 page_key 漂移导致 .tsx 写错目录。
     used_keys: set[str] = {"DefaultPage"}
     for p in pages:
         key = str(p.get("page_key") or "").strip()
         if key:
             used_keys.add(key)
 
-    target_index = -1
-    for i, p in enumerate(pages):
-        if _page_id(p) == page_id or str(p.get("pageId") or "") == page_id:
-            target_index = i
-            break
-    if target_index < 0:
-        _emit_progress(
-            f"未找到待操作页面：{page_id}",
-            ready=len(pages),
-            total=len(pages),
-            pages=list(pages),
+    tasks: list[UiDesignGenerationTask] = []
+    for item in raw_actions:
+        if not isinstance(item, dict):
+            continue
+        page_id = str(item.get("pageId") or "").strip()
+        sub_type = str(item.get("action") or "").strip()
+        if not page_id or sub_type not in {"regenerate", "select_template"}:
+            continue
+        spec_page = spec_pages.get(page_id)
+        if not spec_page:
+            _emit_progress(
+                f"未找到待操作页面：{page_id}",
+                ready=len(pages),
+                total=len(pages),
+                pages=list(pages),
+            )
+            continue
+        target = existing_pages.get(page_id) or {}
+        page_key = str(target.get("page_key") or "").strip()
+        if not page_key:
+            page_key = derive_page_key(spec_page, used_keys)
+            used_keys.add(page_key)
+        tasks.append(
+            UiDesignGenerationTask(
+                workspace=workspace,
+                project_id=str(state.get("project_id") or ""),
+                project_dir=project_dir,
+                page_id=page_id,
+                spec_page=spec_page,
+                page_key=page_key,
+                action=sub_type,
+                template_id=str(item.get("templateId") or "").strip(),
+            )
         )
-        return existing
 
-    target_page = pages[target_index]
-    spec_page = next(
-        (page for page in _page_list(state) if _page_id(page) == page_id),
-        {"pageId": page_id},
+    if not tasks:
+        return {
+            "schema_version": UI_MANIFEST_SCHEMA_VERSION,
+            "confirmation_status": "pending_user_confirmation",
+            "product_plan_sha256": _product_plan_hash(state),
+            "pages": pages,
+        }
+
+    pool = get_ui_design_generation_pool()
+    accepted = await pool.submit(tasks)
+    _emit_progress(
+        f"已提交 {len(accepted)} 个页面设计稿生成任务，后台并发生成中",
+        ready=0,
+        total=len(pages),
+        pages=list(pages),
+        queued=accepted,
     )
-    page_name = str(spec_page.get("name") or page_id)
-    page_key = str(target_page.get("page_key") or "").strip()
-    if not page_key:
-        page_key = derive_page_key(spec_page, used_keys)
+    # 池已写入 queued 状态，读回最新文件作为本轮 ui_designs（不落盘，避免竞争）。
+    return await _latest_ui_designs(
+        state,
+        {"schema_version": UI_MANIFEST_SCHEMA_VERSION, "pages": pages},
+    )
 
-    if action_type == "select_template":
-        template_id = str(action.get("templateId") or "").strip()
-        _emit_progress(
-            f"正在按页面事实适配模板：{page_name}",
-            pageId=page_id,
-            ready=len(pages),
-            total=len(pages),
-            pages=list(pages),
-        )
-        updated = await asyncio.to_thread(
-            _apply_template_to_page,
-            spec_page,
-            page_key,
-            project_dir,
-            template_id,
-        )
-    else:  # regenerate
-        _emit_progress(
-            f"正在重新生成设计稿：{page_name or target_page.get('name') or page_id}",
-            pageId=page_id,
-            ready=len(pages),
-            total=len(pages),
-            pages=list(pages),
-        )
-        # 删除已落盘设计稿，绕过 load_page_code 复用，强制重新调 LLM。
-        delete_page_code(project_dir, page_key)
-        updated = build_ui_page_manifest(spec_page, page_key=page_key)
-        try:
-            code = await asyncio.to_thread(
-                generate_page_react_code, spec_page, page_key, project_dir
-            )
-            code_path = persist_page_code(project_dir, page_key, code)
-            updated = build_ui_page_manifest(
-                spec_page,
-                page_key=page_key,
-                code_path=code_path,
-                code=code,
-                status="confirmed",
-            )
-            # 换一换成功即视为该页设计稿已确认：用户主动触发生成，无需再手动确认。
-            _emit_progress(
-                f"设计稿已重新生成：{page_name}",
-                pageId=page_id,
-                ready=len(pages),
-                total=len(pages),
-                pages=list(pages),
-            )
-        except Exception as exc:
-            logger.exception("ui_design_regenerate_failed page_id=%s", page_id)
-            updated = build_ui_page_manifest(
-                spec_page,
-                page_key=page_key,
-                status="generation_failed",
-                error=str(exc),
-            )
-            _emit_progress(
-                f"设计稿重新生成失败：{page_name}",
-                pageId=page_id,
-                ready=len(pages),
-                total=len(pages),
-                pages=list(pages),
-            )
 
-    # 增量更新：只替换目标页，其余页（含已确认状态）原样保留。
-    # 重新生成时 updated 不含 template_id，{**target_page, **updated} 会保留旧
-    # template_id——这里显式清除，恢复为纯 LLM 设计稿。
-    if action_type == "regenerate":
-        updated = {k: v for k, v in updated.items() if k not in {"template_id", "template_source_path"}}
-        pages[target_index] = updated
-    else:
-        pages[target_index] = updated
-    return {
-        "schema_version": UI_MANIFEST_SCHEMA_VERSION,
-        "confirmation_status": "pending_user_confirmation",
-        "product_plan_sha256": _product_plan_hash(state),
-        "pages": pages,
-    }
+async def _apply_ui_design_action(
+    state: ProjectState, existing: dict[str, Any], action: dict[str, Any]
+) -> dict[str, Any]:
+    """把用户逐页「选模板 / 重新生成 / 多页调整」动作交给后台生成池或顺序调整。
+
+    regenerate/select_template（单页与 multi）走后台并发生成池：登记即返回，不再
+    阻塞在 Graph run 内同步调 LLM。adjust_pages 保持一个 run 内顺序处理（基于现有
+    设计稿 + 指令逐页改写），因为它是显式的多页调整请求而非并发生成。
+    """
+
+    workspace = str(workspace_root(state))
+    project_dir = str(ui_design_project_dir(workspace))
+    action_type = str(action.get("action") or "").strip()
+    pages = existing.get("pages") if isinstance(existing, dict) else None
+    pages = [p for p in (pages or []) if isinstance(p, dict)]
+
+    # 多页调整：顺序遍历 pageIds，对每页基于现有设计稿 + 调整指令重新生成。
+    # adjust_pages 不落盘，需在此持久化；换一换/选模板由池落盘，这里不重复写。
+    if action_type == "adjust_pages":
+        adjusted = await _apply_adjust_pages(state, pages, project_dir, action)
+        _persist_ui_designs(state, adjusted)
+        return adjusted
+
+    # 单页 / multi「换一换 / 选模板」：登记到后台并发池。
+    return await _enqueue_ui_design_generation(state, pages, action)
 
 
 async def ui_confirmation(state: ProjectState) -> dict:
@@ -820,23 +684,26 @@ async def ui_confirmation(state: ProjectState) -> dict:
         }
 
     # 恢复路径：已有待确认设计稿且本轮无新提交，直接重放确认卡。
+    # 前端用「无操作 resume」轮询生成进度：这里读工作区最新 ui-designs.json（池在
+    # 后台写入 queued/generating/confirmed/generation_failed），而非只重放 checkpoint。
     if (
         isinstance(existing, dict)
         and existing.get("confirmation_status") == "pending_user_confirmation"
         and not _has_explicit_user_submission(state)
     ):
-        _persist_ui_designs(state, existing)
+        latest = await _latest_ui_designs(state, existing)
         return {
             "phase": "ui_confirmation",
             "status": "requires_user_input",
-            "ui_designs": existing,
-            "clarification": _ui_design_confirmation_payload(state, existing),
+            "ui_designs": latest,
+            "clarification": _ui_design_confirmation_payload(state, latest),
             "timeline": ["ui_confirmation"],
         }
 
-    # 单页动作路径：用户逐页"选模板"或"重新生成"，即时更新该页设计稿后重放确认卡。
+    # 单页动作路径：用户逐页"选模板"或"重新生成"，登记到后台池后立即重放确认卡。
     # 不推进到 project_planning——只有"确认全部设计稿"才放行。动作处理完清除
-    # ui_design_action，避免下次恢复时残留动作被重复执行。
+    # ui_design_action，避免下次恢复时残留动作被重复执行。池已写入最新状态，
+    # _apply_ui_design_action 返回的 ui_designs 无需在此重复落盘。
     if (
         isinstance(action, dict)
         and isinstance(existing, dict)
@@ -844,7 +711,6 @@ async def ui_confirmation(state: ProjectState) -> dict:
         and _has_explicit_user_submission(state)
     ):
         ui_designs = await _apply_ui_design_action(state, existing, action)
-        _persist_ui_designs(state, ui_designs)
         return {
             "phase": "ui_confirmation",
             "status": "requires_user_input",
@@ -855,12 +721,14 @@ async def ui_confirmation(state: ProjectState) -> dict:
         }
 
     # 用户确认路径：检测到全部确认信号且无页面仍待确认。
+    # 先读最新文件（池可能刚完成最后一页），再按当前 ProductPlan 校验。
     if (
         isinstance(existing, dict)
         and existing.get("confirmation_status") == "pending_user_confirmation"
         and _user_confirmed_all_designs(request)
     ):
-        verified, validation_errors = _verified_ui_designs_for_confirmation(state, existing)
+        latest = await _latest_ui_designs(state, existing)
+        verified, validation_errors = _verified_ui_designs_for_confirmation(state, latest)
         if validation_errors:
             clarification = _ui_design_confirmation_payload(state, verified)
             clarification["message"] = "设计稿尚未通过产品事实一致性校验，请修正后再确认。"

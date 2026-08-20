@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
+
+# UI 设计稿生成池会并发（默认 3 个 worker）调用模型，各自的 handler 同时向 stdout
+# 打印流式 token，会字符级交错成乱码。用一把进程级锁把每次 print 原子化。
+_print_lock = threading.Lock()
+
+
+def _print(*args: Any, **kwargs: Any) -> None:
+    with _print_lock:
+        print(*args, **kwargs)
 
 
 class ModelOutputLogHandler(BaseCallbackHandler):
@@ -37,13 +47,13 @@ class ModelOutputLogHandler(BaseCallbackHandler):
         run_id = kwargs.get("run_id")
         if isinstance(run_id, UUID):
             self._streamed_runs.add(run_id)
-        print(token, end="", flush=True)
+        _print(token, end="", flush=True)
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         run_id = kwargs.get("run_id")
         streamed = isinstance(run_id, UUID) and run_id in self._streamed_runs
         if streamed:
-            print(flush=True)
+            _print(flush=True)
 
         for generations in response.generations:
             for generation in generations:
@@ -54,8 +64,8 @@ class ModelOutputLogHandler(BaseCallbackHandler):
                     content = getattr(generation, "text", "")
                 if streamed:
                     if tool_calls:
-                        print("[model-tool-calls]")
-                        print(_stringify_content(tool_calls), flush=True)
+                        _print("[model-tool-calls]")
+                        _print(_stringify_content(tool_calls), flush=True)
                 else:
                     log_model_output(content=content, tool_calls=tool_calls)
 
@@ -65,7 +75,7 @@ class ModelOutputLogHandler(BaseCallbackHandler):
     def _start_run(self, run_id: Any) -> None:
         if isinstance(run_id, UUID):
             self._streamed_runs.discard(run_id)
-        print("[model-output]", flush=True)
+        _print("[model-output]", flush=True)
 
 
 def log_model_output(
@@ -74,15 +84,15 @@ def log_model_output(
     tool_calls: Any = None,
     prefix: str = "[model-output]",
 ) -> None:
-    print(prefix, flush=True)
+    _print(prefix, flush=True)
     text = _stringify_content(content)
     if text:
-        print(text, flush=True)
+        _print(text, flush=True)
     else:
-        print("(empty content)", flush=True)
+        _print("(empty content)", flush=True)
     if tool_calls:
-        print("[model-tool-calls]", flush=True)
-        print(_stringify_content(tool_calls), flush=True)
+        _print("[model-tool-calls]", flush=True)
+        _print(_stringify_content(tool_calls), flush=True)
 
 
 def _stringify_content(value: Any) -> str:

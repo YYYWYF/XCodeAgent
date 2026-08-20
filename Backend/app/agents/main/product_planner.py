@@ -163,9 +163,18 @@ def _invoke_product_planner(
     user_feedback: str = "",
     on_token: Callable[[str], None] | None = None,
 ) -> str:
-    """调用产品规划 ChatModel，并可选透传流式文本。"""
+    """调用产品规划 ChatModel，并可选透传流式文本。
 
-    model = create_chat_model(Settings.from_env())
+    GLM-5.2 默认开启深度思考，thinking 与正文共享 max_tokens。ProductPlan JSON
+    体量大（多页 information_items/actions/state_requirements），thinking 会挤占
+    输出预算，常在写完闭合括号前被截断，流式投到前端的原始 JSON 也随之截断、
+    解析校验失败。与 UI 设计稿生成一致，关闭 thinking 释放输出预算。
+    """
+
+    model = create_chat_model(
+        Settings.from_env(),
+        extra_model_kwargs={"thinking": {"type": "disabled"}},
+    )
     prompt = _product_planning_prompt(requirement_spec, existing_plan, user_feedback)
     if on_token is None:
         result = model.invoke(prompt)

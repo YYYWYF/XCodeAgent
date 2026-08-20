@@ -75,7 +75,7 @@ export async function fetchTemplateCode(
       console.error('[模板拉取失败]', error)
     }
   } else {
-    console.warn('[templateApi] 当前环境不支持拉取模板工程，跳过 git clone。')
+    console.warn('当前环境不支持拉取模板工程，跳过 git clone。')
   }
 
   return {
@@ -316,45 +316,23 @@ export async function generateApplicationTemplateFiles(
   }
 
   const artifacts = extractFrontendTemplateArtifacts(workflow)
-  console.log(
-    '[templateApi] generateApplicationTemplateFiles 调用: ' +
-      JSON.stringify({
-        appName,
-        projectPath,
-        pagesCount: artifacts.pages.length,
-        pages: artifacts.pages,
-        menuItems: artifacts.menuItems,
-        hasWorkflow: Boolean(workflow),
-        resultKeys: workflow?.result ? Object.keys(workflow.result) : [],
-        stateKeys: workflow?.state ? Object.keys(workflow.state) : [],
-        hasProjectPlanInResult: Boolean(
-          (workflow?.result as Record<string, unknown> | undefined)?.project_plan
-        ),
-        hasProjectPlanInState: Boolean(
-          (workflow?.state as Record<string, unknown> | undefined)?.project_plan
-        )
-      })
-  )
   if (artifacts.pages.length === 0) {
-    console.warn('[templateApi] 未从规划结果中提取到页面清单，跳过页面文件生成。')
+    console.warn('未从规划结果中提取到页面清单，跳过页面文件生成。')
     return { written: [] }
   }
 
   const workspaceApi = window.xcodeAgent?.workspace
-  console.log('[templateApi] workspaceApi 存在: ' + Boolean(workspaceApi) + ', writeTemplatePages: ' + Boolean(workspaceApi?.writeTemplatePages))
   if (!workspaceApi?.writeTemplatePages) {
-    console.warn('[templateApi] 当前环境不支持写入页面文件，跳过。')
+    console.warn('当前环境不支持写入页面文件，跳过模板页生成。')
     return { written: [] }
   }
 
-  console.log('[templateApi] 调用 writeTemplatePages IPC, payload=' + JSON.stringify(artifacts))
   const result = await workspaceApi.writeTemplatePages({
     projectPath,
     appName,
     pages: artifacts.pages,
     menuItems: artifacts.menuItems
   })
-  console.log('[templateApi] writeTemplatePages 返回: ' + JSON.stringify(result))
 
   return { written: result?.written ?? [] }
 }

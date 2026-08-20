@@ -1017,7 +1017,8 @@ def _workflow_start_node(
     if workflow_scope == "application_planning":
         return (
             resume_from
-            if resume_from in {"requirements", "project_planning"}
+            if resume_from
+            in {"requirements", "product_planning", "ui_confirmation", "technical_planning"}
             else "requirements"
         )
     if resume_from == "detail_confirmation":
