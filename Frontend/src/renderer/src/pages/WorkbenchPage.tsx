@@ -1,5 +1,4 @@
-import { Layout, notification } from 'antd'
-import { LoadingOutlined } from '@ant-design/icons'
+import { Layout } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { LeftPanel, WorkbenchTopBar } from '../components'
 import { WorkbenchPhaseProvider } from '../context'
@@ -22,6 +21,10 @@ import type {
 } from '../typings'
 import { cx, previewOrigin } from '../utils'
 import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
+import {
+  hasApplicationEnteredDevelopment,
+  subscribeApplicationDevelopmentEntry
+} from '../workbenchPhase'
 import './WorkbenchPage.less'
 
 type Props = {
@@ -101,14 +104,27 @@ function WorkbenchPage({
   const launchRunIdRef = useRef(0)
   const launchCleanupPendingRef = useRef(false)
   const launchCleanupTimerRef = useRef<number>()
+  const [developmentEntryConfirmed, setDevelopmentEntryConfirmed] = useState(
+    () => application.source !== 'new' || hasApplicationEnteredDevelopment(application.id)
+  )
   // 模板是否就绪（lifecycle=ready_for_workbench）。用 boolean 而非整个 lifecycle 作为预览启动
   // effect 的依赖，避免规划期流式 workflow 事件频繁递增 revision 导致 effect 反复 cleanup，
   // 进而中断正在进行的 npm install / dev server 启动。
   const lifecycleReadyForWorkbench = isApplicationCreationComplete(applicationLifecycle)
 
-  // 进入工作台时自动异步尝试启动项目预览（首次创建和重新进入均生效）。
-  // 新建应用需等模板拉取完成（lifecycle=ready_for_workbench）后才有 frontend/package.json，
-  // 在此之前启动会报"未找到前端 package.json"，故规划期跳过，就绪后再启动。
+  useEffect(() => {
+    if (application.source !== 'new') {
+      setDevelopmentEntryConfirmed(true)
+      return
+    }
+    setDevelopmentEntryConfirmed(hasApplicationEnteredDevelopment(application.id))
+    return subscribeApplicationDevelopmentEntry(application.id, () => {
+      setDevelopmentEntryConfirmed(true)
+    })
+  }, [application.id, application.source])
+
+  // 进入开发阶段后自动异步尝试启动项目预览（首次创建和重新进入均生效）。
+  // 新建应用必须同时满足模板就绪与用户已进入开发，避免在设计阶段末尾提前启动项目。
   useEffect(() => {
     const workspacePath =
       application.workspaceRoot || application.projectParentPath || ''
@@ -122,16 +138,19 @@ function WorkbenchPage({
       setPreviewLaunchLoading(false)
       return
     }
-    // 新建应用在模板就绪前不启动预览（工作区尚无 frontend/package.json）。
-    // 非新建应用（source !== 'new'）已有完整工程，直接启动。
-    if (application.source === 'new' && !lifecycleReadyForWorkbench) {
+    // 新建应用只有进入开发阶段且模板就绪后才能启动；已有工程打开时默认已处于开发阶段。
+    if (
+      application.source === 'new' &&
+      (!lifecycleReadyForWorkbench || !developmentEntryConfirmed)
+    ) {
       activeLaunchWorkspaceRef.current = ''
       setPreviewLaunchLoading(false)
       return
     }
     activeLaunchWorkspaceRef.current = workspacePath
     if (launchedWorkspaceRef.current === workspacePath) {
-      setPreviewLaunchLoading(false)
+      // 同一工作区的启动请求可能因 Strict Mode 重放 effect 再次进入这里；
+      // 保留现有 loading，直到原请求明确成功或失败，避免按钮提前结束加载态。
       const existingLaunchRunId = launchRunIdRef.current
       return () => {
         launchCleanupPendingRef.current = true
@@ -152,24 +171,12 @@ function WorkbenchPage({
     setPreviewLaunchError('')
     setPreviewLaunchLoading(true)
 
-    const loadingKey = `project-launch-${application.id}-${launchRunId}`
-    notification.open({
-      key: loadingKey,
-      message: '项目正在启动中',
-      description: '正在安装依赖并启动开发服务器，请稍候...',
-      placement: 'bottomRight',
-      duration: null,
-      icon: <LoadingOutlined />,
-      className: cx('project-launch-loading')
-    })
-
     startProjectLaunch(workspacePath)
       .then((result) => {
         const launchStillCurrent =
           launchRunIdRef.current === launchRunId &&
           activeLaunchWorkspaceRef.current === workspacePath &&
           !launchCleanupPendingRef.current
-        notification.close(loadingKey)
         if (!launchStillCurrent) {
           if (result.status === 'running') {
             void stopProjectPreview(workspacePath).finally(() => {
@@ -187,26 +194,13 @@ function WorkbenchPage({
           })
           setPreviewBaseUrl(previewOrigin(result.preview_url))
           setPreviewLaunchError('')
-          notification.success({
-            message: '项目预览已启动',
-            description: '可在预览面板中查看效果',
-            placement: 'bottomRight',
-            duration: 3
-          })
         } else {
           const errorMsg = result.message || '未知错误'
           setPreviewBaseUrl('')
           setPreviewLaunchError(errorMsg)
-          notification.warning({
-            message: '项目预览启动失败',
-            description: `${errorMsg}，可在预览区查看详情`,
-            placement: 'bottomRight',
-            duration: 3
-          })
         }
       })
       .catch((err) => {
-        notification.close(loadingKey)
         const launchStillCurrent =
           launchRunIdRef.current === launchRunId &&
           activeLaunchWorkspaceRef.current === workspacePath &&
@@ -216,7 +210,6 @@ function WorkbenchPage({
         const errorMsg = err instanceof Error ? err.message : '网络请求失败'
         setPreviewBaseUrl('')
         setPreviewLaunchError(errorMsg)
-        setPreviewLaunchLoading(false)
       })
     return () => {
       launchCleanupPendingRef.current = true
@@ -234,6 +227,7 @@ function WorkbenchPage({
     application.source,
     application.projectParentPath,
     application.workspaceRoot,
+    developmentEntryConfirmed,
     lifecycleReadyForWorkbench
   ])
 

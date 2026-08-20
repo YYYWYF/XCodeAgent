@@ -1,5 +1,49 @@
 import type { ApplicationLifecycle } from './typings'
 
+const DEVELOPMENT_ENTRY_STORAGE_PREFIX = 'xcodeagent:enter-dev-confirmed:'
+const DEVELOPMENT_ENTRY_EVENT = 'xcodeagent:development-entered'
+
+/** 生成应用进入开发阶段的持久化键。 */
+function developmentEntryStorageKey(applicationId: string): string {
+  return `${DEVELOPMENT_ENTRY_STORAGE_PREFIX}${applicationId}`
+}
+
+/** 判断用户是否已明确让指定新应用进入开发阶段。 */
+export function hasApplicationEnteredDevelopment(applicationId: string): boolean {
+  return window.localStorage.getItem(developmentEntryStorageKey(applicationId)) === '1'
+}
+
+/** 持久化进入开发阶段的决定，并通知当前窗口内依赖该门禁的功能。 */
+export function markApplicationEnteredDevelopment(applicationId: string): void {
+  window.localStorage.setItem(developmentEntryStorageKey(applicationId), '1')
+  window.dispatchEvent(
+    new CustomEvent(DEVELOPMENT_ENTRY_EVENT, { detail: { applicationId } })
+  )
+}
+
+/** 监听指定应用进入开发阶段的决定，兼顾当前窗口操作与其他窗口同步。 */
+export function subscribeApplicationDevelopmentEntry(
+  applicationId: string,
+  listener: () => void
+): () => void {
+  const handleDevelopmentEntry = (event: Event): void => {
+    const enteredApplicationId = (event as CustomEvent<{ applicationId?: string }>).detail
+      ?.applicationId
+    if (enteredApplicationId === applicationId) listener()
+  }
+  const handleStorage = (event: StorageEvent): void => {
+    if (event.key === developmentEntryStorageKey(applicationId) && event.newValue === '1') {
+      listener()
+    }
+  }
+  window.addEventListener(DEVELOPMENT_ENTRY_EVENT, handleDevelopmentEntry)
+  window.addEventListener('storage', handleStorage)
+  return () => {
+    window.removeEventListener(DEVELOPMENT_ENTRY_EVENT, handleDevelopmentEntry)
+    window.removeEventListener('storage', handleStorage)
+  }
+}
+
 /**
  * 工作台三大阶段，每个阶段对应一个 Agent。
  * 阶段是主开关：先切到对应阶段，才能编辑该阶段的对象；点文件不会自动切阶段。
