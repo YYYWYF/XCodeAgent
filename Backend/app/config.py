@@ -36,8 +36,19 @@ class Settings:
     )
     default_temperature: float = 0.2
     default_max_tokens: int = 2048
-    ui_design_max_tokens: int = 8192
-    ui_design_max_retries: int = 2
+    # UI 确认节点生成 React 设计稿的生成 token 上限。推理模型（如 glm-5.2）的
+    # 思考过程与正文共用该预算，且网关会把 thinking 以 [{'thinking': ..}] 碎片
+    # 形式逐 token 拼进 content——16384 时思考可吃掉大部分预算导致正文在
+    # `export default` 前被截断，故提到 32768 给足余量。
+    ui_design_max_tokens: int = 32768
+    # UI 设计稿生成后校验失败时的自动修复重试次数（回喂错误给 LLM 让其修正）。
+    # 默认 1：外层校验重试 1 次 + 内层 API 重试 1 次，最坏 4 次 LLM 调用，
+    # 单页最坏约 1 分钟内出结果；校验仍不过则标记 generation_failed 让用户手动重试，
+    # 不长时间卡住。如需更激进的自动修复可调高（注意最坏调用数 = (n+1)^2）。
+    ui_design_max_retries: int = 1
+    # UI 设计稿并发生成 worker 数量：解耦式生成池（ui_design_generation_pool）同时
+    # 调用 LLM 生成设计稿的并发上限。默认 3，避免单 API Key 触发模型服务限流。
+    ui_design_concurrency: int = 3
     checkpoint_db_path: str = ""  # populated in from_env
     checkpoint_retention_days: int = 30
     langsmith_tracing_enabled: bool = False
@@ -82,10 +93,13 @@ class Settings:
             default_temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
             default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "2048")),
             ui_design_max_tokens=int(
-                os.getenv("UI_DESIGN_MAX_TOKENS", "8192")
+                os.getenv("XCODEAGENT_UI_DESIGN_MAX_TOKENS", "32768")
             ),
             ui_design_max_retries=int(
-                os.getenv("UI_DESIGN_MAX_RETRIES", "2")
+                os.getenv("XCODEAGENT_UI_DESIGN_MAX_RETRIES", "1")
+            ),
+            ui_design_concurrency=int(
+                os.getenv("XCODEAGENT_UI_DESIGN_CONCURRENCY", "3")
             ),
             checkpoint_db_path=os.getenv("XCODEAGENT_CHECKPOINT_DB", ""),
             checkpoint_retention_days=int(
