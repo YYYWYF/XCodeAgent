@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from app.services.frontend_performance_runner import (
     PERFORMANCE_CHECK_ID,
+    _lighthouserc_config,
     frontend_performance_available,
     run_frontend_performance_check,
 )
@@ -42,6 +43,15 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertFalse(frontend_performance_available(state))
+
+    def test_lighthouserc_config_skips_full_page_screenshot(self) -> None:
+        """整页截图不参与评分和指标，跳过它规避新版 Chrome 的协议超时。"""
+
+        config = _lighthouserc_config("http://localhost:3000")
+        settings = config["ci"]["collect"]["settings"]
+
+        self.assertEqual(config["ci"]["collect"]["url"], ["http://localhost:3000"])
+        self.assertEqual(settings["skipAudits"], ["full-page-screenshot"])
 
     def test_missing_frontend_returns_skipped_advisory(self) -> None:
         """没有可启动前端时跳过性能测试且不阻断门禁。"""
