@@ -482,6 +482,8 @@ testing.START
 
 `main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；质量门禁通过时跳过修复计划并输出 `integration_next_action = launch_project`。
 
+任一阻塞性检查失败时，单元测试确认与前端性能确认两个可选门自动跳过，检查记录为 `passed=true, skipped=true`，流程直达质量门禁与修复规划，不再要求用户先回答跳过/继续。advisory 的 `frontend_performance` 失败不触发修复，测试生成越权写入仍作为安全失败直接终止。
+
 当前质量门禁覆盖：
 
 - 前端 TypeScript 依赖安装；
@@ -490,7 +492,9 @@ testing.START
 - 前端和后端单元测试生成校验，以及存在对应测试文件时的 Jest/Surefire 单元测试。
 - `frontend_performance` 作为 advisory 检查纳入报告展示，但不参与门禁阻断与返修。
 
-单元测试生成是正式 Workflow 中的尽力而为阶段：测试子图从刚完成的 Build 代码变更集合中提取目标业务源码及有界真实 diff，并先完成前后端依赖、类型和构建检查；构建完成后暂停并通过 AG-UI 展示“是否跳过单元测试”的两个按钮。选择跳过时，生成和单元测试检查记录为 `passed=true, skipped=true` 后进入前端性能确认；选择继续时才交给 TestGeneration Agent，再执行前后端单元测试。本轮没有对应测试文件、生成 Agent 无输出或 Agent 初始化失败时，生成和单测检查仍按尽力而为策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败仍进入 RepairPlanner → SmallTask 修复闭环。子图通过 `build_project_checks → unit_test_confirmation → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks) → frontend_performance_confirmation → (skip_frontend_performance | frontend_performance_test)` 固定执行顺序，并在确认恢复时复用已完成的构建检查快照，避免重复安装和构建。TestGeneration Agent 调用期间通过 `integration_test.checks` 发布逐层 `running` 快照，前端原位展示集成检查矩阵、旋转 loading 和生成说明，校验完成后再更新为通过、跳过或失败；实时快照与最终报告均按依赖/类型检查、构建、测试生成检查、单元测试、前端性能测试的稳定顺序展示。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。测试生成期间 LangGraph 对 `.xcodeagent/checkpoints/` 的技术性写入不属于工程变更；其他 `.xcodeagent` 正式工件仍受越权修改检查保护。
+单元测试生成是正式 Workflow 中的尽力而为阶段：测试子图从刚完成的 Build 代码变更集合中提取目标业务源码及有界真实 diff，并先完成前后端依赖、类型和构建检查；构建检查无阻塞失败时暂停并通过 AG-UI 展示“是否跳过单元测试”的两个按钮。选择跳过时，生成和单元测试检查记录为 `passed=true, skipped=true` 后进入前端性能确认；选择继续时才交给 TestGeneration Agent，再执行前后端单元测试。本轮没有对应测试文件、生成 Agent 无输出或 Agent 初始化失败时，生成和单测检查仍按尽力而为策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败仍进入 RepairPlanner → SmallTask 修复闭环。子图通过 `build_project_checks → unit_test_confirmation → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks) → frontend_performance_confirmation → (skip_frontend_performance | frontend_performance_test)` 固定执行顺序，并在确认恢复时复用已完成的构建检查快照，避免重复安装和构建。TestGeneration Agent 调用期间通过 `integration_test.checks` 发布逐层 `running` 快照，前端原位展示集成检查矩阵、旋转 loading 和生成说明，校验完成后再更新为通过、跳过或失败；实时快照与最终报告均按依赖/类型检查、构建、测试生成检查、单元测试、前端性能测试的稳定顺序展示。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。测试生成期间 LangGraph 对 `.xcodeagent/checkpoints/` 的技术性写入不属于工程变更；其他 `.xcodeagent` 正式工件仍受越权修改检查保护。
+
+集成测试修复授权使用用户 workspace 下的项目目录级范围：frontend 侧失败授权 `frontend/`，backend 侧失败授权 `backend/`，同时把具体失败文件（如 `backend/pom.xml`、`frontend/package.json`、对应测试与业务源码）保留为 `target_files`/`change_scope` 提示。RepairPlanner 返回 `requires_user_confirmation` 或 `terminal_failure` 时，只要确定性候选任务携带真实授权路径，就自动升级为 `ready/repair` 并直接派发 SmallTask；仅无真实路径、安全失败或修复预算耗尽时才等待扩权确认或进入 `handle_failure`。
 
 输出至少包含：
 

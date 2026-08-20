@@ -211,6 +211,18 @@ def _unit_test_decision(state: ProjectState | dict[str, Any]) -> str:
     return ""
 
 
+def _blocking_test_failures(state: ProjectState | dict[str, Any]) -> list[dict[str, Any]]:
+    """收集本轮阻塞性检查失败，任何一步失败都直接短路到质量门禁与修复。"""
+
+    return [
+        result
+        for result in state.get("test_results", [])
+        if isinstance(result, dict)
+        and not bool(result.get("passed"))
+        and bool(result.get("blocking", True))
+    ]
+
+
 def _unit_test_confirmation_payload() -> dict[str, Any]:
     """构造构建完成后的单元测试可选确认载荷。"""
 
@@ -1041,8 +1053,16 @@ def build_project_checks(
 
 
 def unit_test_confirmation(state: ProjectState) -> dict[str, Any]:
-    """在构建检查完成后暂停，等待用户选择是否执行可选单元测试。"""
+    """无阻塞失败时暂停等待用户选择；存在阻塞失败则自动跳过直达质量门禁。"""
 
+    if _blocking_test_failures(state):
+        return {
+            "status": "in_progress",
+            "clarification": {},
+            "unit_test_decision": "skip",
+            "integration_next_action": "skip_unit_tests",
+            "test_events": ["unit_test_confirmation:auto_skipped_blocking_failure"],
+        }
     if state.get("unit_test_generation_enabled") is False:
         return {
             "status": "in_progress",
@@ -1097,8 +1117,9 @@ def _skipped_unit_test_check(
     *,
     layer: str,
     check_type: str,
+    evidence: str = "用户选择跳过单元测试，本轮不生成、不执行单元测试。",
 ) -> dict[str, Any]:
-    """构造用户主动跳过时的单元测试生成或执行检查结果。"""
+    """构造跳过时的单元测试生成或执行检查结果，支持用户跳过与失败短路两种原因。"""
 
     layer_label = "前端" if layer == "frontend" else "后端"
     if check_type == "generation":
@@ -1116,7 +1137,7 @@ def _skipped_unit_test_check(
         "skipped": True,
         "required": False,
         "command": None,
-        "evidence": "用户选择跳过单元测试，本轮不生成、不执行单元测试。",
+        "evidence": evidence,
         "failure_category": None,
         "execution": {
             "tool": "none",
@@ -1134,10 +1155,20 @@ def skip_unit_tests(
     state: ProjectState,
     config: RunnableConfig,
 ) -> dict[str, Any]:
-    """记录用户主动跳过的生成和单元测试检查，并直接进入质量门禁。"""
+    """记录跳过的生成和单元测试检查，并直接进入质量门禁。"""
 
+    auto_skipped = bool(_blocking_test_failures(state))
+    evidence = (
+        "存在阻塞性检查失败，自动跳过单元测试，直接进入质量门禁与修复规划。"
+        if auto_skipped
+        else "用户选择跳过单元测试，本轮不生成、不执行单元测试。"
+    )
     checks = [
-        _skipped_unit_test_check(layer=layer, check_type=check_type)
+        _skipped_unit_test_check(
+            layer=layer,
+            check_type=check_type,
+            evidence=evidence,
+        )
         for layer in _unit_test_layers(state)
         for check_type in ("generation", "unit")
     ]
@@ -1150,8 +1181,16 @@ def skip_unit_tests(
         ),
         "unit_test_decision": "skip",
         "test_events": [
-            "unit_test_generation:skipped_by_user",
-            "unit_tests:skipped_by_user",
+            (
+                "unit_test_generation:auto_skipped_blocking_failure"
+                if auto_skipped
+                else "unit_test_generation:skipped_by_user"
+            ),
+            (
+                "unit_tests:auto_skipped_blocking_failure"
+                if auto_skipped
+                else "unit_tests:skipped_by_user"
+            ),
         ],
     }
 
@@ -1191,6 +1230,16 @@ def frontend_performance_confirmation(
             "frontend_performance_decision": "skip",
             "integration_next_action": "skip_frontend_performance",
             "test_events": ["frontend_performance_confirmation:auto_skipped_disabled"],
+        }
+    if _blocking_test_failures(state):
+        return {
+            "status": "in_progress",
+            "clarification": {},
+            "frontend_performance_decision": "skip",
+            "integration_next_action": "skip_frontend_performance",
+            "test_events": [
+                "frontend_performance_confirmation:auto_skipped_blocking_failure"
+            ],
         }
     if not frontend_performance_available(state) or not frontend_build_passed(state):
         return {
@@ -1236,10 +1285,15 @@ def skip_frontend_performance(
     state: ProjectState,
     config: RunnableConfig,
 ) -> dict[str, Any]:
-    """记录用户主动跳过的前端性能测试，并直接进入质量门禁。"""
+    """记录跳过的前端性能测试，并直接进入质量门禁。"""
 
+    auto_skipped = bool(_blocking_test_failures(state))
     check = _skipped_frontend_performance_check(
-        "本轮跳过前端性能测试，不启动前端、不执行 Lighthouse。"
+        (
+            "存在阻塞性检查失败，自动跳过前端性能测试，直接进入质量门禁与修复规划。"
+            if auto_skipped
+            else "本轮跳过前端性能测试，不启动前端、不执行 Lighthouse。"
+        )
     )
     reporter = _progress_reporter(config)
     _report_generation_progress(reporter, check=check, status="skipped")
@@ -1248,7 +1302,13 @@ def skip_frontend_performance(
             [*state.get("test_results", []), check]
         ),
         "frontend_performance_decision": "skip",
-        "test_events": ["frontend_performance:skipped"],
+        "test_events": [
+            (
+                "frontend_performance:auto_skipped_blocking_failure"
+                if auto_skipped
+                else "frontend_performance:skipped"
+            )
+        ],
     }
 
 
@@ -1288,6 +1348,48 @@ def main_quality_gate(state: ProjectState) -> dict:
         "needs_revision": report["needs_revision"],
         "revision_requests": report["revision_requests"],
         "test_events": ["main_quality_gate"],
+    }
+
+
+def _task_has_real_repair_paths(task: dict[str, Any]) -> bool:
+    """候选修复任务必须携带真实路径授权，占位路径不可直接派发。"""
+
+    for key in ("allowed_paths", "target_files"):
+        for path in task.get(key, []) or []:
+            normalized = str(path or "").strip()
+            if normalized and not normalized.casefold().startswith("<no file paths"):
+                return True
+    return False
+
+
+def _upgrade_candidate_repair_plan(
+    repair_task_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """把已授权目录内的确定性候选任务自动升级为可执行修复任务。"""
+
+    if not isinstance(repair_task_plan, dict):
+        return repair_task_plan
+    if repair_task_plan.get("status") not in {
+        "requires_user_confirmation",
+        "terminal_failure",
+    }:
+        return repair_task_plan
+    candidates = [
+        item
+        for item in repair_task_plan.get("candidateTasks", [])
+        if isinstance(item, dict)
+    ]
+    usable = [task for task in candidates if _task_has_real_repair_paths(task)]
+    if not usable:
+        return repair_task_plan
+    return {
+        **repair_task_plan,
+        "status": "ready",
+        "decision": "repair",
+        "tasks": usable,
+        "candidateTasks": candidates,
+        "original_decision": repair_task_plan.get("decision"),
+        "auto_dispatched_candidate": True,
     }
 
 
@@ -1408,6 +1510,7 @@ def repair_planning(state: ProjectState) -> dict:
         ),
     )
     repair_task_plan = captured.value
+    repair_task_plan = _upgrade_candidate_repair_plan(repair_task_plan)
     repair_task_plan_path = write_repair_task_plan_json(state, repair_task_plan)
     next_action = _next_action_for_repair_plan(repair_task_plan)
     return {
@@ -1475,8 +1578,75 @@ def _next_action_for_repair_plan(repair_task_plan: dict) -> str:
     return "handle_failure"
 
 
+_REPAIR_DIRECTORY_BY_OWNER = {
+    "frontend": "frontend",
+    "backend": "backend",
+}
+_INTEGRATION_REPAIR_CONFIG_HINTS = {
+    "frontend_install": [
+        "frontend/package.json",
+        "frontend/pnpm-lock.yaml",
+        "frontend/package-lock.json",
+        "frontend/yarn.lock",
+    ],
+    "frontend_build": [
+        "frontend/package.json",
+        "frontend/tsconfig.json",
+        "frontend/tsconfig.app.json",
+        "frontend/tsconfig.node.json",
+        "frontend/vite.config.ts",
+        "frontend/vite.config.js",
+    ],
+    "backend_build": ["backend/pom.xml"],
+    "backend_static_check": [
+        "backend/pom.xml",
+        "backend/src/main/resources/application.yml",
+    ],
+}
+
+
+def _failed_repair_owners(
+    state: ProjectState,
+) -> dict[str, list[dict[str, Any]]]:
+    """把本轮阻塞失败按 frontend/backend owner 汇总，驱动目录级修复授权。"""
+
+    owners: dict[str, list[dict[str, Any]]] = {"frontend": [], "backend": []}
+    for result in _blocking_test_failures(state):
+        check_id = str(result.get("id") or "")
+        if check_id.startswith("frontend_"):
+            owners["frontend"].append(result)
+        elif check_id.startswith("backend_"):
+            owners["backend"].append(result)
+        else:
+            owners["frontend"].append(result)
+            owners["backend"].append(result)
+    return owners
+
+
+def _repair_config_hints_for(
+    state: ProjectState,
+    owner: str,
+) -> list[str]:
+    """按 owner 提取失败检查对应的具体修复提示文件，目录授权之外保留精确线索。"""
+
+    hints: list[str] = []
+    for result in _blocking_test_failures(state):
+        check_id = str(result.get("id") or "")
+        owner_matches = (
+            owner == "frontend"
+            and check_id.startswith("frontend_")
+        ) or (
+            owner == "backend"
+            and check_id.startswith("backend_")
+        )
+        if not owner_matches:
+            continue
+        hints.extend(_INTEGRATION_REPAIR_CONFIG_HINTS.get(check_id, []))
+    return list(dict.fromkeys(hints))
+
+
 def _repair_scoped_tasks(state: ProjectState) -> list[dict[str, Any]]:
-    """把生成测试文件并入同层修复授权，使 SmallTask 能判断测试或业务代码错误。"""
+    """按 owner 授权用户 workspace 下的 backend/frontend 目录，并保留精确目标文件。"""
 
     execution_slice = state.get("build_execution_slice")
     execution_slice = execution_slice if isinstance(execution_slice, dict) else {}
@@ -1491,25 +1661,45 @@ def _repair_scoped_tasks(state: ProjectState) -> list[dict[str, Any]]:
     context = state.get("unit_test_generation_context")
     context = context if isinstance(context, dict) else {}
     source_files = _string_list(context.get("source_files"), limit=100)
+    failed_by_owner = _failed_repair_owners(state)
     for owner in ("frontend", "backend"):
         owner_tests = [path for path in test_files if _test_file_layer(path) == owner]
         owner_sources = [path for path in source_files if _source_layer(path) == owner]
-        if not owner_tests and not owner_sources:
+        config_hints = _repair_config_hints_for(state, owner)
+        owner_failures = failed_by_owner.get(owner, [])
+        if not owner_tests and not owner_sources and not config_hints and not owner_failures:
             continue
         owner_task = next((task for task in tasks if task.get("owner") == owner), None)
         if owner_task is None:
-            owner_task = {"id": f"unit-tests:{owner}", "owner": owner, "unit_id": owner}
+            owner_task = {
+                "id": (
+                    f"unit-tests:{owner}"
+                    if owner_tests or owner_sources
+                    else f"integration-repair:{owner}"
+                ),
+                "owner": owner,
+                "unit_id": owner,
+            }
             tasks.append(owner_task)
-        for key in ("allowed_paths", "target_files"):
-            owner_task[key] = list(
-                dict.fromkeys(
-                    [
-                        *_string_list(owner_task.get(key), limit=100),
-                        *owner_sources,
-                        *owner_tests,
-                    ]
-                )
+        # 目录级硬授权：允许 SmallTask 修改该 owner 的整个项目目录。
+        owner_task["allowed_paths"] = list(
+            dict.fromkeys(
+                [
+                    *_string_list(owner_task.get("allowed_paths"), limit=100),
+                    _REPAIR_DIRECTORY_BY_OWNER[owner],
+                ]
             )
+        )
+        owner_task["target_files"] = list(
+            dict.fromkeys(
+                [
+                    *_string_list(owner_task.get("target_files"), limit=100),
+                    *owner_sources,
+                    *owner_tests,
+                    *config_hints,
+                ]
+            )
+        )[:100]
     return tasks
 
 
