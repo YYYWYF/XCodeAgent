@@ -4,6 +4,8 @@
 
 应用创建流程把产品决策和开发决策拆成两个独立确认边界，避免 UI 设计稿与页面详细设计重复定义布局、组件和交互。
 
+四个正式产物均采用 LangGraph 原生人工审阅门：需求澄清期间只更新 checkpoint 中的未完成事实，不生成或写入 RequirementSpec 草稿；模型判定没有重要缺口后才写入待确认 Markdown/内部 JSON，再进入独立 review 节点调用 `interrupt()`。用户操作通过同一 thread 的 `Command(resume=...)` 恢复。创建规划的 SQLite checkpoint 是上下文权威，前端只提交包含 `gateId`、产物摘要和显式 action 的 `applicationPlanningInteraction`，不回传 Workflow 状态来推断恢复节点。`confirm`、`revise`、需求澄清 `answer`、UI `ui_action` 和底部 `design_change` 具有不同类型；前端按按钮/表单的明确意图产生 action，产物节点直接消费 action，用户文本只作为回答或修订内容。服务端按 thread 串行完成中断读取、版本校验和恢复，旧卡片、摘要不匹配或并发重复提交必须在节点执行前拒绝。
+
 ```text
 RequirementSpec
   -> 产品确认
@@ -25,7 +27,7 @@ Workbench
 
 ### RequirementSpec
 
-路径：`.xcodeagent/specs/requirement-spec.md|json`
+草稿路径：`.xcodeagent/drafts/specs/requirement-spec.md|json`；确认后正式路径：`.xcodeagent/specs/requirement-spec.md|json`
 
 负责人：产品。
 
@@ -33,7 +35,7 @@ Workbench
 
 ### ProductPlan
 
-路径：`.xcodeagent/plans/product-plan.md|json`
+草稿路径：`.xcodeagent/drafts/plans/product-plan.md|json`；确认后正式路径：`.xcodeagent/plans/product-plan.md|json`
 
 负责人：产品。
 

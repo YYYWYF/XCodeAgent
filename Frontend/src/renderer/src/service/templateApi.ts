@@ -104,7 +104,7 @@ async function runApplicationTemplateReadiness(
   return lifecycle
 }
 
-/** 以工作区为粒度合并并发 readiness；任务结束后允许下一次进入重新对账。 */
+/** 以工作区为粒度合并同一次 TechnicalPlan 确认触发的并发 readiness。 */
 export function ensureApplicationTemplateReadiness(
   application: ApplicationConfig,
   threadId: string

@@ -21,9 +21,9 @@ from app.services.entity_definitions import (
 from app.workspace.spec_documents import (
     load_requirement_spec_json,
     render_requirement_spec_markdown,
-    requirement_spec_json_path,
-    requirement_spec_markdown_path,
-    write_requirement_spec_document,
+    requirement_spec_draft_json_path,
+    requirement_spec_draft_markdown_path,
+    write_requirement_spec_draft_document,
 )
 
 
@@ -243,7 +243,7 @@ def merge_clarification_answers_into_spec(
                     "pageId": _stable_id("page", value, index),
                     "name": value,
                     "path": f"/{_stable_id('page', value, index).removeprefix('page_').replace('_', '-')}",
-                    "module_id": "core_management",
+                    "module_id": _stable_id("module", value, index),
                     "description": f"{value}页面。",
                 }
                 for index, value in enumerate(values)
@@ -259,19 +259,12 @@ def merge_clarification_answers_into_spec(
                 for index, value in enumerate(values)
             ]
         elif "数据源" in question or "数据" in question or "存储" in question:
-            existing_entities = (
+            # 澄清答案只补充用户明确提供的事实，不为技术问题凭空创建核心实体。
+            merged["entities"] = (
                 merged.get("entities")
                 if isinstance(merged.get("entities"), list)
                 else []
             )
-            merged["entities"] = existing_entities or [
-                {
-                    "id": "CoreEntity",
-                    "name": "核心业务对象",
-                    "description": "提供核心业务页面所需展示的数据。",
-                    "fields": [],
-                }
-            ]
         elif "验收" in question:
             merged["acceptance_criteria"] = values
 
@@ -607,6 +600,7 @@ def create_requirement_spec(
     existing_spec: dict[str, Any] | None = None,
     authoritative_agent_spec: bool = False,
     datasource_type: DatasourceType | None = None,
+    allow_inferred_defaults: bool = True,
 ) -> dict[str, Any]:
     """生成完整 RequirementSpec，并把数据源类型限定为应用策略类型。"""
 
@@ -623,8 +617,9 @@ def create_requirement_spec(
         agent_spec=agent_spec,
         existing_spec=existing_spec,
     )
-    modules = _feature_modules(source_text)
-    app_name = _app_name(source_text)
+    # 模型正在 ask_user 时只允许保留已有或明确返回的事实，禁止用默认页面填充未决需求。
+    modules = _feature_modules(source_text) if allow_inferred_defaults else []
+    app_name = _app_name(source_text) if allow_inferred_defaults else ""
     roles = [
         {
             "id": "admin",
@@ -636,7 +631,15 @@ def create_requirement_spec(
             "name": "普通用户",
             "description": "负责日常业务查看和处理。",
         },
-    ]
+    ] if allow_inferred_defaults else []
+
+    default_app_info = {
+        "name": app_name,
+        "summary": merged_summary,
+        "target": "生成一个可在本地运行的前后端应用工程。"
+        if allow_inferred_defaults
+        else "",
+    }
 
     default_spec = {
         "version": "0.1.0",
@@ -644,17 +647,15 @@ def create_requirement_spec(
         "generated_at": datetime.now(UTC).isoformat(),
         "summary": merged_summary,
         "source_request": source_text,
-        "app_info": {
-            "name": app_name,
-            "summary": merged_summary,
-            "target": "生成一个可在本地运行的前后端应用工程。",
-        },
+        "app_info": default_app_info,
         "user_roles": roles,
         "feature_modules": modules,
-        "pages": _pages(modules),
-        "entities": _entities(modules),
-        "business_flows": _business_flows(modules),
-        "acceptance_criteria": _acceptance_criteria(app_name),
+        "pages": _pages(modules) if allow_inferred_defaults else [],
+        "entities": _entities(modules) if allow_inferred_defaults else [],
+        "business_flows": _business_flows(modules) if allow_inferred_defaults else [],
+        "acceptance_criteria": (
+            _acceptance_criteria(app_name) if allow_inferred_defaults else []
+        ),
         "clarification_questions": [],
         "agent_note": agent_note,
         "approved": True,
@@ -928,7 +929,7 @@ def save_requirement_spec_draft(
     datasource_type = datasource_type_from_artifact({}, fallback="database")
 
     state: dict[str, Any] = {"workspace": str(workspace)}
-    json_path = requirement_spec_json_path(state)
+    json_path = requirement_spec_draft_json_path(state)
     if not json_path.is_file():
         raise ValueError("尚未生成可编辑的需求文档。")
 
@@ -950,13 +951,15 @@ def save_requirement_spec_draft(
             "clarification_questions": existing_spec.get("clarification_questions", []),
         }
     )
-    markdown_path = Path(write_requirement_spec_document(state, synchronized_spec))
+    markdown_path = Path(
+        write_requirement_spec_draft_document(state, synchronized_spec)
+    )
     return {
         "requirementSpec": synchronized_spec,
         "artifact": {
             "id": "requirement_spec",
             "name": markdown_path.name,
-            "path": str(requirement_spec_markdown_path(state)),
+            "path": str(requirement_spec_draft_markdown_path(state)),
             "format": "markdown",
             "content": render_requirement_spec_markdown(synchronized_spec),
         },

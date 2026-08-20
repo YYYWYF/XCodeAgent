@@ -1,0 +1,71 @@
+.@{class-prefix}-agent-error-card {
+  box-sizing: border-box;
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 13px;
+  width: 100%;
+  padding: 16px;
+  color: var(--wb-text, var(--modal-text, #202124));
+  background: color-mix(
+    in srgb,
+    var(--wb-danger, var(--modal-danger, #b42318)) 7%,
+    var(--wb-surface, var(--modal-surface, #ffffff))
+  );
+  border: 1px solid color-mix(
+    in srgb,
+    var(--wb-danger, var(--modal-danger, #b42318)) 38%,
+    var(--wb-border, var(--modal-border, rgba(0, 0, 0, 0.12)))
+  );
+  border-radius: 10px;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--wb-danger, #b42318) 8%, transparent);
+}
+
+.@{class-prefix}-agent-error-card-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: var(--wb-danger, var(--modal-danger, #b42318));
+  font-size: 22px;
+}
+
+.@{class-prefix}-agent-error-card-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.@{class-prefix}-agent-error-card-title.ant-typography {
+  color: var(--wb-text, var(--modal-text, #202124));
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.@{class-prefix}-agent-error-card-message.ant-typography {
+  color: var(--wb-text, var(--modal-text, #202124));
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-agent-error-card-hint.ant-typography,
+.@{class-prefix}-agent-error-card-detail.ant-typography {
+  color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-agent-error-card-detail.ant-typography {
+  font-family: var(--ui-font-mono);
+}
+
+@media (max-width: 600px) {
+  .@{class-prefix}-agent-error-card {
+    flex-wrap: wrap;
+  }
+}

@@ -28,6 +28,18 @@ def _bullet_items(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
+def _confirmation_status_label(value: Any) -> str:
+    """把需求确认状态转换为用户可读的中文标签。"""
+
+    labels = {
+        "draft": "草稿",
+        "pending_user_input": "待补充",
+        "pending_user_confirmation": "待确认",
+        "confirmed": "已确认",
+    }
+    return labels.get(str(value), str(value or "草稿"))
+
+
 def _entity_markdown(entity: Any) -> str:
     """把单个实体渲染为 Markdown 列表项和字段表，兼容旧字符串实体。"""
 
@@ -107,7 +119,7 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 - 名称：{app_info.get('name', '未命名应用')}
 - 目标：{app_info.get('target', '生成一个可在本地运行的前后端应用工程。')}
 - 确认需求摘要：{spec.get('summary') or spec.get('source_request', '待补充需求摘要')}
-- 状态：{spec.get('status', 'draft')}
+- 状态：{_confirmation_status_label(spec.get('confirmation_status') or spec.get('status'))}
 - 版本：{spec.get('version', '0.1.0')}
 
 ## 用户角色
@@ -165,10 +177,25 @@ def synchronize_requirement_spec_markdown_datasource_types(
     return synchronized
 
 
+def synchronize_requirement_spec_markdown_confirmation_status(
+    markdown: str,
+    spec: dict[str, Any],
+) -> str:
+    """确认需求时只刷新 Markdown 状态行，保留用户对正文的直接编辑。"""
+
+    status_line = (
+        "- 状态："
+        f"{_confirmation_status_label(spec.get('confirmation_status') or spec.get('status'))}"
+    )
+    return re.sub(r"^- 状态：.*$", status_line, markdown, count=1, flags=re.MULTILINE)
+
+
 def write_requirement_spec_document(
     state: dict[str, Any],
     spec: dict[str, Any],
 ) -> str:
+    """把已确认的 RequirementSpec 写入当前状态指定的 Markdown 与 JSON。"""
+
     path = requirement_spec_markdown_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_requirement_spec_markdown(spec), encoding="utf-8")
@@ -177,12 +204,96 @@ def write_requirement_spec_document(
 
 
 def requirement_spec_markdown_path(state: dict[str, Any]) -> Path:
+    """返回当前状态关联的需求 Markdown 路径。"""
+
     existing_path = state.get("requirement_spec_path")
     return (
         Path(existing_path)
         if existing_path and str(existing_path).endswith(".md")
         else workflow_artifact_root(state) / "specs" / "requirement-spec.md"
     )
+
+
+def _is_requirement_spec_draft_path(
+    state: dict[str, Any],
+    path: Path,
+) -> bool:
+    """判断路径是否位于当前工作区的需求草稿目录。"""
+
+    draft_root = (workflow_artifact_root(state) / "drafts").resolve()
+    try:
+        path.resolve().relative_to(draft_root)
+    except ValueError:
+        return False
+    return True
+
+
+def requirement_spec_draft_markdown_path(state: dict[str, Any]) -> Path:
+    """返回待确认 RequirementSpec 的 Markdown 草稿路径。"""
+
+    existing_path = state.get("requirement_spec_path")
+    candidate = Path(existing_path) if existing_path else None
+    if (
+        candidate
+        and candidate.suffix == ".md"
+        and _is_requirement_spec_draft_path(state, candidate)
+    ):
+        return candidate
+    return workflow_artifact_root(state) / "drafts" / "specs" / "requirement-spec.md"
+
+
+def confirmed_requirement_spec_markdown_path(state: dict[str, Any]) -> Path:
+    """返回用户确认后正式 RequirementSpec Markdown 的路径。"""
+
+    return workflow_artifact_root(state) / "specs" / "requirement-spec.md"
+
+
+def confirmed_requirement_spec_json_path(state: dict[str, Any]) -> Path:
+    """返回用户确认后正式 RequirementSpec JSON 的路径。"""
+
+    return workflow_artifact_root(state) / "specs" / "requirement-spec.json"
+
+
+def write_requirement_spec_draft_document(
+    state: dict[str, Any],
+    spec: dict[str, Any],
+) -> str:
+    """把模型生成的 RequirementSpec 写入待确认草稿目录。"""
+
+    path = requirement_spec_draft_markdown_path(state)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_requirement_spec_markdown(spec), encoding="utf-8")
+    write_requirement_spec_draft_json(state, spec)
+    return str(path)
+
+
+def write_confirmed_requirement_spec_document(
+    state: dict[str, Any],
+    spec: dict[str, Any],
+    markdown: str | None = None,
+) -> str:
+    """将已确认需求从草稿提升为正式 Markdown/JSON，并清理生成的草稿副本。"""
+
+    markdown_path = confirmed_requirement_spec_markdown_path(state)
+    json_path = confirmed_requirement_spec_json_path(state)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    confirmed_markdown = synchronize_requirement_spec_markdown_confirmation_status(
+        markdown if markdown is not None else render_requirement_spec_markdown(spec),
+        spec,
+    )
+    markdown_path.write_text(confirmed_markdown, encoding="utf-8")
+    json_path.write_text(
+        json.dumps(spec, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    draft_markdown_path = requirement_spec_draft_markdown_path(state)
+    draft_json_path = requirement_spec_draft_json_path(state)
+    for draft_path in (draft_markdown_path, draft_json_path):
+        try:
+            draft_path.unlink()
+        except FileNotFoundError:
+            pass
+    return str(markdown_path)
 
 
 def edited_requirement_spec_markdown(
@@ -197,12 +308,43 @@ def edited_requirement_spec_markdown(
 
 
 def requirement_spec_json_path(state: dict[str, Any]) -> Path:
+    """返回当前状态关联的需求 JSON 路径。"""
+
     existing_path = state.get("requirement_spec_json_path")
     return (
         Path(existing_path)
         if existing_path
         else workflow_artifact_root(state) / "specs" / "requirement-spec.json"
     )
+
+
+def requirement_spec_draft_json_path(state: dict[str, Any]) -> Path:
+    """返回待确认 RequirementSpec 的内部 JSON 草稿路径。"""
+
+    existing_path = state.get("requirement_spec_json_path")
+    candidate = Path(existing_path) if existing_path else None
+    if (
+        candidate
+        and candidate.suffix == ".json"
+        and _is_requirement_spec_draft_path(state, candidate)
+    ):
+        return candidate
+    return workflow_artifact_root(state) / "drafts" / "specs" / "requirement-spec.json"
+
+
+def write_requirement_spec_draft_json(
+    state: dict[str, Any],
+    spec: dict[str, Any],
+) -> str:
+    """把待确认 RequirementSpec 的内部结构化状态写入草稿 JSON。"""
+
+    path = requirement_spec_draft_json_path(state)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(spec, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return str(path)
 
 
 def write_requirement_spec_json(state: dict[str, Any], spec: dict[str, Any]) -> str:

@@ -63,22 +63,22 @@ START
 
 首页“创建并规划页面”使用独立 `requirements → product_planning → ui_confirmation → technical_planning` Graph，并负责生成主 Graph 的正式初始产物。产品确认 RequirementSpec、ProductPlan 与 React UI 稿（UI 阶段也可明确跳过），开发确认 TechnicalPlan；它不会进入工作区检查、任务拆分、代码生成和测试阶段。
 
-- 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照、`resumeState` 和 `clarificationAnswers`；需求概览的“保存并退出编辑”复用同一端点的 `requirementSpecDraft.action = save` AG-UI 动作，只持久化草稿，不续跑 Graph。
+- 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照和 `applicationPlanningInteraction`；确认卡携带服务端生成的 `gateId`、`artifactRevision` 与显式动作，沿同一 thread/checkpoint 原生恢复 Graph。前端按实际按钮或表单意图提交 `answer/confirm/revise/ui_action/design_change`，后端节点不再从中文文案猜动作；同一 thread 的版本校验与恢复全程串行，重复提交至多一个进入下游节点。
 - RequirementSpec、ProductPlan 和 TechnicalPlan 使用 Markdown 确认入口；React UI 稿及 `ui-designs.json` 使用 UI 确认界面，用户可提交结构化 `ui_design_action.action = skip` 跳过 UI 设计并直接进入 TechnicalPlan。澄清回答不能替代产物确认。RequirementSpec、ProductPlan 与 UI 产品确认不展示或询问数据源、数据库、持久化和 API 选择；这些内部技术输入只在 TechnicalPlan 由开发角色确认。
 - TechnicalPlan 确认后校验四类正式产物；UI Manifest 的 `confirmation_status` 可以是 `confirmed` 或用户明确提交跳过后的 `skipped`，再推进 lifecycle 到 `generating_application_template_files`。模板完成动作使用同一规则复核四类 JSON 后才写入 `ready_for_workbench`。
 - 创建弹窗展示“需求确认、产品规划、UI 确认、技术规划”四阶段；RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为，页面事实只保留 `pages`，不生成或兼容读取 `frontend_pages`，也不含数据源/API/数据库；模型输出先按完整 JSON 示例执行精确字段校验；UI 使用 `ui-manifest.v3`，正式 JSON 在生成 UI 时保存 React 稿引用、产品 ID 到控件 ID 的映射、本地 UI 效果和验证证据，跳过时保存空 `pages` 与 `confirmation_status: skipped`，不复制 ProductPlan 文案、正式路由、角色或状态事实；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
 - 主 Workflow 运行时从 RequirementSpec、ProductPlan、UiManifest 和 TechnicalPlan 按需编译 PageImplementationContract；编译结果不写回 TechnicalPlan。
 - 创建规划不执行构建后的集成测试质量门，也不生成 `quality_gate_passed`；AG-UI 摘要只在主 Workflow 明确产生布尔质量门结果时展示“通过/未通过”，不得把缺失值误报为未通过。
 
-该澄清边界映射到参考架构时，沿用 learn-coding-agent 的 AskUserQuestion 工具循环与可恢复会话记录、OpenCode 的 session/tool-call 问答关联，以及 Deep Agents 的外层确定性门禁：需求模型只生成结构化问题，Graph 在 `requirements` 后结束当前轮次，AG-UI 持久化公开状态与回答，恢复轮次将答案合并回 RequirementSpec。澄清回答只补足需求，不能替代后续 RequirementSpec 的显式确认。每轮仅携带当前请求、紧凑 RequirementSpec 和结构化回答，不加载仓库或完整会话历史，继续满足 128k 上下文预算。
+该澄清边界映射到参考架构时，沿用 learn-coding-agent 的 AskUserQuestion 工具循环与可恢复会话记录、OpenCode 的 session/tool-call 问答关联，以及 Deep Agents 的外层确定性门禁：需求模型只生成结构化问题，Graph 在 `requirements` 后通过原生 `interrupt` 暂停，AG-UI 持久化公开状态与回答，恢复轮次将答案合并回 RequirementSpec。澄清回答只补足需求，不能替代后续 RequirementSpec 的显式确认。每轮仅携带当前请求、紧凑 RequirementSpec 和结构化回答，不加载仓库或完整会话历史，继续满足 128k 上下文预算。
 
-需求草稿保存遵循 learn-coding-agent 的“读取当前事实、执行一次确定性写入、立即返回验证结果”紧凑边界，并沿用 OpenCode 的可恢复 session/event 思路，通过完整 AG-UI 生命周期返回新文档状态。它不调用 Deep Agent，也不把仓库或会话历史注入上下文；请求仅包含当前 RequirementSpec 草稿，后端再以工作区 JSON 为基线合并，因此继续满足 128k 上下文预算且不引入新的 Agent 权限。
+需求澄清期间只在 checkpoint 中保留未完成的结构化事实和问题，`ask_user` 返回后不得生成页面、实体或模块兜底，也不得写入本地需求文档草稿；只有模型判断没有重要缺口后，才将完整 RequirementSpec 写入 `.xcodeagent/drafts/specs/requirement-spec.md|json` 并展示在右侧。用户在左侧确认后，才将同一版本提升到 `.xcodeagent/specs/requirement-spec.md|json`，确认前不覆盖正式文档。
 
 ### 工作区应用生命周期
 
 `.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台 execution 和资源锁的持久化权威来源，schema 与完整状态机见 `docs/APPLICATION_LIFECYCLE.md`。初始化期间由 `initialization.threadId` 定位同一 checkpoint，成功进入工作台时清空；初始化交互正文和确认令牌不在根节点重复保存。它使用版本化 Pydantic schema、单调 revision、同目录临时文件 + fsync + 原子替换，损坏或不支持的版本不会被当作缺失静默忽略。当前对话的 Graph 运行状态以实时 AG-UI 流和同一 `threadId` 的 LangGraph checkpoint 为准，不会在每个节点运行前从状态文件重建。
 
-应用冷启动恢复到 `awaiting_user` 时，前端通过 `/application-page-planning/run` 的 `applicationPlanningRecovery.get` AG-UI 动作只读获取同一 `threadId` 的 checkpoint，并重新投影确认卡和 Markdown 工件；该动作不得调用 Graph 节点、改变 lifecycle 或伪造用户消息。需求与计划确认还要求本轮存在非空 `clarificationAnswers` 结构化提交，普通恢复文案、原始需求和重新挂载组件都不能越过确认门禁。运行中阶段仍可按原线程恢复执行，失败或取消阶段只展示显式重试入口。
+应用冷启动恢复到 `awaiting_user` 时，前端通过 `/application-page-planning/run` 的 `applicationPlanningRecovery.get` AG-UI 动作只读获取同一 `threadId` 的 checkpoint，并重新投影右侧需求草稿与确认卡；未确认的 RequirementSpec 只能作为草稿展示，不能冒充正式文档。该动作不得调用 Graph 节点、改变 lifecycle 或伪造用户消息；真正的确认/补充必须提交带版本令牌的 `applicationPlanningInteraction`。运行中阶段仍可按原线程恢复执行，失败或取消阶段只展示显式重试入口。
 
 职责边界固定如下：
 
@@ -88,7 +88,7 @@ START
 - RequirementSpec / ProjectPlan Markdown + JSON：正式文档内容和 `confirmation_status`，继续保留；
 - Build DAG / ExecutionRun / TestReport：任务、执行和测试事实，继续由各自产物负责。
 
-创建流程覆盖 `collecting_requirement -> analyzing_requirement -> awaiting_requirement_clarification -> generating_requirement_spec -> awaiting_requirement_confirmation -> generating_product_plan -> awaiting_product_plan_confirmation -> generating_ui_designs -> awaiting_ui_design_confirmation -> generating_technical_plan -> awaiting_technical_plan_confirmation -> generating_application_template_files -> application_template_generation_failed/ready_for_workbench`。旧 ProjectPlan 阶段只用于历史恢复。
+创建流程覆盖 `collecting_requirement -> analyzing_requirement -> awaiting_requirement_clarification -> analyzing_requirement -> awaiting_requirement_confirmation -> generating_requirement_spec -> generating_product_plan -> awaiting_product_plan_confirmation -> generating_ui_designs -> awaiting_ui_design_confirmation -> generating_technical_plan -> awaiting_technical_plan_confirmation -> generating_application_template_files -> application_template_generation_failed（终止）/ready_for_workbench`。模板生成只由用户确认 TechnicalPlan 后触发；失败、重启和再次打开都不会重新触发。需求确认提交 `revise` 时从 `awaiting_requirement_confirmation` 回到 `analyzing_requirement`；提交 `confirm` 时才进入 `generating_requirement_spec`。旧 ProjectPlan 阶段只用于历史恢复。
 
 进入工作台后的主 Workflow 不再改写应用初始化阶段；运行、等待确认、失败、停止和验收只更新对应 execution。后端从正式 ProjectPlan 为页面执行解析页面、导航关联页、API 契约和数据源资源集合并写入 `resourceLocks`，但当前不以集合交集、同页面、同工作区或应用级范围拒绝新运行；进程内 lease 同样只跟踪活动 run 的释放，不再执行互斥。重叠资源键显示最近一次写入的 owner，完成或明确结束只清理该 run 当前拥有的登记。中央消息、现有进度卡、侧栏与预览布局不改变。停止、结束、结构化确认、重试、计划调整和最终验收均复用 `/workflow/run` 的 AG-UI 完整事件生命周期。停止操作先用本地 Workflow 快照即时显示 `stopping/stopped`，并让该瞬时状态优先于可能 revision 更高但尚未刷新的文件快照；后端 AG-UI 回包随后校准权威 execution，乐观更新不得改写顶层 `initialization`。
 
@@ -141,9 +141,9 @@ EndpointDetail 在单个 endpoint 设计链路内部固定分为两步，不新�
 
 - 理解用户的原始需求；
 - 发现缺失信息并提出澄清问题；
-- 生成结构化 `RequirementSpec`；
-- 生成需求 Spec Markdown 文档；
-- 暂停并等待用户确认需求文档正确。
+- 生成内存中的结构化 `RequirementSpec` 草稿；
+- 发现未解决问题时暂停在分析/追问页面，右侧继续展示最新草稿，不覆盖正式 Markdown/JSON；
+- 用户明确确认当前需求没问题后，将草稿提升为正式需求 Spec Markdown/JSON。
 
 `RequirementSpec` 至少包含：
 
@@ -155,25 +155,25 @@ EndpointDetail 在单个 endpoint 设计链路内部固定分为两步，不新�
 - 业务流程；
 - 待确认问题。
 
-当前实现通过 `agents/main/requirements_analyzer.py` 直接调用 `create_chat_model()`，并只绑定通用 `tools/ask_user.py`。该边界不创建 Main DeepAgent，不加载 workspace backend，也不暴露 `task`、Frontend/Data Source/Test subagent 或文件读写工具。需求分析提示词覆盖应用信息、用户角色、功能模块、页面清单、实体清单、业务信息需求和业务流程；实体在本阶段只携带展示信息，不选择数据源。数据源、存储、API、数据库和验收标准分别由后续 ProductPlan、TechnicalPlan、实体设计和工程验收边界负责。若缺失信息会实质改变产品设计，应生成 `ask_user` tool call，由后端解析为 1-4 个待确认问题；用户未要求的可选细节直接省略，不生成默认假设。
+当前实现通过 `agents/main/requirements_analyzer.py` 直接调用 `create_chat_model()`，并只绑定通用 `tools/ask_user.py`。该边界不创建 Main DeepAgent，不加载 workspace backend，也不暴露 `task`、Frontend/Data Source/Test subagent 或文件读写工具。需求分析提示词明确要求覆盖应用信息、用户角色、功能模块、页面清单、业务信息需求和业务流程，不生成数据源或验收标准；若缺失信息会实质改变产品设计，应生成 `ask_user` tool call。需求澄清最多进行 3 轮，每轮将实质缺口批量整理为 5-8 个聚焦问题；若剩余缺口少于 5 个则全部提问，不用无意义问题凑数。第三轮回答完成后的合并阶段禁止再次调用 `ask_user`，直接进入 RequirementSpec 确认；用户未要求的可选细节直接省略，不生成默认假设。
 
 `ask_user` 是通用的人机确认工具，不包含 requirements 专用问题规则。后续产品/技术计划、接口或实体设计等阶段需要用户输入时，也应复用该工具，由对应 Agent 根据上下文决定问题内容。
 
-当 requirements direct ChatModel 判断需求不清晰时，必须一次性审视应用信息、角色、模块、页面、实体、支撑业务信息的需求和业务流程，将所有无法安全推断的产品缺口合并为一次 `clarification.status = requires_user_input`。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和结构化答案；模型基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
+当 requirements direct ChatModel 边界判断需求不清晰时，必须先一次性审视所有关键产品事实：应用信息、角色、模块、页面清单、支撑业务信息的需求和业务流程。数据源、存储、API、数据库和验收标准分别由后续 ProductPlan、TechnicalPlan 和工程验收边界负责，不进入需求确认。它将所有无法安全推断的产品缺口合并为一次 5-8 题的 `clarification.status = requires_user_input`；如果本轮只剩少于 5 个实质缺口，则只提这些问题。Graph 在该节点后结束本轮运行并等待用户回答，最多允许三轮；第三轮回答后的最终合并不再产生第四轮问题，而是进入 RequirementSpec 确认。前端提交回答时同时携带上一轮 workflow payload、上一版归纳需求和本轮结构化答案；后端据此推断续跑节点并生成扁平的当前请求，不重复嵌套完整会话。模型基于上一版 `RequirementSpec` 和本轮反馈返回完整 JSON，新反馈覆盖冲突旧内容，确定性服务只负责字段校验和缺省补齐。
 
-无论初始需求是否需要澄清，只要 `requirements` 生成或更新了需求文档，就必须进入 `requirement_spec_confirmation`，要求用户明确确认文档是否正确。澄清问题的回答只用于补充需求，不能等同于对生成后文档的确认；只有用户确认当前版本后，节点才输出 `status = completed` 并继续进入 `product_planning`。若用户补充后仍存在重要缺口，模型可以再次发起一次集中澄清。用户提出修改意见时，需要重新生成文档，并再次经过确认。
+无论初始需求是否需要澄清，只要分析得到当前版本，就必须进入 `requirement_spec_confirmation`，要求用户明确确认需求内容。澄清问题的回答只用于补充需求，不能等同于对当前版本的确认；模型生成或更新当前版本时先写入草稿 Markdown/JSON，用户确认后才进入 `generating_requirement_spec`，把草稿提升为正式 Markdown/JSON，输出 `requirementsConfirmed = true`，再继续进入 `product_planning`。如果仍存在重要缺口，模型继续停留在分析/追问页面；用户提出修改意见时，旧的生成请求失效，回到分析并再次等待确认。
 
-等待 `requirement_spec_confirmation` 时，AG-UI workflow payload 通过只读 `confirmationArtifact` 返回当前 `requirement-spec.md` 的文件名、路径和完整 Markdown 正文，供确认卡片展示。普通需求澄清不返回该正文。首页独立规划流程还会从公开 `requirement_spec` 状态生成结构化概览；用户可在概览右上角进入编辑态，修改应用定位、页面、角色和核心业务流程。“保存并退出编辑”通过同一 AG-UI 端点的 `forwardedProps.requirementSpecDraft` 保存动作立即重写待确认 Markdown/JSON 并刷新确认卡，但保持 `pending_user_confirmation`；最终确认仍通过恢复请求的 `forwardedProps.editedRequirementSpec` 进入确认门禁。确认卡右下角意见框的自然语言内容直接作为本轮确认答案提交：空输入或“好的/OK/确认/没问题/继续”等认可语义会确认当前需求文档并继续规划；“增加/删除/修改/调整/补充/不需要/改为/不是/而是”等修改语义优先于认可语义，必须基于现有 RequirementSpec 重新生成完整需求文档并再次等待确认。`forwardedProps.requirementSpecFeedback` 仅保留兼容审计信息，不再决定确认语义。
+等待 `requirement_spec_confirmation` 时，AG-UI workflow payload 返回服务端生成的草稿 `confirmationArtifact` 与草稿路径；右侧文档区展示 Markdown 草稿，确认卡只展示状态、修改入口和确认动作，不在对话卡片内重复渲染完整需求内容。`requirementsConfirmed = false` 表示当前仍是草稿，不能把它当作正式文档。意见框为空并点击确认时，前端提交 `action=confirm`，将草稿提升为正式需求文档并继续规划；意见框非空并提交时，前端提交 `action=revise`，旧生成请求失效并基于最新 RequirementSpec 重新生成草稿。后端不再按“确认、修改、只保留”等关键词重新解释 action，因此确认词出现在修改意见中也不会静默放行。正式文档生成期间显示“正在生成需求文档”，不能用错误页面占位。
 
-确认时以 Markdown 作为用户可读、可编辑的文档。概览编辑器保存时，后端只合并白名单可见字段，已有条目按稳定 id 保留隐藏结构，然后由同一份待确认 RequirementSpec 同时重写 `requirement-spec.md` 与 `requirement-spec.json`；该保存动作不等同于确认，也不允许进入 ProductPlan。最终确认时再次以当前草稿为准同步并标记 confirmed。如果用户在确认前直接修改了 RequirementSpec Markdown，节点必须先与当前结构化状态对比，以原 JSON 为基线同步 Markdown 中的业务变更并保留 Markdown 未表达的内部字段，然后更新内部 JSON；不得先重写 Markdown 或直接使用旧 JSON 继续。JSON 文件只供工作流节点读取，不作为前端可编辑产物展示。
+确认后以 Markdown 作为用户可读正式文档，JSON 只作为内部工作流状态。右侧需求文档页和本地文件探测应优先读取草稿路径；未确认时必须标记“需求文档（草稿）”，不能把草稿路径或旧正式文件冒充为正式需求文档。
 
-当前等待/续跑机制是显式的后端推断续跑点，还不是 LangGraph 原生 `interrupt` resume。主 Graph 已接入 SQLite checkpointer，用于持久化 ProjectState、支持服务重启后的状态恢复和调试；但用户输入后的续跑路由仍由后端根据当前状态显式推断。后续如果切换到 LangGraph `interrupt` 和 command resume，应保持同样的原则：前端提交用户回答和 thread 标识，不硬编码后端阶段名。
+当前等待/续跑机制使用 LangGraph 原生 `interrupt` 与 `Command(resume=...)`。主 Graph 通过 SQLite checkpointer 持久化 ProjectState；前端只提交服务端中断返回的版本令牌、用户回答或确认动作，不回传状态重建上下文，也不硬编码后端阶段名。
 
 所有选项型 `ask_user` 问题（单选、多选、是/否）都自动包含“其他”选项。用户选中“其他”后必须填写补充内容；前端提交结构化答案 `{ selected, other }`，后端将其归并为“已选：…；其他补充：…”，与原始需求和既有选项一起输入给后续模型。文本题本身就是自由输入，不额外显示“其他”。
 
 生成选项题前，模型必须先判断选项是否互斥。搜索、筛选、导入导出、分页等可叠加能力必须使用 `multiSelect = true`，并将每项能力作为独立选项；不得通过“搜索 + 导入导出”这类组合选项伪造单选。只有数据源类型、认证策略等真正的二选一或多选一决策使用单选。
 
-Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec` 和澄清结果，负责写入需求文档并更新状态，不应自行进行需求分析。
+Graph 节点只接收直接 ChatModel 边界产出的结构化 `RequirementSpec` 和澄清结果，负责确认门禁、正式文档落盘和状态更新；分析/追问阶段不得提前写正式需求文档。
 
 ### `direct_modification`
 
@@ -307,18 +307,18 @@ Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 必须从已�
 `build-dag.v3` 的 Unit ID 采用新的层次：
 
 - `application:root` 表示整应用根；
-- `backend:bootstrap` 表示后端工程基础能力；
+- `backend:bootstrap` 表示数据库来源后端所需的 Maven、数据源与 MyBatis-Plus 基础能力；外部 API-only 与静态范围不创建该 Unit；
 - `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
 - `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；菜单、路由和隐藏路由由模板初始化独占，不建立 Build Unit；
 - `page:<pageId>` 表示页面实现范围。
 
-页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。
+页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。只有包含 database 实体的范围才要求 `backend:bootstrap`，并由 Unit Graph 建立 `backend:bootstrap → backend:endpoint:*`；external_api-only endpoint 不依赖该 Unit。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。
 
 代码图不参与 DAG 任务生成。进入 `build` 后，Frontend Agent 与承载 backend task 的 DataSource Agent 才按 `task_id` 使用绑定当前 `workspaceRoot` 的 `code_graph_context`：已有目标文件优先查询 `file_summary`，未知业务符号优先查询 `search_symbols`，命中后再按需查询引用、影响和相关测试。只有 `status=ready` 且 `matches/relations/relatedTests/impactedFiles` 至少一项非空的结果才作为导航；空结果、异常或不可用状态会立即降级为任务 `target_files/allowed_paths/change_scope` 内的文件搜索和真实源码读取，不会令任务失败或扩大写入授权。代码图始终不是源码事实，修改前必须读取当前文件。
 
 任务规划模型输入中的数据源事实只来自当前范围的 `executable_details.entity_designs`。数据库实体摘要公开已确认的目标表、字段绑定与数据库执行状态，外部 API 实体摘要公开已确认的上游方法与映射计数，静态实体摘要公开种子记录统计；完整库表快照、数据库操作清单、连接信息和未确认的外部 API 细节不进入模型。endpoint 模式的 `TargetBuildContext` 只携带目标、Unit、实体 ID 和工件引用，完整 EndpointDetail、实体摘要与当前 API Contract 只在 `TaskPreparationContext.executable_details` 出现一次。数据库与外部 API 实体只生成 `owner=backend` 的 endpoint 任务，静态实体只生成 `owner=frontend` 的 `frontend:data:*` 任务；所有正常 Build scope 都不得生成 `owner=database` 任务，模型返回此类任务时确定性语义校验会阻止 DAG 进入 Build。
 
-任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：Normal Build 的 Unit 骨架不包含 `database:*`，模型误返回 `owner=database` 或 `database:*` 候选时会保留原候选并把职责越界写入 `task_graph.validation.errors`，不能以静默删除的方式掩盖边界问题。数据库表结构和数据源操作继续由实体确认流程负责；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。候选任务的边界、owner、Unit 和拓扑均属于平台设计，校验失败会自动回灌错误并重生成，不要求用户人工拆分任务。
+任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：Normal Build 的 Unit 骨架不包含 `database:*`，模型误返回 `owner=database` 或 `database:*` 候选时会保留原候选并把职责越界写入 `task_graph.validation.errors`，不能以静默删除的方式掩盖边界问题。当本轮 `planning_unit_ids` 包含 `backend:bootstrap` 时，候选必须包含该 Unit 的可执行后端任务；遗漏会作为平台校验错误回灌模型并自动重生成。已准备且不在本轮替换范围内的 bootstrap 任务继续复用，不要求重复生成。数据库表结构和数据源操作继续由实体确认流程负责；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。候选任务的边界、owner、Unit 和拓扑均属于平台设计，校验失败会自动回灌错误并重生成，不要求用户人工拆分任务。
 
 Build Task 保留独立工程验收元数据，但当前不在每个任务执行完成后调用 verifier，也不复制 ProductPlan、UiDesign、TechnicalPlan 或 EndpointDetail 中的业务验收。角色数据范围、业务状态转换、页面可见内容、筛选交互、loading/empty/error 和点击行为分别保留在 ProductPlan 与 React UI 稿中，并通过 `PageImplementationContract` 进入代码生成上下文；任务规划模型必须返回空 `acceptance_criteria`。确定性编译器忽略模型输出的验收文案，依据 `owner/task_type/change_scope/allowed_paths/source_refs/build_context` 生成带稳定 ID 的内部 `acceptance_checks`，再把检查描述投影到兼容前端的 `acceptance_criteria: string[]`，供审计和修复上下文使用。Build 执行阶段只做结果归一化和真实 diff 归属，不再因工作区中额外的编译产物或生成文件阻断任务；菜单、路由、页面占位由模板初始化流程负责，不生成 DAG 工程检查。API/Spring 契约、数据库及 build、lint、test 由后续集成质量门禁处理。
 
@@ -357,7 +357,7 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 
 `stages[].output` 是严格的 `kind` 判别联合：`unit_graph` 包含 Unit（id/type/status/taskCount）、Unit 依赖边和骨架校验；`build_context` 包含目标 type/id、关联 Unit/Endpoint/API Contract/数据源及数据库摘要状态；`contract_validation` 包含校验范围、通过状态和问题；`candidate_tasks` 包含候选任务、负责人、依赖和 owner 汇总；`compiled_tasks` 包含最终拓扑任务、变更文件、工程检查摘要、任务依赖边和 owner 汇总；`dag_validation` 包含根/叶任务、拓扑顺序、执行批次（串/并行）和校验错误；`artifacts` 仅包含 `build-task-plan.json` 的 JSON 安全标签和确认状态。列表字段最多 200 条、文本最多 1000 字符，依赖边最多 500 条并带 `truncated` 标记；顶层 `tasks`、`artifacts` 仅作为安全投影保留。阶段完成或失败后产物冻结，后续阶段更新不得覆盖早期详情。历史会话重入时，前端以已完成 Workflow 事件、状态和结果中的 DAG 快照回填已持久化的步骤；若多个来源同时存在，优先选择包含更多阶段 `output` 的完整快照，避免旧的中间进度帧覆盖完成产物。
 
-该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。与 Deep Agents 的默认 harness 映射是：`prepare_build_tasks` 只负责 planning，不挂载文件工具；后续 BuildScheduler 与代码执行 runner 负责 action/verification。为控制 128k 上下文预算，模型只接收已确认计划、快照摘要和精确文件清单，不把完整目录树或文件内容复制进 Graph State。任务规划提示词还按本轮实际可替换 Unit 渐进注入上下文：只有 endpoint Unit 待生成时注入 EndpointDetail、绑定实体设计和当前数据源对应的 Skill（数据库 MyBatis、外部 API 集成或前端静态数据），只有 page Unit 待生成时注入页面实现契约和前端事实；两类 Unit 同轮待生成时才组合当前范围的完整前后端提示词。endpoint 工作区快照仅保留相关侧的入口、关键文件、现有路由/模型或 API client 与目录树，排除构建测试命令、全局统计、通用代码图和另一侧技术栈；混合来源使用前后端最小投影并集。已准备的 endpoint Unit 被页面范围复用时，不会为页面规划重复注入 endpoint 后端上下文。执行 Agent 使用任务 `source_refs.entity_designs` 选择相同 Skill，Build Unit 编译器按 owner/source 过滤来源引用。`springboot-mybatis-generate` 的入口只保留规划所需四阶段与职责边界，执行 Agent 再按入口路由读取分层实现或显式 bootstrap reference；普通 endpoint Unit 不加载或生成 bootstrap 修改。
+该设计沿用 learn-coding-agent 的“先侦察、再计划、执行后验证”循环，并采用 OpenCode 风格的稳定任务 ID、显式状态和文件冲突串行化。与 Deep Agents 的默认 harness 映射是：`prepare_build_tasks` 只负责 planning，不挂载文件工具；后续 BuildScheduler 与代码执行 runner 负责 action/verification。为控制 128k 上下文预算，模型只接收已确认计划、快照摘要和精确文件清单，不把完整目录树或文件内容复制进 Graph State。任务规划提示词还按本轮实际可替换 Unit 渐进注入上下文：只有 endpoint Unit 待生成时注入 EndpointDetail、绑定实体设计和当前数据源对应的 Skill（数据库 MyBatis、外部 API 集成或前端静态数据），只有 page Unit 待生成时注入页面实现契约和前端事实；两类 Unit 同轮待生成时才组合当前范围的完整前后端提示词。endpoint 与 combined 提示词在 database 且 `backend:bootstrap` 待准备时强制生成独立根任务，并明确允许它修改现有 `backend/pom.xml` 和精确的数据源/MyBatis 配置文件；普通 endpoint 任务仍不得修改全局依赖或配置。endpoint 工作区快照仅保留相关侧的入口、关键文件、现有路由/模型或 API client 与目录树，排除构建测试命令、全局统计、通用代码图和另一侧技术栈；混合来源使用前后端最小投影并集。已准备的 endpoint Unit 被页面范围复用时，不会为页面规划重复注入 endpoint 后端上下文。执行 Agent 使用任务 `source_refs.entity_designs` 选择相同 Skill，Build Unit 编译器按 owner/source 过滤来源引用；bootstrap 只继承 database 实体，因此只加载 MyBatis Skill 及显式 bootstrap reference。`springboot-mybatis-generate` 的入口只保留规划所需四阶段与职责边界，普通 endpoint Unit 不加载或生成 bootstrap 修改。
 
 该节点的结构化产物必须落盘，供后续恢复执行和单节点验证使用：
 
@@ -482,6 +482,8 @@ testing.START
 
 `main_quality_gate` 是历史节点名，实际职责是确定性质量门禁：根据测试证据生成 `test_report`、`quality_gate_passed`、`needs_revision` 和 `revision_requests`，不代表 Main DeepAgent。`repair_planning` 只有在质量门禁未通过时才调用独立 RepairPlanner Agent；质量门禁通过时跳过修复计划并输出 `integration_next_action = launch_project`。
 
+任一阻塞性检查失败时，单元测试确认与前端性能确认两个可选门自动跳过，检查记录为 `passed=true, skipped=true`，流程直达质量门禁与修复规划，不再要求用户先回答跳过/继续。advisory 的 `frontend_performance` 失败不触发修复，测试生成越权写入仍作为安全失败直接终止。
+
 当前质量门禁覆盖：
 
 - 前端 TypeScript 依赖安装；
@@ -490,7 +492,9 @@ testing.START
 - 前端和后端单元测试生成校验，以及存在对应测试文件时的 Jest/Surefire 单元测试。
 - `frontend_performance` 作为 advisory 检查纳入报告展示，但不参与门禁阻断与返修。
 
-单元测试生成是正式 Workflow 中的尽力而为阶段：测试子图从刚完成的 Build 代码变更集合中提取目标业务源码及有界真实 diff，并先完成前后端依赖、类型和构建检查；构建完成后暂停并通过 AG-UI 展示“是否跳过单元测试”的两个按钮。选择跳过时，生成和单元测试检查记录为 `passed=true, skipped=true` 后进入前端性能确认；选择继续时才交给 TestGeneration Agent，再执行前后端单元测试。本轮没有对应测试文件、生成 Agent 无输出或 Agent 初始化失败时，生成和单测检查仍按尽力而为策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败仍进入 RepairPlanner → SmallTask 修复闭环。子图通过 `build_project_checks → unit_test_confirmation → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks) → frontend_performance_confirmation → (skip_frontend_performance | frontend_performance_test)` 固定执行顺序，并在确认恢复时复用已完成的构建检查快照，避免重复安装和构建。TestGeneration Agent 调用期间通过 `integration_test.checks` 发布逐层 `running` 快照，前端原位展示集成检查矩阵、旋转 loading 和生成说明，校验完成后再更新为通过、跳过或失败；实时快照与最终报告均按依赖/类型检查、构建、测试生成检查、单元测试、前端性能测试的稳定顺序展示。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。测试生成期间 LangGraph 对 `.xcodeagent/checkpoints/` 的技术性写入不属于工程变更；其他 `.xcodeagent` 正式工件仍受越权修改检查保护。
+单元测试生成是正式 Workflow 中的尽力而为阶段：测试子图从刚完成的 Build 代码变更集合中提取目标业务源码及有界真实 diff，并先完成前后端依赖、类型和构建检查；构建检查无阻塞失败时暂停并通过 AG-UI 展示“是否跳过单元测试”的两个按钮。选择跳过时，生成和单元测试检查记录为 `passed=true, skipped=true` 后进入前端性能确认；选择继续时才交给 TestGeneration Agent，再执行前后端单元测试。本轮没有对应测试文件、生成 Agent 无输出或 Agent 初始化失败时，生成和单测检查仍按尽力而为策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败仍进入 RepairPlanner → SmallTask 修复闭环。子图通过 `build_project_checks → unit_test_confirmation → (skip_unit_tests | generate_unit_tests → validate_generated_unit_tests → actual_project_checks) → frontend_performance_confirmation → (skip_frontend_performance | frontend_performance_test)` 固定执行顺序，并在确认恢复时复用已完成的构建检查快照，避免重复安装和构建。TestGeneration Agent 调用期间通过 `integration_test.checks` 发布逐层 `running` 快照，前端原位展示集成检查矩阵、旋转 loading 和生成说明，校验完成后再更新为通过、跳过或失败；实时快照与最终报告均按依赖/类型检查、构建、测试生成检查、单元测试、前端性能测试的稳定顺序展示。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。测试生成期间 LangGraph 对 `.xcodeagent/checkpoints/` 的技术性写入不属于工程变更；其他 `.xcodeagent` 正式工件仍受越权修改检查保护。
+
+集成测试修复授权使用用户 workspace 下的项目目录级范围：frontend 侧失败授权 `frontend/`，backend 侧失败授权 `backend/`，同时把具体失败文件（如 `backend/pom.xml`、`frontend/package.json`、对应测试与业务源码）保留为 `target_files`/`change_scope` 提示。RepairPlanner 返回 `requires_user_confirmation` 或 `terminal_failure` 时，只要确定性候选任务携带真实授权路径，就自动升级为 `ready/repair` 并直接派发 SmallTask；仅无真实路径、安全失败或修复预算耗尽时才等待扩权确认或进入 `handle_failure`。
 
 输出至少包含：
 

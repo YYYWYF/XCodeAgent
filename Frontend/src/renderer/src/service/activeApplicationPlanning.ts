@@ -9,6 +9,8 @@ export type PersistedActivePlanning = {
   lifecycle: ApplicationLifecycle
   status: ActivePlanningStatus
   threadId: string
+  /** 当前规划会话最近一次模型/Workflow 错误，仅用于前端实时展示。 */
+  error?: string
   workflow?: WorkflowRunPayload
 }
 

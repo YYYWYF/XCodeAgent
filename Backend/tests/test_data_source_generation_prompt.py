@@ -292,8 +292,8 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
                 },
             )
 
-    def test_bootstrap_inherits_current_backend_entity_sources(self) -> None:
-        """bootstrap 只继承当前目标中的 database/external_api 实体。"""
+    def test_bootstrap_inherits_only_current_database_entity_sources(self) -> None:
+        """bootstrap 只继承当前目标中的 database 实体。"""
 
         tasks = apply_unit_compilation(
             {"build_units": {"backend:bootstrap": {"id": "backend:bootstrap"}}},
@@ -311,8 +311,11 @@ class DataSourceTaskCompilationTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(tasks[0]["source_refs"]["entity_ids"], ["Order", "Weather"])
-        self.assertEqual(len(_task_required_skill_paths(tasks[0])), 2)
+        self.assertEqual(tasks[0]["source_refs"]["entity_ids"], ["Order"])
+        self.assertEqual(
+            _task_required_skill_paths(tasks[0]),
+            ["/.xcodeagent/builtin-skills/springboot-mybatis-generate/SKILL.md"],
+        )
 
 
 if __name__ == "__main__":

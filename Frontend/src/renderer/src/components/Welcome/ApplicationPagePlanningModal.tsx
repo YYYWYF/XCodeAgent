@@ -1,8 +1,9 @@
-import { ReloadOutlined } from '@ant-design/icons'
-import { Button, message, Result, Spin, Steps } from 'antd'
+import { Button, message, Spin, Steps } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ApplicationConfig,
+  ApplicationPlanningAction,
+  ApplicationPlanningInteraction,
   ApplicationPlanningConfirmation,
   ApplicationLifecycle,
   WorkflowClarification,
@@ -18,12 +19,19 @@ import { getApplicationLifecycle } from '../../service/applicationLifecycle'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { cx } from '../../utils'
 import { formatError } from './utils'
+import AgentErrorCard from '../AgentErrorCard'
 import ApplicationPlanningProgress, {
   type ApplicationPlanningProgressEvent
 } from './ApplicationPlanningProgress'
 import ApplicationPlanningQuestionPanel from './ApplicationPlanningQuestionPanel'
 import UiDesignStreamingPreview from './UiDesignStreamingPreview'
-import { planningWorkflowPhase, planningWorkflowRequiresUserInput } from './planningWorkflowState'
+import {
+  planningRequirementsDocumentGenerating,
+  planningTechnicalPlanConfirmed,
+  planningWorkflowLifecycleStage,
+  planningWorkflowPhase,
+  planningWorkflowRequiresUserInput
+} from './planningWorkflowState'
 import type { ActivePlanningStatus } from '../../service/activeApplicationPlanning'
 import './ApplicationPagePlanningModal.less'
 
@@ -66,7 +74,8 @@ type Props = {
   ) => void
   onPlanningContent?: (content: string) => void
   onPlanningWorkflow?: (workflow: WorkflowRunPayload) => void
-  onConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
+  onTechnicalPlanConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
+  onErrorChange: (error?: string) => void
   onLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onStatusChange: (status: ActivePlanningStatus) => void
   onWorkflowChange: (workflow: WorkflowRunPayload) => void
@@ -103,8 +112,8 @@ const phaseProgress: Record<
   requirements: {
     active: 10,
     complete: 20,
-    message: '正在分析需求并生成需求文档…',
-    title: '正在确认产品需求'
+    message: '正在分析需求并识别待补充信息…',
+    title: '正在分析需求'
   },
   product_planning: {
     active: 30,
@@ -130,11 +139,24 @@ const phaseProgress: Record<
 function workflowConfirmation(
   workflow?: WorkflowRunPayload
 ): ApplicationPlanningConfirmation | undefined {
+  if (!planningTechnicalPlanConfirmed(workflow)) return undefined
   for (const source of [workflow?.result, workflow?.state]) {
     const value = source?.application_planning_confirmation
     if (value && typeof value === 'object') return value as ApplicationPlanningConfirmation
   }
   return undefined
+}
+
+// 用最新权威生命周期刷新本地 Workflow 展示，不参与 Graph 恢复输入。
+function withAuthoritativeLifecycle(
+  workflow: WorkflowRunPayload,
+  lifecycle: ApplicationLifecycle
+): WorkflowRunPayload {
+  return {
+    ...workflow,
+    state: { ...workflow.state, lifecycle },
+    result: { ...workflow.result, lifecycle }
+  }
 }
 
 // 优先读取已确认 ProductPlan 的页面数，用于 UI 生成期间渲染未就绪骨架。
@@ -168,15 +190,91 @@ function withSavedRequirementSpec(
   }
 }
 
-// 用提交前读取的权威 lifecycle 替换旧 Workflow 快照中的交互并发令牌。
-function withAuthoritativeLifecycle(
+// 读取服务端从 LangGraph checkpoint 投影的当前原生审阅中断。
+function planningInterrupt(workflow: WorkflowRunPayload): Record<string, unknown> {
+  for (const source of [workflow.result, workflow.state]) {
+    const value = source?.application_planning_interrupt
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  throw new Error('当前规划确认卡缺少可恢复的服务端中断，请刷新后重试。')
+}
+
+// 把确认卡操作转换为类型化 resume 信封，禁止由服务端猜测用户正在回答哪张卡。
+function buildPlanningInteraction(
   workflow: WorkflowRunPayload,
-  lifecycle: ApplicationLifecycle
-): WorkflowRunPayload {
+  answers: WorkflowClarificationAnswers,
+  editedRequirementSpec?: Record<string, unknown>,
+  requirementSpecFeedback?: string,
+  designChangeRequest?: string
+): ApplicationPlanningInteraction {
+  const pending = planningInterrupt(workflow)
+  const gateId = String(pending.gateId || '')
+  const artifactRevision = String(pending.artifactRevision || '')
+  const artifact = String(pending.artifact || '') as ApplicationPlanningInteraction['artifact']
+  if (!gateId || !artifactRevision) {
+    throw new Error('当前规划确认卡版本信息不完整，请刷新后重试。')
+  }
+
+  if (designChangeRequest?.trim()) {
+    return {
+      gateId,
+      artifact,
+      artifactRevision,
+      action: 'design_change',
+      request: designChangeRequest.trim()
+    }
+  }
+
+  const explicitAction = answers.__applicationPlanningAction
+  if (!explicitAction) {
+    throw new Error('当前规划提交缺少明确的交互动作，请从确认卡重新提交。')
+  }
+  const visibleAnswers = { ...answers }
+  delete visibleAnswers.__applicationPlanningAction
+  const rawUiAction = visibleAnswers.ui_design_action
+  if (explicitAction === 'ui_action') {
+    if (!rawUiAction || typeof rawUiAction !== 'object' || Array.isArray(rawUiAction)) {
+      throw new Error('UI 操作提交缺少结构化 uiAction，请重试。')
+    }
+    return {
+      gateId,
+      artifact,
+      artifactRevision,
+      action: 'ui_action',
+      answers: visibleAnswers,
+      uiAction: rawUiAction as Record<string, unknown>
+    }
+  }
+
+  const confirmationValue = [
+    visibleAnswers.requirement_spec_confirmation,
+    visibleAnswers.product_plan_confirmation,
+    visibleAnswers.ui_design_confirmation,
+    visibleAnswers.technical_plan_confirmation
+  ].find((value) => typeof value === 'string')
+  const confirmationText = typeof confirmationValue === 'string' ? confirmationValue.trim() : ''
+  const feedback = requirementSpecFeedback?.trim() || ''
+  const planningRecovery =
+    typeof visibleAnswers.planning_recovery === 'string'
+      ? visibleAnswers.planning_recovery.trim()
+      : ''
+  const request = feedback || confirmationText || planningRecovery
+  const action: ApplicationPlanningAction = explicitAction
+  if ((action === 'revise' || action === 'design_change') && !request) {
+    throw new Error('修改动作必须提供明确的修改意见。')
+  }
+
   return {
-    ...workflow,
-    state: { ...workflow.state, lifecycle },
-    result: { ...workflow.result, lifecycle }
+    gateId,
+    artifact,
+    artifactRevision,
+    action,
+    request,
+    answers: visibleAnswers,
+    editedRequirementSpec,
+    requirementSpecFeedback: feedback || undefined
   }
 }
 
@@ -210,7 +308,15 @@ function workflowProgressEvents(
   const currentIndex = workflowStep(workflow)
   const finished = workflow.summary.status === 'completed'
   const events = phaseOrder.slice(0, currentIndex + 1).map((stage, index) => {
-    const meta = phaseProgress[stage]
+    const meta =
+      stage === 'requirements' &&
+      planningRequirementsDocumentGenerating(workflow, planningWorkflowLifecycleStage(workflow))
+        ? {
+            ...phaseProgress.requirements,
+            message: '正在生成需求文档…',
+            title: '正在生成需求文档'
+          }
+        : phaseProgress[stage]
     const completed = index < currentIndex || (finished && index === currentIndex)
     return {
       stage,
@@ -236,6 +342,9 @@ function workflowProgressEvents(
 // 返回当前节点在动态进度卡上的标题与兜底说明。
 function workflowProgressCopy(workflow?: WorkflowRunPayload): { fallback: string; title: string } {
   const stage = phaseOrder[workflowStep(workflow)]
+  if (stage === 'requirements' && planningRequirementsDocumentGenerating(workflow)) {
+    return { fallback: '正在生成需求文档…', title: '正在生成需求文档' }
+  }
   const meta = phaseProgress[stage] || phaseProgress.requirements
   return { fallback: meta.message, title: meta.title }
 }
@@ -253,7 +362,8 @@ export default function ApplicationPagePlanningModal({
   onSubmitClarificationChange,
   onPlanningContent,
   onPlanningWorkflow,
-  onConfirmed,
+  onTechnicalPlanConfirmed,
+  onErrorChange,
   onLifecycleChange,
   onStatusChange,
   onWorkflowChange,
@@ -263,6 +373,9 @@ export default function ApplicationPagePlanningModal({
   const originalRequest = useMemo(() => buildApplicationPlanningRequest(application), [application])
   const startedRef = useRef(false)
   const completedRef = useRef(false)
+  // 记录当前请求代次；用户补充新内容时，旧的生成流和旧快照都必须失效。
+  const planningRunTokenRef = useRef(0)
+  const planningRunningRef = useRef(false)
   // 标记本轮 runPlanning 流式 onWorkflow 是否已转发最终（requires_user_input）workflow，
   // 避免 result.workflow 重复转发导致工作台新增重复卡片。
   const streamedFinalWorkflowRef = useRef(false)
@@ -346,6 +459,11 @@ export default function ApplicationPagePlanningModal({
     onStatusChange(status)
   }, [awaitingUserInput, error, onStatusChange, running, workflow])
 
+  // 规划窗口可能被工作台隐藏，错误仍需同步到工作台消息区，保证失败可见。
+  useEffect(() => {
+    onErrorChange(error || undefined)
+  }, [error, onErrorChange])
+
   // 同步组件内 Workflow 展示状态与可跨重启恢复的外部快照。
   const handleWorkflowChange = (nextWorkflow: WorkflowRunPayload): void => {
     // 每个全屏规划实例只接收自己的线程事件，避免并行应用互相覆盖问题卡片。
@@ -354,15 +472,15 @@ export default function ApplicationPagePlanningModal({
     onWorkflowChange(nextWorkflow)
   }
 
-  // 保持加载界面直到模板准备完成，失败时恢复可重试状态。
+  // 保持加载界面直到模板准备完成；失败后只展示终止状态，不再次触发模板初始化。
   const completePlanning = async (confirmation: ApplicationPlanningConfirmation): Promise<void> => {
     completedRef.current = true
     setPreparingTemplate(true)
     try {
-      const succeeded = await onConfirmed(confirmation)
+      const succeeded = await onTechnicalPlanConfirmed(confirmation)
       if (succeeded) return
       completedRef.current = false
-      setError('应用模板准备失败，请重试；成功后才会进入工作台。')
+      setError('应用模板准备失败，模板生成已终止。')
     } catch (reason) {
       console.error('[planning-modal] completePlanning error', reason)
       completedRef.current = false
@@ -372,38 +490,31 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
-  // 运行初始或恢复轮次，并在项目规划确认后直接打开工作台。
+  // 运行初始或原生中断恢复轮次，并在技术规划确认后直接打开工作台。
   const runPlanning = async (
     messageText: string,
-    answers?: WorkflowClarificationAnswers,
-    resumeState?: WorkflowRunPayload,
-    editedRequirementSpec?: Record<string, unknown>,
-    requirementSpecFeedback?: string,
-    designChangeSubmission = false
+    interaction?: ApplicationPlanningInteraction
   ): Promise<void> => {
     if (!application.workspaceRoot) return
+    const runToken = planningRunTokenRef.current + 1
+    planningRunTokenRef.current = runToken
+    // 新一轮补充到达时先取消旧生成，避免旧请求在新需求之后继续写入状态。
+    if (planningRunningRef.current) {
+      await session.stop()
+    }
+    planningRunningRef.current = true
     setRunning(true)
     onStatusChange('running')
     setError('')
     setStreamingContent('')
     streamedFinalWorkflowRef.current = false
     try {
-      let currentResumeState = resumeState
-      if (currentResumeState) {
-        const lifecycle = await getApplicationLifecycle(application, threadId)
-        currentResumeState = withAuthoritativeLifecycle(currentResumeState, lifecycle)
-        handleWorkflowChange(currentResumeState)
-      }
       const result = await session.sendMessage(messageText, {
         application,
-        clarificationAnswers: answers,
-        editedRequirementSpec,
-        requirementSpecFeedback,
-        designChangeSubmission,
+        applicationPlanningInteraction: interaction,
         editorMode: 'frontend',
         originalRequest,
-        resumeState: currentResumeState,
-        workflowDebug: currentResumeState
+        workflowDebug: interaction
           ? undefined
           : {
               enabled: true,
@@ -423,10 +534,12 @@ export default function ApplicationPagePlanningModal({
         workflowScope: 'application_planning',
         workspaceRoot: application.workspaceRoot,
         onContent: (content) => {
+          if (runToken !== planningRunTokenRef.current) return
           setStreamingContent(content)
           onPlanningContent?.(content)
         },
         onWorkflow: (nextWorkflow) => {
+          if (runToken !== planningRunTokenRef.current) return
           handleWorkflowChange(nextWorkflow)
           onPlanningWorkflow?.(nextWorkflow)
           // 流式已转发最终（requires_user_input）workflow，标记避免 result.workflow 重复转发。
@@ -435,6 +548,7 @@ export default function ApplicationPagePlanningModal({
           }
         }
       })
+      if (runToken !== planningRunTokenRef.current) return
       if (result.workflow) {
         handleWorkflowChange(result.workflow)
         // 流式已转发最终 workflow 时不再重复转发，避免工作台新增重复卡片。
@@ -447,11 +561,15 @@ export default function ApplicationPagePlanningModal({
         await completePlanning(confirmation)
       }
     } catch (reason) {
+      if (runToken !== planningRunTokenRef.current) return
       console.error('[planning-modal] runPlanning error', reason)
       if (isAuthenticationFailure(reason)) return
       setError(formatError(reason, '创建规划运行失败'))
     } finally {
-      setRunning(false)
+      if (runToken === planningRunTokenRef.current) {
+        planningRunningRef.current = false
+        setRunning(false)
+      }
     }
   }
 
@@ -518,7 +636,7 @@ export default function ApplicationPagePlanningModal({
     }
     if (initialStatus !== 'running') return
     if (initialWorkflow) {
-      void runPlanning('请从上次保存的规划状态继续执行。', undefined, initialWorkflow)
+      void runPlanning('请从上次保存的规划状态继续执行。')
       return
     }
     void runPlanning(originalRequest)
@@ -526,20 +644,24 @@ export default function ApplicationPagePlanningModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialLifecycle.initialization.stage, originalRequest])
 
-  // 提交当前确认卡答案，并由后端从公开状态推断恢复节点。
+  // 提交当前确认卡答案，并用服务端中断标识精确恢复同一个审阅门。
   const handleSubmitClarification = (
     currentWorkflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
   ): void => {
-    void runPlanning(
-      '请根据本轮确认继续创建规划。',
-      answers,
-      currentWorkflow,
-      editedRequirementSpec,
-      requirementSpecFeedback
-    )
+    try {
+      const interaction = buildPlanningInteraction(
+        currentWorkflow,
+        answers,
+        editedRequirementSpec,
+        requirementSpecFeedback
+      )
+      void runPlanning('请根据本轮确认继续创建规划。', interaction)
+    } catch (reason) {
+      setError(formatError(reason, '创建规划确认失败'))
+    }
   }
 
   // 把提交确认的能力注册给 AppEntryPage，供工作台中间区的 ApplicationPlanningQuestionPanel
@@ -554,14 +676,18 @@ export default function ApplicationPagePlanningModal({
         designChangeRequest?: string
       ) => {
         if (designChangeRequest) {
-          void runPlanning(
-            designChangeRequest,
-            undefined,
-            workflow,
-            undefined,
-            undefined,
-            true
-          )
+          try {
+            const interaction = buildPlanningInteraction(
+              workflow,
+              answers,
+              undefined,
+              undefined,
+              designChangeRequest
+            )
+            void runPlanning(designChangeRequest, interaction)
+          } catch (reason) {
+            setError(formatError(reason, '设计变更提交失败'))
+          }
           return
         }
         handleSubmitClarification(workflow, answers, editedRequirementSpec, requirementSpecFeedback)
@@ -593,24 +719,11 @@ export default function ApplicationPagePlanningModal({
     }
   }
 
-  // 模板准备失败时直接重试本地准备动作，避免重复提交已确认的项目计划。
+  // 规划流程失败时只允许重跑尚未进入模板阶段的规划，不重试已确认的 TechnicalPlan。
   const retryAfterFailure = async (): Promise<void> => {
     const confirmation = workflowConfirmation(workflow)
-    if (!confirmation) {
-      await runPlanning(originalRequest)
-      return
-    }
-    setRunning(true)
-    onStatusChange('running')
-    setError('')
-    try {
-      await completePlanning(confirmation)
-    } catch (reason) {
-      if (isAuthenticationFailure(reason)) return
-      setError(formatError(reason, '应用模板准备失败'))
-    } finally {
-      setRunning(false)
-    }
+    if (confirmation) return
+    await runPlanning(originalRequest)
   }
 
   return (
@@ -662,19 +775,10 @@ export default function ApplicationPagePlanningModal({
           ) : null}
 
           {error ? (
-            <Result
-              extra={
-                <Button
-                  icon={<ReloadOutlined />}
-                  onClick={() => void retryAfterFailure()}
-                  type="primary"
-                >
-                  重试
-                </Button>
-              }
-              status="error"
-              subTitle={`${error} 可点击重试；仅在提示连接或超时时检查网络与模型服务。`}
-              title="应用初始化失败"
+            <AgentErrorCard
+              error={error}
+              onRetry={workflowConfirmation(workflow) ? undefined : () => void retryAfterFailure()}
+              retrying={running}
             />
           ) : (
             <section className={cx('page-planning-review')}>

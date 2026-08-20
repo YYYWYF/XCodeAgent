@@ -13,6 +13,7 @@ import { useWorkbenchPhase } from '../../../../context'
 import { WORKBENCH_PHASE_AGENTS } from '../../../../workbenchPhase'
 import {
   planningWorkflowActivity,
+  planningWorkflowNeedsChatLoading,
   planningWorkflowRequiresUserInput
 } from '../../../Welcome/planningWorkflowState'
 import type {
@@ -23,6 +24,7 @@ import type {
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
+import AgentErrorCard from '../../../AgentErrorCard'
 import CodeChangeCard from '../CodeChangeCard'
 import { ToolCallChain } from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
@@ -116,6 +118,8 @@ type MessageListProps = {
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
   entityDesignSession?: boolean
+  /** 当前会话最新一轮模型/Workflow 错误，优先在消息区展示统一错误卡片。 */
+  error?: string
   /** 设计阶段：规划 workflow 确认卡始终可提交（由 planningSubmitRef 驱动），
    *  不走开发 execution 的 workflowInteractionAvailability 判定。 */
   designPhasePlanning?: boolean
@@ -136,8 +140,6 @@ type MessageListProps = {
   rootPath?: string
   /** 模板就绪后点击进入开发阶段（放开 product 锁，恢复跟随旅程）。 */
   onEnterDevelopment?: () => void
-  /** 模板生成失败后重试（重新触发模板生成）。 */
-  onRetryTemplate?: () => void
   /** 当前应用是否正在生成模板（前端状态信号，lifecycle 在生成期间不变）。 */
   generatingTemplate?: boolean
   /** 设计阶段最新的规划 workflow（activePlannings 权威快照，每轮 no-op resume 都会更新）。
@@ -156,6 +158,8 @@ type MessageListProps = {
     editedRequirementSpec?: Record<string, unknown>
   ) => Promise<void>
   onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
+  /** 错误来自当前设计阶段规划时，允许用户回到规划页重试。 */
+  onRetryError?: () => void
   revertingCodeChangeIds: ReadonlySet<string>
   workspaceRoot?: string
 }
@@ -167,6 +171,7 @@ export default function MessageList({
   conversationRunning,
   entityDesignSession = false,
   designPhasePlanning = false,
+  error,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
   uiDesignActingPageIds,
@@ -174,7 +179,6 @@ export default function MessageList({
   onSaveRequirementSpec,
   rootPath,
   onEnterDevelopment,
-  onRetryTemplate,
   generatingTemplate,
   planningWorkflow,
   onStartDetailDesign,
@@ -183,6 +187,7 @@ export default function MessageList({
   onEntityDesignGateJump,
   onOpenCodeChangeFile,
   onRevertCodeChanges,
+  onRetryError,
   revertingCodeChangeIds,
   onSubmitClarification,
   workspaceRoot
@@ -195,6 +200,15 @@ export default function MessageList({
   const scrollUpdateFrameRef = useRef<number>()
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
+  const latestAssistantMessageId = findLastAssistantMessageId(messages)
+  const visibleError = error?.trim() || ''
+  const latestAssistantMessage = findLastAssistantMessage(messages)
+  const latestAssistantMessageError = latestAssistantMessage
+    ? latestAssistantMessage.error?.trim() ||
+      workflowFailureMessage(latestAssistantMessage.workflow)
+    : ''
+  // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
+  const showStandaloneError = Boolean(visibleError && visibleError !== latestAssistantMessageError)
   const hasStreamingProcess = messages.some(
     (message) => message.id === activeAssistantMessageId && Boolean(message.processSteps?.length)
   )
@@ -279,7 +293,7 @@ export default function MessageList({
   // 消息或加载状态切换后主动安排一次跟随，ResizeObserver 不可用时仍可工作。
   useEffect(() => {
     scheduleScrollUpdate()
-  }, [loading, messages, scheduleScrollUpdate])
+  }, [loading, messages, scheduleScrollUpdate, visibleError])
 
   return (
     <div className={cx('ai-message-list-shell')}>
@@ -290,7 +304,7 @@ export default function MessageList({
         ref={scrollContainerRef}
       >
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
-          {messages.length === 0 ? (
+          {messages.length === 0 && !visibleError ? (
             <div className={cx('ai-message-empty')}>
               {designPhasePlanning ? (
                 <>
@@ -313,6 +327,11 @@ export default function MessageList({
               // 实体会话内所有消息按对话样式渲染，运行中的临时快照缺少实体
               // 上下文时也不回退显示 Agent 流程信息。
               const hideEntityWorkflowChrome = entityDesignSession || entityDesignMessage
+              const isCurrentErrorMessage =
+                Boolean(message.error || workflowFailureMessage(message.workflow)) &&
+                message.role === 'assistant' &&
+                message.id === latestAssistantMessageId
+              const messageError = message.error || workflowFailureMessage(message.workflow)
               const codeChanges = message.codeChanges ?? workflowCodeChanges(message.workflow)
               const visibleCodeChanges = workflowShouldShowCodeChanges(message.workflow)
                 ? codeChanges
@@ -364,7 +383,8 @@ export default function MessageList({
                 message.workflow &&
                 ['product_planning', 'project_planning', 'technical_planning'].includes(
                   String(message.workflow.summary?.phase || '')
-                ) && message.workflow.summary?.status !== 'running'
+                ) &&
+                message.workflow.summary?.status !== 'running'
               const showWorkflowCard = Boolean(
                 message.workflow &&
                   (requiresClarification ||
@@ -400,13 +420,27 @@ export default function MessageList({
                 isStructuredPlanningWorkflow(message.workflow) &&
                 message.workflow.summary?.status === 'running'
               const isPlanningLoadingPlaceholder = Boolean(message.planningLoading)
+              // 某些首帧会先带 running workflow，随后旧的占位标记可能被流式文本清掉；
+              // 只要当前仍在运行且消息没有正文/确认卡，就继续显示生成中，避免只剩 Agent 头像。
+              const isPlanningWorkflowRunning =
+                designPhasePlanning && message.workflow?.summary?.status === 'running'
+              const showPlanningLoading =
+                !messageError &&
+                planningWorkflowNeedsChatLoading(
+                  message.workflow,
+                  designPhasePlanning,
+                  isPlanningLoadingPlaceholder,
+                  showWorkflowCard,
+                  visibleAssistantContent
+                )
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
               // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。
               const effectiveAssistantContent =
+                messageError ||
                 isPlanningArtifactConfirmationCard ||
                 isPlanningStageRunningCard ||
                 isLaunchProjectCard ||
-                isPlanningLoadingPlaceholder ||
+                showPlanningLoading ||
                 (showWorkflowCard && requiresClarification && !entityDesignCardVisible)
                   ? ''
                   : visibleAssistantContent
@@ -425,26 +459,36 @@ export default function MessageList({
                         {/* 统一 Agent 头：人像图标 + 当前阶段 Agent 角色名（产品/研发/审查），
                             独占一行，下方换行展示正文/卡片。 */}
                         <MessageAgentHeader agentKey={currentPhase} />
+                        {messageError ? (
+                          <AgentErrorCard
+                            error={messageError}
+                            onRetry={isCurrentErrorMessage ? onRetryError : undefined}
+                          />
+                        ) : null}
                         {/* 设计阶段规划占位消息：初次进入或用户提交后产品 Agent 正在准备，
                             planningLoading 标记的占位消息显示 loading 态，
                             流式 chunk 到达后 planningLoading 被清除，展示返回内容。 */}
-                        {isPlanningLoadingPlaceholder && (
-                          planningActivity && message.workflow ? (
+                        {showPlanningLoading &&
+                          (planningActivity && message.workflow ? (
                             <PlanningWorkflowActivity workflow={message.workflow} />
                           ) : (
                             <div className={cx('ai-message-loading-placeholder')}>
                               <Spin size="small" />
                               <Text type="secondary">
-                                {designPhasePlanning ? '正在准备需求确认…' : '正在处理…'}
+                                {isPlanningWorkflowRunning
+                                  ? '正在生成设计方案…'
+                                  : designPhasePlanning
+                                    ? '正在准备需求确认…'
+                                    : '正在处理…'}
                               </Text>
                             </div>
-                          )
-                        )}
-                        {!isPlanningLoadingPlaceholder &&
-                          planningActivity &&
-                          message.workflow ? (
-                            <PlanningWorkflowActivity workflow={message.workflow} />
-                          ) : null}
+                          ))}
+                        {!showPlanningLoading &&
+                        !messageError &&
+                        planningActivity &&
+                        message.workflow ? (
+                          <PlanningWorkflowActivity workflow={message.workflow} />
+                        ) : null}
                         {/* 开发阶段 detailBlocker：研发 Agent 流内挡板卡，
                             选中待设计页面时注入，展示「尚未进行详细设计」+ 开始按钮。 */}
                         {message.detailBlocker && (
@@ -585,6 +629,14 @@ export default function MessageList({
               )
             })
           )}
+          {showStandaloneError ? (
+            <article className={cx('ai-message', 'assistant')}>
+              <div className={cx('ai-message-content')}>
+                <MessageAgentHeader agentKey={currentPhase} />
+                <AgentErrorCard error={visibleError} onRetry={onRetryError} />
+              </div>
+            </article>
+          ) : null}
           {designPhasePlanning &&
           (generatingTemplate || isTemplatePreparing(applicationLifecycle)) ? (
             <article className={cx('ai-message', 'assistant', 'template-preparing-message')}>
@@ -592,7 +644,6 @@ export default function MessageList({
                 <TemplatePreparingCard
                   lifecycle={applicationLifecycle}
                   onEnterDevelopment={onEnterDevelopment}
-                  onRetry={onRetryTemplate}
                 />
               </div>
             </article>
@@ -624,10 +675,21 @@ export default function MessageList({
 
 /** 从消息末尾向前查找当前正在流式更新的 Assistant 消息。 */
 function findLastAssistantMessageId(messages: AgentChatMessage[]): number | undefined {
+  return findLastAssistantMessage(messages)?.id
+}
+
+/** 从消息末尾向前查找最新的 Assistant 消息，供错误去重和展示顺序复用。 */
+function findLastAssistantMessage(messages: AgentChatMessage[]): AgentChatMessage | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'assistant') return messages[index].id
+    if (messages[index].role === 'assistant') return messages[index]
   }
   return undefined
+}
+
+/** 从 Workflow 终态提取失败摘要，覆盖后端未额外发送 RUN_ERROR 的失败路径。 */
+function workflowFailureMessage(workflow?: WorkflowRunPayload): string | undefined {
+  if (workflow?.summary.status !== 'failed') return undefined
+  return workflow.summary.message?.trim() || '本次模型调用未完成。'
 }
 
 /** 只为最新一轮快速修改显示版本提醒，避免历史消息重复读取 Git 状态。 */

@@ -72,6 +72,7 @@ def _workflow_progress_summary(
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
         "lifecycle": result.get("lifecycle"),
+        "requirementsConfirmed": result.get("requirements_confirmed") is True,
         "workspaceInspectionProgress": result.get("workspace_scan_progress"),
     }
 
@@ -135,6 +136,10 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("status") == "requires_user_input":
             return []
         return ["ui_confirmation"]
+    if node_name == "requirements":
+        if update.get("status") == "requires_user_input":
+            return []
+        return ["product_planning"]
     if node_name == "technical_planning":
         return []
     if node_name == "integration_test":
@@ -201,13 +206,14 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
         not in {
             "requirement_spec_json_path",
             "project_plan_json_path",
-            "user_interaction_submission",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
     inspection = _workspace_inspection_snapshot(value)
     if inspection is not None:
         public_state["workspaceInspection"] = inspection
+    if "requirements_confirmed" in value:
+        public_state["requirementsConfirmed"] = value.get("requirements_confirmed") is True
     return public_state
 
 
@@ -247,7 +253,12 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             if isinstance(clarification, dict)
             else None
         )
-        message = f"需求文档={update.get('requirement_spec_path')}"
+        if update.get("requirements_confirmed") is True:
+            message = f"需求文档={update.get('requirement_spec_path')}"
+        elif questions:
+            message = "需求信息尚不完整，等待用户补充；补充完成前不生成需求文档草稿"
+        else:
+            message = "需求草稿已写入右侧，等待确认后转为正式需求文档"
         if questions:
             message += f"，待确认问题={len(questions)}"
         return {
@@ -988,6 +999,7 @@ def _workflow_summary(
         "clarification": clarification,
         "observability": result.get("observability", {}),
         "lifecycle": result.get("lifecycle"),
+        "requirementsConfirmed": result.get("requirements_confirmed") is True,
     }
 
 
@@ -1006,8 +1018,12 @@ def _workflow_user_input_message(
         return "项目预览已就绪，请确认是否符合预期。"
 
     confirmation_labels = {
-        "requirement_spec_confirmation": "需求文档已生成，请确认后继续。",
-        "product_plan_confirmation": "产品规划已生成，请确认后继续。",
+        "requirement_spec_confirmation": (
+            "右侧已展示需求文档草稿，请确认需求没问题后转为正式文档。"
+            if result.get("requirements_confirmed") is not True
+            else "需求文档已生成，请确认后继续。"
+        ),
+        "product_plan_confirmation": "产品规划草稿已生成，请确认后转为正式产品规划。",
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
         "technical_plan_confirmation": "技术规划已生成，请确认后继续。",
         "technical_plan_generation_error": "技术规划未通过校验，请重新生成。",
@@ -1064,6 +1080,7 @@ def _workflow_visual_payload(
         "smallTaskResults": result.get("small_task_results", []),
         "smallTaskHandoff": result.get("small_task_handoff", {}),
         "clarification": result.get("clarification", {}),
+        "requirementsConfirmed": result.get("requirements_confirmed") is True,
         "design_change_submission": result.get("design_change_submission", False),
         "design_change_request": result.get("design_change_request"),
         "design_change_target": result.get("design_change_target"),
@@ -1149,11 +1166,18 @@ def _workflow_confirmation_artifact(
     contract = artifact_contracts.get(str(clarification.get("mode") or ""))
     if not contract or result.get("phase") != contract["phase"]:
         return None
-
     raw_path = result.get(contract["path_field"])
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
     path = Path(raw_path)
+    if (
+        contract["id"] == "requirement_spec"
+        and result.get("requirements_confirmed") is not True
+        and "drafts" not in path.parts
+    ):
+        return None
+    if contract["id"] == "product_plan" and "drafts" not in path.parts:
+        return None
     if path.name != contract["name"] or not path.is_file():
         return None
 

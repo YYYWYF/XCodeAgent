@@ -1,4 +1,8 @@
-import type { WorkflowRunPayload } from '../../typings'
+import type {
+  WorkflowClarification,
+  WorkflowClarificationAnswers,
+  WorkflowRunPayload
+} from '../../typings'
 
 export type PlanningWorkflowActivity = {
   status: 'running' | 'completed' | 'failed'
@@ -12,10 +16,10 @@ const PLANNING_ACTIVITY_COPY: Record<
   { title: string; revisionTitle: string; detail: string; revisionDetail?: string }
 > = {
   requirements: {
-    title: '正在生成需求文档',
-    revisionTitle: '正在重新生成需求文档',
-    detail: '正在分析产品目标、用户角色、页面与业务流程。',
-    revisionDetail: '正在合并本次变更，并保留未受影响的需求事实。'
+    title: '正在分析需求',
+    revisionTitle: '正在重新分析需求',
+    detail: '正在识别产品目标、用户角色、页面与业务流程中的信息缺口。',
+    revisionDetail: '正在合并本次补充，并保留未受影响的需求事实。'
   },
   product_planning: {
     title: '正在生成产品规划',
@@ -49,6 +53,71 @@ const DESIGN_INTENT_LABELS: Record<string, string> = {
   chat: '无需修改正式产物'
 }
 
+const PLANNING_CONFIRMATION_ANSWER_KEYS: Record<string, string> = {
+  requirement_spec_confirmation: 'requirement_spec_confirmation',
+  product_plan_confirmation: 'product_plan_confirmation',
+  ui_design_confirmation: 'ui_design_confirmation',
+  technical_plan_confirmation: 'technical_plan_confirmation',
+  project_plan_confirmation: 'project_plan_confirmation'
+}
+
+const PLANNING_CONFIRMATION_DEFAULTS = new Set([
+  '正确，继续',
+  '正确，继续规划',
+  '确认全部设计稿'
+])
+
+// 从 Workflow 快照读取当前设计阶段的交互说明，统一覆盖 summary/state/result 的投影差异。
+function planningWorkflowClarification(
+  workflow: WorkflowRunPayload
+): WorkflowClarification | undefined {
+  for (const value of [
+    workflow.summary.clarification,
+    workflow.state?.clarification,
+    workflow.result?.clarification
+  ]) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as WorkflowClarification
+    }
+  }
+  return undefined
+}
+
+// 将聊天区提交的规划答案补齐为服务端中断恢复所需的显式动作。
+export function ensureApplicationPlanningAction(
+  workflow: WorkflowRunPayload,
+  answers: WorkflowClarificationAnswers
+): WorkflowClarificationAnswers {
+  if (answers.__applicationPlanningAction) return answers
+
+  const clarification = planningWorkflowClarification(workflow)
+  const mode = String(clarification?.mode || '')
+  if (answers.ui_design_action && typeof answers.ui_design_action === 'object') {
+    return { ...answers, __applicationPlanningAction: 'ui_action' }
+  }
+  if (mode === 'technical_plan_generation_error' || typeof answers.planning_recovery === 'string') {
+    return { ...answers, __applicationPlanningAction: 'revise' }
+  }
+
+  const confirmationKey = PLANNING_CONFIRMATION_ANSWER_KEYS[mode]
+  if (confirmationKey) {
+    const confirmationValue = answers[confirmationKey]
+    const confirmationText =
+      typeof confirmationValue === 'string' ? confirmationValue.trim() : ''
+    const action =
+      confirmationText && !PLANNING_CONFIRMATION_DEFAULTS.has(confirmationText)
+        ? 'revise'
+        : 'confirm'
+    return { ...answers, __applicationPlanningAction: action }
+  }
+
+  // WorkflowRunCard 的需求澄清按钮只传用户答案；此处明确标记为 answer，避免在本地构造请求前失败。
+  if (mode === 'ask_user_question' || (clarification?.questions?.length || 0) > 0) {
+    return { ...answers, __applicationPlanningAction: 'answer' }
+  }
+  return answers
+}
+
 // 判断当前应用规划是否已经进入可展示的用户交互阶段，避免被仍在收尾的传输状态遮挡。
 export function planningWorkflowRequiresUserInput(workflow?: WorkflowRunPayload): boolean {
   if (workflow?.summary.status === 'requires_user_input') return true
@@ -70,6 +139,23 @@ export function planningWorkflowSettlesLoading(workflow?: WorkflowRunPayload): b
   return ['completed', 'failed'].includes(String(workflow?.summary.status || ''))
 }
 
+// 判断设计阶段的空助手消息是否必须继续显示加载态，避免 running 快照只渲染 Agent 头像。
+export function planningWorkflowNeedsChatLoading(
+  workflow: WorkflowRunPayload | undefined,
+  designPhasePlanning: boolean,
+  loadingPlaceholder: boolean,
+  hasWorkflowCard: boolean,
+  content: string
+): boolean {
+  if (loadingPlaceholder) return true
+  return Boolean(
+    designPhasePlanning &&
+      workflow?.summary.status === 'running' &&
+      !hasWorkflowCard &&
+      !content.trim()
+  )
+}
+
 // 判断权威快照是否可以回填聊天区；用户已提交新一轮时禁止复用上一轮待确认内容。
 export function shouldBackfillPlanningWorkflow(
   workflow: WorkflowRunPayload | undefined,
@@ -87,6 +173,77 @@ export function planningWorkflowPhase(workflow?: WorkflowRunPayload): string {
     if (startedPhase) return String(startedPhase)
   }
   return String(workflow?.summary.phase || '')
+}
+
+// 从 Workflow 或生命周期快照读取当前需求是否已通过用户确认门禁。
+export function planningRequirementsConfirmed(
+  workflow?: WorkflowRunPayload,
+  requirementSpecPath?: string
+): boolean {
+  // 以当前 state/result 中第一个明确布尔值为准；修订首帧的 false 必须覆盖旧快照里的 true。
+  for (const source of [workflow?.state, workflow?.result, workflow?.summary]) {
+    const value = source?.requirementsConfirmed ?? source?.requirements_confirmed
+    if (typeof value === 'boolean') return value
+  }
+  // 重新打开应用时可能没有内存 Workflow；此时只以本次真实读取到的正式 Markdown 路径兜底。
+  return Boolean(
+    requirementSpecPath && !requirementSpecPath.match(/[\\/]drafts[\\/]/)
+  )
+}
+
+// 从公开 Workflow 状态读取应用规划生命周期的当前阶段。
+export function planningWorkflowLifecycleStage(workflow?: WorkflowRunPayload): string {
+  for (const source of [workflow?.state, workflow?.result, workflow?.summary]) {
+    const lifecycle = source?.lifecycle
+    if (!lifecycle || typeof lifecycle !== 'object') continue
+    const initialization = (lifecycle as Record<string, unknown>).initialization
+    if (!initialization || typeof initialization !== 'object') continue
+    const stage = (initialization as Record<string, unknown>).stage
+    if (typeof stage === 'string' && stage) return stage
+  }
+  return ''
+}
+
+// 只在本轮 TechnicalPlan 已确认并进入模板阶段时允许触发模板初始化，拒绝上游修订快照携带的旧终态确认。
+export function planningTechnicalPlanConfirmed(workflow?: WorkflowRunPayload): boolean {
+  if (
+    planningWorkflowPhase(workflow) !== 'technical_planning' ||
+    workflow?.summary.status !== 'completed' ||
+    planningWorkflowLifecycleStage(workflow) !== 'generating_application_template_files'
+  ) {
+    return false
+  }
+  // 以当前 state 的第一个明确状态为准，避免旧 result 中的 confirmed 覆盖新一轮 pending 状态。
+  for (const source of [workflow?.state, workflow?.result]) {
+    const technicalPlan = source?.technical_plan
+    if (!technicalPlan || typeof technicalPlan !== 'object' || Array.isArray(technicalPlan)) continue
+    const confirmationStatus = (technicalPlan as Record<string, unknown>).confirmation_status
+    if (typeof confirmationStatus === 'string') return confirmationStatus === 'confirmed'
+  }
+  return false
+}
+
+// 判断当前是否正在把已确认的需求草稿落成正式 Markdown 文档。
+export function planningRequirementsDocumentGenerating(
+  workflow?: WorkflowRunPayload,
+  lifecycleStage?: string
+): boolean {
+  for (const source of [workflow?.state, workflow?.result]) {
+    const interaction = source?.application_planning_interaction
+    if (
+      interaction &&
+      typeof interaction === 'object' &&
+      (interaction as Record<string, unknown>).action === 'confirm' &&
+      (interaction as Record<string, unknown>).artifact === 'requirement_spec'
+    ) {
+      return planningWorkflowPhase(workflow) === 'requirements'
+    }
+  }
+  return (
+    planningWorkflowPhase(workflow) === 'requirements' &&
+    (lifecycleStage === 'generating_requirement_spec' ||
+      planningWorkflowLifecycleStage(workflow) === 'generating_requirement_spec')
+  )
 }
 
 // 把创建规划 Graph 的实时节点和意图结果转换为聊天区可直接展示的进度文案。
@@ -154,18 +311,32 @@ export function planningWorkflowActivity(
     designChangeSubmission &&
     Boolean(intent.target) &&
     hasExistingPlanningArtifact(workflow, phase)
+  const requirementsDocumentGenerating = planningRequirementsDocumentGenerating(
+    workflow,
+    planningWorkflowLifecycleStage(workflow)
+  )
+  const effectiveCopy =
+    copy && phase === 'requirements' && requirementsDocumentGenerating
+      ? {
+          ...copy,
+          title: isRevision ? '正在重新生成需求文档' : '正在生成需求文档',
+          revisionTitle: '正在重新生成需求文档',
+          detail: '正在把已确认的需求草稿写入正式 Markdown 文档。',
+          revisionDetail: '正在把本次确认后的需求修订写入正式 Markdown 文档。'
+        }
+      : copy
   // 首次创建的需求、产品和技术阶段使用活动块；UI 首次生成由设计预览区反馈。
   // 只有设计变更显示“重新生成”和意图标签。
   // UI 设计卡片的结构化动作会保留历史意图但显式关闭设计变更，此时沿用卡片自身加载态。
   if (
-    !copy ||
+    !effectiveCopy ||
     (phase === 'ui_confirmation' && !isRevision) ||
     (!designChangeSubmission && Boolean(intent.target)) ||
     !['running', 'failed'].includes(status)
   ) {
     return undefined
   }
-  const title = isRevision ? copy.revisionTitle : copy.title
+  const title = isRevision ? effectiveCopy.revisionTitle : effectiveCopy.title
   return {
     status: status === 'failed' ? 'failed' : 'running',
     title: status === 'failed' ? `${title.replace('正在', '')}失败` : title,
@@ -173,28 +344,20 @@ export function planningWorkflowActivity(
       status === 'failed'
         ? String(workflow.summary.message || '当前设计产物生成失败，请重试。')
         : isRevision
-          ? intent.reason || copy.revisionDetail || copy.detail
-          : copy.detail,
+          ? intent.reason || effectiveCopy.revisionDetail || effectiveCopy.detail
+          : effectiveCopy.detail,
     intentLabel: isRevision ? DESIGN_INTENT_LABELS[intent.target] || intent.target : undefined
   }
 }
 
-// 读取设计变更开始前冻结的产物状态，缺少快照时仅使用当前公开产物作兜底。
+// 只读取服务端创建修订事务时冻结的产物状态；缺少快照一律按首次生成展示。
 function hasExistingPlanningArtifact(workflow: WorkflowRunPayload, phase: string): boolean {
   for (const source of [workflow.result, workflow.state]) {
     const presence = readRecord(source?.design_change_existing_artifacts)
     if (typeof presence[phase] === 'boolean') return presence[phase] === true
   }
 
-  const artifactFields: Record<string, string[]> = {
-    requirements: ['requirement_spec', 'requirement_spec_path'],
-    product_planning: ['product_plan', 'product_plan_path'],
-    ui_confirmation: ['ui_designs'],
-    technical_planning: ['technical_plan', 'technical_plan_path']
-  }
-  return artifactFields[phase]?.some((field) =>
-    [workflow.result, workflow.state].some((source) => Boolean(source?.[field]))
-  ) ?? false
+  return false
 }
 
 // 从公开 Workflow 状态或意图节点完成事件中读取设计变更路由结果。

@@ -44,10 +44,12 @@ type Props = {
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
-  /** 模板生成失败后重试（重新触发模板生成）。 */
-  onRetryTemplate?: () => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
+  /** 设计阶段后台规划窗口的模型错误。 */
+  planningError?: string
+  /** 从工作台错误卡片重新打开设计阶段规划窗口。 */
+  onRetryPlanning?: () => void
   planningThreadId?: string
   planningWorkflow?: WorkflowRunPayload
   theme: Theme
@@ -69,8 +71,9 @@ function WorkbenchPage({
   onStopPlanning,
   onThemeChange,
   onPlanningStreamReady,
-  onRetryTemplate,
   generatingTemplate,
+  planningError,
+  onRetryPlanning,
   planningThreadId,
   planningWorkflow,
   theme
@@ -380,8 +383,9 @@ function WorkbenchPage({
                 onStopPlanning={onStopPlanning}
                 onThemeChange={handleThemeChange}
                 onPlanningStreamReady={onPlanningStreamReady}
-                onRetryTemplate={onRetryTemplate}
                 generatingTemplate={generatingTemplate}
+                planningError={planningError}
+                onRetryPlanning={onRetryPlanning}
                 planningThreadId={planningThreadId}
                 planningWorkflow={planningWorkflow}
                 theme={theme}

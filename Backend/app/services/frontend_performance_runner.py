@@ -57,6 +57,39 @@ def frontend_build_passed(state: dict[str, Any]) -> bool:
     return False
 
 
+def _lighthouserc_config(preview_url: str) -> dict[str, Any]:
+    """生成 LHCI 0.7.2 配置；跳过整页截图规避新版 Chrome 的协议超时。"""
+
+    return {
+        "ci": {
+            "collect": {
+                "url": [preview_url],
+                "numberOfRuns": 1,
+                "settings": {
+                    # 保持 Lighthouse 7.3 可用的移动端模拟采集链路，
+                    # 但把网络/CPU 限速调到接近本地无限制，避免
+                    # dev server 未打包依赖被 1.6Mbps 模型放大。
+                    "throttlingMethod": "simulate",
+                    "throttling": {
+                        "rttMs": 0,
+                        "throughputKbps": 100_000,
+                        "cpuSlowdownMultiplier": 1,
+                    },
+                    # 整页截图仅用于 HTML 报告的视觉展示，不参与评分和指标；
+                    # Lighthouse 7.3 在较新 HeadlessChrome 上调用
+                    # Page.captureScreenshot 会挂起并超时，直接跳过。
+                    "skipAudits": ["full-page-screenshot"],
+                },
+            },
+            "upload": {
+                "target": "filesystem",
+                "outputDir": ".",
+                "reportFilenamePattern": "frontend-performance.%%EXTENSION%%",
+            },
+        }
+    }
+
+
 def run_frontend_performance_check(
     state: dict[str, Any],
     *,
@@ -144,32 +177,7 @@ def run_frontend_performance_check(
         config_path = runtime_dir / "lighthouserc.json"
         config_path.write_text(
             json.dumps(
-                {
-                    "ci": {
-                        "collect": {
-                            "url": [preview_url],
-                            "numberOfRuns": 1,
-                            "settings": {
-                                # 保持 Lighthouse 7.3 可用的移动端模拟采集链路，
-                                # 但把网络/CPU 限速调到接近本地无限制，避免
-                                # dev server 未打包依赖被 1.6Mbps 模型放大。
-                                "throttlingMethod": "simulate",
-                                "throttling": {
-                                    "rttMs": 0,
-                                    "throughputKbps": 100_000,
-                                    "cpuSlowdownMultiplier": 1,
-                                },
-                            },
-                        },
-                        "upload": {
-                            "target": "filesystem",
-                            "outputDir": ".",
-                            "reportFilenamePattern": (
-                                "frontend-performance.%%EXTENSION%%"
-                            ),
-                        },
-                    }
-                },
+                _lighthouserc_config(preview_url),
                 ensure_ascii=False,
                 indent=2,
             ),

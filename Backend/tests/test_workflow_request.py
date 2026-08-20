@@ -240,19 +240,23 @@ class WorkflowRequestTests(unittest.TestCase):
             {
                 "forwardedProps": {
                     "workflowScope": "application_planning",
-                    "clarificationAnswers": {
-                        "ui_design_action": {
+                    "applicationPlanningInteraction": {
+                        "gateId": "ui_designs:revision-1",
+                        "artifact": "ui_designs",
+                        "artifactRevision": "revision-1",
+                        "action": "ui_action",
+                        "uiAction": {
                             "pageId": "order_list_page",
                             "action": "select_template",
                             "templateId": "commonTable",
-                        }
+                        },
                     },
                 }
             }
         )
 
         self.assertEqual(
-            inputs["resume_values"]["ui_design_action"],
+            inputs["application_planning_interaction"]["ui_action"],
             {"pageId": "order_list_page", "action": "select_template", "templateId": "commonTable"},
         )
 
@@ -261,18 +265,22 @@ class WorkflowRequestTests(unittest.TestCase):
             {
                 "forwardedProps": {
                     "workflowScope": "application_planning",
-                    "clarificationAnswers": {
-                        "ui_design_action": {
+                    "applicationPlanningInteraction": {
+                        "gateId": "ui_designs:revision-1",
+                        "artifact": "ui_designs",
+                        "artifactRevision": "revision-1",
+                        "action": "ui_action",
+                        "uiAction": {
                             "pageId": "dashboard_page",
                             "action": "regenerate",
-                        }
+                        },
                     },
                 }
             }
         )
 
         self.assertEqual(
-            inputs["resume_values"]["ui_design_action"],
+            inputs["application_planning_interaction"]["ui_action"],
             {"pageId": "dashboard_page", "action": "regenerate"},
         )
 
@@ -283,14 +291,21 @@ class WorkflowRequestTests(unittest.TestCase):
             {
                 "forwardedProps": {
                     "workflowScope": "application_planning",
-                    "clarificationAnswers": {
-                        "ui_design_action": {"action": "skip"},
+                    "applicationPlanningInteraction": {
+                        "gateId": "ui_designs:revision-1",
+                        "artifact": "ui_designs",
+                        "artifactRevision": "revision-1",
+                        "action": "ui_action",
+                        "uiAction": {"action": "skip"},
                     },
                 }
             }
         )
 
-        self.assertEqual(inputs["resume_values"]["ui_design_action"], {"action": "skip"})
+        self.assertEqual(
+            inputs["application_planning_interaction"]["ui_action"],
+            {"action": "skip"},
+        )
 
     def test_application_planning_rejects_invalid_ui_design_action(self) -> None:
         # select_template 缺 templateId、未知 action、缺 pageId 均视为无动作
@@ -299,15 +314,21 @@ class WorkflowRequestTests(unittest.TestCase):
             {"pageId": "p1", "action": "unknown"},
             {"action": "regenerate"},
         ):
-            inputs = workflow_run_inputs(
-                {
-                    "forwardedProps": {
-                        "workflowScope": "application_planning",
-                        "clarificationAnswers": {"ui_design_action": invalid},
+            with self.assertRaisesRegex(ValueError, "uiAction"):
+                workflow_run_inputs(
+                    {
+                        "forwardedProps": {
+                            "workflowScope": "application_planning",
+                            "applicationPlanningInteraction": {
+                                "gateId": "ui_designs:revision-1",
+                                "artifact": "ui_designs",
+                                "artifactRevision": "revision-1",
+                                "action": "ui_action",
+                                "uiAction": invalid,
+                            },
+                        }
                     }
-                }
-            )
-            self.assertNotIn("ui_design_action", inputs["resume_values"])
+                )
 
     def test_main_workflow_ignores_edited_requirement_spec(self) -> None:
         inputs = workflow_run_inputs(
@@ -436,7 +457,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertIn("系统有哪些用户角色", request)
         self.assertIn("普通员工、库管员", request)
         self.assertIn("入库管理、出库管理、库存查询", request)
-        self.assertTrue(inputs["user_interaction_submission"])
+        self.assertNotIn("user_interaction_submission", inputs)
 
     def test_plain_recovery_message_is_not_a_user_interaction_submission(self) -> None:
         """普通恢复文案不得获得确认卡结构化提交权限。"""
@@ -448,7 +469,7 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertFalse(inputs["user_interaction_submission"])
+        self.assertNotIn("user_interaction_submission", inputs)
 
     def test_unit_test_confirmation_is_forwarded_as_resume_decision(self) -> None:
         """单元测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
@@ -471,7 +492,7 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["resume_from"], "integration_test")
         self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
-        self.assertTrue(inputs["user_interaction_submission"])
+        self.assertNotIn("user_interaction_submission", inputs)
 
     def test_frontend_performance_confirmation_is_forwarded_as_resume_decision(self) -> None:
         """前端性能测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
@@ -497,7 +518,7 @@ class WorkflowRequestTests(unittest.TestCase):
             inputs["resume_values"]["frontend_performance_decision"],
             "run",
         )
-        self.assertTrue(inputs["user_interaction_submission"])
+        self.assertNotIn("user_interaction_submission", inputs)
 
     def test_performance_resume_keeps_previous_unit_test_decision(self) -> None:
         """性能测试确认恢复时必须保留单测决策与构建缓存，避免集成测试从头重跑。"""

@@ -17,6 +17,7 @@ from app.services.product_plan import (
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.product_plan_documents import (
     edited_product_plan_markdown,
+    write_confirmed_product_plan_documents,
     write_product_plan_documents,
 )
 
@@ -36,9 +37,11 @@ def _product_planning_token(token: str) -> None:
 
 
 def _has_explicit_submission(state: ProjectState) -> bool:
-    """确保创建流程恢复卡片时不会把恢复动作误判为产品确认。"""
+    """确保创建流程只消费原生中断恢复产生的产品交互。"""
 
-    return state.get("workflow_scope") != "application_planning" or state.get("user_interaction_submission") is True
+    return state.get("workflow_scope") != "application_planning" or bool(
+        state.get("application_planning_interaction")
+    )
 
 
 def _user_confirmed(request: str) -> bool:
@@ -49,6 +52,21 @@ def _user_confirmed(request: str) -> bool:
         positive_signals=("正确", "确认产品规划", "产品规划没问题", "继续", "无误"),
         negative_signals=("修改", "调整", "补充", "不对", "不正确", "重新生成"),
     )
+
+
+def _application_planning_interaction(state: ProjectState) -> dict[str, Any]:
+    """读取当前创建规划的结构化 ProductPlan 动作。"""
+
+    value = state.get("application_planning_interaction")
+    return value if isinstance(value, dict) and value else {}
+
+
+def _product_planning_request(state: ProjectState, interaction: dict[str, Any]) -> str:
+    """选择 ProductPlan 的结构化请求，避免创建流程重新解释中文确认词。"""
+
+    if state.get("workflow_scope") == "application_planning" and interaction:
+        return str(interaction.get("request") or "").strip()
+    return str(state.get("request") or "")
 
 
 def _confirmation_payload(plan: dict[str, Any]) -> dict[str, Any]:
@@ -185,6 +203,10 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
     requirement_spec = state.get("requirement_spec")
     if not isinstance(requirement_spec, dict):
         raise ValueError("产品规划必须读取已确认的 RequirementSpec。")
+    interaction = _application_planning_interaction(state)
+    application_planning_scope = state.get("workflow_scope") == "application_planning"
+    request = _product_planning_request(state, interaction)
+    action = str(interaction.get("action") or "")
     existing = state.get("product_plan")
     if isinstance(existing, dict):
         if (
@@ -219,7 +241,11 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             "timeline": ["product_planning"],
         }
 
-    if isinstance(existing, dict) and _user_confirmed(str(state.get("request") or "")):
+    if isinstance(existing, dict) and (
+        action == "confirm"
+        if application_planning_scope
+        else _user_confirmed(request)
+    ):
         edited_markdown = edited_product_plan_markdown(state, existing)
         synchronized = (
             sync_product_plan_from_markdown(existing, requirement_spec, edited_markdown)
@@ -236,7 +262,11 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
                 errors,
             )
             return _pending_product_plan_update(state, repaired)
-        markdown_path, json_path = write_product_plan_documents(state, confirmed)
+        markdown_path, json_path = write_confirmed_product_plan_documents(
+            state,
+            confirmed,
+            markdown=edited_markdown,
+        )
         return {
             "phase": "product_planning",
             "status": "completed",
@@ -247,7 +277,16 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             "timeline": ["product_planning"],
         }
 
-    feedback = str(state.get("request") or "") if isinstance(existing, dict) else ""
+    feedback = (
+        request
+        if isinstance(existing, dict)
+        and (
+            action == "revise" or not interaction
+            if application_planning_scope
+            else bool(request)
+        )
+        else ""
+    )
     plan = _generate_valid_product_plan(
         requirement_spec,
         existing_plan=existing if isinstance(existing, dict) else None,

@@ -210,10 +210,13 @@ export default function WorkflowRunCard({
     ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
     : dagConfirmation
       ? dagTaskPlan?.tasks?.length || 0
-    : uiDesignConfirmation
-      ? ((clarification as unknown as Record<string, unknown>).pages as unknown[] | undefined)
-          ?.length || clarificationQuestions.length
-      : clarificationQuestions.length
+      : uiDesignConfirmation
+        ? (
+            (clarification as unknown as Record<string, unknown> | undefined)?.pages as
+              | unknown[]
+              | undefined
+          )?.length || clarificationQuestions.length
+        : clarificationQuestions.length
   const requiresConfirmation = clarification?.status === 'requires_user_input'
   const [answers, setAnswers] = useState<ClarificationAnswers>(() =>
     loadClarificationDraft(workflow.threadId, clarificationQuestions)
@@ -533,8 +536,8 @@ function readRequirementSpec(workflow: WorkflowRunPayload): Record<string, unkno
 }
 
 /**
- * 需求文档确认卡片：展示已生成状态 + 修改（弹窗结构化编辑器）+ 确认并继续规划。
- * 右侧需求文档只读；点「修改」打开 Modal 编辑页面/角色/流程，保存后同步给后端，
+ * 需求文档确认卡片：展示右侧草稿状态 + 修改（弹窗结构化编辑器）+ 确认并继续规划。
+ * 右侧需求文档只读；点「修改」打开 Modal 编辑页面/角色/流程，保存后同步给草稿，
  * 确认只提交确认语义，禁止用前端快照覆盖后端已经生成或保存的新文档。
  */
 function RequirementSpecConfirmationCard({
@@ -557,6 +560,7 @@ function RequirementSpecConfirmationCard({
   workflow: WorkflowRunPayload
 }): ReactElement {
   const spec = readRequirementSpec(workflow)
+  const requirementsConfirmed = readRequirementsConfirmed(workflow)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Record<string, unknown> | undefined>()
   const [saving, setSaving] = useState(false)
@@ -590,10 +594,18 @@ function RequirementSpecConfirmationCard({
 
   return (
     <div className={cx('requirement-spec-confirmation-card')}>
+      {!requirementsConfirmed && spec ? (
+        <div className={cx('requirement-spec-draft-summary')}>
+          <Text strong>需求草稿已展示在右侧</Text>
+          <Text type="secondary">
+            确认后将转为正式需求文档并进入下一阶段。
+          </Text>
+        </div>
+      ) : null}
       <div className={cx('artifact-auth-bar-footer')}>
         <span className={cx('artifact-auth-status')}>
           <CheckCircleOutlined aria-hidden="true" />
-          需求文档已生成
+          {requirementsConfirmed ? '需求文档已确认' : '需求草稿待确认'}
         </span>
         <span className={cx('artifact-auth-actions')}>
           {canEdit ? (
@@ -638,6 +650,16 @@ function RequirementSpecConfirmationCard({
       </Modal>
     </div>
   )
+}
+
+// 从公开 Workflow 快照读取需求确认门禁，禁止把结构化草稿误称为正式文档。
+function readRequirementsConfirmed(workflow: WorkflowRunPayload): boolean {
+  // 修订首帧的 false 必须覆盖旧快照里的 true，禁止过期文档进入确认卡或编辑入口。
+  for (const source of [workflow.state, workflow.result, workflow.summary]) {
+    const value = source?.requirementsConfirmed ?? source?.requirements_confirmed
+    if (typeof value === 'boolean') return value
+  }
+  return false
 }
 
 /** 规划文档确认卡片：展示当前文档并提交放弃或确认操作。 */

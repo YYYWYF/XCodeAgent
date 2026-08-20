@@ -12,6 +12,8 @@ export type AgentChatMessage = {
   content: string
   skills?: ChatMessageSkill[]
   workflow?: WorkflowRunPayload
+  /** 当前 assistant 轮次的模型或 Workflow 错误，统一交给错误卡片渲染。 */
+  error?: string
   codeChanges?: WorkspaceCodeChangeSet
   toolCalls?: ToolCallRecord[]
   processSteps?: ProcessStepRecord[]

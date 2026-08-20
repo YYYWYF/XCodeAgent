@@ -147,6 +147,40 @@ class BuildUnitSkeletonTests(unittest.TestCase):
         self.assertIn("frontend:api-client", units)
         self.assertNotIn("database:external_api", units)
         self.assertEqual(plan["unit_graph"]["validation"]["is_valid"], True)
+        self.assertIn(
+            {
+                "from": "backend:bootstrap",
+                "to": "backend:endpoint:orders-api:orders.list",
+                "type": "depends_on",
+            },
+            plan["unit_graph"]["edges"],
+        )
+        self.assertNotIn(
+            {
+                "from": "backend:bootstrap",
+                "to": "backend:endpoint:weather-api:weather.get",
+                "type": "depends_on",
+            },
+            plan["unit_graph"]["edges"],
+        )
+
+    def test_external_api_only_skeleton_omits_database_bootstrap(self) -> None:
+        """纯外部 API 工程不创建数据库 bootstrap Unit 或依赖边。"""
+
+        project_plan = confirm_entity_designs(
+            _project_plan(),
+            source_type="external_api",
+        )
+        plan = ensure_build_unit_skeleton(project_plan, {})
+
+        self.assertNotIn("backend:bootstrap", plan["build_units"])
+        self.assertIn("backend:endpoint:orders-api:orders.list", plan["build_units"])
+        self.assertFalse(
+            any(
+                edge.get("from") == "backend:bootstrap"
+                for edge in plan["unit_graph"]["edges"]
+            )
+        )
 
     def test_builds_all_plan_units_and_endpoint_page_edges(self) -> None:
         plan = ensure_build_unit_skeleton(

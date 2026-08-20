@@ -20,11 +20,14 @@ from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
 )
+from app.protocols.workflow.projection import _workflow_confirmation_artifact
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.requirement_spec import create_requirement_spec
 from app.services.product_plan import create_product_plan
-from app.workspace.spec_documents import write_requirement_spec_document
+from app.workspace.spec_documents import (
+    write_requirement_spec_draft_document,
+)
 
 
 def _write_application_config(workspace: Path, datasource_type: str = "database") -> None:
@@ -105,7 +108,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 raise AssertionError("恢复动作不应执行 Graph。")
 
         with tempfile.TemporaryDirectory() as directory:
-            artifact = Path(directory) / "requirement-spec.md"
+            artifact = Path(directory) / ".xcodeagent" / "drafts" / "specs" / "requirement-spec.md"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text("# RequirementSpec\n\n待确认需求。\n", encoding="utf-8")
             graph = RecoveryGraph()
             graph.values = {
@@ -117,6 +121,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                     "confirmation_status": "pending_user_confirmation",
                     "app_info": {"name": "任务中心"},
                 },
+                # 待确认阶段应恢复 checkpoint 指向的草稿工件。
+                "requirements_confirmed": False,
                 "requirement_spec_path": str(artifact),
                 "clarification": {
                     "mode": "requirement_spec_confirmation",
@@ -168,7 +174,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             _write_application_config(Path(directory))
-            write_requirement_spec_document({"workspace": directory}, spec)
+            write_requirement_spec_draft_document({"workspace": directory}, spec)
             stream = build_application_page_planning_ag_ui_stream(
                 graph=object(),
                 payload={
@@ -191,7 +197,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
             frames = asyncio.run(collect())
             saved = json.loads(
-                (Path(directory) / ".xcodeagent/specs/requirement-spec.json").read_text(
+                (Path(directory) / ".xcodeagent/drafts/specs/requirement-spec.json").read_text(
                     encoding="utf-8"
                 )
             )
@@ -227,7 +233,25 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
                 self.prompt = prompt
                 return AIMessage(
-                    content="",
+                    # 即使工具调用消息夹带了与需求无关的页面 JSON，也不应在提问阶段采用。
+                    content=json.dumps(
+                        {
+                            "feature_modules": [
+                                {
+                                    "id": "core_management",
+                                    "name": "核心业务管理",
+                                }
+                            ],
+                            "pages": [
+                                {
+                                    "pageId": "dashboard_page",
+                                    "name": "概览页",
+                                    "path": "/page/home",
+                                }
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
                     tool_calls=[{
                         "name": "ask_user",
                         "args": {
@@ -257,6 +281,10 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertIn("name and a broad scenario alone are not sufficient", model.prompt)
         self.assertEqual(result["clarification"]["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["questions"][0]["header"], "用户角色")
+        self.assertEqual(result["requirement_spec"]["pages"], [])
+        self.assertEqual(result["requirement_spec"]["feature_modules"], [])
+        self.assertEqual(result["requirement_spec"]["entities"], [])
+        self.assertEqual(result["requirement_spec"]["business_flows"], [])
 
     def test_streaming_requirements_merge_chunked_ask_user_tool_call(self) -> None:
         """流式模型拆分 ask_user 参数时仍应恢复成可展示的澄清问题。"""
@@ -315,7 +343,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(_route_start({"resume_from": "detail_confirmation"}), "requirements")
         self.assertEqual(
             _route_requirements({"clarification": {"status": "requires_user_input"}}),
-            "await_user_input",
+            "requirements_review",
         )
 
     def test_requirement_failure_and_retry_update_lifecycle(self) -> None:
@@ -522,10 +550,51 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             capability["editableArtifacts"]["requirement_spec"]["saveActionField"],
             "forwardedProps.requirementSpecDraft",
         )
+        self.assertEqual(
+            capability["draftArtifacts"]["product_plan"]["writes"],
+            [
+                "drafts/plans/product-plan.md",
+                "drafts/plans/product-plan.json",
+            ],
+        )
         self.assertFalse(capability["writesApplicationJsonAfterConfirmation"])
-        self.assertEqual(capability["artifactDirectories"], [".xcodeagent/specs", ".xcodeagent/plans"])
+        self.assertEqual(
+            capability["artifactDirectories"],
+            [
+                ".xcodeagent/drafts/specs",
+                ".xcodeagent/drafts/plans",
+                ".xcodeagent/specs",
+                ".xcodeagent/plans",
+            ],
+        )
         self.assertEqual(capability["workspaceGate"], "planning-artifacts")
         self.assertNotIn("lifecycle", capability)
+
+    def test_product_confirmation_projects_only_draft_markdown(self) -> None:
+        """产品规划待确认时只允许把 drafts/plans 下的 Markdown 投影给前端。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            draft_path = Path(directory) / ".xcodeagent/drafts/plans/product-plan.md"
+            draft_path.parent.mkdir(parents=True, exist_ok=True)
+            draft_path.write_text("# 产品规划草稿\n", encoding="utf-8")
+            result = {
+                "phase": "product_planning",
+                "status": "requires_user_input",
+                "product_plan_path": str(draft_path),
+                "clarification": {
+                    "status": "requires_user_input",
+                    "mode": "product_plan_confirmation",
+                },
+            }
+
+            artifact = _workflow_confirmation_artifact(result)
+            result["product_plan_path"] = str(
+                Path(directory) / ".xcodeagent/plans/product-plan.md"
+            )
+
+        self.assertIsNotNone(artifact)
+        self.assertEqual(artifact["path"], str(draft_path))
+        self.assertIsNone(_workflow_confirmation_artifact(result))
 
     def test_lifecycle_action_is_rejected_without_running_graph(self) -> None:
         """旧页面规划端点应以完整 AG-UI 失败流拒绝 lifecycle 动作。"""

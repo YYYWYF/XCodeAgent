@@ -17,7 +17,12 @@ from ag_ui.core import (
 )
 from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
+from langgraph.types import Command
 
+from app.protocols.application_planning_interrupt import (
+    application_planning_interrupt_from_snapshot,
+    project_application_planning_interrupt,
+)
 from app.protocols.workflow.projection import (
     _public_workflow_state,
     _workflow_artifacts,
@@ -56,6 +61,48 @@ from app.graph.application_planning_revision import cleared_design_change_contex
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
+
+
+_APPLICATION_PLANNING_RESUME_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _application_planning_resume_lock(thread_id: str) -> asyncio.Lock:
+    """返回指定创建规划 thread 的进程内恢复锁。"""
+
+    lock = _APPLICATION_PLANNING_RESUME_LOCKS.get(thread_id)
+    if lock is None:
+        # 单进程事件循环内创建锁不需要额外互斥；不同 thread 会得到不同锁并行执行。
+        lock = asyncio.Lock()
+        _APPLICATION_PLANNING_RESUME_LOCKS[thread_id] = lock
+    return lock
+
+
+def _validate_application_planning_resume(
+    snapshot: Any,
+    interaction: dict[str, Any],
+) -> dict[str, Any]:
+    """在产生任何恢复投影前校验提交是否仍匹配 checkpoint 的当前中断。"""
+
+    pending = application_planning_interrupt_from_snapshot(snapshot)
+    if pending is None:
+        raise ValueError("当前创建规划线程没有可恢复的审阅中断。")
+
+    submitted_gate_id = str(
+        interaction.get("gate_id") or interaction.get("gateId") or ""
+    )
+    submitted_artifact = str(interaction.get("artifact") or "")
+    submitted_revision = str(
+        interaction.get("artifact_revision")
+        or interaction.get("artifactRevision")
+        or ""
+    )
+    if submitted_gate_id != str(pending.get("gateId") or ""):
+        raise ValueError("提交的创建规划确认卡已经过期，请刷新后重试。")
+    if submitted_artifact != str(pending.get("artifact") or ""):
+        raise ValueError("创建规划交互与当前待确认产物不匹配。")
+    if submitted_revision != str(pending.get("artifactRevision") or ""):
+        raise ValueError("待确认产物已经更新，请基于最新版本重新提交。")
+    return pending
 
 
 def _next_node_attempt(node_attempts: dict[str, int], node_name: str) -> int:
@@ -127,6 +174,52 @@ def _runtime_node_label(node_name: str, state: dict[str, Any]) -> str:
     return _workflow_node_label(node_name)
 
 
+def _application_planning_resume_node(interaction: Any) -> str:
+    """按显式中断交互选择本轮首个展示节点，禁止从旧快照猜测。"""
+
+    if not isinstance(interaction, dict):
+        return ""
+    if interaction.get("action") == "design_change":
+        return "design_intent_analysis"
+    return {
+        "requirement_spec": "requirements",
+        "product_plan": "product_planning",
+        "ui_designs": "ui_confirmation",
+        "technical_plan": "technical_planning",
+    }.get(str(interaction.get("artifact") or ""), "")
+
+
+def _mark_started_artifact_revision(
+    state: dict[str, Any],
+    interaction: dict[str, Any],
+) -> None:
+    """在审阅门恢复首帧标记真实修订，且只按 checkpoint 中既有产物判定文案。"""
+
+    node_name = _application_planning_resume_node(interaction)
+    if not node_name:
+        return
+    state["design_change_submission"] = True
+    state["design_change_target"] = node_name
+    state["design_change_reason"] = str(interaction.get("request") or "").strip()
+    state["design_change_existing_artifacts"] = {
+        "requirements": bool(
+            state.get("requirement_spec") or state.get("requirement_spec_path")
+        ),
+        "product_planning": bool(
+            state.get("product_plan") or state.get("product_plan_path")
+        ),
+        "ui_confirmation": bool(state.get("ui_designs")),
+        "technical_planning": bool(
+            state.get("technical_plan") or state.get("technical_plan_path")
+        ),
+    }
+    if node_name == "requirements":
+        # 修订运行的 started 快照也必须立即撤销旧需求确认，避免生成流尚未进入节点时仍展示旧文档。
+        state["requirements_confirmed"] = False
+        state["requirement_spec_path"] = ""
+        state["requirement_spec_json_path"] = ""
+
+
 def _runtime_terminal_process_title(
     node_name: str,
     status: str,
@@ -184,6 +277,8 @@ def build_workflow_ag_ui_stream(
         workflow_scope = workflow_inputs.get("workflow_scope") or None
         current_phase = "detail_confirmation"
         node_attempts: dict[str, int] = {}
+        application_planning_resume_lock: asyncio.Lock | None = None
+        application_planning_resume_lock_acquired = False
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")
@@ -219,11 +314,24 @@ def build_workflow_ag_ui_stream(
                 project_id=project_id,
                 workspace=workspace,
             )
+            application_planning_interaction = workflow_inputs.get(
+                "application_planning_interaction"
+            )
             active_graph = (
                 await graph(workspace=workspace, project_id=project_id)
                 if callable(graph)
                 else graph
             )
+            if (
+                workflow_scope == "application_planning"
+                and isinstance(application_planning_interaction, dict)
+            ):
+                # 同一创建规划 thread 的恢复请求必须从快照校验一直串行到本轮流结束。
+                application_planning_resume_lock = _application_planning_resume_lock(
+                    thread_id
+                )
+                await application_planning_resume_lock.acquire()
+                application_planning_resume_lock_acquired = True
             await cleanup_workflow_checkpoints(
                 workspace=workspace,
                 project_id=project_id,
@@ -241,14 +349,23 @@ def build_workflow_ag_ui_stream(
                 run_id=run_id,
             )
             resume_from = workflow_inputs.get("resume_from") or None
+            checkpoint_values: dict[str, Any] = {}
+            if (
+                workflow_scope == "application_planning"
+                and isinstance(application_planning_interaction, dict)
+                and hasattr(active_graph, "aget_state")
+            ):
+                checkpoint_snapshot = await active_graph.aget_state(
+                    {"configurable": {"thread_id": thread_id}}
+                )
+                _validate_application_planning_resume(
+                    checkpoint_snapshot,
+                    application_planning_interaction,
+                )
+                checkpoint_values = dict(checkpoint_snapshot.values)
             initial_state: dict[str, Any] = {
+                **checkpoint_values,
                 "request": request,
-                "design_change_submission": bool(
-                    workflow_inputs.get("design_change_submission")
-                ),
-                "user_interaction_submission": bool(
-                    workflow_inputs.get("user_interaction_submission")
-                ),
                 "selected_skill_names": list(selected_skill_names),
                 "timeline": [],
                 "observability": observability,
@@ -256,15 +373,25 @@ def build_workflow_ag_ui_stream(
                 "active_run_id": run_id,
             }
             initial_state.update(workflow_inputs.get("resume_values") or {})
+            if (
+                isinstance(application_planning_interaction, dict)
+                and application_planning_interaction.get("action") == "revise"
+            ):
+                _mark_started_artifact_revision(
+                    initial_state,
+                    application_planning_interaction,
+                )
             # 非设计变更链路的规划轮次显式清空变更上下文：快照回传只覆盖公开字段，
             # 已终结或被放弃的旧变更指令仍可能残留在 checkpoint 里，必须在这里覆写，
             # 防止其随 checkpoint 合并复活并劫持后续自然回复轮次。
-            design_change_active = bool(
-                initial_state.get("design_change_submission")
-            ) or bool(str(initial_state.get("design_change_request") or "").strip())
-            if workflow_scope == "application_planning" and not design_change_active:
+            if (
+                workflow_scope == "application_planning"
+                and not application_planning_interaction
+            ):
                 initial_state.update(cleared_design_change_context())
-            first_node_name = _workflow_start_node(resume_from, workflow_scope)
+            first_node_name = _application_planning_resume_node(
+                application_planning_interaction
+            ) or _workflow_start_node(resume_from, workflow_scope)
             current_phase = first_node_name
             if not workflow_scope:
                 # 独立创建规划 Graph 只维护创建阶段生命周期，不能登记为工作台开发执行。
@@ -374,6 +501,7 @@ def build_workflow_ag_ui_stream(
                     "design_change_request",
                     "design_change_target",
                     "design_change_reason",
+                    "design_change_existing_artifacts",
                 ):
                     if initial_state.get(key) is not None:
                         started_result[key] = initial_state[key]
@@ -418,8 +546,26 @@ def build_workflow_ag_ui_stream(
             tool_steps: dict[str, dict[str, str]] = {}
             tool_indexes: dict[int, str] = {}
 
+            graph_input: dict[str, Any] | Command[Any] = initial_state
+            if workflow_scope == "application_planning" and isinstance(
+                application_planning_interaction,
+                dict,
+            ):
+                # 传输层开启新 AG-UI run，但业务执行恢复同一 thread 的原生中断任务。
+                graph_input = Command(
+                    resume=application_planning_interaction,
+                    update={
+                        "active_thread_id": thread_id,
+                        "active_run_id": run_id,
+                        "selected_skill_names": list(selected_skill_names),
+                        "workspace": workspace,
+                        "project_id": project_id,
+                        "editor_mode": editor_mode,
+                        "workflow_scope": workflow_scope,
+                    },
+                )
             async for stream_mode, chunk in active_graph.astream(
-                initial_state,
+                graph_input,
                 config=config,
                 stream_mode=["updates", "messages", "custom"],
             ):
@@ -875,7 +1021,30 @@ def build_workflow_ag_ui_stream(
                     continue
 
                 for node_name, update in chunk.items():
+                    if node_name == "__interrupt__":
+                        continue
                     if not isinstance(update, dict):
+                        continue
+                    if (
+                        workflow_scope == "application_planning"
+                        and node_name.endswith("_review")
+                    ):
+                        # review 节点只完成 interrupt 恢复交接；对外继续展示真实产物节点，
+                        # 同时立即投影服务端创建的修订事务，避免生成期间文案闪回首次生成。
+                        current_phase = first_node_name
+                        resumed_state = {
+                            **update,
+                            "phase": first_node_name,
+                            "status": "running",
+                        }
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=resumed_state,
+                        ):
+                            yield frame
                         continue
                     current_phase = node_name
                     if not workflow_scope:
@@ -1030,7 +1199,10 @@ def build_workflow_ag_ui_stream(
 
             # 真实 LangGraph 提供 aget_state；测试或兼容 Graph 可能只通过流更新返回状态。
             if hasattr(active_graph, "aget_state"):
-                result = dict((await active_graph.aget_state(config)).values)
+                snapshot = await active_graph.aget_state(config)
+                result = dict(snapshot.values)
+                if workflow_scope == "application_planning":
+                    result = project_application_planning_interrupt(result, snapshot)
             if lifecycle_payload is not None:
                 result["lifecycle"] = lifecycle_payload
             summary = _workflow_summary(result, events)
@@ -1153,6 +1325,12 @@ def build_workflow_ag_ui_stream(
             workflow_run_registry.unregister(run_id, task)
             if workspace_lease is not None:
                 workspace_lease.release()
+            if (
+                application_planning_resume_lock is not None
+                and application_planning_resume_lock_acquired
+            ):
+                # 取消、预校验异常和 Graph 异常都走这里，不能把同一 thread 永久锁死。
+                application_planning_resume_lock.release()
 
     return stream()
 

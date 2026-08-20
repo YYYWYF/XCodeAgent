@@ -193,6 +193,13 @@ def _user_confirmed_all_designs(request: str) -> bool:
     )
 
 
+def _application_planning_interaction(state: ProjectState) -> dict[str, Any]:
+    """读取当前创建规划的结构化 UI 动作，不再从确认文案猜分支。"""
+
+    value = state.get("application_planning_interaction")
+    return value if isinstance(value, dict) and value else {}
+
+
 def _verified_ui_designs_for_confirmation(
     state: ProjectState,
     ui_designs: dict[str, Any],
@@ -249,11 +256,11 @@ def _verified_ui_designs_for_confirmation(
 
 
 def _has_explicit_user_submission(state: ProjectState) -> bool:
-    """与 requirements 节点一致：创建规划须收到本轮结构化交互提交。"""
+    """创建规划只接受原生中断恢复写入的 UI 交互。"""
 
     return (
         state.get("workflow_scope") != "application_planning"
-        or state.get("user_interaction_submission") is True
+        or bool(state.get("application_planning_interaction"))
     )
 
 
@@ -664,14 +671,21 @@ async def ui_confirmation(state: ProjectState) -> dict:
     if product_plan.get("confirmation_status") != "confirmed":
         raise ValueError("UI 设计必须基于已确认 ProductPlan 生成。")
     existing = state.get("ui_designs")
-    request = state.get("request", "")
+    interaction = _application_planning_interaction(state)
+    application_planning_scope = state.get("workflow_scope") == "application_planning"
+    interaction_action = str(interaction.get("action") or "")
+    request = str(state.get("request") or "")
 
     # 跳过动作是显式结构化提交，不生成设计稿、不创建设计目录，直接放行技术规划。
     action = state.get("ui_design_action")
     if (
         isinstance(action, dict)
         and action.get("action") == "skip"
-        and _has_explicit_user_submission(state)
+        and (
+            interaction_action == "ui_action"
+            if application_planning_scope
+            else _has_explicit_user_submission(state)
+        )
     ):
         ui_designs = _build_skipped_ui_designs(state)
         return {
@@ -708,7 +722,11 @@ async def ui_confirmation(state: ProjectState) -> dict:
         isinstance(action, dict)
         and isinstance(existing, dict)
         and existing.get("confirmation_status") == "pending_user_confirmation"
-        and _has_explicit_user_submission(state)
+        and (
+            interaction_action == "ui_action"
+            if application_planning_scope
+            else _has_explicit_user_submission(state)
+        )
     ):
         ui_designs = await _apply_ui_design_action(state, existing, action)
         return {
@@ -725,7 +743,11 @@ async def ui_confirmation(state: ProjectState) -> dict:
     if (
         isinstance(existing, dict)
         and existing.get("confirmation_status") == "pending_user_confirmation"
-        and _user_confirmed_all_designs(request)
+        and (
+            interaction_action == "confirm"
+            if application_planning_scope
+            else _user_confirmed_all_designs(request)
+        )
     ):
         latest = await _latest_ui_designs(state, existing)
         verified, validation_errors = _verified_ui_designs_for_confirmation(state, latest)

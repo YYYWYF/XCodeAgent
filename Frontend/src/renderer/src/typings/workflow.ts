@@ -27,6 +27,7 @@ export type WorkflowSummary = {
   acceptanceRequest?: WorkflowAcceptanceRequest
   artifacts?: Record<string, string>
   clarification?: WorkflowClarification
+  requirementsConfirmed?: boolean
   acceptanceAdjustment?: WorkflowAcceptanceAdjustment
   smallTaskTasks?: WorkflowSmallTask[]
   smallTaskResults?: WorkflowSmallTaskResult[]
@@ -333,7 +334,17 @@ export type WorkflowClarificationAnswer =
   | WorkflowBuildTaskPlanConfirmation
   | Record<string, unknown>
 
-export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer>
+export type ApplicationPlanningAction =
+  | 'answer'
+  | 'confirm'
+  | 'revise'
+  | 'ui_action'
+  | 'design_change'
+
+export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer> & {
+  /** 由创建规划 UI 明确写入，不能由确认文案反推。 */
+  __applicationPlanningAction?: ApplicationPlanningAction
+}
 
 export type WorkflowBuildTaskPlanPatch = {
   task_id: string
@@ -345,6 +356,18 @@ export type WorkflowBuildTaskPlanConfirmation = {
   mode?: 'build_task_plan_confirmation' | string
   action: 'confirm' | 'patch' | 'regenerate'
   patches?: WorkflowBuildTaskPlanPatch[]
+}
+
+export type ApplicationPlanningInteraction = {
+  gateId: string
+  artifact: 'requirement_spec' | 'product_plan' | 'ui_designs' | 'technical_plan'
+  artifactRevision: string
+  action: ApplicationPlanningAction
+  request?: string
+  answers?: WorkflowClarificationAnswers
+  editedRequirementSpec?: Record<string, unknown>
+  requirementSpecFeedback?: string
+  uiAction?: Record<string, unknown>
 }
 
 export type WorkflowClarificationSelectionGroup = {

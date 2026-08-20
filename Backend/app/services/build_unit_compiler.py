@@ -289,7 +289,7 @@ def _unit_source_refs(
     if unit_id == "backend:bootstrap":
         backend_designs = _filter_entity_designs_by_source(
             entity_designs,
-            {"database", "external_api"},
+            {"database"},
         )
         return {
             **existing,

@@ -23,6 +23,7 @@ from app.graph.subgraphs.testing import (
     validate_generated_unit_tests,
 )
 from app.services.test_validation import create_revision_requests
+from app.workspace.code_changes import CapturedWorkspaceChanges
 
 
 class TestingSubgraphEventsTests(unittest.TestCase):
@@ -1227,8 +1228,208 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         )
         self.assertIn(
             "backend/src/test/java/demo/OrdersServiceTest.java",
-            tasks[0]["allowed_paths"],
+            tasks[0]["target_files"],
         )
+        self.assertIn("backend", tasks[0]["allowed_paths"])
+
+    def test_backend_build_failure_authorizes_backend_directory(self) -> None:
+        """构建失败修复必须授权用户 workspace 的 backend 目录并保留 pom.xml 提示。"""
+
+        tasks = _repair_scoped_tasks(
+            {
+                "build_execution_slice": {"tasks": []},
+                "test_results": [
+                    {
+                        "id": "backend_build",
+                        "passed": False,
+                        "blocking": True,
+                        "evidence": "compilation failure",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["owner"], "backend")
+        self.assertIn("backend", tasks[0]["allowed_paths"])
+        self.assertIn("backend/pom.xml", tasks[0]["target_files"])
+
+    def test_blocking_build_failure_auto_skips_unit_test_confirmation(self) -> None:
+        """存在阻塞性构建失败时，单元测试确认必须自动跳过，不再等待用户。"""
+
+        result = unit_test_confirmation(
+            {
+                "test_results": [
+                    {"id": "backend_build", "passed": False, "blocking": True}
+                ]
+            }
+        )
+
+        self.assertEqual(result["status"], "in_progress")
+        self.assertEqual(result["clarification"], {})
+        self.assertEqual(result["unit_test_decision"], "skip")
+        self.assertEqual(result["integration_next_action"], "skip_unit_tests")
+        self.assertIn(
+            "unit_test_confirmation:auto_skipped_blocking_failure",
+            result["test_events"],
+        )
+
+    def test_frontend_performance_confirmation_auto_skips_on_blocking_failure(
+        self,
+    ) -> None:
+        """任何阻塞性检查失败时，性能确认必须自动跳过并直达质量门禁。"""
+
+        result = frontend_performance_confirmation(
+            {
+                "frontend_performance_test_enabled": True,
+                "test_results": [
+                    {"id": "backend_build", "passed": False, "blocking": True},
+                    {"id": "frontend_build", "passed": True, "blocking": True},
+                ],
+            }
+        )
+
+        self.assertEqual(result["status"], "in_progress")
+        self.assertEqual(result["clarification"], {})
+        self.assertEqual(result["frontend_performance_decision"], "skip")
+        self.assertEqual(result["integration_next_action"], "skip_frontend_performance")
+        self.assertIn(
+            "frontend_performance_confirmation:auto_skipped_blocking_failure",
+            result["test_events"],
+        )
+
+    def test_subgraph_blocking_failure_reaches_repair_without_user_input(self) -> None:
+        """阻塞失败必须跳过两个确认，直接产出 small_task_repair 修复任务。"""
+
+        with patch(
+            "app.graph.subgraphs.testing.run_integration_checks",
+            return_value={
+                "test_results": [
+                    {"id": "backend_build", "passed": False, "blocking": True}
+                ],
+                "test_events": ["backend_build"],
+            },
+        ), patch(
+            "app.graph.subgraphs.testing._invoke_test_generation_agent"
+        ) as invoke_agent, patch(
+            "app.graph.subgraphs.testing.evaluate_quality_gate",
+            return_value={
+                "passed": False,
+                "needs_revision": True,
+                "revision_requests": [
+                    {
+                        "id": "revision:backend_build",
+                        "owner": "backend",
+                        "owners": ["backend"],
+                        "reason": "后端构建检查",
+                        "failed_check": {
+                            "id": "backend_build",
+                            "name": "后端构建检查",
+                            "passed": False,
+                            "evidence": "compilation failure",
+                        },
+                    }
+                ],
+            },
+        ), patch(
+            "app.graph.subgraphs.testing.write_test_report_json",
+            return_value="/tmp/test-report.json",
+        ), patch(
+            "app.graph.subgraphs.testing.capture_agent_file_changes",
+            side_effect=lambda **kwargs: CapturedWorkspaceChanges(
+                value=kwargs["action"](),
+                code_change_set=None,
+            ),
+        ), patch(
+            "app.graph.subgraphs.testing.plan_repairs_with_repair_planner_agent",
+            return_value={
+                "version": "0.1.0",
+                "status": "ready",
+                "decision": "repair",
+                "planId": "plan-1",
+                "tasks": [
+                    {
+                        "id": "repair:plan-1:1:backend_build:backend",
+                        "owner": "backend",
+                        "allowed_paths": ["backend"],
+                        "target_files": ["backend/pom.xml"],
+                        "status": "pending",
+                    }
+                ],
+            },
+        ), patch(
+            "app.graph.subgraphs.testing.write_repair_task_plan_json",
+            return_value="/tmp/repair-task-plan.json",
+        ):
+            result = build_testing_subgraph().invoke(
+                {
+                    "unit_test_generation_enabled": True,
+                    "test_results": [],
+                    "test_events": [],
+                    "code_changes": {},
+                    "code_change_sets": [],
+                    "timeline": [],
+                }
+            )
+
+        self.assertEqual(result["integration_next_action"], "small_task_repair")
+        self.assertEqual(len(result["repair_tasks"]), 1)
+        self.assertNotIn("requires_user_input", [result.get("status")])
+        self.assertIn(
+            "unit_test_confirmation:auto_skipped_blocking_failure",
+            result["test_events"],
+        )
+        self.assertIn(
+            "frontend_performance_confirmation:auto_skipped_blocking_failure",
+            result["test_events"],
+        )
+        invoke_agent.assert_not_called()
+
+    def test_repair_planning_auto_dispatches_bounded_candidates(self) -> None:
+        """Planner 声明终止时，只要存在目录内候选任务就自动派发 SmallTask。"""
+
+        with patch(
+            "app.graph.subgraphs.testing.capture_agent_file_changes",
+            side_effect=lambda **kwargs: CapturedWorkspaceChanges(
+                value=kwargs["action"](),
+                code_change_set=None,
+            ),
+        ), patch(
+            "app.graph.subgraphs.testing.plan_repairs_with_repair_planner_agent",
+            return_value={
+                "version": "0.1.0",
+                "status": "terminal_failure",
+                "decision": "terminal_failure",
+                "planId": "plan-1",
+                "requestedPaths": ["backend"],
+                "tasks": [],
+                "candidateTasks": [
+                    {
+                        "id": "repair:plan-1:1:backend_build:backend",
+                        "owner": "backend",
+                        "allowed_paths": ["backend"],
+                        "target_files": ["backend/pom.xml"],
+                        "status": "pending",
+                    }
+                ],
+                "reason": "unclear",
+            },
+        ), patch(
+            "app.graph.subgraphs.testing.write_repair_task_plan_json",
+            return_value="/tmp/repair-task-plan.json",
+        ):
+            result = repair_planning(
+                {
+                    "quality_gate_passed": False,
+                    "test_report": {"passed": False},
+                    "revision_requests": [],
+                }
+            )
+
+        self.assertEqual(result["integration_next_action"], "small_task_repair")
+        self.assertEqual(len(result["repair_tasks"]), 1)
+        self.assertEqual(result["repair_task_plan"]["decision"], "repair")
+        self.assertTrue(result["repair_task_plan"]["auto_dispatched_candidate"])
 
     def test_generation_security_failure_stops_repair_planner(self) -> None:
         """测试目录外实际写入属于安全失败，不交给 SmallTask 猜测修复。"""

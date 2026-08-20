@@ -1,7 +1,6 @@
 import {
   CheckCircleOutlined,
-  ExclamationCircleOutlined,
-  ReloadOutlined
+  ExclamationCircleOutlined
 } from '@ant-design/icons'
 import { Button, Spin, Typography } from 'antd'
 import type { ReactElement } from 'react'
@@ -15,8 +14,6 @@ type Props = {
   lifecycle?: ApplicationLifecycle
   /** 模板就绪后点击进入开发阶段。 */
   onEnterDevelopment?: () => void
-  /** 模板生成失败后重试。 */
-  onRetry?: () => void
 }
 
 const TEMPLATE_STAGES = new Set([
@@ -25,21 +22,20 @@ const TEMPLATE_STAGES = new Set([
   'application_template_generation_failed'
 ])
 
-/** 判断 lifecycle 是否已进入模板准备阶段（用户点过"进入开发阶段"后）。 */
+/** 判断 lifecycle 是否已进入模板准备阶段（TechnicalPlan 确认后）。 */
 export function isTemplatePreparing(lifecycle?: ApplicationLifecycle): boolean {
   const stage = lifecycle?.initialization?.stage
   return Boolean(stage && TEMPLATE_STAGES.has(stage))
 }
 
-/** 项目计划确认后"产品 Agent 正在准备模板"卡片。
+/** TechnicalPlan 确认后"产品 Agent 正在准备模板"卡片。
  *  由 applicationLifecycle.initialization.stage 驱动三态：
  *  - generating_application_template_files：加载态（拉取模板工程 + 生成应用骨架）
  *  - ready_for_workbench：就绪态，出现"进入开发阶段"按钮
- *  - application_template_generation_failed：失败态，错误信息 + 重试 */
+ *  - application_template_generation_failed：失败态，展示错误信息 */
 export default function TemplatePreparingCard({
   lifecycle,
-  onEnterDevelopment,
-  onRetry
+  onEnterDevelopment
 }: Props): ReactElement {
   const stage = lifecycle?.initialization?.stage
   const failed = stage === 'application_template_generation_failed'
@@ -53,11 +49,8 @@ export default function TemplatePreparingCard({
           <Text strong>应用模板生成失败</Text>
         </div>
         <Text type="secondary" className={cx('template-preparing-desc')}>
-          {lifecycle?.error?.message || '应用模板文件生成失败，请重试。'}
+          {lifecycle?.error?.message || '应用模板文件生成失败，请查看错误信息。'}
         </Text>
-        <Button icon={<ReloadOutlined />} onClick={() => onRetry?.()}>
-          重试
-        </Button>
       </div>
     )
   }
@@ -70,7 +63,7 @@ export default function TemplatePreparingCard({
           <Text strong>应用模板已就绪</Text>
         </div>
         <Text type="secondary" className={cx('template-preparing-desc')}>
-          项目计划已确认，应用模板已生成。点击下方按钮进入开发阶段，开始详细设计与构建。
+          TechnicalPlan 已确认，应用模板已生成。点击下方按钮进入开发阶段，开始详细设计与构建。
         </Text>
         <Button
           className={cx('template-preparing-enter-btn')}

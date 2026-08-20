@@ -11,29 +11,21 @@ from app.services.entity_definitions import plan_data_sources
 from app.services.frontend_page_tree import project_plan_page_records
 
 
-PUBLIC_UNIT_IDS = (
-    "frontend:shell",
-    "frontend:api-client",
-    "frontend:auth-guard",
-    "backend:bootstrap",
-    "app:integration",
-)
-
-
 def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
-    """按数据源类型集合选择公共 Unit：全 static 不创建后端启动和 HTTP 客户端。"""
+    """按数据源类型选择公共 Unit，bootstrap 仅服务数据库后端能力。"""
 
     source_types = {
         str(source.get("type") or "")
         for source in plan_data_sources(project_plan)
     }
-    if source_types and source_types <= {"static"}:
-        return (
-            "frontend:shell",
-            "frontend:auth-guard",
-            "app:integration",
-        )
-    return PUBLIC_UNIT_IDS
+    units = ["frontend:shell"]
+    if not (source_types and source_types <= {"static"}):
+        units.append("frontend:api-client")
+    units.append("frontend:auth-guard")
+    if "database" in source_types:
+        units.append("backend:bootstrap")
+    units.append("app:integration")
+    return tuple(units)
 
 
 def _source_type_map(project_plan: dict[str, Any]) -> dict[str, str]:
@@ -262,7 +254,8 @@ def _unit_graph(
 
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
-        if contract_source_types.get(contract_id) not in {"database", "external_api"}:
+        contract_source_type = contract_source_types.get(contract_id)
+        if contract_source_type not in {"database", "external_api"}:
             continue
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "")
@@ -273,7 +266,8 @@ def _unit_graph(
                 errors.append(f"API contract {contract_id} endpoint {endpoint_id} has no Unit.")
                 continue
             edges.append({"from": "application:root", "to": endpoint_unit_id, "type": "contains"})
-            edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
+            if contract_source_type == "database":
+                edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
             edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
 
     for page in project_plan_page_records(project_plan):

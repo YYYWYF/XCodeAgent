@@ -16,6 +16,7 @@ REQUIRED_TEST_CHECKS = [
     ("backend_unit_tests", "后端单元测试通过"),
     ("joint_integration", "前后端集成测试通过"),
 ]
+_INTEGRATION_REPAIR_DIRECTORIES = {"frontend", "backend"}
 
 
 def _check_result(
@@ -184,6 +185,16 @@ def create_repair_task_plan(
                 requested_paths = [
                     "<no file paths — repair is a command-level operation>"
                 ]
+            change_paths = _repair_target_file_paths(owner, scoped_tasks or [])
+            if not change_paths:
+                change_paths = [
+                    path
+                    for path in requested_paths
+                    if path not in _INTEGRATION_REPAIR_DIRECTORIES
+                    and not path.casefold().startswith("<no file paths")
+                ]
+            if not change_paths:
+                change_paths = requested_paths
             repair_unit_id = _repair_task_unit_id(
                 owner,
                 repair_scope,
@@ -209,14 +220,14 @@ def create_repair_task_plan(
                         "failed_check_id": request["failed_check"]["id"],
                     },
                     "allowed_paths": requested_paths,
-                    "target_files": requested_paths,
+                    "target_files": change_paths,
                     "change_scope": [
                         {
                             "operation": "modify",
                             "path": path,
                             "description": f"修复 {request['failed_check']['id']} 的测试失败。",
                         }
-                        for path in requested_paths
+                        for path in change_paths
                     ],
                     "repair_scope": {
                         **repair_scope,
@@ -269,7 +280,7 @@ def create_repair_task_plan(
 
 
 def _repair_allowed_paths(owner: str, scoped_tasks: list[dict[str, Any]]) -> list[str]:
-    """从当前切片同 owner 任务继承真实授权路径，禁止生成宿主模板路径。"""
+    """从当前切片同 owner 任务继承真实授权路径，允许 backend/frontend 目录级授权。"""
 
     paths: list[str] = []
     for task in scoped_tasks:
@@ -288,6 +299,29 @@ def _repair_allowed_paths(owner: str, scoped_tasks: list[dict[str, Any]]) -> lis
         paths.extend(
             str(path) for path in task.get("target_files", []) if str(path).strip()
         )
+    return list(dict.fromkeys(paths))
+
+
+def _repair_target_file_paths(
+    owner: str,
+    scoped_tasks: list[dict[str, Any]],
+) -> list[str]:
+    """提取精确目标文件作为 change_scope，目录级授权只保留在 allowed_paths。"""
+
+    paths: list[str] = []
+    for task in scoped_tasks:
+        if task.get("owner") != owner:
+            continue
+        for path in task.get("target_files", []) or []:
+            normalized = str(path or "").strip()
+            if normalized and normalized not in _INTEGRATION_REPAIR_DIRECTORIES:
+                paths.append(normalized)
+        for change in task.get("change_scope", []) or []:
+            if not isinstance(change, dict):
+                continue
+            normalized = str(change.get("path") or "").strip()
+            if normalized and normalized not in _INTEGRATION_REPAIR_DIRECTORIES:
+                paths.append(normalized)
     return list(dict.fromkeys(paths))
 
 

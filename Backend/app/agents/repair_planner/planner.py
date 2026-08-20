@@ -32,6 +32,11 @@ def _test_repair_planning_prompt(
         "may include only the exact generated test files and their mapped production "
         "sources. Never delete a valid test, weaken an assertion, or add skip/disabled "
         "markers.\n\n"
+        "For frontend_install, frontend_build, backend_build, backend_static_check, and "
+        "other toolchain failures, choose repair when the fix stays inside the already "
+        "authorized project directories (frontend and backend), including package.json, "
+        "lockfiles, tsconfig, vite config, pom.xml, and application configuration. Do not "
+        "request scope expansion for files inside these directories.\n\n"
         "Return only one JSON object using this contract:\n"
         "{\n"
         '  "decision": "repair" | "requires_user_confirmation" | "terminal_failure",\n'

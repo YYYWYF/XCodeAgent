@@ -8,10 +8,6 @@ import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleSt
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { stopProjectPreview } from '../service/projectLaunch'
-import {
-  APPLICATION_TEMPLATE_GENERATION_ENABLED,
-  ensureApplicationTemplateReadiness
-} from '../service/templateApi'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -155,11 +151,14 @@ function AppEntryContent(): JSX.Element {
 
   // 同步当前活动工作台的规划线程标识到 ref，供 deliverPlanningChunk 按 threadId 过滤。
   // 只有匹配该 threadId 的规划流式才注入工作台，避免后台其他应用规划串入对话。
-  const activePlanningThreadId = activeApplication
+  const activePlanning = activeApplication
     ? planningController.activePlannings.find(
         (item) => item.application.id === activeApplication.id
-      )?.threadId
+      )
     : undefined
+  const activePlanningThreadId = activePlanning?.threadId
+  const templateGenerationFailed =
+    activePlanning?.lifecycle.initialization.stage === 'application_template_generation_failed'
   useEffect(() => {
     activePlanningThreadIdRef.current = activePlanningThreadId
     // threadId 就绪后，如果 stream 已注册且有待回放的缓存，按 threadId 回放。
@@ -207,23 +206,7 @@ function AppEntryContent(): JSX.Element {
         return
       }
       try {
-        let lifecycle = await getApplicationLifecycle(application)
-        const templateStage = lifecycle.initialization.stage
-        if (
-          APPLICATION_TEMPLATE_GENERATION_ENABLED &&
-          application.source === 'new' &&
-          [
-            'generating_application_template_files',
-            'application_template_generation_failed',
-            'ready_for_workbench'
-          ].includes(templateStage)
-        ) {
-          const templateThreadId =
-            lifecycle.initialization.threadId ||
-            application.planningThreadId ||
-            `template-generation:${application.id}`
-          lifecycle = await ensureApplicationTemplateReadiness(application, templateThreadId)
-        }
+        const lifecycle = await getApplicationLifecycle(application)
         const readyForWorkbench =
           lifecycle?.initialization?.stage === 'ready_for_workbench'
         if (readyForWorkbench && enterDevConfirmed) {
@@ -310,7 +293,12 @@ function AppEntryContent(): JSX.Element {
           initialStatus={planning.status}
           initialWorkflow={planning.workflow}
           key={planning.threadId}
-          onConfirmed={() => planningController.onPlanningConfirmed(planning.application.id)}
+          onTechnicalPlanConfirmed={() =>
+            planningController.onTechnicalPlanConfirmed(planning.application.id)
+          }
+          onErrorChange={(error) =>
+            planningController.updatePlanningError(planning.application.id, error)
+          }
           onLifecycleChange={(lifecycle) => {
             planningController.updatePlanningLifecycle(planning.application.id, lifecycle)
             if (activeApplication?.id === planning.application.id) {
@@ -373,16 +361,15 @@ function AppEntryContent(): JSX.Element {
             onStopPlanning={() => planningController.stopPlanning(activeApplication.id)}
             onThemeChange={setTheme}
             onPlanningStreamReady={handlePlanningStreamReady}
-            onRetryTemplate={() => {
-              void planningController.onPlanningConfirmed(activeApplication.id)
-            }}
+            onRetryPlanning={
+              templateGenerationFailed
+                ? undefined
+                : () => planningController.showPlanning(activeApplication.id)
+            }
             generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
             planningThreadId={activePlanningThreadId}
-            planningWorkflow={
-              planningController.activePlannings.find(
-                (item) => item.application.id === activeApplication.id
-              )?.workflow
-            }
+            planningWorkflow={activePlanning?.workflow}
+            planningError={activePlanning?.error}
             theme={theme}
           />
         </div>

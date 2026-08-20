@@ -13,10 +13,13 @@ type ConfirmationArtifactProps = {
 export default function ConfirmationArtifact({
   artifact
 }: ConfirmationArtifactProps): ReactElement {
+  const isDraft = artifact.path.match(/[\\/]drafts[\\/]/)
   const title = artifact.id === 'requirement_spec'
     ? '需求文档'
     : artifact.id === 'product_plan'
-      ? '产品规划'
+      ? isDraft
+        ? '产品规划草稿'
+        : '产品规划'
       : artifact.id === 'technical_plan'
         ? '技术规划'
         : '项目计划'

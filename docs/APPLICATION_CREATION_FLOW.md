@@ -132,7 +132,7 @@ flowchart TD
 
 ### 2. 产品规划：ProductPlan
 
-产物路径：`.xcodeagent/plans/product-plan.md`、`.xcodeagent/plans/product-plan.json`
+草稿路径：`.xcodeagent/drafts/plans/product-plan.md`、`.xcodeagent/drafts/plans/product-plan.json`；确认后正式路径：`.xcodeagent/plans/product-plan.md`、`.xcodeagent/plans/product-plan.json`
 
 ```json
 {

@@ -14,6 +14,7 @@ from app.domain.application_lifecycle import (
     WorkbenchExecutionStatus,
 )
 from app.services.application_lifecycle import (
+    begin_application_template_generation,
     complete_application_template_generation,
     complete_workbench_execution,
     ApplicationLifecycleConflictError,
@@ -23,6 +24,7 @@ from app.services.application_lifecycle import (
     end_workbench_execution,
     application_lifecycle_path,
     load_application_lifecycle,
+    persist_application_lifecycle_transition,
     start_workbench_execution,
     stop_workbench_execution,
     transition_application_lifecycle,
@@ -142,6 +144,56 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 self.assertEqual(reloaded.initialization.stage, target_stage)
                 self.assertEqual(reloaded.initialization.thread_id, "thread-init")
 
+    def test_requirement_confirmation_revision_returns_to_analysis(self) -> None:
+        """需求确认选择 revise 时，持久化服务必须允许回到需求分析阶段。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+                initialization_thread_id="thread-init",
+            )
+            write_application_lifecycle(directory, state)
+            for stage, status in (
+                (
+                    ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                    ApplicationLifecycleStatus.RUNNING,
+                ),
+                (
+                    ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                    ApplicationLifecycleStatus.RUNNING,
+                ),
+                (
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CONFIRMATION,
+                    ApplicationLifecycleStatus.AWAITING_USER,
+                ),
+            ):
+                state = persist_application_lifecycle_transition(
+                    directory,
+                    stage=stage,
+                    status=status,
+                )
+
+            revised = persist_application_lifecycle_transition(
+                directory,
+                stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                status=ApplicationLifecycleStatus.RUNNING,
+                active_run_id="revision-run",
+            )
+            loaded = load_application_lifecycle(directory)
+
+        assert loaded is not None
+        self.assertEqual(
+            revised.initialization.stage,
+            ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+        )
+        self.assertEqual(
+            revised.initialization.status,
+            ApplicationLifecycleStatus.RUNNING,
+        )
+        self.assertEqual(revised.active_run_id, "revision-run")
+        self.assertEqual(loaded.revision, revised.revision)
+
     def test_atomic_write_interruption_preserves_previous_file(self) -> None:
         """原子替换前失败时应保留上一版完整状态。"""
 
@@ -214,36 +266,10 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
             self.assertEqual(sorted(results), ["conflict", "written"])
 
-    def test_template_generation_failure_retry_and_success_are_persisted(self) -> None:
-        """应用模板文件生成失败应阻止工作台，重试成功且 UI 可跳过后才进入 ready。"""
+    def test_template_generation_failure_is_terminal(self) -> None:
+        """应用模板文件生成失败后不能从失败状态重新启动。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            specs = workspace / ".xcodeagent/specs"
-            plans = workspace / ".xcodeagent/plans"
-            specs.mkdir(parents=True)
-            plans.mkdir(parents=True)
-            for path in (
-                specs / "requirement-spec.json",
-                plans / "product-plan.json",
-                specs / "ui-designs.json",
-                plans / "technical-plan.json",
-            ):
-                payload = {
-                    "confirmation_status": (
-                        "skipped" if path.name == "ui-designs.json" else "confirmed"
-                    )
-                }
-                if path.name == "product-plan.json":
-                    payload.update({"schema_version": "product-plan.v4", "pages": []})
-                if path.name == "ui-designs.json":
-                    payload.update({"schema_version": "ui-manifest.v3", "pages": []})
-                if path.name == "technical-plan.json":
-                    payload["artifact_type"] = "technical-plan"
-                path.write_text(
-                    json.dumps(payload),
-                    encoding="utf-8",
-                )
             state = create_application_lifecycle(
                 application_id="app-1",
                 application_name="任务中心",
@@ -278,6 +304,62 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
             assert failed.error is not None
             self.assertEqual(failed.error.code, "application_template_generation_failed")
+
+            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "只有用户确认 TechnicalPlan"):
+                begin_application_template_generation(directory)
+            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "不能提交应用模板文件生成结果"):
+                complete_application_template_generation(directory, succeeded=True)
+
+    def test_template_generation_success_is_persisted_after_technical_confirmation(self) -> None:
+        """TechnicalPlan 确认后进入模板阶段，完成门禁才能进入工作台。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            specs = workspace / ".xcodeagent/specs"
+            plans = workspace / ".xcodeagent/plans"
+            specs.mkdir(parents=True)
+            plans.mkdir(parents=True)
+            for path in (
+                specs / "requirement-spec.json",
+                plans / "product-plan.json",
+                specs / "ui-designs.json",
+                plans / "technical-plan.json",
+            ):
+                payload = {
+                    "confirmation_status": (
+                        "skipped" if path.name == "ui-designs.json" else "confirmed"
+                    )
+                }
+                if path.name == "product-plan.json":
+                    payload.update({"schema_version": "product-plan.v4", "pages": []})
+                if path.name == "ui-designs.json":
+                    payload.update({"schema_version": "ui-manifest.v3", "pages": []})
+                if path.name == "technical-plan.json":
+                    payload["artifact_type"] = "technical-plan"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+
+            state = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+            )
+            route = [
+                ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                ApplicationLifecycleStage.GENERATING_REQUIREMENT_SPEC,
+                ApplicationLifecycleStage.GENERATING_PRODUCT_PLAN,
+                ApplicationLifecycleStage.AWAITING_PRODUCT_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+                ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            ]
+            for stage in route:
+                state = transition_application_lifecycle(
+                    state,
+                    stage=stage,
+                    status=ApplicationLifecycleStatus.RUNNING,
+                )
+            write_application_lifecycle(directory, state)
 
             (workspace / "frontend/src/constants").mkdir(parents=True)
             (workspace / "frontend/package.json").write_text("{}", encoding="utf-8")

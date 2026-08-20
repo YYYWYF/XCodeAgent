@@ -201,6 +201,87 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("same Unit", prompt)
         self.assertNotIn("page implementation contract", prompt.lower())
 
+    def test_database_endpoint_prompt_requires_bootstrap_task(self) -> None:
+        """数据库 endpoint 待准备 bootstrap 时必须生成幂等依赖校验任务。"""
+
+        project_plan = {
+            "executable_details": {
+                "endpoint_detail_plans": [{"endpoint_id": "orders.list"}],
+                "entity_designs": [
+                    {"entity_id": "Order", "data_source_type": "database"}
+                ],
+                "api_contracts": [{"id": "orders-api"}],
+            }
+        }
+        with patch(
+            "app.agents.main.task_preparer._springboot_mybatis_skill_document",
+            return_value="DATABASE SKILL BODY",
+        ):
+            prompt = _task_preparation_prompt(
+                project_plan,
+                {
+                    "high_value_files": [{"path": "backend/pom.xml"}],
+                    "backend": {"dir_structure": "backend/pom.xml"},
+                },
+                {
+                    "planning_context_mode": "endpoint",
+                    "planning_unit_ids": [
+                        "backend:bootstrap",
+                        "backend:endpoint:orders-api:orders.list",
+                    ],
+                    "required_unit_ids": [
+                        "backend:bootstrap",
+                        "backend:endpoint:orders-api:orders.list",
+                    ],
+                },
+            )
+
+        self.assertIn("DATABASE BOOTSTRAP TASK IS REQUIRED", prompt)
+        self.assertIn("`backend:bootstrap` Unit", prompt)
+        self.assertIn("change_scope must include `backend/pom.xml`", prompt)
+        self.assertIn("sole exception", prompt)
+        self.assertIn("already_satisfied", prompt)
+
+    def test_database_combined_prompt_requires_bootstrap_task(self) -> None:
+        """前后端混合规划同样注入数据库 bootstrap 任务规则。"""
+
+        project_plan = {
+            "application_skeleton": {"pages": [{"pageId": "orders"}]},
+            "executable_details": {
+                "page_implementation_contracts": [{"pageId": "orders"}],
+                "endpoint_detail_plans": [{"endpoint_id": "orders.list"}],
+                "entity_designs": [
+                    {"entity_id": "Order", "data_source_type": "database"}
+                ],
+                "api_contracts": [{"id": "orders-api"}],
+            },
+        }
+        with patch(
+            "app.agents.main.task_preparer._springboot_mybatis_skill_document",
+            return_value="DATABASE SKILL BODY",
+        ):
+            prompt = _task_preparation_prompt(
+                project_plan,
+                {"backend": {"dir_structure": "backend/pom.xml"}},
+                {
+                    "planning_context_mode": "combined",
+                    "planning_unit_ids": [
+                        "backend:bootstrap",
+                        "backend:endpoint:orders-api:orders.list",
+                        "page:orders",
+                    ],
+                    "required_unit_ids": [
+                        "backend:bootstrap",
+                        "backend:endpoint:orders-api:orders.list",
+                        "page:orders",
+                    ],
+                },
+            )
+
+        self.assertIn("DATABASE BOOTSTRAP TASK IS REQUIRED", prompt)
+        self.assertIn("/backend/pom.xml", prompt)
+        self.assertIn("only exception", prompt)
+
     def test_endpoint_prompt_keeps_executable_facts_once_and_target_routing_only(self) -> None:
         """endpoint 正文只出现在 executable_details，TargetBuildContext 仅保留路由字段。"""
 
@@ -397,6 +478,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("upstream DTO/client", prompt)
         self.assertIn("external_api", prompt)
         self.assertNotIn("INJECTED springboot-mybatis-generate", prompt)
+        self.assertNotIn("DATABASE BOOTSTRAP TASK IS REQUIRED", prompt)
 
     def test_mixed_endpoint_prompt_injects_exact_source_skill_union(self) -> None:
         """混合 endpoint 按实体来源同时注入三类规则，但保留前后端边界。"""
@@ -765,6 +847,158 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("AUTOMATIC REGENERATION FEEDBACK", second_prompt)
         self.assertIn("Task menu-task", second_prompt)
         self.assertIn("frontend/src/constants/menus.ts", second_prompt)
+
+    def test_missing_database_bootstrap_is_automatically_regenerated(self) -> None:
+        """数据库候选遗漏 bootstrap 时必须通过确定性错误触发自动重生成。"""
+
+        endpoint_task = {
+            "id": "orders-objects",
+            "unit_id": "backend:endpoint:orders-api:orders.list",
+            "owner": "backend",
+            "description": "实现订单对象层。",
+            "source_refs": {"entity_ids": ["Order"]},
+            "change_scope": [
+                {
+                    "operation": "add",
+                    "path": "backend/src/main/java/demo/Order.java",
+                }
+            ],
+        }
+        invalid_response = json.dumps({"tasks": [endpoint_task]})
+        valid_response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "backend-bootstrap",
+                        "unit_id": "backend:bootstrap",
+                        "owner": "backend",
+                        "description": "幂等校验数据库后端依赖和基础配置。",
+                        "dependencies": [],
+                        "change_scope": [
+                            {
+                                "operation": "modify",
+                                "path": "backend/pom.xml",
+                            }
+                        ],
+                    },
+                    endpoint_task,
+                ]
+            }
+        )
+        chat_model = Mock()
+        bound_model = Mock()
+        chat_model.bind.return_value = bound_model
+        bound_model.invoke.side_effect = [
+            SimpleNamespace(content=invalid_response, usage_metadata=None, response_metadata={}),
+            SimpleNamespace(content=valid_response, usage_metadata=None, response_metadata={}),
+        ]
+        settings = SimpleNamespace(
+            model_name="test-model",
+            model_api_name="test-model",
+            default_max_tokens=4096,
+            build_task_plan_max_retries=2,
+        )
+        base_plan = {
+            "schema_version": "build-dag.v3",
+            "build_units": {
+                "backend:bootstrap": {"id": "backend:bootstrap", "kind": "backend"},
+                "backend:endpoint:orders-api:orders.list": {
+                    "id": "backend:endpoint:orders-api:orders.list",
+                    "kind": "backend",
+                },
+            },
+            "unit_graph": {
+                "schema_version": "build-unit-graph.v3",
+                "nodes": [
+                    "backend:bootstrap",
+                    "backend:endpoint:orders-api:orders.list",
+                ],
+                "edges": [
+                    {
+                        "from": "backend:bootstrap",
+                        "to": "backend:endpoint:orders-api:orders.list",
+                        "type": "depends_on",
+                    }
+                ],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+        build_context = {
+            "target": {"type": "endpoint", "id": "orders.list"},
+            "endpoint_ids": ["orders.list"],
+            "entity_ids": ["Order"],
+            "entity_designs": [
+                {"entity_id": "Order", "data_source_type": "database"}
+            ],
+            "planning_unit_ids": [
+                "backend:bootstrap",
+                "backend:endpoint:orders-api:orders.list",
+            ],
+            "required_unit_ids": [
+                "backend:bootstrap",
+                "backend:endpoint:orders-api:orders.list",
+            ],
+        }
+        project_plan = {
+            "executable_details": {
+                "entity_designs": build_context["entity_designs"],
+                "api_contracts": [],
+            }
+        }
+        with (
+            patch("app.agents.main.task_preparer.Settings.from_env", return_value=settings),
+            patch("app.agents.main.task_preparer.create_chat_model", return_value=chat_model),
+        ):
+            plan = prepare_build_tasks_with_main_agent(
+                project_plan,
+                build_context=build_context,
+                build_task_plan=base_plan,
+            )
+
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
+        self.assertEqual(
+            {task["unit_id"] for task in tasks_from_build_task_plan(plan)},
+            {
+                "backend:bootstrap",
+                "backend:endpoint:orders-api:orders.list",
+            },
+        )
+        retry_prompt = bound_model.invoke.call_args_list[1].args[0]
+        self.assertIn("AUTOMATIC REGENERATION FEEDBACK", retry_prompt)
+        self.assertIn("requires a backend:bootstrap task", retry_prompt)
+
+    def test_prepared_bootstrap_is_not_required_in_incremental_candidate(self) -> None:
+        """本轮 planning_unit_ids 不含已准备 bootstrap 时不产生遗漏错误。"""
+
+        plan = create_build_task_plan(
+            {"executable_details": {}},
+            agent_plan={
+                "tasks": [
+                    {
+                        "id": "orders-api",
+                        "unit_id": "backend:endpoint:orders-api:orders.list",
+                        "owner": "backend",
+                        "description": "实现订单接口。",
+                        "change_scope": [
+                            {
+                                "operation": "add",
+                                "path": "backend/src/main/java/demo/OrdersController.java",
+                            }
+                        ],
+                    }
+                ]
+            },
+            build_context={
+                "planning_unit_ids": ["backend:endpoint:orders-api:orders.list"],
+                "required_unit_ids": [
+                    "backend:bootstrap",
+                    "backend:endpoint:orders-api:orders.list",
+                ],
+            },
+        )
+
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
 
     def test_task_preparer_binds_configured_max_tokens(self) -> None:
         """任务规划调用必须显式传递 AGENT_MAX_TOKENS，避免采用 Provider 的短输出默认值。"""

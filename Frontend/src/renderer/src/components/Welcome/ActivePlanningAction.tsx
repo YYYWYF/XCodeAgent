@@ -28,7 +28,7 @@ function planningStatusPresentation(
   const stage = lifecycle.initialization.stage
   if (status === 'error') {
     return {
-      description: lifecycle.error?.message || '规划流程需要处理，点击进入查看详情或重试',
+      description: lifecycle.error?.message || '规划流程需要处理，点击进入查看详情',
       icon: <ExclamationCircleFilled />,
       title: `「${application.appName}」的应用规划需要处理`
     }
@@ -36,16 +36,16 @@ function planningStatusPresentation(
   // 技术执行态优先于上一次持久化的待交互阶段，避免生成期间提前提示产物已完成。
   if (status === 'running' && stage === 'awaiting_requirement_clarification') {
     return {
-      description: '正在根据刚刚补充的信息生成需求文档',
+      description: '需求分析等待补充信息，收到后重新分析',
       icon: <LoadingOutlined spin />,
-      title: `阶段 1/4：正在生成「${application.appName}」的需求文档`
+      title: `阶段 1/4：等待补充「${application.appName}」的需求细节`
     }
   }
   if (status === 'running' && stage === 'awaiting_requirement_confirmation') {
     return {
-      description: '正在处理需求文档并准备后续产品规划',
+      description: '需求分析已完成，等待确认后生成正式需求文档',
       icon: <LoadingOutlined spin />,
-      title: `阶段 1/4：正在处理「${application.appName}」的需求文档`
+      title: `阶段 1/4：等待确认「${application.appName}」的需求内容`
     }
   }
   if (status === 'running' && stage === 'awaiting_product_plan_confirmation') {
@@ -78,9 +78,9 @@ function planningStatusPresentation(
   }
   if (stage === 'awaiting_requirement_confirmation') {
     return {
-      description: '需求文档已生成，确认后继续生成产品规划',
+      description: '需求分析已完成，确认后生成需求文档并继续产品规划',
       icon: <CheckCircleFilled />,
-      title: `阶段 1/4：确认「${application.appName}」的需求文档`
+      title: `阶段 1/4：确认「${application.appName}」的需求内容`
     }
   }
   if (stage === 'awaiting_product_plan_confirmation') {
@@ -106,7 +106,7 @@ function planningStatusPresentation(
   }
   if (stage === 'application_template_generation_failed') {
     return {
-      description: lifecycle.error?.message || '应用模板文件生成失败，点击查看详情或重试',
+      description: lifecycle.error?.message || '应用模板文件生成失败，点击查看详情',
       icon: <ExclamationCircleFilled />,
       title: `「${application.appName}」的应用模板文件生成失败`
     }
@@ -147,9 +147,9 @@ function planningStatusPresentation(
     }
   }
   return {
-    description: '正在分析需求并生成需求文档',
+    description: '正在分析需求并识别待补充信息',
     icon: <LoadingOutlined spin />,
-    title: `阶段 1/4：正在生成「${application.appName}」的需求文档`
+    title: `阶段 1/4：正在分析「${application.appName}」的需求`
   }
 }
 
