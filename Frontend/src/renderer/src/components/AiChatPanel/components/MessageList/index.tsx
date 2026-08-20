@@ -123,10 +123,10 @@ type MessageListProps = {
   uiDesignActivePageId?: string
   /** UI 设计稿确认：选中页变化时通知外部（联动右侧预览）。 */
   onUiDesignActivePageChange?: (pageId: string) => void
-  /** UI 设计稿确认：当前正在执行单页动作的 pageId（联动右侧加载态）。 */
-  uiDesignActionPageId?: string | null
-  /** UI 设计稿确认：单页动作页变化时通知外部。 */
-  onUiDesignActionPageIdChange?: (pageId: string | null) => void
+  /** UI 设计稿确认：当前正在执行动作的 pageId 集合（联动右侧逐页加载态）。 */
+  uiDesignActingPageIds?: string[]
+  /** UI 设计稿确认：动作页集合变化时通知外部。 */
+  onUiDesignActingPageIdsChange?: (ids: string[]) => void
   /** 需求文档确认：保存编辑草稿（重写 Markdown+JSON），返回更新后的 spec。 */
   onSaveRequirementSpec?: (
     workflow: WorkflowRunPayload,
@@ -140,6 +140,10 @@ type MessageListProps = {
   onRetryTemplate?: () => void
   /** 当前应用是否正在生成模板（前端状态信号，lifecycle 在生成期间不变）。 */
   generatingTemplate?: boolean
+  /** 设计阶段最新的规划 workflow（activePlannings 权威快照，每轮 no-op resume 都会更新）。
+   *  UI 设计稿确认卡片优先用它渲染，绕过消息对象里可能滞留的旧 message.workflow，
+   *  保证后台生成池写入的最新页面状态实时反映到卡片。 */
+  planningWorkflow?: WorkflowRunPayload
   /** 开发阶段：detailBlocker 卡片点击「开始详细设计」。 */
   onStartDetailDesign?: (page: DevelopmentPlanningPageOption) => void
   loading: boolean
@@ -165,13 +169,14 @@ export default function MessageList({
   designPhasePlanning = false,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
-  uiDesignActionPageId,
-  onUiDesignActionPageIdChange,
+  uiDesignActingPageIds,
+  onUiDesignActingPageIdsChange,
   onSaveRequirementSpec,
   rootPath,
   onEnterDevelopment,
   onRetryTemplate,
   generatingTemplate,
+  planningWorkflow,
   onStartDetailDesign,
   loading,
   messages,
@@ -296,20 +301,6 @@ export default function MessageList({
             </div>
           ) : (
             messages.map((message) => {
-              console.log(
-                '[msg-debug] id=',
-                message.id,
-                'content=',
-                JSON.stringify(message.content).slice(0, 50),
-                'hasWorkflow=',
-                Boolean(message.workflow),
-                'phase=',
-                message.workflow?.summary?.phase,
-                'clarStatus=',
-                message.workflow ? workflowClarification(message.workflow)?.status : undefined,
-                'planningLoading=',
-                message.planningLoading
-              )
               const messageLoading = message.id === activeAssistantMessageId
               const entityDesignMessage = isEntityDesignWorkflow(message.workflow)
               // 实体会话内所有消息按对话样式渲染，运行中的临时快照缺少实体
@@ -526,10 +517,11 @@ export default function MessageList({
                               onSubmitClarification={onSubmitClarification}
                               uiDesignActivePageId={uiDesignActivePageId}
                               onUiDesignActivePageChange={onUiDesignActivePageChange}
-                              uiDesignActionPageId={uiDesignActionPageId}
-                              onUiDesignActionPageIdChange={onUiDesignActionPageIdChange}
+                              uiDesignActingPageIds={uiDesignActingPageIds}
+                              onUiDesignActingPageIdsChange={onUiDesignActingPageIdsChange}
                               onSaveRequirementSpec={onSaveRequirementSpec}
                               rootPath={rootPath}
+                              planningWorkflow={planningWorkflow}
                               workflow={message.workflow}
                               workspaceRoot={workspaceRoot}
                             />

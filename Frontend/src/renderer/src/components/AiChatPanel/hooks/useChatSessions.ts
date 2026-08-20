@@ -273,7 +273,6 @@ export function useChatSessions({
           (session) => (session.pageId || session.endpointId) && session.messageCount > 0
         ) || nextSessions.find((session) => session.pageId || session.endpointId)
       if (detailSessionToOpen) {
-        console.log('[load-sessions] mode=', mode, 'total=', nextSessions.length, 'sessions=', nextSessions.map(s => ({ id: s.id.slice(0, 8), msgs: s.messageCount, thread: s.threadId?.slice(0, 8), page: s.pageId?.slice(0, 8) })), 'opening=', detailSessionToOpen.id.slice(0, 8), 'openingMsgs=', detailSessionToOpen.messageCount)
         await openChatSession(mode, detailSessionToOpen.id)
       }
       // 若没有任何页面/接口会话，不自动打开——交给 autoSelectDevPage 选首个待设计页面。
@@ -306,9 +305,6 @@ export function useChatSessions({
         pageId: session.pageId
       })
       registerSession(identity, session.messages)
-      console.log('[open-session] registered key=', key.slice(-12), 'msgs=', session.messages.length, 'threadId=', session.threadId?.slice(0, 8))
-    } else {
-      console.log('[open-session] agent exists, skip read key=', key.slice(-12), 'memMsgs=', getSessionMessages(key).length)
     }
 
     // 设计阶段规划 session 已激活时，不抢 activeSessionId，避免覆盖规划对话。

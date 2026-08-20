@@ -85,7 +85,6 @@ function AppEntryContent(): JSX.Element {
       const activeThreadId = activePlanningThreadIdRef.current
       if (activeThreadId !== undefined && activeThreadId !== threadId) return
       const stream = planningStreamRef.current
-      console.log('[planning-deliver]', stream ? 'inject' : 'cache', 'activeThread=', activeThreadId, 'chunkThread=', threadId, chunk.content?.slice(0, 40) || chunk.workflow?.summary?.phase)
       if (stream) {
         stream(chunk)
       } else {
@@ -100,7 +99,6 @@ function AppEntryContent(): JSX.Element {
     (inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null) => {
       planningStreamRef.current = inject
       const activeThreadId = activePlanningThreadIdRef.current
-      console.log('[planning-stream-ready]', inject ? 'registered' : 'unregistered', 'pending=', pendingPlanningChunksRef.current.length, 'activeThread=', activeThreadId)
       // 注册后回放工作台挂载前缓存的 chunk，只回放当前工作台 threadId 的。
       // activeThreadId 尚未确定时不回放，由 activePlanningThreadId effect 在 threadId 就绪后回放。
       if (inject && activeThreadId) {
@@ -141,7 +139,6 @@ function AppEntryContent(): JSX.Element {
   const openWorkbench = useCallback(
     async (application: ApplicationConfig, lifecycle?: ApplicationLifecycle): Promise<void> => {
       await stopPreviousPreviewIfNeeded(application)
-      console.log('[open-workbench] application.planningConfirmedAt=', application.planningConfirmedAt, 'lifecycleStage=', lifecycle?.initialization?.stage)
       setActiveApplication(application)
       activePreviewWorkspaceRef.current = applicationPreviewWorkspace(application)
       if (lifecycle) mergeApplicationLifecycle(lifecycle)
@@ -364,7 +361,6 @@ function AppEntryContent(): JSX.Element {
               designChangeRequest
             ) => {
               const submit = planningSubmitByAppRef.current[activeApplication.id]
-              console.log('[planning-submit] onSubmitPlanningClarification appId=', activeApplication.id, 'submitRef=', Boolean(submit), 'answers=', answers, 'workflow.runId=', workflow.runId)
               if (submit)
                 submit(
                   workflow,

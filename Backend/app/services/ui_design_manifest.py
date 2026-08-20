@@ -10,7 +10,10 @@ from typing import Any
 UI_MANIFEST_SCHEMA_VERSION = "ui-manifest.v3"
 
 _STATIC_ATTRIBUTE_TEMPLATE = r"\b{attribute}\s*=\s*['\"]([^'\"]+)['\"]"
-_INTERACTION_ATTRIBUTE_RE = re.compile(r"\bon(?:Click|Change|Finish|PressEnter|Select|Submit)\s*=")
+# 表达式绑定的 data-* 属性（如 data-information-item-id={item.itemId}、
+# data-control-id={`${m.itemId}-display`}）。静态分析无法解析运行时表达式，
+# 其值不会被 _attribute 提取，判为"缺失"。用于在缺失报错时给出定向修复提示。
+_EXPR_ATTRIBUTE_TEMPLATE = r"\b{attribute}\s*=\s*\{{"
 _INTERACTIVE_TAGS = {
     "a",
     "Button",
@@ -35,6 +38,19 @@ _BUSINESS_DISPLAY_TAGS = {
     "ProTable",
     "Statistic",
     "Table",
+}
+# 装饰性/容器组件：既非业务交互控件也非业务展示组件，不承载 ProductPlan
+# actionId 或 informationItemId。例如 Result（空状态/成功提示页）常带 onClick
+# 做"返回"交互、Empty/Spin/Alert 是纯 UI 反馈，校验器不应把它们当作未绑定的
+# 业务控件报错。这类标签完全豁免 unowned_interactions 与 unowned_displays 校验。
+_DECORATIVE_TAGS = {
+    "Alert",
+    "Drawer",
+    "Empty",
+    "Modal",
+    "Result",
+    "Skeleton",
+    "Spin",
 }
 _LEGACY_PRODUCT_FACT_KEYS = {
     "description",
@@ -64,6 +80,22 @@ def _attribute(attrs: str, name: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def _expression_bound_hint(code: str, attribute: str) -> str:
+    """当静态校验判"缺少"某 data-* 绑定时，检测代码里是否存在该属性的表达式绑定。
+
+    存在则说明模型可能把 id 放进了 .map() 回调变量或模板字符串，静态校验解析
+    不了运行时表达式，需要回喂模型改写字面量。未检测到则返回空串（不追加提示）。
+    """
+
+    if not re.search(_EXPR_ATTRIBUTE_TEMPLATE.format(attribute=re.escape(attribute)), code):
+        return ""
+    return (
+        f" 检测到 `{attribute}={{...}}` 表达式绑定（如 .map() 回调变量或模板字符串），"
+        "静态校验无法解析运行时表达式，一律判为缺失。请把每一项展开为独立 JSX 元素，"
+        f"在标签上直接写死字符串字面量（如 `{attribute}=\"<id>\"`）。"
+    )
+
+
 def _expected_ids(page: dict[str, Any], collection: str, key: str) -> list[str]:
     """按 ProductPlan 原顺序读取稳定产品 ID。"""
 
@@ -74,17 +106,34 @@ def _expected_ids(page: dict[str, Any], collection: str, key: str) -> list[str]:
     ]
 
 
-def _jsx_opening_tags(code: str) -> list[tuple[str, str]]:
-    """扫描 JSX 开始标签，并保留表达式内部箭头函数中的 `>` 字符。"""
+def _jsx_opening_tags(code: str) -> list[tuple[str, str, bool, bool]]:
+    """扫描 JSX 标签，返回 ``(tag, attrs, self_closing, is_closing)``。
 
-    tags: list[tuple[str, str]] = []
+    - 普通开标签 ``<Tag ...>`` → ``(tag, attrs, False, False)``
+    - 自闭合标签 ``<Tag .../>`` → ``(tag, attrs, True, False)``
+    - 闭合标签 ``</Tag>`` → ``(tag, "", False, True)``
+
+    保留表达式内部箭头函数中的 ``>`` 字符（通过 brace_depth 保护）。
+    """
+
+    tags: list[tuple[str, str, bool, bool]] = []
     index = 0
     length = len(code)
     while index < length:
         start = code.find("<", index)
         if start < 0 or start + 1 >= length:
             break
-        if code[start + 1] in "/!?":
+        # 闭合标签 </Tag> —— 提取标签名用于维护祖先栈
+        if code[start + 1] == "/":
+            close_match = re.match(r"\s*([A-Za-z][\w.]*)", code[start + 2 :])
+            if close_match:
+                tags.append((close_match.group(1), "", False, True))
+                gt = code.find(">", start + 2)
+                index = gt + 1 if gt >= 0 else start + 2
+            else:
+                index = start + 2
+            continue
+        if code[start + 1] in "!?":
             index = start + 2
             continue
         name_match = re.match(r"[A-Za-z][\w.]*", code[start + 1 :])
@@ -117,7 +166,8 @@ def _jsx_opening_tags(code: str) -> list[tuple[str, str]]:
             elif char == "}" and brace_depth:
                 brace_depth -= 1
             elif char == ">" and brace_depth == 0:
-                tags.append((tag, code[attrs_start:cursor]))
+                self_closing = cursor > attrs_start and code[cursor - 1] == "/"
+                tags.append((tag, code[attrs_start:cursor], self_closing, False))
                 cursor += 1
                 break
             cursor += 1
@@ -126,7 +176,12 @@ def _jsx_opening_tags(code: str) -> list[tuple[str, str]]:
 
 
 def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
-    """从 TSX 静态标记提取产品操作、信息项和未归属控件。"""
+    """从 TSX 静态标记提取产品操作、信息项和未归属控件。
+
+    维护 JSX 祖先栈：当业务展示组件（Statistic/Table 等）嵌套在已绑定
+    ``data-information-item-id`` 或 ``data-preview-only="true"`` 的父容器内时，
+    视为该信息项的子展示，不重复要求自身绑定。
+    """
 
     actions: dict[str, list[str]] = {}
     interaction_effects: dict[str, str] = {}
@@ -134,13 +189,26 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
     information_items: dict[str, list[str]] = {}
     unowned_interactions: list[str] = []
     unowned_displays: list[str] = []
-    for tag, attrs in _jsx_opening_tags(code):
+    # 祖先栈：(tag_name, has_information_item_id, has_preview_only)
+    ancestor_stack: list[tuple[str, bool, bool]] = []
+    for tag, attrs, self_closing, is_closing in _jsx_opening_tags(code):
+        if is_closing:
+            # 从栈顶向下找最近的同名标签，弹出它及之上的所有标签
+            for i in range(len(ancestor_stack) - 1, -1, -1):
+                if ancestor_stack[i][0] == tag:
+                    del ancestor_stack[i:]
+                    break
+            continue
         action_id = _attribute(attrs, "data-action-id")
         information_item_id = _attribute(attrs, "data-information-item-id")
         control_id = _attribute(attrs, "data-control-id")
         interaction_effect = _attribute(attrs, "data-ui-effect")
         action_step_id = _attribute(attrs, "data-action-step-id")
         preview_only = _attribute(attrs, "data-preview-only").lower() == "true"
+        # 检查祖先链：只要有一个祖先绑定了 informationItemId 或 preview-only，
+        # 当前展示组件就被视为该信息项的子展示，不单独要求绑定。
+        ancestor_has_item = any(s[1] for s in ancestor_stack)
+        ancestor_has_preview = any(s[2] for s in ancestor_stack)
         if action_id:
             actions.setdefault(action_id, [])
             if control_id and control_id not in actions[action_id]:
@@ -153,11 +221,28 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
             information_items.setdefault(information_item_id, [])
             if control_id and control_id not in information_items[information_item_id]:
                 information_items[information_item_id].append(control_id)
-        interactive = tag in _INTERACTIVE_TAGS or bool(_INTERACTION_ATTRIBUTE_RE.search(attrs))
+        decorative = tag in _DECORATIVE_TAGS
+        # 交互控件判定以组件类型为准：只有 _INTERACTIVE_TAGS 白名单内的真交互控件
+        # （Button/Input/Select 等）才算交互控件。不再用 _INTERACTION_ATTRIBUTE_RE
+        # 兜底匹配 onClick/onFinish 等属性——否则 ProForm/Form（onFinish 表单提交回调）、
+        # 容器 div（onClick 委托）会被误判为未绑定 actionId 的交互控件。白名单外的
+        # 组件即使带交互属性，要么是容器（其内嵌按钮才是 action）、要么是装饰，都不
+        # 该要求绑 actionId。真交互控件已在白名单内，带 onClick 时仍会被判，不会漏。
+        interactive = tag in _INTERACTIVE_TAGS and not decorative
         if interactive and not action_id and not information_item_id and not preview_only:
             unowned_interactions.append(tag)
-        if tag in _BUSINESS_DISPLAY_TAGS and not information_item_id and not preview_only:
+        if (
+            tag in _BUSINESS_DISPLAY_TAGS
+            and not decorative
+            and not information_item_id
+            and not preview_only
+            and not ancestor_has_item
+            and not ancestor_has_preview
+        ):
             unowned_displays.append(tag)
+        # 非自闭合标签入栈，供后续子组件检查祖先
+        if not self_closing:
+            ancestor_stack.append((tag, bool(information_item_id), preview_only))
     return {
         "actions": actions,
         "interaction_effects": interaction_effects,
@@ -180,24 +265,32 @@ def validate_ui_design_code(page: dict[str, Any], code: str) -> list[str]:
     if actual_actions != set(expected_actions):
         missing = sorted(set(expected_actions) - actual_actions)
         unknown = sorted(actual_actions - set(expected_actions))
-        errors.append(
+        message = (
             "业务操作标记必须与 ProductPlan actions 完全一致"
             f"（缺少：{missing or '无'}；越界：{unknown or '无'}）。"
         )
+        if missing:
+            message += _expression_bound_hint(code, "data-action-id")
+        errors.append(message)
     if actual_items != set(expected_items):
         missing = sorted(set(expected_items) - actual_items)
         unknown = sorted(actual_items - set(expected_items))
-        errors.append(
+        message = (
             "业务信息标记必须与 ProductPlan information_items 完全一致"
             f"（缺少：{missing or '无'}；越界：{unknown or '无'}）。"
         )
+        if missing:
+            message += _expression_bound_hint(code, "data-information-item-id")
+        errors.append(message)
     for kind, expected, actual in (
         ("action", expected_actions, inspection["actions"]),
         ("information item", expected_items, inspection["information_items"]),
     ):
         missing_controls = [item_id for item_id in expected if not actual.get(item_id)]
         if missing_controls:
-            errors.append(f"以下 {kind} 缺少静态 data-control-id：{', '.join(missing_controls)}。")
+            message = f"以下 {kind} 缺少静态 data-control-id：{', '.join(missing_controls)}。"
+            message += _expression_bound_hint(code, "data-control-id")
+            errors.append(message)
     interface_actions = [
         str(action.get("actionId") or "").strip()
         for action in _dict_items(page.get("actions"))

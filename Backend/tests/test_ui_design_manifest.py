@@ -89,6 +89,130 @@ export default Orders;
         self.assertTrue(any("越界" in error for error in errors))
         self.assertTrue(any("Statistic" in error for error in errors))
 
+    def test_business_display_nested_in_bound_container_not_flagged(self) -> None:
+        """嵌套在已绑定 informationItemId 容器内的 Statistic 不应误报为未绑定。
+
+        回归：校验器曾逐标签检查 data-information-item-id，不识别父子嵌套，
+        导致 ProCard(data-information-item-id=X) > Statistic 的合法结构被误报
+        "Statistic 未绑定 informationItemId"，重试 2 次仍失败。
+        """
+
+        code = """
+import React from 'react';
+import { Card, Input, Statistic } from 'antd';
+import { ProCard } from '@ant-design/pro-components';
+const Orders = () => <div>
+  <Input data-action-id="search-orders" data-control-id="search-orders-control" />
+  <ProCard data-information-item-id="orders-list" data-control-id="orders-list-display">
+    <Card>
+      <Statistic title="订单总数" value={10} />
+      <Statistic title="今日订单" value={3} />
+    </Card>
+  </ProCard>
+</div>;
+export default Orders;
+"""
+
+        self.assertEqual(validate_ui_design_code(self.page, code), [])
+
+    def test_expression_bound_ids_reported_with_static_literal_hint(self) -> None:
+        """map 回调里的表达式绑定 id 必须判缺失，并提示改写静态字面量。
+
+        回归：模型把 5 个指标卡做成 metricCards.map((m) => <div
+        data-information-item-id={m.itemId}>)，_STATIC_ATTRIBUTE_TEMPLATE 只认
+        ="字面量"，5 项全部判"缺少"，重试 2 次仍用同种动态写法而失败。报错需
+        显式指出"表达式绑定无法静态解析"，引导模型逐项写死字面量。
+        """
+
+        page = {
+            "pageId": "dashboard_page",
+            "information_items": [
+                {"itemId": "dashboard_page-project-total"},
+                {"itemId": "dashboard_page-active-project-count"},
+            ],
+            "actions": [{"actionId": "dashboard_page-goto-project-list"}],
+        }
+        code = """
+import React from 'react';
+import { Statistic } from 'antd';
+const metricCards = [
+  { itemId: 'dashboard_page-project-total', value: 128 },
+  { itemId: 'dashboard_page-active-project-count', value: 42 },
+];
+const DashboardPage = () => <div>
+  {metricCards.map((m) => (
+    <div data-information-item-id={m.itemId} data-control-id={`${m.itemId}-display`}>
+      <Statistic value={m.value} />
+    </div>
+  ))}
+  <button data-action-id="dashboard_page-goto-project-list" data-control-id="dashboard_page-goto-project-list-control">进入</button>
+</div>;
+export default DashboardPage;
+"""
+
+        errors = validate_ui_design_code(page, code)
+
+        # 表达式绑定的 2 个信息项判缺失，且报错带"表达式绑定"定向提示。
+        missing_error = next(e for e in errors if "缺少" in e and "完全一致" in e)
+        self.assertIn("dashboard_page-project-total", missing_error)
+        self.assertIn("dashboard_page-active-project-count", missing_error)
+        self.assertIn("表达式绑定", missing_error)
+        self.assertIn("静态", missing_error)
+        control_error = next(e for e in errors if "缺少静态 data-control-id" in e)
+        self.assertIn("表达式绑定", control_error)
+
+        # 改成逐项静态字面量后，缺失与提示都消失。
+        static_code = """
+import React from 'react';
+import { Statistic } from 'antd';
+const DashboardPage = () => <div>
+  <div data-information-item-id="dashboard_page-project-total" data-control-id="dashboard_page-project-total-display"><Statistic value={128} /></div>
+  <div data-information-item-id="dashboard_page-active-project-count" data-control-id="dashboard_page-active-project-count-display"><Statistic value={42} /></div>
+  <button data-action-id="dashboard_page-goto-project-list" data-control-id="dashboard_page-goto-project-list-control">进入</button>
+</div>;
+export default DashboardPage;
+"""
+        self.assertEqual(validate_ui_design_code(page, static_code), [])
+
+    def test_business_display_nested_in_preview_only_container_not_flagged(self) -> None:
+        """嵌套在 data-preview-only 容器内的 Table 不应误报为未绑定。"""
+
+        page = {
+            "pageId": "orders",
+            "information_items": [],
+            "actions": [],
+        }
+        code = """
+import React from 'react';
+import { Table } from 'antd';
+const Orders = () => <div data-preview-only="true">
+  <Table dataSource={[]} />
+</div>;
+export default Orders;
+"""
+
+        self.assertEqual(validate_ui_design_code(page, code), [])
+
+    def test_business_display_sibling_of_bound_container_still_flagged(self) -> None:
+        """与绑定容器平级（非嵌套）的 Statistic 仍应被报错。"""
+
+        code = """
+import React from 'react';
+import { Card, Input, Statistic } from 'antd';
+import { ProCard } from '@ant-design/pro-components';
+const Orders = () => <div>
+  <Input data-action-id="search-orders" data-control-id="search-orders-control" />
+  <ProCard data-information-item-id="orders-list" data-control-id="orders-list-display">
+    <Statistic title="订单总数" value={10} />
+  </ProCard>
+  <Statistic title="今日订单" value={3} />
+</div>;
+export default Orders;
+"""
+
+        errors = validate_ui_design_code(self.page, code)
+        self.assertTrue(any("Statistic" in e for e in errors))
+
     def test_preview_controls_require_explicit_preview_only_marker(self) -> None:
         """状态评审控件显式标记后不应被误判为产品 action。"""
 
@@ -129,6 +253,44 @@ export default Orders;
 """
 
         self.assertEqual(validate_ui_design_code(self.page, code), [])
+
+    def test_form_container_with_on_finish_not_misjudged_as_interaction(self) -> None:
+        """ProForm/Form 等表单容器带 onFinish 不应被误判为未绑定 actionId 的交互控件。
+
+        onFinish 是表单提交回调，真正的 action 是表单内的提交按钮。容器组件即使带
+        交互属性也不该要求绑 actionId（回归：曾因 _INTERACTION_ATTRIBUTE_RE 匹配
+        onFinish 把 ProForm 误判，导致设计稿校验失败）。真交互控件（Button）未绑
+        actionId 仍要报错。
+        """
+
+        code = """
+import React from 'react';
+import { Button, Form } from 'antd';
+import { ProForm, ProFormText } from '@ant-design/pro-components';
+const Page = () => <div>
+  <ProForm onFinish={() => undefined} submitter={false}>
+    <ProFormText name="x" />
+  </ProForm>
+  <Form onFinish={() => undefined} />
+  <Button data-action-id="search-orders" data-control-id="search-orders-control">提交</Button>
+  <Button onClick={() => undefined}>未绑定</Button>
+</div>;
+export default Page;
+"""
+        errors = validate_ui_design_code(self.page, code)
+        # ProForm/Form 不报错，只有未绑 actionId 的 Button 报错。
+        self.assertTrue(
+            any("Button" in e for e in errors),
+            "未绑 actionId 的 Button 应报错",
+        )
+        self.assertFalse(
+            any("ProForm" in e for e in errors),
+            "ProForm 带 onFinish 不应误判为交互控件",
+        )
+        self.assertFalse(
+            any("Form" in e for e in errors),
+            "Form 带 onFinish 不应误判为交互控件",
+        )
 
     def test_interface_action_requires_ui_owned_effect(self) -> None:
         """界面行为必须由真实 TSX 的 data-ui-effect 固化，不能留给 TechnicalPlan。"""

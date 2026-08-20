@@ -437,10 +437,18 @@ def _invoke_live_chat_model(
     settings: Settings | None = None,
     on_token: Callable[[str], None] | None = None,
 ) -> str:
-    """调用项目规划模型，并透传数据源实现边界。"""
+    """调用项目规划模型，并透传数据源实现边界。
+
+    GLM-5.2 默认开启深度思考，thinking 与正文共享 max_tokens。ProjectPlan JSON
+    体量大，thinking 会挤占输出预算，常在写完前被截断，流式投到前端的原始 JSON
+    也随之截断、解析校验失败。与产品/UI 设计生成一致，关闭 thinking 释放输出预算。
+    """
 
     active_settings = settings or Settings.from_env()
-    model = create_chat_model(active_settings)
+    model = create_chat_model(
+        active_settings,
+        extra_model_kwargs={"thinking": {"type": "disabled"}},
+    )
     if on_token is None:
         result = model.invoke(
             _planning_prompt(requirement_spec, existing_plan, datasource_type)

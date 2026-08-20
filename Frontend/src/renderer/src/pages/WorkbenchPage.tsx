@@ -110,20 +110,8 @@ function WorkbenchPage({
   // 新建应用需等模板拉取完成（lifecycle=ready_for_workbench）后才有 frontend/package.json，
   // 在此之前启动会报"未找到前端 package.json"，故规划期跳过，就绪后再启动。
   useEffect(() => {
-    const workspacePath = application.workspaceRoot || application.projectParentPath || ''
-    console.log(
-      '[preview-launch-effect]',
-      'workspace=',
-      workspacePath,
-      'source=',
-      application.source,
-      'ready=',
-      lifecycleReadyForWorkbench,
-      'launched=',
-      launchedWorkspaceRef.current,
-      'activeLaunch=',
-      activeLaunchWorkspaceRef.current
-    )
+    const workspacePath =
+      application.workspaceRoot || application.projectParentPath || ''
     if (launchCleanupTimerRef.current !== undefined) {
       window.clearTimeout(launchCleanupTimerRef.current)
       launchCleanupTimerRef.current = undefined
@@ -181,19 +169,6 @@ function WorkbenchPage({
           launchRunIdRef.current === launchRunId &&
           activeLaunchWorkspaceRef.current === workspacePath &&
           !launchCleanupPendingRef.current
-        console.log(
-          '[preview-launch-result]',
-          'status=',
-          result.status,
-          'previewUrl=',
-          result.preview_url,
-          'stillCurrent=',
-          launchStillCurrent,
-          'cleanupPending=',
-          launchCleanupPendingRef.current,
-          'msg=',
-          result.message
-        )
         notification.close(loadingKey)
         if (!launchStillCurrent) {
           if (result.status === 'running') {

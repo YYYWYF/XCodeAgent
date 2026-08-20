@@ -242,6 +242,12 @@
   font-variant-numeric: tabular-nums;
 }
 
+// 顶部"全部生成"按钮：一键并发生成所有未确认页面，避免逐页点击退化为串行。
+.@{class-prefix}-planning-question-panel.@{class-prefix}-is-ui-confirmation .@{class-prefix}-ui-design-generate-all-btn {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
 .@{class-prefix}-ui-design-list {
   display: flex;
   flex-direction: column;
@@ -351,6 +357,15 @@
   &:disabled {
     opacity: 0.5;
   }
+}
+
+// 「生成/换一换」按钮：文案随 page.code 在「生成」(2字) 与「换一换」(3字) 间切换。
+// 固定宽度避免该按钮宽度随文案变化——否则生成中行的 actions 区变窄、meta 区被撑宽，
+// 导致状态 Tag（生成中）相对已确认行右移、整行右侧内容错位。
+.@{class-prefix}-ui-design-action-btn-regenerate.ant-btn {
+  width: 88px;
+  padding: 0;
+  justify-content: center;
 }
 
 // 「确认本页」主按钮：圆角胶囊。
@@ -738,9 +753,7 @@
 
 // header 中"正在处理某页"提示：run 期间全局禁用时让用户理解为何按钮点不了。
 .@{class-prefix}-ui-design-processing-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  display: inline-block;
   margin-top: 8px;
   padding: 4px 12px;
   border-radius: 999px;
